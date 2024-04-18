@@ -33,9 +33,10 @@ const (
 
 type container struct {
 	colexec.ReceiverOperator
-	state   int
-	isMerge bool
-	batch   *batch.Batch
+	state                int
+	isMerge              bool
+	batch                *batch.Batch
+	runtimeFilterHandled bool
 }
 
 type Argument struct {
@@ -78,6 +79,12 @@ func (arg *Argument) Release() {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
+		if !ctr.runtimeFilterHandled && arg.RuntimeFilterSpec != nil {
+			var runtimeFilter process.RuntimeFilterMessage
+			runtimeFilter.Tag = arg.RuntimeFilterSpec.Tag
+			runtimeFilter.Typ = process.RuntimeFilter_DROP
+			sendFilter(arg, proc, runtimeFilter)
+		}
 		if ctr.batch != nil {
 			proc.PutBatch(ctr.batch)
 		}

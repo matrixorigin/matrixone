@@ -58,8 +58,9 @@ type container struct {
 	strHashMap *hashmap.StrHashMap
 	keyWidth   int // keyWidth is the width of hash columns, it determines which hash map to use.
 
-	uniqueJoinKeys  []*vector.Vector
-	runtimeFilterIn bool
+	uniqueJoinKeys       []*vector.Vector
+	runtimeFilterIn      bool
+	runtimeFilterHandled bool
 }
 
 type Argument struct {
@@ -114,6 +115,12 @@ func (arg *Argument) Release() {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
+		if !ctr.runtimeFilterHandled && arg.RuntimeFilterSpec != nil {
+			var runtimeFilter process.RuntimeFilterMessage
+			runtimeFilter.Tag = arg.RuntimeFilterSpec.Tag
+			runtimeFilter.Typ = process.RuntimeFilter_DROP
+			sendFilter(arg, proc, runtimeFilter)
+		}
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors(proc.Mp())
 		if !arg.NeedHashMap {
