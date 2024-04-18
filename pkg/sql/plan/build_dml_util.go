@@ -42,6 +42,7 @@ var dmlPlanCtxPool = sync.Pool{
 		return &dmlPlanCtx{}
 	},
 }
+
 var deleteNodeInfoPool = sync.Pool{
 	New: func() any {
 		return &deleteNodeInfo{}
@@ -1126,6 +1127,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.insertColPos = insertColPos
 						upPlanCtx.isFkRecursionCall = true
 						upPlanCtx.updatePkCol = updatePk
+						upPlanCtx.lockTable = ifNeedLockWholeTable(builder, lastNodeId)
 
 						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 						putDmlPlanCtx(upPlanCtx)
@@ -1171,6 +1173,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 								upPlanCtx.isFkRecursionCall = true
 								upPlanCtx.updatePkCol = updatePk
+								upPlanCtx.lockTable = ifNeedLockWholeTable(builder, lastNodeId)
 
 								err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 								putDmlPlanCtx(upPlanCtx)
@@ -1201,6 +1204,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								upPlanCtx.sourceStep = newSourceStep
 								upPlanCtx.beginIdx = 0
 								upPlanCtx.allDelTableIDs = allDelTableIDs
+								upPlanCtx.lockTable = ifNeedLockWholeTable(builder, lastNodeId)
 
 								err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
 								putDmlPlanCtx(upPlanCtx)
@@ -2343,10 +2347,7 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	}
 
 	if !isUpdate {
-		ifLockTable := false
-		if builder.qry.Nodes[lastNodeId].Stats.Outcnt > float64(MaxLockCount) {
-			ifLockTable = true
-		}
+		ifLockTable := ifNeedLockWholeTable(builder, lastNodeId)
 		if lockNodeId, ok := appendLockNode(
 			builder,
 			bindCtx,
@@ -2437,10 +2438,7 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 	}
 
 	// 3. add lock
-	ifLockTable := false
-	if builder.qry.Nodes[lastNodeId].Stats.Outcnt > float64(MaxLockCount) {
-		ifLockTable = true
-	}
+	ifLockTable := ifNeedLockWholeTable(builder, lastNodeId)
 	if lockNodeId, ok := appendLockNode(
 		builder,
 		bindCtx,
@@ -2693,10 +2691,7 @@ func appendPreInsertSkVectorPlan(
 
 	lastNodeId = projectId
 
-	ifLockTable := false
-	if builder.qry.Nodes[lastNodeId].Stats.Outcnt > float64(MaxLockCount) {
-		ifLockTable = true
-	}
+	ifLockTable := ifNeedLockWholeTable(builder, lastNodeId)
 	if lockNodeId, ok := appendLockNode(
 		builder,
 		bindCtx,
@@ -2905,10 +2900,7 @@ func appendPreInsertUkPlan(
 	}
 	lastNodeId = builder.appendNode(preInsertUkNode, bindCtx)
 
-	ifLockTable := false
-	if builder.qry.Nodes[lastNodeId].Stats.Outcnt > float64(MaxLockCount) {
-		ifLockTable = true
-	}
+	ifLockTable := ifNeedLockWholeTable(builder, lastNodeId)
 	if lockNodeId, ok := appendLockNode(
 		builder,
 		bindCtx,
