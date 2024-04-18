@@ -602,3 +602,7 @@ func (node *ShowSnapShots) StmtKind() StmtKind {
 func (node *UpgradeStatement) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
+
+func (node *RestoreSnapShot) StmtKind() StmtKind {
+	return frontendStatusTyp
+}

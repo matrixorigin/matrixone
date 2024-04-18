@@ -994,13 +994,13 @@ snapshot_restore_stmt:
             SnapShotName: tree.Identifier($8.ToLower()),
         }
     }
-|   RESTORE ACCOUNT ident DATABASE ident TABLE table_name FROM SNAPSHOT ident
+|   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident
     {
         $$ = &tree.RestoreSnapShot{
             Level: tree.RESTORELEVELTABLE,
             AccountName: tree.Identifier($3.ToLower()),
             DatabaseName: tree.Identifier($5.ToLower()),
-            TableName: *$7,
+            TableName: tree.Identifier($7.ToLower()),
             SnapShotName: tree.Identifier($10.ToLower()),
         }
     }
@@ -1027,13 +1027,13 @@ snapshot_restore_stmt:
             AuthOption: $12,
         }
     }
-|   RESTORE ACCOUNT ident DATABASE ident TABLE table_name FROM SNAPSHOT ident  TO NEWACCOUNT ident account_auth_option
+|   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident  TO NEWACCOUNT ident account_auth_option
     {
         $$ = &tree.RestoreSnapShot{
             Level: tree.RESTORELEVELTABLE,
             AccountName: tree.Identifier($3.ToLower()),
             DatabaseName: tree.Identifier($5.ToLower()),
-            TableName: *$7,
+            TableName: tree.Identifier($7.ToLower()),
             SnapShotName: tree.Identifier($10.ToLower()),
             IsToNewAccount: true,
             NewAccountName: tree.Identifier($13.ToLower()),

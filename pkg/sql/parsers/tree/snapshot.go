@@ -170,7 +170,7 @@ type RestoreSnapShot struct {
 	Level        RestoreLevel
 	AccountName  Identifier // account name
 	DatabaseName Identifier // database name
-	TableName    TableName  // table name
+	TableName    Identifier // table name
 	SnapShotName Identifier // snapshot name
 
 	IsToNewAccount bool
@@ -200,9 +200,14 @@ func (node *RestoreSnapShot) Format(ctx *FmtCtx) {
 		node.TableName.Format(ctx)
 	}
 
+	ctx.WriteString(" from snapshot ")
+	node.SnapShotName.Format(ctx)
+
 	if node.IsToNewAccount {
 		ctx.WriteString(" to account ")
 		node.NewAccountName.Format(ctx)
+		ctx.WriteString(" identified by ")
+		node.AuthOption.Format(ctx)
 	}
 }
 
