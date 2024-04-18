@@ -274,8 +274,6 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		} else {
 			genericSort(col, os, blockidGreater)
 		}
-	default:
-		panic(fmt.Sprintf("sort: unsupported type %s", vec.GetType().String()))
 	}
 }
 
