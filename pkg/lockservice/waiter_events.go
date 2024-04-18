@@ -48,6 +48,7 @@ type lockContext struct {
 	lockFunc func(*lockContext, bool)
 	w        *waiter
 	createAt time.Time
+	closed   bool
 }
 
 func (l *localLockTable) newLockContext(

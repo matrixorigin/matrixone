@@ -17,6 +17,7 @@ package timewin
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
@@ -45,8 +45,8 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 
 	ctr.aggExe = make([]colexec.ExpressionExecutor, len(ap.Aggs))
 	for i, ag := range ap.Aggs {
-		if ag.E != nil {
-			ctr.aggExe[i], err = colexec.NewExpressionExecutor(proc, ag.E)
+		if expressions := ag.GetArgExpressions(); len(expressions) > 0 {
+			ctr.aggExe[i], err = colexec.NewExpressionExecutor(proc, expressions[0])
 			if err != nil {
 				return err
 			}
@@ -148,10 +148,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.firstWindow(ap, proc); err != nil {
 				return result, err
 			}
-			ctr.aggs = make([]agg.Agg[any], len(ap.Aggs))
+			ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
-					return result, err
+				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
+				if config := ag.GetExtraConfig(); config != nil {
+					if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
+						return result, err
+					}
 				}
 			}
 			ctr.status = evalTag
@@ -193,16 +196,19 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.nextWindow(ap, proc); err != nil {
 				return result, err
 			}
-			ctr.aggs = make([]agg.Agg[any], len(ap.Aggs))
+			ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
-					return result, err
+				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
+				if config := ag.GetExtraConfig(); config != nil {
+					if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
+						return result, err
+					}
 				}
 			}
 			ctr.wstart = append(ctr.wstart, ctr.start)
 			ctr.wend = append(ctr.wend, ctr.end)
 			for _, ag := range ctr.aggs {
-				if err = ag.Grows(1, proc.Mp()); err != nil {
+				if err = ag.GroupGrow(1); err != nil {
 					return result, err
 				}
 			}
@@ -210,7 +216,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			for i := ctr.preIdx; i < len(ctr.bats); i++ {
 				for k := ctr.preRow; k < ctr.bats[i].RowCount(); k++ {
 					for j, agg := range ctr.aggs {
-						if err = agg.Fill(0, int64(k), []*vector.Vector{ctr.aggVec[i][j]}); err != nil {
+						if err = agg.Fill(0, k, []*vector.Vector{ctr.aggVec[i][j]}); err != nil {
 							return result, err
 						}
 					}
@@ -251,7 +257,7 @@ func eval[T constraints.Integer](ctr *container, ap *Argument, proc *process.Pro
 				ctr.wstart = append(ctr.wstart, ctr.start)
 				ctr.wend = append(ctr.wend, ctr.end)
 				for _, ag := range ctr.aggs {
-					if err = ag.Grows(1, proc.Mp()); err != nil {
+					if err = ag.GroupGrow(1); err != nil {
 						return err
 					}
 				}
@@ -259,7 +265,7 @@ func eval[T constraints.Integer](ctr *container, ap *Argument, proc *process.Pro
 				ctr.group++
 			}
 			for j, agg := range ctr.aggs {
-				if err = agg.Fill(int64(ctr.group), int64(ctr.curRow), []*vector.Vector{ctr.aggVec[ctr.curIdx][j]}); err != nil {
+				if err = agg.Fill(ctr.group, ctr.curRow, []*vector.Vector{ctr.aggVec[ctr.curIdx][j]}); err != nil {
 					return err
 				}
 			}
@@ -280,10 +286,13 @@ func eval[T constraints.Integer](ctr *container, ap *Argument, proc *process.Pro
 				if err = calRes[T](ctr, ap, proc); err != nil {
 					return err
 				}
-				ctr.aggs = make([]agg.Agg[any], len(ap.Aggs))
+				ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 				for i, ag := range ap.Aggs {
-					if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
-						return err
+					ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
+					if config := ag.GetExtraConfig(); config != nil {
+						if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
+							return err
+						}
 					}
 				}
 				ctr.group = 0
@@ -308,7 +317,7 @@ func calRes[T constraints.Integer](ctr *container, ap *Argument, proc *process.P
 	ctr.rbat = batch.NewWithSize(ctr.colCnt)
 	i := 0
 	for _, agg := range ctr.aggs {
-		vec, err := agg.Eval(proc.Mp())
+		vec, err := agg.Flush()
 		if err != nil {
 			return err
 		}

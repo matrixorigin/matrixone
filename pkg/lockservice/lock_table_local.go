@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
 
@@ -75,10 +74,6 @@ func (l *localLockTable) lock(
 	opts LockOptions,
 	cb func(pb.Result, error)) {
 	v2.TxnLocalLockTotalCounter.Inc()
-
-	// FIXME(fagongzi): too many mem alloc in trace
-	ctx, span := trace.Debug(ctx, "lockservice.lock.local")
-	defer span.End()
 
 	logLocalLock(txn, l.bind.Table, rows, opts)
 	c := l.newLockContext(ctx, txn, rows, opts, cb, l.bind)
@@ -146,17 +141,35 @@ func (l *localLockTable) doLock(
 		c.txn.Lock()
 
 		logLocalLockWaitOnResult(c.txn, table, c.rows[c.idx], c.opts, c.w, v)
-		if v.err != nil {
-			c.txn.clearBlocked(c.w)
+
+		// txn closed between Unlock and get Lock again
+		e := v.err
+		if e == nil && (!bytes.Equal(oldTxnID, c.txn.txnID) ||
+			!bytes.Equal(c.w.txn.TxnID, oldTxnID)) {
+			e = ErrTxnNotFound
+		}
+		if e != nil {
+			c.closed = true
+			if e != ErrTxnNotFound {
+				c.txn.closeBlockWaiters()
+			}
+
+			if len(c.w.conflictKey) > 0 &&
+				c.opts.Granularity == pb.Granularity_Row {
+				l.mu.Lock()
+				if c.w.conflictWith.closeWaiter(c.w) {
+					l.mu.store.Delete(c.w.conflictKey)
+				}
+				l.mu.Unlock()
+			}
+
 			c.w.close()
-			c.done(v.err)
+			c.done(e)
 			return
 		}
-		// txn closed between Unlock and get Lock again
-		if !bytes.Equal(oldTxnID, c.txn.txnID) {
-			c.w.close()
-			c.done(ErrTxnNotFound)
-			return
+
+		if c.opts.RetryWait > 0 {
+			time.Sleep(time.Duration(c.opts.RetryWait))
 		}
 
 		c.w.resetWait()
@@ -436,10 +449,17 @@ func (l *localLockTable) handleLockConflictLocked(
 		return ErrLockConflict
 	}
 
+	c.w.conflictKey = key
+	c.w.conflictWith = conflictWith
+	c.w.lt = l
 	c.w.waitFor = c.w.waitFor[:0]
 	for _, txn := range conflictWith.holders.txns {
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
 	}
+	conflictWith.waiters.iter(func(w *waiter) bool {
+		c.w.waitFor = append(c.w.waitFor, w.txn.TxnID)
+		return true
+	})
 
 	conflictWith.addWaiter(c.w)
 	l.events.add(c)

@@ -17,9 +17,11 @@ package batch
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
 var (
@@ -36,7 +38,7 @@ type EncodeBatch struct {
 	rowCount  int64
 	Vecs      []*vector.Vector
 	Attrs     []string
-	AggInfos  []aggInfo
+	AggInfos  [][]byte
 	Recursive int32
 }
 
@@ -79,13 +81,9 @@ func (m *EncodeBatch) MarshalBinary() ([]byte, error) {
 	l = int32(len(m.AggInfos))
 	buf.Write(types.EncodeInt32(&l))
 	for i := 0; i < int(l); i++ {
-		data, err := m.AggInfos[i].MarshalBinary()
-		if err != nil {
-			return nil, err
-		}
-		size := int32(len(data))
+		size := int32(len(m.AggInfos[i]))
 		buf.Write(types.EncodeInt32(&size))
-		buf.Write(data)
+		buf.Write(m.AggInfos[i])
 	}
 
 	buf.Write(types.EncodeInt32(&m.Recursive))
@@ -94,6 +92,14 @@ func (m *EncodeBatch) MarshalBinary() ([]byte, error) {
 }
 
 func (m *EncodeBatch) UnmarshalBinary(data []byte) error {
+	return m.unmarshalBinaryWithAnyMp(data, nil)
+}
+
+func (m *EncodeBatch) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
+	return m.unmarshalBinaryWithAnyMp(data, mp)
+}
+
+func (m *EncodeBatch) unmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) error {
 	// types.DecodeXXX plays with raw pointer, so we make a copy of binary data
 	buf := make([]byte, len(data))
 	copy(buf, data)
@@ -110,12 +116,23 @@ func (m *EncodeBatch) UnmarshalBinary(data []byte) error {
 		size := types.DecodeInt32(buf[:4])
 		buf = buf[4:]
 
-		vec := vector.NewEmptyVec()
-		if err := vec.UnmarshalBinary(buf[:size]); err != nil {
-			return err
+		vecs[i] = vector.NewEmptyVec()
+		if mp == nil {
+			if err := vecs[i].UnmarshalBinary(buf[:size]); err != nil {
+				return err
+			}
+		} else {
+			if err := vecs[i].UnmarshalBinaryWithCopy(buf[:size], mp); err != nil {
+				for _, vec := range vecs {
+					if vec != nil {
+						vec.Free(mp)
+					}
+				}
+				return err
+			}
 		}
+
 		buf = buf[size:]
-		vecs[i] = vec
 	}
 	m.Vecs = vecs
 
@@ -134,30 +151,18 @@ func (m *EncodeBatch) UnmarshalBinary(data []byte) error {
 	// AggInfos
 	l = types.DecodeInt32(buf[:4])
 	buf = buf[4:]
-	aggs := make([]aggInfo, l)
+	aggs := make([][]byte, l)
 	for i := 0; i < int(l); i++ {
 		size := types.DecodeInt32(buf[:4])
 		buf = buf[4:]
-
-		var agg aggInfo
-		if err := agg.UnmarshalBinary(buf[:size]); err != nil {
-			return err
-		}
+		aggs[i] = buf[:size]
 		buf = buf[size:]
-		aggs[i] = agg
 	}
 	m.AggInfos = aggs
 
 	m.Recursive = types.DecodeInt32(buf[:4])
 
 	return nil
-}
-
-type aggInfo struct {
-	Op         int64
-	Dist       bool
-	inputTypes types.Type
-	Agg        agg.Agg[any]
 }
 
 // Batch represents a part of a relationship
@@ -178,8 +183,8 @@ type Batch struct {
 	Attrs []string
 	// Vecs col data
 	Vecs []*vector.Vector
-	// ring
-	Aggs []agg.Agg[any]
+
+	Aggs []aggexec.AggFuncExec
 
 	// row count of batch, to instead of old len(Zs).
 	rowCount int

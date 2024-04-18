@@ -1607,6 +1607,8 @@ const (
 
 	getSnapshotTsWithSnapshotNameFormat = `select ts from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`
 
+	checkSnapshotTsFormat = `select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id;`
+
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
 	getPubInfoFormat            = `select account_list,comment,database_name,database_id from mo_catalog.mo_pubs where pub_name = '%s';`
@@ -1692,6 +1694,10 @@ func getSqlForGetSnapshotTsWithSnapshotName(ctx context.Context, snapshot string
 		return "", err
 	}
 	return fmt.Sprintf(getSnapshotTsWithSnapshotNameFormat, snapshot), nil
+}
+
+func getSqlForCheckSnapshotTs(snapshotTs int64) string {
+	return fmt.Sprintf(checkSnapshotTsFormat, snapshotTs)
 }
 
 func getSqlForCheckStageStatus(ctx context.Context, status string) string {
@@ -9965,6 +9971,33 @@ func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses FeSession, spN
 	} else {
 		return 0, moerr.NewInternalError(ctx, "snapshot %s does not exist", spName)
 	}
+}
+
+func checkTimeStampValid(ctx context.Context, ses FeSession, snapshotTs int64) (bool, error) {
+	var sql string
+	var err error
+	var erArray []ExecResult
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	sql = getSqlForCheckSnapshotTs(snapshotTs)
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return false, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if !execResultArrayHasData(erArray) {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func getDbIdAndType(ctx context.Context, bh BackgroundExec, tenantInfo *TenantInfo, dbName string) (dbId uint64, dbType string, err error) {
