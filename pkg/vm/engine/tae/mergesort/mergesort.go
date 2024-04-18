@@ -15,79 +15,26 @@
 package mergesort
 
 import (
-	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 func SortBlockColumns(
 	cols []containers.Vector, pk int, pool *containers.VectorPool,
-) ([]int32, error) {
-	sortedIdx := make([]int32, cols[pk].Length())
-
-	switch cols[pk].GetType().Oid {
-	case types.T_bool:
-		Sort(cols[pk], boolLess, sortedIdx)
-	case types.T_bit:
-		Sort(cols[pk], numericLess[uint64], sortedIdx)
-	case types.T_int8:
-		Sort(cols[pk], numericLess[int8], sortedIdx)
-	case types.T_int16:
-		Sort(cols[pk], numericLess[int16], sortedIdx)
-	case types.T_int32:
-		Sort(cols[pk], numericLess[int32], sortedIdx)
-	case types.T_int64:
-		Sort(cols[pk], numericLess[int64], sortedIdx)
-	case types.T_uint8:
-		Sort(cols[pk], numericLess[uint8], sortedIdx)
-	case types.T_uint16:
-		Sort(cols[pk], numericLess[uint16], sortedIdx)
-	case types.T_uint32:
-		Sort(cols[pk], numericLess[uint32], sortedIdx)
-	case types.T_uint64:
-		Sort(cols[pk], numericLess[uint64], sortedIdx)
-	case types.T_float32:
-		Sort(cols[pk], numericLess[float32], sortedIdx)
-	case types.T_float64:
-		Sort(cols[pk], numericLess[float64], sortedIdx)
-	case types.T_date:
-		Sort(cols[pk], numericLess[types.Date], sortedIdx)
-	case types.T_time:
-		Sort(cols[pk], numericLess[types.Time], sortedIdx)
-	case types.T_datetime:
-		Sort(cols[pk], numericLess[types.Datetime], sortedIdx)
-	case types.T_timestamp:
-		Sort(cols[pk], numericLess[types.Timestamp], sortedIdx)
-	case types.T_enum:
-		Sort(cols[pk], numericLess[types.Enum], sortedIdx)
-	case types.T_decimal64:
-		Sort(cols[pk], ltTypeLess[types.Decimal64], sortedIdx)
-	case types.T_decimal128:
-		Sort(cols[pk], ltTypeLess[types.Decimal128], sortedIdx)
-	case types.T_uuid:
-		Sort(cols[pk], ltTypeLess[types.Uuid], sortedIdx)
-	case types.T_TS:
-		Sort(cols[pk], tsLess, sortedIdx)
-	case types.T_Rowid:
-		Sort(cols[pk], rowidLess, sortedIdx)
-	case types.T_Blockid:
-		Sort(cols[pk], blockidLess, sortedIdx)
-	case types.T_char, types.T_json, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
-		Sort(cols[pk], bytesLess, sortedIdx)
-	//TODO: check if I should add T_array here? Is bytesLess enough?
-	default:
-		panic(fmt.Sprintf("%s not supported", cols[pk].GetType().String()))
+) ([]int64, error) {
+	pkCol := cols[pk]
+	sortedIdx := make([]int64, pkCol.Length())
+	for i := 0; i < len(sortedIdx); i++ {
+		sortedIdx[i] = int64(i)
 	}
+	sort.Sort(false, false, true, sortedIdx, pkCol.GetDownstreamVector(), nil)
 
 	for i := 0; i < len(cols); i++ {
-		if i == pk {
-			continue
+		err := cols[i].GetDownstreamVector().Shuffle(sortedIdx, pool.MPool())
+		if err != nil {
+			return nil, err
 		}
-		cols[i] = Shuffle(cols[i], sortedIdx, pool)
 	}
 	return sortedIdx, nil
 }

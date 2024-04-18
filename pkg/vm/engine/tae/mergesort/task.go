@@ -393,7 +393,7 @@ func CleanTransMapping(b *api.BlkTransferBooking) {
 	}
 }
 
-func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, deletes *nulls.Nulls, mapping []int32) {
+func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, deletes *nulls.Nulls, mapping []int64) {
 	// TODO: remove panic check
 	if mapping != nil {
 		deletecnt := 0
@@ -408,9 +408,9 @@ func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, d
 		// [9 4 8 5 2 6 0 7 3 1](orignVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
 		// [0 1 2 3 4 5 6 7 8 9](sortedVec) -> [0 1 2 3 4 5 6 7 8 9](originalVec)
 		// TODO: use a more efficient way to transpose, in place
-		transposedMapping := make([]int32, len(mapping))
+		transposedMapping := make([]int64, len(mapping))
 		for sortedPos, originalPos := range mapping {
-			transposedMapping[originalPos] = int32(sortedPos)
+			transposedMapping[originalPos] = int64(sortedPos)
 		}
 		mapping = transposedMapping
 	}
@@ -425,7 +425,7 @@ func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, d
 			// no sort phase, the mapping is 1:1, just use posInVecApplyDeletes
 			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(posInVecApplyDeletes)}
 		} else {
-			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: mapping[posInVecApplyDeletes]}
+			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(mapping[posInVecApplyDeletes])}
 		}
 		posInVecApplyDeletes++
 	}
