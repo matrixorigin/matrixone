@@ -2768,6 +2768,27 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `md5`
+	{
+		functionId: MD5,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Md5
+				},
+			},
+		},
+	},
+
 	// function `ln`
 	{
 		functionId: LN,
@@ -5504,7 +5525,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CastNanoToTimestamp

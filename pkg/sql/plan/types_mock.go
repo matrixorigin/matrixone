@@ -370,6 +370,21 @@ func (mr *MockCompilerContext2MockRecorder) ResolveSnapshotTsWithSnapShotName(sn
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveSnapshotTsWithSnapShotName", reflect.TypeOf((*MockCompilerContext)(nil).ResolveSnapshotTsWithSnapShotName), snapshotName)
 }
 
+// CheckTimeStampValid mocks base method.
+func (m *MockCompilerContext2) CheckTimeStampValid(ts int64) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CheckTimeStampValid", ts)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CheckTimeStampValid indicates an expected call of CheckTimeStampValid.
+func (mr *MockCompilerContext2MockRecorder) CheckTimeStampValid(ts interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckTimeStampValid", reflect.TypeOf((*MockCompilerContext)(nil).CheckTimeStampValid), ts)
+}
+
 // ResolveUdf indicates an expected call of ResolveUdf.
 func (mr *MockCompilerContext2MockRecorder) ResolveUdf(name, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
