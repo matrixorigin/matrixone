@@ -16,6 +16,7 @@ package cache
 
 import (
 	"bytes"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -48,6 +49,12 @@ type TableVersion struct {
 
 // catalog cache
 type CatalogCache struct {
+	mu struct {
+		sync.Mutex
+		start types.TS
+		end   types.TS
+	}
+	//tables and database is safe to be read concurrently.
 	tables    *tableCache
 	databases *databaseCache
 }

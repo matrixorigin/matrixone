@@ -110,12 +110,13 @@ type Config struct {
 	RPC rpc.Config `toml:"rpc"`
 
 	Ckp struct {
-		FlushInterval         toml.Duration `toml:"flush-interval"`
-		ScanInterval          toml.Duration `toml:"scan-interval"`
-		MinCount              int64         `toml:"min-count"`
-		IncrementalInterval   toml.Duration `toml:"incremental-interval"`
-		GlobalMinCount        int64         `toml:"global-min-count"`
-		ReservedWALEntryCount uint64        `toml:"reserved-WAL-entry-count"`
+		FlushInterval          toml.Duration `toml:"flush-interval"`
+		ScanInterval           toml.Duration `toml:"scan-interval"`
+		MinCount               int64         `toml:"min-count"`
+		IncrementalInterval    toml.Duration `toml:"incremental-interval"`
+		GlobalMinCount         int64         `toml:"global-min-count"`
+		ReservedWALEntryCount  uint64        `toml:"reserved-WAL-entry-count"`
+		OverallFlushMemControl uint64        `toml:"overall-flush-mem-control"`
 	}
 
 	GCCfg struct {

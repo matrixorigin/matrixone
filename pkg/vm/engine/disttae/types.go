@@ -130,11 +130,26 @@ type Engine struct {
 	us       udf.Service
 	cli      client.TxnClient
 	idGen    IDGenerator
-	//TODO::cache multiple snapshot databases and tables.
+	tnID     string
+
+	//latest catalog will be loaded from TN when engine is initialized.
 	catalog *cache.CatalogCache
-	tnID    string
-	//TODO::table maybe contains multiple snapshot partition state.
+	//snapshot catalog will be loaded from TN When snapshot read is needed.
+	snapCatalog *struct {
+		sync.Mutex
+		snaps []*cache.CatalogCache
+	}
+	//latest partitions which be protected by e.Lock().
 	partitions map[[2]uint64]*logtailreplay.Partition
+	//snapshot partitions
+	mu struct {
+		sync.Mutex
+		snapParts map[[2]uint64]*struct {
+			sync.Mutex
+			snaps []*logtailreplay.Partition
+		}
+	}
+
 	packerPool *fileservice.Pool[*types.Packer]
 
 	gcPool *ants.Pool
