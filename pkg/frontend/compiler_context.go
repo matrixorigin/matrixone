@@ -649,9 +649,13 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) (*pb.StatsInfo, error
 		return nil, nil
 	}
 	if needUpdate {
-		s := table.Stats(ctx, true)
-		tcc.UpdateStatsInCache(table.GetTableID(ctx), s)
-		return s, nil
+		s, err = table.Stats(ctx, true)
+		if err != nil {
+			return s, err
+		}
+		if s != nil {
+			tcc.UpdateStatsInCache(table.GetTableID(ctx), s)
+		}
 	}
 	return s, nil
 }
