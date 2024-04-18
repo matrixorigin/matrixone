@@ -1705,6 +1705,7 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	bat := new(batch.Batch)
 	if err := bat.UnmarshalBinaryWithCopy(data, mp); err != nil {
+		bat.Clean(mp)
 		return nil, err
 	}
 	return bat, nil
