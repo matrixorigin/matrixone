@@ -156,6 +156,9 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.CheckpointCfg.GlobalMinCount <= 0 {
 		o.CheckpointCfg.GlobalMinCount = DefaultCheckpointMinCount
 	}
+	if o.CheckpointCfg.OverallFlushMemControl <= 0 {
+		o.CheckpointCfg.OverallFlushMemControl = DefaultOverallFlushMemControl
+	}
 	if o.CheckpointCfg.MinCount <= 0 {
 		o.CheckpointCfg.MinCount = DefaultCheckpointMinCount
 	}
