@@ -377,7 +377,6 @@ func Multiplex(
 func Reshape(column []*vector.Vector, ret []*vector.Vector, fromLayout, toLayout []uint32, m *mpool.MPool) {
 	fromIdx := 0
 	fromOffset := 0
-	typ := column[0].GetType()
 	for i := 0; i < len(toLayout); i++ {
 		toOffset := 0
 		for toOffset < int(toLayout[i]) {
@@ -395,20 +394,14 @@ func Reshape(column []*vector.Vector, ret []*vector.Vector, fromLayout, toLayout
 				length = int(toLayout[i]) - toOffset
 			}
 
-			// clone from src and append to dest
-			// FIXME: is clone necessary? can we just feed the original vector window to GetUnionAllFunction?
-			// TODO: use vector pool for the cloned vector
-			cloned, err := column[fromIdx].CloneWindow(fromOffset, fromOffset+length, m)
+			sels := make([]int32, length)
+			for i := 0; i < length; i++ {
+				sels[i] = int32(fromOffset + i)
+			}
+			err := ret[i].Union(column[fromIdx], sels, m)
 			if err != nil {
 				panic(err)
 			}
-			err = vector.GetUnionAllFunction(*typ, m)(ret[i], cloned)
-			if err != nil {
-				panic(err)
-			}
-
-			// release temporary coloned vector
-			cloned.Free(m)
 
 			// update offset
 			fromOffset += length

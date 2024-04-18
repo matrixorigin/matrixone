@@ -149,6 +149,7 @@ func TestMerge1(t *testing.T) {
 		}
 	}
 }
+
 func TestMerge2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()
@@ -167,7 +168,8 @@ func TestMerge2(t *testing.T) {
 		}
 	}
 }
-func TestReshape1(t *testing.T) {
+
+func TestReshapeColumn1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()
 	for _, vecType := range vecTypes {
@@ -184,7 +186,7 @@ func TestReshape1(t *testing.T) {
 		}
 	}
 }
-func TestReshape2(t *testing.T) {
+func TestReshapeColumn2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()
 	for _, vecType := range vecTypes {
