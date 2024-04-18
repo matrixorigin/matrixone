@@ -21,13 +21,14 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
@@ -91,7 +92,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 	case param.Extern.Local:
 		return moerr.NewNYI(param.Ctx, "unsupported load parquet local now")
 	default:
-		fs, readPath, err := plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
+		fs, readPath, err := plan.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
 		if err != nil {
 			return err
 		}
@@ -108,103 +109,186 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
 	h.cols = make([]*parquet.Column, len(param.Attrs))
-	h.dataFn = make([]dataFn, len(param.Attrs))
+	h.mappers = make([]*columnMapper, len(param.Attrs))
 	for colIdx, attr := range param.Attrs {
 		def := param.Cols[colIdx]
 		if def.Hidden {
 			continue
 		}
+
 		col := h.file.Root().Column(attr)
 		if col == nil {
 			return moerr.NewInvalidInput(param.Ctx, "column %s not found", attr)
 		}
+		if !col.Leaf() {
+			return moerr.NewNYI(param.Ctx, "can't load group column %s", attr)
+		}
 
 		h.cols[colIdx] = col
-		fn := h.getDataFn(col.Type(), types.T(def.Typ.Id))
+		fn := h.getMapper(col, def.Typ)
 		if fn == nil {
-			return moerr.NewNYI(param.Ctx, "load %s to %s", col.Type(), types.T(def.Typ.Id))
+			st := col.Type().String()
+			if col.Optional() {
+				st += "(optional)"
+			} else {
+				st += "(required)"
+			}
+			dt := types.T(def.Typ.Id).String()
+			if def.NotNull {
+				dt += " NOT NULL"
+			} else {
+				dt += " NULL"
+			}
+			return moerr.NewNYI(param.Ctx, "load %s to %s", st, dt)
 		}
-		h.dataFn[colIdx] = fn
+		h.mappers[colIdx] = fn
 	}
 
 	return nil
 }
 
-func (*ParquetHandler) getDataFn(st parquet.Type, dt types.T) dataFn {
+func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper {
+	st := sc.Type()
 	if st.PhysicalType() == nil {
 		return nil
 	}
+	if sc.Optional() && dt.NotNullable {
+		return nil
+	}
 
-	switch dt {
+	mp := &columnMapper{
+		srcNull:            sc.Optional(),
+		dstNull:            !dt.NotNullable,
+		maxDefinitionLevel: byte(sc.MaxDefinitionLevel()),
+	}
+	switch types.T(dt.Id) {
 	case types.T_bool:
 		if st.Kind() == parquet.Boolean {
-			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				var err error
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				p := make([]bool, page.NumValues())
 				r := page.Values().(parquet.BooleanReader)
-				var n int
-				n, err = r.ReadBooleans(p)
+				n, err := r.ReadBooleans(p)
 				if err != nil && !errors.Is(err, io.EOF) {
 					return moerr.ConvertGoError(proc.Ctx, err)
 				}
 				if n != int(page.NumValues()) {
 					return moerr.NewInternalError(proc.Ctx, "short read bool")
 				}
-				return vector.AppendFixedList(vec, p, nil, proc.GetMPool())
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, p, nil, proc.Mp())
+				}
+				return appendFixed(vec, p, isNulls, proc.Mp())
 			}
 		}
 	case types.T_int32:
 		if st.Kind() == parquet.Int32 {
-			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
-				return vector.AppendFixedList(vec, data.Int32(), nil, proc.GetMPool())
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, data.Int32(), nil, proc.Mp())
+				}
+				return appendFixed(vec, data.Int32(), isNulls, proc.Mp())
 			}
 		}
 	case types.T_int64:
 		if st.Kind() == parquet.Int64 {
-			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
-				return vector.AppendFixedList(vec, data.Int64(), nil, proc.GetMPool())
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, data.Int64(), nil, proc.Mp())
+				}
+				return appendFixed(vec, data.Int64(), isNulls, proc.Mp())
 			}
 		}
 	case types.T_uint32:
 		if st.Kind() == parquet.Int32 {
-			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
-				return vector.AppendFixedList(vec, data.Uint32(), nil, proc.GetMPool())
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, data.Uint32(), nil, proc.Mp())
+				}
+				return appendFixed(vec, data.Uint32(), isNulls, proc.Mp())
 			}
 		}
 	case types.T_uint64:
 		if st.Kind() == parquet.Int64 {
-			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
-				return vector.AppendFixedList(vec, data.Uint64(), nil, proc.GetMPool())
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, data.Uint64(), nil, proc.Mp())
+				}
+				return appendFixed(vec, data.Uint64(), isNulls, proc.Mp())
 			}
 		}
 	case types.T_float32:
 		if st.Kind() == parquet.Float {
-			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
-				return vector.AppendFixedList(vec, data.Float(), nil, proc.GetMPool())
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, data.Float(), nil, proc.Mp())
+				}
+				return appendFixed(vec, data.Float(), isNulls, proc.Mp())
 			}
 		}
 	case types.T_float64:
 		if st.Kind() == parquet.Double {
-			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
-				return vector.AppendFixedList(vec, data.Double(), nil, proc.GetMPool())
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, data.Double(), nil, proc.GetMPool())
+				}
+				return appendFixed(vec, data.Double(), isNulls, proc.Mp())
 			}
 		}
 	case types.T_char, types.T_varchar:
 		if st.Kind() == parquet.ByteArray {
-			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				buf, offsets := data.ByteArray()
 				if len(offsets) > 0 {
 					baseOffset := offsets[0]
-					for _, endOffset := range offsets[1:] {
-						err := vector.AppendBytes(vec, buf[baseOffset:endOffset:endOffset], false, proc.GetMPool())
-						baseOffset = endOffset
+					j := 1
+					for i := 0; i < int(page.NumRows()); i++ {
+						isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+						if err != nil {
+							return err
+						}
+						if isNull {
+							err = vector.AppendBytes(vec, nil, true, proc.GetMPool())
+						} else {
+							endOffset := offsets[j]
+							err = vector.AppendBytes(vec, buf[baseOffset:endOffset:endOffset], false, proc.GetMPool())
+							baseOffset = endOffset
+							j++
+						}
 						if err != nil {
 							return err
 						}
@@ -214,18 +298,48 @@ func (*ParquetHandler) getDataFn(st parquet.Type, dt types.T) dataFn {
 			}
 		}
 		if st.Kind() == parquet.FixedLenByteArray {
-			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				buf, size := data.FixedLenByteArray()
+				i := 0
 				for len(buf) > 0 {
-					err := vector.AppendBytes(vec, buf[:size:size], false, proc.GetMPool())
-					buf = buf[size:]
+					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
+					if err != nil {
+						return err
+					}
+					if isNull {
+						err = vector.AppendBytes(vec, nil, true, proc.GetMPool())
+					} else {
+						err = vector.AppendBytes(vec, buf[:size:size], false, proc.GetMPool())
+						buf = buf[size:]
+					}
 					if err != nil {
 						return err
 					}
 				}
 				return nil
 			}
+			return mp
+		}
+	}
+	if mp.mapper != nil {
+		return mp
+	}
+	return nil
+}
+
+func appendFixed[T any](vec *vector.Vector, ls []T, isNulls []bool, mp *mpool.MPool) error {
+	err := vec.PreExtend(len(isNulls), mp)
+	if err != nil {
+		return err
+	}
+	j := 0
+	for _, null := range isNulls {
+		if null {
+			vector.AppendFixed(vec, 0, true, mp)
+		} else {
+			vector.AppendFixed(vec, ls[j], false, mp)
+			j++
 		}
 	}
 	return nil
@@ -260,8 +374,8 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 				continue
 			}
 
-			if len(page.DefinitionLevels()) != 0 || len(page.RepetitionLevels()) != 0 {
-				return moerr.NewNYI(param.Ctx, "page has repetition or definition not support")
+			if len(page.RepetitionLevels()) != 0 {
+				return moerr.NewNYI(param.Ctx, "page has repetition")
 			}
 
 			if o > 0 || o+n < nr {
@@ -270,7 +384,7 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 			o = 0
 			n -= page.NumRows()
 
-			err = h.dataFn[colIdx](page, proc, vec)
+			err = h.mappers[colIdx].mapping(page, proc, vec)
 			if err != nil {
 				return err
 			}
@@ -303,6 +417,42 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 	}
 
 	return nil
+}
+
+func (mp *columnMapper) pageIsNulls(ctx context.Context, page parquet.Page) ([]bool, error) {
+	if !mp.srcNull || !mp.dstNull {
+		return nil, nil
+	}
+	if page.NumNulls() == 0 {
+		return nil, nil
+	}
+	def := page.DefinitionLevels()
+	if len(def) != int(page.NumRows()) {
+		return nil, moerr.NewInvalidInput(ctx, "malformed page")
+	}
+	isNulls := make([]bool, len(def))
+	for i, level := range def {
+		isNulls[i] = level != mp.maxDefinitionLevel
+	}
+	return isNulls, nil
+}
+
+func (mp *columnMapper) pageIsNull(ctx context.Context, page parquet.Page, index int) (bool, error) {
+	if !mp.srcNull || !mp.dstNull {
+		return false, nil
+	}
+	if page.NumNulls() == 0 {
+		return false, nil
+	}
+	levels := page.DefinitionLevels()
+	if len(levels) != int(page.NumRows()) {
+		return false, moerr.NewInvalidInput(ctx, "malformed page")
+	}
+	return levels[index] != mp.maxDefinitionLevel, nil
+}
+
+func (mp *columnMapper) mapping(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+	return mp.mapper(mp, page, proc, vec)
 }
 
 type fsReaderAt struct {

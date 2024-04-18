@@ -15,9 +15,11 @@
 package external
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/encoding"
@@ -84,8 +86,26 @@ func Test_dataFn(t *testing.T) {
 			page := tc.typ.NewPage(0, tc.numValues, tc.values)
 			vec := proc.GetVector(types.New(tc.vType, 0, 0))
 
+			var buf bytes.Buffer
+			schema := parquet.NewSchema("x", parquet.Group{
+				"c": parquet.Leaf(tc.typ),
+			})
+			w := parquet.NewWriter(&buf, schema)
+
+			values := make([]parquet.Value, page.NumRows())
+			page.Values().ReadValues(values)
+			_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(values)})
+			convey.So(err, convey.ShouldBeNil)
+			err = w.Close()
+			convey.So(err, convey.ShouldBeNil)
+
+			f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			convey.So(err, convey.ShouldBeNil)
+
 			var h ParquetHandler
-			err := h.getDataFn(tc.typ, tc.vType)(page, proc, vec)
+			err = h.getMapper(f.Root().Column("c"), plan.Type{
+				Id: int32(tc.vType),
+			}).mapping(page, proc, vec)
 			convey.So(err, convey.ShouldBeNil)
 
 			t.Log(vec.String())
