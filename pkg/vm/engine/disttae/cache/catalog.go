@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -45,7 +46,35 @@ func NewCatalog() *CatalogCache {
 			data:       btree.NewBTreeG(databaseItemLess),
 			rowidIndex: btree.NewBTreeG(databaseItemRowidLess),
 		},
+		mu: struct {
+			sync.Mutex
+			start types.TS
+			end   types.TS
+		}{start: types.MaxTs()},
 	}
+}
+
+func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	cc.mu.start = start
+	cc.mu.end = end
+}
+
+var _ = (&CatalogCache{}).UpdateStart
+
+func (cc *CatalogCache) UpdateStart(ts types.TS) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	if cc.mu.start != types.MaxTs() {
+		cc.mu.start = ts
+	}
+}
+
+func (cc *CatalogCache) CanServe(ts types.TS) bool {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	return ts.GreaterEq(&cc.mu.start) && ts.LessEq(&cc.mu.end)
 }
 
 func (cc *CatalogCache) GC(ts timestamp.Timestamp) {
