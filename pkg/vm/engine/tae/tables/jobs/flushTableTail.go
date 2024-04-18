@@ -654,7 +654,10 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context) (subt
 		}
 		if deletes != nil {
 			// make sure every batch in deltaloc object is sorted by rowid
-			mergesort.SortBlockColumns(deletes.Vecs, 0, task.rt.VectorPool.Transient)
+			_, err := mergesort.SortBlockColumns(deletes.Vecs, 0, task.rt.VectorPool.Transient)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		aobjectTask := NewFlushObjTask(
@@ -745,7 +748,10 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 	}
 	if bufferBatch != nil {
 		// make sure every batch in deltaloc object is sorted by rowid
-		mergesort.SortBlockColumns(bufferBatch.Vecs, 0, task.rt.VectorPool.Transient)
+		_, err = mergesort.SortBlockColumns(bufferBatch.Vecs, 0, task.rt.VectorPool.Transient)
+		if err != nil {
+			return
+		}
 		subtask = NewFlushDeletesTask(tasks.WaitableCtx, task.rt.Fs, bufferBatch)
 		if err = task.rt.Scheduler.Schedule(subtask); err != nil {
 			return
