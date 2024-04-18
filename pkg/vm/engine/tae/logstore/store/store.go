@@ -177,6 +177,7 @@ func (w *StoreImpl) onDoneWithErrQueue(items ...any) {
 		if err != nil {
 			panic(err)
 		}
+		e.Entry.ExecuteAfterFlushCBs()
 		e.Entry.DoneWithErr(nil)
 		_, err = w.logInfoQueue.Enqueue(e)
 		if err != nil {

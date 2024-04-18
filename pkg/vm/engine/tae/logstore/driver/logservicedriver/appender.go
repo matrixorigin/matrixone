@@ -114,7 +114,6 @@ func (a *driverAppender) waitDone() {
 
 func (a *driverAppender) freeEntries() {
 	for _, e := range a.entry.entries {
-		e.Entry.ExecuteAfterFlushCBs()
 		e.DoneWithErr(nil)
 	}
 }

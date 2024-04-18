@@ -137,7 +137,7 @@ func (bs *baseStore) onCommits(batches ...any) {
 			// 	logutil.Infof("sync and queues takes %dms", e.Duration().Milliseconds())
 			// 	e.StartTime()
 			// }
-			e.Entry.ExecuteAfterFlushCBs()
+			//e.Entry.ExecuteAfterFlushCBs()
 			e.DoneWithErr(nil)
 			_, err := bs.postCommitQueue.Enqueue(e)
 			if err != nil {

@@ -553,7 +553,6 @@ func (mgr *TxnManager) registerApplyCommitCB(e entry2.Entry, op *OpTxn) {
 		postCallback()
 		return
 	}
-
 	e.RegisterAfterFlushCBs(func() error {
 		postCallback()
 		return nil
