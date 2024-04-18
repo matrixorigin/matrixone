@@ -49,7 +49,7 @@ func ifNeedLockWholeTable(builder *QueryBuilder, lastNodeId int32) bool {
 	if lastNode == nil {
 		return false
 	}
-	if lastNode.Stats.Outcnt > lockservice.MaxLockCount {
+	if lastNode.Stats.Outcnt > lockservice.MaxLockCount || builder.qry.LoadTag {
 		return true
 	}
 	return false
