@@ -49,11 +49,7 @@ func ifNeedLockWholeTable(builder *QueryBuilder, lastNodeId int32) bool {
 		return false
 	}
 	lockconfig := builder.compCtx.GetProcess().LockService.GetConfig()
-
-	if lastNode.Stats.Outcnt > float64(lockconfig.MaxLockRowCount) {
-		return true
-	}
-	return false
+	return lastNode.Stats.Outcnt > float64(lockconfig.MaxLockRowCount)
 }
 
 // GetFunctionArgTypeStrFromAst function arg type do not have scale and width, it depends on the data that it process
