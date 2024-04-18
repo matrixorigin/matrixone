@@ -553,6 +553,16 @@ func (s *service) getLockServiceConfig() lockservice.Config {
 	s.cfg.LockService.ServiceID = s.cfg.UUID
 	s.cfg.LockService.RPC = s.cfg.RPC
 	s.cfg.LockService.ListenAddress = s.lockServiceListenAddr()
+	s.cfg.LockService.TxnIterFunc = func(f func([]byte) bool) {
+		tc := s._txnClient
+		if tc == nil {
+			return
+		}
+
+		tc.IterTxns(func(to client.TxnOverview) bool {
+			return f(to.Meta.ID)
+		})
+	}
 	return s.cfg.LockService
 }
 

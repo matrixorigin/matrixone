@@ -60,6 +60,7 @@ var (
 		moerr.ErrTxnNotFound:          {},
 		moerr.ErrTxnNotActive:         {},
 		moerr.ErrLockTableBindChanged: {},
+		moerr.ErrCannotCommitOrphan:   {},
 	}
 	rollbackTxnErrors = map[uint16]struct{}{
 		moerr.ErrTAERollback:  {},
