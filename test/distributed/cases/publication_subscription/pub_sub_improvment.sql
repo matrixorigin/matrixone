@@ -1,6 +1,7 @@
 drop database if exists database01;
 drop database if exists test02;
 drop database if exists test03;
+drop database if exists procedure_test;
 -- create tenant
 drop account if exists test_tenant_1;
 create account test_tenant_1 admin_name 'test_account' identified by '111';
