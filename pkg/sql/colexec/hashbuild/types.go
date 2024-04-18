@@ -115,12 +115,7 @@ func (arg *Argument) Release() {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
-		if !ctr.runtimeFilterHandled && arg.RuntimeFilterSpec != nil {
-			var runtimeFilter process.RuntimeFilterMessage
-			runtimeFilter.Tag = arg.RuntimeFilterSpec.Tag
-			runtimeFilter.Typ = process.RuntimeFilter_DROP
-			sendFilter(arg, proc, runtimeFilter)
-		}
+		ctr.cleanRuntimeFilters(proc, arg.RuntimeFilterSpec)
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors(proc.Mp())
 		if !arg.NeedHashMap {
@@ -132,6 +127,15 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		} else {
 			ctr.FreeAllReg()
 		}
+	}
+}
+
+func (ctr *container) cleanRuntimeFilters(proc *process.Process, runtimeFilterSpec *pbplan.RuntimeFilterSpec) {
+	if !ctr.runtimeFilterHandled && runtimeFilterSpec != nil {
+		var runtimeFilter process.RuntimeFilterMessage
+		runtimeFilter.Tag = runtimeFilterSpec.Tag
+		runtimeFilter.Typ = process.RuntimeFilter_DROP
+		proc.SendMessage(runtimeFilter)
 	}
 }
 

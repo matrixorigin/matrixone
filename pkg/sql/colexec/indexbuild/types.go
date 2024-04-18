@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -79,12 +80,7 @@ func (arg *Argument) Release() {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
-		if !ctr.runtimeFilterHandled && arg.RuntimeFilterSpec != nil {
-			var runtimeFilter process.RuntimeFilterMessage
-			runtimeFilter.Tag = arg.RuntimeFilterSpec.Tag
-			runtimeFilter.Typ = process.RuntimeFilter_DROP
-			sendFilter(arg, proc, runtimeFilter)
-		}
+		ctr.cleanRuntimeFilters(proc, arg.RuntimeFilterSpec)
 		if ctr.batch != nil {
 			proc.PutBatch(ctr.batch)
 		}
@@ -94,5 +90,14 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		} else {
 			ctr.FreeAllReg()
 		}
+	}
+}
+
+func (ctr *container) cleanRuntimeFilters(proc *process.Process, runtimeFilterSpec *pbplan.RuntimeFilterSpec) {
+	if !ctr.runtimeFilterHandled && runtimeFilterSpec != nil {
+		var runtimeFilter process.RuntimeFilterMessage
+		runtimeFilter.Tag = runtimeFilterSpec.Tag
+		runtimeFilter.Typ = process.RuntimeFilter_DROP
+		proc.SendMessage(runtimeFilter)
 	}
 }
