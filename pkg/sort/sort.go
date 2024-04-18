@@ -15,6 +15,7 @@
 package sort
 
 import (
+	"fmt"
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -252,6 +253,29 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		} else {
 			genericSort(col, os, arrayGreater[float64])
 		}
+	case types.T_TS:
+		col := vector.MustFixedCol[types.TS](vec)
+		if !desc {
+			genericSort(col, os, tsLess)
+		} else {
+			genericSort(col, os, tsGreater)
+		}
+	case types.T_Rowid:
+		col := vector.MustFixedCol[types.Rowid](vec)
+		if !desc {
+			genericSort(col, os, rowidLess)
+		} else {
+			genericSort(col, os, rowidGreater)
+		}
+	case types.T_Blockid:
+		col := vector.MustFixedCol[types.Blockid](vec)
+		if !desc {
+			genericSort(col, os, blockidLess)
+		} else {
+			genericSort(col, os, blockidGreater)
+		}
+	default:
+		panic(fmt.Sprintf("sort: unsupported type %s", vec.GetType().String()))
 	}
 }
 
@@ -277,6 +301,30 @@ func decimal128Less(data []types.Decimal128, i, j int64) bool {
 
 func decimal128Greater(data []types.Decimal128, i, j int64) bool {
 	return data[i].Compare(data[j]) > 0
+}
+
+func tsLess(data []types.TS, i, j int64) bool {
+	return data[i].Less(&data[j])
+}
+
+func tsGreater(data []types.TS, i, j int64) bool {
+	return data[i].Greater(&data[j])
+}
+
+func rowidLess(data []types.Rowid, i, j int64) bool {
+	return data[i].Less(data[j])
+}
+
+func rowidGreater(data []types.Rowid, i, j int64) bool {
+	return data[i].Great(data[j])
+}
+
+func blockidLess(data []types.Blockid, i, j int64) bool {
+	return data[i].Less(data[j])
+}
+
+func blockidGreater(data []types.Blockid, i, j int64) bool {
+	return data[i].Great(data[j])
 }
 
 func uuidLess(data []types.Uuid, i, j int64) bool {
