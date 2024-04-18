@@ -15,7 +15,6 @@
 package sort
 
 import (
-	"fmt"
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
