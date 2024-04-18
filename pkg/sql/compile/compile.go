@@ -2113,12 +2113,8 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 		attrs[j] = col.Name
 	}
 
-	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) {
-		if n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
-			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
-		} else {
-			return nil, moerr.NewInvalidInput(c.ctx, "scan timestamp is greater than current txn timestamp")
-		}
+	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+		txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
 	} else {
 		txnOp = c.proc.TxnOperator
 	}
@@ -3631,6 +3627,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 	var err error
 	var db engine.Database
 	var ranges engine.Ranges
+	var txnOp client.TxnOperator
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -3642,7 +3639,13 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 
-	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+		txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+	} else {
+		txnOp = c.proc.TxnOperator
+	}
+
+	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 	if err != nil {
 		return nil, err
 	}
@@ -3709,12 +3712,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var nodes engine.Nodes
 	var txnOp client.TxnOperator
 
-	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) {
-		if n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
-			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
-		} else {
-			return nil, nil, nil, moerr.NewInvalidInput(c.ctx, "scan timestamp is greater than current txn timestamp")
-		}
+	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+		txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
 	} else {
 		txnOp = c.proc.TxnOperator
 	}

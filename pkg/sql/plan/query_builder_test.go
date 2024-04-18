@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/assert"
 )
@@ -68,7 +69,7 @@ func TestBuildTable_AlterView(t *testing.T) {
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
 	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string) (*ObjectRef, *TableDef) {
+		func(schemaName string, tableName string, ts timestamp.Timestamp) (*ObjectRef, *TableDef) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
