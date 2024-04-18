@@ -150,6 +150,10 @@ func (l *localLockTable) doLock(
 		}
 		if e != nil {
 			c.closed = true
+			if e != ErrTxnNotFound {
+				c.txn.closeBlockWaiters()
+			}
+
 			if len(c.w.conflictKey) > 0 &&
 				c.opts.Granularity == pb.Granularity_Row {
 				l.mu.Lock()

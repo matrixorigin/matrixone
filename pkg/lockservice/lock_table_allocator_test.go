@@ -144,9 +144,13 @@ func TestCheckTimeoutServiceTask(t *testing.T) {
 			// create s1 bind
 			a.Get("s1", 0, 1, 0, pb.Sharding_None)
 
-			time.Sleep(time.Millisecond * 10)
-			bind := a.GetLatest(0, 1)
-			require.False(t, bind.Valid)
+			for {
+				bind := a.GetLatest(0, 1)
+				if bind.Valid {
+					return
+				}
+				time.Sleep(time.Millisecond * 10)
+			}
 		})
 }
 

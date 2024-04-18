@@ -246,6 +246,13 @@ func (txn *activeTxn) clearBlocked(w *waiter) {
 	txn.blockedWaiters = newBlockedWaiters
 }
 
+func (txn *activeTxn) closeBlockWaiters() {
+	for _, w := range txn.blockedWaiters {
+		w.close()
+	}
+	txn.blockedWaiters = txn.blockedWaiters[:0]
+}
+
 func (txn *activeTxn) setBlocked(w *waiter) {
 	if w == nil {
 		panic("invalid waiter")

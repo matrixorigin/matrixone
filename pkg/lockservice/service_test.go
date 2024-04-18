@@ -2796,7 +2796,6 @@ func maybeAddTestLockWithDeadlockWithWaitRetry(
 	granularity pb.Granularity,
 	wait time.Duration,
 ) pb.Result {
-	t.Logf("%s try lock %+v", string(txnID), lock)
 	res, err := l.Lock(ctx, table, lock, txnID, pb.LockOptions{
 		Granularity: granularity,
 		Mode:        pb.LockMode_Exclusive,
@@ -2805,10 +2804,8 @@ func maybeAddTestLockWithDeadlockWithWaitRetry(
 	})
 
 	if moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) {
-		t.Logf("%s lock %+v, found dead lock", string(txnID), lock)
 		return res
 	}
-	t.Logf("%s lock %+v, ok", string(txnID), lock)
 	require.NoError(t, err)
 	return res
 }
