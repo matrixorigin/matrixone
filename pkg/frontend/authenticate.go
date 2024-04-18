@@ -2959,7 +2959,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	//encryption the password
 	encryption = HashPassWord(password)
 
-	if execResultArrayHasData(erArray) {
+	if execResultArrayHasData(erArray) || getGlobalPu().SV.SkipCheckPrivilege {
 		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 		if err != nil {
 			return err
