@@ -3548,7 +3548,7 @@ func makePreUpdateDeletePlan(
 		PrimaryColIdxInBat: int32(pkPos),
 		PrimaryColTyp:      pkTyp,
 		RefreshTsIdxInBat:  -1,
-		LockTable:          false,
+		LockTable:          delCtx.lockTable,
 	}
 	if delCtx.tableDef.Partition != nil {
 		lockTarget.IsPartitionTable = true
@@ -3637,7 +3637,7 @@ func makePreUpdateDeletePlan(
 			PrimaryColIdxInBat: newPkPos,
 			PrimaryColTyp:      pkTyp,
 			RefreshTsIdxInBat:  -1, //unsupport now
-			LockTable:          false,
+			LockTable:          delCtx.lockTable,
 		}
 		if delCtx.tableDef.Partition != nil {
 			lockTarget.IsPartitionTable = true
