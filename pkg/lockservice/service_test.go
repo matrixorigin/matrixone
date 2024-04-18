@@ -2803,7 +2803,8 @@ func maybeAddTestLockWithDeadlockWithWaitRetry(
 		RetryWait:   int64(wait),
 	})
 
-	if moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) {
+	if moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
 		return res
 	}
 	require.NoError(t, err)
