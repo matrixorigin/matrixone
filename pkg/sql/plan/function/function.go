@@ -210,6 +210,11 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 	exec, execFree := f.GetExecuteMethod()
 	if err = exec(inputs, result, proc, evaluateLength); err != nil {
 		result.Free()
+		if execFree != nil {
+			// NOTE: execFree is only applicable for serial and serial_full.
+			// if execFree is not nil, then make sure to call it after exec() is done.
+			_ = execFree()
+		}
 		return nil, err
 	}
 	if execFree != nil {

@@ -17,6 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
+	"hash/crc32"
+	goruntime "runtime"
+	"runtime/debug"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -57,10 +62,6 @@ import (
 	"github.com/panjf2000/ants/v2"
 	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
-	"hash/crc32"
-	goruntime "runtime"
-	"runtime/debug"
-	"sync"
 )
 
 func newScope(magic magicType) *Scope {
@@ -120,8 +121,13 @@ func (s *Scope) Run(c *Compile) (err error) {
 			id = s.DataSource.TableDef.TblId
 		}
 		p = pipeline.New(id, s.DataSource.Attributes, s.Instructions, s.Reg)
-		if s.DataSource.Bat != nil {
-			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
+		if s.DataSource.isConst {
+			var bat *batch.Batch
+			bat, err = constructValueScanBatch(s.Proc.Ctx, c.proc, s.DataSource.node)
+			if err != nil {
+				return
+			}
+			_, err = p.ConstRun(bat, s.Proc)
 		} else {
 			var tag int32
 			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
@@ -671,14 +677,10 @@ func (s *Scope) LoadRun(c *Compile) error {
 	mcpu := s.NodeInfo.Mcpu
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
-		bat := batch.NewWithSize(1)
-		{
-			bat.SetRowCount(1)
-		}
 		ss[i] = newScope(Normal)
 		ss[i].NodeInfo = s.NodeInfo
 		ss[i].DataSource = &Source{
-			Bat: bat,
+			isConst: true,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
