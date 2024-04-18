@@ -146,7 +146,7 @@ func TestCheckTimeoutServiceTask(t *testing.T) {
 
 			for {
 				bind := a.GetLatest(0, 1)
-				if bind.Valid {
+				if !bind.Valid {
 					return
 				}
 				time.Sleep(time.Millisecond * 10)
