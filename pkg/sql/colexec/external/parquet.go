@@ -90,7 +90,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 	case param.Extern.ScanType == tree.INLINE:
 		r = bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data))
 	case param.Extern.Local:
-		return moerr.NewNYI(param.Ctx, "unsupported load parquet local now")
+		return moerr.NewNYI(param.Ctx, "load parquet local")
 	default:
 		fs, readPath, err := plan.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
 		if err != nil {
@@ -121,7 +121,7 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			return moerr.NewInvalidInput(param.Ctx, "column %s not found", attr)
 		}
 		if !col.Leaf() {
-			return moerr.NewNYI(param.Ctx, "can't load group column %s", attr)
+			return moerr.NewNYI(param.Ctx, "load group type column %s", attr)
 		}
 
 		h.cols[colIdx] = col
@@ -353,7 +353,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 	case types.T_time:
 		// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#time
 		lt := st.LogicalType().Time
-		if lt == nil || !lt.IsAdjustedToUTC {
+		if lt == nil {
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
@@ -389,6 +389,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				data := page.Data()
 				buf, offsets := data.ByteArray()
 				if len(offsets) > 0 {
+					err := vec.PreExtend(int(page.NumRows()), proc.GetMPool())
+					if err != nil {
+						return err
+					}
 					baseOffset := offsets[0]
 					j := 1
 					for i := 0; i < int(page.NumRows()); i++ {
@@ -416,6 +420,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				buf, size := data.FixedLenByteArray()
+				err := vec.PreExtend(int(page.NumRows()), proc.GetMPool())
+				if err != nil {
+					return err
+				}
 				for i := 0; i < int(page.NumRows()); i++ {
 					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
 					if err != nil {
