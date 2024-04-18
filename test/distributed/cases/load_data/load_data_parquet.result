@@ -13,4 +13,16 @@ id    name
 12    user12
 15    user15
 16    user16
+create table t2(id bigint not null, name varchar not null, sex bool, f32 float(5,2));
+load data infile {'filepath'='$resources/load_data/simple2.parq', 'format'='parquet'} into table t2;
+select * from t2;
+id    name    sex    f32
+1    user1    false    1.00
+2    user2    false    NULL
+7    user7    false    7.00
+8    user8    true    NULL
+10    user10    false    10.00
+12    user12    false    NULL
+15    user15    false    NULL
+16    user16    true    NULL
 drop database parq;

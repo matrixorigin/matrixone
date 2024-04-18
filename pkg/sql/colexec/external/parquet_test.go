@@ -16,6 +16,7 @@ package external
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,7 +27,7 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 )
 
-func Test_dataFn(t *testing.T) {
+func Test_getMapper(t *testing.T) {
 	convey.Convey("dataFn", t, func() {
 		proc := testutil.NewProc()
 
@@ -107,8 +108,7 @@ func Test_dataFn(t *testing.T) {
 				Id: int32(tc.vType),
 			}).mapping(page, proc, vec)
 			convey.So(err, convey.ShouldBeNil)
-
-			t.Log(vec.String())
+			convey.So(vec.String(), convey.ShouldEqual, fmt.Sprint(values))
 		}
 	})
 }
