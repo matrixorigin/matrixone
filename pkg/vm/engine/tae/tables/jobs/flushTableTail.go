@@ -391,7 +391,7 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 		task.aObjDeletesCnt += deletes.GetCardinality()
 	}
 
-	var sortMapping []int32
+	var sortMapping []int64
 	if sortKeyPos >= 0 {
 		if objIdx == 0 {
 			logutil.Infof("flushtabletail sort obj on %s", bat.Attrs[sortKeyPos])
