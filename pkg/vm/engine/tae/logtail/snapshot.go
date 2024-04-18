@@ -235,11 +235,11 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				return nil, err
 			}
 			defer bat.Clean(mp)
-			tsList := vector.MustFixedCol[types.Timestamp](bat.Vecs[0])
+			tsList := vector.MustFixedCol[int64](bat.Vecs[0])
 			acctList := vector.MustFixedCol[uint64](bat.Vecs[1])
 			for r := 0; r < bat.Vecs[0].Length(); r++ {
 				ts := tsList[r]
-				snapTs := types.BuildTS(ts.Unix()*types.NanoSecsPerSec, 0)
+				snapTs := types.BuildTS(ts, 0)
 				acct := acctList[r]
 				id := uint32(acct)
 				if snapshotList[id] == nil {
