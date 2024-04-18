@@ -60,5 +60,4 @@ type StateMachine interface {
 	Start()
 	Stop()
 	EnqueueRecevied(any) (any, error)
-	EnqueueCheckpoint(any) (any, error)
 }

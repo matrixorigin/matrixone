@@ -285,6 +285,8 @@ func (store *txnStore) Close() error {
 	store.dbs = nil
 	store.cmdMgr = nil
 	store.warChecker = nil
+	store.logTailsCloseCB = nil
+	store.logTails = nil
 	return err
 }
 
@@ -716,7 +718,6 @@ func (store *txnStore) WaitPrepared(ctx context.Context) (err error) {
 			store.logEntry.Free()
 		}
 	}
-	store.wg.Wait()
 	return
 }
 

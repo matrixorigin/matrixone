@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	entry2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -91,19 +90,19 @@ type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) 
 
 type TxnManager struct {
 	sm.ClosedState
-	PreparingSM     sm.StateMachine
-	FlushQueue      sm.Queue
-	IDMap           *sync.Map
-	IdAlloc         *common.TxnIDAllocator
-	MaxCommittedTS  atomic.Pointer[types.TS]
-	TxnStoreFactory TxnStoreFactory
-	TxnFactory      TxnFactory
-	Exception       *atomic.Value
-	CommitListener  *batchTxnCommitListener
-	ctx             context.Context
-	cancel          context.CancelFunc
-	wg              sync.WaitGroup
-	workers         *ants.Pool
+	PreparingSM         sm.StateMachine
+	RecycleEntriesQueue sm.Queue
+	IDMap               *sync.Map
+	IdAlloc             *common.TxnIDAllocator
+	MaxCommittedTS      atomic.Pointer[types.TS]
+	TxnStoreFactory     TxnStoreFactory
+	TxnFactory          TxnFactory
+	Exception           *atomic.Value
+	CommitListener      *batchTxnCommitListener
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	wg                  sync.WaitGroup
+	workers             *ants.Pool
 
 	ts struct {
 		mu        sync.Mutex
@@ -132,9 +131,8 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	mgr.ts.allocator = types.NewTsAlloctor(clock)
 	mgr.initMaxCommittedTS()
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
-	prepareWALQueue := sm.NewSafeQueue(20000, 1000, nil)
-	mgr.FlushQueue = sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
-	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, prepareWALQueue)
+	mgr.RecycleEntriesQueue = sm.NewSafeQueue(20000, 1000, mgr.onRecycleEntries)
+	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue)
 
 	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
 	mgr.workers, _ = ants.NewPool(runtime.NumCPU())
@@ -242,11 +240,6 @@ func (mgr *TxnManager) GetTxn(id string) txnif.AsyncTxn {
 		return res.(txnif.AsyncTxn)
 	}
 	return nil
-}
-
-func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
-	_, err = mgr.PreparingSM.EnqueueCheckpoint(op)
-	return
 }
 
 func (mgr *TxnManager) heartbeat(ctx context.Context) {
@@ -545,13 +538,13 @@ func (mgr *TxnManager) registerCollectLogTailCB(e entry2.Entry, op *OpTxn) {
 
 func (mgr *TxnManager) registerApplyCommitCB(e entry2.Entry, op *OpTxn) {
 	postCallback := func() {
-		//if err := op.Txn.WaitPrepared(op.ctx); err != nil {
-		//	panic(err)
-		//}
 		if op.Is2PC() {
 			mgr.on2PCPrepared(op)
 		} else {
 			mgr.on1PCPrepared(op)
+		}
+		if e != nil {
+			mgr.RecycleEntriesQueue.Enqueue(e)
 		}
 	}
 
@@ -565,6 +558,14 @@ func (mgr *TxnManager) registerApplyCommitCB(e entry2.Entry, op *OpTxn) {
 		postCallback()
 		return nil
 	})
+}
+
+func (mgr *TxnManager) onRecycleEntries(items ...any) {
+	for _, item := range items {
+		e := item.(entry2.Entry)
+		e.WaitDone()
+		e.Free()
+	}
 }
 
 func (mgr *TxnManager) onFlushWal(op *OpTxn) {
@@ -602,38 +603,6 @@ func (mgr *TxnManager) onFlushWal(op *OpTxn) {
 	}
 }
 
-// 1PC and 2PC
-func (mgr *TxnManager) dequeuePrepared(items ...any) {
-	now := time.Now()
-	for _, item := range items {
-		op := item.(*OpTxn)
-		store := op.Txn.GetStore()
-		store.TriggerTrace(txnif.TracePrepared)
-		mgr.workers.Submit(func() {
-			//Notice that WaitPrepared do nothing when op is OpRollback
-			t0 := time.Now()
-			if err := op.Txn.WaitPrepared(op.ctx); err != nil {
-				// v0.6 TODO: Error handling
-				panic(err)
-			}
-
-			if op.Is2PC() {
-				mgr.on2PCPrepared(op)
-			} else {
-				mgr.on1PCPrepared(op)
-			}
-			dequeuePreparedDuration := time.Since(t0)
-			v2.TxnDequeuePreparedDurationHistogram.Observe(dequeuePreparedDuration.Seconds())
-		})
-	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debug("[dequeuePrepared]",
-			common.NameSpaceField("txns"),
-			common.CountField(len(items)),
-			common.DurationField(time.Since(now)))
-	})
-}
-
 func (mgr *TxnManager) OnException(new error) {
 	old := mgr.Exception.Load()
 	for old == nil {
@@ -660,7 +629,7 @@ func (mgr *TxnManager) MinTSForTest() types.TS {
 }
 
 func (mgr *TxnManager) Start(ctx context.Context) {
-	mgr.FlushQueue.Start()
+	mgr.RecycleEntriesQueue.Start()
 	mgr.PreparingSM.Start()
 	mgr.wg.Add(1)
 	go mgr.heartbeat(ctx)
@@ -670,7 +639,7 @@ func (mgr *TxnManager) Stop() {
 	mgr.cancel()
 	mgr.wg.Wait()
 	mgr.PreparingSM.Stop()
-	mgr.FlushQueue.Stop()
+	mgr.RecycleEntriesQueue.Stop()
 	mgr.OnException(sm.ErrClose)
 	mgr.workers.Release()
 	logutil.Info("[Stop]", TxnMgrField(mgr))

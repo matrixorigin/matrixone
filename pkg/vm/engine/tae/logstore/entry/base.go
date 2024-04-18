@@ -291,6 +291,9 @@ func (b *Base) reset() {
 	b.t0 = time.Time{}
 	b.printTime = false
 	b.err = nil
+
+	b.afterFlushCallbacks = b.afterFlushCallbacks[:0]
+	b.beforeFlushCallbacks = b.beforeFlushCallbacks[:0]
 }
 func (b *Base) GetInfoBuf() []byte {
 	return b.infobuf

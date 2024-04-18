@@ -25,12 +25,11 @@ type stateMachine struct {
 	checkpointQueue Queue
 }
 
-func NewStateMachine(wg *sync.WaitGroup, closed Closable, rQueue, ckpQueue Queue) *stateMachine {
+func NewStateMachine(wg *sync.WaitGroup, closed Closable, rQueue Queue) *stateMachine {
 	return &stateMachine{
-		closed:          closed,
-		wg:              wg,
-		receiveQueue:    rQueue,
-		checkpointQueue: ckpQueue,
+		closed:       closed,
+		wg:           wg,
+		receiveQueue: rQueue,
 	}
 }
 
@@ -38,14 +37,7 @@ func (sm *stateMachine) EnqueueRecevied(item any) (any, error) {
 	return sm.receiveQueue.Enqueue(item)
 }
 
-func (sm *stateMachine) EnqueueCheckpoint(item any) (any, error) {
-	return sm.checkpointQueue.Enqueue(item)
-}
-
 func (sm *stateMachine) Start() {
-	if sm.checkpointQueue != nil {
-		sm.checkpointQueue.Start()
-	}
 	if sm.receiveQueue != nil {
 		sm.receiveQueue.Start()
 	}
@@ -57,9 +49,6 @@ func (sm *stateMachine) Stop() {
 	}
 	if sm.receiveQueue != nil {
 		sm.receiveQueue.Stop()
-	}
-	if sm.checkpointQueue != nil {
-		sm.checkpointQueue.Stop()
 	}
 	sm.wg.Wait()
 }
