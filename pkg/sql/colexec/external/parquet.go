@@ -165,23 +165,25 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 	case types.T_bool:
 		if st.Kind() == parquet.Boolean {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				p := make([]bool, page.NumValues())
-				r := page.Values().(parquet.BooleanReader)
-				n, err := r.ReadBooleans(p)
+				p := make([]parquet.Value, page.NumValues())
+				n, err := page.Values().ReadValues(p)
 				if err != nil && !errors.Is(err, io.EOF) {
 					return moerr.ConvertGoError(proc.Ctx, err)
 				}
 				if n != int(page.NumValues()) {
 					return moerr.NewInternalError(proc.Ctx, "short read bool")
 				}
-				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
-				if err != nil {
-					return err
+				for _, v := range p {
+					if v.IsNull() {
+						err = vector.AppendFixed(vec, false, true, proc.Mp())
+					} else {
+						err = vector.AppendFixed(vec, v.Boolean(), false, proc.Mp())
+					}
+					if err != nil {
+						return err
+					}
 				}
-				if len(isNulls) == 0 {
-					return vector.AppendFixedList(vec, p, nil, proc.Mp())
-				}
-				return appendFixed(vec, p, isNulls, proc.Mp())
+				return nil
 			}
 		}
 	case types.T_int32:
@@ -414,8 +416,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				buf, size := data.FixedLenByteArray()
-				i := 0
-				for len(buf) > 0 {
+				for i := 0; i < int(page.NumRows()); i++ {
 					isNull, err := mp.pageIsNull(proc.Ctx, page, i)
 					if err != nil {
 						return err
