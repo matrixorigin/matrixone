@@ -48,7 +48,13 @@ func ifNeedLockWholeTable(builder *QueryBuilder, lastNodeId int32) bool {
 	if lastNode == nil {
 		return false
 	}
-	lockconfig := builder.compCtx.GetProcess().LockService.GetConfig()
+
+	lockService := builder.compCtx.GetProcess().LockService
+	if lockService == nil {
+		// MockCompilerContext
+		return false
+	}
+	lockconfig := lockService.GetConfig()
 	return lastNode.Stats.Outcnt > float64(lockconfig.MaxLockRowCount)
 }
 
