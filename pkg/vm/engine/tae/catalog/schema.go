@@ -993,7 +993,7 @@ func MockSnapShotSchema() *Schema {
 
 	schema.AppendCol("col0", types.T_uint64.ToType())
 	schema.AppendCol("col1", types.T_uint64.ToType())
-	schema.AppendCol("ts", types.T_timestamp.ToType())
+	schema.AppendCol("ts", types.T_int64.ToType())
 	schema.AppendCol("col3", types.T_uint64.ToType())
 	schema.AppendCol("col4", types.T_uint64.ToType())
 	schema.AppendCol("col5", types.T_uint64.ToType())

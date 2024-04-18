@@ -6483,7 +6483,7 @@ func TestSnapshotGC(t *testing.T) {
 	pool, err := ants.NewPool(20)
 	assert.Nil(t, err)
 	defer pool.Release()
-	snapshots := make([]types.Timestamp, 0)
+	snapshots := make([]int64, 0)
 	var wg sync.WaitGroup
 	var snapWG sync.WaitGroup
 	snapWG.Add(1)
@@ -6496,7 +6496,7 @@ func TestSnapshotGC(t *testing.T) {
 			}
 			i++
 			time.Sleep(200 * time.Millisecond)
-			snapshot := types.Timestamp(time.Now().Unix())
+			snapshot := time.Now().UTC().Unix()
 			snapshots = append(snapshots, snapshot)
 		}
 	}()
@@ -6512,7 +6512,7 @@ func TestSnapshotGC(t *testing.T) {
 	for _, snapshot := range snapshots {
 		attrs := []string{"col0", "col1", "ts", "col3", "col4", "col5", "col6", "id"}
 		vecTypes := []types.Type{types.T_uint64.ToType(),
-			types.T_uint64.ToType(), types.T_timestamp.ToType(),
+			types.T_uint64.ToType(), types.T_int64.ToType(),
 			types.T_uint64.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
 			types.T_uint64.ToType(), types.T_uint64.ToType()}
 		opt := containers.Options{}
