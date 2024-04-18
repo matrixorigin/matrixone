@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -93,7 +92,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	}
 }
 
-func (ctr *container) cleanRuntimeFilters(proc *process.Process, runtimeFilterSpec *pbplan.RuntimeFilterSpec) {
+func (ctr *container) cleanRuntimeFilters(proc *process.Process, runtimeFilterSpec *plan.RuntimeFilterSpec) {
 	if !ctr.runtimeFilterHandled && runtimeFilterSpec != nil {
 		var runtimeFilter process.RuntimeFilterMessage
 		runtimeFilter.Tag = runtimeFilterSpec.Tag
