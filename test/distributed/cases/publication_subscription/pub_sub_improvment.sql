@@ -63,6 +63,10 @@ show subscriptions;
 use sub_database01;
 show tables;
 select * from t1;
+-- @bvt:issue#15607
+select mo_table_col_max('sub_database01', 't1', 'a');
+select mo_table_col_min('sub_database01', 't1', 'b');
+-- @bvt:issue
 -- @session
 
 drop table if exists t2;
@@ -84,6 +88,9 @@ use sub_database01;
 show tables;
 select * from t1;
 select * from t2;
+-- @bvt:issue#15607
+select mo_table_col_max('sub_database01', 't2', 'col1');
+-- @bvt:issue
 -- @session
 drop publication publication01;
 
@@ -138,6 +145,7 @@ show subscriptions all;
 use sub_database03;
 show tables;
 select * from table01;
+desc table01;
 -- @ignore:10,11,12
 show table status;
 -- @session
@@ -158,6 +166,8 @@ show subscriptions all;
 create database sub_database03 from sys publication publication03;
 use sub_database03;
 show tables;
+show columns from table01;
+desc table01;
 select * from table01;
 -- @session
 
@@ -190,6 +200,8 @@ alter publication publication01 database database03;
 use resub01;
 show tables;
 select * from table01;
+show columns from table01;
+desc table01;
 -- @ignore:10,11,12
 show table status;
 -- @session
@@ -203,6 +215,8 @@ show publications;
 show subscriptions all;
 use resub01;
 show tables;
+show columns from repub01;
+desc repub01;
 select * from repub01;
 -- @session
 
