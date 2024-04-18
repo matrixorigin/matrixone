@@ -1235,7 +1235,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		// from
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		stmt.AsSource.Format(fmtCtx)
-		insertSqlBuilder.WriteString(fmt.Sprintf(" from (`%s`)", fmtCtx.String()))
+		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", fmtCtx.String()))
 
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
 	}
