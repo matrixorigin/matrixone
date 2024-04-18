@@ -83,13 +83,22 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	var err error
 	tblName := stmt.Name.GetTableName()
 	dbName := stmt.Name.GetDBName()
-	// snapshot to fix
-	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, timestamp.Timestamp{})
+
+	var ts timestamp.Timestamp
+	if len(stmt.SnapshotName) > 0 {
+		tsTime, err := ctx.ResolveSnapshotTsWithSnapShotName(stmt.SnapshotName)
+		if err != nil {
+			return nil, err
+		}
+		ts = timestamp.Timestamp{PhysicalTime: tsTime}
+	}
+
+	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, ts)
 	if err != nil {
 		return nil, err
 	}
 
-	_, tableDef := ctx.Resolve(dbName, tblName, timestamp.Timestamp{})
+	_, tableDef := ctx.Resolve(dbName, tblName, ts)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -99,6 +108,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			newStmt = tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
 		} else if stmt.Name.NumParts == 2 {
 			newStmt = tree.NewShowCreateView(tree.SetUnresolvedObjectName(2, [3]string{tblName, dbName, ""}))
+		}
+		if len(stmt.SnapshotName) > 0 {
+			newStmt.SnapshotName = stmt.SnapshotName
 		}
 
 		return buildShowCreateView(newStmt, ctx)
@@ -448,12 +460,22 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	var err error
 	tblName := stmt.Name.GetTableName()
 	dbName := stmt.Name.GetDBName()
-	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, timestamp.Timestamp{})
+
+	var ts timestamp.Timestamp
+	if len(stmt.SnapshotName) > 0 {
+		tsTime, err := ctx.ResolveSnapshotTsWithSnapShotName(stmt.SnapshotName)
+		if err != nil {
+			return nil, err
+		}
+		ts = timestamp.Timestamp{PhysicalTime: tsTime}
+	}
+
+	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, ts)
 	if err != nil {
 		return nil, err
 	}
 
-	_, tableDef := ctx.Resolve(dbName, tblName, timestamp.Timestamp{})
+	_, tableDef := ctx.Resolve(dbName, tblName, ts)
 	if tableDef == nil || tableDef.TableType != catalog.SystemViewRel {
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
 	}
@@ -491,11 +513,20 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 
 	var sql string
 	// Any account should shows database MO_CATALOG_DB_NAME
-	if accountId == catalog.System_Account {
-		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
-		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where (%s) ORDER BY %s", MO_CATALOG_DB_NAME, accountClause, catalog.SystemDBAttr_Name)
+	if len(stmt.SnapshotName) > 0 {
+		if accountId == catalog.System_Account {
+			accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
+			sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database{snapshot = '%s'} where (%s) ORDER BY %s", MO_CATALOG_DB_NAME, stmt.SnapshotName, accountClause, catalog.SystemDBAttr_Name)
+		} else {
+			sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database{snapshot = '%s'} ORDER BY %s", MO_CATALOG_DB_NAME, stmt.SnapshotName, catalog.SystemDBAttr_Name)
+		}
 	} else {
-		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database ORDER BY %s", MO_CATALOG_DB_NAME, catalog.SystemDBAttr_Name)
+		if accountId == catalog.System_Account {
+			accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
+			sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where (%s) ORDER BY %s", MO_CATALOG_DB_NAME, accountClause, catalog.SystemDBAttr_Name)
+		} else {
+			sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database ORDER BY %s", MO_CATALOG_DB_NAME, catalog.SystemDBAttr_Name)
+		}
 	}
 
 	if stmt.Where != nil {
@@ -544,8 +575,16 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	if err != nil {
 		return nil, err
 	}
-	// snapshot to fix
-	dbName, err := databaseIsValid(stmt.DBName, ctx, timestamp.Timestamp{})
+
+	var ts timestamp.Timestamp
+	if len(stmt.SnapshotName) > 0 {
+		tsTime, err := ctx.ResolveSnapshotTsWithSnapShotName(stmt.SnapshotName)
+		if err != nil {
+			return nil, err
+		}
+		ts = timestamp.Timestamp{PhysicalTime: tsTime}
+	}
+	dbName, err := databaseIsValid(stmt.DBName, ctx, ts)
 	if err != nil {
 		return nil, err
 	}
@@ -555,7 +594,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	if stmt.Full {
 		tableType = fmt.Sprintf(", case relkind when 'v' then 'VIEW' when '%s' then 'CLUSTER TABLE' else 'BASE TABLE' end as Table_type", catalog.SystemClusterRel)
 	}
-	sub, err := ctx.GetSubscriptionMeta(dbName, timestamp.Timestamp{})
+	sub, err := ctx.GetSubscriptionMeta(dbName, ts)
 	if err != nil {
 		return nil, err
 	}
@@ -569,26 +608,52 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 			ctx.SetQueryingSubscription(nil)
 		}()
 
-		if accountId == catalog.System_Account {
-			mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
-			clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
-			accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-			sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s' and (%s) and relkind != '%s'",
-				subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel, accountClause, catalog.SystemViewRel)
+		if len(stmt.SnapshotName) > 0 {
+			if accountId == catalog.System_Account {
+				mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
+				clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
+				accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
+				sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables{snapshot = '%s'} WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s' and (%s) and relkind != '%s'",
+					subName, tableType, MO_CATALOG_DB_NAME, stmt.SnapshotName, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel, accountClause, catalog.SystemViewRel)
+			} else {
+				sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables{snapshot = '%s'}  WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s' and relkind != '%s' ",
+					subName, tableType, MO_CATALOG_DB_NAME, stmt.SnapshotName, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel, catalog.SystemViewRel)
+			}
 		} else {
-			sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s' and relkind != '%s' ",
-				subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel, catalog.SystemViewRel)
+			if accountId == catalog.System_Account {
+				mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
+				clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
+				accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
+				sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s' and (%s) and relkind != '%s'",
+					subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel, accountClause, catalog.SystemViewRel)
+			} else {
+				sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s' and relkind != '%s' ",
+					subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel, catalog.SystemViewRel)
+			}
 		}
 	} else {
-		if accountId == catalog.System_Account {
-			mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
-			clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
-			accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-			sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s' and (%s)",
-				subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel, accountClause)
+		if len(stmt.SnapshotName) > 0 {
+			if accountId == catalog.System_Account {
+				mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
+				clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
+				accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
+				sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables{snapshot = '%s'} WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s' and (%s)",
+					subName, tableType, MO_CATALOG_DB_NAME, stmt.SnapshotName, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel, accountClause)
+			} else {
+				sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables{snapshot = '%s'}  WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s'",
+					subName, tableType, MO_CATALOG_DB_NAME, stmt.SnapshotName, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel)
+			}
 		} else {
-			sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s'",
-				subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel)
+			if accountId == catalog.System_Account {
+				mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
+				clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
+				accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
+				sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s' and (%s)",
+					subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel, accountClause)
+			} else {
+				sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s'",
+					subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel)
+			}
 		}
 	}
 
