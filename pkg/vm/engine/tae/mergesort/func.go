@@ -377,6 +377,7 @@ func Multiplex(
 func Reshape(column []*vector.Vector, ret []*vector.Vector, fromLayout, toLayout []uint32, m *mpool.MPool) {
 	fromIdx := 0
 	fromOffset := 0
+	sels := make([]int32, 0, toLayout[0])
 	for i := 0; i < len(toLayout); i++ {
 		toOffset := 0
 		for toOffset < int(toLayout[i]) {
@@ -393,10 +394,9 @@ func Reshape(column []*vector.Vector, ret []*vector.Vector, fromLayout, toLayout
 			} else {
 				length = int(toLayout[i]) - toOffset
 			}
-
-			sels := make([]int32, length)
+			sels = sels[:0]
 			for i := 0; i < length; i++ {
-				sels[i] = int32(fromOffset + i)
+				sels = append(sels, int32(fromOffset+i))
 			}
 			err := ret[i].Union(column[fromIdx], sels, m)
 			if err != nil {

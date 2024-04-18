@@ -45,4 +45,7 @@ func TestReshape(t *testing.T) {
 
 	require.Equal(t, []int32{0, 1, 2}, vector.MustFixedCol[int32](retvec[0]))
 	require.Equal(t, []int32{3, 4, 5}, vector.MustFixedCol[int32](retvec[1]))
+	for _, v := range ret {
+		v.Close()
+	}
 }
