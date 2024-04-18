@@ -29,7 +29,7 @@ drop snapshot snapshot_02;
 drop database snapshot_read;
 -- @session
 drop account if exists test_account;
--- @bvt:issue
+
 
 
 create database if not exists snapshot_read;
@@ -54,3 +54,4 @@ drop database snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read{snapshot = 'snapshot_01'};
 drop database if exists snapshot_read;
 drop snapshot snapshot_01;
+-- @bvt:issue
