@@ -3615,9 +3615,6 @@ func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
 	if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
 		return true
 	}
-	if rel.GetEngineType() != engine.Disttae {
-		return true
-	}
 	if n.AggList != nil { //need to handle partial results
 		return true
 	}
