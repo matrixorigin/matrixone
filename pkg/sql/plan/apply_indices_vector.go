@@ -358,23 +358,7 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 		},
 	})
 
-	var onList []*Expr
-	var joinOnType int32 = 1
-	//TODO: Currently OnList doesnt support 2 arguments.
-	// Being tracked under:https://github.com/matrixorigin/matrixone/issues/15196
-	switch joinOnType {
-	case 1:
-		andEq, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{
-			entriesCentroidIdEqCentroidId,
-			centroidVersionEqEntriesVersion,
-		})
-		onList = []*Expr{andEq}
-	case 2:
-		onList = []*Expr{entriesCentroidIdEqCentroidId, centroidVersionEqEntriesVersion}
-	case 3:
-		onList = []*Expr{entriesCentroidIdEqCentroidId}
-	}
-
+	var onList = []*Expr{entriesCentroidIdEqCentroidId, centroidVersionEqEntriesVersion}
 	// Create JOIN entries and centroids
 	// ON
 	// - centroids.centroid_id == entries.centroid_id_fk AND
