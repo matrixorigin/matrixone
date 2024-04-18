@@ -1102,11 +1102,13 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 	global, _ := r.storage.globals.Max()
 	r.storage.Unlock()
 	locs := make([]string, 0)
+	ckpStart := types.MaxTs()
 	newStart := start
 	if global != nil && global.HasOverlap(start, end) {
 		locs = append(locs, global.GetLocation().String())
 		locs = append(locs, strconv.Itoa(int(global.version)))
 		newStart = global.end.Next()
+		ckpStart = global.GetEnd()
 		checkpointed = global.GetEnd()
 	}
 	pivot := NewCheckpointEntry(newStart, newStart, ET_Incremental)
@@ -1135,12 +1137,20 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 				if len(locs) == 0 {
 					return
 				}
+				duration := fmt.Sprintf("[%s_%s]",
+					ckpStart.ToString(),
+					ckpStart.ToString())
+				locs = append(locs, duration)
 				locations = strings.Join(locs, ";")
 				return
 			}
 			if e.HasOverlap(newStart, end) {
 				locs = append(locs, e.GetLocation().String())
 				locs = append(locs, strconv.Itoa(int(e.version)))
+				start := e.GetStart()
+				if start.Less(&ckpStart) {
+					ckpStart = start
+				}
 				checkpointed = e.GetEnd()
 				// checkpoints = append(checkpoints, e)
 			}
@@ -1153,6 +1163,10 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			}
 			locs = append(locs, e.GetLocation().String())
 			locs = append(locs, strconv.Itoa(int(e.version)))
+			start := e.GetStart()
+			if start.Less(&ckpStart) {
+				ckpStart = start
+			}
 			checkpointed = e.GetEnd()
 			// checkpoints = append(checkpoints, e)
 			if ok = iter.Next(); !ok {
@@ -1165,6 +1179,10 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			if len(locs) == 0 {
 				return
 			}
+			duration := fmt.Sprintf("[%s_%s]",
+				ckpStart.ToString(),
+				ckpStart.ToString())
+			locs = append(locs, duration)
 			locations = strings.Join(locs, ";")
 			return
 		}
@@ -1175,11 +1193,19 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			if len(locs) == 0 {
 				return
 			}
+			duration := fmt.Sprintf("[%s_%s]",
+				ckpStart.ToString(),
+				ckpStart.ToString())
+			locs = append(locs, duration)
 			locations = strings.Join(locs, ";")
 			return
 		}
 		locs = append(locs, e.GetLocation().String())
 		locs = append(locs, strconv.Itoa(int(e.version)))
+		start := e.GetStart()
+		if start.Less(&ckpStart) {
+			ckpStart = start
+		}
 		checkpointed = e.GetEnd()
 		// checkpoints = append(checkpoints, e)
 	}
@@ -1187,6 +1213,10 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 	if len(locs) == 0 {
 		return
 	}
+	duration := fmt.Sprintf("[%s_%s]",
+		ckpStart.ToString(),
+		checkpointed.ToString())
+	locs = append(locs, duration)
 	locations = strings.Join(locs, ";")
 	return
 }
