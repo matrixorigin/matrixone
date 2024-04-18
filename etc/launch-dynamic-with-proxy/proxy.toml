@@ -1,4 +1,4 @@
-service-type = "CN"
+service-type = "PROXY"
 data-dir = "./mo-data"
 
 [log]
@@ -8,7 +8,7 @@ max-size = 512
 
 [hakeeper-client]
 service-addresses = [
-	"127.0.0.1:32001",
+  "127.0.0.1:32001",
 ]
 
 [[fileservice]]
@@ -21,24 +21,13 @@ backend = "DISK"
 data-dir = "mo-data/shared"
 
 [fileservice.cache]
-memory-capacity = "128MB"
-disk-capacity = "128MB"
+memory-capacity = "512MB"
+disk-capacity = "8GB"
 disk-path = "mo-data/file-service-cache"
 
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
 
-[observability]
-
-[cn]
-uuid = "dd1dccb%d-4d3c-41f8-b482-5251dc7a41bf"
-port-base = %d
-service-host = "cn%d"
-
-[cn.Engine]
-type = "distributed-tae"
-
-[cn.frontend]
-port = %d
-unix-socket = "/tmp/mysql%d.sock"
+[proxy]
+uuid = "rd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
