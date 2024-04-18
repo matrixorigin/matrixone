@@ -27,6 +27,8 @@ var (
 	defaultMaxFixedSliceSize      = 1 << 20 * 10 // 10mb
 	defaultKeepRemoteLockDuration = time.Second
 	defaultKeepBindTimeout        = time.Second * 10
+
+	MaxLockCount = float64(10_000_000)
 )
 
 // Config lock service config
@@ -83,6 +85,7 @@ func (c *Config) Validate() {
 	}
 	if c.MaxFixedSliceSize == 0 {
 		c.MaxFixedSliceSize = toml.ByteSize(defaultMaxFixedSliceSize)
+		MaxLockCount = 0.9 * float64(c.MaxFixedSliceSize)
 	}
 	if c.KeepBindDuration.Duration == 0 {
 		c.KeepBindDuration.Duration = time.Second

@@ -33,10 +33,6 @@ import (
 	"golang.org/x/exp/slices"
 )
 
-var CNPrimaryCheck = false
-
-var MaxLockCount = 10_000_000
-
 var dmlPlanCtxPool = sync.Pool{
 	New: func() any {
 		return &dmlPlanCtx{}

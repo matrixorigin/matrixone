@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -41,15 +42,14 @@ import (
 // 	return nodeID
 // }
 
-
 // ifNeedLockWholeTable checks if the whole table needs to be locked based on the last node's statistics.
 // It returns true if the out count of the last node is greater than the maximum lock count, otherwise it returns false.
-func ifNeedLockWholeTable(builder *QueryBuilder , lastNodeId int32) bool {
+func ifNeedLockWholeTable(builder *QueryBuilder, lastNodeId int32) bool {
 	lastNode := builder.qry.Nodes[lastNodeId]
 	if lastNode == nil {
 		return false
 	}
-	if lastNode.Stats.Outcnt > float64(MaxLockCount) {
+	if lastNode.Stats.Outcnt > lockservice.MaxLockCount {
 		return true
 	}
 	return false
