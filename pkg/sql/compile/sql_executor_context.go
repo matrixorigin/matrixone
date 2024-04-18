@@ -64,6 +64,10 @@ func (c *compilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string)
 	panic("not supported in internal sql executor")
 }
 
+func (c *compilerContext) CheckTimeStampValid(ts int64) (bool, error) {
+	panic("not supported in internal sql executor")
+}
+
 func (c *compilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
 	panic("not supported in internal sql executor")
 }

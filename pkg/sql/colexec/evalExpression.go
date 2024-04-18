@@ -1323,10 +1323,22 @@ func GetExprZoneMap(
 				result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, typ, proc.Mp())
 				if err = result.PreExtendAndReset(2); err != nil {
 					zms[expr.AuxId].Reset()
+					result.Free()
+					if fnFree != nil {
+						// NOTE: fnFree is only applicable for serial and serial_full.
+						// if fnFree is not nil, then make sure to call it after fn() is done.
+						_ = fnFree()
+					}
 					return zms[expr.AuxId]
 				}
 				if err = fn(ivecs, result, proc, 2); err != nil {
 					zms[expr.AuxId].Reset()
+					result.Free()
+					if fnFree != nil {
+						// NOTE: fnFree is only applicable for serial and serial_full.
+						// if fnFree is not nil, then make sure to call it after fn() is done.
+						_ = fnFree()
+					}
 					return zms[expr.AuxId]
 				}
 				if fnFree != nil {
@@ -1335,7 +1347,7 @@ func GetExprZoneMap(
 					_ = fnFree()
 				}
 				zms[expr.AuxId] = index.VectorToZM(result.GetResultVector(), zms[expr.AuxId])
-				result.GetResultVector().Free(proc.Mp())
+				result.Free()
 			}
 		}
 

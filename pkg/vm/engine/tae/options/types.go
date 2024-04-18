@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 )
 
@@ -42,6 +43,7 @@ const (
 	DefaultCheckpointGlobalMinCount     = 10
 	DefaultGlobalVersionInterval        = time.Hour
 	DefaultGCCheckpointInterval         = time.Minute
+	DefaultOverallFlushMemControl       = common.Const1GBytes
 
 	DefaultScanGCInterval = time.Minute * 30
 	DefaultGCTTL          = time.Hour
