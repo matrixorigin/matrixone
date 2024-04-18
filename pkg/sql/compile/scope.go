@@ -1011,10 +1011,6 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 
 		errSubmit := ants.Submit(
 			func() {
-				defer func() {
-					wg.Done()
-				}()
-
 				op := &s.RemoteReceivRegInfos[i]
 
 				streamSender, errStream := cnclient.GetStreamSender(op.FromAddr)
