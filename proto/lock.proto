@@ -48,6 +48,7 @@ message LockOptions {
   WaitPolicy  Policy          = 3;
   string      ForwardTo       = 4;
   bool        TableDefChanged = 5;
+  int64       RetryWait       = 6;
 }
 
 // LockTable describes which CN manages a Table's Locks.

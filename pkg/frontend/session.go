@@ -1295,6 +1295,11 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 	if prepareStmt, ok := ses.prepareStmts[name]; ok {
 		return prepareStmt, nil
 	}
+	var connID uint32
+	if ses.protocol != nil {
+		connID = ses.protocol.ConnectionID()
+	}
+	logutil.Errorf("prepared statement '%s' does not exist on connection %d", name, connID)
 	return nil, moerr.NewInvalidState(ses.requestCtx, "prepared statement '%s' does not exist", name)
 }
 
