@@ -876,7 +876,10 @@ func Test15608(t *testing.T) {
 			v, err := s1.getLockTable(table)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
-			lt.options.beforeCloseFirstWaiter = func() {
+			lt.options.beforeCloseFirstWaiter = func(c *lockContext) {
+				c.txn.Unlock()
+				defer c.txn.Lock()
+
 				// txn3 hold lock
 				_, err = s1.Lock(ctx, table, rows, txn3, option)
 				require.NoError(t, err, err)
