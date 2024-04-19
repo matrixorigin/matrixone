@@ -63,6 +63,7 @@ func initTransferMapping(e *api.MergeCommitEntry, blkcnt int) {
 
 func getSimilarBatch(bat *batch.Batch, capacity int, vpool DisposableVecPool) (*batch.Batch, func()) {
 	newBat := batch.NewWithSize(len(bat.Vecs))
+	newBat.Attrs = bat.Attrs
 	rfs := make([]func(), len(bat.Vecs))
 	releaseF := func() {
 		for _, release := range rfs {
@@ -269,21 +270,8 @@ func DoMergeAndWrite(
 	phaseDesc = "reshape, one column"
 	toLayout := arrangeToLayout(totalRowCount, blkMaxRow)
 
-	// just do reshape, keep sortedIdx nil
-	retBatches := make([]*batch.Batch, 0, len(toLayout))
-	rfs := make([]func(), 0, len(toLayout))
-	defer func() {
-		for _, rf := range rfs {
-			rf()
-		}
-	}()
-	for _, layout := range toLayout {
-		bat, releaseF := getSimilarBatch(batches[0], int(layout), mergehost)
-		retBatches = append(retBatches, bat)
-		rfs = append(rfs, releaseF)
-	}
-
-	ReshapeBatches(batches, retBatches, fromLayout, toLayout, mpool)
+	retBatches, releaseF := ReshapeBatches(batches, fromLayout, toLayout, mergehost)
+	defer releaseF()
 	UpdateMappingAfterMerge(commitEntry.Booking, nil, fromLayout, toLayout)
 
 	// -------------------------- phase 2

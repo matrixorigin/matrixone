@@ -15,6 +15,7 @@
 package mergesort
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"math/rand"
 	"testing"
 	"time"
@@ -210,8 +211,8 @@ func TestMerge2(t *testing.T) {
 	}
 }
 
-func TestReshapeColumn1(t *testing.T) {
-	defer testutils.AfterTest(t)()
+func TestReshapeBatches1(t *testing.T) {
+	pool := &testPool{pool: mocks.GetTestVectorPool()}
 	vecTypes := types.MockColTypes()
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 4, false, nil)
@@ -220,24 +221,39 @@ func TestReshapeColumn1(t *testing.T) {
 		vec2.Update(rand.Intn(6), nil, true)
 		t.Log(vec)
 		t.Log(vec2)
-		ret := ReshapeColumn([]containers.Vector{vec, vec2}, []uint32{4, 6}, []uint32{5, 5}, mocks.GetTestVectorPool())
-		t.Log(ret)
-		for _, v := range ret {
-			v.Close()
+		vecs := []containers.Vector{vec, vec2}
+
+		inputBatches := make([]*batch.Batch, 2)
+		for i := range inputBatches {
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vecs[i].GetDownstreamVector()
+			inputBatches[i] = bat
 		}
+		retBatches, releaseF := ReshapeBatches(inputBatches, []uint32{4, 6}, []uint32{5, 5}, pool)
+		t.Log(retBatches)
+		for i := range retBatches {
+			require.Equal(t, 5, retBatches[i].RowCount())
+		}
+		releaseF()
 	}
 }
-func TestReshapeColumn2(t *testing.T) {
-	defer testutils.AfterTest(t)()
+
+func TestReshapeBatches3(t *testing.T) {
+	pool := &testPool{pool: mocks.GetTestVectorPool()}
 	vecTypes := types.MockColTypes()
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 50000, false, nil)
 		vec2 := containers.MockVector(vecType, 50000, false, nil)
-		t0 := time.Now()
-		ret := ReshapeColumn([]containers.Vector{vec, vec2}, []uint32{50000, 50000}, []uint32{50000, 50000}, mocks.GetTestVectorPool())
-		t.Logf("%v takes %v", vecType, time.Since(t0))
-		for _, v := range ret {
-			v.Close()
+		vecs := []containers.Vector{vec, vec2}
+		inputBatches := make([]*batch.Batch, 2)
+		for i := range inputBatches {
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vecs[i].GetDownstreamVector()
+			inputBatches[i] = bat
 		}
+		t0 := time.Now()
+		_, releaseF := ReshapeBatches(inputBatches, []uint32{50000, 50000}, []uint32{50000, 50000}, pool)
+		t.Logf("%v takes %v", vecType, time.Since(t0))
+		releaseF()
 	}
 }

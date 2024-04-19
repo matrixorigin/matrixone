@@ -20,15 +20,17 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -187,6 +189,16 @@ func NewFlushTableTailTask(
 		task.delSrcHandles = append(task.delSrcHandles, hdl)
 	}
 	return
+}
+
+// impl DisposableVecPool
+func (task *flushTableTailTask) GetVector(typ *types.Type) (*vector.Vector, func()) {
+	v := task.rt.VectorPool.Transient.GetVector(typ)
+	return v.GetDownstreamVector(), v.Close
+}
+
+func (task *flushTableTailTask) GetMPool() *mpool.MPool {
+	return task.rt.VectorPool.Transient.GetMPool()
 }
 
 // Scopes is used in conflict checking in scheduler. For ScopedTask interface
@@ -450,10 +462,11 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 		}
 		readedBats = append(readedBats, bat)
 	}
-
-	for _, bat := range readedBats {
-		defer bat.Close()
-	}
+	defer func() {
+		for _, bat := range readedBats {
+			bat.Close()
+		}
+	}()
 
 	if len(readedBats) == 0 {
 		// just soft delete all Objects
@@ -509,6 +522,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	// do first sort
 	var orderedVecs []containers.Vector
 	var sortedIdx []uint32
+	var writtenBatches []*containers.Batch
 	if schema.HasSortKey() {
 		// mergesort is needed, allocate sortedidx and mapping
 		allocSz := totalRowCnt * 4
@@ -532,49 +546,53 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 		mergesort.UpdateMappingAfterMerge(task.transMappings, mapping, fromLayout, toLayout)
 		// free mapping, which is never used again
 		common.MergeAllocator.Free(mappingNode)
+
+		defer func() {
+			for _, vec := range orderedVecs {
+				vec.Close()
+			}
+		}()
+		// make all columns ordered and prepared writtenBatches
+		writtenBatches = make([]*containers.Batch, 0, len(orderedVecs))
+		task.createdObjHandles = toObjectHandle
+		for i := 0; i < len(orderedVecs); i++ {
+			writtenBatches = append(writtenBatches, containers.NewBatch())
+		}
+		vecs := make([]containers.Vector, 0, len(readedBats))
+		for i, idx := range readColIdxs {
+			// skip rowid and sort(reshape) column in the first run
+			if schema.ColDefs[idx].IsPhyAddr() {
+				continue
+			}
+			if i == sortKeyPos {
+				for i, vec := range orderedVecs {
+					writtenBatches[i].AddVector(schema.ColDefs[idx].Name, vec)
+				}
+				continue
+			}
+			vecs = vecs[:0]
+			for _, bat := range readedBats {
+				vecs = append(vecs, bat.Vecs[i])
+			}
+			outvecs := mergesort.ShuffleColumn(vecs, sortedIdx, fromLayout, toLayout, task.rt.VectorPool.Transient)
+			for i, vec := range outvecs {
+				writtenBatches[i].AddVector(schema.ColDefs[idx].Name, vec)
+				defer vec.Close()
+			}
+		}
 	} else {
-		// just do reshape
-		orderedVecs = mergesort.ReshapeColumn(sortVecs, fromLayout, toLayout, task.rt.VectorPool.Transient)
+		cnBatches := make([]*batch.Batch, len(readedBats))
+		for i := range readedBats {
+			cnBatches[i] = containers.ToCNBatch(readedBats[i])
+		}
+		retBatches, releaseF := mergesort.ReshapeBatches(cnBatches, fromLayout, toLayout, task)
+		defer releaseF()
+		writtenBatches = make([]*containers.Batch, len(retBatches))
+		for i := range retBatches {
+			writtenBatches[i] = containers.ToTNBatch(retBatches[i], task.GetMPool())
+		}
 		// UpdateMappingAfterMerge will handle the nil mapping
 		mergesort.UpdateMappingAfterMerge(task.transMappings, nil, fromLayout, toLayout)
-	}
-	for _, vec := range orderedVecs {
-		defer vec.Close()
-	}
-
-	// make all columns ordered and prepared writtenBatches
-	writtenBatches := make([]*containers.Batch, 0, len(orderedVecs))
-	task.createdObjHandles = toObjectHandle
-	for i := 0; i < len(orderedVecs); i++ {
-		writtenBatches = append(writtenBatches, containers.NewBatch())
-	}
-	vecs := make([]containers.Vector, 0, len(readedBats))
-	for i, idx := range readColIdxs {
-		// skip rowid and sort(reshape) column in the first run
-		if schema.ColDefs[idx].IsPhyAddr() {
-			continue
-		}
-		if i == sortKeyPos {
-			for i, vec := range orderedVecs {
-				writtenBatches[i].AddVector(schema.ColDefs[idx].Name, vec)
-			}
-			continue
-		}
-		vecs = vecs[:0]
-		for _, bat := range readedBats {
-			vecs = append(vecs, bat.Vecs[i])
-		}
-		var outvecs []containers.Vector
-		if schema.HasSortKey() {
-			outvecs = mergesort.ShuffleColumn(vecs, sortedIdx, fromLayout, toLayout, task.rt.VectorPool.Transient)
-		} else {
-			outvecs = mergesort.ReshapeColumn(vecs, fromLayout, toLayout, task.rt.VectorPool.Transient)
-		}
-
-		for i, vec := range outvecs {
-			writtenBatches[i].AddVector(schema.ColDefs[idx].Name, vec)
-			defer vec.Close()
-		}
 	}
 
 	// write!

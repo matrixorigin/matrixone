@@ -351,7 +351,24 @@ func Reshape(column []*vector.Vector, ret []*vector.Vector, fromLayout, toLayout
 	}
 }
 
-func ReshapeBatches(batches []*batch.Batch, ret []*batch.Batch, fromLayout, toLayout []uint32, m *mpool.MPool) {
+func ReshapeBatches(
+	batches []*batch.Batch,
+	fromLayout, toLayout []uint32,
+	vpool DisposableVecPool) ([]*batch.Batch, func()) {
+	// just do reshape, keep sortedIdx nil
+	ret := make([]*batch.Batch, 0, len(toLayout))
+	rfs := make([]func(), 0, len(toLayout))
+	for _, layout := range toLayout {
+		bat, releaseF := getSimilarBatch(batches[0], int(layout), vpool)
+		ret = append(ret, bat)
+		rfs = append(rfs, releaseF)
+	}
+	releaseF := func() {
+		for _, rf := range rfs {
+			rf()
+		}
+	}
+
 	fromIdx := 0
 	fromOffset := 0
 	for i := 0; i < len(toLayout); i++ {
@@ -376,7 +393,7 @@ func ReshapeBatches(batches []*batch.Batch, ret []*batch.Batch, fromLayout, toLa
 				if err != nil {
 					panic(err)
 				}
-				err = vector.GetUnionAllFunction(*vec.GetType(), m)(ret[i].Vecs[vecIdx], window)
+				err = vector.GetUnionAllFunction(*vec.GetType(), vpool.GetMPool())(ret[i].Vecs[vecIdx], window)
 				if err != nil {
 					panic(err)
 				}
@@ -388,4 +405,5 @@ func ReshapeBatches(batches []*batch.Batch, ret []*batch.Batch, fromLayout, toLa
 		}
 		ret[i].SetRowCount(int(toLayout[i]))
 	}
+	return ret, releaseF
 }

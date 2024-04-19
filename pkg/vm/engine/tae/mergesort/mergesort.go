@@ -93,26 +93,3 @@ func ShuffleColumn(
 
 	return
 }
-
-// ReshapeColumn rearrange array according to toLayout. After that, vector in `column` will be closed. Used by Tn only
-func ReshapeColumn(
-	column []containers.Vector, fromLayout, toLayout []uint32, pool *containers.VectorPool,
-) (ret []containers.Vector) {
-	columns := make([]*vector.Vector, len(column))
-	for i := range column {
-		columns[i] = column[i].GetDownstreamVector()
-	}
-	ret = make([]containers.Vector, len(toLayout))
-	retvec := make([]*vector.Vector, len(toLayout))
-	for i := 0; i < len(toLayout); i++ {
-		ret[i] = pool.GetVector(column[0].GetType())
-		retvec[i] = ret[i].GetDownstreamVector()
-	}
-
-	Reshape(columns, retvec, fromLayout, toLayout, ret[0].GetAllocator())
-
-	for _, v := range column {
-		v.Close()
-	}
-	return
-}

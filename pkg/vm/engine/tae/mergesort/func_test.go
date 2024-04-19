@@ -201,20 +201,7 @@ func TestReshapeBatches(t *testing.T) {
 	var m1, m2 runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&m1)
-	retBatch := make([]*batch.Batch, len(toLayout))
-	rfs := make([]func(), len(toLayout))
-	defer func() {
-		for _, f := range rfs {
-			f()
-		}
-	}()
-	for i := range toLayout {
-		var f func()
-		retBatch[i], f = getSimilarBatch(batches[0], int(toLayout[i]), pool)
-		rfs[i] = f
-	}
-
-	ReshapeBatches(batches, retBatch, fromLayout, toLayout, pool.GetMPool())
+	retBatch, releaseF := ReshapeBatches(batches, fromLayout, toLayout, pool)
 	runtime.ReadMemStats(&m2)
 	t.Log("total:", m2.TotalAlloc-m1.TotalAlloc)
 	t.Log("mallocs:", m2.Mallocs-m1.Mallocs)
@@ -222,6 +209,7 @@ func TestReshapeBatches(t *testing.T) {
 	for i, v := range retBatch {
 		require.Equal(t, toLayout[i], uint32(v.RowCount()))
 	}
+	releaseF()
 }
 
 func TestReshapeBatchesInOriginalWay(t *testing.T) {
