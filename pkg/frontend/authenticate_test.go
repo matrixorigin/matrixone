@@ -11427,7 +11427,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
-			Obeject: tree.ObejectInfo{
+			Object: tree.ObjectInfo{
 				SLevel: tree.SnapshotLevelType{
 					Level: tree.SNAPSHOTLEVELCLUSTER,
 				},
@@ -11488,7 +11488,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
-			Obeject: tree.ObejectInfo{
+			Object: tree.ObjectInfo{
 				SLevel: tree.SnapshotLevelType{
 					Level: tree.SNAPSHOTLEVELCLUSTER,
 				},
@@ -11549,7 +11549,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
-			Obeject: tree.ObejectInfo{
+			Object: tree.ObjectInfo{
 				SLevel: tree.SnapshotLevelType{
 					Level: tree.SNAPSHOTLEVELACCOUNT,
 				},
@@ -11614,7 +11614,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
-			Obeject: tree.ObejectInfo{
+			Object: tree.ObjectInfo{
 				SLevel: tree.SnapshotLevelType{
 					Level: tree.SNAPSHOTLEVELACCOUNT,
 				},
@@ -11679,7 +11679,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
-			Obeject: tree.ObejectInfo{
+			Object: tree.ObjectInfo{
 				SLevel: tree.SnapshotLevelType{
 					Level: tree.SNAPSHOTLEVELACCOUNT,
 				},
@@ -11745,7 +11745,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
-			Obeject: tree.ObejectInfo{
+			Object: tree.ObjectInfo{
 				SLevel: tree.SnapshotLevelType{
 					Level: tree.SNAPSHOTLEVELACCOUNT,
 				},
@@ -11811,7 +11811,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
-			Obeject: tree.ObejectInfo{
+			Object: tree.ObjectInfo{
 				SLevel: tree.SnapshotLevelType{
 					Level: tree.SNAPSHOTLEVELACCOUNT,
 				},

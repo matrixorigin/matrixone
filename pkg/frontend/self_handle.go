@@ -379,6 +379,11 @@ func execInFrontend(requestCtx context.Context,
 		if err = handleDropSnapshot(requestCtx, ses, st); err != nil {
 			return
 		}
+	case *tree.RestoreSnapShot:
+		//TODO: invalidate privilege cache
+		if err = handleRestoreSnapshot(requestCtx, ses, st); err != nil {
+			return
+		}
 	case *tree.UpgradeStatement:
 		//TODO: invalidate privilege cache
 		if err = handleExecUpgrade(requestCtx, ses, st); err != nil {
