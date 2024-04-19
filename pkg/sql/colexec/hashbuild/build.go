@@ -463,4 +463,5 @@ func sendFilter(ap *Argument, proc *process.Process, runtimeFilter process.Runti
 	sendRuntimeFilterStart := time.Now()
 	proc.SendMessage(runtimeFilter)
 	anal.WaitStop(sendRuntimeFilterStart)
+	ap.ctr.runtimeFilterHandled = true
 }

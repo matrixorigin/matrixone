@@ -16,12 +16,13 @@ package service
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"math"
 	"os"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -695,6 +696,48 @@ func TestCommitWithLockTablesBindChanged(t *testing.T) {
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 0))
 	checkResponses(t, commitWriteData(t, sender, wTxn),
 		txn.WrapError(moerr.NewLockTableBindChanged(context.TODO()), 0))
+}
+
+func TestCommitWithOrphan(t *testing.T) {
+	sender := NewTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	allocator := newTestLockTablesAllocator(
+		t,
+		"/tmp/locktable.sock",
+		time.Second)
+	defer func() {
+		assert.NoError(t, allocator.Close())
+	}()
+	s := NewTestTxnServiceWithAllocator(
+		t,
+		1,
+		sender,
+		NewTestClock(1),
+		allocator).(*service)
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close(false))
+	}()
+	sender.AddTxnService(s)
+
+	bind := allocator.Get("s1", 0, 10, 0, lock.Sharding_None)
+	wTxn := NewTestTxn(1, 1, 1)
+	wTxn.LockTables = append(wTxn.LockTables, bind)
+	wTxn.LockService = "s1"
+
+	allocator.AddCannotCommit([]lock.OrphanTxn{
+		{
+			Service: "s1",
+			Txn:     [][]byte{wTxn.ID},
+		},
+	})
+
+	checkResponses(t, writeTestData(t, sender, 1, wTxn, 0))
+	checkResponses(t, commitWriteData(t, sender, wTxn),
+		txn.WrapError(moerr.NewCannotCommitOrphan(context.TODO()), 0))
 }
 
 func TestRollback(t *testing.T) {
