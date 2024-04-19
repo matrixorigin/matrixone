@@ -1,8 +1,13 @@
+partition_rules:
+    - name: main
+      conditions:
+        - base=main
+    - name: 1.1-dev
+      conditions:
+        - base=1.1-dev
+
 queue_rules:
   - name: main
-    merge_conditions: []
-    checks_timeout: 4h
-  - name: release-1.0
     merge_conditions: []
     checks_timeout: 4h
   - name: release-1.1
@@ -15,27 +20,11 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
       - base=main
+      - queue-partition-name=main
     actions:
       queue:
         name: main
-        method: squash
-        commit_message_template: |
-          {{ title }} (#{{ number }})
-
-          {{ body | get_section("## What this PR does / why we need it:") }}
-
-          Approved by: @{{ approved_reviews_by | join(', @') }}
-
-  - name: Automatic queue on approval for release-1.0
-    conditions:
-      - "#changes-requested-reviews-by<=0"
-      - label!=do-not-merge/wip
-      - base=1.0-dev
-      - approved-reviews-by=sukki37
-    actions:
-      queue:
-        name: release-1.0
-        method: squash
+        merge_method: squash
         commit_message_template: |
           {{ title }} (#{{ number }})
 
@@ -48,11 +37,12 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
       - base=1.1-dev
+      - queue-partition-name=1.1-dev
       - approved-reviews-by=sukki37
     actions:
       queue:
         name: release-1.1
-        method: squash
+        merge_method: squash
         commit_message_template: |
           {{ title }} (#{{ number }})
 
