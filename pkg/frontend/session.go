@@ -1856,19 +1856,6 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		pu := ses.GetParameterUnit()
 		mp := ses.GetMemPool()
 
-		updateSqls := ses.getUpdateVariableSqlsByToml()
-		for _, sql := range updateSqls {
-			_, err = executeSQLInBackgroundSession(
-				sysTenantCtx,
-				ses,
-				mp,
-				pu,
-				sql)
-			if err != nil {
-				return err
-			}
-		}
-
 		rsset, err = executeSQLInBackgroundSession(
 			sysTenantCtx,
 			ses,
@@ -1915,19 +1902,6 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		pu := ses.GetParameterUnit()
 		mp := ses.GetMemPool()
 
-		updateSqls := ses.getUpdateVariableSqlsByToml()
-		for _, sql := range updateSqls {
-			_, err = executeSQLInBackgroundSession(
-				tenantCtx,
-				ses,
-				mp,
-				pu,
-				sql)
-			if err != nil {
-				return err
-			}
-		}
-
 		rsset, err = executeSQLInBackgroundSession(
 			tenantCtx,
 			ses,
@@ -1967,24 +1941,6 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		}
 	}
 	return err
-}
-
-func (ses *Session) getUpdateVariableSqlsByToml() []string {
-	updateSqls := make([]string, 0)
-	tenantInfo := ses.GetTenantInfo()
-	// sql_mode
-	if getVariableValue(ses.pu.SV.SqlMode) != gSysVarsDefs["sql_mode"].Default {
-		sqlForUpdate := getSqlForUpdateSystemVariableValue(ses.pu.SV.SqlMode, uint64(tenantInfo.GetTenantID()), "sql_mode")
-		updateSqls = append(updateSqls, sqlForUpdate)
-	}
-
-	// lower_case_table_names
-	if getVariableValue(ses.pu.SV.LowerCaseTableNames) != gSysVarsDefs["lower_case_table_names"].Default {
-		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(ses.pu.SV.LowerCaseTableNames), uint64(tenantInfo.GetTenantID()), "lower_case_table_names")
-		updateSqls = append(updateSqls, sqlForUpdate)
-	}
-
-	return updateSqls
 }
 
 func (ses *Session) GetPrivilege() *privilege {
@@ -2513,20 +2469,32 @@ func checkPlanIsInsertValues(proc *process.Process,
 }
 
 func commitAfterMigrate(ses *Session, err error) {
-	if err != nil {
-		rErr := ses.GetTxnHandler().RollbackTxn()
-		if rErr != nil {
-			logutil.Errorf("failed to rollback txn: %v", rErr)
-		}
-	}
-
-	// Commit txn manually.
-	if cErr := ses.GetTxnHandler().CommitTxn(); cErr != nil {
-		logutil.Errorf("failed to commit txn: %v", cErr)
+	if ses == nil {
+		logutil.Error("session is nil")
 		return
 	}
-	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
-	ses.ClearOptionBits(OPTION_BEGIN)
+	txnHandler := ses.GetTxnHandler()
+	if txnHandler == nil {
+		logutil.Error("txn handler is nil")
+		return
+	}
+	if txnHandler.GetSession() == nil {
+		logutil.Error("ses in txn handler is nil")
+		return
+	}
+	defer func() {
+		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+		ses.ClearOptionBits(OPTION_BEGIN)
+	}()
+	if err != nil {
+		if rErr := txnHandler.RollbackTxn(); rErr != nil {
+			logutil.Errorf("failed to rollback txn: %v", rErr)
+		}
+	} else {
+		if cErr := txnHandler.CommitTxn(); cErr != nil {
+			logutil.Errorf("failed to commit txn: %v", cErr)
+		}
+	}
 }
 
 type dbMigration struct {
@@ -2596,6 +2564,15 @@ func (p *prepareStmtMigration) Migrate(ses *Session) error {
 }
 
 func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
+	accountID, err := defines.GetAccountId(ses.requestCtx)
+	if err != nil {
+		logutil.Errorf("failed to get account ID: %v", err)
+		return err
+	}
+	userID := defines.GetUserId(ses.requestCtx)
+	logutil.Infof("do migration on connection %d, db: %s, account id: %d, user id: %d",
+		req.ConnID, req.DB, accountID, userID)
+
 	dbm := newDBMigration(req.DB)
 	if err := dbm.Migrate(ses); err != nil {
 		return err
