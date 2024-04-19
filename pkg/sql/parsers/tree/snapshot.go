@@ -57,12 +57,12 @@ func (node *SnapshotLevelType) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Level.String())
 }
 
-type ObejectInfo struct {
+type ObjectInfo struct {
 	SLevel  SnapshotLevelType // snapshot level
 	ObjName Identifier        // object name
 }
 
-func (node *ObejectInfo) Format(ctx *FmtCtx) {
+func (node *ObjectInfo) Format(ctx *FmtCtx) {
 	node.SLevel.Format(ctx)
 	ctx.WriteString(" ")
 	node.ObjName.Format(ctx)
@@ -73,7 +73,7 @@ type CreateSnapShot struct {
 
 	IfNotExists bool
 	Name        Identifier // snapshot name
-	Obeject     ObejectInfo
+	Object      ObjectInfo
 }
 
 func (node *CreateSnapShot) Format(ctx *FmtCtx) {
@@ -83,7 +83,7 @@ func (node *CreateSnapShot) Format(ctx *FmtCtx) {
 	}
 	node.Name.Format(ctx)
 	ctx.WriteString(" for ")
-	node.Obeject.Format(ctx)
+	node.Object.Format(ctx)
 }
 
 func (node *CreateSnapShot) GetStatementType() string { return "Create Snapshot" }
@@ -167,15 +167,12 @@ func (s RestoreLevel) String() string {
 type RestoreSnapShot struct {
 	statementImpl
 
-	Level        RestoreLevel
-	AccountName  Identifier // account name
-	DatabaseName Identifier // database name
-	TableName    Identifier // table name
-	SnapShotName Identifier // snapshot name
-
-	IsToNewAccount bool
-	NewAccountName Identifier // new account name
-	AuthOption     AccountAuthOption
+	Level         RestoreLevel
+	AccountName   Identifier // account name
+	DatabaseName  Identifier // database name
+	TableName     Identifier // table name
+	SnapShotName  Identifier // snapshot name
+	ToAccountName Identifier // to account name
 }
 
 func (node *RestoreSnapShot) Format(ctx *FmtCtx) {
@@ -203,11 +200,9 @@ func (node *RestoreSnapShot) Format(ctx *FmtCtx) {
 	ctx.WriteString(" from snapshot ")
 	node.SnapShotName.Format(ctx)
 
-	if node.IsToNewAccount {
+	if len(node.ToAccountName) > 0 {
 		ctx.WriteString(" to account ")
-		node.NewAccountName.Format(ctx)
-		ctx.WriteString(" identified by ")
-		node.AuthOption.Format(ctx)
+		node.ToAccountName.Format(ctx)
 	}
 }
 

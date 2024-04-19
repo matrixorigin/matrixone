@@ -32,36 +32,33 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-
 	"github.com/tidwall/btree"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type TenantInfo struct {
@@ -1152,16 +1149,6 @@ var (
 		created_time,
 		comment) values ('%s','%s', '%s', '%s','%s', '%s');`
 
-	insertIntoMoSnapshots = `insert into mo_catalog.mo_snapshots(
-		snapshot_id,
-		sname,
-		ts,
-		level,
-		account_name,
-		database_name,
-		table_name,
-		obj_id ) values ('%s', '%s', %d, '%s', '%s', '%s', '%s', %d);`
-
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
 			owner,
@@ -1593,21 +1580,13 @@ const (
 
 	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = '%s' order by stage_id;`
 
-	dropSnapshotFormat = `delete from mo_catalog.mo_snapshots where sname = '%s' order by snapshot_id;`
+	updateStageUrlFormat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s' order by stage_id;`
 
-	updateStageUrlFotmat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageCredentialsFormat = `update mo_catalog.mo_stages set stage_credentials = '%s'  where stage_name = '%s' order by stage_id;`
 
-	updateStageCredentialsFotmat = `update mo_catalog.mo_stages set stage_credentials = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageStatusFormat = `update mo_catalog.mo_stages set stage_status = '%s'  where stage_name = '%s' order by stage_id;`
 
-	updateStageStatusFotmat = `update mo_catalog.mo_stages set stage_status = '%s'  where stage_name = '%s' order by stage_id;`
-
-	updateStageCommentFotmat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
-
-	checkSnapshotFormat = `select snapshot_id from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`
-
-	getSnapshotTsWithSnapshotNameFormat = `select ts from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`
-
-	checkSnapshotTsFormat = `select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id;`
+	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
 
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
@@ -1680,26 +1659,6 @@ func getSqlForCheckStage(ctx context.Context, stage string) (string, error) {
 	return fmt.Sprintf(checkStageFormat, stage), nil
 }
 
-func getSqlForCheckSnapshot(ctx context.Context, snapshot string) (string, error) {
-	err := inputNameIsInvalid(ctx, snapshot)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkSnapshotFormat, snapshot), nil
-}
-
-func getSqlForGetSnapshotTsWithSnapshotName(ctx context.Context, snapshot string) (string, error) {
-	err := inputNameIsInvalid(ctx, snapshot)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(getSnapshotTsWithSnapshotNameFormat, snapshot), nil
-}
-
-func getSqlForCheckSnapshotTs(snapshotTs int64) string {
-	return fmt.Sprintf(checkSnapshotTsFormat, snapshotTs)
-}
-
 func getSqlForCheckStageStatus(ctx context.Context, status string) string {
 	return fmt.Sprintf(checkStageStatusFormat, status)
 }
@@ -1723,36 +1682,24 @@ func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credential
 	return fmt.Sprintf(insertIntoMoStages, stageName, url, credentials, status, createdTime, comment), nil
 }
 
-func getSqlForCreateSnapshot(ctx context.Context, snapshotId, snapshotName string, ts int64, level, accountName, databaseName, tableName string, objectId uint64) (string, error) {
-	err := inputNameIsInvalid(ctx, snapshotName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(insertIntoMoSnapshots, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName, objectId), nil
-}
-
 func getSqlForDropStage(stageName string) string {
 	return fmt.Sprintf(dropStageFormat, stageName)
 }
 
-func getSqlForDropSnapshot(snapshotName string) string {
-	return fmt.Sprintf(dropSnapshotFormat, snapshotName)
-}
-
 func getsqlForUpdateStageUrl(stageName, url string) string {
-	return fmt.Sprintf(updateStageUrlFotmat, url, stageName)
+	return fmt.Sprintf(updateStageUrlFormat, url, stageName)
 }
 
 func getsqlForUpdateStageCredentials(stageName, credentials string) string {
-	return fmt.Sprintf(updateStageCredentialsFotmat, credentials, stageName)
+	return fmt.Sprintf(updateStageCredentialsFormat, credentials, stageName)
 }
 
 func getsqlForUpdateStageStatus(stageName, status string) string {
-	return fmt.Sprintf(updateStageStatusFotmat, status, stageName)
+	return fmt.Sprintf(updateStageStatusFormat, status, stageName)
 }
 
 func getsqlForUpdateStageComment(stageName, comment string) string {
-	return fmt.Sprintf(updateStageCommentFotmat, comment, stageName)
+	return fmt.Sprintf(updateStageCommentFormat, comment, stageName)
 }
 
 func getSqlForGetAccountName(tenantId uint32) string {
@@ -6064,6 +6011,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
+	case *tree.RestoreSnapShot:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
+		kind = privilegeKindNone
 	case *tree.TruncateTable:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTruncate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -9729,275 +9680,6 @@ func postAlterSessionStatus(
 
 	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
-}
-
-func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) error {
-	var err error
-	var snapshotLevel tree.SnapshotLevel
-	var snapshotForAccount string
-	var snapshotName string
-	var snapshotExist bool
-	var snapshotId string
-	var databaseName string
-	var tableName string
-	var sql string
-	var objId uint64
-
-	// check create stage priv
-	err = doCheckRole(ctx, ses)
-	if err != nil {
-		return err
-	}
-
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	// check create snapshot priv
-
-	// 1.only admin can create tenant level snapshot
-	err = doCheckRole(ctx, ses)
-	if err != nil {
-		return err
-	}
-	// 2.only sys can create cluster level snapshot
-	tenantInfo := ses.GetTenantInfo()
-	currentAccount := tenantInfo.GetTenant()
-	snapshotLevel = stmt.Obeject.SLevel.Level
-	if snapshotLevel == tree.SNAPSHOTLEVELCLUSTER && currentAccount != sysAccountName {
-		return moerr.NewInternalError(ctx, "only sys tenant can create cluster level snapshot")
-	}
-
-	// 3.only sys can create tenant level snapshot for other tenant
-	if snapshotLevel == tree.SNAPSHOTLEVELACCOUNT {
-		snapshotForAccount = string(stmt.Obeject.ObjName)
-		if currentAccount != sysAccountName && currentAccount != snapshotForAccount {
-			return moerr.NewInternalError(ctx, "only sys tenant can create tenant level snapshot for other tenant")
-		}
-
-		// check account exists or not and get accountId
-		getAccountIdFunc := func(accountName string) (accountId uint64, rtnErr error) {
-			var erArray []ExecResult
-			sql, rtnErr = getSqlForCheckTenant(ctx, accountName)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
-			bh.ClearExecResultSet()
-			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
-
-			erArray, rtnErr = getResultSet(ctx, bh)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
-
-			if execResultArrayHasData(erArray) {
-				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-					accountId, rtnErr = erArray[0].GetUint64(ctx, i, 0)
-					if rtnErr != nil {
-						return 0, rtnErr
-					}
-				}
-			} else {
-				return 0, moerr.NewInternalError(ctx, "account %s does not exist", accountName)
-			}
-			return accountId, rtnErr
-		}
-
-		// if sys tenant create snapshots for other tenant, get the account id
-		// otherwise, get the account id from tenantInfo
-		if currentAccount == sysAccountName && currentAccount != snapshotForAccount {
-			objId, err = getAccountIdFunc(snapshotForAccount)
-			if err != nil {
-				return err
-			}
-		} else {
-			objId = uint64(tenantInfo.GetTenantID())
-		}
-	}
-
-	// check snapshot exists or not
-	snapshotName = string(stmt.Name)
-	snapshotExist, err = checkSnapShotExistOrNot(ctx, bh, snapshotName)
-	if err != nil {
-		return err
-	}
-	if snapshotExist {
-		if !stmt.IfNotExists {
-			return moerr.NewInternalError(ctx, "snapshot %s already exists", snapshotName)
-		} else {
-			return nil
-		}
-	} else {
-		// insert record to the system table
-
-		// 1. get snapshot id
-		newUUid, err := uuid.NewV7()
-		if err != nil {
-			return err
-		}
-		snapshotId = newUUid.String()
-
-		// 2. get snapshot ts
-		// ts := ses.proc.TxnOperator.SnapshotTS()
-		// snapshotTs = ts.String()
-
-		sql, err = getSqlForCreateSnapshot(ctx, snapshotId, snapshotName, time.Now().UTC().UnixNano(), snapshotLevel.String(), string(stmt.Obeject.ObjName), databaseName, tableName, objId)
-		if err != nil {
-			return err
-		}
-
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
-		}
-	}
-
-	// insert record to the system table
-
-	return err
-}
-
-func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) (err error) {
-	var sql string
-	var stageExist bool
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	// check create stage priv
-	// only admin can drop snapshot for himself
-	err = doCheckRole(ctx, ses)
-	if err != nil {
-		return err
-	}
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	// check stage
-	stageExist, err = checkSnapShotExistOrNot(ctx, bh, string(stmt.Name))
-	if err != nil {
-		return err
-	}
-
-	if !stageExist {
-		if !stmt.IfExists {
-			return moerr.NewInternalError(ctx, "snapshot %s does not exist", string(stmt.Name))
-		} else {
-			// do nothing
-			return err
-		}
-	} else {
-		sql = getSqlForDropSnapshot(string(stmt.Name))
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
-		}
-	}
-	return err
-}
-
-func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotName string) (bool, error) {
-	var sql string
-	var erArray []ExecResult
-	var err error
-	sql, err = getSqlForCheckSnapshot(ctx, snapshotName)
-	if err != nil {
-		return false, err
-	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return false, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return false, err
-	}
-
-	if execResultArrayHasData(erArray) {
-		return true, nil
-	}
-	return false, nil
-}
-
-func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses FeSession, spName string) (snapshotTs int64, err error) {
-	var sql string
-	var erArray []ExecResult
-	err = inputNameIsInvalid(ctx, spName)
-	if err != nil {
-		return 0, err
-	}
-
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	sql, err = getSqlForGetSnapshotTsWithSnapshotName(ctx, spName)
-	if err != nil {
-		return 0, err
-	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return 0, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return 0, err
-	}
-
-	if execResultArrayHasData(erArray) {
-		snapshotTs, err := erArray[0].GetInt64(ctx, 0, 0)
-		if err != nil {
-			return 0, err
-		}
-
-		return snapshotTs, nil
-	} else {
-		return 0, moerr.NewInternalError(ctx, "snapshot %s does not exist", spName)
-	}
-}
-
-func checkTimeStampValid(ctx context.Context, ses FeSession, snapshotTs int64) (bool, error) {
-	var sql string
-	var err error
-	var erArray []ExecResult
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	sql = getSqlForCheckSnapshotTs(snapshotTs)
-
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return false, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return false, err
-	}
-
-	if !execResultArrayHasData(erArray) {
-		return false, err
-	}
-
-	return true, nil
 }
 
 func getDbIdAndType(ctx context.Context, bh BackgroundExec, tenantInfo *TenantInfo, dbName string) (dbId uint64, dbType string, err error) {
