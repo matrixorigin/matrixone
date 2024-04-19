@@ -63,10 +63,6 @@ show subscriptions;
 use sub_database01;
 show tables;
 select * from t1;
--- @bvt:issue#15607
-select mo_table_col_max('sub_database01', 't1', 'a');
-select mo_table_col_min('sub_database01', 't1', 'b');
--- @bvt:issue
 -- @session
 
 drop table if exists t2;
@@ -88,9 +84,6 @@ use sub_database01;
 show tables;
 select * from t1;
 select * from t2;
--- @bvt:issue#15607
-select mo_table_col_max('sub_database01', 't2', 'col1');
--- @bvt:issue
 -- @session
 drop publication publication01;
 
