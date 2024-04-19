@@ -396,7 +396,7 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 	levels := page.DefinitionLevels()
 	j := 0
 	for i := 0; i < n; i++ {
-		if !noNulls && levels[i+length] != mp.maxDefinitionLevel {
+		if !noNulls && levels[i] != mp.maxDefinitionLevel {
 			nulls.Add(vec.GetNulls(), uint64(i+length))
 		} else {
 			ret[i+length] = itee(data[j])
