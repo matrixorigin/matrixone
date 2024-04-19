@@ -2469,20 +2469,32 @@ func checkPlanIsInsertValues(proc *process.Process,
 }
 
 func commitAfterMigrate(ses *Session, err error) {
-	if err != nil {
-		rErr := ses.GetTxnHandler().RollbackTxn()
-		if rErr != nil {
-			logutil.Errorf("failed to rollback txn: %v", rErr)
-		}
-	}
-
-	// Commit txn manually.
-	if cErr := ses.GetTxnHandler().CommitTxn(); cErr != nil {
-		logutil.Errorf("failed to commit txn: %v", cErr)
+	if ses == nil {
+		logutil.Error("session is nil")
 		return
 	}
-	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
-	ses.ClearOptionBits(OPTION_BEGIN)
+	txnHandler := ses.GetTxnHandler()
+	if txnHandler == nil {
+		logutil.Error("txn handler is nil")
+		return
+	}
+	if txnHandler.GetSession() == nil {
+		logutil.Error("ses in txn handler is nil")
+		return
+	}
+	defer func() {
+		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+		ses.ClearOptionBits(OPTION_BEGIN)
+	}()
+	if err != nil {
+		if rErr := txnHandler.RollbackTxn(); rErr != nil {
+			logutil.Errorf("failed to rollback txn: %v", rErr)
+		}
+	} else {
+		if cErr := txnHandler.CommitTxn(); cErr != nil {
+			logutil.Errorf("failed to commit txn: %v", cErr)
+		}
+	}
 }
 
 type dbMigration struct {
@@ -2552,6 +2564,15 @@ func (p *prepareStmtMigration) Migrate(ses *Session) error {
 }
 
 func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
+	accountID, err := defines.GetAccountId(ses.requestCtx)
+	if err != nil {
+		logutil.Errorf("failed to get account ID: %v", err)
+		return err
+	}
+	userID := defines.GetUserId(ses.requestCtx)
+	logutil.Infof("do migration on connection %d, db: %s, account id: %d, user id: %d",
+		req.ConnID, req.DB, accountID, userID)
+
 	dbm := newDBMigration(req.DB)
 	if err := dbm.Migrate(ses); err != nil {
 		return err
