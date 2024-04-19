@@ -49,7 +49,7 @@ type localLockTable struct {
 	}
 
 	options struct {
-		beforeCloseFirstWaiter func()
+		beforeCloseFirstWaiter func(c *lockContext)
 	}
 }
 
@@ -162,7 +162,7 @@ func (l *localLockTable) doLock(
 				c.opts.Granularity == pb.Granularity_Row {
 
 				if l.options.beforeCloseFirstWaiter != nil {
-					l.options.beforeCloseFirstWaiter()
+					l.options.beforeCloseFirstWaiter(c)
 				}
 
 				l.mu.Lock()
