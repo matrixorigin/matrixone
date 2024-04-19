@@ -491,6 +491,7 @@ message ProcessInfo {
   string snapshot = 6;
   SessionInfo session_info = 7;
   repeated int32 analysis_node_list = 8;
+  SessionLoggerInfo session_logger = 9;
 }
 
 message SessionInfo {
@@ -503,6 +504,22 @@ message SessionInfo {
   bytes  time_zone = 7;
   string  account = 8;
   repeated string query_id = 9;
+}
+
+message SessionLoggerInfo {
+  enum LogLevel{
+    Debug = 0;
+    Info = 1;
+    Warn = 2;
+    Error = 3;
+    Panic = 4;
+    Fatal = 5;
+  }
+
+  bytes sess_id = 1;
+  bytes stmt_id = 2;
+  bytes txn_id = 3;
+  LogLevel log_level = 4;
 }
 
 message Pipeline {
