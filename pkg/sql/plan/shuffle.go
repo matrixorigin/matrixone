@@ -370,6 +370,9 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 	if n.TableDef.Pkey != nil {
 		firstColName := n.TableDef.Pkey.Names[0]
 		firstColID := n.TableDef.Name2ColIndex[firstColName]
+		if n.TableDef.Cols[firstColID].Typ.AutoIncr {
+			return
+		}
 		s := getStatsInfoByTableID(n.TableDef.TblId, builder)
 		if s == nil {
 			return
