@@ -577,6 +577,10 @@ func (c *Compile) runOnce() error {
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
+		err = s.InitAllDataSource(c)
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := range c.scope {
@@ -2100,14 +2104,24 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Scope, error) {
+	s := newScope(Remote)
+	s.NodeInfo = node
+	s.DataSource = &Source{
+		node: n,
+	}
+	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+	return s, nil
+}
+
+func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	var err error
-	var s *Scope
 	var tblDef *plan.TableDef
 	var ts timestamp.Timestamp
 	var db engine.Database
 	var rel engine.Relation
 	var txnOp client.TxnOperator
 
+	n := s.DataSource.node
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -2117,7 +2131,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 		if n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
 			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
 		} else {
-			return nil, moerr.NewInvalidInput(c.ctx, "scan timestamp is greater than current txn timestamp")
+			return moerr.NewInvalidInput(c.ctx, "scan timestamp is greater than current txn timestamp")
 		}
 	} else {
 		txnOp = c.proc.TxnOperator
@@ -2141,7 +2155,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 		rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
 		if err != nil {
 			if txnOp.IsSnapOp() {
-				return nil, err
+				return err
 			}
 			var e error // avoid contamination of error messages
 			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, txnOp)
@@ -2168,32 +2182,27 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 		}
 	}
 
-	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
-	if filterExpr != nil {
+	var filterExpr *plan.Expr
+	if len(n.FilterList) > 0 {
+		filterExpr = colexec.RewriteFilterExprList(n.FilterList)
 		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	s = newScope(Remote)
-	s.NodeInfo = node
-	s.DataSource = &Source{
-		Timestamp:              ts,
-		Attributes:             attrs,
-		TableDef:               tblDef,
-		RelationName:           n.TableDef.Name,
-		PartitionRelationNames: partitionRelNames,
-		SchemaName:             n.ObjRef.SchemaName,
-		AccountId:              n.ObjRef.GetPubInfo(),
-		FilterExpr:             plan2.DeepCopyExpr(filterExpr),
-		node:                   n,
-		RuntimeFilterSpecs:     n.RuntimeFilterProbeList,
-		OrderBy:                n.OrderBy,
-	}
-	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+	s.DataSource.Timestamp = ts
+	s.DataSource.Attributes = attrs
+	s.DataSource.TableDef = tblDef
+	s.DataSource.RelationName = n.TableDef.Name
+	s.DataSource.PartitionRelationNames = partitionRelNames
+	s.DataSource.SchemaName = n.ObjRef.SchemaName
+	s.DataSource.AccountId = n.ObjRef.GetPubInfo()
+	s.DataSource.FilterExpr = filterExpr
+	s.DataSource.RuntimeFilterSpecs = n.RuntimeFilterProbeList
+	s.DataSource.OrderBy = n.OrderBy
 
-	return s, nil
+	return nil
 }
 
 func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
