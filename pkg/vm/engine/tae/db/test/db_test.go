@@ -2337,6 +2337,75 @@ func TestSnapshotIsolation2(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 }
 
+// Same as TestMergeBlocks
+// no pkRow in schema, so merge will run reshape.
+func TestReshapeBlocks(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, -1)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 3
+	bat := catalog.MockBatch(schema, 30)
+	defer bat.Close()
+
+	testutil.CreateRelationAndAppend(t, 0, tae, "db", schema, bat, true)
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err := txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err := db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	it := rel.MakeObjectIt()
+	blkID := it.GetObject().Fingerprint()
+	err = rel.RangeDelete(blkID, 5, 9, handle.DT_Normal)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit(context.Background()))
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	for it.Valid() {
+		testutil.CheckAllColRowsByScan(t, rel, bat.Length(), false)
+		obj := it.GetObject()
+		for j := 0; j < obj.BlkCnt(); j++ {
+			col, err := obj.GetColumnDataById(context.Background(), uint16(j), 0, common.DefaultAllocator)
+			assert.NoError(t, err)
+			defer col.Close()
+			t.Log(col)
+		}
+		it.Next()
+	}
+	assert.Nil(t, txn.Commit(context.Background()))
+
+	testutil.CompactBlocks(t, 0, tae, "db", schema, false)
+	testutil.MergeBlocks(t, 0, tae, "db", schema, false)
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
+	it = rel.MakeObjectIt()
+	for it.Valid() {
+		testutil.CheckAllColRowsByScan(t, rel, bat.Length()-5, false)
+		obj := it.GetObject()
+		for j := 0; j < obj.BlkCnt(); j++ {
+			col, err := obj.GetColumnDataById(context.Background(), uint16(j), 0, common.DefaultAllocator)
+			assert.NoError(t, err)
+			defer col.Close()
+			t.Log(col)
+		}
+		it.Next()
+	}
+	assert.Nil(t, txn.Commit(context.Background()))
+}
+
 // 1. Append 3 blocks and delete last 5 rows of the 1st block
 // 2. Merge blocks
 // 3. Check rows and col[0]

@@ -61,6 +61,25 @@ func initTransferMapping(e *api.MergeCommitEntry, blkcnt int) {
 	e.Booking = NewBlkTransferBooking(blkcnt)
 }
 
+func getSimilarBatch(bat *batch.Batch, capacity int, mergeHost MergeTaskHost) (*batch.Batch, func()) {
+	newBat := batch.NewWithSize(len(bat.Attrs))
+	rfs := make([]func(), len(bat.Vecs))
+	releaseF := func() {
+		for _, release := range rfs {
+			release()
+		}
+	}
+	for i := range bat.Vecs {
+		vec, release := mergeHost.GetVector(bat.Vecs[i].GetType())
+		if capacity > 0 {
+			vec.PreExtend(capacity, mergeHost.GetMPool())
+		}
+		newBat.Vecs[i] = vec
+		rfs[i] = release
+	}
+	return newBat, releaseF
+}
+
 func GetNewWriter(
 	fs fileservice.FileService,
 	ver uint32, seqnums []uint16,
@@ -250,65 +269,27 @@ func DoMergeAndWrite(
 	phaseDesc = "merge sort, or reshape, one column"
 	toLayout := arrangeToLayout(totalRowCount, blkMaxRow)
 
-	sortedVecs, releaseF := getRetVecs(len(toLayout), toSortVecs[0].GetType(), mergehost)
-	defer releaseF()
-
 	// just do reshape, keep sortedIdx nil
-	Reshape(toSortVecs, sortedVecs, fromLayout, toLayout, mpool)
+	retBatches := make([]*batch.Batch, 0, len(toLayout))
+	rfs := make([]func(), 0, len(toLayout))
+	defer func() {
+		for _, rf := range rfs {
+			rf()
+		}
+	}()
+	for _, layout := range toLayout {
+		bat, releaseF := getSimilarBatch(batches[0], int(layout), mergehost)
+		retBatches = append(retBatches, bat)
+		rfs = append(rfs, releaseF)
+	}
+
+	ReshapeBatches(batches, retBatches, fromLayout, toLayout, mpool)
 	UpdateMappingAfterMerge(commitEntry.Booking, nil, fromLayout, toLayout)
 
 	// -------------------------- phase 2
-	phaseDesc = "merge sort, or reshape, the rest of columns"
-
-	// prepare multiple batch
-	attrs := batches[0].Attrs
-	writtenBatches := make([]*batch.Batch, 0, len(sortedVecs))
-	for _, vec := range sortedVecs {
-		b := batch.New(true, attrs)
-		b.SetRowCount(vec.Length())
-		writtenBatches = append(writtenBatches, b)
-	}
-
-	// arrange the other columns according to sortedidx, or, just reshape
-	tempVecs := make([]*vector.Vector, 0, len(batches))
-	for i := range attrs {
-		// just put the sorted column to the write batch
-		if i == sortkeyPos {
-			for j, vec := range sortedVecs {
-				writtenBatches[j].Vecs[i] = vec
-			}
-			continue
-		}
-		tempVecs = tempVecs[:0]
-
-		for _, bat := range batches {
-			if bat.RowCount() == 0 {
-				continue
-			}
-			tempVecs = append(tempVecs, bat.Vecs[i])
-		}
-		if len(toSortVecs) != len(tempVecs) {
-			return moerr.NewInternalError(ctx, "tosort mismatch length %v %v", len(toSortVecs), len(tempVecs))
-		}
-
-		outvecs, release := getRetVecs(len(toLayout), tempVecs[0].GetType(), mergehost)
-		defer release()
-
-		if len(sortedVecs) != len(outvecs) {
-			return moerr.NewInternalError(ctx, "written mismatch length %v %v", len(sortedVecs), len(outvecs))
-		}
-
-		Reshape(tempVecs, outvecs, fromLayout, toLayout, mpool)
-
-		for j, vec := range outvecs {
-			writtenBatches[j].Vecs[i] = vec
-		}
-	}
-
-	// -------------------------- phase 3
 	phaseDesc = "new writer to write down"
 	writer := mergehost.PrepareNewWriter()
-	for _, bat := range writtenBatches {
+	for _, bat := range retBatches {
 		_, err = writer.WriteBatch(bat)
 		if err != nil {
 			return err
@@ -337,22 +318,6 @@ func DoMergeAndWrite(
 
 	return nil
 
-}
-
-// get vector from pool, and return a release function
-func getRetVecs(count int, t *types.Type, vpool DisposableVecPool) (ret []*vector.Vector, releaseAll func()) {
-	var fs []func()
-	for i := 0; i < count; i++ {
-		vec, release := vpool.GetVector(t)
-		ret = append(ret, vec)
-		fs = append(fs, release)
-	}
-	releaseAll = func() {
-		for i := 0; i < count; i++ {
-			fs[i]()
-		}
-	}
-	return
 }
 
 // layout [blkMaxRow, blkMaxRow, blkMaxRow,..., blkMaxRow, totalRowCount - blkMaxRow*N]

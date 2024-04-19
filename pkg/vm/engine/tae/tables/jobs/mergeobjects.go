@@ -154,6 +154,26 @@ func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
 	return task.rt.VectorPool.Transient.MPool()
 }
 
+func (task *mergeObjectsTask) GetSimilarBatch(bat *batch.Batch, capacity int) (*batch.Batch, func()) {
+	newBat := batch.NewWithSize(len(bat.Attrs))
+	rfs := make([]func(), len(bat.Vecs))
+	releaseF := func() {
+		for _, release := range rfs {
+			release()
+		}
+	}
+	for i := range bat.Vecs {
+		vec, release := task.GetVector(bat.Vecs[i].GetType())
+		if capacity > 0 {
+			vec.PreExtend(capacity, task.GetMPool())
+		}
+		newBat.Vecs[i] = vec
+		rfs[i] = release
+	}
+	return newBat, releaseF
+
+}
+
 func (task *mergeObjectsTask) HostHintName() string { return "DN" }
 
 func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error) {
