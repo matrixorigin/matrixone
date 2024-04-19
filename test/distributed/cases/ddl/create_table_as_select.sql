@@ -1304,7 +1304,6 @@ drop database db;
 drop database db5;
 drop database db6;
 
--- @bvt:issue#15491
 -- privilege
 drop database if exists db7;
 create database db7;
@@ -1323,7 +1322,6 @@ grant connect on account * to role_r1;
 grant create table, drop table on database *.* to role_r1;
 grant show tables on database * to role_r1;
 -- @session:id=23&user=sys:role_u1:role_r1&password=111
-drop table if exists t2;
 create table t2 as select * from t1;
 -- @session
 grant select on table * to role_r1;
@@ -1336,5 +1334,4 @@ select * from t2;
 drop table t1;
 drop table t2;
 drop database db7;
--- @bvt:issue
 set @@global.lower_case_table_names = 1;
