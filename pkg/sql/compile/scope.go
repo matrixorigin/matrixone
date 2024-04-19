@@ -141,14 +141,15 @@ func (s *Scope) MergeRun(c *Compile) error {
 			wg.Done()
 		}
 	}
-	defer wg.Wait()
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	var errReceiveChan chan error
 	if len(s.RemoteReceivRegInfos) > 0 {
 		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
-		s.notifyAndReceiveFromRemote(errReceiveChan)
+		s.notifyAndReceiveFromRemote(&wg, errReceiveChan)
 	}
+	defer wg.Wait()
+
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		select {
@@ -819,62 +820,73 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 	}
 }
 
-func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
+func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan error) {
+	// if context has done, it means other pipeline stop the query normally.
+	closeWithError := func(err error, reg *process.WaitRegister) {
+		if reg != nil {
+			select {
+			case <-s.Proc.Ctx.Done():
+			case reg.Ch <- nil:
+			}
+			close(reg.Ch)
+		}
+
+		select {
+		case <-s.Proc.Ctx.Done():
+			errChan <- nil
+		default:
+			errChan <- err
+		}
+		wg.Done()
+	}
+
+	// start N goroutines to send notifications to remote nodes.
+	// to notify the remote dispatch executor where its remote receivers are.
+	// dispatch operator will use this stream connection to send data back.
+	//
+	// function `cnMessageHandle` at file `scopeRemoteRun.go` will handle the notification.
 	for i := range s.RemoteReceivRegInfos {
-		op := &s.RemoteReceivRegInfos[i]
+		wg.Add(1)
 
-		go func(info *RemoteReceivRegInfo, reg *process.WaitRegister) {
-			// if context has done, it means other pipeline stop the query normally.
-			closeWithError := func(err error) {
-				if reg != nil {
-					select {
-					case <-s.Proc.Ctx.Done():
-					case reg.Ch <- nil:
-					}
-					close(reg.Ch)
+		errSubmit := ants.Submit(
+			func() {
+				op := &s.RemoteReceivRegInfos[i]
+
+				streamSender, errStream := cnclient.GetStreamSender(op.FromAddr)
+				if errStream != nil {
+					logutil.Errorf("Failed to get stream sender txnID=%s, err=%v",
+						s.Proc.TxnOperator.Txn().DebugString(), errStream)
+					closeWithError(errStream, s.Proc.Reg.MergeReceivers[op.Idx])
+					return
 				}
+				defer streamSender.Close(true)
 
-				select {
-				case <-s.Proc.Ctx.Done():
-					errChan <- nil
-				default:
-					errChan <- err
-				}
-			}
-
-			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
-			if errStream != nil {
-				logutil.Errorf("Failed to get stream sender txnID=%s, err=%v",
-					s.Proc.TxnOperator.Txn().DebugString(), errStream)
-				closeWithError(errStream)
-				return
-			}
-			defer streamSender.Close(true)
-
-			message := cnclient.AcquireMessage()
-			{
+				message := cnclient.AcquireMessage()
 				message.Id = streamSender.ID()
 				message.Cmd = pbpipeline.Method_PrepareDoneNotifyMessage
 				message.Sid = pbpipeline.Status_Last
-				message.Uuid = info.Uuid[:]
-			}
-			if errSend := streamSender.Send(s.Proc.Ctx, message); errSend != nil {
-				closeWithError(errSend)
-				return
-			}
+				message.Uuid = op.Uuid[:]
 
-			messagesReceive, errReceive := streamSender.Receive()
-			if errReceive != nil {
-				closeWithError(errReceive)
-				return
-			}
-			var ch chan *batch.Batch
-			if reg != nil {
-				ch = reg.Ch
-			}
-			err := receiveMsgAndForward(s.Proc, messagesReceive, ch)
-			closeWithError(err)
-		}(op, s.Proc.Reg.MergeReceivers[op.Idx])
+				if errSend := streamSender.Send(s.Proc.Ctx, message); errSend != nil {
+					closeWithError(errSend, s.Proc.Reg.MergeReceivers[op.Idx])
+					return
+				}
+
+				messagesReceive, errReceive := streamSender.Receive()
+				if errReceive != nil {
+					closeWithError(errReceive, s.Proc.Reg.MergeReceivers[op.Idx])
+					return
+				}
+
+				err := receiveMsgAndForward(s.Proc, messagesReceive, s.Proc.Reg.MergeReceivers[op.Idx].Ch)
+				closeWithError(err, s.Proc.Reg.MergeReceivers[op.Idx])
+			},
+		)
+
+		if errSubmit != nil {
+			errChan <- errSubmit
+			wg.Done()
+		}
 	}
 }
 
@@ -887,8 +899,8 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 	for {
 		select {
 		case <-proc.Ctx.Done():
-			logutil.Warnf("proc ctx done during forward")
 			return nil
+
 		case val, ok = <-receiveCh:
 			if val == nil || !ok {
 				return moerr.NewStreamClosedNoCtx()
@@ -934,8 +946,9 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			} else {
 				select {
 				case <-proc.Ctx.Done():
-					logutil.Warnf("proc ctx done during forward")
+					bat.Clean(proc.Mp())
 					return nil
+
 				case forwardCh <- bat:
 				}
 			}
