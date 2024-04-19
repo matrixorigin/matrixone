@@ -22,6 +22,7 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -352,12 +353,20 @@ type FeSession interface {
 }
 
 type SessionLogger interface {
+	SessionGetter
 	Info(ctx context.Context, msg string, fields ...zap.Field)
 	Error(ctx context.Context, msg string, fields ...zap.Field)
 	Debug(ctx context.Context, msg string, fields ...zap.Field)
 	Infof(ctx context.Context, msg string, args ...any)
 	Errorf(ctx context.Context, msg string, args ...any)
 	Debugf(ctx context.Context, msg string, args ...any)
+}
+
+type SessionGetter interface {
+	GetSessId() uuid.UUID
+	GetStmtId() uuid.UUID
+	GetTxnId() uuid.UUID
+	GetLogLevel() zapcore.Level
 }
 
 type ExecCtx struct {

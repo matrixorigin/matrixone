@@ -86,6 +86,7 @@ type processHelper struct {
 	txnClient        client.TxnClient
 	sessionInfo      process.SessionInfo
 	analysisNodeList []int32
+	StmtId           uuid.UUID
 }
 
 // messageSenderOnClient is a structure
@@ -385,6 +386,11 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
 	proc.DispatchNotifyCh = make(chan process.WrapCs)
+	{
+		txn := proc.TxnOperator.Txn()
+		txnId := txn.GetID()
+		proc.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
+	}
 
 	c := reuse.Alloc[Compile](nil)
 	c.proc = proc
@@ -521,6 +527,13 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	result.sessionInfo, err = convertToProcessSessionInfo(procInfo.SessionInfo)
 	if err != nil {
 		return processHelper{}, err
+	}
+	{
+		sessLogger := procInfo.SessionLogger
+		copy(result.sessionInfo.SessionId[:], sessLogger.SessId)
+		result.sessionInfo.LogLevel = enumLogLevel2ZapLogLevel(sessLogger.LogLevel)
+		copy(result.StmtId[:], sessLogger.StmtId)
+		// txnId, ignore. more in txnOperator.
 	}
 
 	return result, nil

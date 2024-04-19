@@ -21,12 +21,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
-
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -51,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -97,10 +93,14 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // CnServerMessageHandler is responsible for processing the cn-client message received at cn-server.
@@ -435,8 +435,49 @@ func encodeProcessInfo(proc *process.Process, sql string) ([]byte, error) {
 		}
 	}
 	{ // log info
+		stmtId := proc.StmtProfile.GetStmtId()
+		txnId := proc.StmtProfile.GetTxnId()
+		procInfo.SessionLogger = &pipeline.SessionLoggerInfo{
+			SessId:   proc.SessionInfo.SessionId[:],
+			StmtId:   stmtId[:],
+			TxnId:    txnId[:],
+			LogLevel: zapLogLevel2EnumLogLevel(proc.SessionInfo.LogLevel),
+		}
 	}
 	return procInfo.Marshal()
+}
+
+var zapLogLevel2EnumLogLevelMap = map[zapcore.Level]pipeline.SessionLoggerInfo_LogLevel{
+	zap.DebugLevel:  pipeline.SessionLoggerInfo_Debug,
+	zap.InfoLevel:   pipeline.SessionLoggerInfo_Info,
+	zap.WarnLevel:   pipeline.SessionLoggerInfo_Warn,
+	zap.ErrorLevel:  pipeline.SessionLoggerInfo_Error,
+	zap.DPanicLevel: pipeline.SessionLoggerInfo_Panic,
+	zap.PanicLevel:  pipeline.SessionLoggerInfo_Panic,
+	zap.FatalLevel:  pipeline.SessionLoggerInfo_Fatal,
+}
+
+func zapLogLevel2EnumLogLevel(level zapcore.Level) pipeline.SessionLoggerInfo_LogLevel {
+	if lvl, exist := zapLogLevel2EnumLogLevelMap[level]; exist {
+		return lvl
+	}
+	return pipeline.SessionLoggerInfo_Info
+}
+
+var enumLogLevel2ZapLogLevelMap = map[pipeline.SessionLoggerInfo_LogLevel]zapcore.Level{
+	pipeline.SessionLoggerInfo_Debug: zap.DebugLevel,
+	pipeline.SessionLoggerInfo_Info:  zap.InfoLevel,
+	pipeline.SessionLoggerInfo_Warn:  zap.WarnLevel,
+	pipeline.SessionLoggerInfo_Error: zap.ErrorLevel,
+	pipeline.SessionLoggerInfo_Panic: zap.PanicLevel,
+	pipeline.SessionLoggerInfo_Fatal: zap.FatalLevel,
+}
+
+func enumLogLevel2ZapLogLevel(level pipeline.SessionLoggerInfo_LogLevel) zapcore.Level {
+	if lvl, exist := enumLogLevel2ZapLogLevelMap[level]; exist {
+		return lvl
+	}
+	return zap.InfoLevel
 }
 
 func appendWriteBackOperator(c *Compile, s *Scope) *Scope {

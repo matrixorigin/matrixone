@@ -985,6 +985,14 @@ func (backSes *backSession) ReplaceDerivedStmt(b bool) bool {
 	return prev
 }
 
+func (backSes *backSession) GetSessId() uuid.UUID {
+	return backSes.upstream.GetSessId()
+}
+
+func (backSes *backSession) GetLogLevel() zapcore.Level {
+	return backSes.upstream.GetLogLevel()
+}
+
 func (backSes *backSession) log(ctx context.Context, level zapcore.Level, msg string, fields ...zap.Field) {
 	ses := backSes.upstream
 	if ses.logger.Enabled(level) {

@@ -24,8 +24,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -53,7 +51,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var MaxPrepareNumberInOneSession int = 100000
@@ -1942,6 +1942,14 @@ func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
 
 func (ses *Session) GetLogger() SessionLogger {
 	return ses
+}
+
+func (ses *Session) GetSessId() uuid.UUID {
+	return uuid.UUID(ses.GetUUID())
+}
+
+func (ses *Session) GetLogLevel() zapcore.Level {
+	return zap.InfoLevel
 }
 
 func (ses *Session) Info(ctx context.Context, msg string, fields ...zap.Field) {

@@ -24,6 +24,7 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -41,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -123,6 +125,8 @@ type SessionInfo struct {
 	SqlHelper            sqlHelper
 	Buf                  *buffer.Buffer
 	SourceInMemScanBatch []*kafka.Message
+	LogLevel             zapcore.Level
+	SessionId            uuid.UUID
 }
 
 // AnalyzeInfo  analyze information for query
@@ -188,6 +192,13 @@ type StmtProfile struct {
 	//the sql from user may have multiple statements
 	//sqlOfStmt is the text part of one statement in the sql
 	sqlOfStmt string
+}
+
+func NewStmtProfile(txnId, stmtId uuid.UUID) *StmtProfile {
+	return &StmtProfile{
+		txnId:  txnId,
+		stmtId: stmtId,
+	}
 }
 
 func (sp *StmtProfile) Clear() {
@@ -341,6 +352,8 @@ type Process struct {
 	WaitPolicy lock.WaitPolicy
 
 	MessageBoard *MessageBoard
+
+	logger *log.MOLogger
 }
 
 type vectorPool struct {

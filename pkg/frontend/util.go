@@ -503,15 +503,13 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 // appendSessionField append session id, transaction id and statement id to the fields
 func appendSessionField(fields []zap.Field, ses FeSession) []zap.Field {
 	if ses != nil {
+		fields = append(fields, logutil.SessionIdField(uuid.UUID(ses.GetUUID()).String()))
 		if ses.GetStmtInfo() != nil {
-			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.GetStmtInfo().SessionID).String()))
-			fields = append(fields, zap.String(statementId, uuid.UUID(ses.GetStmtInfo().StatementID).String()))
+			fields = append(fields, logutil.StatementIdField(uuid.UUID(ses.GetStmtInfo().StatementID).String()))
 			txnInfo := ses.GetTxnInfo()
 			if txnInfo != "" {
-				fields = append(fields, zap.String(txnId, txnInfo))
+				fields = append(fields, logutil.TxnIdField(txnInfo))
 			}
-		} else {
-			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.GetUUID()).String()))
 		}
 	}
 	return fields

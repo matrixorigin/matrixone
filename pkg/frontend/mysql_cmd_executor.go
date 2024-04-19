@@ -32,6 +32,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -2692,6 +2693,8 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 		SqlHelper:            ses.GetSqlHelper(),
 		Buf:                  ses.GetBuffer(),
 		SourceInMemScanBatch: inMemStreamScan,
+		LogLevel:             zapcore.InfoLevel, //TODO: need set by session level config
+		SessionId:            ses.GetSessId(),
 	}
 	// proc.SetStmtProfile(&ses.stmtProfile)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
