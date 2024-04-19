@@ -371,9 +371,6 @@ func ReshapeBatches(batches []*batch.Batch, ret []*batch.Batch, fromLayout, toLa
 				length = int(toLayout[i]) - toOffset
 			}
 
-			// clone from src and append to dest
-			// FIXME: is clone necessary? can we just feed the original vector window to GetUnionAllFunction?
-			// TODO: use vector pool for the cloned vector
 			for vecIdx, vec := range batches[fromIdx].Vecs {
 				window, err := vec.Window(fromOffset, fromOffset+length)
 				if err != nil {
@@ -389,5 +386,6 @@ func ReshapeBatches(batches []*batch.Batch, ret []*batch.Batch, fromLayout, toLa
 			fromOffset += length
 			toOffset += length
 		}
+		ret[i].SetRowCount(int(toLayout[i]))
 	}
 }

@@ -15,6 +15,8 @@
 package mergesort
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"math/rand"
 	"runtime"
 	"testing"
@@ -64,7 +66,7 @@ func TestReshape(t *testing.T) {
 	var m1, m2 runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&m1)
-	Reshape(vecs, retvec, fromLayout, toLayout, pool.MPool())
+	Reshape(vecs, retvec, fromLayout, toLayout, pool.GetMPool())
 	runtime.ReadMemStats(&m2)
 	t.Log("total:", m2.TotalAlloc-m1.TotalAlloc)
 	t.Log("mallocs:", m2.Mallocs-m1.Mallocs)
@@ -109,7 +111,7 @@ func TestReshapeVarLen(t *testing.T) {
 	var m1, m2 runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&m1)
-	Reshape(vecs, retvec, fromLayout, toLayout, pool.MPool())
+	Reshape(vecs, retvec, fromLayout, toLayout, pool.GetMPool())
 	runtime.ReadMemStats(&m2)
 	t.Log("total:", m2.TotalAlloc-m1.TotalAlloc)
 	t.Log("mallocs:", m2.Mallocs-m1.Mallocs)
@@ -152,7 +154,7 @@ func TestReshapeLargeInt(t *testing.T) {
 	var m1, m2 runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&m1)
-	Reshape(vecs, retvec, fromLayout, toLayout, pool.MPool())
+	Reshape(vecs, retvec, fromLayout, toLayout, pool.GetMPool())
 	runtime.ReadMemStats(&m2)
 	t.Log("total:", m2.TotalAlloc-m1.TotalAlloc)
 	t.Log("mallocs:", m2.Mallocs-m1.Mallocs)
@@ -162,6 +164,158 @@ func TestReshapeLargeInt(t *testing.T) {
 	for _, v := range ret {
 		v.Close()
 	}
+}
+
+type testPool struct {
+	pool *containers.VectorPool
+}
+
+func (p *testPool) GetVector(typ *types.Type) (ret *vector.Vector, release func()) {
+	v := p.pool.GetVector(typ)
+	return v.GetDownstreamVector(), v.Close
+}
+
+func (p *testPool) GetMPool() *mpool.MPool {
+	return p.pool.GetMPool()
+}
+
+func TestReshapeBatches(t *testing.T) {
+	pool := &testPool{pool: mocks.GetTestVectorPool()}
+	batchSize := 5
+	fromLayout := []uint32{2000, 4000, 6000}
+	toLayout := []uint32{8192, 3808}
+
+	batches := make([]*batch.Batch, len(fromLayout))
+	for i := range fromLayout {
+		batches[i] = batch.NewWithSize(batchSize)
+		for j := 0; j < batchSize; j++ {
+			vec := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+			for k := uint32(0); k < fromLayout[i]; k++ {
+				vec.Append(int32(k), false)
+			}
+			batches[i].Vecs[j] = vec.GetDownstreamVector()
+			batches[i].SetRowCount(vec.Length())
+		}
+	}
+
+	var m1, m2 runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&m1)
+	retBatch := make([]*batch.Batch, len(toLayout))
+	rfs := make([]func(), len(toLayout))
+	defer func() {
+		for _, f := range rfs {
+			f()
+		}
+	}()
+	for i := range toLayout {
+		var f func()
+		retBatch[i], f = getSimilarBatch(batches[0], int(toLayout[i]), pool)
+		rfs[i] = f
+	}
+
+	ReshapeBatches(batches, retBatch, fromLayout, toLayout, pool.GetMPool())
+	runtime.ReadMemStats(&m2)
+	t.Log("total:", m2.TotalAlloc-m1.TotalAlloc)
+	t.Log("mallocs:", m2.Mallocs-m1.Mallocs)
+
+	for i, v := range retBatch {
+		require.Equal(t, toLayout[i], uint32(v.RowCount()))
+	}
+}
+
+func TestReshapeBatchesInOriginalWay(t *testing.T) {
+	pool := &testPool{pool: mocks.GetTestVectorPool()}
+	batchSize := 5
+	fromLayout := []uint32{2000, 4000, 6000}
+	toLayout := []uint32{8192, 3808}
+
+	batches := make([]*batch.Batch, len(fromLayout))
+	for i := range fromLayout {
+		batches[i] = batch.NewWithSize(batchSize)
+		for j := 0; j < batchSize; j++ {
+			vec := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+			for k := uint32(0); k < fromLayout[i]; k++ {
+				vec.Append(int32(k), false)
+			}
+			batches[i].Vecs[j] = vec.GetDownstreamVector()
+			batches[i].SetRowCount(vec.Length())
+		}
+	}
+
+	var m1, m2 runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&m1)
+	attrs := []string{"a", "b", "c", "d", "e"}
+	toSortVecs := make([]*vector.Vector, 0, len(batches))
+	for i := range batches {
+		toSortVecs = append(toSortVecs, batches[i].GetVector(int32(0)))
+	}
+	sortedVecs, releaseF := getRetVecs(len(toLayout), toSortVecs[0].GetType(), pool)
+	defer releaseF()
+
+	Reshape(toSortVecs, sortedVecs, fromLayout, toLayout, pool.GetMPool())
+	retBatches := make([]*batch.Batch, 0, len(sortedVecs))
+
+	for _, vec := range sortedVecs {
+		b := batch.New(true, attrs)
+		b.SetRowCount(vec.Length())
+		retBatches = append(retBatches, b)
+	}
+
+	// arrange the other columns according to sortedidx, or, just reshape
+	tempVecs := make([]*vector.Vector, 0, len(batches))
+	for i := range attrs {
+		// just put the sorted column to the write batch
+		if i == 0 {
+			for j, vec := range sortedVecs {
+				retBatches[j].Vecs[i] = vec
+			}
+			continue
+		}
+		tempVecs = tempVecs[:0]
+
+		for _, bat := range batches {
+			if bat.RowCount() == 0 {
+				continue
+			}
+			tempVecs = append(tempVecs, bat.Vecs[i])
+		}
+		require.Equal(t, len(toSortVecs), len(tempVecs))
+		outvecs, release := getRetVecs(len(toLayout), tempVecs[0].GetType(), pool)
+		defer release()
+
+		require.Equal(t, len(sortedVecs), len(outvecs))
+
+		Reshape(tempVecs, outvecs, fromLayout, toLayout, pool.GetMPool())
+
+		for j, vec := range outvecs {
+			retBatches[j].Vecs[i] = vec
+		}
+	}
+	runtime.ReadMemStats(&m2)
+	t.Log("total:", m2.TotalAlloc-m1.TotalAlloc)
+	t.Log("mallocs:", m2.Mallocs-m1.Mallocs)
+
+	for i, v := range retBatches {
+		require.Equal(t, toLayout[i], uint32(v.RowCount()))
+	}
+}
+
+// get vector from pool, and return a release function
+func getRetVecs(count int, t *types.Type, vpool DisposableVecPool) (ret []*vector.Vector, releaseAll func()) {
+	var fs []func()
+	for i := 0; i < count; i++ {
+		vec, release := vpool.GetVector(t)
+		ret = append(ret, vec)
+		fs = append(fs, release)
+	}
+	releaseAll = func() {
+		for i := 0; i < count; i++ {
+			fs[i]()
+		}
+	}
+	return
 }
 
 func assertLayoutEqual(t *testing.T, vectors []*vector.Vector, layout []uint32) {

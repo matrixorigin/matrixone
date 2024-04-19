@@ -54,7 +54,7 @@ func CloneVector(src *movec.Vector, mp *mpool.MPool, vp *VectorPool) (Vector, er
 	var vec Vector
 	if vp != nil {
 		vec = vp.GetVector(src.GetType())
-		mp = vp.GetAllocator()
+		mp = vp.GetMPool()
 		if err := src.CloneWindowTo(
 			vec.GetDownstreamVector(), 0, src.Length(), mp,
 		); err != nil {
