@@ -1333,5 +1333,7 @@ select * from t2;
 -- @session
 drop table t1;
 drop table t2;
+drop role role_r1;
+drop user role_u1;
 drop database db7;
 set @@global.lower_case_table_names = 1;
