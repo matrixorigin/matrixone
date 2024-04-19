@@ -284,17 +284,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 		lockKeys = append(lockKeys, cs.slice())
 	}
 	wt := txn.toWaitTxn(serviceID, true)
-
-	added := txn.fetchWhoWaitingMeInBlockingWaiters(
-		txnID,
-		waiters,
-		true,
-	)
 	txn.RUnlock()
-
-	if !added {
-		return false
-	}
 
 	defer func() {
 		for _, cs := range lockKeys {
@@ -330,45 +320,6 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 				})
 			return !hasDeadLock
 		})
-
-		if hasDeadLock {
-			return false
-		}
-	}
-	return true
-}
-
-func (txn *activeTxn) fetchWhoWaitingMeInBlockingWaiters(
-	txnID []byte,
-	waiters func(pb.WaitTxn) bool,
-	locked bool,
-) bool {
-	if !locked {
-		txn.RLock()
-		defer txn.RUnlock()
-	}
-
-	// txn already closed
-	if !bytes.Equal(txn.txnID, txnID) {
-		return true
-	}
-
-	hasDeadLock := false
-	for _, bw := range txn.blockedWaiters {
-		canAdd := false
-		bw.lt.mu.RLock()
-		bw.conflictWith.waiters.iter(func(w *waiter) bool {
-			if bytes.Equal(w.txn.TxnID, bw.txn.TxnID) {
-				canAdd = true
-				return true
-			}
-
-			if canAdd {
-				hasDeadLock = !waiters(w.txn)
-			}
-			return !hasDeadLock
-		})
-		bw.lt.mu.RUnlock()
 
 		if hasDeadLock {
 			return false
