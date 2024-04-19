@@ -386,19 +386,20 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 	noNulls := !mp.srcNull || !mp.dstNull || page.NumNulls() == 0
 	n := int(page.NumRows())
 
-	err := vec.PreExtend(n, proc.Mp())
+	length := vec.Length()
+	err := vec.PreExtend(n+length, proc.Mp())
 	if err != nil {
 		return err
 	}
-	vec.SetLength(n)
+	vec.SetLength(n + length)
 	ret := vector.MustFixedCol[U](vec)
 	levels := page.DefinitionLevels()
 	j := 0
 	for i := 0; i < n; i++ {
-		if !noNulls && levels[i] != mp.maxDefinitionLevel {
-			nulls.Add(vec.GetNulls(), uint64(i))
+		if !noNulls && levels[i+length] != mp.maxDefinitionLevel {
+			nulls.Add(vec.GetNulls(), uint64(i+length))
 		} else {
-			ret[i] = itee(data[j])
+			ret[i+length] = itee(data[j])
 			j++
 		}
 	}
