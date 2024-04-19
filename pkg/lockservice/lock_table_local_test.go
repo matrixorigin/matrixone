@@ -852,6 +852,58 @@ func TestLockedTSIsLastCommittedTSWithRange(t *testing.T) {
 		})
 }
 
+func Test15608(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			s1 := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			option := newTestRowExclusiveOptions()
+			rows := newTestRows(1)
+			txn1 := newTestTxnID(1)
+			txn2 := newTestTxnID(2)
+			txn3 := newTestTxnID(3)
+			table := uint64(10)
+
+			// txn1 hold lock
+			_, err := s1.Lock(ctx, table, rows, txn1, option)
+			require.NoError(t, err, err)
+
+			v, err := s1.getLockTable(table)
+			require.NoError(t, err)
+			lt := v.(*localLockTable)
+			lt.options.beforeCloseFirstWaiter = func() {
+				// txn3 hold lock
+				_, err = s1.Lock(ctx, table, rows, txn3, option)
+				require.NoError(t, err, err)
+			}
+
+			// txn2 wait for lock, is first waiter
+			wg := sync.WaitGroup{}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				option := newTestRowExclusiveOptions()
+				_, _ = s1.Lock(ctx, table, rows, txn2, option)
+			}()
+
+			waitWaiters(t, s1, table, rows[0], 1)
+
+			// unlock txn1 and txn2
+			require.NoError(t, s1.Unlock(ctx, txn2, timestamp.Timestamp{}))
+			require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
+
+			wg.Wait()
+
+			checkLock(t, lt, rows[0], [][]byte{txn3}, nil, nil)
+			require.NoError(t, s1.Unlock(ctx, txn3, timestamp.Timestamp{}))
+		})
+}
+
 type target struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
