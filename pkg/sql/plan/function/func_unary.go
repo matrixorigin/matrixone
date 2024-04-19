@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
@@ -839,6 +840,14 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	}
 
 	return nil
+}
+
+func Md5(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryBytesToBytes(parameters, result, proc, length, func(data []byte) []byte {
+		sum := md5.Sum(data)
+		return []byte(hex.EncodeToString(sum[:]))
+	})
+
 }
 
 func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {

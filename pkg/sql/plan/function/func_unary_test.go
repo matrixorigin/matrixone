@@ -17,10 +17,11 @@ package function
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"math"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1715,6 +1716,40 @@ func TestHexArray(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexArray)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initMd5TestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test encode - string to md5",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"", "abc", "abcd", "abc\b", "abc\"d", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+					[]bool{false, false, false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false,
+				[]string{
+					"d41d8cd98f00b204e9800998ecf8427e",
+					"900150983cd24fb0d6963f7d28e17f72",
+					"e2fc714c4727ee9395f324cd2e7f331f",
+					"c7fa18a56de1b25123523e8475ceb311",
+					"0671c72bd761b6ab47f5385798998780",
+					"5eca9bd3eb07c006cd43ae48dfde7fd3",
+				},
+				[]bool{false, false, false, false, false, false}),
+		},
+	}
+}
+
+func TestMd5(t *testing.T) {
+	testCases := initMd5TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Md5)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}

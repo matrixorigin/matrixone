@@ -39,6 +39,7 @@ type CheckpointCfg struct {
 	ScanInterval              time.Duration `toml:"scan-interval"`
 	IncrementalInterval       time.Duration `toml:"checkpoint-incremental-interval"`
 	GlobalMinCount            int64         `toml:"checkpoint-global-interval"`
+	OverallFlushMemControl    uint64        `toml:"overall-flush-mem-control"`
 	ForceUpdateGlobalInterval bool
 	GlobalVersionInterval     time.Duration
 	GCCheckpointInterval      time.Duration

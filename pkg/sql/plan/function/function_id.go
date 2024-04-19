@@ -130,6 +130,7 @@ const (
 	HEX_ENCODE
 	HEX
 	UNHEX
+	MD5
 	IFF
 	IFNULL
 	ILIKE
@@ -576,6 +577,7 @@ var functionIdRegister = map[string]int32{
 	"load_file":                      LOAD_FILE,
 	"hex":                            HEX,
 	"unhex":                          UNHEX,
+	"md5":                            MD5,
 	"to_base64":                      TO_BASE64,
 	"from_base64":                    FROM_BASE64,
 	"serial":                         SERIAL,

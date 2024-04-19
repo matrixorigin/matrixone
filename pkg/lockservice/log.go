@@ -97,6 +97,28 @@ func logLocalLockAdded(
 	}
 }
 
+func logHolderAdded(
+	c *lockContext,
+	lock Lock) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.DebugLevel) {
+		var waits [][]byte
+		lock.waiters.iter(func(v *waiter) bool {
+			waits = append(waits, v.txn.TxnID)
+			return true
+		})
+
+		logger.Debug("holder added",
+			txnField(c.txn),
+			zap.Uint64("table", c.result.LockedOn.Table),
+			bytesArrayField("rows", c.rows),
+			zap.String("opts", c.opts.DebugString()),
+			waitTxnArrayField("holders", lock.holders.txns),
+			bytesArrayField("waiters", waits),
+		)
+	}
+}
+
 func logLocalLockFailed(
 	txn *activeTxn,
 	tableID uint64,
@@ -431,12 +453,10 @@ func logUnlockTableOnRemoteFailed(
 	bind pb.LockTable,
 	err error) {
 	logger := getWithSkipLogger()
-	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn failed to unlock table on remote",
-			txnField(txn),
-			zap.String("bind", bind.DebugString()),
-			zap.Error(err))
-	}
+	logger.Debug("txn failed to unlock table on remote",
+		txnField(txn),
+		zap.String("bind", bind.DebugString()),
+		zap.Error(err))
 }
 
 func logWaitersAdded(
@@ -531,6 +551,9 @@ func logTxnCreated(txn *activeTxn) {
 }
 
 func txnField(txn *activeTxn) zap.Field {
+	if txn == nil {
+		return zap.String("txn", "nil")
+	}
 	return zap.String("txn",
 		fmt.Sprintf("%s(%s)",
 			hex.EncodeToString(txn.txnID),

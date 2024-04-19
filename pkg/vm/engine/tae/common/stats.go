@@ -48,6 +48,8 @@ var (
 	IsStandaloneBoost          atomic.Bool
 	ShouldStandaloneCNTakeOver atomic.Bool
 	Epsilon                    float64
+
+	RuntimeOverallFlushMemCap atomic.Uint64
 )
 
 func init() {
