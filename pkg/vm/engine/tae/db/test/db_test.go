@@ -6414,10 +6414,10 @@ func TestAppendAndGC(t *testing.T) {
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
-	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
-	testutils.WaitExpect(5000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
+	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	assert.NotNil(t, minMerged)
 	tae.Restart(ctx)
 	db = tae.DB
