@@ -231,8 +231,6 @@ func DoMergeAndWrite(
 	fromLayout := make([]uint32, 0, len(batches))
 	totalRowCount := 0
 
-	toSortVecs := make([]*vector.Vector, 0, len(batches))
-
 	mpool := mergehost.GetMPool()
 	// iter all block to get basic info, do shrink if needed
 	for i := range batches {
@@ -255,7 +253,6 @@ func DoMergeAndWrite(
 		AddSortPhaseMapping(commitEntry.Booking, i, rowCntBeforeApplyDelete, del, nil)
 		fromLayout = append(fromLayout, uint32(batches[i].RowCount()))
 		totalRowCount += batches[i].RowCount()
-		toSortVecs = append(toSortVecs, batches[i].GetVector(int32(sortkeyPos)))
 	}
 
 	if totalRowCount == 0 {
