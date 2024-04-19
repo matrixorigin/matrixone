@@ -343,7 +343,7 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
 	if err != nil {
-		logutil.Errorf("Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
+		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
 			c.sql, c.proc.TxnOperator.Txn().DebugString(), err)
 		return err
 	}
