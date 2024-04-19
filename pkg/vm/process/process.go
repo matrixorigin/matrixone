@@ -16,9 +16,10 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
@@ -337,7 +338,7 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 	}
 	for _, agg := range bat.Aggs {
 		if agg != nil {
-			agg.Free(proc.Mp())
+			agg.Free()
 		}
 	}
 	bat.Vecs = nil

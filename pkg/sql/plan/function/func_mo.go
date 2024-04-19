@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -643,6 +644,28 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 			}
 
 			if err = rs.Append(index, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// CastNanoToTimestamp returns timestamp string according to the nano
+func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	nanos := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+
+	layout := "2006-01-02 15:04:05.999999999"
+	for i := uint64(0); i < uint64(length); i++ {
+		nano, null := nanos.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			t := time.Unix(0, nano).UTC()
+			if err := rs.AppendBytes([]byte(t.Format(layout)), false); err != nil {
 				return err
 			}
 		}

@@ -441,6 +441,9 @@ func (c *checkpointCleaner) CheckGC() error {
 	gCkp := c.GetMaxCompared()
 	if gCkp == nil {
 		gCkp = c.ckpClient.MaxGlobalCheckpoint()
+		if gCkp == nil {
+			return nil
+		}
 		logutil.Warnf("MaxCompared is nil, use maxGlobalCkp %v", gCkp.String())
 	}
 	data, err := c.collectGlobalCkpData(gCkp)

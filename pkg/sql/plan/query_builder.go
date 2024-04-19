@@ -21,6 +21,7 @@ import (
 	"go/constant"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -29,11 +30,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool) *QueryBuilder {
@@ -2208,11 +2211,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if builder.isForUpdate {
 			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
 			pkPos, pkTyp := getPkPos(tableDef, false)
+			ifLockTable := ifNeedLockWholeTable(builder, nodeID)
 			lockTarget := &plan.LockTarget{
 				TableId:            tableDef.TblId,
 				PrimaryColIdxInBat: int32(pkPos),
 				PrimaryColTyp:      pkTyp,
 				Block:              true,
+				LockTable:          ifLockTable,
 				RefreshTsIdxInBat:  -1, //unsupport now
 				FilterColIdxInBat:  -1, //unsupport now
 			}
@@ -3235,6 +3240,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 	case *tree.TableName:
+		var ts timestamp.Timestamp
 		schema := string(tbl.SchemaName)
 		table := string(tbl.ObjectName)
 		if len(table) == 0 || table == "dual" { //special table name
@@ -3453,6 +3459,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			return 0, err
 		}
 
+		if tbl.AtTsExpr != nil {
+			ts, err = builder.resolveTsHint(tbl.AtTsExpr)
+			if err != nil {
+				return 0, err
+			}
+		}
+
 		obj, tableDef := builder.compCtx.Resolve(schema, table)
 		if tableDef == nil {
 			return 0, moerr.NewParseError(builder.GetContext(), "table %q does not exist", table)
@@ -3563,6 +3576,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			ObjRef:      obj,
 			TableDef:    tableDef,
 			BindingTags: []int32{builder.genNewTag()},
+			ScanTS:      &ts,
 		}, ctx)
 
 	case *tree.JoinTableExpr:
@@ -4022,4 +4036,78 @@ func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
 		}
 		return false
 	}
+}
+
+func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.Timestamp, error) {
+	if tsExpr == nil {
+		return timestamp.Timestamp{}, nil
+	}
+
+	conds := splitAstConjunction(tsExpr.Expr)
+	if len(conds) != 1 {
+		return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
+	}
+
+	binder := NewDefaultBinder(builder.GetContext(), nil, nil, nil, nil)
+	binder.builder = builder
+	defExpr, err := binder.BindExpr(conds[0], 0, false)
+	if err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	if exprLit, ok := defExpr.Expr.(*plan.Expr_Lit); !ok {
+		return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
+	} else {
+		if lit, ok := exprLit.Lit.Value.(*plan.Literal_Sval); ok {
+			if tsExpr.Type == tree.ATTIMESTAMPTIME {
+				ts, err := time.Parse("2006-01-02 15:04:05.999999999", lit.Sval)
+				if err != nil {
+					return timestamp.Timestamp{}, err
+				}
+				tsNano := ts.UTC().UnixNano()
+				if tsNano <= 0 {
+					return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
+				}
+				if time.Now().UTC().UnixNano()-tsNano <= options.DefaultGCTTL.Nanoseconds() && 0 <= time.Now().UTC().UnixNano()-tsNano {
+					return timestamp.Timestamp{PhysicalTime: tsNano}, nil
+				} else {
+					valid, err := builder.compCtx.CheckTimeStampValid(tsNano)
+					if err != nil {
+						return timestamp.Timestamp{}, err
+					}
+					if valid {
+						return timestamp.Timestamp{PhysicalTime: tsNano}, nil
+					} else {
+						return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value, no corresponding snapshot ", lit.Sval)
+					}
+				}
+
+			} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+				tsValue, err := builder.compCtx.ResolveSnapshotTsWithSnapShotName(lit.Sval)
+				if err != nil {
+					return timestamp.Timestamp{}, err
+				}
+				return timestamp.Timestamp{PhysicalTime: tsValue}, nil
+			} else if tsExpr.Type == tree.ATMOTIMESTAMP {
+				ts, err := timestamp.ParseTimestamp(lit.Sval)
+				if err != nil {
+					return timestamp.Timestamp{}, err
+				}
+				return ts, nil
+			} else {
+				return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint type", tsExpr.Type.String())
+			}
+		} else if lit, ok := exprLit.Lit.Value.(*plan.Literal_I64Val); ok {
+			if tsExpr.Type == tree.ATTIMESTAMPTIME {
+				if lit.I64Val <= 0 {
+					return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
+				}
+				return timestamp.Timestamp{PhysicalTime: lit.I64Val}, nil
+			} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+				return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint for snapshot hint", lit.I64Val)
+			}
+		} else {
+			return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid input expr ", tsExpr.Expr.String())
+		}
+	}
+	return timestamp.Timestamp{}, nil
 }

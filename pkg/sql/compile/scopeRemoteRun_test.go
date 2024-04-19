@@ -16,6 +16,8 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"hash/crc32"
 	"testing"
 	"time"
@@ -41,7 +43,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -71,7 +72,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -89,8 +89,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -206,15 +204,9 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 	streamSender := mock_morpc.NewMockStream(ctrl)
 	ch := make(chan morpc.Message)
 	streamSender.EXPECT().Receive().Return(ch, nil)
-
-	agg0, err := functionAgg.NewAggAvg(
-		function.AVG<<32,
-		false,
-		[]types.Type{types.T_int64.ToType()},
-		types.T_int64.ToType(),
-		0,
-	)
-	require.Nil(t, err)
+	aggexec.RegisterGroupConcatAgg(0, ",")
+	agg0 := aggexec.MakeAgg(
+		testutil.NewProcess(), 0, false, []types.Type{types.T_varchar.ToType()}...)
 
 	bat := &batch.Batch{
 		Recursive:  0,
@@ -223,7 +215,7 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 		Cnt:        1,
 		Attrs:      []string{"1"},
 		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType())},
-		Aggs:       []agg.Agg[any]{agg0},
+		Aggs:       []aggexec.AggFuncExec{agg0},
 		AuxData:    nil,
 	}
 	bat.SetRowCount(1)
@@ -616,22 +608,6 @@ func Test_mergeAnalyseInfo(t *testing.T) {
 	require.Equal(t, len(ana.List), 1)
 }
 
-func Test_convertPipelineMultiAggs(t *testing.T) {
-	multiAggs := []group_concat.Argument{
-		{},
-	}
-	aggs := convertPipelineMultiAggs(multiAggs)
-	require.Equal(t, len(aggs), 1)
-}
-
-func Test_convertToMultiAggs(t *testing.T) {
-	multiAggs := []*pipeline.MultiArguemnt{
-		{},
-	}
-	aggs := convertToMultiAggs(multiAggs)
-	require.Equal(t, len(aggs), 1)
-}
-
 func Test_convertToProcessLimitation(t *testing.T) {
 	lim := &pipeline.ProcessLimitation{
 		Size: 100,
@@ -669,15 +645,9 @@ func Test_decodeBatch(t *testing.T) {
 		nil,
 		nil,
 		nil)
-
-	agg0, err := functionAgg.NewAggAvg(
-		function.AVG<<32,
-		false,
-		[]types.Type{types.T_int64.ToType()},
-		types.T_int64.ToType(),
-		0,
-	)
-	require.Nil(t, err)
+	aggexec.RegisterGroupConcatAgg(0, ",")
+	agg0 := aggexec.MakeAgg(
+		vp, 0, false, []types.Type{types.T_varchar.ToType()}...)
 
 	bat := &batch.Batch{
 		Recursive:  0,
@@ -686,12 +656,12 @@ func Test_decodeBatch(t *testing.T) {
 		Cnt:        1,
 		Attrs:      []string{"1"},
 		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType())},
-		Aggs:       []agg.Agg[any]{agg0},
+		Aggs:       []aggexec.AggFuncExec{agg0},
 		AuxData:    nil,
 	}
 	bat.SetRowCount(1)
 	data, err := types.Encode(bat)
 	require.Nil(t, err)
-	_, err = decodeBatch(mp, vp, data)
+	_, err = decodeBatch(mp, data)
 	require.Nil(t, err)
 }

@@ -53,6 +53,7 @@ func fillRuntimeOptions(opts *options.Options) {
 	common.RuntimeCNMergeMemControl.Store(opts.MergeCfg.CNMergeMemControlHint)
 	common.RuntimeMinCNMergeSize.Store(opts.MergeCfg.CNTakeOverExceed)
 	common.RuntimeCNTakeOverAll.Store(opts.MergeCfg.CNTakeOverAll)
+	common.RuntimeCNMergeMemControl.Store(opts.CheckpointCfg.OverallFlushMemControl)
 	if opts.IsStandalone {
 		common.IsStandaloneBoost.Store(true)
 	}
@@ -160,7 +161,8 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
 		checkpoint.WithGlobalMinCount(int(opts.CheckpointCfg.GlobalMinCount)),
 		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval),
-		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
+		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount),
+		checkpoint.WithDisableGC(opts.GCCfg.DisableGC))
 
 	now := time.Now()
 	checkpointed, ckpLSN, valid, err := db.BGCheckpointRunner.Replay(dataFactory)

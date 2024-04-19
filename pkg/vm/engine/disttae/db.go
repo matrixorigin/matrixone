@@ -17,10 +17,13 @@ package disttae
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -255,7 +258,212 @@ func (e *Engine) init(ctx context.Context) error {
 	return nil
 }
 
-func (e *Engine) getPartition(databaseId, tableId uint64) *logtailreplay.Partition {
+func (e *Engine) getLatestCatalogCache() *cache.CatalogCache {
+	return e.catalog
+}
+
+func (e *Engine) loadSnapCkpForTable(
+	ctx context.Context,
+	snapCatalog *cache.CatalogCache,
+	loc string,
+	tid uint64,
+	tblName string,
+	did uint64,
+	dbName string,
+	pkSeqNum int,
+) error {
+	entries, closeCBs, err := logtail.LoadCheckpointEntries(
+		ctx,
+		loc,
+		tid,
+		tblName,
+		did,
+		dbName,
+		e.mp,
+		e.fs)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		for _, cb := range closeCBs {
+			cb()
+		}
+	}()
+	for _, entry := range entries {
+		if err = consumeEntry(ctx, pkSeqNum, e, snapCatalog, nil, entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Engine) getOrCreateSnapCatalogCache(
+	ctx context.Context,
+	ts types.TS) (*cache.CatalogCache, error) {
+	if e.catalog.CanServe(ts) {
+		return e.catalog, nil
+	}
+	e.snapCatalog.Lock()
+	defer e.snapCatalog.Unlock()
+	for _, snap := range e.snapCatalog.snaps {
+		if snap.CanServe(ts) {
+			return snap, nil
+		}
+	}
+	snapCata := cache.NewCatalog()
+	//TODO:: insert mo_tables, or mo_colunms, or mo_database, mo_catalog into snapCata.
+	//       ref to engine.init.
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, 0, nil)
+	if err != nil {
+		return nil, err
+	}
+	//Notice that checkpoints must contain only one or zero global checkpoint
+	//followed by zero or multi continuous incremental checkpoints.
+	start := types.MaxTs()
+	end := types.TS{}
+	for _, ckp := range ckps {
+		locs := make([]string, 0)
+		locs = append(locs, ckp.GetLocation().String())
+		locs = append(locs, strconv.Itoa(int(ckp.GetVersion())))
+		locations := strings.Join(locs, ";")
+		//FIXME::pkSeqNum == 0?
+		if err := e.loadSnapCkpForTable(
+			ctx,
+			snapCata,
+			locations,
+			catalog.MO_DATABASE_ID,
+			catalog.MO_DATABASE,
+			catalog.MO_CATALOG_ID,
+			catalog.MO_CATALOG,
+			0); err != nil {
+			return nil, err
+		}
+		if err := e.loadSnapCkpForTable(
+			ctx,
+			snapCata,
+			locations,
+			catalog.MO_TABLES_ID,
+			catalog.MO_TABLES,
+			catalog.MO_CATALOG_ID,
+			catalog.MO_CATALOG, 0); err != nil {
+			return nil, err
+		}
+		if err := e.loadSnapCkpForTable(
+			ctx,
+			snapCata,
+			locations,
+			catalog.MO_COLUMNS_ID,
+			catalog.MO_COLUMNS,
+			catalog.MO_CATALOG_ID,
+			catalog.MO_CATALOG,
+			0); err != nil {
+			return nil, err
+		}
+		//update start and end of snapCata.
+		if ckp.GetType() == checkpoint.ET_Global {
+			start = ckp.GetEnd()
+		}
+		if ckp.GetType() == checkpoint.ET_Incremental {
+			ckpstart := ckp.GetStart()
+			if ckpstart.Less(&start) {
+				start = ckpstart
+			}
+			ckpend := ckp.GetEnd()
+			if ckpend.Greater(&end) {
+				end = ckpend
+			}
+		}
+	}
+	if end.IsEmpty() {
+		//only on global checkpoint.
+		end = start
+	}
+	snapCata.UpdateDuration(start, end)
+	e.snapCatalog.snaps = append(e.snapCatalog.snaps, snapCata)
+	return snapCata, nil
+}
+
+func (e *Engine) getOrCreateSnapPart(
+	ctx context.Context,
+	databaseId uint64,
+	dbName string,
+	tableId uint64,
+	tblName string,
+	primaySeqnum int,
+	ts types.TS) (*logtailreplay.Partition, error) {
+
+	//First, check whether the latest partition is available.
+	e.Lock()
+	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
+	e.Unlock()
+	if ok && partition.CanServe(ts) {
+		return partition, nil
+	}
+
+	//Then, check whether the snapshot partitions is available.
+	e.mu.Lock()
+	snaps, ok := e.mu.snapParts[[2]uint64{databaseId, tableId}]
+	if !ok {
+		e.mu.snapParts[[2]uint64{databaseId, tableId}] = &struct {
+			sync.Mutex
+			snaps []*logtailreplay.Partition
+		}{}
+		snaps = e.mu.snapParts[[2]uint64{databaseId, tableId}]
+	}
+	e.mu.Unlock()
+
+	snaps.Lock()
+	defer snaps.Unlock()
+	for _, snap := range snaps.snaps {
+		if snap.CanServe(ts) {
+			return snap, nil
+		}
+	}
+	//new snapshot partition and apply checkpoints into it.
+	snap := logtailreplay.NewPartition()
+	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
+	//      we should init the partition,ref to engine.init
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, tableId, nil)
+	if err != nil {
+		return nil, err
+	}
+	snap.ConsumeSnapCkps(ctx, ckps, func(
+		checkpoint *checkpoint.CheckpointEntry,
+		state *logtailreplay.PartitionState) error {
+		locs := make([]string, 0)
+		locs = append(locs, checkpoint.GetLocation().String())
+		locs = append(locs, strconv.Itoa(int(checkpoint.GetVersion())))
+		locations := strings.Join(locs, ";")
+		entries, closeCBs, err := logtail.LoadCheckpointEntries(
+			ctx,
+			locations,
+			tableId,
+			tblName,
+			databaseId,
+			dbName,
+			e.mp,
+			e.fs)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			for _, cb := range closeCBs {
+				cb()
+			}
+		}()
+		for _, entry := range entries {
+			if err = consumeEntry(ctx, primaySeqnum, e, nil, state, entry); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	snaps.snaps = append(snaps.snaps, snap)
+
+	return snap, nil
+}
+
+func (e *Engine) getOrCreateLatestPart(databaseId, tableId uint64) *logtailreplay.Partition {
 	e.Lock()
 	defer e.Unlock()
 	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
@@ -266,8 +474,9 @@ func (e *Engine) getPartition(databaseId, tableId uint64) *logtailreplay.Partiti
 	return partition
 }
 
-func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Partition, error) {
-	part := e.getPartition(tbl.db.databaseId, tbl.tableId)
+func (e *Engine) lazyLoadLatestCkp(ctx context.Context, tbl *txnTable) (*logtailreplay.Partition, error) {
+	part := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
+	cache := e.getLatestCatalogCache()
 
 	if err := part.ConsumeCheckpoints(
 		ctx,
@@ -290,7 +499,7 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Pa
 				}
 			}()
 			for _, entry := range entries {
-				if err = consumeEntry(ctx, tbl.primarySeqnum, e, state, entry); err != nil {
+				if err = consumeEntry(ctx, tbl.primarySeqnum, e, cache, state, entry); err != nil {
 					return err
 				}
 			}
@@ -305,52 +514,4 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Pa
 
 func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	return e.pClient.TryToSubscribeTable(ctx, databaseId, tableId)
-}
-
-// skip SCA check for unused function.
-var _ = (&Engine{}).UpdateOfPull
-
-func (e *Engine) UpdateOfPull(ctx context.Context, tnList []DNStore, tbl *txnTable, op client.TxnOperator,
-	primarySeqnum int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
-	logDebugf(op.Txn(), "UpdateOfPull")
-
-	part := e.ensureTablePart(databaseId, tableId)
-
-	if err := func() error {
-		lockErr := part.Lock(ctx)
-		if lockErr != nil {
-			return lockErr
-		}
-		defer part.Unlock()
-
-		if part.TS.Greater(ts) || part.TS.Equal(ts) {
-			return nil
-		}
-
-		if err := updatePartitionOfPull(
-			primarySeqnum, tbl, ctx, op, e, part, tnList[0],
-			genSyncLogTailReq(part.TS, ts, databaseId, tableId),
-		); err != nil {
-			return err
-		}
-
-		part.TS = ts
-
-		return nil
-	}(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (e *Engine) ensureTablePart(databaseId uint64, tableId uint64) *logtailreplay.Partition {
-	e.Lock()
-	defer e.Unlock()
-	part, ok := e.partitions[[2]uint64{databaseId, tableId}]
-	if !ok {
-		part = logtailreplay.NewPartition()
-		e.partitions[[2]uint64{databaseId, tableId}] = part
-	}
-	return part
 }

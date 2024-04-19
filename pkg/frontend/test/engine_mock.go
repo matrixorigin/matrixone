@@ -76,11 +76,12 @@ func (mr *MockStatisticsMockRecorder) Size(ctx, columnName interface{}) *gomock.
 }
 
 // Stats mocks base method.
-func (m *MockStatistics) Stats(ctx context.Context, sync bool) *statsinfo.StatsInfo {
+func (m *MockStatistics) Stats(ctx context.Context, sync bool) (*statsinfo.StatsInfo, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Stats", ctx, sync)
 	ret0, _ := ret[0].(*statsinfo.StatsInfo)
-	return ret0
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Stats indicates an expected call of Stats.
@@ -633,11 +634,12 @@ func (mr *MockRelationMockRecorder) Size(ctx, columnName interface{}) *gomock.Ca
 }
 
 // Stats mocks base method.
-func (m *MockRelation) Stats(ctx context.Context, sync bool) *statsinfo.StatsInfo {
+func (m *MockRelation) Stats(ctx context.Context, sync bool) (*statsinfo.StatsInfo, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Stats", ctx, sync)
 	ret0, _ := ret[0].(*statsinfo.StatsInfo)
-	return ret0
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Stats indicates an expected call of Stats.

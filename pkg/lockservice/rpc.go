@@ -155,6 +155,14 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 					address = s.LockServiceAddress
 					return false
 				})
+		case pb.Method_GetActiveTxn:
+			sid := getUUIDFromServiceIdentifier(request.GetActiveTxn.ServiceID)
+			c.cluster.GetCNServiceWithoutWorkingState(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
 		default:
 			values := c.cluster.GetAllTNServices()
 			if len(values) > 0 {
