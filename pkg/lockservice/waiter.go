@@ -74,6 +74,7 @@ type waiter struct {
 	waitFor      [][]byte
 	conflictKey  []byte
 	conflictWith Lock
+	lt           *localLockTable
 	status       atomic.Int32
 	refCount     atomic.Int32
 	c            chan notifyValue
@@ -259,6 +260,7 @@ func (w *waiter) reset() {
 	w.waitFor = w.waitFor[:0]
 	w.conflictKey = nil
 	w.conflictWith = Lock{}
+	w.lt = nil
 	w.setStatus(ready)
 	waiterPool.Put(w)
 }

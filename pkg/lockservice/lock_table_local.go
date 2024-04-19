@@ -47,6 +47,10 @@ type localLockTable struct {
 		store            LockStorage
 		tableCommittedAt timestamp.Timestamp
 	}
+
+	options struct {
+		beforeCloseFirstWaiter func(c *lockContext)
+	}
 }
 
 func newLocalLockTable(
@@ -151,8 +155,17 @@ func (l *localLockTable) doLock(
 			c.closed = true
 			if len(c.w.conflictKey) > 0 &&
 				c.opts.Granularity == pb.Granularity_Row {
+
+				if l.options.beforeCloseFirstWaiter != nil {
+					l.options.beforeCloseFirstWaiter(c)
+				}
+
 				l.mu.Lock()
-				if c.w.conflictWith.closeFirstWaiter(c.w) {
+				// we must reload conflict lock, because the lock may be deleted
+				// by other txn and readd into store. So c.w.conflictWith is
+				// invalid.
+				conflictWith, ok := l.mu.store.Get(c.w.conflictKey)
+				if ok && conflictWith.closeFirstWaiter(c.w) {
 					l.mu.store.Delete(c.w.conflictKey)
 				}
 				l.mu.Unlock()
@@ -161,6 +174,10 @@ func (l *localLockTable) doLock(
 			c.w.close()
 			c.done(e)
 			return
+		}
+
+		if c.opts.RetryWait > 0 {
+			time.Sleep(time.Duration(c.opts.RetryWait))
 		}
 
 		c.w.resetWait()
@@ -411,10 +428,15 @@ func (l *localLockTable) handleLockConflictLocked(
 	conflictWith Lock) {
 	c.w.conflictKey = key
 	c.w.conflictWith = conflictWith
+	c.w.lt = l
 	c.w.waitFor = c.w.waitFor[:0]
 	for _, txn := range conflictWith.holders.txns {
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
 	}
+	conflictWith.waiters.iter(func(w *waiter) bool {
+		c.w.waitFor = append(c.w.waitFor, w.txn.TxnID)
+		return true
+	})
 
 	conflictWith.addWaiter(c.w)
 	l.events.add(c)
