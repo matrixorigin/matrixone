@@ -1295,6 +1295,11 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 	if prepareStmt, ok := ses.prepareStmts[name]; ok {
 		return prepareStmt, nil
 	}
+	var connID uint32
+	if ses.protocol != nil {
+		connID = ses.protocol.ConnectionID()
+	}
+	logutil.Errorf("prepared statement '%s' does not exist on connection %d", name, connID)
 	return nil, moerr.NewInvalidState(ses.requestCtx, "prepared statement '%s' does not exist", name)
 }
 
@@ -2469,32 +2474,20 @@ func checkPlanIsInsertValues(proc *process.Process,
 }
 
 func commitAfterMigrate(ses *Session, err error) {
-	if ses == nil {
-		logutil.Error("session is nil")
-		return
-	}
-	txnHandler := ses.GetTxnHandler()
-	if txnHandler == nil {
-		logutil.Error("txn handler is nil")
-		return
-	}
-	if txnHandler.GetSession() == nil {
-		logutil.Error("ses in txn handler is nil")
-		return
-	}
-	defer func() {
-		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
-		ses.ClearOptionBits(OPTION_BEGIN)
-	}()
 	if err != nil {
-		if rErr := txnHandler.RollbackTxn(); rErr != nil {
+		rErr := ses.GetTxnHandler().RollbackTxn()
+		if rErr != nil {
 			logutil.Errorf("failed to rollback txn: %v", rErr)
 		}
-	} else {
-		if cErr := txnHandler.CommitTxn(); cErr != nil {
-			logutil.Errorf("failed to commit txn: %v", cErr)
-		}
 	}
+
+	// Commit txn manually.
+	if cErr := ses.GetTxnHandler().CommitTxn(); cErr != nil {
+		logutil.Errorf("failed to commit txn: %v", cErr)
+		return
+	}
+	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+	ses.ClearOptionBits(OPTION_BEGIN)
 }
 
 type dbMigration struct {
@@ -2564,15 +2557,6 @@ func (p *prepareStmtMigration) Migrate(ses *Session) error {
 }
 
 func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
-	accountID, err := defines.GetAccountId(ses.requestCtx)
-	if err != nil {
-		logutil.Errorf("failed to get account ID: %v", err)
-		return err
-	}
-	userID := defines.GetUserId(ses.requestCtx)
-	logutil.Infof("do migration on connection %d, db: %s, account id: %d, user id: %d",
-		req.ConnID, req.DB, accountID, userID)
-
 	dbm := newDBMigration(req.DB)
 	if err := dbm.Migrate(ses); err != nil {
 		return err
