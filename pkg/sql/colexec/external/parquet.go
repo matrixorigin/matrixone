@@ -21,9 +21,9 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -190,42 +190,84 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		if st.Kind() == parquet.Int32 {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
-				return copyPageToVec(mp, page, proc, vec, data.Int32())
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, data.Int32(), nil, proc.Mp())
+				}
+				return appendFixed(vec, data.Int32(), isNulls, proc.Mp())
 			}
 		}
 	case types.T_int64:
 		if st.Kind() == parquet.Int64 {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
-				return copyPageToVec(mp, page, proc, vec, data.Int64())
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, data.Int64(), nil, proc.Mp())
+				}
+				return appendFixed(vec, data.Int64(), isNulls, proc.Mp())
 			}
 		}
 	case types.T_uint32:
 		if st.Kind() == parquet.Int32 {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
-				return copyPageToVec(mp, page, proc, vec, data.Uint32())
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, data.Uint32(), nil, proc.Mp())
+				}
+				return appendFixed(vec, data.Uint32(), isNulls, proc.Mp())
 			}
 		}
 	case types.T_uint64:
 		if st.Kind() == parquet.Int64 {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
-				return copyPageToVec(mp, page, proc, vec, data.Uint64())
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, data.Uint64(), nil, proc.Mp())
+				}
+				return appendFixed(vec, data.Uint64(), isNulls, proc.Mp())
 			}
 		}
 	case types.T_float32:
 		if st.Kind() == parquet.Float {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
-				return copyPageToVec(mp, page, proc, vec, data.Float())
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, data.Float(), nil, proc.Mp())
+				}
+				return appendFixed(vec, data.Float(), isNulls, proc.Mp())
 			}
 		}
 	case types.T_float64:
 		if st.Kind() == parquet.Double {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
-				return copyPageToVec(mp, page, proc, vec, data.Double())
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, data.Double(), nil, proc.GetMPool())
+				}
+				return appendFixed(vec, data.Double(), isNulls, proc.Mp())
 			}
 		}
 	case types.T_date:
@@ -233,9 +275,16 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		if st.LogicalType().Date != nil {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
 				bs, _ := data.Data()
 				ls := types.DecodeSlice[types.Date](bs)
-				return copyPageToVec(mp, page, proc, vec, ls)
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, ls, nil, proc.Mp())
+				}
+				return appendFixed(vec, ls, isNulls, proc.Mp())
 			}
 		}
 	case types.T_timestamp:
@@ -246,22 +295,29 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			data := page.Data()
+			isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+			if err != nil {
+				return err
+			}
+			ls := make([]types.Timestamp, page.NumValues())
 			switch {
 			case lt.Unit.Nanos != nil:
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-					return types.UnixNanoToTimestamp(v)
-				})
+				for i, n := range data.Int64() {
+					ls[i] = types.UnixNanoToTimestamp(n)
+				}
 			case lt.Unit.Micros != nil:
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-					return types.UnixMicroToTimestamp(v)
-				})
+				for i, n := range data.Int64() {
+					ls[i] = types.UnixMicroToTimestamp(n)
+				}
 			case lt.Unit.Millis != nil:
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-					return types.UnixMicroToTimestamp(v * 1000)
-				})
-			default:
-				return moerr.NewInternalError(proc.Ctx, "unknown unit")
+				for i, n := range data.Int64() {
+					ls[i] = types.UnixMicroToTimestamp(n * 1000)
+				}
 			}
+			if len(isNulls) == 0 {
+				return vector.AppendFixedList(vec, ls, nil, proc.Mp())
+			}
+			return appendFixed(vec, ls, isNulls, proc.Mp())
 		}
 	case types.T_datetime:
 		lt := st.LogicalType().Timestamp
@@ -270,22 +326,29 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			data := page.Data()
+			isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+			if err != nil {
+				return err
+			}
+			ls := make([]types.Datetime, page.NumValues())
 			switch {
 			case lt.Unit.Nanos != nil:
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Datetime {
-					return types.Datetime(types.UnixNanoToTimestamp(v))
-				})
+				for i, n := range data.Int64() {
+					ls[i] = types.Datetime(types.UnixNanoToTimestamp(n))
+				}
 			case lt.Unit.Micros != nil:
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Datetime {
-					return types.Datetime(types.UnixMicroToTimestamp(v))
-				})
+				for i, n := range data.Int64() {
+					ls[i] = types.Datetime(types.UnixMicroToTimestamp(n))
+				}
 			case lt.Unit.Millis != nil:
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Datetime {
-					return types.Datetime(types.UnixMicroToTimestamp(v * 1000))
-				})
-			default:
-				return moerr.NewInternalError(proc.Ctx, "unknown unit")
+				for i, n := range data.Int64() {
+					ls[i] = types.Datetime(types.UnixMicroToTimestamp(n * 1000))
+				}
 			}
+			if len(isNulls) == 0 {
+				return vector.AppendFixedList(vec, ls, nil, proc.Mp())
+			}
+			return appendFixed(vec, ls, isNulls, proc.Mp())
 		}
 	case types.T_time:
 		// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#time
@@ -295,21 +358,30 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			data := page.Data()
+			isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+			if err != nil {
+				return err
+			}
+			var ls []types.Time
 			switch {
 			case lt.Unit.Nanos != nil:
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Time {
-					return types.Time(v / 1000)
-				})
+				ls = make([]types.Time, page.NumValues())
+				for i, n := range data.Int64() {
+					ls[i] = types.Time(n / 1000)
+				}
 			case lt.Unit.Micros != nil:
 				bs, _ := data.Data()
-				return copyPageToVec(mp, page, proc, vec, types.DecodeSlice[types.Time](bs))
+				ls = types.DecodeSlice[types.Time](bs)
 			case lt.Unit.Millis != nil:
-				return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) types.Time {
-					return types.Time(v) * 1000
-				})
-			default:
-				return moerr.NewInternalError(proc.Ctx, "unknown unit")
+				ls = make([]types.Time, page.NumValues())
+				for i, n := range data.Int32() {
+					ls[i] = types.Time(n) * 1000
+				}
 			}
+			if len(isNulls) == 0 {
+				return vector.AppendFixedList(vec, ls, nil, proc.Mp())
+			}
+			return appendFixed(vec, ls, isNulls, proc.Mp())
 		}
 	case types.T_char, types.T_varchar:
 		if st.Kind() == parquet.ByteArray {
@@ -378,27 +450,17 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 	return nil
 }
 
-func copyPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, data []T) error {
-	return copyPageToVecMap(mp, page, proc, vec, data, func(v T) T { return v })
-}
-
-func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, data []T, itee func(t T) U) error {
-	noNulls := !mp.srcNull || !mp.dstNull || page.NumNulls() == 0
-	n := int(page.NumRows())
-
-	err := vec.PreExtend(n, proc.Mp())
+func appendFixed[T any](vec *vector.Vector, ls []T, isNulls []bool, mp *mpool.MPool) error {
+	err := vec.PreExtend(len(isNulls), mp)
 	if err != nil {
 		return err
 	}
-	vec.SetLength(n)
-	ret := vector.MustFixedCol[U](vec)
-	levels := page.DefinitionLevels()
 	j := 0
-	for i := 0; i < n; i++ {
-		if !noNulls && levels[i] != mp.maxDefinitionLevel {
-			nulls.Add(vec.GetNulls(), uint64(i))
+	for _, null := range isNulls {
+		if null {
+			vector.AppendFixed(vec, 0, true, mp)
 		} else {
-			ret[i] = itee(data[j])
+			vector.AppendFixed(vec, ls[j], false, mp)
 			j++
 		}
 	}
@@ -477,6 +539,24 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 	}
 
 	return nil
+}
+
+func (mp *columnMapper) pageIsNulls(ctx context.Context, page parquet.Page) ([]bool, error) {
+	if !mp.srcNull || !mp.dstNull {
+		return nil, nil
+	}
+	if page.NumNulls() == 0 {
+		return nil, nil
+	}
+	def := page.DefinitionLevels()
+	if len(def) != int(page.NumRows()) {
+		return nil, moerr.NewInvalidInput(ctx, "malformed page")
+	}
+	isNulls := make([]bool, len(def))
+	for i, level := range def {
+		isNulls[i] = level != mp.maxDefinitionLevel
+	}
+	return isNulls, nil
 }
 
 func (mp *columnMapper) pageIsNull(ctx context.Context, page parquet.Page, index int) (bool, error) {
