@@ -16,14 +16,16 @@ package proxy
 
 import (
 	"context"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // serverBaseConnID is the base connection ID for server.
@@ -150,6 +152,8 @@ func (s *serverConn) HandleHandshake(
 	case <-ch:
 		return r, err
 	case <-ctx.Done():
+		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d",
+			s.cnServer.addr, timeout, s.connID)
 		// Return a retryable error.
 		return nil, newConnectErr(context.DeadlineExceeded)
 	}

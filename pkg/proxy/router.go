@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -97,6 +98,8 @@ func (s *CNServer) Connect(timeout time.Duration) (goetty.IOSession, error) {
 	c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()))
 	err := c.Connect(s.addr, timeout)
 	if err != nil {
+		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, error: %v",
+			timeout, s.backendConnID, s.addr, err)
 		return nil, newConnectErr(err)
 	}
 	if len(s.salt) != 20 {
