@@ -16,6 +16,7 @@ package mergesort
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -341,6 +342,47 @@ func Reshape(column []*vector.Vector, ret []*vector.Vector, fromLayout, toLayout
 			err = vector.GetUnionAllFunction(*typ, m)(ret[i], window)
 			if err != nil {
 				panic(err)
+			}
+
+			// update offset
+			fromOffset += length
+			toOffset += length
+		}
+	}
+}
+
+func ReshapeBatches(batches []*batch.Batch, ret []*batch.Batch, fromLayout, toLayout []uint32, m *mpool.MPool) {
+	fromIdx := 0
+	fromOffset := 0
+	for i := 0; i < len(toLayout); i++ {
+		toOffset := 0
+		for toOffset < int(toLayout[i]) {
+			// find offset to fill a full block
+			fromLeft := int(fromLayout[fromIdx]) - fromOffset
+			if fromLeft == 0 {
+				fromIdx++
+				fromOffset = 0
+				fromLeft = int(fromLayout[fromIdx])
+			}
+			length := 0
+			if fromLeft < int(toLayout[i])-toOffset {
+				length = fromLeft
+			} else {
+				length = int(toLayout[i]) - toOffset
+			}
+
+			// clone from src and append to dest
+			// FIXME: is clone necessary? can we just feed the original vector window to GetUnionAllFunction?
+			// TODO: use vector pool for the cloned vector
+			for vecIdx, vec := range batches[fromIdx].Vecs {
+				window, err := vec.Window(fromOffset, fromOffset+length)
+				if err != nil {
+					panic(err)
+				}
+				err = vector.GetUnionAllFunction(*vec.GetType(), m)(ret[i].Vecs[vecIdx], window)
+				if err != nil {
+					panic(err)
+				}
 			}
 
 			// update offset
