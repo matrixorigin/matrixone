@@ -51,6 +51,7 @@ type lockContext struct {
 	lockFunc func(*lockContext, bool)
 	w        *waiter
 	createAt time.Time
+	closed   bool
 }
 
 func (l *localLockTable) newLockContext(
@@ -184,34 +185,22 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 		return
 	}
 
-	stopAt := -1
 	now := time.Now()
+	newBlockedWaiters := mw.mu.blockedWaiters[:0]
 	for i, w := range mw.mu.blockedWaiters {
-		if now.Sub(w.waitAt) < timeout {
-			stopAt = i
-			break
-		}
-
-		// already completed
+		// remove if not in blocking state
 		if w.getStatus() != blocking {
+			w.close()
+			mw.mu.blockedWaiters[i] = nil
 			continue
 		}
 
-		// deadlock check busy, retry later
-		if err := mw.addToDeadlockCheck(w); err != nil {
-			stopAt = i
-			break
+		if now.Sub(w.waitAt) >= timeout {
+			mw.addToDeadlockCheck(w)
 		}
+		newBlockedWaiters = append(newBlockedWaiters, w)
 	}
-	if stopAt == -1 {
-		stopAt = len(mw.mu.blockedWaiters)
-	}
-	for i := 0; i < stopAt; i++ {
-		mw.mu.blockedWaiters[i].close()
-		mw.mu.blockedWaiters[i] = nil
-	}
-
-	mw.mu.blockedWaiters = append(mw.mu.blockedWaiters[:0], mw.mu.blockedWaiters[stopAt:]...)
+	mw.mu.blockedWaiters = newBlockedWaiters
 }
 
 func (mw *waiterEvents) addToDeadlockCheck(w *waiter) error {

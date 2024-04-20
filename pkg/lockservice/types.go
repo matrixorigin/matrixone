@@ -170,7 +170,9 @@ type LockTableAllocator interface {
 	// period of time to maintain the binding, the binding will become invalid.
 	KeepLockTableBind(serviceID string) bool
 	// Valid check for changes in the binding relationship of a specific locktable.
-	Valid(binds []pb.LockTable) []uint64
+	Valid(serviceID string, txnID []byte, binds []pb.LockTable) ([]uint64, error)
+	// AddCannotCommit add cannot commit txn
+	AddCannotCommit(values []pb.OrphanTxn)
 	// Close close the lock table allocator
 	Close() error
 

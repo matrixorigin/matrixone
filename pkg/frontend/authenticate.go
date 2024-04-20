@@ -2857,7 +2857,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 	//encryption the password
 	encryption = HashPassWord(password)
 
-	if execResultArrayHasData(erArray) {
+	if execResultArrayHasData(erArray) || ses.pu.SV.SkipCheckPrivilege {
 		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 		if err != nil {
 			return err
@@ -9146,6 +9146,9 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 		return err
 	}
 	currentRole := tenantInfo.GetDefaultRole()
+	if len(currentRole) == 0 {
+		return err
+	}
 
 	// 1.first change to moadmin/accountAdmin
 	var tenantCtx context.Context
@@ -9193,6 +9196,9 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 		return err
 	}
 	currentRole := tenantInfo.GetDefaultRole()
+	if len(currentRole) == 0 {
+		return err
+	}
 
 	// 1.first change to moadmin/accountAdmin
 	var tenantCtx context.Context

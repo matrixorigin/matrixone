@@ -51,7 +51,7 @@ func getRunner(remote bool) func(t *testing.T, table uint64, fn func(context.Con
 			[]string{"s1", "s2"},
 			func(alloc *lockTableAllocator, ss []*service) {
 				s1 := ss[0]
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 				defer cancel()
 
 				option := newTestRowExclusiveOptions()
@@ -1050,6 +1050,120 @@ func TestDeadLockWith2Txn(t *testing.T) {
 	}
 }
 
+func TestDeadLockWithIndirectDependsOn(t *testing.T) {
+	for name, runner := range runners {
+		if name == "local" {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			table := uint64(10)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					// row1: txn1 : txn2, txn3
+					// row4: txn4 : txn3, txn2
+
+					row1 := newTestRows(1)
+					row4 := newTestRows(4)
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+					txn3 := newTestTxnID(3)
+					txn4 := newTestTxnID(4)
+
+					mustAddTestLock(t, ctx, s, table, txn1, row1, pb.Granularity_Row)
+					mustAddTestLock(t, ctx, s, table, txn4, row4, pb.Granularity_Row)
+
+					var wg sync.WaitGroup
+					wg.Add(4)
+					go func() {
+						defer wg.Done()
+
+						// row1 wait list: txn2
+						maybeAddTestLockWithDeadlockWithWaitRetry(
+							t,
+							ctx,
+							s,
+							table,
+							txn2,
+							row1,
+							pb.Granularity_Row,
+							time.Second*5,
+						)
+					}()
+					go func() {
+						defer wg.Done()
+
+						// row4 wait list: txn3
+						waitLocalWaiters(lt, row4[0], 1)
+
+						// row4 wait list: txn3, txn2
+						maybeAddTestLockWithDeadlockWithWaitRetry(
+							t,
+							ctx,
+							s,
+							table,
+							txn2,
+							row4,
+							pb.Granularity_Row,
+							time.Second*5,
+						)
+
+						require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+					}()
+
+					go func() {
+						defer wg.Done()
+
+						// row1 wait list: txn2
+						waitLocalWaiters(lt, row1[0], 1)
+
+						// row1 wait list: txn2, txn3
+						maybeAddTestLockWithDeadlockWithWaitRetry(
+							t,
+							ctx,
+							s,
+							table,
+							txn3,
+							row1,
+							pb.Granularity_Row,
+							time.Second*5,
+						)
+
+						require.NoError(t, s.Unlock(ctx, txn3, timestamp.Timestamp{}))
+					}()
+					go func() {
+						defer wg.Done()
+
+						// row4 wait list: txn3
+						maybeAddTestLockWithDeadlockWithWaitRetry(
+							t,
+							ctx,
+							s,
+							table,
+							txn3,
+							row4,
+							pb.Granularity_Row,
+							time.Second*5)
+					}()
+
+					// row1:  txn1 : txn2, txn3
+					waitLocalWaiters(lt, row1[0], 2)
+					// row4:  txn4 : txn3, txn2
+					waitLocalWaiters(lt, row4[0], 2)
+
+					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, txn4, timestamp.Timestamp{}))
+
+					wg.Wait()
+				})
+		})
+	}
+}
+
 func TestLockSuccWithKeepBindTimeout(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
@@ -1706,12 +1820,36 @@ func maybeAddTestLockWithDeadlock(
 	table uint64,
 	txnID []byte,
 	lock [][]byte,
-	granularity pb.Granularity) pb.Result {
+	granularity pb.Granularity,
+) pb.Result {
+	return maybeAddTestLockWithDeadlockWithWaitRetry(
+		t,
+		ctx,
+		l,
+		table,
+		txnID,
+		lock,
+		granularity,
+		0,
+	)
+}
+
+func maybeAddTestLockWithDeadlockWithWaitRetry(
+	t *testing.T,
+	ctx context.Context,
+	l *service,
+	table uint64,
+	txnID []byte,
+	lock [][]byte,
+	granularity pb.Granularity,
+	wait time.Duration,
+) pb.Result {
 	t.Logf("%s try lock %+v", string(txnID), lock)
 	res, err := l.Lock(ctx, table, lock, txnID, pb.LockOptions{
 		Granularity: granularity,
 		Mode:        pb.LockMode_Exclusive,
 		Policy:      pb.WaitPolicy_Wait,
+		RetryWait:   int64(wait),
 	})
 
 	if moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) {
@@ -1897,4 +2035,53 @@ func TestSharedTableID(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, tenantID, tenantID2)
 	require.Equal(t, tableID, tableID2)
+}
+
+func TestCannotHungWithUnstableNetwork(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.FatalLevel,
+		[]string{"s1", "s2", "s3"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, services []*service) {
+			s1 := services[0]
+			s2 := services[1]
+			s3 := services[2]
+
+			tableID := uint64(10)
+			rows := newTestRows(1)
+			txn1 := newTestTxnID(1)
+			opts := newTestRowExclusiveOptions()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			_, err := s1.Lock(ctx, tableID, rows, txn1, opts)
+			require.NoError(t, err)
+			require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
+
+			var wg sync.WaitGroup
+			n := 10000
+			fn := func(s *service, idx int) {
+				defer wg.Done()
+				for i := 0; i < n; i++ {
+					txnID := append([]byte{byte(idx)}, buf.Int2Bytes(i)...)
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+					s.Lock(ctx, tableID, rows, txnID, opts)
+					require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+					cancel()
+				}
+			}
+
+			wg.Add(3)
+			go fn(s1, 0)
+			go fn(s2, 0)
+			go fn(s3, 0)
+
+			wg.Wait()
+		},
+		func(c *Config) {
+			// close the connection after every 5 messages received
+			c.disconnectPeriod = 5
+			c.RemoteLockTimeout.Duration = time.Millisecond * 200
+		})
 }

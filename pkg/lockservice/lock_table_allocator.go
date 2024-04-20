@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"go.uber.org/zap"
 )
@@ -38,8 +39,9 @@ type lockTableAllocator struct {
 
 	mu struct {
 		sync.RWMutex
-		services   map[string]*serviceBinds
-		lockTables map[uint64]pb.LockTable
+		services     map[string]*serviceBinds
+		lockTables   map[uint64]pb.LockTable
+		cannotCommit map[string]*cannotCommit
 	}
 }
 
@@ -69,7 +71,11 @@ func NewLockTableAllocator(
 	}
 	la.mu.lockTables = make(map[uint64]pb.LockTable, 10240)
 	la.mu.services = make(map[string]*serviceBinds)
+	la.mu.cannotCommit = make(map[string]*cannotCommit)
 	if err := la.stopper.RunTask(la.checkInvalidBinds); err != nil {
+		panic(err)
+	}
+	if err := la.stopper.RunTask(la.cleanCannotCommit); err != nil {
 		panic(err)
 	}
 
@@ -96,10 +102,48 @@ func (l *lockTableAllocator) KeepLockTableBind(serviceID string) bool {
 	return b.active()
 }
 
-func (l *lockTableAllocator) Valid(binds []pb.LockTable) []uint64 {
+func (l *lockTableAllocator) AddCannotCommit(values []pb.OrphanTxn) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, v := range values {
+		service := getUUIDFromServiceIdentifier(v.Service)
+		if _, ok := l.mu.cannotCommit[service]; !ok {
+			l.mu.cannotCommit[service] = &cannotCommit{txn: map[string]struct{}{}, serviceID: v.Service}
+		}
+		for _, txn := range v.Txn {
+			l.mu.cannotCommit[service].txn[util.UnsafeBytesToString(txn)] = struct{}{}
+		}
+	}
+}
+
+func (l *lockTableAllocator) Valid(
+	serviceID string,
+	txnID []byte,
+	binds []pb.LockTable,
+) ([]uint64, error) {
 	var invalid []uint64
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+
+	fn := func() error {
+		service := getUUIDFromServiceIdentifier(serviceID)
+		if c, ok := l.mu.cannotCommit[service]; ok {
+			// means cn restart, all cannot commit txn can remove.
+			if c.serviceID != serviceID {
+				return nil
+			}
+
+			if _, ok := c.txn[util.UnsafeBytesToString(txnID)]; ok {
+				return moerr.NewCannotCommitOrphanNoCtx()
+			}
+		}
+		return nil
+	}
+
+	if err := fn(); err != nil {
+		return nil, err
+	}
+
 	for _, b := range binds {
 		if !b.Valid {
 			panic("BUG")
@@ -128,7 +172,7 @@ func (l *lockTableAllocator) Valid(binds []pb.LockTable) []uint64 {
 			invalid = append(invalid, b.Table)
 		}
 	}
-	return invalid
+	return invalid, nil
 }
 
 func (l *lockTableAllocator) Close() error {
@@ -289,12 +333,99 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 					zap.Int("count", len(timeoutBinds)))
 			}
 			for _, b := range timeoutBinds {
-				if !validateService(l.keepBindTimeout, b.getServiceID(), l.client) {
+				valid, err := validateService(
+					l.keepBindTimeout,
+					b.getServiceID(),
+					l.client,
+				)
+				if !valid || !isRetryError(err) {
 					b.disable()
 					l.disableTableBinds(b)
 				}
 			}
 			timer.Reset(l.keepBindTimeout)
+		}
+	}
+}
+
+func (l *lockTableAllocator) cleanCannotCommit(ctx context.Context) {
+	defer l.logger.InfoAction("clean cannot commit task")()
+
+	timer := time.NewTimer(l.keepBindTimeout * 2)
+	defer timer.Stop()
+
+	getActiveTxn := func(sid string) ([][]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+		defer cancel()
+
+		req := acquireRequest()
+		defer releaseRequest(req)
+
+		req.Method = pb.Method_GetActiveTxn
+		req.GetActiveTxn.ServiceID = sid
+
+		resp, err := l.client.Send(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		defer releaseResponse(resp)
+
+		if !resp.GetActiveTxn.Valid {
+			return nil, nil
+		}
+
+		return resp.GetActiveTxn.Txn, nil
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			var services []string
+			var invalidServices []string
+			activesMap := make(map[string]map[string]struct{})
+
+			l.mu.RLock()
+			for _, c := range l.mu.cannotCommit {
+				services = append(services, c.serviceID)
+			}
+			l.mu.RUnlock()
+
+			for _, sid := range services {
+				actives, err := getActiveTxn(sid)
+				if err == nil {
+					activesMap[getUUIDFromServiceIdentifier(sid)] = make(map[string]struct{}, len(actives))
+					if len(actives) == 0 {
+						invalidServices = append(invalidServices, sid)
+					} else {
+						for _, txn := range actives {
+							activesMap[getUUIDFromServiceIdentifier(sid)][util.UnsafeBytesToString(txn)] = struct{}{}
+						}
+					}
+				}
+			}
+
+			l.mu.Lock()
+			for _, sid := range invalidServices {
+				delete(l.mu.cannotCommit, sid)
+			}
+			for sid, c := range l.mu.cannotCommit {
+				if m, ok := activesMap[sid]; ok {
+					for k := range c.txn {
+						if _, ok := m[k]; !ok {
+							delete(c.txn, k)
+						}
+					}
+
+					if len(c.txn) == 0 {
+						delete(l.mu.cannotCommit, sid)
+					}
+				}
+			}
+			l.mu.Unlock()
+
+			timer.Reset(l.keepBindTimeout * 2)
 		}
 	}
 }
@@ -388,6 +519,10 @@ func (l *lockTableAllocator) initHandler() {
 		pb.Method_KeepLockTableBind,
 		l.handleKeepLockTableBind,
 	)
+
+	l.server.RegisterMethodHandler(
+		pb.Method_CannotCommit,
+		l.handleCannotCommit)
 }
 
 func (l *lockTableAllocator) handleGetBind(
@@ -411,11 +546,23 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	writeResponse(ctx, cancel, resp, nil, cs)
 }
 
+func (l *lockTableAllocator) handleCannotCommit(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+
+	l.AddCannotCommit(req.CannotCommit.OrphanTxnList)
+
+	writeResponse(ctx, cancel, resp, nil, cs)
+}
+
 func validateService(
 	timeout time.Duration,
 	serviceID string,
 	client Client,
-) bool {
+) (bool, error) {
 	if timeout < defaultRPCTimeout {
 		timeout = defaultRPCTimeout
 	}
@@ -431,12 +578,14 @@ func validateService(
 	resp, err := client.Send(ctx, req)
 	if err != nil {
 		logPingFailed(serviceID, err)
-		// can not connect to the service, means target service is down, otherwise
-		// we can not determine the service is valid or not.
-		return !(moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
-			moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		return false, err
 	}
 	defer releaseResponse(resp)
 
-	return resp.ValidateService.OK
+	return resp.ValidateService.OK, nil
+}
+
+type cannotCommit struct {
+	serviceID string
+	txn       map[string]struct{}
 }

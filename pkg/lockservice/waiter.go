@@ -70,14 +70,16 @@ const (
 // lock to be released if a conflict is encountered.
 type waiter struct {
 	// belong to which txn
-	txn      pb.WaitTxn
-	waitFor  [][]byte
-	status   atomic.Int32
-	refCount atomic.Int32
-	c        chan notifyValue
-	event    event
-	waitAt   time.Time
-
+	txn          pb.WaitTxn
+	waitFor      [][]byte
+	conflictKey  []byte
+	conflictWith Lock
+	lt           *localLockTable
+	status       atomic.Int32
+	refCount     atomic.Int32
+	c            chan notifyValue
+	event        event
+	waitAt       time.Time
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
 }
@@ -256,6 +258,9 @@ func (w *waiter) reset() {
 	w.txn = pb.WaitTxn{}
 	w.event = event{}
 	w.waitFor = w.waitFor[:0]
+	w.conflictKey = nil
+	w.conflictWith = Lock{}
+	w.lt = nil
 	w.setStatus(ready)
 	waiterPool.Put(w)
 }
