@@ -612,7 +612,8 @@ var InformationSchemaCOLUMNS = &table.Table{
 		"att_comment as COLUMN_COMMENT,"+
 		"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 		"if(true, NULL, 0) as SRS_ID "+
-		"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
+		"from mo_catalog.mo_columns "+
+		"where account_id = current_account_id() and att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
 	CreateTableSql: "drop view if exists information_schema.COLUMNS",
 }
 
@@ -620,7 +621,7 @@ var InformationSchemaPARTITIONS = &table.Table{
 	Account:  table.AccountAll,
 	Database: sysview.InformationDBConst,
 	Table:    "PARTITIONS",
-	CreateViewSql: fmt.Sprintf("CREATE VIEW information_schema.PARTITIONS AS " +
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS information_schema.`PARTITIONS` AS " +
 		"SELECT " +
 		"'def' AS `TABLE_CATALOG`," +
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
@@ -659,7 +660,7 @@ var InformationSchemaPARTITIONS = &table.Table{
 		"NULL AS `TABLESPACE_NAME` " +
 		"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` " +
 		"ON `part`.`table_id` = `tbl`.`rel_id` " +
-		"WHERE `tbl`.`partitioned` = 1;"),
+		"WHERE `tbl`.`account_id` = current_account_id() and `tbl`.`partitioned` = 1;",
 	CreateTableSql: "drop view if exists information_schema.PARTITIONS",
 }
 
@@ -698,10 +699,31 @@ var InformationSchemaTABLES = &table.Table{
 	CreateTableSql: "drop view if exists information_schema.TABLES",
 }
 
+var InformationSchemaViews = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "VIEWS",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS information_schema.VIEWS AS " +
+		"SELECT 'def' AS `TABLE_CATALOG`," +
+		"tbl.reldatabase AS `TABLE_SCHEMA`," +
+		"tbl.relname AS `TABLE_NAME`," +
+		"tbl.rel_createsql AS `VIEW_DEFINITION`," +
+		"'NONE' AS `CHECK_OPTION`," +
+		"'YES' AS `IS_UPDATABLE`," +
+		"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
+		"'DEFINER' AS `SECURITY_TYPE`," +
+		"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
+		"'utf8mb4_0900_ai_ci' AS `COLLATION_CONNECTION` " +
+		"FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
+		"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'",
+	CreateTableSql: "drop view if exists information_schema.VIEWS",
+}
+
 var needUpgradeExistingView = []*table.Table{
 	InformationSchemaSCHEMATA,
 	InformationSchemaCOLUMNS,
 	InformationSchemaPARTITIONS,
 	InformationSchemaTABLES,
+	InformationSchemaViews,
 	processlistView,
 }
