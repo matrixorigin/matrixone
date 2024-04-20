@@ -2219,11 +2219,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if builder.isForUpdate {
 			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
 			pkPos, pkTyp := getPkPos(tableDef, false)
+			ifLockTable := ifNeedLockWholeTable(builder, nodeID)
 			lockTarget := &plan.LockTarget{
 				TableId:            tableDef.TblId,
 				PrimaryColIdxInBat: int32(pkPos),
 				PrimaryColTyp:      pkTyp,
 				Block:              true,
+				LockTable:          ifLockTable,
 				RefreshTsIdxInBat:  -1, //unsupport now
 				FilterColIdxInBat:  -1, //unsupport now
 			}

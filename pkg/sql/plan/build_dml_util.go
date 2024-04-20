@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 
@@ -33,13 +34,12 @@ import (
 	"golang.org/x/exp/slices"
 )
 
-var CNPrimaryCheck = false
-
 var dmlPlanCtxPool = sync.Pool{
 	New: func() any {
 		return &dmlPlanCtx{}
 	},
 }
+
 var deleteNodeInfoPool = sync.Pool{
 	New: func() any {
 		return &deleteNodeInfo{}
@@ -791,6 +791,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.insertColPos = insertColPos
 						upPlanCtx.isFkRecursionCall = true
 						upPlanCtx.updatePkCol = updatePk
+						upPlanCtx.lockTable = ifNeedLockWholeTable(builder, lastNodeId)
 
 						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 						putDmlPlanCtx(upPlanCtx)
@@ -836,6 +837,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 								upPlanCtx.isFkRecursionCall = true
 								upPlanCtx.updatePkCol = updatePk
+								upPlanCtx.lockTable = ifNeedLockWholeTable(builder, lastNodeId)
 
 								err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 								putDmlPlanCtx(upPlanCtx)
@@ -866,6 +868,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								upPlanCtx.sourceStep = newSourceStep
 								upPlanCtx.beginIdx = 0
 								upPlanCtx.allDelTableIDs = allDelTableIDs
+								upPlanCtx.lockTable = ifNeedLockWholeTable(builder, lastNodeId)
 
 								err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
 								putDmlPlanCtx(upPlanCtx)
@@ -1175,7 +1178,7 @@ func makeInsertPlan(
 	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 && checkInsertPkDupForHiddenIndexTable {
 		// needCheck := true
 		needCheck := !builder.qry.LoadTag
-		useFuzzyFilter := CNPrimaryCheck
+		useFuzzyFilter := config.CNPrimaryCheck
 		if isUpdate {
 			needCheck = updatePkCol
 			useFuzzyFilter = false
@@ -1376,7 +1379,7 @@ func makeInsertPlan(
 	// The refactor that using fuzzy filter has not been completely finished, Update type Insert cannot directly use fuzzy filter for duplicate detection.
 	//  so the original logic is retained. should be deleted later
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
-	if CNPrimaryCheck && checkInsertPkDupForHiddenIndexTable {
+	if config.CNPrimaryCheck && checkInsertPkDupForHiddenIndexTable {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 			rfTag := builder.genNewTag()
 
@@ -2331,12 +2334,13 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	}
 
 	if !isUpdate {
+		ifLockTable := ifNeedLockWholeTable(builder, lastNodeId)
 		if lockNodeId, ok := appendLockNode(
 			builder,
 			bindCtx,
 			lastNodeId,
 			tableDef,
-			false,
+			ifLockTable,
 			false,
 			partitionIdx,
 			partTableIds,
@@ -2531,12 +2535,13 @@ func appendPreInsertUkPlan(
 	}
 	lastNodeId = builder.appendNode(preInsertUkNode, bindCtx)
 
+	ifLockTable := ifNeedLockWholeTable(builder, lastNodeId)
 	if lockNodeId, ok := appendLockNode(
 		builder,
 		bindCtx,
 		lastNodeId,
 		uniqueTableDef,
-		false,
+		ifLockTable,
 		false,
 		-1,
 		nil,
@@ -2919,7 +2924,7 @@ func makePreUpdateDeletePlan(
 		PrimaryColIdxInBat: int32(pkPos),
 		PrimaryColTyp:      pkTyp,
 		RefreshTsIdxInBat:  -1,
-		LockTable:          false,
+		LockTable:          delCtx.lockTable,
 	}
 	if delCtx.tableDef.Partition != nil {
 		lockTarget.IsPartitionTable = true
@@ -3008,7 +3013,7 @@ func makePreUpdateDeletePlan(
 			PrimaryColIdxInBat: newPkPos,
 			PrimaryColTyp:      pkTyp,
 			RefreshTsIdxInBat:  -1, //unsupport now
-			LockTable:          false,
+			LockTable:          delCtx.lockTable,
 		}
 		if delCtx.tableDef.Partition != nil {
 			lockTarget.IsPartitionTable = true
@@ -3086,10 +3091,6 @@ func appendLockNode(
 	}
 	pkPos, pkTyp := getPkPos(tableDef, false)
 	if pkPos == -1 {
-		return -1, false
-	}
-
-	if builder.qry.LoadTag && !lockTable {
 		return -1, false
 	}
 
