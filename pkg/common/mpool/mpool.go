@@ -374,15 +374,14 @@ func (mp *MPool) Cap() int64 {
 	return mp.cap
 }
 
-func (mp *MPool) destroy() (succeed bool) {
-	if !atomic.CompareAndSwapInt32(&mp.available, Available, Unavailable) {
-		logutil.Errorf("Mpool %s double destroy", mp.tag)
-		return false
-	}
+func (mp *MPool) destroy() {
 	if atomic.LoadInt32(&mp.inUseCount) != 0 {
-		logutil.Errorf("Mpool %s was still in use", mp.tag)
-		atomic.StoreInt32(&mp.available, Available)
-		return false
+		logutil.Errorf("Mpool %s already in use", mp.tag)
+		return
+	}
+	if !atomic.CompareAndSwapInt32(&mp.available, 0, 1) {
+		logutil.Errorf("Mpool %s double destroy", mp.tag)
+		return
 	}
 	if mp.stats.NumAlloc.Load() < mp.stats.NumFree.Load() {
 		logutil.Errorf("mp error: %s", mp.stats.Report(""))
@@ -396,7 +395,6 @@ func (mp *MPool) destroy() (succeed bool) {
 	globalStats.RecordManyFrees(mp.tag,
 		mp.stats.NumAlloc.Load()-mp.stats.NumFree.Load(),
 		mp.stats.NumCurrBytes.Load())
-	return true
 }
 
 // New a MPool.   Tag is user supplied, used for debugging/diagnostics.
@@ -501,9 +499,8 @@ func DeleteMPool(mp *MPool) {
 	}
 
 	// logutil.Infof("destroy mpool %s, cap %d, stats\n%s", mp.tag, mp.cap, mp.Report())
-	if mp.destroy() {
-		globalPools.Delete(mp.id)
-	}
+	globalPools.Delete(mp.id)
+	mp.destroy()
 }
 
 var nextPool int64
