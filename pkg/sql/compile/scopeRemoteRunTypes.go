@@ -217,7 +217,11 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		}
 
 		bat, err = decodeBatch(sender.c.proc.Mp(), sender.c.proc, dataBuffer)
-		return bat, false, err
+		if err != nil {
+			return nil, false, err
+		}
+
+		return bat, false, nil
 	}
 }
 
