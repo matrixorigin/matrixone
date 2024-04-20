@@ -18,11 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
+	"time"
+	"unsafe"
 
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
