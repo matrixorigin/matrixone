@@ -280,7 +280,12 @@ type fuzzyCheck struct {
 	condition string
 
 	// handle with primary key(a, b, ...) or unique key (a, b, ...)
-	isCompound   bool
+	isCompound bool
+
+	// handle with cases like create a unique index for existed table, or alter add unique key
+	// and the type of unique key is compound
+	onlyInsertHidden bool
+
 	col          *plan.ColDef
 	compoundCols []*plan.ColDef
 
