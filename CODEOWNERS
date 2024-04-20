@@ -126,6 +126,7 @@
 /pkg/sql/parsers @iamlinjunhong
 /pkg/sql/plan @ouyuanning @aunjgr @badboynt1
 /pkg/sql/plan/function @m-schen
+/pkg/sql/plan/explain @ouyuanning @aunjgr @badboynt1 @qingxinhome
 
 # pkg/taskservice
 /pkg/taskservice @zhangxu19830126
