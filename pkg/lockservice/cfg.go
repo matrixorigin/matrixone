@@ -88,9 +88,6 @@ func (c *Config) Validate() {
 	if c.MaxFixedSliceSize == 0 {
 		c.MaxFixedSliceSize = toml.ByteSize(defaultMaxFixedSliceSize)
 	}
-	if c.MaxLockRowCount > c.MaxFixedSliceSize {
-		panic("This parameter configuration may trigger scenarios that violate MaxFixedSliceSize")
-	}
 	if c.KeepBindDuration.Duration == 0 {
 		c.KeepBindDuration.Duration = time.Second
 	}
