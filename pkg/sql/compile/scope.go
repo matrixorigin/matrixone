@@ -715,11 +715,11 @@ func (s *Scope) LoadRun(c *Compile) error {
 		ss[i].DataSource = &Source{
 			isConst: true,
 		}
-		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 		err := ss[i].initDataSource(c)
 		if err != nil {
 			return err
 		}
+		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
 	newScope, err := newParallelScope(c, s, ss)
 	if err != nil {
