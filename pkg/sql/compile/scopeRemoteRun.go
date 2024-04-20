@@ -1672,7 +1672,6 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 func decodeBatch(mp *mpool.MPool, vp engine.VectorPool, data []byte) (*batch.Batch, error) {
 	bat := new(batch.Batch)
-
 	err := types.Decode(data, bat)
 	if err != nil {
 		return nil, err
@@ -1688,8 +1687,7 @@ func decodeBatch(mp *mpool.MPool, vp engine.VectorPool, data []byte) (*batch.Bat
 		if vp != nil {
 			rvec = vp.GetVector(typ)
 		}
-		if err = vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
-			rvec.Free(mp)
+		if err := vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
 			bat.Clean(mp)
 			return nil, err
 		}
