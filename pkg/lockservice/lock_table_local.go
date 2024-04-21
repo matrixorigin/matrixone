@@ -427,16 +427,11 @@ func (l *localLockTable) handleLockConflictLocked(
 	key []byte,
 	conflictWith Lock) {
 	c.w.conflictKey = key
-	c.w.conflictWith = conflictWith
 	c.w.lt = l
 	c.w.waitFor = c.w.waitFor[:0]
 	for _, txn := range conflictWith.holders.txns {
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
 	}
-	conflictWith.waiters.iter(func(w *waiter) bool {
-		c.w.waitFor = append(c.w.waitFor, w.txn.TxnID)
-		return true
-	})
 
 	conflictWith.addWaiter(c.w)
 	l.events.add(c)
