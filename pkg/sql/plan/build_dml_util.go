@@ -21,18 +21,17 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"golang.org/x/exp/slices"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+	"golang.org/x/exp/slices"
 )
 
 var dmlPlanCtxPool = sync.Pool{
@@ -3529,12 +3528,12 @@ func getSqlForCheckHasDBRefersTo(db string) string {
 // define fk refers to these databases.
 // for simplicity of the design
 var fkBannedDatabase = map[string]bool{
-	catalog.MO_CATALOG:         true,
-	catalog.MO_SYSTEM:          true,
-	catalog.MO_SYSTEM_METRICS:  true,
-	catalog.MOTaskDB:           true,
-	sysview.InformationDBConst: true,
-	sysview.MysqlDBConst:       true,
+	catalog.MO_CATALOG:        true,
+	catalog.MO_SYSTEM:         true,
+	catalog.MO_SYSTEM_METRICS: true,
+	catalog.MOTaskDB:          true,
+	"information_schema":      true,
+	"mysql":                   true,
 }
 
 // IsFkBannedDatabase denotes the database should not have any
