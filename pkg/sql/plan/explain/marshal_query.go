@@ -243,6 +243,7 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOptions) ([]Label, error) {
 	labels := make([]Label, 0)
 
+	// 1. Handling unique label information for different nodes
 	switch m.node.NodeType {
 	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_STREAM_SCAN:
 		tableDef := m.node.TableDef
@@ -278,6 +279,17 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_Scan_Columns, //"Scan columns",
 			Value: len(tableDef.Cols),
 		})
+
+		if len(m.node.BlockFilterList) > 0 {
+			value, err := GetExprsLabelValue(ctx, m.node.BlockFilterList, options)
+			if err != nil {
+				return nil, err
+			}
+			labels = append(labels, Label{
+				Name:  Label_Block_Filter_Conditions, // "Block Filter conditions",
+				Value: value,
+			})
+		}
 	case plan.Node_FUNCTION_SCAN:
 		tableDef := m.node.TableDef
 		fullTableName := ""
@@ -309,6 +321,17 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_Scan_Columns, //"Scan columns",
 			Value: len(tableDef.Cols),
 		})
+
+		if len(m.node.BlockFilterList) > 0 {
+			value, err := GetExprsLabelValue(ctx, m.node.BlockFilterList, options)
+			if err != nil {
+				return nil, err
+			}
+			labels = append(labels, Label{
+				Name:  Label_Block_Filter_Conditions, // "Block Filter conditions",
+				Value: value,
+			})
+		}
 	case plan.Node_INSERT:
 		objRef := m.node.InsertCtx.Ref
 		fullTableName := ""
@@ -419,6 +442,17 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_List_Values, //"List of values",
 			Value: value,
 		})
+
+		if len(m.node.BlockFilterList) > 0 {
+			value, err = GetExprsLabelValue(ctx, m.node.BlockFilterList, options)
+			if err != nil {
+				return nil, err
+			}
+			labels = append(labels, Label{
+				Name:  Label_Block_Filter_Conditions, // "Block Filter conditions",
+				Value: value,
+			})
+		}
 	case plan.Node_UNION:
 		value, err := GetExprsLabelValue(ctx, m.node.ProjectList, options)
 		if err != nil {
@@ -603,19 +637,19 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		return nil, moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
 
-	if m.node.NodeType != plan.Node_FILTER && m.node.FilterList != nil {
-		// Where condition
+	// 2. handle shared label information for all nodes, such as filter conditions
+	if len(m.node.FilterList) > 0 && m.node.NodeType != plan.Node_FILTER {
 		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
 		if err != nil {
 			return nil, err
 		}
 		labels = append(labels, Label{
-			Name:  Label_Filter_Conditions, //"Filter conditions",
+			Name:  Label_Filter_Conditions, // "Filter conditions",
 			Value: value,
 		})
 	}
 
-	// Get Limit And Offset info
+	// 3. handle `Limit` and `Offset` label information for all nodes
 	if m.node.Limit != nil {
 		buf := bytes.NewBuffer(make([]byte, 0, 80))
 		err := describeExpr(ctx, m.node.Limit, options, buf)

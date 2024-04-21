@@ -276,6 +276,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 		txn.RUnlock()
 		panic("can not fetch waiting txn on remote txn")
 	}
+
 	tables := make([]uint64, 0, len(txn.holdLocks))
 	lockKeys := make([]*fixedSlice, 0, len(txn.holdLocks))
 	for table, cs := range txn.holdLocks {
