@@ -20,7 +20,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -88,7 +87,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 	var pkFilterExprs []*Expr
 	var newPartitionExpr *Expr
-	if config.CNPrimaryCheck && len(pkPosInValues) > 0 {
+	if CNPrimaryCheck && len(pkPosInValues) > 0 {
 		pkFilterExprs = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
 		// The insert statement subplan with a primary key has undergone manual column pruning in advance,
 		// so the partition expression needs to be remapped and judged whether partition pruning can be performed
@@ -247,7 +246,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		upPlanCtx.insertColPos = insertColPos
 		upPlanCtx.updateColPosMap = updateColPosMap
 		upPlanCtx.checkInsertPkDup = checkInsertPkDup
-		upPlanCtx.lockTable = ifNeedLockWholeTable(builder, lastNodeId)
 
 		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, true)
 		if err != nil {
