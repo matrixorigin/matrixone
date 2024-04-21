@@ -25,7 +25,8 @@ select purge_log(NULL, NULL) a;
 -- case for issue 10421, 15,455
 set @ts=(select IFNULL(max(collecttime), now()) from system_metrics.metric);
 select purge_log('statement_info,metric', DATE_ADD( @ts, interval 1 day)) a;
-select count(1) val from system_metrics.metric where `collecttime` <  DATE_SUB( @ts, interval 3 minute);
+-- @ignore:1
+select count(1) val, @ts from system_metrics.metric where `collecttime` <  DATE_SUB( @ts, interval 3 minute);
 
 -- clean
 drop account if exists bvt_purge_log;
