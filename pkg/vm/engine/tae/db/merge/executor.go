@@ -18,9 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,6 +47,7 @@ type activeTaskStats map[uint64]struct {
 type MergeExecutor struct {
 	tableName           string
 	rt                  *dbutils.Runtime
+	cnSched             CNMergeScheduler
 	memAvail            int
 	memSpare            int // 15% of total memory
 	cpuPercent          float64
@@ -51,13 +55,15 @@ type MergeExecutor struct {
 	activeEstimateBytes int64
 	taskConsume         struct {
 		sync.Mutex
+		o map[objectio.ObjectId]struct{}
 		m activeTaskStats
 	}
 }
 
-func NewMergeExecutor(rt *dbutils.Runtime) *MergeExecutor {
+func NewMergeExecutor(rt *dbutils.Runtime, sched CNMergeScheduler) *MergeExecutor {
 	return &MergeExecutor{
-		rt: rt,
+		rt:      rt,
+		cnSched: sched,
 	}
 }
 
@@ -113,6 +119,7 @@ func (e *MergeExecutor) OnExecDone(v any) {
 	atomic.AddInt64(&e.activeEstimateBytes, -int64(stat.estBytes))
 }
 
+// TODO: remove manually merge on dn
 func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catalog.ObjectEntry) error {
 	mem := e.MemAvailBytes()
 	if mem > constMaxMemCap {
@@ -123,16 +130,15 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catal
 		return moerr.NewInternalErrorNoCtx("no enough mem to merge. osize %d, mem %d", osize, mem)
 	}
 
-	mergedBlks, mobjs := expandObjectList(objs)
-	blkCnt := len(mergedBlks)
+	objCnt := len(objs)
 
-	scopes := make([]common.ID, blkCnt)
-	for i, blk := range mergedBlks {
-		scopes[i] = *blk.AsCommonID()
+	scopes := make([]common.ID, objCnt)
+	for i, obj := range objs {
+		scopes[i] = *obj.AsCommonID()
 	}
 
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt)
+		return jobs.NewMergeObjectsTask(ctx, txn, objs, e.rt)
 	}
 	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, tasks.DataCompactionTask, scopes, factory)
 	if err == tasks.ErrScheduleScopeConflict {
@@ -140,7 +146,12 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catal
 	} else if err != nil {
 		return moerr.NewInternalErrorNoCtx("schedule error: %v", err)
 	}
-	logMergeTask(entry.GetLastestSchemaLocked().Name, task.ID(), mobjs, len(mergedBlks), osize, esize)
+
+	blkn := 0
+	for _, obj := range objs {
+		blkn += obj.BlockCnt()
+	}
+	logMergeTask(entry.GetLastestSchemaLocked().Name, task.ID(), objs, blkn, osize, esize)
 	if err = task.WaitDone(context.Background()); err != nil {
 		return moerr.NewInternalErrorNoCtx("merge error: %v", err)
 	}
@@ -150,35 +161,72 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catal
 func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 
-	objectList := policy.Revise(int64(e.cpuPercent), int64(e.MemAvailBytes()))
-	mergedBlks, mobjs := expandObjectList(objectList)
-	blkCnt := len(mergedBlks)
-
-	if blkCnt == 0 {
+	mobjs, kind := policy.Revise(int64(e.cpuPercent), int64(e.MemAvailBytes()))
+	if len(mobjs) < 2 {
 		return
 	}
 
-	scopes := make([]common.ID, blkCnt)
-	for i, blk := range mergedBlks {
-		scopes[i] = *blk.AsCommonID()
-	}
-
-	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt)
-	}
-	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
-	if err != nil {
-		if err != tasks.ErrScheduleScopeConflict {
-			logutil.Infof("[Mergeblocks] Schedule error info=%v", err)
-		}
+	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
 		return
 	}
 
 	osize, esize, _ := estimateMergeConsume(mobjs)
-	e.AddActiveTask(task.ID(), blkCnt, esize)
-	task.AddObserver(e)
+	blkCnt := 0
+	for _, obj := range mobjs {
+		blkCnt += obj.BlockCnt()
+	}
+	if kind == TaskHostCN {
+		stats := make([][]byte, 0, len(mobjs))
+		cids := make([]common.ID, 0, len(mobjs))
+		for _, obj := range mobjs {
+			stat := obj.GetObjectStats()
+			stats = append(stats, stat.Clone().Marshal())
+			cids = append(cids, *obj.AsCommonID())
+		}
+		if e.rt.Scheduler.CheckAsyncScopes(cids) != nil {
+			return
+		}
+		schema := entry.GetLastestSchema()
+		cntask := &api.MergeTaskEntry{
+			AccountId:         schema.AcInfo.TenantID,
+			UserId:            schema.AcInfo.UserID,
+			RoleId:            schema.AcInfo.RoleID,
+			TblId:             entry.ID,
+			DbId:              entry.GetDB().GetID(),
+			TableName:         entry.GetLastestSchema().Name,
+			DbName:            entry.GetDB().GetName(),
+			ToMergeObjs:       stats,
+			EstimatedMemUsage: uint64(esize),
+		}
+		if err := e.cnSched.SendMergeTask(context.TODO(), cntask); err == nil {
+			ActiveCNObj.AddActiveCNObj(mobjs)
+			logMergeTask(e.tableName, math.MaxUint64, mobjs, blkCnt, osize, esize)
+		} else {
+			logutil.Warnf("mergeblocks send to cn error: %v", err)
+			return
+		}
+	} else {
+		scopes := make([]common.ID, len(mobjs))
+		for i, obj := range mobjs {
+			scopes[i] = *obj.AsCommonID()
+		}
+
+		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
+			return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt)
+		}
+		task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
+		if err != nil {
+			if err != tasks.ErrScheduleScopeConflict {
+				logutil.Infof("[Mergeblocks] Schedule error info=%v", err)
+			}
+			return
+		}
+		e.AddActiveTask(task.ID(), blkCnt, esize)
+		task.AddObserver(e)
+		logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
+	}
+
 	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
-	logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
 }
 
 func (e *MergeExecutor) MemAvailBytes() int {
@@ -190,37 +238,7 @@ func (e *MergeExecutor) MemAvailBytes() int {
 	return avail
 }
 
-func expandObjectList(objs []*catalog.ObjectEntry) (
-	mblks []*catalog.BlockEntry, mobjs []*catalog.ObjectEntry,
-) {
-	if len(objs) < 2 {
-		return
-	}
-	mobjs = objs
-	mblks = make([]*catalog.BlockEntry, 0, len(objs)*constMergeMinBlks)
-	for _, obj := range objs {
-		blkit := obj.MakeBlockIt(true)
-		for ; blkit.Valid(); blkit.Next() {
-			entry := blkit.Get().GetPayload()
-			if !entry.IsActive() {
-				continue
-			}
-			entry.RLock()
-			if entry.IsCommitted() &&
-				catalog.ActiveWithNoTxnFilter(&entry.BaseEntryImpl) {
-				mblks = append(mblks, entry)
-			}
-			entry.RUnlock()
-		}
-	}
-	return
-}
-
 func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blkn, osize, esize int) {
-	v2.TaskMergeScheduledByCounter.Inc()
-	v2.TaskMergedBlocksCounter.Add(float64(blkn))
-	v2.TasKMergedSizeCounter.Add(float64(osize))
-
 	rows := 0
 	infoBuf := &bytes.Buffer{}
 	for _, obj := range merges {
@@ -228,9 +246,20 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 		rows += r
 		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", r, common.ShortObjId(obj.ID)))
 	}
+	platform := fmt.Sprintf("t%d", taskId)
+	if taskId == math.MaxUint64 {
+		platform = "CN"
+		v2.TaskCNMergeScheduledByCounter.Inc()
+		v2.TaskCNMergedBlocksCounter.Add(float64(blkn))
+		v2.TaskCNMergedSizeCounter.Add(float64(osize))
+	} else {
+		v2.TaskDNMergeScheduledByCounter.Inc()
+		v2.TaskDNMergedBlocksCounter.Add(float64(blkn))
+		v2.TaskDNMergedSizeCounter.Add(float64(osize))
+	}
 	logutil.Infof(
-		"[Mergeblocks] Scheduled %v [t%d|on%d,bn%d|%s,%s], merged(%v): %s", name,
-		taskId, len(merges), blkn,
+		"[Mergeblocks] Scheduled %v [%v|on%d,bn%d|%s,%s], merged(%v): %s", name,
+		platform, len(merges), blkn,
 		common.HumanReadableBytes(osize), common.HumanReadableBytes(esize),
 		rows,
 		infoBuf.String(),

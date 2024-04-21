@@ -15,8 +15,6 @@
 package frontend
 
 import (
-	"bytes"
-	"container/list"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -28,6 +26,8 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 type RoutineManager struct {
@@ -46,9 +45,7 @@ type RoutineManager struct {
 	clients map[goetty.IOSession]*Routine
 	// routinesByID keeps the routines by connection ID.
 	routinesByConnID map[uint32]*Routine
-	pu               *config.ParameterUnit
 	tlsConfig        *tls.Config
-	aicm             *defines.AutoIncrCacheManager
 	accountRoutine   *AccountRoutineManager
 	baseService      BaseService
 	sessionManager   *queryservice.SessionManager
@@ -161,14 +158,6 @@ func (ar *AccountRoutineManager) deepCopyRoutineMap() map[int64]map[*Routine]uin
 	return tempRoutineMap
 }
 
-func (rm *RoutineManager) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
-	return rm.aicm
-}
-
-func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
-	return rm.pu
-}
-
 func (rm *RoutineManager) getCtx() context.Context {
 	return rm.ctx
 }
@@ -204,7 +193,6 @@ func (rm *RoutineManager) deleteRoutine(rs goetty.IOSession) *Routine {
 	if rt, ok = rm.clients[rs]; ok {
 		delete(rm.clients, rs)
 	}
-
 	if rt != nil {
 		connID := rt.getConnectionID()
 		if _, ok = rm.routinesByConnID[connID]; ok {
@@ -220,12 +208,12 @@ func (rm *RoutineManager) getTlsConfig() *tls.Config {
 
 func (rm *RoutineManager) getConnID() (uint32, error) {
 	// Only works in unit test.
-	if rm.pu.HAKeeperClient == nil {
+	if getGlobalPu().HAKeeperClient == nil {
 		return nextConnectionID(), nil
 	}
 	ctx, cancel := context.WithTimeout(rm.ctx, time.Second*2)
 	defer cancel()
-	connID, err := rm.pu.HAKeeperClient.AllocateIDByKey(ctx, ConnIDAllocKey)
+	connID, err := getGlobalPu().HAKeeperClient.AllocateIDByKey(ctx, ConnIDAllocKey)
 	if err != nil {
 		return 0, err
 	}
@@ -252,23 +240,19 @@ func (rm *RoutineManager) GetAccountRoutineManager() *AccountRoutineManager {
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	logutil.Debugf("get the connection from %s", rs.RemoteAddress())
 	createdStart := time.Now()
-	pu := rm.getParameterUnit()
 	connID, err := rm.getConnID()
 	if err != nil {
 		logutil.Errorf("failed to get connection ID from HAKeeper: %v", err)
 		return
 	}
-	pro := NewMysqlClientProtocol(connID, rs, int(pu.SV.MaxBytesInOutbufToFlush), pu.SV)
-	exe := NewMysqlCmdExecutor()
-	exe.SetRoutineManager(rm)
-	exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
-
-	routine := NewRoutine(rm.getCtx(), pro, exe, pu.SV, rs)
+	pro := NewMysqlClientProtocol(connID, rs, int(getGlobalPu().SV.MaxBytesInOutbufToFlush), getGlobalPu().SV)
+	routine := NewRoutine(rm.getCtx(), pro, getGlobalPu().SV, rs)
+	v2.CreatedRoutineCounter.Inc()
 
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true, rm.aicm, nil)
+	ses := NewSession(routine.getProtocol(), nil, GSysVariables, true, nil)
 	cancelCtx := routine.getCancelRoutineCtx()
 	if rm.baseService != nil {
 		cancelCtx = context.WithValue(cancelCtx, defines.NodeIDKey{}, rm.baseService.ID())
@@ -278,6 +262,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.SetFromRealUser(true)
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
+	ses.clientAddr = pro.Peer()
 
 	ses.timestampMap[TSCreatedStart] = createdStart
 	defer func() {
@@ -291,7 +276,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	logDebugf(pro.GetDebugString(), "have done some preparation for the connection %s", rs.RemoteAddress())
 
 	// With proxy module enabled, we try to update salt value and label info from proxy.
-	if rm.pu.SV.ProxyEnabled {
+	if getGlobalPu().SV.ProxyEnabled {
 		pro.receiveExtraInfo(rs)
 	}
 
@@ -315,6 +300,7 @@ When the io is closed, the Closed will be called.
 func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	logutil.Debugf("clean resource of the connection %d:%s", rs.ID(), rs.RemoteAddress())
 	defer func() {
+		v2.CloseRoutineCounter.Inc()
 		logutil.Debugf("resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
 	}()
 	rt := rm.deleteRoutine(rs)
@@ -338,26 +324,13 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	}
 }
 
-func (rm *RoutineManager) getRoutineById(id uint64) *Routine {
-	var rt *Routine = nil
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-	for _, value := range rm.clients {
-		if uint64(value.getConnectionID()) == id {
-			rt = value
-			break
-		}
-	}
-	return rt
-}
-
 /*
 kill a connection or query.
 if killConnection is true, the query will be canceled first, then the network will be closed.
 if killConnection is false, only the query will be canceled. the connection keeps intact.
 */
 func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatKill, id uint64, statementId string) error {
-	rt := rm.getRoutineById(id)
+	rt := rm.getRoutineByConnID(uint32(id))
 
 	killMyself := idThatKill == id
 	if rt != nil {
@@ -541,9 +514,11 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	//handle request
 	err = routine.handleRequest(req)
 	if err != nil {
-		logError(routine.ses, routine.ses.GetDebugString(),
-			"Error occurred",
-			zap.Error(err))
+		if !skipClientQuit(err.Error()) {
+			logError(routine.ses, routine.ses.GetDebugString(),
+				"Error occurred",
+				zap.Error(err))
+		}
 		return err
 	}
 
@@ -559,52 +534,12 @@ func (rm *RoutineManager) clientCount() int {
 	return count
 }
 
-type info struct {
-	id    uint32
-	peer  string
-	count []uint64
-}
-
-func (rm *RoutineManager) collectClientInfo(infos *list.List) {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-	for _, routine := range rm.clients {
-		proto := routine.getProtocol()
-		infos.PushBack(&info{
-			proto.ConnectionID(),
-			proto.Peer(),
-			proto.resetDebugCount(),
-		})
-	}
-}
-
-func (rm *RoutineManager) printDebug() {
-	infos := list.New()
-	rm.collectClientInfo(infos)
-
-	bb := bytes.Buffer{}
-	bb.WriteString("Clients:")
-	bb.WriteString(fmt.Sprintf("(%d)\n", infos.Len()))
-	for e := infos.Front(); e != nil; e = e.Next() {
-		d := e.Value.(*info)
-		if d == nil {
-			continue
-		}
-		bb.WriteString(fmt.Sprintf("%d|%s|", d.id, d.peer))
-		for i, u := range d.count {
-			bb.WriteString(fmt.Sprintf("%d:0x%x ", i, u))
-		}
-		bb.WriteByte('\n')
-	}
-	logutil.Info(bb.String())
-}
-
 func (rm *RoutineManager) cleanKillQueue() {
 	ar := rm.accountRoutine
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
 	for toKillAccount, killRecord := range ar.killIdQueue {
-		if time.Since(killRecord.killTime) > time.Duration(rm.pu.SV.CleanKillQueueInterval)*time.Minute {
+		if time.Since(killRecord.killTime) > time.Duration(getGlobalPu().SV.CleanKillQueueInterval)*time.Minute {
 			delete(ar.killIdQueue, toKillAccount)
 		}
 	}
@@ -646,7 +581,7 @@ func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromReques
 	return routine.migrateConnectionFrom(resp)
 }
 
-func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) (*RoutineManager, error) {
+func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {
 	accountRoutine := &AccountRoutineManager{
 		killQueueMu:       sync.RWMutex{},
 		accountId2Routine: make(map[int64]map[*Routine]uint64),
@@ -658,31 +593,13 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 		ctx:              ctx,
 		clients:          make(map[goetty.IOSession]*Routine),
 		routinesByConnID: make(map[uint32]*Routine),
-		pu:               pu,
 		accountRoutine:   accountRoutine,
 	}
-
-	rm.aicm = aicm
-	if pu.SV.EnableTls {
-		err := initTlsConfig(rm, pu.SV)
+	if getGlobalPu().SV.EnableTls {
+		err := initTlsConfig(rm, getGlobalPu().SV)
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	//add debug routine
-	if pu.SV.PrintDebug {
-		go func() {
-			for {
-				select {
-				case <-rm.ctx.Done():
-					return
-				default:
-				}
-				rm.printDebug()
-				time.Sleep(time.Duration(pu.SV.PrintDebugInterval) * time.Minute)
-			}
-		}()
 	}
 
 	// add kill connect routine
@@ -694,7 +611,7 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 			default:
 			}
 			rm.KillRoutineConnections()
-			time.Sleep(time.Duration(time.Duration(pu.SV.KillRountinesInterval) * time.Second))
+			time.Sleep(time.Duration(time.Duration(getGlobalPu().SV.KillRountinesInterval) * time.Second))
 		}
 	}()
 

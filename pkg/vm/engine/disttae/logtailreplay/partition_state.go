@@ -18,14 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net/http"
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -39,12 +36,6 @@ import (
 	"github.com/tidwall/btree"
 )
 
-var partitionStateProfileHandler = fileservice.NewProfileHandler()
-
-func init() {
-	http.Handle("/debug/cn-partition-state", partitionStateProfileHandler)
-}
-
 type PartitionState struct {
 	// also modify the Copy method if adding fields
 
@@ -56,6 +47,8 @@ type PartitionState struct {
 	//TODO:: It's transient, should be removed in future PR.
 	blockDeltas *btree.BTreeG[BlockDeltaEntry]
 	checkpoints []string
+	start       types.TS
+	end         types.TS
 
 	// index
 	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
@@ -183,6 +176,10 @@ func (o ObjectEntry) Less(than ObjectEntry) bool {
 	return bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:]) < 0
 }
 
+func (o ObjectEntry) IsEmpty() bool {
+	return o.Size() == 0
+}
+
 func (o *ObjectEntry) Visible(ts types.TS) bool {
 	return o.CreateTime.LessEq(&ts) &&
 		(o.DeleteTime.IsEmpty() || ts.Less(&o.DeleteTime))
@@ -307,6 +304,8 @@ func (p *PartitionState) Copy() *PartitionState {
 		dirtyBlocks:           p.dirtyBlocks.Copy(),
 		objectIndexByTS:       p.objectIndexByTS.Copy(),
 		shared:                p.shared,
+		start:                 p.start,
+		end:                   p.end,
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -425,6 +424,7 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
 		if objEntry.ObjectStats.BlkCnt() == 0 || objEntry.ObjectStats.Rows() == 0 {
+			logutil.Errorf("skip empty object stats when HandleObjectInsert, %s\n", objEntry.String())
 			continue
 		}
 
@@ -434,8 +434,11 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 		objEntry.CommitTS = commitTSCol[idx]
 		objEntry.Sorted = sortedCol[idx]
 
-		if old, exist := p.dataObjects.Get(objEntry); exist {
+		old, exist := p.dataObjects.Get(objEntry)
+		if exist {
 			objEntry.HasDeltaLoc = old.HasDeltaLoc
+		}
+		if exist && !old.IsEmpty() {
 			// why check the deleteTime here? consider this situation:
 			// 		1. insert on an object, then these insert operations recorded into a CKP.
 			// 		2. and delete this object, this operation recorded into WAL.
@@ -496,16 +499,21 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 			}
 		}
 
+		if objEntry.EntryState && objEntry.DeleteTime.IsEmpty() {
+			panic("logic error")
+		}
 		// for appendable object, gc rows when delete object
-		if objEntry.EntryState && !objEntry.DeleteTime.IsEmpty() {
-			iter := p.rows.Copy().Iter()
-			objID := objEntry.ObjectStats.ObjectName().ObjectId()
-			blkID := objectio.NewBlockidWithObjectID(objID, 0)
+		iter := p.rows.Copy().Iter()
+		objID := objEntry.ObjectStats.ObjectName().ObjectId()
+		trunctPoint := startTSCol[idx]
+		blkCnt := objEntry.ObjectStats.BlkCnt()
+		for i := uint32(0); i < blkCnt; i++ {
+
+			blkID := objectio.NewBlockidWithObjectID(objID, uint16(i))
 			pivot := RowEntry{
 				// aobj has only one blk
 				BlockID: *blkID,
 			}
-			trunctPoint := startTSCol[idx]
 			for ok := iter.Seek(pivot); ok; ok = iter.Next() {
 				entry := iter.Item()
 				if entry.BlockID != *blkID {
@@ -532,11 +540,25 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 						blockDeleted++
 					}
 				}
+
+				//it's tricky here.
+				//Due to consuming lazily the checkpoint,
+				//we have to take the following scenario into account:
+				//1. CN receives deletes for a non-appendable block from the log tail,
+				//   then apply the deletes into PartitionState.rows.
+				//2. CN receives block meta of the above non-appendable block to be inserted
+				//   from the checkpoint, then apply the block meta into PartitionState.blocks.
+				// So , if the above scenario happens, we need to set the non-appendable block into
+				// PartitionState.dirtyBlocks.
+				if !objEntry.EntryState && !objEntry.HasDeltaLoc {
+					p.dirtyBlocks.Set(entry.BlockID)
+					break
+				}
 			}
 			iter.Release()
 
 			// if there are no rows for the block, delete the block from the dirty
-			if scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
+			if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
 				p.dirtyBlocks.Delete(*blkID)
 			}
 		}
@@ -559,11 +581,6 @@ func (p *PartitionState) HandleRowsInsert(
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
-	t0 := time.Now()
-	defer func() {
-		partitionStateProfileHandler.AddSample(time.Since(t0))
-	}()
-
 	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
 	timeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 	batch, err := batch.ProtoBatchToBatch(input)
@@ -577,39 +594,37 @@ func (p *PartitionState) HandleRowsInsert(
 
 	var numInserted int64
 	for i, rowID := range rowIDVector {
-		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleInsert, func() {
 
-			blockID := rowID.CloneBlockID()
-			pivot := RowEntry{
-				BlockID: blockID,
-				RowID:   rowID,
-				Time:    timeVector[i],
-			}
-			entry, ok := p.rows.Get(pivot)
-			if !ok {
-				entry = pivot
-				entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
-				numInserted++
-			}
+		blockID := rowID.CloneBlockID()
+		pivot := RowEntry{
+			BlockID: blockID,
+			RowID:   rowID,
+			Time:    timeVector[i],
+		}
+		entry, ok := p.rows.Get(pivot)
+		if !ok {
+			entry = pivot
+			entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
+			numInserted++
+		}
 
-			if !p.noData {
-				entry.Batch = batch
-				entry.Offset = int64(i)
-			}
-			entry.PrimaryIndexBytes = primaryKeys[i]
-			p.rows.Set(entry)
+		if !p.noData {
+			entry.Batch = batch
+			entry.Offset = int64(i)
+		}
+		entry.PrimaryIndexBytes = primaryKeys[i]
+		p.rows.Set(entry)
 
-			{
-				entry := &PrimaryIndexEntry{
-					Bytes:      primaryKeys[i],
-					RowEntryID: entry.ID,
-					BlockID:    blockID,
-					RowID:      rowID,
-					Time:       entry.Time,
-				}
-				p.primaryIndex.Set(entry)
+		{
+			entry := &PrimaryIndexEntry{
+				Bytes:      primaryKeys[i],
+				RowEntryID: entry.ID,
+				BlockID:    blockID,
+				RowID:      rowID,
+				Time:       entry.Time,
 			}
-		})
+			p.primaryIndex.Set(entry)
+		}
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
@@ -630,11 +645,6 @@ func (p *PartitionState) HandleRowsDelete(
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsDelete")
 	defer task.End()
 
-	t0 := time.Now()
-	defer func() {
-		partitionStateProfileHandler.AddSample(time.Since(t0))
-	}()
-
 	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
 	timeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 	batch, err := batch.ProtoBatchToBatch(input)
@@ -653,47 +663,45 @@ func (p *PartitionState) HandleRowsDelete(
 
 	numDeletes := int64(0)
 	for i, rowID := range rowIDVector {
-		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleDel, func() {
 
-			blockID := rowID.CloneBlockID()
-			pivot := RowEntry{
-				BlockID: blockID,
-				RowID:   rowID,
-				Time:    timeVector[i],
-			}
-			entry, ok := p.rows.Get(pivot)
-			if !ok {
-				entry = pivot
-				entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
-				numDeletes++
-			}
+		blockID := rowID.CloneBlockID()
+		pivot := RowEntry{
+			BlockID: blockID,
+			RowID:   rowID,
+			Time:    timeVector[i],
+		}
+		entry, ok := p.rows.Get(pivot)
+		if !ok {
+			entry = pivot
+			entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
+			numDeletes++
+		}
 
-			entry.Deleted = true
-			if i < len(primaryKeys) {
-				entry.PrimaryIndexBytes = primaryKeys[i]
-			}
-			if !p.noData {
-				entry.Batch = batch
-				entry.Offset = int64(i)
-			}
-			p.rows.Set(entry)
+		entry.Deleted = true
+		if i < len(primaryKeys) {
+			entry.PrimaryIndexBytes = primaryKeys[i]
+		}
+		if !p.noData {
+			entry.Batch = batch
+			entry.Offset = int64(i)
+		}
+		p.rows.Set(entry)
 
-			//handle memory deletes for non-appendable block.
-			p.dirtyBlocks.Set(blockID)
+		//handle memory deletes for non-appendable block.
+		p.dirtyBlocks.Set(blockID)
 
-			// primary key
-			if i < len(primaryKeys) && len(primaryKeys[i]) > 0 {
-				entry := &PrimaryIndexEntry{
-					Bytes:      primaryKeys[i],
-					RowEntryID: entry.ID,
-					BlockID:    blockID,
-					RowID:      rowID,
-					Time:       entry.Time,
-				}
-				p.primaryIndex.Set(entry)
+		// primary key
+		if i < len(primaryKeys) && len(primaryKeys[i]) > 0 {
+			entry := &PrimaryIndexEntry{
+				Bytes:      primaryKeys[i],
+				RowEntryID: entry.ID,
+				BlockID:    blockID,
+				RowID:      rowID,
+				Time:       entry.Time,
 			}
+			p.primaryIndex.Set(entry)
+		}
 
-		})
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
@@ -709,11 +717,6 @@ func (p *PartitionState) HandleMetadataInsert(
 	input *api.Batch) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataInsert")
 	defer task.End()
-
-	t0 := time.Now()
-	defer func() {
-		partitionStateProfileHandler.AddSample(time.Since(t0))
-	}()
 
 	createTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 	blockIDVector := vector.MustFixedCol[types.Blockid](mustVectorFromProto(input.Vecs[2]))
@@ -733,112 +736,125 @@ func (p *PartitionState) HandleMetadataInsert(
 		}
 		p.shared.Unlock()
 
-		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleMetaInsert, func() {
+		pivot := BlockDeltaEntry{
+			BlockID: blockID,
+		}
+		blockEntry, ok := p.blockDeltas.Get(pivot)
+		if !ok {
+			blockEntry = pivot
+			numInserted++
+		} else if blockEntry.CommitTs.GreaterEq(&commitTimeVector[i]) {
+			// it possible to get an older version blk from lazy loaded checkpoint
+			return
+		}
 
-			pivot := BlockDeltaEntry{
+		// the following codes handle block which be inserted or updated by a newer delta location.
+		// Notice that only delta location can be updated by a newer delta location.
+		if location := objectio.Location(deltaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
+			blockEntry.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
+		}
+		if t := commitTimeVector[i]; !t.IsEmpty() {
+			blockEntry.CommitTs = t
+		}
+
+		isAppendable := entryStateVector[i]
+		isEmptyDelta := blockEntry.DeltaLocation().IsEmpty()
+
+		if !isEmptyDelta {
+			p.blockDeltas.Set(blockEntry)
+		}
+
+		{
+			scanCnt := int64(0)
+			blockDeleted := int64(0)
+			trunctPoint := memTruncTSVector[i]
+			iter := p.rows.Copy().Iter()
+			pivot := RowEntry{
 				BlockID: blockID,
 			}
-			blockEntry, ok := p.blockDeltas.Get(pivot)
-			if !ok {
-				blockEntry = pivot
-				numInserted++
-			} else if blockEntry.CommitTs.GreaterEq(&commitTimeVector[i]) {
-				// it possible to get an older version blk from lazy loaded checkpoint
-				return
-			}
-
-			// the following codes handle block which be inserted or updated by a newer delta location.
-			// Notice that only delta location can be updated by a newer delta location.
-			if location := objectio.Location(deltaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
-				blockEntry.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
-			}
-			if t := commitTimeVector[i]; !t.IsEmpty() {
-				blockEntry.CommitTs = t
-			}
-
-			isAppendable := entryStateVector[i]
-			isEmptyDelta := blockEntry.DeltaLocation().IsEmpty()
-
-			if !isEmptyDelta {
-				p.blockDeltas.Set(blockEntry)
-			}
-
-			{
-				scanCnt := int64(0)
-				blockDeleted := int64(0)
-				trunctPoint := memTruncTSVector[i]
-				iter := p.rows.Copy().Iter()
-				pivot := RowEntry{
-					BlockID: blockID,
+			for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+				entry := iter.Item()
+				if entry.BlockID != blockID {
+					break
 				}
-				for ok := iter.Seek(pivot); ok; ok = iter.Next() {
-					entry := iter.Item()
-					if entry.BlockID != blockID {
-						break
-					}
-					scanCnt++
-					//it's tricky here.
-					//Due to consuming lazily the checkpoint,
-					//we have to take the following scenario into account:
-					//1. CN receives deletes for a non-appendable block from the log tail,
-					//   then apply the deletes into PartitionState.rows.
-					//2. CN receives block meta of the above non-appendable block to be inserted
-					//   from the checkpoint, then apply the block meta into PartitionState.blocks.
-					// So , if the above scenario happens, we need to set the non-appendable block into
-					// PartitionState.dirtyBlocks.
-					if !isAppendable && isEmptyDelta {
-						p.dirtyBlocks.Set(blockID)
-						break
-					}
+				scanCnt++
+				//it's tricky here.
+				//Due to consuming lazily the checkpoint,
+				//we have to take the following scenario into account:
+				//1. CN receives deletes for a non-appendable block from the log tail,
+				//   then apply the deletes into PartitionState.rows.
+				//2. CN receives block meta of the above non-appendable block to be inserted
+				//   from the checkpoint, then apply the block meta into PartitionState.blocks.
+				// So , if the above scenario happens, we need to set the non-appendable block into
+				// PartitionState.dirtyBlocks.
+				if !isAppendable && isEmptyDelta {
+					p.dirtyBlocks.Set(blockID)
+					break
+				}
 
-					// if the inserting block is appendable, need to delete the rows for it;
-					// if the inserting block is non-appendable and has delta location, need to delete
-					// the deletes for it.
-					if isAppendable || (!isAppendable && !isEmptyDelta) {
-						if entry.Time.LessEq(&trunctPoint) {
-							// delete the row
-							p.rows.Delete(entry)
+				// if the inserting block is appendable, need to delete the rows for it;
+				// if the inserting block is non-appendable and has delta location, need to delete
+				// the deletes for it.
+				if isAppendable || (!isAppendable && !isEmptyDelta) {
+					if entry.Time.LessEq(&trunctPoint) {
+						// delete the row
+						p.rows.Delete(entry)
 
-							// delete the row's primary index
-							if isAppendable && len(entry.PrimaryIndexBytes) > 0 {
-								p.primaryIndex.Delete(&PrimaryIndexEntry{
-									Bytes:      entry.PrimaryIndexBytes,
-									RowEntryID: entry.ID,
-								})
-							}
-							numDeleted++
-							blockDeleted++
+						// delete the row's primary index
+						if isAppendable && len(entry.PrimaryIndexBytes) > 0 {
+							p.primaryIndex.Delete(&PrimaryIndexEntry{
+								Bytes:      entry.PrimaryIndexBytes,
+								RowEntryID: entry.ID,
+							})
 						}
+						numDeleted++
+						blockDeleted++
 					}
-				}
-				iter.Release()
-
-				// if there are no rows for the block, delete the block from the dirty
-				if scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
-					p.dirtyBlocks.Delete(blockID)
 				}
 			}
+			iter.Release()
 
-			//create object by block insert
-			{
-				objPivot := ObjectEntry{}
-				metaLoc := objectio.Location(metaLocationVector.GetBytesAt(i))
+			// if there are no rows for the block, delete the block from the dirty
+			if scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
+				p.dirtyBlocks.Delete(blockID)
+			}
+		}
+
+		//create object by block insert to set objEntry.HasDeltaLoc
+		//when lazy load, maybe deltalocation is consumed before object is created
+		{
+			objPivot := ObjectEntry{}
+			if metaLoc := objectio.Location(metaLocationVector.GetBytesAt(i)); !metaLoc.IsEmpty() {
 				objectio.SetObjectStatsLocation(&objPivot.ObjectStats, metaLoc)
-				objEntry, ok := p.dataObjects.Get(objPivot)
-				if ok {
-					// don't need to update objEntry, except for HasDeltaLoc and blkCnt
-					if !isEmptyDelta {
-						objEntry.HasDeltaLoc = true
-					}
-
-					blkCnt := blockID.Sequence() + 1
-					if uint32(blkCnt) > objEntry.BlkCnt() {
-						objectio.SetObjectStatsBlkCnt(&objEntry.ObjectStats, uint32(blkCnt))
-					}
-					p.dataObjects.Set(objEntry)
-					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
-					return
+			} else {
+				// After block is removed,
+				// HandleMetadataInsert only handle deltaloc.
+				// Meta location is empty.
+				objID := blockID.Object()
+				objName := objectio.BuildObjectNameWithObjectID(objID)
+				objectio.SetObjectStatsObjectName(&objPivot.ObjectStats, objName)
+			}
+			objEntry, ok := p.dataObjects.Get(objPivot)
+			if ok {
+				// don't need to update objEntry, except for HasDeltaLoc and blkCnt
+				if !isEmptyDelta {
+					objEntry.HasDeltaLoc = true
 				}
+
+				blkCnt := blockID.Sequence() + 1
+				if uint32(blkCnt) > objEntry.BlkCnt() {
+					objectio.SetObjectStatsBlkCnt(&objEntry.ObjectStats, uint32(blkCnt))
+				}
+				p.dataObjects.Set(objEntry)
+				// For deltaloc batch after block is removed,
+				// objEntry.CreateTime is empty.
+				// and it's temporary.
+				// Related dataObjectsByCreateTS will be set in HandleObjectInsert.
+				if !objEntry.CreateTime.IsEmpty() {
+					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+				}
+			} else {
+
 				objEntry = objPivot
 				objEntry.EntryState = entryStateVector[i]
 				objEntry.Sorted = sortedStateVector[i]
@@ -846,7 +862,11 @@ func (p *PartitionState) HandleMetadataInsert(
 					objEntry.HasDeltaLoc = true
 				}
 				objEntry.CommitTS = commitTimeVector[i]
-				objEntry.CreateTime = createTimeVector[i]
+				createTS := createTimeVector[i]
+				// after blk is removed, create ts is empty
+				if !createTS.IsEmpty() {
+					objEntry.CreateTime = createTS
+				}
 
 				blkCnt := blockID.Sequence() + 1
 				if uint32(blkCnt) > objEntry.BlkCnt() {
@@ -855,12 +875,9 @@ func (p *PartitionState) HandleMetadataInsert(
 
 				p.dataObjects.Set(objEntry)
 
-				//prefetch the object meta
-				if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
-					logutil.Errorf("prefetch object meta failed. %v", err)
+				if !objEntry.CreateTime.IsEmpty() {
+					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
 				}
-
-				p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
 
 				{
 					e := ObjectIndexByTSEntry{
@@ -873,8 +890,8 @@ func (p *PartitionState) HandleMetadataInsert(
 					p.objectIndexByTS.Set(e)
 				}
 			}
+		}
 
-		})
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
@@ -960,22 +977,14 @@ func (p *PartitionState) HandleMetadataDelete(
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataDelete")
 	defer task.End()
 
-	t0 := time.Now()
-	defer func() {
-		partitionStateProfileHandler.AddSample(time.Since(t0))
-	}()
-
 	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
 	deleteTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 
 	for i, rowID := range rowIDVector {
 		blockID := rowID.CloneBlockID()
-		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleMetaDelete, func() {
-			pivot := ObjectEntry{}
-			objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(&blockID))
-
-			p.objectDeleteHelper(tableID, pivot, deleteTimeVector[i])
-		})
+		pivot := ObjectEntry{}
+		objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(&blockID))
+		p.objectDeleteHelper(tableID, pivot, deleteTimeVector[i])
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
@@ -984,7 +993,20 @@ func (p *PartitionState) HandleMetadataDelete(
 	})
 }
 
-func (p *PartitionState) AppendCheckpoint(checkpoint string, partiton *Partition) {
+func (p *PartitionState) CacheCkpDuration(
+	start types.TS,
+	end types.TS,
+	partition *Partition) {
+	if partition.checkpointConsumed.Load() {
+		panic("checkpoints already consumed")
+	}
+	p.start = start
+	p.end = end
+}
+
+func (p *PartitionState) AppendCheckpoint(
+	checkpoint string,
+	partiton *Partition) {
 	if partiton.checkpointConsumed.Load() {
 		panic("checkpoints already consumed")
 	}

@@ -167,6 +167,8 @@ var (
 
 	// default sql_mode
 	dafaultSqlMode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES"
+
+	CNPrimaryCheck = false
 )
 
 // FrontendParameters of the frontend
@@ -550,6 +552,9 @@ type ObservabilityParameters struct {
 	// LabelSelector
 	LabelSelector map[string]string `toml:"labelSelector"`
 
+	// estimate tcp network packet cost
+	TCPPacket bool `toml:"tcpPacket"`
+
 	// for cu calculation
 	CU   OBCUConfig `toml:"cu"`
 	CUv1 OBCUConfig `toml:"cu_v1"`
@@ -583,6 +588,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		SelectAggrThreshold:                toml.Duration{},
 		EnableStmtMerge:                    false,
 		LabelSelector:                      map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal}, /*role=logging_cn*/
+		TCPPacket:                          false,
 		CU:                                 *NewOBCUConfig(),
 		CUv1:                               *NewOBCUConfig(),
 		OBCollectorConfig:                  *NewOBCollectorConfig(),

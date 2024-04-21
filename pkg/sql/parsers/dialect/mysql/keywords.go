@@ -623,5 +623,8 @@ func init() {
 		"bitmap_bit_position":        BITMAP_BIT_POSITION,
 		"bitmap_bucket_number":       BITMAP_BUCKET_NUMBER,
 		"bitmap_count":               BITMAP_COUNT,
+		"upgrade":                    UPGRADE,
+		"retry":                      RETRY,
+		"mo_ts":                      MO_TS,
 	}
 }

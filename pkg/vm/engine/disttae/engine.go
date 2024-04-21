@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"runtime"
 	"strings"
 	"sync"
@@ -100,6 +101,15 @@ func New(
 			},
 		),
 	}
+	e.snapCatalog = &struct {
+		sync.Mutex
+		snaps []*cache.CatalogCache
+	}{}
+	e.mu.snapParts = make(map[[2]uint64]*struct {
+		sync.Mutex
+		snaps []*logtailreplay.Partition
+	})
+
 	pool, err := ants.NewPool(GCPoolSize)
 	if err != nil {
 		panic(err)
@@ -118,7 +128,10 @@ func New(
 }
 
 func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {
-	txn := e.getTransaction(op)
+	if op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("create database in snapshot txn")
+	}
+	txn := op.GetWorkspace().(*Transaction)
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
@@ -152,7 +165,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	txn.databaseMap.Store(genDatabaseKey(accountId, name), &txnDatabase{
-		txn:          txn,
+		op:           op,
 		databaseId:   databaseId,
 		databaseName: name,
 		rowId:        rowId,
@@ -165,7 +178,7 @@ func (e *Engine) DatabaseByAccountID(
 	name string,
 	op client.TxnOperator) (engine.Database, error) {
 	logDebugf(op.Txn(), "Engine.DatabaseByAccountID %s", name)
-	txn := e.getTransaction(op)
+	txn := op.GetWorkspace().(*Transaction)
 	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
@@ -174,7 +187,7 @@ func (e *Engine) DatabaseByAccountID(
 	}
 	if name == catalog.MO_CATALOG {
 		db := &txnDatabase{
-			txn:          txn,
+			op:           op,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: name,
 		}
@@ -185,11 +198,23 @@ func (e *Engine) DatabaseByAccountID(
 		AccountId: accountID,
 		Ts:        txn.op.SnapshotTS(),
 	}
-	if ok := e.catalog.GetDatabase(key); !ok {
+	var catalog *cache.CatalogCache
+	var err error
+	if !txn.op.IsSnapOp() {
+		catalog = e.getLatestCatalogCache()
+	} else {
+		catalog, err = e.getOrCreateSnapCatalogCache(
+			context.Background(),
+			types.TimestampToTS(txn.op.SnapshotTS()))
+		if err != nil {
+			return nil, err
+		}
+	}
+	if ok := catalog.GetDatabase(key); !ok {
 		return nil, moerr.GetOkExpectedEOB()
 	}
 	return &txnDatabase{
-		txn:               txn,
+		op:                op,
 		databaseName:      name,
 		databaseId:        key.Id,
 		rowId:             key.Rowid,
@@ -201,7 +226,7 @@ func (e *Engine) DatabaseByAccountID(
 func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
 	logDebugf(op.Txn(), "Engine.Database %s", name)
-	txn := e.getTransaction(op)
+	txn := op.GetWorkspace().(*Transaction)
 	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
@@ -214,7 +239,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	}
 	if name == catalog.MO_CATALOG {
 		db := &txnDatabase{
-			txn:          txn,
+			op:           op,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: name,
 		}
@@ -225,11 +250,25 @@ func (e *Engine) Database(ctx context.Context, name string,
 		AccountId: accountId,
 		Ts:        txn.op.SnapshotTS(),
 	}
-	if ok := e.catalog.GetDatabase(key); !ok {
+	var catalog *cache.CatalogCache
+	if !txn.op.IsSnapOp() {
+		catalog = e.getLatestCatalogCache()
+	} else {
+		if name == "test" {
+			logutil.Infof("xxxx Database-getOrCreateSnapCatalogCache: txn:%s", txn.op.Txn().DebugString())
+		}
+		catalog, err = e.getOrCreateSnapCatalogCache(
+			ctx,
+			types.TimestampToTS(txn.op.SnapshotTS()))
+		if err != nil {
+			return nil, err
+		}
+	}
+	if ok := catalog.GetDatabase(key); !ok {
 		return nil, moerr.GetOkExpectedEOB()
 	}
 	return &txnDatabase{
-		txn:               txn,
+		op:                op,
 		databaseName:      name,
 		databaseId:        key.Id,
 		rowId:             key.Rowid,
@@ -241,7 +280,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
 	var dbs []string
 
-	txn := e.getTransaction(op)
+	txn := op.GetWorkspace().(*Transaction)
 	if txn == nil {
 		return nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
@@ -256,12 +295,23 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 		}
 		return true
 	})
-	dbs = append(dbs, e.catalog.Databases(accountId, txn.op.SnapshotTS())...)
+	var catalog *cache.CatalogCache
+	if !txn.op.IsSnapOp() {
+		catalog = e.getLatestCatalogCache()
+	} else {
+		catalog, err = e.getOrCreateSnapCatalogCache(
+			ctx,
+			types.TimestampToTS(txn.op.SnapshotTS()))
+		if err != nil {
+			return nil, err
+		}
+	}
+	dbs = append(dbs, catalog.Databases(accountId, txn.op.SnapshotTS())...)
 	return dbs, nil
 }
 
 func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
-	txn := e.getTransaction(op)
+	txn := op.GetWorkspace().(*Transaction)
 	if txn == nil {
 		return "", "", moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
@@ -290,9 +340,19 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 		}
 		return true
 	})
-
+	var catalog *cache.CatalogCache
+	if !op.IsSnapOp() {
+		catalog = e.getLatestCatalogCache()
+	} else {
+		catalog, err = e.getOrCreateSnapCatalogCache(
+			ctx,
+			types.TimestampToTS(op.SnapshotTS()))
+		if err != nil {
+			return "", "", err
+		}
+	}
 	if tblName == "" {
-		dbNames := e.catalog.Databases(accountId, txn.op.SnapshotTS())
+		dbNames := catalog.Databases(accountId, txn.op.SnapshotTS())
 		for _, databaseName := range dbNames {
 			db, err = e.Database(noRepCtx, databaseName, op)
 			if err != nil {
@@ -319,14 +379,14 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 }
 
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
-	txn := e.getTransaction(op)
+	txn := op.GetWorkspace().(*Transaction)
 	if txn == nil {
 		return "", "", nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
 	switch tableId {
 	case catalog.MO_DATABASE_ID:
 		db := &txnDatabase{
-			txn:          txn,
+			op:           op,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: catalog.MO_CATALOG,
 		}
@@ -335,7 +395,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			db.openSysTable(nil, tableId, catalog.MO_DATABASE, defs), nil
 	case catalog.MO_TABLES_ID:
 		db := &txnDatabase{
-			txn:          txn,
+			op:           op,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: catalog.MO_CATALOG,
 		}
@@ -344,7 +404,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			db.openSysTable(nil, tableId, catalog.MO_TABLES, defs), nil
 	case catalog.MO_COLUMNS_ID:
 		db := &txnDatabase{
-			txn:          txn,
+			op:           op,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: catalog.MO_CATALOG,
 		}
@@ -378,9 +438,19 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		}
 		return true
 	})
-
+	var catache *cache.CatalogCache
+	if !op.IsSnapOp() {
+		catache = e.getLatestCatalogCache()
+	} else {
+		catache, err = e.getOrCreateSnapCatalogCache(
+			ctx,
+			types.TimestampToTS(op.SnapshotTS()))
+		if err != nil {
+			return "", "", nil, err
+		}
+	}
 	if rel == nil {
-		dbNames := e.catalog.Databases(accountId, txn.op.SnapshotTS())
+		dbNames := catache.Databases(accountId, txn.op.SnapshotTS())
 		fn := func(dbName string) error {
 			db, err = e.Database(noRepCtx, dbName, op)
 			if err != nil {
@@ -411,7 +481,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	if rel == nil {
 		if tableId == 2 {
 			logutil.Errorf("can not find table by id %d: accountId: %v", tableId, accountId)
-			tbls, tblIds := e.catalog.Tables(accountId, 1, op.SnapshotTS())
+			tbls, tblIds := catache.Tables(accountId, 1, op.SnapshotTS())
 			logutil.Errorf("tables: %v, tableIds: %v", tbls, tblIds)
 			util.CoreDump()
 		}
@@ -426,8 +496,10 @@ func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error
 
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
 	var db *txnDatabase
-
-	txn := e.getTransaction(op)
+	if op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("delete database in snapshot txn")
+	}
+	txn := op.GetWorkspace().(*Transaction)
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
@@ -445,11 +517,11 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 			AccountId: accountId,
 			Ts:        txn.op.SnapshotTS(),
 		}
-		if ok := e.catalog.GetDatabase(key); !ok {
+		if ok := e.getLatestCatalogCache().GetDatabase(key); !ok {
 			return moerr.GetOkExpectedEOB()
 		}
 		db = &txnDatabase{
-			txn:          txn,
+			op:           op,
 			databaseName: name,
 			databaseId:   key.Id,
 			rowId:        key.Rowid,
@@ -536,7 +608,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
 	colexec.Get().PutCnSegment(id, colexec.TxnWorkSpaceIdType)
-	e.newTransaction(op, txn)
+	op.AddWorkspace(txn)
 
 	e.pClient.validLogTailMustApplied(txn.op.SnapshotTS())
 	return nil
@@ -621,20 +693,12 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	if err != nil {
 		return nil, err
 	}
-	blockReaders := newBlockReaders(ctx, fs, tblDef, -1, ts, num, expr, proc.(*process.Process))
+	blockReaders := newBlockReaders(ctx, fs, tblDef, ts, num, expr, proc.(*process.Process))
 	distributeBlocksToBlockReaders(blockReaders, num, len(blkInfos), infos, steps)
 	for i := 0; i < num; i++ {
 		rds[i] = blockReaders[i]
 	}
 	return rds, nil
-}
-
-func (e *Engine) newTransaction(op client.TxnOperator, txn *Transaction) {
-	op.AddWorkspace(txn)
-}
-
-func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
-	return op.GetWorkspace().(*Transaction)
 }
 
 func (e *Engine) getTNServices() []DNStore {

@@ -36,7 +36,6 @@ type Relation interface {
 	AlterTable(ctx context.Context, req *apipb.AlterTableReq) error
 	MakeObjectIt() ObjectIt
 	MakeObjectItOnSnap() ObjectIt
-	MakeBlockIt() BlockIt
 
 	DeleteByPhyAddrKey(key any) error
 	GetValueByPhyAddrKey(key any, col int) (any, bool, error)
@@ -52,7 +51,7 @@ type Relation interface {
 
 	BatchDedup(col containers.Vector) error
 	Append(ctx context.Context, data *containers.Batch) error
-	AddBlksWithMetaLoc(ctx context.Context, stats containers.Vector) error
+	AddObjsWithMetaLoc(ctx context.Context, stats containers.Vector) error
 
 	GetMeta() any
 	CreateObject(bool) (Object, error)

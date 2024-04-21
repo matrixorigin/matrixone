@@ -67,7 +67,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := ctr.build(anal); err != nil {
 				return result, err
 			}
 			if ctr.mp == nil && !arg.IsShuffle {
@@ -131,19 +131,19 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze) error {
+func (ctr *container) receiveHashMap(anal process.Analyze) error {
 	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
 	}
 	if bat != nil && bat.AuxData != nil {
 		ctr.mp = bat.DupJmAuxData()
-		anal.Alloc(ctr.mp.Size())
+		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	return nil
 }
 
-func (ctr *container) receiveBatch(proc *process.Process, anal process.Analyze) error {
+func (ctr *container) receiveBatch(anal process.Analyze) error {
 	for {
 		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 		if err != nil {
@@ -164,12 +164,12 @@ func (ctr *container) receiveBatch(proc *process.Process, anal process.Analyze) 
 	return nil
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
-	err := ctr.receiveHashMap(proc, anal)
+func (ctr *container) build(anal process.Analyze) error {
+	err := ctr.receiveHashMap(anal)
 	if err != nil {
 		return err
 	}
-	return ctr.receiveBatch(proc, anal)
+	return ctr.receiveBatch(anal)
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {

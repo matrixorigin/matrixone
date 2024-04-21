@@ -17,6 +17,7 @@ package indexbuild
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -32,14 +33,15 @@ const (
 
 type container struct {
 	colexec.ReceiverOperator
-	state   int
-	isMerge bool
-	batch   *batch.Batch
+	state                int
+	isMerge              bool
+	batch                *batch.Batch
+	runtimeFilterHandled bool
 }
 
 type Argument struct {
-	ctr                  *container
-	RuntimeFilterSenders []*colexec.RuntimeFilterChan
+	ctr               *container
+	RuntimeFilterSpec *plan.RuntimeFilterSpec
 	vm.OperatorBase
 }
 
@@ -74,13 +76,10 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetRuntimeFilterSenders(rfs []*colexec.RuntimeFilterChan) {
-	arg.RuntimeFilterSenders = rfs
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
+		ctr.cleanRuntimeFilters(proc, arg.RuntimeFilterSpec)
 		if ctr.batch != nil {
 			proc.PutBatch(ctr.batch)
 		}
@@ -90,5 +89,14 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		} else {
 			ctr.FreeAllReg()
 		}
+	}
+}
+
+func (ctr *container) cleanRuntimeFilters(proc *process.Process, runtimeFilterSpec *plan.RuntimeFilterSpec) {
+	if !ctr.runtimeFilterHandled && runtimeFilterSpec != nil {
+		var runtimeFilter process.RuntimeFilterMessage
+		runtimeFilter.Tag = runtimeFilterSpec.Tag
+		runtimeFilter.Typ = process.RuntimeFilter_DROP
+		proc.SendMessage(runtimeFilter)
 	}
 }

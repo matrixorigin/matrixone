@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -76,7 +75,6 @@ type Service interface {
 	GetTaskService() (taskservice.TaskService, bool)
 	GetSQLExecutor() executor.SQLExecutor
 	GetBootstrapService() bootstrap.Service
-	WaitSystemInitCompleted(ctx context.Context) error
 }
 
 type EngineType string
@@ -267,6 +265,10 @@ type Config struct {
 	// LogtailUpdateStatsThreshold is the number that logtail entries received
 	// to trigger stats updating.
 	LogtailUpdateStatsThreshold int `toml:"logtail-update-stats-threshold"`
+
+	// Whether to automatically upgrade when system startup
+	AutomaticUpgrade       bool `toml:"auto-upgrade"`
+	UpgradeTenantBatchSize int  `toml:"upgrade-tenant-batch"`
 }
 
 func (c *Config) Validate() error {
@@ -384,9 +386,9 @@ func (c *Config) Validate() error {
 
 	// pessimistic mode implies primary key check
 	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic || c.PrimaryKeyCheck {
-		plan.CNPrimaryCheck = true
+		config.CNPrimaryCheck = true
 	} else {
-		plan.CNPrimaryCheck = false
+		config.CNPrimaryCheck = false
 	}
 
 	if c.MaxPreparedStmtCount > 0 {
@@ -537,6 +539,12 @@ func (c *Config) SetDefaultValue() {
 		c.InitWorkState = metadata.WorkState_Working.String()
 	}
 
+	if c.UpgradeTenantBatchSize <= 0 {
+		c.UpgradeTenantBatchSize = 16
+	} else if c.UpgradeTenantBatchSize >= 32 {
+		c.UpgradeTenantBatchSize = 32
+	}
+
 	c.Frontend.SetDefaultValues()
 }
 
@@ -544,6 +552,16 @@ func (s *service) getLockServiceConfig() lockservice.Config {
 	s.cfg.LockService.ServiceID = s.cfg.UUID
 	s.cfg.LockService.RPC = s.cfg.RPC
 	s.cfg.LockService.ListenAddress = s.lockServiceListenAddr()
+	s.cfg.LockService.TxnIterFunc = func(f func([]byte) bool) {
+		tc := s._txnClient
+		if tc == nil {
+			return
+		}
+
+		tc.IterTxns(func(to client.TxnOverview) bool {
+			return f(to.Meta.ID)
+		})
+	}
 	return s.cfg.LockService
 }
 
@@ -593,9 +611,8 @@ type service struct {
 	udfService       udf.Service
 	bootstrapService bootstrap.Service
 
-	stopper     *stopper.Stopper
-	aicm        *defines.AutoIncrCacheManager
-	upgradeOnce sync.Once
+	stopper *stopper.Stopper
+	aicm    *defines.AutoIncrCacheManager
 
 	task struct {
 		sync.RWMutex

@@ -54,6 +54,16 @@ func (c *CompilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("implement me")
 }
 
+func (c *CompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (c *CompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
 	//TODO implement me
 	panic("implement me")
@@ -218,7 +228,7 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 }
 
 func (*CompilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
-	return "", nil
+	return nil, nil
 }
 
 func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs []*engine.Attribute, err error) {

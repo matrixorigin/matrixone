@@ -28,19 +28,28 @@ import (
 )
 
 const (
-	DefaultMinRowsQualified = 40960
-	DefaultMaxRowsObj       = 8192 * 500
-	DefaultMaxMergeObjN     = 2
+	DefaultMinRowsQualified      = 40960
+	DefaultMaxRowsObj            = 8192 * 500
+	DefaultMinCNMergeSize        = 80000 // MB
+	DefaultCNMergeMemControlHint = 8192  // MB
+	DefaultMaxMergeObjN          = 4
 
 	Const1GBytes = 1 << 30
 	Const1MBytes = 1 << 20
 )
 
 var (
-	RuntimeMaxMergeObjN     atomic.Int32
-	RuntimeMinRowsQualified atomic.Int32
-	RuntimeMaxRowsObj       atomic.Int32
-	Epsilon                 float64
+	RuntimeMaxMergeObjN        atomic.Int32
+	RuntimeMinRowsQualified    atomic.Int32
+	RuntimeMaxRowsObj          atomic.Int32
+	RuntimeMinCNMergeSize      atomic.Uint64
+	RuntimeCNMergeMemControl   atomic.Uint64
+	RuntimeCNTakeOverAll       atomic.Bool
+	IsStandaloneBoost          atomic.Bool
+	ShouldStandaloneCNTakeOver atomic.Bool
+	Epsilon                    float64
+
+	RuntimeOverallFlushMemCap atomic.Uint64
 )
 
 func init() {

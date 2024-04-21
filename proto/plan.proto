@@ -19,6 +19,7 @@ package plan;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "lock.proto";
+import "timestamp.proto";
 
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 option (gogoproto.sizer_all) = false;
@@ -512,8 +513,9 @@ message Stats {
 	double table_cnt = 5;
 	//for scan, selectivity means outcnt divide total count
 	double selectivity = 6;
+	bool forceOneCN = 7;
 
-	HashMapStats hashmapStats = 7;
+	HashMapStats hashmapStats = 8;
 }
 
 message RowsetExpr {
@@ -581,10 +583,16 @@ message FrameBound {
 }
 
 message OnDuplicateKeyCtx {
-	TableDef table_def					= 1;
-	repeated int32 on_duplicate_idx		= 2;
-	map<string, Expr> on_duplicate_expr	= 3;
-	bool is_ignore 						= 4;
+	repeated string attrs = 1;
+	int32 insert_col_count = 2;
+	repeated Expr unique_col_check_expr = 3;
+	repeated string unique_cols = 4;
+	repeated int32 on_duplicate_idx		= 5;
+	map<string, Expr> on_duplicate_expr	= 6;
+	bool is_ignore 						= 7;
+	string table_name         = 8;
+	uint64 table_id           = 9;
+	uint32 table_version			= 10;
 }
 
 message InsertCtx {
@@ -828,6 +836,9 @@ message Node {
 	//for message
 	repeated msgHeader send_msg_list = 55;
 	repeated msgHeader recv_msg_list = 56;
+
+	// table_scan timestamp
+	timestamp.Timestamp scanTS = 57;
 }
 
 message ExternScan {
@@ -859,7 +870,6 @@ message PreInsertUkCtx {
 	int32 pk_column 		= 2;
 	Type pk_type 			= 3;
 	Type uk_type			= 4;
-	TableDef table_def 		= 5;
 }
 
 message PreDeleteCtx {
@@ -1004,6 +1014,9 @@ message DataControl {
 		PREPARE			= 4;
 		EXECUTE			= 5;
 		DEALLOCATE		= 6;
+		CREATE_ACCOUNT  = 7;
+		ALTER_ACCOUNT   = 8;
+		DROP_ACCOUNT    = 9;
 	}
 	//DataDefinition type
 	DclType dcl_type = 1;
@@ -1012,6 +1025,7 @@ message DataControl {
 		Prepare prepare 			= 3;
 		Execute execute				= 4;
 		Deallocate deallocate 		= 5;
+		OtherDCL other = 6;
 	}
 }
 
@@ -1051,7 +1065,7 @@ message DataDefinition {
 		DROP_SEQUENCE		= 31;
 		SHOW_SEQUENCES      = 32;
 		SHOW_CONNECTORS = 33;
-
+		SHOW_UPGRADE = 34;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -1388,6 +1402,10 @@ message Execute {
 
 message Deallocate {
 	string name			= 1;
+}
+
+message OtherDCL {
+	repeated int32 paramTypes = 1;
 }
 
 enum TableLockType {

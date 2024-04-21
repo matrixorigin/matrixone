@@ -86,6 +86,25 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	return nil
 }
 
+func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+
+	scale := int32(6)
+	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
+		scale = int32(vector.MustFixedCol[int64](ivecs[0])[0])
+	}
+	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+
+	resultValue := types.UnixNanoToTimestamp(time.Now().UnixNano())
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(resultValue, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 const (
 	onUpdateExpr = iota
 	defaultExpr
@@ -155,6 +174,63 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			}
 		} else {
 			b, err := f(v1)
+			if err != nil {
+				return err
+			}
+			if b == nil {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				if err = rs.AppendBytes(b, false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	enumVal := vector.GenerateFunctionStrParameter(parameters[1])
+
+	var f func([]byte, string) ([]byte, error)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	f = func(s []byte, enumStr string) ([]byte, error) {
+		typ := new(types.Type)
+		err := types.Decode(s, typ)
+		if err != nil {
+			return nil, err
+		}
+		if typ.Oid != types.T_enum {
+			return nil, moerr.NewNotSupported(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
+		}
+
+		// get enum values
+		enums := strings.Split(enumStr, ",")
+		enumVal := ""
+		for i, e := range enums {
+			enumVal += fmt.Sprintf("'%s'", e)
+			if i < len(enums)-1 {
+				enumVal += ","
+			}
+		}
+		ret := fmt.Sprintf("%s(%s)", typ.String(), enumVal)
+		return functionUtil.QuickStrToBytes(ret), nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		enumStr, null2 := enumVal.GetStrValue(i)
+		if null1 || null2 || len(v1) == 0 || len(enumStr) == 0 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			enumString := functionUtil.QuickBytesToStr(enumStr)
+			b, err := f(v1, enumString)
 			if err != nil {
 				return err
 			}
@@ -914,21 +990,16 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-// Serial have a similar function named SerialWithCompacted in the index_util
+// BuiltInSerial have a similar function named SerialWithCompacted in the index_util
 // Serial func is used by users, the function make true when input vec have ten
 // rows, the output vec is ten rows, when the vectors have null value, the output
 // vec will set the row null
 // for example:
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
-func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	ps := types.NewPackerArray(length, proc.Mp())
-	defer func() {
-		for _, p := range ps {
-			p.FreeMem()
-		}
-	}()
+	op.tryExpand(length, proc.Mp())
 
 	bitMap := new(nulls.Nulls)
 
@@ -937,16 +1008,18 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
 			return nil
 		}
-		SerialHelper(v, bitMap, ps, false)
+		SerialHelper(v, bitMap, op.ps, false)
 	}
 
+	//NOTE: make sure to use uint64(length) instead of len(op.ps[i])
+	// as length of packer array could be larger than length of input vectors
 	for i := uint64(0); i < uint64(length); i++ {
 		if bitMap.Contains(i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
-			if err := rs.AppendBytes(ps[i].GetBuf(), false); err != nil {
+			if err := rs.AppendBytes(op.ps[i].GetBuf(), false); err != nil {
 				return err
 			}
 		}
@@ -954,29 +1027,26 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	ps := types.NewPackerArray(length, proc.Mp())
-	defer func() {
-		for _, p := range ps {
-			p.FreeMem()
-		}
-	}()
+	op.tryExpand(length, proc.Mp())
 
 	for _, v := range parameters {
 		if v.IsConstNull() {
 			for i := 0; i < v.Length(); i++ {
-				ps[i].EncodeNull()
+				op.ps[i].EncodeNull()
 			}
 			continue
 		}
 
-		SerialHelper(v, nil, ps, true)
+		SerialHelper(v, nil, op.ps, true)
 	}
 
+	//NOTE: make sure to use uint64(length) instead of len(op.ps[i])
+	// as length of packer array could be larger than length of input vectors
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.AppendBytes(ps[i].GetBuf(), false); err != nil {
+		if err := rs.AppendBytes(op.ps[i].GetBuf(), false); err != nil {
 			return err
 		}
 	}

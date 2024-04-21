@@ -15,9 +15,10 @@
 package plan
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"strings"
 )
 
 func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]int) {
@@ -572,9 +573,6 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
 	}
 	scan := builder.qry.Nodes[node.Children[0]]
 	if scan.NodeType != plan.Node_TABLE_SCAN {
-		return
-	}
-	if scan.TableDef.Pkey == nil {
 		return
 	}
 	groupCol := make([]int32, 0)

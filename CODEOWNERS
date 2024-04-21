@@ -126,6 +126,9 @@
 # pkg/sort
 /pkg/sort @nnsgmsone
 
+# pkg/bootstrap
+/pkg/bootstrap @daviszhen @zhangxu19830126 @qingxinhome
+
 # pkg/sql
 /pkg/sql @nnsgmsone @aunjgr
 /pkg/sql/colexec @m-schen
@@ -133,6 +136,7 @@
 /pkg/sql/parsers @iamlinjunhong
 /pkg/sql/plan @ouyuanning @aunjgr @badboynt1
 /pkg/sql/plan/function @m-schen
+/pkg/sql/plan/explain @ouyuanning @aunjgr @badboynt1 @qingxinhome
 
 # pkg/taskservice
 /pkg/taskservice @zhangxu19830126

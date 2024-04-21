@@ -118,7 +118,7 @@ func (l *remoteLockTable) lock(
 	// encounter any error, we need try to check bind is valid.
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
-	_ = l.handleError(txn.txnID, err)
+	_ = l.handleError(txn.txnID, err, true)
 	cb(pb.Result{}, err)
 }
 
@@ -131,7 +131,6 @@ func (l *remoteLockTable) unlock(
 		l.serviceID,
 		txn,
 		l.bind)
-	st := time.Now()
 	for {
 		err := l.doUnlock(txn, commitTS, mutations...)
 		if err == nil {
@@ -149,11 +148,7 @@ func (l *remoteLockTable) unlock(
 		// handleError returns nil meaning bind changed, then all locks
 		// will be released. If handleError returns any error, it means
 		// that the current bind is valid, retry unlock.
-		if err := l.handleError(txn.txnID, err); err == nil ||
-			!isRetryError(err) ||
-			// if retry cost > keepRemoteLockDuration, remote lock will
-			// dropped by timeout.
-			time.Since(st) > l.removeLockTimeout {
+		if err := l.handleError(txn.txnID, err, false); err == nil {
 			return
 		}
 	}
@@ -163,7 +158,6 @@ func (l *remoteLockTable) getLock(
 	key []byte,
 	txn pb.WaitTxn,
 	fn func(Lock)) {
-	st := time.Now()
 	for {
 		lock, ok, err := l.doGetLock(key, txn)
 		if err == nil {
@@ -175,11 +169,7 @@ func (l *remoteLockTable) getLock(
 		}
 
 		// why use loop is similar to unlock
-		if err = l.handleError(txn.TxnID, err); err == nil ||
-			!isRetryError(err) ||
-			// if retry cost > keepRemoteLockDuration, remote lock will
-			// dropped by timeout.
-			time.Since(st) > l.removeLockTimeout {
+		if err = l.handleError(txn.TxnID, err, false); err == nil {
 			return
 		}
 	}
@@ -252,10 +242,10 @@ func (l *remoteLockTable) close() {
 	logLockTableClosed(l.bind, true)
 }
 
-func (l *remoteLockTable) handleError(txnID []byte, err error) error {
+func (l *remoteLockTable) handleError(txnID []byte, err error, mustHandleLockBindChangedErr bool) error {
 	oldError := err
 	// ErrLockTableBindChanged error must already handled. Skip
-	if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+	if !mustHandleLockBindChangedErr && moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
 		return nil
 	}
 

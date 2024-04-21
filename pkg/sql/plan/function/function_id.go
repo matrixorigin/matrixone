@@ -129,6 +129,8 @@ const (
 	HEX_DECODE
 	HEX_ENCODE
 	HEX
+	UNHEX
+	MD5
 	IFF
 	IFNULL
 	ILIKE
@@ -200,6 +202,7 @@ const (
 	STDDEV_SAMPLE
 	SUBSTR
 	SUM
+	SYSDATE
 	GROUP_CONCAT
 	TAN
 	TO_DATE
@@ -226,6 +229,8 @@ const (
 	SUBSTRING
 	ENCODE
 	DECODE
+	TO_BASE64
+	FROM_BASE64
 	SUBSTRING_INDEX
 	WEEK
 	WEEKDAY
@@ -296,7 +301,8 @@ const (
 	// see builtin.ctl.ctl.go to get detail.
 	MO_CTL
 
-	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
+	MO_SHOW_VISIBLE_BIN      // parse type/onUpdate/default []byte to visible string
+	MO_SHOW_VISIBLE_BIN_ENUM //  parse type/onUpdate/default []byte to visible string for enum
 
 	MO_TABLE_ROWS    // table rows
 	MO_TABLE_SIZE    // table size
@@ -323,10 +329,13 @@ const (
 	INTERNAL_COLUMN_CHARACTER_SET
 	INTERNAL_AUTO_INCREMENT
 
-	// be uesed: enum
+	// be used: enum
 	CAST_INDEX_TO_VALUE
 	CAST_VALUE_TO_INDEX
 	CAST_INDEX_VALUE_TO_INDEX
+
+	// be used: show snapshots
+	CAST_NANO_TO_TIMESTAMP
 
 	//Sequence function
 	NEXTVAL
@@ -465,6 +474,7 @@ var functionIdRegister = map[string]int32{
 	"concat":            CONCAT,
 	"current_timestamp": CURRENT_TIMESTAMP,
 	"now":               CURRENT_TIMESTAMP,
+	"sysdate":           SYSDATE,
 	"floor":             FLOOR,
 	"lpad":              LPAD,
 	"pi":                PI,
@@ -565,6 +575,10 @@ var functionIdRegister = map[string]int32{
 	"uuid":                           UUID,
 	"load_file":                      LOAD_FILE,
 	"hex":                            HEX,
+	"unhex":                          UNHEX,
+	"md5":                            MD5,
+	"to_base64":                      TO_BASE64,
+	"from_base64":                    FROM_BASE64,
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,
@@ -585,6 +599,7 @@ var functionIdRegister = map[string]int32{
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
+	"mo_show_visible_bin_enum":       MO_SHOW_VISIBLE_BIN_ENUM,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
 	"format":                         FORMAT,
@@ -626,6 +641,7 @@ var functionIdRegister = map[string]int32{
 	"cast_index_to_value":            CAST_INDEX_TO_VALUE,
 	"cast_value_to_index":            CAST_VALUE_TO_INDEX,
 	"cast_index_value_to_index":      CAST_INDEX_VALUE_TO_INDEX,
+	"cast_nano_to_timestamp":         CAST_NANO_TO_TIMESTAMP,
 	"to_upper":                       UPPER,
 	"upper":                          UPPER,
 	"ucase":                          UPPER,

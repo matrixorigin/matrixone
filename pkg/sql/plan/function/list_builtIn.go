@@ -1240,8 +1240,9 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return builtInSerial
+				newOpWithFree: func() (executeLogicOfOverload, executeFreeOfOverload) {
+					opSerial := newOpSerial()
+					return opSerial.BuiltInSerial, opSerial.Close
 				},
 			},
 		},
@@ -1265,8 +1266,9 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return BuiltInSerialFull
+				newOpWithFree: func() (executeLogicOfOverload, executeFreeOfOverload) {
+					opSerial := newOpSerial()
+					return opSerial.BuiltInSerialFull, opSerial.Close
 				},
 			},
 		},
@@ -1434,10 +1436,9 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 		},
 	},
-
-	// function `encode`
+	// to_base64
 	{
-		functionId: ENCODE,
+		functionId: TO_BASE64,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
@@ -1445,40 +1446,40 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_varchar, types.T_varchar},
+				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_text.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return Encode
+					return ToBase64
 				},
 			},
 			{
 				overloadId: 1,
-				args:       []types.T{types.T_array_float32, types.T_varchar},
+				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_text.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return Encode
+					return ToBase64
 				},
 			},
 			{
 				overloadId: 2,
-				args:       []types.T{types.T_array_float64, types.T_varchar},
+				args:       []types.T{types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_text.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return Encode
+					return ToBase64
 				},
 			},
 		},
 	},
 
-	// function `decode`
+	// from_base64
 	{
-		functionId: DECODE,
+		functionId: FROM_BASE64,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
@@ -1486,12 +1487,12 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_varchar, types.T_varchar},
+				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_blob.ToType()
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return Decode
+					return FromBase64
 				},
 			},
 		},
@@ -2723,6 +2724,68 @@ var supportedMathBuiltIns = []FuncNew{
 					return HexUint64
 				},
 			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexArray
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexArray
+				},
+			},
+		},
+	},
+
+	// function `unhex`
+	{
+		functionId: UNHEX,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Unhex
+				},
+			},
+		},
+	},
+
+	// function `md5`
+	{
+		functionId: MD5,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Md5
+				},
+			},
 		},
 	},
 
@@ -3258,6 +3321,35 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `sysdate` (execute timestamp)
+	{
+		functionId: SYSDATE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				realTimeRelated: true,
+				volatile:        true,
+				retType: func(parameters []types.Type) types.Type {
+					typ := types.T_timestamp.ToType()
+					typ.Scale = 6
+					return typ
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSysdate
+				},
+			},
+		},
+	},
+
 	// function `date`
 	{
 		functionId: DATE,
@@ -3387,6 +3479,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimeAdd
 				},
 			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_text, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringAdd
+				},
+			},
 		},
 	},
 
@@ -3479,6 +3581,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimestampSub
 				},
 			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_text, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringSub
+				},
+			},
 		},
 	},
 
@@ -3559,7 +3671,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `from_unixtime`
 	{
 		functionId: FROM_UNIXTIME,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -5308,6 +5420,28 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_show_visible_bin_enum`
+	{
+		functionId: MO_SHOW_VISIBLE_BIN_ENUM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInMoShowVisibleBinEnum
+				},
+			},
+		},
+	},
+
 	// function `cast_index_to_value`
 	{
 		functionId: CAST_INDEX_TO_VALUE,
@@ -5372,6 +5506,29 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return CastIndexValueToIndex
+				},
+			},
+		},
+	},
+
+	// function `cast_nano_to_timestamp`
+	{
+		functionId: CAST_NANO_TO_TIMESTAMP,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastNanoToTimestamp
 				},
 			},
 		},
@@ -5820,8 +5977,8 @@ var supportedOthersBuiltIns = []FuncNew{
 									col, _ := columnNames.GetStrValue(i)
 									coltypes, _ := columnTypes.GetStrValue(i)
 									if !null2 {
-										tuples, _, _, err := types.DecodeTuple(value)
-										scales := make([]int32, len(coltypes))
+										tuples, _, schema, err := types.DecodeTuple(value)
+										scales := make([]int32, max(len(coltypes), len(schema)))
 										for j := range coltypes {
 											scales[j] = int32(coltypes[j])
 										}

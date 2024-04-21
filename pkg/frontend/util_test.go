@@ -24,16 +24,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/stretchr/testify/assert"
 
 	"github.com/golang/mock/gomock"
+	cvey "github.com/smartystreets/goconvey/convey"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -46,7 +51,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	cvey "github.com/smartystreets/goconvey/convey"
 
 	"github.com/stretchr/testify/require"
 )
@@ -75,20 +79,6 @@ func Test_PathExists(t *testing.T) {
 		require.True(t, exist == c.exist)
 		require.True(t, isfile == c.isfile)
 	}
-}
-
-func Test_closeFlag(t *testing.T) {
-	cvey.Convey("closeFlag", t, func() {
-		cf := &CloseFlag{}
-		cf.setClosed(0)
-		cvey.So(cf.IsOpened(), cvey.ShouldBeTrue)
-
-		cf.Open()
-		cvey.So(cf.IsOpened(), cvey.ShouldBeTrue)
-
-		cf.Close()
-		cvey.So(cf.IsClosed(), cvey.ShouldBeTrue)
-	})
 }
 
 func Test_MinMax(t *testing.T) {
@@ -121,13 +111,6 @@ func Test_timeout(t *testing.T) {
 func Test_substringFromBegin(t *testing.T) {
 	cvey.Convey("ssfb", t, func() {
 		cvey.So(SubStringFromBegin("abcdef", 3), cvey.ShouldEqual, "abc...")
-	})
-}
-
-func Test_makedebuginfo(t *testing.T) {
-	cvey.Convey("makedebuginfo", t, func() {
-		MakeDebugInfo([]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
-			6, 3)
 	})
 }
 
@@ -455,7 +438,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -493,7 +476,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -634,7 +617,8 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
 		ws.EXPECT().UpdateSnapshotWriteOffset().AnyTimes()
 		ws.EXPECT().Adjust(gomock.Any()).AnyTimes()
-		ws.EXPECT().TransferRowID().AnyTimes()
+		ws.EXPECT().CloneSnapshotWS().AnyTimes()
+		ws.EXPECT().BindTxnOp(gomock.Any()).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -654,23 +638,23 @@ func TestGetExprValue(t *testing.T) {
 		}
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-
-		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), pu, GSysVariables, true, nil, nil)
+		setGlobalPu(pu)
+		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
 		ses.connectCtx = ctx
 		ses.SetDatabaseName("db")
-		exe := NewMysqlCmdExecutor()
-		exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
-		exe.SetSession(ses)
+		var c clock.Clock
+		_, err := ses.SetTempTableStorage(c)
+		assert.Nil(t, err)
 		for _, kase := range kases {
 			fmt.Println("++++>", kase.sql)
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
 			cvey.So(ok, cvey.ShouldBeTrue)
-			value, err := getExprValue(sv.Assignments[0].Value, exe, ses)
+			value, err := getExprValue(sv.Assignments[0].Value, ses)
 			if kase.wantErr {
 				cvey.So(err, cvey.ShouldNotBeNil)
 			} else {
@@ -741,7 +725,8 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().Adjust(uint64(0)).AnyTimes()
 		ws.EXPECT().IncrSQLCount().AnyTimes()
 		ws.EXPECT().GetSQLCount().AnyTimes()
-		ws.EXPECT().TransferRowID().AnyTimes()
+		ws.EXPECT().CloneSnapshotWS().AnyTimes()
+		ws.EXPECT().BindTxnOp(gomock.Any()).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -761,21 +746,21 @@ func TestGetExprValue(t *testing.T) {
 		}
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-
-		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), pu, GSysVariables, true, nil, nil)
+		setGlobalPu(pu)
+		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
 		ses.connectCtx = ctx
-		exe := NewMysqlCmdExecutor()
-		exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
-		exe.SetSession(ses)
+		var c clock.Clock
+		_, err := ses.SetTempTableStorage(c)
+		assert.Nil(t, err)
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
 			cvey.So(ok, cvey.ShouldBeTrue)
-			value, err := getExprValue(sv.Assignments[0].Value, exe, ses)
+			value, err := getExprValue(sv.Assignments[0].Value, ses)
 			if kase.wantErr {
 				cvey.So(err, cvey.ShouldNotBeNil)
 			} else {
@@ -916,7 +901,9 @@ func Test_makeExecuteSql(t *testing.T) {
 	}
 
 	pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-	ses1 := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), pu, GSysVariables, true, nil, nil)
+	setGlobalPu(pu)
+	ses1 := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true,
+		nil)
 
 	ses1.SetUserDefinedVar("var2", "val2", "set var2 = val2")
 	ses1.SetUserDefinedVar("var3", "val3", "set var3 = val3")
@@ -1083,4 +1070,69 @@ func Test_isErrorRollbackWholeTxn(t *testing.T) {
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableNotFoundNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadlockCheckBusyNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockConflictNoCtx()))
+}
+
+func TestUserInput_getSqlSourceType(t *testing.T) {
+	type fields struct {
+		sql           string
+		stmt          tree.Statement
+		sqlSourceType []string
+	}
+	type args struct {
+		i int
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   string
+	}{
+		{
+			name: "t1",
+			fields: fields{
+				sql:           "select * from t1",
+				sqlSourceType: nil,
+			},
+			args: args{
+				i: 0,
+			},
+			want: "external_sql",
+		},
+		{
+			name: "t2",
+			fields: fields{
+				sql:           "select * from t1",
+				sqlSourceType: nil,
+			},
+			args: args{
+				i: 1,
+			},
+			want: "external_sql",
+		},
+		{
+			name: "t3",
+			fields: fields{
+				sql: "select * from t1",
+				sqlSourceType: []string{
+					"a",
+					"b",
+					"c",
+				},
+			},
+			args: args{
+				i: 2,
+			},
+			want: "c",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ui := &UserInput{
+				sql:           tt.fields.sql,
+				stmt:          tt.fields.stmt,
+				sqlSourceType: tt.fields.sqlSourceType,
+			}
+			assert.Equalf(t, tt.want, ui.getSqlSourceType(tt.args.i), "getSqlSourceType(%v)", tt.args.i)
+		})
+	}
 }

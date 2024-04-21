@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -90,7 +91,7 @@ type ClusterByDef struct {
 }
 
 type Statistics interface {
-	Stats(ctx context.Context, sync bool) *pb.StatsInfo
+	Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error)
 	Rows(ctx context.Context) (uint64, error)
 	Size(ctx context.Context, columnName string) (uint64, error)
 }
@@ -592,8 +593,6 @@ var _ Ranges = (*objectio.BlockInfoSlice)(nil)
 type Relation interface {
 	Statistics
 
-	UpdateObjectInfos(context.Context) error
-
 	Ranges(context.Context, []*plan.Expr) (Ranges, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
@@ -649,6 +648,7 @@ type Relation interface {
 	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 
 	ApproxObjectsNum(ctx context.Context) int
+	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats) (*api.MergeCommitEntry, error)
 }
 
 type Reader interface {

@@ -43,6 +43,7 @@ type compilerContext struct {
 
 	buildAlterView       bool
 	dbOfView, nameOfView string
+	sql                  string
 	mu                   sync.Mutex
 }
 
@@ -56,6 +57,14 @@ func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubNam
 }
 
 func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
+	panic("not supported in internal sql executor")
+}
+
+func (c *compilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
+	panic("not supported in internal sql executor")
+}
+
+func (c *compilerContext) CheckTimeStampValid(ts int64) (bool, error) {
 	panic("not supported in internal sql executor")
 }
 
@@ -93,7 +102,7 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef) (*pb.StatsInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return t.Stats(c.ctx, true), nil
+	return t.Stats(c.ctx, true)
 }
 
 func (c *compilerContext) GetStatsCache() *plan.StatsCache {
@@ -176,7 +185,13 @@ func (c *compilerContext) GetPrimaryKeyDef(
 }
 
 func (c *compilerContext) GetRootSql() string {
-	return ""
+	return c.sql
+}
+
+func (c *compilerContext) SetRootSql(sql string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sql = sql
 }
 
 func (c *compilerContext) GetUserName() string {

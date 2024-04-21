@@ -60,6 +60,7 @@ var (
 		moerr.ErrTxnNotFound:          {},
 		moerr.ErrTxnNotActive:         {},
 		moerr.ErrLockTableBindChanged: {},
+		moerr.ErrCannotCommitOrphan:   {},
 	}
 	rollbackTxnErrors = map[uint16]struct{}{
 		moerr.ErrTAERollback:  {},
@@ -206,6 +207,10 @@ type txnOperator struct {
 	commitSeq            uint64
 	lockService          lockservice.LockService
 	sequence             atomic.Uint64
+	createTs             timestamp.Timestamp
+	//read-only txn operators for supporting snapshot read feature.
+	children []*txnOperator
+	parent   atomic.Pointer[txnOperator]
 
 	mu struct {
 		sync.RWMutex
@@ -235,6 +240,7 @@ func newTxnOperator(
 	tc.txnID = txnMeta.ID
 	tc.clock = clock
 	tc.createAt = time.Now()
+	tc.createTs, _ = clock.Now()
 	for _, opt := range options {
 		opt(tc)
 	}
@@ -247,6 +253,27 @@ func newTxnOperator(
 		v2.TxnInternalCounter.Inc()
 	}
 	return tc
+}
+
+func (tc *txnOperator) IsSnapOp() bool {
+	return tc.parent.Load() != nil
+}
+
+func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator {
+	op := &txnOperator{}
+	op.mu.txn = txn.TxnMeta{
+		SnapshotTS: snapshot,
+		ID:         tc.mu.txn.ID,
+		TNShards:   tc.mu.txn.TNShards,
+	}
+	op.txnID = op.mu.txn.ID
+
+	op.workspace = tc.workspace.CloneSnapshotWS()
+	op.workspace.BindTxnOp(op)
+
+	tc.children = append(tc.children, op)
+	op.parent.Store(tc)
+	return op
 }
 
 func newTxnOperatorWithSnapshot(
@@ -339,6 +366,10 @@ func (tc *txnOperator) SnapshotTS() timestamp.Timestamp {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 	return tc.mu.txn.SnapshotTS
+}
+
+func (tc *txnOperator) CreateTS() timestamp.Timestamp {
+	return tc.createTs
 }
 
 func (tc *txnOperator) Status() txn.TxnStatus {
