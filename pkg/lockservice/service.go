@@ -374,9 +374,8 @@ func (s *service) isStatus(status pb.Status) bool {
 }
 
 func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, error) {
-	activeTxn := s.activeTxnHolder.getActiveTxn(txn.TxnID, false, "")
-
 	if txn.CreatedOn == s.serviceID {
+		activeTxn := s.activeTxnHolder.getActiveTxn(txn.TxnID, false, "")
 		// the active txn closed
 		if activeTxn == nil {
 			return true, nil
@@ -391,17 +390,6 @@ func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, e
 			s.activeTxnHolder,
 			waiters.add,
 			s.getLockTable), nil
-	}
-
-	if activeTxn != nil {
-		added := activeTxn.fetchWhoWaitingMeInBlockingWaiters(
-			txn.TxnID,
-			waiters.add,
-			false,
-		)
-		if !added {
-			return false, nil
-		}
 	}
 
 	waitingList, err := s.getTxnWaitingListOnRemote(txn.TxnID, txn.CreatedOn)
