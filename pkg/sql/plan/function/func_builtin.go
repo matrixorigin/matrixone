@@ -542,6 +542,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 				return moerr.NewNotSupported(proc.Ctx, "purge '%s'", tblName)
 			}
 		}
+
 		for _, tblName := range tableNames {
 			for _, tbl := range tables {
 				if strings.TrimSpace(tblName) == tbl.Table {
@@ -550,6 +551,9 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 					opts := executor.Options{}.WithDatabase(tbl.Database).
 						WithTxn(proc.TxnOperator).
 						WithTimeZone(proc.SessionInfo.TimeZone)
+					if proc.TxnOperator != nil {
+						opts = opts.WithDisableIncrStatement() // this option always with WithTxn()
+					}
 					res, err := exec.Exec(proc.Ctx, sql, opts)
 					if err != nil {
 						return err
