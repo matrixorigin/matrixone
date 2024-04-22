@@ -379,15 +379,25 @@ func execInFrontend(requestCtx context.Context,
 		if err = handleDropSnapshot(requestCtx, ses, st); err != nil {
 			return
 		}
-	case *tree.RestoreSnapShot:
-		//TODO: invalidate privilege cache
-		if err = handleRestoreSnapshot(requestCtx, ses, st); err != nil {
-			return
-		}
+	//case *tree.RestoreSnapShot:
+	//	//TODO: invalidate privilege cache
+	//	if err = handleRestoreSnapshot(requestCtx, ses, st); err != nil {
+	//		return
+	//	}
 	case *tree.UpgradeStatement:
 		//TODO: invalidate privilege cache
 		if err = handleExecUpgrade(requestCtx, ses, st); err != nil {
 			return
+		}
+	case *tree.RestoreSnapShot:
+		if st.Level == tree.RESTORELEVELCLUSTER {
+			return handleRestoreCluster(requestCtx, ses, st)
+		} else if st.Level == tree.RESTORELEVELACCOUNT {
+			return handleRestoreAccount(requestCtx, ses, st)
+		} else if st.Level == tree.RESTORELEVELDATABASE {
+			return handleRestoreDatabase(requestCtx, ses, st)
+		} else if st.Level == tree.RESTORELEVELTABLE {
+			return handleRestoreTable(requestCtx, ses, st)
 		}
 	}
 	return
