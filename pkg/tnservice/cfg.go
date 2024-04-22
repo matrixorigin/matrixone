@@ -16,11 +16,12 @@ package tnservice
 
 import (
 	"context"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"path/filepath"
 	"strings"
 	"time"
+
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -109,18 +110,26 @@ type Config struct {
 	RPC rpc.Config `toml:"rpc"`
 
 	Ckp struct {
-		FlushInterval         toml.Duration `toml:"flush-interval"`
-		ScanInterval          toml.Duration `toml:"scan-interval"`
-		MinCount              int64         `toml:"min-count"`
-		IncrementalInterval   toml.Duration `toml:"incremental-interval"`
-		GlobalMinCount        int64         `toml:"global-min-count"`
-		ReservedWALEntryCount uint64        `toml:"reserved-WAL-entry-count"`
+		FlushInterval          toml.Duration `toml:"flush-interval"`
+		ScanInterval           toml.Duration `toml:"scan-interval"`
+		MinCount               int64         `toml:"min-count"`
+		IncrementalInterval    toml.Duration `toml:"incremental-interval"`
+		GlobalMinCount         int64         `toml:"global-min-count"`
+		ReservedWALEntryCount  uint64        `toml:"reserved-WAL-entry-count"`
+		OverallFlushMemControl uint64        `toml:"overall-flush-mem-control"`
 	}
 
 	GCCfg struct {
 		GCTTL          toml.Duration `toml:"gc-ttl"`
 		ScanGCInterval toml.Duration `toml:"scan-gc-interval"`
 		DisableGC      bool          `toml:"disable-gc"`
+	}
+
+	Merge struct {
+		CNTakeOverAll    bool          `toml:"offload-all"`
+		CNStandaloneTake bool          `toml:"offload-when-standalone"`
+		CNTakeOverExceed toml.ByteSize `toml:"offload-exceed"`
+		CNMergeMemHint   toml.ByteSize `toml:"offload-mem-hint"`
 	}
 
 	LogtailServer struct {

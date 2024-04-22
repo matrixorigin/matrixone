@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
 )
@@ -128,13 +129,20 @@ func (s *store) newMemKVStorage(shard metadata.TNShard, logClient logservice.Cli
 }
 
 func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
+	// use s3 as main fs
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
 	ckpcfg := &options.CheckpointCfg{
-		MinCount:              s.cfg.Ckp.MinCount,
-		ScanInterval:          s.cfg.Ckp.ScanInterval.Duration,
-		FlushInterval:         s.cfg.Ckp.FlushInterval.Duration,
-		IncrementalInterval:   s.cfg.Ckp.IncrementalInterval.Duration,
-		GlobalMinCount:        s.cfg.Ckp.GlobalMinCount,
-		ReservedWALEntryCount: s.cfg.Ckp.ReservedWALEntryCount,
+		MinCount:               s.cfg.Ckp.MinCount,
+		ScanInterval:           s.cfg.Ckp.ScanInterval.Duration,
+		FlushInterval:          s.cfg.Ckp.FlushInterval.Duration,
+		IncrementalInterval:    s.cfg.Ckp.IncrementalInterval.Duration,
+		GlobalMinCount:         s.cfg.Ckp.GlobalMinCount,
+		ReservedWALEntryCount:  s.cfg.Ckp.ReservedWALEntryCount,
+		OverallFlushMemControl: s.cfg.Ckp.OverallFlushMemControl,
 	}
 
 	gcCfg := &options.GCCfg{
@@ -142,6 +150,14 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		ScanGCInterval: s.cfg.GCCfg.ScanGCInterval.Duration,
 		DisableGC:      s.cfg.GCCfg.DisableGC,
 	}
+
+	mergeCfg := &options.MergeConfig{
+		CNMergeMemControlHint: uint64(s.cfg.Merge.CNMergeMemHint),
+		CNTakeOverAll:         s.cfg.Merge.CNTakeOverAll,
+		CNTakeOverExceed:      uint64(s.cfg.Merge.CNTakeOverExceed),
+		CNStandaloneTake:      s.cfg.Merge.CNStandaloneTake,
+	}
+
 	logtailServerAddr := s.logtailServiceListenAddr()
 	logtailServerCfg := &options.LogtailServerCfg{
 		RpcMaxMessageSize:      int64(s.cfg.LogtailServer.RpcMaxMessageSize),
@@ -151,29 +167,34 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		ResponseSendTimeout:    s.cfg.LogtailServer.LogtailResponseSendTimeout.Duration,
 	}
 
-	// use s3 as main fs
-	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
-	if err != nil {
-		return nil, err
-	}
-
 	// the previous values
 	//max2LogServiceMsgSizeLimit := s.cfg.RPC.MaxMessageSize
 	// unlimited, divided by 2 to avoid overflow
 	max2LogServiceMsgSizeLimit := uint64(math.MaxUint64 / 2)
 
+	opt := &options.Options{
+		Clock:             s.rt.Clock(),
+		Fs:                fs,
+		Lc:                logservicedriver.LogServiceClientFactory(factory),
+		Shard:             shard,
+		CheckpointCfg:     ckpcfg,
+		GCCfg:             gcCfg,
+		MergeCfg:          mergeCfg,
+		LogStoreT:         options.LogstoreLogservice,
+		IncrementalDedup:  s.cfg.Txn.IncrementalDedup == "true",
+		IsStandalone:      s.cfg.InStandalone,
+		Ctx:               ctx,
+		MaxMessageSize:    max2LogServiceMsgSizeLimit,
+		TaskServiceGetter: s.GetTaskService,
+	}
+
 	return taestorage.NewTAEStorage(
 		ctx,
 		s.cfg.Txn.Storage.dataDir,
+		opt,
 		shard,
-		factory,
-		fs,
 		s.rt,
-		ckpcfg,
-		gcCfg,
 		logtailServerAddr,
 		logtailServerCfg,
-		s.cfg.Txn.IncrementalDedup == "true",
-		max2LogServiceMsgSizeLimit,
 	)
 }

@@ -95,7 +95,7 @@ message MultiArguemnt{
 message Aggregate {
   int64 op = 1;
   bool dist = 2;
-  plan.Expr expr = 3;
+  repeated plan.Expr expr = 3;
   bytes config =4;
 }
 

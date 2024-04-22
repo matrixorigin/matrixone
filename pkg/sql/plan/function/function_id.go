@@ -130,6 +130,7 @@ const (
 	HEX_ENCODE
 	HEX
 	UNHEX
+	MD5
 	IFF
 	IFNULL
 	ILIKE
@@ -328,10 +329,13 @@ const (
 	INTERNAL_COLUMN_CHARACTER_SET
 	INTERNAL_AUTO_INCREMENT
 
-	// be uesed: enum
+	// be used: enum
 	CAST_INDEX_TO_VALUE
 	CAST_VALUE_TO_INDEX
 	CAST_INDEX_VALUE_TO_INDEX
+
+	// be used: show snapshots
+	CAST_NANO_TO_TIMESTAMP
 
 	//Sequence function
 	NEXTVAL
@@ -572,6 +576,7 @@ var functionIdRegister = map[string]int32{
 	"load_file":                      LOAD_FILE,
 	"hex":                            HEX,
 	"unhex":                          UNHEX,
+	"md5":                            MD5,
 	"to_base64":                      TO_BASE64,
 	"from_base64":                    FROM_BASE64,
 	"serial":                         SERIAL,
@@ -636,6 +641,7 @@ var functionIdRegister = map[string]int32{
 	"cast_index_to_value":            CAST_INDEX_TO_VALUE,
 	"cast_value_to_index":            CAST_VALUE_TO_INDEX,
 	"cast_index_value_to_index":      CAST_INDEX_VALUE_TO_INDEX,
+	"cast_nano_to_timestamp":         CAST_NANO_TO_TIMESTAMP,
 	"to_upper":                       UPPER,
 	"upper":                          UPPER,
 	"ucase":                          UPPER,

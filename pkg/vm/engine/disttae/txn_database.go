@@ -40,6 +40,10 @@ func (db *txnDatabase) getTxn() *Transaction {
 	return db.op.GetWorkspace().(*Transaction)
 }
 
+func (db *txnDatabase) getEng() *Engine {
+	return db.op.GetWorkspace().(*Transaction).engine
+}
+
 func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 	var rels []string
 	//first get all delete tables
@@ -65,7 +69,18 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	tbls, _ := db.getTxn().engine.catalog.Tables(
+	var catache *cache.CatalogCache
+	if !db.op.IsSnapOp() {
+		catache = db.getTxn().engine.getLatestCatalogCache()
+	} else {
+		catache, err = db.getTxn().engine.getOrCreateSnapCatalogCache(
+			ctx,
+			types.TimestampToTS(db.op.SnapshotTS()))
+		if err != nil {
+			return nil, err
+		}
+	}
+	tbls, _ := catache.Tables(
 		accountId, db.databaseId, db.op.SnapshotTS())
 	for _, tbl := range tbls {
 		//if the table is deleted, do not save it.
@@ -107,8 +122,18 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) (string,
 		if err != nil {
 			return "", err
 		}
-
-		tbls, tblIds := db.getTxn().engine.catalog.Tables(
+		var catache *cache.CatalogCache
+		if !db.op.IsSnapOp() {
+			catache = db.getTxn().engine.getLatestCatalogCache()
+		} else {
+			catache, err = db.getTxn().engine.getOrCreateSnapCatalogCache(
+				ctx,
+				types.TimestampToTS(db.op.SnapshotTS()))
+			if err != nil {
+				return "", err
+			}
+		}
+		tbls, tblIds := catache.Tables(
 			accountId, db.databaseId, db.op.SnapshotTS())
 		for idx, tblId := range tblIds {
 			if tblId == id {
@@ -157,7 +182,7 @@ func (db *txnDatabase) RelationByAccountID(
 		p = proc.(*process.Process)
 	}
 
-	rel := db.getTxn().getCachedTable(key)
+	rel := db.getTxn().getCachedTable(context.Background(), key)
 	if rel != nil {
 		rel.proc.Store(p)
 		return rel, nil
@@ -192,7 +217,19 @@ func (db *txnDatabase) RelationByAccountID(
 		AccountId:  accountID,
 		Ts:         db.op.SnapshotTS(),
 	}
-	if ok := db.getTxn().engine.catalog.GetTable(item); !ok {
+	var catache *cache.CatalogCache
+	var err error
+	if !db.op.IsSnapOp() {
+		catache = db.getTxn().engine.getLatestCatalogCache()
+	} else {
+		catache, err = db.getTxn().engine.getOrCreateSnapCatalogCache(
+			context.Background(),
+			types.TimestampToTS(db.op.SnapshotTS()))
+		if err != nil {
+			return nil, err
+		}
+	}
+	if ok := catache.GetTable(item); !ok {
 		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist",
 			name,
 			accountID,
@@ -229,6 +266,9 @@ func (db *txnDatabase) RelationByAccountID(
 }
 
 func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
+	if db.databaseName == "test" && name == "bugt" && db.op.IsSnapOp() {
+		logutil.Infof("xxxx open relation, txn:%s", db.op.Txn().DebugString())
+	}
 	logDebugf(db.op.Txn(), "txnDatabase.Relation table %s", name)
 	txn := db.getTxn()
 	if txn.op.Status() == txn2.TxnStatus_Aborted {
@@ -249,7 +289,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		p = proc.(*process.Process)
 	}
 
-	rel := db.getTxn().getCachedTable(key)
+	rel := db.getTxn().getCachedTable(ctx, key)
 	if rel != nil {
 		rel.proc.Store(p)
 		return rel, nil
@@ -284,7 +324,18 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		AccountId:  accountId,
 		Ts:         db.op.SnapshotTS(),
 	}
-	if ok := db.getTxn().engine.catalog.GetTable(item); !ok {
+	var catache *cache.CatalogCache
+	if !db.op.IsSnapOp() {
+		catache = db.getTxn().engine.getLatestCatalogCache()
+	} else {
+		catache, err = db.getTxn().engine.getOrCreateSnapCatalogCache(
+			ctx,
+			types.TimestampToTS(db.op.SnapshotTS()))
+		if err != nil {
+			return nil, err
+		}
+	}
+	if ok := catache.GetTable(item); !ok {
 		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist",
 			name,
 			accountId,
@@ -328,6 +379,9 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 	var id uint64
 	var rowid types.Rowid
 	var rowids []types.Rowid
+	if db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("delete table in snapshot transaction")
+	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
@@ -365,7 +419,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 			AccountId:  accountId,
 			Ts:         db.op.SnapshotTS(),
 		}
-		if ok := db.getTxn().engine.catalog.GetTable(item); !ok {
+		if ok := db.getTxn().engine.getLatestCatalogCache().GetTable(item); !ok {
 			return moerr.GetOkExpectedEOB()
 		}
 		id = item.Id
@@ -413,6 +467,9 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	var rowid types.Rowid
 	var v any
 	var ok bool
+	if db.op.IsSnapOp() {
+		return 0, moerr.NewInternalErrorNoCtx("truncate table in snapshot transaction")
+	}
 	newId, err := db.getTxn().allocateID(ctx)
 	if err != nil {
 		return 0, err
@@ -439,7 +496,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 			AccountId:  accountId,
 			Ts:         db.op.SnapshotTS(),
 		}
-		if ok := db.getTxn().engine.catalog.GetTable(item); !ok {
+		if ok := db.getTxn().engine.getLatestCatalogCache().GetTable(item); !ok {
 			return 0, moerr.GetOkExpectedEOB()
 		}
 		oldId = item.Id
@@ -473,6 +530,9 @@ func (db *txnDatabase) IsSubscription(ctx context.Context) bool {
 }
 
 func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
+	if db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
+	}
 	accountId, userId, roleId, err := getAccessInfo(ctx)
 	if err != nil {
 		return err
@@ -589,7 +649,7 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 		tableName:     name,
 		defs:          defs,
 		primaryIdx:    0,
-		primarySeqnum: 0,
+		primarySeqnum: db.getEng().getLatestCatalogCache().GetTableById(db.databaseId, id).PrimarySeqnum,
 		clusterByIdx:  -1,
 	}
 	switch name {

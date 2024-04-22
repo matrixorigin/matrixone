@@ -25,11 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -256,4 +259,27 @@ func (s *service) registerExecutorsLocked() {
 	// streaming connector task
 	s.task.runner.RegisterExecutor(task.TaskCode_ConnectorKafkaSink,
 		moconnector.KafkaSinkConnectorExecutor(s.logger, ts, ieFactory, s.task.runner.Attach))
+	s.task.runner.RegisterExecutor(task.TaskCode_MergeObject,
+		func(ctx context.Context, task task.Task) error {
+			metadata := task.GetMetadata()
+			var mergeTask api.MergeTaskEntry
+			err := mergeTask.Unmarshal(metadata.Context)
+			if err != nil {
+				return err
+			}
+
+			objs := make([]string, len(mergeTask.ToMergeObjs))
+			for i, b := range mergeTask.ToMergeObjs {
+				stats := objectio.ObjectStats(b)
+				objs[i] = stats.ObjectName().String()
+			}
+			sql := fmt.Sprintf("select mo_ctl('DN', 'MERGEOBJECTS', '%s.%s %s')",
+				mergeTask.DbName, mergeTask.TableName, strings.Join(objs, ","))
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			defer cancel()
+			opts := executor.Options{}.WithAccountID(mergeTask.AccountId).WithWaitCommittedLogApplied()
+			_, err = s.sqlExecutor.Exec(ctx, sql, opts)
+			return err
+		},
+	)
 }
