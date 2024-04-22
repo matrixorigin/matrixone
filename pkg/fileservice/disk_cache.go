@@ -19,76 +19,98 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"math"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
+	"github.com/cespare/xxhash/v2"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
 type DiskCache struct {
-	capacity        int64
-	evictInterval   time.Duration
-	evictTarget     float64
 	path            string
-	fileExists      sync.Map
 	perfCounterSets []*perfcounter.CounterSet
-
-	evictState struct {
-		sync.Mutex
-		timer        *time.Timer
-		newlyWritten int64
-	}
-	noAutoEviction bool
 
 	updatingPaths struct {
 		*sync.Cond
 		m map[string]bool
 	}
+
+	cache *fifocache.Cache[string, struct{}]
 }
 
 func NewDiskCache(
 	ctx context.Context,
 	path string,
-	capacity int64,
-	evictInterval time.Duration,
-	evictTarget float64,
+	capacity int,
 	perfCounterSets []*perfcounter.CounterSet,
-) (*DiskCache, error) {
+) (ret *DiskCache, err error) {
 
-	if evictInterval == 0 {
-		panic("zero evict interval")
-	}
-	if evictTarget == 0 {
-		panic("zero evict target")
-	}
-	if evictTarget > 1 {
-		panic("evict target greater than 1")
-	}
-
-	err := os.MkdirAll(path, 0755)
+	err = os.MkdirAll(path, 0755)
 	if err != nil {
 		return nil, err
 	}
-	ret := &DiskCache{
-		capacity:        capacity,
-		evictInterval:   evictInterval,
-		evictTarget:     evictTarget,
+
+	ret = &DiskCache{
 		path:            path,
 		perfCounterSets: perfCounterSets,
+
+		cache: fifocache.New(
+			capacity,
+			func(path string, _ struct{}) {
+				err := os.Remove(path)
+				if err == nil {
+					perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
+						set.FileService.Cache.Disk.Evict.Add(1)
+					}, perfCounterSets...)
+				}
+			},
+			func(key string) uint8 {
+				return uint8(xxhash.Sum64String(key))
+			},
+		),
 	}
-	ret.triggerEvict(ctx, 0)
-	ret.triggerEvict(ctx, capacity) // trigger an immediately eviction
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))
 	ret.updatingPaths.m = make(map[string]bool)
+
+	ret.loadCache()
+
 	return ret, nil
+}
+
+func (d *DiskCache) loadCache() {
+
+	_ = filepath.WalkDir(d.path, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil //ignore
+		}
+		if entry.IsDir() {
+			// try remove if empty. for cleaning old structure
+			if path != d.path {
+				os.Remove(path)
+			}
+			return nil
+		}
+		if !strings.HasSuffix(entry.Name(), cacheFileSuffix) {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil // ignore
+		}
+
+		d.cache.Set(path, struct{}{}, int(fileSize(info)))
+
+		return nil
+	})
+
 }
 
 var _ IOVectorCache = new(DiskCache)
@@ -106,7 +128,7 @@ func (d *DiskCache) Read(
 
 	var numHit, numRead, numOpenIOEntry, numOpenFull, numError int64
 	defer func() {
-		v2.FSReadHitDiskCounter.Add(float64(numHit))
+		metric.FSReadHitDiskCounter.Add(float64(numHit))
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 			c.FileService.Cache.Read.Add(numRead)
 			c.FileService.Cache.Hit.Add(numHit)
@@ -123,70 +145,109 @@ func (d *DiskCache) Read(
 		return err
 	}
 
-	for i, entry := range vector.Entries {
+	openedFiles := make(map[string]*os.File)
+	defer func() {
+		for _, file := range openedFiles {
+			_ = file.Close()
+		}
+	}()
+
+	fillEntry := func(entry *IOEntry) error {
 		if entry.done {
-			continue
+			return nil
 		}
 		if entry.Size < 0 {
 			// ignore size unknown entry
-			continue
+			return nil
 		}
 
-		t0 := time.Now()
 		numRead++
 
 		var file *os.File
 
 		// entry file
-		diskPath := d.pathForIOEntry(path.File, entry)
-		d.waitUpdateComplete(diskPath)
-		diskFile, err := os.Open(diskPath)
-		if err == nil {
-			file = diskFile
-			defer diskFile.Close()
-			numOpenIOEntry++
-		}
-
-		if file == nil {
-			// full file
-			diskPath := d.pathForFile(path.File)
+		diskPath := d.pathForIOEntry(path.File, *entry)
+		if f, ok := openedFiles[diskPath]; ok {
+			// use opened file
+			_, err = file.Seek(entry.Offset, io.SeekStart)
+			if err == nil {
+				file = f
+			}
+		} else {
+			// open file
 			d.waitUpdateComplete(diskPath)
 			diskFile, err := os.Open(diskPath)
 			if err == nil {
-				defer diskFile.Close()
-				numOpenFull++
-				// seek
-				_, err = diskFile.Seek(entry.Offset, io.SeekStart)
+				file = diskFile
+				defer func() {
+					openedFiles[diskPath] = diskFile
+				}()
+				numOpenIOEntry++
+			}
+		}
+
+		if file == nil {
+			// try full file
+			diskPath = d.pathForFile(path.File)
+			if f, ok := openedFiles[diskPath]; ok {
+				// use opened file
+				_, err = f.Seek(entry.Offset, io.SeekStart)
 				if err == nil {
-					file = diskFile
+					file = f
+				}
+			} else {
+				// open file
+				d.waitUpdateComplete(diskPath)
+				diskFile, err := os.Open(diskPath)
+				if err == nil {
+					defer func() {
+						openedFiles[diskPath] = diskFile
+					}()
+					numOpenFull++
+					// seek
+					_, err = diskFile.Seek(entry.Offset, io.SeekStart)
+					if err == nil {
+						file = diskFile
+					}
 				}
 			}
 		}
 
 		if file == nil {
 			// no file available
-			continue
+			return nil
+		}
+
+		if _, ok := d.cache.Get(diskPath); !ok {
+			// set cache
+			stat, err := file.Stat()
+			if err != nil {
+				return err
+			}
+			d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
 		}
 
 		if err := entry.ReadFromOSFile(file); err != nil {
 			// ignore error
 			numError++
 			logutil.Warn("read disk cache error", zap.Any("error", err))
-			continue
+			return nil
 		}
 
 		entry.done = true
 		entry.fromCache = d
-		vector.Entries[i] = entry
 		numHit++
-		d.cacheHit(time.Since(t0))
+
+		return nil
+	}
+
+	for i := range vector.Entries {
+		if err := fillEntry(&vector.Entries[i]); err != nil {
+			return err
+		}
 	}
 
 	return nil
-}
-
-func (d *DiskCache) cacheHit(duration time.Duration) {
-	FSProfileHandler.AddSample(duration)
 }
 
 func (d *DiskCache) Update(
@@ -262,14 +323,14 @@ func (d *DiskCache) writeFile(
 	doneUpdate := d.startUpdate(diskPath)
 	defer doneUpdate()
 
-	if _, ok := d.fileExists.Load(diskPath); ok {
+	if _, ok := d.cache.Get(diskPath); ok {
 		// already exists
 		return false, nil
 	}
-	_, err := os.Stat(diskPath)
+	stat, err := os.Stat(diskPath)
 	if err == nil {
 		// file exists
-		d.fileExists.Store(diskPath, true)
+		d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
 		numStat++
 		return false, nil
 	}
@@ -299,7 +360,7 @@ func (d *DiskCache) writeFile(
 	var buf []byte
 	put := ioBufferPool.Get(&buf)
 	defer put.Put()
-	n, err := io.CopyBuffer(f, from, buf)
+	_, err = io.CopyBuffer(f, from, buf)
 	if err != nil {
 		f.Close()
 		os.Remove(f.Name())
@@ -307,6 +368,22 @@ func (d *DiskCache) writeFile(
 		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
+
+	if err := f.Sync(); err != nil {
+		numError++
+		logutil.Warn("write disk cache error", zap.Any("error", err))
+		return false, nil // ignore error
+	}
+
+	// set cache
+	stat, err = f.Stat()
+	if err != nil {
+		numError++
+		logutil.Warn("write disk cache error", zap.Any("error", err))
+		return false, nil // ignore error
+	}
+	d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
+
 	if err := f.Close(); err != nil {
 		numError++
 		logutil.Warn("write disk cache error", zap.Any("error", err))
@@ -322,159 +399,11 @@ func (d *DiskCache) writeFile(
 	)
 
 	numWrite++
-	d.triggerEvict(ctx, int64(n))
-	d.fileExists.Store(diskPath, true)
 
 	return true, nil
 }
 
 func (d *DiskCache) Flush() {
-	//TODO
-}
-
-func (d *DiskCache) triggerEvict(ctx context.Context, bytesWritten int64) {
-	if d.noAutoEviction {
-		return
-	}
-
-	d.evictState.Lock()
-	defer d.evictState.Unlock()
-
-	d.evictState.newlyWritten += bytesWritten
-
-	if d.evictState.timer != nil {
-		// has pending eviction
-
-		newlyWrittenThreshold := int64(math.Ceil(float64(d.capacity) * (1 - d.evictTarget)))
-		if newlyWrittenThreshold > 0 && d.evictState.newlyWritten >= newlyWrittenThreshold {
-			if d.evictState.timer.Stop() {
-				// evict immediately
-				logutil.Info("disk cache: newly written bytes may excceeds eviction target, start immediately",
-					zap.Any("newly-written", d.evictState.newlyWritten),
-					zap.Any("newly-written-threshold", newlyWrittenThreshold),
-				)
-				// timer stopped, start eviction
-				// before the following eviction is end, further calls of triggerEvict will not go this path, since timer.Stop will return false
-				perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
-					set.FileService.Cache.Disk.EvictImmediately.Add(1)
-				}, d.perfCounterSets...)
-				go func() {
-					defer func() {
-						d.evictState.Lock()
-						d.evictState.timer = nil
-						d.evictState.newlyWritten = 0
-						d.evictState.Unlock()
-					}()
-					d.evict(ctx)
-				}()
-			}
-			return
-		}
-
-		return
-	}
-
-	perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
-		set.FileService.Cache.Disk.EvictPending.Add(1)
-	}, d.perfCounterSets...)
-	d.evictState.timer = time.AfterFunc(
-		d.evictInterval,
-		func() {
-			defer func() {
-				d.evictState.Lock()
-				d.evictState.timer = nil
-				d.evictState.newlyWritten = 0
-				d.evictState.Unlock()
-			}()
-			d.evict(ctx)
-		},
-	)
-}
-
-func (d *DiskCache) evict(ctx context.Context) {
-	paths := make(map[string]int64)
-	var sumSize int64
-
-	_ = filepath.WalkDir(d.path, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return nil //ignore
-		}
-		if entry.IsDir() {
-			// try remove if empty. for cleaning old structure
-			if path != d.path {
-				os.Remove(path)
-			}
-			return nil
-		}
-		if !strings.HasSuffix(entry.Name(), cacheFileSuffix) {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return nil // ignore
-		}
-
-		var size int64
-		if sys, ok := info.Sys().(*syscall.Stat_t); ok {
-			size = int64(sys.Blocks) * 512 // it's always 512, not sys.Blksize
-		} else {
-			size = info.Size()
-		}
-
-		if _, ok := paths[path]; !ok {
-			paths[path] = size
-			sumSize += size
-		}
-		return nil
-	})
-
-	target := int64(float64(d.capacity) * d.evictTarget)
-
-	logutil.Info("disk cache eviction check",
-		zap.Any("used bytes", sumSize),
-		zap.Any("target", target),
-	)
-
-	var numDeleted int64
-	var bytesDeleted int64
-	defer func() {
-		if numDeleted > 0 {
-			perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
-				set.FileService.Cache.Disk.Evict.Add(numDeleted)
-			}, d.perfCounterSets...)
-			logutil.Info("disk cache eviction finished",
-				zap.Any("deleted files", numDeleted),
-				zap.Any("deleted bytes", bytesDeleted),
-			)
-		}
-	}()
-
-	var onEvict []OnDiskCacheEvictFunc
-	if v := ctx.Value(CtxKeyDiskCacheCallbacks); v != nil {
-		onEvict = v.(*DiskCacheCallbacks).OnEvict
-	}
-
-	for path, size := range paths {
-		if sumSize <= target {
-			break
-		}
-		if err := os.Remove(path); err != nil {
-			continue // ignore
-		} else {
-			logutil.Debug("disk cache file removed",
-				zap.Any("path", path),
-			)
-		}
-		d.fileExists.Delete(path)
-		sumSize -= size
-		numDeleted++
-		bytesDeleted += size
-
-		for _, fn := range onEvict {
-			fn(path)
-		}
-
-	}
 }
 
 const cacheFileSuffix = ".mofscache"
@@ -562,14 +491,20 @@ func (d *DiskCache) DeletePaths(
 		doneUpdate := d.startUpdate(diskPath)
 		defer doneUpdate()
 
-		d.fileExists.Delete(diskPath)
-
 		if err := os.Remove(diskPath); err != nil {
 			if !os.IsNotExist(err) {
 				return err
 			}
 		}
+		d.cache.Delete(diskPath)
 	}
 
 	return nil
+}
+
+func fileSize(info fs.FileInfo) int64 {
+	if sys, ok := info.Sys().(*syscall.Stat_t); ok {
+		return int64(sys.Blocks) * 512 // it's always 512, not sys.Blksize
+	}
+	return info.Size()
 }
