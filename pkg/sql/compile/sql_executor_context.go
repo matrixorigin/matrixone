@@ -104,7 +104,7 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, ts timestamp.Timestamp) (*p
 	if err != nil {
 		return nil, err
 	}
-	return t.Stats(c.ctx, true), nil
+	return t.Stats(c.ctx, true)
 }
 
 func (c *compilerContext) GetStatsCache() *plan.StatsCache {

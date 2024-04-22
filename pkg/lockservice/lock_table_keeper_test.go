@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,8 +30,8 @@ func TestKeeper(t *testing.T) {
 	runRPCTests(
 		t,
 		func(c Client, s Server) {
-			n1 := 0
-			n2 := 0
+			n1 := atomic.Uint64{}
+			n2 := atomic.Uint64{}
 			c1 := make(chan struct{})
 			c2 := make(chan struct{})
 			s.RegisterMethodHandler(
@@ -41,8 +42,8 @@ func TestKeeper(t *testing.T) {
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
-					n1++
-					if n1 == 10 {
+
+					if n1.Add(1) == 10 {
 						close(c1)
 					}
 					writeResponse(ctx, cancel, resp, nil, cs)
@@ -55,8 +56,8 @@ func TestKeeper(t *testing.T) {
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
-					n2++
-					if n2 == 10 {
+
+					if n2.Add(1) == 10 {
 						close(c2)
 					}
 					writeResponse(ctx, cancel, resp, nil, cs)
