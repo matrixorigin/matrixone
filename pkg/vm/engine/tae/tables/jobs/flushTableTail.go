@@ -554,7 +554,6 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 		}()
 		// make all columns ordered and prepared writtenBatches
 		writtenBatches = make([]*containers.Batch, 0, len(orderedVecs))
-		task.createdObjHandles = toObjectHandle
 		for i := 0; i < len(orderedVecs); i++ {
 			writtenBatches = append(writtenBatches, containers.NewBatch())
 		}
@@ -598,6 +597,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	// write!
 	name := objectio.BuildObjectNameWithObjectID(&toObjectEntry.ID)
 	writer, err := blockio.NewBlockWriterNew(task.rt.Fs.Service, name, schema.Version, seqnums)
+	task.createdObjHandles = toObjectHandle
 	if err != nil {
 		return err
 	}
