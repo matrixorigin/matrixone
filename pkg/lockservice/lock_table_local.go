@@ -732,6 +732,11 @@ func (c *mergeContext) commit(
 		c.mergedLocks)
 
 	for _, q := range c.mergedWaiters {
+		// release ref in merged waiters. The ref is moved to c.to.
+		q.iter(func(w *waiter) bool {
+			w.close()
+			return true
+		})
 		q.reset()
 	}
 	c.to.commitChange()
