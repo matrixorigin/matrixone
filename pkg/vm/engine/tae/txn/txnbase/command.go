@@ -471,7 +471,7 @@ func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
 	if _, err = headerBuf.Write(types.EncodeUint16(&ver)); err != nil {
 		return
 	}
-	var length uint32 = uint32(len(cc.Cmds))
+	var length = uint32(len(cc.Cmds))
 	if _, err = headerBuf.Write(types.EncodeUint32(&length)); err != nil {
 		return
 	}

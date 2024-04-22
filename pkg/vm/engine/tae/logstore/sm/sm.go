@@ -19,10 +19,10 @@ import (
 )
 
 type stateMachine struct {
-	closed          Closable
-	wg              *sync.WaitGroup
-	receiveQueue    Queue
-	checkpointQueue Queue
+	closed       Closable
+	wg           *sync.WaitGroup
+	receiveQueue Queue
+	//checkpointQueue Queue
 }
 
 func NewStateMachine(wg *sync.WaitGroup, closed Closable, rQueue Queue) *stateMachine {
