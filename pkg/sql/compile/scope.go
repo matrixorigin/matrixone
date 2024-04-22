@@ -95,6 +95,28 @@ func (s *Scope) release() {
 	reuse.Free[Scope](s, nil)
 }
 
+func (s *Scope) initDataSource(c *Compile) (err error) {
+	if s.DataSource == nil {
+		return nil
+	}
+	if s.DataSource.isConst {
+		if s.DataSource.Bat != nil {
+			return
+		}
+		bat, err := constructValueScanBatch(s.Proc.Ctx, c.proc, s.DataSource.node)
+		if err != nil {
+			return err
+		}
+		s.DataSource.Bat = bat
+	} else {
+		if s.DataSource.TableDef != nil {
+			return nil
+		}
+		return c.compileTableScanDataSource(s)
+	}
+	return nil
+}
+
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
 	var p *pipeline.Pipeline
@@ -105,7 +127,9 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("sql", c.sql),
 				zap.String("error", err.Error()))
 		}
-		p.Cleanup(s.Proc, err != nil, err)
+		if p != nil {
+			p.Cleanup(s.Proc, err != nil, err)
+		}
 	}()
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
@@ -122,12 +146,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 		p = pipeline.New(id, s.DataSource.Attributes, s.Instructions, s.Reg)
 		if s.DataSource.isConst {
-			var bat *batch.Batch
-			bat, err = constructValueScanBatch(s.Proc.Ctx, c.proc, s.DataSource.node)
-			if err != nil {
-				return
-			}
-			_, err = p.ConstRun(bat, s.Proc)
+			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 		} else {
 			var tag int32
 			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
@@ -153,6 +172,20 @@ func (s *Scope) SetContextRecursively(ctx context.Context) {
 	for _, scope := range s.PreScopes {
 		scope.SetContextRecursively(newCtx)
 	}
+}
+
+func (s *Scope) InitAllDataSource(c *Compile) error {
+	err := s.initDataSource(c)
+	if err != nil {
+		return err
+	}
+	for _, scope := range s.PreScopes {
+		err := scope.InitAllDataSource(c)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
@@ -386,6 +419,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 // ParallelRun try to execute the scope in parallel way.
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	var rds []engine.Reader
+	var err error
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	if s.IsJoin {
@@ -398,7 +432,6 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		return s.MergeRun(c)
 	}
 
-	var err error
 	err = s.handleRuntimeFilter(c)
 	if err != nil {
 		return err
@@ -683,6 +716,10 @@ func (s *Scope) LoadRun(c *Compile) error {
 			isConst: true,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
+		err := ss[i].initDataSource(c)
+		if err != nil {
+			return err
+		}
 	}
 	newScope, err := newParallelScope(c, s, ss)
 	if err != nil {
