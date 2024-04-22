@@ -22,6 +22,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPut(t *testing.T) {
@@ -262,4 +263,28 @@ func TestCanGetCommitTSInWaitQueue(t *testing.T) {
 		assert.Equal(t, int64(3), w5.wait(context.Background()).ts.PhysicalTime)
 		q.removeByTxnID(w5.txn.TxnID)
 	})
+}
+
+func TestMoveToCannotCloseWaiter(t *testing.T) {
+	reuse.RunReuseTests(func() {
+
+		from := newWaiterQueue()
+		defer from.close(notifyValue{})
+
+		to := newWaiterQueue()
+
+		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
+		defer w1.close()
+
+		from.put(w1)
+		require.Equal(t, int32(2), w1.refCount.Load())
+
+		to.beginChange()
+		from.moveTo(to)
+		require.Equal(t, int32(3), w1.refCount.Load())
+		to.rollbackChange()
+
+		require.Equal(t, int32(2), w1.refCount.Load())
+	})
+
 }
