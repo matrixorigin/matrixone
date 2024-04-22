@@ -153,6 +153,17 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 		return
 	}
 
+	// avoid allocating over 1GB in a vector
+	osize, esize := estimateMergeConsume(mobjs)
+	mergerows := 0
+	for _, obj := range mobjs {
+		mergerows += obj.Stat.GetRemainingRows()
+	}
+
+	if osize > 800*common.Const1MBytes && mergerows < 8192 {
+		return
+	}
+
 	scopes := make([]common.ID, blkCnt)
 	for i, blk := range mergedBlks {
 		scopes[i] = *blk.AsCommonID()
@@ -169,7 +180,6 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 		return
 	}
 
-	osize, esize := estimateMergeConsume(mobjs)
 	e.AddActiveTask(task.ID(), blkCnt, esize)
 	task.AddObserver(e)
 	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
