@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"regexp"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -214,7 +213,7 @@ func NewCSVParser(
 		quoteStopSet = append(quoteStopSet, cfg.FieldsEscapedBy[0])
 		unquoteStopSet = append(unquoteStopSet, cfg.FieldsEscapedBy[0])
 		// we need special treatment of the NULL value \N, used by MySQL.
-		if !cfg.NotNull && slices.Contains(cfg.Null, cfg.FieldsEscapedBy+`N`) {
+		if !cfg.NotNull && Contains(cfg.Null, cfg.FieldsEscapedBy+`N`) {
 			escFlavor = escapeFlavorMySQLWithNull
 		}
 		r, err = regexp.Compile(`(?s)` + regexp.QuoteMeta(cfg.FieldsEscapedBy) + `.`)
@@ -319,7 +318,7 @@ func (parser *CSVParser) unescapeString(input field) (unescaped string, isNull b
 		// this branch represents "quote is not configured" or "quoted null is null" or "this field has no quote"
 		// we check null for them
 		isNull = !parser.cfg.NotNull &&
-			slices.Contains(parser.cfg.Null, unescaped)
+			Contains(parser.cfg.Null, unescaped)
 		// avoid \\N becomes NULL
 		if parser.escFlavor == escapeFlavorMySQLWithNull && unescaped == parser.escapedBy+`N` {
 			isNull = false
@@ -895,4 +894,13 @@ func IndexAnyByte(s []byte, as *byteSet) int {
 		}
 	}
 	return -1
+}
+
+func Contains[E comparable](s []E, v E) bool {
+	for _, e := range s {
+		if e == v {
+			return true
+		}
+	}
+	return false
 }
