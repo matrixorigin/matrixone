@@ -821,14 +821,13 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 }
 
 func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan error) {
-	// if context has done, it means other pipeline stop the query normally.
+	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister) {
 		if reg != nil {
 			select {
 			case <-s.Proc.Ctx.Done():
 			case reg.Ch <- nil:
 			}
-			close(reg.Ch)
 		}
 
 		select {
@@ -848,15 +847,18 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 	for i := range s.RemoteReceivRegInfos {
 		wg.Add(1)
 
+		op := &s.RemoteReceivRegInfos[i]
+		fromAddr := op.FromAddr
+		receiverIdx := op.Idx
+		uuid := op.Uuid[:]
+
 		errSubmit := ants.Submit(
 			func() {
-				op := &s.RemoteReceivRegInfos[i]
-
-				streamSender, errStream := cnclient.GetStreamSender(op.FromAddr)
+				streamSender, errStream := cnclient.GetStreamSender(fromAddr)
 				if errStream != nil {
 					logutil.Errorf("Failed to get stream sender txnID=%s, err=%v",
 						s.Proc.TxnOperator.Txn().DebugString(), errStream)
-					closeWithError(errStream, s.Proc.Reg.MergeReceivers[op.Idx])
+					closeWithError(errStream, s.Proc.Reg.MergeReceivers[receiverIdx])
 					return
 				}
 				defer streamSender.Close(true)
@@ -865,21 +867,21 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 				message.Id = streamSender.ID()
 				message.Cmd = pbpipeline.Method_PrepareDoneNotifyMessage
 				message.Sid = pbpipeline.Status_Last
-				message.Uuid = op.Uuid[:]
+				message.Uuid = uuid
 
 				if errSend := streamSender.Send(s.Proc.Ctx, message); errSend != nil {
-					closeWithError(errSend, s.Proc.Reg.MergeReceivers[op.Idx])
+					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx])
 					return
 				}
 
 				messagesReceive, errReceive := streamSender.Receive()
 				if errReceive != nil {
-					closeWithError(errReceive, s.Proc.Reg.MergeReceivers[op.Idx])
+					closeWithError(errReceive, s.Proc.Reg.MergeReceivers[receiverIdx])
 					return
 				}
 
-				err := receiveMsgAndForward(s.Proc, messagesReceive, s.Proc.Reg.MergeReceivers[op.Idx].Ch)
-				closeWithError(err, s.Proc.Reg.MergeReceivers[op.Idx])
+				err := receiveMsgAndForward(s.Proc, messagesReceive, s.Proc.Reg.MergeReceivers[receiverIdx].Ch)
+				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx])
 			},
 		)
 
