@@ -2,6 +2,7 @@
   <p align="center">
    <img alt="MatrixOne All in One" height="50" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/logo.png?raw=true">
   </p>
+  </a>
   <a href="https://github.com/matrixorigin/matrixone/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/License-Apache%202.0-red.svg" alt="license"/>
   </a>
@@ -13,15 +14,15 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.cn/1.1.3/MatrixOne/Release-Notes/v1.1.3/">
-   <img src="https://img.shields.io/badge/Release-1.1.3-green.svg" alt="release"/>
+  <a href="https://docs.matrixorigin.cn/en/1.1.3/MatrixOne/Release-Notes/v1.1.3/">
+   <img src="https://img.shields.io/badge/Release-v1.1.3-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.cn//1.1.3/">
+  <a href="https://docs.matrixorigin.cn/en/1.1.3/">
     <b>Docs</b>
   </a>
   <b>||</b>
-  <a href="https://www.matrixorigin.cn/">
+  <a href="https://www.matrixorigin.io/">
    <b> Official Website</b>
   </a>
   <br>
@@ -34,238 +35,243 @@
   </a>
 </div>
 
-<h3 align="center">加入 MatrixOne 社区</h3>
+<h3 align="center">Connect with us:</h3>
 <p align="center">
-<a href="https://26805113.s21i.faiusr.com/4/ABUIABAEGAAgv7rJjwYo977zvgQw1AY41AY!200x200.png.webp" target="blank"><img align="center" src="https://github.com/dengn/CASAUVSQ/blob/priority/wechat-logo.png" alt="matrixone16" height="30" width="30" /></a>
+<a href="https://twitter.com/matrixone16" target="blank"><img align="center" src="https://raw.githubusercontent.com/rahuldkjain/github-profile-readme-generator/master/src/images/icons/Social/twitter.svg" alt="matrixone16" height="30" width="40" /></a>
 <a href="http://matrixoneworkspace.slack.com" target="blank"><img align="center" src="https://github.com/dengn/CASAUVSQ/blob/priority/slack_icon.png" alt="matrixone16" height="30" width="30" /></a>
 
 </p>
 
-<h5 align="center">如果你对 MatrixOne 项目感兴趣的话，请帮忙给 MatrixOne 点击 Star， Fork 和 Watch 三连吧，谢谢！</h5>
+<h5 align="center">If you are interested in MatrixOne project, please kindly give MatrixOne a triple `Star`, `Fork` and `Watch`, Thanks!</h5>
 
-目录
+Contents
 ========
 
-* [MatrixOne 是什么？](#what-is-matrixone)
-* [核心特性](#key-features)
-* [用户价值](#user-values)
-* [架构](#architecture)
-* [快速上手](#quick-start)
-* [参与贡献](#contributing)
+* [What is MatrixOne](#what-is-matrixone)
+* [KeyFeatures](#key-features)
+* [User Values](#user-values)
+* [Architecture](#architecture)
+* [Quick start](#quick-start)
+* [Contributing](#contributing)
 * [License](#license)
 
-## <a id="what-is-matrixone">MatrixOne 是什么？</a>
+## What is MatrixOne?
 
-MatrixOne 是一款超融合异构分布式数据库，通过云原生化和存储、计算、事务分离的架构构建 HSTAP 超融合数据引擎，实现单一数据库系统支持 OLTP、OLAP、流计算等多种业务负载，并且支持公有云、私有云、边缘云部署和使用，实现异构基础设施的兼容。
+MatrixOne is a hyper-converged cloud & edge native distributed database with a structure that separates storage, computation, and transactions to form a consolidated HSTAP data engine. This engine enables a single database system to accommodate diverse business loads such as OLTP, OLAP, and stream computing. It also supports deployment and utilization across public, private, and edge clouds, ensuring compatibility with diverse infrastructures.
+
 <p align="center">
-  <img alt="MatrixOne" height="500" src="https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/artwork/docs/overview/mo-new-arch.png?raw=true">
+  <img alt="MatrixOne" height="450" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/architecture/archi-en-1.png?raw=true">
 </p>
 
-## 🎯 <a id="key-features">核心特性</a>
+## 🎯 <a id="key-features">Key Features</a>
 
-### 💥 **超融合引擎**
+### 💥 **Hyper-converged Engine**
 
 <details>
-  <summary><b><font size=4>超融合引擎</b></font></summary>
-    HTAP 数据引擎，单数据库即可支持 TP、AP、时序、机器学习等混合工作负载。
+  <summary><b><font size=4>Monolithic Engine![Alt text](image.png)</b></font></summary>
+          HTAP data engine that supports a mix of workloads such as TP, AP, time series, and machine learning within a single database.
 </details>
 
 <details>
-  <summary><b><font size=4>内置流引擎</b></font></summary>
-     内置流计算引擎，支持实时数据流入、实时数据转换及实时数据查询。
+  <summary><b><font size=4>Built-in Streaming Engine</b></font></summary>
+             Built-in stream computing engine that enables real-time data inflow, transformation, and querying.
 </details>
 
-### ☁️ **异构云原生**
+### ☁️ **Cloud & Edge Native**
 
 <details>
-  <summary><b><font size=4>存算分离架构</b></font></summary>
-     将存储、计算、事务三层解耦，通过完全容器化的设计来实现极致扩展。
+  <summary><b><font size=4>Storage-Computation Separation Structure</b></font></summary>
+            Separates the storage, computation, and transaction layers, leveraging a containerized design for ultimate scalability.
 </details>
 
 <details>
-  <summary><b><font size=4>多基础设施兼容</b></font></summary>
-     支持跨机房协同/多地协同/云边协同，实现无感知扩缩容，提供高效统一的数据管理。
+  <summary><b><font size=4>Multi-Infrastructure Compatibility</b></font></summary>
+           MatrixOne provides industry-leading latency control with optimized consistency protocol.
 </details>
 
-### 🚀 **极致性能**
+### 🚀 **Extreme Performance**
 
 <details>
-  <summary><b><font size=4>高性能执行引擎</b></font></summary>
-  通过 Compute Node 和 Transaction node 的灵活配合兼顾点查询与批处理，对于 OLTP 和 OLAP 都具备极致性能。
+  <summary><b><font size=4>High-Performance Execution Engine</b></font></summary>
+     The flexible combination of Compute Node and Transaction node accommodates point queries and batch processing, delivering peak performance for OLTP and OLAP.
+</details>
+
+<details>
+  <summary><b><font size=4>Enterprise-Grade High Availability</b></font></summary>
+     Establishes a consistently shared log under a leading Multi-Raft replication state machine model. It ensures high cluster availability while preventing data duplication, thus achieving RTO=0.
+</details>
+
+### 🖊️ **Ease of Use**
+
+<details>
+  <summary><b><font size=4>Built-in Multi-Tenancy Capability</b></font></summary>
+  Offers inherent multi-tenancy, where tenants are isolated from each other, independently scalable yet uniformly manageable. This feature simplifies the complexity of multi-tenancy design in upper-level applications.
   </details>
 
 <details>
-  <summary><b><font size=4>企业级高可用</b></font></summary>
-     在领先的 Multi-Raft 复制状态机模型下建立强一致共享日志，可在避免数据重复的同时保证集群的高可用。
+  <summary><b><font size=4>High Compatibility with MySQL</b></font></summary>
+     MatrixOne exhibits high compatibility with MySQL 8.0, including transmission protocol, SQL syntax, and ecosystem tools, lowering usage and migration barriers.
 </details>
 
-### 🖊️ **简单易用**
+### 💰 **Cost-Effective**
 
 <details>
-  <summary><b><font size=4>自带多租户能力</b></font></summary>
-  自带多租户功能，租户既相互隔离，独立扩缩容又可进行统一管理，简化上层应用的多租户设计复杂度。
+  <summary><b><font size=4>Efficient Storage Design</b></font></summary>
+  Employs cost-effective object storage as primary storage. High availability can be achieved through erasure coding technology with only about 150% data redundancy. It also provides high-speed caching capabilities, balancing cost and performance via a multi-tiered storage strategy that separates hot and cold data.
   </details>
 
 <details>
-  <summary><b><font size=4>MySQL 高度兼容</b></font></summary>
-     MatrixOne 与 MySQL8.0 高度兼容，包括传输协议，SQL 语法和生态工具，降低使用和迁移门槛。
+  <summary><b><font size=4>Flexible Resource Allocation</b></font></summary>
+    Users can adjust the resource allocation ratio for OLTP and OLAP according to business conditions, maximizing resource utilization.
 </details>
 
-### 💰 **高性价比**
+### 🔒 **Enterprise-Level Security and Compliance**
+
+   MatrixOne employs Role-Based Access Control (RBAC), TLS connections, and data encryption to establish a multi-tiered security defense system, safeguarding enterprise-level data security and compliance.
+
+## 💎 **<a id="user-values">User Values</a>**
 
 <details>
-  <summary><b><font size=4>高效存储设计</b></font></summary>
-  以成本低廉的对象存储作为主存储，通过纠删码技术仅需要 150% 左右的数据冗余即可实现高可用，同时提供高速缓存能力，通过冷热分离多级存储方案兼顾成本和性能。
-
-  </details>
-
-<details>
-  <summary><b><font size=4>资源灵活调配</b></font></summary>
-    用户可以根据业务情况自由调整为 OLTP 及 OLAP 分配的资源比例，实现资源最大化利用。
-</details>
-
-### 🔒 **企业级安全合规**
-
- 采用用户角色访问控制（RBAC）、TLS 连接、数据加密等手段，建立多级安全防护体系，保障企业级数据安全和合规。
-
-## 💎 **<a id="user-values">用户价值</a>**
-
-<details>
-  <summary><b><font size=4>简化数据开发和运维</b></font></summary>
-      随着业务发展，企业使用的数据引擎和中间件越来越多，而每一个数据引擎平均依赖 5+ 个基础组件，存储 3+ 个数据副本，每一个数据引擎都要各自安装、监控、补丁和升级。这些都导致数据引擎的选型、开发及运维成本高昂且不可控。在 MatrixOne 的一体化架构下，用户使用单个数据库即可服务多种数据应用，引入的数据组件和技术栈减少 80%，大大简化了数据库管理和维护的成本。
+  <summary><b><font size=4>Simplify Database Management and Maintenance</b></font></summary>
+     With business evolution, the number of data engines and middleware enterprises employ increases. Each data engine relies on 5+ essential components and stores 3+ data replicas. Each engine must be independently installed, monitored, patched, and upgraded. This results in high and uncontrollable data engine selection, development, and operations costs. Under MatrixOne's unified architecture, users can employ a single database to serve multiple data applications, reducing the number of introduced data components and technology stacks by 80% and significantly simplifying database management and maintenance costs.
 </details>
 <details>
-  <summary><b><font size=4>消减数据碎片和不一致</b></font></summary>
-    在既有复杂的系统架构内，存在多条数据管道多份数据存储冗余。数据依赖复杂，导致数据更新维护复杂，上下游数据不一致问题频发，人工校对难度增大。MatrixOne 的高内聚架构和独有的增量物化视图能力，使得下游可以支持上游数据的实时更新，摆脱冗余的 ETL 流程，实现端到端实时数据处理。
+  <summary><b><font size=4>Reduce Data Fragmentation and Inconsistency</b></font></summary>
+     Data flow and copy between databases make data sync and consistency increasingly tricky. The unified and incrementally materialized view of MatrixOne allows the downstream to support real-time upstream updates and achieve end-to-end data processing without redundant ETL processes.
 </details>
 <details>
-  <summary><b><font size=4>无需绑定基础设施</b></font></summary>
-    因为基础设施的碎片化，企业的私有化数据集群和公有云数据集群之间数据架构和建设方案割裂，数据迁移成本高。而数据上云一旦选型确定数据库厂商，后续的集群扩容、其他组件采购等都将被既有厂商绑定。MatrixOne 提供统一的云边基础架构和高效统一的数据管理，企业数据架构不再被基础设施绑定，实现单数据集群跨云无感知扩缩容，提升性价比。
+  <summary><b><font size=4>Decoupling Data Architecture From Infrastructure</b></font></summary>
+     Currently, the architecture design across different infrastructures is complicated, causing new data silos between cloud and edge, cloud and on-premise. MatrixOne is designed with a unified architecture to support simplified data management and operations across different infrastructures.
 </details>
 <details>
-  <summary><b><font size=4>极速的分析性能</b></font></summary>  
-    目前，由于缓慢的复杂查询性能以及冗余的中间表，数据仓库在业务敏捷性上的表现不尽人意，大量宽表的创建也严重影响迭代速度。MatrixOne 通过特有的因子化计算和向量化执行引擎，支持极速的复杂查询，单表、星型和雪花查询都具备极速分析性能。
+  <summary><b><font size=4>Extremely Fast Complex Query Performance</b></font></summary>  
+     Poor business agility results from slow, complex queries and redundant intermediate tables in current data warehousing solutions. MatrixOne supports blazing-fast experience even for star and snowflake schema queries, improving business agility with real-time analytics.
 </details>
 <details>
-  <summary><b><font size=4>像 TP 一样可靠的 AP 体验</b></font></summary>
-    传统数据仓库数据更新代价非常高，很难做到数据更新即可见。在营销风控，无人驾驶，智能工厂等实时计算要求高的场景或者上游数据变化快的场景中，当前的大数据分析系统无法支持增量更新，往往需要做全量的更新，耗时耗力。MatrixOne 通过提供跨存储引擎的高性能全局分布式事务能力，支持条级别的实时增量更新，在保证极速分析性能的同时支持更新、删除和实时点查询。
+  <summary><b><font size=4>Solid OLTP-like OLAP Experience</b></font></summary>
+     Current data warehousing solutions have the following problems: high latency and absence of immediate visibility for data updates. MatrixOne brings OLTP (Online Transactional Processing) level consistency and high availability to CRUD operations in OLAP (Online Analytical Processing).
 </details>
 <details>
-  <summary><b><font size=4>不停服自动扩缩容</b></font></summary>
-    传统数仓无法兼顾性能和灵活度，性价比无法做到最优。MatrixOne 基于存算分离的技术架构，支持存储节点与计算节点独立扩缩容，高效应对负载变化。
+  <summary><b><font size=4>Seamless and Non-disruptive Scalability</b></font></summary>
+     It is challenging to balance performance and scalability to achieve an optimum price-performance ratio in current data warehousing solutions. MatrixOne's disaggregated storage and compute architecture makes it fully automated and efficient to scale in/out and up/down without disrupting applications.
 </details>
 
-## 🔎 <a id="architecture">架构一览</a>
+<br>
 
-MatrixOne 的架构图如下图所示：
+## 🔎 <a id="architecture">Architecture</a>
+
+MatrixOne's architecture is as below:
 <p align="center">
-  <img alt="MatrixOne" height="500" src="https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/artwork/docs/overview/architecture/architecture-1.png?raw=true">
+    <img alt="MatrixOne" height="420" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/architecture/archi-en-2.png?raw=true">
 </p>
 
-关于更详细的 MatrixOne 技术架构，可以参考[MatrixOne 架构设计](https://docs.matrixorigin.cn/1.1.3/MatrixOne/Overview/architecture/matrixone-architecture-design/)。
+For more details, you can checkout [MatrixOne Architecture Design](https://docs.matrixorigin.cn/en/1.1.3/MatrixOne/Overview/architecture/matrixone-architecture-design/).
 
-## ⚡️ <a id="quick-start">快速上手</a>
+## ⚡️ <a id="quick-start">Quick start</a>
 
-### ⚙️ 安装 MatrixOne
+### ⚙️ Install MatrixOne
 
-MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装，二进制包安装或者 docker 安装。对于更详情的安装方式请参见[MatrixOne 安装指南](https://docs.matrixorigin.cn/1.1.3/MatrixOne/Get-Started/install-standalone-matrixone/)。
+MatrixOne supports Linux and MacOS. You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
+For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.cn/en/1.1.3/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
 
-以下为您介绍通过源码部署和docker部署两种方式:
+**Step 1.Install Dependency**
 
-**步骤 1.前置依赖**
+- **Building from source**
 
-- 源码部署
+1. Install Go (version 1.20 is required)
 
-1. 搭建 Go 语言环境(至少需要 1.20 版本)
+    Click <a href="https://go.dev/doc/install" target="_blank">Go Download and install</a> to enter its official documentation, and follow the installation steps to complete the **Go** installation.
 
-点击 <a href="https://go.dev/doc/install" target="_blank">Go Download and install</a> 入到 **Go** 的官方文档，按照官方指导安装步骤完成 **Go** 语言的安装。
+2. Install GCC/Clang
 
-2. 安装 GCC/Clang
+     Click <a href="https://gcc.gnu.org/install/" target="_blank">GCC Download and install</a> to enter its official documentation, and follow the installation steps to complete the **GCC** installation.
 
-点击 <a href="https://gcc.gnu.org/install/" target="_blank">GCC Download and install</a> 进入到 **GCC** 的官方文档，按照官方指导安装步骤完成 **GCC** 的安装。
+3. Install Git
 
-3. 安装 Git
+    Install Git via the [Official Documentation](https://git-scm.com/download).
 
-通过[官方文档](https://git-scm.com/download)安装 Git.
+4. Install and configure MySQL Client
 
-4. 安装 MySQL Client
+    Click <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a> to enter into the MySQL client download and installation page. According to your operating system and hardware environment.Configure the MySQL client environment variables.
 
-点击 <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a>，进入到 MySQL 客户端下载安装页面，根据你的操作系统和硬件环境，按需选择下载安装包进行安装并配置环境变量。
+- **Using docker**
 
-- docker部署
+1. Download and install Docker
 
-1. 安装docker
+Click <a href="https://docs.docker.com/get-docker/" target="_blank">Get Docker</a>, enter into the Docker's official document page, depending on your operating system, download and install the corresponding Docker.  It is recommended to choose Docker version 20.10.18 or later and strive to maintain consistency between the Docker client and Docker server versions.
 
-点击 <a href="https://docs.docker.com/get-docker/" target="_blank">Get Docker</a>，进入 Docker 的官方文档页面，根据你的操作系统，下载安装对应的 Docker，Docker 版本推荐选择在 20.10.18 及以上，且尽量保持 Docker client 和 Docker server 的版本一致。
+2. Install and configure MySQL Client
 
-2. 安装 MySQL 客户端
+Click <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a> to enter into the MySQL client download and installation page. According to your operating system and hardware environment.Configure the MySQL client environment variables.
 
-点击 <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a>，进入到 MySQL 客户端下载安装页面，根据你的操作系统和硬件环境，按需选择下载安装包进行安装并配置环境变量。
+__Note__: MySQL client version 8.0.30 or later is recommended.
 
-__Tips__: 建议 MySQL 客户端版本为 8.0.30 版本及以上。
+**Step 2. Install the mo_ctl tool**
 
-**步骤 2.安装 mo_ctl 工具**
+[mo_ctl](https://github.com/matrixorigin/mo_ctl_standalone) is a command-line tool for deploying, installing, and managing MatrixOne. It is very convenient to perform various operations on MatrixOne.
 
-[mo_ctl](https://github.com/matrixorigin/mo_ctl_standalone) 是一个部署安装和管理 MatrixOne 的命令行工具，使用它可以非常方便的对 MatrixOne 进行各类操作。
+The mo_ctl tool can be installed through the following command:
 
-通过以下命令一键安装 mo_ctl 工具:
-
-```  
+```
 wget https://raw.githubusercontent.com/matrixorigin/mo_ctl_standalone/main/install.sh && sudo -u $(whoami) bash +x ./install.sh
 ```
 
-如需获取完整的使用细节可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/1.1.3/MatrixOne/Maintain/mo_ctl/#_3)。
+See [mo_ctl Tool](https://docs.matrixorigin.cn/en/1.1.3/MatrixOne/Maintain/mo_ctl/) for complete usage details.
 
-**步骤 3.设置 mo_ctl 的配置参数**
+**Step 3. Set mo_ctl parameters**
 
-- 源码部署
-
-```
-mo_ctl set_conf MO_PATH="yourpath" # 设置自定义的MatrixOne下载路径
-mo_ctl set_conf MO_DEPLOY_MODE=git #设置MatrixOne部署方式，此为源码部署方式
-```
-
-- docker部署
+- **Building from source**
 
 ```
-mo_ctl set_conf MO_CONTAINER_DATA_HOST_PATH="/yourpath/mo/" # 宿主机mo的数据目录
-mo_ctl set_conf MO_DEPLOY_MODE=docker #设置MatrixOne部署方式，此为docker部署方式
+mo_ctl set_conf MO_PATH="yourpath" # Set custom MatrixOne download path
+mo_ctl set_conf MO_DEPLOY_MODE=git # Set MatrixOne deployment method
 ```
 
-**步骤 4.一键安装 MatrixOne**
+- **Using docker**
 
-根据您的需要，选择您所获取的代码永远保持最新，还是获得稳定版本的代码。
+```
+mo_ctl set_conf MO_CONTAINER_DATA_HOST_PATH="/yourpath/mo/" # Set the data directory for host
+mo_ctl set_conf MO_DEPLOY_MODE=docker # Set MatrixOne deployment method
+```
 
-- *选项 1*:获取 MatrixOne(开发版本)
+**Step 4. One-click install Matrixone**
 
-    **main** 分支是默认分支，主分支上的代码总是最新的，但不够稳定。
+Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
 
-    ```  
-    mo_ctl deploy main
-    ```
+- *Option 1*: Get the MatrixOne(Develop Version)
 
-- *选项 2*:获取 MatrixOne (稳定版本)
+The **main** branch is the default branch, the code on the main branch is always up-to-date but not stable enough.
 
-    如果您想获得 MatrixOne 发布的最新稳定版本，请先从 **main** 切换选择至 **1.1.3** 版本分支。
+```
+mo_ctl deploy main
+```
 
-    ```
-    mo_ctl deploy 1.1.3
-    ```
+- *Option 2*: Get the MatrixOne(Stable Version)
 
-**步骤 5.启动 MatrixOne 服务**
+If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **1.1.3** first.
 
-通过 `mo_ctl start` 命令一键启动 MatrixOne 服务。
+```
+mo_ctl deploy v1.1.3
+```
 
-__Tips__: 首次启动 MatrixOne 大致需要花费 20 至 30 秒的时间，在稍作等待后，你便可以连接至 MatrixOne。
+**Step 5. Launch MatrixOne server**
 
-**步骤 6.连接 MatrixOne 服务**
+Launch the MatrixOne service through the `mo_ctl start` command.
 
-通过 `mo_ctl connect` 命令一键连接 MatrixOne 服务。
+__Tips__: The initial startup of MatrixOne approximately takes 20 to 30 seconds. After a brief wait, you can connect to MatrixOne using the MySQL client.
 
-__Tips__: 连接和登录账号为初始账号 `root` 和密码 `111`，请在登录 MatrixOne 后及时修改初始密码，参见[密码管理](https://docs.matrixorigin.cn/1.1.3/MatrixOne/Security/password-mgmt/)。修改登录用户名或密码后重新登录同样需要通过 `mo_ctl set_conf` 的方式设置新的用户名和密码。详情可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/1.1.3/MatrixOne/Maintain/mo_ctl/#_3)。
+**Step 6. Connect to MatrixOne**
 
+One-click connection to MatrixOne service through `mo_ctl connect` command.
 
-### 👏贡献者
+__Note__: The login account in the above code snippet is the initial account; please change the initial password after logging in to MatrixOne; see [Password Management](https://docs.matrixorigin.cn/en/1.1.3/MatrixOne/Security/password-mgmt/).
+
+## 🙌 <a id="contributing">Contributing</a>
+
+Contributions to MatrixOne are welcome from everyone.  
+ See [Contribution Guide](https://docs.matrixorigin.cn/en/1.1.3/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
+
+### 👏 All contributors
 
 <!-- readme: contributors -start -->
 <table>
@@ -1018,11 +1024,6 @@ __Tips__: 连接和登录账号为初始账号 `root` 和密码 `111`，请在�
 </table>
 <!-- readme: contributors -end -->
 
-## 🙌 <a id="contributing">参与贡献</a>
-
-欢迎大家对 MatrixOne 的贡献。  
-请查看[贡献指南](https://docs.matrixorigin.cn/1.1.3/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
-
 ## <a id="license">License</a>
 
-[Apache License, Version 2.0](LICENSE)。
+MatrixOne is licensed under the [Apache License, Version 2.0](LICENSE).
