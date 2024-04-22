@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -227,14 +228,14 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	accountName := string(stmt.AccountName)
+	srcAccountName := string(stmt.AccountName)
 	dbName := string(stmt.DatabaseName)
 	tblName := string(stmt.TableName)
 	toAccountName := string(stmt.ToAccountName)
 
-	accountId := getAccountIdByName(ctx, ses, bh, accountName)
+	accountId := getAccountIdByName(ctx, ses, bh, srcAccountName)
 	if accountId == -1 {
-		return moerr.NewInternalError(ctx, fmt.Sprintf("account does not exist, account name: %s", accountName))
+		return moerr.NewInternalError(ctx, fmt.Sprintf("account does not exist, account name: %s", srcAccountName))
 	}
 	// default restore to self
 	toAccountId := accountId
@@ -283,6 +284,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		restoreToDatabase(snapshotTs, uint32(accountId), dbName, uint32(toAccountId))
 	case tree.RESTORELEVELTABLE:
 		restoreToTable(snapshotTs, uint32(accountId), dbName, tblName, uint32(toAccountId))
+
 	}
 	return
 }
