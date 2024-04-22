@@ -9942,7 +9942,7 @@ yydefault:
 		{
 			res := &tree.Fields{
 				Terminated: &tree.Terminated{
-					Value: "\t",
+					Value: ",",
 				},
 				EnclosedBy: &tree.EnclosedBy{
 					Value: byte(0),

@@ -133,7 +133,7 @@ type ParseLineHandler struct {
 }
 
 func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
-	fieldsTerminatedBy := "\t"
+	fieldsTerminatedBy := ","
 	fieldsEnclosedBy := "\""
 	fieldsEscapedBy := "\\"
 
