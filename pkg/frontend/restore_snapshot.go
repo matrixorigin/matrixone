@@ -298,6 +298,9 @@ func getTenantInfoByName(ctx context.Context, bh BackgroundExec, accountName str
 	// Execute the query
 	bh.ClearExecResultSet()
 	err := bh.Exec(ctx, query)
+	if err != nil {
+		return tenant, err
+	}
 
 	resultSet, err := getResultSet(ctx, bh)
 	if err != nil {
