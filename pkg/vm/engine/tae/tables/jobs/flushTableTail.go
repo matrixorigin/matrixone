@@ -17,9 +17,6 @@ package jobs
 import (
 	"context"
 	"fmt"
-	"time"
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"time"
 )
 
 type TestFlushBailoutPos1 struct{}
@@ -480,15 +478,6 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 		return nil
 	}
 
-	// create new object to hold merged blocks
-	var toObjectEntry *catalog.ObjectEntry
-	var toObjectHandle handle.Object
-	if toObjectHandle, err = task.rel.CreateNonAppendableObject(false, nil); err != nil {
-		return
-	}
-	toObjectEntry = toObjectHandle.GetMeta().(*catalog.ObjectEntry)
-	toObjectEntry.SetSorted()
-
 	// prepare merge
 	// pick the sort key or first column to run first merge, determing the ordering
 	sortVecs := make([]containers.Vector, 0, len(readedBats))
@@ -520,84 +509,86 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	}
 
 	// do first sort
-	var orderedVecs []containers.Vector
-	var sortedIdx []uint32
-	var writtenBatches []*containers.Batch
+	var releaseF func()
+	var writtenBatches []*batch.Batch
+	var mapping []uint32
 	if schema.HasSortKey() {
-		// mergesort is needed, allocate sortedidx and mapping
-		allocSz := totalRowCnt * 4
-		// sortedIdx is used to shuffle other columns according to the order of the sort key
-		sortIdxNode, err := common.MergeAllocator.Alloc(allocSz)
-		if err != nil {
-			panic(err)
+		var merger mergesort.AObjMerger
+		typ := readedBats[0].Vecs[sortKeyPos].GetType()
+		if typ.IsVarlen() {
+			merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[string], sortKeyPos, vector.MustStrCol, schema.BlockMaxRows, len(toLayout))
+		} else {
+			switch typ.Oid {
+			case types.T_bool:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.BoolLess, sortKeyPos, vector.MustFixedCol[bool], schema.BlockMaxRows, len(toLayout))
+			case types.T_bit:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64], schema.BlockMaxRows, len(toLayout))
+			case types.T_int8:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[int8], sortKeyPos, vector.MustFixedCol[int8], schema.BlockMaxRows, len(toLayout))
+			case types.T_int16:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[int16], sortKeyPos, vector.MustFixedCol[int16], schema.BlockMaxRows, len(toLayout))
+			case types.T_int32:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[int32], sortKeyPos, vector.MustFixedCol[int32], schema.BlockMaxRows, len(toLayout))
+			case types.T_int64:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[int64], sortKeyPos, vector.MustFixedCol[int64], schema.BlockMaxRows, len(toLayout))
+			case types.T_float32:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[float32], sortKeyPos, vector.MustFixedCol[float32], schema.BlockMaxRows, len(toLayout))
+			case types.T_float64:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[float64], sortKeyPos, vector.MustFixedCol[float64], schema.BlockMaxRows, len(toLayout))
+			case types.T_uint8:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[uint8], sortKeyPos, vector.MustFixedCol[uint8], schema.BlockMaxRows, len(toLayout))
+			case types.T_uint16:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[uint16], sortKeyPos, vector.MustFixedCol[uint16], schema.BlockMaxRows, len(toLayout))
+			case types.T_uint32:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[uint32], sortKeyPos, vector.MustFixedCol[uint32], schema.BlockMaxRows, len(toLayout))
+			case types.T_uint64:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64], schema.BlockMaxRows, len(toLayout))
+			case types.T_date:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[types.Date], sortKeyPos, vector.MustFixedCol[types.Date], schema.BlockMaxRows, len(toLayout))
+			case types.T_timestamp:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[types.Timestamp], sortKeyPos, vector.MustFixedCol[types.Timestamp], schema.BlockMaxRows, len(toLayout))
+			case types.T_datetime:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[types.Datetime], sortKeyPos, vector.MustFixedCol[types.Datetime], schema.BlockMaxRows, len(toLayout))
+			case types.T_time:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[types.Time], sortKeyPos, vector.MustFixedCol[types.Time], schema.BlockMaxRows, len(toLayout))
+			case types.T_enum:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[types.Enum], sortKeyPos, vector.MustFixedCol[types.Enum], schema.BlockMaxRows, len(toLayout))
+			case types.T_decimal64:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.LtTypeLess[types.Decimal64], sortKeyPos, vector.MustFixedCol[types.Decimal64], schema.BlockMaxRows, len(toLayout))
+			case types.T_decimal128:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.LtTypeLess[types.Decimal128], sortKeyPos, vector.MustFixedCol[types.Decimal128], schema.BlockMaxRows, len(toLayout))
+			case types.T_uuid:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.LtTypeLess[types.Uuid], sortKeyPos, vector.MustFixedCol[types.Uuid], schema.BlockMaxRows, len(toLayout))
+			case types.T_TS:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.TsLess, sortKeyPos, vector.MustFixedCol[types.TS], schema.BlockMaxRows, len(toLayout))
+			case types.T_Rowid:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.RowidLess, sortKeyPos, vector.MustFixedCol[types.Rowid], schema.BlockMaxRows, len(toLayout))
+			case types.T_Blockid:
+				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.BlockidLess, sortKeyPos, vector.MustFixedCol[types.Blockid], schema.BlockMaxRows, len(toLayout))
+			default:
+				panic(fmt.Sprintf("unsupported type %s", typ.String()))
+			}
 		}
-		// sortedidx will be used to shuffle other column, defer free
-		defer common.MergeAllocator.Free(sortIdxNode)
-		sortedIdx = unsafe.Slice((*uint32)(unsafe.Pointer(&sortIdxNode[0])), totalRowCnt)
-
-		mappingNode, err := common.MergeAllocator.Alloc(allocSz)
-		if err != nil {
-			panic(err)
-		}
-		mapping := unsafe.Slice((*uint32)(unsafe.Pointer(&mappingNode[0])), totalRowCnt)
-
-		// modify sortidx and mapping
-		orderedVecs = mergesort.MergeColumn(sortVecs, sortedIdx, mapping, fromLayout, toLayout, task.rt.VectorPool.Transient)
-		mergesort.UpdateMappingAfterMerge(task.transMappings, mapping, fromLayout, toLayout)
-		// free mapping, which is never used again
-		common.MergeAllocator.Free(mappingNode)
-
-		defer func() {
-			for _, vec := range orderedVecs {
-				vec.Close()
-			}
-		}()
-		// make all columns ordered and prepared writtenBatches
-		writtenBatches = make([]*containers.Batch, 0, len(orderedVecs))
-		for i := 0; i < len(orderedVecs); i++ {
-			writtenBatches = append(writtenBatches, containers.NewBatch())
-		}
-		vecs := make([]containers.Vector, 0, len(readedBats))
-		for i, idx := range readColIdxs {
-			// skip rowid and sort(reshape) column in the first run
-			if schema.ColDefs[idx].IsPhyAddr() {
-				continue
-			}
-			if i == sortKeyPos {
-				for i, vec := range orderedVecs {
-					writtenBatches[i].AddVector(schema.ColDefs[idx].Name, vec)
-				}
-				continue
-			}
-			vecs = vecs[:0]
-			for _, bat := range readedBats {
-				vecs = append(vecs, bat.Vecs[i])
-			}
-			outvecs := mergesort.ShuffleColumn(vecs, sortedIdx, fromLayout, toLayout, task.rt.VectorPool.Transient)
-			for i, vec := range outvecs {
-				writtenBatches[i].AddVector(schema.ColDefs[idx].Name, vec)
-				defer vec.Close()
-			}
-		}
+		writtenBatches, releaseF, mapping = merger.Merge(ctx)
 	} else {
 		cnBatches := make([]*batch.Batch, len(readedBats))
 		for i := range readedBats {
 			cnBatches[i] = containers.ToCNBatch(readedBats[i])
 		}
-		retBatches, releaseF := mergesort.ReshapeBatches(cnBatches, fromLayout, toLayout, task)
-		defer releaseF()
-		writtenBatches = make([]*containers.Batch, len(retBatches))
-		for i := range retBatches {
-			writtenBatches[i] = containers.ToTNBatch(retBatches[i], task.GetMPool())
-		}
-		// UpdateMappingAfterMerge will handle the nil mapping
-		mergesort.UpdateMappingAfterMerge(task.transMappings, nil, fromLayout, toLayout)
+		writtenBatches, releaseF = mergesort.ReshapeBatches(cnBatches, fromLayout, toLayout, task)
 	}
+	defer releaseF()
+	mergesort.UpdateMappingAfterMerge(task.transMappings, mapping, toLayout)
 
 	// write!
+	// create new object to hold merged blocks
+	if task.createdObjHandles, err = task.rel.CreateNonAppendableObject(false, nil); err != nil {
+		return
+	}
+	toObjectEntry := task.createdObjHandles.GetMeta().(*catalog.ObjectEntry)
+	toObjectEntry.SetSorted()
 	name := objectio.BuildObjectNameWithObjectID(&toObjectEntry.ID)
 	writer, err := blockio.NewBlockWriterNew(task.rt.Fs.Service, name, schema.Version, seqnums)
-	task.createdObjHandles = toObjectHandle
 	if err != nil {
 		return err
 	}
@@ -608,7 +599,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 		writer.SetSortKey(uint16(schema.GetSingleSortKeyIdx()))
 	}
 	for _, bat := range writtenBatches {
-		_, err = writer.WriteBatch(containers.ToCNBatch(bat))
+		_, err = writer.WriteBatch(bat)
 		if err != nil {
 			return err
 		}
@@ -620,11 +611,11 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	task.createdMergedObjectName = name.String()
 
 	// update new status for created blocks
-	err = toObjectHandle.UpdateStats(writer.Stats())
+	err = task.createdObjHandles.UpdateStats(writer.Stats())
 	if err != nil {
 		return
 	}
-	err = toObjectHandle.GetMeta().(*catalog.ObjectEntry).GetObjectData().Init()
+	err = task.createdObjHandles.GetMeta().(*catalog.ObjectEntry).GetObjectData().Init()
 	if err != nil {
 		return
 	}
