@@ -64,7 +64,7 @@ select * from ct_04;
 -- @bvt:issue#3433
 create table ct_05(a int,b varchar(25) primary key);
 begin;
-load data infile '$resources/load_data/ct_file.csv' into table ct_05;
+load data infile '$resources/load_data/ct_file.csv' into table ct_05 fields terminated by ',';
 commit;
 select * from ct_05;
 -- @bvt:issue

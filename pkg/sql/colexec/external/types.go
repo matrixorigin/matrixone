@@ -17,7 +17,6 @@ package external
 import (
 	"bufio"
 	"context"
-	"encoding/csv"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -72,7 +72,7 @@ type ExParam struct {
 	Fileparam      *ExFileparam
 	Zoneparam      *ZonemapFileparam
 	Filter         *FilterParam
-	MoCsvLineArray [][]string
+	MoCsvLineArray [][]csvparser.Field
 }
 
 type ExFileparam struct {
@@ -125,20 +125,62 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 }
 
 type ParseLineHandler struct {
-	csvReader *csv.Reader
+	csvReader *csvparser.CSVParser
 	//batch
 	batchSize int
 	//mo csv
-	moCsvLineArray [][]string
+	moCsvLineArray [][]csvparser.Field
 }
 
-// NewReader returns a new Reader with options that reads from r.
-func newReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *csv.Reader {
-	rCsv := csv.NewReader(bufio.NewReader(r))
-	rCsv.Comma = cma
-	rCsv.Comment = cmnt
-	rCsv.LazyQuotes = lazyQt
-	rCsv.TrimLeadingSpace = tls
-	rCsv.FieldsPerRecord = -1
-	return rCsv
+func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
+	fieldsTerminatedBy := "\t"
+	fieldsEnclosedBy := "\""
+	fieldsEscapedBy := "\\"
+
+	linesTerminatedBy := "\n"
+	linesStartingBy := ""
+
+	if param.Extern.Tail.Fields != nil {
+		if terminated := param.Extern.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
+			fieldsTerminatedBy = terminated.Value
+		}
+		if enclosed := param.Extern.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
+			fieldsEnclosedBy = string(enclosed.Value)
+		}
+		if escaped := param.Extern.Tail.Fields.EscapedBy; escaped != nil {
+			if escaped.Value == 0 {
+				fieldsEscapedBy = ""
+			} else {
+				fieldsEscapedBy = string(escaped.Value)
+			}
+		}
+	}
+
+	if param.Extern.Tail.Lines != nil {
+		if terminated := param.Extern.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
+			linesTerminatedBy = param.Extern.Tail.Lines.TerminatedBy.Value
+		}
+		if param.Extern.Tail.Lines.StartingBy != "" {
+			linesStartingBy = param.Extern.Tail.Lines.StartingBy
+		}
+	}
+
+	if param.Extern.Format == tree.JSONLINE {
+		fieldsTerminatedBy = "\t"
+		fieldsEscapedBy = ""
+	}
+
+	config := csvparser.CSVConfig{
+		FieldsTerminatedBy: fieldsTerminatedBy,
+		FieldsEnclosedBy:   fieldsEnclosedBy,
+		FieldsEscapedBy:    fieldsEscapedBy,
+		LinesTerminatedBy:  linesTerminatedBy,
+		LinesStartingBy:    linesStartingBy,
+		NotNull:            false,
+		Null:               []string{`\N`},
+		UnescapedQuote:     true,
+		Comment:            '#',
+	}
+
+	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false, false)
 }

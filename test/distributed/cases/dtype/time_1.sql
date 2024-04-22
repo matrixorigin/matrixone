@@ -72,7 +72,7 @@ delete from time_03 where t2 is not null;
 select * from time_03;
 insert into time_03 values (40,"37","gloooooooge","35:50");
 truncate table time_03;
-load data infile "$resources/external_table_file/time_ex_table.csv" into table time_03;
+load data infile "$resources/external_table_file/time_ex_table.csv" into table time_03 fields terminated by ',';
 create external table time_ex_01(t1 int,t2 time,t3 varchar(25),t4 time)  infile{"filepath"='$resources/external_table_file/time_ex_table.csv'} fields terminated by ',' enclosed by '\"';
 select * from time_ex_01;
 select * from time_01 time1 join time_03 time3 on time1.t1=time3.t2;

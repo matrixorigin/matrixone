@@ -361,49 +361,79 @@ func NewDuplicateKeyIgnore() *DuplicateKeyIgnore {
 	return &DuplicateKeyIgnore{}
 }
 
+type EscapedBy struct {
+	Value byte
+}
+
+type EnclosedBy struct {
+	Value byte
+}
+
+type Terminated struct {
+	Value string
+}
+
 type Fields struct {
-	Terminated string
+	Terminated *Terminated
 	Optionally bool
-	EnclosedBy byte
-	EscapedBy  byte
+	EnclosedBy *EnclosedBy
+	EscapedBy  *EscapedBy
 }
 
 func (node *Fields) Format(ctx *FmtCtx) {
 	ctx.WriteString("fields")
 	prefix := ""
-	if node.Terminated != "" {
+	if node.Terminated != nil {
 		ctx.WriteString(" terminated by ")
-		ctx.WriteStringQuote(node.Terminated)
+		if node.Terminated.Value == "" {
+			ctx.WriteString("''")
+		} else {
+			ctx.WriteStringQuote(node.Terminated.Value)
+		}
 		prefix = " "
 	}
 	if node.Optionally {
 		ctx.WriteString(prefix)
 		ctx.WriteString("optionally enclosed by ")
-		ctx.WriteStringQuote(string(node.EnclosedBy))
-	} else if node.EnclosedBy != 0 {
+		if node.EnclosedBy.Value == 0 {
+			ctx.WriteString("''")
+		} else {
+			ctx.WriteStringQuote(string(node.EnclosedBy.Value))
+		}
+	} else if node.EnclosedBy != nil && node.EnclosedBy.Value != 0 {
 		ctx.WriteString(prefix)
 		ctx.WriteString("enclosed by ")
-		ctx.WriteStringQuote(string(node.EnclosedBy))
+		ctx.WriteStringQuote(string(node.EnclosedBy.Value))
 	}
-	if node.EscapedBy != 0 {
+	if node.EscapedBy != nil {
 		ctx.WriteString(prefix)
 		ctx.WriteString("escaped by ")
-		ctx.WriteStringQuote(string(node.EscapedBy))
+		if node.EscapedBy.Value == 0 {
+			ctx.WriteString("''")
+		} else {
+			ctx.WriteStringQuote(string(node.EscapedBy.Value))
+		}
 	}
 }
 
 func NewFields(t string, o bool, en byte, es byte) *Fields {
 	return &Fields{
-		Terminated: t,
+		Terminated: &Terminated{
+			Value: t,
+		},
 		Optionally: o,
-		EnclosedBy: en,
-		EscapedBy:  es,
+		EnclosedBy: &EnclosedBy{
+			Value: en,
+		},
+		EscapedBy: &EscapedBy{
+			Value: es,
+		},
 	}
 }
 
 type Lines struct {
 	StartingBy   string
-	TerminatedBy string
+	TerminatedBy *Terminated
 }
 
 func (node *Lines) Format(ctx *FmtCtx) {
@@ -412,16 +442,22 @@ func (node *Lines) Format(ctx *FmtCtx) {
 		ctx.WriteString(" starting by ")
 		ctx.WriteStringQuote(node.StartingBy)
 	}
-	if node.TerminatedBy != "" {
+	if node.TerminatedBy != nil {
 		ctx.WriteString(" terminated by ")
-		ctx.WriteStringQuote(node.TerminatedBy)
+		if node.TerminatedBy.Value == "" {
+			ctx.WriteString("''")
+		} else {
+			ctx.WriteStringQuote(node.TerminatedBy.Value)
+		}
 	}
 }
 
 func NewLines(s string, t string) *Lines {
 	return &Lines{
-		StartingBy:   s,
-		TerminatedBy: t,
+		StartingBy: s,
+		TerminatedBy: &Terminated{
+			Value: t,
+		},
 	}
 }
 

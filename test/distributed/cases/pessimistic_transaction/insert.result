@@ -453,7 +453,7 @@ col7 int unsigned,
 col8 bigint unsigned
 );
 [unknown result because it is related to issue#5790]
-load data infile '$resources/load_data/integer_numbers_3.csv' into table t1;
+load data infile '$resources/load_data/integer_numbers_3.csv' into table t1 fields terminated by ',';
 [unknown result because it is related to issue#5790]
 select * from t1;
 [unknown result because it is related to issue#5790]
@@ -475,7 +475,7 @@ drop table t2;
 [unknown result because it is related to issue#5790]
 create table t2(c1 int) cluster by c1;
 [unknown result because it is related to issue#5790]
-load data infile '$resources/load_data/integer.csv' into table t2;
+load data infile '$resources/load_data/integer.csv' into table t2 fields terminated by ',';
 [unknown result because it is related to issue#5790]
 select * from t2;
 [unknown result because it is related to issue#5790]
@@ -487,7 +487,7 @@ drop table t2;
 [unknown result because it is related to issue#5790]
 create table t2(c1 int,c2 int) cluster by (c1,c2);
 [unknown result because it is related to issue#5790]
-load data infile '$resources/load_data/integer2.csv' into table t2;
+load data infile '$resources/load_data/integer2.csv' into table t2 fields terminated by ',';
 [unknown result because it is related to issue#5790]
 select * from t2;
 [unknown result because it is related to issue#5790]

@@ -189,7 +189,7 @@ drop table dis_temp_01;
 
 -- @bvt:issue#10585
 start transaction;
-load data infile '$resources/external_table_file/isolation_01.csv' into table dis_table_02;
+load data infile '$resources/external_table_file/isolation_01.csv' into table dis_table_02 fields terminated by ',';
 -- @session:id=1{
 use isolation_2;
 update dis_table_02 set b='pppp';
@@ -316,7 +316,7 @@ select * from dis_table_04;
 begin ;
 use isolation_2;
 create temporary table dis_table_05(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));
-load data infile 'fff.csv' to dis_table_05;
+load data infile 'fff.csv' to dis_table_05 fields terminated by ',';
 -- @session:id=1{
 use isolation_2;
 select * from dis_table_05;

@@ -1786,8 +1786,12 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		param.Tail = new(tree.TailParameter)
 		param.Tail.IgnoredLines = n.ExternScan.IgnoredLines
 		param.Tail.Fields = &tree.Fields{
-			Terminated: n.ExternScan.Terminated,
-			EnclosedBy: n.ExternScan.EnclosedBy[0],
+			Terminated: &tree.Terminated{
+				Value: n.ExternScan.Terminated,
+			},
+			EnclosedBy: &tree.EnclosedBy{
+				Value: n.ExternScan.EnclosedBy[0],
+			},
 		}
 		param.JsonData = n.ExternScan.JsonType
 	}

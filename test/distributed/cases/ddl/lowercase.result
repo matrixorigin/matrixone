@@ -29,7 +29,7 @@ a
 -45412.39
 DROP TABLE T1;
 drop table IF EXISTS table01;
-CREATE external table table01(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'};
+CREATE external table table01(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'} fields terminated by ',';
 SELECT * FROM Table01;
 clo1    clo2
 1    2131420000000000
@@ -637,7 +637,7 @@ DROP DATABASE IF EXISTS `test08`;
 CREATE DATABASE `test08`;
 use  `test08`;
 DROP table IF EXISTS `table02`;
-CREATE external table `table02`(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'};
+CREATE external table `table02`(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'} fields terminated by ',';
 SELECT * FROM `Table02`;
 clo1    clo2
 1    2131420000000000

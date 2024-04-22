@@ -192,11 +192,17 @@ func Test_saveQueryResultMeta(t *testing.T) {
 		QueryId:  testUUID.String(),
 		FilePath: exportFilePath,
 		Fields: &tree.Fields{
-			Terminated: ",",
-			EnclosedBy: '"',
+			Terminated: &tree.Terminated{
+				Value: ",",
+			},
+			EnclosedBy: &tree.EnclosedBy{
+				Value: '"',
+			},
 		},
 		Lines: &tree.Lines{
-			TerminatedBy: "\n",
+			TerminatedBy: &tree.Terminated{
+				Value: "\n",
+			},
 		},
 		MaxFileSize: 0,
 		Header:      false,

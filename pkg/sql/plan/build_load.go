@@ -40,12 +40,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
-	if stmt.Param.Tail.Lines != nil && stmt.Param.Tail.Lines.StartingBy != "" {
-		return nil, moerr.NewBadConfig(ctx.GetContext(), "load operation do not support StartingBy field.")
-	}
-	if stmt.Param.Tail.Fields != nil && stmt.Param.Tail.Fields.EscapedBy != 0 {
-		return nil, moerr.NewBadConfig(ctx.GetContext(), "load operation do not support EscapedBy field.")
-	}
 	stmt.Param.Local = stmt.Local
 	fileName, err := checkFileExist(stmt.Param, ctx)
 	if err != nil {
@@ -97,8 +91,12 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	terminated := ","
 	enclosedBy := []byte{0}
 	if stmt.Param.Tail.Fields != nil {
-		enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy}
-		terminated = stmt.Param.Tail.Fields.Terminated
+		if stmt.Param.Tail.Fields.EnclosedBy != nil {
+			enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy.Value}
+		}
+		if stmt.Param.Tail.Fields.Terminated != nil {
+			terminated = stmt.Param.Tail.Fields.Terminated.Value
+		}
 	}
 
 	if !loadFormatIsValid(stmt.Param) {
