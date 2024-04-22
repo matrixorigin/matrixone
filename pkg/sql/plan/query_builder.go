@@ -1642,7 +1642,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 					argsCastType[i].Scale = 0
 				}
 			}
-			var targetType *plan.Type
+			var targetType plan.Type
 			var targetArgType types.Type
 			if len(argsCastType) == 0 {
 				targetArgType = tmpArgsType[0]
@@ -1667,7 +1667,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 				if !argsType[idx].Eq(targetArgType) {
 					node := builder.qry.Nodes[tmpID]
 					if argsType[idx].Oid == types.T_any {
-						node.ProjectList[columnIdx].Typ = *targetType
+						node.ProjectList[columnIdx].Typ = targetType
 					} else {
 						node.ProjectList[columnIdx], err = appendCastBeforeExpr(builder.GetContext(), node.ProjectList[columnIdx], targetType)
 						if err != nil {
@@ -2088,13 +2088,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
 		}
 		bat := batch.NewWithSize(len(valuesClause.Rows[0]))
-		strTyp := &plan.Type{
+		strTyp := plan.Type{
 			Id:          int32(types.T_text),
 			NotNullable: false,
 		}
 		strColTyp := makeTypeByPlan2Type(strTyp)
 		strColTargetTyp := &plan.Expr{
-			Typ: *strTyp,
+			Typ: strTyp,
 			Expr: &plan.Expr_T{
 				T: &plan.TargetType{},
 			},
@@ -2154,7 +2154,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			tableDef.Cols[i] = &plan.ColDef{
 				ColId: 0,
 				Name:  colName,
-				Typ:   *strTyp,
+				Typ:   strTyp,
 			}
 		}
 		bat.SetRowCount(rowCount)
@@ -2451,7 +2451,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					}
 				}
 				if astTimeWindow.Fill.Val != nil {
-					e, err := appendCastBeforeExpr(builder.GetContext(), v, &t.Typ)
+					e, err := appendCastBeforeExpr(builder.GetContext(), v, t.Typ)
 					if err != nil {
 						return 0, err
 					}
@@ -2476,7 +2476,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					if err != nil {
 						return 0, err
 					}
-					col, err := appendCastBeforeExpr(builder.GetContext(), v, &fillCols[i].Typ)
+					col, err := appendCastBeforeExpr(builder.GetContext(), v, fillCols[i].Typ)
 					if err != nil {
 						return 0, err
 					}
@@ -3361,7 +3361,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						}
 						for i := range n.ProjectList {
 							projTyp := projects[i].GetTyp()
-							n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], &projTyp)
+							n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
 							if err != nil {
 								return
 							}
@@ -4045,7 +4045,7 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 		return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
 	}
 
-	binder := NewDefaultBinder(builder.GetContext(), nil, nil, nil, nil)
+	binder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
 	binder.builder = builder
 	defExpr, err := binder.BindExpr(conds[0], 0, false)
 	if err != nil {

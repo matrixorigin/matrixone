@@ -1079,7 +1079,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				primaryKeys = pks
 			}
 
-			defaultValue, err := buildDefaultExpr(def, &colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExpr(def, colType, ctx.GetProcess())
 			if err != nil {
 				return err
 			}
@@ -1087,7 +1087,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				return moerr.NewInvalidInput(ctx.GetContext(), "invalid default value for '%s'", def.Name.Parts[0])
 			}
 
-			onUpdateExpr, err := buildOnUpdate(def, &colType, ctx.GetProcess())
+			onUpdateExpr, err := buildOnUpdate(def, colType, ctx.GetProcess())
 			if err != nil {
 				return err
 			}
@@ -3140,7 +3140,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				primaryKeys = pks
 			}
 
-			defaultValue, err := buildDefaultExpr(opt.Column, &colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExpr(opt.Column, colType, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
@@ -3148,7 +3148,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				return nil, moerr.NewInvalidInput(ctx.GetContext(), "invalid default value for '%s'", opt.Column.Name.Parts[0])
 			}
 
-			onUpdateExpr, err := buildOnUpdate(opt.Column, &colType, ctx.GetProcess())
+			onUpdateExpr, err := buildOnUpdate(opt.Column, colType, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}

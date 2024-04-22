@@ -2526,7 +2526,7 @@ func (tbl *txnTable) transferDeletes(
 func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	blks []objectio.BlockInfo) (types.Rowid, bool, error) {
 	var auxIdCnt int32
-	var typ *plan.Type
+	var typ plan.Type
 	var rowid types.Rowid
 	var objMeta objectio.ObjectMeta
 
@@ -2535,7 +2535,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	tableDef := tbl.GetTableDef(context.TODO())
 	for _, col := range tableDef.Cols {
 		if col.Name == tableDef.Pkey.PkeyColName {
-			typ = &col.Typ
+			typ = col.Typ
 			columns = append(columns, uint16(col.Seqnum))
 			colTypes = append(colTypes, types.T(col.Typ.Id).ToType())
 		}

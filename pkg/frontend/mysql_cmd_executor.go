@@ -936,7 +936,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		if err != nil {
 			return err
 		}
-		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
+		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
 		planExpr, err := binder.BindExpr(sv.Where.Expr, 0, false)
 		if err != nil {
 			return err
@@ -1665,7 +1665,7 @@ func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation
 	}
 
 	if sc.Where != nil {
-		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"collation", "charset", "id", "default", "compiled", "sortlen", "pad_attribute"})
+		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"collation", "charset", "id", "default", "compiled", "sortlen", "pad_attribute"})
 		planExpr, err := binder.BindExpr(sc.Where.Expr, 0, false)
 		if err != nil {
 			return err

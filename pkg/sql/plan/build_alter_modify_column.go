@@ -48,7 +48,7 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		return err
 	}
 
-	newCol, err := buildChangeColumnAndConstraint(ctx, alterPlan, col, specNewColumn, &colType)
+	newCol, err := buildChangeColumnAndConstraint(ctx, alterPlan, col, specNewColumn, colType)
 	if err != nil {
 		return err
 	}

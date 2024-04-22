@@ -1609,7 +1609,7 @@ func makeOneDeletePlan(
 			// append filter
 			rowIdTyp := types.T_Rowid.ToType()
 			rowIdColExpr := &plan.Expr{
-				Typ: *makePlan2Type(&rowIdTyp),
+				Typ: makePlan2Type(&rowIdTyp),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(delNodeInfo.deleteIndex),
@@ -2021,7 +2021,7 @@ func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, l
 		AggList:  []*Expr{aggExpr},
 		ProjectList: []*Expr{
 			{
-				Typ: *makePlan2Type(&countType),
+				Typ: makePlan2Type(&countType),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: -2,
@@ -3272,7 +3272,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 			},
 		},
 		&plan.Expr{
-			Typ: *makePlan2Type(&cpPkType),
+			Typ: makePlan2Type(&cpPkType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 1,

@@ -593,14 +593,14 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 
 func constructFuzzyFilter(c *Compile, n, right *plan.Node) *fuzzyfilter.Argument {
 	pkName := n.TableDef.Pkey.PkeyColName
-	var pkTyp *plan.Type
+	var pkTyp plan.Type
 	if pkName == catalog.CPrimaryKeyColName {
-		pkTyp = &n.TableDef.Pkey.CompPkeyCol.Typ
+		pkTyp = n.TableDef.Pkey.CompPkeyCol.Typ
 	} else {
 		cols := n.TableDef.Cols
 		for _, c := range cols {
 			if c.Name == pkName {
-				pkTyp = &c.Typ
+				pkTyp = c.Typ
 			}
 		}
 	}
@@ -667,7 +667,7 @@ func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertsecond
 func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.Argument, error) {
 	arg := lockop.NewArgumentByEngine(eng)
 	for _, target := range n.LockTargets {
-		typ := plan2.MakeTypeByPlan2Type(&target.PrimaryColTyp)
+		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
 		if target.IsPartitionTable {
 			arg.AddLockTargetWithPartition(target.GetPartitionTableIds(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetFilterColIdxInBat())
 		} else {

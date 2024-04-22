@@ -104,7 +104,7 @@ message Group {
   uint64 ibucket = 2;
   uint64 nbucket = 3;
   repeated plan.Expr  exprs = 4;
-  repeated plan.Type  types = 5;
+  repeated plan.Type  types = 5 [(gogoproto.nullable) = false];
   repeated Aggregate  aggs = 6;
   repeated MultiArguemnt MultiAggs = 7;
   bool isShuffle = 8;
@@ -167,7 +167,7 @@ message PreInsert {
 message LockTarget {
   uint64 table_id           	  = 1;
   int32 primary_col_idx_in_bat  = 2;
-  plan.Type primary_col_typ     = 3;
+  plan.Type primary_col_typ     = 3 [(gogoproto.nullable) = false];
   int32 refresh_ts_idx_in_bat   = 4;
   int32 filter_col_idx_in_bat   = 5;
   bool lock_table               = 6;
@@ -201,7 +201,7 @@ message OnDuplicateKey{
 message FuzzyFilter {
   float N = 1;
   string PkName = 2;
-  plan.Type PkTyp = 3;
+  plan.Type PkTyp = 3 [(gogoproto.nullable) = false];
 }
 
 message Join {
@@ -210,7 +210,7 @@ message Join {
   repeated int32 rel_list = 3;
   repeated int32 col_list = 4;
   plan.Expr  expr = 5;
-  repeated plan.Type  types = 6;
+  repeated plan.Type  types = 6 [(gogoproto.nullable) = false];
   repeated plan.Expr left_cond = 7;
   repeated plan.Expr right_cond = 8;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
@@ -223,7 +223,7 @@ message AntiJoin{
   uint64 nbucket = 2;
   repeated int32 result = 3;
   plan.Expr  expr = 4;
-  repeated plan.Type  types = 5;
+  repeated plan.Type  types = 5 [(gogoproto.nullable) = false];
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
   bool hash_on_pk = 8;
@@ -236,7 +236,7 @@ message LeftJoin {
   repeated int32 rel_list = 3;
   repeated int32 col_list = 4;
   plan.Expr  expr = 5;
-  repeated plan.Type  types = 6;
+  repeated plan.Type  types = 6 [(gogoproto.nullable) = false];
   repeated plan.Expr left_cond = 7;
   repeated plan.Expr right_cond = 8;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
@@ -250,8 +250,8 @@ message RightJoin {
   repeated int32 rel_list = 3;
   repeated int32 col_list = 4;
   plan.Expr  expr = 5;
-  repeated plan.Type  left_types = 6;
-  repeated plan.Type  right_types = 7;
+  repeated plan.Type  left_types = 6 [(gogoproto.nullable) = false];
+  repeated plan.Type  right_types = 7 [(gogoproto.nullable) = false];
   repeated plan.Expr left_cond = 8;
   repeated plan.Expr right_cond = 9;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 10;
@@ -264,7 +264,7 @@ message RightSemiJoin {
   uint64 nbucket = 2;
   repeated int32 result = 3;
   plan.Expr  expr = 4;
-  repeated plan.Type right_types = 5;
+  repeated plan.Type right_types = 5 [(gogoproto.nullable) = false];
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
@@ -277,7 +277,7 @@ message RightAntiJoin {
   uint64 nbucket = 2;
   repeated int32 result = 3;
   plan.Expr  expr = 4;
-  repeated plan.Type right_types = 5;
+  repeated plan.Type right_types = 5 [(gogoproto.nullable) = false];
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
@@ -290,7 +290,7 @@ message SemiJoin {
   uint64 nbucket = 2;
   repeated int32 result = 3;
   plan.Expr  expr = 4;
-  repeated plan.Type  types = 5;
+  repeated plan.Type  types = 5 [(gogoproto.nullable) = false];
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
@@ -304,7 +304,7 @@ message SingleJoin {
   repeated int32 rel_list = 3;
   repeated int32 col_list = 4;
   plan.Expr  expr = 5;
-  repeated plan.Type  types = 6;
+  repeated plan.Type  types = 6 [(gogoproto.nullable) = false];
   repeated plan.Expr left_cond = 7;
   repeated plan.Expr right_cond = 8;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
@@ -317,7 +317,7 @@ message MarkJoin {
   uint64 nbucket = 2;
   repeated int32 result = 3;
   plan.Expr expr = 4;
-  repeated plan.Type types = 5;
+  repeated plan.Type types = 5 [(gogoproto.nullable) = false];
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
   repeated plan.Expr on_list = 8;
@@ -328,13 +328,13 @@ message MarkJoin {
 message Product {
   repeated int32 rel_list = 1;
   repeated int32 col_list = 2;
-  repeated plan.Type  types = 3;
+  repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
   bool is_shuffle =4;
 }
 
 message IndexJoin {
   repeated int32 result = 1;
-  repeated plan.Type  types = 2;
+  repeated plan.Type  types = 2 [(gogoproto.nullable) = false];
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 3;
 }
 
@@ -351,7 +351,7 @@ message HashBuild {
   bool need_hash = 2;
   uint64 ibucket = 3;
   uint64 nbucket = 4;
-  repeated plan.Type types = 5;
+  repeated plan.Type types = 5 [(gogoproto.nullable) = false];
   repeated plan.Expr conds = 6;
   bool hash_on_pk = 7;
   bool need_merged_batch = 8;

@@ -2447,7 +2447,7 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 	bat.Attrs = attrs
 
 	// typ is sequenece's type now
-	typ := plan2.MakeTypeByPlan2Type(&tableDef.Cols[0].Typ)
+	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
 	vecs := make([]*vector.Vector, len(plan2.Sequence_cols_name))
 
 	switch typ.Oid {
@@ -2556,7 +2556,7 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 	}
 	bat.Attrs = attrs
 
-	typ := plan2.MakeTypeByPlan2Type(&tableDef.Cols[0].Typ)
+	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
 	sequence_cols_num := 7
 	vecs := make([]*vector.Vector, sequence_cols_num)
 

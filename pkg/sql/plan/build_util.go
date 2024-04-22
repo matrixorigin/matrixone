@@ -208,7 +208,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	return plan.Type{}, moerr.NewInternalError(ctx, "unknown data type")
 }
 
-func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Process) (*plan.Default, error) {
+func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil
 	for _, attr := range col.Attributes {
@@ -274,7 +274,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Pr
 	}, nil
 }
 
-func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Process) (*plan.OnUpdate, error) {
+func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.OnUpdate, error) {
 	var expr tree.Expr = nil
 
 	for _, attr := range col.Attributes {

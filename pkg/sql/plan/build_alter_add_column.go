@@ -107,7 +107,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 	for _, attr := range specNewColumn.Attributes {
 		switch attribute := attr.(type) {
 		case *tree.AttributePrimaryKey, *tree.AttributeKey:
-			err = checkPrimaryKeyPartType(ctx.GetContext(), &colType, newColName)
+			err = checkPrimaryKeyPartType(ctx.GetContext(), colType, newColName)
 			if err != nil {
 				return nil, err
 			}
@@ -136,7 +136,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			}
 			newCol.Typ.AutoIncr = true
 		case *tree.AttributeUnique, *tree.AttributeUniqueKey:
-			err = checkUniqueKeyPartType(ctx.GetContext(), &colType, newColName)
+			err = checkUniqueKeyPartType(ctx.GetContext(), colType, newColName)
 			if err != nil {
 				return nil, err
 			}
@@ -163,14 +163,14 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			}
 			alterPlan.CopyTableDef.Indexes = append(alterPlan.CopyTableDef.Indexes, indexDef)
 		case *tree.AttributeDefault, *tree.AttributeNull:
-			defaultValue, err := buildDefaultExpr(specNewColumn, &colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
 			hasDefaultValue = true
 		case *tree.AttributeOnUpdate:
-			onUpdateExpr, err := buildOnUpdate(specNewColumn, &colType, ctx.GetProcess())
+			onUpdateExpr, err := buildOnUpdate(specNewColumn, colType, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
@@ -183,7 +183,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), specNewColumn.Name.Parts[0])
 	}
 	if !hasDefaultValue {
-		defaultValue, err := buildDefaultExpr(specNewColumn, &colType, ctx.GetProcess())
+		defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
 		if err != nil {
 			return nil, err
 		}
@@ -209,7 +209,7 @@ func checkAddColumnType(ctx context.Context, colType *plan.Type, columnName stri
 	return nil
 }
 
-func checkPrimaryKeyPartType(ctx context.Context, colType *plan.Type, columnName string) error {
+func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName string) error {
 	if colType.GetId() == int32(types.T_blob) {
 		return moerr.NewNotSupported(ctx, "blob type in primary key")
 	}
@@ -225,7 +225,7 @@ func checkPrimaryKeyPartType(ctx context.Context, colType *plan.Type, columnName
 	return nil
 }
 
-func checkUniqueKeyPartType(ctx context.Context, colType *plan.Type, columnName string) error {
+func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName string) error {
 	if colType.GetId() == int32(types.T_blob) {
 		return moerr.NewNotSupported(ctx, "blob type in primary key")
 	}

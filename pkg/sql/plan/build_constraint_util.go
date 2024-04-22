@@ -67,7 +67,7 @@ type dmlTableInfo struct {
 	alias          map[string]int         // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
 }
 
-var constTextType *plan.Type
+var constTextType plan.Type
 
 func init() {
 	typ := types.T_text.ToType()
@@ -468,12 +468,12 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			},
 		}
 		if tableDef.Cols[colIdx].Typ.Id == int32(types.T_enum) {
-			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, &tableDef.Cols[colIdx].Typ)
+			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
 				return false, nil, err
 			}
 		} else {
-			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, &tableDef.Cols[colIdx].Typ)
+			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
 				return false, nil, err
 			}
@@ -625,7 +625,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							return false, nil, err
 						}
 					}
-					defExpr, err = forceCastExpr(builder.GetContext(), defExpr, &col.Typ)
+					defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
 					if err != nil {
 						return false, nil, err
 					}
@@ -856,7 +856,7 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 	}, nil
 }
 
-func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
+func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	if targetType.Id == 0 {
 		return expr, nil
 	}
@@ -871,7 +871,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, er
 		return nil, err
 	}
 	t := &plan.Expr{
-		Typ: *targetType,
+		Typ: targetType,
 		Expr: &plan.Expr_T{
 			T: &plan.TargetType{},
 		},
@@ -883,7 +883,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, er
 				Args: []*Expr{expr, t},
 			},
 		},
-		Typ: *targetType,
+		Typ: targetType,
 	}, nil
 }
 
@@ -919,7 +919,7 @@ func buildValueScan(
 
 	for i, colName := range updateColumns {
 		col := tableDef.Cols[colToIdx[colName]]
-		colTyp := makeTypeByPlan2Type(&col.Typ)
+		colTyp := makeTypeByPlan2Type(col.Typ)
 		vec := proc.GetVector(colTyp)
 		bat.Vecs[i] = vec
 		targetTyp := &plan.Expr{
@@ -950,7 +950,7 @@ func buildValueScan(
 				})
 			}
 		} else {
-			binder := NewDefaultBinder(builder.GetContext(), nil, nil, &col.Typ, nil)
+			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
 			for j, r := range slt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok {
@@ -983,7 +983,7 @@ func buildValueScan(
 						RowPos: int32(j),
 						Pos:    int32(nv.Offset),
 						Expr: &plan.Expr{
-							Typ: *constTextType,
+							Typ: constTextType,
 							Expr: &plan.Expr_P{
 								P: &plan.ParamRef{
 									Pos: int32(nv.Offset),
@@ -999,7 +999,7 @@ func buildValueScan(
 						return err
 					}
 					if col.Typ.Id == int32(types.T_enum) {
-						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, &col.Typ)
+						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
 							bat.Clean(proc.Mp())
 							return err
@@ -1054,7 +1054,7 @@ func buildValueScan(
 			col := tableDef.Cols[colToIdx[expr.Names[0].Parts[0]]]
 			if nv, ok := expr.Expr.(*tree.ParamExpr); ok {
 				updateExpr = &plan.Expr{
-					Typ: *constTextType,
+					Typ: constTextType,
 					Expr: &plan.Expr_P{
 						P: &plan.ParamRef{
 							Pos: int32(nv.Offset),
@@ -1063,7 +1063,7 @@ func buildValueScan(
 				}
 			} else if nv, ok := expr.Expr.(*tree.FuncExpr); ok {
 				if checkExprHasParamExpr(nv.Exprs) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, &col.Typ, nil)
+					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 					binder.builder = builder
 					binder.ctx = bindCtx
 					updateExpr, err = binder.BindExpr(nv, 0, true)
@@ -1073,7 +1073,7 @@ func buildValueScan(
 				}
 			} else if nv, ok := expr.Expr.(*tree.BinaryExpr); ok {
 				if checkExprHasParamExpr([]tree.Expr{nv.Right}) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, &col.Typ, nil)
+					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 					binder.builder = builder
 					binder.ctx = bindCtx
 					updateExpr, err = binder.BindExpr(nv.Right, 0, true)
@@ -1154,7 +1154,7 @@ func appendForeignConstrantPlan(
 			errExpr := makePlan2StringConstExprWithType("Cannot add or update a child row: a foreign key constraint fails")
 			for i := range tableDef.Fkeys {
 				colExpr := &plan.Expr{
-					Typ: *makePlan2Type(&rowIdTyp),
+					Typ: makePlan2Type(&rowIdTyp),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							ColPos: int32(beginIdx + i),

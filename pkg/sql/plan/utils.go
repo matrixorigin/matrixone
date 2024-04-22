@@ -310,7 +310,7 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		// expr must be bool type, if not, try to do type convert
 		// but just ignore the subQuery. It will be solved at optimizer.
 		if expr.GetSub() == nil {
-			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, &plan.Type{Id: int32(types.T_bool)})
+			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, plan.Type{Id: int32(types.T_bool)})
 			if err != nil {
 				return nil, err
 			}
