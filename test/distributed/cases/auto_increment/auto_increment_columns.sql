@@ -342,7 +342,7 @@ b bigint auto_increment,
 c varchar(25)
 );
 
-load data infile '$resources/auto_increment_columns/auto_increment_1.csv' into table t11 fields terminated by ',';
+load data infile '$resources/auto_increment_columns/auto_increment_1.csv' into table t11;
 select * from t11 order by a;
 drop table t11;
 
@@ -353,7 +353,7 @@ a int primary key auto_increment,
 b bigint auto_increment,
 c varchar(25)
 );
-load data infile '$resources/auto_increment_columns/auto_increment_2.csv' into table t12 fields terminated by ',';
+load data infile '$resources/auto_increment_columns/auto_increment_2.csv' into table t12;
 select * from t12 order by a;
 
 drop table t12;
@@ -365,7 +365,7 @@ b bigint auto_increment,
 c varchar(25)
 );
 
-load data infile '$resources/auto_increment_columns/auto_increment_3.csv' into table t13 fields terminated by ',';
+load data infile '$resources/auto_increment_columns/auto_increment_3.csv' into table t13;
 select * from t13 order by a;
 
 drop table t13;

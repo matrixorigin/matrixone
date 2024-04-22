@@ -144,7 +144,7 @@ create external table ex_table_3_5(char_1 char(20),char_2 varchar(10),date_1 dat
 select * from ex_table_3_5;
 char_1    char_2    date_1    date_2    date_3
 78    yellow 芝士    2020-10-09    0001-01-01 00:00:00    2011-01-20 03:14:08
-create external table ex_table_31(clo1 tinyint default 8,clo2 smallint null,clo3 int not null,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255),primary key(clo1))infile{"filepath"='$resources/external_table_file/ex_table_3_6.csv'} fields terminated by ',';
+create external table ex_table_31(clo1 tinyint default 8,clo2 smallint null,clo3 int not null,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255),primary key(clo1))infile{"filepath"='$resources/external_table_file/ex_table_3_6.csv'};
 select clo1,clo2,clo3,clo4,clo5,clo6,clo7,clo8,col9,col10,col11,col12,col13,col15,col16,col17,col18,col19,col20 from ex_table_31;
 clo1    clo2    clo3    clo4    clo5    clo6    clo7    clo8    col9    col10    col11    col12    col13    col15    col16    col17    col18    col19    col20
 1    11    1    2    15    600    700    56    3.4365    5.559    math    2020-04-30    1998-08-07 00:00:00    true    602.53    abcdefg    message    s@126.com    comment balabalabalabalabala
@@ -183,15 +183,15 @@ clo1    clo5    clo7    col12    col13    col16
 create external table ex_table_7(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_4.csv'} fields terminated by '#' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_7;
-invalid input: invalid field or comment delimiter
+csv: invalid field or comment delimiter
 create external table ex_table_8(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_5.csv'} fields terminated by '\n' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_8;
-invalid input: invalid field or comment delimiter
+csv: invalid field or comment delimiter
 create external table ex_table_9(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_6.csv'} fields terminated by '\r' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_9;
-invalid input: invalid field or comment delimiter
+csv: invalid field or comment delimiter
 create external table ex_table_10(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_7.csv'} fields terminated by ''  lines terminated by '\n';
 select * from ex_table_10;
@@ -216,7 +216,7 @@ select clo1,clo5,clo7,col12,col13,col16,col17,col18  from ex_table_13;
 clo1    clo5    clo7    col12    col13    col16    col17    col18
 -62    154    2658450361    4149-04-30    5732-08-07 00:00:00    602.53    I,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghi    HI,G;KL/MN?OPQR.STU-_+=VWXYZa
 91    122    625429347    2865-02-22    9976-06-04 00:00:00    878.09    HI,G;KL/MN?OPQR.STU-_+=VWXYZabcd    QR.STU-_+=VWXYZabcdefghigklmnopqrstu
-create external table ex_table_14(clo1 tinyint primary key,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_10.csv'} fields terminated by ',';
+create external table ex_table_14(clo1 tinyint primary key,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_10.csv'};
 select clo1,clo5,clo7,col12,col13,col16,col17,col18  from ex_table_14;
 clo1    clo5    clo7    col12    col13    col16    col17    col18
 -62    154    2658450361    4149-04-30    5732-08-07 00:00:00    602.53    I,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghi    HI,G;KL/MN?OPQR.STU-_+=VWXYZa
@@ -264,7 +264,7 @@ create external table ex_table_none(clo1 tinyint,clo2 smallint,clo3 int,clo4 big
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255)) infile{"filepath"='$resources/external_table_file/ex_table_sep_8.csv',"compression"='none'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select clo1,clo5,clo7,col12,col13,col16,col17,col18  from ex_table_none;
 clo1    clo5    clo7    col12    col13    col16    col17    col18
--62    154    2658450361    4149-04-30    5732-08-07 00:00:00    602.53     "IG;KL/MN?OPQR.STU-_+=VWXYZabcdefghi"    HI,G;KL/MN?OPQR.STU-_+=VWXYZa
+-62    154    2658450361    4149-04-30    5732-08-07 00:00:00    602.53    IG;KL/MN?OPQR.STU-_+=VWXYZabcdefghi    HI,G;KL/MN?OPQR.STU-_+=VWXYZa
 91    122    625429347    2865-02-22    9976-06-04 00:00:00    878.09    HI,G;KL/MN?OPQR.STU-_+=VWXYZabcd    QR.STU-_+=VWXYZabcdefghigklmnopqrstu
 create external table ex_table_nocomp(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_bzip.bz2'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select char_1,char_2,date_1,date_2 from ex_table_nocomp;
@@ -318,13 +318,13 @@ create external table ex_table_space(a varchar(200), b varchar(200), c varchar(2
 select length(a), length(b), length(c) from ex_table_space;
 length(a)    length(b)    length(c)
 4    6    8
-6    8    10
+2    2    2
 create table t1(a varchar(100), b varchar(100), c varchar(100));
 load data infile '$resources/external_table_file/ex_table_space.csv' into table t1 fields terminated by '|' enclosed by '\"' lines terminated by '\n';
 select length(a), length(b), length(c) from t1;
 length(a)    length(b)    length(c)
 4    6    8
-6    8    10
+2    2    2
 create external table ex_table_null( col1 int, col2 float, col3 varchar, col4 blob, col6 date, col7 bool )infile{"filepath"='$resources/external_table_file/ex_table_null.csv'} fields terminated by ',' enclosed by '"' lines terminated by '\n' set col3=nullif(col3,'null');
 select max(col3), min(col3) from ex_table_null;
 max(col3)    min(col3)

@@ -162,7 +162,7 @@ select * from time_03;
 t1    t2    t3    t4
 insert into time_03 values (40,"37","gloooooooge","35:50");
 truncate table time_03;
-load data infile "$resources/external_table_file/time_ex_table.csv" into table time_03 fields terminated by ',';
+load data infile "$resources/external_table_file/time_ex_table.csv" into table time_03;
 create external table time_ex_01(t1 int,t2 time,t3 varchar(25),t4 time)  infile{"filepath"='$resources/external_table_file/time_ex_table.csv'} fields terminated by ',' enclosed by '\"';
 select * from time_ex_01;
 t1    t2    t3    t4

@@ -28,7 +28,7 @@ drop database rdb;
 
 create table r1(c1 int,c2 varchar(20));
 insert into r_test values(8,'c');
-load data infile '$resources/load_data/integer_numbers_1.csv' into table r_test fields terminated by ',';
+load data infile '$resources/load_data/integer_numbers_1.csv' into table r_test;
 update r_test set c1=5 where c2='h';
 delete from r_test where c1=4;
 select * from r_test;

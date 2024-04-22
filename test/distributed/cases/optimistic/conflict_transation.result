@@ -67,7 +67,7 @@ select * from ct_04;
 a    b
 create table ct_05(a int,b varchar(25) primary key);
 begin;
-load data infile '$resources/load_data/ct_file.csv' into table ct_05 fields terminated by ',';
+load data infile '$resources/load_data/ct_file.csv' into table ct_05;
 Duplicate entry 'apple' for key 'b'
 commit;
 select * from ct_05;

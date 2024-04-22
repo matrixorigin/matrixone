@@ -159,7 +159,7 @@ stage_name    stage_status    comment
 local_stage    enabled
 select * from stage_table into outfile 'local_stage:/stage_table1.csv';
 truncate table stage_table;
-load data infile '$resources/into_outfile/stage_table1.csv' into table stage_table fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/stage_table1.csv' into table stage_table ignore 1 lines;
 select r_name from stage_table;
 r_name
 AFRICA
@@ -173,7 +173,7 @@ stage_name    stage_status    comment
 local_stage    enabled
 select * from stage_table into outfile 'local_stage:/stage_table2.csv';
 truncate table stage_table;
-load data infile '$resources/into_outfile_2/stage_table2.csv' into table stage_table fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile_2/stage_table2.csv' into table stage_table ignore 1 lines;
 select r_name from stage_table;
 r_name
 AFRICA

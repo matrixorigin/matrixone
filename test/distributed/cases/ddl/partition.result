@@ -20,7 +20,7 @@ drop table if exists pt_table_43;
 drop table if exists pt_table_44;
 drop table if exists pt_table_45;
 create table pt_table_1(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col1))partition by hash(col1)partitions 4;
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_1 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_1;
 select col1 from pt_table_1;
 col1
 -8
@@ -35,7 +35,7 @@ col1
 -75
 110
 create table pt_table_2(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col5))partition by hash(col5);
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_2 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_2;
 select col5 from pt_table_2;
 col5
 154
@@ -50,7 +50,7 @@ col5
 98
 56
 create table pt_table_3(col1 tinyint not null,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 char(255) default 'style nine',primary key(col1,col20))partition by hash(col1)partitions 4;
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_3 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_3;
 select col1 from pt_table_3;
 col1
 -8
@@ -65,7 +65,7 @@ col1
 -75
 110
 create table pt_table_5(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 char(255))partition by hash(year(col12));
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_5 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_5;
 select col12 from pt_table_5;
 col12
 4149-04-30
@@ -83,7 +83,7 @@ show create table pt_table_5;
 Table    Create Table
 pt_table_5    CREATE TABLE `pt_table_5` (\n`col1` TINYINT DEFAULT NULL,\n`col2` SMALLINT DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`clo4` BIGINT DEFAULT NULL,\n`col5` TINYINT UNSIGNED DEFAULT NULL,\n`col6` SMALLINT UNSIGNED DEFAULT NULL,\n`col7` INT UNSIGNED DEFAULT NULL,\n`col8` BIGINT UNSIGNED DEFAULT NULL,\n`col9` FLOAT DEFAULT NULL,\n`col10` DOUBLE DEFAULT NULL,\n`col11` VARCHAR(255) DEFAULT NULL,\n`col12` DATE DEFAULT NULL,\n`col13` DATETIME DEFAULT NULL,\n`col14` TIMESTAMP DEFAULT NULL,\n`col15` BOOL DEFAULT NULL,\n`col16` DECIMAL(5,2) DEFAULT NULL,\n`col17` TEXT DEFAULT NULL,\n`col18` VARCHAR(255) DEFAULT NULL,\n`col19` VARCHAR(255) DEFAULT NULL,\n`col20` CHAR(255) DEFAULT NULL\n) partition by hash (year(col12))
 create table pt_table_6(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by LINEAR hash(col2)partitions 10;
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_6 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_6;
 select col2 from pt_table_6;
 col2
 5807
@@ -108,7 +108,7 @@ Field 'col12' is of a not allowed type for this type of partitioning
 create table pt_table_13(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 char(255))partition by (col12);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 351 near " (col12);";
 create table pt_table_21(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col2))partition by key(col2)partitions 4;
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_21 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_21;
 select col2 from pt_table_21;
 col2
 5807
@@ -123,7 +123,7 @@ col2
 19514
 775
 create table pt_table_22(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col6,col18))partition by key(col6,col18)partitions 4;
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_22 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_22;
 select col2 from pt_table_22;
 col2
 -18596
@@ -138,7 +138,7 @@ col2
 -30001
 775
 create table pt_table_23(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col19))partition by key(col19)partitions 4;
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_23 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_23;
 select col19 from pt_table_23;
 col19
 +=Zab
@@ -153,7 +153,7 @@ STU-_+=Zabcdefghigklmnopqrstuvwxyz01
 I,G;KL/MN?OPQR.STU-_+=Zabcdefghigklmnopq
 DEF,GHI,G;KL/MN?OPQR.STU-_+=Zabcdefghigklmnopqrstuvwxyz0123456
 create table pt_table_24(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by key(col13)partitions 10;
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_24 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_24;
 select col13 from pt_table_24;
 col13
 3114-10-05 23:59:59
@@ -168,7 +168,7 @@ col13
 9976-06-04 00:00:00
 6438-11-29 00:00:00
 create table pt_table_31(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col3))partition by range(col3)(PARTITION p0 VALUES LESS THAN (100),PARTITION p1 VALUES LESS THAN (2000),PARTITION p2 VALUES LESS THAN (4000),PARTITION p3 VALUES LESS THAN (6000),PARTITION p5 VALUES LESS THAN MAXVALUE);
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_31 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_31;
 select col2 from pt_table_31;
 col2
 5807
@@ -183,7 +183,7 @@ col2
 -18596
 19053
 create table pt_table_32(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by range(col7)(PARTITION p0 VALUES LESS THAN (100),PARTITION p1 VALUES LESS THAN (2000),PARTITION p2 VALUES LESS THAN (4000),PARTITION p3 VALUES LESS THAN (6000),PARTITION p5 VALUES LESS THAN MAXVALUE);
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_32 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_32;
 select col2 from pt_table_32;
 col2
 5807
@@ -198,7 +198,7 @@ col2
 -23777
 19053
 create table pt_table_33(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 char(255),primary key(col3,col7))partition by range(col7)(PARTITION p0 VALUES LESS THAN (100),PARTITION p1 VALUES LESS THAN (2000),PARTITION p2 VALUES LESS THAN (4000),PARTITION p3 VALUES LESS THAN (6000),PARTITION p5 VALUES LESS THAN MAXVALUE);
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_33 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_33;
 select col2 from pt_table_33;
 col2
 5807
@@ -215,7 +215,7 @@ col2
 create table pt_table_34(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by range(year(col14))(PARTITION p0 VALUES LESS THAN (1991) comment ='expression range',PARTITION p1 VALUES LESS THAN (2000),PARTITION p2 VALUES LESS THAN (2009)comment ='range',PARTITION p3 VALUES LESS THAN (2010),PARTITION p5 VALUES LESS THAN MAXVALUE);
 Constant, random or timezone-dependent expressions in (sub)partitioning function are not allowed
 create table pt_table_35(col1 int not null,col2 smallint,col3 int not null,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col3,col1))partition by range columns(col1,col3)(PARTITION p0 VALUES LESS THAN (100,300),PARTITION p1 VALUES LESS THAN (300,500),PARTITION p2 VALUES LESS THAN (500,MAXVALUE),PARTITION p3 VALUES LESS THAN (6000,MAXVALUE),PARTITION p4 VALUES LESS THAN (MAXVALUE,MAXVALUE));
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_35 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_35;
 select col14 from pt_table_35;
 col14
 1975-09-09 23:59:59
@@ -230,7 +230,7 @@ col14
 1996-08-27 23:59:59
 2011-10-04 00:00:00
 create table pt_table_36(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col3))partition by range(col3)(PARTITION p0 VALUES LESS THAN (100+50),PARTITION p1 VALUES LESS THAN (2000+100),PARTITION p2 VALUES LESS THAN (4000),PARTITION p3 VALUES LESS THAN (6000),PARTITION p5 VALUES LESS THAN MAXVALUE);
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_36 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_36;
 select col2 from pt_table_36;
 col2
 5807
@@ -259,7 +259,7 @@ For RANGE partitions each partition must be defined
 create table pt_table_37(col1 tinyint not null,col2 smallint,col3 int not null,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col3,col1))partition by range columns(col1,col3)(PARTITION p0 VALUES LESS THAN (100,300),PARTITION p1 VALUES LESS THAN (300,500),PARTITION p2 VALUES LESS THAN (500,MAXVALUE),PARTITION p3 VALUES LESS THAN (6000,MAXVALUE),PARTITION p4 VALUES LESS THAN (MAXVALUE,MAXVALUE));
 Data truncation: data out of range: data type int8, value '300'
 create table pt_table_41(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col4)) partition by list(col4) (PARTITION r0 VALUES IN (-6041648745842399623, 2267877015687134490, 7769629822818484334),PARTITION r1 VALUES IN (1234138289513302348, -3038428195984464330, -1681456935776973509),PARTITION r2 VALUES IN (-484407619835391694, -5246968895134993792, -3237107390156157130),PARTITION r3 VALUES IN (-2998549470145089608, 6123486173032718578, 6123486173032718570));
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_41 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_41;
 select col8 from pt_table_41 order by col8;
 col8
 3143191107533743301
@@ -274,7 +274,7 @@ col8
 17397115807377870895
 18225693328091251880
 create table pt_table_42(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text) partition by list(col8) (PARTITION r0 VALUES IN (14999475422109240954, 6204822205090614210, 6625004793680807490),PARTITION r1 VALUES IN (17397115807377870895, 3143191107533743301, 13381191796017069332),PARTITION r2 VALUES IN (8740918055557791046, 4029688785176298663, 6625004793680807495),PARTITION r3 VALUES IN (16635491969502097586, 7094376021034692269, 18225693328091251880));
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_42 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_42;
 select col8 from pt_table_42 order by col8;
 col8
 3143191107533743301
@@ -291,7 +291,7 @@ col8
 create table pt_table_43(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by list(col10) (PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
 Field 'col10' is of a not allowed type for this type of partitioning
 create table pt_table_44(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col3,col4)) partition by list columns(col3,col4) (PARTITION p0 VALUES IN( (-1889972806, 7769629822818484334), (NULL,NULL) ),PARTITION p1 VALUES IN( (-1030254547, -5246968895134993792),(-1006909301, -6041648745842399623),( -232972021, -3237107390156157130)) comment='list column comment' ,PARTITION p2 VALUES IN( (-179559641, 1234138289513302348),(330484802, -2998549470145089608),(476482983, -484407619835391694) ),PARTITION p3 VALUES IN( (837702822, 6123486173032718578),(1124555433, -1681456935776973509),(1287532466, -3038428195984464330),(1449911253, 2267877015687134490)));
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_44 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_44;
 select col3,col4 from pt_table_44 order by col3,col4;
 col3    col4
 -1889972806    7769629822818484334
@@ -306,7 +306,7 @@ col3    col4
 1287532466    -3038428195984464330
 1449911253    2267877015687134490
 create table pt_table_45(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text) partition by list(year(col13))(PARTITION r0 VALUES IN (5732, 9976, 3647, 6216),PARTITION r1 VALUES IN (7031, 6868, 4844, 6438),PARTITION r2 VALUES IN (3114, 1014, 4023, 2008));
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_45 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_45;
 select col3,col4 from pt_table_45 order by col3,col4;
 col3    col4
 -1889972806    7769629822818484334

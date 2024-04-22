@@ -20,7 +20,7 @@ show databases like "mysql";
 select * from result_scan(last_query_id()) as u;
 
 -- test select table result cache
-load data infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',';
+load data infile '$resources/load_data/test_1.csv' into table test_table;
 /* save_result */select * from test_table;
 select * from result_scan(last_query_id()) as u;
 /* save_result */select col1 from test_table;

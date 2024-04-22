@@ -5,7 +5,7 @@ col1 tinyint
 );
 
 -- load data
-load data inline format='csv', data='1\n2\n' into table t1 fields terminated by ',';
+load data inline format='csv', data='1\n2\n' into table t1;
 load data  inline format='csv', data=$XXX$
 1
 2

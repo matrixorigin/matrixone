@@ -29,8 +29,8 @@ create table t2 (a json,b int);
 delete from t1;
 insert into t1 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
 select * from t1 into outfile '$resources/json/export_1.csv' fields enclosed by '"' force_quote(a);
-load data infile '$resources/json/export_1.csv' into table t1 fields terminated by ',' ignore 1 lines;
-load data infile '$resources/json/export_1.csv' into table t2 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/json/export_1.csv' into table t1 ignore 1 lines;
+load data infile '$resources/json/export_1.csv' into table t2 ignore 1 lines;
 select * from t1;
 a	b
 {"t1": "a"}	1
@@ -68,7 +68,7 @@ select * from t1;
 a	b
 {"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1
 [1, true, false, null, "aaa", 1.1, {"t": false}]	2
-load data  infile '$resources/json/data_2.csv' into table t1 fields terminated by ',';
+load data  infile '$resources/json/data_2.csv' into table t1;
 select * from t1;
 a	b
 {"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1
@@ -76,7 +76,7 @@ a	b
 {"a": 1, "b": [1, 2, {"c": 1.5}, null, true, false]}	1
 drop table if exists t3;
 create table t3 (a json,b json);
-load data  infile '$resources/json/data_3.csv' into table t3 fields terminated by ',';
+load data  infile '$resources/json/data_3.csv' into table t3;
 select * from t3;
 a	b
 {"a": 1, "b": [1, 2, {"c": 1.5}, null, true, false]}	{"b": 1}

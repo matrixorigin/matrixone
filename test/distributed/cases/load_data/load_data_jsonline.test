@@ -29,7 +29,7 @@ select * from jsonline_t1;
 select * from jsonline_t1 into outfile '$resources/into_outfile/json_outfile_integer_numbers_1.csv';
 select * from jsonline_t1;
 delete from jsonline_t1;
-load data infile '$resources/into_outfile/json_outfile_integer_numbers_1.csv' into table jsonline_t1 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/json_outfile_integer_numbers_1.csv' into table jsonline_t1 ignore 1 lines;
 select * from jsonline_t1;
 delete from jsonline_t1;
 load data infile{'filepath'='$resources/load_data/integer_numbers_1_array.jl','format'='jsonline','jsondata'='array'}into table jsonline_t1;
@@ -50,7 +50,7 @@ select * from jsonline_t2 into outfile '$resources/into_outfile/json_outfile_cha
 select * from jsonline_t2;
 delete from jsonline_t2;
 -- load data
-load data infile '$resources/into_outfile/json_outfile_char_varchar_1.csv' into table jsonline_t2 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/json_outfile_char_varchar_1.csv' into table jsonline_t2 ignore 1 lines;
 select * from jsonline_t2;
 delete from jsonline_t2;
 load data infile{'filepath'='$resources/load_data/char_varchar_1_array.json','format'='jsonline','jsondata'='array'}into table jsonline_t2;
@@ -83,7 +83,7 @@ select * from jsonline_t4;
 -- into outfile
 select * from jsonline_t4 into outfile '$resources/into_outfile/json_outfile_time_date_1.csv';
 -- load data
-load data infile '$resources/into_outfile/json_outfile_time_date_1.csv' into table jsonline_t4 fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/json_outfile_time_date_1.csv' into table jsonline_t4 ignore 1 lines;
 select * from jsonline_t4;
 truncate table jsonline_t4;
 load data infile{'filepath'='$resources/load_data/time_date_1_array.jl','format'='jsonline','jsondata'='array'}into table jsonline_t4;
@@ -113,7 +113,7 @@ load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='j
 load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','jsondata'='object'}into table jsonline_t7;
 drop table jsonline_t7;
 create table jsonline_t7(col1 float,col2 double,col3 decimal(38,16),col4 decimal(38,16));
-load data infile{'filepath'='$resources/load_data/float_1.json','format'='csv'} into table jsonline_t7 fields terminated by ',';
+load data infile{'filepath'='$resources/load_data/float_1.json','format'='csv'}into table jsonline_t7;
 load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t7;
 
 --column constraint test

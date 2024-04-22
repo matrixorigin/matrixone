@@ -673,7 +673,7 @@ col1    col2    col3
 76    opp    8.94
 823    var    0.98
 create table p_table_19(col1 int,col2 date,col3 varchar(25))partition by key(col2)partitions 6;
-load data infile '$resources/load_data/key_partition_data.csv' into table p_table_19 fields terminated by ',';
+load data infile '$resources/load_data/key_partition_data.csv' into table p_table_19;
 select * from p_table_19 where col1>1500;
 col1    col2    col3
 2300    2022-07-22    mnsef
@@ -710,7 +710,7 @@ count(*)
 12
 drop table p_table_19;
 create table p_table_19(col1 int auto_increment,col2 date,col3 varchar(25),primary key(col1,col2))partition by key(col2)partitions 3;
-load data infile '$resources/load_data/key_partition_data.csv' into table p_table_19 fields terminated by ',';
+load data infile '$resources/load_data/key_partition_data.csv' into table p_table_19;
 select * from p_table_19 where col1>1500;
 col1    col2    col3
 2300    2022-07-22    mnsef
@@ -959,7 +959,7 @@ show create table p_hash_table_03;
 Table    Create Table
 p_hash_table_03    CREATE TABLE `p_hash_table_03` (\n`col1` BIGINT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(30) DEFAULT NULL,\n`col3` DATE DEFAULT '1970-01-01',\n`col4` INT DEFAULT NULL,\nUNIQUE KEY `k1` (`col1`,`col2`)\n) partition by hash (col1) partitions 4
 create table p_hash_table_04(col1 bigint ,col2 date,col3 varchar(30))partition by hash(year(col2)) partitions 4;
-load data infile '$resources/load_data/key_partition_data.csv' into table p_hash_table_04 fields terminated by ',';
+load data infile '$resources/load_data/key_partition_data.csv' into table p_hash_table_04;
 select * from `%!%p0%!%p_hash_table_04`;
 col1    col2    col3
 1050    2010-08-12    yyyyyyssssss
@@ -1236,7 +1236,7 @@ select * from `%!%p3%!%p_hash_table_09`;
 col1    col2    col3    col4
 200    55    2021-08-11    72
 create table p_hash_table_10(col1 bigint ,col2 date,col3 varchar(30))partition by hash(to_days(col2)) partitions 4;
-load data infile '$resources/load_data/key_partition_data.csv' into table p_hash_table_10 fields terminated by ',';
+load data infile '$resources/load_data/key_partition_data.csv' into table p_hash_table_10;
 select * from `%!%p0%!%p_hash_table_10`;
 col1    col2    col3
 1050    2010-08-12    yyyyyyssssss
@@ -1259,7 +1259,7 @@ col1    col2    col3
 8972    2005-02-02    ttt
 drop table p_hash_table_10;
 create table p_hash_table_10(col1 bigint ,col2 date,col3 varchar(30))partition by hash(to_seconds(col2)) partitions 4;
-load data infile '$resources/load_data/key_partition_data.csv' into table p_hash_table_10 fields terminated by ',';
+load data infile '$resources/load_data/key_partition_data.csv' into table p_hash_table_10;
 select * from `%!%p0%!%p_hash_table_10`;
 col1    col2    col3
 1000    1990-02-02    ooopppppppptttttt

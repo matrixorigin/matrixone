@@ -3,13 +3,13 @@ create database vecdb2;
 use vecdb2;
 drop table if exists vec_table;
 create table vec_table(a int, b vecf32(3), c vecf64(3));
-load data infile '$resources/load_data/array_out.csv' into table vec_table fields terminated by ',' ignore 1 lines;
+load data infile '$resources/load_data/array_out.csv' into table vec_table ignore 1 lines;
 select * from vec_table;
 a    b    c
 1    [1, 2, 3]    [4, 5, 6]
 select * from vec_table into outfile '$resources/into_outfile/array_out.csv';
 delete from vec_table;
-load data infile '$resources/into_outfile/array_out.csv' into table vec_table fields terminated by ',' ignore 1 lines;
+load data infile '$resources/into_outfile/array_out.csv' into table vec_table ignore 1 lines;
 select * from vec_table;
 a    b    c
 1    [1, 2, 3]    [4, 5, 6]

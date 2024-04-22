@@ -120,7 +120,7 @@ select * from ex_table_3_4;
 create external table ex_table_3_5(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_3_5.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_3_5;
 
-create external table ex_table_31(clo1 tinyint default 8,clo2 smallint null,clo3 int not null,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255),primary key(clo1))infile{"filepath"='$resources/external_table_file/ex_table_3_6.csv'} fields terminated by ',';
+create external table ex_table_31(clo1 tinyint default 8,clo2 smallint null,clo3 int not null,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255),primary key(clo1))infile{"filepath"='$resources/external_table_file/ex_table_3_6.csv'};
 select clo1,clo2,clo3,clo4,clo5,clo6,clo7,clo8,col9,col10,col11,col12,col13,col15,col16,col17,col18,col19,col20 from ex_table_31;
 
 create external table ex_table_4(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
@@ -168,7 +168,7 @@ create external table ex_table_13(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigin
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_10.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\r\n';
 select clo1,clo5,clo7,col12,col13,col16,col17,col18  from ex_table_13;
 --缺省fields terminated ，terminated，ENCLOSED(默认分隔符，封闭符"")
-create external table ex_table_14(clo1 tinyint primary key,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_10.csv'} fields terminated by ',';
+create external table ex_table_14(clo1 tinyint primary key,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_10.csv'};
 select clo1,clo5,clo7,col12,col13,col16,col17,col18  from ex_table_14;
 --text
 create external table ex_table_text(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_char.text'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';

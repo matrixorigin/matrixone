@@ -116,7 +116,7 @@ col8 text,
 col9 varchar
 );
 
-load data infile '$resources/load_data/cluster_table.csv' into table cluster_table_2 fields terminated by ',';
+load data infile '$resources/load_data/cluster_table.csv' into table cluster_table_2;
 update cluster_table_2 set account_id=(select account_id from mo_account where account_name="test_account1") where account_id=1;
 update cluster_table_2 set account_id=(select account_id from mo_account where account_name="test_account2") where account_id=2;
 select col1,col2,col3,col4,col5,col6,col7,col8,col9 from cluster_table_2;

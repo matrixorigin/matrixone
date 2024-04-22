@@ -52,7 +52,7 @@ drop view atomic_view_2;
 create table atomic_table_3a(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col1))partition by hash(col1)partitions 4;
 -- @bvt:issue#5941
 begin;
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  atomic_table_3a fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  atomic_table_3a;
 select col1,col2 from atomic_table_3a;
 update atomic_table_3a set col1=400;
 rollback;
@@ -61,7 +61,7 @@ select col1 from atomic_table_3a;
 
 -- @bvt:issue#5941
 start transaction ;
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  atomic_table_3a fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  atomic_table_3a;
 select count(*) from atomic_table_3a;
 update atomic_table_3a set col1=100;
 commit;
@@ -69,7 +69,7 @@ select col1 from atomic_table_3a;
 -- @bvt:issue
 
 create table atomic_table_3(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col1))partition by hash(col1)partitions 4;
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  atomic_table_3 fields terminated by ',';
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  atomic_table_3;
 start transaction ;
 update  atomic_table_3 set col2=20;
 select  col1,col2 from atomic_table_3;

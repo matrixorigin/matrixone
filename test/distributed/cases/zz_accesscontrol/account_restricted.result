@@ -35,7 +35,7 @@ create table r1(c1 int,c2 varchar(20));
 internal error: do not have privilege to execute the statement
 insert into r_test values(8,'c');
 internal error: do not have privilege to execute the statement
-load data infile '$resources/load_data/integer_numbers_1.csv' into table r_test fields terminated by ',';
+load data infile '$resources/load_data/integer_numbers_1.csv' into table r_test;
 internal error: do not have privilege to execute the statement
 update r_test set c1=5 where c2='h';
 internal error: do not have privilege to execute the statement
