@@ -173,6 +173,7 @@ var (
 			"REFERENCED_TABLE_NAME varchar(64)," +
 			"REFERENCED_COLUMN_NAME varchar(64)" +
 			");",
+
 		fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS select "+
 			"'def' as TABLE_CATALOG,"+
 			"att_database as TABLE_SCHEMA,"+
@@ -196,7 +197,9 @@ var (
 			"att_comment as COLUMN_COMMENT,"+
 			"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 			"if(true, NULL, 0) as SRS_ID "+
-			"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
+			"from mo_catalog.mo_columns "+
+			"where account_id = current_account_id() and att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
+
 		"CREATE TABLE IF NOT EXISTS PROFILING (" +
 			"QUERY_ID int NOT NULL DEFAULT '0'," +
 			"SEQ int NOT NULL DEFAULT '0'," +
@@ -239,6 +242,7 @@ var (
 			"if(true, NULL, '') AS SQL_PATH," +
 			"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
 			"FROM mo_catalog.mo_database where account_id = current_account_id() or (account_id = 0 and datname in ('mo_catalog'))",
+
 		"CREATE TABLE IF NOT EXISTS CHARACTER_SETS(" +
 			"CHARACTER_SET_NAME varchar(64)," +
 			"DEFAULT_COLLATE_NAME varchar(64)," +
@@ -299,7 +303,7 @@ var (
 			"FROM mo_catalog.mo_tables tbl "+
 			"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relkind != '%s';", catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel),
 
-		"CREATE VIEW IF NOT EXISTS `PARTITIONS` AS " +
+		"CREATE VIEW IF NOT EXISTS information_schema.`PARTITIONS` AS " +
 			"SELECT " +
 			"'def' AS `TABLE_CATALOG`," +
 			"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
@@ -338,9 +342,9 @@ var (
 			"NULL AS `TABLESPACE_NAME` " +
 			"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` " +
 			"ON `part`.`table_id` = `tbl`.`rel_id` " +
-			"WHERE `tbl`.`partitioned` = 1;",
+			"WHERE `tbl`.`account_id` = current_account_id() and `tbl`.`partitioned` = 1;",
 
-		"CREATE VIEW IF NOT EXISTS VIEWS AS " +
+		"CREATE VIEW IF NOT EXISTS information_schema.VIEWS AS " +
 			"SELECT 'def' AS `TABLE_CATALOG`," +
 			"tbl.reldatabase AS `TABLE_SCHEMA`," +
 			"tbl.relname AS `TABLE_NAME`," +
@@ -352,7 +356,7 @@ var (
 			"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
 			"'utf8mb4_0900_ai_ci' AS `COLLATION_CONNECTION` " +
 			"FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
-			"WHERE tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'",
+			"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'",
 
 		"CREATE VIEW IF NOT EXISTS `STATISTICS` AS " +
 			"select 'def' AS `TABLE_CATALOG`," +
