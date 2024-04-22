@@ -35,7 +35,6 @@ func LtTypeLess[T Lter[T]](a, b T) bool         { return a.Lt(b) }
 func TsLess(a, b types.TS) bool           { return bytes.Compare(a[:], b[:]) < 0 }
 func RowidLess(a, b types.Rowid) bool     { return bytes.Compare(a[:], b[:]) < 0 }
 func BlockidLess(a, b types.Blockid) bool { return bytes.Compare(a[:], b[:]) < 0 }
-func bytesLess(a, b []byte) bool          { return bytes.Compare(a, b) < 0 }
 
 const nullFirst = true
 
@@ -85,7 +84,6 @@ type heapElem[T any] struct {
 	data   T
 	isNull bool
 	src    uint32
-	next   uint32
 }
 
 type heapSlice[T any] struct {
