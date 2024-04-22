@@ -17,6 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
+	"hash/crc32"
+	goruntime "runtime"
+	"runtime/debug"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -57,10 +62,6 @@ import (
 	"github.com/panjf2000/ants/v2"
 	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
-	"hash/crc32"
-	goruntime "runtime"
-	"runtime/debug"
-	"sync"
 )
 
 func newScope(magic magicType) *Scope {
@@ -94,6 +95,28 @@ func (s *Scope) release() {
 	reuse.Free[Scope](s, nil)
 }
 
+func (s *Scope) initDataSource(c *Compile) (err error) {
+	if s.DataSource == nil {
+		return nil
+	}
+	if s.DataSource.isConst {
+		if s.DataSource.Bat != nil {
+			return
+		}
+		bat, err := constructValueScanBatch(s.Proc.Ctx, c.proc, s.DataSource.node)
+		if err != nil {
+			return err
+		}
+		s.DataSource.Bat = bat
+	} else {
+		if s.DataSource.TableDef != nil {
+			return nil
+		}
+		return c.compileTableScanDataSource(s)
+	}
+	return nil
+}
+
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
 	var p *pipeline.Pipeline
@@ -104,7 +127,9 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("sql", c.sql),
 				zap.String("error", err.Error()))
 		}
-		p.Cleanup(s.Proc, err != nil, err)
+		if p != nil {
+			p.Cleanup(s.Proc, err != nil, err)
+		}
 	}()
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
@@ -120,7 +145,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 			id = s.DataSource.TableDef.TblId
 		}
 		p = pipeline.New(id, s.DataSource.Attributes, s.Instructions, s.Reg)
-		if s.DataSource.Bat != nil {
+		if s.DataSource.isConst {
 			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 		} else {
 			var tag int32
@@ -147,6 +172,20 @@ func (s *Scope) SetContextRecursively(ctx context.Context) {
 	for _, scope := range s.PreScopes {
 		scope.SetContextRecursively(newCtx)
 	}
+}
+
+func (s *Scope) InitAllDataSource(c *Compile) error {
+	err := s.initDataSource(c)
+	if err != nil {
+		return err
+	}
+	for _, scope := range s.PreScopes {
+		err := scope.InitAllDataSource(c)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
@@ -380,6 +419,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 // ParallelRun try to execute the scope in parallel way.
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	var rds []engine.Reader
+	var err error
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	if s.IsJoin {
@@ -392,7 +432,6 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		return s.MergeRun(c)
 	}
 
-	var err error
 	err = s.handleRuntimeFilter(c)
 	if err != nil {
 		return err
@@ -671,16 +710,16 @@ func (s *Scope) LoadRun(c *Compile) error {
 	mcpu := s.NodeInfo.Mcpu
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
-		bat := batch.NewWithSize(1)
-		{
-			bat.SetRowCount(1)
-		}
 		ss[i] = newScope(Normal)
 		ss[i].NodeInfo = s.NodeInfo
 		ss[i].DataSource = &Source{
-			Bat: bat,
+			isConst: true,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
+		err := ss[i].initDataSource(c)
+		if err != nil {
+			return err
+		}
 	}
 	newScope, err := newParallelScope(c, s, ss)
 	if err != nil {
@@ -778,6 +817,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			flg = true
 			idx = i
 			arg := in.Arg.(*group.Argument)
+			if arg.AnyDistinctAgg() {
+				continue
+			}
 			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeGroup,
@@ -796,10 +838,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: group.NewArgument().
-						WithAggs(arg.Aggs).
 						WithExprs(arg.Exprs).
 						WithTypes(arg.Types).
-						WithMultiAggs(arg.MultiAggs),
+						WithAggsNew(arg.Aggs),
 
 					CnAddr:      in.CnAddr,
 					OperatorID:  in.OperatorID,
@@ -1081,7 +1122,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
 				return moerr.NewInternalError(proc.Ctx, "Packages delivered by morpc is broken")
 			}
-			bat, err := decodeBatch(proc.Mp(), nil, dataBuffer)
+			bat, err := decodeBatch(proc.Mp(), dataBuffer)
 			if err != nil {
 				return err
 			}

@@ -2087,3 +2087,10 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	}
 	return nil
 }
+
+// XXX: Any code relying on Name in ColRef, except for "explain", is bad design and practically buggy.
+func (builder *QueryBuilder) addNameByColRef(tag int32, tableDef *plan.TableDef) {
+	for i, col := range tableDef.Cols {
+		builder.nameByColRef[[2]int32{tag, int32(i)}] = tableDef.Name + "." + col.Name
+	}
+}

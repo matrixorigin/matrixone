@@ -199,7 +199,15 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	}
 
 	if len(request.Txn.LockTables) > 0 {
-		invalidBinds := s.allocator.Valid(request.Txn.LockTables)
+		invalidBinds, err := s.allocator.Valid(
+			request.Txn.LockService,
+			request.Txn.ID,
+			request.Txn.LockTables,
+		)
+		if err != nil {
+			response.TxnError = txn.WrapError(err, 0)
+			return nil
+		}
 		if len(invalidBinds) > 0 {
 			response.CommitResponse.InvalidLockTables = invalidBinds
 			response.TxnError = txn.WrapError(moerr.NewLockTableBindChanged(ctx), 0)

@@ -35,6 +35,7 @@ func (c *DashboardCreator) initFileServiceDashboard() error {
 			c.initFSReadWriteBytesRow(),
 			c.initFSS3ConnOverviewRow(),
 			c.initFSS3ConnDurationRow(),
+			c.initFSIOLockDurationRow(),
 		)...)
 	if err != nil {
 		return err
@@ -161,6 +162,25 @@ func (c *DashboardCreator) initFSS3ConnDurationRow() dashboard.Option {
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},
 			axis.Unit("s"),
+			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initFSIOLockDurationRow() dashboard.Option {
+	return dashboard.Row(
+		"FileService io lock duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_fs_io_lock_duration`, `type="wait"`),
+				c.getMetricWithFilter(`mo_fs_io_lock_duration`, `type="locked"`),
+			},
+			[]string{
+				"wait",
+				"locked",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Unit("seconds"),
 			axis.Min(0))...,
 	)
 }

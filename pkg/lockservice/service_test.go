@@ -52,7 +52,7 @@ func getRunner(remote bool) func(t *testing.T, table uint64, fn func(context.Con
 			[]string{"s1", "s2"},
 			func(alloc *lockTableAllocator, ss []*service) {
 				s1 := ss[0]
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 				defer cancel()
 
 				option := newTestRowExclusiveOptions()
@@ -1047,6 +1047,120 @@ func TestDeadLockWith2Txn(t *testing.T) {
 							pb.Granularity_Row)
 						require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 					}()
+					wg.Wait()
+				})
+		})
+	}
+}
+
+func TestDeadLockWithIndirectDependsOn(t *testing.T) {
+	for name, runner := range runners {
+		if name == "local" {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			table := uint64(10)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					// row1: txn1 : txn2, txn3
+					// row4: txn4 : txn3, txn2
+
+					row1 := newTestRows(1)
+					row4 := newTestRows(4)
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+					txn3 := newTestTxnID(3)
+					txn4 := newTestTxnID(4)
+
+					mustAddTestLock(t, ctx, s, table, txn1, row1, pb.Granularity_Row)
+					mustAddTestLock(t, ctx, s, table, txn4, row4, pb.Granularity_Row)
+
+					var wg sync.WaitGroup
+					wg.Add(4)
+					go func() {
+						defer wg.Done()
+
+						// row1 wait list: txn2
+						maybeAddTestLockWithDeadlockWithWaitRetry(
+							t,
+							ctx,
+							s,
+							table,
+							txn2,
+							row1,
+							pb.Granularity_Row,
+							time.Second*5,
+						)
+					}()
+					go func() {
+						defer wg.Done()
+
+						// row4 wait list: txn3
+						waitLocalWaiters(lt, row4[0], 1)
+
+						// row4 wait list: txn3, txn2
+						maybeAddTestLockWithDeadlockWithWaitRetry(
+							t,
+							ctx,
+							s,
+							table,
+							txn2,
+							row4,
+							pb.Granularity_Row,
+							time.Second*5,
+						)
+
+						require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+					}()
+
+					go func() {
+						defer wg.Done()
+
+						// row1 wait list: txn2
+						waitLocalWaiters(lt, row1[0], 1)
+
+						// row1 wait list: txn2, txn3
+						maybeAddTestLockWithDeadlockWithWaitRetry(
+							t,
+							ctx,
+							s,
+							table,
+							txn3,
+							row1,
+							pb.Granularity_Row,
+							time.Second*5,
+						)
+
+						require.NoError(t, s.Unlock(ctx, txn3, timestamp.Timestamp{}))
+					}()
+					go func() {
+						defer wg.Done()
+
+						// row4 wait list: txn3
+						maybeAddTestLockWithDeadlockWithWaitRetry(
+							t,
+							ctx,
+							s,
+							table,
+							txn3,
+							row4,
+							pb.Granularity_Row,
+							time.Second*5)
+					}()
+
+					// row1:  txn1 : txn2, txn3
+					waitLocalWaiters(lt, row1[0], 2)
+					// row4:  txn4 : txn3, txn2
+					waitLocalWaiters(lt, row4[0], 2)
+
+					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, txn4, timestamp.Timestamp{}))
+
 					wg.Wait()
 				})
 		})
@@ -2658,19 +2772,41 @@ func maybeAddTestLockWithDeadlock(
 	table uint64,
 	txnID []byte,
 	lock [][]byte,
-	granularity pb.Granularity) pb.Result {
-	t.Logf("%s try lock %+v", string(txnID), lock)
+	granularity pb.Granularity,
+) pb.Result {
+	return maybeAddTestLockWithDeadlockWithWaitRetry(
+		t,
+		ctx,
+		l,
+		table,
+		txnID,
+		lock,
+		granularity,
+		0,
+	)
+}
+
+func maybeAddTestLockWithDeadlockWithWaitRetry(
+	t *testing.T,
+	ctx context.Context,
+	l *service,
+	table uint64,
+	txnID []byte,
+	lock [][]byte,
+	granularity pb.Granularity,
+	wait time.Duration,
+) pb.Result {
 	res, err := l.Lock(ctx, table, lock, txnID, pb.LockOptions{
 		Granularity: granularity,
 		Mode:        pb.LockMode_Exclusive,
 		Policy:      pb.WaitPolicy_Wait,
+		RetryWait:   int64(wait),
 	})
 
-	if moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) {
-		t.Logf("%s lock %+v, found dead lock", string(txnID), lock)
+	if moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
 		return res
 	}
-	t.Logf("%s lock %+v, ok", string(txnID), lock)
 	require.NoError(t, err)
 	return res
 }

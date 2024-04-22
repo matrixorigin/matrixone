@@ -1717,16 +1717,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 	}
 
-	if name == NameGroupConcat {
-		expressionList := args[:len(args)-1]
-		separator := args[len(args)-1]
-		compactCol, e := BindFuncExprImplByPlanExpr(ctx, "serial", expressionList)
-		if e != nil {
-			return nil, e
-		}
-		args = []*plan.Expr{compactCol, separator}
-	}
-
 	// return new expr
 	Typ := makePlan2Type(&returnType)
 	Typ.NotNullable = function.DeduceNotNullable(funcID, args)

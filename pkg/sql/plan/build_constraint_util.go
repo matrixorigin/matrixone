@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1215,7 +1216,7 @@ func appendPrimaryConstrantPlan(
 	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 		// needCheck := true
 		needCheck := !builder.qry.LoadTag
-		useFuzzyFilter := CNPrimaryCheck
+		useFuzzyFilter := config.CNPrimaryCheck
 		if isUpdate {
 			needCheck = updatePkCol
 			useFuzzyFilter = false
@@ -1415,7 +1416,7 @@ func appendPrimaryConstrantPlan(
 	// The refactor that using fuzzy filter has not been completely finished, Update type Insert cannot directly use fuzzy filter for duplicate detection.
 	//  so the original logic is retained. should be deleted later
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
-	if CNPrimaryCheck {
+	if config.CNPrimaryCheck {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 			rfTag := builder.genNewMsgTag()
 

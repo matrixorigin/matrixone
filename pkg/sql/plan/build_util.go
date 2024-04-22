@@ -41,6 +41,23 @@ import (
 // 	return nodeID
 // }
 
+// ifNeedLockWholeTable checks if the whole table needs to be locked based on the last node's statistics.
+// It returns true if the out count of the last node is greater than the maximum lock count, otherwise it returns false.
+func ifNeedLockWholeTable(builder *QueryBuilder, lastNodeId int32) bool {
+	lastNode := builder.qry.Nodes[lastNodeId]
+	if lastNode == nil {
+		return false
+	}
+
+	lockService := builder.compCtx.GetProcess().LockService
+	if lockService == nil {
+		// MockCompilerContext
+		return false
+	}
+	lockconfig := lockService.GetConfig()
+	return lastNode.Stats.Outcnt > float64(lockconfig.MaxLockRowCount)
+}
+
 // GetFunctionArgTypeStrFromAst function arg type do not have scale and width, it depends on the data that it process
 func GetFunctionArgTypeStrFromAst(arg tree.FunctionArg) (string, error) {
 	argDecl := arg.(*tree.FunctionArgDecl)

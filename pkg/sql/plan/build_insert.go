@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -273,6 +274,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		upPlanCtx.rowIdPos = rowIdPos
 		upPlanCtx.insertColPos = insertColPos
 		upPlanCtx.updateColPosMap = updateColPosMap
+		upPlanCtx.lockTable = ifNeedLockWholeTable(builder, lastNodeId)
 
 		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, true)
 		if err != nil {
@@ -369,7 +371,7 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 		isCompound = len(tableDef.Pkey.Names) > 1
 	}
 
-	if !CNPrimaryCheck {
+	if !config.CNPrimaryCheck {
 		return false // break condition 0
 	}
 
