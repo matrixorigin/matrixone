@@ -161,6 +161,7 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	}
 
 	if osize > 800*common.Const1MBytes && mergerows < 8192 {
+		logutil.Warnf("mergeblocks avoid merge %v, size %v, rows %v", e.tableName, osize, mergerows)
 		return
 	}
 
