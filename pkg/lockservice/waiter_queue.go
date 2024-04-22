@@ -56,7 +56,6 @@ type sliceBasedWaiterQueue struct {
 func (q *sliceBasedWaiterQueue) moveTo(to waiterQueue) {
 	q.iter(func(w *waiter) bool {
 		to.put(w)
-		w.close()
 		return true
 	})
 }
