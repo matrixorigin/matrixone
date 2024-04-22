@@ -131,9 +131,9 @@ func statementCanBeExecutedInUncommittedTransaction(ses FeSession, stmt tree.Sta
 	switch st := stmt.(type) {
 	//ddl statement
 	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
-		if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
-			return false, nil
-		}
+		//if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
+		//	return false, nil
+		//}
 		return true, nil
 	case *tree.CreateDatabase, *tree.CreateSequence: //Case1, Case3 above
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
