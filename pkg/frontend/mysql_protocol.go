@@ -2678,9 +2678,6 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 
 // the server sends the payload to the client
 func (mp *MysqlProtocolImpl) writePackets(payload []byte, flush bool) error {
-	if flush {
-		flush = !mp.disableAutoFlush
-	}
 
 	//protocol header length
 	var headerLen = HeaderOffset
