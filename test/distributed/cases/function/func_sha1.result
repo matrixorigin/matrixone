@@ -1,0 +1,18 @@
+SELECT sha1('abc');
+sha1(abc)
+a9993e364706816aba3e25717850c26c9cd0d89d
+SELECT sha('abc');
+sha(abc)
+a9993e364706816aba3e25717850c26c9cd0d89d
+SELECT sha1('');
+sha1()
+da39a3ee5e6b4b0d3255bfef95601890afd80709
+SELECT sha('');
+sha()
+da39a3ee5e6b4b0d3255bfef95601890afd80709
+SELECT sha1(NULL);
+sha1(NULL)
+NULL
+SELECT sha(NULL);
+sha(NULL)
+NULL
