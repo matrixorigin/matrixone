@@ -205,6 +205,7 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 	}
 
 	if len(errors) > 0 {
+		//panic("Upgrade failed during system startup! " + convErrsToFormatMsg(errors))
 		return moerr.NewInternalError(ctx, "Upgrade failed during system startup! "+convErrsToFormatMsg(errors))
 	}
 
@@ -224,6 +225,7 @@ func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) []error {
 		if err != nil {
 			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			continue
+			//return err
 		}
 
 		//if there is no view, skip
@@ -235,6 +237,7 @@ func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) []error {
 		if err != nil {
 			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			continue
+			//return err
 		} else if len(diff.AddedColumns) == 0 {
 			continue
 		}
@@ -264,6 +267,7 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
 		if err != nil {
 			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			continue
+			//return err
 		}
 
 		if currentSchema == nil {
@@ -274,6 +278,7 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
 		if err != nil {
 			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			continue
+			//return err
 		} else if len(diff.AddedColumns) == 0 {
 			continue
 		}
@@ -282,12 +287,14 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
 		if err != nil {
 			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			continue
+			//return err
 		}
 
 		// Execute upgrade SQL
 		if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
 			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			continue
+			//return err
 		}
 	}
 	if len(errors) > 0 {
@@ -354,6 +361,7 @@ func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.Tenan
 				if err := u.upgradeFunc(ctx, tbl, true, tenant, exec); err != nil {
 					errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, tenant.Tenant, tenant.TenantID, err.Error()))
 					continue
+					//return err
 				}
 			}
 		} else {
