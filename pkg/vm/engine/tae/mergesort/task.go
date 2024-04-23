@@ -247,7 +247,7 @@ func DoMergeAndWrite(
 	}
 
 	// -------------------------- phase 1
-	phaseDesc = "merge sort, or reshape, one column"
+	phaseDesc = "reshape, one column"
 	toLayout := arrangeToLayout(totalRowCount, blkMaxRow)
 
 	sortedVecs, releaseF := getRetVecs(len(toLayout), toSortVecs[0].GetType(), mergehost)
@@ -258,7 +258,7 @@ func DoMergeAndWrite(
 	UpdateMappingAfterMerge(commitEntry.Booking, nil, fromLayout, toLayout)
 
 	// -------------------------- phase 2
-	phaseDesc = "merge sort, or reshape, the rest of columns"
+	phaseDesc = "reshape, the rest of columns"
 
 	// prepare multiple batch
 	attrs := batches[0].Attrs
