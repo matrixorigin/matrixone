@@ -1267,6 +1267,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		if err != nil {
 			return nil, err
 		}
+		ifLockTable := ifNeedLockWholeTable(builder, node.Children[0])
+		node.LockTargets[0].LockTable = ifLockTable
 
 		tableDef := node.GetTableDef()
 		if tableDef.Partition != nil {
@@ -2211,13 +2213,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if builder.isForUpdate {
 			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
 			pkPos, pkTyp := getPkPos(tableDef, false)
-			ifLockTable := ifNeedLockWholeTable(builder, nodeID)
+			// need to determine whether whole table needs to be locked at remapAllColRefs.case plan.Node_LOCK_OP:
 			lockTarget := &plan.LockTarget{
 				TableId:            tableDef.TblId,
 				PrimaryColIdxInBat: int32(pkPos),
 				PrimaryColTyp:      pkTyp,
 				Block:              true,
-				LockTable:          ifLockTable,
 				RefreshTsIdxInBat:  -1, //unsupport now
 				FilterColIdxInBat:  -1, //unsupport now
 			}
