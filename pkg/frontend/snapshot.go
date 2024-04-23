@@ -43,7 +43,7 @@ var (
 
 	checkSnapshotTsFormat = `select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id;`
 
-	createTableAsSelectFormat = "create table `%s`.`%s` AS SELECT * FROM `%s`.`%s` {snapshot = '%s'}"
+	restoreTableDataFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {snapshot = '%s'}"
 )
 
 func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) error {
@@ -251,18 +251,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			return
 		}
 
-		//newAccountName := string(stmt.ToAccountName)
-		//an := tree.NewNumValWithType(constant.MakeString(newAccountName), newAccountName, false, tree.P_char)
-		//// TODO
-		//// AccountStatusSuspend
-		//// AccountStatusRestricted
-		//as := tree.NewAccountStatus()
-		//ac := tree.NewAccountComment()
-		//st := tree.NewCreateAccount(false, an, stmt.AuthOption, *as, *ac)
-		//if err = HandleCreateAccount(ctx, ses, st, proc); err != nil {
-		//	return err
-		//}
-
 		newAccountName := string(stmt.ToAccountName)
 		if toAccountId = getAccountIdByName(ctx, ses, bh, newAccountName); toAccountId == -1 {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("account does not exist, account name: %s", newAccountName))
@@ -275,11 +263,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	} else if !snapShotExist {
 		return moerr.NewInternalError(ctx, "snapshot %s does not exist", snapshotName)
 	}
-
-	//snapshotTs, err := doResolveSnapshotTsWithSnapShotName(ctx, ses, snapshotName)
-	//if err != nil {
-	//	return
-	//}
 
 	// TODO stop toAccount
 	// TODO defer open toAccount
@@ -344,16 +327,24 @@ func restoreToDatabase(ctx context.Context, ses *Session, bh BackgroundExec, sna
 		return
 	}
 
-	tables, err := showTables(ctx, bh, snapshotName, dbName)
+	createTableSqls, err := getCreateTableSqls(ctx, bh, snapshotName, dbName)
 	if err != nil {
-		return
+		return err
 	}
 
-	for _, tblName := range tables {
-		if err = restoreToTable(ctx, ses, bh, snapshotName, accountId, dbName, tblName, toAccountId); err != nil {
+	for tblName, createTableSql := range createTableSqls {
+		// create table
+		if err = bh.Exec(ctx, createTableSql); err != nil {
+			return
+		}
+
+		// insert data
+		insertIntoSql := fmt.Sprintf(restoreTableDataFmt, dbName, tblName, dbName, tblName, snapshotName)
+		if err = bh.Exec(ctx, insertIntoSql); err != nil {
 			return
 		}
 	}
+
 	return
 }
 
@@ -378,8 +369,18 @@ func restoreToTable(ctx context.Context, ses *Session, bh BackgroundExec, snapsh
 		return
 	}
 
-	createTableAsSelectSql := fmt.Sprintf(createTableAsSelectFormat, dbName, tblName, dbName, tblName, snapshotName)
-	return bh.Exec(ctx, createTableAsSelectSql)
+	// create table
+	createTableSql, err := getCreateTableSql(ctx, bh, snapshotName, dbName, tblName)
+	if err != nil {
+		return err
+	}
+	if err = bh.Exec(ctx, createTableSql); err != nil {
+		return
+	}
+
+	// insert data
+	insertIntoSql := fmt.Sprintf(restoreTableDataFmt, dbName, tblName, dbName, tblName, snapshotName)
+	return bh.Exec(ctx, insertIntoSql)
 }
 
 func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotName string) (bool, error) {
@@ -509,4 +510,41 @@ func showDatabases(ctx context.Context, bh BackgroundExec, snapshotName string) 
 func showTables(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string) ([]string, error) {
 	sql := fmt.Sprintf("show tables from `%s` {snapshot = '%s'}", dbName, snapshotName)
 	return getStringList(ctx, bh, sql)
+}
+
+func getCreateTableSqls(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string) (map[string]string, error) {
+	tables, err := showTables(ctx, bh, snapshotName, dbName)
+	if err != nil {
+		return nil, err
+	}
+
+	createSqlMap := make(map[string]string)
+	for _, tblName := range tables {
+		tableDef, err := getCreateTableSql(ctx, bh, snapshotName, dbName, tblName)
+		if err != nil {
+			return nil, err
+		}
+		createSqlMap[tblName] = tableDef
+	}
+	return createSqlMap, nil
+}
+
+func getCreateTableSql(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (string, error) {
+	sql := fmt.Sprintf("show create table `%s`.`%s` {snapshot = '%s'}", dbName, tblName, snapshotName)
+
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return "", err
+	}
+
+	resultSet, err := getResultSet(ctx, bh)
+	if err != nil {
+		return "", err
+	}
+
+	if len(resultSet) == 0 || resultSet[0].GetRowCount() == 0 {
+		return "", moerr.NewNoSuchTable(ctx, dbName, tblName)
+	}
+
+	return resultSet[0].GetString(ctx, 0, 1)
 }
