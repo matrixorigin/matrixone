@@ -333,21 +333,15 @@ func Reshape(column []*vector.Vector, ret []*vector.Vector, fromLayout, toLayout
 			} else {
 				length = int(toLayout[i]) - toOffset
 			}
-
-			// clone from src and append to dest
-			// FIXME: is clone necessary? can we just feed the original vector window to GetUnionAllFunction?
-			// TODO: use vector pool for the cloned vector
-			cloned, err := column[fromIdx].CloneWindow(fromOffset, fromOffset+length, m)
+			// get data from src and append to dest
+			window, err := column[fromIdx].Window(fromOffset, fromOffset+length)
 			if err != nil {
 				panic(err)
 			}
-			err = vector.GetUnionAllFunction(*typ, m)(ret[i], cloned)
+			err = vector.GetUnionAllFunction(*typ, m)(ret[i], window)
 			if err != nil {
 				panic(err)
 			}
-
-			// release temporary coloned vector
-			cloned.Free(m)
 
 			// update offset
 			fromOffset += length
