@@ -302,6 +302,8 @@ type Session struct {
 	// If the connection is from proxy, client address is the real address of client.
 	clientAddr string
 	proxyAddr  string
+
+	fprints footPrints
 }
 
 func (ses *Session) ClearStmtProfile() {
@@ -960,6 +962,8 @@ func (ses *Session) InvalidatePrivilegeCache() {
 
 // GetBackgroundExec generates a background executor
 func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
+	enterFPrint(ses, 21)
+	defer exitFPrint(ses, 21)
 	return NewBackgroundHandler(
 		ctx,
 		ses,
@@ -970,6 +974,8 @@ func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
 // GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction.
 // newRawBatch denotes we need the raw batch instead of mysql result set.
 func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
+	enterFPrint(ses, 22)
+	defer exitFPrint(ses, 22)
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
 		ses: NewBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, true),
@@ -983,6 +989,8 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 }
 
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) *BackgroundHandler {
+	enterFPrint(ses, 23)
+	defer exitFPrint(ses, 23)
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
 		ses: NewBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, false),
@@ -2504,10 +2512,8 @@ func newDBMigration(db string) *dbMigration {
 }
 
 func (d *dbMigration) Migrate(ses *Session) error {
-	var txnOp TxnOperator
-	_, txnOp, _ = ses.GetTxnHandler().GetTxnOperator()
-	enterFPrint(txnOp, 15)
-	defer exitFPrint(txnOp, 15)
+	enterFPrint(ses, 15)
+	defer exitFPrint(ses, 15)
 	if d.db == "" {
 		return nil
 	}
@@ -2539,10 +2545,8 @@ func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepar
 
 func (p *prepareStmtMigration) Migrate(ses *Session) error {
 	var err error
-	var txnOp TxnOperator
-	_, txnOp, _ = ses.GetTxnHandler().GetTxnOperator()
-	enterFPrint(txnOp, 14)
-	defer exitFPrint(txnOp, 14)
+	enterFPrint(ses, 14)
+	defer exitFPrint(ses, 14)
 
 	v, err := ses.GetGlobalVar("lower_case_table_names")
 	if err != nil {

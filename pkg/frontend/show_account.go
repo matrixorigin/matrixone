@@ -165,8 +165,8 @@ func requestStorageUsage(ses *Session, accIds [][]int32) (resp any, tried bool, 
 		return nil, false, err
 	}
 
-	enterFPrint(txnOperator, 8)
-	defer exitFPrint(txnOperator, 8)
+	enterFPrint(ses, 8)
+	defer exitFPrint(ses, 8)
 
 	// create a new proc for `handler`
 	proc := process.New(ctx, ses.proc.GetMPool(),

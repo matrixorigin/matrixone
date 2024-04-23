@@ -227,11 +227,10 @@ func (rt *Routine) handleRequest(req *Request) error {
 	rt.setCancelRequestFunc(cancelRequestFunc)
 	ses = rt.getSession()
 	ses.UpdateDebugString()
+	ses.fprints.reset()
 
-	var txnOp TxnOperator
-	_, txnOp, _ = ses.GetTxnHandler().GetTxnOperator()
-	enterFPrint(txnOp, 13)
-	defer exitFPrint(txnOp, 13)
+	enterFPrint(ses, 13)
+	defer exitFPrint(ses, 13)
 
 	if rt.needPrintSessionInfo() {
 		logInfof(ses.GetDebugString(), "mo received first request")

@@ -695,10 +695,8 @@ If it is Case2, Then
 */
 func (ses *Session) TxnCommitSingleStatement(stmt tree.Statement) error {
 	var err error
-	var txnOp TxnOperator
-	_, txnOp, _ = ses.GetTxnHandler().GetTxnOperator()
-	enterFPrint(txnOp, 9)
-	defer exitFPrint(txnOp, 9)
+	enterFPrint(ses, 9)
+	defer exitFPrint(ses, 9)
 	/*
 		Commit Rules:
 		1, if it is in single-statement mode:
@@ -739,11 +737,8 @@ If it is Case2, Then
 func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement, inputErr error) error {
 	var err error
 	var rollbackWholeTxn bool
-	var txnOp TxnOperator
-	_, txnOp, _ = ses.GetTxnHandler().GetTxnOperator()
-
-	enterFPrint(txnOp, 10)
-	defer exitFPrint(txnOp, 10)
+	enterFPrint(ses, 10)
+	defer exitFPrint(ses, 10)
 
 	if inputErr != nil {
 		rollbackWholeTxn = isErrorRollbackWholeTxn(inputErr)

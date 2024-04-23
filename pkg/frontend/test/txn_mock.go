@@ -370,18 +370,6 @@ func (mr *MockTxnOperatorMockRecorder) Debug(ctx, ops interface{}) *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Debug", reflect.TypeOf((*MockTxnOperator)(nil).Debug), ctx, ops)
 }
 
-// EnterFPrints mocks base method.
-func (m *MockTxnOperator) EnterFPrints(idx int) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "EnterFPrints", idx)
-}
-
-// EnterFPrints indicates an expected call of EnterFPrints.
-func (mr *MockTxnOperatorMockRecorder) EnterFPrints(idx interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnterFPrints", reflect.TypeOf((*MockTxnOperator)(nil).EnterFPrints), idx)
-}
-
 // EnterRunSql mocks base method.
 func (m *MockTxnOperator) EnterRunSql() {
 	m.ctrl.T.Helper()
@@ -392,18 +380,6 @@ func (m *MockTxnOperator) EnterRunSql() {
 func (mr *MockTxnOperatorMockRecorder) EnterRunSql() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnterRunSql", reflect.TypeOf((*MockTxnOperator)(nil).EnterRunSql))
-}
-
-// ExitFPrints mocks base method.
-func (m *MockTxnOperator) ExitFPrints(idx int) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "ExitFPrints", idx)
-}
-
-// ExitFPrints indicates an expected call of ExitFPrints.
-func (mr *MockTxnOperatorMockRecorder) ExitFPrints(idx interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExitFPrints", reflect.TypeOf((*MockTxnOperator)(nil).ExitFPrints), idx)
 }
 
 // ExitRunSql mocks base method.
@@ -525,6 +501,18 @@ func (m *MockTxnOperator) Rollback(ctx context.Context) error {
 func (mr *MockTxnOperatorMockRecorder) Rollback(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Rollback", reflect.TypeOf((*MockTxnOperator)(nil).Rollback), ctx)
+}
+
+// SetFootPrints mocks base method.
+func (m *MockTxnOperator) SetFootPrints(prints [][2]uint32) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetFootPrints", prints)
+}
+
+// SetFootPrints indicates an expected call of SetFootPrints.
+func (mr *MockTxnOperatorMockRecorder) SetFootPrints(prints interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFootPrints", reflect.TypeOf((*MockTxnOperator)(nil).SetFootPrints), prints)
 }
 
 // Snapshot mocks base method.

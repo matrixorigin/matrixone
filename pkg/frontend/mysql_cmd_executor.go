@@ -553,8 +553,8 @@ func doUse(ctx context.Context, ses *Session, db string) error {
 	if err != nil {
 		return err
 	}
-	enterFPrint(txn, 7)
-	defer exitFPrint(txn, 7)
+	enterFPrint(ses, 7)
+	defer exitFPrint(ses, 7)
 	//TODO: check meta data
 	if dbMeta, err = ses.GetParameterUnit().StorageEngine.Database(txnCtx, db, txn); err != nil {
 		//echo client. no such database
@@ -3162,7 +3162,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return err
 	}
 
-	enterFPrint(txnOp, 11)
+	enterFPrint(ses, 11)
 
 	//non derived statement
 	if txnOp != nil && !ses.IsDerivedStmt() {
@@ -3184,7 +3184,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			logError(ses, ses.GetDebugString(), err3.Error())
 			return
 		}
-		exitFPrint(txnOp, 11)
+		exitFPrint(ses, 11)
 		//non derived statement
 		if txnOp != nil && !ses.IsDerivedStmt() {
 			//startStatement has been called
@@ -3684,6 +3684,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				Start pipeline
 				Producing the data row and sending the data row
 			*/
+			_, fPrintTxnOp, _ := ses.GetTxnHandler().GetTxnOperator()
+			enterFPrint(ses, 16)
+			defer exitFPrint(ses, 16)
+			setFPrints(fPrintTxnOp, ses.fprints)
 			// todo: add trace
 			if _, err = runner.Run(0); err != nil {
 				return
@@ -3755,6 +3759,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				Producing the data row and sending the data row
 			*/
 			// todo: add trace
+			_, fPrintTxnOp, _ := ses.GetTxnHandler().GetTxnOperator()
+			enterFPrint(ses, 17)
+			defer exitFPrint(ses, 17)
+			setFPrints(fPrintTxnOp, ses.fprints)
 			if _, err = runner.Run(0); err != nil {
 				return
 			}
@@ -3830,6 +3838,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			Producing the data row and sending the data row
 		*/
 		// todo: add trace
+		_, fPrintTxnOp, _ := ses.GetTxnHandler().GetTxnOperator()
+		enterFPrint(ses, 18)
+		defer exitFPrint(ses, 18)
+		setFPrints(fPrintTxnOp, ses.fprints)
 		if _, err = runner.Run(0); err != nil {
 			return
 		}
@@ -3894,6 +3906,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 		}
 
+		_, fPrintTxnOp, _ := ses.GetTxnHandler().GetTxnOperator()
+		enterFPrint(ses, 19)
+		defer exitFPrint(ses, 19)
+		setFPrints(fPrintTxnOp, ses.fprints)
 		if runResult, err = runner.Run(0); err != nil {
 			if loadLocalErrGroup != nil { // release resources
 				err2 := proc.LoadLocalReader.Close()
@@ -3972,6 +3988,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		/*
 			Step 1: Start
 		*/
+		_, fPrintTxnOp, _ := ses.GetTxnHandler().GetTxnOperator()
+		enterFPrint(ses, 20)
+		defer exitFPrint(ses, 20)
+		setFPrints(fPrintTxnOp, ses.fprints)
 		if _, err = runner.Run(0); err != nil {
 			return
 		}
@@ -4026,10 +4046,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 
 	ses := mce.GetSession()
 
-	var txnOp TxnOperator
-	_, txnOp, _ = ses.GetTxnHandler().GetTxnOperator()
-	enterFPrint(txnOp, 12)
-	defer exitFPrint(txnOp, 12)
+	enterFPrint(ses, 12)
+	defer exitFPrint(ses, 12)
 
 	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)

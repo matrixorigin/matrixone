@@ -60,8 +60,7 @@ var _ Engine = new(testEngine)
 type testOperator struct {
 }
 
-func (o *testOperator) EnterFPrints(idx int) {}
-func (o *testOperator) ExitFPrints(idx int)  {}
+func (o *testOperator) SetFootPrints(prints [][2]uint32) {}
 func (o *testOperator) EnterRunSql() {
 	//TODO implement me
 	panic("implement me")

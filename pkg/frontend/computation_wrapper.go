@@ -211,8 +211,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if err != nil {
 		return nil, err
 	}
-	enterFPrint(cwft.proc.TxnOperator, 6)
-	defer exitFPrint(cwft.proc.TxnOperator, 6)
+	enterFPrint(cwft.ses, 6)
+	defer exitFPrint(cwft.ses, 6)
 	txnCtx = fileservice.EnsureStatementProfiler(txnCtx, requestCtx)
 	txnCtx = statistic.EnsureStatsInfoCanBeFound(txnCtx, requestCtx)
 
@@ -447,9 +447,6 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
 	defer func() {
 		logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run end")
 	}()
-	_, txnOp, _ := cwft.ses.GetTxnHandler().GetTxnOperator()
-	enterFPrint(txnOp, 16)
-	defer exitFPrint(txnOp, 16)
 	runResult, err := cwft.compile.Run(ts)
 	cwft.runResult = runResult
 	cwft.compile = nil

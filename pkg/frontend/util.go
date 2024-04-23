@@ -898,70 +898,58 @@ func getRandomErrorRollbackWholeTxn() error {
 	}
 }
 
-func enterFPrint(txnOp TxnOperator, idx int) {
-	if txnOp != nil {
-		txnOp.EnterFPrints(idx)
+func enterFPrint(ses *Session, idx int) {
+	if ses != nil {
+		ses.fprints.addEnter(idx)
 	}
 }
 
-func exitFPrint(txnOp TxnOperator, idx int) {
-	if txnOp != nil {
-		txnOp.ExitFPrints(idx)
+func exitFPrint(ses *Session, idx int) {
+	if ses != nil {
+		ses.fprints.addExit(idx)
 	}
 }
 
-type counter struct {
-	enter atomic.Uint64
-	exit  atomic.Uint64
-}
-
-func (count *counter) addEnter() {
-	count.enter.Add(1)
-}
-
-func (count *counter) addExit() {
-	count.exit.Add(1)
-}
-
-func (count *counter) more() bool {
-	return count.enter.Load() > count.exit.Load()
-}
-
-func (count *counter) String() string {
-	return fmt.Sprintf("enter:%d, exit:%d", count.enter.Load(), count.exit.Load())
-}
-
-func (count *counter) nonZero() bool {
-	return count.exit.Load() > 0 || count.enter.Load() > 0
+func setFPrints(txnOp TxnOperator, fprints footPrints) {
+	if txnOp != nil {
+		txnOp.SetFootPrints(fprints.prints[:])
+	}
 }
 
 type footPrints struct {
-	prints [64]counter
+	prints [64][2]uint32
 }
 
-func (fprints *footPrints) addEnter(idx int) {
-	if idx >= 0 && idx < len(fprints.prints) {
-		fprints.prints[idx].addEnter()
-	}
-}
-
-func (fprints *footPrints) addExit(idx int) {
-	if idx >= 0 && idx < len(fprints.prints) {
-		fprints.prints[idx].addExit()
+func (fprints *footPrints) reset() {
+	for i := 0; i < len(fprints.prints); i++ {
+		fprints.prints[i][0] = 0
+		fprints.prints[i][1] = 0
 	}
 }
 
 func (fprints *footPrints) String() string {
 	strBuf := strings.Builder{}
 	for i := 0; i < len(fprints.prints); i++ {
-		if !fprints.prints[i].nonZero() {
+		if fprints.prints[i][0] == 0 && fprints.prints[i][1] == 0 {
 			continue
 		}
 		strBuf.WriteString("[")
 		strBuf.WriteString(fmt.Sprintf("%d", i))
 		strBuf.WriteString(": ")
-		strBuf.WriteString(fprints.prints[i].String())
+		strBuf.WriteString(fmt.Sprintf("enter:%d exit:%d", fprints.prints[i][0], fprints.prints[i][1]))
 		strBuf.WriteString("] ")
 	}
 	return strBuf.String()
+}
+
+func (fprints *footPrints) addEnter(idx int) {
+	if idx >= 0 && idx < len(fprints.prints) {
+		fprints.prints[idx][0]++
+	}
+}
+
+func (fprints *footPrints) addExit(idx int) {
+	if idx >= 0 && idx < len(fprints.prints) {
+		fprints.prints[idx][1]++
+	}
 }

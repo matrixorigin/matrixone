@@ -645,8 +645,8 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().EnterFPrints(gomock.Any()).Return().AnyTimes()
-		txnOperator.EXPECT().ExitFPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -752,8 +752,8 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().EnterFPrints(gomock.Any()).Return().AnyTimes()
-		txnOperator.EXPECT().ExitFPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()

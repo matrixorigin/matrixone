@@ -1108,9 +1108,6 @@ func (tc *txnOperator) counter() string {
 		tc.fprints.String())
 }
 
-func (tc *txnOperator) EnterFPrints(idx int) {
-	tc.fprints.addEnter(idx)
-}
-func (tc *txnOperator) ExitFPrints(idx int) {
-	tc.fprints.addExit(idx)
+func (tc *txnOperator) SetFootPrints(prints [][2]uint32) {
+	tc.fprints.setFPrints(prints)
 }
