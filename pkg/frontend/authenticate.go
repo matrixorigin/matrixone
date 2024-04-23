@@ -9682,6 +9682,33 @@ func postAlterSessionStatus(
 	return errors.Join(err, retErr)
 }
 
+func checkTimeStampValid(ctx context.Context, ses FeSession, snapshotTs int64) (bool, error) {
+	var sql string
+	var err error
+	var erArray []ExecResult
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	sql = getSqlForCheckSnapshotTs(snapshotTs)
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return false, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if !execResultArrayHasData(erArray) {
+		return false, err
+	}
+
+	return true, nil
+}
+
 func getDbIdAndType(ctx context.Context, bh BackgroundExec, tenantInfo *TenantInfo, dbName string) (dbId uint64, dbType string, err error) {
 	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(tenantInfo.TenantID))
 	if err != nil {
