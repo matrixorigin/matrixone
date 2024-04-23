@@ -705,3 +705,13 @@ col1    col2
 @@ db"    -234242
    32423"    3283
 drop table test09;
+drop table if exists test10;
+CREATE TABLE `test10` (
+`col1` VARBINARY(32) NOT NULL,
+UNIQUE KEY `col1` (`col1`)
+);
+LOAD DATA INFILE '$resources/load_data/empty_varbinary.csv' INTO TABLE `test10` FIELDS TERMINATED BY '\t' ENCLOSED BY '"' LINES TERMINATED BY '\n' PARALLEL 'TRUE';
+select * from test10;
+col1
+drop table test10;
+

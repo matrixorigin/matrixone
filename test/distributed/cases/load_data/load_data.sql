@@ -319,3 +319,12 @@ create table test09(col1 varchar(20), col2 varchar(20));
 load data infile '$resources/load_data/test_starting_by04.csv' into table test09 CHARACTER SET "utf_8" fields terminated by ',' lines starting by ' ';
 select * from test09;
 drop table test09;
+
+drop table if exists test10;
+CREATE TABLE `test10` (
+`col1` VARBINARY(32) NOT NULL,
+UNIQUE KEY `col1` (`col1`)
+);
+LOAD DATA INFILE '$resources/load_data/empty_varbinary.csv' INTO TABLE `test10` FIELDS TERMINATED BY '\t' ENCLOSED BY '"' LINES TERMINATED BY '\n' PARALLEL 'TRUE';
+select * from test10;
+drop table test10;
