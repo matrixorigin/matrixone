@@ -228,7 +228,7 @@ func DoMergeAndWrite(
 
 	initTransferMapping(commitEntry, len(batches))
 
-	fromLayout := make([]uint32, 0, len(batches))
+	fromLayout := make([]uint32, len(batches))
 	totalRowCount := 0
 
 	mpool := mergehost.GetMPool()
@@ -251,7 +251,7 @@ func DoMergeAndWrite(
 			}
 		}
 		AddSortPhaseMapping(commitEntry.Booking, i, rowCntBeforeApplyDelete, del, nil)
-		fromLayout = append(fromLayout, uint32(batches[i].RowCount()))
+		fromLayout[i] = uint32(batches[i].RowCount())
 		totalRowCount += batches[i].RowCount()
 	}
 

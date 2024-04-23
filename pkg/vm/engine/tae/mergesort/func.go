@@ -51,6 +51,7 @@ func ReshapeBatches(
 	rfs := make([]func(), 0, len(toLayout))
 	for _, layout := range toLayout {
 		bat, releaseF := getSimilarBatch(batches[0], int(layout), vpool)
+		bat.SetRowCount(int(layout))
 		ret = append(ret, bat)
 		rfs = append(rfs, releaseF)
 	}
@@ -80,7 +81,7 @@ func ReshapeBatches(
 			}
 
 			for vecIdx, vec := range batches[fromIdx].Vecs {
-				window, err := vec.CloneWindow(fromOffset, fromOffset+length, vpool.GetMPool())
+				window, err := vec.Window(fromOffset, fromOffset+length)
 				if err != nil {
 					panic(err)
 				}
@@ -94,7 +95,6 @@ func ReshapeBatches(
 			fromOffset += length
 			toOffset += length
 		}
-		ret[i].SetRowCount(int(toLayout[i]))
 	}
 	return ret, releaseF
 }
