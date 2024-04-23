@@ -2393,9 +2393,6 @@ func executeStmtWithResponse(requestCtx context.Context,
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
 
-	execCtx.proto.DisableAutoFlush()
-	defer execCtx.proto.EnableAutoFlush()
-
 	err = executeStmtWithTxn(requestCtx, ses, execCtx)
 	if err != nil {
 		return err
@@ -2534,7 +2531,6 @@ func executeStmt(requestCtx context.Context,
 		if string(st.Name) == ses.GetDatabaseName() {
 			ses.SetDatabaseName("")
 		}
-
 	case *tree.ExplainAnalyze:
 		ses.SetData(nil)
 	case *tree.ShowTableStatus:
@@ -2636,17 +2632,20 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 	//here,we only need the user_name.
 	userNameOnly := rootName
 
-	proc := process.New(
-		requestCtx,
-		ses.GetMemPool(),
-		getGlobalPu().TxnClient,
-		nil,
-		getGlobalPu().FileService,
-		getGlobalPu().LockService,
-		getGlobalPu().QueryClient,
-		getGlobalPu().HAKeeperClient,
-		getGlobalPu().UdfService,
-		globalAicm)
+	// proc := process.New(
+	// 	requestCtx,
+	// 	ses.GetMemPool(),
+	// 	getGlobalPu().TxnClient,
+	// 	nil,
+	// 	getGlobalPu().FileService,
+	// 	getGlobalPu().LockService,
+	// 	getGlobalPu().QueryClient,
+	// 	getGlobalPu().HAKeeperClient,
+	// 	getGlobalPu().UdfService,
+	// 	globalAicm)
+	proc := ses.proc
+	proc.Ctx = requestCtx
+
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
 	proc.Id = ses.getNextProcessId()
@@ -2667,7 +2666,7 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 		Buf:                  ses.GetBuffer(),
 		SourceInMemScanBatch: inMemStreamScan,
 	}
-	proc.SetStmtProfile(&ses.stmtProfile)
+	// proc.SetStmtProfile(&ses.stmtProfile)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
@@ -2701,8 +2700,8 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 
 	proc.SessionInfo.User = userNameOnly
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
-	ses.txnCompileCtx.SetProcess(proc)
-	ses.proc.SessionInfo = proc.SessionInfo
+	// ses.txnCompileCtx.SetProcess(proc)
+	// ses.proc.SessionInfo = proc.SessionInfo
 
 	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
 	requestCtx = statistic.ContextWithStatsInfo(requestCtx, &statsInfo)

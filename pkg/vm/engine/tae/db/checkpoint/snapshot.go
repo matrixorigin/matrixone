@@ -24,8 +24,36 @@ import (
 	"sort"
 )
 
-func ListSnapshotCheckpoint(ctx context.Context, fs fileservice.FileService, snapshot types.TS, tid uint64) ([]*CheckpointEntry, error) {
-	files, idx, err := listMeta(ctx, fs, snapshot)
+type GetCheckpointRange = func(snapshot types.TS, files []*metaFile) ([]*metaFile, int, error)
+
+func SpecifiedCheckpoint(snapshot types.TS, files []*metaFile) ([]*metaFile, int, error) {
+	for i, file := range files {
+		if snapshot.LessEq(&file.end) {
+			return files, i, nil
+		}
+	}
+	return files, len(files) - 1, nil
+}
+
+func AllAfterAndGCheckpoint(snapshot types.TS, files []*metaFile) ([]*metaFile, int, error) {
+	var prev *metaFile
+	for i, file := range files {
+		if snapshot.LessEq(&file.end) && snapshot.Less(&prev.end) && file.start.IsEmpty() {
+			return files, i - 1, nil
+		}
+		prev = file
+	}
+	return files, len(files) - 1, nil
+}
+
+func ListSnapshotCheckpoint(
+	ctx context.Context,
+	fs fileservice.FileService,
+	snapshot types.TS,
+	tid uint64,
+	listFunc GetCheckpointRange,
+) ([]*CheckpointEntry, error) {
+	files, idx, err := listMeta(ctx, fs, snapshot, listFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -62,6 +90,9 @@ func ListSnapshotCheckpoint(ctx context.Context, fs fileservice.FileService, sna
 		bat.AddVector(colNames[i], vec)
 	}
 	entries, maxGlobalEnd := replayCheckpointEntries(bat, 3)
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].end.Less(&entries[j].end)
+	})
 	for i := range entries {
 		if entries[i].end.Equal(&maxGlobalEnd) && entries[i].entryType == ET_Global {
 			return entries[i:], nil
@@ -70,7 +101,7 @@ func ListSnapshotCheckpoint(ctx context.Context, fs fileservice.FileService, sna
 	return entries, nil
 }
 
-func listMeta(ctx context.Context, fs fileservice.FileService, snapshot types.TS) ([]*metaFile, int, error) {
+func listMeta(ctx context.Context, fs fileservice.FileService, snapshot types.TS, listFunc GetCheckpointRange) ([]*metaFile, int, error) {
 	dirs, err := fs.List(ctx, CheckpointDir)
 	if err != nil {
 		return nil, 0, err
@@ -92,10 +123,8 @@ func listMeta(ctx context.Context, fs fileservice.FileService, snapshot types.TS
 		return metaFiles[i].end.Less(&metaFiles[j].end)
 	})
 
-	for i, file := range metaFiles {
-		if snapshot.LessEq(&file.end) {
-			return metaFiles, i, nil
-		}
+	if listFunc == nil {
+		listFunc = AllAfterAndGCheckpoint
 	}
-	return metaFiles, len(metaFiles) - 1, nil
+	return listFunc(snapshot, metaFiles)
 }

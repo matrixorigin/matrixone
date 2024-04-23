@@ -17,6 +17,9 @@ package logtailreplay
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,12 +28,25 @@ import (
 
 // a partition corresponds to a dn
 type Partition struct {
+	//lock is used to protect pointer of PartitionState from concurrent mutation
 	lock  chan struct{}
 	state atomic.Pointer[PartitionState]
-	TS    timestamp.Timestamp // last updated timestamp
 
 	// assuming checkpoints will be consumed once
 	checkpointConsumed atomic.Bool
+
+	//current partitionState can serve snapshot read only if start <= ts <= end
+	mu struct {
+		sync.Mutex
+		start types.TS
+		end   types.TS
+	}
+}
+
+func (p *Partition) CanServe(ts types.TS) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return ts.GreaterEq(&p.mu.start) && ts.LessEq(&p.mu.end)
 }
 
 func NewPartition() *Partition {
@@ -39,6 +55,7 @@ func NewPartition() *Partition {
 	ret := &Partition{
 		lock: lock,
 	}
+	ret.mu.start = types.MaxTs()
 	ret.state.Store(NewPartitionState(false))
 	return ret
 }
@@ -80,6 +97,73 @@ func (p *Partition) Unlock() {
 	p.lock <- struct{}{}
 }
 
+func (p *Partition) checkValid() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.mu.start.LessEq(&p.mu.end)
+}
+
+func (p *Partition) UpdateStart(ts types.TS) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.mu.start != types.MaxTs() {
+		p.mu.start = ts
+	}
+}
+
+// [start, end]
+func (p *Partition) UpdateDuration(start types.TS, end types.TS) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.mu.start = start
+	p.mu.end = end
+}
+
+func (p *Partition) ConsumeSnapCkps(
+	_ context.Context,
+	ckps []*checkpoint.CheckpointEntry,
+	fn func(
+		ckp *checkpoint.CheckpointEntry,
+		state *PartitionState,
+	) error,
+) (
+	err error,
+) {
+	//Notice that checkpoints must contain only one or zero global checkpoint
+	//followed by zero or multi continuous incremental checkpoints.
+	state := p.state.Load()
+	start := types.MaxTs()
+	end := types.TS{}
+	for _, ckp := range ckps {
+		if err = fn(ckp, state); err != nil {
+			return
+		}
+		if ckp.GetType() == checkpoint.ET_Global {
+			start = ckp.GetEnd()
+		}
+		if ckp.GetType() == checkpoint.ET_Incremental {
+			ckpstart := ckp.GetStart()
+			if ckpstart.Less(&start) {
+				start = ckpstart
+			}
+			ckpend := ckp.GetEnd()
+			if ckpend.Greater(&end) {
+				end = ckpend
+			}
+		}
+	}
+	if end.IsEmpty() {
+		//only one global checkpoint.
+		end = start
+	}
+	p.UpdateDuration(start, end)
+	if !p.checkValid() {
+		panic("invalid checkpoint")
+	}
+
+	return nil
+}
+
 func (p *Partition) ConsumeCheckpoints(
 	ctx context.Context,
 	fn func(
@@ -95,6 +179,7 @@ func (p *Partition) ConsumeCheckpoints(
 	}
 	curState := p.state.Load()
 	if len(curState.checkpoints) == 0 {
+		p.UpdateDuration(types.TS{}, types.MaxTs())
 		return nil
 	}
 
@@ -106,6 +191,8 @@ func (p *Partition) ConsumeCheckpoints(
 
 	curState = p.state.Load()
 	if len(curState.checkpoints) == 0 {
+		logutil.Infof("xxxx impossible path")
+		p.UpdateDuration(types.TS{}, types.MaxTs())
 		return nil
 	}
 
@@ -114,6 +201,8 @@ func (p *Partition) ConsumeCheckpoints(
 	if err := state.consumeCheckpoints(fn); err != nil {
 		return err
 	}
+
+	p.UpdateDuration(state.start, types.MaxTs())
 
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")
@@ -135,6 +224,8 @@ func (p *Partition) Truncate(ctx context.Context, ids [2]uint64, ts types.TS) er
 	state := curState.Copy()
 
 	state.truncate(ids, ts)
+
+	//TODO::update partition's start and end
 
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")

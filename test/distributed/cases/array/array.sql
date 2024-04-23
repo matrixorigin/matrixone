@@ -237,5 +237,8 @@ select c2+c3 from t1;
 -- Except
 select * from t8 except select * from t9;
 
+-- infinity scenario
+select cast("[76875768584509877574546435800000005,8955885757767774774774774456466]" as vecf32(2)) *623585864455;
+
 -- post
 drop database vecdb;

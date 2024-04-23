@@ -20,68 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
-
-/// sort things
-
-func sort[T any](col containers.Vector, lessFunc LessFunc[T], n int) SortSlice[T] {
-	dataWithIdx := NewSortSlice(n, lessFunc)
-	if col.HasNull() {
-		for i := 0; i < n; i++ {
-			var item SortElem[T]
-			if col.IsNull(i) {
-				item = SortElem[T]{isNull: true, idx: int32(i)}
-			} else {
-				item = SortElem[T]{data: col.Get(i).(T), idx: int32(i)}
-			}
-			dataWithIdx.Append(item)
-		}
-	} else {
-		for i := 0; i < n; i++ {
-			dataWithIdx.Append(SortElem[T]{data: col.Get(i).(T), idx: int32(i)})
-		}
-	}
-	sortUnstable(dataWithIdx)
-	return dataWithIdx
-}
-
-func Sort[T any](col containers.Vector, lessFunc LessFunc[T], idx []int32) (ret containers.Vector) {
-	dataWithIdx := sort(col, lessFunc, len(idx))
-
-	// make col sorted
-	for i, v := range dataWithIdx.AsSlice() {
-		idx[i] = v.idx
-		if v.isNull {
-			col.Update(i, nil, true)
-		} else {
-			// FIXME: memory waste for varlen type
-			col.Update(i, v.data, false)
-		}
-	}
-
-	ret = col
-	return
-}
-
-func Shuffle(
-	col containers.Vector, idx []int32, pool *containers.VectorPool,
-) containers.Vector {
-	var err error
-	ret := pool.GetVector(col.GetType())
-	if err = ret.PreExtend(len(idx)); err != nil {
-		panic(err)
-	}
-	retVec := ret.GetDownstreamVector()
-	srcVec := col.GetDownstreamVector()
-
-	if err = retVec.Union(srcVec, idx, ret.GetAllocator()); err != nil {
-		panic(err)
-	}
-
-	col.Close()
-	return ret
-}
 
 /// merge things
 
@@ -99,19 +38,19 @@ func mergeVarlen(
 	}
 
 	nBlk := len(col)
-	heap := NewHeapSlice(nBlk, bytesLess)
+	heap := newHeapSlice(nBlk, bytesLess)
 	for i := 0; i < nBlk; i++ {
 		if col[i].IsNull(0) {
-			heap.Append(HeapElem[[]byte]{isNull: true, src: uint32(i), next: 1})
+			heap.Append(heapElem[[]byte]{isNull: true, src: uint32(i), next: 1})
 		} else {
-			heap.Append(HeapElem[[]byte]{data: col[i].GetBytesAt(0), src: uint32(i), next: 1})
+			heap.Append(heapElem[[]byte]{data: col[i].GetBytesAt(0), src: uint32(i), next: 1})
 		}
 	}
 	heapInit(heap)
 	k := 0
 	for i := 0; i < len(toLayout); i++ {
 		for j := 0; j < int(toLayout[i]); j++ {
-			top := heapPop(&heap)
+			top := heapPop(heap)
 			// update sortidx and mapping for k-th sorted element
 			sortidx[k] = top.src
 			mapping[offset[top.src]+top.next-1] = uint32(k)
@@ -126,9 +65,9 @@ func mergeVarlen(
 			// find next element to heap
 			if int(top.next) < int(fromLayout[top.src]) {
 				if col[top.src].IsNull(uint64(top.next)) {
-					heapPush(&heap, HeapElem[[]byte]{isNull: true, src: top.src, next: top.next + 1})
+					heapPush(heap, heapElem[[]byte]{isNull: true, src: top.src, next: top.next + 1})
 				} else {
-					heapPush(&heap, HeapElem[[]byte]{data: col[top.src].GetBytesAt(int(top.next)), src: top.src, next: top.next + 1})
+					heapPush(heap, heapElem[[]byte]{data: col[top.src].GetBytesAt(int(top.next)), src: top.src, next: top.next + 1})
 				}
 			}
 		}
@@ -139,7 +78,7 @@ func mergeVarlen(
 func mergeFixed[T any](
 	col, ret []*vector.Vector,
 	sortidx, mapping []uint32,
-	lessFunc LessFunc[T],
+	lessFunc lessFunc[T],
 	fromLayout, toLayout []uint32,
 	m *mpool.MPool,
 ) {
@@ -150,12 +89,12 @@ func mergeFixed[T any](
 	}
 
 	nBlk := len(col)
-	heap := NewHeapSlice(nBlk, lessFunc)
+	heap := newHeapSlice(nBlk, lessFunc)
 	for i := 0; i < nBlk; i++ {
 		if col[i].IsNull(0) {
-			heap.Append(HeapElem[T]{isNull: true, src: uint32(i), next: 1})
+			heap.Append(heapElem[T]{isNull: true, src: uint32(i), next: 1})
 		} else {
-			heap.Append(HeapElem[T]{data: vector.GetFixedAt[T](col[i], 0), src: uint32(i), next: 1})
+			heap.Append(heapElem[T]{data: vector.GetFixedAt[T](col[i], 0), src: uint32(i), next: 1})
 		}
 	}
 	heapInit(heap)
@@ -163,7 +102,7 @@ func mergeFixed[T any](
 	k := 0
 	for i := 0; i < len(toLayout); i++ {
 		for j := 0; j < int(toLayout[i]); j++ {
-			top := heapPop(&heap)
+			top := heapPop(heap)
 			// update sortidx and mapping for k-th sorted element
 			sortidx[k] = top.src
 			mapping[offset[top.src]+top.next-1] = uint32(k)
@@ -178,9 +117,9 @@ func mergeFixed[T any](
 			// find next element to heap
 			if int(top.next) < int(fromLayout[top.src]) {
 				if col[top.src].IsNull(uint64(top.next)) {
-					heapPush(&heap, HeapElem[T]{isNull: true, src: top.src, next: top.next + 1})
+					heapPush(heap, heapElem[T]{isNull: true, src: top.src, next: top.next + 1})
 				} else {
-					heapPush(&heap, HeapElem[T]{data: vector.GetFixedAt[T](col[top.src], int(top.next)), src: top.src, next: top.next + 1})
+					heapPush(heap, heapElem[T]{data: vector.GetFixedAt[T](col[top.src], int(top.next)), src: top.src, next: top.next + 1})
 				}
 			}
 		}
@@ -394,21 +333,15 @@ func Reshape(column []*vector.Vector, ret []*vector.Vector, fromLayout, toLayout
 			} else {
 				length = int(toLayout[i]) - toOffset
 			}
-
-			// clone from src and append to dest
-			// FIXME: is clone necessary? can we just feed the original vector window to GetUnionAllFunction?
-			// TODO: use vector pool for the cloned vector
-			cloned, err := column[fromIdx].CloneWindow(fromOffset, fromOffset+length, m)
+			// get data from src and append to dest
+			window, err := column[fromIdx].Window(fromOffset, fromOffset+length)
 			if err != nil {
 				panic(err)
 			}
-			err = vector.GetUnionAllFunction(*typ, m)(ret[i], cloned)
+			err = vector.GetUnionAllFunction(*typ, m)(ret[i], window)
 			if err != nil {
 				panic(err)
 			}
-
-			// release temporary coloned vector
-			cloned.Free(m)
 
 			// update offset
 			fromOffset += length

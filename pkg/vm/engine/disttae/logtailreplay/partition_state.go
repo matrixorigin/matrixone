@@ -47,6 +47,8 @@ type PartitionState struct {
 	//TODO:: It's transient, should be removed in future PR.
 	blockDeltas *btree.BTreeG[BlockDeltaEntry]
 	checkpoints []string
+	start       types.TS
+	end         types.TS
 
 	// index
 	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
@@ -302,6 +304,8 @@ func (p *PartitionState) Copy() *PartitionState {
 		dirtyBlocks:           p.dirtyBlocks.Copy(),
 		objectIndexByTS:       p.objectIndexByTS.Copy(),
 		shared:                p.shared,
+		start:                 p.start,
+		end:                   p.end,
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -849,41 +853,42 @@ func (p *PartitionState) HandleMetadataInsert(
 				if !objEntry.CreateTime.IsEmpty() {
 					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
 				}
-				return
-			}
-			objEntry = objPivot
-			objEntry.EntryState = entryStateVector[i]
-			objEntry.Sorted = sortedStateVector[i]
-			if !isEmptyDelta {
-				objEntry.HasDeltaLoc = true
-			}
-			objEntry.CommitTS = commitTimeVector[i]
-			createTS := createTimeVector[i]
-			// after blk is removed, create ts is empty
-			if !createTS.IsEmpty() {
-				objEntry.CreateTime = createTS
-			}
+			} else {
 
-			blkCnt := blockID.Sequence() + 1
-			if uint32(blkCnt) > objEntry.BlkCnt() {
-				objectio.SetObjectStatsBlkCnt(&objEntry.ObjectStats, uint32(blkCnt))
-			}
-
-			p.dataObjects.Set(objEntry)
-
-			if !objEntry.CreateTime.IsEmpty() {
-				p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
-			}
-
-			{
-				e := ObjectIndexByTSEntry{
-					Time:         createTimeVector[i],
-					ShortObjName: *objEntry.ObjectShortName(),
-					IsDelete:     false,
-
-					IsAppendable: objEntry.EntryState,
+				objEntry = objPivot
+				objEntry.EntryState = entryStateVector[i]
+				objEntry.Sorted = sortedStateVector[i]
+				if !isEmptyDelta {
+					objEntry.HasDeltaLoc = true
 				}
-				p.objectIndexByTS.Set(e)
+				objEntry.CommitTS = commitTimeVector[i]
+				createTS := createTimeVector[i]
+				// after blk is removed, create ts is empty
+				if !createTS.IsEmpty() {
+					objEntry.CreateTime = createTS
+				}
+
+				blkCnt := blockID.Sequence() + 1
+				if uint32(blkCnt) > objEntry.BlkCnt() {
+					objectio.SetObjectStatsBlkCnt(&objEntry.ObjectStats, uint32(blkCnt))
+				}
+
+				p.dataObjects.Set(objEntry)
+
+				if !objEntry.CreateTime.IsEmpty() {
+					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+				}
+
+				{
+					e := ObjectIndexByTSEntry{
+						Time:         createTimeVector[i],
+						ShortObjName: *objEntry.ObjectShortName(),
+						IsDelete:     false,
+
+						IsAppendable: objEntry.EntryState,
+					}
+					p.objectIndexByTS.Set(e)
+				}
 			}
 		}
 
@@ -988,7 +993,20 @@ func (p *PartitionState) HandleMetadataDelete(
 	})
 }
 
-func (p *PartitionState) AppendCheckpoint(checkpoint string, partiton *Partition) {
+func (p *PartitionState) CacheCkpDuration(
+	start types.TS,
+	end types.TS,
+	partition *Partition) {
+	if partition.checkpointConsumed.Load() {
+		panic("checkpoints already consumed")
+	}
+	p.start = start
+	p.end = end
+}
+
+func (p *PartitionState) AppendCheckpoint(
+	checkpoint string,
+	partiton *Partition) {
 	if partiton.checkpointConsumed.Load() {
 		panic("checkpoints already consumed")
 	}

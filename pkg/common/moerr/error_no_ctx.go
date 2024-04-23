@@ -319,6 +319,10 @@ func NewDeadlockCheckBusyNoCtx() *Error {
 	return newError(Context(), ErrDeadlockCheckBusy)
 }
 
+func NewCannotCommitOrphanNoCtx() *Error {
+	return NewCannotCommitOrphan(Context())
+}
+
 func NewLockTableBindChangedNoCtx() *Error {
 	return newError(Context(), ErrLockTableBindChanged)
 }
@@ -353,4 +357,8 @@ func NewTxnNeedRetryWithDefChangedNoCtx() *Error {
 
 func NewTxnCannotRetryNoCtx() *Error {
 	return newError(Context(), ErrTxnCannotRetry)
+}
+
+func NewRPCTimeoutNoCtx() *Error {
+	return NewRPCTimeout(Context())
 }

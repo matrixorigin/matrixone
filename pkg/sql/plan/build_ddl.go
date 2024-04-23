@@ -1212,7 +1212,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
 		var insertSqlBuilder strings.Builder
-		insertSqlBuilder.WriteString(fmt.Sprintf("insert into %s select ", createTable.TableDef.Name))
+		insertSqlBuilder.WriteString(fmt.Sprintf("insert into `%s` select ", createTable.TableDef.Name))
 
 		cols := createTable.TableDef.Cols
 		firstCol := true
@@ -2303,10 +2303,19 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	if len(stmt.Names) != 1 {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "drop multiple (%d) tables in one statement", len(stmt.Names))
 	}
+
 	dropTable.Database = string(stmt.Names[0].SchemaName)
+
+	// If the database name is empty, attempt to get default database name
 	if dropTable.Database == "" {
 		dropTable.Database = ctx.DefaultDatabase()
 	}
+
+	// If the final database name is still empty, return an error
+	if dropTable.Database == "" {
+		return nil, moerr.NewNoDB(ctx.GetContext())
+	}
+
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
 	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
@@ -2419,10 +2428,18 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 	if len(stmt.Names) != 1 {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "drop multiple (%d) view", len(stmt.Names))
 	}
+
 	dropTable.Database = string(stmt.Names[0].SchemaName)
+
+	// If the database name is empty, attempt to get default database name
 	if dropTable.Database == "" {
 		dropTable.Database = ctx.DefaultDatabase()
 	}
+	// If the final database name is still empty, return an error
+	if dropTable.Database == "" {
+		return nil, moerr.NewNoDB(ctx.GetContext())
+	}
+
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
 	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
@@ -2622,6 +2639,11 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		dropIndex.Database = ctx.DefaultDatabase()
 	} else {
 		dropIndex.Database = string(stmt.TableName.SchemaName)
+	}
+
+	// If the final database name is still empty, return an error
+	if dropIndex.Database == "" {
+		return nil, moerr.NewNoDB(ctx.GetContext())
 	}
 
 	// check table
