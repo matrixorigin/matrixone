@@ -278,6 +278,9 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 							snapshotList[account] = containers.MakeVector(colTypes[0], mp)
 						}
 						err = vector.AppendFixed[types.TS](snapshotList[account].GetDownstreamVector(), snapTs, false, mp)
+						if err != nil {
+							return nil, err
+						}
 					}
 					continue
 				}
