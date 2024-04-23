@@ -135,28 +135,39 @@ func (l Lock) release() {
 }
 
 func (l Lock) closeWaiter(w *waiter) bool {
-	if !l.isLockRow() {
-		panic("BUG: range lock cannot call closeWaiter")
-	}
+	canRemove := func() bool {
+		if !l.isLockRow() {
+			panic("BUG: range lock cannot call closeWaiter")
+		}
 
-	if l.holders.size() > 0 {
-		return false
-	}
+		if l.holders.size() > 0 {
+			return false
+		}
 
-	if l.waiters.size() == 0 {
-		return true
-	}
+		if l.waiters.size() == 0 {
+			return true
+		}
 
-	if l.waiters.first() != w {
-		return false
-	}
+		if l.waiters.first() != w {
+			return false
+		}
 
-	if l.waiters.size() == 1 {
-		return true
-	}
+		if l.waiters.size() == 1 {
+			return true
+		}
 
-	l.waiters.notify(notifyValue{defChanged: l.isLockTableDefChanged()})
-	return l.isEmpty()
+		l.waiters.notify(notifyValue{defChanged: l.isLockTableDefChanged()})
+		return l.isEmpty()
+	}()
+
+	if canRemove {
+		// close all ref in waiter queue
+		l.waiters.iter(func(w *waiter) bool {
+			w.close()
+			return true
+		})
+	}
+	return canRemove
 }
 
 func (l Lock) closeTxn(
