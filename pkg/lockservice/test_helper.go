@@ -73,7 +73,9 @@ func RunLockServicesForTest(
 		services = append(services,
 			NewLockService(cfg).(*service))
 	}
-	allocator := NewLockTableAllocator(testSockets, lockTableBindTimeout, morpc.Config{})
+	allocator := NewLockTableAllocator(testSockets, lockTableBindTimeout, morpc.Config{}, func(lta *lockTableAllocator) {
+		lta.options.removeDisconnectDuration = configs[0].removeDisconnectDuration
+	})
 	fn(allocator.(*lockTableAllocator), services)
 
 	for _, s := range services {
