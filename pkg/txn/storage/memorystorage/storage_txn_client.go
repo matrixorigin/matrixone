@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -103,6 +104,16 @@ func (*StorageTxnClient) CNBasedConsistencyEnabled() bool        { panic("unimpl
 type StorageTxnOperator struct {
 	storages map[string]*Storage
 	meta     txn.TxnMeta
+}
+
+func (s *StorageTxnOperator) EnterFPrints(idx int) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *StorageTxnOperator) ExitFPrints(idx int) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (s *StorageTxnOperator) EnterRunSql() {

@@ -25,6 +25,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 type TxnCompilerContext struct {
@@ -134,6 +135,8 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	if err != nil {
 		return false
 	}
+	enterFPrint(txn, 5)
+	defer exitFPrint(txn, 5)
 	//open database
 	ses := tcc.GetSession()
 	_, err = tcc.GetTxnHandler().GetStorage().Database(txnCtx, name, txn)
@@ -157,6 +160,8 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	enterFPrint(txn, 4)
+	defer exitFPrint(txn, 4)
 	database, err := tcc.GetTxnHandler().GetStorage().Database(txnCtx, dbName, txn)
 	if err != nil {
 		return 0, err
@@ -180,6 +185,8 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	if err != nil {
 		return nil, nil, err
 	}
+	enterFPrint(txn, 3)
+	defer exitFPrint(txn, 3)
 	account := ses.GetTenantInfo()
 	if isClusterTable(dbName, tableName) {
 		//if it is the cluster table in the general account, switch into the sys account
@@ -239,6 +246,8 @@ func (tcc *TxnCompilerContext) getTmpRelation(_ context.Context, tableName strin
 	if err != nil {
 		return nil, err
 	}
+	enterFPrint(txn, 1)
+	defer exitFPrint(txn, 1)
 	db, err := e.Database(txnCtx, defines.TEMPORARY_DBNAME, txn)
 	if err != nil {
 		logError(tcc.ses, tcc.ses.GetDebugString(),
@@ -273,6 +282,8 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 	if err != nil {
 		return nil, nil
 	}
+	enterFPrint(txn, 0)
+	defer exitFPrint(txn, 0)
 	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(txnCtx, txn, tableId)
 	if err != nil {
 		return nil, nil
@@ -712,6 +723,8 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string) (*plan.Subscri
 	if err != nil {
 		return nil, err
 	}
+	enterFPrint(txn, 2)
+	defer exitFPrint(txn, 2)
 	sub, err := getSubscriptionMeta(txnCtx, dbName, tcc.GetSession(), txn)
 	if err != nil {
 		return nil, err

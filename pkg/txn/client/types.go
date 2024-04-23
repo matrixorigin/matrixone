@@ -167,6 +167,8 @@ type TxnOperator interface {
 
 	EnterRunSql()
 	ExitRunSql()
+	EnterFPrints(idx int)
+	ExitFPrints(idx int)
 }
 
 // TxnIDGenerator txn id generator

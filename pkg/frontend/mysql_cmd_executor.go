@@ -32,13 +32,16 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
-	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -65,7 +68,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/sync/errgroup"
 )
 
 func createDropDatabaseErrorInfo() string {
@@ -551,6 +553,8 @@ func doUse(ctx context.Context, ses *Session, db string) error {
 	if err != nil {
 		return err
 	}
+	enterFPrint(txn, 7)
+	defer exitFPrint(txn, 7)
 	//TODO: check meta data
 	if dbMeta, err = ses.GetParameterUnit().StorageEngine.Database(txnCtx, db, txn); err != nil {
 		//echo client. no such database
@@ -3158,6 +3162,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return err
 	}
 
+	enterFPrint(txnOp, 11)
+
 	//non derived statement
 	if txnOp != nil && !ses.IsDerivedStmt() {
 		//startStatement has been called
@@ -3178,6 +3184,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			logError(ses, ses.GetDebugString(), err3.Error())
 			return
 		}
+		exitFPrint(txnOp, 11)
 		//non derived statement
 		if txnOp != nil && !ses.IsDerivedStmt() {
 			//startStatement has been called
@@ -4018,6 +4025,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	requestCtx = appendStatementAt(requestCtx, beginInstant)
 
 	ses := mce.GetSession()
+
+	var txnOp TxnOperator
+	_, txnOp, _ = ses.GetTxnHandler().GetTxnOperator()
+	enterFPrint(txnOp, 12)
+	defer exitFPrint(txnOp, 12)
+
 	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()

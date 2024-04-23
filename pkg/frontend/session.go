@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -2503,6 +2504,10 @@ func newDBMigration(db string) *dbMigration {
 }
 
 func (d *dbMigration) Migrate(ses *Session) error {
+	var txnOp TxnOperator
+	_, txnOp, _ = ses.GetTxnHandler().GetTxnOperator()
+	enterFPrint(txnOp, 15)
+	defer exitFPrint(txnOp, 15)
 	if d.db == "" {
 		return nil
 	}
@@ -2534,6 +2539,11 @@ func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepar
 
 func (p *prepareStmtMigration) Migrate(ses *Session) error {
 	var err error
+	var txnOp TxnOperator
+	_, txnOp, _ = ses.GetTxnHandler().GetTxnOperator()
+	enterFPrint(txnOp, 14)
+	defer exitFPrint(txnOp, 14)
+
 	v, err := ses.GetGlobalVar("lower_case_table_names")
 	if err != nil {
 		return err

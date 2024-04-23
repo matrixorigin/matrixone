@@ -26,13 +26,16 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/stretchr/testify/assert"
 
 	"github.com/golang/mock/gomock"
+	cvey "github.com/smartystreets/goconvey/convey"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -45,7 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	cvey "github.com/smartystreets/goconvey/convey"
 
 	"github.com/stretchr/testify/require"
 )
@@ -643,6 +645,8 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().EnterFPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().ExitFPrints(gomock.Any()).Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -748,6 +752,8 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().EnterFPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().ExitFPrints(gomock.Any()).Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()

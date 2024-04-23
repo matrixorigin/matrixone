@@ -16,8 +16,14 @@ package frontend
 
 import (
 	"context"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
+	"github.com/smartystreets/goconvey/convey"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -26,10 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/smartystreets/goconvey/convey"
-	"sync"
-	"testing"
-	"time"
 )
 
 var _ client.Workspace = (*testWorkspace)(nil)
@@ -231,6 +233,8 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(moerr.NewInternalError(ctx, "throw error")).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+			txnOperator.EXPECT().EnterFPrints(gomock.Any()).Return().AnyTimes()
+			txnOperator.EXPECT().ExitFPrints(gomock.Any()).Return().AnyTimes()
 			wsp := newTestWorkspace()
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
 			return txnOperator, nil
@@ -260,6 +264,8 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+			txnOperator.EXPECT().EnterFPrints(gomock.Any()).Return().AnyTimes()
+			txnOperator.EXPECT().ExitFPrints(gomock.Any()).Return().AnyTimes()
 			wsp := newTestWorkspace()
 			wsp.reportErr1 = true
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
@@ -295,6 +301,8 @@ func Test_rollbackStatement(t *testing.T) {
 				txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 				txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 				txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+				txnOperator.EXPECT().EnterFPrints(gomock.Any()).Return().AnyTimes()
+				txnOperator.EXPECT().ExitFPrints(gomock.Any()).Return().AnyTimes()
 				wsp := newTestWorkspace()
 				txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
 				return txnOperator, nil

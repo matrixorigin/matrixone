@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -117,4 +118,39 @@ func (count *counter) more() bool {
 
 func (count *counter) String() string {
 	return fmt.Sprintf("enter:%d, exit:%d", count.enter.Load(), count.exit.Load())
+}
+
+func (count *counter) nonZero() bool {
+	return count.exit.Load() > 0 || count.enter.Load() > 0
+}
+
+type footPrints struct {
+	prints [64]counter
+}
+
+func (fprints *footPrints) addEnter(idx int) {
+	if idx >= 0 && idx < len(fprints.prints) {
+		fprints.prints[idx].addEnter()
+	}
+}
+
+func (fprints *footPrints) addExit(idx int) {
+	if idx >= 0 && idx < len(fprints.prints) {
+		fprints.prints[idx].addExit()
+	}
+}
+
+func (fprints *footPrints) String() string {
+	strBuf := strings.Builder{}
+	for i := 0; i < len(fprints.prints); i++ {
+		if !fprints.prints[i].nonZero() {
+			continue
+		}
+		strBuf.WriteString("[")
+		strBuf.WriteString(fmt.Sprintf("%d", i))
+		strBuf.WriteString(": ")
+		strBuf.WriteString(fprints.prints[i].String())
+		strBuf.WriteString("] ")
+	}
+	return strBuf.String()
 }

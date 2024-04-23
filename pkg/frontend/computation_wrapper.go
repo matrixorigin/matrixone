@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mohae/deepcopy"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/mohae/deepcopy"
 )
 
 var _ ComputationWrapper = &TxnComputationWrapper{}
@@ -210,7 +211,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if err != nil {
 		return nil, err
 	}
-
+	enterFPrint(cwft.proc.TxnOperator, 6)
+	defer exitFPrint(cwft.proc.TxnOperator, 6)
 	txnCtx = fileservice.EnsureStatementProfiler(txnCtx, requestCtx)
 	txnCtx = statistic.EnsureStatsInfoCanBeFound(txnCtx, requestCtx)
 
@@ -445,6 +447,9 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
 	defer func() {
 		logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run end")
 	}()
+	_, txnOp, _ := cwft.ses.GetTxnHandler().GetTxnOperator()
+	enterFPrint(txnOp, 16)
+	defer exitFPrint(txnOp, 16)
 	runResult, err := cwft.compile.Run(ts)
 	cwft.runResult = runResult
 	cwft.compile = nil

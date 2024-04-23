@@ -35,6 +35,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -49,7 +51,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go.uber.org/zap"
 )
 
 type CloseFlag struct {
@@ -895,4 +896,72 @@ func getRandomErrorRollbackWholeTxn() error {
 	default:
 		panic(fmt.Sprintf("usp error code %d", arr[x]))
 	}
+}
+
+func enterFPrint(txnOp TxnOperator, idx int) {
+	if txnOp != nil {
+		txnOp.EnterFPrints(idx)
+	}
+}
+
+func exitFPrint(txnOp TxnOperator, idx int) {
+	if txnOp != nil {
+		txnOp.ExitFPrints(idx)
+	}
+}
+
+type counter struct {
+	enter atomic.Uint64
+	exit  atomic.Uint64
+}
+
+func (count *counter) addEnter() {
+	count.enter.Add(1)
+}
+
+func (count *counter) addExit() {
+	count.exit.Add(1)
+}
+
+func (count *counter) more() bool {
+	return count.enter.Load() > count.exit.Load()
+}
+
+func (count *counter) String() string {
+	return fmt.Sprintf("enter:%d, exit:%d", count.enter.Load(), count.exit.Load())
+}
+
+func (count *counter) nonZero() bool {
+	return count.exit.Load() > 0 || count.enter.Load() > 0
+}
+
+type footPrints struct {
+	prints [64]counter
+}
+
+func (fprints *footPrints) addEnter(idx int) {
+	if idx >= 0 && idx < len(fprints.prints) {
+		fprints.prints[idx].addEnter()
+	}
+}
+
+func (fprints *footPrints) addExit(idx int) {
+	if idx >= 0 && idx < len(fprints.prints) {
+		fprints.prints[idx].addExit()
+	}
+}
+
+func (fprints *footPrints) String() string {
+	strBuf := strings.Builder{}
+	for i := 0; i < len(fprints.prints); i++ {
+		if !fprints.prints[i].nonZero() {
+			continue
+		}
+		strBuf.WriteString("[")
+		strBuf.WriteString(fmt.Sprintf("%d", i))
+		strBuf.WriteString(": ")
+		strBuf.WriteString(fprints.prints[i].String())
+		strBuf.WriteString("] ")
+	}
+	return strBuf.String()
 }

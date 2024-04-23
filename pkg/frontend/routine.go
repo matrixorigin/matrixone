@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -29,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 // Routine handles requests.
@@ -226,6 +227,11 @@ func (rt *Routine) handleRequest(req *Request) error {
 	rt.setCancelRequestFunc(cancelRequestFunc)
 	ses = rt.getSession()
 	ses.UpdateDebugString()
+
+	var txnOp TxnOperator
+	_, txnOp, _ = ses.GetTxnHandler().GetTxnOperator()
+	enterFPrint(txnOp, 13)
+	defer exitFPrint(txnOp, 13)
 
 	if rt.needPrintSessionInfo() {
 		logInfof(ses.GetDebugString(), "mo received first request")

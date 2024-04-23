@@ -23,11 +23,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -592,6 +594,8 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 				client.WithEnableRefreshExpression())
 		}
 
+		s.cfg.Txn.EnableLeakCheck = 1
+		s.cfg.Txn.MaxActiveAges.Duration = time.Second * 10
 		if s.cfg.Txn.EnableLeakCheck == 1 {
 			opts = append(opts, client.WithEnableLeakCheck(
 				s.cfg.Txn.MaxActiveAges.Duration,
