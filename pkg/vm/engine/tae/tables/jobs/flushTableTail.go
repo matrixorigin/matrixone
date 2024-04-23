@@ -506,67 +506,11 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	}
 
 	// do first sort
-	var releaseF func()
 	var writtenBatches []*batch.Batch
+	var releaseF func()
 	var mapping []uint32
 	if schema.HasSortKey() {
-		var merger mergesort.AObjMerger
-		typ := readedBats[0].Vecs[sortKeyPos].GetType()
-		if typ.IsVarlen() {
-			merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[string], sortKeyPos, vector.MustStrCol, schema.BlockMaxRows, len(toLayout))
-		} else {
-			switch typ.Oid {
-			case types.T_bool:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.BoolLess, sortKeyPos, vector.MustFixedCol[bool], schema.BlockMaxRows, len(toLayout))
-			case types.T_bit:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64], schema.BlockMaxRows, len(toLayout))
-			case types.T_int8:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[int8], sortKeyPos, vector.MustFixedCol[int8], schema.BlockMaxRows, len(toLayout))
-			case types.T_int16:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[int16], sortKeyPos, vector.MustFixedCol[int16], schema.BlockMaxRows, len(toLayout))
-			case types.T_int32:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[int32], sortKeyPos, vector.MustFixedCol[int32], schema.BlockMaxRows, len(toLayout))
-			case types.T_int64:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[int64], sortKeyPos, vector.MustFixedCol[int64], schema.BlockMaxRows, len(toLayout))
-			case types.T_float32:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[float32], sortKeyPos, vector.MustFixedCol[float32], schema.BlockMaxRows, len(toLayout))
-			case types.T_float64:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[float64], sortKeyPos, vector.MustFixedCol[float64], schema.BlockMaxRows, len(toLayout))
-			case types.T_uint8:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[uint8], sortKeyPos, vector.MustFixedCol[uint8], schema.BlockMaxRows, len(toLayout))
-			case types.T_uint16:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[uint16], sortKeyPos, vector.MustFixedCol[uint16], schema.BlockMaxRows, len(toLayout))
-			case types.T_uint32:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[uint32], sortKeyPos, vector.MustFixedCol[uint32], schema.BlockMaxRows, len(toLayout))
-			case types.T_uint64:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64], schema.BlockMaxRows, len(toLayout))
-			case types.T_date:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[types.Date], sortKeyPos, vector.MustFixedCol[types.Date], schema.BlockMaxRows, len(toLayout))
-			case types.T_timestamp:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[types.Timestamp], sortKeyPos, vector.MustFixedCol[types.Timestamp], schema.BlockMaxRows, len(toLayout))
-			case types.T_datetime:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[types.Datetime], sortKeyPos, vector.MustFixedCol[types.Datetime], schema.BlockMaxRows, len(toLayout))
-			case types.T_time:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[types.Time], sortKeyPos, vector.MustFixedCol[types.Time], schema.BlockMaxRows, len(toLayout))
-			case types.T_enum:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.NumericLess[types.Enum], sortKeyPos, vector.MustFixedCol[types.Enum], schema.BlockMaxRows, len(toLayout))
-			case types.T_decimal64:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.LtTypeLess[types.Decimal64], sortKeyPos, vector.MustFixedCol[types.Decimal64], schema.BlockMaxRows, len(toLayout))
-			case types.T_decimal128:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.LtTypeLess[types.Decimal128], sortKeyPos, vector.MustFixedCol[types.Decimal128], schema.BlockMaxRows, len(toLayout))
-			case types.T_uuid:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.LtTypeLess[types.Uuid], sortKeyPos, vector.MustFixedCol[types.Uuid], schema.BlockMaxRows, len(toLayout))
-			case types.T_TS:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.TsLess, sortKeyPos, vector.MustFixedCol[types.TS], schema.BlockMaxRows, len(toLayout))
-			case types.T_Rowid:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.RowidLess, sortKeyPos, vector.MustFixedCol[types.Rowid], schema.BlockMaxRows, len(toLayout))
-			case types.T_Blockid:
-				merger = mergesort.NewAObjMerger(task, readedBats, mergesort.BlockidLess, sortKeyPos, vector.MustFixedCol[types.Blockid], schema.BlockMaxRows, len(toLayout))
-			default:
-				panic(fmt.Sprintf("unsupported type %s", typ.String()))
-			}
-		}
-		writtenBatches, releaseF, mapping = merger.Merge(ctx)
+		writtenBatches, releaseF, mapping = mergesort.MergeAObj(task, readedBats, sortKeyPos, schema.BlockMaxRows, len(toLayout))
 	} else {
 		cnBatches := make([]*batch.Batch, len(readedBats))
 		for i := range readedBats {
