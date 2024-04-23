@@ -33,7 +33,8 @@ import (
 )
 
 const (
-	SnapshotTypeCluster types.Enum = iota
+	SnapshotTypeIdx types.Enum = iota
+	SnapshotTypeCluster
 	SnapshotTypeAccount
 )
 
