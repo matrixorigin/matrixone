@@ -254,7 +254,6 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 			ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
 			ap.ctr.localRegsCnt--
 			ap.ctr.aliveRegCnt--
-			close(reg.Ch)
 			if ap.ctr.localRegsCnt == 0 {
 				return true, nil
 			}
