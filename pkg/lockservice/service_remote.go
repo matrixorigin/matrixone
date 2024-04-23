@@ -55,7 +55,7 @@ func (s *service) initRemote() {
 			// transaction is marked as cannot commit on tn.
 			return false, err
 		},
-		func(txn []pb.OrphanTxn) error {
+		func(txn []pb.OrphanTxn) ([][]byte, error) {
 			req := acquireRequest()
 			defer releaseRequest(req)
 
@@ -67,10 +67,10 @@ func (s *service) initRemote() {
 
 			resp, err := s.remote.client.Send(ctx, req)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			releaseResponse(resp)
-			return nil
+			defer releaseResponse(resp)
+			return resp.CannotCommit.CommittingTxn, nil
 		},
 	)
 
