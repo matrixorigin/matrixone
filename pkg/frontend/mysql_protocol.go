@@ -2678,9 +2678,6 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 
 // the server sends the payload to the client
 func (mp *MysqlProtocolImpl) writePackets(payload []byte, flush bool) error {
-	if flush {
-		flush = !mp.disableAutoFlush
-	}
 
 	//protocol header length
 	var headerLen = HeaderOffset
@@ -2706,7 +2703,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte, flush bool) error {
 		var packet = append(header[:], payload[i:i+curLen]...)
 
 		mp.incDebugCount(4)
-		err := mp.tcpConn.Write(packet, goetty.WriteOptions{Flush: false})
+		err := mp.tcpConn.Write(packet, goetty.WriteOptions{Flush: true})
 		mp.incDebugCount(5)
 		if err != nil {
 			return err
@@ -2733,9 +2730,6 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte, flush bool) error {
 		}
 	}
 
-	if flush {
-		return mp.tcpConn.Flush(0)
-	}
 	return nil
 }
 

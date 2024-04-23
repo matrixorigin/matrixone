@@ -2849,7 +2849,7 @@ func finishTxn(ctx context.Context, bh BackgroundExec, err error) error {
 
 type alterUser struct {
 	IfExists bool
-	User     *user
+	Users    []*user
 	Role     *tree.Role
 	MiscOpt  tree.UserMiscOption
 	// comment or attribute
@@ -2882,16 +2882,20 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	if au.CommentOrAttribute.Exist {
 		return moerr.NewInternalError(ctx, "not support alter comment or attribute")
 	}
+	if len(au.Users) != 1 {
+		return moerr.NewInternalError(ctx, "can only alter one user at a time")
+	}
+	user := au.Users[0]
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	userName, err := normalizeName(ctx, au.User.Username)
+	userName, err := normalizeName(ctx, user.Username)
 	if err != nil {
 		return err
 	}
-	hostName := au.User.Hostname
-	password := au.User.IdentStr
+	hostName := user.Hostname
+	password := user.IdentStr
 	if len(password) == 0 {
 		return moerr.NewInternalError(ctx, "password is empty string")
 	}
@@ -2904,11 +2908,11 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		return err
 	}
 
-	if !au.User.AuthExist {
+	if !user.AuthExist {
 		return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', alter Auth is nil", userName, hostName)
 	}
 
-	if au.User.IdentTyp != tree.AccountIdentifiedByPassword {
+	if user.IdentTyp != tree.AccountIdentifiedByPassword {
 		return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', only support alter Auth by identified by", userName, hostName)
 	}
 
