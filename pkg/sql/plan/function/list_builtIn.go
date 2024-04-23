@@ -1240,8 +1240,9 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return builtInSerial
+				newOpWithFree: func() (executeLogicOfOverload, executeFreeOfOverload) {
+					opSerial := newOpSerial()
+					return opSerial.BuiltInSerial, opSerial.Close
 				},
 			},
 		},
@@ -1265,8 +1266,9 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return BuiltInSerialFull
+				newOpWithFree: func() (executeLogicOfOverload, executeFreeOfOverload) {
+					opSerial := newOpSerial()
+					return opSerial.BuiltInSerialFull, opSerial.Close
 				},
 			},
 		},
@@ -2761,6 +2763,27 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return Unhex
+				},
+			},
+		},
+	},
+
+	// function `md5`
+	{
+		functionId: MD5,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Md5
 				},
 			},
 		},
@@ -5488,6 +5511,29 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `cast_nano_to_timestamp`
+	{
+		functionId: CAST_NANO_TO_TIMESTAMP,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastNanoToTimestamp
+				},
+			},
+		},
+	},
+
 	// function `mo_table_rows`
 	{
 		functionId: MO_TABLE_ROWS,
@@ -6133,6 +6179,27 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return BitmapCount
+				},
+			},
+		},
+	},
+
+	// function `SHA1`
+	{
+		functionId: SHA1,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SHA1Func
 				},
 			},
 		},

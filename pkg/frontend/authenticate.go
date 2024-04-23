@@ -1050,7 +1050,7 @@ var (
 		`create table mo_snapshots(
 			snapshot_id uuid unique key,
 			sname varchar(64) primary key,
-			ts timestamp,
+			ts bigint,
 			level enum('cluster','account','database','table'),
 	        account_name varchar(300),
 			database_name varchar(5000),
@@ -1160,7 +1160,7 @@ var (
 		account_name,
 		database_name,
 		table_name,
-		obj_id) values ('%s','%s', '%s', '%s','%s',	'%s','%s', '%d');`
+		obj_id ) values ('%s', '%s', %d, '%s', '%s', '%s', '%s', %d);`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -1605,6 +1605,10 @@ const (
 
 	checkSnapshotFormat = `select snapshot_id from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`
 
+	getSnapshotTsWithSnapshotNameFormat = `select ts from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`
+
+	checkSnapshotTsFormat = `select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id;`
+
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
 	getPubInfoFormat            = `select account_list,comment,database_name,database_id from mo_catalog.mo_pubs where pub_name = '%s';`
@@ -1684,7 +1688,19 @@ func getSqlForCheckSnapshot(ctx context.Context, snapshot string) (string, error
 	return fmt.Sprintf(checkSnapshotFormat, snapshot), nil
 }
 
-func getSqlForCheckStageStatus(_ context.Context, status string) string {
+func getSqlForGetSnapshotTsWithSnapshotName(ctx context.Context, snapshot string) (string, error) {
+	err := inputNameIsInvalid(ctx, snapshot)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(getSnapshotTsWithSnapshotNameFormat, snapshot), nil
+}
+
+func getSqlForCheckSnapshotTs(snapshotTs int64) string {
+	return fmt.Sprintf(checkSnapshotTsFormat, snapshotTs)
+}
+
+func getSqlForCheckStageStatus(ctx context.Context, status string) string {
 	return fmt.Sprintf(checkStageStatusFormat, status)
 }
 
@@ -1707,7 +1723,7 @@ func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credential
 	return fmt.Sprintf(insertIntoMoStages, stageName, url, credentials, status, createdTime, comment), nil
 }
 
-func getSqlForCreateSnapshot(ctx context.Context, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName string, objectId uint64) (string, error) {
+func getSqlForCreateSnapshot(ctx context.Context, snapshotId, snapshotName string, ts int64, level, accountName, databaseName, tableName string, objectId uint64) (string, error) {
 	err := inputNameIsInvalid(ctx, snapshotName)
 	if err != nil {
 		return "", err
@@ -2943,7 +2959,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	//encryption the password
 	encryption = HashPassWord(password)
 
-	if execResultArrayHasData(erArray) {
+	if execResultArrayHasData(erArray) || getGlobalPu().SV.SkipCheckPrivilege {
 		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 		if err != nil {
 			return err
@@ -9722,7 +9738,6 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	var snapshotName string
 	var snapshotExist bool
 	var snapshotId string
-	var snapshotTs string
 	var databaseName string
 	var tableName string
 	var sql string
@@ -9834,9 +9849,8 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		// 2. get snapshot ts
 		// ts := ses.proc.TxnOperator.SnapshotTS()
 		// snapshotTs = ts.String()
-		snapshotTs = types.CurrentTimestamp().String2(time.Local, 0)
 
-		sql, err = getSqlForCreateSnapshot(ctx, snapshotId, snapshotName, snapshotTs, snapshotLevel.String(), string(stmt.Obeject.ObjName), databaseName, tableName, objId)
+		sql, err = getSqlForCreateSnapshot(ctx, snapshotId, snapshotName, time.Now().UTC().UnixNano(), snapshotLevel.String(), string(stmt.Obeject.ObjName), databaseName, tableName, objId)
 		if err != nil {
 			return err
 		}
@@ -9919,6 +9933,71 @@ func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotNam
 		return true, nil
 	}
 	return false, nil
+}
+
+func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses FeSession, spName string) (snapshotTs int64, err error) {
+	var sql string
+	var erArray []ExecResult
+	err = inputNameIsInvalid(ctx, spName)
+	if err != nil {
+		return 0, err
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	sql, err = getSqlForGetSnapshotTsWithSnapshotName(ctx, spName)
+	if err != nil {
+		return 0, err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return 0, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return 0, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		snapshotTs, err := erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return 0, err
+		}
+
+		return snapshotTs, nil
+	} else {
+		return 0, moerr.NewInternalError(ctx, "snapshot %s does not exist", spName)
+	}
+}
+
+func checkTimeStampValid(ctx context.Context, ses FeSession, snapshotTs int64) (bool, error) {
+	var sql string
+	var err error
+	var erArray []ExecResult
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	sql = getSqlForCheckSnapshotTs(snapshotTs)
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return false, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if !execResultArrayHasData(erArray) {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func getDbIdAndType(ctx context.Context, bh BackgroundExec, tenantInfo *TenantInfo, dbName string) (dbId uint64, dbType string, err error) {

@@ -16,6 +16,8 @@ package function
 
 import (
 	"context"
+	"crypto/md5"
+	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -840,6 +842,14 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	return nil
 }
 
+func Md5(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryBytesToBytes(parameters, result, proc, length, func(data []byte) []byte {
+		sum := md5.Sum(data)
+		return []byte(hex.EncodeToString(sum[:]))
+	})
+
+}
+
 func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
 		buf := make([]byte, base64.StdEncoding.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
@@ -1403,5 +1413,17 @@ func BitmapCount(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return 0
 		}
 		return bmp.GetCardinality()
+	})
+}
+
+func SHA1Func(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+) error {
+	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+		sum := sha1.Sum(v)
+		return []byte(hex.EncodeToString(sum[:]))
 	})
 }
