@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -45,7 +46,8 @@ type lockTableAllocator struct {
 
 	// for test
 	options struct {
-		getActiveTxnFunc func(sid string) (bool, [][]byte, error)
+		getActiveTxnFunc         func(sid string) (bool, [][]byte, error)
+		removeDisconnectDuration time.Duration
 	}
 }
 
@@ -477,6 +479,11 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 		}
 	}
 
+	removeDisconnectDuration := l.options.removeDisconnectDuration
+	if removeDisconnectDuration == 0 {
+		removeDisconnectDuration = time.Hour * 24
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -487,7 +494,13 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 			activeTxnMap := make(map[string]map[string]struct{})
 
 			l.ctl.Range(func(key, value any) bool {
-				services = append(services, key.(string))
+				c := value.(*commitCtl)
+				ok, at := c.disconnected()
+				if !ok {
+					services = append(services, key.(string))
+				} else if time.Since(at) > removeDisconnectDuration {
+					l.ctl.Delete(key)
+				}
 				return true
 			})
 
@@ -503,6 +516,8 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 						}
 						activeTxnMap[sid] = m
 					}
+				} else if !isRetryError(err) {
+					l.getCtl(sid).disconnect()
 				}
 			}
 
@@ -847,6 +862,9 @@ var (
 )
 
 type commitCtl struct {
+	// disconnectAt indicates whether the service is disconnected, never connect
+	// to the service again.
+	disconnectAt atomic.Pointer[time.Time]
 	// txn id -> state, 0: cannot commit, 1: committed
 	states sync.Map
 }
@@ -857,4 +875,17 @@ func (c *commitCtl) add(txnID string, state ctlState) ctlState {
 		return old.(ctlState)
 	}
 	return state
+}
+
+func (c *commitCtl) disconnect() {
+	at := time.Now()
+	c.disconnectAt.Store(&at)
+}
+
+func (c *commitCtl) disconnected() (bool, time.Time) {
+	v := c.disconnectAt.Load()
+	if v == nil {
+		return false, time.Time{}
+	}
+	return true, *v
 }

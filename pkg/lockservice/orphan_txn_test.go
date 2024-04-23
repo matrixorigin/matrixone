@@ -445,6 +445,7 @@ func TestCannotCommitTxnCanBeRemovedWithRestart(t *testing.T) {
 		},
 		func(c *Config) {
 			c.TxnIterFunc = fn
+			c.removeDisconnectDuration = time.Millisecond * 50
 		},
 	)
 }
