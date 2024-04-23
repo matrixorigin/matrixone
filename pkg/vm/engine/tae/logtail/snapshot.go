@@ -32,6 +32,23 @@ import (
 	"time"
 )
 
+const (
+	SnapshotTypeCluster uint16 = iota
+	SnapshotTypeAccount
+)
+
+// mo_snapshot's schema
+const (
+	ColSnapshotId uint16 = iota
+	ColSName
+	ColTS
+	ColLevel
+	ColAccountName
+	ColDatabaseName
+	ColTableName
+	ColObjId
+)
+
 var (
 	objectInfoSchemaAttr = []string{
 		catalog.ObjectAttr_ObjectStats,
@@ -73,6 +90,17 @@ var (
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
 	}
+
+	snapshotSchemaTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
+		types.New(types.T_uint16, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_uint64, 0, 0),
+	}
 )
 
 type objectInfo struct {
@@ -86,11 +114,11 @@ type SnapshotMeta struct {
 	sync.RWMutex
 	objects     map[objectio.Segmentid]*objectInfo
 	tid         uint64
-	tables      map[uint32]map[uint64]*tableInfo
-	acctIndexes map[uint64]*tableInfo
+	tables      map[uint32]map[uint64]*TableInfo
+	acctIndexes map[uint64]*TableInfo
 }
 
-type tableInfo struct {
+type TableInfo struct {
 	accID    uint32
 	dbID     uint64
 	tid      uint64
@@ -101,8 +129,8 @@ type tableInfo struct {
 func NewSnapshotMeta() *SnapshotMeta {
 	return &SnapshotMeta{
 		objects:     make(map[objectio.Segmentid]*objectInfo),
-		tables:      make(map[uint32]map[uint64]*tableInfo),
-		acctIndexes: make(map[uint64]*tableInfo),
+		tables:      make(map[uint32]map[uint64]*TableInfo),
+		acctIndexes: make(map[uint64]*TableInfo),
 	}
 }
 
@@ -126,7 +154,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		}
 		accID := insAccIDs[i]
 		if sm.tables[accID] == nil {
-			sm.tables[accID] = make(map[uint64]*tableInfo)
+			sm.tables[accID] = make(map[uint64]*TableInfo)
 		}
 		dbid := insDBIDs[i]
 		create := insCreateAts[i]
@@ -134,7 +162,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		if sm.tables[accID][tid] != nil {
 			continue
 		}
-		table := &tableInfo{
+		table := &TableInfo{
 			accID:    accID,
 			dbID:     dbid,
 			tid:      tid,
@@ -209,10 +237,11 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 	objects := sm.objects
 	sm.RUnlock()
 	snapshotList := make(map[uint32]containers.Vector)
-	idxes := []uint16{2, 7}
+	idxes := []uint16{ColTS, ColLevel, ColObjId}
 	colTypes := []types.Type{
-		types.New(types.T_TS, types.MaxVarcharLen, 0),
-		types.New(types.T_uint64, 0, 0),
+		snapshotSchemaTypes[ColTS],
+		snapshotSchemaTypes[ColLevel],
+		snapshotSchemaTypes[ColObjId],
 	}
 	for _, object := range objects {
 		location := object.stats.ObjectLocation()
@@ -236,11 +265,22 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 			}
 			defer bat.Clean(mp)
 			tsList := vector.MustFixedCol[int64](bat.Vecs[0])
-			acctList := vector.MustFixedCol[uint64](bat.Vecs[1])
+			typeList := vector.MustFixedCol[uint16](bat.Vecs[1])
+			acctList := vector.MustFixedCol[uint64](bat.Vecs[2])
 			for r := 0; r < bat.Vecs[0].Length(); r++ {
 				ts := tsList[r]
 				snapTs := types.BuildTS(ts, 0)
 				acct := acctList[r]
+				snapshotType := typeList[r]
+				if snapshotType == SnapshotTypeCluster {
+					for account := range sm.tables {
+						if snapshotList[account] == nil {
+							snapshotList[account] = containers.MakeVector(colTypes[0], mp)
+						}
+						err = vector.AppendFixed[types.TS](snapshotList[account].GetDownstreamVector(), snapTs, false, mp)
+					}
+					continue
+				}
 				id := uint32(acct)
 				if snapshotList[id] == nil {
 					snapshotList[id] = containers.MakeVector(colTypes[0], mp)
@@ -369,9 +409,9 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 		createTS := insCreateTSs[i]
 		deleteTS := insDeleteTSs[i]
 		if sm.tables[accid] == nil {
-			sm.tables[accid] = make(map[uint64]*tableInfo)
+			sm.tables[accid] = make(map[uint64]*TableInfo)
 		}
-		table := &tableInfo{
+		table := &TableInfo{
 			tid:      tid,
 			dbID:     dbid,
 			accID:    accid,
@@ -559,7 +599,7 @@ func (sm *SnapshotMeta) MergeTableInfo(SnapshotList map[uint32][]types.TS) error
 	return nil
 }
 
-func isSnapshotRefers(table *tableInfo, snapVec []types.TS) bool {
+func isSnapshotRefers(table *TableInfo, snapVec []types.TS) bool {
 	if len(snapVec) == 0 {
 		return false
 	}
