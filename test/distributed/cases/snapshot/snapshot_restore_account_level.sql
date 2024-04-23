@@ -635,7 +635,7 @@ drop database snapshot_read;
 -- @session
 
 create account test_account_01 admin_name = 'test_user' identified by '111';
-restore account test_account from snapshot snapshot_01 to newAccount test_account_01 ;
+restore account test_account from snapshot snapshot_01 to account test_account_01 ;
 
 -- @session:id=8&user=test_account_01:test_user&password=111
 use test_snapshot_restore;

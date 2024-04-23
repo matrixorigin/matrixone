@@ -371,8 +371,8 @@ select count(*) from snapshot_read.users;
 -- @session
 
 create account test_account_01 admin_name = 'test_user_01' identified by '111';
-restore account 'test_account' database 'snapshot_read' table 'users' from snapshot 'sp_01' to NEWACCOUNT 'test_account_01';
-restore account 'test_account' database 'snapshot_read' table 'v1' from snapshot 'sp_01' to NEWACCOUNT 'test_account_01';
+restore account 'test_account' database 'snapshot_read' table 'users' from snapshot 'sp_01' to account 'test_account_01';
+restore account 'test_account' database 'snapshot_read' table 'v1' from snapshot 'sp_01' to account 'test_account_01';
 
 -- @session:id=8&user=test_account_01:test_user_01&password=111
 select count(*) from snapshot_read.users;

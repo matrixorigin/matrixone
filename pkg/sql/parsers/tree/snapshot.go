@@ -186,14 +186,14 @@ func (node *RestoreSnapShot) Format(ctx *FmtCtx) {
 	case RESTORELEVELDATABASE:
 		ctx.WriteString("account ")
 		node.AccountName.Format(ctx)
-		ctx.WriteString("database ")
+		ctx.WriteString(" database ")
 		node.DatabaseName.Format(ctx)
 	case RESTORELEVELTABLE:
 		ctx.WriteString("account ")
 		node.AccountName.Format(ctx)
-		ctx.WriteString("database ")
+		ctx.WriteString(" database ")
 		node.DatabaseName.Format(ctx)
-		ctx.WriteString("table ")
+		ctx.WriteString(" table ")
 		node.TableName.Format(ctx)
 	}
 

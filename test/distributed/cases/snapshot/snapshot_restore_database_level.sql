@@ -379,7 +379,7 @@ drop view v2;
 
 
 create account test_account_2 admin_name = 'test_user_2' identified by '111';
-restore account 'test_account' database 'snapshot_read' from snapshot 'sp_01' to NEWACCOUNT 'test_account_2';
+restore account 'test_account' database 'snapshot_read' from snapshot 'sp_01' to account 'test_account_2';
 
 -- @session:id=10&user=test_account_2:test_user_2&password=111
 select count(*) from snapshot_read.students;
@@ -450,7 +450,7 @@ drop database snapshot_read;
 
 
 create account test_account_2 admin_name = 'test_user_2' identified by '111';
-restore account 'test_account' database 'snapshot_read' from snapshot 'sp_01' to NEWACCOUNT 'test_account_2';
+restore account 'test_account' database 'snapshot_read' from snapshot 'sp_01' to account 'test_account_2';
 
 -- @session:id=13&user=test_account_2:test_user_2&password=111
 select count(*) from snapshot_read.students;
