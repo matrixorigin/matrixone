@@ -174,10 +174,16 @@ func TestAObjMergeContainsNull(t *testing.T) {
 	}
 
 	ret, releaseF, mapping := testAObjMerger(vecType.ToType(), testPool)(batches, 0, uint32(rowCnt), batCnt).Merge(context.Background())
-	for i := 0; i < batCnt; i++ {
-		for j := 0; j < vecCnt; j++ {
-			t.Log(vector.MustFixedCol[int32](ret[i].Vecs[j]))
-			require.True(t, slices.IsSorted(vector.MustFixedCol[int32](ret[i].Vecs[j])))
+	for _, bat := range ret {
+		for _, vec := range bat.Vecs {
+			s := vector.MustFixedCol[int32](vec)
+			for i := range s {
+				if vec.IsNull(uint64(i)) {
+					s[i] = 0
+				}
+			}
+			t.Log(s)
+			require.True(t, slices.IsSorted(s))
 		}
 	}
 	t.Log(mapping)
