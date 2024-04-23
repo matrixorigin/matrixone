@@ -96,11 +96,12 @@ type singleAggFuncExec1[from, to types.FixedSizeTExceptStrType] struct {
 	ret    aggFuncResult[to]
 	groups []SingleAggFromFixedRetFixed[from, to]
 
-	fill     SingleAggFill1[from, to]
-	fillNull SingleAggFillNull1[from, to]
-	fills    SingleAggFills1[from, to]
-	merge    SingleAggMerge1[from, to]
-	flush    SingleAggFlush1[from, to]
+	initGroup SingleAggInit1[from, to]
+	fill      SingleAggFill1[from, to]
+	fillNull  SingleAggFillNull1[from, to]
+	fills     SingleAggFills1[from, to]
+	merge     SingleAggMerge1[from, to]
+	flush     SingleAggFlush1[from, to]
 
 	// method to new the private structure for group growing.
 	gGroup func() SingleAggFromFixedRetFixed[from, to]
@@ -184,6 +185,9 @@ func (exec *singleAggFuncExec1[from, to]) init(
 	if impl.flush != nil {
 		exec.flush = impl.flush.(SingleAggFlush1[from, to])
 	}
+	if impl.init != nil {
+		exec.initGroup = impl.init.(SingleAggInit1[from, to])
+	}
 
 	if info.distinct {
 		exec.distinctHash = newDistinctHash(mg.Mp(), opt.receiveNull)
@@ -206,10 +210,14 @@ func (exec *singleAggFuncExec1[from, to]) GroupGrow(more int) error {
 	exec.groups = append(exec.groups, make([]SingleAggFromFixedRetFixed[from, to], more)...)
 	for i, j := oldLength, len(exec.groups); i < j; i++ {
 		exec.groups[i] = exec.gGroup()
+	}
 
-		exec.ret.groupToSet = i
-		if err := exec.groups[i].Init(setter, exec.singleAggInfo.argType, exec.singleAggInfo.retType); err != nil {
-			return err
+	if exec.initGroup != nil {
+		for i, j := oldLength, len(exec.groups); i < j; i++ {
+			exec.ret.groupToSet = i
+			if err := exec.initGroup(exec.groups[i], setter, exec.singleAggInfo.argType, exec.singleAggInfo.retType); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

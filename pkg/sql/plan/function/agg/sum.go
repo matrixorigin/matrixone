@@ -25,6 +25,7 @@ func RegisterSum1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), SumReturnType, false, true),
 			aggexec.GenerateEmptyContextFromFixedToFixed[uint64, uint64],
+			nil,
 			FillAggSum1[uint64, uint64], nil, FillsAggSum1[uint64, uint64],
 			MergeAggSum1[uint64, uint64],
 			nil,
@@ -34,6 +35,7 @@ func RegisterSum1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), SumReturnType, false, true),
 			aggexec.GenerateEmptyContextFromFixedToFixed[int8, int64],
+			nil,
 			FillAggSum1[int8, int64], nil, FillsAggSum1[int8, int64],
 			MergeAggSum1[int8, int64],
 			nil,
@@ -43,6 +45,7 @@ func RegisterSum1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), SumReturnType, false, true),
 			aggexec.GenerateEmptyContextFromFixedToFixed[int16, int64],
+			nil,
 			FillAggSum1[int16, int64], nil, FillsAggSum1[int16, int64],
 			MergeAggSum1[int16, int64],
 			nil,
@@ -52,6 +55,7 @@ func RegisterSum1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), SumReturnType, false, true),
 			aggexec.GenerateEmptyContextFromFixedToFixed[int32, int64],
+			nil,
 			FillAggSum1[int32, int64], nil, FillsAggSum1[int32, int64],
 			MergeAggSum1[int32, int64],
 			nil,
@@ -61,6 +65,7 @@ func RegisterSum1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), SumReturnType, false, true),
 			aggexec.GenerateEmptyContextFromFixedToFixed[int64, int64],
+			nil,
 			FillAggSum1[int64, int64], nil, FillsAggSum1[int64, int64],
 			MergeAggSum1[int64, int64],
 			nil,
@@ -70,6 +75,7 @@ func RegisterSum1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), SumReturnType, false, true),
 			aggexec.GenerateEmptyContextFromFixedToFixed[uint8, uint64],
+			nil,
 			FillAggSum1[uint8, uint64], nil, FillsAggSum1[uint8, uint64],
 			MergeAggSum1[uint8, uint64],
 			nil,
@@ -79,6 +85,7 @@ func RegisterSum1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), SumReturnType, false, true),
 			aggexec.GenerateEmptyContextFromFixedToFixed[uint16, uint64],
+			nil,
 			FillAggSum1[uint16, uint64], nil, FillsAggSum1[uint16, uint64],
 			MergeAggSum1[uint16, uint64],
 			nil,
@@ -88,6 +95,7 @@ func RegisterSum1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), SumReturnType, false, true),
 			aggexec.GenerateEmptyContextFromFixedToFixed[uint32, uint64],
+			nil,
 			FillAggSum1[uint32, uint64], nil, FillsAggSum1[uint32, uint64],
 			MergeAggSum1[uint32, uint64],
 			nil,
@@ -97,6 +105,7 @@ func RegisterSum1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), SumReturnType, false, true),
 			aggexec.GenerateEmptyContextFromFixedToFixed[uint64, uint64],
+			nil,
 			FillAggSum1[uint64, uint64], nil, FillsAggSum1[uint64, uint64],
 			MergeAggSum1[uint64, uint64],
 			nil,
@@ -106,6 +115,7 @@ func RegisterSum1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), SumReturnType, false, true),
 			aggexec.GenerateEmptyContextFromFixedToFixed[float32, float64],
+			nil,
 			FillAggSum1[float32, float64], nil, FillsAggSum1[float32, float64],
 			MergeAggSum1[float32, float64],
 			nil,
@@ -115,6 +125,7 @@ func RegisterSum1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), SumReturnType, false, true),
 			aggexec.GenerateEmptyContextFromFixedToFixed[float64, float64],
+			nil,
 			FillAggSum1[float64, float64], nil, FillsAggSum1[float64, float64],
 			MergeAggSum1[float64, float64],
 			nil,
@@ -124,6 +135,7 @@ func RegisterSum1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), SumReturnType, false, true),
 			newAggSumDecimal64,
+			InitAggSumDecimal64,
 			FillAggSumDecimal64, nil, FillsAggSumDecimal64,
 			MergeAggSumDecimal64,
 			nil,
@@ -133,6 +145,7 @@ func RegisterSum1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), SumReturnType, false, true),
 			newAggSumDecimal128,
+			InitAggSumDecimal128,
 			FillAggSumDecimal128, nil, FillsAggSumDecimal128,
 			MergeAggSumDecimal128,
 			nil,
@@ -195,19 +208,20 @@ func newAggSumDecimal64() aggexec.SingleAggFromFixedRetFixed[types.Decimal64, ty
 
 func (a *aggSumDecimal64) Marshal() []byte     { return types.EncodeInt32(&a.argScale) }
 func (a *aggSumDecimal64) Unmarshal(bs []byte) { a.argScale = types.DecodeInt32(bs) }
-func (a *aggSumDecimal64) Init(set aggexec.AggSetter[types.Decimal128], arg types.Type, ret types.Type) error {
-	set(types.Decimal128{B0_63: 0, B64_127: 0})
+
+func InitAggSumDecimal64(
+	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128], setter aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
+	setter(types.Decimal128{B0_63: 0, B64_127: 0})
+	a := exec.(*aggSumDecimal64)
 	a.argScale = arg.Scale
 	return nil
 }
-
 func FillAggSumDecimal64(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128], value types.Decimal64, getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {
 	r, err := getter().Add64(value)
 	setter(r)
 	return err
 }
-
 func FillsAggSumDecimal64(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128],
 	value types.Decimal64, isNull bool, count int, getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {
@@ -245,19 +259,20 @@ func newAggSumDecimal128() aggexec.SingleAggFromFixedRetFixed[types.Decimal128, 
 
 func (a *aggSumDecimal128) Marshal() []byte     { return types.EncodeInt32(&a.argScale) }
 func (a *aggSumDecimal128) Unmarshal(bs []byte) { a.argScale = types.DecodeInt32(bs) }
-func (a *aggSumDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg types.Type, ret types.Type) error {
+
+func InitAggSumDecimal128(
+	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128], setter aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
+	setter(types.Decimal128{B0_63: 0, B64_127: 0})
+	a := exec.(*aggSumDecimal128)
 	a.argScale = arg.Scale
-	set(types.Decimal128{B0_63: 0, B64_127: 0})
 	return nil
 }
-
 func FillAggSumDecimal128(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128], value types.Decimal128, getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {
 	r, err := getter().Add128(value)
 	setter(r)
 	return err
 }
-
 func FillsAggSumDecimal128(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128],
 	value types.Decimal128, isNull bool, count int, getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {

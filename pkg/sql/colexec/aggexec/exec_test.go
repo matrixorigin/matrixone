@@ -106,7 +106,7 @@ func TestSingleAggFuncExec1(t *testing.T) {
 		MakeSingleAgg1RegisteredInfo(
 			MakeSingleColumnAggInformation(info.aggID, info.argType, tSinglePrivate1Ret, true, info.emptyNull),
 			gTesSingleAggPrivate1,
-			fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
+			nil, fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
 	executor := MakeAgg(
 		mg,
 		info.aggID, info.distinct, info.argType)
@@ -374,7 +374,7 @@ func TestEmptyNullFlag(t *testing.T) {
 			MakeSingleAgg1RegisteredInfo(
 				MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, false, true),
 				gTesSingleAggPrivate1,
-				fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
+				nil, fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
 		executor := MakeAgg(
 			mg,
 			id, false, types.T_int32.ToType())
@@ -391,7 +391,7 @@ func TestEmptyNullFlag(t *testing.T) {
 			MakeSingleAgg1RegisteredInfo(
 				MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, false, false),
 				gTesSingleAggPrivate1,
-				fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
+				nil, fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
 		executor := MakeAgg(
 			mg,
 			id, false, types.T_int32.ToType())

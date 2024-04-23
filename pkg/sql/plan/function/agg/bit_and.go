@@ -25,6 +25,7 @@ func RegisterBitAnd1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), BitAndReturnType, false, true),
 			newAggBitAnd[uint64],
+			InitAggBitAnd1[uint64],
 			FillAggBitAnd1[uint64], nil, FillsAggBitAnd1[uint64],
 			MergeAggBitAnd1[uint64],
 			nil,
@@ -34,6 +35,7 @@ func RegisterBitAnd1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), BitAndReturnType, false, true),
 			newAggBitAnd[uint8],
+			InitAggBitAnd1[uint8],
 			FillAggBitAnd1[uint8], nil, FillsAggBitAnd1[uint8],
 			MergeAggBitAnd1[uint8],
 			nil,
@@ -43,6 +45,7 @@ func RegisterBitAnd1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), BitAndReturnType, false, true),
 			newAggBitAnd[uint16],
+			InitAggBitAnd1[uint16],
 			FillAggBitAnd1[uint16], nil, FillsAggBitAnd1[uint16],
 			MergeAggBitAnd1[uint16],
 			nil,
@@ -52,6 +55,7 @@ func RegisterBitAnd1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), BitAndReturnType, false, true),
 			newAggBitAnd[uint32],
+			InitAggBitAnd1[uint32],
 			FillAggBitAnd1[uint32], nil, FillsAggBitAnd1[uint32],
 			MergeAggBitAnd1[uint32],
 			nil,
@@ -61,6 +65,7 @@ func RegisterBitAnd1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), BitAndReturnType, false, true),
 			newAggBitAnd[uint64],
+			InitAggBitAnd1[uint64],
 			FillAggBitAnd1[uint64], nil, FillsAggBitAnd1[uint64],
 			MergeAggBitAnd1[uint64],
 			nil,
@@ -70,6 +75,7 @@ func RegisterBitAnd1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), BitAndReturnType, false, true),
 			newAggBitAnd[int8],
+			InitAggBitAnd1[int8],
 			FillAggBitAnd1[int8], nil, FillsAggBitAnd1[int8],
 			MergeAggBitAnd1[int8],
 			nil,
@@ -79,6 +85,7 @@ func RegisterBitAnd1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), BitAndReturnType, false, true),
 			newAggBitAnd[int16],
+			InitAggBitAnd1[int16],
 			FillAggBitAnd1[int16], nil, FillsAggBitAnd1[int16],
 			MergeAggBitAnd1[int16],
 			nil,
@@ -88,6 +95,7 @@ func RegisterBitAnd1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), BitAndReturnType, false, true),
 			newAggBitAnd[int32],
+			InitAggBitAnd1[int32],
 			FillAggBitAnd1[int32], nil, FillsAggBitAnd1[int32],
 			MergeAggBitAnd1[int32],
 			nil,
@@ -97,6 +105,7 @@ func RegisterBitAnd1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), BitAndReturnType, false, true),
 			newAggBitAnd[int64],
+			InitAggBitAnd1[int64],
 			FillAggBitAnd1[int64], nil, FillsAggBitAnd1[int64],
 			MergeAggBitAnd1[int64],
 			nil,
@@ -106,6 +115,7 @@ func RegisterBitAnd1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), BitAndReturnType, false, true),
 			newAggBitAnd[float32],
+			InitAggBitAnd1[float32],
 			FillAggBitAnd1[float32], nil, FillsAggBitAnd1[float32],
 			MergeAggBitAnd1[float32],
 			nil,
@@ -115,6 +125,7 @@ func RegisterBitAnd1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), BitAndReturnType, false, true),
 			newAggBitAnd[float64],
+			InitAggBitAnd1[float64],
 			FillAggBitAnd1[float64], nil, FillsAggBitAnd1[float64],
 			MergeAggBitAnd1[float64],
 			nil,
@@ -162,11 +173,11 @@ func newAggBitAnd[T numeric]() aggexec.SingleAggFromFixedRetFixed[T, uint64] {
 
 func (a aggBitAnd[T]) Marshal() []byte  { return nil }
 func (a aggBitAnd[T]) Unmarshal([]byte) {}
-func (a aggBitAnd[T]) Init(set aggexec.AggSetter[uint64], arg, ret types.Type) error {
+
+func InitAggBitAnd1[T numeric](exec aggexec.SingleAggFromFixedRetFixed[T, uint64], set aggexec.AggSetter[uint64], arg types.Type, ret types.Type) error {
 	set(^uint64(0))
 	return nil
 }
-
 func FillAggBitAnd1[from numeric](
 	exec aggexec.SingleAggFromFixedRetFixed[from, uint64], value from, getter aggexec.AggGetter[uint64], setter aggexec.AggSetter[uint64]) error {
 	vv := float64(value)

@@ -24,6 +24,7 @@ func RegisterAvg1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), AvgReturnType, false, true),
 			newAggAvg[uint64],
+			InitAggAvg1[uint64],
 			FillAggAvg1[uint64], nil, FillsAggAvg1[uint64],
 			MergeAggAvg1[uint64],
 			FlushAggAvg1[uint64],
@@ -33,6 +34,7 @@ func RegisterAvg1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), AvgReturnType, false, true),
 			newAggAvg[int8],
+			InitAggAvg1[int8],
 			FillAggAvg1[int8], nil, FillsAggAvg1[int8],
 			MergeAggAvg1[int8],
 			FlushAggAvg1[int8],
@@ -42,6 +44,7 @@ func RegisterAvg1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), AvgReturnType, false, true),
 			newAggAvg[int16],
+			InitAggAvg1[int16],
 			FillAggAvg1[int16], nil, FillsAggAvg1[int16],
 			MergeAggAvg1[int16],
 			FlushAggAvg1[int16],
@@ -51,6 +54,7 @@ func RegisterAvg1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), AvgReturnType, false, true),
 			newAggAvg[int32],
+			InitAggAvg1[int32],
 			FillAggAvg1[int32], nil, FillsAggAvg1[int32],
 			MergeAggAvg1[int32],
 			FlushAggAvg1[int32],
@@ -60,6 +64,7 @@ func RegisterAvg1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), AvgReturnType, false, true),
 			newAggAvg[int64],
+			InitAggAvg1[int64],
 			FillAggAvg1[int64], nil, FillsAggAvg1[int64],
 			MergeAggAvg1[int64],
 			FlushAggAvg1[int64],
@@ -69,6 +74,7 @@ func RegisterAvg1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), AvgReturnType, false, true),
 			newAggAvg[uint8],
+			InitAggAvg1[uint8],
 			FillAggAvg1[uint8], nil, FillsAggAvg1[uint8],
 			MergeAggAvg1[uint8],
 			FlushAggAvg1[uint8],
@@ -78,6 +84,7 @@ func RegisterAvg1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), AvgReturnType, false, true),
 			newAggAvg[uint16],
+			InitAggAvg1[uint16],
 			FillAggAvg1[uint16], nil, FillsAggAvg1[uint16],
 			MergeAggAvg1[uint16],
 			FlushAggAvg1[uint16],
@@ -87,6 +94,7 @@ func RegisterAvg1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), AvgReturnType, false, true),
 			newAggAvg[uint32],
+			InitAggAvg1[uint32],
 			FillAggAvg1[uint32], nil, FillsAggAvg1[uint32],
 			MergeAggAvg1[uint32],
 			FlushAggAvg1[uint32],
@@ -96,6 +104,7 @@ func RegisterAvg1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), AvgReturnType, false, true),
 			newAggAvg[uint64],
+			InitAggAvg1[uint64],
 			FillAggAvg1[uint64], nil, FillsAggAvg1[uint64],
 			MergeAggAvg1[uint64],
 			FlushAggAvg1[uint64],
@@ -105,6 +114,7 @@ func RegisterAvg1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), AvgReturnType, false, true),
 			newAggAvg[float32],
+			InitAggAvg1[float32],
 			FillAggAvg1[float32], nil, FillsAggAvg1[float32],
 			MergeAggAvg1[float32],
 			FlushAggAvg1[float32],
@@ -114,6 +124,7 @@ func RegisterAvg1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), AvgReturnType, false, true),
 			newAggAvg[float64],
+			InitAggAvg1[float64],
 			FillAggAvg1[float64], nil, FillsAggAvg1[float64],
 			MergeAggAvg1[float64],
 			FlushAggAvg1[float64],
@@ -123,6 +134,7 @@ func RegisterAvg1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), AvgReturnType, false, true),
 			newAggAvgDecimal64,
+			InitAggAvgDecimal64,
 			FillAggAvgDecimal64, nil, FillsAggAvgDecimal64,
 			MergeAggAvgDecimal64,
 			FlushAggAvgDecimal64,
@@ -132,6 +144,7 @@ func RegisterAvg1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), AvgReturnType, false, true),
 			newAggAvgDecimal128,
+			InitAggAvgDecimal128,
 			FillAggAvgDecimal128, nil, FillsAggAvgDecimal128,
 			MergeAggAvgDecimal128,
 			FlushAggAvgDecimal128,
@@ -181,12 +194,13 @@ func newAggAvg[from numeric]() aggexec.SingleAggFromFixedRetFixed[from, float64]
 
 func (a *aggAvg[from]) Marshal() []byte       { return types.EncodeInt64(&a.count) }
 func (a *aggAvg[from]) Unmarshal(data []byte) { a.count = types.DecodeInt64(data) }
-func (a *aggAvg[from]) Init(set aggexec.AggSetter[float64], arg, ret types.Type) error {
+
+func InitAggAvg1[from numeric](exec aggexec.SingleAggFromFixedRetFixed[from, float64], set aggexec.AggSetter[float64], arg, ret types.Type) error {
 	set(0)
+	a := exec.(*aggAvg[from])
 	a.count = 0
 	return nil
 }
-
 func FillAggAvg1[from numeric](
 	exec aggexec.SingleAggFromFixedRetFixed[from, float64], value from, getter aggexec.AggGetter[float64], setter aggexec.AggSetter[float64]) error {
 	a := exec.(*aggAvg[from])
@@ -240,13 +254,14 @@ func (a *aggAvgDecimal64) Unmarshal(data []byte) {
 	a.count = types.DecodeInt64(data[:8])
 	a.argScale = types.DecodeInt32(data[8:])
 }
-func (a *aggAvgDecimal64) Init(set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
+
+func InitAggAvgDecimal64(exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128], set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
 	set(types.Decimal128{B0_63: 0, B64_127: 0})
+	a := exec.(*aggAvgDecimal64)
 	a.count = 0
 	a.argScale = arg.Scale
 	return nil
 }
-
 func FillAggAvgDecimal64(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128], value types.Decimal64, getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {
 	a := exec.(*aggAvgDecimal64)
@@ -316,13 +331,15 @@ func (a *aggAvgDecimal128) Unmarshal(data []byte) {
 	a.count = types.DecodeInt64(data[:8])
 	a.argScale = types.DecodeInt32(data[8:])
 }
-func (a *aggAvgDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
+
+func InitAggAvgDecimal128(
+	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128], set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
 	set(types.Decimal128{B0_63: 0, B64_127: 0})
+	a := exec.(*aggAvgDecimal128)
 	a.count = 0
 	a.argScale = arg.Scale
 	return nil
 }
-
 func FillAggAvgDecimal128(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128], value types.Decimal128, getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {
 	a := exec.(*aggAvgDecimal128)

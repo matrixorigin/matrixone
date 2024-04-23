@@ -29,6 +29,21 @@ type AggBytesGetter func() []byte
 	the definition of aggregation's basic method.
 */
 
+// SingleAggInit1 ... MultiAggInit2
+// is the method how does an agg initialize for each group.
+type SingleAggInit1[from types.FixedSizeTExceptStrType, to types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromFixedRetFixed[from, to], setter AggSetter[to], arg, ret types.Type) error
+type SingleAggInit2[from types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromFixedRetVar[from], setter AggBytesSetter, arg, ret types.Type) error
+type SingleAggInit3[to types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromVarRetFixed[to], setter AggSetter[to], arg, ret types.Type) error
+type SingleAggInit4 func(
+	exec SingleAggFromVarRetVar, setter AggBytesSetter, arg, ret types.Type) error
+type MultiAggInit1[to types.FixedSizeTExceptStrType] func(
+	exec MultiAggRetFixed[to], setter AggSetter[to], args []types.Type, ret types.Type)
+type MultiAggInit2 func(
+	exec MultiAggRetVar, setter AggBytesSetter, args []types.Type, ret types.Type)
+
 // SingleAggFill1 ... SingleAggFill4
 // is the method how does single-column agg fill one value.
 type SingleAggFill1[from, to types.FixedSizeTExceptStrType] func(
@@ -120,11 +135,9 @@ type AggCanMarshal interface {
 }
 
 /*
-	all codes below are the interface of aggregation's private structure.
-	each aggregation has its own private structure to do the aggregation.
-	we use the interface to hide the private structure's detail.
+	All the codes bellow were the interface of aggregations' execute context.
+	Each aggregation should implement one of the interfaces.
 
-    we have 4 kinds of aggregation for single-column aggregation and 2 kinds of aggregation for multi-column aggregation:
 	1. SingleAggFromFixedRetFixed: aggregation receives a fixed length type and returns a fixed length type.
 	2. SingleAggFromFixedRetVar: aggregation receives a fixed length type and returns a variable length type.
 	3. SingleAggFromVarRetFixed: aggregation receives a variable length type and returns a fixed length type.
@@ -132,14 +145,15 @@ type AggCanMarshal interface {
 	5. MultiAggRetFixed: aggregation receives multi columns and returns a fixed length type.
 	6. MultiAggRetVar: aggregation receives multi columns and returns a variable length type.
 
-	todo: we should remove the Init() method later to get a better performance.
-		and can reuse the private structure easily.
+	If the aggregation needn't store any context,
+	you can use the EmptyContextOfSingleAggRetFixed or EmptyContextOfSingleAggRetBytes.
+	If the aggregation only needs to store a flag to indicate whether it is empty,
+	you can use the ContextWithEmptyFlagOfSingleAggRetFixed or ContextWithEmptyFlagOfSingleAggRetBytes.
 */
 
 type SingleAggFromFixedRetFixed[
 	from types.FixedSizeTExceptStrType, to types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
-	Init(setter AggSetter[to], arg, ret types.Type) error
 }
 
 type SingleAggFromFixedRetVar[
@@ -214,6 +228,11 @@ func (a *ContextWithEmptyFlagOfSingleAggRetFixed[T]) Init(_ AggSetter[T], _, _ t
 }
 func GenerateFlagContextFromFixedToFixed[from, to types.FixedSizeTExceptStrType]() SingleAggFromFixedRetFixed[from, to] {
 	return &ContextWithEmptyFlagOfSingleAggRetFixed[to]{}
+}
+func InitFlagContextFromFixedToFixed[from, to types.FixedSizeTExceptStrType](exec SingleAggFromFixedRetFixed[from, to], setter AggSetter[to], arg, ret types.Type) error {
+	a := exec.(*ContextWithEmptyFlagOfSingleAggRetFixed[to])
+	a.IsEmpty = true
+	return nil
 }
 
 //func GenerateFlagContextFromVarToFixed[to types.FixedSizeTExceptStrType]() SingleAggFromVarRetFixed[to] {

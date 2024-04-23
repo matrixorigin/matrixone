@@ -25,6 +25,7 @@ func RegisterBitXor1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), BitXorReturnType, false, true),
 			newAggBitXor[uint64],
+			InitAggBitXor[uint64],
 			FillAggBitXor1[uint64], nil, FillsAggBitXor1[uint64],
 			MergeAggBitXor1[uint64],
 			nil,
@@ -34,6 +35,7 @@ func RegisterBitXor1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), BitXorReturnType, false, true),
 			newAggBitXor[uint8],
+			InitAggBitXor[uint8],
 			FillAggBitXor1[uint8], nil, FillsAggBitXor1[uint8],
 			MergeAggBitXor1[uint8],
 			nil,
@@ -43,6 +45,7 @@ func RegisterBitXor1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), BitXorReturnType, false, true),
 			newAggBitXor[uint16],
+			InitAggBitXor[uint16],
 			FillAggBitXor1[uint16], nil, FillsAggBitXor1[uint16],
 			MergeAggBitXor1[uint16],
 			nil,
@@ -52,6 +55,7 @@ func RegisterBitXor1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), BitXorReturnType, false, true),
 			newAggBitXor[uint32],
+			InitAggBitXor[uint32],
 			FillAggBitXor1[uint32], nil, FillsAggBitXor1[uint32],
 			MergeAggBitXor1[uint32],
 			nil,
@@ -61,6 +65,7 @@ func RegisterBitXor1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), BitXorReturnType, false, true),
 			newAggBitXor[uint64],
+			InitAggBitXor[uint64],
 			FillAggBitXor1[uint64], nil, FillsAggBitXor1[uint64],
 			MergeAggBitXor1[uint64],
 			nil,
@@ -70,6 +75,7 @@ func RegisterBitXor1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), BitXorReturnType, false, true),
 			newAggBitXor[int8],
+			InitAggBitXor[int8],
 			FillAggBitXor1[int8], nil, FillsAggBitXor1[int8],
 			MergeAggBitXor1[int8],
 			nil,
@@ -79,6 +85,7 @@ func RegisterBitXor1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), BitXorReturnType, false, true),
 			newAggBitXor[int16],
+			InitAggBitXor[int16],
 			FillAggBitXor1[int16], nil, FillsAggBitXor1[int16],
 			MergeAggBitXor1[int16],
 			nil,
@@ -88,6 +95,7 @@ func RegisterBitXor1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), BitXorReturnType, false, true),
 			newAggBitXor[int32],
+			InitAggBitXor[int32],
 			FillAggBitXor1[int32], nil, FillsAggBitXor1[int32],
 			MergeAggBitXor1[int32],
 			nil,
@@ -97,6 +105,7 @@ func RegisterBitXor1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), BitXorReturnType, false, true),
 			newAggBitXor[int64],
+			InitAggBitXor[int64],
 			FillAggBitXor1[int64], nil, FillsAggBitXor1[int64],
 			MergeAggBitXor1[int64],
 			nil,
@@ -106,6 +115,7 @@ func RegisterBitXor1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), BitXorReturnType, false, true),
 			newAggBitXor[float32],
+			InitAggBitXor[float32],
 			FillAggBitXor1[float32], nil, FillsAggBitXor1[float32],
 			MergeAggBitXor1[float32],
 			nil,
@@ -115,6 +125,7 @@ func RegisterBitXor1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), BitXorReturnType, false, true),
 			newAggBitXor[float64],
+			InitAggBitXor[float64],
 			FillAggBitXor1[float64], nil, FillsAggBitXor1[float64],
 			MergeAggBitXor1[float64],
 			nil,
@@ -149,11 +160,12 @@ func newAggBitXor[T numeric]() aggexec.SingleAggFromFixedRetFixed[T, uint64] {
 
 func (a aggBitXor[T]) Marshal() []byte  { return nil }
 func (a aggBitXor[T]) Unmarshal([]byte) {}
-func (a aggBitXor[T]) Init(set aggexec.AggSetter[uint64], arg, ret types.Type) error {
-	set(0)
+
+func InitAggBitXor[from numeric](
+	exec aggexec.SingleAggFromFixedRetFixed[from, uint64], setter aggexec.AggSetter[uint64], arg, ret types.Type) error {
+	setter(0)
 	return nil
 }
-
 func FillAggBitXor1[from numeric](
 	exec aggexec.SingleAggFromFixedRetFixed[from, uint64], value from, getter aggexec.AggGetter[uint64], setter aggexec.AggSetter[uint64]) error {
 	vv := float64(value)

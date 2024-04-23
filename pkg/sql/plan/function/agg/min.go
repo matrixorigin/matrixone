@@ -26,6 +26,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), MinReturnType, false, true),
 			newAggMin[uint8],
+			InitAggMin1[uint8],
 			FillAggMin1[uint8], nil, FillsAggMin1[uint8],
 			MergeAggMin1[uint8],
 			nil,
@@ -35,6 +36,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), MinReturnType, false, true),
 			newAggMin[uint16],
+			InitAggMin1[uint16],
 			FillAggMin1[uint16], nil, FillsAggMin1[uint16],
 			MergeAggMin1[uint16],
 			nil,
@@ -44,6 +46,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), MinReturnType, false, true),
 			newAggMin[uint32],
+			InitAggMin1[uint32],
 			FillAggMin1[uint32], nil, FillsAggMin1[uint32],
 			MergeAggMin1[uint32],
 			nil,
@@ -53,6 +56,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), MinReturnType, false, true),
 			newAggMin[uint64],
+			InitAggMin1[uint64],
 			FillAggMin1[uint64], nil, FillsAggMin1[uint64],
 			MergeAggMin1[uint64],
 			nil,
@@ -62,6 +66,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), MinReturnType, false, true),
 			newAggMin[int8],
+			InitAggMin1[int8],
 			FillAggMin1[int8], nil, FillsAggMin1[int8],
 			MergeAggMin1[int8],
 			nil,
@@ -71,6 +76,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), MinReturnType, false, true),
 			newAggMin[int16],
+			InitAggMin1[int16],
 			FillAggMin1[int16], nil, FillsAggMin1[int16],
 			MergeAggMin1[int16],
 			nil,
@@ -80,6 +86,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), MinReturnType, false, true),
 			newAggMin[int32],
+			InitAggMin1[int32],
 			FillAggMin1[int32], nil, FillsAggMin1[int32],
 			MergeAggMin1[int32],
 			nil,
@@ -89,6 +96,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), MinReturnType, false, true),
 			newAggMin[int64],
+			InitAggMin1[int64],
 			FillAggMin1[int64], nil, FillsAggMin1[int64],
 			MergeAggMin1[int64],
 			nil,
@@ -98,6 +106,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), MinReturnType, false, true),
 			newAggMin[float32],
+			InitAggMin1[float32],
 			FillAggMin1[float32], nil, FillsAggMin1[float32],
 			MergeAggMin1[float32],
 			nil,
@@ -107,6 +116,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), MinReturnType, false, true),
 			newAggMin[float64],
+			InitAggMin1[float64],
 			FillAggMin1[float64], nil, FillsAggMin1[float64],
 			MergeAggMin1[float64],
 			nil,
@@ -116,6 +126,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_date.ToType(), MinReturnType, false, true),
 			newAggMin[types.Date],
+			InitAggMin1[types.Date],
 			FillAggMin1[types.Date], nil, FillsAggMin1[types.Date],
 			MergeAggMin1[types.Date],
 			nil,
@@ -125,6 +136,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_datetime.ToType(), MinReturnType, false, true),
 			newAggMin[types.Datetime],
+			InitAggMin1[types.Datetime],
 			FillAggMin1[types.Datetime], nil, FillsAggMin1[types.Datetime],
 			MergeAggMin1[types.Datetime],
 			nil,
@@ -134,6 +146,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_timestamp.ToType(), MinReturnType, false, true),
 			newAggMin[types.Timestamp],
+			InitAggMin1[types.Timestamp],
 			FillAggMin1[types.Timestamp], nil, FillsAggMin1[types.Timestamp],
 			MergeAggMin1[types.Timestamp],
 			nil,
@@ -143,6 +156,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_time.ToType(), MinReturnType, false, true),
 			newAggMin[types.Time],
+			InitAggMin1[types.Time],
 			FillAggMin1[types.Time], nil, FillsAggMin1[types.Time],
 			MergeAggMin1[types.Time],
 			nil,
@@ -152,6 +166,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), MinReturnType, false, true),
 			newAggMin[uint64],
+			InitAggMin1[uint64],
 			FillAggMin1[uint64], nil, FillsAggMin1[uint64],
 			MergeAggMin1[uint64],
 			nil,
@@ -161,6 +176,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_bool.ToType(), MinReturnType, false, true),
 			newAggMinBool,
+			InitAggMinBool,
 			FillAggMinBool, nil, FillsAggMinBool,
 			MergeAggMinBool,
 			nil,
@@ -170,6 +186,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), MinReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[types.Uuid, types.Uuid],
+			aggexec.InitFlagContextFromFixedToFixed[types.Uuid, types.Uuid],
 			FillAggMinUuid, nil, FillsAggMinUuid,
 			MergeAggMinUuid,
 			nil,
@@ -179,6 +196,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), MinReturnType, false, true),
 			newAggMinDecimal64,
+			InitAggMinDecimal64,
 			FillAggMinDecimal64, nil, FillsAggMinDecimal64,
 			MergeAggMinDecimal64,
 			nil,
@@ -188,6 +206,7 @@ func RegisterMin1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), MinReturnType, false, true),
 			newAggMinDecimal128,
+			InitAggMinDecimal128,
 			FillAggMinDecimal128, nil, FillsAggMinDecimal128,
 			MergeAggMinDecimal128,
 			nil,
@@ -232,45 +251,29 @@ func newAggMin[from canCompare]() aggexec.SingleAggFromFixedRetFixed[from, from]
 
 func (a aggMin[from]) Marshal() []byte  { return nil }
 func (a aggMin[from]) Unmarshal([]byte) {}
-func (a aggMin[from]) Init(set aggexec.AggSetter[from], arg, ret types.Type) error {
-	set(getMaxValue[from]().(from))
-	return nil
+
+var fromTypeIDtoMaxValue = map[types.T]interface{}{
+	types.T_bit:       uint64(math.MaxUint64),
+	types.T_uint8:     uint8(math.MaxUint8),
+	types.T_uint16:    uint16(math.MaxUint16),
+	types.T_uint32:    uint32(math.MaxUint32),
+	types.T_uint64:    uint64(math.MaxUint64),
+	types.T_int8:      int8(math.MaxInt8),
+	types.T_int16:     int16(math.MaxInt16),
+	types.T_int32:     int32(math.MaxInt32),
+	types.T_int64:     int64(math.MaxInt64),
+	types.T_float32:   float32(math.MaxFloat32),
+	types.T_float64:   math.MaxFloat64,
+	types.T_date:      types.Date(math.MaxInt32),
+	types.T_datetime:  types.Datetime(math.MaxInt64),
+	types.T_timestamp: types.Timestamp(math.MaxInt64),
+	types.T_time:      types.Time(math.MaxInt64),
 }
 
-func getMaxValue[T canCompare]() interface{} {
-	var t T
-	var tt interface{} = &t
-	switch tt.(type) {
-	case *uint8:
-		return uint8(math.MaxUint8)
-	case *uint16:
-		return uint16(math.MaxUint16)
-	case *uint32:
-		return uint32(math.MaxUint32)
-	case *uint64:
-		return uint64(math.MaxUint64)
-	case *int8:
-		return int8(math.MaxInt8)
-	case *int16:
-		return int16(math.MaxInt16)
-	case *int32:
-		return int32(math.MaxInt32)
-	case *int64:
-		return int64(math.MaxInt64)
-	case *float32:
-		return float32(math.MaxFloat32)
-	case *float64:
-		return math.MaxFloat64
-	case *types.Date:
-		return types.Date(math.MaxInt32)
-	case *types.Datetime:
-		return types.Datetime(math.MaxInt64)
-	case *types.Timestamp:
-		return types.Timestamp(math.MaxInt64)
-	case *types.Time:
-		return types.Time(math.MaxInt64)
-	}
-	panic("unexpected type")
+func InitAggMin1[from canCompare](
+	exec aggexec.SingleAggFromFixedRetFixed[from, from], setter aggexec.AggSetter[from], arg, ret types.Type) error {
+	setter(fromTypeIDtoMaxValue[arg.Oid].(from))
+	return nil
 }
 
 func FillAggMin1[from canCompare](
@@ -303,14 +306,15 @@ type aggMinBool struct{}
 func newAggMinBool() aggexec.SingleAggFromFixedRetFixed[bool, bool] {
 	return aggMinBool{}
 }
-
 func (a aggMinBool) Marshal() []byte     { return nil }
 func (a aggMinBool) Unmarshal(bs []byte) {}
-func (a aggMinBool) Init(setter aggexec.AggSetter[bool], arg types.Type, ret types.Type) error {
+
+func InitAggMinBool(
+	exec aggexec.SingleAggFromFixedRetFixed[bool, bool],
+	setter aggexec.AggSetter[bool], arg, ret types.Type) error {
 	setter(true)
 	return nil
 }
-
 func FillAggMinBool(
 	exec aggexec.SingleAggFromFixedRetFixed[bool, bool],
 	value bool, getter aggexec.AggGetter[bool], setter aggexec.AggSetter[bool]) error {
@@ -416,14 +420,15 @@ type aggMinDecimal64 struct{}
 func newAggMinDecimal64() aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal64] {
 	return aggMinDecimal64{}
 }
-
 func (a aggMinDecimal64) Marshal() []byte  { return nil }
 func (a aggMinDecimal64) Unmarshal([]byte) {}
-func (a aggMinDecimal64) Init(set aggexec.AggSetter[types.Decimal64], arg, ret types.Type) error {
-	set(types.Decimal64Max)
+
+func InitAggMinDecimal64(
+	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal64],
+	setter aggexec.AggSetter[types.Decimal64], arg, ret types.Type) error {
+	setter(types.Decimal64Max)
 	return nil
 }
-
 func FillAggMinDecimal64(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal64],
 	value types.Decimal64, getter aggexec.AggGetter[types.Decimal64], setter aggexec.AggSetter[types.Decimal64]) error {
@@ -454,14 +459,15 @@ type aggMinDecimal128 struct{}
 func newAggMinDecimal128() aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128] {
 	return aggMinDecimal128{}
 }
-
 func (a aggMinDecimal128) Marshal() []byte  { return nil }
 func (a aggMinDecimal128) Unmarshal([]byte) {}
-func (a aggMinDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
-	set(types.Decimal128Max)
+
+func InitAggMinDecimal128(
+	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128],
+	setter aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
+	setter(types.Decimal128Max)
 	return nil
 }
-
 func FillAggMinDecimal128(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128],
 	value types.Decimal128, getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {

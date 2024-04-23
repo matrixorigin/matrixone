@@ -26,6 +26,7 @@ func RegisterVarPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[uint64],
+			InitAggVarPop1[uint64],
 			FillAggVarPop1[uint64], nil, FillsAggVarPop1[uint64],
 			MergeAggVarPop1[uint64],
 			FlushAggVarPop1[uint64],
@@ -35,6 +36,7 @@ func RegisterVarPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[int8],
+			InitAggVarPop1[int8],
 			FillAggVarPop1[int8], nil, FillsAggVarPop1[int8],
 			MergeAggVarPop1[int8],
 			FlushAggVarPop1[int8],
@@ -44,6 +46,7 @@ func RegisterVarPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[int16],
+			InitAggVarPop1[int16],
 			FillAggVarPop1[int16], nil, FillsAggVarPop1[int16],
 			MergeAggVarPop1[int16],
 			FlushAggVarPop1[int16],
@@ -53,6 +56,7 @@ func RegisterVarPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[int32],
+			InitAggVarPop1[int32],
 			FillAggVarPop1[int32], nil, FillsAggVarPop1[int32],
 			MergeAggVarPop1[int32],
 			FlushAggVarPop1[int32],
@@ -62,6 +66,7 @@ func RegisterVarPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[int64],
+			InitAggVarPop1[int64],
 			FillAggVarPop1[int64], nil, FillsAggVarPop1[int64],
 			MergeAggVarPop1[int64],
 			FlushAggVarPop1[int64],
@@ -71,6 +76,7 @@ func RegisterVarPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[uint8],
+			InitAggVarPop1[uint8],
 			FillAggVarPop1[uint8], nil, FillsAggVarPop1[uint8],
 			MergeAggVarPop1[uint8],
 			FlushAggVarPop1[uint8],
@@ -80,6 +86,7 @@ func RegisterVarPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[uint16],
+			InitAggVarPop1[uint16],
 			FillAggVarPop1[uint16], nil, FillsAggVarPop1[uint16],
 			MergeAggVarPop1[uint16],
 			FlushAggVarPop1[uint16],
@@ -89,6 +96,7 @@ func RegisterVarPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[uint32],
+			InitAggVarPop1[uint32],
 			FillAggVarPop1[uint32], nil, FillsAggVarPop1[uint32],
 			MergeAggVarPop1[uint32],
 			FlushAggVarPop1[uint32],
@@ -98,6 +106,7 @@ func RegisterVarPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[uint64],
+			InitAggVarPop1[uint64],
 			FillAggVarPop1[uint64], nil, FillsAggVarPop1[uint64],
 			MergeAggVarPop1[uint64],
 			FlushAggVarPop1[uint64],
@@ -107,6 +116,7 @@ func RegisterVarPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[float32],
+			InitAggVarPop1[float32],
 			FillAggVarPop1[float32], nil, FillsAggVarPop1[float32],
 			MergeAggVarPop1[float32],
 			FlushAggVarPop1[float32],
@@ -116,6 +126,7 @@ func RegisterVarPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[float64],
+			InitAggVarPop1[float64],
 			FillAggVarPop1[float64], nil, FillsAggVarPop1[float64],
 			MergeAggVarPop1[float64],
 			FlushAggVarPop1[float64],
@@ -125,6 +136,7 @@ func RegisterVarPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), VarPopReturnType, false, true),
 			newAggVarPopDecimal64,
+			InitAggVarPop1Decimal64,
 			FillAggVarPop1Decimal64, nil, FillsAggVarPop1Decimal64,
 			MergeAggVarPop1Decimal64,
 			FlushAggVarPop1Decimal64,
@@ -134,6 +146,7 @@ func RegisterVarPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), VarPopReturnType, false, true),
 			newAggVarPopDecimal128,
+			InitAggVarPop1Decimal128,
 			FillAggVarPop1Decimal128, nil, FillsAggVarPop1Decimal128,
 			MergeAggVarPop1Decimal128,
 			FlushAggVarPop1Decimal128,
@@ -179,13 +192,16 @@ func (a *aggVarPop[T]) Unmarshal(bs []byte) {
 	a.sum = types.DecodeFloat64(bs[:8])
 	a.count = types.DecodeInt64(bs[8:])
 }
-func (a *aggVarPop[T]) Init(set aggexec.AggSetter[float64], arg, ret types.Type) error {
+
+func InitAggVarPop1[from numeric](
+	exec aggexec.SingleAggFromFixedRetFixed[from, float64],
+	setter aggexec.AggSetter[float64], arg, ret types.Type) error {
+	setter(0)
+	a := exec.(*aggVarPop[from])
 	a.sum = 0
 	a.count = 0
-	set(0)
 	return nil
 }
-
 func FillAggVarPop1[from numeric](
 	exec aggexec.SingleAggFromFixedRetFixed[from, float64],
 	value from, getter aggexec.AggGetter[float64], setter aggexec.AggSetter[float64]) error {
@@ -266,7 +282,16 @@ func (a *aggVarPopDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg,
 	set(a.sum)
 	return nil
 }
-
+func InitAggVarPop1Decimal128(
+	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128],
+	setter aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
+	return exec.(*aggVarPopDecimal128).Init(setter, arg, ret)
+}
+func InitAggVarPop1Decimal64(
+	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128],
+	setter aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
+	return exec.(*aggVarPopDecimal128).Init(setter, arg, ret)
+}
 func FillAggVarPop1Decimal128(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128],
 	value types.Decimal128, getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {

@@ -24,6 +24,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[uint8, uint8],
+			aggexec.InitFlagContextFromFixedToFixed[uint8, uint8],
 			FillAnyValue1[uint8], nil, FillsAnyValue1[uint8],
 			MergeAnyValue1[uint8],
 			nil,
@@ -33,6 +34,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[uint16, uint16],
+			aggexec.InitFlagContextFromFixedToFixed[uint16, uint16],
 			FillAnyValue1[uint16], nil, FillsAnyValue1[uint16],
 			MergeAnyValue1[uint16],
 			nil,
@@ -42,6 +44,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[uint32, uint32],
+			aggexec.InitFlagContextFromFixedToFixed[uint32, uint32],
 			FillAnyValue1[uint32], nil, FillsAnyValue1[uint32],
 			MergeAnyValue1[uint32],
 			nil,
@@ -51,6 +54,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[uint64, uint64],
+			aggexec.InitFlagContextFromFixedToFixed[uint64, uint64],
 			FillAnyValue1[uint64], nil, FillsAnyValue1[uint64],
 			MergeAnyValue1[uint64],
 			nil,
@@ -60,6 +64,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[int8, int8],
+			aggexec.InitFlagContextFromFixedToFixed[int8, int8],
 			FillAnyValue1[int8], nil, FillsAnyValue1[int8],
 			MergeAnyValue1[int8],
 			nil,
@@ -69,6 +74,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[int16, int16],
+			aggexec.InitFlagContextFromFixedToFixed[int16, int16],
 			FillAnyValue1[int16], nil, FillsAnyValue1[int16],
 			MergeAnyValue1[int16],
 			nil,
@@ -78,6 +84,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[int32, int32],
+			aggexec.InitFlagContextFromFixedToFixed[int32, int32],
 			FillAnyValue1[int32], nil, FillsAnyValue1[int32],
 			MergeAnyValue1[int32],
 			nil,
@@ -87,6 +94,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[int64, int64],
+			aggexec.InitFlagContextFromFixedToFixed[int64, int64],
 			FillAnyValue1[int64], nil, FillsAnyValue1[int64],
 			MergeAnyValue1[int64],
 			nil,
@@ -96,6 +104,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[float32, float32],
+			aggexec.InitFlagContextFromFixedToFixed[float32, float32],
 			FillAnyValue1[float32], nil, FillsAnyValue1[float32],
 			MergeAnyValue1[float32],
 			nil,
@@ -105,6 +114,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[float64, float64],
+			aggexec.InitFlagContextFromFixedToFixed[float64, float64],
 			FillAnyValue1[float64], nil, FillsAnyValue1[float64],
 			MergeAnyValue1[float64],
 			nil,
@@ -114,6 +124,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_date.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[types.Date, types.Date],
+			aggexec.InitFlagContextFromFixedToFixed[types.Date, types.Date],
 			FillAnyValue1[types.Date], nil, FillsAnyValue1[types.Date],
 			MergeAnyValue1[types.Date],
 			nil,
@@ -123,6 +134,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_datetime.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[types.Datetime, types.Datetime],
+			aggexec.InitFlagContextFromFixedToFixed[types.Datetime, types.Datetime],
 			FillAnyValue1[types.Datetime], nil, FillsAnyValue1[types.Datetime],
 			MergeAnyValue1[types.Datetime],
 			nil,
@@ -132,6 +144,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_timestamp.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[types.Timestamp, types.Timestamp],
+			aggexec.InitFlagContextFromFixedToFixed[types.Timestamp, types.Timestamp],
 			FillAnyValue1[types.Timestamp], nil, FillsAnyValue1[types.Timestamp],
 			MergeAnyValue1[types.Timestamp],
 			nil,
@@ -141,6 +154,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_time.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[types.Time, types.Time],
+			aggexec.InitFlagContextFromFixedToFixed[types.Time, types.Time],
 			FillAnyValue1[types.Time], nil, FillsAnyValue1[types.Time],
 			MergeAnyValue1[types.Time],
 			nil,
@@ -150,6 +164,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[types.Decimal64, types.Decimal64],
+			aggexec.InitFlagContextFromFixedToFixed[types.Decimal64, types.Decimal64],
 			FillAnyValue1[types.Decimal64], nil, FillsAnyValue1[types.Decimal64],
 			MergeAnyValue1[types.Decimal64],
 			nil,
@@ -159,6 +174,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[types.Decimal128, types.Decimal128],
+			aggexec.InitFlagContextFromFixedToFixed[types.Decimal128, types.Decimal128],
 			FillAnyValue1[types.Decimal128], nil, FillsAnyValue1[types.Decimal128],
 			MergeAnyValue1[types.Decimal128],
 			nil,
@@ -168,6 +184,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_bool.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[bool, bool],
+			aggexec.InitFlagContextFromFixedToFixed[bool, bool],
 			FillAnyValue1[bool], nil, FillsAnyValue1[bool],
 			MergeAnyValue1[bool],
 			nil,
@@ -177,6 +194,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[uint64, uint64],
+			aggexec.InitFlagContextFromFixedToFixed[uint64, uint64],
 			FillAnyValue1[uint64], nil, FillsAnyValue1[uint64],
 			MergeAnyValue1[uint64],
 			nil,
@@ -186,6 +204,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[types.Uuid, types.Uuid],
+			aggexec.InitFlagContextFromFixedToFixed[types.Uuid, types.Uuid],
 			FillAnyValue1[types.Uuid], nil, FillsAnyValue1[types.Uuid],
 			MergeAnyValue1[types.Uuid],
 			nil,
@@ -195,6 +214,7 @@ func RegisterAnyValue1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_Rowid.ToType(), AnyValueReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[types.Rowid, types.Rowid],
+			aggexec.InitFlagContextFromFixedToFixed[types.Rowid, types.Rowid],
 			FillAnyValue1[types.Rowid], nil, FillsAnyValue1[types.Rowid],
 			MergeAnyValue1[types.Rowid],
 			nil,

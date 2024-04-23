@@ -26,6 +26,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), MaxReturnType, false, true),
 			newAggMax[uint8],
+			InitAggMax1[uint8],
 			FillAggMax1[uint8], nil, FillsAggMax1[uint8],
 			MergeAggMax1[uint8],
 			nil,
@@ -35,6 +36,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), MaxReturnType, false, true),
 			newAggMax[uint16],
+			InitAggMax1[uint16],
 			FillAggMax1[uint16], nil, FillsAggMax1[uint16],
 			MergeAggMax1[uint16],
 			nil,
@@ -44,6 +46,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), MaxReturnType, false, true),
 			newAggMax[uint32],
+			InitAggMax1[uint32],
 			FillAggMax1[uint32], nil, FillsAggMax1[uint32],
 			MergeAggMax1[uint32],
 			nil,
@@ -53,6 +56,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), MaxReturnType, false, true),
 			newAggMax[uint64],
+			InitAggMax1[uint64],
 			FillAggMax1[uint64], nil, FillsAggMax1[uint64],
 			MergeAggMax1[uint64],
 			nil,
@@ -62,6 +66,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), MaxReturnType, false, true),
 			newAggMax[int8],
+			InitAggMax1[int8],
 			FillAggMax1[int8], nil, FillsAggMax1[int8],
 			MergeAggMax1[int8],
 			nil,
@@ -71,6 +76,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), MaxReturnType, false, true),
 			newAggMax[int16],
+			InitAggMax1[int16],
 			FillAggMax1[int16], nil, FillsAggMax1[int16],
 			MergeAggMax1[int16],
 			nil,
@@ -80,6 +86,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), MaxReturnType, false, true),
 			newAggMax[int32],
+			InitAggMax1[int32],
 			FillAggMax1[int32], nil, FillsAggMax1[int32],
 			MergeAggMax1[int32],
 			nil,
@@ -89,6 +96,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), MaxReturnType, false, true),
 			newAggMax[int64],
+			InitAggMax1[int64],
 			FillAggMax1[int64], nil, FillsAggMax1[int64],
 			MergeAggMax1[int64],
 			nil,
@@ -98,6 +106,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), MaxReturnType, false, true),
 			newAggMax[float32],
+			InitAggMax1[float32],
 			FillAggMax1[float32], nil, FillsAggMax1[float32],
 			MergeAggMax1[float32],
 			nil,
@@ -107,6 +116,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), MaxReturnType, false, true),
 			newAggMax[float64],
+			InitAggMax1[float64],
 			FillAggMax1[float64], nil, FillsAggMax1[float64],
 			MergeAggMax1[float64],
 			nil,
@@ -116,6 +126,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_date.ToType(), MaxReturnType, false, true),
 			newAggMax[types.Date],
+			InitAggMax1[types.Date],
 			FillAggMax1[types.Date], nil, FillsAggMax1[types.Date],
 			MergeAggMax1[types.Date],
 			nil,
@@ -125,6 +136,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_datetime.ToType(), MaxReturnType, false, true),
 			newAggMax[types.Datetime],
+			InitAggMax1[types.Datetime],
 			FillAggMax1[types.Datetime], nil, FillsAggMax1[types.Datetime],
 			MergeAggMax1[types.Datetime],
 			nil,
@@ -134,6 +146,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_timestamp.ToType(), MaxReturnType, false, true),
 			newAggMax[types.Timestamp],
+			InitAggMax1[types.Timestamp],
 			FillAggMax1[types.Timestamp], nil, FillsAggMax1[types.Timestamp],
 			MergeAggMax1[types.Timestamp],
 			nil,
@@ -143,6 +156,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_time.ToType(), MaxReturnType, false, true),
 			newAggMax[types.Time],
+			InitAggMax1[types.Time],
 			FillAggMax1[types.Time], nil, FillsAggMax1[types.Time],
 			MergeAggMax1[types.Time],
 			nil,
@@ -152,6 +166,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), MaxReturnType, false, true),
 			newAggMax[uint64],
+			InitAggMax1[uint64],
 			FillAggMax1[uint64], nil, FillsAggMax1[uint64],
 			MergeAggMax1[uint64],
 			nil,
@@ -161,6 +176,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_bool.ToType(), MaxReturnType, false, true),
 			newAggMaxBool,
+			InitAggMaxBool,
 			FillAggMaxBool, nil, FillsAggMaxBool,
 			MergeAggMaxBool,
 			nil,
@@ -170,6 +186,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), MaxReturnType, false, true),
 			aggexec.GenerateFlagContextFromFixedToFixed[types.Uuid, types.Uuid],
+			aggexec.InitFlagContextFromFixedToFixed[types.Uuid, types.Uuid],
 			FillAggMaxUuid, nil, FillsAggMaxUuid,
 			MergeAggMaxUuid,
 			nil,
@@ -179,6 +196,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), MaxReturnType, false, true),
 			newAggMaxDecimal64,
+			InitAggMaxDecimal64,
 			FillAggMaxDecimal64, nil, FillsAggMaxDecimal64,
 			MergeAggMaxDecimal64,
 			nil,
@@ -188,6 +206,7 @@ func RegisterMax1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), MaxReturnType, false, true),
 			newAggMaxDecimal128,
+			InitAggMaxDecimal128,
 			FillAggMaxDecimal128, nil, FillsAggMaxDecimal128,
 			MergeAggMaxDecimal128,
 			nil,
@@ -229,37 +248,32 @@ type aggMax[from canCompare] struct{}
 func newAggMax[from canCompare]() aggexec.SingleAggFromFixedRetFixed[from, from] {
 	return aggMax[from]{}
 }
-
 func (a aggMax[from]) Marshal() []byte  { return nil }
 func (a aggMax[from]) Unmarshal([]byte) {}
-func (a aggMax[from]) Init(set aggexec.AggSetter[from], arg, ret types.Type) error {
-	set(getMinValue[from]().(from))
+
+var fromTypeIDtoMinValue = map[types.T]interface{}{
+	types.T_bit:       uint64(0),
+	types.T_uint8:     uint8(0),
+	types.T_uint16:    uint16(0),
+	types.T_uint32:    uint32(0),
+	types.T_uint64:    uint64(0),
+	types.T_int8:      int8(math.MinInt8),
+	types.T_int16:     int16(math.MinInt16),
+	types.T_int32:     int32(math.MinInt32),
+	types.T_int64:     int64(math.MinInt64),
+	types.T_float32:   float32(-math.MaxFloat32),
+	types.T_float64:   -math.MaxFloat64,
+	types.T_date:      types.Date(0),
+	types.T_datetime:  types.Datetime(0),
+	types.T_timestamp: types.Timestamp(0),
+	types.T_time:      types.Time(0),
+}
+
+func InitAggMax1[from canCompare](
+	exec aggexec.SingleAggFromFixedRetFixed[from, from], setter aggexec.AggSetter[from], arg, ret types.Type) error {
+	setter(fromTypeIDtoMinValue[arg.Oid].(from))
 	return nil
 }
-
-func getMinValue[T canCompare]() interface{} {
-	var t T
-	var tt interface{} = &t
-	switch tt.(type) {
-	case *uint8, *uint16, *uint32, *uint64,
-		*types.Date, *types.Datetime, *types.Timestamp, *types.Time:
-		return T(0)
-	case *int8:
-		return int8(math.MinInt8)
-	case *int16:
-		return int16(math.MinInt16)
-	case *int32:
-		return int32(math.MinInt32)
-	case *int64:
-		return int64(math.MinInt64)
-	case *float32:
-		return float32(-math.MaxFloat32)
-	case *float64:
-		return -math.MaxFloat64
-	}
-	panic("unexpected type")
-}
-
 func FillAggMax1[from canCompare](
 	exec aggexec.SingleAggFromFixedRetFixed[from, from],
 	value from, getter aggexec.AggGetter[from], setter aggexec.AggSetter[from]) error {
@@ -298,6 +312,10 @@ func (a aggMaxBool) Init(setter aggexec.AggSetter[bool], arg types.Type, ret typ
 	return nil
 }
 
+func InitAggMaxBool(exec aggexec.SingleAggFromFixedRetFixed[bool, bool], setter aggexec.AggSetter[bool], arg, ret types.Type) error {
+	setter(false)
+	return nil
+}
 func FillAggMaxBool(
 	exec aggexec.SingleAggFromFixedRetFixed[bool, bool],
 	value bool, getter aggexec.AggGetter[bool], setter aggexec.AggSetter[bool]) error {
@@ -406,11 +424,12 @@ func newAggMaxDecimal64() aggexec.SingleAggFromFixedRetFixed[types.Decimal64, ty
 
 func (a aggMaxDecimal64) Marshal() []byte  { return nil }
 func (a aggMaxDecimal64) Unmarshal([]byte) {}
-func (a aggMaxDecimal64) Init(set aggexec.AggSetter[types.Decimal64], arg, ret types.Type) error {
-	set(types.Decimal64Min)
+
+func InitAggMaxDecimal64(
+	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal64], setter aggexec.AggSetter[types.Decimal64], arg, ret types.Type) error {
+	setter(types.Decimal64Min)
 	return nil
 }
-
 func FillAggMaxDecimal64(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal64],
 	value types.Decimal64, getter aggexec.AggGetter[types.Decimal64], setter aggexec.AggSetter[types.Decimal64]) error {
@@ -444,11 +463,12 @@ func newAggMaxDecimal128() aggexec.SingleAggFromFixedRetFixed[types.Decimal128, 
 
 func (a aggMaxDecimal128) Marshal() []byte  { return nil }
 func (a aggMaxDecimal128) Unmarshal([]byte) {}
-func (a aggMaxDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
-	set(types.Decimal128Min)
+
+func InitAggMaxDecimal128(
+	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128], setter aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
+	setter(types.Decimal128Min)
 	return nil
 }
-
 func FillAggMaxDecimal128(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128],
 	value types.Decimal128, getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {
