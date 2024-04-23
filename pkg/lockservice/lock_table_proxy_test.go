@@ -16,8 +16,11 @@ package lockservice
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
@@ -143,4 +146,24 @@ func TestProxySharedUnlock(t *testing.T) {
 			require.NoError(t, s1.Unlock(ctx, txn4, timestamp.Timestamp{}))
 		},
 	)
+}
+
+func TestAAA(t *testing.T) {
+	data := make([]byte, 100)
+
+	offset := 0
+	n := (*node)(unsafe.Pointer(&data[offset]))
+	n.v1 = 1
+	n.v2 = 2
+	n.data[0].Store(3)
+	n.data[1].Store(4)
+
+	fmt.Printf("%+v\n", data)
+	t.Fail()
+}
+
+type node struct {
+	v1   uint32
+	v2   uint32
+	data [2]atomic.Uint32
 }
