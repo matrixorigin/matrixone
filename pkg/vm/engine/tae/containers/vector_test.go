@@ -91,7 +91,7 @@ func TestVector1(t *testing.T) {
 	vec.Close()
 	vec2.Close()
 	// XXX MPOOL
-	// alloc := vec.GetAllocator()
+	// alloc := vec.GetMPool()
 	// assert.Equal(t, 0, alloc.CurrNB())
 }
 
