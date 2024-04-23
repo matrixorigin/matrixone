@@ -80,7 +80,7 @@ func ReshapeBatches(
 			}
 
 			for vecIdx, vec := range batches[fromIdx].Vecs {
-				window, err := vec.Window(fromOffset, fromOffset+length)
+				window, err := vec.CloneWindow(fromOffset, fromOffset+length, vpool.GetMPool())
 				if err != nil {
 					panic(err)
 				}

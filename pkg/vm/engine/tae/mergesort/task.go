@@ -66,8 +66,8 @@ func getSimilarBatch(bat *batch.Batch, capacity int, vpool DisposableVecPool) (*
 	newBat.Attrs = bat.Attrs
 	rfs := make([]func(), len(bat.Vecs))
 	releaseF := func() {
-		for _, release := range rfs {
-			release()
+		for _, f := range rfs {
+			f()
 		}
 	}
 	for i := range bat.Vecs {
