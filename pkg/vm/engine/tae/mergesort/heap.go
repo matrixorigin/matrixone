@@ -19,6 +19,7 @@ package mergesort
 // Init is idempotent with respect to the heap invariants
 // and may be called whenever the heap invariants may have been invalidated.
 // The complexity is Operator(n) where n = len(h).
+/*
 func heapInit[T any](h *heapSlice[T]) {
 	// heapify
 	n := len(h.s)
@@ -26,6 +27,7 @@ func heapInit[T any](h *heapSlice[T]) {
 		down(h, i, n)
 	}
 }
+*/
 
 // Push pushes the element x onto the heap.
 // The complexity is Operator(log n) where n = len(h).
