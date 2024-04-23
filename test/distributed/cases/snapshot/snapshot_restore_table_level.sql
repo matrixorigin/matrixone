@@ -360,7 +360,7 @@ INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adam
 Create view v1 as select * from snapshot_read.users;
 select count(*) from snapshot_read.users;
 select count(*) from snapshot_read.v1;
--- @bvt:issue
+
 
 create snapshot sp_01 for account test_account;
 
