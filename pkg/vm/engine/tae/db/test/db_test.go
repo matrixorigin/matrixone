@@ -6513,7 +6513,7 @@ func TestSnapshotGC(t *testing.T) {
 		attrs := []string{"col0", "col1", "ts", "col3", "col4", "col5", "col6", "id"}
 		vecTypes := []types.Type{types.T_uint64.ToType(),
 			types.T_uint64.ToType(), types.T_int64.ToType(),
-			types.T_uint16.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
+			types.T_enum.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
 			types.T_uint64.ToType(), types.T_uint64.ToType()}
 		opt := containers.Options{}
 		opt.Capacity = 0
@@ -6521,7 +6521,7 @@ func TestSnapshotGC(t *testing.T) {
 		data1.Vecs[0].Append(uint64(0), false)
 		data1.Vecs[1].Append(uint64(0), false)
 		data1.Vecs[2].Append(snapshot, false)
-		data1.Vecs[3].Append(uint16(1), false)
+		data1.Vecs[3].Append(types.Enum(1), false)
 		data1.Vecs[4].Append(uint64(0), false)
 		data1.Vecs[5].Append(uint64(0), false)
 		data1.Vecs[6].Append(uint64(0), false)

@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	SnapshotTypeCluster uint16 = iota
+	SnapshotTypeCluster types.Enum = iota
 	SnapshotTypeAccount
 )
 
@@ -95,7 +95,7 @@ var (
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
-		types.New(types.T_uint16, 0, 0),
+		types.New(types.T_enum, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
@@ -265,7 +265,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 			}
 			defer bat.Clean(mp)
 			tsList := vector.MustFixedCol[int64](bat.Vecs[0])
-			typeList := vector.MustFixedCol[uint16](bat.Vecs[1])
+			typeList := vector.MustFixedCol[types.Enum](bat.Vecs[1])
 			acctList := vector.MustFixedCol[uint64](bat.Vecs[2])
 			for r := 0; r < bat.Vecs[0].Length(); r++ {
 				ts := tsList[r]
