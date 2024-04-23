@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -55,7 +56,11 @@ func ifNeedLockWholeTable(builder *QueryBuilder, lastNodeId int32) bool {
 		return false
 	}
 	lockconfig := lockService.GetConfig()
-	return lastNode.Stats.Outcnt > float64(lockconfig.MaxLockRowCount)
+	lock := lastNode.Stats.Outcnt > float64(lockconfig.MaxLockRowCount)
+	if lock {
+		logutil.Warnf("lock whole table for sql %s, the stats of outcnt is %f", builder.compCtx.GetRootSql(), lastNode.Stats.Outcnt)
+	}
+	return lock
 }
 
 // GetFunctionArgTypeStrFromAst function arg type do not have scale and width, it depends on the data that it process
