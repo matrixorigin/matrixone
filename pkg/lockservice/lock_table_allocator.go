@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -36,20 +37,29 @@ type lockTableAllocator struct {
 	address         string
 	server          Server
 	client          Client
-
-	mu struct {
+	ctl             sync.Map // lock service id -> *commitCtl
+	mu              struct {
 		sync.RWMutex
-		services     map[string]*serviceBinds
-		lockTables   map[uint64]pb.LockTable
-		cannotCommit map[string]*cannotCommit
+		services   map[string]*serviceBinds
+		lockTables map[uint64]pb.LockTable
+	}
+
+	// for test
+	options struct {
+		getActiveTxnFunc         func(sid string) (bool, [][]byte, error)
+		removeDisconnectDuration time.Duration
 	}
 }
+
+type AllocatorOption func(*lockTableAllocator)
 
 // NewLockTableAllocator create a memory based lock table allocator.
 func NewLockTableAllocator(
 	address string,
 	keepBindTimeout time.Duration,
-	cfg morpc.Config) LockTableAllocator {
+	cfg morpc.Config,
+	opts ...AllocatorOption,
+) LockTableAllocator {
 	if keepBindTimeout == 0 {
 		panic("invalid lock table bind timeout")
 	}
@@ -71,11 +81,15 @@ func NewLockTableAllocator(
 	}
 	la.mu.lockTables = make(map[uint64]pb.LockTable, 10240)
 	la.mu.services = make(map[string]*serviceBinds)
-	la.mu.cannotCommit = make(map[string]*cannotCommit)
+
+	for _, opt := range opts {
+		opt(la)
+	}
+
 	if err := la.stopper.RunTask(la.checkInvalidBinds); err != nil {
 		panic(err)
 	}
-	if err := la.stopper.RunTask(la.cleanCannotCommit); err != nil {
+	if err := la.stopper.RunTask(la.cleanCommitState); err != nil {
 		panic(err)
 	}
 
@@ -102,18 +116,18 @@ func (l *lockTableAllocator) KeepLockTableBind(serviceID string) bool {
 	return b.active()
 }
 
-func (l *lockTableAllocator) AddCannotCommit(values []pb.OrphanTxn) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+func (l *lockTableAllocator) AddCannotCommit(values []pb.OrphanTxn) [][]byte {
+	var committing [][]byte
 	for _, v := range values {
-		service := getUUIDFromServiceIdentifier(v.Service)
-		if _, ok := l.mu.cannotCommit[service]; !ok {
-			l.mu.cannotCommit[service] = &cannotCommit{txn: map[string]struct{}{}, serviceID: v.Service}
-		}
+		c := l.getCtl(v.Service)
 		for _, txn := range v.Txn {
-			l.mu.cannotCommit[service].txn[util.UnsafeBytesToString(txn)] = struct{}{}
+			state := c.add(util.UnsafeBytesToString(txn), cannotCommitState)
+			if state == committingState {
+				committing = append(committing, txn)
+			}
 		}
 	}
+	return committing
 }
 
 func (l *lockTableAllocator) Valid(
@@ -124,25 +138,6 @@ func (l *lockTableAllocator) Valid(
 	var invalid []uint64
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-
-	fn := func() error {
-		service := getUUIDFromServiceIdentifier(serviceID)
-		if c, ok := l.mu.cannotCommit[service]; ok {
-			// means cn restart, all cannot commit txn can remove.
-			if c.serviceID != serviceID {
-				return nil
-			}
-
-			if _, ok := c.txn[util.UnsafeBytesToString(txnID)]; ok {
-				return moerr.NewCannotCommitOrphanNoCtx()
-			}
-		}
-		return nil
-	}
-
-	if err := fn(); err != nil {
-		return nil, err
-	}
 
 	for _, b := range binds {
 		if !b.Valid {
@@ -172,7 +167,17 @@ func (l *lockTableAllocator) Valid(
 			invalid = append(invalid, b.Table)
 		}
 	}
-	return invalid, nil
+
+	if len(invalid) > 0 {
+		return invalid, nil
+	}
+
+	c := l.getCtl(serviceID)
+	state := c.add(util.UnsafeBytesToString(txnID), committingState)
+	if state == cannotCommitState {
+		return nil, moerr.NewCannotCommitOrphanNoCtx()
+	}
+	return nil, nil
 }
 
 func (l *lockTableAllocator) Close() error {
@@ -348,33 +353,41 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 	}
 }
 
-func (l *lockTableAllocator) cleanCannotCommit(ctx context.Context) {
+func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 	defer l.logger.InfoAction("clean cannot commit task")()
 
 	timer := time.NewTimer(l.keepBindTimeout * 2)
 	defer timer.Stop()
 
-	getActiveTxn := func(sid string) ([][]byte, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
-		defer cancel()
+	getActiveTxnFunc := l.options.getActiveTxnFunc
+	if getActiveTxnFunc == nil {
+		getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+			defer cancel()
 
-		req := acquireRequest()
-		defer releaseRequest(req)
+			req := acquireRequest()
+			defer releaseRequest(req)
 
-		req.Method = pb.Method_GetActiveTxn
-		req.GetActiveTxn.ServiceID = sid
+			req.Method = pb.Method_GetActiveTxn
+			req.GetActiveTxn.ServiceID = sid
 
-		resp, err := l.client.Send(ctx, req)
-		if err != nil {
-			return nil, err
+			resp, err := l.client.Send(ctx, req)
+			if err != nil {
+				return false, nil, err
+			}
+			defer releaseResponse(resp)
+
+			if !resp.GetActiveTxn.Valid {
+				return false, nil, nil
+			}
+
+			return true, resp.GetActiveTxn.Txn, nil
 		}
-		defer releaseResponse(resp)
+	}
 
-		if !resp.GetActiveTxn.Valid {
-			return nil, nil
-		}
-
-		return resp.GetActiveTxn.Txn, nil
+	removeDisconnectDuration := l.options.removeDisconnectDuration
+	if removeDisconnectDuration == 0 {
+		removeDisconnectDuration = time.Hour * 24
 	}
 
 	for {
@@ -384,46 +397,53 @@ func (l *lockTableAllocator) cleanCannotCommit(ctx context.Context) {
 		case <-timer.C:
 			var services []string
 			var invalidServices []string
-			activesMap := make(map[string]map[string]struct{})
+			activeTxnMap := make(map[string]map[string]struct{})
 
-			l.mu.RLock()
-			for _, c := range l.mu.cannotCommit {
-				services = append(services, c.serviceID)
-			}
-			l.mu.RUnlock()
+			l.ctl.Range(func(key, value any) bool {
+				c := value.(*commitCtl)
+				ok, at := c.disconnected()
+				if !ok {
+					services = append(services, key.(string))
+				} else if time.Since(at) > removeDisconnectDuration {
+					l.ctl.Delete(key)
+				}
+				return true
+			})
 
 			for _, sid := range services {
-				actives, err := getActiveTxn(sid)
+				valid, actives, err := getActiveTxnFunc(sid)
 				if err == nil {
-					activesMap[getUUIDFromServiceIdentifier(sid)] = make(map[string]struct{}, len(actives))
-					if len(actives) == 0 {
+					if !valid {
 						invalidServices = append(invalidServices, sid)
 					} else {
+						m := make(map[string]struct{}, len(actives))
 						for _, txn := range actives {
-							activesMap[getUUIDFromServiceIdentifier(sid)][util.UnsafeBytesToString(txn)] = struct{}{}
+							m[util.UnsafeBytesToString(txn)] = struct{}{}
 						}
+						activeTxnMap[sid] = m
 					}
+				} else if !isRetryError(err) {
+					l.getCtl(sid).disconnect()
 				}
 			}
 
-			l.mu.Lock()
 			for _, sid := range invalidServices {
-				delete(l.mu.cannotCommit, sid)
+				l.ctl.Delete(sid)
 			}
-			for sid, c := range l.mu.cannotCommit {
-				if m, ok := activesMap[sid]; ok {
-					for k := range c.txn {
-						if _, ok := m[k]; !ok {
-							delete(c.txn, k)
-						}
-					}
 
-					if len(c.txn) == 0 {
-						delete(l.mu.cannotCommit, sid)
-					}
+			l.ctl.Range(func(key, value any) bool {
+				sid := key.(string)
+				if m, ok := activeTxnMap[sid]; ok {
+					c := value.(*commitCtl)
+					c.states.Range(func(key, value any) bool {
+						if _, ok := m[key.(string)]; !ok {
+							c.states.Delete(key)
+						}
+						return true
+					})
 				}
-			}
-			l.mu.Unlock()
+				return true
+			})
 
 			timer.Reset(l.keepBindTimeout * 2)
 		}
@@ -552,10 +572,22 @@ func (l *lockTableAllocator) handleCannotCommit(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-
-	l.AddCannotCommit(req.CannotCommit.OrphanTxnList)
-
+	committingTxn := l.AddCannotCommit(req.CannotCommit.OrphanTxnList)
+	resp.CannotCommit.CommittingTxn = committingTxn
 	writeResponse(ctx, cancel, resp, nil, cs)
+}
+
+func (l *lockTableAllocator) getCtl(serviceID string) *commitCtl {
+	if v, ok := l.ctl.Load(serviceID); ok {
+		return v.(*commitCtl)
+	}
+
+	v := &commitCtl{}
+	old, loaded := l.ctl.LoadOrStore(serviceID, v)
+	if loaded {
+		return old.(*commitCtl)
+	}
+	return v
 }
 
 func validateService(
@@ -585,7 +617,38 @@ func validateService(
 	return resp.ValidateService.OK, nil
 }
 
-type cannotCommit struct {
-	serviceID string
-	txn       map[string]struct{}
+type ctlState int
+
+var (
+	committingState   = ctlState(0)
+	cannotCommitState = ctlState(1)
+)
+
+type commitCtl struct {
+	// disconnectAt indicates whether the service is disconnected, never connect
+	// to the service again.
+	disconnectAt atomic.Pointer[time.Time]
+	// txn id -> state, 0: cannot commit, 1: committed
+	states sync.Map
+}
+
+func (c *commitCtl) add(txnID string, state ctlState) ctlState {
+	old, loaded := c.states.LoadOrStore(txnID, state)
+	if loaded {
+		return old.(ctlState)
+	}
+	return state
+}
+
+func (c *commitCtl) disconnect() {
+	at := time.Now()
+	c.disconnectAt.Store(&at)
+}
+
+func (c *commitCtl) disconnected() (bool, time.Time) {
+	v := c.disconnectAt.Load()
+	if v == nil {
+		return false, time.Time{}
+	}
+	return true, *v
 }
