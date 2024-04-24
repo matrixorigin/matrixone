@@ -1,7 +1,7 @@
 /*
  * Copyright 2017 Dgraph Labs, Inc. and Contributors
  * Modifications copyright (C) 2017 Andy Kimball and Contributors
- * and (C) 2024 MatrixOrigin Inc.
+ * and copyright (C) 2024 MatrixOrigin Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
