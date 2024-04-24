@@ -151,7 +151,7 @@ func (task *mergeObjectsTask) GetVector(typ *types.Type) (*vector.Vector, func()
 }
 
 func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
-	return task.rt.VectorPool.Transient.MPool()
+	return task.rt.VectorPool.Transient.GetMPool()
 }
 
 func (task *mergeObjectsTask) HostHintName() string { return "DN" }

@@ -1296,16 +1296,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 	// deal with some special function
 	switch name {
-	case "date":
-		// rewrite date function to cast function, and retrun directly
-		if len(args) == 0 {
-			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
-		}
-		if args[0].Typ.Id != int32(types.T_varchar) && args[0].Typ.Id != int32(types.T_char) {
-			return appendCastBeforeExpr(ctx, args[0], Type{
-				Id: int32(types.T_date),
-			})
-		}
 	case "interval":
 		// rewrite interval function to ListExpr, and retrun directly
 		return &plan.Expr{
