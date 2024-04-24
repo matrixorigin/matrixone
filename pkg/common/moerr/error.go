@@ -267,6 +267,10 @@ const (
 	ErrUnsupportedDataType uint16 = 20905
 	ErrTaskNotFound        uint16 = 20906
 
+	// Group 10: skip list
+	ErrKeyAlreadyExists uint16 = 21001
+	ErrArenaFull        uint16 = 21002
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -478,6 +482,10 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDuplicateConnector:  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the connector for table %s already exists"},
 	ErrUnsupportedDataType: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported data type %T"},
 	ErrTaskNotFound:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "task with ID %d not found"},
+
+	// Group 10: skip list
+	ErrKeyAlreadyExists: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "record with this key already exists"},
+	ErrArenaFull:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "allocation failed because arena is full"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},

@@ -19,11 +19,12 @@
 package arenaskl
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const (
@@ -41,7 +42,7 @@ const nodeAlignment = 4
 var (
 	// ErrArenaFull indicates that the arena is full and cannot perform any more
 	// allocations.
-	ErrArenaFull = errors.New("allocation failed because arena is full")
+	ErrArenaFull = moerr.NewArenaFullNoCtx()
 )
 
 // NewArena allocates a new arena using the specified buffer as the backing

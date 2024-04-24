@@ -362,3 +362,11 @@ func NewTxnCannotRetryNoCtx() *Error {
 func NewRPCTimeoutNoCtx() *Error {
 	return NewRPCTimeout(Context())
 }
+
+func NewKeyAlreadyExistsNoCtx() *Error {
+	return newError(Context(), ErrKeyAlreadyExists)
+}
+
+func NewArenaFullNoCtx() *Error {
+	return newError(Context(), ErrArenaFull)
+}

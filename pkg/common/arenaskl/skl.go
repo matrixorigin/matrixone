@@ -42,16 +42,16 @@ Key differences:
 - Iterator includes mutator functions.
 */
 
-package arenaskl // import "github.com/cockroachdb/pebble/internal/arenaskl"
+package arenaskl
 
 import (
-	"errors"
 	"math"
 	"runtime"
 	"sync/atomic"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/fastrand"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const (
@@ -68,7 +68,7 @@ type Compare func(a, b []byte) int
 // exists in the skiplist. Duplicate entries are not directly supported and
 // instead must be handled by the user by appending a unique version suffix to
 // keys.
-var ErrRecordExists = errors.New("record with this key already exists")
+var ErrRecordExists = moerr.NewKeyAlreadyExistsNoCtx()
 
 // Skiplist is a fast, concurrent skiplist implementation that supports forward
 // and backward iteration. See batchskl.Skiplist for a non-concurrent
