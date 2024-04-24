@@ -253,6 +253,17 @@ func (txn *activeTxn) isRemoteLocked() bool {
 	return txn.remoteService != ""
 }
 
+func (txn *activeTxn) incLockTableRef(m map[uint64]uint64, serviceID string) {
+	txn.RLock()
+	defer txn.RUnlock()
+	for _, l := range txn.holdBinds {
+		if serviceID == l.ServiceID {
+			m[l.Table]++
+
+		}
+	}
+}
+
 // ============================================================================================================================
 // the above methods are called in the Lock and Unlock processes, where txn holds the mutex at the beginning of the process.
 // The following methods are called concurrently in processes that are concurrent with the Lock and Unlock processes.
@@ -276,6 +287,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 		txn.RUnlock()
 		panic("can not fetch waiting txn on remote txn")
 	}
+
 	tables := make([]uint64, 0, len(txn.holdLocks))
 	lockKeys := make([]*fixedSlice, 0, len(txn.holdLocks))
 	for table, cs := range txn.holdLocks {

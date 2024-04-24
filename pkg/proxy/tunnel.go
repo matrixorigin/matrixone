@@ -266,11 +266,13 @@ func (t *tunnel) canStartTransfer(sync bool) bool {
 
 	// The last message must be from server to client.
 	if scp.mu.lastCmdTime.Before(csp.mu.lastCmdTime) {
+		t.logger.Info("reason: client packet is after server packet")
 		return false
 	}
 
 	// We are now in a transaction.
 	if !scp.safeToTransfer() {
+		t.logger.Info("reason: txn status is true")
 		return false
 	}
 
@@ -554,8 +556,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	}
 	defer finish()
 
+	var transferred bool
 	for ctx.Err() == nil {
-		if p.name == pipeServerToClient && p.tun.transferIntent.Load() && p.src.writeAvail() > 0 {
+		if p.name == pipeServerToClient && transferred {
 			if err := p.handleTransferIntent(ctx, &peer.wg); err != nil {
 				p.logger.Error("failed to transfer connection", zap.Error(err))
 			}
@@ -574,7 +577,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			peerWg = &peer.wg
 		}
 
-		if _, err := p.src.sendTo(p.dst, &p.tun.transferIntent, peerWg); err != nil {
+		if transferred, err = p.src.sendTo(p.dst, &p.tun.transferIntent, peerWg); err != nil {
 			return moerr.NewInternalErrorNoCtx("send message error: %v", err)
 		}
 	}

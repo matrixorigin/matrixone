@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -301,6 +302,8 @@ type Session struct {
 	// If the connection is from proxy, client address is the real address of client.
 	clientAddr string
 	proxyAddr  string
+
+	fprints footPrints
 }
 
 func (ses *Session) ClearStmtProfile() {
@@ -959,6 +962,8 @@ func (ses *Session) InvalidatePrivilegeCache() {
 
 // GetBackgroundExec generates a background executor
 func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
+	enterFPrint(ses, 21)
+	defer exitFPrint(ses, 21)
 	return NewBackgroundHandler(
 		ctx,
 		ses,
@@ -969,6 +974,8 @@ func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
 // GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction.
 // newRawBatch denotes we need the raw batch instead of mysql result set.
 func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
+	enterFPrint(ses, 22)
+	defer exitFPrint(ses, 22)
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
 		ses: NewBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, true),
@@ -982,6 +989,8 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 }
 
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) *BackgroundHandler {
+	enterFPrint(ses, 23)
+	defer exitFPrint(ses, 23)
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
 		ses: NewBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, false),
@@ -1295,6 +1304,11 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 	if prepareStmt, ok := ses.prepareStmts[name]; ok {
 		return prepareStmt, nil
 	}
+	var connID uint32
+	if ses.protocol != nil {
+		connID = ses.protocol.ConnectionID()
+	}
+	logutil.Errorf("prepared statement '%s' does not exist on connection %d", name, connID)
 	return nil, moerr.NewInvalidState(ses.requestCtx, "prepared statement '%s' does not exist", name)
 }
 
@@ -2498,6 +2512,8 @@ func newDBMigration(db string) *dbMigration {
 }
 
 func (d *dbMigration) Migrate(ses *Session) error {
+	enterFPrint(ses, 15)
+	defer exitFPrint(ses, 15)
 	if d.db == "" {
 		return nil
 	}
@@ -2529,6 +2545,9 @@ func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepar
 
 func (p *prepareStmtMigration) Migrate(ses *Session) error {
 	var err error
+	enterFPrint(ses, 14)
+	defer exitFPrint(ses, 14)
+
 	v, err := ses.GetGlobalVar("lower_case_table_names")
 	if err != nil {
 		return err

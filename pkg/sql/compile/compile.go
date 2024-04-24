@@ -142,7 +142,9 @@ func putCompile(c *Compile) {
 	if c.scope != nil {
 		c.scope = nil
 	}
-
+	if c.fuzzys != nil {
+		c.fuzzys = nil
+	}
 	c.proc.CleanValueScanBatchs()
 	c.clear()
 	pool.Put(c)
@@ -166,7 +168,6 @@ func (c *Compile) clear() {
 	c.cnList = nil
 	c.stmt = nil
 	c.startAt = time.Time{}
-	c.fuzzy = nil
 	c.metaTables = nil
 	c.needLockMeta = false
 
@@ -439,8 +440,12 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	defer func() {
 		// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
 		if runC != nil {
-			if runC.fuzzy != nil && runC.fuzzy.cnt > 0 && err == nil {
-				err = runC.fuzzy.backgroundSQLCheck(runC)
+			if len(runC.fuzzys) > 0 && err == nil {
+				for _, f := range runC.fuzzys {
+					if f != nil && f.cnt > 0 {
+						err = f.backgroundSQLCheck(runC)
+					}
+				}
 			}
 
 			//detect fk self refer
@@ -2691,7 +2696,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	if err != nil {
 		return nil, err
 	}
-
+	c.fuzzys = append(c.fuzzys, outData)
 	// wrap the collision key into c.fuzzy, for more information,
 	// please refer fuzzyCheck.go
 	rs.appendInstruction(vm.Instruction{
@@ -2702,9 +2707,8 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 				if bat == nil || bat.IsEmpty() {
 					return nil
 				}
-				c.fuzzy = data.(*fuzzyCheck)
 				// the batch will contain the key that fuzzyCheck
-				if err := c.fuzzy.fill(c.ctx, bat); err != nil {
+				if err := outData.fill(c.ctx, bat); err != nil {
 					return err
 				}
 
@@ -3889,7 +3893,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 	// for multi cn in launch mode, put all payloads in current CN
 	// maybe delete this in the future
-	if isLaunchMode(c.cnList) {
+	if isLaunchMode(c.cnList) || len(ranges) < plan2.BlockNumForceOneCN {
 		return putBlocksInCurrentCN(c, ranges, rel, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
@@ -4019,7 +4023,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 		}
 	}
 	if minWorkLoad*2 < maxWorkLoad {
-		logstring := fmt.Sprintf("read table %v ,workload among %v nodes not balanced, max %v, min %v,", n.TableDef.Name, len(newNodes), maxWorkLoad, minWorkLoad)
+		logstring := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,", n.TableDef.Name, len(ranges), len(newNodes), maxWorkLoad, minWorkLoad)
 		logstring = logstring + " cnlist: "
 		for i := range c.cnList {
 			logstring = logstring + c.cnList[i].Addr + " "
