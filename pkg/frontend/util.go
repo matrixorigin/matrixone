@@ -35,6 +35,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -49,7 +51,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go.uber.org/zap"
 )
 
 type CloseFlag struct {
@@ -894,5 +895,61 @@ func getRandomErrorRollbackWholeTxn() error {
 	//	return moerr.NewLockConflictNoCtx()
 	default:
 		panic(fmt.Sprintf("usp error code %d", arr[x]))
+	}
+}
+
+func enterFPrint(ses *Session, idx int) {
+	if ses != nil {
+		ses.fprints.addEnter(idx)
+	}
+}
+
+func exitFPrint(ses *Session, idx int) {
+	if ses != nil {
+		ses.fprints.addExit(idx)
+	}
+}
+
+func setFPrints(txnOp TxnOperator, fprints footPrints) {
+	if txnOp != nil {
+		txnOp.SetFootPrints(fprints.prints[:])
+	}
+}
+
+type footPrints struct {
+	prints [128][2]uint32
+}
+
+func (fprints *footPrints) reset() {
+	for i := 0; i < len(fprints.prints); i++ {
+		fprints.prints[i][0] = 0
+		fprints.prints[i][1] = 0
+	}
+}
+
+func (fprints *footPrints) String() string {
+	strBuf := strings.Builder{}
+	for i := 0; i < len(fprints.prints); i++ {
+		if fprints.prints[i][0] == 0 && fprints.prints[i][1] == 0 {
+			continue
+		}
+		strBuf.WriteString("[")
+		strBuf.WriteString(fmt.Sprintf("%d", i))
+		strBuf.WriteString(": ")
+		strBuf.WriteString(fmt.Sprintf("enter:%d exit:%d", fprints.prints[i][0], fprints.prints[i][1]))
+		strBuf.WriteString("] ")
+	}
+	return strBuf.String()
+}
+
+func (fprints *footPrints) addEnter(idx int) {
+	if idx >= 0 && idx < len(fprints.prints) {
+		fprints.prints[idx][0]++
+	}
+}
+
+func (fprints *footPrints) addExit(idx int) {
+	if idx >= 0 && idx < len(fprints.prints) {
+		fprints.prints[idx][1]++
 	}
 }

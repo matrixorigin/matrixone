@@ -30,15 +30,15 @@ import (
 type leakChecker struct {
 	sync.RWMutex
 	logger         *log.MOLogger
-	actives        []activeTxn
+	actives        []ActiveTxn
 	maxActiveAges  time.Duration
-	leakHandleFunc func(txnID []byte, createAt time.Time, options txn.TxnOptions)
+	leakHandleFunc func([]ActiveTxn)
 	stopper        *stopper.Stopper
 }
 
 func newLeakCheck(
 	maxActiveAges time.Duration,
-	leakHandleFunc func(txnID []byte, createAt time.Time, options txn.TxnOptions)) *leakChecker {
+	leakHandleFunc func([]ActiveTxn)) *leakChecker {
 	logger := runtime.DefaultRuntime().Logger()
 	return &leakChecker{
 		logger:         logger,
@@ -65,10 +65,10 @@ func (lc *leakChecker) txnOpened(
 	options txn.TxnOptions) {
 	lc.Lock()
 	defer lc.Unlock()
-	lc.actives = append(lc.actives, activeTxn{
-		options:  options,
-		id:       txnID,
-		createAt: time.Now(),
+	lc.actives = append(lc.actives, ActiveTxn{
+		Options:  options,
+		ID:       txnID,
+		CreateAt: time.Now(),
 		txnOp:    txnOp,
 	})
 }
@@ -78,7 +78,7 @@ func (lc *leakChecker) txnClosed(txnID []byte) {
 	defer lc.Unlock()
 	values := lc.actives[:0]
 	for idx, txn := range lc.actives {
-		if bytes.Equal(txn.id, txnID) {
+		if bytes.Equal(txn.ID, txnID) {
 			values = append(values, lc.actives[idx+1:]...)
 			break
 		}
@@ -93,36 +93,37 @@ func (lc *leakChecker) check(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(lc.maxActiveAges):
-			if txn, ok := lc.doCheck(); ok {
-				lc.leakHandleFunc(txn.id, txn.createAt, txn.options)
+			if values := lc.doCheck(); len(values) > 0 {
+				lc.leakHandleFunc(values)
 			}
 		}
 	}
 }
 
-func (lc *leakChecker) doCheck() (activeTxn, bool) {
+func (lc *leakChecker) doCheck() []ActiveTxn {
 	lc.RLock()
 	defer lc.RUnlock()
 
+	var values []ActiveTxn
 	now := time.Now()
 	for _, txn := range lc.actives {
-		if now.Sub(txn.createAt) >= lc.maxActiveAges {
+		if now.Sub(txn.CreateAt) >= lc.maxActiveAges {
 			if txn.txnOp != nil {
-				txn.options.Counter = txn.txnOp.counter()
-				txn.options.InRunSql = txn.txnOp.inRunSql()
-				txn.options.InCommit = txn.txnOp.inCommit()
-				txn.options.InRollback = txn.txnOp.inRollback()
-				txn.options.SessionInfo = txn.txnOp.options.SessionInfo
+				txn.Options.Counter = txn.txnOp.counter()
+				txn.Options.InRunSql = txn.txnOp.inRunSql()
+				txn.Options.InCommit = txn.txnOp.inCommit()
+				txn.Options.InRollback = txn.txnOp.inRollback()
+				txn.Options.SessionInfo = txn.txnOp.options.SessionInfo
 			}
-			return txn, true
+			values = append(values, txn)
 		}
 	}
-	return activeTxn{}, false
+	return values
 }
 
-type activeTxn struct {
-	options  txn.TxnOptions
-	id       []byte
-	createAt time.Time
+type ActiveTxn struct {
+	Options  txn.TxnOptions
+	ID       []byte
+	CreateAt time.Time
 	txnOp    *txnOperator
 }
