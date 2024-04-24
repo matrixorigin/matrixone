@@ -86,7 +86,6 @@ func (r *runner) CleanPenddingCheckpoint() {
 
 func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error {
 	if r.GetPenddingIncrementalCount() != 0 {
-		end = r.MaxCheckpoint().GetEnd()
 		return nil
 	}
 	if versionInterval == 0 {
@@ -116,7 +115,6 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Durati
 			return nil
 		}
 	}
-	return nil
 }
 
 func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error {
@@ -198,7 +196,8 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 		logutil.Errorf("prev checkpoint not finished")
 		return moerr.NewTAENeedRetryNoCtx()
 	}
-	if end.LessEq(&prev.end) {
+
+	if prev != nil && end.LessEq(&prev.end) {
 		return nil
 	}
 	var (

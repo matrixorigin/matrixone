@@ -96,6 +96,9 @@ func (db *DB) ForceCheckpoint(
 	db.BGCheckpointRunner.DisableCheckpoint()
 	defer db.BGCheckpointRunner.EnableCheckpoint()
 	db.BGCheckpointRunner.CleanPenddingCheckpoint()
+	if flushDuration == 0 {
+		flushDuration = time.Minute
+	}
 	t0 := time.Now()
 	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
 	logutil.Infof("[Force Checkpoint] flush takes %v: %v", time.Since(t0), err)
@@ -123,7 +126,6 @@ func (db *DB) ForceCheckpoint(
 			return nil
 		}
 	}
-	return err
 }
 
 func (db *DB) ForceGlobalCheckpoint(
