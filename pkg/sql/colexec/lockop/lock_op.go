@@ -18,9 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,10 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
+	"strings"
 )
 
 var (
@@ -206,8 +205,15 @@ func performLock(
 			zap.Int32("primary-index", target.primaryColumnIndexInBatch))
 		var filterCols []int32
 		priVec := bat.GetVector(target.primaryColumnIndexInBatch)
+		// For partitioned tables, filter is not nil
 		if target.filter != nil {
 			filterCols = vector.MustFixedCol[int32](bat.GetVector(target.filterColIndexInBatch))
+			for _, value := range filterCols {
+				// has Illegal Partition index
+				if value == -1 {
+					return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
+				}
+			}
 		}
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
@@ -412,6 +418,7 @@ func doLock(
 		Policy:          lock.WaitPolicy_Wait,
 		Mode:            opts.mode,
 		TableDefChanged: opts.changeDef,
+		SnapShotTs:      txnOp.CreateTS(),
 	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
@@ -430,7 +437,8 @@ func doLock(
 
 	var err error
 	var result lock.Result
-	for i := 0; i < 10; i++ {
+
+	for {
 		result, err = lockService.Lock(
 			ctx,
 			tableID,
@@ -446,7 +454,7 @@ func doLock(
 	}
 
 	// add bind locks
-	if err := txnOp.AddLockTable(result.LockedOn); err != nil {
+	if err = txnOp.AddLockTable(result.LockedOn); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
 
@@ -517,6 +525,9 @@ func doLock(
 }
 
 func canRetryLock(txn client.TxnOperator, err error) bool {
+	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+		return true
+	}
 	if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
 		!moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
 		return false

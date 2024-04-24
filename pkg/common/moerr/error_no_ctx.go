@@ -272,6 +272,14 @@ func NewWaiterPausedNoCtx() *Error {
 	return newError(Context(), ErrWaiterPaused)
 }
 
+func NewRetryForCNRollingRestart() *Error {
+	return newError(Context(), ErrRetryForCNRollingRestart)
+}
+
+func NewNewTxnInCNRollingRestart() *Error {
+	return newError(Context(), ErrNewTxnInCNRollingRestart)
+}
+
 func NewNotFoundNoCtx() *Error {
 	return newError(Context(), ErrNotFound)
 }
