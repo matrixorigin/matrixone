@@ -288,29 +288,6 @@ func (blk *baseObject) LoadPersistedColumnData(
 	)
 }
 
-func (blk *baseObject) loadPersistedDeletes(
-	ctx context.Context,
-	blkID uint16,
-	mp *mpool.MPool,
-) (bat *containers.Batch, persistedByCN bool, deltalocCommitTS types.TS, release func(), err error) {
-	mvcc := blk.tryGetMVCC()
-	if mvcc == nil {
-		return
-	}
-	location, deltalocCommitTS := mvcc.GetDeltaLocAndCommitTS(blkID)
-	if location.IsEmpty() {
-		return
-	}
-	pkName := blk.meta.GetSchema().GetPrimaryKey().Name
-	bat, persistedByCN, release, err = LoadPersistedDeletes(
-		ctx,
-		pkName,
-		blk.rt.Fs,
-		location,
-		mp,
-	)
-	return
-}
 func (blk *baseObject) loadLatestPersistedDeletes(
 	ctx context.Context,
 	blkID uint16,
@@ -434,10 +411,20 @@ func (blk *baseObject) foreachPersistedDeletesCommittedInRange(
 	postOp func(*containers.Batch),
 	mp *mpool.MPool,
 ) (err error) {
-	loadFn := func() (bat *containers.Batch, persistedByCN bool, commitTS types.TS, _ bool, release func(), err error) {
+	loadFn := func() (bat *containers.Batch, persistedByCN bool, commitTS types.TS, visible bool, release func(), err error) {
+		mvcc := blk.tryGetMVCC()
+		if mvcc == nil {
+			return
+		}
 		// commitTS of deltalocation is the commitTS of deletes persisted by CN batches
-		deletes, persistedByCN, deltalocCommitTS, release, err := blk.loadPersistedDeletes(ctx, blkID, mp)
-		if deletes == nil || err != nil {
+		location, deltalocCommitTS, deltalocStartTS := mvcc.GetDeltaLocAndCommitTS(blkID)
+		if location.IsEmpty() {
+			return
+		}
+
+		// quick check for early return.
+		persistedByCN, err = blockio.IsPersistedByCN(ctx, location, blk.rt.Fs.Service)
+		if err != nil {
 			return
 		}
 		if persistedByCN {
@@ -447,8 +434,22 @@ func (blk *baseObject) foreachPersistedDeletesCommittedInRange(
 			if deltalocCommitTS.Less(&start) || deltalocCommitTS.Greater(&end) {
 				return
 			}
+		} else if deltalocStartTS.Less(&start) {
+			return
 		}
-		return deletes, persistedByCN, deltalocCommitTS, true, release, err
+
+		// IO
+		visible = true
+		pkName := blk.meta.GetSchema().GetPrimaryKey().Name
+		bat, release, err = LoadPersistedDeletesBySchema(
+			ctx,
+			pkName,
+			blk.rt.Fs,
+			location,
+			persistedByCN,
+			mp,
+		)
+		return
 	}
 	return blk.foreachPersistedDeletes(ctx, start, end, blkID, skipAbort, loadFn, loopOp, postOp, mp)
 }
