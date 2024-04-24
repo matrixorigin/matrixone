@@ -319,3 +319,12 @@ create table test09(col1 varchar(20), col2 varchar(20));
 load data infile '$resources/load_data/test_starting_by04.csv' into table test09 CHARACTER SET "utf_8" fields terminated by ',' lines starting by ' ';
 select * from test09;
 drop table test09;
+
+drop table if exists test10;
+create table test10(col1 text, col2 text);
+load data infile {'filepath'='$resources/load_data/text.csv.tar.gz', 'compression'='tar.gz'} into table test10 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
+select * from test10;
+
+load data infile {'filepath'='$resources/load_data/text.csv.tar.bz2', 'compression'='tar.bz2'} into table test10 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
+select * from test10;
+drop table test10;
