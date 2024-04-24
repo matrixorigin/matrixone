@@ -276,6 +276,48 @@ func TestLockTableBindChanged(t *testing.T) {
 	)
 }
 
+func TestNewClientWithMOCluster(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
+	assert.NoError(t, os.RemoveAll(testSockets[7:]))
+
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	cluster := clusterservice.NewMOCluster(
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(
+			[]metadata.CNService{
+				{
+					ServiceID:          "mock",
+					LockServiceAddress: testSockets,
+				},
+			},
+			[]metadata.TNService{
+				{
+					LockServiceAddress: testSockets,
+				},
+			}))
+	var newClientFailed bool
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				newClientFailed = true
+			}
+		}()
+		_, err := NewClient(morpc.Config{})
+		if err != nil {
+			newClientFailed = true
+		}
+	}()
+	require.True(t, newClientFailed, "new LockService Client without a process-level cluster nor a custom cluster should fail")
+	c, err := NewClient(morpc.Config{}, WithMOCluster(cluster))
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+}
+
 func runRPCTests(
 	t *testing.T,
 	fn func(Client, Server),
