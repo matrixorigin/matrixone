@@ -170,7 +170,7 @@ func (exec *groupConcatExec) BatchMerge(next AggFuncExec, offset int, groups []u
 		if groups[i] == GroupNotMatched {
 			continue
 		}
-		if err := exec.merge(other, i+offset, int(groups[i])-1); err != nil {
+		if err := exec.merge(other, int(groups[i])-1, i+offset); err != nil {
 			return err
 		}
 	}
@@ -241,9 +241,6 @@ func concatFixed[T types.FixedSizeTExceptStrType](v *vector.Vector, row int, src
 
 func concatVar(v *vector.Vector, row int, src []byte) ([]byte, error) {
 	value := v.GetBytesAt(row)
-
-	debug := string(value)
-	_ = debug
 
 	if err := isValidGroupConcatUnit(value); err != nil {
 		return nil, err

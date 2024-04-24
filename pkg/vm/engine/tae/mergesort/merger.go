@@ -106,18 +106,8 @@ func (m *merger[T]) Merge(ctx context.Context) {
 		})
 	}
 
-	m.buffer = batch.New(false, m.bats[0].bat.Attrs)
-	rfs := make([]func(), 0, len(m.bats[0].bat.Vecs))
-	for i := range m.bats[0].bat.Vecs {
-		var fs func()
-		m.buffer.Vecs[i], fs = m.host.GetVector(m.bats[0].bat.Vecs[i].GetType())
-		rfs = append(rfs, fs)
-	}
-	releaseF := func() {
-		for _, f := range rfs {
-			f()
-		}
-	}
+	var releaseF func()
+	m.buffer, releaseF = getSimilarBatch(m.bats[0].bat, int(m.rowPerBlk), m.host)
 	defer releaseF()
 
 	objCnt := 0

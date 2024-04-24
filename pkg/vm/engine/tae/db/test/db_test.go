@@ -2337,6 +2337,75 @@ func TestSnapshotIsolation2(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 }
 
+// Same as TestMergeBlocks
+// no pkRow in schema, so merge will run reshape.
+func TestReshapeBlocks(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, -1)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 3
+	bat := catalog.MockBatch(schema, 30)
+	defer bat.Close()
+
+	testutil.CreateRelationAndAppend(t, 0, tae, "db", schema, bat, true)
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err := txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err := db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	it := rel.MakeObjectIt()
+	blkID := it.GetObject().Fingerprint()
+	err = rel.RangeDelete(blkID, 5, 9, handle.DT_Normal)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit(context.Background()))
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	for it.Valid() {
+		testutil.CheckAllColRowsByScan(t, rel, bat.Length(), false)
+		obj := it.GetObject()
+		for j := 0; j < obj.BlkCnt(); j++ {
+			col, err := obj.GetColumnDataById(context.Background(), uint16(j), 0, common.DefaultAllocator)
+			assert.NoError(t, err)
+			defer col.Close()
+			t.Log(col)
+		}
+		it.Next()
+	}
+	assert.Nil(t, txn.Commit(context.Background()))
+
+	testutil.CompactBlocks(t, 0, tae, "db", schema, false)
+	testutil.MergeBlocks(t, 0, tae, "db", schema, false)
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
+	it = rel.MakeObjectIt()
+	for it.Valid() {
+		testutil.CheckAllColRowsByScan(t, rel, bat.Length()-5, false)
+		obj := it.GetObject()
+		for j := 0; j < obj.BlkCnt(); j++ {
+			col, err := obj.GetColumnDataById(context.Background(), uint16(j), 0, common.DefaultAllocator)
+			assert.NoError(t, err)
+			defer col.Close()
+			t.Log(col)
+		}
+		it.Next()
+	}
+	assert.Nil(t, txn.Commit(context.Background()))
+}
+
 // 1. Append 3 blocks and delete last 5 rows of the 1st block
 // 2. Merge blocks
 // 3. Check rows and col[0]
@@ -6414,10 +6483,10 @@ func TestAppendAndGC(t *testing.T) {
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
-	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
-	testutils.WaitExpect(5000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
+	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	assert.NotNil(t, minMerged)
 	tae.Restart(ctx)
 	db = tae.DB
@@ -6461,14 +6530,14 @@ func TestSnapshotGC(t *testing.T) {
 	schema2 := catalog.MockSchemaAll(13, 2)
 	schema2.BlockMaxRows = 10
 	schema2.ObjectMaxBlocks = 2
-	var rel1, rel2, rel3 handle.Relation
+	var rel3 handle.Relation
 	{
 		txn, _ := db.StartTxn(nil)
 		database, err := txn.CreateDatabase("db", "", "")
 		assert.Nil(t, err)
-		rel1, err = database.CreateRelation(schema1)
+		_, err = database.CreateRelation(schema1)
 		assert.Nil(t, err)
-		rel2, err = database.CreateRelation(schema2)
+		_, err = database.CreateRelation(schema2)
 		assert.Nil(t, err)
 		rel3, err = database.CreateRelation(snapshotSchema)
 		assert.Nil(t, err)
@@ -6483,7 +6552,7 @@ func TestSnapshotGC(t *testing.T) {
 	pool, err := ants.NewPool(20)
 	assert.Nil(t, err)
 	defer pool.Release()
-	snapshots := make([]types.TS, 0)
+	snapshots := make([]int64, 0)
 	var wg sync.WaitGroup
 	var snapWG sync.WaitGroup
 	snapWG.Add(1)
@@ -6496,7 +6565,7 @@ func TestSnapshotGC(t *testing.T) {
 			}
 			i++
 			time.Sleep(200 * time.Millisecond)
-			snapshot := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+			snapshot := time.Now().UTC().Unix()
 			snapshots = append(snapshots, snapshot)
 		}
 	}()
@@ -6509,19 +6578,23 @@ func TestSnapshotGC(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	snapWG.Wait()
-	for i, snapshot := range snapshots {
-		attrs := []string{"tid", "ts"}
-		vecTypes := []types.Type{types.T_uint64.ToType(), types.T_TS.ToType()}
+	for _, snapshot := range snapshots {
+		attrs := []string{"col0", "col1", "ts", "col3", "col4", "col5", "col6", "id"}
+		vecTypes := []types.Type{types.T_uint64.ToType(),
+			types.T_uint64.ToType(), types.T_int64.ToType(),
+			types.T_enum.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
+			types.T_uint64.ToType(), types.T_uint64.ToType()}
 		opt := containers.Options{}
 		opt.Capacity = 0
 		data1 := containers.BuildBatch(attrs, vecTypes, opt)
-		if i == 2 {
-			data1.Vecs[0].Append(rel2.ID(), false)
-		} else {
-			data1.Vecs[0].Append(rel1.ID(), false)
-		}
-		logutil.Infof("add snapshot %v", snapshot.ToString())
-		data1.Vecs[1].Append(snapshot, false)
+		data1.Vecs[0].Append(uint64(0), false)
+		data1.Vecs[1].Append(uint64(0), false)
+		data1.Vecs[2].Append(snapshot, false)
+		data1.Vecs[3].Append(types.Enum(1), false)
+		data1.Vecs[4].Append(uint64(0), false)
+		data1.Vecs[5].Append(uint64(0), false)
+		data1.Vecs[6].Append(uint64(0), false)
+		data1.Vecs[7].Append(uint64(0), false)
 		txn1, _ := db.StartTxn(nil)
 		database, _ := txn1.GetDatabase("db")
 		rel, _ := database.GetRelationByName(snapshotSchema.Name)
