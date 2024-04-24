@@ -32,13 +32,16 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
-	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -65,7 +68,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/sync/errgroup"
 )
 
 func createDropDatabaseErrorInfo() string {
@@ -551,6 +553,8 @@ func doUse(ctx context.Context, ses *Session, db string) error {
 	if err != nil {
 		return err
 	}
+	enterFPrint(ses, 7)
+	defer exitFPrint(ses, 7)
 	//TODO: check meta data
 	if dbMeta, err = ses.GetParameterUnit().StorageEngine.Database(txnCtx, db, txn); err != nil {
 		//echo client. no such database
@@ -3158,6 +3162,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return err
 	}
 
+	enterFPrint(ses, 11)
+
 	//non derived statement
 	if txnOp != nil && !ses.IsDerivedStmt() {
 		//startStatement has been called
@@ -3178,6 +3184,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			logError(ses, ses.GetDebugString(), err3.Error())
 			return
 		}
+		exitFPrint(ses, 11)
 		//non derived statement
 		if txnOp != nil && !ses.IsDerivedStmt() {
 			//startStatement has been called
@@ -3677,6 +3684,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				Start pipeline
 				Producing the data row and sending the data row
 			*/
+			_, fPrintTxnOp, _ := ses.GetTxnHandler().GetTxnOperator()
+			enterFPrint(ses, 16)
+			defer exitFPrint(ses, 16)
+			setFPrints(fPrintTxnOp, ses.fprints)
 			// todo: add trace
 			if _, err = runner.Run(0); err != nil {
 				return
@@ -3748,6 +3759,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				Producing the data row and sending the data row
 			*/
 			// todo: add trace
+			_, fPrintTxnOp, _ := ses.GetTxnHandler().GetTxnOperator()
+			enterFPrint(ses, 17)
+			defer exitFPrint(ses, 17)
+			setFPrints(fPrintTxnOp, ses.fprints)
 			if _, err = runner.Run(0); err != nil {
 				return
 			}
@@ -3823,6 +3838,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			Producing the data row and sending the data row
 		*/
 		// todo: add trace
+		_, fPrintTxnOp, _ := ses.GetTxnHandler().GetTxnOperator()
+		enterFPrint(ses, 18)
+		defer exitFPrint(ses, 18)
+		setFPrints(fPrintTxnOp, ses.fprints)
 		if _, err = runner.Run(0); err != nil {
 			return
 		}
@@ -3887,6 +3906,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 		}
 
+		_, fPrintTxnOp, _ := ses.GetTxnHandler().GetTxnOperator()
+		enterFPrint(ses, 19)
+		defer exitFPrint(ses, 19)
+		setFPrints(fPrintTxnOp, ses.fprints)
 		if runResult, err = runner.Run(0); err != nil {
 			if loadLocalErrGroup != nil { // release resources
 				err2 := proc.LoadLocalReader.Close()
@@ -3965,6 +3988,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		/*
 			Step 1: Start
 		*/
+		_, fPrintTxnOp, _ := ses.GetTxnHandler().GetTxnOperator()
+		enterFPrint(ses, 20)
+		defer exitFPrint(ses, 20)
+		setFPrints(fPrintTxnOp, ses.fprints)
 		if _, err = runner.Run(0); err != nil {
 			return
 		}
@@ -4018,6 +4045,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	requestCtx = appendStatementAt(requestCtx, beginInstant)
 
 	ses := mce.GetSession()
+
+	enterFPrint(ses, 12)
+	defer exitFPrint(ses, 12)
+
 	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()

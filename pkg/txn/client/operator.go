@@ -24,6 +24,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -35,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 var (
@@ -199,6 +200,7 @@ type txnOperator struct {
 	commitCounter   counter
 	rollbackCounter counter
 	runSqlCounter   counter
+	fprints         footPrints
 }
 
 func newTxnOperator(
@@ -1105,8 +1107,13 @@ func (tc *txnOperator) inRollback() bool {
 }
 
 func (tc *txnOperator) counter() string {
-	return fmt.Sprintf("commit: %s rollback: %s runSql: %s",
+	return fmt.Sprintf("commit: %s rollback: %s runSql: %s footPrints: %s",
 		tc.commitCounter.String(),
 		tc.rollbackCounter.String(),
-		tc.runSqlCounter.String())
+		tc.runSqlCounter.String(),
+		tc.fprints.String())
+}
+
+func (tc *txnOperator) SetFootPrints(prints [][2]uint32) {
+	tc.fprints.setFPrints(prints)
 }
