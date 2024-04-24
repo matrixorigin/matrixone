@@ -1167,7 +1167,7 @@ func makeInsertPlan(
 	//  case 3: create hidden table for secondary index
 
 	isSecondaryHidden := strings.Contains(tableDef.Name, catalog.SecondaryIndexTableNamePrefix)
-	if isSecondaryHidden {
+	if isSecondaryHidden || isInsertWithoutAutoPkCol {
 		return nil
 	}
 
