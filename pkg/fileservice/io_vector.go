@@ -26,11 +26,23 @@ func (i *IOVector) allDone() bool {
 }
 
 func (i *IOVector) Release() {
-	for _, entry := range i.Entries {
+	if i.released {
+		panic("double release")
+	}
+	for idx, entry := range i.Entries {
 		if entry.CachedData != nil {
 			entry.CachedData.Release()
 		}
+		// to expose use-after-free
+		entry.WriterForRead = nil
+		entry.ReaderForWrite = nil
+		entry.CachedData = nil
+		i.Entries[idx] = entry
 	}
+	for _, fn := range i.onRelease {
+		fn()
+	}
+	i.released = true
 }
 
 func (i *IOVector) readRange() (min *int64, max *int64, readFull bool) {

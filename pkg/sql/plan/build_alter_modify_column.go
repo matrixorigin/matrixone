@@ -44,7 +44,7 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	if err != nil {
 		return err
 	}
-	if err = checkAddColumnType(ctx.GetContext(), colType, specNewColumn.Name.Parts[0]); err != nil {
+	if err = checkAddColumnType(ctx.GetContext(), &colType, specNewColumn.Name.Parts[0]); err != nil {
 		return err
 	}
 
