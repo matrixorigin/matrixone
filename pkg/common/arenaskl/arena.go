@@ -1,6 +1,7 @@
 /*
  * Copyright 2017 Dgraph Labs, Inc. and Contributors
  * Modifications copyright (C) 2017 Andy Kimball and Contributors
+ * and (C) 2024 MatrixOrigin Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,17 +19,15 @@
 package arenaskl
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sync/atomic"
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const (
-	maxSize     = math.MaxUint32
-	enableCheck = false
+	maxArenaSize = math.MaxUint32
 )
 
 // Arena is lock-free.
@@ -42,13 +41,13 @@ const nodeAlignment = 4
 var (
 	// ErrArenaFull indicates that the arena is full and cannot perform any more
 	// allocations.
-	ErrArenaFull = moerr.NewInternalErrorNoCtx("allocation failed because arena is full")
+	ErrArenaFull = errors.New("allocation failed because arena is full")
 )
 
 // NewArena allocates a new arena using the specified buffer as the backing
 // store.
 func NewArena(buf []byte) *Arena {
-	if len(buf) > maxSize {
+	if len(buf) > maxArenaSize {
 		panic(fmt.Sprintf("attempting to create arena of size %d", len(buf)))
 	}
 	a := &Arena{
@@ -63,10 +62,10 @@ func NewArena(buf []byte) *Arena {
 // Size returns the number of bytes allocated by the arena.
 func (a *Arena) Size() uint32 {
 	s := a.n.Load()
-	if s > maxSize {
+	if s > maxArenaSize {
 		// The last failed allocation can push the size higher than len(a.buf).
 		// Saturate at the maximum representable offset.
-		return maxSize
+		return maxArenaSize
 	}
 	return uint32(s)
 }
@@ -83,7 +82,7 @@ func (a *Arena) Capacity() uint32 {
 // inside the arena (this is used for structures that are larger than the
 // requested size but don't use those extra bytes).
 func (a *Arena) alloc(size, alignment, overflow uint32) (uint32, uint32, error) {
-	if enableCheck && (alignment&(alignment-1)) != 0 {
+	if (alignment & (alignment - 1)) != 0 {
 		panic(fmt.Sprintf("invalid alignment %d", alignment))
 	}
 	// Verify that the arena isn't already full.

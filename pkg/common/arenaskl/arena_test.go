@@ -1,6 +1,7 @@
 /*
  * Copyright 2017 Dgraph Labs, Inc. and Contributors
  * Modifications copyright (C) 2017 Andy Kimball and Contributors
+ * and (C) 2024 MatrixOrigin Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +22,6 @@ import (
 	"math"
 	"testing"
 
-	"github.com/cockroachdb/pebble/internal/constants"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,7 +32,9 @@ func newArena(n uint32) *Arena {
 // TestArenaSizeOverflow tests that large allocations do not cause Arena's
 // internal size accounting to overflow and produce incorrect results.
 func TestArenaSizeOverflow(t *testing.T) {
-	a := newArena(constants.MaxUint32OrInt)
+	a := newArena(maxArenaSize)
+
+	a.alloc(1, 4, 0)
 
 	// Allocating under the limit throws no error.
 	offset, _, err := a.alloc(math.MaxUint16, 1, 0)
@@ -44,10 +46,10 @@ func TestArenaSizeOverflow(t *testing.T) {
 	// overflow if 32-bit arithmetic was used. It shouldn't.
 	_, _, err = a.alloc(math.MaxUint32, 1, 0)
 	require.Equal(t, ErrArenaFull, err)
-	require.Equal(t, uint32(constants.MaxUint32OrInt), a.Size())
+	require.Equal(t, uint32(maxArenaSize), a.Size())
 
 	// Continuing to allocate continues to throw an error.
 	_, _, err = a.alloc(math.MaxUint16, 1, 0)
 	require.Equal(t, ErrArenaFull, err)
-	require.Equal(t, uint32(constants.MaxUint32OrInt), a.Size())
+	require.Equal(t, uint32(maxArenaSize), a.Size())
 }

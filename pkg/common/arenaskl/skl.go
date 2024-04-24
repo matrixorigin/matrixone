@@ -1,6 +1,7 @@
 /*
  * Copyright 2017 Dgraph Labs, Inc. and Contributors
  * Modifications copyright (C) 2017 Andy Kimball and Contributors
+ * and (C) 2024 MatrixOrigin Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,14 +45,13 @@ Key differences:
 package arenaskl // import "github.com/cockroachdb/pebble/internal/arenaskl"
 
 import (
+	"errors"
 	"math"
 	"runtime"
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/cockroachdb/pebble/internal/base"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/valyala/fastrand"
+	"github.com/matrixorigin/matrixone/pkg/common/fastrand"
 )
 
 const (
@@ -61,11 +61,14 @@ const (
 	pValue      = 1 / math.E
 )
 
+// Compare is a comparison function for keys.
+type Compare func(a, b []byte) int
+
 // ErrRecordExists indicates that an entry with the specified key already
 // exists in the skiplist. Duplicate entries are not directly supported and
 // instead must be handled by the user by appending a unique version suffix to
 // keys.
-var ErrRecordExists = moerr.NewInternalErrorNoCtx("record with this key already exists")
+var ErrRecordExists = errors.New("record with this key already exists")
 
 // Skiplist is a fast, concurrent skiplist implementation that supports forward
 // and backward iteration. See batchskl.Skiplist for a non-concurrent
@@ -74,9 +77,9 @@ var ErrRecordExists = moerr.NewInternalErrorNoCtx("record with this key already 
 // entries that shadow existing entries and perform deletion via tombstones. It
 // is up to the user to process these shadow entries and tombstones
 // appropriately during retrieval.
-type Skiplist[K, V any] struct {
+type Skiplist struct {
 	arena  *Arena
-	cmp    func(K, K) int
+	cmp    Compare
 	head   *node
 	tail   *node
 	height atomic.Uint32 // Current height. 1 <= height <= maxHeight. CAS.
@@ -87,13 +90,13 @@ type Skiplist[K, V any] struct {
 }
 
 // Inserter TODO(peter)
-type Inserter[K, V any] struct {
+type Inserter struct {
 	spl    [maxHeight]splice
 	height uint32
 }
 
 // Add TODO(peter)
-func (ins *Inserter[K, V]) Add(list *Skiplist[K, V], key K, value V) error {
+func (ins *Inserter) Add(list *Skiplist, key, value []byte) error {
 	return list.addInternal(key, value, ins)
 }
 
@@ -114,14 +117,14 @@ func init() {
 
 // NewSkiplist constructs and initializes a new, empty skiplist. All nodes, keys,
 // and values in the skiplist will be allocated from the given arena.
-func NewSkiplist[K, V any](arena *Arena, cmp func(K, K) int) *Skiplist[K, V] {
-	skl := &Skiplist[K, V]{}
+func NewSkiplist(arena *Arena, cmp Compare) *Skiplist {
+	skl := &Skiplist{}
 	skl.Reset(arena, cmp)
 	return skl
 }
 
 // Reset the skiplist to empty and re-initialize.
-func (s *Skiplist[K, V]) Reset(arena *Arena, cmp func(K, K) int) {
+func (s *Skiplist) Reset(arena *Arena, cmp Compare) {
 	// Allocate head and tail nodes.
 	head, err := newRawNode(arena, maxHeight, 0, 0)
 	if err != nil {
@@ -143,7 +146,7 @@ func (s *Skiplist[K, V]) Reset(arena *Arena, cmp func(K, K) int) {
 		tail.tower[i].prevOffset.Store(headOffset)
 	}
 
-	*s = Skiplist[K, V]{
+	*s = Skiplist{
 		arena: arena,
 		cmp:   cmp,
 		head:  head,
@@ -154,23 +157,23 @@ func (s *Skiplist[K, V]) Reset(arena *Arena, cmp func(K, K) int) {
 
 // Height returns the height of the highest tower within any of the nodes that
 // have ever been allocated as part of this skiplist.
-func (s *Skiplist[K, V]) Height() uint32 { return s.height.Load() }
+func (s *Skiplist) Height() uint32 { return s.height.Load() }
 
 // Arena returns the arena backing this skiplist.
-func (s *Skiplist[K, V]) Arena() *Arena { return s.arena }
+func (s *Skiplist) Arena() *Arena { return s.arena }
 
 // Size returns the number of bytes that have allocated from the arena.
-func (s *Skiplist[K, V]) Size() uint32 { return s.arena.Size() }
+func (s *Skiplist) Size() uint32 { return s.arena.Size() }
 
 // Add adds a new key if it does not yet exist. If the key already exists, then
 // Add returns ErrRecordExists. If there isn't enough room in the arena, then
 // Add returns ErrArenaFull.
-func (s *Skiplist[K, V]) Add(key K, value V) error {
-	var ins Inserter[K, V]
+func (s *Skiplist) Add(key, value []byte) error {
+	var ins Inserter
 	return s.addInternal(key, value, &ins)
 }
 
-func (s *Skiplist[K, V]) addInternal(key K, value V, ins *Inserter[K, V]) error {
+func (s *Skiplist) addInternal(key, value []byte, ins *Inserter) error {
 	if s.findSplice(key, ins) {
 		// Found a matching node, but handle case where it's been deleted.
 		return ErrRecordExists
@@ -304,18 +307,8 @@ func (s *Skiplist) NewIter(lower, upper []byte) *Iterator {
 	return it
 }
 
-// NewFlushIter returns a new flushIterator, which is similar to an Iterator
-// but also sets the current number of the bytes that have been iterated
-// through.
-func (s *Skiplist) NewFlushIter(bytesFlushed *uint64) base.InternalIterator {
-	return &flushIterator{
-		Iterator:      Iterator{list: s, nd: s.head},
-		bytesIterated: bytesFlushed,
-	}
-}
-
-func (s *Skiplist[K, V]) newNode(
-	key K, value V,
+func (s *Skiplist) newNode(
+	key, value []byte,
 ) (nd *node, height uint32, err error) {
 	height = s.randomHeight()
 	nd, err = newNode(s.arena, height, key, value)
@@ -348,7 +341,7 @@ func (s *Skiplist) randomHeight() uint32 {
 	return h
 }
 
-func (s *Skiplist) findSplice(key base.InternalKey, ins *Inserter) (found bool) {
+func (s *Skiplist) findSplice(key []byte, ins *Inserter) (found bool) {
 	listHeight := s.Height()
 	var level int
 
@@ -397,7 +390,7 @@ func (s *Skiplist) findSplice(key base.InternalKey, ins *Inserter) (found bool) 
 }
 
 func (s *Skiplist) findSpliceForLevel(
-	key base.InternalKey, level int, start *node,
+	key []byte, level int, start *node,
 ) (prev, next *node, found bool) {
 	prev = start
 
@@ -411,22 +404,14 @@ func (s *Skiplist) findSpliceForLevel(
 
 		offset, size := next.keyOffset, next.keySize
 		nextKey := s.arena.buf[offset : offset+size]
-		cmp := s.cmp(key.UserKey, nextKey)
+		cmp := s.cmp(key, nextKey)
 		if cmp < 0 {
 			// We are done for this level, since prev.key < key < next.key.
 			break
 		}
 		if cmp == 0 {
-			// User-key equality.
-			if key.Trailer == next.keyTrailer {
-				// Internal key equality.
-				found = true
-				break
-			}
-			if key.Trailer > next.keyTrailer {
-				// We are done for this level, since prev.key < key < next.key.
-				break
-			}
+			found = true
+			break
 		}
 
 		// Keep moving right on this level.
@@ -436,21 +421,9 @@ func (s *Skiplist) findSpliceForLevel(
 	return
 }
 
-func (s *Skiplist) keyIsAfterNode(nd *node, key base.InternalKey) bool {
+func (s *Skiplist) keyIsAfterNode(nd *node, key []byte) bool {
 	ndKey := s.arena.buf[nd.keyOffset : nd.keyOffset+nd.keySize]
-	cmp := s.cmp(ndKey, key.UserKey)
-	if cmp < 0 {
-		return true
-	}
-	if cmp > 0 {
-		return false
-	}
-	// User-key equality.
-	if key.Trailer == nd.keyTrailer {
-		// Internal key equality.
-		return false
-	}
-	return key.Trailer < nd.keyTrailer
+	return s.cmp(ndKey, key) < 0
 }
 
 func (s *Skiplist) getNext(nd *node, h int) *node {

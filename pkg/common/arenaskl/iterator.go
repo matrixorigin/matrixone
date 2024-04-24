@@ -1,6 +1,7 @@
 /*
  * Copyright 2017 Dgraph Labs, Inc. and Contributors
  * Modifications copyright (C) 2017 Andy Kimball and Contributors
+ * and (C) 2024 MatrixOrigin Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,8 +20,6 @@ package arenaskl
 
 import (
 	"sync"
-
-	"github.com/cockroachdb/pebble/internal/base"
 )
 
 type splice struct {
@@ -39,13 +38,13 @@ func (s *splice) init(prev, next *node) {
 type Iterator struct {
 	list  *Skiplist
 	nd    *node
-	key   base.InternalKey
+	key   []byte
 	lower []byte
 	upper []byte
 }
 
 // Iterator implements the base.InternalIterator interface.
-var _ base.InternalIterator = (*Iterator)(nil)
+// var _ base.InternalIterator = (*Iterator)(nil)
 
 var iterPool = sync.Pool{
 	New: func() interface{} {
@@ -77,40 +76,17 @@ func (it *Iterator) Error() error {
 // pointing at a valid entry, and (nil, nil) otherwise. Note that SeekGE only
 // checks the upper bound. It is up to the caller to ensure that key is greater
 // than or equal to the lower bound.
-func (it *Iterator) SeekGE(key []byte, flags base.SeekGEFlags) (*base.InternalKey, base.LazyValue) {
-	if flags.TrySeekUsingNext() {
-		if it.nd == it.list.tail {
-			// Iterator is done.
-			return nil, base.LazyValue{}
-		}
-		less := it.list.cmp(it.key.UserKey, key) < 0
-		// Arbitrary constant. By measuring the seek cost as a function of the
-		// number of elements in the skip list, and fitting to a model, we
-		// could adjust the number of nexts based on the current size of the
-		// skip list.
-		const numNexts = 5
-		for i := 0; less && i < numNexts; i++ {
-			k, _ := it.Next()
-			if k == nil {
-				// Iterator is done.
-				return nil, base.LazyValue{}
-			}
-			less = it.list.cmp(it.key.UserKey, key) < 0
-		}
-		if !less {
-			return &it.key, base.MakeInPlaceValue(it.value())
-		}
-	}
+func (it *Iterator) SeekGE(key []byte) (bool, []byte, []byte) {
 	_, it.nd, _ = it.seekForBaseSplice(key)
 	if it.nd == it.list.tail {
-		return nil, base.LazyValue{}
+		return false, nil, nil
 	}
 	it.decodeKey()
-	if it.upper != nil && it.list.cmp(it.upper, it.key.UserKey) <= 0 {
+	if it.upper != nil && it.list.cmp(it.upper, it.key) <= 0 {
 		it.nd = it.list.tail
-		return nil, base.LazyValue{}
+		return false, nil, nil
 	}
-	return &it.key, base.MakeInPlaceValue(it.value())
+	return true, it.key, it.value()
 }
 
 // SeekPrefixGE moves the iterator to the first entry whose key is greater than
@@ -118,101 +94,94 @@ func (it *Iterator) SeekGE(key []byte, flags base.SeekGEFlags) (*base.InternalKe
 // provided so that an arenaskl.Iterator implements the
 // internal/base.InternalIterator interface.
 func (it *Iterator) SeekPrefixGE(
-	prefix, key []byte, flags base.SeekGEFlags,
-) (*base.InternalKey, base.LazyValue) {
-	return it.SeekGE(key, flags)
+	prefix, key []byte,
+) (bool, []byte, []byte) {
+	return it.SeekGE(key)
 }
 
 // SeekLT moves the iterator to the last entry whose key is less than the given
 // key. Returns the key and value if the iterator is pointing at a valid entry,
 // and (nil, nil) otherwise. Note that SeekLT only checks the lower bound. It
 // is up to the caller to ensure that key is less than the upper bound.
-func (it *Iterator) SeekLT(key []byte, flags base.SeekLTFlags) (*base.InternalKey, base.LazyValue) {
+func (it *Iterator) SeekLT(key []byte) (bool, []byte, []byte) {
 	// NB: the top-level Iterator has already adjusted key based on
 	// the upper-bound.
 	it.nd, _, _ = it.seekForBaseSplice(key)
 	if it.nd == it.list.head {
-		return nil, base.LazyValue{}
+		return false, nil, nil
 	}
 	it.decodeKey()
-	if it.lower != nil && it.list.cmp(it.lower, it.key.UserKey) > 0 {
+	if it.lower != nil && it.list.cmp(it.lower, it.key) > 0 {
 		it.nd = it.list.head
-		return nil, base.LazyValue{}
+		return false, nil, nil
 	}
-	return &it.key, base.MakeInPlaceValue(it.value())
+	return true, it.key, it.value()
 }
 
 // First seeks position at the first entry in list. Returns the key and value
 // if the iterator is pointing at a valid entry, and (nil, nil) otherwise. Note
 // that First only checks the upper bound. It is up to the caller to ensure
 // that key is greater than or equal to the lower bound (e.g. via a call to SeekGE(lower)).
-func (it *Iterator) First() (*base.InternalKey, base.LazyValue) {
+func (it *Iterator) First() (bool, []byte, []byte) {
 	it.nd = it.list.getNext(it.list.head, 0)
 	if it.nd == it.list.tail {
-		return nil, base.LazyValue{}
+		return false, nil, nil
 	}
 	it.decodeKey()
-	if it.upper != nil && it.list.cmp(it.upper, it.key.UserKey) <= 0 {
+	if it.upper != nil && it.list.cmp(it.upper, it.key) <= 0 {
 		it.nd = it.list.tail
-		return nil, base.LazyValue{}
+		return false, nil, nil
 	}
-	return &it.key, base.MakeInPlaceValue(it.value())
+	return true, it.key, it.value()
 }
 
 // Last seeks position at the last entry in list. Returns the key and value if
 // the iterator is pointing at a valid entry, and (nil, nil) otherwise. Note
 // that Last only checks the lower bound. It is up to the caller to ensure that
 // key is less than the upper bound (e.g. via a call to SeekLT(upper)).
-func (it *Iterator) Last() (*base.InternalKey, base.LazyValue) {
+func (it *Iterator) Last() (bool, []byte, []byte) {
 	it.nd = it.list.getPrev(it.list.tail, 0)
 	if it.nd == it.list.head {
-		return nil, base.LazyValue{}
+		return false, nil, nil
 	}
 	it.decodeKey()
-	if it.lower != nil && it.list.cmp(it.lower, it.key.UserKey) > 0 {
+	if it.lower != nil && it.list.cmp(it.lower, it.key) > 0 {
 		it.nd = it.list.head
-		return nil, base.LazyValue{}
+		return false, nil, nil
 	}
-	return &it.key, base.MakeInPlaceValue(it.value())
+	return true, it.key, it.value()
 }
 
 // Next advances to the next position. Returns the key and value if the
 // iterator is pointing at a valid entry, and (nil, nil) otherwise.
 // Note: flushIterator.Next mirrors the implementation of Iterator.Next
 // due to performance. Keep the two in sync.
-func (it *Iterator) Next() (*base.InternalKey, base.LazyValue) {
+func (it *Iterator) Next() (bool, []byte, []byte) {
 	it.nd = it.list.getNext(it.nd, 0)
 	if it.nd == it.list.tail {
-		return nil, base.LazyValue{}
+		return false, nil, nil
 	}
 	it.decodeKey()
-	if it.upper != nil && it.list.cmp(it.upper, it.key.UserKey) <= 0 {
+	if it.upper != nil && it.list.cmp(it.upper, it.key) <= 0 {
 		it.nd = it.list.tail
-		return nil, base.LazyValue{}
+		return false, nil, nil
 	}
-	return &it.key, base.MakeInPlaceValue(it.value())
-}
-
-// NextPrefix advances to the next position with a new prefix. Returns the key
-// and value if the iterator is pointing at a valid entry, and (nil, nil)
-// otherwise.
-func (it *Iterator) NextPrefix(succKey []byte) (*base.InternalKey, base.LazyValue) {
-	return it.SeekGE(succKey, base.SeekGEFlagsNone.EnableTrySeekUsingNext())
+	return true, it.key, it.value()
 }
 
 // Prev moves to the previous position. Returns the key and value if the
 // iterator is pointing at a valid entry, and (nil, nil) otherwise.
-func (it *Iterator) Prev() (*base.InternalKey, base.LazyValue) {
+func (it *Iterator) Prev() (bool, []byte, []byte) {
 	it.nd = it.list.getPrev(it.nd, 0)
 	if it.nd == it.list.head {
-		return nil, base.LazyValue{}
+		return false, nil, nil
 	}
 	it.decodeKey()
-	if it.lower != nil && it.list.cmp(it.lower, it.key.UserKey) > 0 {
+	if it.lower != nil && it.list.cmp(it.lower, it.key) > 0 {
 		it.nd = it.list.head
-		return nil, base.LazyValue{}
+		return false, nil, nil
 	}
-	return &it.key, base.MakeInPlaceValue(it.value())
+	return true, it.key, it.value()
 }
 
 // value returns the value at the current position.
@@ -239,17 +208,15 @@ func (it *Iterator) SetBounds(lower, upper []byte) {
 }
 
 func (it *Iterator) decodeKey() {
-	it.key.UserKey = it.list.arena.getBytes(it.nd.keyOffset, it.nd.keySize)
-	it.key.Trailer = it.nd.keyTrailer
+	it.key = it.list.arena.getBytes(it.nd.keyOffset, it.nd.keySize)
 }
 
 func (it *Iterator) seekForBaseSplice(key []byte) (prev, next *node, found bool) {
-	ikey := base.MakeSearchKey(key)
 	level := int(it.list.Height() - 1)
 
 	prev = it.list.head
 	for {
-		prev, next, found = it.list.findSpliceForLevel(ikey, level, prev)
+		prev, next, found = it.list.findSpliceForLevel(key, level, prev)
 
 		if found {
 			if level != 0 {
