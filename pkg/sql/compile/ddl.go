@@ -1555,6 +1555,16 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 		return err
 	}
 
+	// 4.d delete older entries in index table.
+	err = s.handleIvfIndexDeleteOldEntries(c,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName,
+		qryDatabase)
+	if err != nil {
+		return err
+	}
+
 	return nil
 
 }
