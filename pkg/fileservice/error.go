@@ -20,7 +20,7 @@ import (
 	"strings"
 )
 
-func isRetryableError(err error) bool {
+func IsRetryableError(err error) bool {
 	// Is error
 	if errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
