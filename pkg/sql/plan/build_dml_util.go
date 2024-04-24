@@ -3714,6 +3714,10 @@ func appendLockNode(
 		return -1, false
 	}
 
+	if builder.qry.LoadTag {
+		return -1, false
+	}
+
 	lockTarget := &plan.LockTarget{
 		TableId:            tableDef.TblId,
 		PrimaryColIdxInBat: int32(pkPos),
