@@ -102,10 +102,27 @@ func (db *DB) ForceCheckpoint(
 	if err != nil {
 		return err
 	}
-	if err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, true); err != nil {
-		return err
+
+	timeout := time.After(flushDuration - time.Since(t0))
+	for {
+		select {
+		case <-timeout:
+			return moerr.NewInternalError(ctx, "timeout")
+		default:
+			err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, true)
+			if err != nil {
+				if !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
+					return err
+				} else {
+					interval := flushDuration * time.Millisecond / 400
+					time.Sleep(interval)
+					break
+				}
+			}
+			logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
+			return nil
+		}
 	}
-	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
 	return err
 }
 

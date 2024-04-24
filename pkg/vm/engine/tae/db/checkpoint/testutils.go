@@ -86,21 +86,36 @@ func (r *runner) CleanPenddingCheckpoint() {
 
 func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error {
 	if r.GetPenddingIncrementalCount() == 0 {
-		err := r.ForceIncrementalCheckpoint(end, false)
-		if err != nil {
-			return err
+		if versionInterval == 0 {
+			versionInterval = r.options.globalVersionInterval
+		}
+		timeout := time.After(versionInterval)
+		for {
+			select {
+			case <-timeout:
+				return moerr.NewInternalError(r.ctx, "timeout")
+			default:
+				err := r.ForceIncrementalCheckpoint(end, false)
+				if err != nil {
+					if !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
+						return err
+					} else {
+						interval := versionInterval * time.Millisecond / 400
+						time.Sleep(interval)
+						break
+					}
+				}
+				r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
+					force:    true,
+					end:      end,
+					interval: versionInterval,
+				})
+				return nil
+			}
 		}
 	} else {
 		end = r.MaxCheckpoint().GetEnd()
 	}
-	if versionInterval == 0 {
-		versionInterval = r.options.globalVersionInterval
-	}
-	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
-		force:    true,
-		end:      end,
-		interval: versionInterval,
-	})
 	return nil
 }
 
@@ -180,9 +195,12 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 	now := time.Now()
 	prev := r.MaxCheckpoint()
 	if prev != nil && !prev.IsFinished() {
-		return moerr.NewInternalError(r.ctx, "prev checkpoint not finished")
+		logutil.Errorf("prev checkpoint not finished")
+		return moerr.NewTAENeedRetryNoCtx()
 	}
-
+	if end.LessEq(&prev.end) {
+		return nil
+	}
 	var (
 		err      error
 		errPhase string
