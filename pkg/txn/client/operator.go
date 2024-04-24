@@ -161,9 +161,10 @@ func WithSessionInfo(info string) TxnOption {
 }
 
 type txnOperator struct {
-	sender rpc.TxnSender
-	waiter *waiter
-	txnID  []byte
+	sender   rpc.TxnSender
+	waiter   *waiter
+	txnID    []byte
+	createTs timestamp.Timestamp
 
 	option struct {
 		user             bool
@@ -212,6 +213,7 @@ func newTxnOperator(
 	tc.txnID = txnMeta.ID
 	tc.clock = clock
 	tc.createAt = time.Now()
+	tc.createTs, _ = clock.Now()
 	for _, opt := range options {
 		opt(tc)
 	}
@@ -320,6 +322,10 @@ func (tc *txnOperator) SnapshotTS() timestamp.Timestamp {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 	return tc.mu.txn.SnapshotTS
+}
+
+func (tc *txnOperator) CreateTS() timestamp.Timestamp {
+	return tc.createTs
 }
 
 func (tc *txnOperator) Status() txn.TxnStatus {

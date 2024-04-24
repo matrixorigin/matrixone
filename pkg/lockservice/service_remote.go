@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 	"time"
 
@@ -88,7 +89,8 @@ func (s *service) initRemote() {
 		rpcClient,
 		s.cfg.KeepBindDuration.Duration,
 		s.cfg.KeepRemoteLockDuration.Duration,
-		s.tables)
+		s.tables,
+		s)
 	s.initRemoteHandler()
 	if err := s.remote.server.Start(); err != nil {
 		panic(err)
@@ -123,6 +125,11 @@ func (s *service) handleRemoteLock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table) {
+		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
+		return
+	}
+
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
@@ -161,6 +168,11 @@ func (s *service) handleForwardLock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table) {
+		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
+		return
+	}
+
 	l, err := s.getLockTable(req.LockTable.Table)
 	if err != nil ||
 		l == nil {
