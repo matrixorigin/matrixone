@@ -120,10 +120,6 @@ func (count *counter) String() string {
 	return fmt.Sprintf("enter:%d, exit:%d", count.enter.Load(), count.exit.Load())
 }
 
-func (count *counter) nonZero() bool {
-	return count.exit.Load() > 0 || count.enter.Load() > 0
-}
-
 type fPrint [2]uint32
 
 func (fp fPrint) String() string {
