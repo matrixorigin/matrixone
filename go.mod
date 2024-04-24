@@ -43,7 +43,6 @@ require (
 	github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd
 	github.com/minio/minio-go/v7 v7.0.63
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
-	github.com/nnsgmsone/mmap v0.0.0-20240320065159-dbdd196c4459
 	github.com/panjf2000/ants/v2 v2.7.4
 	github.com/parquet-go/parquet-go v0.20.1
 	github.com/pierrec/lz4/v4 v4.1.18
@@ -61,6 +60,7 @@ require (
 	github.com/stretchr/testify v1.8.4
 	github.com/tidwall/btree v1.6.0
 	github.com/tidwall/pretty v1.2.1
+	go.uber.org/automaxprocs v1.5.3
 	go.uber.org/ratelimit v0.2.0
 	go.uber.org/zap v1.24.0
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d
@@ -126,7 +126,7 @@ require (
 	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
-	github.com/golang/protobuf v1.5.3 // indirect
+	github.com/golang/protobuf v1.5.3
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/gopherjs/gopherjs v1.12.80 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect

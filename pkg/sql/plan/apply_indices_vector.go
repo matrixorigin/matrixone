@@ -75,15 +75,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, p
 	idxObjRefs[0], idxTableDefs[0] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
 	idxObjRefs[1], idxTableDefs[1] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
 	idxObjRefs[2], idxTableDefs[2] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
-	builder.nameByColRef[[2]int32{idxTags["meta.scan"], 0}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[0].Name
-	builder.nameByColRef[[2]int32{idxTags["meta.scan"], 1}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[1].Name
-	builder.nameByColRef[[2]int32{idxTags["centroids.scan"], 0}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[0].Name
-	builder.nameByColRef[[2]int32{idxTags["centroids.scan"], 1}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[1].Name
-	builder.nameByColRef[[2]int32{idxTags["centroids.scan"], 2}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[2].Name
-	builder.nameByColRef[[2]int32{idxTags["entries.scan"], 0}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[0].Name
-	builder.nameByColRef[[2]int32{idxTags["entries.scan"], 1}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[1].Name
-	builder.nameByColRef[[2]int32{idxTags["entries.scan"], 2}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[2].Name
-	builder.nameByColRef[[2]int32{idxTags["entries.scan"], 3}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[3].Name
+
+	builder.addNameByColRef(idxTags["meta.scan"], idxTableDefs[0])
+	builder.addNameByColRef(idxTags["centroids.scan"], idxTableDefs[1])
+	builder.addNameByColRef(idxTags["entries.scan"], idxTableDefs[2])
 
 	// 2.b Create Centroids.Version == cast(MetaTable.Version)
 	//     Order By L2 Distance(centroids,	input_literal) ASC limit @probe_limit
@@ -256,7 +251,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 	// 4. Sort by l2_distance(centroid, normalize_l2(literal)) limit @probe_limit
 	// 4.1 @probe_limit is a system variable
 	probeLimitValueExpr := &plan.Expr{
-		Typ: *makePlan2Type(&textType), // T_text
+		Typ: makePlan2Type(&textType), // T_text
 		Expr: &plan.Expr_V{
 			V: &plan.VarRef{
 				Name:   "probe_limit",
@@ -363,23 +358,7 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 		},
 	})
 
-	var onList []*Expr
-	var joinOnType int32 = 1
-	//TODO: Currently OnList doesnt support 2 arguments.
-	// Being tracked under:https://github.com/matrixorigin/matrixone/issues/15196
-	switch joinOnType {
-	case 1:
-		andEq, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{
-			entriesCentroidIdEqCentroidId,
-			centroidVersionEqEntriesVersion,
-		})
-		onList = []*Expr{andEq}
-	case 2:
-		onList = []*Expr{entriesCentroidIdEqCentroidId, centroidVersionEqEntriesVersion}
-	case 3:
-		onList = []*Expr{entriesCentroidIdEqCentroidId}
-	}
-
+	var onList = []*Expr{entriesCentroidIdEqCentroidId, centroidVersionEqEntriesVersion}
 	// Create JOIN entries and centroids
 	// ON
 	// - centroids.centroid_id == entries.centroid_id_fk AND

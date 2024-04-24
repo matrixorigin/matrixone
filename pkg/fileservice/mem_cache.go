@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/checks/interval"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type MemCache struct {
@@ -107,7 +107,7 @@ func (m *MemCache) Read(
 
 	var numHit, numRead int64
 	defer func() {
-		v2.FSReadHitMemCounter.Add(float64(numHit))
+		metric.FSReadHitMemCounter.Add(float64(numHit))
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 			c.FileService.Cache.Read.Add(numRead)
 			c.FileService.Cache.Hit.Add(numHit)

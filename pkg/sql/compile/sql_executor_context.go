@@ -60,6 +60,14 @@ func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("not supported in internal sql executor")
 }
 
+func (c *compilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
+	panic("not supported in internal sql executor")
+}
+
+func (c *compilerContext) CheckTimeStampValid(ts int64) (bool, error) {
+	panic("not supported in internal sql executor")
+}
+
 func (c *compilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
 	panic("not supported in internal sql executor")
 }
@@ -94,7 +102,7 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef) (*pb.StatsInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return t.Stats(c.ctx, true), nil
+	return t.Stats(c.ctx, true)
 }
 
 func (c *compilerContext) GetStatsCache() *plan.StatsCache {

@@ -976,6 +976,7 @@ func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, of
 // transaction by go through the delete tables slice, and advance its cachedIndex.
 // TODO::get snapshot table from cache for snapshot read
 func (txn *Transaction) getCachedTable(
+	ctx context.Context,
 	k tableKey,
 ) *txnTable {
 	var tbl *txnTable
@@ -987,7 +988,19 @@ func (txn *Transaction) getCachedTable(
 			DatabaseId: k.databaseId,
 			Name:       k.name,
 		}
-		val := txn.engine.catalog.GetSchemaVersion(tblKey)
+		var catache *cache.CatalogCache
+		var err error
+		if !txn.op.IsSnapOp() {
+			catache = txn.engine.getLatestCatalogCache()
+		} else {
+			catache, err = txn.engine.getOrCreateSnapCatalogCache(
+				ctx,
+				types.TimestampToTS(txn.op.SnapshotTS()))
+			if err != nil {
+				return nil
+			}
+		}
+		val := catache.GetSchemaVersion(tblKey)
 		if val != nil {
 			if val.Ts.Greater(tbl.lastTS) && val.Version != tbl.version {
 				txn.tableCache.tableMap.Delete(genTableKey(k.accountId, k.name, k.databaseId))

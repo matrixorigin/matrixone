@@ -53,9 +53,10 @@ message LockOptions {
   WaitPolicy          Policy            = 3;
   string              ForwardTo         = 4;
   bool                TableDefChanged   = 5;
-  uint32              Group             = 6;
-  Sharding            Sharding          = 7;
-  timestamp.Timestamp SnapShotTs        = 8 [(gogoproto.nullable) = false];
+  int64               RetryWait         = 6;
+  uint32              Group             = 7;
+  Sharding            Sharding          = 8;
+  timestamp.Timestamp SnapShotTs        = 9 [(gogoproto.nullable) = false];
 }
 
 // LockTable describes which CN manages a Table's Locks.
@@ -93,14 +94,20 @@ enum Method {
   ForwardLock        = 7;
   // ForwardUnlock forward unlock request to another service
   ForwardUnlock      = 8;
-  // SetRestartService set restart lock service
-  SetRestartService  = 9;
-  // RemainTxnInService get remain txn in lock service
-  RemainTxnInService = 10;
-  // canRestartService judge if can restart lock service
-  CanRestartService  = 11;
   // ValidateService validate if lock service alive
-  ValidateService    = 12;
+  ValidateService    = 9;
+  // CannotCommit for orphaned transactions that are found, the lock is released
+  // immediately, and you need to mark these transactions as not being able to be
+  // committed in the TN
+  CannotCommit       = 10;
+  // GetActiveTxn used to get the active txn on the lock service
+  GetActiveTxn       = 11;
+  // SetRestartService set restart lock service
+  SetRestartService  = 12;
+  // RemainTxnInService get remain txn in lock service
+  RemainTxnInService = 13;
+  // canRestartService judge if can restart lock service
+  CanRestartService  = 14;
 }
 
 enum Status {
@@ -125,10 +132,12 @@ message Request {
   GetBindRequest             GetBind             = 8  [(gogoproto.nullable) = false];
   KeepLockTableBindRequest   KeepLockTableBind   = 9  [(gogoproto.nullable) = false];
   KeepRemoteLockRequest      KeepRemoteLock      = 10 [(gogoproto.nullable) = false];
-  SetRestartServiceRequest   SetRestartService   = 11 [(gogoproto.nullable) = false];
-  CanRestartServiceRequest   CanRestartService   = 12 [(gogoproto.nullable) = false];
-  RemainTxnInServiceRequest  RemainTxnInService  = 13 [(gogoproto.nullable) = false];
-  ValidateServiceRequest     ValidateService     = 14 [(gogoproto.nullable) = false];
+  ValidateServiceRequest     ValidateService     = 11 [(gogoproto.nullable) = false];
+  CannotCommitRequest        CannotCommit        = 12 [(gogoproto.nullable) = false];
+  GetActiveTxnRequest        GetActiveTxn        = 13 [(gogoproto.nullable) = false];
+  SetRestartServiceRequest   SetRestartService   = 14 [(gogoproto.nullable) = false];
+  CanRestartServiceRequest   CanRestartService   = 15 [(gogoproto.nullable) = false];
+  RemainTxnInServiceRequest  RemainTxnInService  = 16 [(gogoproto.nullable) = false];
 }
 
 // Response response
@@ -147,10 +156,12 @@ message Response {
     GetBindResponse            GetBind              = 9  [(gogoproto.nullable) = false];
     KeepLockTableBindResponse  KeepLockTableBind    = 10 [(gogoproto.nullable) = false];
     KeepRemoteLockResponse     KeepRemoteLock       = 11 [(gogoproto.nullable) = false];
-    SetRestartServiceResponse  SetRestartService    = 12 [(gogoproto.nullable) = false];
-    CanRestartServiceResponse  CanRestartService    = 13 [(gogoproto.nullable) = false];
-    RemainTxnInServiceResponse RemainTxnInService   = 14 [(gogoproto.nullable) = false];
-    ValidateServiceResponse    ValidateService      = 15 [(gogoproto.nullable) = false];
+    ValidateServiceResponse    ValidateService      = 12 [(gogoproto.nullable) = false];
+    CannotCommitResponse       CannotCommit         = 13 [(gogoproto.nullable) = false];
+    GetActiveTxnResponse       GetActiveTxn         = 14 [(gogoproto.nullable) = false];
+    SetRestartServiceResponse  SetRestartService    = 15 [(gogoproto.nullable) = false];
+    CanRestartServiceResponse  CanRestartService    = 16 [(gogoproto.nullable) = false];
+    RemainTxnInServiceResponse RemainTxnInService   = 17 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
@@ -286,6 +297,31 @@ message ValidateServiceRequest {
 // KeepLockTableBindResponse keep lock table bind response. CN -> DN
 message ValidateServiceResponse {
   bool OK = 1;
+}
+
+
+// CannotCommitRequest cannot commit request. CN -> TN
+message CannotCommitRequest {
+  repeated OrphanTxn OrphanTxnList = 1 [(gogoproto.nullable) = false];
+}
+
+// CannotCommitResponse cannot commit response. TN -> CN
+message CannotCommitResponse {
+  repeated bytes CommittingTxn = 1;
+}
+
+message GetActiveTxnRequest {
+  string ServiceID = 1;
+}
+
+message GetActiveTxnResponse {
+  bool         Valid = 1;
+  repeated bytes Txn = 2;
+}
+
+message OrphanTxn {
+  string     Service = 1;
+  repeated bytes Txn = 2;
 }
 
 // Result result is used to tell the caller the result of the lock operation.

@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"time"
@@ -46,7 +47,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -64,21 +68,103 @@ func (tbl *txnTable) getTxn() *Transaction {
 	return tbl.db.getTxn()
 }
 
-func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
+func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	_, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
-		return nil
+		return nil, err
 	}
-	e := tbl.getEngine()
-	return e.Stats(ctx, pb.StatsInfoKey{
-		DatabaseID: tbl.db.databaseId,
-		TableID:    tbl.tableId,
-	}, sync)
+	if !tbl.db.op.IsSnapOp() {
+		e := tbl.getEngine()
+		return e.Stats(ctx, pb.StatsInfoKey{
+			DatabaseID: tbl.db.databaseId,
+			TableID:    tbl.tableId,
+		}, sync), nil
+	}
+	info, err := tbl.stats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
+	partitionState, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	e := tbl.db.getEng()
+	var partitionsTableDef []*plan2.TableDef
+	var approxObjectNum int64
+	if tbl.partitioned > 0 {
+		partitionInfo := &plan2.PartitionByDef{}
+		if err := partitionInfo.UnMarshalPartitionInfo([]byte(tbl.partition)); err != nil {
+			logutil.Errorf("failed to unmarshal partition table: %v", err)
+			return nil, err
+		}
+		var cataChe *cache.CatalogCache
+		if !tbl.db.op.IsSnapOp() {
+			cataChe = e.getLatestCatalogCache()
+		} else {
+			cataChe, err = e.getOrCreateSnapCatalogCache(
+				ctx,
+				types.TimestampToTS(tbl.db.op.SnapshotTS()))
+			if err != nil {
+				return nil, err
+			}
+		}
+		for _, partitionTableName := range partitionInfo.PartitionTableNames {
+			partitionTable := cataChe.GetTableByName(
+				tbl.db.databaseId, partitionTableName)
+			partitionsTableDef = append(partitionsTableDef, partitionTable.TableDef)
+
+			var ps *logtailreplay.PartitionState
+			if !tbl.db.op.IsSnapOp() {
+				ps = e.getOrCreateLatestPart(tbl.db.databaseId, partitionTable.Id).Snapshot()
+			} else {
+				p, err := e.getOrCreateSnapPart(
+					ctx,
+					tbl.db.databaseId,
+					partitionTable.TableDef.GetDbName(),
+					partitionTable.Id,
+					partitionTable.TableDef.GetName(),
+					partitionTable.PrimarySeqnum,
+					types.TimestampToTS(tbl.db.op.SnapshotTS()),
+				)
+				if err != nil {
+					return nil, err
+				}
+				ps = p.Snapshot()
+			}
+			approxObjectNum += int64(ps.ApproxObjectsNum())
+		}
+	} else {
+		approxObjectNum = int64(partitionState.ApproxObjectsNum())
+	}
+
+	if approxObjectNum == 0 {
+		// There are no objects flushed yet.
+		return nil, nil
+	}
+
+	stats := plan2.NewStatsInfo()
+	req := newUpdateStatsRequest(
+		tbl.tableDef,
+		partitionsTableDef,
+		partitionState,
+		e.fs,
+		types.TimestampToTS(tbl.db.op.SnapshotTS()),
+		approxObjectNum,
+		stats,
+	)
+	if err := UpdateStats(ctx, req); err != nil {
+		logutil.Errorf("failed to init stats info for table %d", tbl.tableId)
+		return nil, err
+	}
+	return stats, nil
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
-	e := tbl.getEngine()
 	var rows uint64
 	deletes := make(map[types.Rowid]struct{})
 	tbl.getTxn().forEachTableWrites(
@@ -124,11 +210,11 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 		}
 		rows++
 	}
-
-	s := e.Stats(ctx, pb.StatsInfoKey{
-		DatabaseID: tbl.db.databaseId,
-		TableID:    tbl.tableId,
-	}, true)
+	//s := e.Stats(ctx, pb.StatsInfoKey{
+	//	DatabaseID: tbl.db.databaseId,
+	//	TableID:    tbl.tableId,
+	//}, true)
+	s, _ := tbl.Stats(ctx, true)
 	if s == nil {
 		return rows, nil
 	}
@@ -136,7 +222,6 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 }
 
 func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error) {
-	e := tbl.getEngine()
 	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
 	part, err := tbl.getPartitionState(ctx)
 	if err != nil {
@@ -215,10 +300,11 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 		handled[entry.Batch] = struct{}{}
 	}
 
-	s := e.Stats(ctx, pb.StatsInfoKey{
-		DatabaseID: tbl.db.databaseId,
-		TableID:    tbl.tableId,
-	}, true)
+	//s := e.Stats(ctx, pb.StatsInfoKey{
+	//	DatabaseID: tbl.db.databaseId,
+	//	TableID:    tbl.tableId,
+	//}, true)
+	s, _ := tbl.Stats(ctx, true)
 	if s == nil {
 		return szInPart, nil
 	}
@@ -555,7 +641,6 @@ func (tbl *txnTable) resetSnapshot() {
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges engine.Ranges, err error) {
 	start := time.Now()
-
 	seq := tbl.db.op.NextSequence()
 	trace.GetService().AddTxnDurationAction(
 		tbl.db.op,
@@ -1348,6 +1433,9 @@ func (tbl *txnTable) CopyTableDef(ctx context.Context) *plan.TableDef {
 }
 
 func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
+	if tbl.db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("cannot update table constraint in snapshot operation")
+	}
 	ct, err := c.MarshalBinary()
 	if err != nil {
 		return err
@@ -1369,6 +1457,9 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 }
 
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, constraint [][]byte) error {
+	if tbl.db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("cannot alter table in snapshot operation")
+	}
 	ct, err := c.MarshalBinary()
 	if err != nil {
 		return err
@@ -1393,6 +1484,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 }
 
 func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) error {
+	if tbl.db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("cannot rename table in snapshot operation")
+	}
 	// 1. delete cn metadata of table
 	accountId, userId, roleId, err := getAccessInfo(ctx)
 	if err != nil {
@@ -1432,7 +1526,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 			AccountId:  accountId,
 			Ts:         db.op.SnapshotTS(),
 		}
-		if ok := tbl.db.getTxn().engine.catalog.GetTable(item); !ok {
+		if ok := tbl.db.getTxn().engine.getLatestCatalogCache().GetTable(item); !ok {
 			return moerr.GetOkExpectedEOB()
 		}
 		id = item.Id
@@ -1618,6 +1712,9 @@ func (tbl *txnTable) GetHideKeys(ctx context.Context) ([]*engine.Attribute, erro
 }
 
 func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
+	if tbl.db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("write operation is not allowed in snapshot transaction")
+	}
 	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
@@ -1660,6 +1757,9 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
+	if tbl.db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("update operation is not allowed in snapshot transaction")
+	}
 	return nil
 }
 
@@ -1714,6 +1814,22 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	return nil
 }
 
+func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
+	if tbl.seqnums != nil && tbl.typs != nil {
+		return
+	}
+	n := len(tbl.tableDef.Cols) - 1
+	idxs := make([]uint16, 0, n)
+	typs := make([]types.Type, 0, n)
+	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
+		col := tbl.tableDef.Cols[i]
+		idxs = append(idxs, uint16(col.Seqnum))
+		typs = append(typs, vector.ProtoTypeToType(&col.Typ))
+	}
+	tbl.seqnums = idxs
+	tbl.typs = typs
+}
+
 // TODO:: do prefetch read and parallel compaction
 func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
@@ -1724,18 +1840,7 @@ func (tbl *txnTable) compaction(
 	if err != nil {
 		return nil, nil, err
 	}
-	if tbl.seqnums == nil {
-		n := len(tbl.tableDef.Cols) - 1
-		idxs := make([]uint16, 0, n)
-		typs := make([]types.Type, 0, n)
-		for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
-			col := tbl.tableDef.Cols[i]
-			idxs = append(idxs, uint16(col.Seqnum))
-			typs = append(typs, vector.ProtoTypeToType(&col.Typ))
-		}
-		tbl.seqnums = idxs
-		tbl.typs = typs
-	}
+	tbl.ensureSeqnumsAndTypesExpectRowid()
 	s3writer.SetSeqnums(tbl.seqnums)
 
 	for blkmetaloc, deletes := range compactedBlks {
@@ -1766,6 +1871,9 @@ func (tbl *txnTable) compaction(
 }
 
 func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) error {
+	if tbl.db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("delete operation is not allowed in snapshot transaction")
+	}
 	//for S3 delete
 	if name != catalog.Row_ID {
 		return tbl.EnhanceDelete(bat, name)
@@ -2127,15 +2235,33 @@ func (tbl *txnTable) newReader(
 	return readers, nil
 }
 
-// get the table's snapshot.
-// it is only initialized once for a transaction and will not change.
-// TODO::get partition state for snapshot txn table.
-func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.PartitionState, error) {
+func (tbl *txnTable) getPartitionState(
+	ctx context.Context,
+) (*logtailreplay.PartitionState, error) {
+	if !tbl.db.op.IsSnapOp() {
+		if tbl._partState.Load() == nil {
+			if err := tbl.updateLogtail(ctx); err != nil {
+				return nil, err
+			}
+			tbl._partState.Store(tbl.getTxn().engine.
+				getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot())
+		}
+		return tbl._partState.Load(), nil
+	}
+
+	// for snapshot txnOp
 	if tbl._partState.Load() == nil {
-		if err := tbl.updateLogtail(ctx); err != nil {
+		p, err := tbl.getTxn().engine.getOrCreateSnapPart(ctx,
+			tbl.db.databaseId,
+			tbl.db.databaseName,
+			tbl.tableId,
+			tbl.tableName,
+			tbl.primarySeqnum,
+			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
+		if err != nil {
 			return nil, err
 		}
-		tbl._partState.Store(tbl.getTxn().engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot())
+		tbl._partState.Store(p.Snapshot())
 	}
 	return tbl._partState.Load(), nil
 }
@@ -2195,7 +2321,7 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 		tbl.db.op.SnapshotTS()); err != nil {
 		return
 	}
-	if _, err = tbl.getTxn().engine.lazyLoad(ctx, tbl); err != nil {
+	if _, err = tbl.getTxn().engine.lazyLoadLatestCkp(ctx, tbl); err != nil {
 		return
 	}
 
@@ -2380,7 +2506,11 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	from types.TS,
 	to types.TS,
 	keysVector *vector.Vector) (bool, error) {
-	part, err := tbl.getTxn().engine.lazyLoad(ctx, tbl)
+	if tbl.db.op.IsSnapOp() {
+		return false,
+			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
+	}
+	part, err := tbl.getTxn().engine.lazyLoadLatestCkp(ctx, tbl)
 	if err != nil {
 		return false, err
 	}
@@ -2517,7 +2647,7 @@ func (tbl *txnTable) transferDeletes(
 func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	blks []objectio.BlockInfo) (types.Rowid, bool, error) {
 	var auxIdCnt int32
-	var typ *plan.Type
+	var typ plan.Type
 	var rowid types.Rowid
 	var objMeta objectio.ObjectMeta
 
@@ -2526,7 +2656,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	tableDef := tbl.GetTableDef(context.TODO())
 	for _, col := range tableDef.Cols {
 		if col.Name == tableDef.Pkey.PkeyColName {
-			typ = &col.Typ
+			typ = col.Typ
 			columns = append(columns, uint16(col.Seqnum))
 			colTypes = append(colTypes, types.T(col.Typ.Id).ToType())
 		}
@@ -2597,4 +2727,94 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 
 func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, error) {
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
+}
+
+func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats) (*api.MergeCommitEntry, error) {
+	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	objInfos := make([]logtailreplay.ObjectInfo, 0, len(objstats))
+	for _, objstat := range objstats {
+		info, exist := state.GetObject(*objstat.ObjectShortName())
+		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
+			logutil.Errorf("object not visible: %s", info.String())
+			return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
+		}
+		objInfos = append(objInfos, info)
+	}
+
+	sortkeyPos := -1
+	sortkeyIsPK := false
+	if tbl.primaryIdx >= 0 && tbl.tableDef.Cols[tbl.primaryIdx].Name != catalog.FakePrimaryKeyColName {
+		if tbl.clusterByIdx < 0 {
+			sortkeyPos = tbl.primaryIdx
+			sortkeyIsPK = true
+		} else {
+			panic(fmt.Sprintf("bad schema pk %v, ck %v", tbl.primaryIdx, tbl.clusterByIdx))
+		}
+	} else if tbl.clusterByIdx >= 0 {
+		sortkeyPos = tbl.clusterByIdx
+		sortkeyIsPK = false
+	}
+
+	tbl.ensureSeqnumsAndTypesExpectRowid()
+
+	taskHost, err := NewCNMergeTask(
+		ctx, tbl, snapshot, state, // context
+		sortkeyPos, sortkeyIsPK, // schema
+		objInfos, // targets
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	err = mergesort.DoMergeAndWrite(ctx, sortkeyPos, int(options.DefaultBlockMaxRows), taskHost)
+	if err != nil {
+		return nil, err
+	}
+
+	// if transfer info is too large, write it down to s3
+	if size := taskHost.commitEntry.Booking.ProtoSize(); size > 60*common.Const1MBytes {
+		logutil.Infof("mergeblocks on cn: write s3 transfer info %v", common.HumanReadableBytes(size))
+		t := types.T_varchar.ToType()
+		v, releasev := taskHost.GetVector(&t)
+		defer releasev()
+		vectorRowCnt := 1
+		data, err := taskHost.commitEntry.Booking.Marshal()
+		if err != nil {
+			return taskHost.commitEntry, err
+		}
+		vector.AppendBytes(v, data, false, taskHost.GetMPool())
+		taskHost.commitEntry.Booking.Marshal()
+		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+		writer, err := blockio.NewBlockWriterNew(taskHost.fs, name, 0, nil)
+		if err != nil {
+			return taskHost.commitEntry, err
+		}
+
+		batch := batch.New(true, []string{"payload"})
+		batch.SetRowCount(vectorRowCnt)
+		batch.Vecs[0] = v
+		_, err = writer.WriteTombstoneBatch(batch)
+		if err != nil {
+			return taskHost.commitEntry, err
+		}
+		blocks, _, err := writer.Sync(ctx)
+		if err != nil {
+			return taskHost.commitEntry, err
+		}
+		location := blockio.EncodeLocation(
+			name,
+			blocks[0].GetExtent(),
+			uint32(vectorRowCnt),
+			blocks[0].GetID())
+		taskHost.commitEntry.BookingLoc = make([]byte, len(location))
+		copy(taskHost.commitEntry.BookingLoc[:], location[:])
+		taskHost.commitEntry.Booking = nil
+	}
+
+	// commit this to tn
+	return taskHost.commitEntry, nil
 }

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
@@ -31,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -136,7 +136,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Exprs = t.Exprs
 		arg.Types = t.Types
 		arg.Aggs = t.Aggs
-		arg.MultiAggs = t.MultiAggs
 		res.Arg = arg
 	case vm.Sample:
 		t := sourceIns.Arg.(*sample.Argument)
@@ -593,14 +592,14 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 
 func constructFuzzyFilter(c *Compile, n, right *plan.Node) *fuzzyfilter.Argument {
 	pkName := n.TableDef.Pkey.PkeyColName
-	var pkTyp *plan.Type
+	var pkTyp plan.Type
 	if pkName == catalog.CPrimaryKeyColName {
-		pkTyp = &n.TableDef.Pkey.CompPkeyCol.Typ
+		pkTyp = n.TableDef.Pkey.CompPkeyCol.Typ
 	} else {
 		cols := n.TableDef.Cols
 		for _, c := range cols {
 			if c.Name == pkName {
-				pkTyp = &c.Typ
+				pkTyp = c.Typ
 			}
 		}
 	}
@@ -667,7 +666,7 @@ func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertsecond
 func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.Argument, error) {
 	arg := lockop.NewArgumentByEngine(eng)
 	for _, target := range n.LockTargets {
-		typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
+		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
 		if target.IsPartitionTable {
 			arg.AddLockTargetWithPartition(target.GetPartitionTableIds(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetFilterColIdxInBat())
 		} else {
@@ -1010,7 +1009,7 @@ func constructFill(n *plan.Node) *fill.Argument {
 }
 
 func constructTimeWindow(_ context.Context, n *plan.Node) *timewin.Argument {
-	var aggs []agg.Aggregate
+	var aggregationExpressions []aggexec.AggFuncExecExpression = nil
 	var typs []types.Type
 	var wStart, wEnd bool
 	i := 0
@@ -1025,15 +1024,14 @@ func constructTimeWindow(_ context.Context, n *plan.Node) *timewin.Argument {
 			continue
 		}
 		f := expr.Expr.(*plan.Expr_F)
-		distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
-		obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
+		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 		e := f.F.Args[0]
 		if e != nil {
-			aggs = append(aggs, agg.Aggregate{
-				E:    e,
-				Dist: distinct,
-				Op:   obj,
-			})
+			aggregationExpressions = append(
+				aggregationExpressions,
+				aggexec.MakeAggFunctionExpression(functionID, isDistinct, f.F.Args, nil))
+
 			typs = append(typs, types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale))
 		}
 		i++
@@ -1061,7 +1059,7 @@ func constructTimeWindow(_ context.Context, n *plan.Node) *timewin.Argument {
 
 	arg := timewin.NewArgument()
 	arg.Types = typs
-	arg.Aggs = aggs
+	arg.Aggs = aggregationExpressions
 	arg.Ts = n.OrderBy[0].Expr
 	arg.WStart = wStart
 	arg.WEnd = wEnd
@@ -1071,15 +1069,17 @@ func constructTimeWindow(_ context.Context, n *plan.Node) *timewin.Argument {
 }
 
 func constructWindow(_ context.Context, n *plan.Node, proc *process.Process) *window.Argument {
-	aggs := make([]agg.Aggregate, len(n.WinSpecList))
+	aggregationExpressions := make([]aggexec.AggFuncExecExpression, len(n.WinSpecList))
 	typs := make([]types.Type, len(n.WinSpecList))
+
 	for i, expr := range n.WinSpecList {
 		f := expr.Expr.(*plan.Expr_W).W.WindowFunc.Expr.(*plan.Expr_F)
-		distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
-		obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
-		var e *plan.Expr = nil
-		var cfg []byte
+		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
+		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
+		var e *plan.Expr = nil
+		var cfg []byte = nil
+		var args = f.F.Args
 		if len(f.F.Args) > 0 {
 
 			//for group_concat, the last arg is separator string
@@ -1087,34 +1087,28 @@ func constructWindow(_ context.Context, n *plan.Node, proc *process.Process) *wi
 			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
 				f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
 				argExpr := f.F.Args[len(f.F.Args)-1]
-				executor, err := colexec.NewExpressionExecutor(proc, argExpr)
+				vec, err := colexec.EvalExpressionOnce(proc, argExpr, []*batch.Batch{constBat})
 				if err != nil {
-					panic(err)
-				}
-				vec, err := executor.Eval(proc, []*batch.Batch{constBat})
-				if err != nil {
-					executor.Free()
 					panic(err)
 				}
 				cfg = []byte(vec.GetStringAt(0))
-				executor.Free()
+				vec.Free(proc.Mp())
+
+				args = f.F.Args[:len(f.F.Args)-1]
 			}
 
 			e = f.F.Args[0]
 		}
-		aggs[i] = agg.Aggregate{
-			E:      e,
-			Dist:   distinct,
-			Op:     obj,
-			Config: cfg,
-		}
+		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
+			functionID, isDistinct, args, cfg)
+
 		if e != nil {
 			typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
 		}
 	}
 	arg := window.NewArgument()
 	arg.Types = typs
-	arg.Aggs = aggs
+	arg.Aggs = aggregationExpressions
 	arg.WinSpecList = n.WinSpecList
 	return arg
 }
@@ -1158,40 +1152,36 @@ func constructSample(n *plan.Node, outputRowCount bool) *sample.Argument {
 }
 
 func constructGroup(_ context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, shuffleDop int, proc *process.Process) *group.Argument {
-	aggs := make([]agg.Aggregate, len(n.AggList))
-	var cfg []byte
+	aggregationExpressions := make([]aggexec.AggFuncExecExpression, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
-			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
-			obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+			isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
+			functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+
+			var cfg []byte = nil
+			var args = f.F.Args
 			if len(f.F.Args) > 0 {
 				//for group_concat, the last arg is separator string
 				//for cluster_centers, the last arg is kmeans_args string
 				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
 					f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
 					argExpr := f.F.Args[len(f.F.Args)-1]
-					executor, err := colexec.NewExpressionExecutor(proc, argExpr)
+					vec, err := colexec.EvalExpressionOnce(proc, argExpr, []*batch.Batch{constBat})
 					if err != nil {
-						panic(err)
-					}
-					vec, err := executor.Eval(proc, []*batch.Batch{constBat})
-					if err != nil {
-						executor.Free()
 						panic(err)
 					}
 					cfg = []byte(vec.GetStringAt(0))
-					executor.Free()
+					vec.Free(proc.Mp())
+
+					args = f.F.Args[:len(f.F.Args)-1]
 				}
 			}
 
-			aggs[i] = agg.Aggregate{
-				E:      f.F.Args[0],
-				Dist:   distinct,
-				Op:     obj,
-				Config: cfg,
-			}
+			aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
+				functionID, isDistinct, args, cfg)
 		}
 	}
+
 	typs := make([]types.Type, len(cn.ProjectList))
 	for i, e := range cn.ProjectList {
 		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
@@ -1209,7 +1199,7 @@ func constructGroup(_ context.Context, n, cn *plan.Node, ibucket, nbucket int, n
 	}
 
 	arg := group.NewArgument()
-	arg.Aggs = aggs
+	arg.Aggs = aggregationExpressions
 	arg.Types = typs
 	arg.NeedEval = needEval
 	arg.Exprs = n.GroupBy

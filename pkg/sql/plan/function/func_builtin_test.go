@@ -323,7 +323,7 @@ func Test_BuiltIn_Serial(t *testing.T) {
 		expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"serial(true, 10)", "serial(false, 1)"}, nil),
 	}
-	tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSerial)
+	tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpSerial().BuiltInSerial)
 	tcc.Run()
 
 	vec := tcc.GetResultVectorDirectly()
@@ -364,7 +364,7 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 		expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"serial_full(null, 10)", "serial_full(false, null)", "serial_full(null, 120)", "serial_full(null, null)"}, nil),
 	}
-	tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, BuiltInSerialFull)
+	tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpSerial().BuiltInSerialFull)
 	tcc.Run()
 
 	vec := tcc.GetResultVectorDirectly()

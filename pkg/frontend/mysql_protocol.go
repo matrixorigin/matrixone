@@ -33,6 +33,9 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	goetty_buf "github.com/fagongzi/goetty/v2/buf"
+	"go.uber.org/zap"
+	"golang.org/x/exp/slices"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -45,8 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"golang.org/x/exp/slices"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -210,15 +211,6 @@ type MysqlProtocol interface {
 }
 
 var _ MysqlProtocol = &MysqlProtocolImpl{}
-
-func (ses *Session) GetMysqlProtocol() MysqlProtocol {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	if ses.protocol != nil {
-		return ses.protocol.(MysqlProtocol)
-	}
-	return nil
-}
 
 type debugStats struct {
 	writeCount uint64
@@ -535,7 +527,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numParams > 0 {
-		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetServerStatus()); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
 			return err
 		}
 	}
@@ -555,7 +547,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numColumns > 0 {
-		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetServerStatus()); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
 			return err
 		}
 	}
@@ -2686,9 +2678,6 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 
 // the server sends the payload to the client
 func (mp *MysqlProtocolImpl) writePackets(payload []byte, flush bool) error {
-	if flush {
-		flush = !mp.disableAutoFlush
-	}
 
 	//protocol header length
 	var headerLen = HeaderOffset
@@ -2714,7 +2703,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte, flush bool) error {
 		var packet = append(header[:], payload[i:i+curLen]...)
 
 		mp.incDebugCount(4)
-		err := mp.tcpConn.Write(packet, goetty.WriteOptions{Flush: false})
+		err := mp.tcpConn.Write(packet, goetty.WriteOptions{Flush: true})
 		mp.incDebugCount(5)
 		if err != nil {
 			return err
@@ -2741,9 +2730,6 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte, flush bool) error {
 		}
 	}
 
-	if flush {
-		return mp.tcpConn.Flush(0)
-	}
 	return nil
 }
 

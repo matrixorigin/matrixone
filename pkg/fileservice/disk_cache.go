@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -128,7 +128,7 @@ func (d *DiskCache) Read(
 
 	var numHit, numRead, numOpenIOEntry, numOpenFull, numError int64
 	defer func() {
-		v2.FSReadHitDiskCounter.Add(float64(numHit))
+		metric.FSReadHitDiskCounter.Add(float64(numHit))
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 			c.FileService.Cache.Read.Add(numRead)
 			c.FileService.Cache.Hit.Add(numHit)
@@ -227,11 +227,13 @@ func (d *DiskCache) Read(
 			d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
 		}
 
-		if err := entry.ReadFromOSFile(file); err != nil {
+		if releaseFunc, err := entry.ReadFromOSFile(file); err != nil {
 			// ignore error
 			numError++
 			logutil.Warn("read disk cache error", zap.Any("error", err))
 			return nil
+		} else if releaseFunc != nil {
+			vector.onRelease = append(vector.onRelease, releaseFunc)
 		}
 
 		entry.done = true

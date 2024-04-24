@@ -807,9 +807,9 @@ func newStringConstVal(v string) *plan.Expr {
 }
 */
 
-func newColumnExpr(pos int, typ *plan.Type, name string) *plan.Expr {
+func newColumnExpr(pos int, typ plan.Type, name string) *plan.Expr {
 	return &plan.Expr{
-		Typ: *typ,
+		Typ: typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				Name:   name,
