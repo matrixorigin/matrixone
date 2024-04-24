@@ -61,6 +61,26 @@ func initTransferMapping(e *api.MergeCommitEntry, blkcnt int) {
 	e.Booking = NewBlkTransferBooking(blkcnt)
 }
 
+func getSimilarBatch(bat *batch.Batch, capacity int, vpool DisposableVecPool) (*batch.Batch, func()) {
+	newBat := batch.NewWithSize(len(bat.Vecs))
+	newBat.Attrs = bat.Attrs
+	rfs := make([]func(), len(bat.Vecs))
+	releaseF := func() {
+		for _, f := range rfs {
+			f()
+		}
+	}
+	for i := range bat.Vecs {
+		vec, release := vpool.GetVector(bat.Vecs[i].GetType())
+		if capacity > 0 {
+			vec.PreExtend(capacity, vpool.GetMPool())
+		}
+		newBat.Vecs[i] = vec
+		rfs[i] = release
+	}
+	return newBat, releaseF
+}
+
 func GetNewWriter(
 	fs fileservice.FileService,
 	ver uint32, seqnums []uint16,
@@ -123,55 +143,55 @@ func DoMergeAndWrite(
 		var merger Merger
 		typ := mergehost.GetSortKeyType()
 		if typ.IsVarlen() {
-			merger = newMerger(mergehost, numericLess[string], sortkeyPos, vector.MustStrCol)
+			merger = newMerger(mergehost, NumericLess[string], sortkeyPos, vector.MustStrCol)
 		} else {
 			switch typ.Oid {
 			case types.T_bool:
-				merger = newMerger(mergehost, boolLess, sortkeyPos, vector.MustFixedCol[bool])
+				merger = newMerger(mergehost, BoolLess, sortkeyPos, vector.MustFixedCol[bool])
 			case types.T_bit:
-				merger = newMerger(mergehost, numericLess[uint64], sortkeyPos, vector.MustFixedCol[uint64])
+				merger = newMerger(mergehost, NumericLess[uint64], sortkeyPos, vector.MustFixedCol[uint64])
 			case types.T_int8:
-				merger = newMerger(mergehost, numericLess[int8], sortkeyPos, vector.MustFixedCol[int8])
+				merger = newMerger(mergehost, NumericLess[int8], sortkeyPos, vector.MustFixedCol[int8])
 			case types.T_int16:
-				merger = newMerger(mergehost, numericLess[int16], sortkeyPos, vector.MustFixedCol[int16])
+				merger = newMerger(mergehost, NumericLess[int16], sortkeyPos, vector.MustFixedCol[int16])
 			case types.T_int32:
-				merger = newMerger(mergehost, numericLess[int32], sortkeyPos, vector.MustFixedCol[int32])
+				merger = newMerger(mergehost, NumericLess[int32], sortkeyPos, vector.MustFixedCol[int32])
 			case types.T_int64:
-				merger = newMerger(mergehost, numericLess[int64], sortkeyPos, vector.MustFixedCol[int64])
+				merger = newMerger(mergehost, NumericLess[int64], sortkeyPos, vector.MustFixedCol[int64])
 			case types.T_float32:
-				merger = newMerger(mergehost, numericLess[float32], sortkeyPos, vector.MustFixedCol[float32])
+				merger = newMerger(mergehost, NumericLess[float32], sortkeyPos, vector.MustFixedCol[float32])
 			case types.T_float64:
-				merger = newMerger(mergehost, numericLess[float64], sortkeyPos, vector.MustFixedCol[float64])
+				merger = newMerger(mergehost, NumericLess[float64], sortkeyPos, vector.MustFixedCol[float64])
 			case types.T_uint8:
-				merger = newMerger(mergehost, numericLess[uint8], sortkeyPos, vector.MustFixedCol[uint8])
+				merger = newMerger(mergehost, NumericLess[uint8], sortkeyPos, vector.MustFixedCol[uint8])
 			case types.T_uint16:
-				merger = newMerger(mergehost, numericLess[uint16], sortkeyPos, vector.MustFixedCol[uint16])
+				merger = newMerger(mergehost, NumericLess[uint16], sortkeyPos, vector.MustFixedCol[uint16])
 			case types.T_uint32:
-				merger = newMerger(mergehost, numericLess[uint32], sortkeyPos, vector.MustFixedCol[uint32])
+				merger = newMerger(mergehost, NumericLess[uint32], sortkeyPos, vector.MustFixedCol[uint32])
 			case types.T_uint64:
-				merger = newMerger(mergehost, numericLess[uint64], sortkeyPos, vector.MustFixedCol[uint64])
+				merger = newMerger(mergehost, NumericLess[uint64], sortkeyPos, vector.MustFixedCol[uint64])
 			case types.T_date:
-				merger = newMerger(mergehost, numericLess[types.Date], sortkeyPos, vector.MustFixedCol[types.Date])
+				merger = newMerger(mergehost, NumericLess[types.Date], sortkeyPos, vector.MustFixedCol[types.Date])
 			case types.T_timestamp:
-				merger = newMerger(mergehost, numericLess[types.Timestamp], sortkeyPos, vector.MustFixedCol[types.Timestamp])
+				merger = newMerger(mergehost, NumericLess[types.Timestamp], sortkeyPos, vector.MustFixedCol[types.Timestamp])
 			case types.T_datetime:
-				merger = newMerger(mergehost, numericLess[types.Datetime], sortkeyPos, vector.MustFixedCol[types.Datetime])
+				merger = newMerger(mergehost, NumericLess[types.Datetime], sortkeyPos, vector.MustFixedCol[types.Datetime])
 			case types.T_time:
-				merger = newMerger(mergehost, numericLess[types.Time], sortkeyPos, vector.MustFixedCol[types.Time])
+				merger = newMerger(mergehost, NumericLess[types.Time], sortkeyPos, vector.MustFixedCol[types.Time])
 			case types.T_enum:
-				merger = newMerger(mergehost, numericLess[types.Enum], sortkeyPos, vector.MustFixedCol[types.Enum])
+				merger = newMerger(mergehost, NumericLess[types.Enum], sortkeyPos, vector.MustFixedCol[types.Enum])
 			case types.T_decimal64:
-				merger = newMerger(mergehost, ltTypeLess[types.Decimal64], sortkeyPos, vector.MustFixedCol[types.Decimal64])
+				merger = newMerger(mergehost, LtTypeLess[types.Decimal64], sortkeyPos, vector.MustFixedCol[types.Decimal64])
 			case types.T_decimal128:
-				merger = newMerger(mergehost, ltTypeLess[types.Decimal128], sortkeyPos, vector.MustFixedCol[types.Decimal128])
+				merger = newMerger(mergehost, LtTypeLess[types.Decimal128], sortkeyPos, vector.MustFixedCol[types.Decimal128])
 			case types.T_uuid:
-				merger = newMerger(mergehost, ltTypeLess[types.Uuid], sortkeyPos, vector.MustFixedCol[types.Uuid])
+				merger = newMerger(mergehost, LtTypeLess[types.Uuid], sortkeyPos, vector.MustFixedCol[types.Uuid])
 			case types.T_TS:
-				merger = newMerger(mergehost, tsLess, sortkeyPos, vector.MustFixedCol[types.TS])
+				merger = newMerger(mergehost, TsLess, sortkeyPos, vector.MustFixedCol[types.TS])
 			case types.T_Rowid:
-				merger = newMerger(mergehost, rowidLess, sortkeyPos, vector.MustFixedCol[types.Rowid])
+				merger = newMerger(mergehost, RowidLess, sortkeyPos, vector.MustFixedCol[types.Rowid])
 			case types.T_Blockid:
-				merger = newMerger(mergehost, blockidLess, sortkeyPos, vector.MustFixedCol[types.Blockid])
+				merger = newMerger(mergehost, BlockidLess, sortkeyPos, vector.MustFixedCol[types.Blockid])
 			default:
 				panic(fmt.Sprintf("unsupported type %s", typ.String()))
 			}
@@ -208,10 +228,8 @@ func DoMergeAndWrite(
 
 	initTransferMapping(commitEntry, len(batches))
 
-	fromLayout := make([]uint32, 0, len(batches))
+	fromLayout := make([]uint32, len(batches))
 	totalRowCount := 0
-
-	toSortVecs := make([]*vector.Vector, 0, len(batches))
 
 	mpool := mergehost.GetMPool()
 	// iter all block to get basic info, do shrink if needed
@@ -233,9 +251,8 @@ func DoMergeAndWrite(
 			}
 		}
 		AddSortPhaseMapping(commitEntry.Booking, i, rowCntBeforeApplyDelete, del, nil)
-		fromLayout = append(fromLayout, uint32(batches[i].RowCount()))
+		fromLayout[i] = uint32(batches[i].RowCount())
 		totalRowCount += batches[i].RowCount()
-		toSortVecs = append(toSortVecs, batches[i].GetVector(int32(sortkeyPos)))
 	}
 
 	if totalRowCount == 0 {
@@ -247,68 +264,17 @@ func DoMergeAndWrite(
 	}
 
 	// -------------------------- phase 1
-	phaseDesc = "merge sort, or reshape, one column"
+	phaseDesc = "reshape, one column"
 	toLayout := arrangeToLayout(totalRowCount, blkMaxRow)
 
-	sortedVecs, releaseF := getRetVecs(len(toLayout), toSortVecs[0].GetType(), mergehost)
+	retBatches, releaseF := ReshapeBatches(batches, fromLayout, toLayout, mergehost)
 	defer releaseF()
-
-	// just do reshape, keep sortedIdx nil
-	Reshape(toSortVecs, sortedVecs, fromLayout, toLayout, mpool)
-	UpdateMappingAfterMerge(commitEntry.Booking, nil, fromLayout, toLayout)
+	UpdateMappingAfterMerge(commitEntry.Booking, nil, toLayout)
 
 	// -------------------------- phase 2
-	phaseDesc = "merge sort, or reshape, the rest of columns"
-
-	// prepare multiple batch
-	attrs := batches[0].Attrs
-	writtenBatches := make([]*batch.Batch, 0, len(sortedVecs))
-	for _, vec := range sortedVecs {
-		b := batch.New(true, attrs)
-		b.SetRowCount(vec.Length())
-		writtenBatches = append(writtenBatches, b)
-	}
-
-	// arrange the other columns according to sortedidx, or, just reshape
-	tempVecs := make([]*vector.Vector, 0, len(batches))
-	for i := range attrs {
-		// just put the sorted column to the write batch
-		if i == sortkeyPos {
-			for j, vec := range sortedVecs {
-				writtenBatches[j].Vecs[i] = vec
-			}
-			continue
-		}
-		tempVecs = tempVecs[:0]
-
-		for _, bat := range batches {
-			if bat.RowCount() == 0 {
-				continue
-			}
-			tempVecs = append(tempVecs, bat.Vecs[i])
-		}
-		if len(toSortVecs) != len(tempVecs) {
-			return moerr.NewInternalError(ctx, "tosort mismatch length %v %v", len(toSortVecs), len(tempVecs))
-		}
-
-		outvecs, release := getRetVecs(len(toLayout), tempVecs[0].GetType(), mergehost)
-		defer release()
-
-		if len(sortedVecs) != len(outvecs) {
-			return moerr.NewInternalError(ctx, "written mismatch length %v %v", len(sortedVecs), len(outvecs))
-		}
-
-		Reshape(tempVecs, outvecs, fromLayout, toLayout, mpool)
-
-		for j, vec := range outvecs {
-			writtenBatches[j].Vecs[i] = vec
-		}
-	}
-
-	// -------------------------- phase 3
 	phaseDesc = "new writer to write down"
 	writer := mergehost.PrepareNewWriter()
-	for _, bat := range writtenBatches {
+	for _, bat := range retBatches {
 		_, err = writer.WriteBatch(bat)
 		if err != nil {
 			return err
@@ -337,22 +303,6 @@ func DoMergeAndWrite(
 
 	return nil
 
-}
-
-// get vector from pool, and return a release function
-func getRetVecs(count int, t *types.Type, vpool DisposableVecPool) (ret []*vector.Vector, releaseAll func()) {
-	var fs []func()
-	for i := 0; i < count; i++ {
-		vec, release := vpool.GetVector(t)
-		ret = append(ret, vec)
-		fs = append(fs, release)
-	}
-	releaseAll = func() {
-		for i := 0; i < count; i++ {
-			fs[i]()
-		}
-	}
-	return
 }
 
 // layout [blkMaxRow, blkMaxRow, blkMaxRow,..., blkMaxRow, totalRowCount - blkMaxRow*N]
@@ -431,7 +381,7 @@ func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, d
 	}
 }
 
-func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping, fromLayout, toLayout []uint32) {
+func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping, toLayout []uint32) {
 	bisectHaystack := make([]uint32, 0, len(toLayout)+1)
 	bisectHaystack = append(bisectHaystack, 0)
 	for _, x := range toLayout {
