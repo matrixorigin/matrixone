@@ -100,3 +100,13 @@ func (p *PartitionByDef) GenPartitionExprString() string {
 		return ""
 	}
 }
+
+func (t *Type) IsEmpty() bool {
+	return t == nil || (t.Id == 0 &&
+		!t.NotNullable &&
+		!t.AutoIncr &&
+		t.Width == 0 &&
+		t.Scale == 0 &&
+		t.Table == "" &&
+		t.Enumvalues == "")
+}
