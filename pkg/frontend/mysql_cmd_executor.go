@@ -3777,8 +3777,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				mysql COM_QUERY response: End after the data row has been sent.
 				After all row data has been sent, it sends the EOF or OK packet.
 			*/
-			ses.maybeUnsetTxnStatus()
-			err = proto.sendEOFOrOkPacket(0, extendStatus(ses.GetServerStatus()))
+			err = proto.sendEOFOrOkPacket(0, ses.getStatusWitTxnEnd())
 			if err != nil {
 				return
 			}
@@ -3863,8 +3862,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			mysql COM_QUERY response: End after the data row has been sent.
 			After all row data has been sent, it sends the EOF or OK packet.
 		*/
-		ses.maybeUnsetTxnStatus()
-		err = proto.sendEOFOrOkPacket(0, extendStatus(ses.GetServerStatus()))
+		err = proto.sendEOFOrOkPacket(0, ses.getStatusWitTxnEnd())
 		if err != nil {
 			return
 		}
@@ -4029,8 +4027,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				mysql COM_QUERY response: End after the data row has been sent.
 				After all row data has been sent, it sends the EOF or OK packet.
 			*/
-			ses.maybeUnsetTxnStatus()
-			err = proto.sendEOFOrOkPacket(0, extendStatus(ses.GetServerStatus()))
+			err = proto.sendEOFOrOkPacket(0, ses.getStatusWitTxnEnd())
 			if err != nil {
 				return
 			}
