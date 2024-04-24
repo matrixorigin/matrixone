@@ -451,30 +451,30 @@ func getUnCompressReader(param *tree.ExternParam, filepath string, r io.ReadClos
 		if err != nil {
 			return nil, err
 		}
-		tarReader := tar.NewReader(gzipReader)
-		// skip header
-		if _, err = tarReader.Next(); err != nil {
-			return nil, err
-		}
-		// move to first file
-		if _, err = tarReader.Next(); err != nil {
-			return nil, err
-		}
-		return io.NopCloser(tarReader), nil
+		return getTarReader(param.Ctx, gzipReader)
 	case tree.TAR_BZ2:
-		tarReader := tar.NewReader(bzip2.NewReader(r))
-		// skip header
-		if _, err := tarReader.Next(); err != nil {
-			return nil, err
-		}
-		// move to first file
-		if _, err := tarReader.Next(); err != nil {
-			return nil, err
-		}
-		return io.NopCloser(tarReader), nil
+		return getTarReader(param.Ctx, bzip2.NewReader(r))
 	default:
 		return nil, moerr.NewInternalError(param.Ctx, "the compress type '%s' is not support now", param.CompressType)
 	}
+}
+
+func getTarReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
+	tarReader := tar.NewReader(r)
+	// move to first file
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			return nil, moerr.NewInternalError(ctx, "failed to decompress the file, no available files found")
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !header.FileInfo().IsDir() && !strings.HasPrefix(header.FileInfo().Name(), ".") {
+			break
+		}
+	}
+	return io.NopCloser(tarReader), nil
 }
 
 func makeType(typ *plan.Type, flag bool) types.Type {
