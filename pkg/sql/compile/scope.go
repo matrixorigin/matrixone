@@ -1047,7 +1047,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 				closeWithError(errStream)
 				return
 			}
-			defer streamSender.Close(true)
+			defer streamSender.Close(false)
 
 			message := cnclient.AcquireMessage()
 			{
