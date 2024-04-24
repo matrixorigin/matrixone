@@ -223,6 +223,13 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	if !tableEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
+	tableEntry.RLock()
+	// this table is creating or altering
+	if !tableEntry.IsCommitted() {
+		tableEntry.RUnlock()
+		return moerr.GetOkStopCurrRecur()
+	}
+	tableEntry.RUnlock()
 	s.resetForTable(tableEntry)
 	return
 }
