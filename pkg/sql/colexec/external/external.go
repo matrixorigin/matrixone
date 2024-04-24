@@ -15,6 +15,7 @@
 package external
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"compress/bzip2"
@@ -410,18 +411,20 @@ func GetCompressType(param *tree.ExternParam, filepath string) string {
 	if param.CompressType != "" && param.CompressType != tree.AUTO {
 		return param.CompressType
 	}
-	index := strings.LastIndex(filepath, ".")
-	if index == -1 {
-		return tree.NOCOMPRESS
-	}
-	tail := string([]byte(filepath)[index+1:])
-	switch tail {
-	case "gz", "gzip":
+
+	filepath = strings.ToLower(filepath)
+
+	switch {
+	case strings.HasSuffix(filepath, ".gz") || strings.HasSuffix(filepath, ".gzip"):
 		return tree.GZIP
-	case "bz2", "bzip2":
+	case strings.HasSuffix(filepath, ".bz2") || strings.HasSuffix(filepath, ".bzip2"):
 		return tree.BZIP2
-	case "lz4":
+	case strings.HasSuffix(filepath, ".lz4"):
 		return tree.LZ4
+	case strings.HasSuffix(filepath, ".tar.gz"):
+		return tree.TAR_GZ
+	case strings.HasSuffix(filepath, ".tar.bz2"):
+		return tree.TAR_BZ2
 	default:
 		return tree.NOCOMPRESS
 	}
@@ -443,6 +446,24 @@ func getUnCompressReader(param *tree.ExternParam, filepath string, r io.ReadClos
 		return io.NopCloser(lz4.NewReader(r)), nil
 	case tree.LZW:
 		return nil, moerr.NewInternalError(param.Ctx, "the compress type '%s' is not support now", param.CompressType)
+	case tree.TAR_GZ:
+		gzipReader, err := gzip.NewReader(r)
+		if err != nil {
+			return nil, err
+		}
+		tarReader := tar.NewReader(gzipReader)
+		_, err = tarReader.Next()
+		if err != nil {
+			return nil, err
+		}
+		return io.NopCloser(tarReader), nil
+	case tree.TAR_BZ2:
+		tarReader := tar.NewReader(bzip2.NewReader(r))
+		_, err := tarReader.Next()
+		if err != nil {
+			return nil, err
+		}
+		return io.NopCloser(tarReader), nil
 	default:
 		return nil, moerr.NewInternalError(param.Ctx, "the compress type '%s' is not support now", param.CompressType)
 	}
