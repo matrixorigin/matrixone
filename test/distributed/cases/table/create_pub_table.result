@@ -1,0 +1,62 @@
+create database if not EXISTS db_from_gh_monitor;
+use db_from_gh_monitor;
+CREATE TABLE `qrtz_job_details` ( `sched_name` VARCHAR(120) NOT NULL, `job_name` VARCHAR(190) NOT NULL, `job_group` VARCHAR(190) NOT NULL, `description` VARCHAR(250) DEFAULT null, `job_class_name` VARCHAR(250) NOT NULL, `is_durable` VARCHAR(1) NOT NULL, `is_nonconcurrent` VARCHAR(1) NOT NULL, `is_update_data` VARCHAR(1) NOT NULL, `requests_recovery` VARCHAR(1) NOT NULL, `job_data` BLOB DEFAULT NULL, PRIMARY KEY (`sched_name`,`job_name`,`job_group`), KEY `idx_qrtz_j_req_recovery` (`sched_name`,`requests_recovery`), KEY `idx_qrtz_j_grp` (`sched_name`,`job_group`) );
+DROP TABLE IF EXISTS `qrtz_triggers`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `qrtz_triggers` (
+`SCHED_NAME` varchar(120) NOT NULL,
+`TRIGGER_NAME` varchar(190) NOT NULL,
+`TRIGGER_GROUP` varchar(190) NOT NULL,
+`JOB_NAME` varchar(190) NOT NULL,
+`JOB_GROUP` varchar(190) NOT NULL,
+`DESCRIPTION` varchar(250) DEFAULT NULL,
+`NEXT_FIRE_TIME` bigint(13) DEFAULT NULL,
+`PREV_FIRE_TIME` bigint(13) DEFAULT NULL,
+`PRIORITY` int(11) DEFAULT NULL,
+`TRIGGER_STATE` varchar(16) NOT NULL,
+`TRIGGER_TYPE` varchar(8) NOT NULL,
+`START_TIME` bigint(13) NOT NULL,
+`END_TIME` bigint(13) DEFAULT NULL,
+`CALENDAR_NAME` varchar(190) DEFAULT NULL,
+`MISFIRE_INSTR` smallint(2) DEFAULT NULL,
+`JOB_DATA` blob,
+PRIMARY KEY (`SCHED_NAME`,`TRIGGER_NAME`,`TRIGGER_GROUP`),
+KEY `IDX_QRTZ_T_J` (`SCHED_NAME`,`JOB_NAME`,`JOB_GROUP`),
+KEY `IDX_QRTZ_T_JG` (`SCHED_NAME`,`JOB_GROUP`),
+KEY `IDX_QRTZ_T_C` (`SCHED_NAME`,`CALENDAR_NAME`),
+KEY `IDX_QRTZ_T_G` (`SCHED_NAME`,`TRIGGER_GROUP`),
+KEY `IDX_QRTZ_T_STATE` (`SCHED_NAME`,`TRIGGER_STATE`),
+KEY `IDX_QRTZ_T_N_STATE` (`SCHED_NAME`,`TRIGGER_NAME`,`TRIGGER_GROUP`,`TRIGGER_STATE`),
+KEY `IDX_QRTZ_T_N_G_STATE` (`SCHED_NAME`,`TRIGGER_GROUP`,`TRIGGER_STATE`),
+KEY `IDX_QRTZ_T_NEXT_FIRE_TIME` (`SCHED_NAME`,`NEXT_FIRE_TIME`),
+KEY `IDX_QRTZ_T_NFT_ST` (`SCHED_NAME`,`TRIGGER_STATE`,`NEXT_FIRE_TIME`),
+KEY `IDX_QRTZ_T_NFT_MISFIRE` (`SCHED_NAME`,`MISFIRE_INSTR`,`NEXT_FIRE_TIME`),
+KEY `IDX_QRTZ_T_NFT_ST_MISFIRE` (`SCHED_NAME`,`MISFIRE_INSTR`,`NEXT_FIRE_TIME`,`TRIGGER_STATE`),
+KEY `IDX_QRTZ_T_NFT_ST_MISFIRE_GRP` (`SCHED_NAME`,`MISFIRE_INSTR`,`NEXT_FIRE_TIME`,`TRIGGER_GROUP`,`TRIGGER_STATE`),
+CONSTRAINT `qrtz_triggers_ibfk_1` FOREIGN KEY (`SCHED_NAME`, `JOB_NAME`, `JOB_GROUP`) REFERENCES `qrtz_job_details` (`SCHED_NAME`, `JOB_NAME`, `JOB_GROUP`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+/*!40101 SET character_set_client = @saved_cs_client */;
+SHOW CREATE TABLE `qrtz_triggers`;
+Table    Create Table
+qrtz_triggers    CREATE TABLE `qrtz_triggers` (\n`sched_name` VARCHAR(120) NOT NULL,\n`trigger_name` VARCHAR(190) NOT NULL,\n`trigger_group` VARCHAR(190) NOT NULL,\n`job_name` VARCHAR(190) NOT NULL,\n`job_group` VARCHAR(190) NOT NULL,\n`description` VARCHAR(250) DEFAULT null,\n`next_fire_time` BIGINT DEFAULT null,\n`prev_fire_time` BIGINT DEFAULT null,\n`priority` INT DEFAULT null,\n`trigger_state` VARCHAR(16) NOT NULL,\n`trigger_type` VARCHAR(8) NOT NULL,\n`start_time` BIGINT NOT NULL,\n`end_time` BIGINT DEFAULT null,\n`calendar_name` VARCHAR(190) DEFAULT null,\n`misfire_instr` SMALLINT DEFAULT null,\n`job_data` BLOB DEFAULT NULL,\nPRIMARY KEY (`sched_name`,`trigger_name`,`trigger_group`),\nKEY `idx_qrtz_t_j` (`sched_name`,`job_name`,`job_group`),\nKEY `idx_qrtz_t_jg` (`sched_name`,`job_group`),\nKEY `idx_qrtz_t_c` (`sched_name`,`calendar_name`),\nKEY `idx_qrtz_t_g` (`sched_name`,`trigger_group`),\nKEY `idx_qrtz_t_state` (`sched_name`,`trigger_state`),\nKEY `idx_qrtz_t_n_state` (`sched_name`,`trigger_name`,`trigger_group`,`trigger_state`),\nKEY `idx_qrtz_t_n_g_state` (`sched_name`,`trigger_group`,`trigger_state`),\nKEY `idx_qrtz_t_next_fire_time` (`sched_name`,`next_fire_time`),\nKEY `idx_qrtz_t_nft_st` (`sched_name`,`trigger_state`,`next_fire_time`),\nKEY `idx_qrtz_t_nft_misfire` (`sched_name`,`misfire_instr`,`next_fire_time`),\nKEY `idx_qrtz_t_nft_st_misfire` (`sched_name`,`misfire_instr`,`next_fire_time`,`trigger_state`),\nKEY `idx_qrtz_t_nft_st_misfire_grp` (`sched_name`,`misfire_instr`,`next_fire_time`,`trigger_group`,`trigger_state`),\nCONSTRAINT `qrtz_triggers_ibfk_1` FOREIGN KEY (`sched_name`,`job_name`,`job_group`) REFERENCES `qrtz_job_details` (`sched_name`,`job_name`,`job_group`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+SHOW CREATE TABLE `qrtz_job_details`;
+Table    Create Table
+qrtz_job_details    CREATE TABLE `qrtz_job_details` (\n`sched_name` VARCHAR(120) NOT NULL,\n`job_name` VARCHAR(190) NOT NULL,\n`job_group` VARCHAR(190) NOT NULL,\n`description` VARCHAR(250) DEFAULT null,\n`job_class_name` VARCHAR(250) NOT NULL,\n`is_durable` VARCHAR(1) NOT NULL,\n`is_nonconcurrent` VARCHAR(1) NOT NULL,\n`is_update_data` VARCHAR(1) NOT NULL,\n`requests_recovery` VARCHAR(1) NOT NULL,\n`job_data` BLOB DEFAULT null,\nPRIMARY KEY (`sched_name`,`job_name`,`job_group`),\nKEY `idx_qrtz_j_req_recovery` (`sched_name`,`requests_recovery`),\nKEY `idx_qrtz_j_grp` (`sched_name`,`job_group`)\n)
+create account acc1 ADMIN_NAME 'root' IDENTIFIED BY '123456';
+create publication pubname1 database db_from_gh_monitor account acc1;
+create database sub_db1 from sys publication pubname1;
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+qrtz_job_details
+qrtz_triggers
+show create table qrtz_job_details;
+Table    Create Table
+qrtz_job_details    CREATE TABLE `qrtz_job_details` (\n`sched_name` VARCHAR(120) NOT NULL,\n`job_name` VARCHAR(190) NOT NULL,\n`job_group` VARCHAR(190) NOT NULL,\n`description` VARCHAR(250) DEFAULT null,\n`job_class_name` VARCHAR(250) NOT NULL,\n`is_durable` VARCHAR(1) NOT NULL,\n`is_nonconcurrent` VARCHAR(1) NOT NULL,\n`is_update_data` VARCHAR(1) NOT NULL,\n`requests_recovery` VARCHAR(1) NOT NULL,\n`job_data` BLOB DEFAULT null,\nPRIMARY KEY (`sched_name`,`job_name`,`job_group`),\nKEY `idx_qrtz_j_req_recovery` (`sched_name`,`requests_recovery`),\nKEY `idx_qrtz_j_grp` (`sched_name`,`job_group`)\n)
+show create table qrtz_triggers;
+Table    Create Table
+qrtz_triggers    CREATE TABLE `qrtz_triggers` (\n`sched_name` VARCHAR(120) NOT NULL,\n`trigger_name` VARCHAR(190) NOT NULL,\n`trigger_group` VARCHAR(190) NOT NULL,\n`job_name` VARCHAR(190) NOT NULL,\n`job_group` VARCHAR(190) NOT NULL,\n`description` VARCHAR(250) DEFAULT null,\n`next_fire_time` BIGINT DEFAULT null,\n`prev_fire_time` BIGINT DEFAULT null,\n`priority` INT DEFAULT null,\n`trigger_state` VARCHAR(16) NOT NULL,\n`trigger_type` VARCHAR(8) NOT NULL,\n`start_time` BIGINT NOT NULL,\n`end_time` BIGINT DEFAULT null,\n`calendar_name` VARCHAR(190) DEFAULT null,\n`misfire_instr` SMALLINT DEFAULT null,\n`job_data` BLOB DEFAULT NULL,\nPRIMARY KEY (`sched_name`,`trigger_name`,`trigger_group`),\nKEY `idx_qrtz_t_j` (`sched_name`,`job_name`,`job_group`),\nKEY `idx_qrtz_t_jg` (`sched_name`,`job_group`),\nKEY `idx_qrtz_t_c` (`sched_name`,`calendar_name`),\nKEY `idx_qrtz_t_g` (`sched_name`,`trigger_group`),\nKEY `idx_qrtz_t_state` (`sched_name`,`trigger_state`),\nKEY `idx_qrtz_t_n_state` (`sched_name`,`trigger_name`,`trigger_group`,`trigger_state`),\nKEY `idx_qrtz_t_n_g_state` (`sched_name`,`trigger_group`,`trigger_state`),\nKEY `idx_qrtz_t_next_fire_time` (`sched_name`,`next_fire_time`),\nKEY `idx_qrtz_t_nft_st` (`sched_name`,`trigger_state`,`next_fire_time`),\nKEY `idx_qrtz_t_nft_misfire` (`sched_name`,`misfire_instr`,`next_fire_time`),\nKEY `idx_qrtz_t_nft_st_misfire` (`sched_name`,`misfire_instr`,`next_fire_time`,`trigger_state`),\nKEY `idx_qrtz_t_nft_st_misfire_grp` (`sched_name`,`misfire_instr`,`next_fire_time`,`trigger_group`,`trigger_state`),\nCONSTRAINT `qrtz_triggers_ibfk_1` FOREIGN KEY (`sched_name`,`job_name`,`job_group`) REFERENCES `qrtz_job_details` (`sched_name`,`job_name`,`job_group`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+drop publication pubname1;
+drop account acc1;
+drop database db_from_gh_monitor;

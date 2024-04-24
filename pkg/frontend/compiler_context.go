@@ -273,6 +273,15 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 	if err != nil {
 		return nil, nil
 	}
+	pub := tcc.GetQueryingSubscription()
+	if pub != nil {
+		txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(pub.AccountId))
+
+		defer func() {
+			txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, tcc.GetSession().GetTenantInfo().TenantID)
+		}()
+	}
+
 	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(txnCtx, txn, tableId)
 	if err != nil {
 		return nil, nil

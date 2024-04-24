@@ -77,12 +77,28 @@ func formatStr(str string) string {
 }
 
 func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Plan, error) {
-	var err error
+	var (
+		err error
+	)
+
 	tblName := stmt.Name.GetTableName()
 	dbName := stmt.Name.GetDBName()
 	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	// check if the database is a subscription
+	sub, err := ctx.GetSubscriptionMeta(dbName)
+	if err != nil {
+		return nil, err
+	}
+
+	if sub != nil {
+		ctx.SetQueryingSubscription(sub)
+		defer func() {
+			ctx.SetQueryingSubscription(nil)
+		}()
 	}
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
