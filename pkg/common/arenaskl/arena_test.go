@@ -34,8 +34,6 @@ func newArena(n uint32) *Arena {
 func TestArenaSizeOverflow(t *testing.T) {
 	a := newArena(maxArenaSize)
 
-	a.alloc(1, 4, 0)
-
 	// Allocating under the limit throws no error.
 	offset, _, err := a.alloc(math.MaxUint16, 1, 0)
 	require.Nil(t, err)

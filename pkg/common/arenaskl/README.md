@@ -3,6 +3,8 @@
 Fast, lock-free, arena-based Skiplist implementation in Go that supports iteration
 in both directions.
 
+Since this is pebble's internal lib, matrixone copied it and modified it to support some features and make it easier to use in matrixone.
+
 ## Advantages
 
 Arenaskl offers several advantages over other skiplist implementations:
