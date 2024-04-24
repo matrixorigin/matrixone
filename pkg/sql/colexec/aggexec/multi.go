@@ -70,6 +70,7 @@ type multiAggFuncExec1[T types.FixedSizeTExceptStrType] struct {
 	ret    aggFuncResult[T]
 	groups []MultiAggRetFixed[T]
 
+	initGroup MultiAggInit1[T]
 	// todo: it's an optimization to move rowValid into eval.
 	rowValid rowValidForMultiAgg1[T]
 	merge    MultiAggMerge1[T]
@@ -86,10 +87,11 @@ type multiAggFuncExec2 struct {
 	ret    aggFuncBytesResult
 	groups []MultiAggRetVar
 
-	rowValid rowValidForMultiAgg2
-	merge    MultiAggMerge2
-	eval     MultiAggEval2
-	flush    MultiAggFlush2
+	initGroup MultiAggInit2
+	rowValid  rowValidForMultiAgg2
+	merge     MultiAggMerge2
+	eval      MultiAggEval2
+	flush     MultiAggFlush2
 
 	// method to new the private structure for group growing.
 	gGroup func() MultiAggRetVar
@@ -119,6 +121,9 @@ func (exec *multiAggFuncExec1[T]) init(
 	if impl.flush != nil {
 		exec.flush = impl.flush.(MultiAggFlush1[T])
 	}
+	if impl.init != nil {
+		exec.initGroup = impl.init.(MultiAggInit1[T])
+	}
 }
 
 func (exec *multiAggFuncExec1[T]) GroupGrow(more int) error {
@@ -129,10 +134,15 @@ func (exec *multiAggFuncExec1[T]) GroupGrow(more int) error {
 	moreGroup := make([]MultiAggRetFixed[T], more)
 	for i := 0; i < more; i++ {
 		moreGroup[i] = exec.gGroup()
-
-		exec.ret.groupToSet = i + len(exec.groups)
-		moreGroup[i].Init(setter, exec.argTypes, exec.retType)
 	}
+
+	if exec.initGroup != nil {
+		for i := 0; i < more; i++ {
+			exec.ret.groupToSet = i + len(exec.groups)
+			exec.initGroup(moreGroup[i], setter, exec.argTypes, exec.retType)
+		}
+	}
+
 	exec.groups = append(exec.groups, moreGroup...)
 	return nil
 }
@@ -312,6 +322,9 @@ func (exec *multiAggFuncExec2) init(
 	if impl.flush != nil {
 		exec.flush = impl.flush.(MultiAggFlush2)
 	}
+	if impl.init != nil {
+		exec.initGroup = impl.init.(MultiAggInit2)
+	}
 }
 
 func (exec *multiAggFuncExec2) GroupGrow(more int) error {
@@ -322,10 +335,15 @@ func (exec *multiAggFuncExec2) GroupGrow(more int) error {
 	moreGroup := make([]MultiAggRetVar, more)
 	for i := 0; i < more; i++ {
 		moreGroup[i] = exec.gGroup()
-
-		exec.ret.groupToSet = i + len(exec.groups)
-		moreGroup[i].Init(setter, exec.argTypes, exec.retType)
 	}
+
+	if exec.initGroup != nil {
+		for i := 0; i < more; i++ {
+			exec.ret.groupToSet = i + len(exec.groups)
+			exec.initGroup(moreGroup[i], setter, exec.argTypes, exec.retType)
+		}
+	}
+
 	exec.groups = append(exec.groups, moreGroup...)
 	return nil
 }

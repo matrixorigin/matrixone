@@ -218,6 +218,7 @@ func RegisterMin1(id int64) {
 			aggexec.MakeSingleAgg4RegisteredInfo(
 				aggexec.MakeSingleColumnAggInformation(id, t.ToType(), MinReturnType, false, true),
 				aggexec.GenerateFlagContextFromVarToVar,
+				aggexec.InitFlagContextFromVarToVar,
 				FillAggMinBytes, nil, FillsAggMinBytes,
 				MergeAggMinBytes,
 				nil,

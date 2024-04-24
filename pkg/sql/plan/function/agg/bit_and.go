@@ -135,6 +135,7 @@ func RegisterBitAnd1(id int64) {
 		aggexec.MakeSingleAgg4RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_binary.ToType(), BitAndReturnType, false, true),
 			aggexec.GenerateFlagContextFromVarToVar,
+			aggexec.InitFlagContextFromVarToVar,
 			FillAggBitAndBinary, nil, FillsAggBitAndBinary,
 			MergeAggBitAndBinary,
 			nil,
@@ -144,6 +145,7 @@ func RegisterBitAnd1(id int64) {
 		aggexec.MakeSingleAgg4RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitAndReturnType, false, true),
 			aggexec.GenerateFlagContextFromVarToVar,
+			aggexec.InitFlagContextFromVarToVar,
 			FillAggBitAndBinary, nil, FillsAggBitAndBinary,
 			MergeAggBitAndBinary,
 			nil,

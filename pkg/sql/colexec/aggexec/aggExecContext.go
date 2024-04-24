@@ -159,29 +159,24 @@ type SingleAggFromFixedRetFixed[
 type SingleAggFromFixedRetVar[
 	from types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
-	Init(setter AggBytesSetter, arg types.Type, ret types.Type) error
 }
 
 type SingleAggFromVarRetFixed[
 	to types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
-	Init(setter AggSetter[to], arg types.Type, ret types.Type) error
 }
 
 type SingleAggFromVarRetVar interface {
 	AggCanMarshal
-	Init(setter AggBytesSetter, arg types.Type, ret types.Type) error
 }
 
 type MultiAggRetFixed[
 	to types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
-	Init(setter AggSetter[to], args []types.Type, ret types.Type)
 }
 
 type MultiAggRetVar interface {
 	AggCanMarshal
-	Init(setter AggBytesSetter, args []types.Type, ret types.Type)
 }
 
 /*
@@ -259,4 +254,9 @@ func (a *ContextWithEmptyFlagOfSingleAggRetBytes) Init(_ AggBytesSetter, _, _ ty
 //	}
 func GenerateFlagContextFromVarToVar() SingleAggFromVarRetVar {
 	return &ContextWithEmptyFlagOfSingleAggRetBytes{}
+}
+func InitFlagContextFromVarToVar(exec SingleAggFromVarRetVar, setter AggBytesSetter, arg, ret types.Type) error {
+	a := exec.(*ContextWithEmptyFlagOfSingleAggRetBytes)
+	a.IsEmpty = true
+	return nil
 }

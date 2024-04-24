@@ -226,6 +226,7 @@ func RegisterAnyValue1(id int64) {
 			aggexec.MakeSingleAgg4RegisteredInfo(
 				aggexec.MakeSingleColumnAggInformation(id, t.ToType(), AnyValueReturnType, false, true),
 				aggexec.GenerateFlagContextFromVarToVar,
+				aggexec.InitFlagContextFromVarToVar,
 				FillAnyValue2, nil, FillsAnyValue2,
 				MergeAnyValue2,
 				nil,

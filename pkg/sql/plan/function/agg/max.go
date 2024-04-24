@@ -218,6 +218,7 @@ func RegisterMax1(id int64) {
 			aggexec.MakeSingleAgg4RegisteredInfo(
 				aggexec.MakeSingleColumnAggInformation(id, t.ToType(), MaxReturnType, false, true),
 				aggexec.GenerateFlagContextFromVarToVar,
+				aggexec.InitFlagContextFromVarToVar,
 				FillAggMaxBytes, nil, FillsAggMaxBytes,
 				MergeAggMaxBytes,
 				nil,

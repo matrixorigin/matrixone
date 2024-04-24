@@ -178,7 +178,6 @@ var mPrivate1Args = []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}
 func mPrivate1Ret(_ []types.Type) types.Type {
 	return types.T_int64.ToType()
 }
-func (t *testMultiAggPrivate1) Init(AggSetter[int64], []types.Type, types.Type) {}
 func fillWhich0(exec MultiAggRetFixed[int64], value int64) error {
 	exec.(*testMultiAggPrivate1).firstIsNull = false
 	return nil
@@ -228,6 +227,7 @@ func TestMultiAggFuncExec1(t *testing.T) {
 		MakeMultiAggRetFixedRegisteredInfo(
 			MakeMultiColumnAggInformation(info.aggID, mPrivate1Args, mPrivate1Ret, info.emptyNull),
 			gTesMultiAggPrivate1,
+			nil,
 			mPrivate1FillWhich,
 			mPrivate1FillNullWhich,
 			validMPrivate1,
@@ -409,6 +409,7 @@ func TestEmptyNullFlag(t *testing.T) {
 			MakeMultiAggRetFixedRegisteredInfo(
 				MakeMultiColumnAggInformation(id, mPrivate1Args, mPrivate1Ret, true),
 				gTesMultiAggPrivate1,
+				nil,
 				mPrivate1FillWhich,
 				mPrivate1FillNullWhich,
 				validMPrivate1,
@@ -432,6 +433,7 @@ func TestEmptyNullFlag(t *testing.T) {
 			MakeMultiAggRetFixedRegisteredInfo(
 				MakeMultiColumnAggInformation(id, mPrivate1Args, mPrivate1Ret, false),
 				gTesMultiAggPrivate1,
+				nil,
 				mPrivate1FillWhich,
 				mPrivate1FillNullWhich,
 				validMPrivate1,

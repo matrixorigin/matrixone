@@ -135,6 +135,7 @@ func RegisterBitOr1(id int64) {
 		aggexec.MakeSingleAgg4RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_binary.ToType(), BitOrReturnType, false, true),
 			aggexec.GenerateFlagContextFromVarToVar,
+			aggexec.InitFlagContextFromVarToVar,
 			FillAggBitOrBinary, nil, FillsAggBitOrBinary,
 			MergeAggBitOrBinary,
 			nil,
@@ -144,6 +145,7 @@ func RegisterBitOr1(id int64) {
 		aggexec.MakeSingleAgg4RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitOrReturnType, false, true),
 			aggexec.GenerateFlagContextFromVarToVar,
+			aggexec.InitFlagContextFromVarToVar,
 			FillAggBitOrBinary, nil, FillsAggBitOrBinary,
 			MergeAggBitOrBinary,
 			nil,
