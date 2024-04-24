@@ -66,14 +66,18 @@ func RunLockServicesForTest(
 			}))
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 
+	var removeDisconnectDuration time.Duration
 	for _, cfg := range configs {
 		if adjustConfig != nil {
 			adjustConfig(&cfg)
+			removeDisconnectDuration = cfg.removeDisconnectDuration
 		}
 		services = append(services,
 			NewLockService(cfg).(*service))
 	}
-	allocator := NewLockTableAllocator(testSockets, lockTableBindTimeout, morpc.Config{})
+	allocator := NewLockTableAllocator(testSockets, lockTableBindTimeout, morpc.Config{}, func(lta *lockTableAllocator) {
+		lta.options.removeDisconnectDuration = removeDisconnectDuration
+	})
 	fn(allocator.(*lockTableAllocator), services)
 
 	for _, s := range services {
