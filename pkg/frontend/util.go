@@ -917,7 +917,7 @@ func setFPrints(txnOp TxnOperator, fprints footPrints) {
 }
 
 type footPrints struct {
-	prints [64][2]uint32
+	prints [128][2]uint32
 }
 
 func (fprints *footPrints) reset() {

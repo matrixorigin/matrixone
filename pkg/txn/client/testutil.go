@@ -130,7 +130,7 @@ func (fp fPrint) nonZero() bool {
 }
 
 type footPrints struct {
-	prints [64]fPrint
+	prints [128]fPrint
 }
 
 func (fprints *footPrints) setFPrints(fp [][2]uint32) {
