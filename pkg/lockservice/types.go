@@ -176,8 +176,8 @@ type LockTableAllocator interface {
 	KeepLockTableBind(serviceID string) bool
 	// Valid check for changes in the binding relationship of a specific lock-table.
 	Valid(serviceID string, txnID []byte, binds []pb.LockTable) ([]uint64, error)
-	// AddCannotCommit add cannot commit txn
-	AddCannotCommit(values []pb.OrphanTxn)
+	// AddCannotCommit add cannot commit txn.
+	AddCannotCommit(values []pb.OrphanTxn) [][]byte
 	// Close close the lock table allocator
 	Close() error
 

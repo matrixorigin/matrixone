@@ -132,12 +132,12 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 					return err
 				}
 				if col != nil && col.Typ.Id == int32(types.T_enum) {
-					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), posExpr, &col.Typ)
+					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), posExpr, col.Typ)
 					if err != nil {
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, &col.Typ)
+					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, col.Typ)
 					if err != nil {
 						return err
 					}
@@ -150,12 +150,12 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 				}
 
 				if col != nil && col.Typ.Id == int32(types.T_enum) {
-					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), lastNode.ProjectList[pos], &col.Typ)
+					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
 					if err != nil {
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], &col.Typ)
+					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
 					if err != nil {
 						return err
 					}
@@ -210,7 +210,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		for colName, updateKey := range updateKeys {
 			for _, coldef := range tableDef.Cols {
 				if coldef.Name == colName && coldef.Typ.Id == int32(types.T_enum) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, &coldef.Typ, nil)
+					binder := NewDefaultBinder(builder.GetContext(), nil, nil, coldef.Typ, nil)
 					updateKeyExpr, err := binder.BindExpr(updateKey, 0, false)
 					if err != nil {
 						return 0, nil, err
