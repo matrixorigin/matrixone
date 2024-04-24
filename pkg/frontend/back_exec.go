@@ -1022,6 +1022,14 @@ func (backSes *backSession) Error(ctx context.Context, msg string, fields ...zap
 	backSes.log(ctx, zap.ErrorLevel, msg, fields...)
 }
 
+func (backSes *backSession) Warn(ctx context.Context, msg string, fields ...zap.Field) {
+	backSes.log(ctx, zap.WarnLevel, msg, fields...)
+}
+
+func (backSes *backSession) Fatal(ctx context.Context, msg string, fields ...zap.Field) {
+	backSes.log(ctx, zap.FatalLevel, msg, fields...)
+}
+
 func (backSes *backSession) Debug(ctx context.Context, msg string, fields ...zap.Field) {
 	backSes.log(ctx, zap.DebugLevel, msg, fields...)
 }
@@ -1032,6 +1040,14 @@ func (backSes *backSession) Infof(ctx context.Context, msg string, args ...any) 
 
 func (backSes *backSession) Errorf(ctx context.Context, msg string, args ...any) {
 	backSes.logf(ctx, zap.ErrorLevel, msg, args...)
+}
+
+func (backSes *backSession) Warnf(ctx context.Context, msg string, args ...any) {
+	backSes.logf(ctx, zap.WarnLevel, msg, args...)
+}
+
+func (backSes *backSession) Fatalf(ctx context.Context, msg string, args ...any) {
+	backSes.logf(ctx, zap.FatalLevel, msg, args...)
 }
 
 func (backSes *backSession) Debugf(ctx context.Context, msg string, args ...any) {

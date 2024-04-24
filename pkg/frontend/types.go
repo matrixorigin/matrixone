@@ -356,9 +356,13 @@ type SessionLogger interface {
 	SessionGetter
 	Info(ctx context.Context, msg string, fields ...zap.Field)
 	Error(ctx context.Context, msg string, fields ...zap.Field)
+	Warn(ctx context.Context, msg string, fields ...zap.Field)
+	Fatal(ctx context.Context, msg string, fields ...zap.Field)
 	Debug(ctx context.Context, msg string, fields ...zap.Field)
 	Infof(ctx context.Context, msg string, args ...any)
 	Errorf(ctx context.Context, msg string, args ...any)
+	Warnf(ctx context.Context, msg string, args ...any)
+	Fatalf(ctx context.Context, msg string, args ...any)
 	Debugf(ctx context.Context, msg string, args ...any)
 }
 
