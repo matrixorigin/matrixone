@@ -285,7 +285,7 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 
 	enterFPrint(tcc.ses, 0)
 	defer exitFPrint(tcc.ses, 0)
-  
+
 	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(txnCtx, txn, tableId)
 	if err != nil {
 		return nil, nil
