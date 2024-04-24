@@ -1970,6 +1970,15 @@ func (ses *Session) Error(ctx context.Context, msg string, fields ...zap.Field) 
 	}
 }
 
+func (ses *Session) Warn(ctx context.Context, msg string, fields ...zap.Field) {
+	if ses.logger.Enabled(zap.WarnLevel) {
+		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
+		fields = appendSessionField(fields, ses)
+		fields = appendTraceField(fields, ctx)
+		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.WarnLevel).AddCallerSkip(1), fields...)
+	}
+}
+
 func (ses *Session) Debug(ctx context.Context, msg string, fields ...zap.Field) {
 	if ses.logger.Enabled(zap.DebugLevel) {
 		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
@@ -1996,6 +2005,16 @@ func (ses *Session) Errorf(ctx context.Context, msg string, args ...any) {
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
 		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
+	}
+}
+
+func (ses *Session) Warnf(ctx context.Context, msg string, args ...any) {
+	if ses.logger.Enabled(zap.WarnLevel) {
+		fields := make([]zap.Field, 0, 5)
+		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
+		fields = appendSessionField(fields, ses)
+		fields = appendTraceField(fields, ctx)
+		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.WarnLevel).AddCallerSkip(1), fields...)
 	}
 }
 

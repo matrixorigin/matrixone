@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -59,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
 	"github.com/panjf2000/ants/v2"
 	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
@@ -958,7 +958,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		// Add log for cn panic which reported on issue 10656
 		// If you find this log is printed, please report the repro details
 		if len(s.Instructions) < 2 {
-			logutil.Error("the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}),
+			c.proc.Error(c.proc.Ctx, "the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}),
 				zap.String("stack", string(debug.Stack())),
 			)
 			return nil, moerr.NewInternalErrorNoCtx("the length of s.Instructions is too short !")
@@ -1042,7 +1042,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
-				logutil.Errorf("Failed to get stream sender txnID=%s, err=%v",
+				s.Proc.Errorf(s.Proc.Ctx, "Failed to get stream sender txnID=%s, err=%v",
 					s.Proc.TxnOperator.Txn().DebugString(), errStream)
 				closeWithError(errStream)
 				return
@@ -1085,7 +1085,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 	for {
 		select {
 		case <-proc.Ctx.Done():
-			logutil.Warnf("proc ctx done during forward")
+			proc.Warnf(proc.Ctx, "proc ctx done during forward")
 			return nil
 		case val, ok = <-receiveCh:
 			if val == nil || !ok {
@@ -1132,7 +1132,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			} else {
 				select {
 				case <-proc.Ctx.Done():
-					logutil.Warnf("proc ctx done during forward")
+					proc.Warnf(proc.Ctx, "proc ctx done during forward")
 					return nil
 				case forwardCh <- bat:
 				}
