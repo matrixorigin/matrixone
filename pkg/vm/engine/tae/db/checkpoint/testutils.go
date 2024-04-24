@@ -85,36 +85,36 @@ func (r *runner) CleanPenddingCheckpoint() {
 }
 
 func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error {
-	if r.GetPenddingIncrementalCount() == 0 {
-		if versionInterval == 0 {
-			versionInterval = r.options.globalVersionInterval
-		}
-		timeout := time.After(versionInterval)
-		for {
-			select {
-			case <-timeout:
-				return moerr.NewInternalError(r.ctx, "timeout")
-			default:
-				err := r.ForceIncrementalCheckpoint(end, false)
-				if err != nil {
-					if !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
-						return err
-					} else {
-						interval := versionInterval * time.Millisecond / 400
-						time.Sleep(interval)
-						break
-					}
-				}
-				r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
-					force:    true,
-					end:      end,
-					interval: versionInterval,
-				})
-				return nil
-			}
-		}
-	} else {
+	if r.GetPenddingIncrementalCount() != 0 {
 		end = r.MaxCheckpoint().GetEnd()
+		return nil
+	}
+	if versionInterval == 0 {
+		versionInterval = r.options.globalVersionInterval
+	}
+	timeout := time.After(versionInterval)
+	for {
+		select {
+		case <-timeout:
+			return moerr.NewInternalError(r.ctx, "timeout")
+		default:
+			err := r.ForceIncrementalCheckpoint(end, false)
+			if err != nil {
+				if !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
+					return err
+				} else {
+					interval := versionInterval * time.Millisecond / 400
+					time.Sleep(interval)
+					break
+				}
+			}
+			r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
+				force:    true,
+				end:      end,
+				interval: versionInterval,
+			})
+			return nil
+		}
 	}
 	return nil
 }
