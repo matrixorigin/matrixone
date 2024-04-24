@@ -273,14 +273,6 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 	if err != nil {
 		return nil, nil
 	}
-	pub := tcc.GetQueryingSubscription()
-	if pub != nil {
-		txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(pub.AccountId))
-
-		defer func() {
-			txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, tcc.GetSession().GetTenantInfo().TenantID)
-		}()
-	}
 
 	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(txnCtx, txn, tableId)
 	if err != nil {
@@ -746,6 +738,32 @@ func (tcc *TxnCompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta 
 
 func (tcc *TxnCompilerContext) IsPublishing(dbName string) (bool, error) {
 	return isDbPublishing(tcc.GetContext(), dbName, tcc.GetSession())
+}
+
+func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan2.ObjectRef, *plan2.TableDef) {
+	txnCtx, txn, err := tcc.GetTxnHandler().GetTxn()
+	if err != nil {
+		return nil, nil
+	}
+
+	pubContext := txnCtx
+	if pubmeta != nil {
+		pubContext = defines.AttachAccountId(pubContext, uint32(pubmeta.AccountId))
+	}
+
+	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(pubContext, txn, tableId)
+	if err != nil {
+		return nil, nil
+	}
+
+	// convert
+	obj := &plan2.ObjectRef{
+		SchemaName: dbName,
+		ObjName:    tableName,
+		Obj:        int64(tableId),
+	}
+	tableDef := table.CopyTableDef(txnCtx)
+	return obj, tableDef
 }
 
 // makeResultMetaPath gets query result meta path

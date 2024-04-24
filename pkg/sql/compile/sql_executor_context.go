@@ -51,6 +51,10 @@ func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("not supported in internal sql executor")
 }
 
+func (tcc *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef) {
+	panic("not supported in internal sql executor")
+}
+
 func (c *compilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
 	panic("not supported in internal sql executor")
 }

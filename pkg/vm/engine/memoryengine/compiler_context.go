@@ -46,6 +46,11 @@ func (c *CompilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("implement me")
 }
 
+func (c *CompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (c *CompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
 	//TODO implement me
 	panic("implement me")

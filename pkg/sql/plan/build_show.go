@@ -299,7 +299,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		if fk.ForeignTbl == 0 {
 			fkTableDef = tableDef
 		} else {
-			_, fkTableDef = ctx.ResolveById(fk.ForeignTbl)
+			if ctx.GetQueryingSubscription() != nil {
+				_, fkTableDef = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
+			} else {
+				_, fkTableDef = ctx.ResolveById(fk.ForeignTbl)
+			}
 		}
 
 		fkColIdToName := make(map[uint64]string)
