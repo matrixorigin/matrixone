@@ -6658,6 +6658,24 @@ func mustUnboxExprStr(e tree.Expr) string {
 }
 
 func Test_doAlterUser(t *testing.T) {
+
+	alterUserFrom := func(stmt *tree.AlterUser) *alterUser {
+		au := &alterUser{}
+		for _, su := range stmt.Users {
+			u := &user{
+				Username: su.Username,
+				Hostname: su.Hostname,
+			}
+			if su.AuthOption != nil {
+				u.AuthExist = true
+				u.IdentTyp = su.AuthOption.Typ
+				u.IdentStr = mustUnboxExprStr(su.AuthOption.Str)
+			}
+			au.Users = append(au.Users, u)
+		}
+		return au
+	}
+
 	convey.Convey("alter user success", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -6707,15 +6725,7 @@ func Test_doAlterUser(t *testing.T) {
 			bh.sql2result[sql] = nil
 		}
 
-		err := doAlterUser(ses.GetRequestContext(), ses, &alterUser{
-			User: &user{
-				Username:  "u1",
-				Hostname:  "%",
-				AuthExist: true,
-				IdentTyp:  tree.AccountIdentifiedByPassword,
-				IdentStr:  "123456",
-			},
-		})
+		err := doAlterUser(ses.GetRequestContext(), ses, alterUserFrom(stmt))
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -6768,15 +6778,7 @@ func Test_doAlterUser(t *testing.T) {
 			bh.sql2result[sql] = nil
 		}
 
-		err := doAlterUser(ses.GetRequestContext(), ses, &alterUser{
-			User: &user{
-				Username:  "u1",
-				Hostname:  "%",
-				AuthExist: true,
-				IdentTyp:  tree.AccountIdentifiedByPassword,
-				IdentStr:  "123456",
-			},
-		})
+		err := doAlterUser(ses.GetRequestContext(), ses, alterUserFrom(stmt))
 		convey.So(err, convey.ShouldBeError)
 	})
 
@@ -6801,7 +6803,6 @@ func Test_doAlterUser(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
@@ -6827,15 +6828,7 @@ func Test_doAlterUser(t *testing.T) {
 			bh.sql2result[sql] = nil
 		}
 
-		err := doAlterUser(ses.GetRequestContext(), ses, &alterUser{
-			User: &user{
-				Username:  "u1",
-				Hostname:  "%",
-				AuthExist: true,
-				IdentTyp:  tree.AccountIdentifiedByPassword,
-				IdentStr:  "123456",
-			},
-		})
+		err := doAlterUser(ses.GetRequestContext(), ses, alterUserFrom(stmt))
 		convey.So(err, convey.ShouldBeError)
 	})
 }
