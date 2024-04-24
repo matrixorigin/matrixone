@@ -395,7 +395,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 func encodeProcessInfo(proc *process.Process, sql string) ([]byte, error) {
 	procInfo := &pipeline.ProcessInfo{}
 	if len(proc.AnalInfos) == 0 {
-		getLogger().Error("empty plan", zap.String("sql", sql))
+		proc.Error(proc.Ctx, "empty plan", zap.String("sql", sql))
 	}
 	{
 		procInfo.Id = proc.Id
