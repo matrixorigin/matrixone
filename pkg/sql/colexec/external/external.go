@@ -415,16 +415,16 @@ func GetCompressType(param *tree.ExternParam, filepath string) string {
 	filepath = strings.ToLower(filepath)
 
 	switch {
+	case strings.HasSuffix(filepath, ".tar.gz") || strings.HasSuffix(filepath, ".tar.gzip"):
+		return tree.TAR_GZ
+	case strings.HasSuffix(filepath, ".tar.bz2") || strings.HasSuffix(filepath, ".tar.bzip2"):
+		return tree.TAR_BZ2
 	case strings.HasSuffix(filepath, ".gz") || strings.HasSuffix(filepath, ".gzip"):
 		return tree.GZIP
 	case strings.HasSuffix(filepath, ".bz2") || strings.HasSuffix(filepath, ".bzip2"):
 		return tree.BZIP2
 	case strings.HasSuffix(filepath, ".lz4"):
 		return tree.LZ4
-	case strings.HasSuffix(filepath, ".tar.gz"):
-		return tree.TAR_GZ
-	case strings.HasSuffix(filepath, ".tar.bz2"):
-		return tree.TAR_BZ2
 	default:
 		return tree.NOCOMPRESS
 	}
@@ -452,15 +452,23 @@ func getUnCompressReader(param *tree.ExternParam, filepath string, r io.ReadClos
 			return nil, err
 		}
 		tarReader := tar.NewReader(gzipReader)
-		_, err = tarReader.Next()
-		if err != nil {
+		// skip header
+		if _, err = tarReader.Next(); err != nil {
+			return nil, err
+		}
+		// move to first file
+		if _, err = tarReader.Next(); err != nil {
 			return nil, err
 		}
 		return io.NopCloser(tarReader), nil
 	case tree.TAR_BZ2:
 		tarReader := tar.NewReader(bzip2.NewReader(r))
-		_, err := tarReader.Next()
-		if err != nil {
+		// skip header
+		if _, err := tarReader.Next(); err != nil {
+			return nil, err
+		}
+		// move to first file
+		if _, err := tarReader.Next(); err != nil {
 			return nil, err
 		}
 		return io.NopCloser(tarReader), nil
