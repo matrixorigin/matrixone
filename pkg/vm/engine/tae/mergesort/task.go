@@ -46,15 +46,16 @@ type MergeTaskHost interface {
 	DisposableVecPool
 	HostHintName() string
 	PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error)
-	PrepareCommitEntry() *api.MergeCommitEntry
 	GetCommitEntry() *api.MergeCommitEntry
 	PrepareNewWriter() *blockio.BlockWriter
 	GetObjectCnt() int
 	GetBlkCnts() []int
 	GetAccBlkCnts() []int
 	GetSortKeyType() types.Type
-	GetObjLayout() (uint32, uint16)
 	LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error)
+	GetRowSize() uint32
+	GetBlockMaxRows() uint32
+	GetTargetObjSize() uint32
 }
 
 func initTransferMapping(e *api.MergeCommitEntry, blkcnt int) {
@@ -110,7 +111,7 @@ func DoMergeAndWrite(
 ) (err error) {
 	now := time.Now()
 	/*out args, keep the transfer infomation*/
-	commitEntry := mergehost.PrepareCommitEntry()
+	commitEntry := mergehost.GetCommitEntry()
 	fromObjsDesc := ""
 	for _, o := range commitEntry.MergedObjs {
 		obj := objectio.ObjectStats(o)

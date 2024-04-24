@@ -125,8 +125,12 @@ func (task *mergeObjectsTask) GetAccBlkCnts() []int {
 	return task.mergedBlkCnt
 }
 
-func (task *mergeObjectsTask) GetObjLayout() (uint32, uint16) {
-	return task.schema.BlockMaxRows, task.schema.ObjectMaxBlocks
+func (task *mergeObjectsTask) GetBlockMaxRows() uint32 {
+	return task.schema.BlockMaxRows
+}
+
+func (task *mergeObjectsTask) GetTargetObjSize() uint32 {
+	return 128 * common.Const1MBytes
 }
 
 func (task *mergeObjectsTask) GetSortKeyPos() int {
@@ -254,12 +258,12 @@ func (task *mergeObjectsTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls
 
 func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {
 	if task.commitEntry == nil {
-		return task.PrepareCommitEntry()
+		return task.prepareCommitEntry()
 	}
 	return task.commitEntry
 }
 
-func (task *mergeObjectsTask) PrepareCommitEntry() *api.MergeCommitEntry {
+func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
 	schema := task.rel.Schema().(*catalog.Schema)
 	commitEntry := &api.MergeCommitEntry{}
 	commitEntry.DbId = task.did
@@ -391,6 +395,10 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *
 	}
 
 	return createdObjs, nil
+}
+
+func (task *mergeObjectsTask) GetRowSize() uint32 {
+	return uint32(task.mergedObjs[0].GetOriginSize()) / uint32(task.mergedObjs[0].GetRows())
 }
 
 // for UT

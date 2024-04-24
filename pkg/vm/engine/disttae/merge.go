@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -129,8 +130,12 @@ func (t *CNMergeTask) GetAccBlkCnts() []int {
 	return accCnt
 }
 
-func (t *CNMergeTask) GetObjLayout() (uint32, uint16) {
-	return options.DefaultBlockMaxRows, options.DefaultBlocksPerObject
+func (t *CNMergeTask) GetBlockMaxRows() uint32 {
+	return options.DefaultBlockMaxRows
+}
+
+func (t *CNMergeTask) GetTargetObjSize() uint32 {
+	return 128 * common.Const1MBytes
 }
 
 func (t *CNMergeTask) GetSortKeyType() types.Type {
@@ -163,7 +168,7 @@ func (t *CNMergeTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, 
 
 func (t *CNMergeTask) GetCommitEntry() *api.MergeCommitEntry {
 	if t.commitEntry == nil {
-		return t.PrepareCommitEntry()
+		return t.prepareCommitEntry()
 	}
 	return t.commitEntry
 }
@@ -185,7 +190,11 @@ func (t *CNMergeTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), err
 	return r, d, release, e
 }
 
-func (t *CNMergeTask) PrepareCommitEntry() *api.MergeCommitEntry {
+func (t *CNMergeTask) GetRowSize() uint32 {
+	return t.targets[0].OriginSize() / t.targets[0].Rows()
+}
+
+func (t *CNMergeTask) prepareCommitEntry() *api.MergeCommitEntry {
 	commitEntry := &api.MergeCommitEntry{}
 	commitEntry.DbId = t.host.db.databaseId
 	commitEntry.TblId = t.host.tableId

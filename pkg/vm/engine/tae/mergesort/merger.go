@@ -49,7 +49,6 @@ type merger[T any] struct {
 
 	objCnt           int
 	objBlkCnts       []int
-	totalBlkCnt      int
 	accObjBlkCnts    []int
 	loadedObjBlkCnts []int
 
@@ -62,7 +61,8 @@ type merger[T any] struct {
 	mustColFunc func(*vector.Vector) []T
 
 	rowPerBlk uint32
-	blkPerObj uint16
+	rowSize   uint32
+	objSize   uint32
 }
 
 func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, mustColFunc func(*vector.Vector) []T) Merger {
@@ -80,15 +80,18 @@ func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, 
 
 		accObjBlkCnts:    host.GetAccBlkCnts(),
 		objBlkCnts:       host.GetBlkCnts(),
+		rowPerBlk:        host.GetBlockMaxRows(),
+		objSize:          host.GetTargetObjSize(),
+		rowSize:          host.GetRowSize(),
 		loadedObjBlkCnts: make([]int, size),
 		mustColFunc:      mustColFunc,
 	}
-	m.rowPerBlk, m.blkPerObj = host.GetObjLayout()
-	for _, cnt := range m.objBlkCnts {
-		m.totalBlkCnt += cnt
-	}
 
-	initTransferMapping(host.GetCommitEntry(), m.totalBlkCnt)
+	totalBlkCnt := 0
+	for _, cnt := range m.objBlkCnts {
+		totalBlkCnt += cnt
+	}
+	initTransferMapping(host.GetCommitEntry(), totalBlkCnt)
 
 	return m
 }
@@ -113,6 +116,7 @@ func (m *merger[T]) Merge(ctx context.Context) {
 	objCnt := 0
 	blkCnt := 0
 	bufferRowCnt := 0
+	objRowCnt := uint32(0)
 	commitEntry := m.host.GetCommitEntry()
 	for m.heap.Len() != 0 {
 		select {
@@ -142,6 +146,7 @@ func (m *merger[T]) Merge(ctx context.Context) {
 		}
 
 		bufferRowCnt++
+		objRowCnt++
 		// write new block
 		if bufferRowCnt == int(m.rowPerBlk) {
 			bufferRowCnt = 0
@@ -158,11 +163,12 @@ func (m *merger[T]) Merge(ctx context.Context) {
 			m.buffer.CleanOnlyData()
 
 			// write new object
-			if blkCnt == int(m.blkPerObj) {
+			if objRowCnt*m.rowSize == m.objSize {
 				// write object and reset writer
 				m.syncObject(ctx)
 				// reset writer after sync
 				blkCnt = 0
+				objRowCnt = 0
 				objCnt++
 
 			}
