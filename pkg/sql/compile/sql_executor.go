@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -40,6 +41,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"go.uber.org/zap"
 )
 
 type sqlExecutor struct {
@@ -349,6 +352,12 @@ func (exec *txnExecutor) Exec(
 		return executor.Result{}, err
 	}
 
+	logutil.Info("sql_executor exec",
+		zap.String("sql", sql),
+		zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
+		zap.Duration("duration", time.Since(receiveAt)),
+		zap.Uint64("AffectedRows", runResult.AffectRows),
+	)
 	result.LastInsertID = proc.GetLastInsertID()
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows
