@@ -38,7 +38,6 @@ func RunLockServicesForTest(
 	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntimeWithLevel(level))
 	services := make([]LockService, 0, len(serviceIDs))
-
 	cns := make([]metadata.CNService, 0, len(serviceIDs))
 	configs := make([]Config, 0, len(serviceIDs))
 	for _, v := range serviceIDs {
