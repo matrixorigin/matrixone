@@ -4298,17 +4298,17 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, rel eng
 	var newNodes engine.Nodes
 	for i := range nodes {
 		if len(nodes[i].Data) > maxWorkLoad {
-			maxWorkLoad = len(nodes[i].Data)
+			maxWorkLoad = len(nodes[i].Data) / objectio.BlockInfoSize
 		}
 		if len(nodes[i].Data) < minWorkLoad {
-			minWorkLoad = len(nodes[i].Data)
+			minWorkLoad = len(nodes[i].Data) / objectio.BlockInfoSize
 		}
 		if len(nodes[i].Data) > 0 {
 			newNodes = append(newNodes, nodes[i])
 		}
 	}
 	if minWorkLoad*2 < maxWorkLoad {
-		logstring := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,", n.TableDef.Name, ranges.Len(), len(newNodes)/objectio.BlockInfoSize, maxWorkLoad, minWorkLoad)
+		logstring := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,", n.TableDef.Name, ranges.Len(), len(newNodes), maxWorkLoad, minWorkLoad)
 		logstring = logstring + " cnlist: "
 		for i := range c.cnList {
 			logstring = logstring + c.cnList[i].Addr + " "
