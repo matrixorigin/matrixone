@@ -33,7 +33,7 @@ import (
 // parameter should be "DbName.TableName obj1,obj2,obj3... targetObjSize"
 func parseArg(parameter string) (db, tbl string, targets []objectio.ObjectStats, targetObjSize int64, err error) {
 	parameters := strings.Split(parameter, " ")
-	if len(parameters) != 2 || len(parameters) != 3 {
+	if len(parameters) != 2 && len(parameters) != 3 {
 		err = moerr.NewInternalErrorNoCtx("handleMerge: invalid parameter")
 		return
 	}
@@ -46,6 +46,10 @@ func parseArg(parameter string) (db, tbl string, targets []objectio.ObjectStats,
 	objstrs := strings.Split(parameters[1], ",")
 	for _, objstrs := range objstrs {
 		parts := strings.Split(objstrs, "_")
+		if len(parts) != 2 {
+			err = moerr.NewInternalErrorNoCtx("handleMerge: invalid parameter")
+			return
+		}
 		uuid, err := types.ParseUuid(parts[0])
 		if err != nil {
 			return "", "", nil, 0, err
