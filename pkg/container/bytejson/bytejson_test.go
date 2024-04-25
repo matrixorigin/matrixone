@@ -18,7 +18,6 @@ import (
 	"strconv"
 	"testing"
 
-	jsoniter "github.com/json-iterator/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -519,9 +518,20 @@ func TestByteJson_Unquote(t *testing.T) {
 }
 
 func TestParseJsonByteFromString2(t *testing.T) {
-	s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
+	s := `{"a":{"b":1}}`
+	//s := `{"a":22,"b":77,"c":"a"}`
 	want, err := ParseJsonByteFromString(s)
 	require.NoError(t, err)
+
+	// [1
+	// 1 0 0 0
+	// 48 0 0 0
+	// 19 0 0 0 1 0
+	// 1 20 0 0 0
+	// 97
+	// 1 0 0 0
+	// 28 0 0 0
+	// 19 0 0 0 1 0 9 20 0 0 0 98 3 0 0 0 0 0 0 0]
 
 	got, err := ParseJsonByteFromString2(s)
 	require.NoError(t, err)
@@ -547,11 +557,11 @@ func BenchmarkParseJsonByteFromString(b *testing.B) {
 }
 
 func BenchmarkParseJsonByteFromString2(b *testing.B) {
-	s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
+	// s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
 
 	for i := 0; i < b.N; i++ {
-		iter := jsoniter.ParseString(jsoniter.ConfigDefault, s)
-		far(iter)
+		// iter := jsoniter.ParseString(jsoniter.ConfigDefault, s)
+		//far(iter)
 		// p := parser{src: util.UnsafeStringToBytes(s)}
 		//p.do()
 	}
@@ -561,22 +571,4 @@ func BenchmarkParseJsonByteFromString2(b *testing.B) {
 	// BenchmarkParseJsonByteFromString2-4        88002             14027 ns/op            5754 B/op        181 allocs/op
 	// PASS
 	// ok      github.com/matrixorigin/matrixone/pkg/container/bytejson        1.389s
-}
-
-func far(iter *jsoniter.Iterator) {
-	tp := iter.WhatIsNext()
-	switch tp {
-	case jsoniter.ArrayValue:
-		iter.ReadObjectCB(func(i *jsoniter.Iterator, s string) bool {
-			far(i)
-			return true
-		})
-	case jsoniter.ObjectValue:
-		iter.ReadArrayCB(func(i *jsoniter.Iterator) bool {
-			far(i)
-			return true
-		})
-	default:
-		iter.ReadAny()
-	}
 }

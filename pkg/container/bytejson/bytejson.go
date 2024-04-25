@@ -17,14 +17,13 @@ package bytejson
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"math"
 	"sort"
 	"strconv"
 	"strings"
 
+	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -678,12 +677,12 @@ func ParseJsonByteFromString(s string) ([]byte, error) {
 }
 
 func ParseJsonByteFromString2(s string) ([]byte, error) {
-	p := parser{src: util.UnsafeStringToBytes(s)}
-	bj, err := p.do()
+	p := parser{iter: jsoniter.ParseString(jsoniter.ConfigDefault, s)}
+	err := p.do()
 	if err != nil {
 		return nil, err
 	}
-	return bj.Marshal()
+	return p.dst, nil
 }
 
 func init() {
@@ -862,118 +861,254 @@ func (group) TypeName() string {
 }
 
 type parser struct {
-	src   []byte
-	stack []*group
+	iter *jsoniter.Iterator
+	dst  []byte
 }
 
-func (p *parser) do() (ByteJson, error) {
-	de := json.NewDecoder(bytes.NewReader(p.src))
-	de.UseNumber()
-	for {
-		tk, err := de.Token()
-		if errors.Is(err, io.EOF) {
-			return ByteJson{}, io.ErrUnexpectedEOF
-		}
-		if err != nil {
-			return ByteJson{}, err
-		}
-		//continue
-		switch tk := tk.(type) {
-		case json.Delim:
-			bj := p.addDelim(tk)
-			if bj != nil {
-				return *bj, nil
-			}
-		case bool:
-			if len(p.stack) > 0 {
-				g := p.stack[len(p.stack)-1]
-				g.addBool(tk)
-			} else {
-				lit := LiteralFalse
-				if tk {
-					lit = LiteralTrue
-				}
-				return ByteJson{
-					Data: []byte{lit},
-					Type: TpCodeLiteral,
-				}, nil
-			}
-		case json.Number:
-			if len(p.stack) > 0 {
-				g := p.stack[len(p.stack)-1]
-				g.addNum(tk)
-			} else {
-				var bj ByteJson
-				bj.Type, bj.Data, err = addJsonNumber(nil, tk)
-				if err != nil {
-					return ByteJson{}, err
-				}
-			}
-		case string:
-			if len(p.stack) > 0 {
-				g := p.stack[len(p.stack)-1]
-				g.addString(tk)
-			} else {
-				return ByteJson{
-					Data: addString(nil, tk),
-					Type: TpCodeString,
-				}, nil
-			}
-		case nil:
-			if len(p.stack) > 0 {
-				g := p.stack[len(p.stack)-1]
-				g.addNil()
-			} else {
-				return ByteJson{
-					Data: []byte{LiteralNull},
-					Type: TpCodeLiteral,
-				}, nil
-			}
-		}
-	}
-}
-
-func (p *parser) addDelim(r json.Delim) *ByteJson {
-	switch r {
-	case '[', '{':
-		g := reuse.Alloc[group](nil)
-		g.obj = r == '{'
-		p.stack = append(p.stack, g)
-	case ']', '}':
-		n := len(p.stack) - 1
-		g := p.stack[n]
-		defer reuse.Free(g, nil)
-		p.stack = p.stack[:n]
-
-		if len(p.stack) == 0 {
-			var buf bytes.Buffer
-			//g.dump(&buf)
-
-			ret := ByteJson{
-				Data: buf.Bytes(),
-			}
-			if g.obj {
-				ret.Type = TpCodeObject
-			} else {
-				ret.Type = TpCodeArray
-			}
-			return &ret
-		}
-
-		pg := p.stack[len(p.stack)-1]
-		var v groupValue
-		if g.obj {
-			v.set(TpCodeObject, uint32(len(g.valueBuf)))
-		} else {
-			v.set(TpCodeArray, uint32(len(g.valueBuf)))
-		}
-		pg.values = append(pg.values, v)
-
-		buf := bytes.NewBuffer(pg.valueBuf)
-		//g.dump(buf)
-		pg.valueBuf = buf.Bytes()
-	default:
-		panic("unknown Delim " + string(r))
-	}
+func (p *parser) do() error {
+	p.writeAny(true, p.iter.ReadAny())
 	return nil
+
+	// for {
+	// 	switch p.iter.WhatIsNext() {
+	// 	case jsoniter.ArrayValue:
+	// 		arr := p.iter.ReadAny()
+	// 		arr.Size()
+
+	// 		p.iter.ReadArrayCB(func(i *jsoniter.Iterator) bool {
+	// 			size++
+	// 			return true
+	// 		})
+	// 	case jsoniter.ObjectValue:
+	// 		size := 0
+	// 		var keys []string
+	// 		p.iter.ReadObjectCB(func(i *jsoniter.Iterator, s string) bool {
+	// 			size++
+	// 			return true
+	// 		})
+	// 	case jsoniter.BoolValue:
+	// 		if len(p.stack) > 0 {
+	// 			g := p.stack[len(p.stack)-1]
+	// 			g.addBool(tk)
+	// 		} else {
+	// 			lit := LiteralFalse
+	// 			if tk {
+	// 				lit = LiteralTrue
+	// 			}
+	// 			return ByteJson{
+	// 				Data: []byte{lit},
+	// 				Type: TpCodeLiteral,
+	// 			}, nil
+	// 		}
+	// 	case jsoniter.NumberValue:
+	// 		if len(p.stack) > 0 {
+	// 			g := p.stack[len(p.stack)-1]
+	// 			g.addNum(tk)
+	// 		} else {
+	// 			var bj ByteJson
+	// 			bj.Type, bj.Data, err = addJsonNumber(nil, tk)
+	// 			if err != nil {
+	// 				return ByteJson{}, err
+	// 			}
+	// 		}
+	// 	case jsoniter.StringValue:
+	// 		if len(p.stack) > 0 {
+	// 			g := p.stack[len(p.stack)-1]
+	// 			g.addString(tk)
+	// 		} else {
+	// 			return ByteJson{
+	// 				Data: addString(nil, tk),
+	// 				Type: TpCodeString,
+	// 			}, nil
+	// 		}
+	// 	case jsoniter.NilValue:
+	// 		if len(p.stack) > 0 {
+	// 			g := p.stack[len(p.stack)-1]
+	// 			g.addNil()
+	// 		} else {
+	// 			return ByteJson{
+	// 				Data: []byte{LiteralNull},
+	// 				Type: TpCodeLiteral,
+	// 			}, nil
+	// 		}
+	// 	}
+	// }
+}
+
+// func (p *parser) addDelim(r json.Delim) *ByteJson {
+// 	switch r {
+// 	case '[', '{':
+// 		g := reuse.Alloc[group](nil)
+// 		g.obj = r == '{'
+// 		p.stack = append(p.stack, g)
+// 	case ']', '}':
+// 		n := len(p.stack) - 1
+// 		g := p.stack[n]
+// 		defer reuse.Free(g, nil)
+// 		p.stack = p.stack[:n]
+
+// 		if len(p.stack) == 0 {
+// 			var buf bytes.Buffer
+// 			//g.dump(&buf)
+
+// 			ret := ByteJson{
+// 				Data: buf.Bytes(),
+// 			}
+// 			if g.obj {
+// 				ret.Type = TpCodeObject
+// 			} else {
+// 				ret.Type = TpCodeArray
+// 			}
+// 			return &ret
+// 		}
+
+// 		pg := p.stack[len(p.stack)-1]
+// 		var v groupValue
+// 		if g.obj {
+// 			v.set(TpCodeObject, uint32(len(g.valueBuf)))
+// 		} else {
+// 			v.set(TpCodeArray, uint32(len(g.valueBuf)))
+// 		}
+// 		pg.values = append(pg.values, v)
+
+// 		buf := bytes.NewBuffer(pg.valueBuf)
+// 		//g.dump(buf)
+// 		pg.valueBuf = buf.Bytes()
+// 	default:
+// 		panic("unknown Delim " + string(r))
+// 	}
+// 	return nil
+// }
+
+func (p *parser) writeAny(raw bool, v jsoniter.Any) (TpCode, uint32) {
+	start := len(p.dst)
+	switch v.ValueType() {
+	case jsoniter.ArrayValue:
+		arr := v
+		n := arr.Size()
+		baseOffset := start
+		if raw {
+			p.dst = append(p.dst, byte(TpCodeArray))
+			baseOffset++
+		}
+		p.dst = endian.AppendUint32(p.dst, uint32(n))
+		p.dst = endian.AppendUint32(p.dst, 0) // array buf length
+		p.dst = extendByte(p.dst, n*5)
+
+		loc := uint32(8 + n*5)
+		for i := 0; i < n; i++ {
+			tp, length := p.writeAny(false, arr.Get(i))
+			o := baseOffset + 8 + i*5
+			p.dst[o] = byte(tp)
+			if tp == TpCodeLiteral {
+				endian.PutUint32(p.dst[o+1:], length)
+				continue
+			}
+			endian.PutUint32(p.dst[o+1:], loc)
+			loc += length
+		}
+
+		endian.PutUint32(p.dst[baseOffset+4:], loc) // array buf length
+		return TpCodeArray, uint32(len(p.dst) - start)
+	case jsoniter.ObjectValue:
+		obj := v
+		keys := obj.Keys()
+		n := len(keys)
+		baseOffset := start
+		if raw {
+			p.dst = append(p.dst, byte(TpCodeObject))
+			baseOffset += 1
+		}
+		p.dst = endian.AppendUint32(p.dst, uint32(n))
+		p.dst = endian.AppendUint32(p.dst, 0) // object buf length
+
+		p.dst = extendByte(p.dst, n*(4+2+1+4))
+
+		loc := uint32(8 + n*(4+2+1+4))
+		for i, k := range keys {
+			o := baseOffset + 8 + i*6
+			length := uint32(len(k)) // todo
+			endian.PutUint32(p.dst[o:], loc)
+			endian.PutUint16(p.dst[o+4:], uint16(length))
+			loc += length
+			p.dst = append(p.dst, k...)
+		}
+
+		for i, k := range keys {
+			tp, length := p.writeAny(false, obj.Get(k))
+			o := baseOffset + 8 + n*6 + i*5
+			p.dst[o] = byte(tp)
+			if tp == TpCodeLiteral {
+				endian.PutUint32(p.dst[o+1:], length)
+				continue
+			}
+			endian.PutUint32(p.dst[o+1:], loc)
+			loc += length
+		}
+
+		endian.PutUint32(p.dst[baseOffset+4:], loc) // object buf length
+		return TpCodeObject, uint32(len(p.dst) - start)
+	case jsoniter.BoolValue:
+		lit := LiteralFalse
+		if v.ToBool() {
+			lit = LiteralTrue
+		}
+		if raw {
+			p.dst = append(p.dst, byte(TpCodeLiteral), lit)
+		}
+		return TpCodeLiteral, uint32(lit)
+	case jsoniter.NilValue:
+		if raw {
+			p.dst = append(p.dst, byte(TpCodeLiteral), LiteralNull)
+		}
+		return TpCodeLiteral, uint32(LiteralNull)
+	case jsoniter.NumberValue:
+		tp, data, _ := p.parseNumber(json.Number(v.ToString()))
+		if raw {
+			p.dst = append(p.dst, byte(tp))
+		}
+		p.dst = append(p.dst, data...)
+		return tp, uint32(len(p.dst) - start)
+	case jsoniter.StringValue:
+		if raw {
+			p.dst = append(p.dst, byte(TpCodeString))
+		}
+		p.dst = addString(p.dst, v.ToString())
+		return TpCodeString, uint32(len(p.dst) - start)
+	default:
+		panic("x")
+	}
+}
+
+func (p *parser) parseNumber(in json.Number) (TpCode, []byte, error) {
+	var data [8]byte
+	//check if it is a float
+	if strings.ContainsAny(string(in), "Ee.") {
+		val, err := in.Float64()
+		if err != nil {
+			return TpCodeFloat64, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
+		}
+		if err = checkFloat64(val); err != nil {
+			return TpCodeFloat64, nil, err
+		}
+		endian.PutUint64(data[:], math.Float64bits(val))
+		return TpCodeFloat64, data[:], nil
+	}
+	if val, err := in.Int64(); err == nil { //check if it is an int
+		endian.PutUint64(data[:], uint64(val))
+		return TpCodeInt64, data[:], nil
+	}
+	if val, err := strconv.ParseUint(string(in), 10, 64); err == nil { //check if it is a uint
+		endian.PutUint64(data[:], val)
+		return TpCodeUint64, data[:], nil
+	}
+	if val, err := in.Float64(); err == nil { //check if it is a float
+		if err = checkFloat64(val); err != nil {
+			return TpCodeFloat64, nil, err
+		}
+		endian.PutUint64(data[:], math.Float64bits(val))
+		return TpCodeFloat64, data[:], nil
+	}
+	var tpCode TpCode
+	return tpCode, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
 }
