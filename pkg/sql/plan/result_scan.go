@@ -50,7 +50,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		}
 		exprs = append(exprs, curExpr)
 	}
-	exprs[0], err = appendCastBeforeExpr(builder.GetContext(), exprs[0], &plan.Type{
+	exprs[0], err = appendCastBeforeExpr(builder.GetContext(), exprs[0], plan.Type{
 		Id:          int32(types.T_uuid),
 		NotNullable: true,
 	})
