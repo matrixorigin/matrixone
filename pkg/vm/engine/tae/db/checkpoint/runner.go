@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,6 +77,12 @@ type globalCheckpointContext struct {
 	interval    time.Duration
 	truncateLSN uint64
 	ckpLSN      uint64
+}
+
+type tableAndSize struct {
+	tbl   *catalog.TableEntry
+	asize int
+	dsize int
 }
 
 // Q: What does runner do?
@@ -187,6 +194,8 @@ type runner struct {
 		checkpointSize      int
 
 		reservedWALEntryCount uint64
+
+		disableGC bool
 	}
 
 	ctx context.Context
@@ -221,6 +230,8 @@ type runner struct {
 	postCheckpointQueue        sm.Queue
 	gcCheckpointQueue          sm.Queue
 
+	objMemSizeList []tableAndSize
+
 	onceStart sync.Once
 	onceStop  sync.Once
 }
@@ -241,12 +252,12 @@ func NewRunner(
 		wal:       wal,
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(b.end)
+		return a.end.Less(&b.end)
 	}, btree.Options{
 		NoLocks: true,
 	})
 	r.storage.globals = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(b.end)
+		return a.end.Less(&b.end)
 	}, btree.Options{
 		NoLocks: true,
 	})
@@ -330,11 +341,11 @@ func (r *runner) getTSTOGC() (ts types.TS, needGC bool) {
 		return
 	}
 	tsTOGC := r.getTSToGC()
-	if tsTOGC.Less(ts) {
+	if tsTOGC.Less(&ts) {
 		ts = tsTOGC
 	}
 	gcedTS := r.getGCedTS()
-	if gcedTS.GreaterEq(ts) {
+	if gcedTS.GreaterEq(&ts) {
 		return
 	}
 	needGC = true
@@ -348,6 +359,10 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 	incrementals := r.GetAllIncrementalCheckpoints()
 	for _, incremental := range incrementals {
 		if incremental.LessEq(ts) {
+			if r.options.disableGC {
+				r.DeleteIncrementalEntry(incremental)
+				continue
+			}
 			err := incremental.GCEntry(r.rt.Fs)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				logutil.Warnf("gc %v failed: %v", incremental.String(), err)
@@ -363,6 +378,10 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 	globals := r.GetAllGlobalCheckpoints()
 	for _, global := range globals {
 		if global.LessEq(ts) {
+			if r.options.disableGC {
+				r.DeleteGlobalEntry(global)
+				continue
+			}
 			err := global.GCEntry(r.rt.Fs)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				panic(err)
@@ -687,7 +706,10 @@ func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (su
 
 	// if it is not the right candidate, skip this request
 	// [startTs, endTs] --> [endTs+1, ?]
-	if !maxEntry.GetEnd().Next().Equal(entry.GetStart()) {
+	endTS := maxEntry.GetEnd()
+	startTS := entry.GetStart()
+	nextTS := endTS.Next()
+	if !nextTS.Equal(&startTS) {
 		success = false
 		return
 	}
@@ -840,27 +862,20 @@ func (r *runner) onWaitWaitableItems(items ...any) {
 }
 
 func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.TableTree, endTs types.TS) error {
-	metas := make([]*catalog.BlockEntry, 0, 10)
+	metas := make([]*catalog.ObjectEntry, 0, 10)
 	for _, obj := range tree.Objs {
-		Object, err := table.GetObjectByID(obj.ID)
+		object, err := table.GetObjectByID(obj.ID)
 		if err != nil {
 			panic(err)
 		}
-		for blk := range obj.Blks {
-			bid := objectio.NewBlockidWithObjectID(obj.ID, blk)
-			block, err := Object.GetBlockEntryByID(bid)
-			if err != nil {
-				panic(err)
-			}
-			metas = append(metas, block)
-		}
+		metas = append(metas, object)
 	}
 
 	// freeze all append
 	scopes := make([]common.ID, 0, len(metas))
 	for _, meta := range metas {
-		if !meta.GetBlockData().PrepareCompact() {
-			logutil.Infof("[FlushTabletail] %d-%s / %s false prepareCompact ", table.ID, table.GetLastestSchema().Name, meta.ID.String())
+		if !meta.GetObjectData().PrepareCompact() {
+			logutil.Infof("[FlushTabletail] %d-%s / %s false prepareCompact ", table.ID, table.GetLastestSchemaLocked().Name, meta.ID.String())
 			return moerr.GetOkExpectedEOB()
 		}
 		scopes = append(scopes, *meta.AsCommonID())
@@ -869,7 +884,7 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 	factory := jobs.FlushTableTailTaskFactory(metas, r.rt, endTs)
 	if _, err := r.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory); err != nil {
 		if err != tasks.ErrScheduleScopeConflict {
-			logutil.Infof("[FlushTabletail] %d-%s %v", table.ID, table.GetLastestSchema().Name, err)
+			logutil.Infof("[FlushTabletail] %d-%s %v", table.ID, table.GetLastestSchemaLocked().Name, err)
 		}
 		return moerr.GetOkExpectedEOB()
 	}
@@ -878,20 +893,13 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 
 func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.TableTree) (asize int, dsize int) {
 	for _, obj := range tree.Objs {
-		Object, err := table.GetObjectByID(obj.ID)
+		object, err := table.GetObjectByID(obj.ID)
 		if err != nil {
 			panic(err)
 		}
-		for blk := range obj.Blks {
-			bid := objectio.NewBlockidWithObjectID(obj.ID, blk)
-			block, err := Object.GetBlockEntryByID(bid)
-			if err != nil {
-				panic(err)
-			}
-			a, d := block.GetBlockData().EstimateMemSize()
-			asize += a
-			dsize += d
-		}
+		a, d := object.GetObjectData().EstimateMemSize()
+		asize += a
+		dsize += d
 	}
 	return
 }
@@ -901,55 +909,74 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		return
 	}
 	logutil.Debugf(entry.String())
-	visitor := new(model.BaseTreeVisitor)
 
-	visitor.TableFn = func(dbID, tableID uint64) error {
-		db, err := r.catalog.GetDatabaseByID(dbID)
+	r.objMemSizeList = r.objMemSizeList[:0]
+	sizevisitor := new(model.BaseTreeVisitor)
+	var totalSize, totalASize int
+	sizevisitor.TableFn = func(did, tid uint64) error {
+		db, err := r.catalog.GetDatabaseByID(did)
 		if err != nil {
 			panic(err)
 		}
-		table, err := db.GetTableEntryByID(tableID)
+		table, err := db.GetTableEntryByID(tid)
 		if err != nil {
 			panic(err)
 		}
-
 		if !table.Stats.Inited {
 			table.Stats.Lock()
 			table.Stats.InitWithLock(r.options.maxFlushInterval)
 			table.Stats.Unlock()
 		}
-
-		dirtyTree := entry.GetTree().GetTable(tableID)
-		_, endTs := entry.GetTimeRange()
-
+		dirtyTree := entry.GetTree().GetTable(tid)
 		asize, dsize := r.EstimateTableMemSize(table, dirtyTree)
+		totalSize += asize + dsize
+		totalASize += asize
+		r.objMemSizeList = append(r.objMemSizeList, tableAndSize{table, asize, dsize})
+		return moerr.GetOkStopCurrRecur()
+	}
+	if err := entry.GetTree().Visit(sizevisitor); err != nil {
+		panic(err)
+	}
+
+	slices.SortFunc(r.objMemSizeList, func(a, b tableAndSize) int {
+		if a.asize > b.asize {
+			return -1
+		} else if a.asize < b.asize {
+			return 1
+		} else {
+			return 0
+		}
+	})
+
+	pressure := float64(totalSize) / float64(common.RuntimeCNMergeMemControl.Load())
+	if pressure > 1.0 {
+		pressure = 1.0
+	}
+
+	logutil.Infof("[flushtabletail] scan result: pressure %v, totalsize %v", pressure, common.HumanReadableBytes(totalSize))
+
+	for _, ticket := range r.objMemSizeList {
+		table, asize, dsize := ticket.tbl, ticket.asize, ticket.dsize
+		dirtyTree := entry.GetTree().GetTable(table.ID)
+		_, endTs := entry.GetTimeRange()
 
 		stats := table.Stats
 		stats.Lock()
 		defer stats.Unlock()
 
-		// debug log, delete later
-		if !stats.LastFlush.IsEmpty() && asize+dsize > 2*1000*1024 {
-			logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v",
-				table.GetLastestSchema().Name,
-				common.HumanReadableBytes(asize+dsize),
-				common.HumanReadableBytes(dsize),
-				time.Until(stats.FlushDeadline))
-		}
-
 		if force {
-			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchema().Name)
+			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchemaLocked().Name)
 			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
 				stats.ResetDeadlineWithLock()
 			}
-			return moerr.GetOkStopCurrRecur()
+			continue
 		}
 
 		if stats.LastFlush.IsEmpty() {
 			// first boot, just bail out, and never enter this branch again
 			stats.LastFlush = stats.LastFlush.Next()
 			stats.ResetDeadlineWithLock()
-			return moerr.GetOkStopCurrRecur()
+			continue
 		}
 
 		flushReady := func() bool {
@@ -962,19 +989,29 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 			if asize < common.Const1MBytes && dsize > 2*common.Const1MBytes+common.Const1MBytes/2 {
 				return true
 			}
+			if asize > common.Const1MBytes && rand.Float64() < pressure {
+				return true
+			}
 			return false
 		}
 
-		if flushReady() {
+		ready := flushReady()
+		// debug log, delete later
+		if !stats.LastFlush.IsEmpty() && asize+dsize > 2*1000*1024 {
+			logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v, flushReady %v",
+				table.GetLastestSchemaLocked().Name,
+				common.HumanReadableBytes(asize+dsize),
+				common.HumanReadableBytes(dsize),
+				time.Until(stats.FlushDeadline),
+				ready,
+			)
+		}
+
+		if ready {
 			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
 				stats.ResetDeadlineWithLock()
 			}
 		}
-
-		return moerr.GetOkStopCurrRecur()
-	}
-	if err := entry.GetTree().Visit(visitor); err != nil {
-		panic(err)
 	}
 }
 
@@ -999,8 +1036,12 @@ func (r *runner) onDirtyEntries(entries ...any) {
 }
 
 func (r *runner) crontask(ctx context.Context) {
+	lag := 3 * time.Second
+	if r.options.maxFlushInterval < time.Second {
+		lag = 0 * time.Second
+	}
 	hb := w.NewHeartBeaterWithFunc(r.options.collectInterval, func() {
-		r.source.Run()
+		r.source.Run(lag)
 		entry := r.source.GetAndRefreshMerged()
 		_, endts := entry.GetTimeRange()
 		if entry.IsEmpty() {
@@ -1061,11 +1102,13 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 	global, _ := r.storage.globals.Max()
 	r.storage.Unlock()
 	locs := make([]string, 0)
+	ckpStart := types.MaxTs()
 	newStart := start
 	if global != nil && global.HasOverlap(start, end) {
 		locs = append(locs, global.GetLocation().String())
 		locs = append(locs, strconv.Itoa(int(global.version)))
 		newStart = global.end.Next()
+		ckpStart = global.GetEnd()
 		checkpointed = global.GetEnd()
 	}
 	pivot := NewCheckpointEntry(newStart, newStart, ET_Incremental)
@@ -1094,12 +1137,20 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 				if len(locs) == 0 {
 					return
 				}
+				duration := fmt.Sprintf("[%s_%s]",
+					ckpStart.ToString(),
+					ckpStart.ToString())
+				locs = append(locs, duration)
 				locations = strings.Join(locs, ";")
 				return
 			}
 			if e.HasOverlap(newStart, end) {
 				locs = append(locs, e.GetLocation().String())
 				locs = append(locs, strconv.Itoa(int(e.version)))
+				start := e.GetStart()
+				if start.Less(&ckpStart) {
+					ckpStart = start
+				}
 				checkpointed = e.GetEnd()
 				// checkpoints = append(checkpoints, e)
 			}
@@ -1112,6 +1163,10 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			}
 			locs = append(locs, e.GetLocation().String())
 			locs = append(locs, strconv.Itoa(int(e.version)))
+			start := e.GetStart()
+			if start.Less(&ckpStart) {
+				ckpStart = start
+			}
 			checkpointed = e.GetEnd()
 			// checkpoints = append(checkpoints, e)
 			if ok = iter.Next(); !ok {
@@ -1124,6 +1179,10 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			if len(locs) == 0 {
 				return
 			}
+			duration := fmt.Sprintf("[%s_%s]",
+				ckpStart.ToString(),
+				ckpStart.ToString())
+			locs = append(locs, duration)
 			locations = strings.Join(locs, ";")
 			return
 		}
@@ -1134,11 +1193,19 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			if len(locs) == 0 {
 				return
 			}
+			duration := fmt.Sprintf("[%s_%s]",
+				ckpStart.ToString(),
+				ckpStart.ToString())
+			locs = append(locs, duration)
 			locations = strings.Join(locs, ";")
 			return
 		}
 		locs = append(locs, e.GetLocation().String())
 		locs = append(locs, strconv.Itoa(int(e.version)))
+		start := e.GetStart()
+		if start.Less(&ckpStart) {
+			ckpStart = start
+		}
 		checkpointed = e.GetEnd()
 		// checkpoints = append(checkpoints, e)
 	}
@@ -1146,6 +1213,10 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 	if len(locs) == 0 {
 		return
 	}
+	duration := fmt.Sprintf("[%s_%s]",
+		ckpStart.ToString(),
+		checkpointed.ToString())
+	locs = append(locs, duration)
 	locations = strings.Join(locs, ";")
 	return
 }

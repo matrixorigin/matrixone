@@ -19,6 +19,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -78,7 +81,7 @@ func TestBuildAlterView(t *testing.T) {
 			Cols: []*ColDef{
 				{
 					Name: "a",
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:    int32(types.T_varchar),
 						Width: types.MaxVarcharLen,
 						Table: "a",
@@ -112,9 +115,10 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()
 	ctx.EXPECT().DatabaseExists(gomock.Any()).Return(true).AnyTimes()
 	ctx.EXPECT().ResolveById(gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().GetStatsCache().Return(nil).AnyTimes()
 
 	ctx.EXPECT().GetRootSql().Return(sql1).AnyTimes()
-	stmt1, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql1, 1)
+	stmt1, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql1, 1, 0)
 	assert.NoError(t, err)
 	_, err = buildAlterView(stmt1.(*tree.AlterView), ctx)
 	assert.NoError(t, err)
@@ -122,14 +126,14 @@ func TestBuildAlterView(t *testing.T) {
 	//direct recursive refrence
 	ctx.EXPECT().GetRootSql().Return(sql2).AnyTimes()
 	ctx.EXPECT().GetBuildingAlterView().Return(true, "db", "v").AnyTimes()
-	stmt2, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql2, 1)
+	stmt2, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql2, 1, 0)
 	assert.NoError(t, err)
 	_, err = buildAlterView(stmt2.(*tree.AlterView), ctx)
 	assert.Error(t, err)
 	assert.EqualError(t, err, "internal error: there is a recursive reference to the view v")
 
 	//indirect recursive refrence
-	stmt3, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql3, 1)
+	stmt3, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql3, 1, 0)
 	ctx.EXPECT().GetBuildingAlterView().Return(true, "db", "vx").AnyTimes()
 	assert.NoError(t, err)
 	_, err = buildAlterView(stmt3.(*tree.AlterView), ctx)
@@ -137,13 +141,13 @@ func TestBuildAlterView(t *testing.T) {
 	assert.EqualError(t, err, "internal error: there is a recursive reference to the view v")
 
 	sql4 := "alter view noexists as select a from a"
-	stmt4, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql4, 1)
+	stmt4, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql4, 1, 0)
 	assert.NoError(t, err)
 	_, err = buildAlterView(stmt4.(*tree.AlterView), ctx)
 	assert.Error(t, err)
 
 	sql5 := "alter view verror as select a from a"
-	stmt5, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql5, 1)
+	stmt5, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql5, 1, 0)
 	assert.NoError(t, err)
 	_, err = buildAlterView(stmt5.(*tree.AlterView), ctx)
 	assert.Error(t, err)
@@ -171,7 +175,7 @@ func TestBuildLockTables(t *testing.T) {
 			Cols: []*ColDef{
 				{
 					Name: "a",
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:    int32(types.T_varchar),
 						Width: types.MaxVarcharLen,
 						Table: "t1",
@@ -197,13 +201,13 @@ func TestBuildLockTables(t *testing.T) {
 	ctx.EXPECT().Stats(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	ctx.EXPECT().GetRootSql().Return(sql1).AnyTimes()
-	stmt1, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql1, 1)
+	stmt1, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql1, 1, 0)
 	assert.NoError(t, err)
 	_, err = buildLockTables(stmt1.(*tree.LockTableStmt), ctx)
 	assert.NoError(t, err)
 
 	ctx.EXPECT().GetRootSql().Return(sql2).AnyTimes()
-	stmt2, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql2, 1)
+	stmt2, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql2, 1, 0)
 	assert.NoError(t, err)
 	_, err = buildLockTables(stmt2.(*tree.LockTableStmt), ctx)
 	assert.Error(t, err)
@@ -215,7 +219,7 @@ func TestBuildLockTables(t *testing.T) {
 			Cols: []*ColDef{
 				{
 					Name: "a",
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:    int32(types.T_varchar),
 						Width: types.MaxVarcharLen,
 						Table: "t2",
@@ -228,7 +232,7 @@ func TestBuildLockTables(t *testing.T) {
 	assert.NoError(t, err)
 
 	ctx.EXPECT().GetRootSql().Return(sql3).AnyTimes()
-	stmt3, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql3, 1)
+	stmt3, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql3, 1, 0)
 	assert.NoError(t, err)
 	_, err = buildLockTables(stmt3.(*tree.LockTableStmt), ctx)
 	assert.Error(t, err)
@@ -236,7 +240,11 @@ func TestBuildLockTables(t *testing.T) {
 
 func TestBuildCreateTable(t *testing.T) {
 	mock := NewMockOptimizer(false)
-
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupProcessLevelRuntime(rt)
+	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
 	sqls := []string{
 		`CREATE TABLE t3(
 					col1 INT NOT NULL,

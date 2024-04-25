@@ -46,9 +46,9 @@ func runClosedEventTests(
 		func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 			cnt := 0
 			tc.AppendEventCallback(ClosedEvent,
-				func(tm txn.TxnMeta, _ error) {
+				func(event TxnEvent) {
 					cnt++
-					assert.Equal(t, status, tm.Status)
+					assert.Equal(t, status, event.Txn.Status)
 				})
 			require.NoError(t, getAction(tc)(ctx))
 			assert.Equal(t, 1, cnt)

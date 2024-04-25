@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -54,7 +55,7 @@ type CacheCallbacks struct {
 	PostEvict []CacheCallbackFunc
 }
 
-type CacheCallbackFunc = func(CacheKey, CacheData)
+type CacheCallbackFunc = func(CacheKey, memorycache.CacheData)
 
 func (c *CacheConfig) setDefaults() {
 	if c.MemoryCapacity == nil {
@@ -83,7 +84,7 @@ func (c *CacheConfig) SetRemoteCacheCallback() {
 	}
 	c.InitKeyRouter = &sync.Once{}
 	c.CacheCallbacks.PostSet = append(c.CacheCallbacks.PostSet,
-		func(key CacheKey, data CacheData) {
+		func(key CacheKey, data memorycache.CacheData) {
 			c.InitKeyRouter.Do(func() {
 				c.KeyRouter = c.KeyRouterFactory()
 			})
@@ -99,7 +100,7 @@ func (c *CacheConfig) SetRemoteCacheCallback() {
 		},
 	)
 	c.CacheCallbacks.PostEvict = append(c.CacheCallbacks.PostEvict,
-		func(key CacheKey, data CacheData) {
+		func(key CacheKey, data memorycache.CacheData) {
 			c.InitKeyRouter.Do(func() {
 				c.KeyRouter = c.KeyRouterFactory()
 			})
@@ -145,9 +146,14 @@ type IOVectorCache interface {
 	) error
 }
 
+var slowCacheReadThreshold = time.Second * 0
+
 func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error {
-	ctx, cancel := context.WithTimeout(ctx, slowCacheReadThreshold)
-	defer cancel()
+	if slowCacheReadThreshold > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, slowCacheReadThreshold)
+		defer cancel()
+	}
 	err := cache.Read(ctx, vector)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -166,17 +172,3 @@ func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error
 }
 
 type CacheKey = pb.CacheKey
-
-// DataCache caches IOEntry.CachedData
-type DataCache interface {
-	Set(ctx context.Context, key CacheKey, value CacheData)
-	Get(ctx context.Context, key CacheKey) (value CacheData, ok bool)
-	//TODO file contents may change, so we still need this s.
-	DeletePaths(ctx context.Context, paths []string)
-	Flush()
-	Capacity() int64
-	Used() int64
-	Available() int64
-}
-
-var slowCacheReadThreshold = time.Second * 10

@@ -19,17 +19,19 @@ package mergesort
 // Init is idempotent with respect to the heap invariants
 // and may be called whenever the heap invariants may have been invalidated.
 // The complexity is Operator(n) where n = len(h).
-func heapInit[T any](h HeapSlice[T]) {
+/*
+func heapInit[T any](h *heapSlice[T]) {
 	// heapify
 	n := len(h.s)
 	for i := n/2 - 1; i >= 0; i-- {
-		down(&h, i, n)
+		down(h, i, n)
 	}
 }
+*/
 
 // Push pushes the element x onto the heap.
 // The complexity is Operator(log n) where n = len(h).
-func heapPush[T any](h *HeapSlice[T], x HeapElem[T]) {
+func heapPush[T any](h *heapSlice[T], x heapElem[T]) {
 	h.s = append(h.s, x)
 	up(h, len(h.s)-1)
 }
@@ -37,7 +39,7 @@ func heapPush[T any](h *HeapSlice[T], x HeapElem[T]) {
 // Pop removes and returns the minimum element (according to Less) from the heap.
 // The complexity is Operator(log n) where n = len(h).
 // Pop is equivalent to Remove(h, 0).
-func heapPop[T any](h *HeapSlice[T]) HeapElem[T] {
+func heapPop[T any](h *heapSlice[T]) heapElem[T] {
 	n := len(h.s) - 1
 	(h.s)[0], (h.s)[n] = (h.s)[n], (h.s)[0]
 	down(h, 0, n)
@@ -46,7 +48,7 @@ func heapPop[T any](h *HeapSlice[T]) HeapElem[T] {
 	return res
 }
 
-func up[T any](h *HeapSlice[T], j int) {
+func up[T any](h *heapSlice[T], j int) {
 	for {
 		i := (j - 1) / 2 // parent
 		if i == j || !h.Less(j, i) {
@@ -57,7 +59,7 @@ func up[T any](h *HeapSlice[T], j int) {
 	}
 }
 
-func down[T any](h *HeapSlice[T], i0, n int) bool {
+func down[T any](h *heapSlice[T], i0, n int) bool {
 	i := i0
 	for {
 		j1 := 2*i + 1

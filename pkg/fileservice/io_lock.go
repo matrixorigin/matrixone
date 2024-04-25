@@ -19,49 +19,90 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
 type IOLockKey struct {
-	File string
+	Path   string
+	Offset int64
+	End    int64
+	Policy Policy
 }
 
 type IOLocks struct {
-	locks sync.Map
+	locks sync.Map // IOLockKey -> chan struct{}
+}
+
+func NewIOLocks() *IOLocks {
+	return &IOLocks{}
 }
 
 var slowIOWaitDuration = time.Second * 10
 
-func (i *IOLocks) Lock(key IOLockKey) (unlock func(), wait func()) {
-	ch := make(chan struct{})
-	v, loaded := i.locks.LoadOrStore(key, ch)
-
-	if loaded {
-		// not locked
-		wait = func() {
-			t0 := time.Now()
-			for {
-				timer := time.NewTimer(slowIOWaitDuration)
-				select {
-				case <-v.(chan struct{}):
-					timer.Stop()
-					return
-				case <-timer.C:
-					logutil.Warn("wait io lock for too long",
-						zap.Any("wait", time.Since(t0)),
-						zap.Any("key", key),
-					)
-				}
+func (i *IOLocks) waitFunc(key IOLockKey, ch chan struct{}) func() {
+	metric.IOLockCounterWait.Add(1)
+	return func() {
+		t0 := time.Now()
+		defer func() {
+			metric.IOLockDurationWait.Observe(time.Since(t0).Seconds())
+		}()
+		for {
+			timer := time.NewTimer(slowIOWaitDuration)
+			select {
+			case <-ch:
+				timer.Stop()
+				return
+			case <-timer.C:
+				logutil.Warn("wait io lock for too long",
+					zap.Any("wait", time.Since(t0)),
+					zap.Any("key", key),
+				)
 			}
 		}
-		return
+	}
+}
+
+func (i *IOLocks) Lock(key IOLockKey) (unlock func(), wait func()) {
+	if v, ok := i.locks.Load(key); ok {
+		// wait
+		return nil, i.waitFunc(key, v.(chan struct{}))
+	}
+
+	// try lock
+	ch := make(chan struct{})
+	v, loaded := i.locks.LoadOrStore(key, ch)
+	if loaded {
+		// lock failed, wait
+		return nil, i.waitFunc(key, v.(chan struct{}))
 	}
 
 	// locked
-	unlock = func() {
+	metric.IOLockCounterLocked.Add(1)
+	t0 := time.Now()
+	return func() {
+		defer func() {
+			metric.IOLockDurationLocked.Observe(time.Since(t0).Seconds())
+		}()
 		i.locks.Delete(key)
 		close(ch)
-	}
+	}, nil
+}
 
-	return
+func (i *IOVector) ioLockKey() IOLockKey {
+	key := IOLockKey{
+		Path:   i.FilePath,
+		Policy: i.Policy,
+	}
+	min, max, readFull := i.readRange()
+	if readFull {
+		return key
+	}
+	if min != nil {
+		key.Offset = *min
+	}
+	if max != nil {
+		key.End = *max
+	}
+	return key
 }

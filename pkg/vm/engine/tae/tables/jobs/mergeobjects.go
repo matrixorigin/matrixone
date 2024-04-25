@@ -23,11 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -42,14 +41,22 @@ import (
 
 type mergeObjectsTask struct {
 	*tasks.BaseTask
-	txn         txnif.AsyncTxn
-	rt          *dbutils.Runtime
-	mergedObjs  []*catalog.ObjectEntry
-	createdBlks []*catalog.BlockEntry
-	compacted   []handle.Block
-	commitEntry *mergesort.MergeCommitEntry
-	rel         handle.Relation
-	did, tid    uint64
+	txn               txnif.AsyncTxn
+	rt                *dbutils.Runtime
+	mergedObjs        []*catalog.ObjectEntry
+	mergedObjsHandle  []handle.Object
+	mergedBlkCnt      []int
+	totalMergedBlkCnt int
+	createdBObjs      []*catalog.ObjectEntry
+	commitEntry       *api.MergeCommitEntry
+	rel               handle.Relation
+	did, tid          uint64
+
+	blkCnt     []int
+	nMergedBlk []int
+	schema     *catalog.Schema
+	idxs       []int
+	attrs      []string
 }
 
 func NewMergeObjectsTask(
@@ -61,11 +68,18 @@ func NewMergeObjectsTask(
 		panic("empty mergedObjs")
 	}
 	task = &mergeObjectsTask{
-		txn:         txn,
-		rt:          rt,
-		mergedObjs:  mergedObjs,
-		createdBlks: make([]*catalog.BlockEntry, 0),
-		compacted:   make([]handle.Block, 0),
+		txn:          txn,
+		rt:           rt,
+		mergedObjs:   mergedObjs,
+		createdBObjs: make([]*catalog.ObjectEntry, 0),
+		mergedBlkCnt: make([]int, len(mergedObjs)),
+		nMergedBlk:   make([]int, len(mergedObjs)),
+		blkCnt:       make([]int, len(mergedObjs)),
+	}
+	for i, obj := range mergedObjs {
+		task.mergedBlkCnt[i] = task.totalMergedBlkCnt
+		task.blkCnt[i] = obj.BlockCnt()
+		task.totalMergedBlkCnt += task.blkCnt[i]
 	}
 
 	task.did = mergedObjs[0].GetTable().GetDB().ID
@@ -83,18 +97,51 @@ func NewMergeObjectsTask(
 		if err != nil {
 			return nil, err
 		}
-		defer obj.Close()
-		it := obj.MakeBlockIt()
-		for ; it.Valid(); it.Next() {
-			blk := it.GetBlock()
-			task.compacted = append(task.compacted, blk)
+		task.mergedObjsHandle = append(task.mergedObjsHandle, obj)
+	}
+	task.schema = task.rel.Schema().(*catalog.Schema)
+	task.idxs = make([]int, 0, len(task.schema.ColDefs)-1)
+	task.attrs = make([]string, 0, len(task.schema.ColDefs)-1)
+	for _, def := range task.schema.ColDefs {
+		if def.IsPhyAddr() {
+			continue
 		}
-		if err != nil {
-			return nil, err
-		}
+		task.idxs = append(task.idxs, def.Idx)
+		task.attrs = append(task.attrs, def.Name)
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 	return
+}
+
+func (task *mergeObjectsTask) GetObjectCnt() int {
+	return len(task.mergedObjs)
+}
+
+func (task *mergeObjectsTask) GetBlkCnts() []int {
+	return task.blkCnt
+}
+
+func (task *mergeObjectsTask) GetAccBlkCnts() []int {
+	return task.mergedBlkCnt
+}
+
+func (task *mergeObjectsTask) GetObjLayout() (uint32, uint16) {
+	return task.schema.BlockMaxRows, task.schema.ObjectMaxBlocks
+}
+
+func (task *mergeObjectsTask) GetSortKeyPos() int {
+	sortKeyPos := -1
+	if task.schema.HasSortKey() {
+		sortKeyPos = task.schema.GetSingleSortKeyIdx()
+	}
+	return sortKeyPos
+}
+
+func (task *mergeObjectsTask) GetSortKeyType() types.Type {
+	if task.schema.HasSortKey() {
+		return task.schema.GetSingleSortKeyType()
+	}
+	return types.Type{}
 }
 
 // impl DisposableVecPool
@@ -104,12 +151,14 @@ func (task *mergeObjectsTask) GetVector(typ *types.Type) (*vector.Vector, func()
 }
 
 func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
-	return task.rt.VectorPool.Transient.MPool()
+	return task.rt.VectorPool.Transient.GetMPool()
 }
+
+func (task *mergeObjectsTask) HostHintName() string { return "DN" }
 
 func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error) {
 	var err error
-	views := make([]*containers.BlockView, len(task.compacted))
+	views := make([]*containers.BlockView, task.totalMergedBlkCnt)
 	releaseF := func() {
 		for _, view := range views {
 			if view != nil {
@@ -132,14 +181,23 @@ func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, fun
 		idxs = append(idxs, def.Idx)
 		attrs = append(attrs, def.Name)
 	}
-	for i, block := range task.compacted {
-		if views[i], err = block.GetColumnDataByIds(context.Background(), idxs, common.MergeAllocator); err != nil {
-			return nil, nil, nil, err
+	for i, obj := range task.mergedObjsHandle {
+
+		maxBlockOffset := task.totalMergedBlkCnt
+		if i != len(task.mergedObjs)-1 {
+			maxBlockOffset = task.mergedBlkCnt[i+1]
+		}
+		minBlockOffset := task.mergedBlkCnt[i]
+
+		for j := 0; j < maxBlockOffset-minBlockOffset; j++ {
+			if views[minBlockOffset+j], err = obj.GetColumnDataByIds(context.Background(), uint16(j), idxs, common.MergeAllocator); err != nil {
+				return nil, nil, nil, err
+			}
 		}
 	}
 
-	batches := make([]*batch.Batch, 0, len(task.compacted))
-	dels := make([]*nulls.Nulls, 0, len(task.compacted))
+	batches := make([]*batch.Batch, 0, task.totalMergedBlkCnt)
+	dels := make([]*nulls.Nulls, 0, task.totalMergedBlkCnt)
 	for _, view := range views {
 		batch := batch.New(true, attrs)
 		if len(attrs) != len(view.Columns) {
@@ -156,22 +214,68 @@ func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, fun
 	return batches, dels, releaseF, nil
 }
 
-func (task *mergeObjectsTask) PrepareCommitEntry() *mergesort.MergeCommitEntry {
+func (task *mergeObjectsTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
+	if objIdx >= uint32(len(task.mergedObjs)) {
+		panic("invalid objIdx")
+	}
+	if task.nMergedBlk[objIdx] >= task.blkCnt[objIdx] {
+		return nil, nil, nil, mergesort.ErrNoMoreBlocks
+	}
+	var err error
+	var view *containers.BlockView
+	releaseF := func() {
+		if view != nil {
+			view.Close()
+		}
+	}
+	defer func() {
+		if err != nil {
+			releaseF()
+		}
+	}()
+
+	obj := task.mergedObjsHandle[objIdx]
+	view, err = obj.GetColumnDataByIds(context.Background(), uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if len(task.attrs) != len(view.Columns) {
+		panic(fmt.Sprintf("mismatch %v, %v, %v", task.attrs, len(task.attrs), len(view.Columns)))
+	}
+	task.nMergedBlk[objIdx]++
+
+	bat := batch.New(true, task.attrs)
+	for i, col := range view.Columns {
+		bat.Vecs[i] = col.GetData().GetDownstreamVector()
+	}
+	bat.SetRowCount(view.Columns[0].Length())
+	return bat, view.DeleteMask, releaseF, nil
+}
+
+func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {
+	if task.commitEntry == nil {
+		return task.PrepareCommitEntry()
+	}
+	return task.commitEntry
+}
+
+func (task *mergeObjectsTask) PrepareCommitEntry() *api.MergeCommitEntry {
 	schema := task.rel.Schema().(*catalog.Schema)
-	commitEntry := &mergesort.MergeCommitEntry{}
-	commitEntry.DbID = task.did
-	commitEntry.TableID = task.tid
-	commitEntry.Tablename = schema.Name
-	commitEntry.StartTs = task.txn.GetStartTS()
+	commitEntry := &api.MergeCommitEntry{}
+	commitEntry.DbId = task.did
+	commitEntry.TblId = task.tid
+	commitEntry.TableName = schema.Name
+	commitEntry.StartTs = task.txn.GetStartTS().ToTimestamp()
 	for _, o := range task.mergedObjs {
-		commitEntry.MergedObjs = append(commitEntry.MergedObjs, o.GetObjectStats())
+		obj := o.GetObjectStats()
+		commitEntry.MergedObjs = append(commitEntry.MergedObjs, obj.Clone().Marshal())
 	}
 	task.commitEntry = commitEntry
 	// leave mapping to ReadMergeAndWrite
 	return commitEntry
 }
 
-func (task *mergeObjectsTask) PrepareNewWriterFunc() func() *blockio.BlockWriter {
+func (task *mergeObjectsTask) PrepareNewWriter() *blockio.BlockWriter {
 	schema := task.rel.Schema().(*catalog.Schema)
 	seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
 	for _, def := range schema.ColDefs {
@@ -189,16 +293,17 @@ func (task *mergeObjectsTask) PrepareNewWriterFunc() func() *blockio.BlockWriter
 	} else if schema.HasSortKey() {
 		sortkeyPos = schema.GetSingleSortKeyIdx()
 	}
-	return mergesort.GetMustNewWriter(task.rt.Fs.Service, schema.Version, seqnums, sortkeyPos, sortkeyIsPK)
+
+	return mergesort.GetNewWriter(task.rt.Fs.Service, schema.Version, seqnums, sortkeyPos, sortkeyIsPK)
 }
 
 func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
-	phaseNumber := 0
+	phaseDesc := ""
 	defer func() {
 		if err != nil {
 			logutil.Error("[DoneWithErr] Mergeblocks", common.OperationField(task.Name()),
 				common.AnyField("error", err),
-				common.AnyField("phase", phaseNumber),
+				common.AnyField("phase", phaseDesc),
 			)
 		}
 	}()
@@ -208,11 +313,13 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	if schema.HasSortKey() {
 		sortkeyPos = schema.GetSingleSortKeyIdx()
 	}
+	phaseDesc = "1-DoMergeAndWrite"
 	if err = mergesort.DoMergeAndWrite(ctx, sortkeyPos, int(schema.BlockMaxRows), task); err != nil {
 		return err
 	}
 
-	if task.createdBlks, err = HandleMergeEntryInTxn(task.txn, task.commitEntry, task.rt); err != nil {
+	phaseDesc = "2-HandleMergeEntryInTxn"
+	if task.createdBObjs, err = HandleMergeEntryInTxn(task.txn, task.commitEntry, task.rt); err != nil {
 		return err
 	}
 
@@ -222,50 +329,37 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	return nil
 }
 
-func (task *mergeObjectsTask) GetCreatedBlocks() []*catalog.BlockEntry {
-	return task.createdBlks
-}
-
-func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *mergesort.MergeCommitEntry, rt *dbutils.Runtime) ([]*catalog.BlockEntry, error) {
-	database, err := txn.GetDatabaseByID(entry.DbID)
+func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *dbutils.Runtime) ([]*catalog.ObjectEntry, error) {
+	database, err := txn.GetDatabaseByID(entry.DbId)
 	if err != nil {
 		return nil, err
 	}
-	rel, err := database.GetRelationByID(entry.TableID)
+	rel, err := database.GetRelationByID(entry.TblId)
 	if err != nil {
 		return nil, err
 	}
 
 	mergedObjs := make([]*catalog.ObjectEntry, 0, len(entry.MergedObjs))
-	createdObjs := make([]*catalog.ObjectEntry, 0, len(entry.CreatedObjectStats))
-	mergedBlks := make([]*catalog.BlockEntry, 0, len(entry.MergedObjs)*2)
-	createdBlks := make([]*catalog.BlockEntry, 0, len(entry.CreatedObjectStats)*2)
+	createdObjs := make([]*catalog.ObjectEntry, 0, len(entry.CreatedObjs))
 	ids := make([]*common.ID, 0, len(entry.MergedObjs)*2)
 
 	// drop merged blocks and objects
-	for _, drop := range entry.MergedObjs {
+	for _, item := range entry.MergedObjs {
+		drop := objectio.ObjectStats(item)
 		objID := drop.ObjectName().ObjectId()
 		obj, err := rel.GetObject(objID)
 		if err != nil {
 			return nil, err
 		}
 		mergedObjs = append(mergedObjs, obj.GetMeta().(*catalog.ObjectEntry))
-		it := obj.MakeBlockIt()
-		for ; it.Valid(); it.Next() {
-			blk := it.GetBlock()
-			if err = obj.SoftDeleteBlock(blk.ID()); err != nil {
-				return nil, err
-			}
-			mergedBlks = append(mergedBlks, blk.GetMeta().(*catalog.BlockEntry))
-			ids = append(ids, blk.Fingerprint())
-		}
 		if err = rel.SoftDeleteObject(objID); err != nil {
 			return nil, err
 		}
 	}
 
 	// construct new object,
-	for _, stats := range entry.CreatedObjectStats {
+	for _, stats := range entry.CreatedObjs {
+		stats := objectio.ObjectStats(stats)
 		objID := stats.ObjectName().ObjectId()
 		obj, err := rel.CreateNonAppendableObject(false, new(objectio.CreateObjOpt).WithId(objID))
 		if err != nil {
@@ -278,50 +372,28 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *mergesort.MergeCommitEntry
 		}
 		objEntry := obj.GetMeta().(*catalog.ObjectEntry)
 		objEntry.SetSorted()
-
-		num := stats.ObjectName().Num()
-		blkCount := stats.BlkCnt()
-		totalRow := stats.Rows()
-		blkMaxRows := rel.Schema().(*catalog.Schema).BlockMaxRows
-		for i := uint16(0); i < uint16(blkCount); i++ {
-			var blkRow uint32
-			if totalRow > blkMaxRows {
-				blkRow = blkMaxRows
-			} else {
-				blkRow = totalRow
-			}
-			totalRow -= blkRow
-			metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, i)
-			blk, err := obj.CreateNonAppendableBlock(
-				new(objectio.CreateBlockOpt).
-					WithMetaloc(metaloc).
-					WithFileIdx(num).
-					WithBlkIdx(i))
-			if err != nil {
-				return nil, err
-			}
-			blkEntry := blk.GetMeta().(*catalog.BlockEntry)
-			createdBlks = append(createdBlks, blkEntry)
-			if err = blkEntry.GetBlockData().Init(); err != nil {
-				return nil, err
-			}
-		}
 	}
 
-	txnEntry := txnentries.NewMergeObjectsEntry(
+	txnEntry, err := txnentries.NewMergeObjectsEntry(
 		txn,
 		rel,
 		mergedObjs,
 		createdObjs,
-		mergedBlks,
-		createdBlks,
 		entry.Booking,
 		rt,
 	)
-
-	if err = txn.LogTxnEntry(entry.DbID, entry.TableID, txnEntry, ids); err != nil {
+	if err != nil {
 		return nil, err
 	}
 
-	return createdBlks, nil
+	if err = txn.LogTxnEntry(entry.DbId, entry.TblId, txnEntry, ids); err != nil {
+		return nil, err
+	}
+
+	return createdObjs, nil
+}
+
+// for UT
+func (task *mergeObjectsTask) GetCreatedObjects() []*catalog.ObjectEntry {
+	return task.createdBObjs
 }

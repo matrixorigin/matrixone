@@ -48,15 +48,20 @@ func GetInFilterCardLimitOnPK(tableCnt float64) int32 {
 	return int32(upper)
 }
 
-func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
+func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
 
 	for _, childID := range node.Children {
-		builder.pushdownRuntimeFilters(childID)
+		builder.generateRuntimeFilters(childID)
 	}
 
 	// Build runtime filters only for broadcast join
 	if node.NodeType != plan.Node_JOIN {
+		return
+	}
+
+	// if this node has already pushed runtime filter, just return
+	if len(node.RuntimeFilterBuildList) > 0 {
 		return
 	}
 
@@ -69,25 +74,6 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	if node.Stats.HashmapStats.Shuffle {
-		leftChild := builder.qry.Nodes[node.Children[0]]
-		if leftChild.NodeType != plan.Node_TABLE_SCAN {
-			return
-		}
-
-		if leftChild.NodeType > 0 {
-			return
-		}
-
-		rfTag := builder.genNewTag()
-
-		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{Tag: rfTag})
-		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, &plan.RuntimeFilterSpec{Tag: rfTag})
-
-		return
-	}
-
-	rightChild := builder.qry.Nodes[node.Children[1]]
-	if rightChild.Stats.Selectivity > 0.5 {
 		return
 	}
 
@@ -98,14 +84,19 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	leftTags := make(map[int32]emptyType)
-	for _, tag := range builder.enumerateTags(node.Children[0]) {
-		leftTags[tag] = emptyStruct
+	rightChild := builder.qry.Nodes[node.Children[1]]
+	if node.JoinType != plan.Node_INDEX && rightChild.Stats.Selectivity > 0.5 {
+		return
 	}
 
-	rightTags := make(map[int32]emptyType)
+	leftTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = true
+	}
+
+	rightTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
-		rightTags[tag] = emptyStruct
+		rightTags[tag] = true
 	}
 
 	var probeExprs, buildExprs []*plan.Expr
@@ -127,7 +118,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	rfTag := builder.genNewTag()
+	rfTag := builder.genNewMsgTag()
 
 	type_tuple := types.New(types.T_tuple, 0, 0)
 	for i := range probeExprs {
@@ -140,59 +131,55 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	if len(probeExprs) == 1 {
-		probeNdv := getExprNdv(probeExprs[0], builder)
-		if probeNdv == -1 || node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
-			return
-		}
+		if node.JoinType != plan.Node_INDEX {
+			probeNdv := getExprNdv(probeExprs[0], builder)
+			if probeNdv == -1 || node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
+				return
+			}
 
-		if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
-			switch col := probeExprs[0].Expr.(type) {
-			case (*plan.Expr_Col):
-				ctx := builder.ctxByNode[leftChild.NodeId]
-				if ctx == nil {
-					return
-				}
-				if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
-					tableDef := builder.qry.Nodes[binding.nodeId].TableDef
-					if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
+			if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
+				switch col := probeExprs[0].Expr.(type) {
+				case *plan.Expr_Col:
+					ctx := builder.ctxByNode[leftChild.NodeId]
+					if ctx == nil {
 						return
 					}
-				}
+					if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
+						tableDef := builder.qry.Nodes[binding.nodeId].TableDef
+						if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
+							return
+						}
+					}
 
-			default:
-				return
+				default:
+					return
+				}
 			}
 		}
 
-		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, &plan.RuntimeFilterSpec{
-			Tag:  rfTag,
-			Expr: DeepCopyExpr(probeExprs[0]),
-		})
-
-		col := probeExprs[0].Expr.(*plan.Expr_Col)
+		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0])))
+		col := probeExprs[0].GetCol()
 		inLimit := GetInFilterCardLimit()
-		if leftChild.TableDef.Pkey != nil && col.Col.Name == leftChild.TableDef.Pkey.PkeyColName {
+		if leftChild.TableDef.Pkey != nil && leftChild.TableDef.Cols[col.ColPos].Name == leftChild.TableDef.Pkey.PkeyColName {
 			inLimit = GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt)
 		}
-		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
-			Tag:        rfTag,
-			UpperLimit: inLimit,
-			Expr: &plan.Expr{
-				Typ: buildExprs[0].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: -1,
-						ColPos: 0,
-					},
+		buildExpr := &plan.Expr{
+			Typ: buildExprs[0].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: -1,
+					ColPos: 0,
 				},
 			},
-		})
-		recalcStatsByRuntimeFilter(leftChild, rightChild.Stats.Selectivity)
+		}
+		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, inLimit, buildExpr))
+
+		recalcStatsByRuntimeFilter(leftChild, node, rightChild.Stats.Selectivity)
 		return
 	}
 
 	tableDef := leftChild.TableDef
-	if tableDef.Pkey == nil || len(tableDef.Pkey.Names) < len(probeExprs) {
+	if len(tableDef.Pkey.Names) < len(probeExprs) {
 		return
 	}
 
@@ -207,14 +194,12 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	for i, expr := range probeExprs {
-		switch col := expr.Expr.(type) {
-		case (*plan.Expr_Col):
-			if pos, ok := name2Pos[col.Col.Name]; ok {
-				col2Probe[pos] = i
-			}
-
-		default:
+		col := expr.GetCol()
+		if col == nil {
 			return
+		}
+		if pos, ok := name2Pos[tableDef.Cols[col.ColPos].Name]; ok {
+			col2Probe[pos] = i
 		}
 	}
 
@@ -234,18 +219,16 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, &plan.RuntimeFilterSpec{
-		Tag: rfTag,
-		Expr: &plan.Expr{
-			Typ: *tableDef.Cols[pkIdx].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: leftChild.BindingTags[0],
-					ColPos: pkIdx,
-				},
+	probeExpr := &plan.Expr{
+		Typ: tableDef.Cols[pkIdx].Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: leftChild.BindingTags[0],
+				ColPos: pkIdx,
 			},
 		},
-	})
+	}
+	leftChild.RuntimeFilterProbeList = append(node.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), 0, probeExpr))
 
 	buildArgs := make([]*plan.Expr, len(probeExprs))
 	for i := range probeExprs {
@@ -254,7 +237,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 			Typ: buildExprs[pos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 0,
+					RelPos: -1,
 					ColPos: int32(pos),
 				},
 			},
@@ -262,10 +245,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	buildExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", buildArgs)
-	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
-		Tag:        rfTag,
-		UpperLimit: GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt), // multicol pk, must hit all pk cols for now
-		Expr:       buildExpr,
-	})
-	recalcStatsByRuntimeFilter(leftChild, rightChild.Stats.Selectivity)
+
+	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt), buildExpr))
+	recalcStatsByRuntimeFilter(leftChild, node, rightChild.Stats.Selectivity)
 }

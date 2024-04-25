@@ -54,6 +54,16 @@ func (c *CompilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("implement me")
 }
 
+func (c *CompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (c *CompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
 	//TODO implement me
 	panic("implement me")
@@ -88,6 +98,10 @@ func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 
 func (*CompilerContext) Stats(obj *plan.ObjectRef) (*pb.StatsInfo, error) {
 	return nil, nil
+}
+
+func (*CompilerContext) GetStatsCache() *plan.StatsCache {
+	return nil
 }
 
 func (c *CompilerContext) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
@@ -178,7 +192,8 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 	}
 
 	tableDef = &plan.TableDef{
-		Name: tableName,
+		Name:   tableName,
+		DbName: schemaName,
 	}
 
 	attrs, err := c.getTableAttrs(schemaName, tableName)
@@ -213,7 +228,7 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 }
 
 func (*CompilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
-	return "", nil
+	return nil, nil
 }
 
 func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs []*engine.Attribute, err error) {
@@ -256,7 +271,7 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 	return &plan.ColDef{
 		ColId: uint64(attr.ID),
 		Name:  attr.Name,
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(attr.Type.Oid),
 			NotNullable: attr.Default != nil && !(attr.Default.NullAbility),
 			Width:       attr.Type.Width,

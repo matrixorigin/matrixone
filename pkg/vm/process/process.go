@@ -16,9 +16,10 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
@@ -280,7 +281,7 @@ func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch
 	return bat, nil
 }
 
-func (proc *Process) AppendBatchFromOffset(dst *batch.Batch, src *batch.Batch, offset int) (*batch.Batch, int, error) {
+func (proc *Process) AppendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int) (*batch.Batch, int, error) {
 	var err error
 	if dst == nil {
 		dst, err = proc.NewBatchFromSrc(src, 0)
@@ -289,7 +290,7 @@ func (proc *Process) AppendBatchFromOffset(dst *batch.Batch, src *batch.Batch, o
 		}
 	}
 	if dst.RowCount() >= DefaultBatchSize {
-		panic("can't call AppendBatchFromOffset when batch is full!")
+		panic("can't call AppendToFixedSizeFromOffset when batch is full!")
 	}
 	if len(dst.Vecs) != len(src.Vecs) {
 		return nil, 0, moerr.NewInternalError(proc.Ctx, "unexpected error happens in batch append")
@@ -337,7 +338,7 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 	}
 	for _, agg := range bat.Aggs {
 		if agg != nil {
-			agg.Free(proc.Mp())
+			agg.Free()
 		}
 	}
 	bat.Vecs = nil

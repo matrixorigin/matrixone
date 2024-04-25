@@ -114,8 +114,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 func (ctr *container) cleanExecutors() {
 	for i := range ctr.executorsForArgs {
-		ctr.executorsForArgs[i].Free()
+		if ctr.executorsForArgs[i] != nil {
+			ctr.executorsForArgs[i].Free()
+		}
 	}
+	ctr.executorsForArgs = nil
 }
 
 type unnestParam struct {

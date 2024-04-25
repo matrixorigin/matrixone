@@ -246,6 +246,13 @@ func (txn *activeTxn) clearBlocked(w *waiter) {
 	txn.blockedWaiters = newBlockedWaiters
 }
 
+func (txn *activeTxn) closeBlockWaiters() {
+	for _, w := range txn.blockedWaiters {
+		w.close()
+	}
+	txn.blockedWaiters = txn.blockedWaiters[:0]
+}
+
 func (txn *activeTxn) setBlocked(w *waiter) {
 	if w == nil {
 		panic("invalid waiter")
@@ -259,6 +266,21 @@ func (txn *activeTxn) setBlocked(w *waiter) {
 
 func (txn *activeTxn) isRemoteLocked() bool {
 	return txn.remoteService != ""
+}
+
+func (txn *activeTxn) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string) {
+	txn.RLock()
+	defer txn.RUnlock()
+	for _, h := range txn.lockHolders {
+		for _, l := range h.tableBinds {
+			if serviceID == l.ServiceID {
+				if _, ok := m[l.Group]; !ok {
+					m[l.Group] = make(map[uint64]uint64, 1024)
+				}
+				m[l.Group][l.Table]++
+			}
+		}
+	}
 }
 
 // ============================================================================================================================

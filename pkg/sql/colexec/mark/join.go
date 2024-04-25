@@ -137,14 +137,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze) error {
+func (ctr *container) receiveHashMap(anal process.Analyze) error {
 	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
 	}
 	if bat != nil && bat.AuxData != nil {
 		ctr.mp = bat.DupJmAuxData()
-		anal.Alloc(ctr.mp.Size())
+		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	return nil
 }
@@ -174,7 +174,7 @@ func (ctr *container) receiveBatch(ap *Argument, proc *process.Process, anal pro
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	err := ctr.receiveHashMap(proc, anal)
+	err := ctr.receiveHashMap(anal)
 	if err != nil {
 		return err
 	}
@@ -404,7 +404,6 @@ func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.
 		return condUnkown, err
 	}
 	vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
-	defer vec.Free(proc.Mp())
 	if err != nil {
 		return condUnkown, err
 	}

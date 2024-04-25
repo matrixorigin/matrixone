@@ -115,7 +115,7 @@ not supported: VECTOR column 'b' cannot be in primary key
 create unique index t3 on vec_table(b);
 not supported: VECTOR column 'b' cannot be in index
 create table t3(a int, b vecf32(65537));
-Data truncation: data out of range: data type vecf32,  typeLen is over the MaxVectorLen : 65536
+Data truncation: data out of range: data type vecf32,  typeLen is over the MaxVectorLen : 65535
 select sqrt(cast("[1,2,-3]" as vecf32(3)));
 invalid argument Sqrt, bad value -3
 select b/(cast("[1,2,0]" as vecf32(3))) from vec_table;
@@ -133,13 +133,13 @@ select * from t4;
 a    b    c
 1    [1, 2, 3, 4, 5]    [1, 2, 3, 4, 5]
 create table t5(a int, b vecf32(3));
-insert into t5 values(1, decode('7e98b23e9e10383b2f41133f','hex'));
-insert into t5 values(2, decode('0363733ff13e0b3f7aa39d3e','hex'));
-insert into t5 values(3, decode('be1ac03e485d083ef6bc723f','hex'));
+insert into t5 values(1, cast(unhex('7e98b23e9e10383b2f41133f') as blob));
+insert into t5 values(2, cast(unhex('0363733ff13e0b3f7aa39d3e') as blob));
+insert into t5 values(3, cast(unhex('be1ac03e485d083ef6bc723f') as blob));
 insert into t5 values(4, "[0,2,3]");
-insert into t5 values(5, decode('05486c3f3ee2863e713d503dd58e8e3e7b88743f','hex')); -- this is float32[5]
+insert into t5 values(5, cast(unhex('05486c3f3ee2863e713d503dd58e8e3e7b88743f') as blob)); -- this is float32[5]
 invalid input: expected vector dimension 3 != actual dimension 5.
-insert into t5 values(6, decode('9be2123fcf92de3e','hex')); -- this is float32[2]
+insert into t5 values(6, cast(unhex('9be2123fcf92de3e') as blob)); -- this is float32[2]
 invalid input: expected vector dimension 3 != actual dimension 2.
 select * from t5;
 a    b
@@ -153,8 +153,8 @@ a    b
 2    [0.95072955, 0.54392916, 0.30788785]
 3    [0.37520403, 0.13316834, 0.9481958]
 4    [0, 2, 3]
-select encode(b,'hex') from t5;
-encode(b, hex)
+select hex(b) from t5;
+hex(b)
 7e98b23e9e10383b2f41133f
 0363733ff13e0b3f7aa39d3e
 be1ac03e485d083ef6bc723f
@@ -495,8 +495,31 @@ Data truncation: division by zero
 select 5 + (-1*cast("[1,2,3]" as vecf32(3)));
 5 + (-1 * cast([1,2,3] as vecf32(3)))
 [4, 3, 2]
+create table t11(a vecf32(2));
+insert into t11 values('[1,0]');
+insert into t11 values('[1,2]');
+select distinct a from t11;
+a
+[1, 0]
+[1, 2]
+select distinct a,a from t11;
+a    a
+[1, 0]    [1, 0]
+[1, 2]    [1, 2]
+drop table if exists t1;
+create table t1(c1 int,c2 vecf32(5),c3 tinyint unsigned,c4 bigint,c5 decimal(4,2),c6 float,c7 double);
+insert into t1 values(10 ,"[1, 0, 1, 6, 6]",3,10,7.1,0.36,2.10);
+insert into t1 values(60,"[6, 0, 8, 10,129]",2,5,3.26,4.89,1.26);
+insert into t1 values(20,"[ 9, 18, 1, 4, 132]",6,1,9.36,6.9,5.6);
+select c2+c3 from t1;
+c2 + c3
+[4, 3, 4, 9, 9]
+[8, 2, 10, 12, 131]
+[15, 24, 7, 10, 138]
 select * from t8 except select * from t9;
 a    b    c
 3    [0.1726299, 3.2908857, 30.433094]    [0.45052445, 2.1984527, 9.579752, 123.48039, 4635.894]
 4    [8.560689, 6.790359, 821.9778]    [0.46323407, 23.498016, 563.923, 56.076736, 8732.958]
+select cast("[76875768584509877574546435800000005,8955885757767774774774774456466]" as vecf32(2)) *623585864455;
+internal error: vector contains infinity values
 drop database vecdb;

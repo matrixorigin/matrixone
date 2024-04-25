@@ -16,8 +16,11 @@ package compile
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -38,6 +41,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"go.uber.org/zap"
 )
 
 type sqlExecutor struct {
@@ -179,8 +184,12 @@ func (s *sqlExecutor) adjustOptions(
 	if !opts.HasExistsTxn() {
 		txnOpts := opts.ExtraTxnOptions()
 		txnOpts = append(txnOpts,
-			client.WithTxnCreateBy("sql-executor"),
-			client.WithDisableTrace(true))
+			client.WithTxnCreateBy(
+				opts.AccountID(),
+				"",
+				"sql-executor",
+				0),
+			client.WithDisableTrace(!opts.EnableTrace()))
 		txnOp, err := s.txnClient.New(
 			ctx,
 			opts.MinCommittedTS(),
@@ -223,9 +232,31 @@ func (exec *txnExecutor) Use(db string) {
 func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption) (executor.Result, error) {
+
+	//-----------------------------------------------------------------------------------------
+	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
+	// so that it can be restored to its original state after completing the task.
+	recoverAccount := func(exec *txnExecutor, accId uint32) {
+		exec.ctx = context.WithValue(exec.ctx, defines.TenantIDKey{}, accId)
+	}
+
+	if statementOption.HasAccountID() {
+		originAccountID := catalog.System_Account
+		if v := exec.ctx.Value(defines.TenantIDKey{}); v != nil {
+			originAccountID = v.(uint32)
+		}
+
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.TenantIDKey{},
+			statementOption.AccountID())
+		// NOTE: Restore AccountID information in context.Context
+		defer recoverAccount(exec, originAccountID)
+	}
+	//-----------------------------------------------------------------------------------------
+
 	receiveAt := time.Now()
 
-	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
+	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1, 0)
 	defer func() {
 		for _, stmt := range stmts {
 			stmt.Free()
@@ -266,19 +297,22 @@ func (exec *txnExecutor) Exec(
 	proc.SetVectorPoolSize(0)
 	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.SessionInfo.Buf = exec.s.buf
+	proc.SessionInfo.StorageEngine = exec.s.eng
 	defer func() {
 		proc.CleanValueScanBatchs()
 		proc.FreeVectors()
 	}()
 
-	pn, err := plan.BuildPlan(
-		exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase()),
-		stmts[0], false)
+	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase())
+	compileContext.SetRootSql(sql)
+
+	pn, err := plan.BuildPlan(compileContext, stmts[0], false)
 	if err != nil {
 		return executor.Result{}, err
 	}
 
 	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	defer c.Release()
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.SetBuildPlanFunc(func() (*plan.Plan, error) {
 		return plan.BuildPlan(
@@ -291,8 +325,7 @@ func (exec *txnExecutor) Exec(
 	err = c.Compile(
 		exec.ctx,
 		pn,
-		nil,
-		func(a any, bat *batch.Batch) error {
+		func(bat *batch.Batch) error {
 			if bat != nil {
 				// the bat is valid only in current method. So we need copy data.
 				// FIXME: add a custom streaming apply handler to consume readed data. Now
@@ -306,7 +339,6 @@ func (exec *txnExecutor) Exec(
 			return nil
 		})
 	if err != nil {
-		c.Release()
 		return executor.Result{}, err
 	}
 	var runResult *util.RunResult
@@ -320,6 +352,12 @@ func (exec *txnExecutor) Exec(
 		return executor.Result{}, err
 	}
 
+	logutil.Info("sql_executor exec",
+		zap.String("sql", sql),
+		zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
+		zap.Duration("duration", time.Since(receiveAt)),
+		zap.Uint64("AffectedRows", runResult.AffectRows),
+	)
 	result.LastInsertID = proc.GetLastInsertID()
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows
@@ -358,6 +396,10 @@ func (exec *txnExecutor) LockTable(table string) error {
 		proc.FreeVectors()
 	}()
 	return doLockTable(exec.s.eng, proc, rel, false)
+}
+
+func (exec *txnExecutor) Txn() client.TxnOperator {
+	return exec.opts.Txn()
 }
 
 func (exec *txnExecutor) commit() error {

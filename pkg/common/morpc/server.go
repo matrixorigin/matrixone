@@ -233,7 +233,6 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 			switch m.flag {
 			case flagPing:
 				sendAt := time.Now()
-				left, _ := request.GetTimeoutFromContext()
 				n := len(cs.c)
 				err := cs.WriteRPCMessage(RPCMessage{
 					Ctx:      request.Ctx,
@@ -246,13 +245,12 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 				if err != nil {
 					failedAt := time.Now()
 					s.logger.Error("handle ping failed",
-						zap.Duration("timeout-left", left),
 						zap.Time("sendAt", sendAt),
 						zap.Time("failedAt", failedAt),
 						zap.Int("queue-size", n),
 						zap.Error(err))
 				}
-				return err
+				return nil
 			default:
 				panic(fmt.Sprintf("invalid internal message, flag %d", m.flag))
 			}
@@ -347,7 +345,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						fields = append(fields, zap.String("client", cs.conn.RemoteAddress()))
 					}
 
-					written := 0
+					written := responses[:0]
 					timeout := time.Duration(0)
 					for _, f := range responses {
 						s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
@@ -387,10 +385,10 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 							f.messageSent(err)
 							return
 						}
-						written++
+						written = append(written, f)
 					}
 
-					if written > 0 {
+					if len(written) > 0 {
 						s.metrics.outputBytesCounter.Add(float64(cs.conn.OutBuf().Readable()))
 						err := cs.conn.Flush(timeout)
 						if err != nil {
@@ -415,7 +413,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						}
 					}
 
-					for _, f := range responses {
+					for _, f := range written {
 						f.messageSent(nil)
 					}
 					for _, f := range needClose {

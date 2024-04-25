@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -89,7 +91,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	txnOp := proc.TxnOperator
-	if !txnOp.Txn().IsPessimistic() || txnOp.Txn().DisableLock {
+	if !txnOp.Txn().IsPessimistic() {
 		return arg.GetChildren(0).Call(proc)
 	}
 
@@ -211,8 +213,15 @@ func performLock(
 			zap.Int32("primary-index", target.primaryColumnIndexInBatch))
 		var filterCols []int32
 		priVec := bat.GetVector(target.primaryColumnIndexInBatch)
+		// For partitioned tables, filter is not nil
 		if target.filter != nil {
 			filterCols = vector.MustFixedCol[int32](bat.GetVector(target.filterColIndexInBatch))
+			for _, value := range filterCols {
+				// has Illegal Partition index
+				if value == -1 {
+					return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
+				}
+			}
 		}
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
@@ -288,8 +297,7 @@ func LockTable(
 	pkType types.Type,
 	changeDef bool) error {
 	txnOp := proc.TxnOperator
-	if !txnOp.Txn().IsPessimistic() ||
-		txnOp.Txn().DisableLock {
+	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
 	parker := types.NewPacker(proc.Mp())
@@ -333,8 +341,7 @@ func LockRows(
 	group uint32,
 ) error {
 	txnOp := proc.TxnOperator
-	if !txnOp.Txn().IsPessimistic() ||
-		txnOp.Txn().DisableLock {
+	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
 
@@ -390,6 +397,16 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
+	seq := txnOp.NextSequence()
+	startAt := time.Now()
+	trace.GetService().AddTxnDurationAction(
+		txnOp,
+		client.LockEvent,
+		seq,
+		tableID,
+		0,
+		nil)
+
 	//in this case:
 	// create table t1 (a int primary key, b int ,c int, unique key(b,c));
 	// insert into t1 values (1,1,null);
@@ -428,6 +445,7 @@ func doLock(
 		TableDefChanged: opts.changeDef,
 		Sharding:        opts.sharding,
 		Group:           opts.group,
+		SnapShotTs:      txnOp.CreateTS(),
 	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
@@ -444,18 +462,32 @@ func doLock(
 	key := txnOp.AddWaitLock(tableID, rows, options)
 	defer txnOp.RemoveWaitLock(key)
 
-	result, err := lockService.Lock(
-		ctx,
+	var err error
+	var result lock.Result
+	for {
+		result, err = lockService.Lock(
+			ctx,
+			tableID,
+			rows,
+			txn.ID,
+			options)
+		if !moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+			break
+		}
+	}
+	trace.GetService().AddTxnDurationAction(
+		txnOp,
+		client.LockEvent,
+		seq,
 		tableID,
-		rows,
-		txn.ID,
-		options)
+		time.Since(startAt),
+		nil)
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
 
 	// add bind locks
-	if err := txnOp.AddLockTable(result.LockedOn); err != nil {
+	if err = txnOp.AddLockTable(result.LockedOn); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
 
@@ -485,18 +517,13 @@ func doLock(
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
-		trace.GetService().ChangedCheck(
-			txn.ID,
-			tableID,
-			snapshotTS,
-			newSnapshotTS,
-			changed)
 
 		if changed {
-			trace.GetService().TxnNeedUpdateSnapshot(
+			trace.GetService().TxnNoConflictChanged(
 				proc.TxnOperator,
 				tableID,
-				"no conflict, data changed")
+				lockedTS,
+				newSnapshotTS)
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 				return false, false, timestamp.Timestamp{}, err
 			}
@@ -530,10 +557,11 @@ func doLock(
 
 	// forward rc's snapshot ts
 	snapshotTS = result.Timestamp.Next()
-	trace.GetService().TxnNeedUpdateSnapshot(
+
+	trace.GetService().TxnConflictChanged(
 		proc.TxnOperator,
 		tableID,
-		"conflict")
+		snapshotTS)
 	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}

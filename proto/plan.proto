@@ -19,6 +19,7 @@ package plan;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "lock.proto";
+import "timestamp.proto";
 
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 option (gogoproto.sizer_all) = false;
@@ -88,6 +89,8 @@ message ColRef {
 	int32	rel_pos	= 1;
 	int32	col_pos	= 2;
 	string	name	= 3;
+	string	tbl_name = 4;
+	string	db_name	= 5;
 }
 
 // Reference a column by its internal table id and column id
@@ -114,7 +117,6 @@ message MaxValue {
 
 // TargetType used in cast function as target type
 message TargetType {
-	Type typ = 1;
 }
 
 // Reference a subquery
@@ -246,7 +248,7 @@ message ColDef {
 	string name 		= 2;
 	bool hidden			= 3;
 	CompressType alg 	= 4;
-	Type typ			= 5;
+	Type typ			= 5 [(gogoproto.nullable) = false];
 	bool not_null		= 6;
 	Default default 	= 7;
 	string comment		= 8;
@@ -260,6 +262,9 @@ message ColDef {
 	int32 pkidx 		= 14;
 	bool headers = 15;
 	string header = 16;
+
+	string tbl_name = 17;
+	string db_name = 18;
 }
 
 message Default {
@@ -450,6 +455,7 @@ message TableDef {
 	uint64 auto_incr_offset = 30;
 	bool is_dynamic = 31;
 
+	string db_name = 32;
 }
 
 message TableFunction{
@@ -507,8 +513,9 @@ message Stats {
 	double table_cnt = 5;
 	//for scan, selectivity means outcnt divide total count
 	double selectivity = 6;
+	bool forceOneCN = 7;
 
-	HashMapStats hashmapStats = 7;
+	HashMapStats hashmapStats = 8;
 }
 
 message RowsetExpr {
@@ -576,10 +583,16 @@ message FrameBound {
 }
 
 message OnDuplicateKeyCtx {
-	TableDef table_def					= 1;
-	repeated int32 on_duplicate_idx		= 2;
-	map<string, Expr> on_duplicate_expr	= 3;
-	bool is_ignore 						= 4;
+	repeated string attrs = 1;
+	int32 insert_col_count = 2;
+	repeated Expr unique_col_check_expr = 3;
+	repeated string unique_cols = 4;
+	repeated int32 on_duplicate_idx		= 5;
+	map<string, Expr> on_duplicate_expr	= 6;
+	bool is_ignore 						= 7;
+	string table_name         = 8;
+	uint64 table_id           = 9;
+	uint32 table_version			= 10;
 }
 
 message InsertCtx {
@@ -716,6 +729,7 @@ message Node {
 		SINGLE	= 6;
 		MARK	= 7;
 		APPLY	= 8;
+		INDEX = 9;
 	}
 
 	enum AggMode {
@@ -822,6 +836,9 @@ message Node {
 	//for message
 	repeated msgHeader send_msg_list = 55;
 	repeated msgHeader recv_msg_list = 56;
+
+	// table_scan timestamp
+	timestamp.Timestamp scanTS = 57;
 }
 
 message ExternScan {
@@ -837,7 +854,7 @@ message ExternScan {
 message LockTarget {
 	uint64 table_id           	= 1;
 	int32 primary_col_idx_in_bat  = 2;
-	Type primary_col_typ          = 3;
+	Type primary_col_typ          = 3 [(gogoproto.nullable) = false];
 	int32 refresh_ts_idx_in_bat   = 4;
 	int32 filter_col_idx_in_bat   = 5;
 	bool lock_table 				= 6;
@@ -851,9 +868,8 @@ message PreInsertUkCtx {
 	// index of columns(parts of unique key) in pre batch
 	repeated int32 columns 	= 1;
 	int32 pk_column 		= 2;
-	Type pk_type 			= 3;
-	Type uk_type			= 4;
-	TableDef table_def 		= 5;
+	Type pk_type 			= 3 [(gogoproto.nullable) = false];
+	Type uk_type			= 4 [(gogoproto.nullable) = false];
 }
 
 message PreDeleteCtx {
@@ -870,8 +886,9 @@ message PreInsertCtx {
 
 message RuntimeFilterSpec {
 	int32 tag = 1;
-	Expr expr = 2;
-	int32 upperLimit = 3;
+	bool match_prefix = 2;
+	int32 upper_limit = 3;
+	Expr expr = 4;
 }
 
 message IdList {
@@ -997,6 +1014,9 @@ message DataControl {
 		PREPARE			= 4;
 		EXECUTE			= 5;
 		DEALLOCATE		= 6;
+		CREATE_ACCOUNT  = 7;
+		ALTER_ACCOUNT   = 8;
+		DROP_ACCOUNT    = 9;
 	}
 	//DataDefinition type
 	DclType dcl_type = 1;
@@ -1005,6 +1025,7 @@ message DataControl {
 		Prepare prepare 			= 3;
 		Execute execute				= 4;
 		Deallocate deallocate 		= 5;
+		OtherDCL other = 6;
 	}
 }
 
@@ -1044,7 +1065,7 @@ message DataDefinition {
 		DROP_SEQUENCE		= 31;
 		SHOW_SEQUENCES      = 32;
 		SHOW_CONNECTORS = 33;
-
+		SHOW_UPGRADE = 34;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -1098,10 +1119,40 @@ message DropDatabase {
 	bool if_exists 		= 1;
 	string database 	= 2;
 	uint64 database_id	= 3;
+	// drop database should delete fk records related to this database
+	// from mo_foreign_keys
+	string updateFkSql = 4;
+	// drop database should check mo_foreign_keys to find fk records
+	// that refer to this database before dropping the database
+	string checkFKSql = 5;
 }
 
 message FkColName {
 	repeated string cols = 1;
+}
+
+/* ForeignKeyInfo holds the fk forward reference.
+
+	Example: t2(b) --fk--> t1(a) but t1 defined after t2
+
+		set foreign_key_checks=0;
+
+		create table t2(b int, constraint c1 foreign key (b) references t1(a));
+
+		create table t1(a int primary key);
+
+	The reason we need ForeignKeyInfo instead of using ForeignKeyDef is that:
+
+		ForeignKeyDef only has table id, column id that does not exist in handling fk forward reference.
+		ForeignKeyDef does not have database name, table name and column names,
+		ForeignKeyInfo also has the ForeignKeyDef internally that holds the child table fk definition.
+ */
+message ForeignKeyInfo{
+	string db = 1; // database name of child table
+	string table = 2; // child table name
+	FkColName cols = 3; // fk names in child table
+	FkColName colsReferred = 4; // referred names in parent table
+	ForeignKeyDef def = 5; //child table fk def
 }
 
 message CreateTable {
@@ -1118,6 +1169,11 @@ message CreateTable {
 	repeated FkColName fk_cols = 9;
 	repeated TableDef partition_tables = 10;// partition tables for partitions
 	string create_as_select_sql = 11;
+	// create table may insert fk records related to this table
+	// into mo_foreign_keys
+	repeated string updateFkSqls = 12;
+	// fks forward reference to me
+	repeated ForeignKeyInfo fksReferToMe = 13;
 }
 
 message AlterTableDrop {
@@ -1187,7 +1243,7 @@ message AlterTableName {
 message AlterAddColumn {
 	string name = 1;
 	string pre_name = 2;
-	Type type = 3;
+	Type type = 3 [(gogoproto.nullable) = false];
 	int32 pos = 4;
 }
 
@@ -1230,6 +1286,9 @@ message AlterTable {
 	map<uint64, ColDef> change_tbl_colId_map = 11;
 	//detect fk self refer constraint
 	repeated string detectSqls= 12;
+	// alter table may insert fk records related to this table
+	// into mo_foreign_keys
+	repeated string updateFkSqls = 13;
 }
 
 message DropTable {
@@ -1243,6 +1302,11 @@ message DropTable {
 	repeated string partition_table_names = 8;
 	bool isView = 9;
 	TableDef table_def 	= 10;
+	// drop table may delete fk records related to this table
+	// into mo_foreign_keys
+	repeated string updateFkSqls = 11;
+	//fk child table id that refers to me
+	repeated uint64 fkChildTblsReferToMe = 12;
 }
 
 message AlterView {
@@ -1338,6 +1402,10 @@ message Execute {
 
 message Deallocate {
 	string name			= 1;
+}
+
+message OtherDCL {
+	repeated int32 paramTypes = 1;
 }
 
 enum TableLockType {

@@ -16,11 +16,11 @@ package hashbuild
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -57,8 +57,9 @@ type container struct {
 	strHashMap *hashmap.StrHashMap
 	keyWidth   int // keyWidth is the width of hash columns, it determines which hash map to use.
 
-	uniqueJoinKeys  []*vector.Vector
-	runtimeFilterIn bool
+	uniqueJoinKeys       []*vector.Vector
+	runtimeFilterIn      bool
+	runtimeFilterHandled bool
 }
 
 type Argument struct {
@@ -72,11 +73,10 @@ type Argument struct {
 	Typs        []types.Type
 	Conditions  []*plan.Expr
 
-	HashOnPK             bool
-	NeedMergedBatch      bool
-	NeedAllocateSels     bool
-	RuntimeFilterSenders []*colexec.RuntimeFilterChan
-
+	HashOnPK          bool
+	NeedMergedBatch   bool
+	NeedAllocateSels  bool
+	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
 	vm.OperatorBase
 }
 
@@ -111,15 +111,12 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetRuntimeFilterSenders(rfs []*colexec.RuntimeFilterChan) {
-	arg.RuntimeFilterSenders = rfs
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
+		ctr.cleanRuntimeFilters(proc, arg.RuntimeFilterSpec)
 		ctr.cleanBatches(proc)
-		ctr.cleanEvalVectors(proc.Mp())
+		ctr.cleanEvalVectors()
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
 		}
@@ -132,6 +129,15 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	}
 }
 
+func (ctr *container) cleanRuntimeFilters(proc *process.Process, runtimeFilterSpec *pbplan.RuntimeFilterSpec) {
+	if !ctr.runtimeFilterHandled && runtimeFilterSpec != nil {
+		var runtimeFilter process.RuntimeFilterMessage
+		runtimeFilter.Tag = runtimeFilterSpec.Tag
+		runtimeFilter.Typ = process.RuntimeFilter_DROP
+		proc.SendMessage(runtimeFilter)
+	}
+}
+
 func (ctr *container) cleanBatches(proc *process.Process) {
 	for i := range ctr.batches {
 		proc.PutBatch(ctr.batches[i])
@@ -139,12 +145,13 @@ func (ctr *container) cleanBatches(proc *process.Process) {
 	ctr.batches = nil
 }
 
-func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
+func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.executor {
 		if ctr.executor[i] != nil {
 			ctr.executor[i].Free()
 		}
 	}
+	ctr.executor = nil
 }
 
 func (ctr *container) cleanHashMap() {

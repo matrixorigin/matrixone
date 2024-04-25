@@ -14,31 +14,143 @@
 
 package malloc
 
-// #include <stdlib.h>
-import "C"
-import "unsafe"
+import (
+	"runtime"
+	"time"
+	"unsafe"
 
-//go:linkname throw runtime.throw
-func throw(s string)
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
+)
 
-// alloc allocates a byte slice of size use cgo
-func Alloc(n int) []byte {
+const (
+	maxBufferSize   = 1 << 31
+	minClassSize    = 128
+	maxClassSize    = 1 << 20
+	classSizeFactor = 1.5
+)
+
+var (
+	numShards        = runtime.GOMAXPROCS(-1)
+	evictAllDuration = time.Hour * 7
+	minEvictInterval = time.Millisecond * 100
+
+	bufferedObjectsPerClass = func() int {
+		n := maxBufferSize / numShards / len(classSizes) / ((minClassSize + maxClassSize) / 2)
+		if n < 8 {
+			n = 8
+		}
+		logutil.Info("malloc",
+			zap.Any("max buffer size", maxBufferSize),
+			zap.Any("num shards", numShards),
+			zap.Any("classes", len(classSizes)),
+			zap.Any("min class size", minClassSize),
+			zap.Any("max class size", maxClassSize),
+			zap.Any("buffer objects per class", n),
+		)
+		return n
+	}()
+
+	classSizes = func() (ret []int) {
+		for size := minClassSize; size <= maxClassSize; size = int(float64(size) * classSizeFactor) {
+			ret = append(ret, size)
+		}
+		return
+	}()
+
+	shards = func() (ret [][]chan *Handle) {
+		for i := 0; i < numShards; i++ {
+			var shard []chan *Handle
+			for range classSizes {
+				shard = append(shard, make(chan *Handle, bufferedObjectsPerClass))
+			}
+			ret = append(ret, shard)
+		}
+		return
+	}()
+)
+
+func init() {
+	// evict
+	go func() {
+		evictOne := func() {
+			for _, shard := range shards {
+				for i := len(shard) - 1; i >= 0; i-- {
+					select {
+					case <-shard[i]:
+						return
+					default:
+					}
+				}
+			}
+		}
+		interval := evictAllDuration / time.Duration(numShards*len(classSizes)*bufferedObjectsPerClass)
+		if interval < minEvictInterval {
+			interval = minEvictInterval
+		}
+		for range time.NewTicker(interval).C {
+			evictOne()
+		}
+	}()
+}
+
+func requestSizeToClass(size int) int {
+	for class, classSize := range classSizes {
+		if classSize >= size {
+			return class
+		}
+	}
+	return -1
+}
+
+func classAllocate(class int) *Handle {
+	pid := runtime_procPin()
+	runtime_procUnpin()
+	if pid >= len(shards) {
+		pid = 0
+	}
+	select {
+	case handle := <-shards[pid][class]:
+		clear(handle.slice)
+		return handle
+	default:
+		slice := make([]byte, classSizes[class])
+		return &Handle{
+			slice: slice,
+			class: class,
+		}
+	}
+}
+
+func Alloc(n int, target *[]byte) *Handle {
 	if n == 0 {
-		return make([]byte, 0)
+		return dumbHandle
 	}
-	ptr := C.calloc(C.size_t(n), 1)
-	if ptr == nil {
-		// NB: throw is like panic, except it guarantees the process will be
-		// terminated. The call below is exactly what the Go runtime invokes when
-		// it cannot allocate memory.
-		throw("out of memory")
+	class := requestSizeToClass(n)
+	if class == -1 {
+		*target = make([]byte, n)
+		return dumbHandle
 	}
-	return unsafe.Slice((*byte)(ptr), n)
+	handle := classAllocate(class)
+	*target = handle.slice[:n:n]
+	return handle
 }
 
-func Free(b []byte) {
-	if cap(b) != 0 {
-		b = b[:cap(b)]
-		C.free(unsafe.Pointer(&b[0]))
+func AllocTyped[T any](target **T) *Handle {
+	var t T
+	size := unsafe.Sizeof(t)
+	class := requestSizeToClass(int(size))
+	if class == -1 {
+		*target = new(T)
+		return dumbHandle
 	}
+	handle := classAllocate(class)
+	*target = (*T)(unsafe.Pointer(unsafe.SliceData(handle.slice)))
+	return handle
 }
+
+//go:linkname runtime_procPin runtime.procPin
+func runtime_procPin() int
+
+//go:linkname runtime_procUnpin runtime.procUnpin
+func runtime_procUnpin() int

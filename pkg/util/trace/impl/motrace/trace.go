@@ -23,6 +23,7 @@ package motrace
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"sync/atomic"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -67,6 +69,9 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithAggregatorWindow(SV.AggregationWindow.Duration),
 		WithSelectThreshold(SV.SelectAggrThreshold.Duration),
 		WithStmtMergeEnable(SV.EnableStmtMerge),
+		WithCUConfig(SV.CU, SV.CUv1),
+		WithTCPPacket(SV.TCPPacket),
+		WithLabels(SV.LabelSelector),
 
 		DebugMode(SV.EnableTraceDebug),
 		WithBufferSizeThreshold(SV.BufferSize),
@@ -103,6 +108,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 	SetDefaultSpanContext(&sc)
 	serviceCtx := context.Background()
 	SetDefaultContext(trace.ContextWithSpanContext(serviceCtx, sc))
+	SetCuConfig(&config.cuConfig, &config.cuConfigV1)
 
 	// init Exporter
 	if err := initExporter(ctx, config); err != nil {
@@ -116,6 +122,9 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportZap: ReportZap, ContextField: trace.ContextField})
 	logutil.SpanFieldKey.Store(trace.SpanFieldKey)
 	errutil.SetErrorReporter(ReportError)
+
+	// init db_hodler
+	db_holder.SetLabelSelector(config.labels)
 
 	logutil.Debugf("trace with LongQueryTime: %v", time.Duration(GetTracerProvider().longQueryTime))
 	logutil.Debugf("trace with LongSpanTime: %v", GetTracerProvider().longSpanTime)
@@ -159,6 +168,37 @@ func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) err
 	if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {
 		return err
 	}
+	return nil
+}
+
+// InitSchema2
+// PS: only in system bootstrap init schema with `executor.TxnExecutor`
+func InitSchemaWithTxn(ctx context.Context, txn executor.TxnExecutor) error {
+	_, err := txn.Exec(sqlCreateDBConst, executor.StatementOption{})
+	if err != nil {
+		return err
+	}
+
+	var createCost time.Duration
+	defer func() {
+		logutil.Debugf("[Trace] init tables: create cost %d ms", createCost.Milliseconds())
+	}()
+
+	instant := time.Now()
+	for _, tbl := range tables {
+		_, err = txn.Exec(tbl.ToCreateSql(ctx, true), executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, v := range views {
+		_, err = txn.Exec(v.ToCreateSql(ctx, true), executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+	}
+	createCost = time.Since(instant)
 	return nil
 }
 

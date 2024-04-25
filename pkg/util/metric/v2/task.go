@@ -28,8 +28,10 @@ var (
 			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 
-	TaskFlushTableTailDurationHistogram = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
-	GetObjectStatsDurationHistogram     = taskShortDurationHistogram.WithLabelValues("get_object_stats")
+	TaskFlushTableTailDurationHistogram     = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
+	TaskCommitTableTailDurationHistogram    = taskShortDurationHistogram.WithLabelValues("commit_table_tail")
+	TaskCommitMergeObjectsDurationHistogram = taskShortDurationHistogram.WithLabelValues("commit_merge_objects")
+	GetObjectStatsDurationHistogram         = taskShortDurationHistogram.WithLabelValues("get_object_stats")
 
 	// storage usage / show accounts metrics
 	TaskGCkpCollectUsageDurationHistogram          = taskShortDurationHistogram.WithLabelValues("gckp_collect_usage")
@@ -79,9 +81,10 @@ var (
 			Subsystem: "task",
 			Name:      "scheduled_by_total",
 			Help:      "Total number of task have been scheduled.",
-		}, []string{"type"})
+		}, []string{"type", "nodetype"})
 
-	TaskMergeScheduledByCounter = taskScheduledByCounter.WithLabelValues("merge")
+	TaskDNMergeScheduledByCounter = taskScheduledByCounter.WithLabelValues("merge", "dn")
+	TaskCNMergeScheduledByCounter = taskScheduledByCounter.WithLabelValues("merge", "cn")
 
 	taskGeneratedStuffCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -89,10 +92,12 @@ var (
 			Subsystem: "task",
 			Name:      "execute_results_total",
 			Help:      "Total number of stuff a task have generated",
-		}, []string{"type"})
+		}, []string{"type", "nodetype"})
 
-	TaskMergedBlocksCounter = taskGeneratedStuffCounter.WithLabelValues("merged_block")
-	TasKMergedSizeCounter   = taskGeneratedStuffCounter.WithLabelValues("merged_size")
+	TaskDNMergedBlocksCounter = taskGeneratedStuffCounter.WithLabelValues("merged_block", "dn")
+	TaskDNMergedSizeCounter   = taskGeneratedStuffCounter.WithLabelValues("merged_size", "dn")
+	TaskCNMergedBlocksCounter = taskGeneratedStuffCounter.WithLabelValues("merged_block", "cn")
+	TaskCNMergedSizeCounter   = taskGeneratedStuffCounter.WithLabelValues("merged_size", "cn")
 
 	taskSelectivityCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

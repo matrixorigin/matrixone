@@ -14,21 +14,35 @@
 
 package fileservice
 
-type Bytes []byte
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+)
+
+type Bytes struct {
+	bytes  []byte
+	handle *malloc.Handle
+}
 
 func (b Bytes) Size() int64 {
-	return int64(len(b))
+	return int64(len(b.bytes))
 }
 
 func (b Bytes) Bytes() []byte {
-	return b
+	return b.bytes
 }
 
-func (b Bytes) Slice(length int) CacheData {
-	return b[:length]
+func (b Bytes) Slice(length int) memorycache.CacheData {
+	return Bytes{
+		bytes:  b.bytes[:length],
+		handle: b.handle,
+	}
 }
 
 func (b Bytes) Release() {
+	if b.handle != nil {
+		b.handle.Free()
+	}
 }
 
 func (b Bytes) Retain() {
@@ -38,6 +52,8 @@ type bytesAllocator struct{}
 
 var _ CacheDataAllocator = new(bytesAllocator)
 
-func (b *bytesAllocator) Alloc(size int) CacheData {
-	return make(Bytes, size)
+func (b *bytesAllocator) Alloc(size int) memorycache.CacheData {
+	var ret Bytes
+	ret.handle = malloc.Alloc(size, &ret.bytes)
+	return ret
 }

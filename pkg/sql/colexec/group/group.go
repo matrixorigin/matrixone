@@ -17,13 +17,12 @@ package group
 import (
 	"bytes"
 	"fmt"
+	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -46,22 +45,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
-		buf.WriteString(fmt.Sprintf("%v(%v)", function.GetAggFunctionNameByID(ag.Op), ag.E))
-	}
-	if len(ap.MultiAggs) != 0 {
-		if len(ap.Aggs) > 0 {
-			buf.WriteString(",")
-		}
-		for i, ag := range ap.MultiAggs {
-			if i > 0 {
-				buf.WriteString(",")
-			}
-			buf.WriteString("group_concat(")
-			for _, expr := range ag.GroupExpr {
-				buf.WriteString(fmt.Sprintf("%v ", expr))
-			}
-			buf.WriteString(")")
-		}
+		buf.WriteString(fmt.Sprintf("%v(%v)", function.GetAggFunctionNameByID(ag.GetAggID()), ag.GetArgExpressions()))
 	}
 	buf.WriteString("])")
 }
@@ -75,66 +59,51 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	ctr := ap.ctr
 	ctr.state = vm.Build
 
-	// if operator has multi columns aggregation agg(expr1, expr2 ...)
-	// then create expression executor for each parameter expr.
-	if ap.MultiAggs != nil {
-		ctr.multiVecs = make([][]evalVector, len(ap.MultiAggs))
-		for i, ag := range ap.MultiAggs {
-			ctr.multiVecs[i] = make([]evalVector, len(ag.GroupExpr))
-			for j := range ctr.multiVecs[i] {
-				ctr.multiVecs[i][j].executor, err = colexec.NewExpressionExecutor(proc, ag.GroupExpr[j])
-				if err != nil {
-					return err
-				}
-				// very bad code.
-				exprTyp := ag.GroupExpr[j].Typ
-				typ := types.New(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale)
-				ctr.multiVecs[i][j].vec = proc.GetVector(typ)
-			}
-		}
-	}
-
-	// if operator has single column aggregation agg(expr)
-	// then create expression executor for the parameter expr.
-	if ap.Aggs != nil {
-		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
+	// create executors for aggregation functions.
+	if len(ap.Aggs) > 0 {
+		ctr.aggVecs = make([]ExprEvalVector, len(ap.Aggs))
 		for i, ag := range ap.Aggs {
-			ctr.aggVecs[i].executor, err = colexec.NewExpressionExecutor(proc, ag.E)
-			if err != nil {
+			expressions := ag.GetArgExpressions()
+			if ctr.aggVecs[i], err = MakeEvalVector(proc, expressions); err != nil {
 				return err
 			}
-			// very bad code.
-			exprTyp := ag.E.Typ
-			typ := types.New(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale)
-			ctr.aggVecs[i].vec = proc.GetVector(typ)
 		}
 	}
 
-	// if operator has group by clause group by expr1, expr2 ...
-	// then create expression executor for each expr.
+	// create executors for group by columns.
 	ctr.keyWidth = 0
 	if ap.Exprs != nil {
-		ctr.groupVecs = make([]evalVector, len(ap.Exprs))
 		ctr.groupVecsNullable = false
-
-		for i, gv := range ap.Exprs {
-			ctr.groupVecsNullable = ctr.groupVecsNullable || (!gv.Typ.NotNullable)
-
-			ctr.groupVecs[i].executor, err = colexec.NewExpressionExecutor(proc, gv)
-			if err != nil {
-				return err
-			}
+		ctr.groupVecs, err = MakeEvalVector(proc, ap.Exprs)
+		if err != nil {
+			return err
 		}
-		ctr.vecs = make([]*vector.Vector, len(ap.Exprs))
+		for _, gv := range ap.Exprs {
+			ctr.groupVecsNullable = ctr.groupVecsNullable || (!gv.Typ.NotNullable)
+		}
 
 		for _, expr := range ap.Exprs {
 			typ := expr.Typ
 			width := types.T(typ.Id).TypeLen()
 			if types.T(typ.Id).FixedLength() < 0 {
 				if typ.Width == 0 {
-					width = 128
+					switch types.T(typ.Id) {
+					case types.T_array_float32:
+						width = 128 * 4
+					case types.T_array_float64:
+						width = 128 * 8
+					default:
+						width = 128
+					}
 				} else {
-					width = int(typ.Width)
+					switch types.T(typ.Id) {
+					case types.T_array_float32:
+						width = int(typ.Width) * 4
+					case types.T_array_float64:
+						width = int(typ.Width) * 8
+					default:
+						width = int(typ.Width)
+					}
 				}
 			}
 			ctr.keyWidth += width
@@ -143,8 +112,6 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 			}
 		}
 	}
-
-	ctr.tmpVecs = make([]*vector.Vector, 1)
 
 	return nil
 }
@@ -167,15 +134,17 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	return ap.ctr.processWithGroup(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast())
 }
 
-func (ctr *container) generateAggStructures(arg *Argument) error {
-	var err error
-	i := 0
-	for i < len(arg.Aggs) {
-		if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(arg.Aggs[i].Op, arg.Aggs[i].Dist, []types.Type{*ctr.aggVecs[i].vec.GetType()}, arg.Aggs[i].Config); err != nil {
-			ctr.bat = nil
-			return err
+func (ctr *container) generateAggStructures(proc *process.Process, arg *Argument) error {
+	for i, ag := range arg.Aggs {
+		ctr.bat.Aggs[i] = aggexec.MakeAgg(
+			proc,
+			ag.GetAggID(), ag.IsDistinct(), ctr.aggVecs[i].Typ...)
+
+		if config := ag.GetExtraConfig(); config != nil {
+			if err := ctr.bat.Aggs[i].SetExtraInformation(config, 0); err != nil {
+				return err
+			}
 		}
-		i++
 	}
 
 	return nil
@@ -196,20 +165,19 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 				continue
 			}
 			bat := result.Batch
-			// defer bat.Clean(proc.Mp())
 			anal.Input(bat, isFirst)
 
-			if err := ctr.evalAggVector(bat, proc); err != nil {
+			if err = ctr.evalAggVector(bat, proc); err != nil {
 				return result, err
 			}
 
 			if ctr.bat == nil {
-				if err := initCtrBatchForProcessWithoutGroup(ap, proc, ctr); err != nil {
+				if err = initCtrBatchForProcessWithoutGroup(ap, proc, ctr); err != nil {
 					return result, err
 				}
 			}
 
-			if err := ctr.processH0(bat); err != nil {
+			if err = ctr.processH0(); err != nil {
 				return result, err
 			}
 		}
@@ -246,12 +214,12 @@ func initCtrBatchForProcessWithoutGroup(ap *Argument, proc *process.Process, ctr
 	ctr.bat = batch.NewWithSize(0)
 	ctr.bat.SetRowCount(1)
 
-	ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
-	if err = ctr.generateAggStructures(ap); err != nil {
+	ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
+	if err = ctr.generateAggStructures(proc, ap); err != nil {
 		return err
 	}
 	for _, ag := range ctr.bat.Aggs {
-		if err = ag.Grows(1, proc.Mp()); err != nil {
+		if err = ag.GroupGrow(1); err != nil {
 			return err
 		}
 	}
@@ -281,17 +249,15 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			}
 
 			for i := range ap.Exprs {
-				ctr.groupVecs[i].vec, err = ctr.groupVecs[i].executor.Eval(proc, []*batch.Batch{bat})
+				ctr.groupVecs.Vec[i], err = ctr.groupVecs.Executor[i].Eval(proc, []*batch.Batch{bat})
 				if err != nil {
 					return result, err
 				}
-				ctr.vecs[i] = ctr.groupVecs[i].vec
 			}
 
 			if ctr.bat == nil {
 				ctr.bat = batch.NewWithSize(len(ap.Exprs))
-				for i := range ctr.groupVecs {
-					vec := ctr.groupVecs[i].vec
+				for i, vec := range ctr.groupVecs.Vec {
 					ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
 				}
 				if ap.PreAllocSize > 0 {
@@ -300,8 +266,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 						return result, err
 					}
 				}
-				ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
-				if err = ctr.generateAggStructures(ap); err != nil {
+				ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
+				if err = ctr.generateAggStructures(proc, ap); err != nil {
 					return result, err
 				}
 				switch {
@@ -350,7 +316,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		if ctr.bat != nil {
 			if ap.NeedEval {
 				for i, ag := range ctr.bat.Aggs {
-					vec, err := ag.Eval(proc.Mp())
+					vec, err := ag.Flush()
 					if err != nil {
 						return result, err
 					}
@@ -358,7 +324,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 					ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
 					anal.Alloc(int64(vec.Size()))
 
-					ag.Free(proc.Mp())
+					ag.Free()
 				}
 				ctr.bat.Aggs = nil
 			}
@@ -378,11 +344,11 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 }
 
 // processH8 use whole batch to fill the aggregation.
-func (ctr *container) processH0(bat *batch.Batch) error {
+func (ctr *container) processH0() error {
 	ctr.bat.SetRowCount(1)
 
 	for i, ag := range ctr.bat.Aggs {
-		err := ag.BulkFill(0, []*vector.Vector{ctr.aggVecs[i].vec})
+		err := ag.BulkFill(0, ctr.aggVecs[i].Vec)
 		if err != nil {
 			return err
 		}
@@ -396,16 +362,19 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	count := bat.RowCount()
 	itr := ctr.intHashMap.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
+		if i%(hashmap.UnitLimit*32) == 0 {
+			runtime.Gosched()
+		}
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
 		rows := ctr.intHashMap.GroupCount()
-		vals, _, err := itr.Insert(i, n, ctr.vecs)
+		vals, _, err := itr.Insert(i, n, ctr.groupVecs.Vec)
 		if err != nil {
 			return err
 		}
-		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
+		if err = ctr.batchFill(i, n, vals, rows, proc); err != nil {
 			return err
 		}
 	}
@@ -417,77 +386,26 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 	count := bat.RowCount()
 	itr := ctr.strHashMap.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
+		if i%(hashmap.UnitLimit*32) == 0 {
+			runtime.Gosched()
+		}
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
 		rows := ctr.strHashMap.GroupCount()
-		vals, _, err := itr.Insert(i, n, ctr.vecs)
+		vals, _, err := itr.Insert(i, n, ctr.groupVecs.Vec)
 		if err != nil {
 			return err
 		}
-		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
+		if err = ctr.batchFill(i, n, vals, rows, proc); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-/*
-func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) error {
-	mSels := make([][]int64, index.MaxLowCardinality+1)
-	poses := vector.MustFixedCol[uint16](ctr.idx.GetPoses())
-	for k, v := range poses {
-		if len(mSels[v]) == 0 {
-			mSels[v] = make([]int64, 0, 64)
-		}
-		mSels[v] = append(mSels[v], int64(k))
-	}
-	if len(mSels[0]) == 0 { // hasNotNull == true
-		mSels = mSels[1:]
-	}
-
-	var groups []int64
-	for i, sels := range mSels {
-		if len(sels) > 0 {
-			groups = append(groups, sels[0])
-			ctr.bat.Zs = append(ctr.bat.Zs, 0)
-			for _, k := range sels {
-				ctr.bat.Zs[i] += bat.Zs[k]
-			}
-		}
-	}
-
-	for _, ag := range ctr.bat.Aggs {
-		if err := ag.Grows(len(groups), proc.Mp()); err != nil {
-			return err
-		}
-	}
-	if err := ctr.bat.Vecs[0].Union(ctr.vecs[0], groups, proc.Mp()); err != nil {
-		return err
-	}
-	for i, ag := range ctr.bat.Aggs {
-
-		for j, sels := range mSels {
-			for _, sel := range sels {
-				if i < len(ctr.aggVecs) {
-					aggVecs := []*vector.Vector{ctr.aggVecs[i].vec}
-					if err := ag.Fill(int64(j), sel, 1, aggVecs); err != nil {
-						return err
-					}
-				} else {
-					if err := ag.Fill(int64(j), sel, 1, ctr.ToVecotrs(i-len(ctr.aggVecs))); err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
-	return nil
-}
-*/
-
-func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, hashRows uint64, proc *process.Process) error {
+func (ctr *container) batchFill(i int, n int, vals []uint64, hashRows uint64, proc *process.Process) error {
 	cnt := 0
 	valCnt := 0
 	copy(ctr.inserted[:n], ctr.zInserted[:n])
@@ -506,12 +424,12 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 
 	if cnt > 0 {
 		for j, vec := range ctr.bat.Vecs {
-			if err := vec.UnionBatch(ctr.groupVecs[j].vec, int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
+			if err := vec.UnionBatch(ctr.groupVecs.Vec[j], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
 				return err
 			}
 		}
 		for _, ag := range ctr.bat.Aggs {
-			if err := ag.Grows(cnt, proc.Mp()); err != nil {
+			if err := ag.GroupGrow(cnt); err != nil {
 				return err
 			}
 		}
@@ -520,8 +438,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 		return nil
 	}
 	for j, ag := range ctr.bat.Aggs {
-		ctr.tmpVecs[0] = ctr.aggVecs[j].vec
-		err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, ctr.tmpVecs)
+		err := ag.BatchFill(i, vals[:n], ctr.aggVecs[j].Vec)
 		if err != nil {
 			return err
 		}
@@ -529,14 +446,17 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 	return nil
 }
 
-func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) (err error) {
 	ctr.hasAggResult = true
+	input := []*batch.Batch{bat}
+
 	for i := range ctr.aggVecs {
-		vec, err := ctr.aggVecs[i].executor.Eval(proc, []*batch.Batch{bat})
-		if err != nil {
-			return err
+		for j := range ctr.aggVecs[i].Executor {
+			ctr.aggVecs[i].Vec[j], err = ctr.aggVecs[i].Executor[j].Eval(proc, input)
+			if err != nil {
+				return err
+			}
 		}
-		ctr.aggVecs[i].vec = vec
 	}
 	return nil
 }

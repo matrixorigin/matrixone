@@ -15,7 +15,7 @@
 //go:build !race
 // +build !race
 
-package fileservice
+package memorycache
 
 import (
 	"fmt"

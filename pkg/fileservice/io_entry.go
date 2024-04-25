@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"io"
 	"os"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 )
 
 func (i *IOEntry) setCachedData() error {
@@ -27,7 +30,10 @@ func (i *IOEntry) setCachedData() error {
 	if len(i.Data) == 0 {
 		return nil
 	}
-	bs, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, DefaultCacheDataAllocator)
+	if i.allocator == nil {
+		i.allocator = DefaultCacheDataAllocator
+	}
+	bs, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, i.allocator)
 	if err != nil {
 		return err
 	}
@@ -35,39 +41,41 @@ func (i *IOEntry) setCachedData() error {
 	return nil
 }
 
-func (i *IOEntry) ReadFromOSFile(file *os.File) error {
+func (i *IOEntry) ReadFromOSFile(file *os.File) (releaseFunc func(), err error) {
 	r := io.LimitReader(file, i.Size)
 
-	if len(i.Data) < int(i.Size) {
-		i.Data = make([]byte, i.Size)
+	if cap(i.Data) < int(i.Size) {
+		releaseFunc = malloc.Alloc(int(i.Size), &i.Data).Free
+	} else {
+		i.Data = i.Data[:i.Size]
 	}
 
 	n, err := io.ReadFull(r, i.Data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if n != int(i.Size) {
-		return io.ErrUnexpectedEOF
+		return nil, io.ErrUnexpectedEOF
 	}
 
 	if i.WriterForRead != nil {
 		if _, err := i.WriterForRead.Write(i.Data); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if i.ReadCloserForRead != nil {
 		*i.ReadCloserForRead = io.NopCloser(bytes.NewReader(i.Data))
 	}
 	if err := i.setCachedData(); err != nil {
-		return err
+		return nil, err
 	}
 
 	i.done = true
 
-	return nil
+	return
 }
 
-func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData CacheData, err error) {
+func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData memorycache.CacheData, err error) {
 	if len(data) == 0 {
 		data, err = io.ReadAll(r)
 		if err != nil {

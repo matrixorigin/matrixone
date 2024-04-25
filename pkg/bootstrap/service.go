@@ -17,6 +17,13 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/predefine"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -85,6 +92,41 @@ var (
 			step       bigint unsigned,  
 			primary key(table_id, col_name)
 		);`, catalog.MO_CATALOG, catalog.MOAutoIncrTable),
+
+		fmt.Sprintf(`create table %s.%s(
+			constraint_name varchar(5000) not null,
+			constraint_id BIGINT UNSIGNED not null default 0,
+			db_name varchar(5000) not null,
+			db_id BIGINT UNSIGNED not null default 0,
+			table_name varchar(5000) not null,
+			table_id BIGINT UNSIGNED not null default 0,
+			column_name varchar(256) not null,
+			column_id BIGINT UNSIGNED not null default 0,
+			refer_db_name varchar(5000) not null,
+			refer_db_id BIGINT UNSIGNED not null default 0,
+			refer_table_name varchar(5000) not null,
+			refer_table_id BIGINT UNSIGNED not null default 0,
+			refer_column_name varchar(256) not null,
+			refer_column_id BIGINT UNSIGNED not null default 0,
+			on_delete varchar(128) not null,
+			on_update varchar(128) not null,
+	
+			primary key(
+				constraint_name,
+				constraint_id,
+				db_name,
+				db_id,
+				table_name,
+				table_id,
+				column_name,
+				column_id,
+				refer_db_name,
+				refer_db_id,
+				refer_table_name,
+				refer_table_id,
+				refer_column_name,
+				refer_column_id)
+		);`, catalog.MO_CATALOG, catalog.MOForeignKeys),
 	}
 
 	step2InitSQLs = []string{
@@ -140,20 +182,64 @@ var (
 			details                     blob)`,
 			catalog.MOTaskDB),
 
-		fmt.Sprintf(`insert into %s.sys_async_task(
-                              task_metadata_id,
-                              task_metadata_executor,
-                              task_metadata_context,
-		                      task_metadata_option,
-		                      task_parent_id,
-		                      task_status,
-		                      task_runner,
-		                      task_epoch,
-		                      last_heartbeat,
-		                      create_at,
-		                      end_at) values ("SystemInit", 1, "", "{}", 0, 0, 0, 0, 0, %d, 0)`,
-			catalog.MOTaskDB, time.Now().UnixNano()),
+		fmt.Sprintf(`create index idx_task_status on %s.sys_async_task(task_status)`,
+			catalog.MOTaskDB),
+
+		fmt.Sprintf(`create index idx_task_runner on %s.sys_async_task(task_runner)`,
+			catalog.MOTaskDB),
+
+		fmt.Sprintf(`create index idx_task_executor on %s.sys_async_task(task_metadata_executor)`,
+			catalog.MOTaskDB),
+
+		fmt.Sprintf(`create index idx_task_epoch on %s.sys_async_task(task_epoch)`,
+			catalog.MOTaskDB),
+
+		fmt.Sprintf(`create index idx_account_id on %s.sys_daemon_task(account_id)`,
+			catalog.MOTaskDB),
+
+		fmt.Sprintf(`create index idx_last_heartbeat on %s.sys_daemon_task(last_heartbeat)`,
+			catalog.MOTaskDB),
 	}
+
+	step3InitSQLs = []string{
+		fmt.Sprintf(`create table %s.%s (
+			version             varchar(50) not null,
+		    version_offset      int unsigned default 0,
+			state               int,
+			create_at           timestamp not null,
+			update_at           timestamp not null,
+			primary key(version, version_offset)
+		)`, catalog.MO_CATALOG, catalog.MOVersionTable),
+
+		fmt.Sprintf(`create table %s.%s (
+			id                   bigint unsigned not null primary key auto_increment,
+			from_version         varchar(50) not null,
+			to_version           varchar(50) not null,
+			final_version        varchar(50) not null,
+            final_version_offset int unsigned default 0,
+			state                int,
+			upgrade_cluster      int,
+			upgrade_tenant       int,
+			upgrade_order        int,
+			total_tenant         int,
+			ready_tenant         int,
+			create_at            timestamp not null,
+			update_at            timestamp not null
+		)`, catalog.MO_CATALOG, catalog.MOUpgradeTable),
+
+		fmt.Sprintf(`create table %s.%s (
+			id                  bigint unsigned not null primary key auto_increment,
+			upgrade_id		    bigint unsigned not null,
+			target_version      varchar(50) not null,
+			from_account_id     int not null,
+			to_account_id       int not null,
+			ready               int,
+			create_at           timestamp not null,
+			update_at           timestamp not null
+		)`, catalog.MO_CATALOG, catalog.MOUpgradeTenantTable),
+	}
+
+	initMoVersionFormat = `insert into %s.%s values ('%s', %d, %d, current_timestamp(), current_timestamp())`
 
 	initSQLs []string
 )
@@ -161,6 +247,15 @@ var (
 func init() {
 	initSQLs = append(initSQLs, step1InitSQLs...)
 	initSQLs = append(initSQLs, step2InitSQLs...)
+	initSQLs = append(initSQLs, step3InitSQLs...)
+
+	// generate system cron tasks sql
+	sql, err := predefine.GenInitCronTaskSQL()
+	if err != nil {
+		panic(err)
+	}
+	initSQLs = append(initSQLs, sql)
+
 	initSQLs = append(initSQLs, trace.InitSQLs...)
 }
 
@@ -226,6 +321,7 @@ func (s *service) Bootstrap(ctx context.Context) error {
 
 	// current node get the bootstrap privilege
 	if ok {
+		// the auto-increment service has already been initialized at current time
 		return s.execBootstrap(ctx)
 	}
 
@@ -269,10 +365,34 @@ func (s *service) execBootstrap(ctx context.Context) error {
 	opts := executor.Options{}.
 		WithMinCommittedTS(s.now()).
 		WithDisableTrace().
-		WithWaitCommittedLogApplied()
-	if err := s.exec.ExecTxn(ctx, execFunc(initSQLs), opts); err != nil {
+		WithWaitCommittedLogApplied().
+		WithTimeZone(time.Local).
+		WithAccountID(catalog.System_Account)
+
+	err := s.exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+		if err := initPreprocessSQL(ctx, txn, s.GetFinalVersion(), s.GetFinalVersionOffset()); err != nil {
+			return err
+		}
+		if err := frontend.InitSysTenant(ctx, txn, s.GetFinalVersion()); err != nil {
+			return err
+		}
+		if err := sysview.InitSchema(ctx, txn); err != nil {
+			return err
+		}
+		if err := mometric.InitSchema(ctx, txn); err != nil {
+			return err
+		}
+		if err := motrace.InitSchemaWithTxn(ctx, txn); err != nil {
+			return err
+		}
+		return nil
+	}, opts)
+
+	if err != nil {
+		getLogger().Error("bootstrap system init failed", zap.Error(err))
 		return err
 	}
+	getLogger().Info("bootstrap system init completed")
 
 	if s.client != nil {
 		getLogger().Info("wait bootstrap logtail applied")
@@ -296,15 +416,26 @@ func (s *service) Close() error {
 	return nil
 }
 
-func execFunc(sql []string) func(executor.TxnExecutor) error {
-	return func(e executor.TxnExecutor) error {
-		for _, s := range sql {
-			r, err := e.Exec(s, executor.StatementOption{})
-			if err != nil {
-				return err
-			}
-			r.Close()
+// initPreprocessSQL  Execute preprocessed SQL, which typically must be completed before system tenant initialization
+func initPreprocessSQL(ctx context.Context, txn executor.TxnExecutor, finalVersion string, finalVersonOffset int32) error {
+	var timeCost time.Duration
+	defer func() {
+		logutil.Debugf("Initialize system pre SQL: create cost %d ms", timeCost.Milliseconds())
+	}()
+
+	begin := time.Now()
+	var initMoVersion string
+	for _, sql := range initSQLs {
+		if _, err := txn.Exec(sql, executor.StatementOption{}); err != nil {
+			return err
 		}
-		return nil
 	}
+
+	initMoVersion = fmt.Sprintf(initMoVersionFormat, catalog.MO_CATALOG, catalog.MOVersionTable, finalVersion, finalVersonOffset, versions.StateReady)
+	if _, err := txn.Exec(initMoVersion, executor.StatementOption{}); err != nil {
+		return err
+	}
+
+	timeCost = time.Since(begin)
+	return nil
 }

@@ -40,11 +40,9 @@ func BenchmarkInsert(b *testing.B) {
 	originStr := "0123456789"
 	testExpr := tree.NewNumValWithType(constant.MakeString(originStr), originStr, false, tree.P_char)
 	targetT := &plan.Expr{
-		Typ: *targetType,
+		Typ: targetType,
 		Expr: &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: targetType,
-			},
+			T: &plan.TargetType{},
 		},
 	}
 	ctx := context.TODO()
@@ -875,6 +873,8 @@ func TestShow(t *testing.T) {
 		"show grants for ROLE role1",
 		"show function status",
 		"show function status like '%ff'",
+		"show snapshots",
+		"show snapshots where SNAPSHOT_NAME = 'snapshot_07'",
 		// "show procedure status",
 		// "show procedure status like '%ff'",
 		"show roles",
@@ -1114,7 +1114,7 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 }
 
 func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
@@ -1146,11 +1146,11 @@ func runTestShouldError(opt Optimizer, t *testing.T, sqls []string) {
 }
 
 func Test_mergeContexts(t *testing.T) {
-	b1 := NewBinding(0, 1, "a", 0, nil, nil, nil, false, nil)
+	b1 := NewBinding(0, 1, "db", "a", 0, nil, nil, nil, false, nil)
 	bc1 := NewBindContext(nil, nil)
 	bc1.bindings = append(bc1.bindings, b1)
 
-	b2 := NewBinding(1, 2, "a", 0, nil, nil, nil, false, nil)
+	b2 := NewBinding(1, 2, "db", "a", 0, nil, nil, nil, false, nil)
 	bc2 := NewBindContext(nil, nil)
 	bc2.bindings = append(bc2.bindings, b2)
 
@@ -1162,7 +1162,7 @@ func Test_mergeContexts(t *testing.T) {
 	assert.EqualError(t, err, "invalid input: table 'a' specified more than once")
 
 	//a merge b
-	b3 := NewBinding(2, 3, "b", 0, nil, nil, nil, false, nil)
+	b3 := NewBinding(2, 3, "db", "b", 0, nil, nil, nil, false, nil)
 	bc3 := NewBindContext(nil, nil)
 	bc3.bindings = append(bc3.bindings, b3)
 

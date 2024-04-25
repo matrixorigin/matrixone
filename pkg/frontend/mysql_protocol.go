@@ -33,6 +33,9 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	goetty_buf "github.com/fagongzi/goetty/v2/buf"
+	"go.uber.org/zap"
+	"golang.org/x/exp/slices"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -45,8 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"golang.org/x/exp/slices"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -196,23 +197,20 @@ type MysqlProtocol interface {
 
 	GetStats() string
 
-	CalculateOutTrafficBytes() int64
+	// CalculateOutTrafficBytes return bytes, mysql packet num send back to client
+	// reset marks Do reset counter after calculation or not.
+	CalculateOutTrafficBytes(reset bool) (int64, int64)
 
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 
 	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+
+	DisableAutoFlush()
+	EnableAutoFlush()
+	Flush() error
 }
 
 var _ MysqlProtocol = &MysqlProtocolImpl{}
-
-func (ses *Session) GetMysqlProtocol() MysqlProtocol {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	if ses.protocol != nil {
-		return ses.protocol.(MysqlProtocol)
-	}
-	return nil
-}
 
 type debugStats struct {
 	writeCount uint64
@@ -348,6 +346,8 @@ type MysqlProtocolImpl struct {
 	SV *config.FrontendParameters
 
 	ses *Session
+
+	disableAutoFlush bool
 }
 
 func (mp *MysqlProtocolImpl) GetSession() *Session {
@@ -369,7 +369,13 @@ func (mp *MysqlProtocolImpl) SetCapability(cap uint32) {
 }
 
 func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
+	mp.ses.CountPacket(int64(a))
 	mp.sequenceId.Add(uint32(a))
+}
+
+func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
+	mp.ses.CountPacket(1)
+	mp.sequenceId.Store(uint32(value))
 }
 
 func (mp *MysqlProtocolImpl) GetDatabaseName() string {
@@ -402,12 +408,19 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 		mp.String())
 }
 
-// CalculateOutTrafficBytes calculate the bytes of the last out traffic
-func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes() int64 {
+// CalculateOutTrafficBytes calculate the bytes of the last out traffic, the number of mysql packets
+func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
+	ses := mp.GetSession()
 	// Case 1: send data as ResultSet
-	return int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
+	bytes = int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
 		// Case 2: send data as CSV
-		mp.GetSession().writeCsvBytes.Load()
+		ses.writeCsvBytes.Load()
+	// mysql packet num + length(sql) / 16KiB + payload / 16 KiB
+	packets = ses.GetPacketCnt() + int64(len(ses.sql)>>14) + int64(ses.payloadCounter>>14)
+	if reset {
+		ses.ResetPacketCounter()
+	}
+	return
 }
 
 func (mp *MysqlProtocolImpl) ResetStatistics() {
@@ -435,6 +448,7 @@ func (mp *MysqlProtocolImpl) Quit() {
 	if mp.binaryNullBuffer != nil {
 		mp.binaryNullBuffer = nil
 	}
+	mp.ses = nil
 }
 
 func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
@@ -493,7 +507,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	data = append(data, 0)
 	// warning count
 	data = append(data, 0, 0) // TODO support warning count
-	if err := mp.writePackets(data); err != nil {
+	if err := mp.writePackets(data, false); err != nil {
 		return err
 	}
 
@@ -513,7 +527,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numParams > 0 {
-		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetServerStatus()); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
 			return err
 		}
 	}
@@ -533,7 +547,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numColumns > 0 {
-		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetServerStatus()); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
 			return err
 		}
 	}
@@ -1648,7 +1662,7 @@ func (mp *MysqlProtocolImpl) makeAuthSwitchRequestPayload(authMethodName string)
 func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod(ctx context.Context) ([]byte, error) {
 	var err error
 	aswPkt := mp.makeAuthSwitchRequestPayload(AuthNativePassword)
-	err = mp.writePackets(aswPkt)
+	err = mp.writePackets(aswPkt, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1676,6 +1690,13 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod(ctx context.Context) 
 	return data, nil
 }
 
+// extendStatus extends a flag to the status variable.
+// SERVER_QUERY_WAS_SLOW and SERVER_STATUS_NO_GOOD_INDEX_USED is not used in other modules,
+// so we use it to mark the packet MUST be OK/EOF.
+func extendStatus(old uint16) uint16 {
+	return old | SERVER_QUERY_WAS_SLOW | SERVER_STATUS_NO_GOOD_INDEX_USED
+}
+
 // make a OK packet
 func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, statusFlags, warnings uint16, message string) []byte {
 	data := make([]byte, HeaderOffset+128+len(message)+10)
@@ -1683,6 +1704,7 @@ func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, st
 	pos = mp.io.WriteUint8(data, pos, defines.OKHeader)
 	pos = mp.writeIntLenEnc(data, pos, affectedRows)
 	pos = mp.writeIntLenEnc(data, pos, lastInsertId)
+	statusFlags = extendStatus(statusFlags)
 	if (mp.capability & CLIENT_PROTOCOL_41) != 0 {
 		pos = mp.io.WriteUint16(data, pos, statusFlags)
 		pos = mp.io.WriteUint16(data, pos, warnings)
@@ -1706,6 +1728,7 @@ func (mp *MysqlProtocolImpl) makeOKPayloadWithEof(affectedRows, lastInsertId uin
 	pos = mp.io.WriteUint8(data, pos, defines.EOFHeader)
 	pos = mp.writeIntLenEnc(data, pos, affectedRows)
 	pos = mp.writeIntLenEnc(data, pos, lastInsertId)
+	statusFlags = extendStatus(statusFlags)
 	if (mp.capability & CLIENT_PROTOCOL_41) != 0 {
 		pos = mp.io.WriteUint16(data, pos, statusFlags)
 		pos = mp.io.WriteUint16(data, pos, warnings)
@@ -1733,18 +1756,18 @@ func (mp *MysqlProtocolImpl) makeLocalInfileRequestPayload(filename string) []by
 
 func (mp *MysqlProtocolImpl) sendLocalInfileRequest(filename string) error {
 	req := mp.makeLocalInfileRequestPayload(filename)
-	return mp.writePackets(req)
+	return mp.writePackets(req, true)
 }
 
 func (mp *MysqlProtocolImpl) sendOKPacketWithEof(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
 	okPkt := mp.makeOKPayloadWithEof(affectedRows, lastInsertId, status, warnings, message)
-	return mp.writePackets(okPkt)
+	return mp.writePackets(okPkt, true)
 }
 
 // send OK packet to the client
 func (mp *MysqlProtocolImpl) sendOKPacket(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
 	okPkt := mp.makeOKPayload(affectedRows, lastInsertId, status, warnings, message)
-	return mp.writePackets(okPkt)
+	return mp.writePackets(okPkt, true)
 }
 
 // make Err packet
@@ -1783,7 +1806,7 @@ func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMess
 		mp.ses.GetErrInfo().push(errorCode, errorMessage)
 	}
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
-	return mp.writePackets(errPkt)
+	return mp.writePackets(errPkt, true)
 }
 
 func (mp *MysqlProtocolImpl) makeEOFPayload(warnings, status uint16) []byte {
@@ -1792,14 +1815,14 @@ func (mp *MysqlProtocolImpl) makeEOFPayload(warnings, status uint16) []byte {
 	pos = mp.io.WriteUint8(data, pos, defines.EOFHeader)
 	if mp.capability&CLIENT_PROTOCOL_41 != 0 {
 		pos = mp.io.WriteUint16(data, pos, warnings)
-		pos = mp.io.WriteUint16(data, pos, status)
+		pos = mp.io.WriteUint16(data, pos, extendStatus(status))
 	}
 	return data[:pos]
 }
 
 func (mp *MysqlProtocolImpl) sendEOFPacket(warnings, status uint16) error {
 	data := mp.makeEOFPayload(warnings, status)
-	return mp.writePackets(data)
+	return mp.writePackets(data, true)
 }
 
 func (mp *MysqlProtocolImpl) SendEOFPacketIf(warnings, status uint16) error {
@@ -1925,7 +1948,7 @@ func (mp *MysqlProtocolImpl) SendColumnDefinitionPacket(ctx context.Context, col
 		data = mp.makeColumnDefinition41Payload(mysqlColumn, cmd)
 	}
 
-	return mp.writePackets(data)
+	return mp.writePackets(data, true)
 }
 
 // SendColumnCountPacket makes the column count packet
@@ -1934,7 +1957,7 @@ func (mp *MysqlProtocolImpl) SendColumnCountPacket(count uint64) error {
 	pos := HeaderOffset
 	pos = mp.writeIntLenEnc(data, pos, count)
 
-	return mp.writePackets(data[:pos])
+	return mp.writePackets(data[:pos], true)
 }
 
 func (mp *MysqlProtocolImpl) sendColumns(ctx context.Context, mrs *MysqlResultSet, cmd int, warnings, status uint16) error {
@@ -2654,7 +2677,8 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 }
 
 // the server sends the payload to the client
-func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
+func (mp *MysqlProtocolImpl) writePackets(payload []byte, flush bool) error {
+
 	//protocol header length
 	var headerLen = HeaderOffset
 	var header [4]byte
@@ -2705,6 +2729,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 			mp.AddSequenceId(1)
 		}
 	}
+
 	return nil
 }
 
@@ -2715,7 +2740,7 @@ func (mp *MysqlProtocolImpl) MakeHandshakePayload() []byte {
 
 // WritePacket exposes (*MysqlProtocolImpl).writePackets() function.
 func (mp *MysqlProtocolImpl) WritePacket(payload []byte) error {
-	return mp.writePackets(payload)
+	return mp.writePackets(payload, true)
 }
 
 // MakeOKPayload exposes (*MysqlProtocolImpl).makeOKPayload() function.
@@ -2740,9 +2765,9 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 		logDebugf(mp.GetDebugString(), "failed to set deadline for salt updating: %v", err)
 		return
 	}
-	ve := proxy.NewVersionedExtraInfo(proxy.Version0, nil)
+	var i proxy.ExtraInfo
 	reader := bufio.NewReader(rs.RawConn())
-	if err := ve.Decode(reader); err != nil {
+	if err := i.Decode(reader); err != nil {
 		// If the error is timeout, we treat it as normal case and do not update extra info.
 		if err, ok := err.(net.Error); ok && err.Timeout() {
 			logInfo(mp.ses, mp.GetDebugString(), "cannot get salt, maybe not use proxy",
@@ -2754,32 +2779,19 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 		return
 	}
 
-	salt, ok := ve.ExtraInfo.GetSalt()
-	if ok {
-		mp.SetSalt(salt)
+	// must from proxy if extraInfo is received
+	mp.GetSession().fromProxy = true
+	mp.SetSalt(i.Salt)
+	mp.connectionID = i.ConnectionID
+	ses := mp.GetSession()
+	ses.requestLabel = i.Label
+	if i.InternalConn {
+		ses.connType = ConnTypeInternal
 	} else {
-		logError(mp.ses, mp.GetDebugString(), "cannot get salt")
+		ses.connType = ConnTypeExternal
 	}
-	label, ok := ve.ExtraInfo.GetLabel()
-	if ok {
-		mp.GetSession().requestLabel = label.Labels
-	} else {
-		logError(mp.ses, mp.GetDebugString(), "cannot get label")
-	}
-	connID, ok := ve.ExtraInfo.GetConnectionID()
-	if ok {
-		if connID > 0 {
-			mp.connectionID = connID
-		}
-	}
-	internalConn, ok := ve.ExtraInfo.GetInternalConn()
-	if ok {
-		if internalConn {
-			mp.GetSession().connType = ConnTypeInternal
-		} else {
-			mp.GetSession().connType = ConnTypeExternal
-		}
-	}
+	ses.clientAddr = i.ClientAddr
+	ses.proxyAddr = mp.Peer()
 }
 
 /*

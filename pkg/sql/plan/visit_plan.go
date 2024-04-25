@@ -122,11 +122,9 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	typ := types.New(types.T_varchar, 65000, 0)
 	toTyp := makePlan2Type(&typ)
 	targetTyp := &plan.Expr{
-		Typ: *toTyp,
+		Typ: toTyp,
 		Expr: &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: toTyp,
-			},
+			T: &plan.TargetType{},
 		},
 	}
 
@@ -142,7 +140,7 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 				return nil, err
 			}
 		}
-		return forceCastExpr(ctx, e, &oldType)
+		return forceCastExpr(ctx, e, oldType)
 	}
 
 	if node.RowsetData != nil {

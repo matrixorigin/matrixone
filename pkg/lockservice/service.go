@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -62,7 +63,11 @@ type service struct {
 
 	mu struct {
 		sync.RWMutex
-		allocating map[uint32]map[uint64]chan struct{}
+		restartTime  timestamp.Timestamp
+		status       pb.Status
+		groupTables  [][]pb.LockTable
+		lockTableRef map[uint32]map[uint64]uint64
+		allocating   map[uint32]map[uint64]chan struct{}
 	}
 
 	option struct {
@@ -95,7 +100,7 @@ func NewLockService(
 
 	s.tableGroups = &lockTableHolders{service: s.serviceID, holders: map[uint32]*lockTableHolder{}}
 	s.mu.allocating = make(map[uint32]map[uint64]chan struct{})
-	s.activeTxnHolder = newMapBasedTxnHandler(s.serviceID, s.fsp)
+	s.mu.lockTableRef = make(map[uint32]map[uint64]uint64)
 	s.deadlockDetector = newDeadlockDetector(
 		s.fetchTxnWaitingList,
 		s.abortDeadlockTxn)
@@ -106,6 +111,7 @@ func NewLockService(
 	for i := 0; i < fetchWhoWaitingListTaskCount; i++ {
 		_ = s.stopper.RunTask(s.handleFetchWhoWaitingMe)
 	}
+	logLockServiceStartSucc(s.serviceID)
 	return s
 }
 
@@ -115,6 +121,11 @@ func (s *service) Lock(
 	rows [][]byte,
 	txnID []byte,
 	options pb.LockOptions) (pb.Result, error) {
+
+	if !s.canLockOnServiceStatus(txnID, options, tableID, rows) {
+		return pb.Result{}, moerr.NewNewTxnInCNRollingRestart()
+	}
+
 	v2.TxnLockTotalCounter.Inc()
 	options.Validate(rows)
 
@@ -176,18 +187,23 @@ func (s *service) Unlock(
 
 	s.wait()
 
-	// FIXME(fagongzi): too many mem alloc in trace
-	_, span := trace.Debug(ctx, "lockservice.unlock")
-	defer span.End()
-
 	txn := s.activeTxnHolder.deleteActiveTxn(txnID)
 	if txn == nil {
 		return nil
 	}
+
 	txn.Lock()
 	defer txn.Unlock()
 	if !bytes.Equal(txn.txnID, txnID) {
 		return nil
+	}
+
+	if !s.isStatus(pb.Status_ServiceLockEnable) {
+		s.reduceCanMoveGroupTables(txn)
+		if s.isStatus(pb.Status_ServiceLockWaiting) &&
+			s.activeTxnHolder.empty() {
+			s.setStatus(pb.Status_ServiceUnLockSucc)
+		}
 	}
 
 	defer logUnlockTxn(s.serviceID, txn)()
@@ -198,6 +214,101 @@ func (s *service) Unlock(
 	// needs to be notified to release memory.
 	s.deadlockDetector.txnClosed(txnID)
 	return nil
+}
+
+func (s *service) reduceCanMoveGroupTables(txn *activeTxn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.mu.lockTableRef) == 0 {
+		return
+	}
+
+	var res []pb.LockTable
+
+	for group, h := range txn.lockHolders {
+		for table, bind := range h.tableBinds {
+			if bind.ServiceID == s.serviceID {
+				if _, ok := s.mu.lockTableRef[group][table]; ok {
+					s.mu.lockTableRef[group][table]--
+					if s.mu.lockTableRef[group][table] == 0 {
+						delete(s.mu.lockTableRef[group], table)
+						res = append(res, bind)
+					}
+				}
+			}
+		}
+	}
+	if len(res) > 0 {
+		s.mu.groupTables = append(s.mu.groupTables, res)
+	}
+}
+
+func (s *service) checkCanMoveGroupTables() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.activeTxnHolder.incLockTableRef(s.mu.lockTableRef, s.serviceID)
+	var res []pb.LockTable
+	s.tableGroups.iter(func(_ uint64, v lockTable) bool {
+		bind := v.getBind()
+		if bind.ServiceID == s.serviceID {
+			if _, ok := s.mu.lockTableRef[bind.Group][bind.Table]; !ok {
+				res = append(res, bind)
+			}
+		}
+		return true
+	})
+	if len(res) > 0 {
+		s.mu.groupTables = append(s.mu.groupTables, res)
+	}
+}
+
+func (s *service) canLockOnServiceStatus(
+	txnID []byte,
+	opts pb.LockOptions,
+	tableID uint64,
+	rows [][]byte) bool {
+	if s.isStatus(pb.Status_ServiceLockEnable) {
+		return true
+	}
+	if opts.Sharding == pb.Sharding_ByRow {
+		tableID = shardingByRow(rows[0])
+	}
+	if !s.validGroupTable(opts.Group, tableID) {
+		return false
+	}
+	if s.activeTxnHolder.empty() {
+		return false
+	}
+	if s.activeTxnHolder.hasActiveTxn(txnID) {
+		return true
+	}
+	if opts.SnapShotTs.LessEq(s.getRestartTime()) {
+		return true
+	}
+	return false
+}
+
+func (s *service) validGroupTable(group uint32, tableID uint64) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.mu.lockTableRef) == 0 {
+		return true
+	}
+	_, ok := s.mu.lockTableRef[group][tableID]
+	return ok
+}
+
+func (s *service) setRestartTime() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.restartTime, _ = s.clock.Now()
+}
+
+func (s *service) getRestartTime() timestamp.Timestamp {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mu.restartTime
 }
 
 func (s *service) GetServiceID() string {
@@ -231,6 +342,35 @@ func (s *service) Close() error {
 		close(s.fetchWhoWaitingListC)
 	})
 	return err
+}
+
+func (s *service) setStatus(status pb.Status) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.status = status
+}
+
+func (s *service) getStatus() pb.Status {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mu.status
+}
+
+func (s *service) popGroupTables() []pb.LockTable {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.mu.groupTables) == 0 {
+		return nil
+	}
+	g := s.mu.groupTables[0]
+	s.mu.groupTables = s.mu.groupTables[1:]
+	return g
+}
+
+func (s *service) isStatus(status pb.Status) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mu.status == status
 }
 
 func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, error) {
@@ -416,18 +556,24 @@ func (s *service) wait() {
 
 type activeTxnHolder interface {
 	close()
+	empty() bool
+	getAllTxnID() [][]byte
+	incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string)
 	getActiveTxn(txnID []byte, create bool, remoteService string) *activeTxn
+	hasActiveTxn(txnID []byte) bool
 	deleteActiveTxn(txnID []byte) *activeTxn
 	keepRemoteActiveTxn(remoteService string)
 	getTimeoutRemoveTxn(
 		timeoutServices map[string]struct{},
 		timeoutTxns [][]byte,
-		maxKeepInterval time.Duration) ([][]byte, time.Duration)
+		maxKeepInterval time.Duration) [][]byte
 }
 
 type mapBasedTxnHolder struct {
 	serviceID string
 	fsp       *fixedSlicePool
+	valid     func(sid string) (bool, error)
+	notify    func([]pb.OrphanTxn) ([][]byte, error)
 	mu        struct {
 		sync.RWMutex
 		// remoteServices known remote service
@@ -441,9 +587,14 @@ type mapBasedTxnHolder struct {
 
 func newMapBasedTxnHandler(
 	serviceID string,
-	fsp *fixedSlicePool) activeTxnHolder {
+	fsp *fixedSlicePool,
+	valid func(sid string) (bool, error),
+	notify func([]pb.OrphanTxn) ([][]byte, error),
+) activeTxnHolder {
 	h := &mapBasedTxnHolder{}
 	h.fsp = fsp
+	h.valid = valid
+	h.notify = notify
 	h.serviceID = serviceID
 	h.mu.activeTxns = make(map[string]*activeTxn, 1024)
 	h.mu.activeTxnServices = make(map[string]string)
@@ -498,6 +649,34 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 	return txn
 }
 
+func (h *mapBasedTxnHolder) hasActiveTxn(txnID []byte) bool {
+	txnKey := util.UnsafeBytesToString(txnID)
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if v := h.getActiveLocked(txnKey); v != nil {
+		return true
+	}
+	return false
+}
+
+func (h *mapBasedTxnHolder) empty() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.mu.activeTxns) == 0
+}
+
+func (h *mapBasedTxnHolder) getAllTxnID() [][]byte {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	txns := make([][]byte, len(h.mu.activeTxns))
+	i := 0
+	for k := range h.mu.activeTxns {
+		txns[i] = util.UnsafeStringToBytes(k)
+		i++
+	}
+	return txns
+}
+
 func (h *mapBasedTxnHolder) deleteActiveTxn(txnID []byte) *activeTxn {
 	txnKey := util.UnsafeBytesToString(txnID)
 	h.mu.Lock()
@@ -521,46 +700,95 @@ func (h *mapBasedTxnHolder) keepRemoteActiveTxn(remoteService string) {
 
 func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 	timeoutServices map[string]struct{},
-	timeoutTxns [][]byte,
-	maxKeepInterval time.Duration) ([][]byte, time.Duration) {
-	timeoutTxns = timeoutTxns[:0]
+	needRemoved [][]byte,
+	maxKeepInterval time.Duration,
+) [][]byte {
+	needRemoved = needRemoved[:0]
 	for k := range timeoutServices {
 		delete(timeoutServices, k)
+	}
+	h.mu.Lock()
+	now := time.Now()
+	h.mu.dequeue.Iter(0, func(r remote) bool {
+		v := now.Sub(r.time)
+		if v < maxKeepInterval {
+			return false
+		}
+		timeoutServices[r.id] = struct{}{}
+		return true
+	})
+	h.mu.Unlock()
+
+	var cannotCommit []pb.OrphanTxn
+	cannotCommitServices := make(map[string]int)
+	for sid := range timeoutServices {
+		// skip maybe valid services
+		if ok, err := h.valid(sid); ok && err == nil {
+			delete(timeoutServices, sid)
+		} else {
+			// any error will be considered the txn cannot commit.
+			delete(timeoutServices, sid)
+			cannotCommit = append(cannotCommit, pb.OrphanTxn{Service: sid})
+			cannotCommitServices[sid] = len(cannotCommit) - 1
+		}
 	}
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	now := time.Now()
-	idx := 0
-	wait := time.Duration(0)
-	h.mu.dequeue.Iter(0, func(r remote) bool {
-		v := now.Sub(r.time)
-		if v < maxKeepInterval {
-			wait = maxKeepInterval - v
-			return false
-		}
-		idx++
-		return true
-	})
-	if removed := h.mu.dequeue.Drain(0, idx); removed != nil {
-		removed.Iter(0, func(r remote) bool {
-			timeoutServices[r.id] = struct{}{}
-			return true
-		})
+	// all txns in the timeout services need to be removed
+	for txnKey := range h.mu.activeTxns {
+		remoteService := h.mu.activeTxnServices[txnKey]
 
-		for txnKey := range h.mu.activeTxns {
-			remoteService := h.mu.activeTxnServices[txnKey]
-			if _, ok := timeoutServices[remoteService]; ok {
-				timeoutTxns = append(timeoutTxns, util.UnsafeStringToBytes(txnKey))
-			}
+		if idx, ok := cannotCommitServices[remoteService]; ok {
+			cannotCommit[idx].Txn = append(cannotCommit[idx].Txn, util.UnsafeStringToBytes(txnKey))
+			continue
 		}
 
-		for k := range timeoutServices {
-			delete(h.mu.remoteServices, k)
+		if _, ok := timeoutServices[remoteService]; ok {
+			needRemoved = append(needRemoved, util.UnsafeStringToBytes(txnKey))
 		}
 	}
-	return timeoutTxns, wait
+	h.mu.Unlock()
+
+	if len(cannotCommit) > 0 {
+		// found txn1 cannot commit, but txn1 is still running in other cn.
+		// There are 2 possible timings here:
+		// 1. txn1's commit request arrive TN before cannot commit request
+		// 2. txn1's commit request arrive TN after cannot commit request
+		//
+		// In case1: we cannot make txn1 as timeout txn.
+		// In case2: txn1'commit request will failed, and we can make txn1 as
+		//           timeout txn.
+		if committing, err := h.notify(cannotCommit); err == nil {
+			for sid, idx := range cannotCommitServices {
+				if len(committing) == 0 {
+					needRemoved = append(needRemoved, cannotCommit[idx].Txn...)
+					timeoutServices[sid] = struct{}{}
+				} else {
+					m := make(map[string]struct{}, len(committing))
+					for _, v := range committing {
+						m[util.UnsafeBytesToString(v)] = struct{}{}
+					}
+					for _, v := range cannotCommit[idx].Txn {
+						if _, ok := m[util.UnsafeBytesToString(v)]; !ok {
+							needRemoved = append(needRemoved, v)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// clear
+	h.mu.Lock()
+	for k := range timeoutServices {
+		if e, ok := h.mu.remoteServices[k]; ok {
+			delete(h.mu.remoteServices, k)
+			h.mu.dequeue.Remove(e)
+		}
+	}
+	return needRemoved
 }
 
 func (h *mapBasedTxnHolder) close() {
@@ -570,6 +798,15 @@ func (h *mapBasedTxnHolder) close() {
 	for k, txn := range h.mu.activeTxns {
 		reuse.Free(txn, nil)
 		delete(h.mu.activeTxns, k)
+	}
+}
+
+func (h *mapBasedTxnHolder) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	for _, txn := range h.mu.activeTxns {
+		txn.incLockTableRef(m, serviceID)
 	}
 }
 

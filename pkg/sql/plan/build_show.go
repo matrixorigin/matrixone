@@ -454,7 +454,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	if tableDef == nil || tableDef.TableType != catalog.SystemViewRel {
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
 	}
-	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`"
+	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`, 'utf8mb4' as `character_set_client`, 'utf8mb4_general_ci' as `collation_connection`"
 	var viewStr string
 	if tableDef.TableType == catalog.SystemViewRel {
 		viewStr = tableDef.ViewSql.View
@@ -866,15 +866,15 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			clusterTable = fmt.Sprintf(" or att_relname = '%s'", tblName)
 		}
 		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`, '' `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND att_is_hidden = 0 ORDER BY attnum"
+		sql = "SELECT attname `Field`, CASE WHEN LENGTH(attr_enum) > 0 THEN mo_show_visible_bin_enum(atttyp, attr_enum) ELSE mo_show_visible_bin(atttyp, 3) END AS `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`, '' `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND att_is_hidden = 0 ORDER BY attnum"
 		if stmt.Full {
-			sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`,  '' `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND att_is_hidden = 0 ORDER BY attnum"
+			sql = "SELECT attname `Field`, CASE WHEN LENGTH(attr_enum) > 0 THEN mo_show_visible_bin_enum(atttyp, attr_enum) ELSE mo_show_visible_bin(atttyp, 3) END AS `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`,  '' `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND att_is_hidden = 0 ORDER BY attnum"
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 	} else {
-		sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`, '' `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND att_is_hidden = 0 ORDER BY attnum"
+		sql = "SELECT attname `Field`, CASE WHEN LENGTH(attr_enum) > 0 THEN mo_show_visible_bin_enum(atttyp, attr_enum) ELSE mo_show_visible_bin(atttyp, 3) END AS `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`, '' `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND att_is_hidden = 0 ORDER BY attnum"
 		if stmt.Full {
-			sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`,  '' `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND att_is_hidden = 0 ORDER BY attnum"
+			sql = "SELECT attname `Field`, CASE WHEN LENGTH(attr_enum) > 0 THEN mo_show_visible_bin_enum(atttyp, attr_enum) ELSE mo_show_visible_bin(atttyp, 3) END AS `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`,  '' `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND att_is_hidden = 0 ORDER BY attnum"
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
@@ -1183,6 +1183,23 @@ func buildShowStages(stmt *tree.ShowStages, ctx CompilerContext) (*Plan, error) 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowSnapShots(stmt *tree.ShowSnapShots, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := fmt.Sprintf("SELECT sname as `SNAPSHOT_NAME`, CAST_NANO_TO_TIMESTAMP(ts) as `TIMESTAMP`,  level as `SNAPSHOT_LEVEL`, account_name as `ACCOUNT_NAME`, database_name as `DATABASE_NAME`, table_name as `TABLE_NAME` FROM %s.mo_snapshots ORDER BY ts DESC", MO_CATALOG_DB_NAME)
+
+	if stmt.Where != nil {
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	}
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowAccountUpgrade(stmt *tree.ShowAccountUpgrade, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_UPGRADE
+	sql := fmt.Sprintf("select account_name as `account_name`, create_version as `current_version` from %s.mo_account order by account_id;", MO_CATALOG_DB_NAME)
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {
 	showVariables := &plan.ShowVariables{
 		Global: stmt.Global,
@@ -1326,7 +1343,7 @@ func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonEx
 }
 
 func getRewriteSQLStmt(ctx CompilerContext, sql string) (tree.Statement, error) {
-	newStmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
+	newStmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1, 0)
 	if err != nil {
 		return nil, err
 	}

@@ -48,6 +48,7 @@ func init() {
 	initTraceMetrics()
 	initProxyMetrics()
 	initFrontendMetrics()
+	initPipelineMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -86,6 +87,9 @@ func initFileServiceMetrics() {
 	registry.MustRegister(s3ConnDurationHistogram)
 	registry.MustRegister(localIOBytesHistogram)
 	registry.MustRegister(localIODurationHistogram)
+
+	registry.MustRegister(ioLockCounter)
+	registry.MustRegister(ioLockDuration)
 }
 
 func initLogtailMetrics() {
@@ -157,6 +161,7 @@ func initRPCMetrics() {
 
 func initTraceMetrics() {
 	registry.MustRegister(traceCollectorDurationHistogram)
+	registry.MustRegister(traceNegativeCUCounter)
 }
 
 func initProxyMetrics() {
@@ -172,6 +177,12 @@ func initProxyMetrics() {
 
 func initFrontendMetrics() {
 	registry.MustRegister(acceptConnDurationHistogram)
+	registry.MustRegister(routineCounter)
+	registry.MustRegister(requestCounter)
+}
+
+func initPipelineMetrics() {
+	registry.MustRegister(PipelineServerDurationHistogram)
 }
 
 func getDurationBuckets() []float64 {

@@ -20,6 +20,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 )
 
 // FileService is a write-once file system
@@ -58,6 +60,8 @@ type FileService interface {
 
 	// PrefetchFile prefetches a file
 	PrefetchFile(ctx context.Context, filePath string) error
+
+	Close()
 }
 
 type IOVector struct {
@@ -87,6 +91,9 @@ type IOVector struct {
 
 	// Caches indicates extra caches to operate on
 	Caches []IOVectorCache
+
+	onRelease []func()
+	released  bool
 }
 
 type IOEntry struct {
@@ -117,14 +124,14 @@ type IOEntry struct {
 	// When reading, if the ToCacheData field is not nil, the returning object's byte slice will be set to this field
 	// Data, WriterForRead, ReadCloserForRead may be empty if CachedData is not null
 	// if ToCacheData is provided, caller should always read CachedData instead of Data, WriterForRead or ReadCloserForRead
-	CachedData CacheData
+	CachedData memorycache.CacheData
 
 	// ToCacheData constructs an object byte slice from entry contents
 	// reader or data must not be retained after returns
 	// reader always contains entry contents
 	// data may contains entry contents if available
 	// if data is empty, the io.Reader must be fully read before returning nil error
-	ToCacheData func(reader io.Reader, data []byte, allocator CacheDataAllocator) (cacheData CacheData, err error)
+	ToCacheData func(reader io.Reader, data []byte, allocator CacheDataAllocator) (cacheData memorycache.CacheData, err error)
 
 	// done indicates whether the entry is filled with data
 	// for implementing cascade cache
@@ -132,6 +139,8 @@ type IOEntry struct {
 
 	// fromCache indicates which cache filled the entry
 	fromCache IOVectorCache
+
+	allocator CacheDataAllocator
 }
 
 func (i IOEntry) String() string {
@@ -143,14 +152,8 @@ func (i IOEntry) String() string {
 	return buf.String()
 }
 
-type CacheData interface {
-	Bytes() []byte
-	Slice(length int) CacheData
-	Release()
-}
-
 type CacheDataAllocator interface {
-	Alloc(size int) CacheData
+	Alloc(size int) memorycache.CacheData
 }
 
 // DirEntry is a file or dir

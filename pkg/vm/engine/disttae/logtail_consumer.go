@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -190,6 +191,7 @@ func (c *PushClient) init(
 	// lock all.
 	// release subscribed lock when init finished.
 	// release subscriber lock when we received enough response from service.
+	c.receivedLogTailTime.e = e
 	c.receivedLogTailTime.ready.Store(false)
 	c.subscriber.setNotReady()
 	c.subscribed.mutex.Lock()
@@ -692,6 +694,7 @@ func (c *PushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
 			logutil.Infof("%s GC partition_state %v", logTag, ts.ToString())
 			for ids, part := range parts {
 				part.Truncate(ctx, ids, ts)
+				part.UpdateStart(ts)
 			}
 		}
 	}()
@@ -757,6 +760,7 @@ type syncLogTailTimestamp struct {
 	ready                  atomic.Bool
 	tList                  []atomic.Pointer[timestamp.Timestamp]
 	latestAppliedLogTailTS atomic.Pointer[timestamp.Timestamp]
+	e                      *Engine
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
@@ -1053,6 +1057,12 @@ func dispatchSubscribeResponse(
 		if err := e.consumeSubscribeResponse(ctx, response, false, receiveAt); err != nil {
 			return err
 		}
+		if len(lt.CkpLocation) == 0 {
+			p := e.getOrCreateLatestPart(tbl.DbId, tbl.TbId)
+			p.UpdateDuration(types.TS{}, types.MaxTs())
+			c := e.getLatestCatalogCache()
+			c.UpdateDuration(types.TS{}, types.MaxTs())
+		}
 		e.pClient.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
 	} else {
 		routineIndex := tbl.TbId % consumerNumber
@@ -1151,7 +1161,7 @@ type routineController struct {
 }
 
 func (rc *routineController) sendSubscribeResponse(
-	ctx context.Context,
+	_ context.Context,
 	r *logtail.SubscribeResponse,
 	receiveAt time.Time) {
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
@@ -1294,7 +1304,7 @@ func (e *Engine) consumeSubscribeResponse(
 	lazyLoad bool,
 	receiveAt time.Time) error {
 	lt := rp.GetLogtail()
-	return updatePartitionOfPush(ctx, e.pClient.subscriber.tnNodeID, e, &lt, lazyLoad, receiveAt)
+	return updatePartitionOfPush(ctx, e, &lt, lazyLoad, receiveAt)
 }
 
 func (e *Engine) consumeUpdateLogTail(
@@ -1302,13 +1312,12 @@ func (e *Engine) consumeUpdateLogTail(
 	rp logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time) error {
-	return updatePartitionOfPush(ctx, e.pClient.subscriber.tnNodeID, e, &rp, lazyLoad, receiveAt)
+	return updatePartitionOfPush(ctx, e, &rp, lazyLoad, receiveAt)
 }
 
 // updatePartitionOfPush is the partition update method of log tail push model.
 func updatePartitionOfPush(
 	ctx context.Context,
-	tnId int,
 	e *Engine,
 	tl *logtail.TableLogtail,
 	lazyLoad bool,
@@ -1325,7 +1334,7 @@ func updatePartitionOfPush(
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
-	partition := e.getPartition(dbId, tblId)
+	partition := e.getOrCreateLatestPart(dbId, tblId)
 
 	lockErr := partition.Lock(ctx)
 	if lockErr != nil {
@@ -1335,22 +1344,38 @@ func updatePartitionOfPush(
 
 	state, doneMutate := partition.MutateState()
 
-	key := e.catalog.GetTableById(dbId, tblId)
+	catache := e.getLatestCatalogCache()
+	key := catache.GetTableById(dbId, tblId)
+
+	var (
+		ckpStart types.TS
+		ckpEnd   types.TS
+	)
 
 	if lazyLoad {
 		if len(tl.CkpLocation) > 0 {
+			//TODO::
+			ckpStart, ckpEnd = parseCkpDuration(tl)
+			if !ckpStart.IsEmpty() && !ckpEnd.IsEmpty() {
+				state.CacheCkpDuration(ckpStart, ckpEnd, partition)
+			}
 			state.AppendCheckpoint(tl.CkpLocation, partition)
 		}
 
-		err = consumeLogTailOfPushWithLazyLoad(
+		err = consumeLogTail(
 			ctx,
 			key.PrimarySeqnum,
 			e,
 			state,
 			tl,
 		)
+
 	} else {
-		err = consumeLogTailOfPushWithoutLazyLoad(ctx, key.PrimarySeqnum, e, state, tl, dbId, key.Id, key.Name)
+		if len(tl.CkpLocation) > 0 {
+			//TODO::
+			ckpStart, ckpEnd = parseCkpDuration(tl)
+		}
+		err = consumeCkpsAndLogTail(ctx, key.PrimarySeqnum, e, state, tl, dbId, key.Id, key.Name)
 	}
 
 	if err != nil {
@@ -1358,14 +1383,23 @@ func updatePartitionOfPush(
 		return err
 	}
 
-	partition.TS = *tl.Ts
+	//After consume checkpoints finished ,then update the start and end of
+	//the mo system table's partition and catalog.
+	if !lazyLoad && len(tl.CkpLocation) != 0 {
+		if !ckpStart.IsEmpty() && !ckpEnd.IsEmpty() {
+			partition.UpdateDuration(ckpStart, types.MaxTs())
+			//Notice that the checkpoint duration is same among all mo system tables,
+			//such as mo_databases, mo_tables, mo_columns.
+			catache.UpdateDuration(ckpStart, types.MaxTs())
+		}
+	}
 
 	doneMutate()
 
 	return nil
 }
 
-func consumeLogTailOfPushWithLazyLoad(
+func consumeLogTail(
 	ctx context.Context,
 	primarySeqnum int,
 	engine *Engine,
@@ -1375,7 +1409,25 @@ func consumeLogTailOfPushWithLazyLoad(
 	return hackConsumeLogtail(ctx, primarySeqnum, engine, state, lt)
 }
 
-func consumeLogTailOfPushWithoutLazyLoad(
+func parseCkpDuration(lt *logtail.TableLogtail) (start types.TS, end types.TS) {
+	locationsAndVersions := strings.Split(lt.CkpLocation, ";")
+	//check whether metLoc contains duration: [start, end]
+	if !strings.Contains(locationsAndVersions[len(locationsAndVersions)-1], "[") {
+		return
+	}
+
+	newlocs := locationsAndVersions[:len(locationsAndVersions)-1]
+	lt.CkpLocation = strings.Join(newlocs, ";")
+
+	duration := locationsAndVersions[len(locationsAndVersions)-1]
+	pos1 := strings.Index(duration, "[")
+	pos2 := strings.Index(duration, "]")
+	sub := duration[pos1+1 : pos2]
+	ds := strings.Split(sub, "_")
+	return types.StringToTS(ds[0]), types.StringToTS(ds[1])
+}
+
+func consumeCkpsAndLogTail(
 	ctx context.Context,
 	primarySeqnum int,
 	engine *Engine,
@@ -1401,7 +1453,7 @@ func consumeLogTailOfPushWithoutLazyLoad(
 	}()
 	for _, entry := range entries {
 		if err = consumeEntry(ctx, primarySeqnum,
-			engine, state, entry); err != nil {
+			engine, engine.getLatestCatalogCache(), state, entry); err != nil {
 			return
 		}
 	}
@@ -1448,7 +1500,7 @@ func hackConsumeLogtail(
 				lt.Commands[i].EntryType = api.Entry_Delete
 			}
 			if err := consumeEntry(ctx, primarySeqnum,
-				engine, state, &lt.Commands[i]); err != nil {
+				engine, engine.getLatestCatalogCache(), state, &lt.Commands[i]); err != nil {
 				return err
 			}
 		}
@@ -1480,7 +1532,7 @@ func hackConsumeLogtail(
 				lt.Commands[i].EntryType = api.Entry_Delete
 			}
 			if err := consumeEntry(ctx, primarySeqnum,
-				engine, state, &lt.Commands[i]); err != nil {
+				engine, engine.getLatestCatalogCache(), state, &lt.Commands[i]); err != nil {
 				return err
 			}
 		}
@@ -1488,7 +1540,7 @@ func hackConsumeLogtail(
 	}
 	for i := 0; i < len(lt.Commands); i++ {
 		if err := consumeEntry(ctx, primarySeqnum,
-			engine, state, &lt.Commands[i]); err != nil {
+			engine, engine.getLatestCatalogCache(), state, &lt.Commands[i]); err != nil {
 			return err
 		}
 	}

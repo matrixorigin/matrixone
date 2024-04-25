@@ -1,16 +1,15 @@
--- test encode/decode function
-SELECT encode('\xa7', 'hex');
-SELECT decode('616263', 'hex');
+-- test hex/unhex and to_base64/from_base64 function
+SELECT hex('\xa7');
+SELECT unhex('616263');
 
-SELECT encode('abc', 'hex'), decode('616263', 'hex');
-SELECT encode('abc', 'base64'), decode('YWJj', 'base64');
+SELECT hex('abc'), unhex('616263');
+SELECT to_base64('abc'), from_base64('YWJj');
 
-SELECT decode('invalid', 'hex');
-SELECT decode('invalid', 'base64');
+SELECT unhex('invalid');
+SELECT from_base64('invalid');
 
-SELECT encode('abc', 'fake');
-SELECT decode('abc', 'fake');
-
+SELECT TO_BASE64('abc'), FROM_BASE64(TO_BASE64('abc'));
+SELECT HEX('abc'),UNHEX(HEX('abc'));
 
 -- test serial() and serial_full()
 CREATE TABLE t1 (name varchar(255), age int);
@@ -64,3 +63,47 @@ select age,name from t2 order by age desc,name desc;
 SELECT max( serial(t2.age,t2.name)) from t2;
 SELECT max( serial_full(t2.age,t2.name)) from t2;
 select  serial_extract(max, 0 as int),  serial_extract(max, 1 as varchar(255)) from (SELECT max( serial_full(t2.age,t2.name)) as max from t2);
+
+-- test function serial()、serial_full()、max() and min()
+drop table if exists test01;
+create table test01 (col1 bigint, col2 varchar(10), col3 char);
+insert into test01 values (1392034, 'database', 'a');
+insert into test01 values (23849242, 'abcdai', 'b');
+insert into test01 values (-32934, 'mo', 'c');
+insert into test01 values (null, null, null);
+select * from test01;
+select serial(col1, col2) from test01;
+select serial(col1, col2, col3) from test01;
+select serial_full(col1, col2, col3) from test01;
+select serial_full(col1, col3) from test01;
+select max(serial(col1, col2)) from test01;
+select max(serial(col1, col2, col3)) from test01;
+select min(serial_full(col1, col2, col3)) from test01;
+select min(serial_full(col1, col3)) from test01;
+drop table test01;
+
+drop table if exists test02;
+create table test02 (col1 int, col2 decimal, col3 char);
+insert into test02 values (1,2,'a');
+insert into test02 values (2,3,'b');
+insert into test02 values (null, null, null);
+select * from test02;
+select serial_extract(max(serial(col1, col2, col3)), 1 as decimal) from test02;
+select serial_extract(min(serial(col1, col2, col3)), 1 as decimal) from test02;
+select serial_extract(max(serial_full(cast(col1 as decimal), cast(col2 as double))), 0 as decimal) from test02;
+select serial_extract(min(serial_full(cast(col1 as decimal), cast(col2 as double))), 0 as decimal) from test02;
+drop table test02;
+
+drop table if exists vtab64;
+create table vtab64(id int primary key auto_increment,`vecf64_3` vecf64(3),`vecf64_5` vecf64(5));
+insert into vtab64(vecf64_3,vecf64_5) values("[0.8166459,NULL,0.4886152]",NULL);
+insert into vtab64(vecf64_3,vecf64_5) values(NULL,NULL);
+insert into vtab64(vecf64_3,vecf64_5) values("[0.8166459,0.66616553,0.4886152]",NULL);
+insert into vtab64(vecf64_3,vecf64_5) values ("[8.5606893,6.7903588,821.977768]","[0.46323407,23.49801546,563.9229458,56.07673508,8732.9583881]");
+insert into vtab64(vecf64_3,vecf64_5) values ("[0.9260021,0.26637346,0.06567037]","[0.45756745,65.2996871,321.623636,3.60082066,87.58445764]");
+select * from vtab64;
+select serial_extract(max(serial(id, `vecf64_3`, `vecf64_5`)), 1 as vecf64(3)) from vtab64;
+select serial_extract(min(serial(id, `vecf64_3`, `vecf64_5`)), 1 as vecf64(3)) from vtab64;
+select serial_extract(max(serial_full(cast(id as decimal), `vecf64_3`)), 0 as decimal) from vtab64;
+select serial_extract(min(serial_full(cast(id as decimal), `vecf64_3`)), 1 as vecf64(3)) from vtab64;
+drop table vtab64;

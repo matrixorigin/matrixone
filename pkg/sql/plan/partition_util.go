@@ -147,7 +147,7 @@ func collectArgsType(ctx context.Context, tblInfo *plan.TableDef, exprs ...tree.
 		if column == nil {
 			return nil, moerr.NewBadFieldError(ctx, col.Parts[0], "partition function")
 		}
-		types = append(types, column.GetTyp().GetId())
+		types = append(types, column.GetTyp().Id)
 	}
 	return types, nil
 }
@@ -247,7 +247,7 @@ func checkListColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionDef *p
 }
 
 // checkPartitionColumnValue check whether the types of partition column and partition value match
-func checkPartitionColumnValue(binder *PartitionBinder, colType *Type, colExpr *plan.Expr) error {
+func checkPartitionColumnValue(binder *PartitionBinder, colType Type, colExpr *plan.Expr) error {
 	val, err := EvalPlanExpr(binder.GetContext(), colExpr, binder.builder.compCtx.GetProcess())
 	if err != nil {
 		return err
@@ -530,7 +530,7 @@ func checkListPartitionValue(partitionBinder *PartitionBinder, partitionDef *pla
 
 func formatListPartitionValue(binder *PartitionBinder, tblInfo *TableDef, pi *plan.PartitionByDef) ([]string, error) {
 	defs := pi.Partitions
-	var colTps []*Type
+	var colTps []Type
 	if pi.PartitionExpr != nil {
 		tp := types.T_int64
 		if isPartExprUnsigned(pi) {
@@ -538,9 +538,9 @@ func formatListPartitionValue(binder *PartitionBinder, tblInfo *TableDef, pi *pl
 		}
 		toType := tp.ToType()
 		makePlan2Type(&toType)
-		colTps = []*Type{makePlan2Type(&toType)}
+		colTps = []Type{makePlan2Type(&toType)}
 	} else {
-		colTps = make([]*Type, 0, len(pi.PartitionColumns.PartitionColumns))
+		colTps = make([]Type, 0, len(pi.PartitionColumns.PartitionColumns))
 		for _, colName := range pi.PartitionColumns.PartitionColumns {
 			colInfo := findColumnByName(colName, tblInfo)
 			if colInfo == nil {
@@ -590,7 +590,7 @@ func isPartExprUnsigned(pi *plan.PartitionByDef) bool {
 	return types.T(pi.PartitionExpr.Expr.Typ.Id).IsUnsignedInt()
 }
 
-func evalPartitionFieldExpr(ctx context.Context, process *process.Process, colType *Type, colExpr *plan.Expr) (string, error) {
+func evalPartitionFieldExpr(ctx context.Context, process *process.Process, colType Type, colExpr *plan.Expr) (string, error) {
 	evalExpr, err := EvalPlanExpr(ctx, colExpr, process)
 	if err != nil {
 		return "", err
@@ -614,11 +614,11 @@ func evalPartitionFieldExpr(ctx context.Context, process *process.Process, colTy
 }
 
 // collectPartitionColumnsType
-func collectColumnsType(partitionDef *plan.PartitionByDef) []*Type {
+func collectColumnsType(partitionDef *plan.PartitionByDef) []Type {
 	if len(partitionDef.PartitionColumns.Columns) > 0 {
-		colTypes := make([]*Type, 0, len(partitionDef.PartitionColumns.Columns))
+		colTypes := make([]Type, 0, len(partitionDef.PartitionColumns.Columns))
 		for _, col := range partitionDef.PartitionColumns.Columns {
-			colTypes = append(colTypes, &col.Typ)
+			colTypes = append(colTypes, col.Typ)
 		}
 		return colTypes
 	}

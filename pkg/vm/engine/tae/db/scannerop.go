@@ -31,82 +31,6 @@ type ScannerOp interface {
 	PostExecute() error
 }
 
-// objHelper holds some temp statistics and founds deletable objects of a table.
-// If a Object has no any non-dropped blocks, it can be deleted. Except the
-// Object has the max Object id, appender may creates block in it.
-type objHelper struct {
-	// Statistics
-	objHasNonDropBlk     bool
-	objRowCnt, objRowDel int
-	objNonAppend         bool
-	isCreating           bool
-
-	// Found deletable Objects
-	maxObjId    uint64
-	objCandids  []*catalog.ObjectEntry // appendable
-	nobjCandids []*catalog.ObjectEntry // non-appendable
-}
-
-func newObjHelper() *objHelper {
-	return &objHelper{
-		objCandids:  make([]*catalog.ObjectEntry, 0),
-		nobjCandids: make([]*catalog.ObjectEntry, 0),
-	}
-}
-
-func (d *objHelper) reset() {
-	d.resetForNewObj()
-	d.maxObjId = 0
-	d.objCandids = d.objCandids[:0]
-	d.nobjCandids = d.nobjCandids[:0]
-}
-
-func (d *objHelper) resetForNewObj() {
-	d.objHasNonDropBlk = false
-	d.objNonAppend = false
-	d.isCreating = false
-	d.objRowCnt = 0
-	d.objRowDel = 0
-}
-
-// call this when a non dropped block was found when iterating blocks of a Object,
-// which make the builder skip this Object
-func (d *objHelper) hintNonDropBlock() {
-	d.objHasNonDropBlk = true
-}
-
-func (d *objHelper) push(entry *catalog.ObjectEntry) {
-	isAppendable := entry.IsAppendable()
-	if isAppendable && d.maxObjId < entry.SortHint {
-		d.maxObjId = entry.SortHint
-	}
-	if d.objHasNonDropBlk {
-		return
-	}
-	// all blocks has been dropped
-	if isAppendable {
-		d.objCandids = append(d.objCandids, entry)
-	} else {
-		d.nobjCandids = append(d.nobjCandids, entry)
-	}
-}
-
-// unused
-// copy out Object entries expect the one with max Object id.
-// func (d *objHelper) finish() []*catalog.ObjectEntry {
-// 	sort.Slice(d.objCandids, func(i, j int) bool { return d.objCandids[i].SortHint < d.objCandids[j].SortHint })
-// 	if last := len(d.objCandids) - 1; last >= 0 && d.objCandids[last].SortHint == d.maxObjId {
-// 		d.objCandids = d.objCandids[:last]
-// 	}
-// 	if len(d.objCandids) == 0 && len(d.nobjCandids) == 0 {
-// 		return nil
-// 	}
-// 	ret := make([]*catalog.ObjectEntry, len(d.objCandids)+len(d.nobjCandids))
-// 	copy(ret[:len(d.objCandids)], d.objCandids)
-// 	copy(ret[len(d.objCandids):], d.nobjCandids)
-// 	return ret
-// }
-
 type MergeTaskBuilder struct {
 	db *DB
 	*catalog.LoopProcessor
@@ -114,11 +38,10 @@ type MergeTaskBuilder struct {
 	name string
 	tbl  *catalog.TableEntry
 
-	ObjectHelper *objHelper
-	objPolicy    merge.Policy
-	executor     *merge.MergeExecutor
-	tableRowCnt  int
-	tableRowDel  int
+	objPolicy   merge.Policy
+	executor    *merge.MergeExecutor
+	tableRowCnt int
+	tableRowDel int
 
 	// concurrecy control
 	suspend    atomic.Bool
@@ -129,14 +52,12 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 	op := &MergeTaskBuilder{
 		db:            db,
 		LoopProcessor: new(catalog.LoopProcessor),
-		ObjectHelper:  newObjHelper(),
 		objPolicy:     merge.NewBasicPolicy(),
-		executor:      merge.NewMergeExecutor(db.Runtime),
+		executor:      merge.NewMergeExecutor(db.Runtime, db.CNMergeSched),
 	}
 
 	op.DatabaseFn = op.onDataBase
 	op.TableFn = op.onTable
-	op.BlockFn = op.onBlock
 	op.ObjectFn = op.onObject
 	op.PostObjectFn = op.onPostObject
 	op.PostTableFn = op.onPostTable
@@ -188,11 +109,10 @@ func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 	if entry != nil {
 		s.tid = entry.ID
 		s.tbl = entry
-		s.name = entry.GetLastestSchema().Name
+		s.name = entry.GetLastestSchemaLocked().Name
 		s.tableRowCnt = 0
 		s.tableRowDel = 0
 	}
-	s.ObjectHelper.reset()
 	s.objPolicy.ResetForTable(entry)
 }
 
@@ -227,6 +147,13 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	if !tableEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
+	tableEntry.RLock()
+	// this table is creating or altering
+	if !tableEntry.IsCommitted() {
+		tableEntry.RUnlock()
+		return moerr.GetOkStopCurrRecur()
+	}
+	tableEntry.RUnlock()
 	s.resetForTable(tableEntry)
 	return
 }
@@ -247,66 +174,33 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 	defer objectEntry.RUnlock()
 
 	// Skip uncommitted entries
+	// TODO: consider the case: add metaloc, is it possible to see a constructing object?
 	if !objectEntry.IsCommitted() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
 		return moerr.GetOkStopCurrRecur()
 	}
 
-	s.ObjectHelper.resetForNewObj()
-	s.ObjectHelper.objNonAppend = !objectEntry.IsAppendable()
+	if objectEntry.IsAppendable() {
+		return moerr.GetOkStopCurrRecur()
+	}
+
+	objectEntry.RUnlock()
+	// Rows will check objectStat, and if not loaded, it will load it.
+	rows, err := objectEntry.GetObjectData().Rows()
+	if err != nil {
+		return
+	}
+
+	dels := objectEntry.GetObjectData().GetTotalChanges()
+
+	// these operations do not require object lock
+	objectEntry.SetRemainingRows(rows - dels)
+	s.tableRowCnt += rows
+	s.tableRowDel += dels
+	s.objPolicy.OnObject(objectEntry)
+	objectEntry.RLock()
 	return
 }
 
 func (s *MergeTaskBuilder) onPostObject(obj *catalog.ObjectEntry) (err error) {
-	s.ObjectHelper.push(obj)
-
-	if !s.ObjectHelper.objNonAppend || s.ObjectHelper.isCreating {
-		return nil
-	}
-	// for sorted Objects, we have to feed it to policy to see if it is qualified to be merged
-	obj.SetRemainingRows(s.ObjectHelper.objRowCnt - s.ObjectHelper.objRowDel)
-
-	obj.CheckAndLoad()
-	s.tableRowCnt += s.ObjectHelper.objRowCnt
-	s.tableRowDel += s.ObjectHelper.objRowDel
-
-	s.objPolicy.OnObject(obj)
-	return nil
-}
-
-// for sorted Objects, we just collect the rows and dels on this Object
-// for non-sorted Objects, flushTableTail will take care of them, here we just check if it is deletable(having no active blocks)
-func (s *MergeTaskBuilder) onBlock(entry *catalog.BlockEntry) (err error) {
-	if !entry.IsActive() {
-		return
-	}
-	// it has active blk, this obj can't be deleted
-	s.ObjectHelper.hintNonDropBlock()
-
-	// this blk is not in a s3 object
-	if !s.ObjectHelper.objNonAppend {
-		return
-	}
-
-	entry.RLock()
-	defer entry.RUnlock()
-
-	// Skip uncommitted entries and appendable block
-	if !entry.IsCommitted() || !catalog.ActiveWithNoTxnFilter(&entry.BaseEntryImpl) {
-		// txn appending metalocs
-		s.ObjectHelper.isCreating = true
-		return
-	}
-	if !catalog.NonAppendableBlkFilter(entry) {
-		panic("append block in sorted Object")
-	}
-
-	// nblks in appenable objs or non-sorted non-appendable objs
-	// these blks are formed by continuous append
-	entry.RUnlock()
-	rows := entry.GetBlockData().Rows()
-	dels := entry.GetBlockData().GetTotalChanges()
-	entry.RLock()
-	s.ObjectHelper.objRowCnt += rows
-	s.ObjectHelper.objRowDel += dels
 	return nil
 }

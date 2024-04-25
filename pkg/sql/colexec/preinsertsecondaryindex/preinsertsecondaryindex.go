@@ -66,7 +66,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	secondaryColumnPos := arg.PreInsertCtx.Columns
 	pkPos := int(arg.PreInsertCtx.PkColumn)
-	// tableDef := argument.PreInsertCtx.TableDef
 
 	if arg.buf != nil {
 		proc.PutBatch(arg.buf)

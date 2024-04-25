@@ -61,6 +61,9 @@ func (m *MemoryFS) Name() string {
 	return m.name
 }
 
+func (m *MemoryFS) Close() {
+}
+
 func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
 	select {
 	case <-ctx.Done():

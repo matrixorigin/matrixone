@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -49,11 +50,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"go.uber.org/zap"
 )
 
@@ -66,6 +69,28 @@ type Handle struct {
 	db        *db.DB
 	txnCtxs   *common.Map[string, *txnContext]
 	GCManager *gc.Manager
+
+	interceptMatchRegexp atomic.Pointer[regexp.Regexp]
+}
+
+func (h *Handle) IsInterceptTable(name string) bool {
+	printMatchRegexp := h.getInterceptMatchRegexp()
+	if printMatchRegexp == nil {
+		return false
+	}
+	return printMatchRegexp.MatchString(name)
+}
+
+func (h *Handle) getInterceptMatchRegexp() *regexp.Regexp {
+	return h.interceptMatchRegexp.Load()
+}
+
+func (h *Handle) UpdateInterceptMatchRegexp(name string) {
+	if name == "" {
+		h.interceptMatchRegexp.Store(nil)
+		return
+	}
+	h.interceptMatchRegexp.Store(regexp.MustCompile(fmt.Sprintf(`.*%s.*`, name)))
 }
 
 var _ rpchandle.Handler = (*Handle)(nil)
@@ -177,7 +202,10 @@ func (h *Handle) HandleCommit(
 			}
 			logutil.Infof("retry txn %X with new txn %X", string(meta.GetID()), txn.GetID())
 			//Handle precommit-write command for 1PC
-			h.handleRequests(ctx, txn, txnCtx)
+			err = h.handleRequests(ctx, txn, txnCtx)
+			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
+				break
+			}
 			//if txn is 2PC ,need to set commit timestamp passed by coordinator.
 			if txn.Is2PC() {
 				txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
@@ -367,6 +395,92 @@ func (h *Handle) HandleGetLogTail(
 	return
 }
 
+func (h *Handle) HandleCommitMerge(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *api.MergeCommitEntry,
+	resp *db.InspectResp) (cb func(), err error) {
+
+	defer func() {
+		if err != nil {
+			e := moerr.DowncastError(err)
+			logutil.Error("mergeblocks err handle commit merge",
+				zap.String("table", fmt.Sprintf("%v-%v", req.TblId, req.TableName)),
+				zap.String("start-ts", req.StartTs.DebugString()),
+				zap.String("error", e.Display()))
+		}
+
+	}()
+	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+		types.TimestampToTS(meta.GetSnapshotTS()))
+	if err != nil {
+		return
+	}
+	ids := make([]objectio.ObjectId, 0, len(req.MergedObjs))
+	for _, o := range req.MergedObjs {
+		stat := objectio.ObjectStats(o)
+		ids = append(ids, *stat.ObjectName().ObjectId())
+	}
+	merge.ActiveCNObj.RemoveActiveCNObj(ids)
+	if req.Err != "" {
+		resp.Message = req.Err
+		err = moerr.NewInternalError(ctx, "merge err in cn: %s", req.Err)
+		return
+	}
+
+	defer func() {
+		if err != nil {
+			txn.Rollback(ctx)
+			resp.Message = err.Error()
+			merge.CleanUpUselessFiles(req, h.db.Runtime.Fs.Service)
+		}
+	}()
+
+	if len(req.BookingLoc) > 0 {
+		// load transfer info from s3
+		if req.Booking != nil {
+			logutil.Error("mergeblocks err booking loc is not empty, but booking is not nil")
+		}
+		loc := objectio.Location(req.BookingLoc)
+		var bat *batch.Batch
+		var release func()
+		bat, release, err = blockio.LoadTombstoneColumns(ctx, []uint16{0}, nil, h.db.Runtime.Fs.Service, loc, nil)
+		if err != nil {
+			return
+		}
+		req.Booking = &api.BlkTransferBooking{}
+		err = req.Booking.Unmarshal(bat.Vecs[0].GetBytesAt(0))
+		if err != nil {
+			release()
+			return
+		}
+		release()
+		h.db.Runtime.Fs.Service.Delete(ctx, loc.Name().String())
+		bat = nil
+	}
+
+	_, err = jobs.HandleMergeEntryInTxn(txn, req, h.db.Runtime)
+	if err != nil {
+		return
+	}
+	err = txn.Commit(ctx)
+	if err == nil {
+		b := &bytes.Buffer{}
+		b.WriteString("merged success\n")
+		for _, o := range req.CreatedObjs {
+			stat := objectio.ObjectStats(o)
+			b.WriteString(fmt.Sprintf("%v, rows %v, blks %v, osize %v, csize %v",
+				stat.ObjectName().String(), stat.Rows(), stat.BlkCnt(),
+				common.HumanReadableBytes(int(stat.OriginSize())),
+				common.HumanReadableBytes(int(stat.Size())),
+			))
+			b.WriteByte('\n')
+		}
+		resp.Message = b.String()
+	}
+	return nil, err
+}
+
 func (h *Handle) HandleFlushTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
@@ -385,6 +499,20 @@ func (h *Handle) HandleFlushTable(
 		req.DatabaseID,
 		req.TableID,
 		currTs)
+	return nil, err
+}
+
+func (h *Handle) HandleForceGlobalCheckpoint(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.Checkpoint,
+	resp *api.SyncLogTailResp) (cb func(), err error) {
+
+	timeout := req.FlushDuration
+
+	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+
+	err = h.db.ForceGlobalCheckpoint(ctx, currTs, timeout)
 	return nil, err
 }
 
@@ -427,6 +555,17 @@ func (h *Handle) HandleBackup(
 		locations += ";"
 	}
 	resp.CkpLocation = locations
+	return nil, err
+}
+
+func (h *Handle) HandleInterceptCommit(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.InterceptCommit,
+	resp *api.SyncLogTailResp) (cb func(), err error) {
+
+	name := req.TableName
+	h.UpdateInterceptMatchRegexp(name)
 	return nil, err
 }
 
@@ -839,13 +978,6 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	return err
 }
 
-// TODO: debug for #13342, remove me later
-var districtMatchRegexp = regexp.MustCompile(`.*bmsql_district.*`)
-
-func IsDistrictTable(name string) bool {
-	return districtMatchRegexp.MatchString(name)
-}
-
 func PrintTuple(tuple types.Tuple) string {
 	res := "("
 	for i, t := range tuple {
@@ -931,7 +1063,7 @@ func (h *Handle) HandleWrite(
 				err = moerr.NewInternalError(ctx, "object stats doesn't match meta locations")
 				return
 			}
-			err = tb.AddBlksWithMetaLoc(ctx, statsVec)
+			err = tb.AddObjsWithMetaLoc(ctx, statsVec)
 			return
 		}
 		//check the input batch passed by cn is valid.
@@ -954,10 +1086,12 @@ func (h *Handle) HandleWrite(
 			}
 		}
 		// TODO: debug for #13342, remove me later
-		if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
-			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
-				pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
-				logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), PrintTuple(pk))
+		if h.IsInterceptTable(tb.Schema().(*catalog2.Schema).Name) {
+			if tb.Schema().(*catalog2.Schema).HasPK() {
+				idx := tb.Schema().(*catalog2.Schema).GetSingleSortKeyIdx()
+				for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
+					logutil.Infof("op1 %v, %v", txn.GetStartTS().ToString(), common.MoVectorToString(req.Batch.Vecs[idx], i))
+				}
 			}
 		}
 		//Appends a batch of data into table.
@@ -1034,12 +1168,12 @@ func (h *Handle) HandleWrite(
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
-	if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
-		for i := 0; i < rowIDVec.Length(); i++ {
-
-			rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
-			pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
-			logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
+	if h.IsInterceptTable(tb.Schema().(*catalog2.Schema).Name) {
+		if tb.Schema().(*catalog2.Schema).HasPK() {
+			for i := 0; i < rowIDVec.Length(); i++ {
+				rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
+				logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), common.MoVectorToString(req.Batch.Vecs[1], i), rowID.String())
+			}
 		}
 	}
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)

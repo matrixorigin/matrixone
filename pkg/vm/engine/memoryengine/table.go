@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -40,8 +42,8 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (t *Table) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
-	return nil
+func (t *Table) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
+	return nil, nil
 }
 
 func (t *Table) Rows(ctx context.Context) (uint64, error) {
@@ -266,7 +268,7 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 			col := &plan2.ColDef{
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
-				Typ: &plan2.Type{
+				Typ: plan2.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
 					Scale:       attr.Attr.Type.Scale,
@@ -539,4 +541,12 @@ func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*p
 
 func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error) {
 	return true, nil
+}
+
+func (t *Table) ApproxObjectsNum(ctx context.Context) int {
+	return 0
+}
+
+func (t *Table) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats) (*api.MergeCommitEntry, error) {
+	return nil, nil
 }

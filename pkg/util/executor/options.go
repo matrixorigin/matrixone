@@ -145,16 +145,34 @@ func (opts StatementOption) WaitPolicy() lock.WaitPolicy {
 	return opts.waitPolicy
 }
 
+// WithAccountID execute sql in account
+func (opts StatementOption) WithAccountID(accountID uint32) StatementOption {
+	opts.accountId = accountID
+	return opts
+}
+
+func (opts StatementOption) AccountID() uint32 {
+	return opts.accountId
+}
+
+func (opts StatementOption) HasAccountID() bool {
+	return opts.accountId > 0
+}
+
 func (opts Options) WithDisableTrace() Options {
 	opts.txnOpts = append(opts.txnOpts, client.WithDisableTrace(true))
 	return opts
 }
 
-func (opts Options) WithDisableLock() Options {
-	opts.txnOpts = append(opts.txnOpts, client.WithDisableLock(true))
+func (opts Options) ExtraTxnOptions() []client.TxnOption {
+	return opts.txnOpts
+}
+
+func (opts Options) WithEnableTrace() Options {
+	opts.enableTrace = true
 	return opts
 }
 
-func (opts Options) ExtraTxnOptions() []client.TxnOption {
-	return opts.txnOpts
+func (opts Options) EnableTrace() bool {
+	return opts.enableTrace
 }

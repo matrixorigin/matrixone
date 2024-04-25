@@ -65,6 +65,7 @@ const (
 
 	// default logtail push server configuration
 	defaultRpcMaxMessageSize          = 16 * mpool.KB
+	defaultRPCStreamPoisonTime        = 5 * time.Second
 	defaultLogtailCollectInterval     = 50 * time.Millisecond
 	defaultLogtailResponseSendTimeout = 10 * time.Second
 )
@@ -107,6 +108,7 @@ type Options struct {
 
 	logtailPushServer struct {
 		rpcMaxMessageSize          int64
+		logtailRPCStreamPoisonTIme time.Duration
 		logtailCollectInterval     time.Duration
 		logtailResponseSendTimeout time.Duration
 	}
@@ -192,6 +194,9 @@ func (opt *Options) validate() {
 	// logtail push server configuration
 	if opt.logtailPushServer.rpcMaxMessageSize <= 0 {
 		opt.logtailPushServer.rpcMaxMessageSize = defaultRpcMaxMessageSize
+	}
+	if opt.logtailPushServer.logtailRPCStreamPoisonTIme <= 0 {
+		opt.logtailPushServer.logtailRPCStreamPoisonTIme = defaultRPCStreamPoisonTime
 	}
 	if opt.logtailPushServer.logtailCollectInterval <= 0 {
 		opt.logtailPushServer.logtailCollectInterval = defaultLogtailCollectInterval

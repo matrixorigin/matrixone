@@ -15,8 +15,9 @@
 package table_function
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -52,12 +53,6 @@ func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 	defer func() {
 		if err != nil && rbat != nil {
 			rbat.Clean(proc.Mp())
-		}
-		if source != nil {
-			source.Free(proc.Mp())
-		}
-		if col != nil {
-			col.Free(proc.Mp())
 		}
 	}()
 
@@ -97,7 +92,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 		return false, err
 	}
 
-	rbat, err = genRetBatch(*proc, arg, metaInfos, colname, rel)
+	rbat, err = genRetBatch(*proc, arg, metaInfos)
 	if err != nil {
 		return false, err
 	}
@@ -118,7 +113,7 @@ func handleDatasource(first []string, second []string) (string, string, string, 
 	return strs[0], strs[1], second[0], nil
 }
 
-func genRetBatch(proc process.Process, arg *Argument, metaInfos []*plan.MetadataScanInfo, colName string, rel engine.Relation) (*batch.Batch, error) {
+func genRetBatch(proc process.Process, arg *Argument, metaInfos []*plan.MetadataScanInfo) (*batch.Batch, error) {
 	retBat, err := initMetadataInfoBat(proc, arg)
 	if err != nil {
 		return nil, err

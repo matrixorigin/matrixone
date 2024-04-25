@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
@@ -24,11 +25,11 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,9 +38,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"github.com/google/uuid"
 )
 
 func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
@@ -73,6 +78,25 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
 	resultValue := types.UnixNanoToTimestamp(proc.UnixTime)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(resultValue, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+
+	scale := int32(6)
+	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
+		scale = int32(vector.MustFixedCol[int64](ivecs[0])[0])
+	}
+	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+
+	resultValue := types.UnixNanoToTimestamp(time.Now().UnixNano())
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
 			return err
@@ -151,6 +175,63 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			}
 		} else {
 			b, err := f(v1)
+			if err != nil {
+				return err
+			}
+			if b == nil {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				if err = rs.AppendBytes(b, false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	enumVal := vector.GenerateFunctionStrParameter(parameters[1])
+
+	var f func([]byte, string) ([]byte, error)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	f = func(s []byte, enumStr string) ([]byte, error) {
+		typ := new(types.Type)
+		err := types.Decode(s, typ)
+		if err != nil {
+			return nil, err
+		}
+		if typ.Oid != types.T_enum {
+			return nil, moerr.NewNotSupported(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
+		}
+
+		// get enum values
+		enums := strings.Split(enumStr, ",")
+		enumVal := ""
+		for i, e := range enums {
+			enumVal += fmt.Sprintf("'%s'", e)
+			if i < len(enums)-1 {
+				enumVal += ","
+			}
+		}
+		ret := fmt.Sprintf("%s(%s)", typ.String(), enumVal)
+		return functionUtil.QuickStrToBytes(ret), nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		enumStr, null2 := enumVal.GetStrValue(i)
+		if null1 || null2 || len(v1) == 0 || len(enumStr) == 0 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			enumString := functionUtil.QuickBytesToStr(enumStr)
+			b, err := f(v1, enumString)
 			if err != nil {
 				return err
 			}
@@ -422,8 +503,8 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-// buildInPurgeLog act like `select mo_purge_log('rawlog,statement_info,metric', '2023-06-27')`
-func buildInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+// builtInPurgeLog act like `select mo_purge_log('rawlog,statement_info,metric', '2023-06-27')`
+func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint8](result)
 
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -461,12 +542,18 @@ func buildInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 				return moerr.NewNotSupported(proc.Ctx, "purge '%s'", tblName)
 			}
 		}
+
 		for _, tblName := range tableNames {
 			for _, tbl := range tables {
 				if strings.TrimSpace(tblName) == tbl.Table {
 					sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
 						tbl.Database, tbl.Table, tbl.TimestampColumn.Name, v2.String())
-					opts := executor.Options{}.WithDatabase(tbl.Database)
+					opts := executor.Options{}.WithDatabase(tbl.Database).
+						WithTxn(proc.TxnOperator).
+						WithTimeZone(proc.SessionInfo.TimeZone)
+					if proc.TxnOperator != nil {
+						opts = opts.WithDisableIncrStatement() // this option always with WithTxn()
+					}
 					res, err := exec.Exec(proc.Ctx, sql, opts)
 					if err != nil {
 						return err
@@ -910,21 +997,16 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-// Serial have a similar function named SerialWithCompacted in the index_util
+// BuiltInSerial have a similar function named SerialWithCompacted in the index_util
 // Serial func is used by users, the function make true when input vec have ten
 // rows, the output vec is ten rows, when the vectors have null value, the output
 // vec will set the row null
 // for example:
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
-func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	ps := types.NewPackerArray(length, proc.Mp())
-	defer func() {
-		for _, p := range ps {
-			p.FreeMem()
-		}
-	}()
+	op.tryExpand(length, proc.Mp())
 
 	bitMap := new(nulls.Nulls)
 
@@ -933,16 +1015,18 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
 			return nil
 		}
-		SerialHelper(v, bitMap, ps, false)
+		SerialHelper(v, bitMap, op.ps, false)
 	}
 
+	//NOTE: make sure to use uint64(length) instead of len(op.ps[i])
+	// as length of packer array could be larger than length of input vectors
 	for i := uint64(0); i < uint64(length); i++ {
 		if bitMap.Contains(i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
-			if err := rs.AppendBytes(ps[i].GetBuf(), false); err != nil {
+			if err := rs.AppendBytes(op.ps[i].GetBuf(), false); err != nil {
 				return err
 			}
 		}
@@ -950,29 +1034,26 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	ps := types.NewPackerArray(length, proc.Mp())
-	defer func() {
-		for _, p := range ps {
-			p.FreeMem()
-		}
-	}()
+	op.tryExpand(length, proc.Mp())
 
 	for _, v := range parameters {
 		if v.IsConstNull() {
 			for i := 0; i < v.Length(); i++ {
-				ps[i].EncodeNull()
+				op.ps[i].EncodeNull()
 			}
 			continue
 		}
 
-		SerialHelper(v, nil, ps, true)
+		SerialHelper(v, nil, op.ps, true)
 	}
 
+	//NOTE: make sure to use uint64(length) instead of len(op.ps[i])
+	// as length of packer array could be larger than length of input vectors
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.AppendBytes(ps[i].GetBuf(), false); err != nil {
+		if err := rs.AppendBytes(op.ps[i].GetBuf(), false); err != nil {
 			return err
 		}
 	}
@@ -2116,4 +2197,86 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		return bytes.ToLower(v)
 	})
+}
+
+// buildInMOCU extract cu or calculate cu from parameters
+// example:
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123)
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'total')
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'cpu')
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'mem')
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioin')
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioout')
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'network')
+func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return buildInMOCUWithCfg(parameters, result, proc, length, nil)
+}
+
+func buildInMOCUv1(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	cfg := motrace.GetCUConfigV1()
+	return buildInMOCUWithCfg(parameters, result, proc, length, cfg)
+}
+
+func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, cfg *config.OBCUConfig) error {
+	var (
+		cu     float64
+		p3     vector.FunctionParameterWrapper[types.Varlena]
+		stats  statistic.StatsArray
+		target []byte
+		null3  bool
+	)
+	rs := vector.MustFunctionResult[float64](result)
+
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
+
+	if len(parameters) == 3 {
+		p3 = vector.GenerateFunctionStrParameter(parameters[2])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		statsJsonArrayStr, null1 := p1.GetStrValue(i) /* stats json array */
+		durationNS, null2 := p2.GetValue(i)           /* duration_ns */
+		if p3 == nil {
+			target, null3 = []byte("total"), false
+		} else {
+			target, null3 = p3.GetStrValue(i)
+		}
+
+		if null1 || null2 || null3 {
+			rs.Append(float64(0), true)
+			continue
+		}
+
+		if len(statsJsonArrayStr) == 0 {
+			rs.Append(float64(0), true)
+			continue
+		}
+
+		if err := json.Unmarshal(statsJsonArrayStr, &stats); err != nil {
+			rs.Append(float64(0), true)
+			//return moerr.NewInternalError(proc.Ctx, "failed to parse json arr: %v", err)
+		}
+
+		switch util.UnsafeBytesToString(target) {
+		case "cpu":
+			cu = motrace.CalculateCUCpu(int64(stats.GetTimeConsumed()), cfg)
+		case "mem":
+			cu = motrace.CalculateCUMem(int64(stats.GetMemorySize()), durationNS, cfg)
+		case "ioin":
+			cu = motrace.CalculateCUIOIn(int64(stats.GetS3IOInputCount()), cfg)
+		case "ioout":
+			cu = motrace.CalculateCUIOOut(int64(stats.GetS3IOOutputCount()), cfg)
+		case "network":
+			cu = motrace.CalculateCUTraffic(int64(stats.GetOutTrafficBytes()), stats.GetConnType(), cfg)
+		case "total":
+			cu = motrace.CalculateCUWithCfg(stats, durationNS, cfg)
+		default:
+			rs.Append(float64(0), true)
+			continue
+		}
+		rs.Append(cu, false)
+	}
+
+	return nil
 }

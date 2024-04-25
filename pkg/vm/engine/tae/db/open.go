@@ -15,22 +15,24 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"path"
 	"sync/atomic"
 	"time"
 
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-
+	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -40,11 +42,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	"go.uber.org/zap"
 )
 
 const (
 	WALDir = "wal"
 )
+
+func fillRuntimeOptions(opts *options.Options) {
+	common.RuntimeCNMergeMemControl.Store(opts.MergeCfg.CNMergeMemControlHint)
+	common.RuntimeMinCNMergeSize.Store(opts.MergeCfg.CNTakeOverExceed)
+	common.RuntimeCNTakeOverAll.Store(opts.MergeCfg.CNTakeOverAll)
+	common.RuntimeCNMergeMemControl.Store(opts.CheckpointCfg.OverallFlushMemControl)
+	if opts.IsStandalone {
+		common.IsStandaloneBoost.Store(true)
+	}
+	if opts.MergeCfg.CNStandaloneTake {
+		common.ShouldStandaloneCNTakeOver.Store(true)
+	}
+	w := &bytes.Buffer{}
+	toml.NewEncoder(w).Encode(opts.MergeCfg)
+	logutil.Info("mergeblocks options", zap.String("toml", w.String()), zap.Bool("standalone", opts.IsStandalone))
+}
 
 func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
 	dbLocker, err := createDBLock(dirname)
@@ -67,6 +86,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}()
 
 	opts = opts.FillDefaults(dirname)
+	fillRuntimeOptions(opts)
 
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
@@ -75,10 +95,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}
 
 	db = &DB{
-		Dir:       dirname,
-		Opts:      opts,
-		Closed:    new(atomic.Value),
-		usageMemo: logtail.NewTNUsageMemo(),
+		Dir:          dirname,
+		Opts:         opts,
+		Closed:       new(atomic.Value),
+		usageMemo:    logtail.NewTNUsageMemo(),
+		CNMergeSched: merge.NewTaskServiceGetter(opts.TaskServiceGetter),
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	transferTable := model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
@@ -140,7 +161,8 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
 		checkpoint.WithGlobalMinCount(int(opts.CheckpointCfg.GlobalMinCount)),
 		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval),
-		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
+		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount),
+		checkpoint.WithDisableGC(opts.GCCfg.DisableGC))
 
 	now := time.Now()
 	checkpointed, ckpLSN, valid, err := db.BGCheckpointRunner.Replay(dataFactory)
@@ -175,14 +197,16 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		scanner)
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
-	db.DiskCleaner = gc2.NewDiskCleaner(opts.Ctx, fs, db.BGCheckpointRunner, db.Catalog, opts.GCCfg.DisableGC)
-	db.DiskCleaner.Start()
-	db.DiskCleaner.AddChecker(
+	cleaner := gc2.NewCheckpointCleaner(opts.Ctx, fs, db.BGCheckpointRunner, opts.GCCfg.DisableGC)
+	cleaner.AddChecker(
 		func(item any) bool {
 			checkpoint := item.(*checkpoint.CheckpointEntry)
 			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.GCTTL), 0)
-			return !checkpoint.GetEnd().GreaterEq(ts)
+			endTS := checkpoint.GetEnd()
+			return !endTS.GreaterEq(&ts)
 		})
+	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
+	db.DiskCleaner.Start()
 	// Init gc manager at last
 	// TODO: clean-try-gc requires configuration parameters
 	db.GCManager = gc.NewManager(
@@ -210,7 +234,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				if opts.CheckpointCfg.DisableGCCheckpoint {
 					return nil
 				}
-				consumed := db.DiskCleaner.GetMaxConsumed()
+				consumed := db.DiskCleaner.GetCleaner().GetMaxConsumed()
 				if consumed == nil {
 					return nil
 				}
@@ -223,7 +247,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				if opts.CatalogCfg.DisableGC {
 					return nil
 				}
-				consumed := db.DiskCleaner.GetMaxConsumed()
+				consumed := db.DiskCleaner.GetCleaner().GetMaxConsumed()
 				if consumed == nil {
 					return nil
 				}

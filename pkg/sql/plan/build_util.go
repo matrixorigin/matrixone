@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -58,35 +60,35 @@ func GetFunctionTypeStrFromAst(typRef tree.ResolvableTypeReference) (string, err
 	return ret, nil
 }
 
-func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*plan.Type, error) {
+func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
 		switch defines.MysqlType(n.InternalType.Oid) {
 		case defines.MYSQL_TYPE_BIT:
-			return &plan.Type{Id: int32(types.T_bit), Width: n.InternalType.DisplayWith, Scale: -1}, nil
+			return plan.Type{Id: int32(types.T_bit), Width: n.InternalType.DisplayWith, Scale: -1}, nil
 		case defines.MYSQL_TYPE_TINY:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: int32(types.T_uint8), Width: n.InternalType.Width, Scale: -1}, nil
+				return plan.Type{Id: int32(types.T_uint8), Width: n.InternalType.Width, Scale: -1}, nil
 			}
-			return &plan.Type{Id: int32(types.T_int8), Width: n.InternalType.Width, Scale: -1}, nil
+			return plan.Type{Id: int32(types.T_int8), Width: n.InternalType.Width, Scale: -1}, nil
 		case defines.MYSQL_TYPE_SHORT:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: int32(types.T_uint16), Width: n.InternalType.Width, Scale: -1}, nil
+				return plan.Type{Id: int32(types.T_uint16), Width: n.InternalType.Width, Scale: -1}, nil
 			}
-			return &plan.Type{Id: int32(types.T_int16), Width: n.InternalType.Width, Scale: -1}, nil
+			return plan.Type{Id: int32(types.T_int16), Width: n.InternalType.Width, Scale: -1}, nil
 		case defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_INT24:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Scale: -1}, nil
+				return plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Scale: -1}, nil
 			}
-			return &plan.Type{Id: int32(types.T_int32), Width: n.InternalType.Width, Scale: -1}, nil
+			return plan.Type{Id: int32(types.T_int32), Width: n.InternalType.Width, Scale: -1}, nil
 		case defines.MYSQL_TYPE_LONGLONG:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: int32(types.T_uint64), Width: n.InternalType.Width, Scale: -1}, nil
+				return plan.Type{Id: int32(types.T_uint64), Width: n.InternalType.Width, Scale: -1}, nil
 			}
-			return &plan.Type{Id: int32(types.T_int64), Width: n.InternalType.Width, Scale: -1}, nil
+			return plan.Type{Id: int32(types.T_int64), Width: n.InternalType.Width, Scale: -1}, nil
 		case defines.MYSQL_TYPE_FLOAT:
-			return &plan.Type{Id: int32(types.T_float32), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+			return plan.Type{Id: int32(types.T_float32), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_DOUBLE:
-			return &plan.Type{Id: int32(types.T_float64), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+			return plan.Type{Id: int32(types.T_float64), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_STRING:
 			width := n.InternalType.DisplayWith
 			// for char type,if we didn't specify the length,
@@ -102,14 +104,14 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				}
 			}
 			if fstr == "char" && width > types.MaxCharLen {
-				return nil, moerr.NewOutOfRange(ctx, "char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
+				return plan.Type{}, moerr.NewOutOfRange(ctx, "char", " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if fstr == "varchar" && width > types.MaxVarcharLen {
-				return nil, moerr.NewOutOfRange(ctx, "varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
+				return plan.Type{}, moerr.NewOutOfRange(ctx, "varchar", " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			}
 			if fstr == "char" { // type char
-				return &plan.Type{Id: int32(types.T_char), Width: width}, nil
+				return plan.Type{Id: int32(types.T_char), Width: width}, nil
 			}
-			return &plan.Type{Id: int32(types.T_varchar), Width: width}, nil
+			return plan.Type{Id: int32(types.T_varchar), Width: width}, nil
 		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
 			width := n.InternalType.DisplayWith
 			// for char type,if we didn't specify the length,
@@ -119,7 +121,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 			fstr := strings.ToLower(n.InternalType.FamilyString)
 			// Check explicit casting.
 			if fstr == "binary" && n.InternalType.Scale == -1 {
-				r := &plan.Type{Id: int32(types.T_binary), Width: width}
+				r := plan.Type{Id: int32(types.T_binary), Width: width}
 				r.Scale = -1
 				return r, nil
 			}
@@ -135,78 +137,78 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 			}
 
 			if (fstr == "char" || fstr == "binary") && width > types.MaxCharLen {
-				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
+				return plan.Type{}, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if (fstr == "varchar" || fstr == "varbinary") && width > types.MaxVarcharLen {
-				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
+				return plan.Type{}, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			} else if fstr == "vecf32" || fstr == "vecf64" {
 				if width > types.MaxArrayDimension {
-					return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxVectorLen : %v", types.MaxArrayDimension)
+					return plan.Type{}, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxVectorLen : %v", types.MaxArrayDimension)
 				}
 				if width < 1 {
-					return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen cannot be less than 1")
+					return plan.Type{}, moerr.NewOutOfRange(ctx, fstr, " typeLen cannot be less than 1")
 				}
 			}
 			switch fstr {
 			case "char":
-				return &plan.Type{Id: int32(types.T_char), Width: width}, nil
+				return plan.Type{Id: int32(types.T_char), Width: width}, nil
 			case "binary":
-				return &plan.Type{Id: int32(types.T_binary), Width: width}, nil
+				return plan.Type{Id: int32(types.T_binary), Width: width}, nil
 			case "varchar":
-				return &plan.Type{Id: int32(types.T_varchar), Width: width}, nil
+				return plan.Type{Id: int32(types.T_varchar), Width: width}, nil
 			case "vecf32":
-				return &plan.Type{Id: int32(types.T_array_float32), Width: width}, nil
+				return plan.Type{Id: int32(types.T_array_float32), Width: width}, nil
 			case "vecf64":
-				return &plan.Type{Id: int32(types.T_array_float64), Width: width}, nil
+				return plan.Type{Id: int32(types.T_array_float64), Width: width}, nil
 			}
 			// varbinary
-			return &plan.Type{Id: int32(types.T_varbinary), Width: width}, nil
+			return plan.Type{Id: int32(types.T_varbinary), Width: width}, nil
 		case defines.MYSQL_TYPE_DATE:
-			return &plan.Type{Id: int32(types.T_date)}, nil
+			return plan.Type{Id: int32(types.T_date)}, nil
 		case defines.MYSQL_TYPE_TIME:
-			return &plan.Type{Id: int32(types.T_time), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+			return plan.Type{Id: int32(types.T_time), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_DATETIME:
 			// currently the ast's width for datetime's is 26, this is not accurate and may need revise, not important though, as we don't need it anywhere else except to differentiate empty vector.Typ.
-			return &plan.Type{Id: int32(types.T_datetime), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+			return plan.Type{Id: int32(types.T_datetime), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			return &plan.Type{Id: int32(types.T_timestamp), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+			return plan.Type{Id: int32(types.T_timestamp), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
 			if n.InternalType.DisplayWith > 16 {
-				return &plan.Type{Id: int32(types.T_decimal128), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+				return plan.Type{Id: int32(types.T_decimal128), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 			}
-			return &plan.Type{Id: int32(types.T_decimal64), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+			return plan.Type{Id: int32(types.T_decimal64), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_BOOL:
-			return &plan.Type{Id: int32(types.T_bool)}, nil
+			return plan.Type{Id: int32(types.T_bool)}, nil
 		case defines.MYSQL_TYPE_BLOB:
-			return &plan.Type{Id: int32(types.T_blob)}, nil
+			return plan.Type{Id: int32(types.T_blob)}, nil
 		case defines.MYSQL_TYPE_TEXT:
-			return &plan.Type{Id: int32(types.T_text)}, nil
+			return plan.Type{Id: int32(types.T_text)}, nil
 		case defines.MYSQL_TYPE_JSON:
-			return &plan.Type{Id: int32(types.T_json)}, nil
+			return plan.Type{Id: int32(types.T_json)}, nil
 		case defines.MYSQL_TYPE_UUID:
-			return &plan.Type{Id: int32(types.T_uuid)}, nil
+			return plan.Type{Id: int32(types.T_uuid)}, nil
 		case defines.MYSQL_TYPE_TINY_BLOB:
-			return &plan.Type{Id: int32(types.T_blob)}, nil
+			return plan.Type{Id: int32(types.T_blob)}, nil
 		case defines.MYSQL_TYPE_MEDIUM_BLOB:
-			return &plan.Type{Id: int32(types.T_blob)}, nil
+			return plan.Type{Id: int32(types.T_blob)}, nil
 		case defines.MYSQL_TYPE_LONG_BLOB:
-			return &plan.Type{Id: int32(types.T_blob)}, nil
+			return plan.Type{Id: int32(types.T_blob)}, nil
 		case defines.MYSQL_TYPE_ENUM:
 			if len(n.InternalType.EnumValues) > types.MaxEnumLen {
-				return nil, moerr.NewNYI(ctx, "enum type out of max length")
+				return plan.Type{}, moerr.NewNYI(ctx, "enum type out of max length")
 			}
 			if len(n.InternalType.EnumValues) == 0 {
-				return nil, moerr.NewNYI(ctx, "enum type length err")
+				return plan.Type{}, moerr.NewNYI(ctx, "enum type length err")
 			}
 
-			return &plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
+			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
 		default:
-			return nil, moerr.NewNYI(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
+			return plan.Type{}, moerr.NewNYI(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
 	}
-	return nil, moerr.NewInternalError(ctx, "unknown data type")
+	return plan.Type{}, moerr.NewInternalError(ctx, "unknown data type")
 }
 
-func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Process) (*plan.Default, error) {
+func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil
 	for _, attr := range col.Attributes {
@@ -272,7 +274,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Pr
 	}, nil
 }
 
-func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Process) (*plan.OnUpdate, error) {
+func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.OnUpdate, error) {
 	var expr tree.Expr = nil
 
 	for _, attr := range col.Attributes {
@@ -302,11 +304,11 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Proce
 	if err != nil {
 		return nil, err
 	}
+	defer executor.Free()
 	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
 	if err != nil {
 		return nil, err
 	}
-	executor.Free()
 
 	ret := &plan.OnUpdate{
 		Expr:         onUpdateExpr,
@@ -626,4 +628,268 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 		ret = append(ret, sql)
 	}
 	return ret, nil
+}
+
+func rewriteForCreateTableLike(stmt *tree.CreateTable, ctx CompilerContext) (newStmt tree.Statement, err error) {
+	oldTable := stmt.LikeTableName
+	newTable := stmt.Table
+
+	tblName := formatStr(string(oldTable.ObjectName))
+	dbName := formatStr(string(oldTable.SchemaName))
+	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	_, tableDef := ctx.Resolve(dbName, tblName)
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel || tableDef.TableType == catalog.SystemClusterRel {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
+	}
+
+	var createStr string
+	if tableDef.TableType == catalog.SystemOrdinaryRel {
+		createStr = fmt.Sprintf("CREATE TABLE `%s` (", formatStr(string(newTable.ObjectName)))
+	} else if tblName == catalog.MO_DATABASE || tblName == catalog.MO_TABLES || tblName == catalog.MO_COLUMNS {
+		createStr = fmt.Sprintf("CREATE TABLE `%s` (", formatStr(string(newTable.ObjectName)))
+	}
+
+	rowCount := 0
+	var pkDefs []string
+	colIdToName := make(map[uint64]string)
+	for _, col := range tableDef.Cols {
+		if col.Hidden {
+			continue
+		}
+		colName := col.Name
+		colIdToName[col.ColId] = col.Name
+		if colName == catalog.Row_ID {
+			continue
+		}
+
+		nullOrNot := "NOT NULL"
+		// col.Default must be not nil
+		if len(col.Default.OriginString) > 0 {
+			if !col.Primary {
+				nullOrNot = "DEFAULT " + formatStr(col.Default.OriginString)
+			}
+		} else if col.Default.NullAbility {
+			nullOrNot = "DEFAULT NULL"
+		}
+
+		if col.Typ.AutoIncr {
+			nullOrNot = "NOT NULL AUTO_INCREMENT"
+		}
+
+		var hasAttrComment string
+		if col.Comment != "" {
+			hasAttrComment = " COMMENT '" + col.Comment + "'"
+		}
+
+		if rowCount == 0 {
+			createStr += "\n"
+		} else {
+			createStr += ",\n"
+		}
+		typ := types.T(col.Typ.Id).ToType()
+		typeStr := typ.String()
+		if typ.Oid.IsDecimal() { //after decimal fix,remove this
+			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
+		}
+		if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
+			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary ||
+			typ.Oid.IsArrayRelate() || typ.Oid == types.T_bit {
+			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
+		}
+		if typ.Oid.IsFloat() && col.Typ.Scale != -1 {
+			typeStr += fmt.Sprintf("(%d,%d)", col.Typ.Width, col.Typ.Scale)
+		}
+
+		if typ.Oid.IsEnum() {
+			enums := strings.Split(col.Typ.GetEnumvalues(), ",")
+			typeStr += "("
+			for i, enum := range enums {
+				typeStr += fmt.Sprintf("'%s'", enum)
+				if i < len(enums)-1 {
+					typeStr += ","
+				}
+			}
+			typeStr += ")"
+		}
+
+		updateOpt := ""
+		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
+			updateOpt = " ON UPDATE " + col.OnUpdate.OriginString
+		}
+		createStr += fmt.Sprintf("`%s` %s %s%s%s", formatStr(colName), typeStr, nullOrNot, updateOpt, hasAttrComment)
+		rowCount++
+		if col.Primary {
+			pkDefs = append(pkDefs, colName)
+		}
+	}
+
+	// If it is a composite primary key, get the component columns of the composite primary key
+	if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
+		pkDefs = append(pkDefs, tableDef.Pkey.Names...)
+	}
+
+	if len(pkDefs) != 0 {
+		pkStr := "PRIMARY KEY ("
+		for i, def := range pkDefs {
+			if i == len(pkDefs)-1 {
+				pkStr += fmt.Sprintf("`%s`", formatStr(def))
+			} else {
+				pkStr += fmt.Sprintf("`%s`,", formatStr(def))
+			}
+		}
+		pkStr += ")"
+		if rowCount != 0 {
+			createStr += ",\n"
+		}
+		createStr += pkStr
+	}
+
+	if tableDef.Indexes != nil {
+
+		// We only print distinct index names. This is used to avoid printing the same index multiple times for IVFFLAT or
+		// other multi-table indexes.
+		indexNames := make(map[string]bool)
+
+		for _, indexdef := range tableDef.Indexes {
+			if _, ok := indexNames[indexdef.IndexName]; ok {
+				continue
+			} else {
+				indexNames[indexdef.IndexName] = true
+			}
+
+			var indexStr string
+			if indexdef.Unique {
+				indexStr = "UNIQUE KEY "
+			} else {
+				indexStr = "KEY "
+			}
+			indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+			if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
+				indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
+			}
+			indexStr += "("
+			i := 0
+			for _, part := range indexdef.Parts {
+				if catalog.IsAlias(part) {
+					continue
+				}
+				if i > 0 {
+					indexStr += ","
+				}
+
+				indexStr += fmt.Sprintf("`%s`", formatStr(part))
+				i++
+			}
+
+			indexStr += ")"
+			if indexdef.IndexAlgoParams != "" {
+				var paramList string
+				paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
+				if err != nil {
+					return nil, err
+				}
+				indexStr += paramList
+			}
+			if indexdef.Comment != "" {
+				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
+				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
+			}
+			if rowCount != 0 {
+				createStr += ",\n"
+			}
+			createStr += indexStr
+		}
+	}
+
+	for _, fk := range tableDef.Fkeys {
+		colNames := make([]string, len(fk.Cols))
+		for i, colId := range fk.Cols {
+			colNames[i] = colIdToName[colId]
+		}
+
+		var fkTableDef *TableDef
+
+		//fk self reference
+		if fk.ForeignTbl == 0 {
+			fkTableDef = tableDef
+		} else {
+			_, fkTableDef = ctx.ResolveById(fk.ForeignTbl)
+		}
+
+		fkColIdToName := make(map[uint64]string)
+		for _, col := range fkTableDef.Cols {
+			fkColIdToName[col.ColId] = col.Name
+		}
+		fkColNames := make([]string, len(fk.ForeignCols))
+		for i, colId := range fk.ForeignCols {
+			fkColNames[i] = fkColIdToName[colId]
+		}
+
+		if rowCount != 0 {
+			createStr += ",\n"
+		}
+		createStr += fmt.Sprintf("CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
+			formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
+	}
+
+	if rowCount != 0 {
+		createStr += "\n"
+	}
+	createStr += ")"
+
+	var comment string
+	var partition string
+	for _, def := range tableDef.Defs {
+		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
+			for _, kv := range proDef.Properties.Properties {
+				if kv.Key == catalog.SystemRelAttr_Comment {
+					comment = " COMMENT='" + kv.Value + "'"
+				}
+			}
+		}
+	}
+
+	if tableDef.Partition != nil {
+		partition = ` ` + tableDef.Partition.PartitionMsg
+	}
+
+	createStr += comment
+	createStr += partition
+
+	if tableDef.ClusterBy != nil {
+		clusterby := " CLUSTER BY ("
+		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+			//multi column clusterby
+			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
+			for i, cbName := range cbNames {
+				if i != 0 {
+					clusterby += fmt.Sprintf(", `%s`", formatStr(cbName))
+				} else {
+					clusterby += fmt.Sprintf("`%s`", formatStr(cbName))
+				}
+			}
+		} else {
+			//single column cluster by
+			clusterby += fmt.Sprintf("`%s`", formatStr(tableDef.ClusterBy.Name))
+		}
+		clusterby += ")"
+		createStr += clusterby
+	}
+
+	var buf bytes.Buffer
+	for _, ch := range createStr {
+		if ch == '"' {
+			buf.WriteRune('"')
+		}
+		buf.WriteRune(ch)
+	}
+	sql := buf.String()
+	return getRewriteSQLStmt(ctx, sql)
 }

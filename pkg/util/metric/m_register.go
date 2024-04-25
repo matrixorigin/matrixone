@@ -27,8 +27,10 @@ var InitCollectors = []Collector{
 	// sql metric
 	StatementCounterFactory,
 	StatementErrorsFactory,
+	StatementCUCounterFactory,
 	TransactionCounterFactory,
 	TransactionErrorsFactory,
+	StatementDurationFactory,
 	// server metric
 	ConnFactory,
 	StorageUsageFactory,

@@ -20,7 +20,6 @@ use ww_conflict;
 begin;
 update dis_table_02 set b='dpqweoe' where a>1;
 invalid input: column 'dis_table_02.a' does not exist
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 update dis_table_02 set b='dpqweoe' where newA>1;
 commit;
 select * from dis_table_02;
@@ -42,7 +41,6 @@ use ww_conflict;
 begin;
 update dis_table_02 set b='dpqweoe' where a>1;
 Duplicate entry 'dpqweoe' for key 'b'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 select * from dis_table_02;
 a    b    c

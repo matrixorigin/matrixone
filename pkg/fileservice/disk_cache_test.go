@@ -17,10 +17,13 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"io/fs"
+	mrand "math/rand"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -306,4 +309,220 @@ func dirSize(path string) (ret int) {
 		panic(err)
 	}
 	return
+}
+
+func benchmarkDiskCacheWriteThenRead(
+	b *testing.B,
+	size int64,
+) {
+	b.Helper()
+
+	b.SetBytes(size)
+	data := bytes.Repeat([]byte("a"), int(size))
+
+	dir := b.TempDir()
+	ctx := context.Background()
+
+	cache, err := NewDiskCache(
+		ctx,
+		dir,
+		10<<30,
+		nil,
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		buf := make([]byte, 0, size)
+		for pb.Next() {
+
+			path := strconv.FormatInt(mrand.Int63(), 10)
+
+			// update
+			err := cache.Update(
+				ctx,
+				&IOVector{
+					FilePath: path,
+					Entries: []IOEntry{
+						{
+							Size: size,
+							Data: data,
+						},
+					},
+				},
+				false,
+			)
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			// read
+			vec := &IOVector{
+				FilePath: path,
+				Entries: []IOEntry{
+					{
+						Size: size,
+						Data: buf,
+					},
+				},
+			}
+			err = cache.Read(
+				ctx,
+				vec,
+			)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if !bytes.Equal(vec.Entries[0].Data, data) {
+				b.Fatal()
+			}
+
+		}
+	})
+
+}
+
+func BenchmarkDiskCacheWriteThenRead(b *testing.B) {
+	b.Run("4K", func(b *testing.B) {
+		benchmarkDiskCacheWriteThenRead(b, 4096)
+	})
+	b.Run("1M", func(b *testing.B) {
+		benchmarkDiskCacheWriteThenRead(b, 1<<20)
+	})
+	b.Run("16M", func(b *testing.B) {
+		benchmarkDiskCacheWriteThenRead(b, 16<<20)
+	})
+}
+
+func benchmarkDiskCacheReadRandomOffsetAtLargeFile(
+	b *testing.B,
+	fileSize int64,
+	readSize int64,
+) {
+	b.Helper()
+
+	b.SetBytes(readSize)
+	data := make([]byte, fileSize)
+	_, err := rand.Read(data)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	dir := b.TempDir()
+	ctx := context.Background()
+
+	cache, err := NewDiskCache(
+		ctx,
+		dir,
+		8<<30,
+		nil,
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	err = cache.SetFile(ctx, "foo", func(ctx context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(data)), nil
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		buf := make([]byte, 0, readSize)
+		for pb.Next() {
+
+			// read
+			offset := mrand.Intn(int(fileSize - readSize))
+			vec := &IOVector{
+				FilePath: "foo",
+				Entries: []IOEntry{
+					{
+						Offset: int64(offset),
+						Size:   readSize,
+						Data:   buf,
+					},
+				},
+			}
+			err = cache.Read(
+				ctx,
+				vec,
+			)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if !bytes.Equal(vec.Entries[0].Data, data[offset:offset+int(readSize)]) {
+				b.Fatal()
+			}
+
+		}
+	})
+
+}
+
+func BenchmarkDiskCacheReadRandomOffsetAtLargeFile(b *testing.B) {
+	b.Run("4K", func(b *testing.B) {
+		benchmarkDiskCacheReadRandomOffsetAtLargeFile(b, 1<<30, 4096)
+	})
+	b.Run("1M", func(b *testing.B) {
+		benchmarkDiskCacheReadRandomOffsetAtLargeFile(b, 1<<30, 1<<20)
+	})
+	b.Run("16M", func(b *testing.B) {
+		benchmarkDiskCacheReadRandomOffsetAtLargeFile(b, 1<<30, 16<<20)
+	})
+}
+
+func BenchmarkDiskCacheMultipleIOEntries(b *testing.B) {
+	dir := b.TempDir()
+	ctx := context.Background()
+
+	cache, err := NewDiskCache(
+		ctx,
+		dir,
+		8<<30,
+		nil,
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	err = cache.SetFile(ctx, "foo", func(ctx context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(bytes.Repeat([]byte("a"), 1<<20))), nil
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		var entries []IOEntry
+		for i := 0; i < 64; i++ {
+			entries = append(entries, IOEntry{
+				Offset: 0,
+				Size:   4096,
+			})
+		}
+		var counter perfcounter.CounterSet
+		ctx := perfcounter.WithCounterSet(ctx, &counter)
+		err := cache.Read(
+			ctx,
+			&IOVector{
+				FilePath: "foo",
+				Entries:  entries,
+			},
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		numOpen := counter.FileService.Cache.Disk.OpenFullFile.Load()
+		if numOpen != 1 {
+			b.Fatal()
+		}
+	}
 }

@@ -28,20 +28,23 @@ var (
 	tn serviceType = "DN"
 	cn serviceType = "CN"
 
-	PingMethod          = "PING"
-	FlushMethod         = "FLUSH"
-	TaskMethod          = "TASK"
-	UseSnapshotMethod   = "USESNAPSHOT"
-	GetSnapshotMethod   = "GETSNAPSHOT"
-	CheckpointMethod    = "CHECKPOINT"
-	ForceGCMethod       = "FORCEGC"
-	InspectMethod       = "INSPECT"
-	LabelMethod         = "LABEL"
-	SyncCommitMethod    = "SYNCCOMMIT"
-	AddFaultPointMethod = "ADDFAULTPOINT"
-	BackupMethod        = "BACKUP"
-	TraceSpanMethod     = "TRACESPAN"
-	CoreDumpMethod      = "COREDUMP"
+	PingMethod             = "PING"
+	FlushMethod            = "FLUSH"
+	TaskMethod             = "TASK"
+	UseSnapshotMethod      = "USESNAPSHOT"
+	GetSnapshotMethod      = "GETSNAPSHOT"
+	CheckpointMethod       = "CHECKPOINT"
+	GlobalCheckpointMethod = "GLOBALCHECKPOINT"
+	ForceGCMethod          = "FORCEGC"
+	InspectMethod          = "INSPECT"
+	LabelMethod            = "LABEL"
+	SyncCommitMethod       = "SYNCCOMMIT"
+	AddFaultPointMethod    = "ADDFAULTPOINT"
+	BackupMethod           = "BACKUP"
+	TraceSpanMethod        = "TRACESPAN"
+	CoreDumpMethod         = "COREDUMP"
+	InterceptCommitMethod  = "INTERCEPTCOMMIT"
+	MergeObjectsMethod     = "MERGEOBJECTS"
 
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
@@ -63,20 +66,23 @@ var (
 var (
 	// register all supported debug command here
 	supportedCmds = map[string]handleFunc{
-		PingMethod:          handlePing(),
-		FlushMethod:         handleFlush(),
-		TaskMethod:          handleTask,
-		UseSnapshotMethod:   handleUseSnapshotTS,
-		GetSnapshotMethod:   handleGetSnapshotTS,
-		CheckpointMethod:    handleCheckpoint(),
-		ForceGCMethod:       handleCNGC,
-		InspectMethod:       handleInspectTN(),
-		LabelMethod:         handleSetLabel,
-		SyncCommitMethod:    handleSyncCommit,
-		AddFaultPointMethod: handleAddFaultPoint(),
-		BackupMethod:        handleBackup(),
-		TraceSpanMethod:     handleTraceSpan,
-		CoreDumpMethod:      handleCoreDump,
+		PingMethod:             handlePing(),
+		FlushMethod:            handleFlush(),
+		TaskMethod:             handleTask,
+		UseSnapshotMethod:      handleUseSnapshotTS,
+		GetSnapshotMethod:      handleGetSnapshotTS,
+		CheckpointMethod:       handleCheckpoint(),
+		GlobalCheckpointMethod: handleGlobalCheckpoint(),
+		ForceGCMethod:          handleCNGC,
+		InspectMethod:          handleInspectTN(),
+		LabelMethod:            handleSetLabel,
+		SyncCommitMethod:       handleSyncCommit,
+		AddFaultPointMethod:    handleAddFaultPoint(),
+		BackupMethod:           handleBackup(),
+		TraceSpanMethod:        handleTraceSpan,
+		CoreDumpMethod:         handleCoreDump,
+		InterceptCommitMethod:  handleInterceptCommit(),
+		MergeObjectsMethod:     handleMerge(),
 
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,

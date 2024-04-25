@@ -227,6 +227,20 @@ func (mr *MockCompilerContext2MockRecorder) GetRootSql() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRootSql", reflect.TypeOf((*MockCompilerContext2)(nil).GetRootSql))
 }
 
+// GetStatsCache mocks base method.
+func (m *MockCompilerContext2) GetStatsCache() *StatsCache {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetStatsCache")
+	ret0, _ := ret[0].(*StatsCache)
+	return ret0
+}
+
+// GetStatsCache indicates an expected call of GetStatsCache.
+func (mr *MockCompilerContext2MockRecorder) GetStatsCache() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStatsCache", reflect.TypeOf((*MockCompilerContext2)(nil).GetStatsCache))
+}
+
 // GetSubscriptionMeta mocks base method.
 func (m *MockCompilerContext2) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
 	m.ctrl.T.Helper()
@@ -339,6 +353,36 @@ func (m *MockCompilerContext2) ResolveUdf(name string, args []*plan.Expr) (*func
 	ret0, _ := ret[0].(*function.Udf)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
+}
+
+// ResolveSnapshotTsWithSnapShotName mocks base method.
+func (m *MockCompilerContext2) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResolveSnapshotTsWithSnapShotName", snapshotName)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ResolveSnapshotTsWithSnapShotName indicates an expected call of ResolveSnapshotTsWithSnapShotName.
+func (mr *MockCompilerContext2MockRecorder) ResolveSnapshotTsWithSnapShotName(snapshotName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveSnapshotTsWithSnapShotName", reflect.TypeOf((*MockCompilerContext)(nil).ResolveSnapshotTsWithSnapShotName), snapshotName)
+}
+
+// CheckTimeStampValid mocks base method.
+func (m *MockCompilerContext2) CheckTimeStampValid(ts int64) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CheckTimeStampValid", ts)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CheckTimeStampValid indicates an expected call of CheckTimeStampValid.
+func (mr *MockCompilerContext2MockRecorder) CheckTimeStampValid(ts interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckTimeStampValid", reflect.TypeOf((*MockCompilerContext)(nil).CheckTimeStampValid), ts)
 }
 
 // ResolveUdf indicates an expected call of ResolveUdf.

@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -120,8 +121,23 @@ func LoadPersistedDeletes(
 	fs *objectio.ObjectFS,
 	location objectio.Location,
 	mp *mpool.MPool,
-) (bat *containers.Batch, isPersistedByCN bool, err error) {
-	movbat, isPersistedByCN, err := blockio.ReadBlockDelete(ctx, location, fs.Service)
+) (bat *containers.Batch, isPersistedByCN bool, release func(), err error) {
+	if isPersistedByCN, err = blockio.IsPersistedByCN(ctx, location, fs.Service); err != nil {
+		return
+	}
+	bat, release, err = LoadPersistedDeletesBySchema(ctx, pkName, fs, location, isPersistedByCN, mp)
+	return
+}
+
+func LoadPersistedDeletesBySchema(
+	ctx context.Context,
+	pkName string,
+	fs *objectio.ObjectFS,
+	location objectio.Location,
+	isPersistedByCN bool,
+	mp *mpool.MPool,
+) (bat *containers.Batch, release func(), err error) {
+	movbat, release, err := blockio.ReadBlockDeleteBySchema(ctx, location, fs.Service, isPersistedByCN)
 	if err != nil {
 		return
 	}
@@ -160,16 +176,16 @@ func LoadPersistedDeletes(
 
 func MakeImmuIndex(
 	ctx context.Context,
-	meta *catalog.BlockEntry,
+	meta *catalog.ObjectEntry,
 	bf objectio.BloomFilter,
 	rt *dbutils.Runtime,
 ) (idx indexwrapper.ImmutIndex, err error) {
-	pkZM, err := meta.GetPKZoneMap(ctx, rt.Fs.Service)
+	stats, err := meta.MustGetObjectStats()
 	if err != nil {
 		return
 	}
 	idx = indexwrapper.NewImmutIndex(
-		*pkZM, bf, meta.GetMetaLoc(),
+		stats.SortKeyZoneMap(), bf, stats.ObjectLocation(),
 	)
 	return
 }

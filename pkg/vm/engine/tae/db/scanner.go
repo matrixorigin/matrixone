@@ -29,7 +29,6 @@ type DBScanner interface {
 }
 
 type ErrHandler interface {
-	OnBlockErr(entry *catalog.BlockEntry, err error) error
 	OnObjectErr(entry *catalog.ObjectEntry, err error) error
 	OnTableErr(entry *catalog.TableEntry, err error) error
 	OnDatabaseErr(entry *catalog.DBEntry, err error) error
@@ -37,7 +36,6 @@ type ErrHandler interface {
 
 type NoopErrHandler struct{}
 
-func (h *NoopErrHandler) OnBlockErr(entry *catalog.BlockEntry, err error) error   { return nil }
 func (h *NoopErrHandler) OnObjectErr(entry *catalog.ObjectEntry, err error) error { return nil }
 func (h *NoopErrHandler) OnTableErr(entry *catalog.TableEntry, err error) error   { return nil }
 func (h *NoopErrHandler) OnDatabaseErr(entry *catalog.DBEntry, err error) error   { return nil }
@@ -95,7 +93,6 @@ func NewDBScanner(db *DB, errHandler ErrHandler) *dbScanner {
 		tablemask:     roaring.New(),
 		objmask:       roaring.New(),
 	}
-	scanner.BlockFn = scanner.onBlock
 	scanner.ObjectFn = scanner.onObject
 	scanner.PostObjectFn = scanner.onPostObject
 	scanner.TableFn = scanner.onTable
@@ -107,16 +104,6 @@ func NewDBScanner(db *DB, errHandler ErrHandler) *dbScanner {
 
 func (scanner *dbScanner) RegisterOp(op ScannerOp) {
 	scanner.ops = append(scanner.ops, op)
-}
-
-func (scanner *dbScanner) onBlock(entry *catalog.BlockEntry) (err error) {
-	for _, op := range scanner.ops {
-		err = op.OnBlock(entry)
-		if err = scanner.errHandler.OnBlockErr(entry, err); err != nil {
-			break
-		}
-	}
-	return
 }
 
 func (scanner *dbScanner) onPostObject(entry *catalog.ObjectEntry) (err error) {

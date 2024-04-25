@@ -76,20 +76,20 @@ select * from t4;
 
 -- insert vector as binary
 create table t5(a int, b vecf32(3));
-insert into t5 values(1, decode('7e98b23e9e10383b2f41133f','hex'));
-insert into t5 values(2, decode('0363733ff13e0b3f7aa39d3e','hex'));
-insert into t5 values(3, decode('be1ac03e485d083ef6bc723f','hex'));
+insert into t5 values(1, cast(unhex('7e98b23e9e10383b2f41133f') as blob));
+insert into t5 values(2, cast(unhex('0363733ff13e0b3f7aa39d3e') as blob));
+insert into t5 values(3, cast(unhex('be1ac03e485d083ef6bc723f') as blob));
 
 insert into t5 values(4, "[0,2,3]");
 
-insert into t5 values(5, decode('05486c3f3ee2863e713d503dd58e8e3e7b88743f','hex')); -- this is float32[5]
-insert into t5 values(6, decode('9be2123fcf92de3e','hex')); -- this is float32[2]
+insert into t5 values(5, cast(unhex('05486c3f3ee2863e713d503dd58e8e3e7b88743f') as blob)); -- this is float32[5]
+insert into t5 values(6, cast(unhex('9be2123fcf92de3e') as blob)); -- this is float32[2]
 
 select * from t5;
 select * from t5 where t5.b > "[0,0,0]";
 
 -- output vector as binary (the output is little endian hex encoding)
-select encode(b,'hex') from t5;
+select hex(b) from t5;
 
 -- insert nulls
 create table t6(a int, b vecf32(3));
@@ -219,8 +219,26 @@ select 2.0 / cast("[1,2,3]" as vecf32(3));
 select cast("[1,2,3]" as vecf32(3)) / 0 ;
 select 5 + (-1*cast("[1,2,3]" as vecf32(3)));
 
+-- Distinct SQL
+create table t11(a vecf32(2));
+insert into t11 values('[1,0]');
+insert into t11 values('[1,2]');
+select distinct a from t11;
+select distinct a,a from t11;
+
+-- TinyInt + Vector
+drop table if exists t1;
+create table t1(c1 int,c2 vecf32(5),c3 tinyint unsigned,c4 bigint,c5 decimal(4,2),c6 float,c7 double);
+insert into t1 values(10 ,"[1, 0, 1, 6, 6]",3,10,7.1,0.36,2.10);
+insert into t1 values(60,"[6, 0, 8, 10,129]",2,5,3.26,4.89,1.26);
+insert into t1 values(20,"[ 9, 18, 1, 4, 132]",6,1,9.36,6.9,5.6);
+select c2+c3 from t1;
+
 -- Except
 select * from t8 except select * from t9;
+
+-- infinity scenario
+select cast("[76875768584509877574546435800000005,8955885757767774774774774456466]" as vecf32(2)) *623585864455;
 
 -- post
 drop database vecdb;

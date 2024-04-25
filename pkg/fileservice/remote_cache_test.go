@@ -73,6 +73,7 @@ func TestRemoteCache(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(ioVec1.Entries))
 		assert.Equal(t, []byte{1, 2}, ioVec1.Entries[0].Data)
+		ioVec1.Release()
 
 		ioVec2 := &IOVector{
 			FilePath: "foo",
@@ -86,9 +87,11 @@ func TestRemoteCache(t *testing.T) {
 		err = sf2.rc.Read(ctx, ioVec2)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(ioVec2.Entries))
-		assert.Equal(t, Bytes{1, 2}, ioVec2.Entries[0].CachedData)
+		assert.Equal(t, Bytes{bytes: []byte{1, 2}}, ioVec2.Entries[0].CachedData)
 		assert.Equal(t, true, ioVec2.Entries[0].done)
 		assert.NotNil(t, ioVec2.Entries[0].fromCache)
+
+		sf1.fs.Close()
 	})
 }
 
@@ -128,9 +131,15 @@ func runTestWithTwoFileServices(t *testing.T, fn func(sf1 *cacheFs, sf2 *cacheFs
 		assert.NoError(t, err)
 		qs.AddHandleFunc(query.CmdMethod_GetCacheData,
 			func(ctx context.Context, req *query.Request, resp *query.Response) error {
-				return HandleRemoteRead(ctx, fs, req, &query.WrappedResponse{
+				wr := &query.WrappedResponse{
 					Response: resp,
-				})
+				}
+				err = HandleRemoteRead(ctx, fs, req, wr)
+				if err != nil {
+					return err
+				}
+				qs.SetReleaseFunc(resp, wr.ReleaseFunc)
+				return nil
 			},
 			false,
 		)

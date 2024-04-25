@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -56,7 +58,7 @@ var (
 	defaultOption = []string{"filepath", "abc", "format", "jsonline", "jsondata", "array"}
 )
 
-func newTestCase(all bool, format, jsondata string) externalTestCase {
+func newTestCase(format, jsondata string) externalTestCase {
 	proc := testutil.NewProcess()
 	proc.FileService = testutil.NewFS()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -89,9 +91,9 @@ func newTestCase(all bool, format, jsondata string) externalTestCase {
 
 func init() {
 	cases = []externalTestCase{
-		newTestCase(true, tree.CSV, ""),
-		newTestCase(true, tree.JSONLINE, tree.OBJECT),
-		newTestCase(true, tree.JSONLINE, tree.ARRAY),
+		newTestCase(tree.CSV, ""),
+		newTestCase(tree.JSONLINE, tree.OBJECT),
+		newTestCase(tree.JSONLINE, tree.ARRAY),
 	}
 }
 
@@ -290,68 +292,73 @@ func Test_getUnCompressReader(t *testing.T) {
 	})
 }
 
-/*
-	func Test_makeBatch(t *testing.T) {
-		convey.Convey("makeBatch succ", t, func() {
-			col := &plan.ColDef{
-				Typ: &plan.Type{
-					Id: int32(types.T_bool),
-				},
-			}
-			param := &ExternalParam{
-				ExParamConst: ExParamConst{
-					Cols:  []*plan.ColDef{col},
-					Attrs: []string{"a"},
-				},
-			}
-			plh := &ParseLineHandler{
-				batchSize: 1,
-			}
-			_ = makeBatch(param, plh.batchSize, testutil.TestUtilMp)
-		})
-	}
-func Test_GetBatchData(t *testing.T) {
-	convey.Convey("GetBatchData succ", t, func() {
+func Test_makeBatch(t *testing.T) {
+	convey.Convey("makeBatch succ", t, func() {
+		col := &plan.ColDef{
+			Typ: plan.Type{
+				Id: int32(types.T_bool),
+			},
+		}
+		param := &ExternalParam{
+			ExParamConst: ExParamConst{
+				Cols:  []*plan.ColDef{col},
+				Attrs: []string{"a"},
+			},
+		}
+		plh := &ParseLineHandler{
+			batchSize: 1,
+		}
+		_, err := makeBatch(param, plh.batchSize, testutil.NewProc())
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_getBatchData(t *testing.T) {
+	convey.Convey("getBatchData succ", t, func() {
 		line := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "2020-09-07",
 			"2020-09-07 00:00:00", "16", "17", "2020-09-07 00:00:00"}
-		atrrs := []string{"col1", "col2", "col3", "col4", "col5", "col6", "col7", "col8", "col9", "col10",
+		attrs := []string{"col1", "col2", "col3", "col4", "col5", "col6", "col7", "col8", "col9", "col10",
 			"col11", "col12", "col13", "col14", "col15", "col16", "col17", "col18"}
-		buf := bytes.NewBuffer(nil)
+
+		buf := bytes.Buffer{}
 		buf.WriteString("{")
-		for idx, attr := range atrrs {
-			buf.WriteString(fmt.Sprintf("\"%s\":\"%s\"", attr, line[idx]))
-			if idx != len(atrrs)-1 {
+		for idx, attr := range attrs {
+			buf.WriteString(fmt.Sprintf(`"%s":"%s"`, attr, line[idx]))
+			if idx != len(attrs)-1 {
 				buf.WriteString(",")
 			}
 		}
 		buf.WriteString("}")
 		jsonline_object := []string{buf.String()}
 		buf.Reset()
-		for idx, attr := range atrrs {
+
+		for idx, attr := range attrs {
 			if idx == 0 {
-				buf.WriteString(fmt.Sprintf("\"%s\":\"%s\"", line[idx], line[idx]))
+				buf.WriteString(fmt.Sprintf(`"%s":"%s"`, line[idx], line[idx]))
 			} else {
-				buf.WriteString(fmt.Sprintf("\"%s\":\"%s\"", attr, line[idx]))
+				buf.WriteString(fmt.Sprintf(`"%s":"%s"`, attr, line[idx]))
 			}
-			if idx != len(atrrs)-1 {
+			if idx != len(attrs)-1 {
 				buf.WriteString(",")
 			}
 		}
 		jsonline_object_key_not_match := []string{"{" + buf.String() + "}"}
 		buf.Reset()
+
 		buf.WriteString("[")
 		for idx := range line {
-			buf.WriteString(fmt.Sprintf("\"%s\"", line[idx]))
-			if idx != len(atrrs)-1 {
+			buf.WriteString(fmt.Sprintf(`"%s"`, line[idx]))
+			if idx != len(attrs)-1 {
 				buf.WriteString(",")
 			}
 		}
 		buf.WriteString("]")
 		jsonline_array := []string{buf.String()}
 		buf.Reset()
+
 		buf.WriteString("{")
 		for i := 0; i < len(line)-1; i++ {
-			buf.WriteString(fmt.Sprintf("\"%s\":\"%s\",", atrrs[i], line[i]))
+			buf.WriteString(fmt.Sprintf(`"%s":"%s",`, attrs[i], line[i]))
 			if i != len(line)-2 {
 				buf.WriteString(",")
 			}
@@ -359,9 +366,10 @@ func Test_GetBatchData(t *testing.T) {
 		buf.WriteString("}")
 		jsonline_object_less := []string{buf.String()}
 		buf.Reset()
+
 		buf.WriteString("[")
 		for i := 0; i < len(line)-1; i++ {
-			buf.WriteString(fmt.Sprintf("\"%s\"", line[i]))
+			buf.WriteString(fmt.Sprintf(`"%s"`, line[i]))
 			if i != len(line)-2 {
 				buf.WriteString(",")
 			}
@@ -369,107 +377,115 @@ func Test_GetBatchData(t *testing.T) {
 		buf.WriteString("]")
 		jsonline_array_less := []string{buf.String()}
 
+		buildFields := func(ls []string) []csvparser.Field {
+			ret := make([]csvparser.Field, 0, len(ls))
+			for _, s := range ls {
+				ret = append(ret, csvparser.Field{Val: s})
+			}
+			return ret
+		}
+
 		cols := []*plan.ColDef{
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_bool),
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_int8),
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_int16),
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_int32),
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_int64),
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_uint8),
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_uint16),
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_uint32),
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_uint64),
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id:    int32(types.T_float32),
 					Scale: -1,
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id:    int32(types.T_float64),
 					Scale: -1,
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_varchar),
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_json),
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_date),
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_datetime),
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id:    int32(types.T_decimal64),
 					Width: 15,
 					Scale: 0,
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id:    int32(types.T_decimal128),
 					Width: 17,
 					Scale: 0,
 				},
 			},
 			{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_timestamp),
 				},
 			},
 		}
 		param := &ExternalParam{
 			ExParamConst: ExParamConst{
-				Attrs: atrrs,
+				Attrs: attrs,
 				Cols:  cols,
 				Extern: &tree.ExternParam{
 					ExParamConst: tree.ExParamConst{
@@ -485,48 +501,49 @@ func Test_GetBatchData(t *testing.T) {
 			},
 		}
 		param.Name2ColIndex = make(map[string]int32)
-		for i := 0; i < len(atrrs); i++ {
-			param.Name2ColIndex[atrrs[i]] = int32(i)
+		for i := 0; i < len(attrs); i++ {
+			param.Name2ColIndex[attrs[i]] = int32(i)
 		}
 		plh := &ParseLineHandler{
 			batchSize:      1,
-			moCsvLineArray: [][]string{line},
+			moCsvLineArray: [][]csvparser.Field{buildFields(line)},
 		}
 
 		proc := testutil.NewProc()
-		_, err := GetBatchData(param, plh, proc)
+		_, err := getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 
-		plh.moCsvLineArray = [][]string{line[:1]}
-		_, err = GetBatchData(param, plh, proc)
+		plh.moCsvLineArray = [][]csvparser.Field{buildFields(line[:1])}
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		for i := 0; i < len(atrrs); i++ {
-			line[i] = "\\N"
+		fields := make([]csvparser.Field, len(attrs))
+		for i := range attrs {
+			fields[i].IsNull = true
 		}
-		plh.moCsvLineArray = [][]string{line}
-		_, err = GetBatchData(param, plh, proc)
+		plh.moCsvLineArray = [][]csvparser.Field{fields}
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 
 		line = []string{"0", "1.0", "2.0", "3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0", "11.0", "13", "2020-09-07",
 			"2020-09-07 00:00:00", "16", "17", "2020-09-07 00:00:00"}
-		plh.moCsvLineArray = [][]string{line}
-		_, err = GetBatchData(param, plh, proc)
+		plh.moCsvLineArray = [][]csvparser.Field{buildFields(line)}
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 
 		line = []string{"truefalse", "128", "32768", "2147483648", "9223372036854775808", "256", "65536", "4294967296", "18446744073709551616",
 			"float32", "float64", "", "13", "date", "datetime", "decimal64", "decimal128", "timestamp"}
-		for i := 0; i < len(atrrs); i++ {
-			tmp := atrrs[i:]
+		for i := 0; i < len(attrs); i++ {
+			tmp := attrs[i:]
 			param.Attrs = tmp
 			param.Cols = cols[i:]
-			plh.moCsvLineArray = [][]string{line}
-			_, err = GetBatchData(param, plh, proc)
+			plh.moCsvLineArray = [][]csvparser.Field{buildFields(line)}
+			_, err = getBatchData(param, plh, proc)
 			convey.So(err, convey.ShouldNotBeNil)
 		}
 
-		param.Extern.Tail.Fields.EnclosedBy = 't'
-		_, err = GetBatchData(param, plh, proc)
+		param.Extern.Tail.Fields.EnclosedBy = &tree.EnclosedBy{Value: 't'}
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		line[1] = "128.9"
@@ -538,68 +555,67 @@ func Test_GetBatchData(t *testing.T) {
 		line[7] = "4294967296.9"
 		line[8] = "a.9"
 		for i := 1; i <= 8; i++ {
-			tmp := atrrs[i:]
+			tmp := attrs[i:]
 			param.Attrs = tmp
 			param.Cols = cols[i:]
-			plh.moCsvLineArray = [][]string{line}
-			_, err = GetBatchData(param, plh, proc)
+			plh.moCsvLineArray = [][]csvparser.Field{buildFields(line)}
+			_, err = getBatchData(param, plh, proc)
 			convey.So(err, convey.ShouldNotBeNil)
 		}
 
 		//test jsonline
 		param.Extern.Format = tree.JSONLINE
 		param.Extern.JsonData = tree.OBJECT
-		param.Attrs = atrrs
+		param.Attrs = attrs
 		param.Cols = cols
-		plh.moCsvLineArray = [][]string{jsonline_object}
-		_, err = GetBatchData(param, plh, proc)
+		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_object)}
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
-		plh.moCsvLineArray = [][]string{jsonline_object_less}
-		_, err = GetBatchData(param, plh, proc)
+		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_object_less)}
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
-		plh.moCsvLineArray = [][]string{jsonline_object_key_not_match}
-		_, err = GetBatchData(param, plh, proc)
+		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_object_key_not_match)}
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		param.Extern.Format = tree.CSV
-		_, err = GetBatchData(param, plh, proc)
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		param.Extern.Format = tree.JSONLINE
 		param.Extern.JsonData = tree.ARRAY
 		param.prevStr = ""
-		plh.moCsvLineArray = [][]string{jsonline_array}
-		_, err = GetBatchData(param, plh, proc)
+		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_array)}
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 		prevStr, str := jsonline_array[0][:len(jsonline_array[0])-2], jsonline_array[0][len(jsonline_array[0])-2:]
-		plh.moCsvLineArray = [][]string{{prevStr}}
-		_, err = GetBatchData(param, plh, proc)
+		plh.moCsvLineArray = [][]csvparser.Field{{{Val: prevStr}}}
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(param.prevStr, convey.ShouldEqual, prevStr)
 
-		plh.moCsvLineArray = [][]string{{str}}
-		_, err = GetBatchData(param, plh, proc)
+		plh.moCsvLineArray = [][]csvparser.Field{{{Val: str}}}
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 
 		param.Extern.JsonData = "test"
-		_, err = GetBatchData(param, plh, proc)
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		plh.moCsvLineArray = [][]string{jsonline_array_less}
-		_, err = GetBatchData(param, plh, proc)
+		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_array_less)}
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		jsonline_array_less[0] = jsonline_object_less[0][1:]
-		plh.moCsvLineArray = [][]string{jsonline_array_less}
-		_, err = GetBatchData(param, plh, proc)
+		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_array_less)}
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 		jsonline_array = append(jsonline_array, jsonline_array_less...)
-		plh.moCsvLineArray = [][]string{jsonline_array}
-		_, err = GetBatchData(param, plh, proc)
+		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_array)}
+		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
-*/
 
 func TestReadDirSymlink(t *testing.T) {
 	root := t.TempDir()
@@ -769,7 +785,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 				Cols: []*plan.ColDef{
 					{
 						Name: catalog.ExternalFilePath,
-						Typ: &plan.Type{
+						Typ: plan.Type{
 							Id:    int32(types.T_varchar),
 							Width: types.MaxVarcharLen,
 							Table: tableName,

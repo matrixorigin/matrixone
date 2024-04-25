@@ -53,7 +53,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc, anal); err != nil {
+			if err := ctr.build(proc, anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
@@ -98,7 +98,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	for {
 		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 		if err != nil {
@@ -107,7 +107,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if bat == nil {
 			break
 		}
-		ctr.bat, _, err = proc.AppendBatchFromOffset(ctr.bat, bat, 0)
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
 		if err != nil {
 			return err
 		}

@@ -348,7 +348,7 @@ func GetVarValue(
 		return nil, err
 	}
 	if e.Typ.Id != int32(types.T_any) && expr.Typ.Id != e.Typ.Id {
-		expr, err = appendCastBeforeExpr(ctx, expr, &e.Typ)
+		expr, err = appendCastBeforeExpr(ctx, expr, e.Typ)
 	}
 	if err != nil {
 		return nil, err
@@ -441,6 +441,7 @@ func (r *RecomputeRealTimeRelatedFuncRule) ApplyExpr(e *plan.Expr) (*plan.Expr, 
 				if err != nil {
 					return nil, err
 				}
+				defer executor.Free()
 				vec, err := executor.Eval(r.proc, []*batch.Batch{r.bat})
 				if err != nil {
 					return nil, err

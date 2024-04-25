@@ -70,6 +70,8 @@ type container struct {
 	handledLast bool
 
 	tmpBatches []*batch.Batch // for reuse
+
+	maxAllocSize int64
 }
 
 type Argument struct {
@@ -146,12 +148,16 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 		ctr.tmpBatches = nil
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
 	}
 }
 
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
+		ctr.expr = nil
 	}
 }
 
@@ -186,5 +192,7 @@ func (ctr *container) cleanEvalVectors() {
 		if ctr.evecs[i].executor != nil {
 			ctr.evecs[i].executor.Free()
 		}
+		ctr.evecs[i].vec = nil
 	}
+	ctr.evecs = nil
 }

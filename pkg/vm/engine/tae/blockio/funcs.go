@@ -36,7 +36,7 @@ func LoadColumnsData(
 	location objectio.Location,
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (bat *batch.Batch, err error) {
+) (bat *batch.Batch, release func(), err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors *fileservice.IOVector
@@ -47,7 +47,9 @@ func LoadColumnsData(
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs, policy); err != nil {
 		return
 	}
-	defer objectio.ReleaseIOVector(ioVectors)
+	release = func() {
+		objectio.ReleaseIOVector(ioVectors)
+	}
 	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
@@ -104,7 +106,7 @@ func LoadColumnsData2(
 		if needCopy {
 			if vec, err = containers.CloneVector(
 				obj.(*vector.Vector),
-				vPool.GetAllocator(),
+				vPool.GetMPool(),
 				vPool,
 			); err != nil {
 				return
@@ -133,7 +135,7 @@ func LoadColumns(
 	location objectio.Location,
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (bat *batch.Batch, err error) {
+) (bat *batch.Batch, release func(), err error) {
 	return LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy)
 }
 
@@ -144,7 +146,7 @@ func LoadTombstoneColumns(
 	fs fileservice.FileService,
 	location objectio.Location,
 	m *mpool.MPool,
-) (bat *batch.Batch, err error) {
+) (bat *batch.Batch, release func(), err error) {
 	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0))
 }
 

@@ -23,21 +23,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
 // leakChecker is used to detect leak txn which is not committed or aborted.
 type leakChecker struct {
 	sync.RWMutex
 	logger         *log.MOLogger
-	actives        []activeTxn
+	actives        []ActiveTxn
 	maxActiveAges  time.Duration
-	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string)
+	leakHandleFunc func([]ActiveTxn)
 	stopper        *stopper.Stopper
 }
 
 func newLeakCheck(
 	maxActiveAges time.Duration,
-	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string)) *leakChecker {
+	leakHandleFunc func([]ActiveTxn)) *leakChecker {
 	logger := runtime.DefaultRuntime().Logger()
 	return &leakChecker{
 		logger:         logger,
@@ -59,18 +60,16 @@ func (lc *leakChecker) close() {
 }
 
 func (lc *leakChecker) txnOpened(
+	txnOp *txnOperator,
 	txnID []byte,
-	createBy string) {
-	if createBy == "" {
-		createBy = "unknown"
-	}
-
+	options txn.TxnOptions) {
 	lc.Lock()
 	defer lc.Unlock()
-	lc.actives = append(lc.actives, activeTxn{
-		createBy: createBy,
-		id:       txnID,
-		createAt: time.Now(),
+	lc.actives = append(lc.actives, ActiveTxn{
+		Options:  options,
+		ID:       txnID,
+		CreateAt: time.Now(),
+		txnOp:    txnOp,
 	})
 }
 
@@ -79,7 +78,7 @@ func (lc *leakChecker) txnClosed(txnID []byte) {
 	defer lc.Unlock()
 	values := lc.actives[:0]
 	for idx, txn := range lc.actives {
-		if bytes.Equal(txn.id, txnID) {
+		if bytes.Equal(txn.ID, txnID) {
 			values = append(values, lc.actives[idx+1:]...)
 			break
 		}
@@ -94,25 +93,37 @@ func (lc *leakChecker) check(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(lc.maxActiveAges):
-			lc.doCheck()
+			if values := lc.doCheck(); len(values) > 0 {
+				lc.leakHandleFunc(values)
+			}
 		}
 	}
 }
 
-func (lc *leakChecker) doCheck() {
+func (lc *leakChecker) doCheck() []ActiveTxn {
 	lc.RLock()
 	defer lc.RUnlock()
 
+	var values []ActiveTxn
 	now := time.Now()
 	for _, txn := range lc.actives {
-		if now.Sub(txn.createAt) >= lc.maxActiveAges {
-			lc.leakHandleFunc(txn.id, txn.createAt, txn.createBy)
+		if now.Sub(txn.CreateAt) >= lc.maxActiveAges {
+			if txn.txnOp != nil {
+				txn.Options.Counter = txn.txnOp.counter()
+				txn.Options.InRunSql = txn.txnOp.inRunSql()
+				txn.Options.InCommit = txn.txnOp.inCommit()
+				txn.Options.InRollback = txn.txnOp.inRollback()
+				txn.Options.SessionInfo = txn.txnOp.options.SessionInfo
+			}
+			values = append(values, txn)
 		}
 	}
+	return values
 }
 
-type activeTxn struct {
-	createBy string
-	id       []byte
-	createAt time.Time
+type ActiveTxn struct {
+	Options  txn.TxnOptions
+	ID       []byte
+	CreateAt time.Time
+	txnOp    *txnOperator
 }

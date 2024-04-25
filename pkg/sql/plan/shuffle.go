@@ -18,6 +18,8 @@ import (
 	"math/bits"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -313,13 +315,13 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	if !builder.IsEquiJoin(n) {
 		return
 	}
-	leftTags := make(map[int32]emptyType)
+	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(n.Children[0]) {
-		leftTags[tag] = emptyStruct
+		leftTags[tag] = true
 	}
-	rightTags := make(map[int32]emptyType)
+	rightTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(n.Children[1]) {
-		rightTags[tag] = emptyStruct
+		rightTags[tag] = true
 	}
 	// for now ,only support the first join condition
 	for i := range n.OnList {
@@ -457,12 +459,12 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 	var firstSortColName string
 	if n.TableDef.ClusterBy != nil {
 		firstSortColName = util.GetClusterByFirstColumn(n.TableDef.ClusterBy.Name)
-		if s.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV && n.TableDef.Pkey != nil {
-			firstSortColName = n.TableDef.Pkey.Names[0]
-		}
-	} else if n.TableDef.Pkey != nil {
+	} else if n.TableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		return
+	} else {
 		firstSortColName = n.TableDef.Pkey.Names[0]
 	}
+
 	if s.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV {
 		return
 	}
@@ -471,7 +473,7 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 	switch types.T(n.TableDef.Cols[firstSortColID].Typ.Id) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text, types.T_bit:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
 		n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 		n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstSortColID].Seqnum)
 		n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstSortColName])
@@ -532,7 +534,7 @@ func shouldUseHashShuffle(s *pb.ShuffleRange) bool {
 	if s.Uniform > 0.3 {
 		return false
 	}
-	if s.Overlap > 0.6 {
+	if s.Overlap > 0.5 {
 		return true
 	}
 	return true

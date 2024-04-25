@@ -434,50 +434,38 @@ func (a *AwsSDKv1) deleteMultiObj(ctx context.Context, objs []*s3.ObjectIdentifi
 func (a *AwsSDKv1) listObjects(ctx context.Context, params *s3.ListObjectsV2Input) (*s3.ListObjectsV2Output, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv1.listObjects")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.List.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 list objects",
 		func() (*s3.ListObjectsV2Output, error) {
 			return a.client.ListObjectsV2(params)
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 
 func (a *AwsSDKv1) headObject(ctx context.Context, params *s3.HeadObjectInput) (*s3.HeadObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv1.headObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Head.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 head object",
 		func() (*s3.HeadObjectOutput, error) {
 			return a.client.HeadObject(params)
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 
 func (a *AwsSDKv1) putObject(ctx context.Context, params *s3.PutObjectInput) (*s3.PutObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv1.putObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Put.Add(1)
 	}, a.perfCounterSets...)
@@ -488,10 +476,6 @@ func (a *AwsSDKv1) putObject(ctx context.Context, params *s3.PutObjectInput) (*s
 func (a *AwsSDKv1) getObject(ctx context.Context, min *int64, max *int64, params *s3.GetObjectInput) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv1.getObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Get.Add(1)
 	}, a.perfCounterSets...)
@@ -504,13 +488,13 @@ func (a *AwsSDKv1) getObject(ctx context.Context, min *int64, max *int64, params
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}
 			params.Range = &rang
-			output, err := doWithRetry(
+			output, err := DoWithRetry(
 				"s3 get object",
 				func() (*s3.GetObjectOutput, error) {
 					return a.client.GetObject(params)
 				},
 				maxRetryAttemps,
-				isRetryableError,
+				IsRetryableError,
 			)
 			if err != nil {
 				return nil, err
@@ -518,7 +502,7 @@ func (a *AwsSDKv1) getObject(ctx context.Context, min *int64, max *int64, params
 			return output.Body, nil
 		},
 		*min,
-		isRetryableError,
+		IsRetryableError,
 	)
 	if err != nil {
 		return nil, err
@@ -529,40 +513,32 @@ func (a *AwsSDKv1) getObject(ctx context.Context, min *int64, max *int64, params
 func (a *AwsSDKv1) deleteObject(ctx context.Context, params *s3.DeleteObjectInput) (*s3.DeleteObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv1.deleteObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Delete.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 delete object",
 		func() (*s3.DeleteObjectOutput, error) {
 			return a.client.DeleteObject(params)
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 
 func (a *AwsSDKv1) deleteObjects(ctx context.Context, params *s3.DeleteObjectsInput) (*s3.DeleteObjectsOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv1.deleteObjects")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.DeleteMulti.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 delete objects",
 		func() (*s3.DeleteObjectsOutput, error) {
 			return a.client.DeleteObjects(params)
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 

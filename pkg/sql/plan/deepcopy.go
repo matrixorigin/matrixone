@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"golang.org/x/exp/constraints"
 )
@@ -64,7 +65,6 @@ func DeepCopyOnDupliateKeyCtx(ctx *plan.OnDuplicateKeyCtx) *plan.OnDuplicateKeyC
 		return nil
 	}
 	newCtx := &plan.OnDuplicateKeyCtx{
-		TableDef:       DeepCopyTableDef(ctx.TableDef, true),
 		OnDuplicateIdx: make([]int32, len(ctx.OnDuplicateIdx)),
 	}
 
@@ -140,9 +140,8 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 	newCtx := &plan.PreInsertUkCtx{
 		Columns:  make([]int32, len(ctx.Columns)),
 		PkColumn: ctx.PkColumn,
-		PkType:   DeepCopyType(ctx.PkType),
-		UkType:   DeepCopyType(ctx.UkType),
-		TableDef: DeepCopyTableDef(ctx.TableDef, true),
+		PkType:   ctx.PkType,
+		UkType:   ctx.UkType,
 	}
 	copy(newCtx.Columns, ctx.Columns)
 
@@ -168,7 +167,7 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 	return &plan.LockTarget{
 		TableId:            target.TableId,
 		PrimaryColIdxInBat: target.PrimaryColIdxInBat,
-		PrimaryColTyp:      DeepCopyType(target.PrimaryColTyp),
+		PrimaryColTyp:      target.PrimaryColTyp,
 		RefreshTsIdxInBat:  target.RefreshTsIdxInBat,
 		FilterColIdxInBat:  target.FilterColIdxInBat,
 		LockTable:          target.LockTable,
@@ -323,7 +322,7 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		ColId:     col.ColId,
 		Name:      col.Name,
 		Alg:       col.Alg,
-		Typ:       DeepCopyType(col.Typ),
+		Typ:       col.Typ,
 		Default:   DeepCopyDefault(col.Default),
 		Primary:   col.Primary,
 		Pkidx:     col.Pkidx,
@@ -332,6 +331,8 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		ClusterBy: col.ClusterBy,
 		Hidden:    col.Hidden,
 		Seqnum:    col.Seqnum,
+		TblName:   col.TblName,
+		DbName:    col.DbName,
 	}
 }
 
@@ -462,6 +463,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		TableLockType:  table.TableLockType,
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
+		DbName:         table.DbName,
 	}
 
 	copy(newTable.RefChildTbls, table.RefChildTbls)
@@ -979,9 +981,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 
 	case *plan.Expr_T:
 		newExpr.Expr = &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: DeepCopyType(item.T.Typ),
-			},
+			T: &plan.TargetType{},
 		}
 
 	case *plan.Expr_Max:

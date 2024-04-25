@@ -41,7 +41,7 @@ func makeColExprForTest(idx int32, typ types.T) *plan.Expr {
 	exprType := plan2.MakePlan2Type(&containerType)
 
 	return &plan.Expr{
-		Typ: *exprType,
+		Typ: exprType,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
@@ -66,7 +66,7 @@ func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	retTyp := finfo.GetReturnType()
 
 	return &plan.Expr{
-		Typ: *plan2.MakePlan2Type(&retTyp),
+		Typ: plan2.MakePlan2Type(&retTyp),
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
@@ -857,6 +857,41 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	}, statsList...)
 
 	require.Equal(t, count, 0)
+}
+
+func TestGetNonCompositePKSerachFuncByExpr(t *testing.T) {
+	m := mpool.MustNewNoFixed(t.Name())
+	proc := testutil.NewProcessWithMPool(m)
+
+	bat := makeBatchForTest(m, 0, 2, 3, 4)
+
+	vals := vector.NewVec(types.T_int64.ToType())
+	ints := []int64{3, 4, 2}
+	for _, n := range ints {
+		vector.AppendFixed(vals, n, false, m)
+	}
+	colExpr := newColumnExpr(0, plan2.MakePlan2Type(vals.GetType()), "pk")
+
+	//vals must be sorted
+	vals.InplaceSort()
+	bytes, _ := vals.MarshalBinary()
+	vals.Free(m)
+
+	inExpr := plan2.MakeInExpr(
+		context.Background(),
+		colExpr,
+		int32(vals.Length()),
+		bytes,
+		false)
+	_, _, filter := getNonCompositePKSearchFuncByExpr(
+		inExpr,
+		"pk",
+		proc)
+	sels := filter(bat.Vecs)
+	require.Equal(t, 3, len(sels))
+	require.True(t, sels[0] == 1)
+	require.True(t, sels[1] == 2)
+	require.True(t, sels[2] == 3)
 }
 
 func TestGetPKExpr(t *testing.T) {
