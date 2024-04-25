@@ -179,6 +179,7 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		} else {
 			buf.WriteString(vec.String())
 		}
+		vec.Free(nil)
 	case *plan.Expr_T:
 		tt := types.T(expr.Typ.Id)
 		if tt == types.T_decimal64 || tt == types.T_decimal128 {
