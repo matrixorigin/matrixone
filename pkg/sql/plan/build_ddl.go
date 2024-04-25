@@ -1661,6 +1661,8 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	}
 
 	nameCount := make(map[string]int)
+	//Note: Index Parts will store the Column ID of the columns in the main table
+	// This is because in zone map, if we use column name, it will be slow after 20 byte length.
 	indexParts := make([]string, 0)
 
 	for _, keyPart := range indexInfo.KeyParts {
@@ -1671,7 +1673,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 		if colMap[name].Typ.Id != int32(types.T_varchar) {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("column '%s' is not varchar type.", name))
 		}
-		indexParts = append(indexParts, name)
+		indexParts = append(indexParts, fmt.Sprintf("%d", colMap[name].GetColId()))
 	}
 
 	var keyName = catalog.MasterIndexTableIndexColName
