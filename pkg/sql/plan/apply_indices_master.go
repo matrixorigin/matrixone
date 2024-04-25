@@ -120,7 +120,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *plan.Expr,
 	idxTableDef *TableDef, idxObjRef *ObjectRef, scanTs timestamp.Timestamp) (int32, int32) {
 
-	// a. Scan * WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value"))
+	// a. Scan * WHERE prefix_eq(`__mo_index_idx_col`,serial_full("1","value"))
 	idxScanTag := builder.genNewTag()
 	args := filterExp.GetF().Args
 

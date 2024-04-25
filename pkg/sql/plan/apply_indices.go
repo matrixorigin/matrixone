@@ -112,7 +112,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			for _, expr := range node.FilterList {
 				fn := expr.GetF()
 				col := fn.Args[0].GetCol()
-				if !isKeyPresentInList(getColIdxFromColRef(col), indexDef.Parts) {
+				if !isKeyPresentInList(col.Name, indexDef.Parts) {
 					isAllFilterColumnsIncluded = false
 					break
 				}
