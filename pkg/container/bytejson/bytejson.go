@@ -25,7 +25,6 @@ import (
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
@@ -136,6 +135,7 @@ func (bj ByteJson) GetElemCnt() int {
 func (bj ByteJson) GetInt64() int64 {
 	return int64(bj.GetUint64())
 }
+
 func (bj ByteJson) GetUint64() uint64 {
 	return endian.Uint64(bj.Data)
 }
@@ -209,6 +209,7 @@ func (bj ByteJson) toObject(buf []byte) ([]byte, error) {
 func (bj ByteJson) toInt64(buf []byte) []byte {
 	return strconv.AppendInt(buf, bj.GetInt64(), 10)
 }
+
 func (bj ByteJson) toUint64(buf []byte) []byte {
 	return strconv.AppendUint(buf, bj.GetUint64(), 10)
 }
@@ -380,6 +381,7 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 	}
 	return cur
 }
+
 func (bj ByteJson) Query(paths []*Path) *ByteJson {
 	out := make([]ByteJson, 0, len(paths))
 	for _, path := range paths {
@@ -677,7 +679,10 @@ func ParseJsonByteFromString(s string) ([]byte, error) {
 }
 
 func ParseJsonByteFromString2(s string) ([]byte, error) {
-	p := parser{iter: jsoniter.ParseString(jsoniter.ConfigDefault, s)}
+	p := parser{
+		iter: jsoniter.ParseString(jsoniter.ConfigDefault, s),
+		dst:  make([]byte, 0, len(s)+1),
+	}
 	err := p.do()
 	if err != nil {
 		return nil, err
@@ -685,399 +690,15 @@ func ParseJsonByteFromString2(s string) ([]byte, error) {
 	return p.dst, nil
 }
 
-func init() {
-	reuse.CreatePool[group](
-		func() *group {
-			return &group{
-				keys:     make([]groupKey, 0, 100),
-				values:   make([]groupValue, 0, 100),
-				keyBuf:   make([]byte, 0, 100),
-				valueBuf: make([]byte, 0, 100),
-			}
-		},
-		func(g *group) { g.reset() },
-		reuse.DefaultOptions[group](),
-	)
-}
-
-type groupKey [6]byte
-
-func (k *groupKey) set(offset uint32, length uint16) {
-	endian.PutUint32(k[:], offset)
-	endian.PutUint16(k[4:], length)
-}
-
-func (k *groupKey) addOff(n uint32) {
-	endian.PutUint32(k[:], endian.Uint32(k[:])+n)
-}
-
-type groupValue [5]byte
-
-func (v *groupValue) set(tp TpCode, offset uint32) {
-	v[0] = byte(tp)
-	endian.PutUint32(v[1:], offset)
-}
-
-func (v *groupValue) TpCode() TpCode {
-	return TpCode(v[0])
-}
-
-func (v *groupValue) addOff(n uint32) {
-	endian.PutUint32(v[1:], endian.Uint32(v[1:])+n)
-}
-
-type group struct {
-	obj      bool
-	keys     []groupKey
-	values   []groupValue
-	keyBuf   []byte
-	valueBuf []byte
-}
-
-func (g *group) addNil() {
-	var v groupValue
-	v.set(TpCodeLiteral, uint32(LiteralNull))
-	g.values = append(g.values, v)
-}
-
-func (g *group) addBool(b bool) {
-	var v groupValue
-	if b {
-		v.set(TpCodeLiteral, uint32(LiteralTrue))
-	} else {
-		v.set(TpCodeLiteral, uint32(LiteralFalse))
-	}
-	g.values = append(g.values, v)
-}
-
-func (g *group) addString(s string) error {
-	if !g.obj || len(g.keys) > len(g.values) {
-		var v groupValue
-		v.set(TpCodeString, uint32(len(g.valueBuf)+len(s)))
-		//g.values = append(g.values, v)
-		//g.valueBuf = addString(g.valueBuf, s)
-	} else {
-		if len(s) > math.MaxUint16 {
-			return moerr.NewInvalidInputNoCtx("json key %s", s)
-		}
-		var key groupKey
-		key.set(uint32(len(g.keyBuf)), uint16(len(s)))
-		//g.keys = append(g.keys, key)
-		//g.keyBuf = append(g.keyBuf, s...)
-	}
-	return nil
-}
-
-func (g *group) addNum(num json.Number) error {
-	return nil
-	//check if it is a float
-	if strings.ContainsAny(string(num), "Ee.") {
-		val, err := num.Float64()
-		if err != nil {
-			return moerr.NewInvalidInputNoCtx("json number %s", num)
-		}
-		if err = checkFloat64(val); err != nil {
-			return err
-		}
-		var v groupValue
-		v.set(TpCodeFloat64, uint32(len(g.valueBuf)))
-		g.values = append(g.values, v)
-		g.valueBuf = addFloat64(g.valueBuf, val)
-		return nil
-	}
-	if val, err := num.Int64(); err == nil { //check if it is an int
-		var v groupValue
-		v.set(TpCodeInt64, uint32(len(g.valueBuf)))
-		g.values = append(g.values, v)
-		g.valueBuf = addInt64(g.valueBuf, val)
-		return nil
-	}
-	if val, err := strconv.ParseUint(string(num), 10, 64); err == nil { //check if it is a uint
-		var v groupValue
-		v.set(TpCodeUint64, uint32(len(g.valueBuf)))
-		g.values = append(g.values, v)
-		g.valueBuf = addUint64(g.valueBuf, val)
-		return nil
-	}
-	if val, err := num.Float64(); err == nil { //check if it is a float
-		if err = checkFloat64(val); err != nil {
-			return err
-		}
-		var v groupValue
-		v.set(TpCodeFloat64, uint32(len(g.valueBuf)))
-		g.values = append(g.values, v)
-		g.valueBuf = addFloat64(g.valueBuf, val)
-		return nil
-	}
-	return nil
-}
-
-func (g *group) dump(buf *bytes.Buffer) {
-	n := len(g.values)
-	var head [8]byte
-	endian.PutUint32(head[:], uint32(n))
-	keyStart := buf.Len() + 8
-	if g.obj {
-		keyStart += n * (4 + 2)
-	}
-	keyStart += n * (4 + 1)
-
-	length := uint32(keyStart + len(g.keyBuf) + len(g.valueBuf))
-	//buf.Grow(int(length))
-	endian.PutUint32(head[4:], length)
-	buf.Write(head[:])
-	if g.obj {
-		for i := range g.keys {
-			g.keys[i].addOff(uint32(keyStart))
-			buf.Write(g.keys[i][:])
-		}
-	}
-
-	valueStart := keyStart + len(g.keyBuf)
-	for i := range g.values {
-		v := &g.values[i]
-		if v.TpCode() != TpCodeLiteral {
-			v.addOff(uint32(valueStart))
-		}
-		buf.Write(v[:])
-	}
-
-	if g.obj {
-		buf.Write(g.keyBuf)
-	}
-	buf.Write(g.valueBuf)
-}
-
-func (g *group) reset() {
-	g.obj = false
-	g.keys = g.keys[:0]
-	g.values = g.values[:0]
-	g.keyBuf = g.keyBuf[:0]
-	g.valueBuf = g.valueBuf[:0]
-}
-
-func (group) TypeName() string {
-	return "bytejson.group"
-}
-
 type parser struct {
 	iter *jsoniter.Iterator
 	dst  []byte
 }
 
-func (p *parser) do() error {
-	p.writeAny(true, p.iter.ReadAny())
-	return nil
-
-	// for {
-	// 	switch p.iter.WhatIsNext() {
-	// 	case jsoniter.ArrayValue:
-	// 		arr := p.iter.ReadAny()
-	// 		arr.Size()
-
-	// 		p.iter.ReadArrayCB(func(i *jsoniter.Iterator) bool {
-	// 			size++
-	// 			return true
-	// 		})
-	// 	case jsoniter.ObjectValue:
-	// 		size := 0
-	// 		var keys []string
-	// 		p.iter.ReadObjectCB(func(i *jsoniter.Iterator, s string) bool {
-	// 			size++
-	// 			return true
-	// 		})
-	// 	case jsoniter.BoolValue:
-	// 		if len(p.stack) > 0 {
-	// 			g := p.stack[len(p.stack)-1]
-	// 			g.addBool(tk)
-	// 		} else {
-	// 			lit := LiteralFalse
-	// 			if tk {
-	// 				lit = LiteralTrue
-	// 			}
-	// 			return ByteJson{
-	// 				Data: []byte{lit},
-	// 				Type: TpCodeLiteral,
-	// 			}, nil
-	// 		}
-	// 	case jsoniter.NumberValue:
-	// 		if len(p.stack) > 0 {
-	// 			g := p.stack[len(p.stack)-1]
-	// 			g.addNum(tk)
-	// 		} else {
-	// 			var bj ByteJson
-	// 			bj.Type, bj.Data, err = addJsonNumber(nil, tk)
-	// 			if err != nil {
-	// 				return ByteJson{}, err
-	// 			}
-	// 		}
-	// 	case jsoniter.StringValue:
-	// 		if len(p.stack) > 0 {
-	// 			g := p.stack[len(p.stack)-1]
-	// 			g.addString(tk)
-	// 		} else {
-	// 			return ByteJson{
-	// 				Data: addString(nil, tk),
-	// 				Type: TpCodeString,
-	// 			}, nil
-	// 		}
-	// 	case jsoniter.NilValue:
-	// 		if len(p.stack) > 0 {
-	// 			g := p.stack[len(p.stack)-1]
-	// 			g.addNil()
-	// 		} else {
-	// 			return ByteJson{
-	// 				Data: []byte{LiteralNull},
-	// 				Type: TpCodeLiteral,
-	// 			}, nil
-	// 		}
-	// 	}
-	// }
-}
-
-// func (p *parser) addDelim(r json.Delim) *ByteJson {
-// 	switch r {
-// 	case '[', '{':
-// 		g := reuse.Alloc[group](nil)
-// 		g.obj = r == '{'
-// 		p.stack = append(p.stack, g)
-// 	case ']', '}':
-// 		n := len(p.stack) - 1
-// 		g := p.stack[n]
-// 		defer reuse.Free(g, nil)
-// 		p.stack = p.stack[:n]
-
-// 		if len(p.stack) == 0 {
-// 			var buf bytes.Buffer
-// 			//g.dump(&buf)
-
-// 			ret := ByteJson{
-// 				Data: buf.Bytes(),
-// 			}
-// 			if g.obj {
-// 				ret.Type = TpCodeObject
-// 			} else {
-// 				ret.Type = TpCodeArray
-// 			}
-// 			return &ret
-// 		}
-
-// 		pg := p.stack[len(p.stack)-1]
-// 		var v groupValue
-// 		if g.obj {
-// 			v.set(TpCodeObject, uint32(len(g.valueBuf)))
-// 		} else {
-// 			v.set(TpCodeArray, uint32(len(g.valueBuf)))
-// 		}
-// 		pg.values = append(pg.values, v)
-
-// 		buf := bytes.NewBuffer(pg.valueBuf)
-// 		//g.dump(buf)
-// 		pg.valueBuf = buf.Bytes()
-// 	default:
-// 		panic("unknown Delim " + string(r))
-// 	}
-// 	return nil
-// }
-
-func (p *parser) writeAny(raw bool, v jsoniter.Any) (TpCode, uint32) {
-	start := len(p.dst)
-	switch v.ValueType() {
-	case jsoniter.ArrayValue:
-		arr := v
-		n := arr.Size()
-		baseOffset := start
-		if raw {
-			p.dst = append(p.dst, byte(TpCodeArray))
-			baseOffset++
-		}
-		p.dst = endian.AppendUint32(p.dst, uint32(n))
-		p.dst = endian.AppendUint32(p.dst, 0) // array buf length
-		p.dst = extendByte(p.dst, n*5)
-
-		loc := uint32(8 + n*5)
-		for i := 0; i < n; i++ {
-			tp, length := p.writeAny(false, arr.Get(i))
-			o := baseOffset + 8 + i*5
-			p.dst[o] = byte(tp)
-			if tp == TpCodeLiteral {
-				endian.PutUint32(p.dst[o+1:], length)
-				continue
-			}
-			endian.PutUint32(p.dst[o+1:], loc)
-			loc += length
-		}
-
-		endian.PutUint32(p.dst[baseOffset+4:], loc) // array buf length
-		return TpCodeArray, uint32(len(p.dst) - start)
-	case jsoniter.ObjectValue:
-		obj := v
-		keys := obj.Keys()
-		n := len(keys)
-		baseOffset := start
-		if raw {
-			p.dst = append(p.dst, byte(TpCodeObject))
-			baseOffset += 1
-		}
-		p.dst = endian.AppendUint32(p.dst, uint32(n))
-		p.dst = endian.AppendUint32(p.dst, 0) // object buf length
-
-		p.dst = extendByte(p.dst, n*(4+2+1+4))
-
-		loc := uint32(8 + n*(4+2+1+4))
-		for i, k := range keys {
-			o := baseOffset + 8 + i*6
-			length := uint32(len(k)) // todo
-			endian.PutUint32(p.dst[o:], loc)
-			endian.PutUint16(p.dst[o+4:], uint16(length))
-			loc += length
-			p.dst = append(p.dst, k...)
-		}
-
-		for i, k := range keys {
-			tp, length := p.writeAny(false, obj.Get(k))
-			o := baseOffset + 8 + n*6 + i*5
-			p.dst[o] = byte(tp)
-			if tp == TpCodeLiteral {
-				endian.PutUint32(p.dst[o+1:], length)
-				continue
-			}
-			endian.PutUint32(p.dst[o+1:], loc)
-			loc += length
-		}
-
-		endian.PutUint32(p.dst[baseOffset+4:], loc) // object buf length
-		return TpCodeObject, uint32(len(p.dst) - start)
-	case jsoniter.BoolValue:
-		lit := LiteralFalse
-		if v.ToBool() {
-			lit = LiteralTrue
-		}
-		if raw {
-			p.dst = append(p.dst, byte(TpCodeLiteral), lit)
-		}
-		return TpCodeLiteral, uint32(lit)
-	case jsoniter.NilValue:
-		if raw {
-			p.dst = append(p.dst, byte(TpCodeLiteral), LiteralNull)
-		}
-		return TpCodeLiteral, uint32(LiteralNull)
-	case jsoniter.NumberValue:
-		tp, data, _ := p.parseNumber(json.Number(v.ToString()))
-		if raw {
-			p.dst = append(p.dst, byte(tp))
-		}
-		p.dst = append(p.dst, data...)
-		return tp, uint32(len(p.dst) - start)
-	case jsoniter.StringValue:
-		if raw {
-			p.dst = append(p.dst, byte(TpCodeString))
-		}
-		p.dst = addString(p.dst, v.ToString())
-		return TpCodeString, uint32(len(p.dst) - start)
-	default:
-		panic("x")
-	}
+type group struct {
+	obj    bool
+	keys   []string
+	values []any
 }
 
 func (p *parser) parseNumber(in json.Number) (TpCode, []byte, error) {
@@ -1111,4 +732,178 @@ func (p *parser) parseNumber(in json.Number) (TpCode, []byte, error) {
 	}
 	var tpCode TpCode
 	return tpCode, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
+}
+
+func (p *parser) do() error {
+	switch p.iter.WhatIsNext() {
+	// case jsoniter.InvalidValue:
+	case jsoniter.StringValue:
+
+	case jsoniter.NumberValue:
+	case jsoniter.NilValue:
+	case jsoniter.BoolValue:
+	case jsoniter.ArrayValue:
+		p.writeAny(true, p.parseArray())
+	case jsoniter.ObjectValue:
+		p.writeAny(true, p.parseObject())
+	}
+
+	return nil
+}
+
+func (p *parser) parseArray() *group {
+	g := group{}
+	for {
+		if !p.iter.ReadArray() {
+			return &g
+		}
+		switch p.iter.WhatIsNext() {
+		// case jsoniter.InvalidValue:
+		case jsoniter.StringValue:
+			g.values = append(g.values, p.iter.ReadString())
+		case jsoniter.NumberValue:
+			g.values = append(g.values, p.iter.ReadNumber())
+		case jsoniter.NilValue:
+			p.iter.ReadNil()
+			g.values = append(g.values, nil)
+		case jsoniter.BoolValue:
+			g.values = append(g.values, p.iter.ReadBool())
+		case jsoniter.ArrayValue:
+			g.values = append(g.values, p.parseArray())
+		case jsoniter.ObjectValue:
+			g.values = append(g.values, p.parseObject())
+		}
+	}
+}
+
+func (p *parser) parseObject() *group {
+	g := group{
+		obj: true,
+	}
+	for {
+		s := p.iter.ReadObject()
+		if s == "" {
+			return &g
+		}
+		g.keys = append(g.keys, s)
+
+		switch p.iter.WhatIsNext() {
+		// case jsoniter.InvalidValue:
+		case jsoniter.StringValue:
+			g.values = append(g.values, p.iter.ReadString())
+		case jsoniter.NumberValue:
+			g.values = append(g.values, p.iter.ReadNumber())
+		case jsoniter.NilValue:
+			p.iter.ReadNil()
+			g.values = append(g.values, nil)
+		case jsoniter.BoolValue:
+			g.values = append(g.values, p.iter.ReadBool())
+		case jsoniter.ArrayValue:
+			g.values = append(g.values, p.parseArray())
+		case jsoniter.ObjectValue:
+			g.values = append(g.values, p.parseObject())
+		}
+	}
+}
+
+func (p *parser) writeAny(raw bool, v any) (TpCode, uint32) {
+	start := len(p.dst)
+	switch val := v.(type) {
+	case *group:
+		if val.obj {
+			obj := val
+			keys := obj.keys
+			n := len(keys)
+			baseOffset := start
+			if raw {
+				p.dst = append(p.dst, byte(TpCodeObject))
+				baseOffset += 1
+			}
+			p.dst = endian.AppendUint32(p.dst, uint32(n))
+			p.dst = endian.AppendUint32(p.dst, 0) // object buf length
+
+			p.dst = extendByte(p.dst, n*(4+2+1+4))
+
+			loc := uint32(8 + n*(4+2+1+4))
+			for i, k := range keys {
+				o := baseOffset + 8 + i*6
+				length := uint32(len(k)) // todo
+				endian.PutUint32(p.dst[o:], loc)
+				endian.PutUint16(p.dst[o+4:], uint16(length))
+				loc += length
+				p.dst = append(p.dst, k...)
+			}
+
+			for i := range keys {
+				tp, length := p.writeAny(false, obj.values[i])
+				o := baseOffset + 8 + n*6 + i*5
+				p.dst[o] = byte(tp)
+				if tp == TpCodeLiteral {
+					endian.PutUint32(p.dst[o+1:], length)
+					continue
+				}
+				endian.PutUint32(p.dst[o+1:], loc)
+				loc += length
+			}
+
+			endian.PutUint32(p.dst[baseOffset+4:], loc) // object buf length
+			return TpCodeObject, uint32(len(p.dst) - start)
+		}
+
+		arr := val
+		n := len(arr.values)
+		baseOffset := start
+		if raw {
+			p.dst = append(p.dst, byte(TpCodeArray))
+			baseOffset++
+		}
+		p.dst = endian.AppendUint32(p.dst, uint32(n))
+		p.dst = endian.AppendUint32(p.dst, 0) // array buf length
+		p.dst = extendByte(p.dst, n*5)
+
+		loc := uint32(8 + n*5)
+		for i := 0; i < n; i++ {
+			tp, length := p.writeAny(false, arr.values[i])
+			o := baseOffset + 8 + i*5
+			p.dst[o] = byte(tp)
+			if tp == TpCodeLiteral {
+				endian.PutUint32(p.dst[o+1:], length)
+				continue
+			}
+			endian.PutUint32(p.dst[o+1:], loc)
+			loc += length
+		}
+
+		endian.PutUint32(p.dst[baseOffset+4:], loc) // array buf length
+		return TpCodeArray, uint32(len(p.dst) - start)
+	case bool:
+		lit := LiteralFalse
+		if val {
+			lit = LiteralTrue
+		}
+		if raw {
+			p.dst = append(p.dst, byte(TpCodeLiteral), lit)
+		}
+		return TpCodeLiteral, uint32(lit)
+	case nil:
+		if raw {
+			p.dst = append(p.dst, byte(TpCodeLiteral), LiteralNull)
+		}
+		return TpCodeLiteral, uint32(LiteralNull)
+	case json.Number:
+		tp, data, _ := p.parseNumber(val)
+		if raw {
+			p.dst = append(p.dst, byte(tp))
+		}
+		p.dst = append(p.dst, data...)
+		return tp, uint32(len(p.dst) - start)
+	case string:
+		if raw {
+			p.dst = append(p.dst, byte(TpCodeString))
+		}
+		p.dst = addString(p.dst, val)
+		return TpCodeString, uint32(len(p.dst) - start)
+	default:
+		panic("x")
+	}
 }

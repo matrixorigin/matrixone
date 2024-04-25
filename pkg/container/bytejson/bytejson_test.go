@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"testing"
 
+	jsoniter "github.com/json-iterator/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -518,57 +519,33 @@ func TestByteJson_Unquote(t *testing.T) {
 }
 
 func TestParseJsonByteFromString2(t *testing.T) {
-	s := `{"a":{"b":1}}`
-	//s := `{"a":22,"b":77,"c":"a"}`
+	s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
 	want, err := ParseJsonByteFromString(s)
 	require.NoError(t, err)
-
-	// [1
-	// 1 0 0 0
-	// 48 0 0 0
-	// 19 0 0 0 1 0
-	// 1 20 0 0 0
-	// 97
-	// 1 0 0 0
-	// 28 0 0 0
-	// 19 0 0 0 1 0 9 20 0 0 0 98 3 0 0 0 0 0 0 0]
 
 	got, err := ParseJsonByteFromString2(s)
 	require.NoError(t, err)
 
-	t.Log(want)
-	t.Log(got)
-
-	//require.Equal(t, want, got)
+	require.Equal(t, want, got)
 }
 
 func BenchmarkParseJsonByteFromString(b *testing.B) {
-	s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
+	s := `{"a":{"b":{"c":{"d":[null,false,true,"123","abc",["1","2","3"],"123.456"]}}}}`
+	//s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
 	for i := 0; i < b.N; i++ {
 		ParseJsonByteFromString(s)
 	}
-
-	//	=== RUN   BenchmarkParseJsonByteFromString
-	//
-	// BenchmarkParseJsonByteFromString
-	// BenchmarkParseJsonByteFromString-4        186908              7152 ns/op            4616 B/op         60 allocs/op
-	// PASS
-	// ok      github.com/matrixorigin/matrixone/pkg/container/bytejson        2.304s
+	// BenchmarkParseJsonByteFromString-4        187210              5936 ns/op            4616 B/op         60 allocs/op
 }
 
 func BenchmarkParseJsonByteFromString2(b *testing.B) {
-	// s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
-
+	// s := `{"a":{"b":{"c":{"d":{"a":1,"b":2,"c":3,"d":4,"e":5}}}}}`
+	s := `{"a":{"b":{"c":{"d":[null,false,true,"123","abc",["1","2","3"],"123.456"]}}}}`
 	for i := 0; i < b.N; i++ {
-		// iter := jsoniter.ParseString(jsoniter.ConfigDefault, s)
-		//far(iter)
-		// p := parser{src: util.UnsafeStringToBytes(s)}
-		//p.do()
+		p := parser{
+			iter: jsoniter.ParseString(jsoniter.ConfigDefault, s),
+		}
+		p.do()
 	}
-	//	=== RUN   BenchmarkParseJsonByteFromString2
-	//
-	// BenchmarkParseJsonByteFromString2
-	// BenchmarkParseJsonByteFromString2-4        88002             14027 ns/op            5754 B/op        181 allocs/op
-	// PASS
-	// ok      github.com/matrixorigin/matrixone/pkg/container/bytejson        1.389s
+	// BenchmarkParseJsonByteFromString2-4        68478             17034 ns/op            5152 B/op        131 allocs/op
 }
