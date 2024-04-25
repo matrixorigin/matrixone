@@ -118,7 +118,7 @@ func (m *merger[T]) Merge(ctx context.Context) {
 	defer releaseF()
 
 	objCnt := 0
-	blkCnt := 0
+	objBlkCnt := 0
 	bufferRowCnt := 0
 	objRowCnt := uint32(0)
 	mergedRowCnt := uint32(0)
@@ -146,7 +146,7 @@ func (m *merger[T]) Merge(ctx context.Context) {
 
 		commitEntry.Booking.Mappings[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1].M[int32(rowIdx)] = api.TransDestPos{
 			ObjIdx: int32(objCnt),
-			BlkIdx: int32(uint32(blkCnt)),
+			BlkIdx: int32(uint32(objBlkCnt)),
 			RowIdx: int32(bufferRowCnt),
 		}
 
@@ -156,7 +156,7 @@ func (m *merger[T]) Merge(ctx context.Context) {
 		// write new block
 		if bufferRowCnt == int(m.rowPerBlk) {
 			bufferRowCnt = 0
-			blkCnt++
+			objBlkCnt++
 
 			if m.writer == nil {
 				m.writer = m.host.PrepareNewWriter()
@@ -169,11 +169,11 @@ func (m *merger[T]) Merge(ctx context.Context) {
 			m.buffer.CleanOnlyData()
 
 			// write new object
-			if m.needNewObject(blkCnt, objRowCnt, mergedRowCnt) {
+			if m.needNewObject(objBlkCnt, objRowCnt, mergedRowCnt) {
 				// write object and reset writer
 				m.syncObject(ctx)
 				// reset writer after sync
-				blkCnt = 0
+				objBlkCnt = 0
 				objRowCnt = 0
 				objCnt++
 			}
@@ -184,7 +184,7 @@ func (m *merger[T]) Merge(ctx context.Context) {
 
 	// write remain data
 	if bufferRowCnt > 0 {
-		blkCnt++
+		objBlkCnt++
 
 		if m.writer == nil {
 			m.writer = m.host.PrepareNewWriter()
@@ -194,23 +194,18 @@ func (m *merger[T]) Merge(ctx context.Context) {
 		}
 		m.buffer.CleanOnlyData()
 	}
-	if blkCnt > 0 {
+	if objBlkCnt > 0 {
 		m.syncObject(ctx)
 	}
 }
 
-func (m *merger[T]) needNewObject(blkCnt int, objRowCnt, mergedRowCnt uint32) bool {
+func (m *merger[T]) needNewObject(objBlkCnt int, objRowCnt, mergedRowCnt uint32) bool {
 	if m.targetObjSize == 0 {
-		if blkCnt == int(options.DefaultBlocksPerObject) {
-			return true
-		}
-		return false
+		return objBlkCnt == int(options.DefaultBlocksPerObject)
 	}
 
 	if objRowCnt*m.rowSize > m.targetObjSize {
-		if (m.totalRowCnt-mergedRowCnt)*m.rowSize > m.targetObjSize {
-			return true
-		}
+		return (m.totalRowCnt-mergedRowCnt)*m.rowSize > m.targetObjSize
 	}
 	return false
 }
