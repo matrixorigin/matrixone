@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"math"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -850,6 +851,14 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				node.Stats.Cost = childStats.Outcnt
 				node.Stats.Selectivity = childStats.Selectivity
 			}
+		}
+
+	case plan.Node_INSERT:
+		if len(node.Children) > 0 && childStats != nil {
+			node.Stats.Outcnt = childStats.Outcnt
+			node.Stats.Cost = childStats.Outcnt
+			node.Stats.Selectivity = childStats.Selectivity
+			node.Stats.Rowsize = GetRowSizeFromTableDef(node.TableDef, true) * 0.8
 		}
 
 	default:
