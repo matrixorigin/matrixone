@@ -175,7 +175,7 @@ func RegisterMax1(id int64) {
 	aggexec.RegisterSingleAggFromFixedToFixed(
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_bool.ToType(), MaxReturnType, false, true),
-			newAggMaxBool,
+			aggexec.GenerateEmptyContextFromFixedToFixed[bool, bool],
 			InitAggMaxBool,
 			FillAggMaxBool, nil, FillsAggMaxBool,
 			MergeAggMaxBool,
@@ -297,19 +297,6 @@ func MergeAggMax1[from canCompare](
 	if getter2() > getter1() {
 		setter1(getter2())
 	}
-	return nil
-}
-
-type aggMaxBool struct{}
-
-func newAggMaxBool() aggexec.SingleAggFromFixedRetFixed[bool, bool] {
-	return aggMaxBool{}
-}
-
-func (a aggMaxBool) Marshal() []byte     { return nil }
-func (a aggMaxBool) Unmarshal(bs []byte) {}
-func (a aggMaxBool) Init(setter aggexec.AggSetter[bool], arg types.Type, ret types.Type) error {
-	setter(false)
 	return nil
 }
 

@@ -68,10 +68,6 @@ func (a *aggBitmapConstruct) Unmarshal(bs []byte) {
 	a.bmp = roaring.New()
 	_ = a.bmp.UnmarshalBinary(bs)
 }
-func (a *aggBitmapConstruct) Init(set aggexec.AggBytesSetter, arg, ret types.Type) error {
-	a.bmp = roaring.New()
-	return nil
-}
 
 func InitAggBitmapConstruct(
 	exec aggexec.SingleAggFromFixedRetVar[uint64], set aggexec.AggBytesSetter, arg, ret types.Type) error {
@@ -134,10 +130,6 @@ func (a *aggBitmapOr) Marshal() []byte {
 func (a *aggBitmapOr) Unmarshal(bs []byte) {
 	a.bmp = roaring.New()
 	_ = a.bmp.UnmarshalBinary(bs)
-}
-func (a *aggBitmapOr) Init(set aggexec.AggBytesSetter, arg, ret types.Type) error {
-	a.bmp = roaring.New()
-	return nil
 }
 
 func InitAggBitmapOr(
