@@ -93,6 +93,20 @@ type container struct {
 func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
 	if ctr := arg.ctr; ctr != nil {
 		mp := proc.Mp()
+		for i := range ctr.batchList {
+			if ctr.batchList[i] != nil {
+				ctr.batchList[i].Clean(mp)
+			}
+		}
+		for i := range ctr.orderCols {
+			if ctr.orderCols[i] != nil {
+				for j := range ctr.orderCols[i] {
+					if ctr.orderCols[i][j] != nil {
+						ctr.orderCols[i][j].Free(mp)
+					}
+				}
+			}
+		}
 		if ctr.buf != nil {
 			ctr.buf.Clean(mp)
 			ctr.buf = nil

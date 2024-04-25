@@ -85,10 +85,16 @@ type container struct {
 func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
+		if ctr.batWaitForSort != nil {
+			ctr.batWaitForSort.Clean(proc.Mp())
+			ctr.batWaitForSort = nil
+		}
+
 		if ctr.rbat != nil {
 			ctr.rbat.Clean(proc.Mp())
 			ctr.rbat = nil
 		}
+		ctr.resultOrderList = ctr.resultOrderList[:0]
 	}
 }
 

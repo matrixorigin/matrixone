@@ -113,8 +113,13 @@ func (arg *Argument) Release() {
 func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
+		ctr.cleanBatch(proc)
+		ctr.cleanHashMap()
 		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
+
+		ctr.batchRowCount = 0
+		ctr.maxAllocSize = 0
 	}
 }
 

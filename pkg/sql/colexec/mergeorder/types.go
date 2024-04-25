@@ -101,6 +101,20 @@ func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error
 			ctr.buf.Clean(mp)
 			ctr.buf = nil
 		}
+		for i := range ctr.batchList {
+			if ctr.batchList[i] != nil {
+				ctr.batchList[i].Clean(mp)
+			}
+		}
+		for i := range ctr.orderCols {
+			if ctr.orderCols[i] != nil {
+				for j := range ctr.orderCols[i] {
+					if ctr.orderCols[i][j] != nil {
+						ctr.orderCols[i][j].Free(mp)
+					}
+				}
+			}
+		}
 	}
 
 }

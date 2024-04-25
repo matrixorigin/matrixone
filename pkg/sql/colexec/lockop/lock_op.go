@@ -801,7 +801,6 @@ func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error
 	}
 	arg.rt.retryError = nil
 	arg.cleanCachedBatch(proc)
-	arg.rt.FreeMergeTypeOperator(pipelineFailed)
 }
 
 // Free free mem

@@ -116,10 +116,11 @@ func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error
 	ctr := arg.ctr
 	if ctr != nil {
 		ctr.cleanBatch(proc)
+		ctr.cleanHashMap()
 		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 	}
-
+	ctr.maxAllocSize = 0
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

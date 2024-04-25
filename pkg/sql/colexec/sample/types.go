@@ -210,6 +210,14 @@ func (arg *Argument) SimpleDup() *Argument {
 
 func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
 	arg.cleanBuf(proc)
+	if arg.ctr != nil {
+		if arg.ctr.intHashMap != nil {
+			arg.ctr.intHashMap.Free()
+		}
+		if arg.ctr.strHashMap != nil {
+			arg.ctr.strHashMap.Free()
+		}
+	}
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

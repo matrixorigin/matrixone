@@ -115,6 +115,9 @@ func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error
 	ctr := arg.ctr
 	if ctr != nil {
 		ctr.cleanBatches(proc)
+		if !arg.NeedHashMap {
+			ctr.cleanHashMap()
+		}
 	}
 }
 

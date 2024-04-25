@@ -75,6 +75,7 @@ func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error
 	arg.cleanBuf(proc)
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Alloc(int64(arg.maxAllocSize))
+	arg.maxAllocSize = 0
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

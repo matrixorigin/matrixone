@@ -104,6 +104,7 @@ func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
+		ctr.cleanHashMap()
 	}
 }
 

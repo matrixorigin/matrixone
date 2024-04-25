@@ -133,6 +133,11 @@ type DeleteCtx struct {
 }
 
 func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+	arg.affectedRows = 0
+	if arg.resBat != nil {
+		arg.resBat.Clean(proc.Mp())
+		arg.resBat = nil
+	}
 }
 
 // delete from t1 using t1 join t2 on t1.a = t2.a;
