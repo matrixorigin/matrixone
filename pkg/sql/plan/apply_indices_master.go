@@ -139,27 +139,27 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 	case "=":
 		serialExpr1, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full",
 			[]*plan.Expr{
-				makePlan2StringConstExprWithType(args[0].GetCol().Name), // "a"
+				makePlan2StringConstExprWithType(getColIdxFromColRef(args[0].GetCol())), // "1"
 				args[1], // value
 			})
 
 		filterList, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_eq", []*Expr{
 			indexKeyCol, // __mo_index_idx_col
-			serialExpr1, // serial_full("a","value")
+			serialExpr1, // serial_full("1","value")
 		})
 	case "between":
 		serialExpr1, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", []*plan.Expr{
-			makePlan2StringConstExprWithType(args[0].GetCol().Name), // "a"
+			makePlan2StringConstExprWithType(getColIdxFromColRef(args[0].GetCol())), // "1"
 			args[1], // value1
 		})
 		serialExpr2, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", []*plan.Expr{
-			makePlan2StringConstExprWithType(args[0].GetCol().Name), // "a"
+			makePlan2StringConstExprWithType(getColIdxFromColRef(args[0].GetCol())), // "1"
 			args[2], // value2
 		})
 		filterList, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_between", []*Expr{
 			indexKeyCol, // __mo_index_idx_col
-			serialExpr1, // serial_full("a","value1")
-			serialExpr2, // serial_full("a","value2")
+			serialExpr1, // serial_full("1","value1")
+			serialExpr2, // serial_full("1","value2")
 		})
 
 	case "in":
@@ -171,11 +171,11 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		_ = arg1AsColValuesVec.UnmarshalBinary(args[1].GetVec().GetData())
 		inExprListLen := arg1AsColValuesVec.Length()
 
-		// b. const vector "a"
+		// b. const vector "1"
 		mp := mpool.MustNewZero()
-		arg0AsColNameVec, _ := vector.NewConstBytes(inVecType, []byte(args[0].GetCol().Name), inExprListLen, mp)
+		arg0AsColNameVec, _ := vector.NewConstBytes(inVecType, []byte(getColIdxFromColRef(args[0].GetCol())), inExprListLen, mp)
 
-		// c. (serial_full("a","value1"), serial_full("a","value2"), serial_full("a","value3"))
+		// c. (serial_full("1","value1"), serial_full("1","value2"), serial_full("1","value3"))
 		ps := types.NewPackerArray(inExprListLen, mp)
 		defer func() {
 			for _, p := range ps {

@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -111,7 +112,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			for _, expr := range node.FilterList {
 				fn := expr.GetF()
 				col := fn.Args[0].GetCol()
-				if !isKeyPresentInList(col.Name, indexDef.Parts) {
+				if !isKeyPresentInList(getColIdxFromColRef(col), indexDef.Parts) {
 					isAllFilterColumnsIncluded = false
 					break
 				}
@@ -127,6 +128,12 @@ END0:
 	{
 		return builder.applyIndicesForFiltersRegularIndex(nodeID, node, colRefCnt, idxColMap)
 	}
+}
+
+func getColIdxFromColRef(col *plan.ColRef) string {
+	// ColId in ColDef is 1-based
+	// ColPos in ColRef is 0-based
+	return fmt.Sprintf("%d", col.GetColPos()+1)
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
