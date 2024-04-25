@@ -91,6 +91,9 @@ type IOVector struct {
 
 	// Caches indicates extra caches to operate on
 	Caches []IOVectorCache
+
+	onRelease []func()
+	released  bool
 }
 
 type IOEntry struct {

@@ -25,7 +25,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -44,6 +43,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"github.com/google/uuid"
 )
 
 func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
@@ -502,8 +503,8 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-// buildInPurgeLog act like `select mo_purge_log('rawlog,statement_info,metric', '2023-06-27')`
-func buildInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+// builtInPurgeLog act like `select mo_purge_log('rawlog,statement_info,metric', '2023-06-27')`
+func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint8](result)
 
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -541,12 +542,18 @@ func buildInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 				return moerr.NewNotSupported(proc.Ctx, "purge '%s'", tblName)
 			}
 		}
+
 		for _, tblName := range tableNames {
 			for _, tbl := range tables {
 				if strings.TrimSpace(tblName) == tbl.Table {
 					sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
 						tbl.Database, tbl.Table, tbl.TimestampColumn.Name, v2.String())
-					opts := executor.Options{}.WithDatabase(tbl.Database)
+					opts := executor.Options{}.WithDatabase(tbl.Database).
+						WithTxn(proc.TxnOperator).
+						WithTimeZone(proc.SessionInfo.TimeZone)
+					if proc.TxnOperator != nil {
+						opts = opts.WithDisableIncrStatement() // this option always with WithTxn()
+					}
 					res, err := exec.Exec(proc.Ctx, sql, opts)
 					if err != nil {
 						return err

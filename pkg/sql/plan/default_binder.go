@@ -23,7 +23,7 @@ import (
 	"strings"
 )
 
-func NewDefaultBinder(sysCtx context.Context, builder *QueryBuilder, ctx *BindContext, typ *Type, cols []string) *DefaultBinder {
+func NewDefaultBinder(sysCtx context.Context, builder *QueryBuilder, ctx *BindContext, typ Type, cols []string) *DefaultBinder {
 	b := &DefaultBinder{typ: typ, cols: cols}
 	b.sysCtx = sysCtx
 	b.builder = builder
@@ -58,7 +58,7 @@ func (b *DefaultBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool
 		return
 	}
 	expr = &plan.Expr{
-		Typ: *b.typ,
+		Typ: b.typ,
 	}
 	expr.Expr = &plan.Expr_Col{
 		Col: &plan.ColRef{
