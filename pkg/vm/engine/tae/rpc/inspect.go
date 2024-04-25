@@ -386,6 +386,7 @@ func (c *objectPruneArg) executePrune() error {
 		return err
 	}
 	notfound := 0
+	w := &bytes.Buffer{}
 	for _, obj := range task.objs {
 		it := obj.MakeBlockIt(true)
 		objHandle, err := tblHdl.GetObject(&obj.ID)
@@ -405,10 +406,14 @@ func (c *objectPruneArg) executePrune() error {
 			logutil.Errorf("objprune: del obj %s: %v", obj.ID.String(), err)
 			return err
 		}
+		w.WriteString(obj.ID.String())
+		w.WriteRune(',')
 	}
 	if err := txn.Commit(context.Background()); err != nil {
 		return err
 	}
+
+	logutil.Infof("objprune done: %v", w.String())
 	c.ctx.resp.Payload = []byte(fmt.Sprintf("prunes total: %d, notfound: %d", len(task.objs), notfound))
 	return nil
 }
