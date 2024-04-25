@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"testing"
 
+	jsoniter "github.com/json-iterator/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -93,6 +94,7 @@ func TestObject(t *testing.T) {
 		require.JSONEq(t, x, bj.String())
 	}
 }
+
 func TestArray(t *testing.T) {
 	j := []string{
 		`[`,
@@ -189,6 +191,7 @@ func TestQuery(t *testing.T) {
 		require.JSONEq(t, kase.outStr, out.String())
 	}
 }
+
 func TestUnnest(t *testing.T) {
 	kases := []struct {
 		jsonStr   string
@@ -512,5 +515,68 @@ func TestByteJson_Unquote(t *testing.T) {
 		out, err := bj.Unquote()
 		require.Nil(t, err)
 		require.Equal(t, kase.outStr, out)
+	}
+}
+
+func TestParseJsonByteFromString2(t *testing.T) {
+	s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
+	want, err := ParseJsonByteFromString(s)
+	require.NoError(t, err)
+
+	got, err := ParseJsonByteFromString2(s)
+	require.NoError(t, err)
+
+	t.Log(want)
+	t.Log(got)
+
+	//require.Equal(t, want, got)
+}
+
+func BenchmarkParseJsonByteFromString(b *testing.B) {
+	s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
+	for i := 0; i < b.N; i++ {
+		ParseJsonByteFromString(s)
+	}
+
+	//	=== RUN   BenchmarkParseJsonByteFromString
+	//
+	// BenchmarkParseJsonByteFromString
+	// BenchmarkParseJsonByteFromString-4        186908              7152 ns/op            4616 B/op         60 allocs/op
+	// PASS
+	// ok      github.com/matrixorigin/matrixone/pkg/container/bytejson        2.304s
+}
+
+func BenchmarkParseJsonByteFromString2(b *testing.B) {
+	s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
+
+	for i := 0; i < b.N; i++ {
+		iter := jsoniter.ParseString(jsoniter.ConfigDefault, s)
+		far(iter)
+		// p := parser{src: util.UnsafeStringToBytes(s)}
+		//p.do()
+	}
+	//	=== RUN   BenchmarkParseJsonByteFromString2
+	//
+	// BenchmarkParseJsonByteFromString2
+	// BenchmarkParseJsonByteFromString2-4        88002             14027 ns/op            5754 B/op        181 allocs/op
+	// PASS
+	// ok      github.com/matrixorigin/matrixone/pkg/container/bytejson        1.389s
+}
+
+func far(iter *jsoniter.Iterator) {
+	tp := iter.WhatIsNext()
+	switch tp {
+	case jsoniter.ArrayValue:
+		iter.ReadObjectCB(func(i *jsoniter.Iterator, s string) bool {
+			far(i)
+			return true
+		})
+	case jsoniter.ObjectValue:
+		iter.ReadArrayCB(func(i *jsoniter.Iterator) bool {
+			far(i)
+			return true
+		})
+	default:
+		iter.ReadAny()
 	}
 }
