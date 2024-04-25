@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -574,9 +575,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 										// in the index table will be same value (ie that from the original table).
 										// So, when we do UNION it automatically removes the duplicate values.
 										// ie
-										//  <"a_arjun_1",1, 1> -->  (select serial_full("a", a, c),__mo_pk_key, __mo_row_id)
+										//  <"a_arjun_1",1, 1> -->  (select serial_full("1", a, c),__mo_pk_key, __mo_row_id)
 										//  <"a_arjun_1",1, 1>
-										//  <"b_sunil_1",1, 1> -->  (select serial_full("b", b,c),__mo_pk_key, __mo_row_id)
+										//  <"b_sunil_1",1, 1> -->  (select serial_full("2", b,c),__mo_pk_key, __mo_row_id)
 										//  <"b_sunil_1",1, 1>
 										//  when we use UNION, we remove the duplicate values
 										// 3. RowID is added here: https://github.com/arjunsk/matrixone/blob/d7db178e1c7298e2a3e4f99e7292425a7ef0ef06/pkg/vm/engine/disttae/txn.go#L95
@@ -2463,19 +2464,23 @@ func buildSerialFullAndPKColsProj(builder *QueryBuilder, bindCtx *BindContext, t
 	//2. recompute CP PK.
 	currLastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, currLastNodeId, originPkPos)
 
-	//3. add a new project for < serial_full(a, "a", pk), pk >
+	//3. add a new project for < serial_full("1", a, pk), pk >
 	projectProjection := make([]*Expr, 2)
 
-	//3.i build serial_full("a", a, pk)
+	//3.i build serial_full("1", a, pk)
 	serialArgs := make([]*plan.Expr, 3)
 	serialArgs[0] = makePlan2StringConstExprWithType(part)
+	colPos, err := getColPosFromPart(part)
+	if err != nil {
+		return nil, err
+	}
 	serialArgs[1] = &Expr{
-		Typ: *colsType[part],
+		Typ: tableDef.Cols[colPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
-				ColPos: int32(colsPos[part]),
-				Name:   part,
+				ColPos: colPos,
+				Name:   tableDef.Cols[colPos].Name,
 			},
 		},
 	}
@@ -3097,6 +3102,16 @@ func appendDeleteIndexTablePlan(
 	return lastNodeId, nil
 }
 
+func getColPosFromPart(part string) (int32, error) {
+	// NOTE: part will have ColIdx which is 1 based index.
+	// We need to convert it to 0 based index to be used in colPos.
+	colIdx, err := strconv.ParseUint(part, 10, 64)
+	if err != nil {
+		return -1, err
+	}
+	return int32(colIdx - 1), nil
+}
+
 func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	masterObjRef *ObjectRef, masterTableDef *TableDef,
 	baseNodeId int32, tableDef *TableDef, indexDef *plan.IndexDef,
@@ -3139,20 +3154,24 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 
 	// join conditions
 	// Example :-
-	//  ( (serial_full('a', a, c) = __mo_index_idx_col) or (serial_full('b', b, c) = __mo_index_idx_col) )
+	//  ( (serial_full('1', a, c) = __mo_index_idx_col) or (serial_full('1', b, c) = __mo_index_idx_col) )
 	var joinConds *Expr
 	for idx, part := range indexDef.Parts {
-		// serial_full("col1", col1, pk)
+		// serial_full("colPos", col1, pk)
 		var leftExpr *Expr
 		leftExprArgs := make([]*Expr, 3)
 		leftExprArgs[0] = makePlan2StringConstExprWithType(part)
+		colPos, err := getColPosFromPart(part)
+		if err != nil {
+			return -1, err
+		}
 		leftExprArgs[1] = &Expr{
-			Typ: typMap[part],
+			Typ: tableDef.Cols[colPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
-					ColPos: int32(posMap[part]),
-					Name:   part,
+					ColPos: colPos,
+					Name:   tableDef.Cols[colPos].Name,
 				},
 			},
 		}
@@ -3166,7 +3185,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 				},
 			},
 		}
-		leftExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", leftExprArgs)
+		leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", leftExprArgs)
 		if err != nil {
 			return -1, err
 		}
