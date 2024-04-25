@@ -136,6 +136,12 @@ func getColIdxFromColRef(col *plan.ColRef) string {
 	return fmt.Sprintf("%d", col.GetColPos()+1)
 }
 
+func getColIdxFromColPos(col int) string {
+	// ColId in ColDef is 1-based
+	// ColPos in ColRef is 0-based
+	return fmt.Sprintf("%d", col+1)
+}
+
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
 	// 1. Vector Index Check

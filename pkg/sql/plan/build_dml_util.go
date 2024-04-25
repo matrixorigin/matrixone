@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -2469,18 +2468,14 @@ func buildSerialFullAndPKColsProj(builder *QueryBuilder, bindCtx *BindContext, t
 
 	//3.i build serial_full("1", a, pk)
 	serialArgs := make([]*plan.Expr, 3)
-	serialArgs[0] = makePlan2StringConstExprWithType(part)
-	colPos, err := getColPosFromPart(part)
-	if err != nil {
-		return nil, err
-	}
+	serialArgs[0] = makePlan2StringConstExprWithType(getColIdxFromColPos(colsPos[part]))
 	serialArgs[1] = &Expr{
-		Typ: tableDef.Cols[colPos].Typ,
+		Typ: *colsType[part],
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
-				ColPos: colPos,
-				Name:   tableDef.Cols[colPos].Name,
+				ColPos: int32(colsPos[part]),
+				Name:   part,
 			},
 		},
 	}
@@ -3102,16 +3097,6 @@ func appendDeleteIndexTablePlan(
 	return lastNodeId, nil
 }
 
-func getColPosFromPart(part string) (int32, error) {
-	// NOTE: part will have ColIdx which is 1 based index.
-	// We need to convert it to 0 based index to be used in colPos.
-	colIdx, err := strconv.ParseUint(part, 10, 64)
-	if err != nil {
-		return -1, err
-	}
-	return int32(colIdx - 1), nil
-}
-
 func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	masterObjRef *ObjectRef, masterTableDef *TableDef,
 	baseNodeId int32, tableDef *TableDef, indexDef *plan.IndexDef,
@@ -3160,18 +3145,14 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 		// serial_full("colPos", col1, pk)
 		var leftExpr *Expr
 		leftExprArgs := make([]*Expr, 3)
-		leftExprArgs[0] = makePlan2StringConstExprWithType(part)
-		colPos, err := getColPosFromPart(part)
-		if err != nil {
-			return -1, err
-		}
+		leftExprArgs[0] = makePlan2StringConstExprWithType(getColIdxFromColPos(posMap[part]))
 		leftExprArgs[1] = &Expr{
-			Typ: tableDef.Cols[colPos].Typ,
+			Typ: typMap[part],
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
-					ColPos: colPos,
-					Name:   tableDef.Cols[colPos].Name,
+					ColPos: int32(posMap[part]),
+					Name:   part,
 				},
 			},
 		}
@@ -3185,7 +3166,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 				},
 			},
 		}
-		leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", leftExprArgs)
+		leftExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", leftExprArgs)
 		if err != nil {
 			return -1, err
 		}
