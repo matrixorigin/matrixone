@@ -214,11 +214,9 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 	if taskId == math.MaxUint64 {
 		platform = "CN"
 		v2.TaskCNMergeScheduledByCounter.Inc()
-		v2.TaskCNMergedBlocksCounter.Add(float64(blkn))
 		v2.TaskCNMergedSizeCounter.Add(float64(osize))
 	} else {
 		v2.TaskDNMergeScheduledByCounter.Inc()
-		v2.TaskDNMergedBlocksCounter.Add(float64(blkn))
 		v2.TaskDNMergedSizeCounter.Add(float64(osize))
 	}
 	logutil.Infof(
