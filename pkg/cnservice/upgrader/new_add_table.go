@@ -405,7 +405,7 @@ var MoSessionsView = &table.Table{
 		table.StringColumn("txn_id", "the id of the transaction"),
 		table.StringColumn("user", "the user name"),
 	},
-	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_sessions` AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp",
 	//actually drop view here
 	CreateTableSql: "drop view if exists `mo_catalog`.`mo_sessions`;",
 }
@@ -422,7 +422,7 @@ var MoConfigurationsView = &table.Table{
 		table.StringColumn("default_value", "the default value of the configuration item"),
 		table.StringColumn("internal", "the configuration item is internal or external"),
 	},
-	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_configurations` AS SELECT * FROM mo_configurations() AS mo_configurations_tmp;",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp",
 	//actually drop view here
 	CreateTableSql: "drop view if exists `mo_catalog`.`mo_configurations`;",
 }
@@ -699,6 +699,8 @@ var needUpgradeExistingView = []*table.Table{
 	InformationSchemaPARTITIONS,
 	InformationSchemaTABLES,
 	processlistView,
+	MoSessionsView,
+	MoConfigurationsView,
 	MoLocksView,
 	MoVariablesView,
 	MoTransactionsView,
