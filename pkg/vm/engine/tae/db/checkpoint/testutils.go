@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -99,13 +100,12 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Durati
 		default:
 			err := r.ForceIncrementalCheckpoint(end, false)
 			if err != nil {
-				if !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
-					return err
-				} else {
+				if dbutils.IsRetrieableCheckpoint(err) {
 					interval := versionInterval * time.Millisecond / 400
 					time.Sleep(interval)
 					break
 				}
+				return err
 			}
 			r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
 				force:    true,
@@ -193,8 +193,7 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 	now := time.Now()
 	prev := r.MaxCheckpoint()
 	if prev != nil && !prev.IsFinished() {
-		logutil.Errorf("prev checkpoint not finished")
-		return moerr.NewTAENeedRetryNoCtx()
+		return moerr.NewPrevCheckpointNotFinished()
 	}
 
 	if prev != nil && end.LessEq(&prev.end) {
