@@ -405,13 +405,14 @@ func (p *PartitionState) HandleObjectDelete(
 
 func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch, fs fileservice.FileService) {
 
-	var numDeleted, blockDeleted, scanCnt int64
+	//var numDeleted, blockDeleted, scanCnt int64
+	var numDeleted int64
 	statsVec := mustVectorFromProto(bat.Vecs[2])
 	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
 	sortedCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[4]))
 	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
 	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[8]))
-	startTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[9]))
+	//startTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[9]))
 	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[11]))
 
 	for idx := 0; idx < len(stateCol); idx++ {
@@ -505,7 +506,6 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 		// for appendable object, gc rows when delete object
 		iter := p.rows.Copy().Iter()
 		objID := objEntry.ObjectStats.ObjectName().ObjectId()
-		trunctPoint := startTSCol[idx]
 		blkCnt := objEntry.ObjectStats.BlkCnt()
 		for i := uint32(0); i < blkCnt; i++ {
 
@@ -519,26 +519,21 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 				if entry.BlockID != *blkID {
 					break
 				}
-				scanCnt++
+				//scanCnt++
 
-				// if the inserting block is appendable, need to delete the rows for it;
-				// if the inserting block is non-appendable and has delta location, need to delete
-				// the deletes for it.
+				// if the inserting object is appendable, need to delete the rows for it;
 				if objEntry.EntryState {
-					if entry.Time.LessEq(&trunctPoint) {
-						// delete the row
-						p.rows.Delete(entry)
+					p.rows.Delete(entry)
 
-						// delete the row's primary index
-						if objEntry.EntryState && len(entry.PrimaryIndexBytes) > 0 {
-							p.primaryIndex.Delete(&PrimaryIndexEntry{
-								Bytes:      entry.PrimaryIndexBytes,
-								RowEntryID: entry.ID,
-							})
-						}
-						numDeleted++
-						blockDeleted++
+					// delete the row's primary index
+					if len(entry.PrimaryIndexBytes) > 0 {
+						p.primaryIndex.Delete(&PrimaryIndexEntry{
+							Bytes:      entry.PrimaryIndexBytes,
+							RowEntryID: entry.ID,
+						})
 					}
+					numDeleted++
+					//blockDeleted++
 				}
 
 				//it's tricky here.
@@ -550,15 +545,15 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 				//   from the checkpoint, then apply the block meta into PartitionState.blocks.
 				// So , if the above scenario happens, we need to set the non-appendable block into
 				// PartitionState.dirtyBlocks.
-				if !objEntry.EntryState && !objEntry.HasDeltaLoc {
-					p.dirtyBlocks.Set(entry.BlockID)
-					break
-				}
+				//if !objEntry.EntryState && !objEntry.HasDeltaLoc {
+				//	p.dirtyBlocks.Set(entry.BlockID)
+				//	break
+				//}
 			}
 			iter.Release()
 
 			// if there are no rows for the block, delete the block from the dirty
-			if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
+			if objEntry.EntryState && p.dirtyBlocks.Len() > 0 {
 				p.dirtyBlocks.Delete(*blkID)
 			}
 		}
@@ -778,19 +773,12 @@ func (p *PartitionState) HandleMetadataInsert(
 					break
 				}
 				scanCnt++
-				//it's tricky here.
-				//Due to consuming lazily the checkpoint,
-				//we have to take the following scenario into account:
-				//1. CN receives deletes for a non-appendable block from the log tail,
-				//   then apply the deletes into PartitionState.rows.
-				//2. CN receives block meta of the above non-appendable block to be inserted
-				//   from the checkpoint, then apply the block meta into PartitionState.blocks.
-				// So , if the above scenario happens, we need to set the non-appendable block into
-				// PartitionState.dirtyBlocks.
-				if !isAppendable && isEmptyDelta {
-					p.dirtyBlocks.Set(blockID)
-					break
-				}
+				//HandleRowsDelete had already set the block into dirtyBlocks when lazily loads checkpoints,so
+				//comment the follow code
+				//if !isAppendable && isEmptyDelta {
+				//	p.dirtyBlocks.Set(blockID)
+				//	break
+				//}
 
 				// if the inserting block is appendable, need to delete the rows for it;
 				// if the inserting block is non-appendable and has delta location, need to delete
@@ -801,7 +789,7 @@ func (p *PartitionState) HandleMetadataInsert(
 						p.rows.Delete(entry)
 
 						// delete the row's primary index
-						if isAppendable && len(entry.PrimaryIndexBytes) > 0 {
+						if len(entry.PrimaryIndexBytes) > 0 {
 							p.primaryIndex.Delete(&PrimaryIndexEntry{
 								Bytes:      entry.PrimaryIndexBytes,
 								RowEntryID: entry.ID,
@@ -850,9 +838,11 @@ func (p *PartitionState) HandleMetadataInsert(
 				// objEntry.CreateTime is empty.
 				// and it's temporary.
 				// Related dataObjectsByCreateTS will be set in HandleObjectInsert.
-				if !objEntry.CreateTime.IsEmpty() {
-					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
-				}
+				//FIXME:: If objEntry.HasDeltaloc = true, then need to set dataObjectsByCreateTS, otherwise leads to
+				// dup or ww conflict.
+				//if !objEntry.CreateTime.IsEmpty() {
+				p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+				//}
 			} else {
 
 				objEntry = objPivot
