@@ -190,8 +190,20 @@ func (t *CNMergeTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), err
 	return r, d, release, e
 }
 
-func (t *CNMergeTask) GetRowSize() uint32 {
-	return t.targets[0].OriginSize() / t.targets[0].Rows()
+func (t *CNMergeTask) GetTotalSize() uint32 {
+	totalSize := uint32(0)
+	for _, obj := range t.targets {
+		totalSize += obj.OriginSize()
+	}
+	return totalSize
+}
+
+func (t *CNMergeTask) GetTotalRowCnt() uint32 {
+	totalRowCnt := uint32(0)
+	for _, obj := range t.targets {
+		totalRowCnt += obj.Rows()
+	}
+	return totalRowCnt
 }
 
 func (t *CNMergeTask) prepareCommitEntry() *api.MergeCommitEntry {

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 type Merger interface {
@@ -60,9 +61,11 @@ type merger[T any] struct {
 
 	mustColFunc func(*vector.Vector) []T
 
-	rowPerBlk uint32
-	rowSize   uint32
-	objSize   uint32
+	totalRowCnt   uint32
+	totalSize     uint32
+	rowPerBlk     uint32
+	rowSize       uint32
+	targetObjSize uint32
 }
 
 func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, mustColFunc func(*vector.Vector) []T) Merger {
@@ -81,12 +84,13 @@ func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, 
 		accObjBlkCnts:    host.GetAccBlkCnts(),
 		objBlkCnts:       host.GetBlkCnts(),
 		rowPerBlk:        host.GetBlockMaxRows(),
-		objSize:          host.GetTargetObjSize(),
-		rowSize:          host.GetRowSize(),
+		targetObjSize:    host.GetTargetObjSize(),
+		totalSize:        host.GetTotalSize(),
+		totalRowCnt:      host.GetTotalRowCnt(),
 		loadedObjBlkCnts: make([]int, size),
 		mustColFunc:      mustColFunc,
 	}
-
+	m.rowSize = m.totalSize / m.totalRowCnt
 	totalBlkCnt := 0
 	for _, cnt := range m.objBlkCnts {
 		totalBlkCnt += cnt
@@ -117,6 +121,7 @@ func (m *merger[T]) Merge(ctx context.Context) {
 	blkCnt := 0
 	bufferRowCnt := 0
 	objRowCnt := uint32(0)
+	mergedRowCnt := uint32(0)
 	commitEntry := m.host.GetCommitEntry()
 	for m.heap.Len() != 0 {
 		select {
@@ -147,6 +152,7 @@ func (m *merger[T]) Merge(ctx context.Context) {
 
 		bufferRowCnt++
 		objRowCnt++
+		mergedRowCnt++
 		// write new block
 		if bufferRowCnt == int(m.rowPerBlk) {
 			bufferRowCnt = 0
@@ -163,14 +169,13 @@ func (m *merger[T]) Merge(ctx context.Context) {
 			m.buffer.CleanOnlyData()
 
 			// write new object
-			if objRowCnt*m.rowSize == m.objSize {
+			if m.needNewObject(blkCnt, objRowCnt, mergedRowCnt) {
 				// write object and reset writer
 				m.syncObject(ctx)
 				// reset writer after sync
 				blkCnt = 0
 				objRowCnt = 0
 				objCnt++
-
 			}
 		}
 
@@ -192,6 +197,22 @@ func (m *merger[T]) Merge(ctx context.Context) {
 	if blkCnt > 0 {
 		m.syncObject(ctx)
 	}
+}
+
+func (m *merger[T]) needNewObject(blkCnt int, objRowCnt, mergedRowCnt uint32) bool {
+	if m.targetObjSize == 0 {
+		if blkCnt == int(options.DefaultBlocksPerObject) {
+			return true
+		}
+		return false
+	}
+
+	if objRowCnt*m.rowSize > m.targetObjSize {
+		if (m.totalRowCnt-mergedRowCnt)*m.rowSize > m.targetObjSize {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *merger[T]) nextPos() uint32 {

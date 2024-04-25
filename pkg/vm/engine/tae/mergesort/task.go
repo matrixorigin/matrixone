@@ -53,7 +53,8 @@ type MergeTaskHost interface {
 	GetAccBlkCnts() []int
 	GetSortKeyType() types.Type
 	LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error)
-	GetRowSize() uint32
+	GetTotalSize() uint32
+	GetTotalRowCnt() uint32
 	GetBlockMaxRows() uint32
 	GetTargetObjSize() uint32
 }
