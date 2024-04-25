@@ -164,13 +164,11 @@ func (c *objStatArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *objStatArg) String() string {
-	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s verbose %v", c.tbl.ID, c.tbl.GetLastestSchema().Name, c.verbose)
+		return fmt.Sprintf("%d-%s verbose %v", c.tbl.ID, c.tbl.GetLastestSchema().Name, c.verbose)
 	} else {
-		t = fmt.Sprintf("list with top %d", c.topk)
+		return fmt.Sprintf("list with top %d", c.topk)
 	}
-	return t
 }
 
 func (c *objStatArg) Run() error {
