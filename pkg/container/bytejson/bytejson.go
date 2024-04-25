@@ -17,7 +17,9 @@ package bytejson
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strconv"
@@ -25,6 +27,7 @@ import (
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
@@ -679,8 +682,12 @@ func ParseJsonByteFromString(s string) ([]byte, error) {
 }
 
 func ParseJsonByteFromString2(s string) ([]byte, error) {
+	if !json.Valid([]byte(s)) {
+		return nil, moerr.NewInvalidInputNoCtx("invalid json: %s", s)
+	}
 	p := parser{
 		iter: jsoniter.ParseString(jsoniter.ConfigDefault, s),
+		src:  s,
 		dst:  make([]byte, 0, len(s)+1),
 	}
 	err := p.do()
@@ -690,8 +697,19 @@ func ParseJsonByteFromString2(s string) ([]byte, error) {
 	return p.dst, nil
 }
 
+func init() {
+	reuse.CreatePool[group](
+		func() *group {
+			return &group{}
+		},
+		func(g *group) { g.reset() },
+		reuse.DefaultOptions[group](),
+	)
+}
+
 type parser struct {
 	iter *jsoniter.Iterator
+	src  string
 	dst  []byte
 }
 
@@ -701,7 +719,21 @@ type group struct {
 	values []any
 }
 
+func (g group) TypeName() string {
+	return "bytejson.group"
+}
+
+func (g *group) reset() {
+	g.obj = false
+	g.keys = g.keys[:0]
+	g.values = g.values[:0]
+}
+
 func (p *parser) parseNumber(in json.Number) (TpCode, []byte, error) {
+	if !json.Valid([]byte(in)) {
+		return 0, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
+	}
+
 	var data [8]byte
 	//check if it is a float
 	if strings.ContainsAny(string(in), "Ee.") {
@@ -735,81 +767,92 @@ func (p *parser) parseNumber(in json.Number) (TpCode, []byte, error) {
 }
 
 func (p *parser) do() error {
-	switch p.iter.WhatIsNext() {
-	// case jsoniter.InvalidValue:
-	case jsoniter.StringValue:
-
-	case jsoniter.NumberValue:
-	case jsoniter.NilValue:
-	case jsoniter.BoolValue:
-	case jsoniter.ArrayValue:
-		p.writeAny(true, p.parseArray())
-	case jsoniter.ObjectValue:
-		p.writeAny(true, p.parseObject())
+	val := p.nextValue()
+	p.iter.WhatIsNext()
+	if !errors.Is(p.iter.Error, io.EOF) {
+		return moerr.NewInvalidInputNoCtx("invalid json: %s", p.src)
 	}
-
+	_, _, err := p.writeAny(true, val)
+	if err != nil {
+		return err
+	}
+	if p.err() != nil {
+		return moerr.NewInvalidInputNoCtx("%v", p.iter.Error)
+	}
 	return nil
 }
 
 func (p *parser) parseArray() *group {
-	g := group{}
+	if p.err() != nil {
+		return nil
+	}
+	g := reuse.Alloc[group](nil)
+	g.obj = false
 	for {
 		if !p.iter.ReadArray() {
-			return &g
+			return g
 		}
-		switch p.iter.WhatIsNext() {
-		// case jsoniter.InvalidValue:
-		case jsoniter.StringValue:
-			g.values = append(g.values, p.iter.ReadString())
-		case jsoniter.NumberValue:
-			g.values = append(g.values, p.iter.ReadNumber())
-		case jsoniter.NilValue:
-			p.iter.ReadNil()
-			g.values = append(g.values, nil)
-		case jsoniter.BoolValue:
-			g.values = append(g.values, p.iter.ReadBool())
-		case jsoniter.ArrayValue:
-			g.values = append(g.values, p.parseArray())
-		case jsoniter.ObjectValue:
-			g.values = append(g.values, p.parseObject())
+		val := p.nextValue()
+		if p.err() != nil {
+			defer reuse.Free(g, nil)
+			return nil
 		}
+		g.values = append(g.values, val)
 	}
 }
 
 func (p *parser) parseObject() *group {
-	g := group{
-		obj: true,
+	if p.err() != nil {
+		return nil
 	}
-	for {
-		s := p.iter.ReadObject()
-		if s == "" {
-			return &g
-		}
+	g := reuse.Alloc[group](nil)
+	g.obj = true
+	p.iter.ReadObjectCB(func(i *jsoniter.Iterator, s string) bool {
 		g.keys = append(g.keys, s)
 
-		switch p.iter.WhatIsNext() {
-		// case jsoniter.InvalidValue:
-		case jsoniter.StringValue:
-			g.values = append(g.values, p.iter.ReadString())
-		case jsoniter.NumberValue:
-			g.values = append(g.values, p.iter.ReadNumber())
-		case jsoniter.NilValue:
-			p.iter.ReadNil()
-			g.values = append(g.values, nil)
-		case jsoniter.BoolValue:
-			g.values = append(g.values, p.iter.ReadBool())
-		case jsoniter.ArrayValue:
-			g.values = append(g.values, p.parseArray())
-		case jsoniter.ObjectValue:
-			g.values = append(g.values, p.parseObject())
-		}
+		val := p.nextValue()
+		g.values = append(g.values, val)
+		return p.err() == nil
+	})
+	if p.err() != nil {
+		defer reuse.Free(g, nil)
+		return nil
 	}
+	return g
 }
 
-func (p *parser) writeAny(raw bool, v any) (TpCode, uint32) {
+func (p *parser) nextValue() any {
+	if p.err() != nil {
+		return nil
+	}
+	tp := p.iter.WhatIsNext()
+	switch tp {
+	case jsoniter.InvalidValue:
+		p.iter.ReportError("nextValue", "invalid value")
+	case jsoniter.StringValue:
+		return p.iter.ReadString()
+	case jsoniter.NumberValue:
+		return p.iter.ReadNumber()
+	case jsoniter.NilValue:
+		p.iter.ReadNil()
+		return nil
+	case jsoniter.BoolValue:
+		return p.iter.ReadBool()
+	case jsoniter.ArrayValue:
+		return p.parseArray()
+	case jsoniter.ObjectValue:
+		return p.parseObject()
+	default:
+		p.iter.ReportError("nextValue", "unknown value type")
+	}
+	return nil
+}
+
+func (p *parser) writeAny(raw bool, v any) (TpCode, uint32, error) {
 	start := len(p.dst)
 	switch val := v.(type) {
 	case *group:
+		defer reuse.Free(val, nil)
 		if val.obj {
 			obj := val
 			keys := obj.keys
@@ -835,7 +878,10 @@ func (p *parser) writeAny(raw bool, v any) (TpCode, uint32) {
 			}
 
 			for i := range keys {
-				tp, length := p.writeAny(false, obj.values[i])
+				tp, length, err := p.writeAny(false, obj.values[i])
+				if err != nil {
+					return 0, 0, err
+				}
 				o := baseOffset + 8 + n*6 + i*5
 				p.dst[o] = byte(tp)
 				if tp == TpCodeLiteral {
@@ -847,7 +893,7 @@ func (p *parser) writeAny(raw bool, v any) (TpCode, uint32) {
 			}
 
 			endian.PutUint32(p.dst[baseOffset+4:], loc) // object buf length
-			return TpCodeObject, uint32(len(p.dst) - start)
+			return TpCodeObject, uint32(len(p.dst) - start), nil
 		}
 
 		arr := val
@@ -863,7 +909,10 @@ func (p *parser) writeAny(raw bool, v any) (TpCode, uint32) {
 
 		loc := uint32(8 + n*5)
 		for i := 0; i < n; i++ {
-			tp, length := p.writeAny(false, arr.values[i])
+			tp, length, err := p.writeAny(false, arr.values[i])
+			if err != nil {
+				return 0, 0, err
+			}
 			o := baseOffset + 8 + i*5
 			p.dst[o] = byte(tp)
 			if tp == TpCodeLiteral {
@@ -875,7 +924,7 @@ func (p *parser) writeAny(raw bool, v any) (TpCode, uint32) {
 		}
 
 		endian.PutUint32(p.dst[baseOffset+4:], loc) // array buf length
-		return TpCodeArray, uint32(len(p.dst) - start)
+		return TpCodeArray, uint32(len(p.dst) - start), nil
 	case bool:
 		lit := LiteralFalse
 		if val {
@@ -884,26 +933,37 @@ func (p *parser) writeAny(raw bool, v any) (TpCode, uint32) {
 		if raw {
 			p.dst = append(p.dst, byte(TpCodeLiteral), lit)
 		}
-		return TpCodeLiteral, uint32(lit)
+		return TpCodeLiteral, uint32(lit), nil
 	case nil:
 		if raw {
 			p.dst = append(p.dst, byte(TpCodeLiteral), LiteralNull)
 		}
-		return TpCodeLiteral, uint32(LiteralNull)
+		return TpCodeLiteral, uint32(LiteralNull), nil
 	case json.Number:
-		tp, data, _ := p.parseNumber(val)
+		tp, data, err := p.parseNumber(val)
+		if err != nil {
+			return 0, 0, err
+		}
 		if raw {
 			p.dst = append(p.dst, byte(tp))
 		}
 		p.dst = append(p.dst, data...)
-		return tp, uint32(len(p.dst) - start)
+		return tp, uint32(len(p.dst) - start), nil
 	case string:
 		if raw {
 			p.dst = append(p.dst, byte(TpCodeString))
 		}
 		p.dst = addString(p.dst, val)
-		return TpCodeString, uint32(len(p.dst) - start)
+		return TpCodeString, uint32(len(p.dst) - start), nil
 	default:
-		panic("x")
+		return 0, 0, moerr.NewInvalidInputNoCtx("unknown type %T", v)
 	}
+}
+
+func (p *parser) err() error {
+	err := p.iter.Error
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
 }

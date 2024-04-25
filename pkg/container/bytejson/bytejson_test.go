@@ -15,10 +15,10 @@
 package bytejson
 
 import (
+	"encoding/json"
 	"strconv"
 	"testing"
 
-	jsoniter "github.com/json-iterator/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -518,34 +518,59 @@ func TestByteJson_Unquote(t *testing.T) {
 	}
 }
 
-func TestParseJsonByteFromString2(t *testing.T) {
-	s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
-	want, err := ParseJsonByteFromString(s)
-	require.NoError(t, err)
-
-	got, err := ParseJsonByteFromString2(s)
-	require.NoError(t, err)
-
-	require.Equal(t, want, got)
-}
-
 func BenchmarkParseJsonByteFromString(b *testing.B) {
-	s := `{"a":{"b":{"c":{"d":[null,false,true,"123","abc",["1","2","3"],"123.456"]}}}}`
-	//s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
+	s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
 	for i := 0; i < b.N; i++ {
 		ParseJsonByteFromString(s)
 	}
-	// BenchmarkParseJsonByteFromString-4        187210              5936 ns/op            4616 B/op         60 allocs/op
+	// goos: linux
+	// goarch: amd64
+	// pkg: github.com/matrixorigin/matrixone/pkg/container/bytejson
+	// cpu: Intel(R) Core(TM) i3-9100F CPU @ 3.60GHz
+	// === RUN   BenchmarkParseJsonByteFromString
+	// BenchmarkParseJsonByteFromString
+	// BenchmarkParseJsonByteFromString-4        190492              6829 ns/op            4616 B/op         60 allocs/op
 }
 
 func BenchmarkParseJsonByteFromString2(b *testing.B) {
-	// s := `{"a":{"b":{"c":{"d":{"a":1,"b":2,"c":3,"d":4,"e":5}}}}}`
-	s := `{"a":{"b":{"c":{"d":[null,false,true,"123","abc",["1","2","3"],"123.456"]}}}}`
+	s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
 	for i := 0; i < b.N; i++ {
-		p := parser{
-			iter: jsoniter.ParseString(jsoniter.ConfigDefault, s),
-		}
-		p.do()
+		ParseJsonByteFromString2(s)
 	}
-	// BenchmarkParseJsonByteFromString2-4        68478             17034 ns/op            5152 B/op        131 allocs/op
+	// goos: linux
+	// goarch: amd64
+	// pkg: github.com/matrixorigin/matrixone/pkg/container/bytejson
+	// cpu: Intel(R) Core(TM) i3-9100F CPU @ 3.60GHz
+	// === RUN   BenchmarkParseJsonByteFromString2
+	// BenchmarkParseJsonByteFromString2
+	// BenchmarkParseJsonByteFromString2-4       243330              4863 ns/op            1416 B/op         37 allocs/op
+}
+
+func FuzzParseJsonByteFromString(f *testing.F) {
+	f.Add(`{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`)
+	f.Add("0000")
+	f.Add("\"\xec\"")
+	f.Add("0A00")
+	f.Add("1E1000")
+	f.Add("{\"\":")
+	f.Add("{\"\":0}")
+	f.Fuzz(func(t *testing.T, s string) {
+		valid := true
+		var v any
+		err := json.Unmarshal([]byte(s), &v)
+		if err != nil {
+			valid = false
+		}
+		data, err := ParseJsonByteFromString2(s)
+		if valid {
+			require.NoError(t, err)
+
+			var bj ByteJson
+			bj.Unmarshal(data)
+
+			require.JSONEq(t, s, bj.String())
+			return
+		}
+		require.NotNil(t, err)
+	})
 }

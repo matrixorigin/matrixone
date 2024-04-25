@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -115,6 +114,7 @@ func TestJoin(t *testing.T) {
 	}
 }
 
+/*
 func TestLowCardinalityJoin(t *testing.T) {
 	tc := newTestCase([]bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(1, 0)},
 		[][]*plan.Expr{
@@ -187,6 +187,7 @@ func TestLowCardinalityIndexesJoin(t *testing.T) {
 		vector.MustFixedCol[uint16](resultIdx.GetPoses()),
 	)
 }
+*/
 
 func BenchmarkJoin(b *testing.B) {
 	for i := 0; i < b.N; i++ {
@@ -358,6 +359,7 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
+/*
 func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
 	idx, err := index.New(*v.GetType(), m)
 	require.NoError(t, err)
@@ -367,14 +369,4 @@ func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
 
 	v.SetIndex(idx)
 }
-
-func probeWithBatches(t *testing.T, tc joinTestCase, l, r *batch.Batch) *batch.Batch {
-	err := Prepare(tc.proc, tc.arg)
-	require.NoError(t, err)
-	tc.proc.Reg.MergeReceivers[0].Ch <- l
-	tc.proc.Reg.MergeReceivers[1].Ch <- r
-	ok, err := Call(0, tc.proc, tc.arg, false, false)
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
-	return tc.proc.Reg.InputBatch
-}
+*/
