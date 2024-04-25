@@ -90,7 +90,7 @@ type container struct {
 	buf *batch.Batch
 }
 
-func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if ctr := arg.ctr; ctr != nil {
 		mp := proc.Mp()
 		for i := range ctr.batchList {

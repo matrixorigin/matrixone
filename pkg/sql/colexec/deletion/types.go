@@ -132,11 +132,11 @@ type DeleteCtx struct {
 	PrimaryKeyIdx         int
 }
 
-func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.cleanBatch(proc)
 	arg.affectedRows = 0
-	if arg.resBat != nil {
-		arg.resBat.Clean(proc.Mp())
-		arg.resBat = nil
+	if arg.ctr != nil {
+		arg.ctr.state = vm.Build
 	}
 }
 
@@ -166,6 +166,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			arg.ctr.pool = nil
 		}
 	}
+	arg.cleanBatch(proc)
+}
+
+func (arg *Argument) cleanBatch(proc *process.Process) {
 	if arg.resBat != nil {
 		arg.resBat.Clean(proc.Mp())
 		arg.resBat = nil

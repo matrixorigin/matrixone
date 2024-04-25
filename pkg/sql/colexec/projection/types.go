@@ -71,7 +71,7 @@ type container struct {
 	uafs          []func(v, w *vector.Vector) error // vector.GetUnionAllFunction
 }
 
-func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	arg.cleanBuf(proc)
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Alloc(int64(arg.maxAllocSize))

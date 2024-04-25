@@ -208,7 +208,7 @@ func (arg *Argument) SimpleDup() *Argument {
 	return a
 }
 
-func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	arg.cleanBuf(proc)
 	if arg.ctr != nil {
 		if arg.ctr.intHashMap != nil {

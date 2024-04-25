@@ -110,13 +110,17 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()
+
 		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
+
+		ctr.maxAllocSize = 0
+		ctr.state = Build
 
 		ctr.batchRowCount = 0
 		ctr.maxAllocSize = 0

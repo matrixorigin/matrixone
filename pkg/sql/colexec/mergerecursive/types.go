@@ -69,7 +69,7 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		for _, b := range arg.ctr.bats {
 			if b != nil {

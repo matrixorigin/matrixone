@@ -792,7 +792,7 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 	return arg
 }
 
-func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.rt == nil {
 		return
 	}

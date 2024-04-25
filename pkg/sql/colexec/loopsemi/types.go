@@ -86,7 +86,7 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if ctr := arg.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 	}

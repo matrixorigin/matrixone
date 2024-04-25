@@ -91,7 +91,7 @@ type container struct {
 	inBuckets []uint8
 }
 
-func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		if ctr.btc != nil {
