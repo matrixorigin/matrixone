@@ -50,15 +50,6 @@ func resetGenerateSeriesState(proc *process.Process, arg *Argument) error {
 		arg.generateSeries.state = genBatch
 
 		defer func() {
-			if startVec != nil {
-				startVec.Free(proc.Mp())
-			}
-			if endVec != nil {
-				endVec.Free(proc.Mp())
-			}
-			if stepVec != nil {
-				stepVec.Free(proc.Mp())
-			}
 			if startVecTmp != nil {
 				startVecTmp.Free(proc.Mp())
 			}
@@ -149,9 +140,6 @@ func resetGenerateSeriesState(proc *process.Process, arg *Argument) error {
 			arg.generateSeries.start = newStartSlice[0]
 			arg.generateSeries.end = newEndSlice[0]
 			arg.generateSeries.last = newEndSlice[0]
-			if stepVec == nil {
-				return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime must specify step")
-			}
 			stepSlice := vector.MustStrCol(stepVec)
 			arg.generateSeries.step = stepSlice[0]
 		default:

@@ -157,7 +157,7 @@ func (rpb *rangePartitionBuilder) buildEvalPartitionExpression(ctx context.Conte
 		if err != nil {
 			return err
 		}
-		partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, &plan.Type{
+		partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, plan.Type{
 			Id:          int32(types.T_int32),
 			NotNullable: true,
 		})
@@ -177,7 +177,7 @@ func (rpb *rangePartitionBuilder) buildEvalPartitionExpression(ctx context.Conte
 		if err != nil {
 			return err
 		}
-		partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, &plan.Type{
+		partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, plan.Type{
 			Id:          int32(types.T_int32),
 			NotNullable: true,
 		})

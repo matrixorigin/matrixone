@@ -381,7 +381,7 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef) []*plan.
 			},
 		}
 
-		expr, _ = makePlan2CastExpr(stmt.Param.Ctx, expr, &typ)
+		expr, _ = makePlan2CastExpr(stmt.Param.Ctx, expr, typ)
 		ret = append(ret, expr)
 	}
 	return ret

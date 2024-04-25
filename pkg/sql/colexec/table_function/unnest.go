@@ -72,11 +72,11 @@ func unnestPrepare(proc *process.Process, arg *Argument) error {
 	if len(arg.Args) == 1 {
 		vType := types.T_varchar.ToType()
 		bType := types.T_bool.ToType()
-		arg.Args = append(arg.Args, &plan.Expr{Typ: *plan2.MakePlan2Type(&vType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Sval{Sval: "$"}}}})
-		arg.Args = append(arg.Args, &plan.Expr{Typ: *plan2.MakePlan2Type(&bType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Bval{Bval: false}}}})
+		arg.Args = append(arg.Args, &plan.Expr{Typ: plan2.MakePlan2Type(&vType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Sval{Sval: "$"}}}})
+		arg.Args = append(arg.Args, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Bval{Bval: false}}}})
 	} else if len(arg.Args) == 2 {
 		bType := types.T_bool.ToType()
-		arg.Args = append(arg.Args, &plan.Expr{Typ: *plan2.MakePlan2Type(&bType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Bval{Bval: false}}}})
+		arg.Args = append(arg.Args, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Bval{Bval: false}}}})
 	}
 	dt, err := json.Marshal(param)
 	if err != nil {
@@ -103,15 +103,6 @@ func unnestCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResu
 	defer func() {
 		if err != nil && rbat != nil {
 			rbat.Clean(proc.Mp())
-		}
-		if jsonVec != nil {
-			jsonVec.Free(proc.Mp())
-		}
-		if pathVec != nil {
-			pathVec.Free(proc.Mp())
-		}
-		if outerVec != nil {
-			outerVec.Free(proc.Mp())
 		}
 	}()
 	if bat == nil {

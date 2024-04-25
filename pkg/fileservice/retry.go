@@ -21,7 +21,7 @@ import (
 
 const maxRetryAttemps = 128
 
-func doWithRetry[T any](
+func DoWithRetry[T any](
 	what string,
 	fn func() (T, error),
 	maxAttemps int,
