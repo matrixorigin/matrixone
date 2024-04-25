@@ -122,7 +122,9 @@ func (arg *Argument) cleanBuf(proc *process.Process) {
 
 func (ctr *container) cleanExecutors() {
 	for i := range ctr.executorsForArgs {
-		ctr.executorsForArgs[i].Free()
+		if ctr.executorsForArgs[i] != nil {
+			ctr.executorsForArgs[i].Free()
+		}
 	}
 	ctr.executorsForArgs = nil
 }

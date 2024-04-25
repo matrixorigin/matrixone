@@ -172,7 +172,9 @@ func (ctr *container) cleanHashMap() {
 
 func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.executorForVecs {
-		ctr.executorForVecs[i].Free()
+		if ctr.executorForVecs[i] != nil {
+			ctr.executorForVecs[i].Free()
+		}
 	}
 	ctr.executorForVecs = nil
 }

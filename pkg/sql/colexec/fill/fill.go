@@ -66,6 +66,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 			}
 			ctr.valVecs[i], err = exe.EvalWithoutResultReusing(proc, []*batch.Batch{b})
 			if err != nil {
+				exe.Free()
 				return err
 			}
 			exe.Free()

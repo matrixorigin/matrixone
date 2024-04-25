@@ -107,7 +107,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanBatch(mp)
 
 		for i := range ctr.executorsForOrderColumn {
-			ctr.executorsForOrderColumn[i].Free()
+			if ctr.executorsForOrderColumn[i] != nil {
+				ctr.executorsForOrderColumn[i].Free()
+			}
 		}
 		ctr.executorsForOrderColumn = nil
 	}
