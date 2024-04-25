@@ -543,13 +543,13 @@ func (a *AwsSDKv2) listObjects(ctx context.Context, params *s3.ListObjectsInput,
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.List.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 list objects",
 		func() (*s3.ListObjectsOutput, error) {
 			return a.client.ListObjects(ctx, params, optFns...)
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 
@@ -563,13 +563,13 @@ func (a *AwsSDKv2) headObject(ctx context.Context, params *s3.HeadObjectInput, o
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Head.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 head object",
 		func() (*s3.HeadObjectOutput, error) {
 			return a.client.HeadObject(ctx, params, optFns...)
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 
@@ -606,13 +606,13 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}
 			params.Range = &rang
-			output, err := doWithRetry(
+			output, err := DoWithRetry(
 				"s3 get object",
 				func() (*s3.GetObjectOutput, error) {
 					return a.client.GetObject(ctx, params, optFns...)
 				},
 				maxRetryAttemps,
-				isRetryableError,
+				IsRetryableError,
 			)
 			if err != nil {
 				return nil, err
@@ -620,7 +620,7 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 			return output.Body, nil
 		},
 		*min,
-		isRetryableError,
+		IsRetryableError,
 	)
 	if err != nil {
 		return nil, err
@@ -638,13 +638,13 @@ func (a *AwsSDKv2) deleteObject(ctx context.Context, params *s3.DeleteObjectInpu
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Delete.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 delete object",
 		func() (*s3.DeleteObjectOutput, error) {
 			return a.client.DeleteObject(ctx, params, optFns...)
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 
@@ -658,13 +658,13 @@ func (a *AwsSDKv2) deleteObjects(ctx context.Context, params *s3.DeleteObjectsIn
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.DeleteMulti.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 delete objects",
 		func() (*s3.DeleteObjectsOutput, error) {
 			return a.client.DeleteObjects(ctx, params, optFns...)
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 
