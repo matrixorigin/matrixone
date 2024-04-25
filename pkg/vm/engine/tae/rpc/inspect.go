@@ -244,8 +244,7 @@ func (c *objectPruneArg) FromCommand(cmd *cobra.Command) (err error) {
 	address, _ := cmd.Flags().GetString("target")
 	c.ack, _ = cmd.Flags().GetInt("ack")
 	c.ago, _ = cmd.Flags().GetDuration("duration")
-	// if c.ago < 24*time.Hour {
-	if c.ago < 5*time.Minute {
+	if c.ago < 24*time.Hour {
 		return moerr.NewInvalidInputNoCtx("pruning objects within 24h is not supported")
 	}
 	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
