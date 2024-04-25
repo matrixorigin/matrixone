@@ -86,11 +86,17 @@ func (r *runner) CleanPenddingCheckpoint() {
 }
 
 func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error {
-	if r.GetPenddingIncrementalCount() != 0 {
-		return nil
-	}
 	if versionInterval == 0 {
 		versionInterval = r.options.globalVersionInterval
+	}
+	if r.GetPenddingIncrementalCount() != 0 {
+		end = r.MaxCheckpoint().GetEnd()
+		r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
+			force:    true,
+			end:      end,
+			interval: versionInterval,
+		})
+		return nil
 	}
 	timeout := time.After(versionInterval)
 	for {
