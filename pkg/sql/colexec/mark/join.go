@@ -404,7 +404,6 @@ func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.
 		return condUnkown, err
 	}
 	vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
-	defer vec.Free(proc.Mp())
 	if err != nil {
 		return condUnkown, err
 	}
