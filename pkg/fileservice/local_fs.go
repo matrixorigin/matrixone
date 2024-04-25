@@ -30,6 +30,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -581,7 +582,9 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 
 			} else {
 				if int64(len(entry.Data)) < entry.Size {
-					entry.Data = make([]byte, entry.Size)
+					vector.onRelease = append(vector.onRelease,
+						malloc.Alloc(int(entry.Size), &entry.Data).Free,
+					)
 				}
 				var n int
 				n, err = io.ReadFull(r, entry.Data)

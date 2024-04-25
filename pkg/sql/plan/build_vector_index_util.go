@@ -70,12 +70,12 @@ func makeMetaTblScanWhereKeyEqVersion(builder *QueryBuilder, bindCtx *BindContex
 
 func makeTableProjectionIncludingNormalizeL2(builder *QueryBuilder, bindCtx *BindContext, tableScanId int32,
 	tableDef *TableDef,
-	typeOriginPk *Type, posOriginPk int,
-	typeOriginVecColumn *Type, posOriginVecColumn int) (int32, error) {
+	typeOriginPk Type, posOriginPk int,
+	typeOriginVecColumn Type, posOriginVecColumn int) (int32, error) {
 
 	normalizeL2, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "normalize_l2", []*Expr{
 		{ // tbl.embedding
-			Typ: *typeOriginVecColumn,
+			Typ: typeOriginVecColumn,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
@@ -97,7 +97,7 @@ func makeTableProjectionIncludingNormalizeL2(builder *QueryBuilder, bindCtx *Bin
 		ProjectList: []*Expr{
 
 			{ // tbl.pk
-				Typ: *typeOriginPk,
+				Typ: typeOriginPk,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -149,8 +149,8 @@ func makeCrossJoinCentroidsMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 
 func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef,
 	leftChildTblId int32, rightChildCentroidsId int32,
-	typeOriginPk *Type, posOriginPk int,
-	typeOriginVecColumn *Type) int32 {
+	typeOriginPk Type, posOriginPk int,
+	typeOriginVecColumn Type) int32 {
 
 	crossJoinTblAndCentroidsId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
@@ -158,7 +158,7 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 		Children: []int32{leftChildTblId, rightChildCentroidsId},
 		ProjectList: []*Expr{
 			{ // centroids.version
-				Typ: *makePlan2Type(&bigIntType),
+				Typ: makePlan2TypeValue(&bigIntType),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 1,
@@ -168,7 +168,7 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 				},
 			},
 			{ // centroids.centroid_id
-				Typ: *makePlan2Type(&bigIntType),
+				Typ: makePlan2TypeValue(&bigIntType),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 1,
@@ -178,7 +178,7 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 				},
 			},
 			{ // tbl.pk
-				Typ: *typeOriginPk,
+				Typ: typeOriginPk,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -188,7 +188,7 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 				},
 			},
 			{ // centroids.centroid
-				Typ: *typeOriginVecColumn,
+				Typ: typeOriginVecColumn,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 1,
@@ -198,7 +198,7 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 				},
 			},
 			{ // tbl.normalize_l2(embedding)
-				Typ: *typeOriginVecColumn,
+				Typ: typeOriginVecColumn,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -345,12 +345,12 @@ func makeMinCentroidIdAndCpKey(builder *QueryBuilder, bindCtx *BindContext,
 func makeFinalProjectWithTblEmbedding(builder *QueryBuilder, bindCtx *BindContext,
 	lastNodeId, minCentroidIdNode int32,
 	tableDef *TableDef,
-	typeOriginPk *Type, posOriginPk int,
-	typeOriginVecColumn *Type, posOriginVecColumn int) (int32, error) {
+	typeOriginPk Type, posOriginPk int,
+	typeOriginVecColumn Type, posOriginVecColumn int) (int32, error) {
 
 	condExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{ // tbl.pk
-			Typ: *DeepCopyType(typeOriginPk),
+			Typ: typeOriginPk,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
@@ -360,7 +360,7 @@ func makeFinalProjectWithTblEmbedding(builder *QueryBuilder, bindCtx *BindContex
 			},
 		},
 		{ // join.pk
-			Typ: *DeepCopyType(typeOriginPk),
+			Typ: typeOriginPk,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 1,
@@ -400,7 +400,7 @@ func makeFinalProjectWithTblEmbedding(builder *QueryBuilder, bindCtx *BindContex
 			DeepCopyExpr(rCentroidsCentroidId),
 			DeepCopyExpr(rTblPk),
 			{ // tbl.pk
-				Typ: *typeOriginVecColumn,
+				Typ: typeOriginVecColumn,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,

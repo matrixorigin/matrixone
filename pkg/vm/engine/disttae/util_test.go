@@ -41,7 +41,7 @@ func makeColExprForTest(idx int32, typ types.T) *plan.Expr {
 	exprType := plan2.MakePlan2Type(&containerType)
 
 	return &plan.Expr{
-		Typ: *exprType,
+		Typ: exprType,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
@@ -66,7 +66,7 @@ func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	retTyp := finfo.GetReturnType()
 
 	return &plan.Expr{
-		Typ: *plan2.MakePlan2Type(&retTyp),
+		Typ: plan2.MakePlan2Type(&retTyp),
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
