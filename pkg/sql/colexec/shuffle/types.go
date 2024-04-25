@@ -75,6 +75,10 @@ type container struct {
 	lastSentBatch *batch.Batch
 }
 
+func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		for i := range arg.ctr.shufflePool {

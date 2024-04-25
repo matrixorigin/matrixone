@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
@@ -590,7 +591,7 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 	return arg
 }
 
-func constructFuzzyFilter(c *Compile, n, right *plan.Node) *fuzzyfilter.Argument {
+func constructFuzzyFilter(n, right *plan.Node) *fuzzyfilter.Argument {
 	pkName := n.TableDef.Pkey.PkeyColName
 	var pkTyp plan.Type
 	if pkName == catalog.CPrimaryKeyColName {
@@ -1595,7 +1596,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	return arg
 }
 
-func constructJoinBuildInstruction(c *Compile, in vm.Instruction, shuffleCnt int, isDup bool) vm.Instruction {
+func constructJoinBuildInstruction(c *Compile, in vm.Instruction, isDup bool) vm.Instruction {
 	switch in.Op {
 	case vm.IndexJoin:
 		arg := in.Arg.(*indexjoin.Argument)
@@ -1614,12 +1615,12 @@ func constructJoinBuildInstruction(c *Compile, in vm.Instruction, shuffleCnt int
 			Op:      vm.HashBuild,
 			Idx:     in.Idx,
 			IsFirst: true,
-			Arg:     constructHashBuild(c, in, c.proc, shuffleCnt, isDup),
+			Arg:     constructHashBuild(in, c.proc, isDup),
 		}
 	}
 }
 
-func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, shuffleCnt int, isDup bool) *hashbuild.Argument {
+func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *hashbuild.Argument {
 	// XXX BUG
 	// relation index of arg.Conditions should be rewritten to 0 here.
 	ret := hashbuild.NewArgument()

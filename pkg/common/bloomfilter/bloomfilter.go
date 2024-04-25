@@ -20,6 +20,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+func (bf *BloomFilter) Reset() {
+	bf.bitmap.Reset()
+	bf.addVals = bf.addVals[:0]
+}
+
 func (bf *BloomFilter) Clean() {
 	bf.bitmap.Reset()
 	bf.bitmap = nil

@@ -61,6 +61,16 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+	for _, bat := range arg.Batchs {
+		if bat != nil {
+			bat.Clean(proc.Mp())
+		}
+	}
+	arg.Batchs = nil
+	arg.idx = 0
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	for _, bat := range arg.Batchs {
 		if bat != nil {

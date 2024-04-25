@@ -65,5 +65,9 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 }

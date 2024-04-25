@@ -131,6 +131,9 @@ type Operator interface {
 	// pipelineFailed marks the process status of the pipeline when the method is called.
 	Free(proc *process.Process, pipelineFailed bool, err error)
 
+	// Clean clean all the memory that can be reused.
+	Clean(proc *process.Process, pipelineFailed bool, err error)
+
 	// String returns the string representation of an operator.
 	String(buf *bytes.Buffer)
 

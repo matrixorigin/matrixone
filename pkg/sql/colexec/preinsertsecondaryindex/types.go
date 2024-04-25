@@ -16,6 +16,7 @@ package preinsertsecondaryindex
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -25,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 type Argument struct {
 	Ctx          context.Context
@@ -68,9 +71,19 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+	arg.cleanBuf(proc)
+	arg.packer.Free()
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	arg.cleanBuf(proc)
+	arg.packer.Free()
+}
+
+func (arg *Argument) cleanBuf(proc *process.Process) {
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())
+		arg.buf = nil
 	}
-	arg.packer.Free()
 }

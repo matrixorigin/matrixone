@@ -110,6 +110,14 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := arg.ctr
+	if ctr != nil {
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
+	}
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {

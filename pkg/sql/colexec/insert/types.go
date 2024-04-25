@@ -91,6 +91,12 @@ type InsertCtx struct {
 	TableDef              *plan.TableDef
 }
 
+func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+	if arg.ctr != nil {
+		arg.cleanBuf(proc)
+	}
+}
+
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -108,10 +114,14 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			arg.ctr.partitionS3Writers = nil
 		}
 
-		if arg.ctr.buf != nil {
-			arg.ctr.buf.Clean(proc.Mp())
-			arg.ctr.buf = nil
-		}
+		arg.cleanBuf(proc)
+	}
+}
+
+func (arg *Argument) cleanBuf(proc *process.Process) {
+	if arg.ctr.buf != nil {
+		arg.ctr.buf.Clean(proc.Mp())
+		arg.ctr.buf = nil
 	}
 }
 

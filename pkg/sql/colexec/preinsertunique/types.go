@@ -16,6 +16,7 @@ package preinsertunique
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -69,9 +70,19 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+	arg.cleanBuf(proc)
+	arg.packers.Free()
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	arg.cleanBuf(proc)
+	arg.packers.Free()
+}
+
+func (arg *Argument) cleanBuf(proc *process.Process) {
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())
+		arg.buf = nil
 	}
-	arg.packers.Free()
 }

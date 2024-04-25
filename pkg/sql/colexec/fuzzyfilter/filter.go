@@ -79,24 +79,28 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	useRoaring := IfCanUseRoaringFilter(types.T(arg.PkTyp.Id))
 
 	if useRoaring {
-		arg.roaringFilter = newroaringFilter(types.T(arg.PkTyp.Id))
+		if arg.roaringFilter == nil {
+			arg.roaringFilter = newroaringFilter(types.T(arg.PkTyp.Id))
+		}
 	} else {
 		//@see https://hur.st/bloomfilter/
-		var probability float64
-		if rowCount < 100001 {
-			probability = 0.00001
-		} else if rowCount < 1000001 {
-			probability = 0.000003
-		} else if rowCount < 10000001 {
-			probability = 0.000001
-		} else if rowCount < 100000001 {
-			probability = 0.0000005
-		} else if rowCount < 1000000001 {
-			probability = 0.0000002
-		} else {
-			probability = 0.0000001
+		if arg.bloomFilter == nil {
+			var probability float64
+			if rowCount < 100001 {
+				probability = 0.00001
+			} else if rowCount < 1000001 {
+				probability = 0.000003
+			} else if rowCount < 10000001 {
+				probability = 0.000001
+			} else if rowCount < 100000001 {
+				probability = 0.0000005
+			} else if rowCount < 1000000001 {
+				probability = 0.0000002
+			} else {
+				probability = 0.0000001
+			}
+			arg.bloomFilter = bloomfilter.New(rowCount, probability)
 		}
-		arg.bloomFilter = bloomfilter.New(rowCount, probability)
 	}
 
 	return nil

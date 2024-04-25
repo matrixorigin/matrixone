@@ -71,6 +71,12 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+	if !pipelineFailed {
+		_ = arg.Func(nil)
+	}
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if !pipelineFailed {
 		_ = arg.Func(nil)

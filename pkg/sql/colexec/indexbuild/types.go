@@ -76,12 +76,21 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := arg.ctr
+	if ctr != nil {
+		if ctr.batch != nil {
+			proc.PutBatch(ctr.batch)
+		}
+	}
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		ctr.cleanRuntimeFilters(proc, arg.RuntimeFilterSpec)
 		if ctr.batch != nil {
-			proc.PutBatch(ctr.batch)
+			ctr.batch.Clean(proc.GetMPool())
 		}
 		ctr.FreeMergeTypeOperator(pipelineFailed)
 		if ctr.isMerge {

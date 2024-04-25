@@ -95,6 +95,18 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+	if arg.ctr != nil {
+		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
+		if arg.ctr.rbat != nil {
+			arg.ctr.rbat.Clean(proc.GetMPool())
+		}
+		if arg.ctr.checkConflictBat != nil {
+			arg.ctr.checkConflictBat.Clean(proc.GetMPool())
+		}
+	}
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		arg.ctr.FreeMergeTypeOperator(pipelineFailed)

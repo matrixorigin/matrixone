@@ -85,6 +85,13 @@ type container struct {
 	bat *batch.Batch
 }
 
+func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+	mp := proc.Mp()
+	if arg.ctr != nil {
+		arg.ctr.cleanBatch(mp)
+	}
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	mp := proc.Mp()
 	if arg.ctr != nil {

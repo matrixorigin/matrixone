@@ -64,6 +64,16 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+	if !pipelineFailed {
+		select {
+		case arg.Reg.Ch <- nil:
+		case <-arg.Reg.Ctx.Done():
+		}
+	}
+	close(arg.Reg.Ch)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if !pipelineFailed {
 		select {

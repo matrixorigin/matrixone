@@ -90,6 +90,23 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+	if arg.bloomFilter != nil {
+		arg.bloomFilter.Reset()
+	}
+	if arg.roaringFilter != nil {
+		arg.roaringFilter.b.Clear()
+	}
+	if arg.rbat != nil {
+		arg.rbat.Clean(proc.GetMPool())
+		arg.rbat = nil
+	}
+	if arg.pass2RuntimeFilter != nil {
+		proc.PutVector(arg.pass2RuntimeFilter)
+	}
+	arg.FreeAllReg()
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.bloomFilter != nil {
 		arg.bloomFilter.Clean()

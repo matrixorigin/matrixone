@@ -127,6 +127,14 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Clean(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := arg.ctr
+	if ctr != nil {
+		ctr.cleanBatch(proc)
+	}
+
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
