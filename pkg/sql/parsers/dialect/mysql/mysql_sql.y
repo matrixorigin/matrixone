@@ -779,7 +779,7 @@ import (
 
 %token <str> KILL
 %type <killOption> kill_opt
-%token <str> BACKUP FILESYSTEM PARALLELISM RESTORE NEWACCOUNT
+%token <str> BACKUP FILESYSTEM PARALLELISM RESTORE
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %type<tableLock> table_lock_elem
@@ -11856,7 +11856,6 @@ non_reserved_keyword:
 |   STAGES
 |   BACKUP
 |   RESTORE
-|   NEWACCOUNT
 |   FILESYSTEM
 |   PARALLELISM
 |	VALUE

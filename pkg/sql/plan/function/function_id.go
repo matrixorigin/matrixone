@@ -130,6 +130,7 @@ const (
 	HEX_ENCODE
 	HEX
 	UNHEX
+	MD5
 	IFF
 	IFNULL
 	ILIKE
@@ -210,6 +211,7 @@ const (
 	TRANSLATE
 	TRIM
 	UNIFORM
+	SHA1
 	SHA2
 	UTC_TIMESTAMP
 	UNIX_TIMESTAMP
@@ -575,6 +577,7 @@ var functionIdRegister = map[string]int32{
 	"load_file":                      LOAD_FILE,
 	"hex":                            HEX,
 	"unhex":                          UNHEX,
+	"md5":                            MD5,
 	"to_base64":                      TO_BASE64,
 	"from_base64":                    FROM_BASE64,
 	"serial":                         SERIAL,
@@ -646,6 +649,8 @@ var functionIdRegister = map[string]int32{
 	"to_lower":                       LOWER,
 	"lower":                          LOWER,
 	"lcase":                          LOWER,
+	"sha1":                           SHA1,
+	"sha":                            SHA1,
 
 	"summation":         SUMMATION,
 	"l1_norm":           L1_NORM,

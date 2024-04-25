@@ -2906,7 +2906,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	//encryption the password
 	encryption = HashPassWord(password)
 
-	if execResultArrayHasData(erArray) {
+	if execResultArrayHasData(erArray) || getGlobalPu().SV.SkipCheckPrivilege {
 		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 		if err != nil {
 			return err
@@ -9680,6 +9680,33 @@ func postAlterSessionStatus(
 
 	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
+}
+
+func checkTimeStampValid(ctx context.Context, ses FeSession, snapshotTs int64) (bool, error) {
+	var sql string
+	var err error
+	var erArray []ExecResult
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	sql = getSqlForCheckSnapshotTs(snapshotTs)
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return false, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if !execResultArrayHasData(erArray) {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func getDbIdAndType(ctx context.Context, bh BackgroundExec, tenantInfo *TenantInfo, dbName string) (dbId uint64, dbType string, err error) {

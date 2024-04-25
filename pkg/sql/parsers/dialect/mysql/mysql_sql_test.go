@@ -2472,8 +2472,8 @@ var (
 			input: "restore account account_01 database db1 table t1 from snapshot snapshot_01",
 		},
 		{
-			input:  "restore account account_01 from snapshot snapshot_01 to newaccount account_02 admin_name='admin' identified by '123456';",
-			output: "restore account account_01 from snapshot snapshot_01 to account account_02 identified by  admin_name 'admin' identified by '******'",
+			input:  "restore account account_01 from snapshot snapshot_01 to account account_02",
+			output: "restore account account_01 from snapshot snapshot_01 to account account_02",
 		},
 		{
 			input: "alter publication pub1 account add acc0, acc1",

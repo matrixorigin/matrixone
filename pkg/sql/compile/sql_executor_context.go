@@ -103,7 +103,7 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot plan.Snapshot) (*p
 	if err != nil {
 		return nil, err
 	}
-	return t.Stats(ctx, true), nil
+	return t.Stats(ctx, true)
 }
 
 func (c *compilerContext) GetStatsCache() *plan.StatsCache {

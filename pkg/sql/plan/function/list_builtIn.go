@@ -2768,6 +2768,27 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `md5`
+	{
+		functionId: MD5,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Md5
+				},
+			},
+		},
+	},
+
 	// function `ln`
 	{
 		functionId: LN,
@@ -6158,6 +6179,27 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return BitmapCount
+				},
+			},
+		},
+	},
+
+	// function `SHA1`
+	{
+		functionId: SHA1,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SHA1Func
 				},
 			},
 		},

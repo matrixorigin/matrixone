@@ -2398,9 +2398,6 @@ func executeStmtWithResponse(requestCtx context.Context,
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
 
-	execCtx.proto.DisableAutoFlush()
-	defer execCtx.proto.EnableAutoFlush()
-
 	err = executeStmtWithTxn(requestCtx, ses, execCtx)
 	if err != nil {
 		return err

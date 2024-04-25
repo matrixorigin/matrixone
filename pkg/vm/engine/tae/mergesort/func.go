@@ -20,68 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
-
-/// sort things
-
-func sort[T any](col containers.Vector, lessFunc lessFunc[T], n int) SortSlice[T] {
-	dataWithIdx := NewSortSlice(n, lessFunc)
-	if col.HasNull() {
-		for i := 0; i < n; i++ {
-			var item SortElem[T]
-			if col.IsNull(i) {
-				item = SortElem[T]{isNull: true, idx: int32(i)}
-			} else {
-				item = SortElem[T]{data: col.Get(i).(T), idx: int32(i)}
-			}
-			dataWithIdx.Append(item)
-		}
-	} else {
-		for i := 0; i < n; i++ {
-			dataWithIdx.Append(SortElem[T]{data: col.Get(i).(T), idx: int32(i)})
-		}
-	}
-	sortUnstable(dataWithIdx)
-	return dataWithIdx
-}
-
-func Sort[T any](col containers.Vector, lessFunc lessFunc[T], idx []int32) (ret containers.Vector) {
-	dataWithIdx := sort(col, lessFunc, len(idx))
-
-	// make col sorted
-	for i, v := range dataWithIdx.AsSlice() {
-		idx[i] = v.idx
-		if v.isNull {
-			col.Update(i, nil, true)
-		} else {
-			// FIXME: memory waste for varlen type
-			col.Update(i, v.data, false)
-		}
-	}
-
-	ret = col
-	return
-}
-
-func Shuffle(
-	col containers.Vector, idx []int32, pool *containers.VectorPool,
-) containers.Vector {
-	var err error
-	ret := pool.GetVector(col.GetType())
-	if err = ret.PreExtend(len(idx)); err != nil {
-		panic(err)
-	}
-	retVec := ret.GetDownstreamVector()
-	srcVec := col.GetDownstreamVector()
-
-	if err = retVec.Union(srcVec, idx, ret.GetAllocator()); err != nil {
-		panic(err)
-	}
-
-	col.Close()
-	return ret
-}
 
 /// merge things
 
@@ -394,21 +333,15 @@ func Reshape(column []*vector.Vector, ret []*vector.Vector, fromLayout, toLayout
 			} else {
 				length = int(toLayout[i]) - toOffset
 			}
-
-			// clone from src and append to dest
-			// FIXME: is clone necessary? can we just feed the original vector window to GetUnionAllFunction?
-			// TODO: use vector pool for the cloned vector
-			cloned, err := column[fromIdx].CloneWindow(fromOffset, fromOffset+length, m)
+			// get data from src and append to dest
+			window, err := column[fromIdx].Window(fromOffset, fromOffset+length)
 			if err != nil {
 				panic(err)
 			}
-			err = vector.GetUnionAllFunction(*typ, m)(ret[i], cloned)
+			err = vector.GetUnionAllFunction(*typ, m)(ret[i], window)
 			if err != nil {
 				panic(err)
 			}
-
-			// release temporary coloned vector
-			cloned.Free(m)
 
 			// update offset
 			fromOffset += length

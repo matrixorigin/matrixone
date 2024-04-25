@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -28,6 +29,7 @@ func consumeEntry(
 	ctx context.Context,
 	primarySeqnum int,
 	engine *Engine,
+	cache *cache.CatalogCache,
 	state *logtailreplay.PartitionState,
 	e *api.Entry,
 ) error {
@@ -36,7 +38,9 @@ func consumeEntry(
 	put := engine.packerPool.Get(&packer)
 	defer put.Put()
 
-	state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer)
+	if state != nil {
+		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer)
+	}
 
 	if logtailreplay.IsMetaTable(e.TableName) {
 		return nil
@@ -46,13 +50,19 @@ func consumeEntry(
 		switch e.TableId {
 		case catalog.MO_TABLES_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			engine.catalog.InsertTable(bat)
+			if cache != nil {
+				cache.InsertTable(bat)
+			}
 		case catalog.MO_DATABASE_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			engine.catalog.InsertDatabase(bat)
+			if cache != nil {
+				cache.InsertDatabase(bat)
+			}
 		case catalog.MO_COLUMNS_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			engine.catalog.InsertColumns(bat)
+			if cache != nil {
+				cache.InsertColumns(bat)
+			}
 		}
 		return nil
 	}
@@ -60,10 +70,14 @@ func consumeEntry(
 	switch e.TableId {
 	case catalog.MO_TABLES_ID:
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		engine.catalog.DeleteTable(bat)
+		if cache != nil {
+			cache.DeleteTable(bat)
+		}
 	case catalog.MO_DATABASE_ID:
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		engine.catalog.DeleteDatabase(bat)
+		if cache != nil {
+			cache.DeleteDatabase(bat)
+		}
 	}
 
 	return nil
