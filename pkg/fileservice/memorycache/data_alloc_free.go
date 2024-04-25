@@ -19,29 +19,25 @@ package memorycache
 
 import (
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
-const dataSize = int(unsafe.Sizeof(Data{}))
-
-func newData(n int, size *atomic.Int64) *Data {
-	if n == 0 {
+func newData(size int, counter *atomic.Int64) *Data {
+	if size == 0 {
 		return nil
 	}
-	size.Add(int64(n + dataSize))
-	b := malloc.Alloc(n + dataSize)
-	d := (*Data)(unsafe.Pointer(&b[0]))
-	d.buf = b[dataSize:]
-	d.ref.init(1)
-	return d
+	counter.Add(int64(size))
+	data := &Data{
+		size: size,
+	}
+	data.bufHandle = malloc.Alloc(size, &data.buf)
+	data.ref.init(1)
+	return data
 }
 
-func (d *Data) free(size *atomic.Int64) {
-	n := cap(d.buf) + dataSize
-	size.Add(-int64(n))
-	buf := unsafe.Slice((*byte)(unsafe.Pointer(d)), n)
+func (d *Data) free(counter *atomic.Int64) {
+	counter.Add(-int64(d.size))
 	d.buf = nil
-	malloc.Free(buf)
+	d.bufHandle.Free()
 }

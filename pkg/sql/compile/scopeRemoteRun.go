@@ -751,7 +751,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.FuzzyFilter = &pipeline.FuzzyFilter{
 			N:      float32(t.N),
 			PkName: t.PkName,
-			PkTyp:  plan2.DeepCopyType(t.PkTyp),
+			PkTyp:  t.PkTyp,
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
@@ -1170,7 +1170,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		lockArg := lockop.NewArgumentByEngine(eng)
 		lockArg.SetBlock(t.Block)
 		for _, target := range t.Targets {
-			typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
+			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
 			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
 		}
 		for _, target := range t.Targets {
@@ -1569,10 +1569,10 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 }
 
 // convert []types.Type to []*plan.Type
-func convertToPlanTypes(ts []types.Type) []*plan.Type {
-	result := make([]*plan.Type, len(ts))
+func convertToPlanTypes(ts []types.Type) []plan.Type {
+	result := make([]plan.Type, len(ts))
 	for i, t := range ts {
-		result[i] = &plan.Type{
+		result[i] = plan.Type{
 			Id:    int32(t.Oid),
 			Width: t.Width,
 			Scale: t.Scale,
@@ -1582,7 +1582,7 @@ func convertToPlanTypes(ts []types.Type) []*plan.Type {
 }
 
 // convert []*plan.Type to []types.Type
-func convertToTypes(ts []*plan.Type) []types.Type {
+func convertToTypes(ts []plan.Type) []types.Type {
 	result := make([]types.Type, len(ts))
 	for i, t := range ts {
 		result[i] = types.New(types.T(t.Id), t.Width, t.Scale)
