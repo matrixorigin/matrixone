@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -99,12 +98,12 @@ func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) Stats(obj *plan.ObjectRef, ts timestamp.Timestamp) (*pb.StatsInfo, error) {
-	t, err := c.getRelation(obj.GetSchemaName(), obj.GetObjName(), ts)
+func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot plan.Snapshot) (*pb.StatsInfo, error) {
+	ctx, t, err := c.getRelation(obj.GetSchemaName(), obj.GetObjName(), snapshot)
 	if err != nil {
 		return nil, err
 	}
-	return t.Stats(c.ctx, true), nil
+	return t.Stats(ctx, true), nil
 }
 
 func (c *compilerContext) GetStatsCache() *plan.StatsCache {
@@ -114,7 +113,7 @@ func (c *compilerContext) GetStatsCache() *plan.StatsCache {
 	return c.statsCache
 }
 
-func (c *compilerContext) GetSubscriptionMeta(dbName string, ts timestamp.Timestamp) (*plan.SubscriptionMeta, error) {
+func (c *compilerContext) GetSubscriptionMeta(dbName string, snapshot plan.Snapshot) (*plan.SubscriptionMeta, error) {
 	return nil, nil
 }
 
@@ -126,37 +125,52 @@ func (c *compilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, strin
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) DatabaseExists(name string, ts timestamp.Timestamp) bool {
-	var txnOpt client.TxnOperator
-	if !ts.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) && ts.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(ts)
-	} else {
-		txnOpt = c.proc.TxnOperator
+func (c *compilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bool {
+	ctx := c.GetContext()
+	txnOpt := c.proc.TxnOperator
+
+	if snapshot.TS != nil {
+		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
+			snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+			txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+
+			if snapshot.CreatedByTenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
+			}
+		}
 	}
+
 	_, err := c.engine.Database(
-		c.ctx,
+		ctx,
 		name,
 		txnOpt,
 	)
 	return err == nil
 }
 
-func (c *compilerContext) GetDatabaseId(dbName string, ts timestamp.Timestamp) (uint64, error) {
-	var txnOpt client.TxnOperator
-	if !ts.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) && ts.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(ts)
-	} else {
-		txnOpt = c.proc.TxnOperator
+func (c *compilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (uint64, error) {
+	ctx := c.GetContext()
+	txnOpt := c.proc.TxnOperator
+
+	if snapshot.TS != nil {
+		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
+			snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+			txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+
+			if snapshot.CreatedByTenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
+			}
+		}
 	}
 
-	database, err := c.engine.Database(c.ctx, dbName, txnOpt)
+	database, err := c.engine.Database(ctx, dbName, txnOpt)
 
 	if err != nil {
 		return 0, err
 	}
-	databaseId, err := strconv.ParseUint(database.GetDatabaseId(c.ctx), 10, 64)
+	databaseId, err := strconv.ParseUint(database.GetDatabaseId(ctx), 10, 64)
 	if err != nil {
-		return 0, moerr.NewInternalError(c.ctx, "The databaseid of '%s' is not a valid number", dbName)
+		return 0, moerr.NewInternalError(ctx, "The databaseid of '%s' is not a valid number", dbName)
 	}
 	return databaseId, nil
 }
@@ -168,17 +182,17 @@ func (c *compilerContext) DefaultDatabase() string {
 func (c *compilerContext) GetPrimaryKeyDef(
 	dbName string,
 	tableName string,
-	ts timestamp.Timestamp) []*plan.ColDef {
+	snapshot plan.Snapshot) []*plan.ColDef {
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
 	}
-	relation, err := c.getRelation(dbName, tableName, ts)
+	ctx, relation, err := c.getRelation(dbName, tableName, snapshot)
 	if err != nil {
 		return nil
 	}
 
-	priKeys, err := relation.GetPrimaryKeys(c.ctx)
+	priKeys, err := relation.GetPrimaryKeys(ctx)
 	if err != nil {
 		return nil
 	}
@@ -223,24 +237,39 @@ func (c *compilerContext) GetContext() context.Context {
 	return c.ctx
 }
 
-func (c *compilerContext) ResolveById(tableId uint64, ts timestamp.Timestamp) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
-	dbName, tableName, _ := c.engine.GetNameById(c.ctx, c.proc.TxnOperator, tableId)
+func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+	ctx := c.GetContext()
+	txnOpt := c.proc.TxnOperator
+
+	if snapshot.TS != nil {
+		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
+			snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+			txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+
+			if snapshot.CreatedByTenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
+			}
+		}
+	}
+
+	dbName, tableName, _ := c.engine.GetNameById(c.ctx, txnOpt, tableId)
 	if dbName == "" || tableName == "" {
 		return nil, nil
 	}
-	return c.Resolve(dbName, tableName, ts)
+	return c.Resolve(dbName, tableName, snapshot)
 }
 
-func (c *compilerContext) Resolve(dbName string, tableName string, ts timestamp.Timestamp) (*plan.ObjectRef, *plan.TableDef) {
+func (c *compilerContext) Resolve(dbName string, tableName string, snapshot plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil, nil
 	}
-	table, err := c.getRelation(dbName, tableName, ts)
+
+	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
 	if err != nil {
 		return nil, nil
 	}
-	return c.getTableDef(table, dbName, tableName)
+	return c.getTableDef(ctx, table, dbName, tableName)
 }
 
 func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
@@ -274,36 +303,44 @@ func (c *compilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error
 func (c *compilerContext) getRelation(
 	dbName string,
 	tableName string,
-	ts timestamp.Timestamp) (engine.Relation, error) {
+	snapshot plan.Snapshot) (context.Context, engine.Relation, error) {
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	var txnOpt client.TxnOperator
-	if !ts.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) && ts.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(ts)
-	} else {
-		txnOpt = c.proc.TxnOperator
+	ctx := c.GetContext()
+	txnOpt := c.proc.TxnOperator
+
+	if snapshot.TS != nil {
+		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
+			snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+			txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+
+			if snapshot.CreatedByTenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
+			}
+		}
 	}
 
-	db, err := c.engine.Database(c.ctx, dbName, txnOpt)
+	db, err := c.engine.Database(ctx, dbName, txnOpt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	table, err := db.Relation(c.ctx, tableName, nil)
+	table, err := db.Relation(ctx, tableName, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return table, nil
+	return ctx, table, nil
 }
 
 func (c *compilerContext) getTableDef(
+	ctx context.Context,
 	table engine.Relation,
 	dbName, tableName string) (*plan.ObjectRef, *plan.TableDef) {
-	tableId := table.GetTableID(c.ctx)
-	engineDefs, err := table.TableDefs(c.ctx)
+	tableId := table.GetTableID(ctx)
+	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
 		return nil, nil
 	}
@@ -452,4 +489,12 @@ func (c *compilerContext) getTableDef(
 		DbName:       dbName,
 	}
 	return obj, tableDef
+}
+
+func (c *compilerContext) GetRestoreInfo() *plan.RestoreInfo {
+	panic("unimplement")
+}
+
+func (c *compilerContext) SetRestoreInfo(restoreInfo *plan.RestoreInfo) {
+	panic("unimplement")
 }

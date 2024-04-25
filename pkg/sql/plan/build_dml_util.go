@@ -21,9 +21,12 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+
+	"golang.org/x/exp/slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -31,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"golang.org/x/exp/slices"
 )
 
 var CNPrimaryCheck = false
@@ -399,7 +401,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				var isUk = indexdef.Unique
 				var isSK = !isUk && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo)
 
-				uniqueObjRef, uniqueTableDef := builder.compCtx.Resolve(delCtx.objRef.SchemaName, indexdef.IndexTableName, timestamp.Timestamp{})
+				uniqueObjRef, uniqueTableDef := builder.compCtx.Resolve(delCtx.objRef.SchemaName, indexdef.IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
 				if uniqueTableDef == nil {
 					return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, indexdef.IndexTableName)
 				}
@@ -512,7 +514,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				multiTableIndexes[indexdef.IndexName].IndexDefs[catalog.ToLower(indexdef.IndexAlgoTableType)] = indexdef
 			} else if indexdef.TableExist && catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) {
 				// Used by pre-insert vector index.
-				masterObjRef, masterTableDef := ctx.Resolve(delCtx.objRef.SchemaName, indexdef.IndexTableName, timestamp.Timestamp{})
+				masterObjRef, masterTableDef := ctx.Resolve(delCtx.objRef.SchemaName, indexdef.IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
 				if masterTableDef == nil {
 					return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, indexdef.IndexName)
 				}
@@ -649,9 +651,14 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				// Used by pre-insert vector index.
 				var idxRefs = make([]*ObjectRef, 3)
 				var idxTableDefs = make([]*TableDef, 3)
-				idxRefs[0], idxTableDefs[0] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, timestamp.Timestamp{})
-				idxRefs[1], idxTableDefs[1] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, timestamp.Timestamp{})
-				idxRefs[2], idxTableDefs[2] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, timestamp.Timestamp{})
+				// TODO: plan node should hold snapshot and account info
+				//idxRefs[0], idxTableDefs[0] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, timestamp.Timestamp{})
+				//idxRefs[1], idxTableDefs[1] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, timestamp.Timestamp{})
+				//idxRefs[2], idxTableDefs[2] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, timestamp.Timestamp{})
+
+				idxRefs[0], idxTableDefs[0] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
+				idxRefs[1], idxTableDefs[1] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
+				idxRefs[2], idxTableDefs[2] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
 
 				entriesObjRef, entriesTableDef := idxRefs[2], idxTableDefs[2]
 				if entriesTableDef == nil {
@@ -827,7 +834,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				childObjRef = delCtx.objRef
 				childTableDef = delCtx.tableDef
 			} else {
-				childObjRef, childTableDef = builder.compCtx.ResolveById(tableId, timestamp.Timestamp{})
+				childObjRef, childTableDef = builder.compCtx.ResolveById(tableId, Snapshot{TS: &timestamp.Timestamp{}})
 			}
 			childPosMap := make(map[string]int32)
 			childTypMap := make(map[string]*plan.Type)
@@ -1274,7 +1281,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				Else IVFFLAT index would fail
 				********/
 
-				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName, timestamp.Timestamp{})
+				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
 				// remove row_id
 				for i, col := range idxTableDef.Cols {
 					if col.Name == catalog.Row_ID {
@@ -1298,7 +1305,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				// with the primary key of the hidden table as the unique key.
 				// package contains some information needed by the fuzzy filter to run background SQL.
 				if indexdef.GetUnique() {
-					_, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName, timestamp.Timestamp{})
+					_, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
 					// remove row_id
 					for i, colVal := range idxTableDef.Cols {
 						if colVal.Name == catalog.Row_ID {
@@ -1384,7 +1391,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				multiTableIndexes[indexdef.IndexName].IndexDefs[catalog.ToLower(indexdef.IndexAlgoTableType)] = indexdef
 			} else if indexdef.TableExist && catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) {
 
-				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName, timestamp.Timestamp{})
+				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
 				// remove row_id
 				for i, colVal := range idxTableDef.Cols {
 					if colVal.Name == catalog.Row_ID {
@@ -1437,9 +1444,15 @@ func buildInsertPlansWithRelatedHiddenTable(
 
 			var idxRefs = make([]*ObjectRef, 3)
 			var idxTableDefs = make([]*TableDef, 3)
-			idxRefs[0], idxTableDefs[0] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, timestamp.Timestamp{})
-			idxRefs[1], idxTableDefs[1] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, timestamp.Timestamp{})
-			idxRefs[2], idxTableDefs[2] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, timestamp.Timestamp{})
+			// TODO: node should hold snapshot and account info
+			//idxRefs[0], idxTableDefs[0] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, timestamp.Timestamp{})
+			//idxRefs[1], idxTableDefs[1] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, timestamp.Timestamp{})
+			//idxRefs[2], idxTableDefs[2] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, timestamp.Timestamp{})
+
+			idxRefs[0], idxTableDefs[0] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
+			idxRefs[1], idxTableDefs[1] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
+			idxRefs[2], idxTableDefs[2] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
+
 			// remove row_id
 			for i := range idxTableDefs {
 				for j, column := range idxTableDefs[i].Cols {
@@ -1848,7 +1861,7 @@ func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableD
 			partTableIds := make([]uint64, tableDef.Partition.PartitionNum)
 			partTableNames := make([]string, tableDef.Partition.PartitionNum)
 			for i, partition := range tableDef.Partition.Partitions {
-				_, partTableDef := ctx.Resolve(objRef.SchemaName, partition.PartitionTableName, timestamp.Timestamp{})
+				_, partTableDef := ctx.Resolve(objRef.SchemaName, partition.PartitionTableName, Snapshot{TS: &timestamp.Timestamp{}})
 				partTableIds[i] = partTableDef.TblId
 				partTableNames[i] = partition.PartitionTableName
 			}
@@ -1893,7 +1906,7 @@ func getPartTableIdsAndNames(ctx CompilerContext, objRef *ObjectRef, tableDef *T
 		partTableIds = make([]uint64, tableDef.Partition.PartitionNum)
 		partTableNames = make([]string, tableDef.Partition.PartitionNum)
 		for i, partition := range tableDef.Partition.Partitions {
-			_, partTableDef := ctx.Resolve(objRef.SchemaName, partition.PartitionTableName, timestamp.Timestamp{})
+			_, partTableDef := ctx.Resolve(objRef.SchemaName, partition.PartitionTableName, Snapshot{TS: &timestamp.Timestamp{}})
 			partTableIds[i] = partTableDef.TblId
 			partTableNames[i] = partition.PartitionTableName
 		}
@@ -2158,7 +2171,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 			fkeyId2Idx[colId] = i
 		}
 
-		parentObjRef, parentTableDef := builder.compCtx.ResolveById(fk.ForeignTbl, timestamp.Timestamp{})
+		parentObjRef, parentTableDef := builder.compCtx.ResolveById(fk.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
 		if parentTableDef == nil {
 			return -1, moerr.NewInternalError(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
 		}

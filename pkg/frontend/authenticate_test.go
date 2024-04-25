@@ -7805,6 +7805,10 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	return nil
 }
 
+func (bt *backgroundExecTest) ExecRestore(context.Context, string, uint32, uint32) error {
+	panic("unimplement")
+}
+
 func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
 	return []interface{}{bt.sql2result[bt.currentSql]}
 }

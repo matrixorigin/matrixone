@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -50,7 +51,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if len(dbName) == 0 {
 		dbName = ctx.DefaultDatabase()
 	}
-	_, t := ctx.Resolve(dbName, tblName, timestamp.Timestamp{})
+
+	_, t := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -78,6 +80,12 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
+	if stmt.IsRestore {
+		builder.compCtx.SetRestoreInfo(&RestoreInfo{
+			Tenant:   "xxx",
+			TenantID: stmt.FromDataTenantID,
+		})
+	}
 
 	bindCtx := NewBindContext(builder, nil)
 	ifExistAutoPkCol, insertWithoutUniqueKeyMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)

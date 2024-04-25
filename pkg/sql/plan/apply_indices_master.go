@@ -36,12 +36,14 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 	var prevLastNodeId int32
 	var lastNodeId int32
 
-	ts := scanNode.ScanTS
+	//ts1 := scanNode.ScanTS
 	for i, filterExp := range scanNode.FilterList {
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName, timestamp.Timestamp{})
+		// TODO: node should hold snapshot info and account info
+		//idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName, timestamp.Timestamp{})
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
 
 		// 1. SELECT pk from idx WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value"))
-		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, *ts)
+		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, scanNode.ScanSnapshot)
 
 		// 2. (SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value1")) )
 		//    	INNER JOIN
@@ -118,7 +120,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 }
 
 func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *plan.Expr,
-	idxTableDef *TableDef, idxObjRef *ObjectRef, scanTs timestamp.Timestamp) (int32, int32) {
+	idxTableDef *TableDef, idxObjRef *ObjectRef, scanSnapshot *Snapshot) (int32, int32) {
 
 	// a. Scan * WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value"))
 	idxScanTag := builder.genNewTag()
@@ -220,7 +222,8 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		ObjRef:      idxObjRef,
 		FilterList:  []*plan.Expr{filterList},
 		BindingTags: []int32{idxScanTag},
-		ScanTS:      &scanTs,
+		//ScanTS:       &scanTs,
+		ScanSnapshot: scanSnapshot,
 	}, bindCtx)
 
 	// b. Project __mo_index_pk_col

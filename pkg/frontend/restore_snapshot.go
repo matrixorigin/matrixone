@@ -66,6 +66,16 @@ func handleRestoreDatabase(ctx context.Context, ses *Session, stmt *tree.Restore
 		return moerr.NewInternalError(ctx, "snapshot %s does not exist", string(snapShot))
 	}
 
+	srcTenantInfo, err := getTenantInfoByName(ctx, bh, srcAccountName)
+	if err != nil {
+		return err
+	}
+
+	toTenantInfo, err := getTenantInfoByName(ctx, bh, descAccountName)
+	if err != nil {
+		return err
+	}
+
 	restoreDatabase := func(execCxt context.Context) (rtnErr error) {
 		rtnErr = bh.Exec(execCxt, "drop database if exists "+schemaName)
 		if rtnErr != nil {
@@ -86,7 +96,8 @@ func handleRestoreDatabase(ctx context.Context, ses *Session, stmt *tree.Restore
 		}
 
 		restoreTableSql := fmt.Sprintf(restoreTableDataFmt, schemaName, tableName, schemaName, tableName, snapShot)
-		rtnErr = bh.Exec(execCxt, restoreTableSql)
+		//rtnErr = bh.Exec(execCxt, restoreTableSql)
+		rtnErr = bh.ExecRestore(execCxt, restoreTableSql, srcTenantInfo.TenantID, toTenantInfo.TenantID)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -194,6 +205,16 @@ func handleRestoreTable(ctx context.Context, ses *Session, stmt *tree.RestoreSna
 		return moerr.NewInternalError(ctx, "snapshot %s does not exist", string(snapShot))
 	}
 
+	srcTenantInfo, err := getTenantInfoByName(ctx, bh, srcAccountName)
+	if err != nil {
+		return err
+	}
+
+	toTenantInfo, err := getTenantInfoByName(ctx, bh, descAccountName)
+	if err != nil {
+		return err
+	}
+
 	restoreTable := func(execCxt context.Context) (rtnErr error) {
 		rtnErr = bh.Exec(execCxt, "create database if not exists "+schemaName)
 		if rtnErr != nil {
@@ -221,7 +242,8 @@ func handleRestoreTable(ctx context.Context, ses *Session, stmt *tree.RestoreSna
 		}
 
 		restoreTableSql := fmt.Sprintf(restoreTableDataFmt, schemaName, tableName, schemaName, tableName, snapShot)
-		rtnErr = bh.Exec(execCxt, restoreTableSql)
+		//rtnErr = bh.Exec(execCxt, restoreTableSql)
+		rtnErr = bh.ExecRestore(execCxt, restoreTableSql, srcTenantInfo.TenantID, toTenantInfo.TenantID)
 		if rtnErr != nil {
 			return rtnErr
 		}
