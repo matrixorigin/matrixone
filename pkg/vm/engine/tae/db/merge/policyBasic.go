@@ -131,12 +131,13 @@ func (o *customConfigProvider) ResetConfig() {
 	o.configs = make(map[uint64]*BasicPolicyConfig)
 }
 
-type basic struct {
-	id      uint64
-	schema  *catalog.Schema
-	hist    *common.MergeHistory
-	objHeap *heapBuilder[*catalog.ObjectEntry]
-	accBuf  []int
+type Basic struct {
+	id        uint64
+	schema    *catalog.Schema
+	hist      *common.MergeHistory
+	objHeap   *heapBuilder[*catalog.ObjectEntry]
+	guessType common.WorkloadKind
+	accBuf    []int
 
 	config         *BasicPolicyConfig
 	configProvider *customConfigProvider
@@ -155,13 +156,19 @@ func NewBasicPolicy() Policy {
 // impl Policy for Basic
 func (o *basic) OnObject(obj *catalog.ObjectEntry) {
 	rowsLeftOnObj := obj.GetRemainingRows()
-	// it has too few rows, merge it
+	osize := obj.GetOriginSize()
+
 	iscandidate := func() bool {
+		// objext with a lot of holes
 		if rowsLeftOnObj < obj.GetRows()/2 {
 			return true
 		}
-		if obj.GetOriginSize() > 110*common.Const1MBytes {
+		// skip big object
+		if osize > 110*common.Const1MBytes {
 			return false
+		}
+		if osize < 100*common.Const1MBytes {
+			return true
 		}
 		if rowsLeftOnObj < o.config.ObjectMinRows {
 			return true
@@ -283,9 +290,6 @@ func (o *basic) optimize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 	for i = len(acc) - 1; i > 1 && isBigGap(acc[i-1], acc[i]); i-- {
 	}
 
-	// for ; i > 1 && acc[i] > o.config.MaxRowsMergedObj; i-- {
-	// }
-
 	readyToMergeRows := acc[i]
 
 	// avoid frequent small object merge
@@ -320,12 +324,7 @@ func controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
 	for needPopout(objs) {
 		objs = objs[:len(objs)-1]
 	}
-	// if popCnt > 0 && memPop {
-	// 	logutil.Infof(
-	// 		"mergeblocks skip %d-%s pop %d out of %d objects due to %s mem cap",
-	// 		o.id, o.schema.Name, popCnt, len(objs)+popCnt, common.HumanReadableBytes(int(mem)),
-	// 	)
-	// }
+
 	return objs
 }
 
@@ -333,6 +332,7 @@ func (o *basic) ResetForTable(entry *catalog.TableEntry) {
 	o.id = entry.ID
 	o.schema = entry.GetLastestSchemaLocked()
 	o.hist = entry.Stats.GetLastMerge()
+	o.guessType = entry.Stats.GetWorkloadGuess()
 	o.objHeap.reset()
 
 	o.config = o.configProvider.GetConfig(entry)
@@ -351,8 +351,7 @@ func (o *basic) ResetForTable(entry *catalog.TableEntry) {
 	}
 
 	if o.config == nil || !o.config.FromUser {
-		guessWorkload := entry.Stats.GetWorkloadGuess()
-		switch guessWorkload {
+		switch o.guessType {
 		case common.WorkApInsert:
 			updateConfig(20*8192, common.DefaultMaxRowsObj, 50)
 		case common.WorkApQuiet:
