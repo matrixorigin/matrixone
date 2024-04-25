@@ -17,6 +17,7 @@ package memorycache
 import (
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache"
 	cache "github.com/matrixorigin/matrixone/pkg/pb/query"
 )
@@ -44,8 +45,10 @@ type RCBytes struct {
 
 // Data is a reference counted byte buffer
 type Data struct {
-	buf []byte
+	size int
+	buf  []byte
 	// reference counta for the Data, the Data is free
 	// when the reference count is 0
-	ref refcnt
+	ref       refcnt
+	bufHandle *malloc.Handle
 }
