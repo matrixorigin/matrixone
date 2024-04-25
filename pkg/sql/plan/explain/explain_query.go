@@ -203,6 +203,19 @@ func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings,
 					settings.buffer.PushNewLine(buf.String(), false, settings.level)
 				}
 			}
+
+			if nodedescImpl.Node.NodeType == plan.Node_LOCK_OP {
+				if nodedescImpl.Node.LockTargets != nil {
+					buf := bytes.NewBuffer(make([]byte, 0, 360))
+					buf.WriteString("Lock level: ")
+					if nodedescImpl.Node.LockTargets[0].LockTable {
+						buf.WriteString("Table level lock")
+					} else {
+						buf.WriteString("Row level lock")
+					}
+					settings.buffer.PushNewLine(buf.String(), false, settings.level)
+				}
+			}
 		}
 
 		// print out the actual operation information
