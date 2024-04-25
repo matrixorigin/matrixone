@@ -230,15 +230,19 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 		pKeyMsg = pkeyName
 	}
 
-	colIdMap := make(map[string]string)
-	for _, col := range originTableDef.Cols {
-		colIdMap[col.GetName()] = fmt.Sprintf("%d", col.GetColId())
+	colIdxMap := make(map[string]string)
+	for idx, col := range originTableDef.Cols {
+		// NOTE:
+		// ColDef.ColId is not used as "after alter table, different columns may have the same colId"
+		// ColRel.ColPos is not used as it will be used in the Planner
+		// ColIdx = Position of Column within tableDef.
+		colIdxMap[col.GetName()] = fmt.Sprintf("%d", idx)
 	}
 
 	for i, part := range indexDef.Parts {
 		insertSQLs[i] = fmt.Sprintf(insertIntoMasterIndexTableFormat,
 			DBName, indexDef.IndexTableName,
-			colIdMap[part], part, pKeyMsg, pKeyMsg, DBName, originTableDef.Name)
+			colIdxMap[part], part, pKeyMsg, pKeyMsg, DBName, originTableDef.Name)
 	}
 
 	return insertSQLs

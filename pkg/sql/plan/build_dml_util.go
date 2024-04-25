@@ -574,7 +574,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 										// in the index table will be same value (ie that from the original table).
 										// So, when we do UNION it automatically removes the duplicate values.
 										// ie
-										//  <"a_arjun_1",1, 1> -->  (select serial_full("1", a, c),__mo_pk_key, __mo_row_id)
+										//  <"a_arjun_1",1, 1> -->  (select serial_full("0", a, c),__mo_pk_key, __mo_row_id)
 										//  <"a_arjun_1",1, 1>
 										//  <"b_sunil_1",1, 1> -->  (select serial_full("2", b,c),__mo_pk_key, __mo_row_id)
 										//  <"b_sunil_1",1, 1>
@@ -2463,10 +2463,10 @@ func buildSerialFullAndPKColsProj(builder *QueryBuilder, bindCtx *BindContext, t
 	//2. recompute CP PK.
 	currLastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, currLastNodeId, originPkPos)
 
-	//3. add a new project for < serial_full("1", a, pk), pk >
+	//3. add a new project for < serial_full("0", a, pk), pk >
 	projectProjection := make([]*Expr, 2)
 
-	//3.i build serial_full("1", a, pk)
+	//3.i build serial_full("0", a, pk)
 	serialArgs := make([]*plan.Expr, 3)
 	serialArgs[0] = makePlan2StringConstExprWithType(getColIdxFromColPos(colsPos[part]))
 	serialArgs[1] = &Expr{
