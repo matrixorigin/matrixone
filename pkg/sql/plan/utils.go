@@ -2094,23 +2094,3 @@ func (builder *QueryBuilder) addNameByColRef(tag int32, tableDef *plan.TableDef)
 		builder.nameByColRef[[2]int32{tag, int32(i)}] = tableDef.Name + "." + col.Name
 	}
 }
-
-func GetRowSizeFromTableDef(tableDef *TableDef, ignoreHiddenKey bool) float64 {
-	size := int32(0)
-	for _, col := range tableDef.Cols {
-		if col.Hidden && ignoreHiddenKey {
-			continue
-		}
-		if col.Typ.Width > 0 {
-			size += col.Typ.Width
-			continue
-		}
-		typ := types.T(col.Typ.Id).ToType()
-		if typ.Width > 0 {
-			size += typ.Width
-		} else {
-			size += typ.Size
-		}
-	}
-	return float64(size)
-}
