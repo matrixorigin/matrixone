@@ -37,6 +37,7 @@ type rowsIter struct {
 	iterDeleted  bool
 }
 
+// NewRowsIter creates a new iterator for data rows and tombstones.
 func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDeleted bool) *rowsIter {
 	iter := p.rows.Copy().Iter()
 	ret := &rowsIter{
@@ -85,6 +86,7 @@ func (p *rowsIter) Next() bool {
 			// not visible
 			continue
 		}
+		//FIXME::??
 		if entry.RowID.Equal(p.lastRowID) {
 			// already met
 			continue

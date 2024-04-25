@@ -39,8 +39,14 @@ import (
 type PartitionState struct {
 	// also modify the Copy method if adding fields
 
-	// data
-	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
+	//TODO:: remove it.
+	rows       *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
+	tombstones *btree.BTreeG[ObjTombstoneRowEntry]
+
+	//TODO:: remove it.
+	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
+	dataRows     *btree.BTreeG[ObjDataRowEntry]
+
 	//table data objects
 	dataObjects           *btree.BTreeG[ObjectEntry]
 	dataObjectsByCreateTS *btree.BTreeG[ObjectIndexByCreateTSEntry]
@@ -50,8 +56,6 @@ type PartitionState struct {
 	start       types.TS
 	end         types.TS
 
-	// index
-	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 	//for non-appendable block's memory deletes, used to getting dirty
 	// non-appendable blocks quickly.
 	//TODO::remove it
@@ -78,6 +82,59 @@ type sharedStates struct {
 	sync.Mutex
 	// last block flush timestamp for table
 	lastFlushTimestamp types.TS
+}
+
+type ObjTombstoneRowEntry struct {
+	ShortObjName objectio.ObjectNameShort
+
+	//tombstones belong to this object.
+	Tombstones atomic.Pointer[btree.BTreeG[TombstoneRowEntry]]
+}
+
+func (o ObjTombstoneRowEntry) Less(than ObjTombstoneRowEntry) bool {
+	return bytes.Compare(o.ShortObjName[:], than.ShortObjName[:]) < 0
+}
+
+type ObjDataRowEntry struct {
+	ShortObjName objectio.ObjectNameShort
+
+	DataRows atomic.Pointer[btree.BTreeG[DataRowEntry]]
+}
+
+func (o ObjDataRowEntry) Less(than ObjDataRowEntry) bool {
+	return bytes.Compare(o.ShortObjName[:], than.ShortObjName[:]) < 0
+}
+
+type TombstoneRowEntry struct {
+	RowID types.Rowid
+
+	PK   []byte
+	Time types.TS
+}
+
+func (t TombstoneRowEntry) Less(than TombstoneRowEntry) bool {
+	//asc
+	cmp := t.RowID.CloneBlockID().Compare(than.RowID.CloneBlockID())
+	if cmp < 0 {
+		return true
+	}
+	if cmp > 0 {
+		return false
+	}
+	return t.RowID.GetRowOffset() < than.RowID.GetRowOffset()
+}
+
+type DataRowEntry struct {
+	PK []byte
+
+	RowID  types.Rowid
+	Time   types.TS
+	Batch  *batch.Batch
+	Offset int64
+}
+
+func (d DataRowEntry) Less(than DataRowEntry) bool {
+	return bytes.Compare(d.PK, than.PK) < 0
 }
 
 // RowEntry represents a version of a row
