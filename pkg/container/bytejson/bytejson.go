@@ -870,7 +870,10 @@ func (p *parser) writeAny(raw bool, v any) (TpCode, uint32, error) {
 			loc := uint32(8 + n*(4+2+1+4))
 			for i, k := range keys {
 				o := baseOffset + 8 + i*6
-				length := uint32(len(k)) // todo
+				length := uint32(len(k))
+				if length > math.MaxUint16 {
+					return 0, 0, moerr.NewInvalidInputNoCtx("json key %s", k)
+				}
 				endian.PutUint32(p.dst[o:], loc)
 				endian.PutUint16(p.dst[o+4:], uint16(length))
 				loc += length
