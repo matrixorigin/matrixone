@@ -28,13 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type CNMergeTask struct {
+type cnMergeTask struct {
 	ctx  context.Context
 	host *txnTable
 	// txn
@@ -61,9 +60,11 @@ type CNMergeTask struct {
 
 	blkCnts  []int
 	blkIters []*StatsBlkIter
+
+	targetObjSize uint32
 }
 
-func NewCNMergeTask(
+func newCNMergeTask(
 	ctx context.Context,
 	tbl *txnTable,
 	snapshot types.TS,
@@ -71,7 +72,8 @@ func NewCNMergeTask(
 	sortkeyPos int,
 	sortkeyIsPK bool,
 	targets []logtailreplay.ObjectInfo,
-) (*CNMergeTask, error) {
+	targetObjSize uint32,
+) (*cnMergeTask, error) {
 	proc := tbl.proc.Load()
 	attrs := make([]string, 0, len(tbl.seqnums))
 	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
@@ -93,7 +95,7 @@ func NewCNMergeTask(
 		blkIters[i] = NewStatsBlkIter(&objInfo.ObjectStats, meta.MustDataMeta())
 	}
 
-	return &CNMergeTask{
+	return &cnMergeTask{
 		ctx:         ctx,
 		host:        tbl,
 		snapshot:    snapshot,
@@ -109,18 +111,20 @@ func NewCNMergeTask(
 		fs:          fs,
 		blkCnts:     blkCnts,
 		blkIters:    blkIters,
+
+		targetObjSize: targetObjSize,
 	}, nil
 }
 
-func (t *CNMergeTask) GetObjectCnt() int {
+func (t *cnMergeTask) GetObjectCnt() int {
 	return len(t.targets)
 }
 
-func (t *CNMergeTask) GetBlkCnts() []int {
+func (t *cnMergeTask) GetBlkCnts() []int {
 	return t.blkCnts
 }
 
-func (t *CNMergeTask) GetAccBlkCnts() []int {
+func (t *cnMergeTask) GetAccBlkCnts() []int {
 	accCnt := make([]int, 0, len(t.targets))
 	acc := 0
 	for _, objInfo := range t.targets {
@@ -130,22 +134,22 @@ func (t *CNMergeTask) GetAccBlkCnts() []int {
 	return accCnt
 }
 
-func (t *CNMergeTask) GetBlockMaxRows() uint32 {
+func (t *cnMergeTask) GetBlockMaxRows() uint32 {
 	return options.DefaultBlockMaxRows
 }
 
-func (t *CNMergeTask) GetTargetObjSize() uint32 {
-	return 128 * common.Const1MBytes
+func (t *cnMergeTask) GetTargetObjSize() uint32 {
+	return t.targetObjSize
 }
 
-func (t *CNMergeTask) GetSortKeyType() types.Type {
+func (t *cnMergeTask) GetSortKeyType() types.Type {
 	if t.sortkeyPos >= 0 {
 		return t.coltypes[t.sortkeyPos]
 	}
 	return types.Type{}
 }
 
-func (t *CNMergeTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
+func (t *cnMergeTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
 	iter := t.blkIters[objIdx]
 	if iter.Next() {
 		blk := iter.Entry()
@@ -166,7 +170,7 @@ func (t *CNMergeTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, 
 	return nil, nil, nil, mergesort.ErrNoMoreBlocks
 }
 
-func (t *CNMergeTask) GetCommitEntry() *api.MergeCommitEntry {
+func (t *cnMergeTask) GetCommitEntry() *api.MergeCommitEntry {
 	if t.commitEntry == nil {
 		return t.prepareCommitEntry()
 	}
@@ -174,23 +178,23 @@ func (t *CNMergeTask) GetCommitEntry() *api.MergeCommitEntry {
 }
 
 // impl DisposableVecPool
-func (t *CNMergeTask) GetVector(typ *types.Type) (*vector.Vector, func()) {
+func (t *cnMergeTask) GetVector(typ *types.Type) (*vector.Vector, func()) {
 	v := t.proc.GetVector(*typ)
 	return v, func() { t.proc.PutVector(v) }
 }
 
-func (t *CNMergeTask) GetMPool() *mpool.MPool {
+func (t *cnMergeTask) GetMPool() *mpool.MPool {
 	return t.proc.GetMPool()
 }
 
-func (t *CNMergeTask) HostHintName() string { return "CN" }
+func (t *cnMergeTask) HostHintName() string { return "CN" }
 
-func (t *CNMergeTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error) {
+func (t *cnMergeTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error) {
 	r, release, d, e := t.readAllData()
 	return r, d, release, e
 }
 
-func (t *CNMergeTask) GetTotalSize() uint32 {
+func (t *cnMergeTask) GetTotalSize() uint32 {
 	totalSize := uint32(0)
 	for _, obj := range t.targets {
 		totalSize += obj.OriginSize()
@@ -198,7 +202,7 @@ func (t *CNMergeTask) GetTotalSize() uint32 {
 	return totalSize
 }
 
-func (t *CNMergeTask) GetTotalRowCnt() uint32 {
+func (t *cnMergeTask) GetTotalRowCnt() uint32 {
 	totalRowCnt := uint32(0)
 	for _, obj := range t.targets {
 		totalRowCnt += obj.Rows()
@@ -206,7 +210,7 @@ func (t *CNMergeTask) GetTotalRowCnt() uint32 {
 	return totalRowCnt
 }
 
-func (t *CNMergeTask) prepareCommitEntry() *api.MergeCommitEntry {
+func (t *cnMergeTask) prepareCommitEntry() *api.MergeCommitEntry {
 	commitEntry := &api.MergeCommitEntry{}
 	commitEntry.DbId = t.host.db.databaseId
 	commitEntry.TblId = t.host.tableId
@@ -220,11 +224,11 @@ func (t *CNMergeTask) prepareCommitEntry() *api.MergeCommitEntry {
 	return commitEntry
 }
 
-func (t *CNMergeTask) PrepareNewWriter() *blockio.BlockWriter {
+func (t *cnMergeTask) PrepareNewWriter() *blockio.BlockWriter {
 	return mergesort.GetNewWriter(t.fs, t.version, t.colseqnums, t.sortkeyPos, t.sortkeyIsPK)
 }
 
-func (t *CNMergeTask) readAllData() ([]*batch.Batch, func(), []*nulls.Nulls, error) {
+func (t *cnMergeTask) readAllData() ([]*batch.Batch, func(), []*nulls.Nulls, error) {
 	var cnt uint32
 	for _, t := range t.targets {
 		cnt += t.BlkCnt()
@@ -284,7 +288,7 @@ func (t *CNMergeTask) readAllData() ([]*batch.Batch, func(), []*nulls.Nulls, err
 }
 
 // readblock reads block data. there is no rowid column, no ablk
-func (t *CNMergeTask) readblock(info *objectio.BlockInfo) (bat *batch.Batch, dels *nulls.Nulls, release func(), err error) {
+func (t *cnMergeTask) readblock(info *objectio.BlockInfo) (bat *batch.Batch, dels *nulls.Nulls, release func(), err error) {
 	// read data
 	bat, release, err = blockio.LoadColumns(t.ctx, t.colseqnums, t.coltypes, t.fs, info.MetaLocation(), t.proc.GetMPool(), fileservice.Policy(0))
 	if err != nil {

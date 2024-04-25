@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/docker/go-units"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -29,10 +30,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// parameter should be "DbName.TableName obj1,obj2,obj3..."
-func parseArg(parameter string) (db, tbl string, targets []objectio.ObjectStats, err error) {
+// parameter should be "DbName.TableName obj1,obj2,obj3... targetObjSize"
+func parseArg(parameter string) (db, tbl string, targets []objectio.ObjectStats, targetObjSize int64, err error) {
 	parameters := strings.Split(parameter, " ")
-	if len(parameters) != 2 {
+	if len(parameters) != 2 || len(parameters) != 3 {
 		err = moerr.NewInternalErrorNoCtx("handleMerge: invalid parameter")
 		return
 	}
@@ -47,17 +48,25 @@ func parseArg(parameter string) (db, tbl string, targets []objectio.ObjectStats,
 		parts := strings.Split(objstrs, "_")
 		uuid, err := types.ParseUuid(parts[0])
 		if err != nil {
-			return "", "", nil, err
+			return "", "", nil, 0, err
 		}
 		num, err := strconv.Atoi(parts[1])
 		if err != nil {
-			return "", "", nil, err
+			return "", "", nil, 0, err
 		}
 		objectname := objectio.BuildObjectName(&uuid, uint16(num))
 
 		obj := objectio.NewObjectStats()
 		objectio.SetObjectStatsObjectName(obj, objectname)
 		targets = append(targets, *obj)
+	}
+	if len(parameters) == 2 {
+		return
+	}
+
+	targetObjSize, err = units.RAMInBytes(parameters[2])
+	if err != nil {
+		return "", "", nil, 0, err
 	}
 	return
 }
@@ -73,7 +82,7 @@ func handleMerge() handleFunc {
 			if proc.TxnOperator == nil {
 				return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: txn operator is nil")
 			}
-			db, tbl, targets, err := parseArg(parameter)
+			db, tbl, targets, targetObjSize, err := parseArg(parameter)
 			if err != nil {
 				return nil, err
 			}
@@ -103,7 +112,7 @@ func handleMerge() handleFunc {
 				logutil.Errorf("mergeblocks err on cn, table %s, err %s", db, err.Error())
 				return nil, err
 			}
-			entry, err := rel.MergeObjects(proc.Ctx, targets)
+			entry, err := rel.MergeObjects(proc.Ctx, targets, uint32(targetObjSize))
 			if err != nil {
 				merge.CleanUpUselessFiles(entry, proc.FileService)
 				return nil, err

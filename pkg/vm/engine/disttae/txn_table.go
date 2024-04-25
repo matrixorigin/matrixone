@@ -2729,7 +2729,7 @@ func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, erro
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
 }
 
-func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats) (*api.MergeCommitEntry, error) {
+func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
 	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
@@ -2761,11 +2761,11 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 
 	tbl.ensureSeqnumsAndTypesExpectRowid()
 
-	taskHost, err := NewCNMergeTask(
+	taskHost, err := newCNMergeTask(
 		ctx, tbl, snapshot, state, // context
 		sortkeyPos, sortkeyIsPK, // schema
 		objInfos, // targets
-	)
+		targetObjSize)
 	if err != nil {
 		return nil, err
 	}
