@@ -554,6 +554,9 @@ func FuzzParseJsonByteFromString(f *testing.F) {
 	f.Add("1E1000")
 	f.Add("{\"\":")
 	f.Add("{\"\":0}")
+	f.Add("null")
+	f.Add("true")
+	f.Add("false")
 	f.Fuzz(func(t *testing.T, s string) {
 		valid := true
 		var v any
