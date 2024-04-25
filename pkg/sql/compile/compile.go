@@ -2127,17 +2127,32 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		attrs[j] = col.Name
 	}
 
-	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
-	} else {
-		txnOp = c.proc.TxnOperator
+	//-----------------------------------------------------------------------------------------------------
+	//if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+	//	txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+	//} else {
+	//	txnOp = c.proc.TxnOperator
+	//}
+
+	ctx := c.ctx
+	txnOp = c.proc.TxnOperator
+	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
+		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+			n.ScanSnapshot.TS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+
+			if n.ScanSnapshot.CreatedByTenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.CreatedByTenant.TenantID)
+			}
+		}
 	}
+	//-----------------------------------------------------------------------------------------------------
 
 	if c.proc != nil && c.proc.TxnOperator != nil {
 		ts = txnOp.Txn().SnapshotTS
 	}
 	{
-		ctx := c.ctx
+		//ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
@@ -3631,7 +3646,28 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 	var db engine.Database
 	var ranges engine.Ranges
 	var txnOp client.TxnOperator
+
+	//-----------------------------------------------------------------------------------------------------
+	//if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+	//	txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+	//} else {
+	//	txnOp = c.proc.TxnOperator
+	//}
+
 	ctx := c.ctx
+	txnOp = c.proc.TxnOperator
+	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
+		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+			n.ScanSnapshot.TS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+
+			if n.ScanSnapshot.CreatedByTenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.CreatedByTenant.TenantID)
+			}
+		}
+	}
+	//-----------------------------------------------------------------------------------------------------
+
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
@@ -3640,12 +3676,6 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 	}
 	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	}
-
-	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
-	} else {
-		txnOp = c.proc.TxnOperator
 	}
 
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
@@ -3715,18 +3745,33 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var nodes engine.Nodes
 	var txnOp client.TxnOperator
 
-	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
-	} else {
-		txnOp = c.proc.TxnOperator
+	//------------------------------------------------------------------------------------------------------------------
+	//if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+	//	txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+	//} else {
+	//	txnOp = c.proc.TxnOperator
+	//}
+
+	ctx := c.ctx
+	txnOp = c.proc.TxnOperator
+	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
+		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+			n.ScanSnapshot.TS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+
+			if n.ScanSnapshot.CreatedByTenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.CreatedByTenant.TenantID)
+			}
+		}
 	}
+	//-------------------------------------------------------------------------------------------------------------
 
 	isPartitionTable := false
 	if n.TableDef.Partition != nil {
 		isPartitionTable = true
 	}
 
-	ctx := c.ctx
+	//ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}

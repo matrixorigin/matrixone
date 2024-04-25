@@ -837,9 +837,23 @@ message Node {
 	repeated msgHeader send_msg_list = 55;
 	repeated msgHeader recv_msg_list = 56;
 
-	// table_scan timestamp
-	timestamp.Timestamp scanTS = 57;
+	Snapshot scan_snapshot = 57;
 }
+
+// Snapshot Represents a snapshot of the database
+message Snapshot {
+	// The timestamp of the snapshot
+	timestamp.Timestamp TS = 1;
+	// Tenant information for creating snapshots
+	SnapshotTenant createdByTenant = 2;
+}
+
+// Tenant information for creating snapshots
+message SnapshotTenant {
+	string tenantName = 1;
+	uint32 tenantID = 2;
+}
+
 
 message ExternScan {
     int32 type = 1;

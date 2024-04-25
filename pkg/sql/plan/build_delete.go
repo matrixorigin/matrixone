@@ -89,7 +89,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 			partTableIds := make([]uint64, tableDef.Partition.PartitionNum)
 			partTableNames := make([]string, tableDef.Partition.PartitionNum)
 			for j, partition := range tableDef.Partition.Partitions {
-				_, partTableDef := ctx.Resolve(tblInfo.objRef[i].SchemaName, partition.PartitionTableName, timestamp.Timestamp{})
+				_, partTableDef := ctx.Resolve(tblInfo.objRef[i].SchemaName, partition.PartitionTableName, Snapshot{TS: &timestamp.Timestamp{}})
 				partTableIds[j] = partTableDef.TblId
 				partTableNames[j] = partition.PartitionTableName
 			}

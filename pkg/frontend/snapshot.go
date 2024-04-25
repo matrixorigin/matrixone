@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"time"
 
 	"github.com/google/uuid"
@@ -235,12 +236,13 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	snapshotName := string(stmt.SnapShotName)
 	toAccountName := string(stmt.ToAccountName)
 
-	accountId := getAccountIdByName(ctx, ses, bh, srcAccountName)
+	accountId := getAccountId(ctx, bh, srcAccountName)
 	if accountId == -1 {
 		return moerr.NewInternalError(ctx, fmt.Sprintf("account does not exist, account name: %s", srcAccountName))
 	}
+
 	// default restore to self
-	toAccountId := accountId
+	toAccountId := ses.GetAccountId()
 
 	// can't restore to another account if cur account is not sys
 	if len(toAccountName) > 0 {
@@ -252,9 +254,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 
 		newAccountName := string(stmt.ToAccountName)
-		if toAccountId = getAccountIdByName(ctx, ses, bh, newAccountName); toAccountId == -1 {
+		tenantId := getAccountId(ctx, bh, newAccountName)
+		if tenantId == -1 {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("account does not exist, account name: %s", newAccountName))
 		}
+		toAccountId = uint32(tenantId)
 	}
 
 	// check if snapShot exists
@@ -348,7 +352,7 @@ func restoreToDatabase(ctx context.Context, ses *Session, bh BackgroundExec, sna
 	return
 }
 
-func restoreToTable(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, accountId uint32, dbName string, tblName string, toAccountId uint32) (err error) {
+func restoreToTable(ctx context.Context, ses *Session, bh BackgroundExec, snapShot string, accountId uint32, schemaName string, tableName string, toAccountId uint32) (err error) {
 	if bh == nil {
 		bh = ses.GetBackgroundExec(ctx)
 		defer bh.Close()
@@ -361,26 +365,50 @@ func restoreToTable(ctx context.Context, ses *Session, bh BackgroundExec, snapsh
 		}()
 	}
 
-	if err = bh.Exec(ctx, "create database if not exists "+dbName); err != nil {
-		return
-	}
-
-	if err = bh.Exec(ctx, "drop table if exists "+dbName+"."+tblName); err != nil {
-		return
-	}
+	currentAccountId := ses.GetAccountId()
 
 	// create table
-	createTableSql, err := getCreateTableSql(ctx, bh, snapshotName, dbName, tblName)
-	if err != nil {
-		return err
-	}
-	if err = bh.Exec(ctx, createTableSql); err != nil {
-		return
+	createTableSql, rtnErr := getTableDefFromSnapshot(ctx, bh, snapShot, schemaName, tableName)
+	if rtnErr != nil {
+		return rtnErr
 	}
 
-	// insert data
-	insertIntoSql := fmt.Sprintf(restoreTableDataFmt, dbName, tblName, dbName, tblName, snapshotName)
-	return bh.Exec(ctx, insertIntoSql)
+	restoreTable := func(execCxt context.Context) (rtnErr error) {
+		rtnErr = bh.Exec(execCxt, "create database if not exists "+schemaName)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		rtnErr = bh.Exec(execCxt, "drop table if exists "+schemaName+"."+tableName)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		rtnErr = bh.Exec(execCxt, "use "+schemaName)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		rtnErr = bh.Exec(execCxt, createTableSql)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		restoreTableSql := fmt.Sprintf(restoreTableDataFmt, schemaName, tableName, schemaName, tableName, snapShot)
+		if currentAccountId == toAccountId {
+			return bh.Exec(execCxt, restoreTableSql)
+		} else {
+			return bh.ExecRestore(execCxt, restoreTableSql, accountId, toAccountId)
+		}
+	}
+
+	if currentAccountId == toAccountId {
+		return restoreTable(ctx)
+	} else {
+		//with new tenant
+		toTenantCtx := defines.AttachAccount(ctx, uint32(toAccountId), uint32(GetAdminUserId()), uint32(accountAdminRoleID))
+		return restoreTable(toTenantCtx)
+	}
 }
 
 func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotName string) (bool, error) {
@@ -547,4 +575,32 @@ func getCreateTableSql(ctx context.Context, bh BackgroundExec, snapshotName stri
 	}
 
 	return resultSet[0].GetString(ctx, 0, 1)
+}
+
+func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) int32 {
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+	sql := getAccountIdNamesSql
+	if len(accountName) > 0 {
+		sql += fmt.Sprintf(" and account_name = '%s'", accountName)
+	}
+
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return -1
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return -1
+	}
+
+	if execResultArrayHasData(erArray) {
+		if accountId, err := erArray[0].GetInt64(ctx, 0, 0); err != nil {
+			return -1
+		} else {
+			return int32(accountId)
+		}
+	}
+
+	return -1
 }

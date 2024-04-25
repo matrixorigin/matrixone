@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -1779,7 +1778,7 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 }
 
 // databaseIsValid checks whether the database exists or not.
-func databaseIsValid(dbName string, ctx CompilerContext, ts timestamp.Timestamp) (string, error) {
+func databaseIsValid(dbName string, ctx CompilerContext, snapshot Snapshot) (string, error) {
 	connectDBFirst := false
 	if len(dbName) == 0 {
 		connectDBFirst = true
@@ -1788,7 +1787,7 @@ func databaseIsValid(dbName string, ctx CompilerContext, ts timestamp.Timestamp)
 		dbName = ctx.DefaultDatabase()
 	}
 
-	if len(dbName) == 0 || !ctx.DatabaseExists(dbName, ts) {
+	if len(dbName) == 0 || !ctx.DatabaseExists(dbName, snapshot) {
 		if connectDBFirst {
 			return "", moerr.NewNoDB(ctx.GetContext())
 		} else {

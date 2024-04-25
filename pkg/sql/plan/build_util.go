@@ -654,12 +654,12 @@ func rewriteForCreateTableLike(stmt *tree.CreateTable, ctx CompilerContext) (new
 
 	tblName := formatStr(string(oldTable.ObjectName))
 	dbName := formatStr(string(oldTable.SchemaName))
-	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, timestamp.Timestamp{})
+	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, Snapshot{TS: &timestamp.Timestamp{}})
 	if err != nil {
 		return nil, err
 	}
 
-	_, tableDef := ctx.Resolve(dbName, tblName, timestamp.Timestamp{})
+	_, tableDef := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -838,7 +838,7 @@ func rewriteForCreateTableLike(stmt *tree.CreateTable, ctx CompilerContext) (new
 		if fk.ForeignTbl == 0 {
 			fkTableDef = tableDef
 		} else {
-			_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, timestamp.Timestamp{})
+			_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
 		}
 
 		fkColIdToName := make(map[uint64]string)

@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -48,7 +50,7 @@ func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.Create
 		dbName = ses.GetDatabaseName()
 	}
 	tableName := string(st.Table.Name())
-	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName, timestamp.Timestamp{})
+	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
@@ -106,7 +108,7 @@ func handleCreateConnector(ctx context.Context, ses *Session, st *tree.CreateCon
 	}
 	dbName := string(st.TableName.Schema())
 	tableName := string(st.TableName.Name())
-	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName, timestamp.Timestamp{})
+	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}

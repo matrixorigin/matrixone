@@ -17,12 +17,16 @@ package tree
 // the INSERT statement.
 type Insert struct {
 	statementImpl
-	Table             TableExpr
+	Table TableExpr
+
 	Accounts          IdentifierList
 	PartitionNames    IdentifierList
 	Columns           IdentifierList
 	Rows              *Select
 	OnDuplicateUpdate UpdateExprs
+	IsRestore         bool
+	DestTableTenantID uint32
+	FromDataTenantID  uint32
 }
 
 func (node *Insert) Format(ctx *FmtCtx) {

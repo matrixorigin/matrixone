@@ -899,6 +899,9 @@ type UserInput struct {
 	sql           string
 	stmt          tree.Statement
 	sqlSourceType []string
+	isRetstore    bool
+	fromAccount   uint32
+	toAccount     uint32
 }
 
 func (ui *UserInput) getSql() string {

@@ -100,6 +100,57 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	return doComQueryInBack(ctx, back.backSes, &UserInput{sql: sql})
 }
 
+func (back *backExec) ExecRestore(ctx context.Context, sql string, fromAccount uint32, toAccount uint32) error {
+	if ctx == nil {
+		ctx = back.backSes.GetRequestContext()
+	} else {
+		back.backSes.SetRequestContext(ctx)
+	}
+	_, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	// For determine this is a background sql.
+	ctx = context.WithValue(ctx, defines.BgKey{}, true)
+	back.backSes.requestCtx = ctx
+	//logutil.Debugf("-->bh:%s", sql)
+	v, err := back.backSes.GetGlobalVar("lower_case_table_names")
+	if err != nil {
+		return err
+	}
+	statements, err := mysql.Parse(ctx, sql, v.(int64), 0)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		for _, stmt := range statements {
+			stmt.Free()
+		}
+	}()
+	if len(statements) > 1 {
+		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
+	}
+	//share txn can not run transaction statement
+	if back.backSes.GetTxnHandler().IsShareTxn() {
+		for _, stmt := range statements {
+			switch stmt.(type) {
+			case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+				return moerr.NewInternalError(ctx, "Exec() can not run transaction statement in share transaction, sql = %s", sql)
+			}
+		}
+	}
+
+	userInput := &UserInput{
+		sql:         sql,
+		isRetstore:  true,
+		fromAccount: fromAccount,
+		toAccount:   toAccount,
+	}
+
+	return doComQueryInBack(ctx, back.backSes, userInput)
+}
+
 func (back *backExec) ExecStmt(ctx context.Context, statement tree.Statement) error {
 	return nil
 }
@@ -226,6 +277,13 @@ func doComQueryInBack(requestCtx context.Context,
 	for i, cw := range cws {
 		backSes.mrs = &MysqlResultSet{}
 		stmt := cw.GetAst()
+
+		if insertStmt, ok := stmt.(*tree.Insert); ok && input.isRetstore {
+			insertStmt.IsRestore = true
+			insertStmt.FromDataTenantID = input.fromAccount
+			insertStmt.DestTableTenantID = input.toAccount
+		}
+
 		tenant := backSes.GetTenantNameWithStmt(stmt)
 
 		/*
@@ -990,7 +1048,7 @@ func (sh *SqlHelper) GetCompilerContext() any {
 }
 
 func (sh *SqlHelper) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
-	return sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName, timestamp.Timestamp{})
+	return sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
 }
 
 // Made for sequence func. nextval, setval.

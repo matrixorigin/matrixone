@@ -32,6 +32,8 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -64,7 +66,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 func createDropDatabaseErrorInfo() string {
@@ -2025,12 +2026,12 @@ func buildPlan(requestCtx context.Context, ses FeSession, ctx plan2.CompilerCont
 	return ret, err
 }
 
-func checkModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool {
-	if plan2 == nil {
+func checkModify(execPlan *plan.Plan, proc *process.Process, ses *Session) bool {
+	if execPlan == nil {
 		return true
 	}
 	checkFn := func(db string, tableName string, tableId uint64, version uint32) bool {
-		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, tableName, timestamp.Timestamp{})
+		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, tableName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
 		if tableDef == nil {
 			return true
 		}
@@ -2039,7 +2040,7 @@ func checkModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool {
 		}
 		return false
 	}
-	switch p := plan2.Plan.(type) {
+	switch p := execPlan.Plan.(type) {
 	case *plan.Plan_Query:
 		for i := range p.Query.Nodes {
 			if def := p.Query.Nodes[i].TableDef; def != nil {
