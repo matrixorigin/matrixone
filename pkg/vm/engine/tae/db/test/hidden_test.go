@@ -186,7 +186,7 @@ func TestHiddenWithPK1(t *testing.T) {
 				if meta.IsAppendable() {
 					assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
 				} else {
-					if objIdx == 0 {
+					if j != 2 {
 						assert.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, offsets)
 					} else {
 						assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
