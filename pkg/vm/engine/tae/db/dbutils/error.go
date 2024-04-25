@@ -19,8 +19,5 @@ import (
 )
 
 func IsRetrieableCheckpoint(err error) bool {
-	if moerr.IsMoErrCode(err, moerr.ErrPrevCheckpointNotFinished) {
-		return true
-	}
-	return false
+	return moerr.IsMoErrCode(err, moerr.ErrPrevCheckpointNotFinished)
 }
