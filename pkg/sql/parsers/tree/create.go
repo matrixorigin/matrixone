@@ -921,21 +921,22 @@ type CreateTable struct {
 		it is impossible to be the temporary table, the cluster table,
 		the normal table and the external table at the same time.
 	*/
-	Temporary       bool
-	IsClusterTable  bool
-	IfNotExists     bool
-	Table           TableName
-	Defs            TableDefs
-	Options         []TableOption
-	PartitionOption *PartitionOption
-	ClusterByOption *ClusterByOption
-	Param           *ExternParam
-	AsSource        *Select
-	IsDynamicTable  bool
-	DTOptions       []TableOption
-	IsAsSelect      bool
-	IsAsLike        bool
-	LikeTableName   TableName
+	Temporary          bool
+	IsClusterTable     bool
+	IfNotExists        bool
+	Table              TableName
+	Defs               TableDefs
+	Options            []TableOption
+	PartitionOption    *PartitionOption
+	ClusterByOption    *ClusterByOption
+	Param              *ExternParam
+	AsSource           *Select
+	IsDynamicTable     bool
+	DTOptions          []TableOption
+	IsAsSelect         bool
+	IsAsLike           bool
+	LikeTableName      TableName
+	SubscriptionOption *SubscriptionOption
 }
 
 func NewCreateTable() *CreateTable {
@@ -972,7 +973,9 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		return
 	}
 
-	if node.IsDynamicTable {
+	if node.SubscriptionOption != nil {
+		node.SubscriptionOption.Format(ctx)
+	} else if node.IsDynamicTable {
 		ctx.WriteString(" as ")
 		node.AsSource.Format(ctx)
 
@@ -5312,15 +5315,17 @@ type CreatePublication struct {
 	IfNotExists bool
 	Name        Identifier
 	Database    Identifier
+	Table       Identifier
 	AccountsSet *AccountsSetOption
 	Comment     string
 }
 
-func NewCreatePublication(ife bool, n Identifier, db Identifier, as *AccountsSetOption, c string) *CreatePublication {
+func NewCreatePublication(ife bool, n Identifier, db Identifier, table Identifier, as *AccountsSetOption, c string) *CreatePublication {
 	cp := reuse.Alloc[CreatePublication](nil)
 	cp.IfNotExists = ife
 	cp.Name = n
 	cp.Database = db
+	cp.Table = table
 	cp.AccountsSet = as
 	cp.Comment = c
 	return cp
@@ -5332,8 +5337,13 @@ func (node *CreatePublication) Format(ctx *FmtCtx) {
 		ctx.WriteString(" if not exists")
 	}
 	node.Name.Format(ctx)
-	ctx.WriteString(" database ")
-	node.Database.Format(ctx)
+	if node.Database != "" {
+		ctx.WriteString(" database ")
+		node.Database.Format(ctx)
+	} else {
+		ctx.WriteString(" table ")
+		node.Table.Format(ctx)
+	}
 	if node.AccountsSet != nil && len(node.AccountsSet.SetAccounts) > 0 {
 		ctx.WriteString(" account ")
 		prefix := ""
