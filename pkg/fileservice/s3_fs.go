@@ -140,9 +140,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 		s.diskCache, err = NewDiskCache(
 			ctx,
 			*config.DiskPath,
-			int64(*config.DiskCapacity),
-			config.DiskMinEvictInterval.Duration,
-			*config.DiskEvictTarget,
+			int(*config.DiskCapacity),
 			s.perfCounterSets,
 		)
 		if err != nil {

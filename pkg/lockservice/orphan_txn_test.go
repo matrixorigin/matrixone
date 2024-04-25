@@ -114,6 +114,54 @@ func TestCannotUnlockOrphanTxnWithCommunicationInterruption(t *testing.T) {
 	)
 }
 
+func TestCannotUnlockOrphanTxnWithCommittingInAllocator(t *testing.T) {
+	txn1 := []byte{1}
+	txn2 := []byte{2}
+	activeTxns := [][]byte{txn1, txn2}
+
+	remoteLockTimeout := time.Second
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			defer cancel()
+
+			txn1 := []byte{1}
+			txn2 := []byte{2}
+			table1 := uint64(1)
+
+			alloc.getCtl(l1.GetServiceID()).add(string(txn1), committingState)
+			alloc.getCtl(l2.GetServiceID()).add(string(txn2), committingState)
+
+			// table1 on l1
+			mustAddTestLock(t, ctx, l1, table1, txn1, [][]byte{{1}}, pb.Granularity_Row)
+			// txn2 lock row 2 on remote.
+			mustAddTestLock(t, ctx, l2, table1, txn2, [][]byte{{2}}, pb.Granularity_Row)
+
+			require.NoError(t, l2.Close())
+
+			time.Sleep(remoteLockTimeout * 2)
+			txn := l1.activeTxnHolder.getActiveTxn(txn2, false, "")
+			assert.NotNil(t, txn)
+		},
+		func(c *Config) {
+			c.RemoteLockTimeout.Duration = remoteLockTimeout
+			c.KeepRemoteLockDuration.Duration = time.Millisecond * 100
+			c.TxnIterFunc = func(f func([]byte) bool) {
+				for _, txn := range activeTxns {
+					if !f(txn) {
+						return
+					}
+				}
+			}
+		},
+	)
+}
+
 func TestUnlockOrphanTxnWithServiceRestart(t *testing.T) {
 	runLockServiceTestsWithAdjustConfig(
 		t,
@@ -162,7 +210,7 @@ func TestGetTimeoutRemoveTxn(t *testing.T) {
 		"s1",
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) error { return nil },
+		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
 	).(*mapBasedTxnHolder)
 
 	txnID1 := []byte("txn1")
@@ -200,7 +248,7 @@ func TestGetTimeoutRemoveTxnWithValid(t *testing.T) {
 		"s1",
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return sid == "s1", nil },
-		func(ot []pb.OrphanTxn) error { return nil },
+		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
 	).(*mapBasedTxnHolder)
 
 	txnID1 := []byte("txn1")
@@ -242,7 +290,7 @@ func TestGetTimeoutRemoveTxnWithValidErrorAndNotifyOK(t *testing.T) {
 		"s1",
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, ErrTxnNotFound },
-		func(ot []pb.OrphanTxn) error { return nil },
+		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
 	).(*mapBasedTxnHolder)
 
 	txnID1 := []byte("txn1")
@@ -266,7 +314,7 @@ func TestGetTimeoutRemoveTxnWithValidErrorAndNotifyFailed(t *testing.T) {
 		"s1",
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, ErrTxnNotFound },
-		func(ot []pb.OrphanTxn) error { return ErrTxnNotFound },
+		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, ErrTxnNotFound },
 	).(*mapBasedTxnHolder)
 
 	txnID1 := []byte("txn1")
@@ -318,16 +366,19 @@ func TestCannotCommitTxnCanBeRemovedWithNotInActiveTxn(t *testing.T) {
 
 			// wait txn 3 removed
 			for {
-				alloc.mu.RLock()
-				v, ok := alloc.mu.cannotCommit[getUUIDFromServiceIdentifier(l1.serviceID)]
+				v, ok := alloc.ctl.Load(l1.serviceID)
 				require.True(t, ok)
 
-				_, ok = v.txn[string([]byte{1})]
-				if len(v.txn) == 1 && ok {
-					alloc.mu.RUnlock()
+				c := v.(*commitCtl)
+				_, ok = c.states.Load(string([]byte{1}))
+				n := 0
+				c.states.Range(func(key, value any) bool {
+					n++
+					return true
+				})
+				if n == 1 && ok {
 					return
 				}
-				alloc.mu.RUnlock()
 				time.Sleep(time.Millisecond * 10)
 			}
 		},
@@ -377,18 +428,21 @@ func TestCannotCommitTxnCanBeRemovedWithRestart(t *testing.T) {
 
 			// wait txn 3 removed
 			for {
-				alloc.mu.RLock()
-				n := len(alloc.mu.cannotCommit)
+				n := 0
+				alloc.ctl.Range(func(key, value any) bool {
+					n++
+					return true
+				})
+
 				if n == 0 {
-					alloc.mu.RUnlock()
 					return
 				}
-				alloc.mu.RUnlock()
 				time.Sleep(time.Millisecond * 10)
 			}
 		},
 		func(c *Config) {
 			c.TxnIterFunc = fn
+			c.removeDisconnectDuration = time.Millisecond * 50
 		},
 	)
 }

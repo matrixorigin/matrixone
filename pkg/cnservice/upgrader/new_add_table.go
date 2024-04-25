@@ -441,9 +441,9 @@ var MoLocksView = &table.Table{
 		table.StringColumn("lock_status", "acquired or wait"),
 		table.StringColumn("lock_wait", "the txn that waits on the lock"),
 	},
-	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_locks` AS SELECT * FROM mo_locks() AS mo_locks_tmp;",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp",
 	//actually drop view here
-	CreateTableSql: "drop view if exists `mo_catalog`.`mo_locks`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_locks`",
 }
 
 var MoVariablesView = &table.Table{
@@ -459,7 +459,7 @@ var MoVariablesView = &table.Table{
 		table.StringColumn("variable_value", "the value of variable"),
 		table.StringColumn("system_variables", "is system variable or not"),
 	},
-	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_variables` AS SELECT * FROM mo_catalog.mo_mysql_compatibility_mode;",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode",
 	//actually drop view here
 	CreateTableSql: "drop view if exists `mo_catalog`.`mo_variables`;",
 }
@@ -495,9 +495,9 @@ var MoTransactionsView = &table.Table{
 		table.StringColumn("lock_content", "the content the clock is on"),
 		table.StringColumn("lock_mode", "shared or exclusive"),
 	},
-	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_transactions` AS SELECT * FROM mo_transactions() AS mo_transactions_tmp;",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp",
 	//actually drop view here
-	CreateTableSql: "drop view if exists `mo_catalog`.`mo_transactions`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_transactions`",
 }
 
 var MoCacheView = &table.Table{
@@ -512,7 +512,7 @@ var MoCacheView = &table.Table{
 		table.StringColumn("free", "free bytes of the cache"),
 		table.StringColumn("hit_ratio", "the hit ratio of the cache"),
 	},
-	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_cache` AS SELECT * FROM mo_cache() AS mo_cache_tmp;",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp",
 	//actually drop view here
 	CreateTableSql: "drop view if exists `mo_catalog`.`mo_cache`;",
 }
@@ -549,12 +549,7 @@ var transactionMetricView = &table.Table{
 		"where `metric_name` = 'sql_statement_duration_total'",
 }
 
-var registeredViews = []*table.Table{
-	MoLocksView,
-	MoVariablesView,
-	MoTransactionsView,
-	MoCacheView,
-}
+var registeredViews = []*table.Table{}
 
 var needUpgradeNewView = []*table.Table{
 	transactionMetricView,
@@ -704,4 +699,8 @@ var needUpgradeExistingView = []*table.Table{
 	InformationSchemaPARTITIONS,
 	InformationSchemaTABLES,
 	processlistView,
+	MoLocksView,
+	MoVariablesView,
+	MoTransactionsView,
+	MoCacheView,
 }

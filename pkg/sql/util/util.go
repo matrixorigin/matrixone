@@ -213,8 +213,32 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	mo_stored_procedure := tree.NewNumValWithType(constant.MakeString("mo_stored_procedure"), "mo_stored_procedure", false, tree.P_char)
 	mo_stages := tree.NewNumValWithType(constant.MakeString("mo_stages"), "mo_stages", false, tree.P_char)
 
-	notInValues := tree.NewTuple(tree.Exprs{mo_userConst, mo_roleConst, mo_user_grantConst, mo_role_grantConst, mo_role_privsConst,
-		mo_user_defined_functionConst, mo_mysql_compatibility_modeConst, mo_indexes, mo_table_partitions, mo_pubs, mo_stored_procedure, mo_stages})
+	mo_locks := tree.NewNumValWithType(constant.MakeString("mo_locks"), "mo_locks", false, tree.P_char)
+	mo_variables := tree.NewNumValWithType(constant.MakeString("mo_variables"), "mo_variables", false, tree.P_char)
+	mo_transactions := tree.NewNumValWithType(constant.MakeString("mo_transactions"), "mo_transactions", false, tree.P_char)
+	mo_cache := tree.NewNumValWithType(constant.MakeString("mo_cache"), "mo_cache", false, tree.P_char)
+
+	//`CREATE VIEW IF NOT EXISTS mo_sessions AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;`,
+	//`CREATE VIEW IF NOT EXISTS mo_configurations AS SELECT * FROM mo_configurations() AS mo_configurations_tmp;`,
+
+	notInValues := tree.NewTuple(tree.Exprs{
+		mo_userConst,
+		mo_roleConst,
+		mo_user_grantConst,
+		mo_role_grantConst,
+		mo_role_privsConst,
+		mo_user_defined_functionConst,
+		mo_mysql_compatibility_modeConst,
+		mo_indexes,
+		mo_table_partitions,
+		mo_pubs,
+		mo_stored_procedure,
+		mo_stages,
+		mo_locks,
+		mo_variables,
+		mo_transactions,
+		mo_cache,
+	})
 
 	notInexpr := tree.NewComparisonExpr(tree.NOT_IN, att_relnameColName, notInValues)
 
