@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -38,6 +39,31 @@ import (
 
 // 	return nodeID
 // }
+
+// reCheckifNeedLockWholeTable checks if the whole table needs to be locked based on the last node's statistics.
+// It returns true if the out count of the last node is greater than the maximum lock count, otherwise it returns false.
+func reCheckifNeedLockWholeTable(builder *QueryBuilder) {
+	lockService := builder.compCtx.GetProcess().LockService
+	if lockService == nil {
+		// MockCompilerContext
+		return
+	}
+	lockconfig := lockService.GetConfig()
+
+	for _, n := range builder.qry.Nodes {
+		if n.NodeType != plan.Node_LOCK_OP {
+			continue
+		}
+		if !n.LockTargets[0].LockTable {
+			reCheckIfNeed := n.Stats.Outcnt > float64(lockconfig.MaxLockRowCount)
+			if reCheckIfNeed {
+				logutil.Warnf("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
+				logutil.Warnf("the outcnt stats is %f", n.Stats.Outcnt)
+				n.LockTargets[0].LockTable = reCheckIfNeed
+			}
+		}
+	}
+}
 
 // GetFunctionArgTypeStrFromAst function arg type do not have scale and width, it depends on the data that it process
 func GetFunctionArgTypeStrFromAst(arg tree.FunctionArg) (string, error) {

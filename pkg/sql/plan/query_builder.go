@@ -2862,6 +2862,10 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
 	}
 
+	if builder.isForUpdate {
+		reCheckifNeedLockWholeTable(builder)
+	}
+
 	return nodeID, nil
 }
 

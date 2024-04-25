@@ -164,6 +164,8 @@ var (
 
 	// default lower_case_table_names
 	defaultLowerCaseTableNames = "1"
+
+	CNPrimaryCheck = false
 )
 
 // FrontendParameters of the frontend

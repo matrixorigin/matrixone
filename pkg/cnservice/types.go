@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -363,9 +362,9 @@ func (c *Config) Validate() error {
 
 	// pessimistic mode implies primary key check
 	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic || c.PrimaryKeyCheck {
-		plan.CNPrimaryCheck = true
+		config.CNPrimaryCheck = true
 	} else {
-		plan.CNPrimaryCheck = false
+		config.CNPrimaryCheck = false
 	}
 
 	if c.MaxPreparedStmtCount > 0 {

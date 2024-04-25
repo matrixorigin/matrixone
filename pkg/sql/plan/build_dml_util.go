@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 
@@ -33,13 +34,12 @@ import (
 	"golang.org/x/exp/slices"
 )
 
-var CNPrimaryCheck = false
-
 var dmlPlanCtxPool = sync.Pool{
 	New: func() any {
 		return &dmlPlanCtx{}
 	},
 }
+
 var deleteNodeInfoPool = sync.Pool{
 	New: func() any {
 		return &deleteNodeInfo{}
@@ -1175,7 +1175,7 @@ func makeInsertPlan(
 	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 && checkInsertPkDupForHiddenIndexTable {
 		// needCheck := true
 		needCheck := !builder.qry.LoadTag
-		useFuzzyFilter := CNPrimaryCheck
+		useFuzzyFilter := config.CNPrimaryCheck
 		if isUpdate {
 			needCheck = updatePkCol
 			useFuzzyFilter = false
@@ -1376,7 +1376,7 @@ func makeInsertPlan(
 	// The refactor that using fuzzy filter has not been completely finished, Update type Insert cannot directly use fuzzy filter for duplicate detection.
 	//  so the original logic is retained. should be deleted later
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
-	if CNPrimaryCheck && checkInsertPkDupForHiddenIndexTable {
+	if config.CNPrimaryCheck && checkInsertPkDupForHiddenIndexTable {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 			rfTag := builder.genNewTag()
 
