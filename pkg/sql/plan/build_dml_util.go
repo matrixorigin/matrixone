@@ -1576,6 +1576,7 @@ func appendPureInsertBranch(ctx CompilerContext, builder *QueryBuilder, bindCtx 
 		NodeType: plan.Node_INSERT,
 		Children: []int32{lastNodeId},
 		ObjRef:   objRef,
+		TableDef: tableDef,
 		InsertCtx: &plan.InsertCtx{
 			Ref:                 objRef,
 			AddAffectedRows:     addAffectedRows,
