@@ -19,13 +19,16 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"io"
 	"math"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -161,11 +164,11 @@ func (c *objStatArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *objStatArg) String() string {
-	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+		return fmt.Sprintf("%d-%s verbose %v", c.tbl.ID, c.tbl.GetLastestSchema().Name, c.verbose)
+	} else {
+		return fmt.Sprintf("list with top %d", c.topk)
 	}
-	return t
 }
 
 func (c *objStatArg) Run() error {
@@ -188,6 +191,230 @@ func (c *objStatArg) Run() error {
 		}
 		c.ctx.resp.Payload = b.Bytes()
 	}
+	return nil
+}
+
+type pruneTask struct {
+	objs     []*catalog.ObjectEntry
+	insertAt time.Time
+}
+
+type objsPruneTask struct {
+	sync.Mutex
+	memos map[int]pruneTask
+}
+
+func (c *objsPruneTask) PruneLocked() {
+	for id, task := range c.memos {
+		if time.Since(task.insertAt) > 5*time.Minute {
+			delete(c.memos, id)
+		}
+	}
+}
+
+func (c *objsPruneTask) Len() int {
+	c.Lock()
+	defer c.Unlock()
+	return len(c.memos)
+}
+
+var TaskCache = &objsPruneTask{
+	memos: make(map[int]pruneTask),
+}
+
+type objectPruneArg struct {
+	ctx *inspectContext
+	tbl *catalog.TableEntry
+	ago time.Duration
+	ack int
+}
+
+func (c *objectPruneArg) String() string {
+	if c.ack != -1 {
+		return fmt.Sprintf("prune: execute task: %d", c.ack)
+	} else {
+		return fmt.Sprintf("prune: table %v-%v, %v ago, cacheLen %v", c.tbl.ID, c.tbl.GetLastestSchema().Name, c.ago, TaskCache.Len())
+	}
+}
+
+func (c *objectPruneArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	address, _ := cmd.Flags().GetString("target")
+	c.ack, _ = cmd.Flags().GetInt("ack")
+	c.ago, _ = cmd.Flags().GetDuration("duration")
+	if c.ago < 24*time.Hour {
+		return moerr.NewInvalidInputNoCtx("pruning objects within 24h is not supported")
+	}
+	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *objectPruneArg) Run() error {
+	if c.ack != -1 {
+		if err := c.executePrune(); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if c.tbl == nil {
+		return moerr.NewInvalidInputNoCtx("need table target")
+	}
+
+	TaskCache.Lock()
+	TaskCache.PruneLocked()
+	if len(TaskCache.memos) >= 100 {
+		TaskCache.Unlock()
+		return moerr.NewInvalidInputNoCtx("too many cache, try later")
+	}
+	TaskCache.Unlock()
+	entry := c.tbl
+
+	it := entry.MakeObjectIt(true)
+	now := c.ctx.db.TxnMgr.Now()
+	var total, stale, selected int
+	var minR, maxR, totalR, minS, maxS, totalS int
+	ago := types.BuildTS(now.Physical()-int64(c.ago), now.Logical())
+
+	hasDels := func(obj *catalog.ObjectEntry) bool {
+		it := obj.MakeBlockIt(true)
+		for ; it.Valid(); it.Next() {
+			blk := it.Get().GetPayload()
+			if blk.HasPersistedDeltaData() || blk.GetBlockData().GetTotalChanges() > 0 {
+				return true
+			}
+		}
+		return false
+	}
+
+	selectedObjs := make([]*catalog.ObjectEntry, 0, 64)
+
+	for ; it.Valid(); it.Next() {
+		obj := it.Get().GetPayload()
+		if !obj.IsActive() || obj.IsAppendable() {
+			continue
+		}
+		total++
+
+		obj.RLock()
+		createTs := obj.GetCreatedAtLocked()
+		obj.RUnlock()
+		if createTs.GreaterEq(ago) {
+			continue
+		}
+		stale++
+		if hasDels(obj) {
+			continue
+		}
+		selected++
+		selectedObjs = append(selectedObjs, obj)
+		stat := obj.GetObjectStats()
+		rw := int(stat.Rows())
+		sz := int(stat.OriginSize())
+		if minR == 0 || rw < minR {
+			minR = rw
+		}
+		if rw > maxR {
+			maxR = rw
+		}
+		totalR += rw
+		if minS == 0 || sz < minS {
+			minS = sz
+		}
+		if sz > maxS {
+			maxS = sz
+		}
+		totalS += sz
+	}
+
+	if selected == 0 {
+		c.ctx.resp.Payload = []byte(fmt.Sprintf(
+			"total: %d, stale: %d, selected: %d, no valid objs to prune",
+			total, stale, selected,
+		))
+		return nil
+	}
+
+	TaskCache.Lock()
+	var id int
+	for {
+		id = rand.Intn(100)
+		if _, ok := TaskCache.memos[id]; ok {
+			continue
+		}
+		TaskCache.memos[id] = pruneTask{
+			objs:     selectedObjs,
+			insertAt: time.Now(),
+		}
+		break
+	}
+	TaskCache.Unlock()
+
+	c.ctx.resp.Payload = []byte(fmt.Sprintf(
+		"total: %d, stale: %d, selected: %d, minR: %d, maxR: %d, avgR: %d, minS: %v, maxS: %v, avgS: %v, taskid: %d",
+		total, stale, selected, minR, maxR, totalR/selected,
+		common.HumanReadableBytes(minS),
+		common.HumanReadableBytes(maxS),
+		common.HumanReadableBytes(totalS/selected),
+		id,
+	))
+
+	return nil
+}
+
+func (c *objectPruneArg) executePrune() error {
+	TaskCache.Lock()
+	task, ok := TaskCache.memos[c.ack]
+	delete(TaskCache.memos, c.ack)
+	TaskCache.Unlock()
+	if !ok {
+		c.ctx.resp.Payload = []byte("task not found")
+		return nil
+	}
+	txn, _ := c.ctx.db.StartTxn(nil)
+	tid := task.objs[0].GetTable().ID
+	did := task.objs[0].GetTable().GetDB().ID
+	dbHdl, err := txn.GetDatabaseByID(uint64(did))
+	if err != nil {
+		return err
+	}
+	tblHdl, err := dbHdl.GetRelationByID(uint64(tid))
+	if err != nil {
+		return err
+	}
+	notfound := 0
+	w := &bytes.Buffer{}
+	for _, obj := range task.objs {
+		it := obj.MakeBlockIt(true)
+		objHandle, err := tblHdl.GetObject(&obj.ID)
+		if err != nil {
+			logutil.Warnf("objprune: %v not found", obj.ID.String())
+			notfound++
+			continue
+		}
+		for ; it.Valid(); it.Next() {
+			blk := it.Get().GetPayload()
+			if err := objHandle.SoftDeleteBlock(blk.ID); err != nil {
+				logutil.Errorf("objprune: del blk %s: %v", blk.ID.String(), err)
+				return err
+			}
+		}
+		if err := tblHdl.SoftDeleteObject(&obj.ID); err != nil {
+			logutil.Errorf("objprune: del obj %s: %v", obj.ID.String(), err)
+			return err
+		}
+		w.WriteString(obj.ID.String())
+		w.WriteRune(',')
+	}
+	if err := txn.Commit(context.Background()); err != nil {
+		return err
+	}
+
+	logutil.Infof("objprune done: %v", w.String())
+	c.ctx.resp.Payload = []byte(fmt.Sprintf("prunes total: %d, notfound: %d", len(task.objs), notfound))
 	return nil
 }
 
@@ -554,6 +781,8 @@ func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
 			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("parse err: %v", err)))
 			return
 		}
+		ctx := cmd.Flag("ictx").Value.(*inspectContext)
+		logutil.Infof("inpsect mo_ctl %s: %v by account %+v", cmd.Name(), t.String(), ctx.acinfo)
 		err := t.Run()
 		if err != nil {
 			cmd.OutOrStdout().Write(
@@ -654,6 +883,16 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	maiCmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
 	rootCmd.AddCommand(maiCmd)
 
+	objPruneCmd := &cobra.Command{
+		Use:   "objprune",
+		Short: "prune objects",
+		Run:   RunFactory(&objectPruneArg{}),
+	}
+	objPruneCmd.Flags().StringP("target", "t", "*", "format: db.table")
+	objPruneCmd.Flags().DurationP("duration", "d", 72*time.Hour, "prune objects older than duration")
+	objPruneCmd.Flags().IntP("ack", "a", -1, "acknowledge the execution of given task")
+	rootCmd.AddCommand(objPruneCmd)
+
 	storageUsageCmd := &cobra.Command{
 		Use:   "storage_usage",
 		Short: "storage usage details",
@@ -720,7 +959,6 @@ func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.Ta
 
 	txn, _ := db.StartTxn(nil)
 	if ac != nil {
-		logutil.Infof("inspect with access info: %+v", ac)
 		txn.BindAccessInfo(ac.AccountID, ac.UserID, ac.RoleID)
 	}
 
