@@ -187,7 +187,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if err != nil {
 				return err
 			}
-			defer vec.Free(proc.Mp())
 
 			rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
 			if vec.IsConst() {
