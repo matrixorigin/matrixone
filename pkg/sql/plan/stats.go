@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"math"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
