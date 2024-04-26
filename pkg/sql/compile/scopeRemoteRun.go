@@ -992,20 +992,11 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.OrderBy = t.Fs
 	// we reused ANTI to store the information here because of the lack of related structure.
 	case *intersect.Argument: // 1
-		in.Anti = &pipeline.AntiJoin{
-			Ibucket: t.IBucket,
-			Nbucket: t.NBucket,
-		}
+		in.Anti = &pipeline.AntiJoin{}
 	case *minus.Argument: // 2
-		in.Anti = &pipeline.AntiJoin{
-			Ibucket: t.IBucket,
-			Nbucket: t.NBucket,
-		}
+		in.Anti = &pipeline.AntiJoin{}
 	case *intersectall.Argument:
-		in.Anti = &pipeline.AntiJoin{
-			Ibucket: t.IBucket,
-			Nbucket: t.NBucket,
-		}
+		in.Anti = &pipeline.AntiJoin{}
 	case *merge.Argument:
 		in.Merge = &pipeline.Merge{
 			SinkScan: t.SinkScan,
@@ -1429,22 +1420,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			WithFs(opr.OrderBy)
 	// should change next day?
 	case vm.Intersect:
-		t := opr.GetAnti()
 		arg := intersect.NewArgument()
-		arg.IBucket = t.Ibucket
-		arg.NBucket = t.Nbucket
 		v.Arg = arg
 	case vm.IntersectAll:
-		t := opr.GetAnti()
 		arg := intersect.NewArgument()
-		arg.IBucket = t.Ibucket
-		arg.NBucket = t.Nbucket
 		v.Arg = arg
 	case vm.Minus:
-		t := opr.GetAnti()
 		arg := minus.NewArgument()
-		arg.IBucket = t.Ibucket
-		arg.NBucket = t.Nbucket
 		v.Arg = arg
 	case vm.Connector:
 		t := opr.GetConnect()
