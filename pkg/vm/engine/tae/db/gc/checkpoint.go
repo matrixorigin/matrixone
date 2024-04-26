@@ -426,6 +426,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 			start = end
 		}
 		if start.Less(&stage) {
+			logutil.Infof("deleteFiles11: %v", ckp.GetLocation().Name().String())
 			deleteFiles = append(deleteFiles, ckp.GetLocation().Name().String())
 		}
 
