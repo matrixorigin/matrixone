@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"sort"
 	"sync"
 	"sync/atomic"
 )
@@ -49,6 +48,8 @@ type checkpointCleaner struct {
 	minMerged atomic.Pointer[checkpoint.CheckpointEntry]
 
 	maxCompared atomic.Pointer[checkpoint.CheckpointEntry]
+
+	ckpStage atomic.Pointer[types.TS]
 
 	// minMergeCount is the configuration of the merge GC metadata file.
 	// When the GC file is greater than or equal to minMergeCount,
@@ -240,6 +241,10 @@ func (c *checkpointCleaner) updateMaxCompared(e *checkpoint.CheckpointEntry) {
 	c.maxCompared.Store(e)
 }
 
+func (c *checkpointCleaner) updateCkpStage(ts *types.TS) {
+	c.ckpStage.Store(ts)
+}
+
 func (c *checkpointCleaner) updateInputs(input *GCTable) {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
@@ -262,6 +267,10 @@ func (c *checkpointCleaner) GetMinMerged() *checkpoint.CheckpointEntry {
 
 func (c *checkpointCleaner) GetMaxCompared() *checkpoint.CheckpointEntry {
 	return c.maxCompared.Load()
+}
+
+func (c *checkpointCleaner) GeteCkpStage() *types.TS {
+	return c.ckpStage.Load()
 }
 
 func (c *checkpointCleaner) GetInputs() *GCTable {
@@ -390,6 +399,9 @@ func (c *checkpointCleaner) mergeGCFile() error {
 }
 
 func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
+	if c.GeteCkpStage().LessEq(&stage) {
+		return nil
+	}
 	files, idx, err := checkpoint.ListSnapshotMeta(c.ctx, c.fs.Service, stage, nil)
 	if err != nil {
 		return err
@@ -406,9 +418,16 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 	}
 	deleteFiles := make([]string, 0)
 	for _, ckp := range ckps {
-		if ckp.GetType() == checkpoint.ET_Global && ckp.GetEnd().Less(&stage) {
+		start := ckp.GetStart()
+		end := ckp.GetEnd()
+		if ckp.GetType() == checkpoint.ET_Global {
+			start = end
+		}
+
+		if start.Less(&stage) {
 			deleteFiles = append(deleteFiles, ckp.GetLocation().String())
 		}
+
 	}
 	for i := 0; i < idx+1; i++ {
 		start := files[i].GetStart()
@@ -426,6 +445,8 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 		logutil.Errorf("DelFiles failed: %v", err.Error())
 		return err
 	}
+	c.updateCkpStage(&stage)
+	return nil
 }
 
 func (c *checkpointCleaner) collectGlobalCkpData(
