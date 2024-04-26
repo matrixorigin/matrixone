@@ -51,7 +51,7 @@ type S3FS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 
-	ioLocks *IOLocks
+	ioMerger *IOMerger
 }
 
 // key mapping scheme:
@@ -75,7 +75,7 @@ func NewS3FS(
 		keyPrefix:       args.KeyPrefix,
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
-		ioLocks:         NewIOLocks(),
+		ioMerger:        NewIOMerger(),
 	}
 
 	var err error
@@ -256,15 +256,15 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	}
 
 	startLock := time.Now()
-	unlock, wait := s.ioLocks.Lock(IOLockKey{
+	done, wait := s.ioMerger.Merge(IOMergeKey{
 		Path: filePath,
 	})
-	if unlock != nil {
-		defer unlock()
+	if done != nil {
+		defer done()
 	} else {
 		wait()
 	}
-	statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOLockTimeConsumption(time.Since(startLock))
+	statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
 
 	// load to disk cache
 	if s.diskCache != nil {
@@ -403,14 +403,14 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	startLock := time.Now()
-	unlock, wait := s.ioLocks.Lock(vector.ioLockKey())
-	if unlock != nil {
-		defer unlock()
+	done, wait := s.ioMerger.Merge(vector.ioMergeKey())
+	if done != nil {
+		defer done()
 	} else {
 		wait()
 	}
 	stats := statistic.StatsInfoFromContext(ctx)
-	stats.AddS3FSReadIOLockTimeConsumption(time.Since(startLock))
+	stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
 
 	allocator := s.allocator
 	if vector.Policy.Any(SkipMemoryCache) {
@@ -484,13 +484,13 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	startLock := time.Now()
-	unlock, wait := s.ioLocks.Lock(vector.ioLockKey())
-	if unlock != nil {
-		defer unlock()
+	done, wait := s.ioMerger.Merge(vector.ioMergeKey())
+	if done != nil {
+		defer done()
 	} else {
 		wait()
 	}
-	statistic.StatsInfoFromContext(ctx).AddS3FSReadCacheIOLockTimeConsumption(time.Since(startLock))
+	statistic.StatsInfoFromContext(ctx).AddS3FSReadCacheIOMergerTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
