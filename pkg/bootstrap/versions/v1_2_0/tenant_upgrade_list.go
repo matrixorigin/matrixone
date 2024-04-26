@@ -42,6 +42,12 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_information_schema_tables,
 	upg_information_schema_processlist,
 	upg_information_schema_referenctial_constraints,
+	upg_mo_catalog_mo_sessions,
+	upg_mo_catalog_mo_configurations,
+	upg_mo_catalog_mo_locks,
+	upg_mo_catalog_mo_variables,
+	upg_mo_catalog_mo_transactions,
+	upg_mo_catalog_mo_cache,
 }
 
 var UpgPrepareEntres = []versions.UpgradeEntry{
@@ -514,4 +520,119 @@ var upg_information_schema_referenctial_constraints = versions.UpgradeEntry{
 		return false, nil
 	},
 	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "REFERENTIAL_CONSTRAINTS"),
+}
+
+// ----------------------------------------------------------------------------------------------------------------------
+var upg_mo_catalog_mo_sessions = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_sessions",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_sessions")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_sessions"),
+}
+
+var upg_mo_catalog_mo_configurations = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_configurations",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_configurations")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_configurations"),
+}
+
+var upg_mo_catalog_mo_locks = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_locks",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_locks")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_locks"),
+}
+
+var upg_mo_catalog_mo_variables = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_variables",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_variables")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_variables"),
+}
+
+var upg_mo_catalog_mo_transactions = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_transactions",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_transactions")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_transactions"),
+}
+
+var upg_mo_catalog_mo_cache = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_cache",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_cache")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_cache"),
 }
