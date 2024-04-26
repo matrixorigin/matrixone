@@ -443,6 +443,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 			deleteFiles = append(deleteFiles, files[i].String())
 		}
 	}
+	logutil.Infof("deleteFiles: %v", deleteFiles)
 	err = c.fs.DelFiles(c.ctx, deleteFiles)
 	if err != nil {
 		logutil.Errorf("DelFiles failed: %v", err.Error())
