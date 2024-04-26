@@ -48,8 +48,6 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		if ap.Cond != nil {
 			ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
 		}
-	} else {
-		ap.ctr.InitReceiver(proc, false)
 	}
 	return err
 }
