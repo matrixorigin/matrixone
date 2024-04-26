@@ -17,15 +17,17 @@ package ctl
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"regexp"
-	"strings"
-	"time"
 )
 
 type cnLabel struct {
@@ -34,8 +36,14 @@ type cnLabel struct {
 	values []string
 }
 
+type cnWorkState struct {
+	uuid  string
+	state int
+}
+
 type parser interface {
-	parse() cnLabel
+	parseLabel() cnLabel
+	parseWorkState() cnWorkState
 }
 
 type singleValue struct {
@@ -50,12 +58,20 @@ func newSingleValue(s string, reg *regexp.Regexp) *singleValue {
 	}
 }
 
-func (s *singleValue) parse() cnLabel {
+func (s *singleValue) parseLabel() cnLabel {
 	items := s.reg.FindStringSubmatch(s.s)
 	var c cnLabel
 	c.uuid = items[1]
 	c.key = items[2]
 	c.values = []string{items[3]}
+	return c
+}
+
+func (s *singleValue) parseWorkState() cnWorkState {
+	items := s.reg.FindStringSubmatch(s.s)
+	var c cnWorkState
+	c.uuid = items[1]
+	c.state, _ = strconv.Atoi(items[2])
 	return c
 }
 
@@ -71,7 +87,7 @@ func newMultiValue(s string, reg *regexp.Regexp) *multiValues {
 	}
 }
 
-func (m *multiValues) parse() cnLabel {
+func (m *multiValues) parseLabel() cnLabel {
 	items := m.reg.FindStringSubmatch(m.s)
 	var c cnLabel
 	c.uuid = items[1]
@@ -80,14 +96,21 @@ func (m *multiValues) parse() cnLabel {
 	return c
 }
 
+// not implemented.
+func (m *multiValues) parseWorkState() cnWorkState {
+	return cnWorkState{}
+}
+
 const (
-	singlePattern   = `^([a-zA-Z0-9\-_]+):([a-zA-Z0-9_]+):([a-zA-Z0-9_]+)$`
-	multiplePattern = `^([a-zA-Z0-9\-_]+):([a-zA-Z0-9_]+):\[([a-zA-Z0-9_]+(,[a-zA-Z0-9_]+)*)\]$`
+	singlePattern      = `^([a-zA-Z0-9\-_]+):([a-zA-Z0-9_]+):([a-zA-Z0-9_]+)$`
+	multiplePattern    = `^([a-zA-Z0-9\-_]+):([a-zA-Z0-9_]+):\[([a-zA-Z0-9_]+(,[a-zA-Z0-9_]+)*)\]$`
+	singlePatternState = `^([a-zA-Z0-9\-_]+):([0-9]+)$`
 )
 
 var (
-	singlePatternReg = regexp.MustCompile(singlePattern)
-	multiPatternReg  = regexp.MustCompile(multiplePattern)
+	singlePatternReg      = regexp.MustCompile(singlePattern)
+	multiPatternReg       = regexp.MustCompile(multiplePattern)
+	singleStatePatternReg = regexp.MustCompile(singlePatternState)
 )
 
 func identifyParser(param string) parser {
@@ -100,6 +123,13 @@ func identifyParser(param string) parser {
 	return nil
 }
 
+func identifyStateParser(param string) parser {
+	if matched := singleStatePatternReg.MatchString(param); matched {
+		return newSingleValue(param, singleStatePatternReg)
+	}
+	return nil
+}
+
 // parseParameter parses the parameter which contains CN uuid and its label
 // information. Its format can be: (1) cn:key:value (2) cn:key:[v1,v2,v3]
 func parseCNLabel(param string) (cnLabel, error) {
@@ -107,7 +137,7 @@ func parseCNLabel(param string) (cnLabel, error) {
 	if p == nil {
 		return cnLabel{}, moerr.NewInternalErrorNoCtx("format is: cn:key:value or cn:key:[v1,v2,...]")
 	}
-	return p.parse(), nil
+	return p.parseLabel(), nil
 }
 
 func handleSetLabel(proc *process.Process,
@@ -122,6 +152,32 @@ func handleSetLabel(proc *process.Process,
 	kvs := make(map[string][]string, 1)
 	kvs[c.key] = c.values
 	if err := cluster.DebugUpdateCNLabel(c.uuid, kvs); err != nil {
+		return Result{}, err
+	}
+	return Result{
+		Method: LabelMethod,
+		Data:   "OK",
+	}, nil
+}
+
+func parseCNWorkState(param string) (cnWorkState, error) {
+	p := identifyStateParser(param)
+	if p == nil {
+		return cnWorkState{}, moerr.NewInternalErrorNoCtx("format is: cn:key:value or cn:key:[v1,v2,...]")
+	}
+	return p.parseWorkState(), nil
+}
+
+func handleSetWorkState(proc *process.Process,
+	service serviceType,
+	parameter string,
+	sender requestSender) (Result, error) {
+	cluster := clusterservice.GetMOCluster()
+	c, err := parseCNWorkState(parameter)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := cluster.DebugUpdateCNWorkState(c.uuid, c.state); err != nil {
 		return Result{}, err
 	}
 	return Result{

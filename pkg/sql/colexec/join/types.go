@@ -68,8 +68,6 @@ type container struct {
 
 type Argument struct {
 	ctr        *container
-	Ibucket    uint64 // index in buckets
-	Nbucket    uint64 // buckets count
 	Result     []colexec.ResultPos
 	Typs       []types.Type
 	Cond       *plan.Expr

@@ -117,8 +117,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Anti:
 		t := sourceIns.Arg.(*anti.Argument)
 		arg := anti.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Cond = t.Cond
 		arg.Typs = t.Typs
 		arg.Conditions = t.Conditions
@@ -144,8 +142,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Join:
 		t := sourceIns.Arg.(*join.Argument)
 		arg := join.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = t.Result
 		arg.Cond = t.Cond
 		arg.Typs = t.Typs
@@ -157,8 +153,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Left:
 		t := sourceIns.Arg.(*left.Argument)
 		arg := left.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Cond = t.Cond
 		arg.Result = t.Result
 		arg.Typs = t.Typs
@@ -170,8 +164,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Right:
 		t := sourceIns.Arg.(*right.Argument)
 		arg := right.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Cond = t.Cond
 		arg.Result = t.Result
 		arg.RightTypes = t.RightTypes
@@ -184,8 +176,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.RightSemi:
 		t := sourceIns.Arg.(*rightsemi.Argument)
 		arg := rightsemi.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Cond = t.Cond
 		arg.Result = t.Result
 		arg.RightTypes = t.RightTypes
@@ -197,8 +187,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.RightAnti:
 		t := sourceIns.Arg.(*rightanti.Argument)
 		arg := rightanti.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Cond = t.Cond
 		arg.Result = t.Result
 		arg.RightTypes = t.RightTypes
@@ -291,8 +279,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Semi:
 		t := sourceIns.Arg.(*semi.Argument)
 		arg := semi.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = t.Result
 		arg.Cond = t.Cond
 		arg.Typs = t.Typs
@@ -304,8 +290,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Single:
 		t := sourceIns.Arg.(*single.Argument)
 		arg := single.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = t.Result
 		arg.Cond = t.Cond
 		arg.Typs = t.Typs
@@ -378,8 +362,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Mark:
 		t := sourceIns.Arg.(*mark.Argument)
 		arg := mark.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = t.Result
 		arg.Conditions = t.Conditions
 		arg.Typs = t.Typs
@@ -505,7 +487,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Deletion:
 		t := sourceIns.Arg.(*deletion.Argument)
 		arg := deletion.NewArgument()
-		arg.Ts = t.Ts
 		arg.IBucket = t.IBucket
 		arg.Nbucket = t.Nbucket
 		arg.DeleteCtx = t.DeleteCtx
@@ -867,8 +848,6 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 	arg := right.NewArgument()
 	arg.LeftTypes = left_typs
 	arg.RightTypes = right_typs
-	arg.Nbucket = Nbucket
-	arg.Ibucket = Ibucket
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
@@ -887,8 +866,6 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 	// 使用NewArgument来初始化
 	arg := rightsemi.NewArgument()
 	arg.RightTypes = right_typs
-	arg.Nbucket = Nbucket
-	arg.Ibucket = Ibucket
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
@@ -906,8 +883,6 @@ func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 	cond, conds := extraJoinConditions(n.OnList)
 	arg := rightanti.NewArgument()
 	arg.RightTypes = right_typs
-	arg.Nbucket = Nbucket
-	arg.Ibucket = Ibucket
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
@@ -1691,8 +1666,6 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 
 	case vm.Right:
 		arg := in.Arg.(*right.Argument)
-		ret.Ibucket = arg.Ibucket
-		ret.Nbucket = arg.Nbucket
 		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
@@ -1706,8 +1679,6 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 
 	case vm.RightSemi:
 		arg := in.Arg.(*rightsemi.Argument)
-		ret.Ibucket = arg.Ibucket
-		ret.Nbucket = arg.Nbucket
 		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
@@ -1721,8 +1692,6 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 
 	case vm.RightAnti:
 		arg := in.Arg.(*rightanti.Argument)
-		ret.Ibucket = arg.Ibucket
-		ret.Nbucket = arg.Nbucket
 		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
