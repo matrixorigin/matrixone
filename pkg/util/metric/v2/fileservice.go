@@ -120,26 +120,26 @@ var (
 )
 
 var (
-	ioLockCounter = prometheus.NewCounterVec(
+	ioMergerCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
 			Subsystem: "fs",
-			Name:      "io_lock_counter",
-			Help:      "io lock counter",
+			Name:      "io_merger_counter",
+			Help:      "io merger counter",
 		},
 		[]string{"type"},
 	)
-	IOLockCounterLocked = ioLockCounter.WithLabelValues("locked")
-	IOLockCounterWait   = ioLockCounter.WithLabelValues("wait")
+	IOMergerCounterInitiate = ioMergerCounter.WithLabelValues("initiate")
+	IOMergerCounterWait     = ioMergerCounter.WithLabelValues("wait")
 
-	ioLockDuration = prometheus.NewHistogramVec(
+	ioMergerDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "fs",
-			Name:      "io_lock_duration_seconds",
-			Help:      "io lock duration seconds",
+			Name:      "io_merger_duration_seconds",
+			Help:      "io merger duration seconds",
 			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
-	IOLockDurationLocked = ioLockDuration.WithLabelValues("locked")
-	IOLockDurationWait   = ioLockDuration.WithLabelValues("wait")
+	IOMergerDurationInitiate = ioMergerDuration.WithLabelValues("initiate")
+	IOMergerDurationWait     = ioMergerDuration.WithLabelValues("wait")
 )

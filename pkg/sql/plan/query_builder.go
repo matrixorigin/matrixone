@@ -1435,6 +1435,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
+		builder.optimizeDateFormatExpr(rootID)
 
 		builder.pushdownLimitToTableScan(rootID)
 
