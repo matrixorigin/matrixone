@@ -88,8 +88,8 @@ func initFileServiceMetrics() {
 	registry.MustRegister(localIOBytesHistogram)
 	registry.MustRegister(localIODurationHistogram)
 
-	registry.MustRegister(ioLockCounter)
-	registry.MustRegister(ioLockDuration)
+	registry.MustRegister(ioMergerCounter)
+	registry.MustRegister(ioMergerDuration)
 }
 
 func initLogtailMetrics() {
