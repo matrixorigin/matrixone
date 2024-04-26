@@ -399,9 +399,10 @@ func (c *checkpointCleaner) mergeGCFile() error {
 }
 
 func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
-	if c.GeteCkpStage().LessEq(&stage) {
+	if c.GeteCkpStage() == nil || c.GeteCkpStage().GreaterEq(&stage) {
 		return nil
 	}
+	logutil.Infof("mergeCheckpointFiles: %v", stage.ToString())
 	files, idx, err := checkpoint.ListSnapshotMeta(c.ctx, c.fs.Service, stage, nil)
 	if err != nil {
 		return err
@@ -420,10 +421,10 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 	for _, ckp := range ckps {
 		start := ckp.GetStart()
 		end := ckp.GetEnd()
+		logutil.Infof("ckps: %v, %v", start.ToString(), end.ToString())
 		if ckp.GetType() == checkpoint.ET_Global {
 			start = end
 		}
-
 		if start.Less(&stage) {
 			deleteFiles = append(deleteFiles, ckp.GetLocation().String())
 		}
@@ -432,11 +433,13 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 	for i := 0; i < idx+1; i++ {
 		start := files[i].GetStart()
 		end := files[i].GetEnd()
+		logutil.Infof("files: %v", files[i].String())
 		if start.IsEmpty() {
 			// global checkpoint
 			start = end
 		}
 		if end.Less(&stage) {
+			logutil.Infof("deleteFiles: %v", files[i].String())
 			deleteFiles = append(deleteFiles, files[i].String())
 		}
 	}
