@@ -726,6 +726,20 @@ func (g *group) reset() {
 	g.values = g.values[:0]
 }
 
+func (g *group) free() {
+	g.obj = false
+	g.keys = g.keys[:0]
+	for _, sub := range g.values {
+		sg, ok := sub.(*group)
+		if !ok {
+			continue
+		}
+		sg.free()
+	}
+	g.values = g.values[:0]
+	reuse.Free(g, nil)
+}
+
 func (p *parser) parseNumber(in json.Number) (TpCode, []byte, error) {
 	if !json.Valid([]byte(in)) {
 		return 0, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
@@ -789,7 +803,7 @@ func (p *parser) parseArray() (*group, error) {
 	for {
 		tk, err := p.de.Peek()
 		if err != nil {
-			reuse.Free(g, nil)
+			g.free()
 			return nil, err
 		}
 
@@ -799,7 +813,7 @@ func (p *parser) parseArray() (*group, error) {
 		}
 		val, err := p.nextValue()
 		if err != nil {
-			reuse.Free(g, nil)
+			g.free()
 			return nil, err
 		}
 		g.values = append(g.values, val)
@@ -812,7 +826,7 @@ func (p *parser) parseObject() (*group, error) {
 	for {
 		tk, err := p.de.Read()
 		if err != nil {
-			reuse.Free(g, nil)
+			g.free()
 			return nil, err
 		}
 
@@ -823,7 +837,7 @@ func (p *parser) parseObject() (*group, error) {
 
 		val, err := p.nextValue()
 		if err != nil {
-			reuse.Free(g, nil)
+			g.free()
 			return nil, err
 		}
 		g.values = append(g.values, val)
@@ -858,7 +872,7 @@ func (p *parser) writeAny(raw bool, v any) (TpCode, uint32, error) {
 	start := len(p.dst)
 	switch val := v.(type) {
 	case *group:
-		defer reuse.Free(val, nil)
+		defer val.free()
 		if val.obj {
 			obj := val
 			keys := obj.keys
