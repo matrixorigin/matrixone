@@ -67,7 +67,8 @@ type Config struct {
 	KeepBindTimeout toml.Duration `toml:"keep-bind-timeout"`
 
 	// for testing
-	disconnectPeriod int `toml:"-"`
+	disconnectPeriod         int           `toml:"-"`
+	removeDisconnectDuration time.Duration `toml:"-"`
 }
 
 // Validate validate
