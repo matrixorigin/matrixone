@@ -217,7 +217,7 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	mo_variables := tree.NewNumValWithType(constant.MakeString("mo_variables"), "mo_variables", false, tree.P_char)
 	mo_transactions := tree.NewNumValWithType(constant.MakeString("mo_transactions"), "mo_transactions", false, tree.P_char)
 	mo_cache := tree.NewNumValWithType(constant.MakeString("mo_cache"), "mo_cache", false, tree.P_char)
-	mo_sessions := tree.NewNumValWithType(constant.MakeString("mo_sessions"), "mo_configurations", false, tree.P_char)
+	mo_sessions := tree.NewNumValWithType(constant.MakeString("mo_sessions"), "mo_sessions", false, tree.P_char)
 	mo_configurations := tree.NewNumValWithType(constant.MakeString("mo_configurations"), "mo_configurations", false, tree.P_char)
 
 	notInValues := tree.NewTuple(tree.Exprs{
