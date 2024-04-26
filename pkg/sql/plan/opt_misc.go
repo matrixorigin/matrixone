@@ -663,11 +663,6 @@ func (builder *QueryBuilder) optimizeDateFormatExpr(nodeID int32) {
 					continue
 				}
 				newFilter = makeBetweenExprFromDateFormat(equalFunc, dateformatFunc, "day", builder)
-			case "%Y:%m:%d":
-				if len(dateSval) != 10 || dateSval[4] != ':' || dateSval[7] != ':' {
-					continue
-				}
-				newFilter = makeBetweenExprFromDateFormat(equalFunc, dateformatFunc, "day", builder)
 			case "%Y%m%d":
 				if len(dateSval) != 8 {
 					continue
