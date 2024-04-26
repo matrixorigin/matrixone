@@ -592,6 +592,38 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
 	node.GroupBy = nil
 }
 
+func makeBetweenExprFromDateFormat(equalFunc *plan.Function, dateformatFunc *plan.Function, intervalStr string, builder *QueryBuilder) *plan.Expr {
+	dateExpr := DeepCopyExpr(equalFunc.Args[1])
+	if intervalStr == "year" {
+		sval, _ := dateExpr.GetLit().GetValue().(*plan.Literal_Sval)
+		sval.Sval = sval.Sval + "0101"
+	}
+	begin, err := forceCastExpr(builder.GetContext(), dateExpr, dateformatFunc.Args[0].Typ)
+	if err != nil {
+		return nil
+	}
+	begin, err = ConstantFold(batch.EmptyForConstFoldBatch, begin, builder.compCtx.GetProcess(), false)
+	if err != nil {
+		return nil
+	}
+	interval := MakeIntervalExpr(1, intervalStr)
+	end, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "+", []*Expr{DeepCopyExpr(begin), interval})
+	if err != nil {
+		return nil
+	}
+	interval = MakeIntervalExpr(1, "microsecond")
+	end, err = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "-", []*Expr{DeepCopyExpr(end), interval})
+	if err != nil {
+		return nil
+	}
+	args := []*Expr{dateformatFunc.Args[0], begin, end}
+	newFilter, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "between", args)
+	if err != nil {
+		return nil
+	}
+	return newFilter
+}
+
 func (builder *QueryBuilder) optimizeDateFormatExpr(nodeID int32) {
 	// for date_format(col,'%Y-%m-%d')= '2024-01-19', change this to col between [2024-01-19 00:00:00,2024-01-19 23:59:59]
 	node := builder.qry.Nodes[nodeID]
@@ -603,48 +635,51 @@ func (builder *QueryBuilder) optimizeDateFormatExpr(nodeID int32) {
 	}
 	for i := range node.FilterList {
 		expr := node.FilterList[i]
-		fun := expr.GetF()
-		if fun != nil && fun.Func.ObjName == "=" {
-			leftFunc := fun.Args[0].GetF()
-			if leftFunc == nil || leftFunc.Func.ObjName != "date_format" {
+		equalFunc := expr.GetF()
+		if equalFunc != nil && equalFunc.Func.ObjName == "=" {
+			dateformatFunc := equalFunc.Args[0].GetF()
+			if dateformatFunc == nil || dateformatFunc.Func.ObjName != "date_format" {
 				continue
 			}
-			col := leftFunc.Args[0].GetCol()
+			col := dateformatFunc.Args[0].GetCol()
 			if col == nil {
 				continue
 			}
-			if leftFunc.Args[1].GetLit() == nil {
+			if dateformatFunc.Args[1].GetLit() == nil {
 				continue
 			}
-			str := leftFunc.Args[1].GetLit().GetSval()
+			str := dateformatFunc.Args[1].GetLit().GetSval()
 			if len(str) == 0 {
 				continue
 			}
+			if equalFunc.Args[1].GetLit() == nil {
+				continue
+			}
+			dateSval := equalFunc.Args[1].GetLit().GetSval()
+			var newFilter *plan.Expr
 			switch str {
-			case "%Y-%m-%d", "%Y%m%d", "%Y %m %d", "%Y:%m:%d":
-				begin, err := forceCastExpr(builder.GetContext(), DeepCopyExpr(fun.Args[1]), leftFunc.Args[0].Typ)
-				if err != nil {
+			case "%Y-%m-%d":
+				if len(dateSval) != 10 || dateSval[4] != '-' || dateSval[7] != '-' {
 					continue
 				}
-				begin, err = ConstantFold(batch.EmptyForConstFoldBatch, begin, builder.compCtx.GetProcess(), false)
-				if err != nil {
+				newFilter = makeBetweenExprFromDateFormat(equalFunc, dateformatFunc, "day", builder)
+			case "%Y:%m:%d":
+				if len(dateSval) != 10 || dateSval[4] != ':' || dateSval[7] != ':' {
 					continue
 				}
-				interval := MakeIntervalExpr(1, "day")
-				end, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "+", []*Expr{DeepCopyExpr(begin), interval})
-				if err != nil {
+				newFilter = makeBetweenExprFromDateFormat(equalFunc, dateformatFunc, "day", builder)
+			case "%Y%m%d":
+				if len(dateSval) != 8 {
 					continue
 				}
-				interval = MakeIntervalExpr(1, "microsecond")
-				end, err = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "-", []*Expr{DeepCopyExpr(end), interval})
-				if err != nil {
+				newFilter = makeBetweenExprFromDateFormat(equalFunc, dateformatFunc, "day", builder)
+			case "%Y":
+				if len(dateSval) != 4 {
 					continue
 				}
-				args := []*Expr{leftFunc.Args[0], begin, end}
-				newFilter, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "between", args)
-				if err != nil {
-					continue
-				}
+				newFilter = makeBetweenExprFromDateFormat(equalFunc, dateformatFunc, "year", builder)
+			}
+			if newFilter != nil {
 				node.FilterList[i] = newFilter
 			}
 		}
