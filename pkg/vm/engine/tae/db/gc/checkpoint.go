@@ -410,7 +410,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 	if len(files) == 0 {
 		return nil
 	}
-	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(c.ctx, c.fs.Service, files, idx)
+	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(c.ctx, c.fs.Service, files, idx, true)
 	if err != nil {
 		return err
 	}
