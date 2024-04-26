@@ -408,7 +408,7 @@ func (mp *MysqlProtocolImpl) EnableAutoFlush() {
 }
 
 func (mp *MysqlProtocolImpl) Flush() error {
-	return mp.tcpConn.Flush(0)
+	return nil
 }
 
 var _ MysqlProtocol = &FakeProtocol{}

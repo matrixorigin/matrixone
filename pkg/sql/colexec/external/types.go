@@ -219,7 +219,12 @@ type ParquetHandler struct {
 	offset   int64
 	batchCnt int64
 	cols     []*parquet.Column
-	dataFn   []dataFn
+	mappers  []*columnMapper
 }
 
-type dataFn = func(page parquet.Page, proc *process.Process, vec *vector.Vector) error
+type columnMapper struct {
+	srcNull, dstNull   bool
+	maxDefinitionLevel byte
+
+	mapper func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
+}

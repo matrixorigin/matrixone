@@ -316,7 +316,6 @@ drop table t5;
 
 drop database test;
 
--- @bvt:issue#15434
 drop database if exists `collate`;
 create database `collate`;
 use `collate`;
@@ -348,4 +347,3 @@ alter table t8 add key pk(col1) comment 'primary key';
 select * from t8;
 drop table t8;
 drop database `drop`;
--- @bvt:issue

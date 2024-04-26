@@ -27,6 +27,7 @@ type IOLockKey struct {
 	Path   string
 	Offset int64
 	End    int64
+	Policy Policy
 }
 
 type IOLocks struct {
@@ -86,4 +87,22 @@ func (i *IOLocks) Lock(key IOLockKey) (unlock func(), wait func()) {
 		i.locks.Delete(key)
 		close(ch)
 	}, nil
+}
+
+func (i *IOVector) ioLockKey() IOLockKey {
+	key := IOLockKey{
+		Path:   i.FilePath,
+		Policy: i.Policy,
+	}
+	min, max, readFull := i.readRange()
+	if readFull {
+		return key
+	}
+	if min != nil {
+		key.Offset = *min
+	}
+	if max != nil {
+		key.End = *max
+	}
+	return key
 }

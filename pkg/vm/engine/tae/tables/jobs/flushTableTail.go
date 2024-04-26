@@ -17,18 +17,17 @@ package jobs
 import (
 	"context"
 	"fmt"
-	"time"
-	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -41,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"time"
 )
 
 type TestFlushBailoutPos1 struct{}
@@ -187,6 +187,16 @@ func NewFlushTableTailTask(
 		task.delSrcHandles = append(task.delSrcHandles, hdl)
 	}
 	return
+}
+
+// impl DisposableVecPool
+func (task *flushTableTailTask) GetVector(typ *types.Type) (*vector.Vector, func()) {
+	v := task.rt.VectorPool.Transient.GetVector(typ)
+	return v.GetDownstreamVector(), v.Close
+}
+
+func (task *flushTableTailTask) GetMPool() *mpool.MPool {
+	return task.rt.VectorPool.Transient.GetMPool()
 }
 
 // Scopes is used in conflict checking in scheduler. For ScopedTask interface
@@ -450,10 +460,11 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 		}
 		readedBats = append(readedBats, bat)
 	}
-
-	for _, bat := range readedBats {
-		defer bat.Close()
-	}
+	defer func() {
+		for _, bat := range readedBats {
+			bat.Close()
+		}
+	}()
 
 	if len(readedBats) == 0 {
 		// just soft delete all Objects
@@ -467,18 +478,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 		return nil
 	}
 
-	// create new object to hold merged blocks
-	var toObjectEntry *catalog.ObjectEntry
-	var toObjectHandle handle.Object
-	if toObjectHandle, err = task.rel.CreateNonAppendableObject(false, nil); err != nil {
-		return
-	}
-	toObjectEntry = toObjectHandle.GetMeta().(*catalog.ObjectEntry)
-	toObjectEntry.SetSorted()
-
 	// prepare merge
-	// pick the sort key or first column to run first merge, determing the ordering
-	sortVecs := make([]containers.Vector, 0, len(readedBats))
 	// fromLayout describes the layout of the input batch, which is a list of batch length
 	fromLayout := make([]uint32, 0, len(readedBats))
 	// toLayout describes the layout of the output batch, i.e. [8192, 8192, 8192, 4242]
@@ -492,7 +492,6 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 		vec := bat.Vecs[sortKeyPos]
 		fromLayout = append(fromLayout, uint32(vec.Length()))
 		totalRowCnt += vec.Length()
-		sortVecs = append(sortVecs, vec)
 	}
 	task.mergeRowsCnt = totalRowCnt
 	rowsLeft := totalRowCnt
@@ -507,77 +506,28 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	}
 
 	// do first sort
-	var orderedVecs []containers.Vector
-	var sortedIdx []uint32
+	var writtenBatches []*batch.Batch
+	var releaseF func()
+	var mapping []uint32
 	if schema.HasSortKey() {
-		// mergesort is needed, allocate sortedidx and mapping
-		allocSz := totalRowCnt * 4
-		// sortedIdx is used to shuffle other columns according to the order of the sort key
-		sortIdxNode, err := common.MergeAllocator.Alloc(allocSz)
-		if err != nil {
-			panic(err)
-		}
-		// sortedidx will be used to shuffle other column, defer free
-		defer common.MergeAllocator.Free(sortIdxNode)
-		sortedIdx = unsafe.Slice((*uint32)(unsafe.Pointer(&sortIdxNode[0])), totalRowCnt)
-
-		mappingNode, err := common.MergeAllocator.Alloc(allocSz)
-		if err != nil {
-			panic(err)
-		}
-		mapping := unsafe.Slice((*uint32)(unsafe.Pointer(&mappingNode[0])), totalRowCnt)
-
-		// modify sortidx and mapping
-		orderedVecs = mergesort.MergeColumn(sortVecs, sortedIdx, mapping, fromLayout, toLayout, task.rt.VectorPool.Transient)
-		mergesort.UpdateMappingAfterMerge(task.transMappings, mapping, fromLayout, toLayout)
-		// free mapping, which is never used again
-		common.MergeAllocator.Free(mappingNode)
+		writtenBatches, releaseF, mapping = mergesort.MergeAObj(task, readedBats, sortKeyPos, schema.BlockMaxRows, len(toLayout))
 	} else {
-		// just do reshape
-		orderedVecs = mergesort.ReshapeColumn(sortVecs, fromLayout, toLayout, task.rt.VectorPool.Transient)
-		// UpdateMappingAfterMerge will handle the nil mapping
-		mergesort.UpdateMappingAfterMerge(task.transMappings, nil, fromLayout, toLayout)
+		cnBatches := make([]*batch.Batch, len(readedBats))
+		for i := range readedBats {
+			cnBatches[i] = containers.ToCNBatch(readedBats[i])
+		}
+		writtenBatches, releaseF = mergesort.ReshapeBatches(cnBatches, fromLayout, toLayout, task)
 	}
-	for _, vec := range orderedVecs {
-		defer vec.Close()
-	}
-
-	// make all columns ordered and prepared writtenBatches
-	writtenBatches := make([]*containers.Batch, 0, len(orderedVecs))
-	task.createdObjHandles = toObjectHandle
-	for i := 0; i < len(orderedVecs); i++ {
-		writtenBatches = append(writtenBatches, containers.NewBatch())
-	}
-	vecs := make([]containers.Vector, 0, len(readedBats))
-	for i, idx := range readColIdxs {
-		// skip rowid and sort(reshape) column in the first run
-		if schema.ColDefs[idx].IsPhyAddr() {
-			continue
-		}
-		if i == sortKeyPos {
-			for i, vec := range orderedVecs {
-				writtenBatches[i].AddVector(schema.ColDefs[idx].Name, vec)
-			}
-			continue
-		}
-		vecs = vecs[:0]
-		for _, bat := range readedBats {
-			vecs = append(vecs, bat.Vecs[i])
-		}
-		var outvecs []containers.Vector
-		if schema.HasSortKey() {
-			outvecs = mergesort.ShuffleColumn(vecs, sortedIdx, fromLayout, toLayout, task.rt.VectorPool.Transient)
-		} else {
-			outvecs = mergesort.ReshapeColumn(vecs, fromLayout, toLayout, task.rt.VectorPool.Transient)
-		}
-
-		for i, vec := range outvecs {
-			writtenBatches[i].AddVector(schema.ColDefs[idx].Name, vec)
-			defer vec.Close()
-		}
-	}
+	defer releaseF()
+	mergesort.UpdateMappingAfterMerge(task.transMappings, mapping, toLayout)
 
 	// write!
+	// create new object to hold merged blocks
+	if task.createdObjHandles, err = task.rel.CreateNonAppendableObject(false, nil); err != nil {
+		return
+	}
+	toObjectEntry := task.createdObjHandles.GetMeta().(*catalog.ObjectEntry)
+	toObjectEntry.SetSorted()
 	name := objectio.BuildObjectNameWithObjectID(&toObjectEntry.ID)
 	writer, err := blockio.NewBlockWriterNew(task.rt.Fs.Service, name, schema.Version, seqnums)
 	if err != nil {
@@ -590,7 +540,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 		writer.SetSortKey(uint16(schema.GetSingleSortKeyIdx()))
 	}
 	for _, bat := range writtenBatches {
-		_, err = writer.WriteBatch(containers.ToCNBatch(bat))
+		_, err = writer.WriteBatch(bat)
 		if err != nil {
 			return err
 		}
@@ -602,11 +552,11 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	task.createdMergedObjectName = name.String()
 
 	// update new status for created blocks
-	err = toObjectHandle.UpdateStats(writer.Stats())
+	err = task.createdObjHandles.UpdateStats(writer.Stats())
 	if err != nil {
 		return
 	}
-	err = toObjectHandle.GetMeta().(*catalog.ObjectEntry).GetObjectData().Init()
+	err = task.createdObjHandles.GetMeta().(*catalog.ObjectEntry).GetObjectData().Init()
 	if err != nil {
 		return
 	}

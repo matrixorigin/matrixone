@@ -42,7 +42,7 @@ type Argument struct {
 	// Estimates of the number of data items obtained from statistical information
 	N      float64
 	PkName string
-	PkTyp  *plan.Type
+	PkTyp  plan.Type
 
 	bloomFilter   *bloomfilter.BloomFilter
 	roaringFilter *roaringFilter
@@ -103,7 +103,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		arg.rbat = nil
 	}
 	if arg.pass2RuntimeFilter != nil {
-		proc.PutVector(arg.pass2RuntimeFilter)
+		arg.pass2RuntimeFilter.Free(proc.GetMPool())
+		arg.pass2RuntimeFilter = nil
 	}
 
 	arg.FreeAllReg()

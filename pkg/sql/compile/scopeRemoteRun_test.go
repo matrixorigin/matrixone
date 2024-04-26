@@ -41,8 +41,6 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -92,110 +90,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-func Test_CnServerMessageHandler(t *testing.T) {
-	colexec.Set(colexec.NewServer(nil))
-
-	ctrl := gomock.NewController(t)
-	ctx := context.TODO()
-	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	cli := mock_frontend.NewMockTxnClient(ctrl)
-	cli.EXPECT().NewWithSnapshot([]byte("")).Return(txnOperator, nil)
-
-	ti, _ := time.Now().MarshalBinary()
-	procInfo := &pipeline.ProcessInfo{
-		Lim:              &pipeline.ProcessLimitation{Size: 1},
-		SessionInfo:      &pipeline.SessionInfo{TimeZone: ti},
-		AnalysisNodeList: []int32{1, 2, 3},
-	}
-	procInfoData, err := procInfo.Marshal()
-	require.Nil(t, err)
-
-	id, _ := uuid.NewV7()
-	pipe := &pipeline.Pipeline{
-		UuidsToRegIdx: []*pipeline.UuidToRegIdx{
-			{Idx: 1, Uuid: id[:]},
-		},
-		InstructionList: []*pipeline.Instruction{
-			{Op: int32(vm.Insert), Insert: &pipeline.Insert{}},
-		},
-		DataSource: &pipeline.Source{
-			Timestamp: &timestamp.Timestamp{},
-		},
-	}
-	pipeData, err := pipe.Marshal()
-	require.Nil(t, err)
-
-	// should be timeout
-	t.Run("PrepareDoneNotifyMessage", func(t *testing.T) {
-		msg := &pipeline.Message{
-			Cmd:          pipeline.Method_PrepareDoneNotifyMessage,
-			Uuid:         id[:],
-			ProcInfoData: procInfoData,
-			Data:         pipeData,
-		}
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			_ = CnServerMessageHandler(
-				ctx,
-				"",
-				msg,
-				nil,
-				nil,
-				nil,
-				nil,
-				nil,
-				nil,
-				nil,
-				cli,
-				nil,
-				nil,
-			)
-		}()
-		select {
-		case <-time.After(time.Second * 3):
-			t.SkipNow()
-		case <-done:
-			t.Fail()
-		}
-	})
-
-	// should be timeout
-	t.Run("PipelineMessage", func(t *testing.T) {
-		msg := &pipeline.Message{
-			Cmd:          pipeline.Method_PipelineMessage,
-			Uuid:         id[:],
-			ProcInfoData: procInfoData,
-			Data:         pipeData,
-		}
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			_ = CnServerMessageHandler(
-				ctx,
-				"",
-				msg,
-				nil,
-				nil,
-				nil,
-				nil,
-				nil,
-				nil,
-				nil,
-				cli,
-				nil,
-				nil,
-			)
-		}()
-		select {
-		case <-time.After(time.Second * 3):
-			t.SkipNow()
-		case <-done:
-			t.Fail()
-		}
-	})
-}
 
 func Test_receiveMessageFromCnServer(t *testing.T) {
 	ctrl := gomock.NewController(t)

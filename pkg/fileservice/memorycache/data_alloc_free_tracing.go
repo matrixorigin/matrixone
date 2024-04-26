@@ -33,8 +33,10 @@ func newData(n int, size *atomic.Int64) *Data {
 		return nil
 	}
 	size.Add(int64(n))
-	b := malloc.Alloc(n)
-	d := &Data{buf: b}
+	d := &Data{
+		size: n,
+	}
+	d.bufHandle = malloc.Alloc(n, &d.buf)
 	d.ref.init(1)
 	runtime.SetFinalizer(d, func(d *Data) {
 		if d.buf != nil {
@@ -47,6 +49,6 @@ func newData(n int, size *atomic.Int64) *Data {
 
 func (d *Data) free(size *atomic.Int64) {
 	size.Add(-int64(cap(d.buf)))
-	malloc.Free(d.buf)
 	d.buf = nil
+	d.bufHandle.Free()
 }
