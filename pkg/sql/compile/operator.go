@@ -1560,7 +1560,7 @@ func registerRuntimeFilters[T runtimeFilterSenderSetter](arg T, c *Compile, spec
 			}
 			receiver = &runtimeFilterReceiver{
 				size: shuffleCnt,
-				ch:   make(chan *pipeline.RuntimeFilter),
+				ch:   make(chan *pipeline.RuntimeFilter, 1),
 			}
 			c.runtimeFilterReceiverMap[rfSpec.Tag] = receiver
 		}

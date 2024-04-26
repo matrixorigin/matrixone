@@ -36,6 +36,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 
+	"github.com/tidwall/btree"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -59,8 +62,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-	"github.com/tidwall/btree"
-	"go.uber.org/zap"
 )
 
 type TenantInfo struct {
@@ -1074,10 +1075,11 @@ var (
 			);`,
 		`CREATE VIEW IF NOT EXISTS mo_sessions AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;`,
 		`CREATE VIEW IF NOT EXISTS mo_configurations AS SELECT * FROM mo_configurations() AS mo_configurations_tmp;`,
-		`CREATE VIEW IF NOT EXISTS mo_locks AS SELECT * FROM mo_locks() AS mo_locks_tmp;`,
-		`CREATE VIEW IF NOT EXISTS mo_variables AS SELECT * FROM mo_catalog.mo_mysql_compatibility_mode;`,
-		`CREATE VIEW IF NOT EXISTS mo_transactions AS SELECT * FROM mo_transactions() AS mo_transactions_tmp;`,
-		`CREATE VIEW IF NOT EXISTS mo_cache AS SELECT * FROM mo_cache() AS mo_cache_tmp;`,
+
+		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp`,
+		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode`,
+		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp`,
+		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp`,
 	}
 
 	//drop tables for the tenant
@@ -2782,7 +2784,8 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 	if err != nil {
 		return err
 	}
-
+	enterFPrint(ses, 62)
+	defer exitFPrint(ses, 62)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -2942,6 +2945,8 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 	}
 
 	alterAccountFunc := func() (rtnErr error) {
+		enterFPrint(ses, 63)
+		defer exitFPrint(ses, 63)
 		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
 
@@ -3313,6 +3318,8 @@ func isSubscriptionValid(accountList string, accName string) bool {
 }
 
 func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, accName, pubName string) (subs *plan.SubscriptionMeta, err error) {
+	enterFPrint(ses, 26)
+	defer exitFPrint(ses, 26)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var (
@@ -3478,6 +3485,8 @@ func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string)
 }
 
 func isDbPublishing(ctx context.Context, dbName string, ses *Session) (ok bool, err error) {
+	enterFPrint(ses, 27)
+	defer exitFPrint(ses, 27)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var (
@@ -3566,6 +3575,8 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 	var credentials string
 	var StageStatus string
 	var comment string
+	enterFPrint(ses, 28)
+	defer exitFPrint(ses, 28)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -3632,7 +3643,8 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 	if ep == nil {
 		return err
 	}
-
+	enterFPrint(ses, 29)
+	defer exitFPrint(ses, 29)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -3716,6 +3728,8 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 	//var err error
 	var stageExist bool
 	var credentials string
+	enterFPrint(ses, 30)
+	defer exitFPrint(ses, 30)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -3808,6 +3822,8 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 	var sql string
 	//var err error
 	var stageExist bool
+	enterFPrint(ses, 31)
+	defer exitFPrint(ses, 31)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -3849,6 +3865,8 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 }
 
 func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePublication) (err error) {
+	enterFPrint(ses, 32)
+	defer exitFPrint(ses, 32)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	const allTable = true
@@ -3937,6 +3955,8 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 }
 
 func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublication) (err error) {
+	enterFPrint(ses, 33)
+	defer exitFPrint(ses, 33)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var (
@@ -4054,6 +4074,8 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 }
 
 func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublication) (err error) {
+	enterFPrint(ses, 34)
+	defer exitFPrint(ses, 34)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	bh.ClearExecResultSet()
@@ -4108,6 +4130,8 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 
 // doDropAccount accomplishes the DropAccount statement
 func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err error) {
+	enterFPrint(ses, 35)
+	defer exitFPrint(ses, 35)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -4409,7 +4433,8 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 	if err != nil {
 		return err
 	}
-
+	enterFPrint(ses, 36)
+	defer exitFPrint(ses, 36)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -4493,7 +4518,8 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	if err != nil {
 		return err
 	}
-
+	enterFPrint(ses, 37)
+	defer exitFPrint(ses, 37)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -4561,7 +4587,8 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	var dbName string
 	var funcId int64
 	var erArray []ExecResult
-
+	enterFPrint(ses, 38)
+	defer exitFPrint(ses, 38)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -4664,7 +4691,8 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 	var dbName string
 	var procId int64
 	var erArray []ExecResult
-
+	enterFPrint(ses, 39)
+	defer exitFPrint(ses, 39)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -4738,6 +4766,8 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 	}
 
 	account := ses.GetTenantInfo()
+	enterFPrint(ses, 40)
+	defer exitFPrint(ses, 40)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -5011,7 +5041,8 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 	} else {
 		userId = account.GetUserID()
 	}
-
+	enterFPrint(ses, 41)
+	defer exitFPrint(ses, 41)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -5164,6 +5195,8 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 	}
 
 	account := ses.GetTenantInfo()
+	enterFPrint(ses, 42)
+	defer exitFPrint(ses, 42)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -5324,6 +5357,8 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 	}
 
 	account := ses.GetTenantInfo()
+	enterFPrint(ses, 43)
+	defer exitFPrint(ses, 43)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -6406,6 +6441,8 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	}
 
 	tenant := ses.GetTenantInfo()
+	enterFPrint(ses, 44)
+	defer exitFPrint(ses, 44)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -6698,7 +6735,8 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 	if err != nil {
 		return false, err
 	}
-
+	enterFPrint(ses, 45)
+	defer exitFPrint(ses, 45)
 	//step2: decide the current user
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -6858,7 +6896,8 @@ func checkRoleWhetherTableOwner(ctx context.Context, ses *Session, dbName, tbNam
 	tenantInfo := ses.GetTenantInfo()
 	// current user
 	currentUser := tenantInfo.GetUserID()
-
+	enterFPrint(ses, 25)
+	defer exitFPrint(ses, 25)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -6934,6 +6973,9 @@ func checkRoleWhetherDatabaseOwner(ctx context.Context, ses *Session, dbName str
 	tenantInfo := ses.GetTenantInfo()
 	// current user
 	currentUser := tenantInfo.GetUserID()
+
+	enterFPrint(ses, 24)
+	defer exitFPrint(ses, 24)
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -7221,6 +7263,8 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 	//step1: normalize the names of roles and users
 	//step2: decide the current user
 	account := ses.GetTenantInfo()
+	enterFPrint(ses, 46)
+	defer exitFPrint(ses, 46)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -7773,7 +7817,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	}
 	st.End()
 	defer mpool.DeleteMPool(mp)
-
+	enterFPrint(ses, 47)
+	defer exitFPrint(ses, 47)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -8184,7 +8229,8 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 		return err
 	}
 	defer mpool.DeleteMPool(mp)
-
+	enterFPrint(ses, 48)
+	defer exitFPrint(ses, 48)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -8382,7 +8428,8 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	if err != nil {
 		return err
 	}
-
+	enterFPrint(ses, 49)
+	defer exitFPrint(ses, 49)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -8532,7 +8579,8 @@ func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, ten
 	} else {
 		dbName = string(cf.Name.Name.SchemaName)
 	}
-
+	enterFPrint(ses, 50)
+	defer exitFPrint(ses, 50)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -8682,7 +8730,8 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	} else {
 		dbName = string(cp.Name.Name.SchemaName)
 	}
-
+	enterFPrint(ses, 51)
+	defer exitFPrint(ses, 51)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -8757,6 +8806,8 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	currentRole = tenantInfo.GetDefaultRoleID()
 
 	updateConfigForDatabase := func() (rtnErr error) {
+		enterFPrint(ses, 52)
+		defer exitFPrint(ses, 52)
 		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
 
@@ -8845,6 +8896,8 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	update_config := stmt.UpdateConfig
 
 	updateConfigForAccount := func() (rtnErr error) {
+		enterFPrint(ses, 53)
+		defer exitFPrint(ses, 53)
 		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
 
@@ -8912,6 +8965,8 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 		}
 
 		insertRecordFunc := func() (rtnErr error) {
+			enterFPrint(ses, 54)
+			defer exitFPrint(ses, 54)
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 
@@ -8967,6 +9022,8 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 		}
 
 		deleteRecordFunc := func() (rtnErr error) {
+			enterFPrint(ses, 55)
+			defer exitFPrint(ses, 55)
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 
@@ -8999,6 +9056,8 @@ func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (
 	var resultConfig string
 	defaultConfig := "0.7"
 	variableName := "version_compatibility"
+	enterFPrint(ses, 56)
+	defer exitFPrint(ses, 56)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -9062,7 +9121,8 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	if err != nil {
 		return nil, err
 	}
-
+	enterFPrint(ses, 57)
+	defer exitFPrint(ses, 57)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -9176,7 +9236,8 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 		tableName := string(st.Table.ObjectName)
 		sql = getSqlForGrantOwnershipOnTable(dbName, tableName, currentRole)
 	}
-
+	enterFPrint(ses, 58)
+	defer exitFPrint(ses, 58)
 	bh := ses.GetBackgroundExec(tenantCtx)
 	defer bh.Close()
 
@@ -9226,7 +9287,8 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 		tableName := string(st.Names[0].ObjectName)
 		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, currentRole)
 	}
-
+	enterFPrint(ses, 59)
+	defer exitFPrint(ses, 59)
 	bh := ses.GetBackgroundExec(tenantCtx)
 	defer bh.Close()
 
@@ -9248,6 +9310,8 @@ func doGetGlobalSystemVariable(ctx context.Context, ses *Session) (ret map[strin
 	tenantInfo := ses.GetTenantInfo()
 
 	sysVars = make(map[string]interface{})
+	enterFPrint(ses, 60)
+	defer exitFPrint(ses, 60)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -9314,6 +9378,8 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 		}
 
 		setGlobalFunc := func() (rtnErr error) {
+			enterFPrint(ses, 61)
+			defer exitFPrint(ses, 61)
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 

@@ -31,6 +31,7 @@ type lockTableKeeper struct {
 	keepRemoteLockInterval    time.Duration
 	tables                    *lockTableHolder
 	canDoKeep                 bool
+	service                   *service
 }
 
 // NewLockTableKeeper create a locktable keeper, an internal timer is started
@@ -41,13 +42,15 @@ func NewLockTableKeeper(
 	client Client,
 	keepLockTableBindInterval time.Duration,
 	keepRemoteLockInterval time.Duration,
-	tables *lockTableHolder) LockTableKeeper {
+	tables *lockTableHolder,
+	service *service) LockTableKeeper {
 	s := &lockTableKeeper{
 		serviceID:                 serviceID,
 		client:                    client,
 		tables:                    tables,
 		keepLockTableBindInterval: keepLockTableBindInterval,
 		keepRemoteLockInterval:    keepRemoteLockInterval,
+		service:                   service,
 		stopper: stopper.NewStopper("lock-table-keeper",
 			stopper.WithLogger(getLogger().RawLogger())),
 	}
@@ -166,6 +169,10 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 }
 
 func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
+	if k.service.isStatus(pb.Status_ServiceLockWaiting) &&
+		k.service.activeTxnHolder.empty() {
+		k.service.setStatus(pb.Status_ServiceUnLockSucc)
+	}
 	if !k.canDoKeep {
 		k.tables.iter(func(key uint64, value lockTable) bool {
 			bind := value.getBind()
@@ -184,6 +191,11 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 
 	req.Method = pb.Method_KeepLockTableBind
 	req.KeepLockTableBind.ServiceID = k.serviceID
+	req.KeepLockTableBind.Status = k.service.getStatus()
+	if !k.service.isStatus(pb.Status_ServiceLockEnable) {
+		req.KeepLockTableBind.LockTables = k.service.popGroupTables()
+		req.KeepLockTableBind.TxnIDs = k.service.activeTxnHolder.getAllTxnID()
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, k.keepLockTableBindInterval)
 	defer cancel()
@@ -195,6 +207,15 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	defer releaseResponse(resp)
 
 	if resp.KeepLockTableBind.OK {
+		switch resp.KeepLockTableBind.Status {
+		case pb.Status_ServiceLockWaiting:
+			// maybe pb.Status_ServiceUnLockSucc
+			if k.service.isStatus(pb.Status_ServiceLockEnable) {
+				go k.service.checkCanMoveGroupTables()
+			}
+		default:
+			k.service.setStatus(resp.KeepLockTableBind.Status)
+		}
 		return
 	}
 
