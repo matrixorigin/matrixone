@@ -427,6 +427,13 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 		}
 		if start.Less(&stage) {
 			logutil.Infof("deleteFiles11: %v", ckp.GetLocation().Name().String())
+			locations, err := logtail.LoadCheckpointLocations(c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
+			if err != nil {
+				return err
+			}
+			for name := range locations {
+				deleteFiles = append(deleteFiles, name)
+			}
 			deleteFiles = append(deleteFiles, ckp.GetLocation().Name().String())
 		}
 

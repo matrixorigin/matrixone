@@ -119,6 +119,12 @@ func (e *CheckpointEntry) GetLocation() objectio.Location {
 	return e.cnLocation
 }
 
+func (e *CheckpointEntry) GetTNLocation() objectio.Location {
+	e.RLock()
+	defer e.RUnlock()
+	return e.tnLocation
+}
+
 func (e *CheckpointEntry) GetVersion() uint32 {
 	return e.version
 }
