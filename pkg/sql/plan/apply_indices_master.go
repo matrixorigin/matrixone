@@ -31,6 +31,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 
 	var pkPos = scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
 	var pkType = scanNode.TableDef.Cols[pkPos].Typ
+	var colDefs = scanNode.TableDef.Cols
 
 	var prevIndexPkCol *Expr
 	var prevLastNodeId int32
@@ -40,12 +41,12 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 	for i, filterExp := range scanNode.FilterList {
 		idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName)
 
-		// 1. SELECT pk from idx WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value"))
-		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, *ts)
+		// 1. SELECT pk from idx WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value"))
+		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, *ts, colDefs)
 
-		// 2. (SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value1")) )
+		// 2. (SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value1")) )
 		//    	INNER JOIN
-		//    (SELECT pk from idx2 WHERE prefix_eq(`__mo_index_idx_col` =  serial_full("b","value2")) )
+		//    (SELECT pk from idx2 WHERE prefix_eq(`__mo_index_idx_col` =  serial_full("1","value2")) )
 		//    	ON idx1.pk = idx2.pk
 		//    ...
 		lastNodeId = currScanId
@@ -80,9 +81,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 	scanNode.Limit, scanNode.Offset = nil, nil
 
 	// 3. SELECT * from tbl INNER JOIN (
-	//    	(SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value1")) )
+	//    	(SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value1")) )
 	//    		INNER JOIN
-	//    	(SELECT pk from idx2 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("b","value2")) )
+	//    	(SELECT pk from idx2 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("1","value2")) )
 	//    		ON idx1.pk = idx2.pk
 	//    ) ON tbl.pk = idx1.pk
 	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
@@ -118,7 +119,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 }
 
 func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *plan.Expr,
-	idxTableDef *TableDef, idxObjRef *ObjectRef, scanTs timestamp.Timestamp) (int32, int32) {
+	idxTableDef *TableDef, idxObjRef *ObjectRef, scanTs timestamp.Timestamp, colDefs []*plan.ColDef) (int32, int32) {
 
 	// a. Scan * WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value"))
 	idxScanTag := builder.genNewTag()
@@ -139,7 +140,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 	case "=":
 		serialExpr1, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full",
 			[]*plan.Expr{
-				makePlan2StringConstExprWithType(getColIdxFromColRef(args[0].GetCol())), // "0"
+				makePlan2StringConstExprWithType(getColSeqFromColDef(colDefs[args[0].GetCol().GetColPos()])), // "0"
 				args[1], // value
 			})
 
@@ -149,11 +150,11 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		})
 	case "between":
 		serialExpr1, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", []*plan.Expr{
-			makePlan2StringConstExprWithType(getColIdxFromColRef(args[0].GetCol())), // "0"
+			makePlan2StringConstExprWithType(getColSeqFromColDef(colDefs[args[0].GetCol().GetColPos()])), // "0"
 			args[1], // value1
 		})
 		serialExpr2, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", []*plan.Expr{
-			makePlan2StringConstExprWithType(getColIdxFromColRef(args[0].GetCol())), // "0"
+			makePlan2StringConstExprWithType(getColSeqFromColDef(colDefs[args[0].GetCol().GetColPos()])), // "0"
 			args[2], // value2
 		})
 		filterList, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_between", []*Expr{
@@ -173,7 +174,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 
 		// b. const vector "0"
 		mp := mpool.MustNewZero()
-		arg0AsColNameVec, _ := vector.NewConstBytes(inVecType, []byte(getColIdxFromColRef(args[0].GetCol())), inExprListLen, mp)
+		arg0AsColNameVec, _ := vector.NewConstBytes(inVecType, []byte(getColSeqFromColDef(colDefs[args[0].GetCol().GetColPos()])), inExprListLen, mp)
 
 		// c. (serial_full("0","value1"), serial_full("0","value2"), serial_full("0","value3"))
 		ps := types.NewPackerArray(inExprListLen, mp)
@@ -207,7 +208,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 
 		filterList, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", []*Expr{
 			indexKeyCol,           // __mo_index_idx_col
-			arg1ForPrefixInLitVec, // (serial_full("a","value1"), serial_full("a","value2"), serial_full("a","value3"))
+			arg1ForPrefixInLitVec, // (serial_full("0","value1"), serial_full("0","value2"), serial_full("0","value3"))
 		})
 
 	default:

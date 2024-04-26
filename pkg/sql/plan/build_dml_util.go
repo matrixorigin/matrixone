@@ -2464,7 +2464,7 @@ func buildSerialFullAndPKColsProjMasterIndex(builder *QueryBuilder, bindCtx *Bin
 
 	//3.i build serial_full("0", a, pk)
 	serialArgs := make([]*plan.Expr, 3)
-	serialArgs[0] = makePlan2StringConstExprWithType(getColIdxFromColPos(colsPos[part]))
+	serialArgs[0] = makePlan2StringConstExprWithType(getColSeqFromColDef(tableDef.Cols[colsPos[part]]))
 	serialArgs[1] = &Expr{
 		Typ: *colsType[part],
 		Expr: &plan.Expr_Col{
@@ -3139,7 +3139,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 		// serial_full("colPos", col1, pk)
 		var leftExpr *Expr
 		leftExprArgs := make([]*Expr, 3)
-		leftExprArgs[0] = makePlan2StringConstExprWithType(getColIdxFromColPos(posMap[part]))
+		leftExprArgs[0] = makePlan2StringConstExprWithType(getColSeqFromColDef(tableDef.Cols[posMap[part]]))
 		leftExprArgs[1] = &Expr{
 			Typ: typMap[part],
 			Expr: &plan.Expr_Col{
