@@ -139,7 +139,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 	case "=":
 		serialExpr1, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full",
 			[]*plan.Expr{
-				makePlan2StringConstExprWithType(getColIdxFromColRef(args[0].GetCol())), // "0"
+				makePlan2StringConstExprWithType(getColSeqFromColRef(args[0].GetCol())), // "0"
 				args[1], // value
 			})
 
@@ -149,11 +149,11 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		})
 	case "between":
 		serialExpr1, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", []*plan.Expr{
-			makePlan2StringConstExprWithType(getColIdxFromColRef(args[0].GetCol())), // "0"
+			makePlan2StringConstExprWithType(getColSeqFromColRef(args[0].GetCol())), // "0"
 			args[1], // value1
 		})
 		serialExpr2, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", []*plan.Expr{
-			makePlan2StringConstExprWithType(getColIdxFromColRef(args[0].GetCol())), // "0"
+			makePlan2StringConstExprWithType(getColSeqFromColRef(args[0].GetCol())), // "0"
 			args[2], // value2
 		})
 		filterList, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_between", []*Expr{
@@ -173,7 +173,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 
 		// b. const vector "0"
 		mp := mpool.MustNewZero()
-		arg0AsColNameVec, _ := vector.NewConstBytes(inVecType, []byte(getColIdxFromColRef(args[0].GetCol())), inExprListLen, mp)
+		arg0AsColNameVec, _ := vector.NewConstBytes(inVecType, []byte(getColSeqFromColRef(args[0].GetCol())), inExprListLen, mp)
 
 		// c. (serial_full("0","value1"), serial_full("0","value2"), serial_full("0","value3"))
 		ps := types.NewPackerArray(inExprListLen, mp)

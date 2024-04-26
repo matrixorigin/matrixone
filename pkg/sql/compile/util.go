@@ -231,12 +231,13 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 	}
 
 	colIdxMap := make(map[string]string)
-	for idx, col := range originTableDef.Cols {
+	for _, col := range originTableDef.Cols {
 		// NOTE:
 		// ColDef.ColId is not used as "after alter table, different columns may have the same colId"
 		// ColRel.ColPos is not used as it will be used in the Planner
 		// ColIdx = Position of Column within tableDef.
-		colIdxMap[col.GetName()] = fmt.Sprintf("%d", idx)
+		// ColSeqNum is monotonically increasing number
+		colIdxMap[col.GetName()] = fmt.Sprintf("%d", col.GetSeqnum())
 	}
 
 	for i, part := range indexDef.Parts {
