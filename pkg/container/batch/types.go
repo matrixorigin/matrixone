@@ -16,6 +16,7 @@ package batch
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
@@ -115,7 +116,7 @@ func (m *EncodeBatch) unmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) err
 		size := types.DecodeInt32(buf[:4])
 		buf = buf[4:]
 
-		vecs[i] = new(vector.Vector)
+		vecs[i] = vector.NewVecFromReuse()
 		if mp == nil {
 			if err := vecs[i].UnmarshalBinary(buf[:size]); err != nil {
 				return err

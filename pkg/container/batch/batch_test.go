@@ -79,7 +79,7 @@ func TestBatchShrink(t *testing.T) {
 }
 
 func TestBatch_ReplaceVector(t *testing.T) {
-	v1, v2, v3 := &vector.Vector{}, &vector.Vector{}, &vector.Vector{}
+	v1, v2, v3 := vector.NewVecFromReuse(), vector.NewVecFromReuse(), vector.NewVecFromReuse()
 	bat := &Batch{
 		Vecs: []*vector.Vector{
 			v1,
