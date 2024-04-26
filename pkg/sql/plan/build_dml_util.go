@@ -17,6 +17,8 @@ package plan
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"strings"
 	"sync"
 
@@ -33,12 +35,13 @@ import (
 	"golang.org/x/exp/slices"
 )
 
+var CNPrimaryCheck = false
+
 var dmlPlanCtxPool = sync.Pool{
 	New: func() any {
 		return &dmlPlanCtx{}
 	},
 }
-
 var deleteNodeInfoPool = sync.Pool{
 	New: func() any {
 		return &deleteNodeInfo{}
@@ -109,7 +112,7 @@ type deleteNodeInfo struct {
 	foreignTbl      []uint64
 	addAffectedRows bool
 	pkPos           int
-	pkTyp           *plan.Type
+	pkTyp           plan.Type
 	lockTable       bool
 }
 
@@ -332,12 +335,12 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 
 	if (hasUniqueKey || hasSecondaryKey) && !canTruncate {
-		typMap := make(map[string]*plan.Type)
+		typMap := make(map[string]plan.Type)
 		posMap := make(map[string]int)
 		colMap := make(map[string]*ColDef)
 		for idx, col := range delCtx.tableDef.Cols {
 			posMap[col.Name] = idx
-			typMap[col.Name] = &col.Typ
+			typMap[col.Name] = col.Typ
 			colMap[col.Name] = col
 		}
 		multiTableIndexes := make(map[string]*MultiTableIndex)
@@ -405,7 +408,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				var err error
 				var uniqueDeleteIdx int
 				var uniqueTblPkPos int
-				var uniqueTblPkTyp *Type
+				var uniqueTblPkTyp Type
 
 				if delCtx.isDeleteWithoutFilters {
 					lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, uniqueObjRef, uniqueTableDef)
@@ -416,7 +419,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					lastNodeId, err = appendDeleteIndexTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, isUk)
 					uniqueDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 					uniqueTblPkPos = uniqueDeleteIdx + 1
-					uniqueTblPkTyp = &uniqueTableDef.Cols[0].Typ
+					uniqueTblPkTyp = uniqueTableDef.Cols[0].Typ
 				}
 				if err != nil {
 					return err
@@ -519,7 +522,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				var err error
 				var masterDeleteIdx int
 				var masterTblPkPos int
-				var masterTblPkTyp *Type
+				var masterTblPkTyp Type
 
 				if delCtx.isDeleteWithoutFilters {
 					lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, masterObjRef, masterTableDef)
@@ -530,7 +533,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					lastNodeId, err = appendDeleteMasterTablePlan(builder, bindCtx, masterObjRef, masterTableDef, lastNodeId, delCtx.tableDef, indexdef, typMap, posMap)
 					masterDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 					masterTblPkPos = masterDeleteIdx + 1
-					masterTblPkTyp = &masterTableDef.Cols[0].Typ
+					masterTblPkTyp = masterTableDef.Cols[0].Typ
 				}
 
 				if err != nil {
@@ -660,7 +663,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				var err error
 				var entriesDeleteIdx int
 				var entriesTblPkPos int
-				var entriesTblPkTyp *Type
+				var entriesTblPkTyp Type
 
 				if delCtx.isDeleteWithoutFilters {
 					lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, entriesObjRef, entriesTableDef)
@@ -671,7 +674,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					lastNodeId, err = appendDeleteIvfTablePlan(builder, bindCtx, entriesObjRef, entriesTableDef, lastNodeId, delCtx.tableDef)
 					entriesDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength // eg:- <id, embedding, row_id, <... update_col> > + 0/1
 					entriesTblPkPos = entriesDeleteIdx + 1                                // this is the compound primary key of the entries table
-					entriesTblPkTyp = &entriesTableDef.Cols[4].Typ                        // 4'th column is the compound primary key <version,id, org_pk,org_embedding, cp_pk, row_id>
+					entriesTblPkTyp = entriesTableDef.Cols[4].Typ                         // 4'th column is the compound primary key <version,id, org_pk,org_embedding, cp_pk, row_id>
 				}
 
 				if err != nil {
@@ -1123,7 +1126,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.insertColPos = insertColPos
 						upPlanCtx.isFkRecursionCall = true
 						upPlanCtx.updatePkCol = updatePk
-						upPlanCtx.lockTable = ifNeedLockWholeTable(builder, lastNodeId)
 
 						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 						putDmlPlanCtx(upPlanCtx)
@@ -1169,7 +1171,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 								upPlanCtx.isFkRecursionCall = true
 								upPlanCtx.updatePkCol = updatePk
-								upPlanCtx.lockTable = ifNeedLockWholeTable(builder, lastNodeId)
 
 								err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 								putDmlPlanCtx(upPlanCtx)
@@ -1200,7 +1201,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								upPlanCtx.sourceStep = newSourceStep
 								upPlanCtx.beginIdx = 0
 								upPlanCtx.allDelTableIDs = allDelTableIDs
-								upPlanCtx.lockTable = ifNeedLockWholeTable(builder, lastNodeId)
 
 								err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
 								putDmlPlanCtx(upPlanCtx)
@@ -1611,7 +1611,7 @@ func makeOneDeletePlan(
 			// append filter
 			rowIdTyp := types.T_Rowid.ToType()
 			rowIdColExpr := &plan.Expr{
-				Typ: *makePlan2Type(&rowIdTyp),
+				Typ: makePlan2Type(&rowIdTyp),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(delNodeInfo.deleteIndex),
@@ -1829,7 +1829,7 @@ func isMultiplePriKey(indexdef *plan.IndexDef) bool {
 
 // makeDeleteNodeInfo Get `DeleteNode` based on TableDef
 func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef,
-	deleteIdx int, partitionIdx int, addAffectedRows bool, pkPos int, pkTyp *Type, lockTable bool, partitionInfos map[uint64]*partSubTableInfo) *deleteNodeInfo {
+	deleteIdx int, partitionIdx int, addAffectedRows bool, pkPos int, pkTyp Type, lockTable bool, partitionInfos map[uint64]*partSubTableInfo) *deleteNodeInfo {
 	delNodeInfo := getDeleteNodeInfo()
 	delNodeInfo.objRef = objRef
 	delNodeInfo.tableDef = tableDef
@@ -2023,7 +2023,7 @@ func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, l
 		AggList:  []*Expr{aggExpr},
 		ProjectList: []*Expr{
 			{
-				Typ: *makePlan2Type(&countType),
+				Typ: makePlan2Type(&countType),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: -2,
@@ -2045,7 +2045,7 @@ func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, l
 	return lastNodeId, nil
 }
 
-func getPkPos(tableDef *TableDef, ignoreFakePK bool) (int, *Type) {
+func getPkPos(tableDef *TableDef, ignoreFakePK bool) (int, Type) {
 	pkName := tableDef.Pkey.PkeyColName
 	// if pkName == catalog.CPrimaryKeyColName {
 	// 	return len(tableDef.Cols) - 1, makeHiddenColTyp()
@@ -2055,10 +2055,10 @@ func getPkPos(tableDef *TableDef, ignoreFakePK bool) (int, *Type) {
 			if ignoreFakePK && col.Name == catalog.FakePrimaryKeyColName {
 				continue
 			}
-			return i, &col.Typ
+			return i, col.Typ
 		}
 	}
-	return -1, nil
+	return -1, Type{}
 }
 
 func getRowIdPos(tableDef *TableDef) int {
@@ -2343,13 +2343,12 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	}
 
 	if !isUpdate {
-		ifLockTable := ifNeedLockWholeTable(builder, lastNodeId)
 		if lockNodeId, ok := appendLockNode(
 			builder,
 			bindCtx,
 			lastNodeId,
 			tableDef,
-			ifLockTable,
+			false,
 			false,
 			partitionIdx,
 			partTableIds,
@@ -2434,13 +2433,12 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 	}
 
 	// 3. add lock
-	ifLockTable := ifNeedLockWholeTable(builder, lastNodeId)
 	if lockNodeId, ok := appendLockNode(
 		builder,
 		bindCtx,
 		lastNodeId,
 		indexTableDef,
-		ifLockTable,
+		false,
 		false,
 		-1,
 		nil,
@@ -2455,7 +2453,7 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 	return newSourceStep, nil
 }
 
-func buildSerialFullAndPKColsProj(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, genLastNodeIdFn func() int32, originPkPos int, part string, colsType map[string]*Type, colsPos map[string]int, originPkType *Type) (*Node, error) {
+func buildSerialFullAndPKColsProj(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, genLastNodeIdFn func() int32, originPkPos int, part string, colsType map[string]*Type, colsPos map[string]int, originPkType Type) (*Node, error) {
 	var err error
 	// 1. get new source sink
 	var currLastNodeId = genLastNodeIdFn()
@@ -2480,7 +2478,7 @@ func buildSerialFullAndPKColsProj(builder *QueryBuilder, bindCtx *BindContext, t
 		},
 	}
 	serialArgs[2] = &Expr{
-		Typ: *originPkType,
+		Typ: originPkType,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
@@ -2496,7 +2494,7 @@ func buildSerialFullAndPKColsProj(builder *QueryBuilder, bindCtx *BindContext, t
 
 	//3.ii build pk
 	projectProjection[1] = &Expr{
-		Typ: *originPkType,
+		Typ: originPkType,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
@@ -2611,19 +2609,19 @@ func appendPreInsertSkVectorPlan(
 
 	//1.a get vector & pk column details
 	var posOriginPk, posOriginVecColumn int
-	var typeOriginPk, typeOriginVecColumn *Type
+	var typeOriginPk, typeOriginVecColumn Type
 	{
 		colsMap := make(map[string]int)
-		colTypes := make([]*Type, len(tableDef.Cols))
+		colTypes := make([]Type, len(tableDef.Cols))
 		for i, col := range tableDef.Cols {
 			colsMap[col.Name] = i
-			colTypes[i] = &tableDef.Cols[i].Typ
+			colTypes[i] = tableDef.Cols[i].Typ
 		}
 
 		for _, part := range multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].Parts {
 			if i, ok := colsMap[part]; ok {
 				posOriginVecColumn = i
-				typeOriginVecColumn = &tableDef.Cols[i].Typ
+				typeOriginVecColumn = tableDef.Cols[i].Typ
 				break
 			}
 		}
@@ -2687,13 +2685,12 @@ func appendPreInsertSkVectorPlan(
 
 	lastNodeId = projectId
 
-	ifLockTable := ifNeedLockWholeTable(builder, lastNodeId)
 	if lockNodeId, ok := appendLockNode(
 		builder,
 		bindCtx,
 		lastNodeId,
 		indexTableDefs[2],
-		ifLockTable,
+		false,
 		false,
 		-1,
 		nil,
@@ -2818,18 +2815,18 @@ func appendPreInsertUkPlan(
 	pkColumn, originPkType := getPkPos(tableDef, false)
 	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
 
-	var ukType *Type
+	var ukType Type
 	if len(idxDef.Parts) == 1 {
-		ukType = &tableDef.Cols[useColumns[0]].Typ
+		ukType = tableDef.Cols[useColumns[0]].Typ
 	} else {
-		ukType = &Type{
+		ukType = Type{
 			Id:    int32(types.T_varchar),
 			Width: types.MaxVarcharLen,
 		}
 	}
 	var preinsertUkProjection []*Expr
 	preinsertUkProjection = append(preinsertUkProjection, &plan.Expr{
-		Typ: *ukType,
+		Typ: ukType,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: -1,
@@ -2839,7 +2836,7 @@ func appendPreInsertUkPlan(
 		},
 	})
 	preinsertUkProjection = append(preinsertUkProjection, &plan.Expr{
-		Typ: *originPkType,
+		Typ: originPkType,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: -1,
@@ -2896,13 +2893,12 @@ func appendPreInsertUkPlan(
 	}
 	lastNodeId = builder.appendNode(preInsertUkNode, bindCtx)
 
-	ifLockTable := ifNeedLockWholeTable(builder, lastNodeId)
 	if lockNodeId, ok := appendLockNode(
 		builder,
 		bindCtx,
 		lastNodeId,
 		uniqueTableDef,
-		ifLockTable,
+		false,
 		false,
 		-1,
 		nil,
@@ -2923,7 +2919,7 @@ func appendDeleteIndexTablePlan(
 	uniqueObjRef *ObjectRef,
 	uniqueTableDef *TableDef,
 	indexdef *IndexDef,
-	typMap map[string]*plan.Type,
+	typMap map[string]plan.Type,
 	posMap map[string]int,
 	baseNodeId int32,
 	isUK bool,
@@ -3016,7 +3012,7 @@ func appendDeleteIndexTablePlan(
 		orginIndexColumnName := indexdef.Parts[0]
 		typ := typMap[orginIndexColumnName]
 		leftExpr = &Expr{
-			Typ: *typ,
+			Typ: typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 1,
@@ -3031,7 +3027,7 @@ func appendDeleteIndexTablePlan(
 			column = catalog.ResolveAlias(column)
 			typ := typMap[column]
 			args[i] = &plan.Expr{
-				Typ: *typ,
+				Typ: typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 1,
@@ -3100,7 +3096,7 @@ func appendDeleteIndexTablePlan(
 func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	masterObjRef *ObjectRef, masterTableDef *TableDef,
 	baseNodeId int32, tableDef *TableDef, indexDef *plan.IndexDef,
-	typMap map[string]*plan.Type, posMap map[string]int) (int32, error) {
+	typMap map[string]plan.Type, posMap map[string]int) (int32, error) {
 
 	originPkColumnPos, originPkType := getPkPos(tableDef, false)
 
@@ -3147,7 +3143,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 		leftExprArgs := make([]*Expr, 3)
 		leftExprArgs[0] = makePlan2StringConstExprWithType(part)
 		leftExprArgs[1] = &Expr{
-			Typ: *typMap[part],
+			Typ: typMap[part],
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
@@ -3157,7 +3153,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 			},
 		}
 		leftExprArgs[2] = &Expr{
-			Typ: *originPkType,
+			Typ: originPkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
@@ -3278,7 +3274,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 			},
 		},
 		&plan.Expr{
-			Typ: *makePlan2Type(&cpPkType),
+			Typ: makePlan2Type(&cpPkType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 1,
@@ -3303,7 +3299,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	// append join node
 	var joinConds []*Expr
 	var leftExpr = &plan.Expr{
-		Typ: *originPkType,
+		Typ: originPkType,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
@@ -3544,7 +3540,7 @@ func makePreUpdateDeletePlan(
 		PrimaryColIdxInBat: int32(pkPos),
 		PrimaryColTyp:      pkTyp,
 		RefreshTsIdxInBat:  -1,
-		LockTable:          delCtx.lockTable,
+		LockTable:          false,
 	}
 	if delCtx.tableDef.Partition != nil {
 		lockTarget.IsPartitionTable = true
@@ -3633,7 +3629,7 @@ func makePreUpdateDeletePlan(
 			PrimaryColIdxInBat: newPkPos,
 			PrimaryColTyp:      pkTyp,
 			RefreshTsIdxInBat:  -1, //unsupport now
-			LockTable:          delCtx.lockTable,
+			LockTable:          false,
 		}
 		if delCtx.tableDef.Partition != nil {
 			lockTarget.IsPartitionTable = true
@@ -3711,6 +3707,10 @@ func appendLockNode(
 	}
 	pkPos, pkTyp := getPkPos(tableDef, false)
 	if pkPos == -1 {
+		return -1, false
+	}
+
+	if builder.qry.LoadTag && !lockTable {
 		return -1, false
 	}
 
@@ -4148,12 +4148,13 @@ func getSqlForCheckHasDBRefersTo(db string) string {
 // define fk refers to these databases.
 // for simplicity of the design
 var fkBannedDatabase = map[string]bool{
-	catalog.MO_CATALOG:        true,
-	catalog.MO_SYSTEM:         true,
-	catalog.MO_SYSTEM_METRICS: true,
-	catalog.MOTaskDB:          true,
-	"information_schema":      true,
-	"mysql":                   true,
+	catalog.MO_CATALOG:         true,
+	catalog.MO_SYSTEM:          true,
+	catalog.MO_SYSTEM_METRICS:  true,
+	catalog.MOTaskDB:           true,
+	sysview.InformationDBConst: true,
+	sysview.MysqlDBConst:       true,
+	trace.DebugDB:              true,
 }
 
 // IsFkBannedDatabase denotes the database should not have any

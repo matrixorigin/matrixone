@@ -76,8 +76,6 @@ type container struct {
 
 type Argument struct {
 	ctr        *container
-	Ibucket    uint64
-	Nbucket    uint64
 	Result     []int32
 	RightTypes []types.Type
 	Cond       *plan.Expr

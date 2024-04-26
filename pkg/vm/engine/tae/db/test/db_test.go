@@ -7880,7 +7880,7 @@ func TestReplayDeletes(t *testing.T) {
 	txn, rel := tae.GetRelation()
 	blkIt := rel.MakeObjectIt()
 	blk := blkIt.GetObject()
-	blk.RangeDelete(0, 1, 50, handle.DT_Normal, common.DefaultAllocator)
+	blk.RangeDelete(0, 1, 49, handle.DT_Normal, common.DefaultAllocator)
 	assert.NoError(t, txn.Commit(context.Background()))
 	//the next blk to compact
 	tae.DoAppend(bats[1])
