@@ -51,8 +51,8 @@ func ParseFromByteSlice(s []byte) (bj ByteJson, err error) {
 }
 
 func toString(buf, data []byte) []byte {
-	bs, _ := json.Marshal(string(data))
-	return append(buf, bs...)
+	bs, _ := appendString(buf, string(data))
+	return bs
 }
 
 func addElem(buf []byte, in interface{}) (TpCode, []byte, error) {

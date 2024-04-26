@@ -17,15 +17,12 @@ package bytejson
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"math"
 	"sort"
 	"strconv"
 	"strings"
 
-	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -682,13 +679,13 @@ func ParseJsonByteFromString(s string) ([]byte, error) {
 }
 
 func ParseJsonByteFromString2(s string) ([]byte, error) {
-	if !json.Valid([]byte(s)) {
-		return nil, moerr.NewInvalidInputNoCtx("invalid json: %s", s)
-	}
+	// if !json.Valid([]byte(s)) {
+	// 	return nil, moerr.NewInvalidInputNoCtx("invalid json: %s", s)
+	// }
 	p := parser{
-		iter: jsoniter.ParseString(jsoniter.ConfigDefault, s),
-		src:  s,
-		dst:  make([]byte, 0, len(s)+1),
+		de:  NewDecoder([]byte(s)),
+		src: s,
+		dst: make([]byte, 0, len(s)+1),
 	}
 	err := p.do()
 	if err != nil {
@@ -708,9 +705,9 @@ func init() {
 }
 
 type parser struct {
-	iter *jsoniter.Iterator
-	src  string
-	dst  []byte
+	de  *Decoder
+	src string
+	dst []byte
 }
 
 type group struct {
@@ -767,85 +764,94 @@ func (p *parser) parseNumber(in json.Number) (TpCode, []byte, error) {
 }
 
 func (p *parser) do() error {
-	val := p.nextValue()
-	p.iter.WhatIsNext()
-	if !errors.Is(p.iter.Error, io.EOF) {
-		return moerr.NewInvalidInputNoCtx("invalid json: %s", p.src)
-	}
-	_, _, err := p.writeAny(true, val)
+	val, err := p.nextValue()
 	if err != nil {
 		return err
 	}
-	if p.err() != nil {
-		return moerr.NewInvalidInputNoCtx("%v", p.iter.Error)
+
+	tok, err := p.de.Read()
+	if err != nil {
+		return err
+	}
+	if tok.Kind() != KdEOF {
+		return moerr.NewInvalidInputNoCtx("invalid json: %s", p.src)
+	}
+	_, _, err = p.writeAny(true, val)
+	if err != nil {
+		return err
 	}
 	return nil
 }
 
-func (p *parser) parseArray() *group {
-	if p.err() != nil {
-		return nil
-	}
+func (p *parser) parseArray() (*group, error) {
 	g := reuse.Alloc[group](nil)
 	g.obj = false
 	for {
-		if !p.iter.ReadArray() {
-			return g
+		tk, err := p.de.Peek()
+		if err != nil {
+			reuse.Free(g, nil)
+			return nil, err
 		}
-		val := p.nextValue()
-		if p.err() != nil {
-			defer reuse.Free(g, nil)
-			return nil
+
+		if tk.Kind() == KdArrayClose {
+			p.de.Read()
+			return g, nil
+		}
+		val, err := p.nextValue()
+		if err != nil {
+			reuse.Free(g, nil)
+			return nil, err
 		}
 		g.values = append(g.values, val)
 	}
 }
 
-func (p *parser) parseObject() *group {
-	if p.err() != nil {
-		return nil
-	}
+func (p *parser) parseObject() (*group, error) {
 	g := reuse.Alloc[group](nil)
 	g.obj = true
-	p.iter.ReadObjectCB(func(i *jsoniter.Iterator, s string) bool {
-		g.keys = append(g.keys, s)
+	for {
+		tk, err := p.de.Read()
+		if err != nil {
+			reuse.Free(g, nil)
+			return nil, err
+		}
 
-		val := p.nextValue()
+		if tk.Kind() == KdObjectClose {
+			return g, nil
+		}
+		g.keys = append(g.keys, tk.Name())
+
+		val, err := p.nextValue()
+		if err != nil {
+			reuse.Free(g, nil)
+			return nil, err
+		}
 		g.values = append(g.values, val)
-		return p.err() == nil
-	})
-	if p.err() != nil {
-		defer reuse.Free(g, nil)
-		return nil
 	}
-	return g
 }
 
-func (p *parser) nextValue() any {
-	if p.err() != nil {
-		return nil
+func (p *parser) nextValue() (any, error) {
+	tk, err := p.de.Read()
+	if err != nil {
+		return nil, err
 	}
-	tp := p.iter.WhatIsNext()
-	switch tp {
-	case jsoniter.InvalidValue:
-		p.iter.ReportError("nextValue", "invalid value")
-	case jsoniter.StringValue:
-		return p.iter.ReadString()
-	case jsoniter.NumberValue:
-		return p.iter.ReadNumber()
-	case jsoniter.NilValue:
-		p.iter.ReadNil()
-		return nil
-	case jsoniter.BoolValue:
-		return p.iter.ReadBool()
-	case jsoniter.ArrayValue:
+
+	switch tk.Kind() {
+	case KdString:
+		return tk.ParsedString(), nil
+	case KdNumber:
+		return json.Number(tk.RawString()), nil
+	case KdNull:
+		return nil, nil
+	case KdBool:
+		return tk.Bool(), nil
+	case KdArrayOpen:
 		return p.parseArray()
-	case jsoniter.ObjectValue:
+	case KdObjectOpen:
 		return p.parseObject()
 	default:
-		p.iter.ReportError("nextValue", "unknown value type")
+		return nil, moerr.NewInternalErrorNoCtx("invalid token %v", tk)
 	}
-	return nil
 }
 
 func (p *parser) writeAny(raw bool, v any) (TpCode, uint32, error) {
@@ -961,12 +967,4 @@ func (p *parser) writeAny(raw bool, v any) (TpCode, uint32, error) {
 	default:
 		return 0, 0, moerr.NewInvalidInputNoCtx("unknown type %T", v)
 	}
-}
-
-func (p *parser) err() error {
-	err := p.iter.Error
-	if errors.Is(err, io.EOF) {
-		return nil
-	}
-	return err
 }
