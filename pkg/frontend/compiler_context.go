@@ -762,7 +762,7 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubm
 
 	pubContext := txnCtx
 	if pubmeta != nil {
-		pubContext = defines.AttachAccountId(pubContext, uint32(pubmeta.AccountId))
+		pubContext = context.WithValue(pubContext, defines.TenantIDKey{}, uint32(pubmeta.AccountId))
 	}
 
 	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(pubContext, txn, tableId)
