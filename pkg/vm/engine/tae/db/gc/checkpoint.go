@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"sort"
 	"sync"
 	"sync/atomic"
 )
@@ -388,6 +389,45 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	return nil
 }
 
+func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
+	files, idx, err := checkpoint.ListSnapshotMeta(c.ctx, c.fs.Service, stage, nil)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(c.ctx, c.fs.Service, files, idx)
+	if err != nil {
+		return err
+	}
+	if len(ckps) == 0 {
+		return nil
+	}
+	deleteFiles := make([]string, 0)
+	for _, ckp := range ckps {
+		if ckp.GetType() == checkpoint.ET_Global && ckp.GetEnd().Less(&stage) {
+			deleteFiles = append(deleteFiles, ckp.GetLocation().String())
+		}
+	}
+	for i := 0; i < idx+1; i++ {
+		start := files[i].GetStart()
+		end := files[i].GetEnd()
+		if start.IsEmpty() {
+			// global checkpoint
+			start = end
+		}
+		if end.Less(&stage) {
+			deleteFiles = append(deleteFiles, files[i].String())
+		}
+	}
+	err = c.fs.DelFiles(c.ctx, deleteFiles)
+	if err != nil {
+		logutil.Errorf("DelFiles failed: %v", err.Error())
+		return err
+	}
+}
+
 func (c *checkpointCleaner) collectGlobalCkpData(
 	ckp *checkpoint.CheckpointEntry,
 ) (data *logtail.CheckpointData, err error) {
@@ -612,6 +652,13 @@ func (c *checkpointCleaner) Process() {
 		}
 	}
 	err = c.mergeGCFile()
+	if err != nil {
+		// TODO: Error handle
+		return
+	}
+
+	err = c.mergeCheckpointFiles(c.ckpClient.GetStage())
+
 	if err != nil {
 		// TODO: Error handle
 		return

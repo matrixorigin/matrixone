@@ -285,3 +285,30 @@ func (e *CheckpointEntry) GCEntry(fs *objectio.ObjectFS) error {
 	defer logutil.Infof("GC checkpoint entry %v, err %v", e.String(), err)
 	return err
 }
+
+type MetaFile struct {
+	index int
+	start types.TS
+	end   types.TS
+	name  string
+}
+
+func (m *MetaFile) String() string {
+	return fmt.Sprintf("MetaFile[%d][%s->%s][%s]", m.index, m.start.ToString(), m.end.ToString(), m.name)
+}
+
+func (m *MetaFile) GetIndex() int {
+	return m.index
+}
+
+func (m *MetaFile) GetStart() types.TS {
+	return m.start
+}
+
+func (m *MetaFile) GetEnd() types.TS {
+	return m.end
+}
+
+func (m *MetaFile) GetName() string {
+	return m.name
+}
