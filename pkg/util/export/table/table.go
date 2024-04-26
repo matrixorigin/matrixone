@@ -445,6 +445,9 @@ func (tbl *Table) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 		sb.WriteString(`)`)
 	}
 	sb.WriteString("\n)")
+	if len(tbl.Comment) > 0 {
+		sb.WriteString(fmt.Sprintf(" COMMENT %q ", tbl.Comment))
+	}
 	// cluster by
 	if len(tbl.ClusterBy) > 0 && tbl.Engine != ExternalTableEngine {
 		sb.WriteString(" cluster by (")

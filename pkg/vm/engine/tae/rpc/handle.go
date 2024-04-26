@@ -441,22 +441,47 @@ func (h *Handle) HandleCommitMerge(
 		if req.Booking != nil {
 			logutil.Error("mergeblocks err booking loc is not empty, but booking is not nil")
 		}
-		loc := objectio.Location(req.BookingLoc)
-		var bat *batch.Batch
-		var release func()
-		bat, release, err = blockio.LoadTombstoneColumns(ctx, []uint16{0}, nil, h.db.Runtime.Fs.Service, loc, nil)
-		if err != nil {
-			return
-		}
-		req.Booking = &api.BlkTransferBooking{}
-		err = req.Booking.Unmarshal(bat.Vecs[0].GetBytesAt(0))
-		if err != nil {
+		if len(req.BookingLoc) == objectio.LocationLen {
+			loc := objectio.Location(req.BookingLoc)
+			var bat *batch.Batch
+			var release func()
+			bat, release, err = blockio.LoadTombstoneColumns(ctx, []uint16{0}, nil, h.db.Runtime.Fs.Service, loc, nil)
+			if err != nil {
+				return
+			}
+			req.Booking = &api.BlkTransferBooking{}
+			err = req.Booking.Unmarshal(bat.Vecs[0].GetBytesAt(0))
+			if err != nil {
+				release()
+				return
+			}
 			release()
-			return
+			h.db.Runtime.Fs.Service.Delete(ctx, loc.Name().String())
+			bat = nil
+		} else {
+			// it has to copy to concat
+			idx := 0
+			locations := req.BookingLoc
+			data := make([]byte, 0, 2<<30)
+			for ; idx < len(locations); idx += objectio.LocationLen {
+				loc := objectio.Location(locations[idx : idx+objectio.LocationLen])
+				var bat *batch.Batch
+				var release func()
+				bat, release, err = blockio.LoadTombstoneColumns(ctx, []uint16{0}, nil, h.db.Runtime.Fs.Service, loc, nil)
+				if err != nil {
+					return
+				}
+				data = append(data, bat.Vecs[0].GetBytesAt(0)...)
+				release()
+				h.db.Runtime.Fs.Service.Delete(ctx, loc.Name().String())
+				bat = nil
+			}
+			req.Booking = &api.BlkTransferBooking{}
+			if err = req.Booking.Unmarshal(data); err != nil {
+				return
+			}
+			data = nil
 		}
-		release()
-		h.db.Runtime.Fs.Service.Delete(ctx, loc.Name().String())
-		bat = nil
 	}
 
 	_, err = jobs.HandleMergeEntryInTxn(txn, req, h.db.Runtime)

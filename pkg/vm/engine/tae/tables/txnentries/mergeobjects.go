@@ -43,6 +43,7 @@ type mergeObjectsEntry struct {
 	createdBlkCnt      []int
 	totalCreatedBlkCnt int
 	transMappings      *api.BlkTransferBooking
+	skipTransfer       bool
 
 	rt                   *dbutils.Runtime
 	pageIds              []*common.ID
@@ -73,22 +74,24 @@ func NewMergeObjectsEntry(
 		createdBlkCnt:      createdBlkCnt,
 		droppedObjs:        droppedObjs,
 		transMappings:      transMappings,
+		skipTransfer:       transMappings == nil,
 		rt:                 rt,
 	}
 
-	if totalCreatedBlkCnt > 0 {
-		entry.delTbls = make([]*model.TransDels, totalCreatedBlkCnt)
-		entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
-		entry.collectTs = rt.Now()
-		var err error
-		// phase 1 transfer
-		entry.transCntBeforeCommit, _, err = entry.collectDelsAndTransfer(entry.txn.GetStartTS(), entry.collectTs)
-		if err != nil {
-			return nil, err
+	if !entry.skipTransfer {
+		if totalCreatedBlkCnt > 0 {
+			entry.delTbls = make([]*model.TransDels, totalCreatedBlkCnt)
+			entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
+			entry.collectTs = rt.Now()
+			var err error
+			// phase 1 transfer
+			entry.transCntBeforeCommit, _, err = entry.collectDelsAndTransfer(entry.txn.GetStartTS(), entry.collectTs)
+			if err != nil {
+				return nil, err
+			}
 		}
+		entry.prepareTransferPage()
 	}
-
-	entry.prepareTransferPage()
 	return entry, nil
 }
 
@@ -316,7 +319,11 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	defer func() {
 		v2.TaskCommitMergeObjectsDurationHistogram.Observe(time.Since(inst).Seconds())
 	}()
-	if len(entry.createdBlkCnt) == 0 {
+	if len(entry.createdBlkCnt) == 0 || entry.skipTransfer {
+		logutil.Infof("mergeblocks commit %v, [%v,%v], no transfer",
+			entry.relation.ID(),
+			entry.txn.GetStartTS().ToString(),
+			entry.txn.GetCommitTS().ToString())
 		return
 	}
 
