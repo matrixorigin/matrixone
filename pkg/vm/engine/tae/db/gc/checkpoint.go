@@ -440,7 +440,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 		}
 		if end.Less(&stage) {
 			logutil.Infof("deleteFiles: %v", files[i].String())
-			deleteFiles = append(deleteFiles, files[i].String())
+			deleteFiles = append(deleteFiles, files[i].GetName())
 		}
 	}
 	logutil.Infof("deleteFiles: %v", deleteFiles)
