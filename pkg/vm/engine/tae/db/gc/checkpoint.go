@@ -419,13 +419,9 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 	}
 	deleteFiles := make([]string, 0)
 	for _, ckp := range ckps {
-		start := ckp.GetStart()
 		end := ckp.GetEnd()
-		logutil.Infof("ckps: %v, %v", start.ToString(), end.ToString())
-		if ckp.GetType() == checkpoint.ET_Global {
-			start = end
-		}
-		if start.Less(&stage) {
+		logutil.Infof("ckps: %v, %v", ckp.GetStart().ToString(), end.ToString())
+		if end.Less(&stage) {
 			logutil.Infof("deleteFiles11: %v", ckp.GetLocation().Name().String())
 			locations, err := logtail.LoadCheckpointLocations(c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
 			if err != nil {
@@ -440,13 +436,8 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 
 	}
 	for i := 0; i < idx+1; i++ {
-		start := files[i].GetStart()
 		end := files[i].GetEnd()
 		logutil.Infof("files: %v", files[i].String())
-		if start.IsEmpty() {
-			// global checkpoint
-			start = end
-		}
 		if end.Less(&stage) {
 			logutil.Infof("deleteFiles: %v", files[i].String())
 			deleteFiles = append(deleteFiles, CKPMetaDir+files[i].GetName())
