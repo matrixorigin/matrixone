@@ -41,8 +41,6 @@ type container struct {
 }
 
 type Argument struct {
-	// Ts is not used
-	Ts       uint64
 	Affected uint64
 	Engine   engine.Engine
 
