@@ -130,8 +130,8 @@ END0:
 	}
 }
 
-func getColSeqFromColDef(col *plan.ColDef) string {
-	return fmt.Sprintf("%d", col.GetSeqnum())
+func getColSeqFromColDef(tblCol *plan.ColDef) string {
+	return fmt.Sprintf("%d", tblCol.GetSeqnum())
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
