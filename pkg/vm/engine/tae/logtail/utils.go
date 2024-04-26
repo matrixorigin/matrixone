@@ -1801,6 +1801,7 @@ func (data *CheckpointData) prepareTNMetaBatch(
 	for i, blks := range objectBlocks {
 		for y, blk := range blks {
 			location := objectio.BuildLocation(checkpointNames[i], blk.GetExtent(), 0, blk.GetID())
+			logutil.Infof("prepareTNMetaBatch %s", location.String())
 			data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_BlockLocation).Append([]byte(location), false)
 			data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_SchemaType).Append(schemaTypes[i][y], false)
 		}
