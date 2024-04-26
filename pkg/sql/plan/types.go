@@ -163,9 +163,8 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode      []*BindContext
-	nameByColRef   map[[2]int32]string
-	seqNumByColRef map[[2]int32]uint32
+	ctxByNode    []*BindContext
+	nameByColRef map[[2]int32]string
 
 	tag2Table map[int32]*TableDef
 

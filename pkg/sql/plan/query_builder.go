@@ -58,7 +58,6 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		compCtx:            ctx,
 		ctxByNode:          []*BindContext{},
 		nameByColRef:       make(map[[2]int32]string),
-		seqNumByColRef:     make(map[[2]int32]uint32),
 		nextTag:            0,
 		mysqlCompatible:    mysqlCompatible,
 		tag2Table:          make(map[int32]*TableDef),
@@ -75,7 +74,6 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 			ne.Col.RelPos = ids[0]
 			ne.Col.ColPos = ids[1]
 			ne.Col.Name = builder.nameByColRef[mapID]
-			ne.Col.Seqnum = builder.seqNumByColRef[mapID]
 		} else {
 			var keys []string
 			for k := range colMap {
@@ -194,7 +192,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: 0,
 						ColPos: int32(i),
 						Name:   col.Name,
-						Seqnum: col.Seqnum,
 					},
 				},
 			})
@@ -212,7 +209,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 							RelPos: 0,
 							ColPos: 0,
 							Name:   node.TableDef.Cols[0].Name,
-							Seqnum: node.TableDef.Cols[0].Seqnum,
 						},
 					},
 				})
@@ -225,7 +221,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 							RelPos: 0,
 							ColPos: 0,
 							Name:   node.TableDef.Cols[0].Name,
-							Seqnum: node.TableDef.Cols[0].Seqnum,
 						},
 					},
 				})
@@ -334,7 +329,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: 0,
 						ColPos: int32(i),
 						Name:   builder.nameByColRef[internalRemapping.localToGlobal[i]],
-						Seqnum: builder.seqNumByColRef[internalRemapping.localToGlobal[i]],
 					},
 				},
 			})
@@ -352,7 +346,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 							RelPos: 0,
 							ColPos: 0,
 							Name:   builder.nameByColRef[globalRef],
-							Seqnum: builder.seqNumByColRef[globalRef],
 						},
 					},
 				})
@@ -365,7 +358,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 							RelPos: 0,
 							ColPos: 0,
 							Name:   builder.nameByColRef[internalRemapping.localToGlobal[0]],
-							Seqnum: builder.seqNumByColRef[internalRemapping.localToGlobal[0]],
 						},
 					},
 				})
@@ -474,7 +466,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: 0,
 						ColPos: int32(i),
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -494,7 +485,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: -1,
 						ColPos: 0,
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -518,7 +508,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 							RelPos: 1,
 							ColPos: int32(i),
 							Name:   builder.nameByColRef[globalRef],
-							Seqnum: builder.seqNumByColRef[globalRef],
 						},
 					},
 				})
@@ -536,7 +525,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: 0,
 						ColPos: 0,
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -585,7 +573,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: -1,
 						ColPos: int32(idx),
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -612,7 +599,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: -2,
 						ColPos: int32(idx) + groupSize,
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -630,7 +616,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 							RelPos: -1,
 							ColPos: 0,
 							Name:   builder.nameByColRef[globalRef],
-							Seqnum: builder.seqNumByColRef[globalRef],
 						},
 					},
 				})
@@ -645,7 +630,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 							RelPos: -2,
 							ColPos: 0,
 							Name:   builder.nameByColRef[globalRef],
-							Seqnum: builder.seqNumByColRef[globalRef],
 						},
 					},
 				})
@@ -707,7 +691,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: -1,
 						ColPos: int32(len(node.ProjectList)),
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -735,7 +718,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: -2,
 						ColPos: int32(i) + offsetSize,
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -756,7 +738,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: 0,
 						ColPos: int32(i) + offsetSize,
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -820,7 +801,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: -1,
 						ColPos: int32(idx),
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -844,7 +824,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: -1,
 						ColPos: int32(idx),
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -868,7 +847,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: -1,
 						ColPos: int32(idx),
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -899,7 +877,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: 0,
 						ColPos: int32(i),
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -933,7 +910,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: -1,
 						ColPos: int32(l),
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -965,7 +941,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: 0,
 						ColPos: int32(i),
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -1012,7 +987,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: 0,
 						ColPos: int32(i),
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -1029,7 +1003,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: 0,
 						ColPos: 0,
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -1068,7 +1041,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: 0,
 						ColPos: int32(i),
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -1272,7 +1244,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 							RelPos: 0,
 							ColPos: int32(i),
 							Name:   col.Name,
-							Seqnum: col.Seqnum,
 						},
 					},
 				})
@@ -1327,7 +1298,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						RelPos: 0,
 						ColPos: int32(i),
 						Name:   builder.nameByColRef[globalRef],
-						Seqnum: builder.seqNumByColRef[globalRef],
 					},
 				},
 			})
@@ -2186,7 +2156,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				ColId: 0,
 				Name:  colName,
 				Typ:   strTyp,
-				// TODO: SeqNum not filled
 			}
 		}
 		bat.SetRowCount(rowCount)
@@ -3509,7 +3478,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			nodeType = plan.Node_EXTERNAL_SCAN
 			col := &ColDef{
 				Name: catalog.ExternalFilePath,
-				// TODO: SeqNum not filled
 				Typ: plan.Type{
 					Id:    int32(types.T_varchar),
 					Width: types.MaxVarcharLen,

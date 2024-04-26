@@ -130,18 +130,18 @@ END0:
 	}
 }
 
-func getColSeqFromColRef(col *plan.ColRef) string {
+func getColIdxFromColRef(col *plan.ColRef) string {
 	// ColId in ColDef is 1-based
 	// ColPos in ColRef is 0-based
 	// ColIdx is 0-based column Position in TableDef
-	return fmt.Sprintf("%d", col.GetSeqnum())
+	return fmt.Sprintf("%d", col.GetColPos())
 }
 
-func getColSeqFromColDef(col *plan.ColDef) string {
+func getColIdxFromColPos(col int) string {
 	// ColId in ColDef is 1-based
 	// ColPos in ColRef is 0-based
 	// ColIdx is 0-based column Position in TableDef
-	return fmt.Sprintf("%d", col.GetSeqnum())
+	return fmt.Sprintf("%d", col)
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {

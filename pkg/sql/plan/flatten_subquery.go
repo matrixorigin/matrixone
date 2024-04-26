@@ -511,7 +511,6 @@ func (builder *QueryBuilder) pullupThroughAgg(ctx *BindContext, node *plan.Node,
 			newMapId := [2]int32{tag, colPos}
 
 			builder.nameByColRef[newMapId] = builder.nameByColRef[oldMapId]
-			builder.seqNumByColRef[newMapId] = builder.seqNumByColRef[oldMapId]
 		}
 
 		return &plan.Expr{
@@ -553,7 +552,6 @@ func (builder *QueryBuilder) pullupThroughProj(ctx *BindContext, node *plan.Node
 			newMapId := [2]int32{tag, colPos}
 
 			builder.nameByColRef[newMapId] = builder.nameByColRef[oldMapId]
-			builder.seqNumByColRef[newMapId] = builder.seqNumByColRef[oldMapId]
 		}
 
 		return &plan.Expr{
