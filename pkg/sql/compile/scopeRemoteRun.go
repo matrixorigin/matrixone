@@ -723,7 +723,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *deletion.Argument:
 		in.Delete = &pipeline.Deletion{
-			Ts:           t.Ts,
 			AffectedRows: t.AffectedRows(),
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
@@ -776,8 +775,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
-			Ibucket:   t.Ibucket,
-			Nbucket:   t.Nbucket,
 			Expr:      t.Cond,
 			Types:     convertToPlanTypes(t.Typs),
 			LeftCond:  t.Conditions[0],
@@ -842,8 +839,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *join.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.Join = &pipeline.Join{
-			Ibucket:                t.Ibucket,
-			Nbucket:                t.Nbucket,
 			RelList:                relList,
 			ColList:                colList,
 			Expr:                   t.Cond,
@@ -857,8 +852,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *left.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.LeftJoin = &pipeline.LeftJoin{
-			Ibucket:                t.Ibucket,
-			Nbucket:                t.Nbucket,
 			RelList:                relList,
 			ColList:                colList,
 			Expr:                   t.Cond,
@@ -872,8 +865,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *right.Argument:
 		rels, poses := getRelColList(t.Result)
 		in.RightJoin = &pipeline.RightJoin{
-			Ibucket:                t.Ibucket,
-			Nbucket:                t.Nbucket,
 			RelList:                rels,
 			ColList:                poses,
 			Expr:                   t.Cond,
@@ -887,8 +878,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *rightsemi.Argument:
 		in.RightSemiJoin = &pipeline.RightSemiJoin{
-			Ibucket:                t.Ibucket,
-			Nbucket:                t.Nbucket,
 			Result:                 t.Result,
 			Expr:                   t.Cond,
 			RightTypes:             convertToPlanTypes(t.RightTypes),
@@ -900,8 +889,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *rightanti.Argument:
 		in.RightAntiJoin = &pipeline.RightAntiJoin{
-			Ibucket:                t.Ibucket,
-			Nbucket:                t.Nbucket,
 			Result:                 t.Result,
 			Expr:                   t.Cond,
 			RightTypes:             convertToPlanTypes(t.RightTypes),
@@ -973,8 +960,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Filter = t.E
 	case *semi.Argument:
 		in.SemiJoin = &pipeline.SemiJoin{
-			Ibucket:                t.Ibucket,
-			Nbucket:                t.Nbucket,
 			Result:                 t.Result,
 			Expr:                   t.Cond,
 			Types:                  convertToPlanTypes(t.Typs),
@@ -993,8 +978,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *single.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.SingleJoin = &pipeline.SingleJoin{
-			Ibucket:                t.Ibucket,
-			Nbucket:                t.Nbucket,
 			RelList:                relList,
 			ColList:                colList,
 			Expr:                   t.Cond,
@@ -1050,8 +1033,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *mark.Argument:
 		in.MarkJoin = &pipeline.MarkJoin{
-			Ibucket:   t.Ibucket,
-			Nbucket:   t.Nbucket,
 			Result:    t.Result,
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
@@ -1126,7 +1107,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Deletion:
 		t := opr.GetDelete()
 		arg := deletion.NewArgument()
-		arg.Ts = t.Ts
 		arg.RemoteDelete = t.RemoteDelete
 		arg.SegmentMap = t.SegmentMap
 		arg.IBucket = t.IBucket
@@ -1210,8 +1190,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Anti:
 		t := opr.GetAnti()
 		arg := anti.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
 		arg.Conditions = [][]*plan.Expr{
@@ -1289,8 +1267,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Join:
 		t := opr.GetJoin()
 		arg := join.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
@@ -1302,8 +1278,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Left:
 		t := opr.GetLeftJoin()
 		arg := left.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
@@ -1315,8 +1289,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Right:
 		t := opr.GetRightJoin()
 		arg := right.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.LeftTypes = convertToTypes(t.LeftTypes)
 		arg.RightTypes = convertToTypes(t.RightTypes)
@@ -1329,8 +1301,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.RightSemi:
 		t := opr.GetRightSemiJoin()
 		arg := rightsemi.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = t.Result
 		arg.RightTypes = convertToTypes(t.RightTypes)
 		arg.Cond = t.Expr
@@ -1342,8 +1312,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.RightAnti:
 		t := opr.GetRightAntiJoin()
 		arg := rightanti.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = t.Result
 		arg.RightTypes = convertToTypes(t.RightTypes)
 		arg.Cond = t.Expr
@@ -1427,8 +1395,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Semi:
 		t := opr.GetSemiJoin()
 		arg := semi.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
@@ -1440,8 +1406,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Single:
 		t := opr.GetSingleJoin()
 		arg := single.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
@@ -1452,8 +1416,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Mark:
 		t := opr.GetMarkJoin()
 		arg := mark.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = t.Result
 		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
 		arg.Typs = convertToTypes(t.Types)
