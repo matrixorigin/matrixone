@@ -1435,6 +1435,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
+		builder.optimizeDateFormatExpr(rootID)
 
 		builder.pushdownLimitToTableScan(rootID)
 
@@ -1476,7 +1477,6 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.partitionPrune(rootID)
 
-		builder.optimizeDateFormatExpr(rootID)
 		builder.optimizeLikeExpr(rootID)
 		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
 		ReCalcNodeStats(rootID, builder, true, false, true)
