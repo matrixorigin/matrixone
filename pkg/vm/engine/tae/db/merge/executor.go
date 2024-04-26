@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -119,49 +118,10 @@ func (e *MergeExecutor) OnExecDone(v any) {
 	atomic.AddInt64(&e.activeEstimateBytes, -int64(stat.estBytes))
 }
 
-// TODO: remove manually merge on dn
-func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catalog.ObjectEntry) error {
-	mem := e.MemAvailBytes()
-	if mem > constMaxMemCap {
-		mem = constMaxMemCap
-	}
-	osize, esize, _ := estimateMergeConsume(objs)
-	if esize > 2*mem/3 {
-		return moerr.NewInternalErrorNoCtx("no enough mem to merge. osize %d, mem %d", osize, mem)
-	}
-
-	objCnt := len(objs)
-
-	scopes := make([]common.ID, objCnt)
-	for i, obj := range objs {
-		scopes[i] = *obj.AsCommonID()
-	}
-
-	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return jobs.NewMergeObjectsTask(ctx, txn, objs, e.rt, 0)
-	}
-	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, tasks.DataCompactionTask, scopes, factory)
-	if err == tasks.ErrScheduleScopeConflict {
-		return moerr.NewInternalErrorNoCtx("conflict with running merging jobs, try later")
-	} else if err != nil {
-		return moerr.NewInternalErrorNoCtx("schedule error: %v", err)
-	}
-
-	blkn := 0
-	for _, obj := range objs {
-		blkn += obj.BlockCnt()
-	}
-	logMergeTask(entry.GetLastestSchemaLocked().Name, task.ID(), objs, blkn, osize, esize)
-	if err = task.WaitDone(context.Background()); err != nil {
-		return moerr.NewInternalErrorNoCtx("merge error: %v", err)
-	}
-	return nil
-}
-
 func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 
-	mobjs, kind := policy.Revise(int64(e.cpuPercent), int64(e.MemAvailBytes()))
+	mobjs, kind := policy.Revise(e.CPUPercent(), int64(e.MemAvailBytes()))
 	if len(mobjs) < 2 {
 		return
 	}
@@ -236,6 +196,10 @@ func (e *MergeExecutor) MemAvailBytes() int {
 		avail = 0
 	}
 	return avail
+}
+
+func (e *MergeExecutor) CPUPercent() int64 {
+	return int64(e.cpuPercent)
 }
 
 func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blkn, osize, esize int) {

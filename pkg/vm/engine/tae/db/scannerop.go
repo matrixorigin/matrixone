@@ -48,7 +48,7 @@ type MergeTaskBuilder struct {
 	suspendCnt atomic.Int32
 }
 
-func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
+func newMergeTaskBuilder(db *DB) *MergeTaskBuilder {
 	op := &MergeTaskBuilder{
 		db:            db,
 		LoopProcessor: new(catalog.LoopProcessor),
@@ -64,7 +64,7 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 	return op
 }
 
-func (s *MergeTaskBuilder) ManuallyMerge(entry *catalog.TableEntry, objs []*catalog.ObjectEntry) error {
+func (s *MergeTaskBuilder) ManuallyMerge(entry *catalog.TableEntry, objs []*catalog.ObjectEntry, policy merge.Policy) error {
 	// stop new merge task
 	s.suspend.Store(true)
 	defer s.suspend.Store(false)
@@ -72,15 +72,28 @@ func (s *MergeTaskBuilder) ManuallyMerge(entry *catalog.TableEntry, objs []*cata
 	for s.suspendCnt.Load() < 2 {
 		time.Sleep(50 * time.Millisecond)
 	}
-
-	// all status are safe in the TaskBuilder
-	for _, obj := range objs {
-		// TODO(_), delete this if every object has objectStat in memory
-		if err := obj.CheckAndLoad(); err != nil {
-			return err
+	policy.ResetForTable(entry)
+	if len(objs) != 0 {
+		// all status are safe in the TaskBuilder
+		for _, obj := range objs {
+			// TODO(_), delete this if every object has objectStat in memory
+			if err := obj.CheckAndLoad(); err != nil {
+				return err
+			}
+			policy.OnObject(obj)
+		}
+	} else {
+		iter := entry.MakeObjectIt(false)
+		for iter.Valid() {
+			obj := iter.Get().GetPayload()
+			if obj.IsActive() && obj.GetLoaded() {
+				policy.OnObject(obj)
+			}
+			iter.Next()
 		}
 	}
-	return s.executor.ManuallyExecute(entry, objs)
+	s.executor.ExecuteFor(entry, policy)
+	return nil
 }
 
 func (s *MergeTaskBuilder) ConfigPolicy(tbl *catalog.TableEntry, c any) {

@@ -511,6 +511,7 @@ type manuallyMergeArg struct {
 	ctx     *inspectContext
 	tbl     *catalog.TableEntry
 	objects []*catalog.ObjectEntry
+	policy  merge.Policy
 }
 
 func (c *manuallyMergeArg) PrepareCommand() *cobra.Command {
@@ -521,7 +522,8 @@ func (c *manuallyMergeArg) PrepareCommand() *cobra.Command {
 	}
 
 	mmCmd.Flags().StringP("target", "t", "*", "format: db.table")
-	mmCmd.Flags().StringSliceP("objects", "o", nil, "format: object_id_0000,object_id_0000")
+	mmCmd.Flags().StringSliceP("objects", "o", nil, "format: object_id_0000,object_id_0000 / all")
+	mmCmd.Flags().StringP("policy", "p", "basic", "format: basic/overlap")
 	return mmCmd
 }
 
@@ -546,29 +548,47 @@ func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
 		}
 		dedup[o] = struct{}{}
 	}
-	if len(dedup) < 2 {
-		return moerr.NewInvalidInputNoCtx("need at least 2 objects")
-	}
-	objs := make([]*catalog.ObjectEntry, 0, len(objects))
-	for o := range dedup {
-		parts := strings.Split(o, "_")
-		uid, err := types.ParseUuid(parts[0])
-		if err != nil {
-			return err
+	if len(dedup) == 1 {
+		if _, ok := dedup["all"]; ok {
+			c.objects = nil
+		} else {
+			return moerr.NewInvalidInputNoCtx("need at least 2 objects")
 		}
-		objects, err := c.tbl.GetObjectsByID(&uid)
-		if err != nil {
-			return moerr.NewInvalidInputNoCtx("not found object %s", o)
+	} else {
+		if len(dedup) < 2 {
+			return moerr.NewInvalidInputNoCtx("need at least 2 objects")
 		}
-		for _, obj := range objects {
-			if !obj.IsActive() || obj.IsAppendable() {
-				return moerr.NewInvalidInputNoCtx("object is deleted or not a flushed one %s", o)
+		objs := make([]*catalog.ObjectEntry, 0, len(objects))
+		for o := range dedup {
+			parts := strings.Split(o, "_")
+			uid, err := types.ParseUuid(parts[0])
+			if err != nil {
+				return err
 			}
-			objs = append(objs, obj)
+			objects, err := c.tbl.GetObjectsByID(&uid)
+			if err != nil {
+				return moerr.NewInvalidInputNoCtx("not found object %s", o)
+			}
+			for _, obj := range objects {
+				if !obj.IsActive() || obj.IsAppendable() {
+					return moerr.NewInvalidInputNoCtx("object is deleted or not a flushed one %s", o)
+				}
+				objs = append(objs, obj)
+			}
 		}
+		c.objects = objs
+	}
+	policy, err := cmd.Flags().GetString("policy")
+	if err != nil {
+		return err
+	}
+	switch policy {
+	case "basic":
+		c.policy = merge.NewBasicPolicy()
+	case "overlap":
+		c.policy = merge.NewOverlapPolicy()
 	}
 
-	c.objects = objs
 	return nil
 }
 
@@ -587,7 +607,7 @@ func (c *manuallyMergeArg) String() string {
 }
 
 func (c *manuallyMergeArg) Run() error {
-	err := c.ctx.db.MergeHandle.ManuallyMerge(c.tbl, c.objects)
+	err := c.ctx.db.MergeHandle.ManuallyMerge(c.tbl, c.objects, c.policy)
 	if err != nil {
 		return err
 	}
