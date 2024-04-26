@@ -543,7 +543,7 @@ func BenchmarkParseJsonByteFromString2(b *testing.B) {
 	// cpu: Intel(R) Core(TM) i3-9100F CPU @ 3.60GHz
 	// === RUN   BenchmarkParseJsonByteFromString2
 	// BenchmarkParseJsonByteFromString2
-	// BenchmarkParseJsonByteFromString2-4       213036              5601 ns/op            1304 B/op         31 allocs/op
+	// BenchmarkParseJsonByteFromString2-4       212386              5401 ns/op            1304 B/op         31 allocs/op
 }
 
 func FuzzParseJsonByteFromString(f *testing.F) {

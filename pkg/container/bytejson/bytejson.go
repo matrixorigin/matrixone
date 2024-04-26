@@ -791,6 +791,9 @@ func (p *parser) do() error {
 		return moerr.NewInvalidInputNoCtx("invalid json: %s", p.src)
 	}
 	_, _, err = p.writeAny(true, val)
+	if g, ok := val.(*group); ok {
+		g.free()
+	}
 	if err != nil {
 		return err
 	}
@@ -872,7 +875,6 @@ func (p *parser) writeAny(raw bool, v any) (TpCode, uint32, error) {
 	start := len(p.dst)
 	switch val := v.(type) {
 	case *group:
-		defer val.free()
 		if val.obj {
 			obj := val
 			keys := obj.keys
@@ -931,7 +933,7 @@ func (p *parser) writeAny(raw bool, v any) (TpCode, uint32, error) {
 		p.dst = extendByte(p.dst, n*5)
 
 		loc := uint32(8 + n*5)
-		for i := 0; i < n; i++ {
+		for i := range arr.values {
 			tp, length, err := p.writeAny(false, arr.values[i])
 			if err != nil {
 				return 0, 0, err
