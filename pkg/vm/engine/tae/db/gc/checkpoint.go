@@ -399,7 +399,8 @@ func (c *checkpointCleaner) mergeGCFile() error {
 }
 
 func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
-	if c.GeteCkpStage() != nil && c.GeteCkpStage().GreaterEq(&stage) {
+	if stage.IsEmpty() ||
+		(c.GeteCkpStage() != nil && c.GeteCkpStage().GreaterEq(&stage)) {
 		return nil
 	}
 	logutil.Infof("mergeCheckpointFiles: %v", stage.ToString())
