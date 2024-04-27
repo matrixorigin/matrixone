@@ -30,9 +30,8 @@ type ObjectsIter interface {
 }
 
 type objectsIter struct {
-	ts          types.TS
-	iter        btree.IterG[ObjectEntry]
-	firstCalled bool
+	ts   types.TS
+	iter btree.IterG[ObjectEntry]
 }
 
 // not accurate!  only used by stats
