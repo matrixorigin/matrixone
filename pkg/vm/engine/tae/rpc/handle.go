@@ -480,7 +480,6 @@ func (h *Handle) HandleCommitMerge(
 			if err = req.Booking.Unmarshal(data); err != nil {
 				return
 			}
-			data = nil
 		}
 	}
 
