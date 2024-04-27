@@ -569,7 +569,7 @@ type activeTxnHolder interface {
 		timeoutServices map[string]struct{},
 		timeoutTxns [][]byte,
 		maxKeepInterval time.Duration) [][]byte
-	isValidTxn(pb.WaitTxn) bool
+	isValidRemoteTxn(pb.WaitTxn) bool
 }
 
 type mapBasedTxnHolder struct {
@@ -797,7 +797,7 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 	return needRemoved
 }
 
-func (h *mapBasedTxnHolder) isValidTxn(txn pb.WaitTxn) bool {
+func (h *mapBasedTxnHolder) isValidRemoteTxn(txn pb.WaitTxn) bool {
 	if txn.CreatedOn == h.serviceID {
 		return true
 	}
@@ -816,8 +816,10 @@ func (h *mapBasedTxnHolder) isValidTxn(txn pb.WaitTxn) bool {
 
 	committing, err := h.notify(cannotCommit)
 	if err != nil {
+		// any error, we cannot make txn as a invalid txn
 		return true
 	}
+	// the target txn is committing, valid
 	return len(committing) != 0
 }
 

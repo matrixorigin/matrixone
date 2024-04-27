@@ -252,7 +252,9 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 	}
 
 	for _, h := range holders {
-		if !mw.txnHolder.isValidTxn(h) {
+		// When you have determined that a remote transaction is an orphaned transaction, you
+		// can release the lock that the remote transaction has placed on the current cn.
+		if !mw.txnHolder.isValidRemoteTxn(h) {
 			// ignore error. If failed will retry until lock removed
 			_ = mw.unlock(context.Background(), h.TxnID, timestamp.Timestamp{})
 		}

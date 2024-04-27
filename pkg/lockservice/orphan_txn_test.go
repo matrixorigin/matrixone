@@ -581,7 +581,7 @@ func TestValidTxnWithLocalTxn(t *testing.T) {
 			return false, nil
 		},
 	).(*mapBasedTxnHolder)
-	require.True(t, hold.isValidTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s1"}))
+	require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s1"}))
 }
 
 func TestValidTxnWithValidRemoteTxn(t *testing.T) {
@@ -594,7 +594,7 @@ func TestValidTxnWithValidRemoteTxn(t *testing.T) {
 			return true, nil
 		},
 	).(*mapBasedTxnHolder)
-	require.True(t, hold.isValidTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s1"}))
+	require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s1"}))
 }
 
 func TestValidTxnWithInvalidRemoteTxn(t *testing.T) {
@@ -607,7 +607,7 @@ func TestValidTxnWithInvalidRemoteTxn(t *testing.T) {
 			return false, nil
 		},
 	).(*mapBasedTxnHolder)
-	require.False(t, hold.isValidTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+	require.False(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
 }
 
 func TestValidTxnWithInvalidRemoteTxnAndNotifyOK(t *testing.T) {
@@ -620,7 +620,7 @@ func TestValidTxnWithInvalidRemoteTxnAndNotifyOK(t *testing.T) {
 			return false, ErrTxnNotFound
 		},
 	).(*mapBasedTxnHolder)
-	require.False(t, hold.isValidTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+	require.False(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
 }
 
 func TestValidTxnWithInvalidRemoteTxnAndNotifyFailed(t *testing.T) {
@@ -633,7 +633,7 @@ func TestValidTxnWithInvalidRemoteTxnAndNotifyFailed(t *testing.T) {
 			return false, ErrTxnNotFound
 		},
 	).(*mapBasedTxnHolder)
-	require.True(t, hold.isValidTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+	require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
 }
 
 func TestValidTxnWithInvalidRemoteTxnAndNotifyFoundCommitting(t *testing.T) {
@@ -646,5 +646,5 @@ func TestValidTxnWithInvalidRemoteTxnAndNotifyFoundCommitting(t *testing.T) {
 			return false, ErrTxnNotFound
 		},
 	).(*mapBasedTxnHolder)
-	require.True(t, hold.isValidTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+	require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
 }
