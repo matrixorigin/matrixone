@@ -570,3 +570,81 @@ func TestOrphanTxnHolderCanBeRelease(t *testing.T) {
 		},
 	)
 }
+
+func TestValidTxnWithLocalTxn(t *testing.T) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(txn pb.WaitTxn) (bool, error) {
+			return false, nil
+		},
+	).(*mapBasedTxnHolder)
+	require.True(t, hold.isValidTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s1"}))
+}
+
+func TestValidTxnWithValidRemoteTxn(t *testing.T) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(txn pb.WaitTxn) (bool, error) {
+			return true, nil
+		},
+	).(*mapBasedTxnHolder)
+	require.True(t, hold.isValidTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s1"}))
+}
+
+func TestValidTxnWithInvalidRemoteTxn(t *testing.T) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(txn pb.WaitTxn) (bool, error) {
+			return false, nil
+		},
+	).(*mapBasedTxnHolder)
+	require.False(t, hold.isValidTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+}
+
+func TestValidTxnWithInvalidRemoteTxnAndNotifyOK(t *testing.T) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(txn pb.WaitTxn) (bool, error) {
+			return false, ErrTxnNotFound
+		},
+	).(*mapBasedTxnHolder)
+	require.False(t, hold.isValidTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+}
+
+func TestValidTxnWithInvalidRemoteTxnAndNotifyFailed(t *testing.T) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, ErrLockConflict },
+		func(txn pb.WaitTxn) (bool, error) {
+			return false, ErrTxnNotFound
+		},
+	).(*mapBasedTxnHolder)
+	require.True(t, hold.isValidTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+}
+
+func TestValidTxnWithInvalidRemoteTxnAndNotifyFoundCommitting(t *testing.T) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) ([][]byte, error) { return [][]byte{{1}}, nil },
+		func(txn pb.WaitTxn) (bool, error) {
+			return false, ErrTxnNotFound
+		},
+	).(*mapBasedTxnHolder)
+	require.True(t, hold.isValidTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+}
