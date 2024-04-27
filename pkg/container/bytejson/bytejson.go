@@ -16,13 +16,15 @@ package bytejson
 
 import (
 	"bytes"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/goccy/go-json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -685,7 +687,7 @@ func ParseJsonByteFromString2(s string) ([]byte, error) {
 	p := parser{
 		de:  NewDecoder([]byte(s)),
 		src: s,
-		dst: make([]byte, 0, len(s)+1),
+		dst: make([]byte, 0, len(s)*2),
 	}
 	err := p.do()
 	if err != nil {
@@ -983,4 +985,273 @@ func (p *parser) writeAny(raw bool, v any) (TpCode, uint32, error) {
 	default:
 		return 0, 0, moerr.NewInvalidInputNoCtx("unknown type %T", v)
 	}
+}
+
+func ParseJsonByteFromString3(s string) ([]byte, error) {
+	p := parser2{
+		src:   util.UnsafeStringToBytes(s),
+		stack: make([]*group, 0, 10),
+		dst:   make([]byte, 0, len(s)*2),
+	}
+	err := p.do()
+	if err != nil {
+		return nil, err
+	}
+	return p.dst, nil
+}
+
+func (g *group) addNil() {
+	g.values = append(g.values, nil)
+}
+
+func (g *group) addString(s string) error {
+	if !g.obj || len(g.keys) > len(g.values) {
+		g.values = append(g.values, s)
+	} else {
+		if len(s) > math.MaxUint16 {
+			return moerr.NewInvalidInputNoCtx("json key %s", s)
+		}
+		g.keys = append(g.keys, s)
+	}
+	return nil
+}
+
+func (g *group) addNum(num json.Number) error {
+	g.values = append(g.values, num)
+	return nil
+}
+
+type parser2 struct {
+	src   []byte
+	stack []*group
+	dst   []byte
+}
+
+func (p *parser2) do() error {
+	de := json.NewDecoder(bytes.NewReader(p.src))
+	de.UseNumber()
+	for {
+		tk, err := de.Token()
+		if errors.Is(err, io.EOF) {
+			return io.ErrUnexpectedEOF
+		}
+		if err != nil {
+			return err
+		}
+		switch tk := tk.(type) {
+		case json.Delim:
+			g := p.addDelim(tk)
+			if g != nil {
+				p.writeAny(true, g)
+				g.free()
+				return nil
+			}
+		case bool:
+			if len(p.stack) > 0 {
+				g := p.stack[len(p.stack)-1]
+				g.values = append(g.values, tk)
+			} else {
+				p.writeAny(true, tk)
+				return nil
+			}
+		case json.Number:
+			if len(p.stack) > 0 {
+				g := p.stack[len(p.stack)-1]
+				g.addNum(tk)
+			} else {
+				p.writeAny(true, tk)
+				return nil
+			}
+		case string:
+			if len(p.stack) > 0 {
+				g := p.stack[len(p.stack)-1]
+				g.addString(tk)
+			} else {
+				p.writeAny(true, tk)
+				return nil
+			}
+		case nil:
+			if len(p.stack) > 0 {
+				g := p.stack[len(p.stack)-1]
+				g.addNil()
+			} else {
+				p.writeAny(true, tk)
+				return nil
+			}
+		}
+	}
+}
+
+func (p *parser2) addDelim(r json.Delim) *group {
+	switch r {
+	case '[', '{':
+		g := reuse.Alloc[group](nil)
+		g.obj = r == '{'
+		p.stack = append(p.stack, g)
+	case ']', '}':
+		n := len(p.stack) - 1
+		g := p.stack[n]
+		p.stack = p.stack[:n]
+
+		if len(p.stack) == 0 {
+			return g
+		}
+
+		pg := p.stack[len(p.stack)-1]
+		pg.values = append(pg.values, g)
+	default:
+		panic("unknown Delim " + string(r))
+	}
+	return nil
+}
+
+func (p *parser2) writeAny(raw bool, v any) (TpCode, uint32, error) {
+	start := len(p.dst)
+	switch val := v.(type) {
+	case *group:
+		if val.obj {
+			obj := val
+			keys := obj.keys
+			n := len(keys)
+			baseOffset := start
+			if raw {
+				p.dst = append(p.dst, byte(TpCodeObject))
+				baseOffset += 1
+			}
+			p.dst = endian.AppendUint32(p.dst, uint32(n))
+			p.dst = endian.AppendUint32(p.dst, 0) // object buf length
+
+			p.dst = extendByte(p.dst, n*(4+2+1+4))
+
+			loc := uint32(8 + n*(4+2+1+4))
+			for i, k := range keys {
+				o := baseOffset + 8 + i*6
+				length := uint32(len(k))
+				if length > math.MaxUint16 {
+					return 0, 0, moerr.NewInvalidInputNoCtx("json key %s", k)
+				}
+				endian.PutUint32(p.dst[o:], loc)
+				endian.PutUint16(p.dst[o+4:], uint16(length))
+				loc += length
+				p.dst = append(p.dst, k...)
+			}
+
+			for i := range keys {
+				tp, length, err := p.writeAny(false, obj.values[i])
+				if err != nil {
+					return 0, 0, err
+				}
+				o := baseOffset + 8 + n*6 + i*5
+				p.dst[o] = byte(tp)
+				if tp == TpCodeLiteral {
+					endian.PutUint32(p.dst[o+1:], length)
+					continue
+				}
+				endian.PutUint32(p.dst[o+1:], loc)
+				loc += length
+			}
+
+			endian.PutUint32(p.dst[baseOffset+4:], loc) // object buf length
+			return TpCodeObject, uint32(len(p.dst) - start), nil
+		}
+
+		arr := val
+		n := len(arr.values)
+		baseOffset := start
+		if raw {
+			p.dst = append(p.dst, byte(TpCodeArray))
+			baseOffset++
+		}
+		p.dst = endian.AppendUint32(p.dst, uint32(n))
+		p.dst = endian.AppendUint32(p.dst, 0) // array buf length
+		p.dst = extendByte(p.dst, n*5)
+
+		loc := uint32(8 + n*5)
+		for i := range arr.values {
+			tp, length, err := p.writeAny(false, arr.values[i])
+			if err != nil {
+				return 0, 0, err
+			}
+			o := baseOffset + 8 + i*5
+			p.dst[o] = byte(tp)
+			if tp == TpCodeLiteral {
+				endian.PutUint32(p.dst[o+1:], length)
+				continue
+			}
+			endian.PutUint32(p.dst[o+1:], loc)
+			loc += length
+		}
+
+		endian.PutUint32(p.dst[baseOffset+4:], loc) // array buf length
+		return TpCodeArray, uint32(len(p.dst) - start), nil
+	case bool:
+		lit := LiteralFalse
+		if val {
+			lit = LiteralTrue
+		}
+		if raw {
+			p.dst = append(p.dst, byte(TpCodeLiteral), lit)
+		}
+		return TpCodeLiteral, uint32(lit), nil
+	case nil:
+		if raw {
+			p.dst = append(p.dst, byte(TpCodeLiteral), LiteralNull)
+		}
+		return TpCodeLiteral, uint32(LiteralNull), nil
+	case json.Number:
+		tp, data, err := p.parseNumber(val)
+		if err != nil {
+			return 0, 0, err
+		}
+		if raw {
+			p.dst = append(p.dst, byte(tp))
+		}
+		p.dst = append(p.dst, data...)
+		return tp, uint32(len(p.dst) - start), nil
+	case string:
+		if raw {
+			p.dst = append(p.dst, byte(TpCodeString))
+		}
+		p.dst = addString(p.dst, val)
+		return TpCodeString, uint32(len(p.dst) - start), nil
+	default:
+		return 0, 0, moerr.NewInvalidInputNoCtx("unknown type %T", v)
+	}
+}
+
+func (p *parser2) parseNumber(in json.Number) (TpCode, []byte, error) {
+	if !json.Valid([]byte(in)) {
+		return 0, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
+	}
+
+	var data [8]byte
+	//check if it is a float
+	if strings.ContainsAny(string(in), "Ee.") {
+		val, err := in.Float64()
+		if err != nil {
+			return TpCodeFloat64, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
+		}
+		if err = checkFloat64(val); err != nil {
+			return TpCodeFloat64, nil, err
+		}
+		endian.PutUint64(data[:], math.Float64bits(val))
+		return TpCodeFloat64, data[:], nil
+	}
+	if val, err := in.Int64(); err == nil { //check if it is an int
+		endian.PutUint64(data[:], uint64(val))
+		return TpCodeInt64, data[:], nil
+	}
+	if val, err := strconv.ParseUint(string(in), 10, 64); err == nil { //check if it is a uint
+		endian.PutUint64(data[:], val)
+		return TpCodeUint64, data[:], nil
+	}
+	if val, err := in.Float64(); err == nil { //check if it is a float
+		if err = checkFloat64(val); err != nil {
+			return TpCodeFloat64, nil, err
+		}
+		endian.PutUint64(data[:], math.Float64bits(val))
+		return TpCodeFloat64, data[:], nil
+	}
+	var tpCode TpCode
+	return tpCode, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
 }

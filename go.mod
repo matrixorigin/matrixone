@@ -28,6 +28,7 @@ require (
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/felixge/fgprof v0.9.3
 	github.com/go-sql-driver/mysql v1.7.1
+	github.com/goccy/go-json v0.10.2
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/mock v1.6.0
 	github.com/google/btree v1.1.2
@@ -37,7 +38,6 @@ require (
 	github.com/google/uuid v1.5.0
 	github.com/hashicorp/memberlist v0.3.1
 	github.com/jhump/protoreflect v1.15.2
-	github.com/json-iterator/go v1.1.12
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376
@@ -82,6 +82,7 @@ require (
 	github.com/gosimple/slug v1.13.1 // indirect
 	github.com/gosimple/unidecode v1.0.1 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
+	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/mattn/go-runewidth v0.0.9 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
 	github.com/minio/sha256-simd v1.0.1 // indirect
