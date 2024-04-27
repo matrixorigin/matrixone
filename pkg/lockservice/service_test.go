@@ -2804,7 +2804,8 @@ func maybeAddTestLockWithDeadlockWithWaitRetry(
 	})
 
 	if moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) ||
-		moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
+		moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) ||
+		moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
 		return res
 	}
 	require.NoError(t, err)
@@ -2814,14 +2815,18 @@ func maybeAddTestLockWithDeadlockWithWaitRetry(
 func runLockServiceTests(
 	t assert.TestingT,
 	serviceIDs []string,
-	fn func(*lockTableAllocator, []*service)) {
+	fn func(*lockTableAllocator, []*service),
+	opts ...Option,
+) {
 	runLockServiceTestsWithLevel(
 		t,
 		zapcore.DebugLevel,
 		serviceIDs,
 		time.Second*10,
 		fn,
-		nil)
+		nil,
+		opts...,
+	)
 }
 
 func runLockServiceTestsWithAdjustConfig(
@@ -2845,7 +2850,9 @@ func runLockServiceTestsWithLevel(
 	serviceIDs []string,
 	lockTableBindTimeout time.Duration,
 	fn func(*lockTableAllocator, []*service),
-	adjustConfig func(*Config)) {
+	adjustConfig func(*Config),
+	opts ...Option,
+) {
 	defer leaktest.AfterTest(t.(testing.TB))()
 
 	reuse.RunReuseTests(func() {
@@ -2861,6 +2868,7 @@ func runLockServiceTestsWithLevel(
 				fn(lta.(*lockTableAllocator), services)
 			},
 			adjustConfig,
+			opts...,
 		)
 	})
 }

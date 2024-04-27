@@ -71,7 +71,8 @@ type service struct {
 	}
 
 	option struct {
-		wait func()
+		wait       func()
+		serverOpts []ServerOption
 	}
 }
 
@@ -104,9 +105,10 @@ func NewLockService(
 	s.deadlockDetector = newDeadlockDetector(
 		s.fetchTxnWaitingList,
 		s.abortDeadlockTxn)
-	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector)
 	s.clock = runtime.ProcessLevelRuntime().Clock()
+
 	s.initRemote()
+	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector, s.activeTxnHolder, s.Unlock)
 	s.events.start()
 	for i := 0; i < fetchWhoWaitingListTaskCount; i++ {
 		_ = s.stopper.RunTask(s.handleFetchWhoWaitingMe)
@@ -567,11 +569,13 @@ type activeTxnHolder interface {
 		timeoutServices map[string]struct{},
 		timeoutTxns [][]byte,
 		maxKeepInterval time.Duration) [][]byte
+	validTimeoutRemoteTxn(pb.WaitTxn) bool
 }
 
 type mapBasedTxnHolder struct {
 	serviceID string
 	fsp       *fixedSlicePool
+	validTxn  func(txn pb.WaitTxn) (bool, error)
 	valid     func(sid string) (bool, error)
 	notify    func([]pb.OrphanTxn) ([][]byte, error)
 	mu        struct {
@@ -590,11 +594,13 @@ func newMapBasedTxnHandler(
 	fsp *fixedSlicePool,
 	valid func(sid string) (bool, error),
 	notify func([]pb.OrphanTxn) ([][]byte, error),
+	validTxn func(txn pb.WaitTxn) (bool, error),
 ) activeTxnHolder {
 	h := &mapBasedTxnHolder{}
 	h.fsp = fsp
 	h.valid = valid
 	h.notify = notify
+	h.validTxn = validTxn
 	h.serviceID = serviceID
 	h.mu.activeTxns = make(map[string]*activeTxn, 1024)
 	h.mu.activeTxnServices = make(map[string]string)
@@ -789,6 +795,30 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 		}
 	}
 	return needRemoved
+}
+
+func (h *mapBasedTxnHolder) validTimeoutRemoteTxn(txn pb.WaitTxn) bool {
+	if txn.CreatedOn == h.serviceID {
+		return false
+	}
+
+	valid, err := h.validTxn(txn)
+	if err == nil {
+		return !valid
+	}
+
+	cannotCommit := []pb.OrphanTxn{
+		{
+			Service: txn.CreatedOn,
+			Txn:     [][]byte{txn.TxnID},
+		},
+	}
+
+	committing, err := h.notify(cannotCommit)
+	if err != nil {
+		return false
+	}
+	return len(committing) == 0
 }
 
 func (h *mapBasedTxnHolder) close() {

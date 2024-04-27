@@ -96,6 +96,8 @@ type RPCClient interface {
 	Ping(ctx context.Context, backend string) error
 	// Close close the client
 	Close() error
+
+	CloseBackend() error
 }
 
 // ClientSession client session, which is used to send the response message.

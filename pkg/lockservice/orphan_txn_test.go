@@ -214,6 +214,7 @@ func TestGetTimeoutRemoveTxn(t *testing.T) {
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
 		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(txn pb.WaitTxn) (bool, error) { return true, nil },
 	).(*mapBasedTxnHolder)
 
 	txnID1 := []byte("txn1")
@@ -252,6 +253,7 @@ func TestGetTimeoutRemoveTxnWithValid(t *testing.T) {
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return sid == "s1", nil },
 		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(txn pb.WaitTxn) (bool, error) { return true, nil },
 	).(*mapBasedTxnHolder)
 
 	txnID1 := []byte("txn1")
@@ -294,6 +296,7 @@ func TestGetTimeoutRemoveTxnWithValidErrorAndNotifyOK(t *testing.T) {
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, ErrTxnNotFound },
 		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(txn pb.WaitTxn) (bool, error) { return true, nil },
 	).(*mapBasedTxnHolder)
 
 	txnID1 := []byte("txn1")
@@ -318,6 +321,7 @@ func TestGetTimeoutRemoveTxnWithValidErrorAndNotifyFailed(t *testing.T) {
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, ErrTxnNotFound },
 		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, ErrTxnNotFound },
+		func(txn pb.WaitTxn) (bool, error) { return true, nil },
 	).(*mapBasedTxnHolder)
 
 	txnID1 := []byte("txn1")
@@ -497,4 +501,72 @@ func TestCannotHungWithUnstableNetwork(t *testing.T) {
 			c.disconnectAfterRead = 5
 			c.RemoteLockTimeout.Duration = time.Millisecond * 200
 		})
+}
+
+func TestOrphanTxnHolderCanBeRelease(t *testing.T) {
+	ch := make(chan struct{})
+	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second*5)
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			s1 := s[0]
+			s2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			txn3 := []byte("txn3")
+			table := uint64(10)
+			rows := newTestRows(1)
+
+			mustAddTestLock(t, ctx, s1, table, txn1, rows, pb.Granularity_Row)
+			require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
+
+			_, err := s2.Lock(ctx2, table, rows, txn2, newTestRowExclusiveOptions())
+			require.Error(t, err)
+
+			// make unlock use new connection
+			client := s2.remote.client.(*client)
+			require.NoError(t, client.client.CloseBackend())
+			require.NoError(t, s2.Unlock(ctx, txn2, timestamp.Timestamp{}))
+			close(ch)
+
+			v, err := s1.getLockTable(0, table)
+			require.NoError(t, err)
+			lt := v.(*localLockTable)
+
+		OUT:
+			for {
+				select {
+				case <-ctx.Done():
+					t.Fail()
+					return
+				default:
+					lt.mu.RLock()
+					_, ok := lt.mu.store.Get(rows[0])
+					lt.mu.RUnlock()
+					if ok {
+						break OUT
+					}
+				}
+				time.Sleep(time.Millisecond * 10)
+			}
+
+			mustAddTestLock(t, ctx, s1, table, txn3, rows, pb.Granularity_Row)
+			require.NoError(t, s1.Unlock(ctx, txn3, timestamp.Timestamp{}))
+		},
+		func(s *service) {
+			s.option.serverOpts = append(s.option.serverOpts,
+				WithServerMessageFilter(func(r *pb.Request) bool {
+					// make handle lock after unlock
+					if r.Method == pb.Method_Lock {
+						cancel2()
+						<-ch
+					}
+					return true
+				}))
+		},
+	)
 }

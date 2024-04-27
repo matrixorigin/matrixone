@@ -33,7 +33,9 @@ func RunLockServicesForTest(
 	serviceIDs []string,
 	lockTableBindTimeout time.Duration,
 	fn func(LockTableAllocator, []LockService),
-	adjustConfig func(*Config)) {
+	adjustConfig func(*Config),
+	opts ...Option,
+) {
 	defaultLazyCheckDuration.Store(time.Millisecond * 50)
 	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntimeWithLevel(level))
@@ -72,7 +74,7 @@ func RunLockServicesForTest(
 			removeDisconnectDuration = cfg.removeDisconnectDuration
 		}
 		services = append(services,
-			NewLockService(cfg).(*service))
+			NewLockService(cfg, opts...).(*service))
 	}
 	allocator := NewLockTableAllocator(testSockets, lockTableBindTimeout, morpc.Config{}, func(lta *lockTableAllocator) {
 		lta.options.removeDisconnectDuration = removeDisconnectDuration
