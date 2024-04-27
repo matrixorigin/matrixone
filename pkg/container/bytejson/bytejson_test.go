@@ -543,12 +543,11 @@ func BenchmarkParseJsonByteFromString2(b *testing.B) {
 	// cpu: Intel(R) Core(TM) i3-9100F CPU @ 3.60GHz
 	// === RUN   BenchmarkParseJsonByteFromString2
 	// BenchmarkParseJsonByteFromString2
-	// BenchmarkParseJsonByteFromString2-4       212386              5401 ns/op            1304 B/op         31 allocs/op
+	// BenchmarkParseJsonByteFromString2-4       278098              4235 ns/op            1880 B/op         48 allocs/op
 }
 
 func FuzzParseJsonByteFromString(f *testing.F) {
 	f.Add(`{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`)
-	f.Add("0000")
 	f.Add("0A00")
 	f.Add("1E1000")
 	f.Add("{\"\":")
@@ -556,8 +555,9 @@ func FuzzParseJsonByteFromString(f *testing.F) {
 	f.Add("null")
 	f.Add("true")
 	f.Add("false")
-	//f.Add("\"\xec\"")
-	//f.Add("\"\\ud800\\ud800\\udC00\"")
+	f.Add("\"\xec\"")
+	f.Add("\"\\ud800\\ud800\\udC00\"")
+	// f.Add("0000")
 	f.Fuzz(func(t *testing.T, s string) {
 		valid := true
 		var v any
