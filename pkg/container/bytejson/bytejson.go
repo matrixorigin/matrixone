@@ -694,16 +694,6 @@ func ParseJsonByteFromString2(s string) ([]byte, error) {
 	return p.dst, nil
 }
 
-func init() {
-	reuse.CreatePool[group](
-		func() *group {
-			return &group{}
-		},
-		func(g *group) { g.reset() },
-		reuse.DefaultOptions[group](),
-	)
-}
-
 type parser struct {
 	src   []byte
 	stack []*group
@@ -943,6 +933,16 @@ func (p *parser) parseNumber(in json.Number) (TpCode, []byte, error) {
 	}
 	var tpCode TpCode
 	return tpCode, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
+}
+
+func init() {
+	reuse.CreatePool[group](
+		func() *group {
+			return &group{}
+		},
+		func(g *group) { g.reset() },
+		reuse.DefaultOptions[group](),
+	)
 }
 
 type group struct {
