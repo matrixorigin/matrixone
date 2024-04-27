@@ -1998,6 +1998,21 @@ func MakeRuntimeFilter(tag int32, matchPrefix bool, upperlimit int32, expr *Expr
 	}
 }
 
+func MakeIntervalExpr(num int64, str string) *Expr {
+	arg0 := makePlan2Int64ConstExprWithType(num)
+	arg1 := makePlan2StringConstExprWithType(str, false)
+	return &plan.Expr{
+		Typ: plan.Type{
+			Id: int32(types.T_interval),
+		},
+		Expr: &plan.Expr_List{
+			List: &plan.ExprList{
+				List: []*Expr{arg0, arg1},
+			},
+		},
+	}
+}
+
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
 	rightArg := &plan.Expr{
 		Typ: plan.Type{
