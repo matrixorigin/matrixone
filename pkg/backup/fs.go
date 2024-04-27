@@ -135,16 +135,23 @@ func writeFile(ctx context.Context, fs fileservice.FileService, path string, dat
 
 	//write checksum file for the file
 	checksumFile := path + ".sha256"
-	err = fs.Write(ctx, fileservice.IOVector{
-		FilePath: checksumFile,
-		Entries: []fileservice.IOEntry{
-			{
-				Offset: 0,
-				Size:   int64(len(checksum)),
-				Data:   checksum[:],
-			},
+	_, err = fileservice.DoWithRetry(
+		"BackupWrite",
+		func() (int, error) {
+			return 0, fs.Write(ctx, fileservice.IOVector{
+				FilePath: checksumFile,
+				Entries: []fileservice.IOEntry{
+					{
+						Offset: 0,
+						Size:   int64(len(checksum)),
+						Data:   checksum[:],
+					},
+				},
+			})
 		},
-	})
+		64,
+		fileservice.IsRetryableError,
+	)
 	return err
 }
 

@@ -545,7 +545,14 @@ func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error 
 	w.buffer.SetDataOptions(items...)
 	// if a compact task is rollbacked, it may leave a written file in fs
 	// here we just delete it and write again
-	err := w.object.fs.Write(ctx, w.buffer.GetData())
+	_, err := fileservice.DoWithRetry(
+		"ObjectSync",
+		func() (int, error) {
+			return 0, w.object.fs.Write(ctx, w.buffer.GetData())
+		},
+		64,
+		fileservice.IsRetryableError,
+	)
 	if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
 		if err = w.object.fs.Delete(ctx, w.fileName); err != nil {
 			return err

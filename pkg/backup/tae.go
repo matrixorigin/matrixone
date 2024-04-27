@@ -416,7 +416,7 @@ func CopyFileWithRetry(ctx context.Context, srcFs, dstFs fileservice.FileService
 		func() ([]byte, error) {
 			return CopyFile(ctx, srcFs, dstFs, name, dstDir)
 		},
-		128,
+		64,
 		fileservice.IsRetryableError,
 	)
 }
