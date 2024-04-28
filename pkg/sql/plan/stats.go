@@ -1023,10 +1023,22 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	for i := range node.FilterList {
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
 		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s)
-		if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-			copyOfExpr := DeepCopyExpr(node.FilterList[i])
-			copyOfExpr.Selectivity = currentBlockSel
-			blockExprList = append(blockExprList, copyOfExpr)
+		if builder.optimizerHints != nil {
+			if builder.optimizerHints.blockFilter == 1 { //always trying to pushdown blockfilters if zonemappable
+				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
+					copyOfExpr := DeepCopyExpr(node.FilterList[i])
+					copyOfExpr.Selectivity = currentBlockSel
+					blockExprList = append(blockExprList, copyOfExpr)
+				}
+			} else if builder.optimizerHints.blockFilter == 2 { // never pushdown blockfilters
+				node.BlockFilterList = nil
+			}
+		} else {
+			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
+				copyOfExpr := DeepCopyExpr(node.FilterList[i])
+				copyOfExpr.Selectivity = currentBlockSel
+				blockExprList = append(blockExprList, copyOfExpr)
+			}
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}

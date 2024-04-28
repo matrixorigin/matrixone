@@ -15,11 +15,10 @@
 package plan
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -760,9 +759,66 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 	}
 }
 
+func handleOptimizerHints(str string, builder *QueryBuilder) {
+	strs := strings.Split(str, "=")
+	if len(strs) != 2 {
+		return
+	}
+	key := strs[0]
+	value, err := strconv.Atoi(strs[1])
+	if err != nil {
+		return
+	}
+	if builder.optimizerHints == nil {
+		builder.optimizerHints = &OptimizerHints{}
+	}
+	switch key {
+	case "pushDownLimitToScan":
+		builder.optimizerHints.pushDownLimitToScan = value
+	case "pushDownTopThroughLeftJoin":
+		builder.optimizerHints.pushDownTopThroughLeftJoin = value
+	case "pushDownSemiAntiJoins":
+		builder.optimizerHints.pushDownSemiAntiJoins = value
+	case "aggPushDown":
+		builder.optimizerHints.aggPushDown = value
+	case "aggPullUp":
+		builder.optimizerHints.aggPullUp = value
+	case "removeEffectLessLeftJoins":
+		builder.optimizerHints.removeEffectLessLeftJoins = value
+	case "removeRedundantJoinCond":
+		builder.optimizerHints.removeRedundantJoinCond = value
+	case "optimizeLikeExpr":
+		builder.optimizerHints.optimizeLikeExpr = value
+	case "optimizeDateFormatExpr":
+		builder.optimizerHints.optimizeDateFormatExpr = value
+	case "determinHashOnPK":
+		builder.optimizerHints.determinHashOnPK = value
+	case "sendMessageFromTopToScan":
+		builder.optimizerHints.sendMessageFromTopToScan = value
+	case "determineShuffle":
+		builder.optimizerHints.determineShuffle = value
+	case "blockFilter":
+		builder.optimizerHints.blockFilter = value
+	case "applyIndices":
+		builder.optimizerHints.applyIndices = value
+	case "runtimeFilter":
+		builder.optimizerHints.runtimeFilter = value
+	case "joinOrdering":
+		builder.optimizerHints.joinOrdering = value
+	}
+}
+
 func (builder *QueryBuilder) parseOptimizeHints() {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("optimizer_hints")
-	if ok {
-		logutil.Infof("optimizer hints! %v", v)
+	if !ok {
+		return
+	}
+	str := v.(string)
+	if len(str) == 0 {
+		return
+	}
+	kvs := strings.Split(str, ",")
+	for i := range kvs {
+		handleOptimizerHints(kvs[i], builder)
 	}
 }

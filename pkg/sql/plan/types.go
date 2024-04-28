@@ -182,18 +182,18 @@ type QueryBuilder struct {
 }
 
 type OptimizerHints struct {
-	pushDownLimitToScan        bool
-	pushDownTopThroughLeftJoin bool
-	pushDownSemiAntiJoins      bool
-	aggPushDown                bool
-	aggPullUp                  bool
-	removeEffectLessLeftJoins  bool
-	removeRedundantJoinCond    bool
-	optimizeLikeExpr           bool
-	optimizeDateFormatExpr     bool
-	determinHashOnPK           bool
-	sendMessageFromTopToScan   bool
-	determineShuffle           bool
+	pushDownLimitToScan        int
+	pushDownTopThroughLeftJoin int
+	pushDownSemiAntiJoins      int
+	aggPushDown                int
+	aggPullUp                  int
+	removeEffectLessLeftJoins  int
+	removeRedundantJoinCond    int
+	optimizeLikeExpr           int
+	optimizeDateFormatExpr     int
+	determinHashOnPK           int
+	sendMessageFromTopToScan   int
+	determineShuffle           int
 	blockFilter                int
 	applyIndices               int
 	runtimeFilter              int
