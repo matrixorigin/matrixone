@@ -68,11 +68,9 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if !pipelineFailed {
-		select {
-		case arg.Reg.Ch <- nil:
-		case <-arg.Reg.Ctx.Done():
-		}
+	// told the next operator to stop if it is still running.
+	select {
+	case arg.Reg.Ch <- nil:
+	case <-arg.Reg.Ctx.Done():
 	}
-	close(arg.Reg.Ch)
 }
