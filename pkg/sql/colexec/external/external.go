@@ -875,7 +875,7 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 	}
 	g, ok := jsonNode.V.(*bytejson.Group)
 	if !ok || g.Obj {
-		return nil, moerr.NewInvalidInput(ctx, "not a array")
+		return nil, moerr.NewInvalidInput(ctx, "not a json array")
 	}
 	if len(g.Values) < getRealAttrCnt(attrs, cols) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo)

@@ -696,9 +696,7 @@ func (p *parser) addDelim(r json.Delim) *Group {
 		if len(p.stack) == 0 {
 			return g
 		}
-
-		pg := p.stack[len(p.stack)-1]
-		pg.Values = append(pg.Values, Node{g})
+		p.appendToLastGroup(Node{g})
 	default:
 		panic("unknown Delim " + string(r))
 	}
@@ -968,4 +966,20 @@ func (n Node) ByteJsonRaw() ([]byte, error) {
 		return nil, err
 	}
 	return w.buf, nil
+}
+
+func (n Node) String() string {
+	switch v := n.V.(type) {
+	case *Group:
+		if !v.Obj {
+			return fmt.Sprint(v.Values)
+		}
+		m := make(map[string]Node, len(v.Keys))
+		for i, key := range v.Keys {
+			m[key] = v.Values[i]
+		}
+		return fmt.Sprint(m)
+	default:
+		return fmt.Sprint(v)
+	}
 }
