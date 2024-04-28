@@ -604,3 +604,28 @@ func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) in
 
 	return -1
 }
+
+func getTableDefFromSnapshot(ctx context.Context, bh BackgroundExec, snapshotName string, schemaName string, tableName string) (string, error) {
+	sql := fmt.Sprintf("show create table `%s`.`%s` {snapshot = '%s'}", schemaName, tableName, snapshotName)
+
+	bh.ClearExecResultSet()
+	err := bh.Exec(ctx, sql)
+	if err != nil {
+		return "", err
+	}
+
+	resultSet, err := getResultSet(ctx, bh)
+	if err != nil {
+		return "", err
+	}
+
+	if len(resultSet) == 0 || resultSet[0].GetRowCount() == 0 {
+		return "", moerr.NewNoSuchTable(ctx, schemaName, tableName)
+	}
+
+	createTableSQL, err := resultSet[0].GetString(ctx, 0, 1)
+	if err != nil {
+		return "", err
+	}
+	return createTableSQL, nil
+}
