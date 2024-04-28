@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"io"
@@ -134,7 +135,7 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 	}()
 	// record files
 	taeFileList := make([]*taeFile, 0, len(files))
-
+	errC := make(chan error, 1)
 	jobScheduler := tasks.NewParallelJobScheduler(parallelCount)
 	defer jobScheduler.Stop()
 	go func() {
@@ -175,6 +176,7 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 							Res: nil,
 						}
 					} else {
+						errC <- err
 						return &tasks.JobResult{
 							Err: err,
 							Res: nil,
@@ -209,11 +211,13 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 			logutil.Infof("schedule job failed %v", err.Error())
 			return nil, err
 		}
-
+		select {
+		case err = <-errC:
+			return nil, err
+		}
 	}
 
 	for n := range backupJobs {
-
 		ret := backupJobs[n].WaitDone()
 		if ret.Err != nil {
 			logutil.Infof("wait job done failed %v", ret.Err.Error())
