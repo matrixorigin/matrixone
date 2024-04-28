@@ -39,6 +39,7 @@ const (
 	CheckpointExt = "ckp"
 	GCFullExt     = "fgc"
 	SnapshotExt   = "snap"
+	AcctExt       = "acct"
 )
 
 func EncodeCheckpointMetadataFileName(dir, prefix string, start, end types.TS) string {
@@ -47,6 +48,10 @@ func EncodeCheckpointMetadataFileName(dir, prefix string, start, end types.TS) s
 
 func EncodeSnapshotMetadataFileName(dir, prefix string, start, end types.TS) string {
 	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), SnapshotExt)
+}
+
+func EncodeTableMetadataFileName(dir, prefix string, start, end types.TS) string {
+	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), AcctExt)
 }
 
 func EncodeGCMetadataFileName(dir, prefix string, start, end types.TS) string {

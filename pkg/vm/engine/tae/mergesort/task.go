@@ -48,6 +48,7 @@ type MergeTaskHost interface {
 	PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error)
 	GetCommitEntry() *api.MergeCommitEntry
 	PrepareNewWriter() *blockio.BlockWriter
+	DoTransfer() bool
 	GetObjectCnt() int
 	GetBlkCnts() []int
 	GetAccBlkCnts() []int
@@ -228,7 +229,9 @@ func DoMergeAndWrite(
 	}
 	defer release()
 
-	initTransferMapping(commitEntry, len(batches))
+	if mergehost.DoTransfer() {
+		initTransferMapping(commitEntry, len(batches))
+	}
 
 	fromLayout := make([]uint32, len(batches))
 	totalRowCount := 0
@@ -252,7 +255,9 @@ func DoMergeAndWrite(
 				continue
 			}
 		}
-		AddSortPhaseMapping(commitEntry.Booking, i, rowCntBeforeApplyDelete, del, nil)
+		if mergehost.DoTransfer() {
+			AddSortPhaseMapping(commitEntry.Booking, i, rowCntBeforeApplyDelete, del, nil)
+		}
 		fromLayout[i] = uint32(batches[i].RowCount())
 		totalRowCount += batches[i].RowCount()
 	}
@@ -261,7 +266,9 @@ func DoMergeAndWrite(
 		logutil.Info("[Done] Mergeblocks due to all deleted",
 			zap.String("table", tableDesc),
 			zap.String("txn-start-ts", commitEntry.StartTs.DebugString()))
-		CleanTransMapping(commitEntry.Booking)
+		if mergehost.DoTransfer() {
+			CleanTransMapping(commitEntry.Booking)
+		}
 		return
 	}
 
@@ -271,7 +278,9 @@ func DoMergeAndWrite(
 
 	retBatches, releaseF := ReshapeBatches(batches, fromLayout, toLayout, mergehost)
 	defer releaseF()
-	UpdateMappingAfterMerge(commitEntry.Booking, nil, toLayout)
+	if mergehost.DoTransfer() {
+		UpdateMappingAfterMerge(commitEntry.Booking, nil, toLayout)
+	}
 
 	// -------------------------- phase 2
 	phaseDesc = "new writer to write down"
