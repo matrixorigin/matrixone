@@ -439,7 +439,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 			locations, err := logtail.LoadCheckpointLocations(c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-					err = nil
 					continue
 				}
 				return err
