@@ -52,10 +52,8 @@ func TestCloseWaitMigrate(t *testing.T) {
 	assert.NotNil(t, mc)
 	assert.Equal(t, mc.beginMigrate(), true)
 	go func() {
-		select {
-		case <-time.After(time.Second):
-			mc.endMigrate()
-		}
+		<-time.After(time.Second)
+		mc.endMigrate()
 	}()
 	mc.waitAndClose()
 }
