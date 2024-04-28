@@ -191,7 +191,7 @@ type OptimizerHints struct {
 	removeRedundantJoinCond    int
 	optimizeLikeExpr           int
 	optimizeDateFormatExpr     int
-	determinHashOnPK           int
+	determineHashOnPK          int
 	sendMessageFromTopToScan   int
 	determineShuffle           int
 	blockFilter                int

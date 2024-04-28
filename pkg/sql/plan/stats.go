@@ -1032,6 +1032,12 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 				}
 			} else if builder.optimizerHints.blockFilter == 2 { // never pushdown blockfilters
 				node.BlockFilterList = nil
+			} else {
+				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
+					copyOfExpr := DeepCopyExpr(node.FilterList[i])
+					copyOfExpr.Selectivity = currentBlockSel
+					blockExprList = append(blockExprList, copyOfExpr)
+				}
 			}
 		} else {
 			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
@@ -1121,6 +1127,10 @@ func resetHashMapStats(stats *plan.Stats) {
 }
 
 func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive bool) {
+	if builder.optimizerHints != nil && builder.optimizerHints.joinOrdering != 0 {
+		return
+	}
+
 	node := builder.qry.Nodes[nodeID]
 	if recursive && len(node.Children) > 0 {
 		for _, child := range node.Children {
