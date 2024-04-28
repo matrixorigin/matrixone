@@ -882,7 +882,7 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols
 			continue
 		}
 
-		val := fmt.Sprintf("%v", valN.V)
+		val := fmt.Sprint(valN)
 		res = append(res, csvparser.Field{Val: val, IsNull: val == JsonNull})
 	}
 	return res, nil
@@ -929,7 +929,7 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 			continue
 		}
 
-		val := fmt.Sprintf("%v", valN.V)
+		val := fmt.Sprint(valN)
 		res = append(res, csvparser.Field{Val: val, IsNull: val == JsonNull})
 	}
 	return res, nil
