@@ -15,8 +15,6 @@
 package logtailreplay
 
 import (
-	"bytes"
-	"cmp"
 	"fmt"
 	"math"
 	"slices"
@@ -24,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
 type Filter interface {
@@ -72,85 +71,29 @@ func (o *overlap) Filter(objs []ObjectInfo) []ObjectInfo {
 			max:   obj.SortKeyZoneMap().GetMax(),
 			entry: obj,
 		})
-
 	}
 	slices.SortFunc(o.intervals, func(a, b entryInterval) int {
-		if c := compare(o.t, a.min, b.min); c != 0 {
+		if c := compute.CompareGeneric(a.min, b.min, o.t); c != 0 {
 			return c
 		}
-		return compare(o.t, a.max, b.max)
+		return compute.CompareGeneric(a.max, b.max, o.t)
 	})
 
 	set := entrySet{entries: make([]ObjectInfo, 0), maxValue: minValue(o.t)}
 	for _, interval := range o.intervals {
 		interval := interval
 		logutil.Infof("Mergeblocks %v %v", interval.min, interval.max)
-		if len(set.entries) == 0 || compare(o.t, set.maxValue, interval.min) > 0 {
+		if len(set.entries) == 0 || compute.CompareGeneric(set.maxValue, interval.min, o.t) > 0 {
 			set.add(o.t, interval)
 		} else if len(set.entries) == 1 {
 			set.reset(o.t)
 			set.add(o.t, interval)
 		} else {
+			// return the first intervals which overlaps with each other
 			return set.entries
 		}
 	}
-	return nil
-}
-
-func compare(t types.T, a, b any) int {
-	switch t {
-	case types.T_bit:
-		return cmp.Compare(a.(uint64), b.(uint64))
-	case types.T_int8:
-		return cmp.Compare(a.(int8), b.(int8))
-	case types.T_int16:
-		return cmp.Compare(a.(int16), b.(int16))
-	case types.T_int32:
-		return cmp.Compare(a.(int32), b.(int32))
-	case types.T_int64:
-		return cmp.Compare(a.(int64), b.(int64))
-	case types.T_uint8:
-		return cmp.Compare(a.(uint8), b.(uint8))
-	case types.T_uint16:
-		return cmp.Compare(a.(uint16), b.(uint16))
-	case types.T_uint32:
-		return cmp.Compare(a.(uint32), b.(uint32))
-	case types.T_uint64:
-		return cmp.Compare(a.(uint64), b.(uint64))
-	case types.T_float32:
-		return cmp.Compare(a.(float32), b.(float32))
-	case types.T_float64:
-		return cmp.Compare(a.(float64), b.(float64))
-	case types.T_date:
-		return cmp.Compare(a.(types.Date), b.(types.Date))
-	case types.T_time:
-		return cmp.Compare(a.(types.Time), b.(types.Time))
-	case types.T_datetime:
-		return cmp.Compare(a.(types.Datetime), b.(types.Datetime))
-	case types.T_timestamp:
-		return cmp.Compare(a.(types.Timestamp), b.(types.Timestamp))
-	case types.T_enum:
-		return cmp.Compare(a.(types.Enum), b.(types.Enum))
-	case types.T_decimal64:
-		return a.(types.Decimal64).Compare(b.(types.Decimal64))
-	case types.T_decimal128:
-		return a.(types.Decimal128).Compare(b.(types.Decimal128))
-	case types.T_uuid:
-		return a.(types.Uuid).Compare(b.(types.Uuid))
-	case types.T_TS:
-		ts1 := a.(types.TS)
-		ts2 := b.(types.TS)
-		return ts1.Compare(&ts2)
-	case types.T_Rowid:
-		return a.(types.Rowid).Compare(b.(types.Rowid))
-	case types.T_Blockid:
-		return a.(types.Blockid).Compare(b.(types.Blockid))
-	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		return bytes.Compare(a.([]byte), b.([]byte))
-	default:
-		panic(fmt.Sprintf("unsupported type: %v", t))
-	}
+	return set.entries
 }
 
 func minValue(t types.T) any {
@@ -158,25 +101,25 @@ func minValue(t types.T) any {
 	case types.T_bit:
 		return 0
 	case types.T_int8:
-		return math.MinInt8
+		return int8(math.MinInt8)
 	case types.T_int16:
-		return math.MinInt16
+		return int16(math.MinInt16)
 	case types.T_int32:
-		return math.MinInt32
+		return int32(math.MinInt32)
 	case types.T_int64:
-		return math.MinInt64
+		return int64(math.MinInt64)
 	case types.T_uint8:
-		return 0
+		return uint8(0)
 	case types.T_uint16:
-		return 0
+		return uint16(0)
 	case types.T_uint32:
-		return 0
+		return uint32(0)
 	case types.T_uint64:
-		return 0
+		return uint64(0)
 	case types.T_float32:
-		return -math.MaxFloat32
+		return float32(-math.MaxFloat32)
 	case types.T_float64:
-		return -math.MaxFloat64
+		return float64(-math.MaxFloat64)
 	case types.T_date:
 		return types.Date(math.MinInt32)
 	case types.T_time:
@@ -224,7 +167,7 @@ func (s *entrySet) reset(t types.T) {
 
 func (s *entrySet) add(t types.T, entry entryInterval) {
 	s.entries = append(s.entries, entry.entry)
-	if compare(t, s.maxValue, entry.max) < 0 {
+	if compute.CompareGeneric(s.maxValue, entry.max, t) < 0 {
 		s.maxValue = entry.max
 	}
 }

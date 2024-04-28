@@ -2772,7 +2772,7 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		}
 	}
 
-	if len(objInfos) == 0 {
+	if len(objInfos) < 2 {
 		return nil, moerr.NewInternalErrorNoCtx("no object match")
 	}
 
