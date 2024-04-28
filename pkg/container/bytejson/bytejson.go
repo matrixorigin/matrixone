@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -655,34 +656,16 @@ func (p *parser) do() (Node, error) {
 			if g != nil {
 				return checkEOF(g)
 			}
-		case bool:
-			if len(p.stack) > 0 {
-				g := p.stack[len(p.stack)-1]
-				g.Values = append(g.Values, Node{tk})
-			} else {
-				return checkEOF(tk)
-			}
-		case json.Number:
-			if len(p.stack) > 0 {
-				g := p.stack[len(p.stack)-1]
-				g.Values = append(g.Values, Node{tk})
-			} else {
-				return checkEOF(tk)
-			}
 		case string:
-			if len(p.stack) > 0 {
-				g := p.stack[len(p.stack)-1]
-				g.addString(tk)
-			} else {
+			if len(p.stack) == 0 {
 				return checkEOF(tk)
 			}
-		case nil:
-			if len(p.stack) > 0 {
-				g := p.stack[len(p.stack)-1]
-				g.Values = append(g.Values, Node{nil})
-			} else {
+			p.addString(tk)
+		case json.Number, bool, nil:
+			if len(p.stack) == 0 {
 				return checkEOF(tk)
 			}
+			p.appendToLastGroup(Node{tk})
 		}
 	}
 
@@ -706,6 +689,10 @@ func (p *parser) addDelim(r json.Delim) *Group {
 		g := p.stack[n]
 		p.stack = p.stack[:n]
 
+		if g.Obj {
+			g.sortKeys()
+		}
+
 		if len(p.stack) == 0 {
 			return g
 		}
@@ -716,6 +703,34 @@ func (p *parser) addDelim(r json.Delim) *Group {
 		panic("unknown Delim " + string(r))
 	}
 	return nil
+}
+
+func (p *parser) appendToLastGroup(n Node) {
+	g := p.stack[len(p.stack)-1]
+	if !g.Obj || len(g.Keys) <= 1 {
+		g.Values = append(g.Values, n)
+		return
+	}
+
+	last := len(g.Keys) - 1
+	dupIdx := slices.Index(g.Keys[:last], g.Keys[last])
+	if dupIdx < 0 {
+		g.Values = append(g.Values, n)
+		return
+	}
+	old := g.Values[dupIdx]
+	old.Free()
+	g.Keys = g.Keys[:last]
+	g.Values[dupIdx] = n
+}
+
+func (p *parser) addString(s string) {
+	g := p.stack[len(p.stack)-1]
+	if g.Obj && len(g.Keys) <= len(g.Values) {
+		g.Keys = append(g.Keys, s)
+		return
+	}
+	p.appendToLastGroup(Node{s})
 }
 
 func init() {
@@ -732,18 +747,6 @@ type Group struct {
 	Obj    bool
 	Keys   []string
 	Values []Node
-}
-
-func (g *Group) addString(s string) error {
-	if !g.Obj || len(g.Keys) > len(g.Values) {
-		g.Values = append(g.Values, Node{s})
-	} else {
-		if len(s) > math.MaxUint16 {
-			return moerr.NewInvalidInputNoCtx("json key %s", s)
-		}
-		g.Keys = append(g.Keys, s)
-	}
-	return nil
 }
 
 func (g Group) TypeName() string {
@@ -768,6 +771,21 @@ func (g *Group) free() {
 	}
 	g.Values = g.Values[:0]
 	reuse.Free(g, nil)
+}
+
+func (g *Group) sortKeys() {
+	sort.Sort((*groupSortKeys)(g))
+}
+
+type groupSortKeys Group
+
+func (g *groupSortKeys) Len() int { return len(g.Keys) }
+
+func (g *groupSortKeys) Less(i, j int) bool { return g.Keys[i] < g.Keys[j] }
+
+func (g *groupSortKeys) Swap(i, j int) {
+	g.Keys[i], g.Keys[j] = g.Keys[j], g.Keys[i]
+	g.Values[i], g.Values[j] = g.Values[j], g.Values[i]
 }
 
 type byteJsonWriter struct {
