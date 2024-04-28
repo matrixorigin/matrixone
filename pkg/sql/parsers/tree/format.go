@@ -52,7 +52,6 @@ func WithQuoteString(quote bool) FmtCtxOption {
 		ctx.quoteString = quote
 	})
 }
-
 func WithSingleQuoteString() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.singleQuoteString = true

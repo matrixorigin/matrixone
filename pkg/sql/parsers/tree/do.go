@@ -20,7 +20,7 @@ func init() {
 	reuse.CreatePool[Do](
 		func() *Do { return &Do{} },
 		func(d *Do) { d.reset() },
-		reuse.DefaultOptions[Do]().WithEnableChecker(),
+		reuse.DefaultOptions[Do](),
 	)
 }
 

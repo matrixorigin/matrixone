@@ -20,31 +20,31 @@ func init() {
 	reuse.CreatePool[RepeatStmt](
 		func() *RepeatStmt { return &RepeatStmt{} },
 		func(r *RepeatStmt) { r.reset() },
-		reuse.DefaultOptions[RepeatStmt]().WithEnableChecker(),
+		reuse.DefaultOptions[RepeatStmt](),
 	)
 
 	reuse.CreatePool[WhileStmt](
 		func() *WhileStmt { return &WhileStmt{} },
 		func(w *WhileStmt) { w.reset() },
-		reuse.DefaultOptions[WhileStmt]().WithEnableChecker(),
+		reuse.DefaultOptions[WhileStmt](),
 	)
 
 	reuse.CreatePool[LoopStmt](
 		func() *LoopStmt { return &LoopStmt{} },
 		func(l *LoopStmt) { l.reset() },
-		reuse.DefaultOptions[LoopStmt]().WithEnableChecker(),
+		reuse.DefaultOptions[LoopStmt](),
 	)
 
 	reuse.CreatePool[IterateStmt](
 		func() *IterateStmt { return &IterateStmt{} },
 		func(i *IterateStmt) { i.reset() },
-		reuse.DefaultOptions[IterateStmt]().WithEnableChecker(),
+		reuse.DefaultOptions[IterateStmt](),
 	)
 
 	reuse.CreatePool[LeaveStmt](
 		func() *LeaveStmt { return &LeaveStmt{} },
 		func(l *LeaveStmt) { l.reset() },
-		reuse.DefaultOptions[LeaveStmt]().WithEnableChecker(),
+		reuse.DefaultOptions[LeaveStmt](),
 	)
 }
 

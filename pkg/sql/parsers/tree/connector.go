@@ -20,20 +20,20 @@ func init() {
 	reuse.CreatePool[DropConnector](
 		func() *DropConnector { return &DropConnector{} },
 		func(d *DropConnector) { d.reset() },
-		reuse.DefaultOptions[DropConnector]().WithEnableChecker(),
-	)
+		reuse.DefaultOptions[DropConnector](), //.
+	) // WithEnableChecker()
 
 	reuse.CreatePool[CreateConnector](
 		func() *CreateConnector { return &CreateConnector{} },
 		func(c *CreateConnector) { c.reset() },
-		reuse.DefaultOptions[CreateConnector]().WithEnableChecker(),
-	)
+		reuse.DefaultOptions[CreateConnector](), //.
+	) // WithEnableChecker()
 
 	reuse.CreatePool[ConnectorOption](
 		func() *ConnectorOption { return &ConnectorOption{} },
 		func(c *ConnectorOption) { c.reset() },
-		reuse.DefaultOptions[ConnectorOption]().WithEnableChecker(),
-	)
+		reuse.DefaultOptions[ConnectorOption](), //.
+	) // WithEnableChecker()
 }
 
 type DropConnector struct {
@@ -106,7 +106,6 @@ func (node *CreateConnector) GetQueryType() string { return QueryTypeDDL }
 func (node *CreateConnector) Free() {
 	reuse.Free[CreateConnector](node, nil)
 }
-
 func (node CreateConnector) TypeName() string { return "tree.CreateConnector" }
 
 func (node *CreateConnector) reset() {

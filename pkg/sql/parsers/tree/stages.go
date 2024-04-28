@@ -21,23 +21,25 @@ import (
 )
 
 func init() {
+
 	reuse.CreatePool[CreateStage](
 		func() *CreateStage { return &CreateStage{} },
 		func(c *CreateStage) { c.reset() },
-		reuse.DefaultOptions[CreateStage]().WithEnableChecker(),
-	)
+		reuse.DefaultOptions[CreateStage](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[DropStage](
 		func() *DropStage { return &DropStage{} },
 		func(d *DropStage) { d.reset() },
-		reuse.DefaultOptions[DropStage]().WithEnableChecker(),
-	)
+		reuse.DefaultOptions[DropStage](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterStage](
 		func() *AlterStage { return &AlterStage{} },
 		func(a *AlterStage) { a.reset() },
-		reuse.DefaultOptions[AlterStage]().WithEnableChecker(),
-	)
+		reuse.DefaultOptions[AlterStage](), //.
+	) //WithEnableChecker()
+
 }
 
 type CreateStage struct {
@@ -264,7 +266,6 @@ func (node *ShowStages) Format(ctx *FmtCtx) {
 		node.Like.Format(ctx)
 	}
 }
-
 func (node *ShowStages) GetStatementType() string { return "Show Stages" }
 
 func (node *ShowStages) GetQueryType() string { return QueryTypeOth }

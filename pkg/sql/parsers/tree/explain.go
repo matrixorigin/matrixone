@@ -25,20 +25,21 @@ func init() {
 	reuse.CreatePool[ExplainStmt](
 		func() *ExplainStmt { return &ExplainStmt{} },
 		func(e *ExplainStmt) { e.reset() },
-		reuse.DefaultOptions[ExplainStmt]().WithEnableChecker(),
-	)
+		reuse.DefaultOptions[ExplainStmt](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ExplainAnalyze](
 		func() *ExplainAnalyze { return &ExplainAnalyze{} },
 		func(e *ExplainAnalyze) { e.reset() },
-		reuse.DefaultOptions[ExplainAnalyze]().WithEnableChecker(),
-	)
+		reuse.DefaultOptions[ExplainAnalyze](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ExplainFor](
 		func() *ExplainFor { return &ExplainFor{} },
 		func(e *ExplainFor) { e.reset() },
-		reuse.DefaultOptions[ExplainFor]().WithEnableChecker(),
-	)
+		reuse.DefaultOptions[ExplainFor](), //.
+	) //WithEnableChecker()
+
 }
 
 type Explain interface {
@@ -224,7 +225,7 @@ func MakeOptionElem(name string, value string) OptionElem {
 }
 
 func MakeOptions(elem OptionElem) []OptionElem {
-	options := make([]OptionElem, 1)
+	var options = make([]OptionElem, 1)
 	options[0] = elem
 	return options
 }

@@ -20,19 +20,19 @@ func init() {
 	reuse.CreatePool[TableLock](
 		func() *TableLock { return &TableLock{} },
 		func(l *TableLock) { l.reset() },
-		reuse.DefaultOptions[TableLock]().WithEnableChecker(),
+		reuse.DefaultOptions[TableLock](),
 	)
 
 	reuse.CreatePool[LockTableStmt](
 		func() *LockTableStmt { return &LockTableStmt{} },
 		func(l *LockTableStmt) { l.reset() },
-		reuse.DefaultOptions[LockTableStmt]().WithEnableChecker(),
+		reuse.DefaultOptions[LockTableStmt](),
 	)
 
 	reuse.CreatePool[UnLockTableStmt](
 		func() *UnLockTableStmt { return &UnLockTableStmt{} },
 		func(u *UnLockTableStmt) { u.reset() },
-		reuse.DefaultOptions[UnLockTableStmt]().WithEnableChecker(),
+		reuse.DefaultOptions[UnLockTableStmt](),
 	)
 }
 

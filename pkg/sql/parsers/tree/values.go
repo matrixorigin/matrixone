@@ -80,7 +80,6 @@ func (node *ValuesStatement) Format(ctx *FmtCtx) {
 		node.Limit.Format(ctx)
 	}
 }
-
 func (node *ValuesStatement) GetStatementType() string { return "Values" }
 
 func (node *ValuesStatement) GetQueryType() string { return QueryTypeDQL }

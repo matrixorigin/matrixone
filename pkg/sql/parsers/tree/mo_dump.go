@@ -20,8 +20,9 @@ func init() {
 	reuse.CreatePool[MoDump](
 		func() *MoDump { return &MoDump{} },
 		func(m *MoDump) { m.reset() },
-		reuse.DefaultOptions[MoDump]().WithEnableChecker(),
+		reuse.DefaultOptions[MoDump](),
 	)
+
 }
 
 type MoDump struct {

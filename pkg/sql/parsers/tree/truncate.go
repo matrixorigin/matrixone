@@ -20,8 +20,9 @@ func init() {
 	reuse.CreatePool[TruncateTable](
 		func() *TruncateTable { return &TruncateTable{} },
 		func(t *TruncateTable) { t.reset() },
-		reuse.DefaultOptions[TruncateTable]().WithEnableChecker(),
-	)
+		reuse.DefaultOptions[TruncateTable](), //.
+	) // WithEnableChecker()
+
 }
 
 // truncate table statement

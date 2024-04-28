@@ -20,25 +20,25 @@ func init() {
 	reuse.CreatePool[ElseIfStmt](
 		func() *ElseIfStmt { return &ElseIfStmt{} },
 		func(e *ElseIfStmt) { e.reset() },
-		reuse.DefaultOptions[ElseIfStmt]().WithEnableChecker(),
+		reuse.DefaultOptions[ElseIfStmt](),
 	)
 
 	reuse.CreatePool[IfStmt](
 		func() *IfStmt { return &IfStmt{} },
 		func(i *IfStmt) { i.reset() },
-		reuse.DefaultOptions[IfStmt]().WithEnableChecker(),
+		reuse.DefaultOptions[IfStmt](),
 	)
 
 	reuse.CreatePool[WhenStmt](
 		func() *WhenStmt { return &WhenStmt{} },
 		func(w *WhenStmt) { w.reset() },
-		reuse.DefaultOptions[WhenStmt]().WithEnableChecker(),
+		reuse.DefaultOptions[WhenStmt](),
 	)
 
 	reuse.CreatePool[CaseStmt](
 		func() *CaseStmt { return &CaseStmt{} },
 		func(c *CaseStmt) { c.reset() },
-		reuse.DefaultOptions[CaseStmt]().WithEnableChecker(),
+		reuse.DefaultOptions[CaseStmt](),
 	)
 }
 
@@ -82,7 +82,6 @@ func (node *ElseIfStmt) Format(ctx *FmtCtx) {
 		}
 	}
 }
-
 func (node *ElseIfStmt) GetStatementType() string { return "ElseIf Statement" }
 
 func (node *ElseIfStmt) GetQueryType() string { return QueryTypeTCL }
@@ -199,7 +198,6 @@ func (node *WhenStmt) Format(ctx *FmtCtx) {
 		}
 	}
 }
-
 func (node *WhenStmt) GetStatementType() string { return "When Statement" }
 
 func (node *WhenStmt) GetQueryType() string { return QueryTypeTCL }
