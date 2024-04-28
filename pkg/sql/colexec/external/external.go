@@ -815,7 +815,7 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols
 		param.prevStr = ""
 	}
 	var jsonMap map[string]interface{}
-	var decoder = json.NewDecoder(bytes.NewReader([]byte(str)))
+	var decoder = json.NewDecoder(strings.NewReader(str))
 	decoder.UseNumber()
 	err = decoder.Decode(&jsonMap)
 	if err != nil {
@@ -868,7 +868,7 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 		param.prevStr = ""
 	}
 	var jsonArray []interface{}
-	var decoder = json.NewDecoder(bytes.NewReader([]byte(str)))
+	var decoder = json.NewDecoder(strings.NewReader(str))
 	decoder.UseNumber()
 	err = decoder.Decode(&jsonArray)
 	if err != nil {

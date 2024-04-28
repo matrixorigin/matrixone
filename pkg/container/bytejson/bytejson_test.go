@@ -523,27 +523,6 @@ func BenchmarkParseJsonByteFromString(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ParseJsonByteFromString(s)
 	}
-	// goos: linux
-	// goarch: amd64
-	// pkg: github.com/matrixorigin/matrixone/pkg/container/bytejson
-	// cpu: Intel(R) Core(TM) i3-9100F CPU @ 3.60GHz
-	// === RUN   BenchmarkParseJsonByteFromString
-	// BenchmarkParseJsonByteFromString
-	// BenchmarkParseJsonByteFromString-4        190492              6829 ns/op            4616 B/op         60 allocs/op
-}
-
-func BenchmarkParseJsonByteFromString2(b *testing.B) {
-	s := `{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`
-	for i := 0; i < b.N; i++ {
-		ParseJsonByteFromString2(s)
-	}
-	// goos: linux
-	// goarch: amd64
-	// pkg: github.com/matrixorigin/matrixone/pkg/container/bytejson
-	// cpu: Intel(R) Core(TM) i3-9100F CPU @ 3.60GHz
-	// === RUN   BenchmarkParseJsonByteFromString2
-	// BenchmarkParseJsonByteFromString2
-	// BenchmarkParseJsonByteFromString2-4       278098              4235 ns/op            1880 B/op         48 allocs/op
 }
 
 func FuzzParseJsonByteFromString(f *testing.F) {
@@ -565,7 +544,7 @@ func FuzzParseJsonByteFromString(f *testing.F) {
 		if err != nil {
 			valid = false
 		}
-		data, err := ParseJsonByteFromString2(s)
+		data, err := ParseJsonByteFromString(s)
 		if valid {
 			require.NoError(t, err)
 
