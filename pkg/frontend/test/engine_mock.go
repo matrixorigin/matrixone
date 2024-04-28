@@ -544,7 +544,7 @@ func (mr *MockRelationMockRecorder) MaxAndMinValues(ctx interface{}) *gomock.Cal
 }
 
 // MergeObjects mocks base method.
-func (m *MockRelation) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
+func (m *MockRelation) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, filter string, targetObjSize uint32) (*api.MergeCommitEntry, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "MergeObjects", ctx, objstats, targetObjSize)
 	ret0, _ := ret[0].(*api.MergeCommitEntry)

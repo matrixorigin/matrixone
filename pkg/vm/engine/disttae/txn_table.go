@@ -2729,20 +2729,50 @@ func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, erro
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
 }
 
-func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
+func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error) {
 	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
-	objInfos := make([]logtailreplay.ObjectInfo, 0, len(objstats))
-	for _, objstat := range objstats {
-		info, exist := state.GetObject(*objstat.ObjectShortName())
-		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
-			logutil.Errorf("object not visible: %s", info.String())
-			return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
+	var objInfos []logtailreplay.ObjectInfo
+	if len(objstats) != 0 {
+		objInfos = make([]logtailreplay.ObjectInfo, 0, len(objstats))
+		for _, objstat := range objstats {
+			info, exist := state.GetObject(*objstat.ObjectShortName())
+			if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
+				logutil.Errorf("object not visible: %s", info.String())
+				return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
+			}
+			objInfos = append(objInfos, info)
 		}
-		objInfos = append(objInfos, info)
+	} else {
+		objInfos = make([]logtailreplay.ObjectInfo, 0)
+		iter, err := state.NewObjectsIter(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		for iter.Next() {
+			obj := iter.Entry().ObjectInfo
+			if obj.EntryState {
+				continue
+			}
+			sortKeyZM := obj.SortKeyZoneMap()
+			if !sortKeyZM.IsInited() {
+				continue
+			}
+			objInfos = append(objInfos, obj)
+		}
+		switch policyName {
+		case "small":
+			objInfos = logtailreplay.NewSmall().Filter(objInfos)
+		case "overlap":
+			objInfos = logtailreplay.NewOverlap().Filter(objInfos)
+		}
+	}
+
+	if len(objInfos) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("no object match")
 	}
 
 	sortkeyPos := -1
@@ -2817,4 +2847,27 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 
 	// commit this to tn
 	return taskHost.commitEntry, nil
+}
+
+func (tbl *txnTable) GetObjects(
+	ctx context.Context,
+	filters []func([]logtailreplay.ObjectEntry) []logtailreplay.ObjectEntry,
+) ([]logtailreplay.ObjectEntry, error) {
+	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	objs := make([]logtailreplay.ObjectEntry, 0)
+	iter, err := state.NewObjectsIter(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	for iter.Next() {
+		objs = append(objs, iter.Entry())
+	}
+	for _, f := range filters {
+		objs = f(objs)
+	}
+	return objs, nil
 }

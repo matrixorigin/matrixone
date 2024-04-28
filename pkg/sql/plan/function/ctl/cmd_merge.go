@@ -15,6 +15,7 @@
 package ctl
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -24,55 +25,92 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
 
-// parameter should be "DbName.TableName obj1,obj2,obj3... targetObjSize"
-func parseArg(parameter string) (db, tbl string, targets []objectio.ObjectStats, targetObjSize int64, err error) {
-	parameters := strings.Split(parameter, " ")
-	if len(parameters) != 2 && len(parameters) != 3 {
-		err = moerr.NewInternalErrorNoCtx("handleMerge: invalid parameter")
-		return
-	}
-	address := strings.Split(parameters[0], ".")
-	if len(address) != 2 {
-		err = moerr.NewInternalErrorNoCtx("handleMerge: invalid parameter")
-		return
-	}
-	db, tbl = address[0], address[1]
-	objstrs := strings.Split(parameters[1], ",")
-	for _, objstrs := range objstrs {
-		parts := strings.Split(objstrs, "_")
-		if len(parts) != 2 {
-			err = moerr.NewInternalErrorNoCtx("handleMerge: invalid parameter")
-			return
-		}
-		uuid, err := types.ParseUuid(parts[0])
-		if err != nil {
-			return "", "", nil, 0, err
-		}
-		num, err := strconv.Atoi(parts[1])
-		if err != nil {
-			return "", "", nil, 0, err
-		}
-		objectname := objectio.BuildObjectName(&uuid, uint16(num))
+type Arguments struct {
+	db, tbl       string
+	objs          []objectio.ObjectStats
+	filter        string
+	targetObjSize int
+}
 
-		obj := objectio.NewObjectStats()
-		objectio.SetObjectStatsObjectName(obj, objectname)
-		targets = append(targets, *obj)
-	}
-	if len(parameters) == 2 {
-		return
+// Args:
+//
+//	"dbName.tableName[:obj1,obj2,...:targetObjSize]"
+//	"dbName.tableName[:all:filter:targetObjSize]"
+//
+// filter: "overlap", "small"
+// filter default: "basic"
+// targetObjSize: "1G", "1M", "1K"
+// targetObjSize default: "120M"
+// Example: "db1.tbl1"
+// Example: "db1.tbl1:all:small:100M"
+// Example: "db1.tbl1:obj1,obj2:100M"
+func parseArgs(arg string) (Arguments, error) {
+	args := strings.Split(arg, ":")
+	if len(args) < 1 || len(args) > 4 {
+		return Arguments{}, moerr.NewInternalErrorNoCtx("handleMerge: invalid arg format")
 	}
 
-	targetObjSize, err = units.RAMInBytes(parameters[2])
+	a := Arguments{
+		targetObjSize: 120 * common.Const1MBytes,
+	}
+
+	// Parse db and table
+	dbtbl := strings.Split(args[0], ".")
+	if len(dbtbl) != 2 {
+		return Arguments{}, moerr.NewInternalErrorNoCtx("handleMerge: invalid db.table format")
+	}
+	a.db, a.tbl = dbtbl[0], dbtbl[1]
+
+	// Parse objects
+	if len(args) != 1 && args[1] != "all" {
+		objs := strings.Split(args[1], ",")
+		a.objs = make([]objectio.ObjectStats, 0, len(objs))
+		for _, objStr := range objs {
+			// Parse object
+			objStr = strings.TrimSpace(objStr)
+			parts := strings.Split(objStr, "_")
+			if len(parts) != 2 {
+				return Arguments{}, moerr.NewInternalErrorNoCtx("handleMerge: invalid obj format: %s", objStr)
+			}
+			uuid, err := types.ParseUuid(parts[0])
+			if err != nil {
+				return Arguments{}, errors.Join(moerr.NewInternalErrorNoCtx("handleMerge: invalid obj uuid format: %s", objStr), err)
+			}
+			num, err := strconv.Atoi(parts[1])
+			if err != nil {
+				return Arguments{}, errors.Join(moerr.NewInternalErrorNoCtx("handleMerge: invalid obj num format: %s", objStr), err)
+			}
+			objectname := objectio.BuildObjectName(&uuid, uint16(num))
+			obj := objectio.NewObjectStats()
+			objectio.SetObjectStatsObjectName(obj, objectname)
+			a.objs = append(a.objs, *obj)
+		}
+	}
+
+	if len(args) <= 2 {
+		return a, nil
+	}
+
+	// Parse filters
+	a.filter = strings.TrimSpace(strings.ToLower(args[2]))
+	if len(args) == 3 {
+		return a, nil
+	}
+
+	// Parse targetObjSize
+	size, err := units.RAMInBytes(args[3])
 	if err != nil {
-		return "", "", nil, 0, err
+		return Arguments{}, errors.Join(moerr.NewInternalErrorNoCtx("handleMerge: invalid targetObjSize format: %s", args[3]), err)
 	}
-	return
+	a.targetObjSize = int(size)
+	return a, nil
 }
 
 func handleMerge() handleFunc {
@@ -86,7 +124,7 @@ func handleMerge() handleFunc {
 			if proc.TxnOperator == nil {
 				return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: txn operator is nil")
 			}
-			db, tbl, targets, targetObjSize, err := parseArg(parameter)
+			a, err := parseArgs(parameter)
 			if err != nil {
 				return nil, err
 			}
@@ -98,7 +136,7 @@ func handleMerge() handleFunc {
 						StartTs: txnOp.SnapshotTS(),
 						Err:     err.Error(),
 					}
-					for _, o := range targets {
+					for _, o := range a.objs {
 						e.MergedObjs = append(e.MergedObjs, o.Clone().Marshal())
 					}
 					// No matter success or not, we should return the merge result to DN
@@ -106,17 +144,17 @@ func handleMerge() handleFunc {
 					err = nil
 				}
 			}()
-			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, db, txnOp)
+			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, a.db, txnOp)
 			if err != nil {
-				logutil.Errorf("mergeblocks err on cn, db %s, err %s", db, err.Error())
+				logutil.Errorf("mergeblocks err on cn, db %s, err %s", a.db, err.Error())
 				return nil, err
 			}
-			rel, err := database.Relation(proc.Ctx, tbl, nil)
+			rel, err := database.Relation(proc.Ctx, a.tbl, nil)
 			if err != nil {
-				logutil.Errorf("mergeblocks err on cn, table %s, err %s", db, err.Error())
+				logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.db, err.Error())
 				return nil, err
 			}
-			entry, err := rel.MergeObjects(proc.Ctx, targets, uint32(targetObjSize))
+			entry, err := rel.MergeObjects(proc.Ctx, a.objs, a.filter, uint32(a.targetObjSize))
 			if err != nil {
 				merge.CleanUpUselessFiles(entry, proc.FileService)
 				return nil, err
