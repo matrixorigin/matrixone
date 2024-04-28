@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -1921,17 +1922,19 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 	return tbl.db.databaseId
 }
 
-func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges []byte, orderedScan bool) ([]engine.Reader, error) {
-	encodedPK, hasNull, _ := tbl.makeEncodedPK(expr)
+func (tbl *txnTable) NewReader(
+	ctx context.Context, num int, expr *plan.Expr, ranges []byte, orderedScan bool,
+) ([]engine.Reader, error) {
+	pkValue, hasNull, fnType := tbl.tryExtractPKFilter(expr)
 	blkArray := objectio.BlockInfoSlice(ranges)
 	if hasNull || plan2.IsFalseExpr(expr) {
 		return []engine.Reader{new(emptyReader)}, nil
 	}
 	if blkArray.Len() == 0 {
-		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)
+		return tbl.newMergeReader(ctx, num, expr, pkValue, fnType, nil)
 	}
 	if blkArray.Len() == 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
-		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)
+		return tbl.newMergeReader(ctx, num, expr, pkValue, fnType, nil)
 	}
 	if blkArray.Len() > 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
 		rds := make([]engine.Reader, num)
@@ -1948,7 +1951,7 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 			}
 			dirtyBlks = append(dirtyBlks, blkInfo)
 		}
-		rds0, err := tbl.newMergeReader(ctx, num, expr, encodedPK, dirtyBlks)
+		rds0, err := tbl.newMergeReader(ctx, num, expr, pkValue, fnType, dirtyBlks)
 		if err != nil {
 			return nil, err
 		}
@@ -1978,11 +1981,12 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 	return tbl.newBlockReader(ctx, num, expr, blkInfos, tbl.proc.Load(), orderedScan)
 }
 
-func (tbl *txnTable) makeEncodedPK(
+func (tbl *txnTable) tryExtractPKFilter(
 	expr *plan.Expr) (
-	encodedPK []byte,
+	pkValue []byte,
 	hasNull bool,
-	isExactlyEqual bool) {
+	fnType uint8,
+) {
 	pk := tbl.tableDef.Pkey
 	if pk != nil && expr != nil {
 		if pk.CompPkeyCol != nil {
@@ -2000,44 +2004,54 @@ func (tbl *txnTable) makeEncodedPK(
 				}
 				v := packer.Bytes()
 				packer.Reset()
-				encodedPK = logtailreplay.EncodePrimaryKey(v, packer)
+				pkValue = logtailreplay.EncodePrimaryKey(v, packer)
 				// TODO: hack: remove the last comma, need to fix this in the future
-				encodedPK = encodedPK[0 : len(encodedPK)-1]
+				pkValue = pkValue[0 : len(pkValue)-1]
 				put.Put()
+				fnType = function.EQUAL
 			}
-			isExactlyEqual = len(pk.Names) == cnt
 		} else {
 			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			ok, isNull, _, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), true, tbl.proc.Load())
+			ok, isNull, isVec, v := getPkValueByExpr(
+				expr, pkColumn.Name, types.T(pkColumn.Typ.Id), false, tbl.proc.Load(),
+			)
+
 			hasNull = isNull
-			if hasNull {
+			if hasNull || !ok {
 				return
 			}
-			if ok {
+
+			if isVec {
+				pkValue = v.([]byte)
+				fnType = function.IN
+			} else {
 				var packer *types.Packer
 				put := tbl.getTxn().engine.packerPool.Get(&packer)
-				encodedPK = logtailreplay.EncodePrimaryKey(v, packer)
+				pkValue = logtailreplay.EncodePrimaryKey(v, packer)
 				put.Put()
+				fnType = function.EQUAL
 			}
-			isExactlyEqual = true
 		}
 		return
 	}
-	return nil, false, false
+	return nil, false, 0
 }
 
 func (tbl *txnTable) newMergeReader(
 	ctx context.Context,
 	num int,
 	expr *plan.Expr,
-	encodedPK []byte,
-	dirtyBlks []*objectio.BlockInfo) ([]engine.Reader, error) {
+	pkValue []byte,
+	fnType uint8,
+	dirtyBlks []*objectio.BlockInfo,
+) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	rds0, err := tbl.newReader(
 		ctx,
 		num,
-		encodedPK,
+		pkValue,
+		fnType,
 		expr,
 		dirtyBlks)
 	if err != nil {
@@ -2116,7 +2130,8 @@ func (tbl *txnTable) newBlockReader(
 func (tbl *txnTable) newReader(
 	ctx context.Context,
 	readerNumber int,
-	encodedPrimaryKey []byte,
+	pkVal []byte,
+	fnType uint8,
 	expr *plan.Expr,
 	dirtyBlks []*objectio.BlockInfo,
 ) ([]engine.Reader, error) {
@@ -2146,12 +2161,26 @@ func (tbl *txnTable) newReader(
 	}
 
 	var iter logtailreplay.RowsIter
-	if len(encodedPrimaryKey) > 0 {
-		iter = state.NewPrimaryKeyIter(
-			types.TimestampToTS(ts),
-			logtailreplay.Prefix(encodedPrimaryKey),
-		)
-	} else {
+	if len(pkVal) > 0 {
+		switch fnType {
+		case function.EQUAL:
+			iter = state.NewPrimaryKeyIter(
+				types.TimestampToTS(ts),
+				logtailreplay.Prefix(pkVal),
+			)
+		case function.IN:
+			// TODO:
+			// 1. Unmarshal pkVal to vector
+			// 2. Create a new vec with the encoded pkVal
+			// 3. Get the min and max of the vec
+			var minV, maxV []byte
+			iter = state.NewPrimaryKeyIter(
+				types.TimestampToTS(ts),
+				logtailreplay.MinMax(minV, maxV),
+			)
+		}
+	}
+	if iter == nil {
 		iter = state.NewRowsIter(
 			types.TimestampToTS(ts),
 			nil,
@@ -2179,7 +2208,7 @@ func (tbl *txnTable) newReader(
 				newBlockMergeReader(
 					ctx,
 					tbl,
-					encodedPrimaryKey,
+					pkVal,
 					ts,
 					[]*objectio.BlockInfo{dirtyBlks[i]},
 					expr,
@@ -2196,7 +2225,7 @@ func (tbl *txnTable) newReader(
 			readers[i+1] = newBlockMergeReader(
 				ctx,
 				tbl,
-				encodedPrimaryKey,
+				pkVal,
 				ts,
 				[]*objectio.BlockInfo{dirtyBlks[i]},
 				expr,
@@ -2227,10 +2256,10 @@ func (tbl *txnTable) newReader(
 		steps)
 	for i := range blockReaders {
 		bmr := &blockMergeReader{
-			blockReader:       blockReaders[i],
-			table:             tbl,
-			encodedPrimaryKey: encodedPrimaryKey,
-			deletaLocs:        make(map[string][]objectio.Location),
+			blockReader: blockReaders[i],
+			table:       tbl,
+			pkVal:       pkVal,
+			deletaLocs:  make(map[string][]objectio.Location),
 		}
 		readers[i+1] = bmr
 	}
