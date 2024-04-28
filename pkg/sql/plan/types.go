@@ -176,8 +176,28 @@ type QueryBuilder struct {
 	haveOnDuplicateKey bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
 	isForUpdate        bool // if it's a query plan for update
 
-	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
-	skipStats  bool
+	deleteNode     map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	skipStats      bool
+	optimizerHints *OptimizerHints
+}
+
+type OptimizerHints struct {
+	pushDownLimitToScan        bool
+	pushDownTopThroughLeftJoin bool
+	pushDownSemiAntiJoins      bool
+	aggPushDown                bool
+	aggPullUp                  bool
+	removeEffectLessLeftJoins  bool
+	removeRedundantJoinCond    bool
+	optimizeLikeExpr           bool
+	optimizeDateFormatExpr     bool
+	determinHashOnPK           bool
+	sendMessageFromTopToScan   bool
+	determineShuffle           bool
+	blockFilter                int
+	applyIndices               int
+	runtimeFilter              int
+	joinOrdering               int
 }
 
 type CTERef struct {

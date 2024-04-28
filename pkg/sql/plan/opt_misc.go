@@ -17,6 +17,9 @@ package plan
 import (
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -754,5 +757,12 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 	if len(newFilters) > 0 {
 		node.FilterList = append(node.FilterList, newFilters...)
 		node.BlockFilterList = append(node.BlockFilterList, DeepCopyExprList(newFilters)...)
+	}
+}
+
+func (builder *QueryBuilder) parseOptimizeHints() {
+	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("optimizer_hints")
+	if ok {
+		logutil.Infof("optimizer hints! %v", v)
 	}
 }
