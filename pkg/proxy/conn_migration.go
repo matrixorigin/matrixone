@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/zap"
 )
 
 func (c *clientConn) getQueryAddress(addr string) string {
@@ -85,6 +86,10 @@ func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromRes
 	if addr == "" {
 		return moerr.NewInternalError(c.ctx, "cannot get query service address")
 	}
+	c.log.Info("connection migrate to server", zap.String("server address", addr),
+		zap.String("tenant", string(c.clientInfo.Tenant)),
+		zap.String("username", c.clientInfo.username),
+		zap.Uint32("conn ID", c.connID))
 	req := c.queryService.NewRequest(query.CmdMethod_MigrateConnTo)
 	req.MigrateConnToRequest = &query.MigrateConnToRequest{
 		ConnID:       c.connID,

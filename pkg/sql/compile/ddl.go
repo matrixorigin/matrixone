@@ -428,13 +428,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 			addIndex = append(addIndex, indexDef)
-			if indexDef.Unique {
-				// 0. check original data is not duplicated
-				err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tblName, partsToColsStr(indexDef.Parts))
-				if err != nil {
-					return err
-				}
-			}
+			// if indexDef.Unique {
+			// 0. check original data is not duplicated
+
+			//  When create a unique index for an existing table, there is no need to check it in advance
+			// because it will also be checked when inserting data into the hidden table.
+			// }
 
 			//1. build and update constraint def
 			insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
@@ -1264,13 +1263,12 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	tableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
 	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
 
-	if indexDef.Unique {
-		// 0. check original data is not duplicated
-		err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tableDef.Name, partsToColsStr(indexDef.Parts))
-		if err != nil {
-			return err
-		}
-	}
+	// if indexDef.Unique {
+	// 0. check original data is not duplicated
+
+	//  When create a unique index for an existing table, there is no need to check it in advance
+	// because it will also be checked when inserting data into the hidden table.
+	// }
 
 	// build and create index table for unique/secondary index
 	if qry.TableExist {

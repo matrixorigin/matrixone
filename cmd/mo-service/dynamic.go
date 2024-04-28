@@ -61,17 +61,18 @@ func startDynamicCluster(
 		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, shutdownC); err != nil {
 			return err
 		}
-	} else {
-		// TODO: make configurable for 6001
-		cnProxy = goetty.NewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
-		for i := 0; i < cfg.Dynamic.ServiceCount; i++ {
-			port := baseFrontendPort + i
-			cnProxy.AddUpStream(fmt.Sprintf("127.0.0.1:%d", port), time.Second*10)
-		}
-		if err := cnProxy.Start(); err != nil {
-			return err
-		}
 	}
+
+	// TODO: make configurable for 6001
+	cnProxy = goetty.NewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
+	for i := 0; i < cfg.Dynamic.ServiceCount; i++ {
+		port := baseFrontendPort + i
+		cnProxy.AddUpStream(fmt.Sprintf("127.0.0.1:%d", port), time.Second*10)
+	}
+	if err := cnProxy.Start(); err != nil {
+		return err
+	}
+
 	return startDynamicCtlHTTPServer(cfg.Dynamic.CtlAddress)
 }
 
@@ -122,6 +123,7 @@ func genDynamicCNConfigs(
 			string(baseCNConfig),
 			uuid,
 			port,
+			i,
 			frontendPort,
 			unixSocketPort)
 		f, err := os.CreateTemp(

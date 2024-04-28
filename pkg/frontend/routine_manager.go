@@ -626,8 +626,8 @@ func (rm *RoutineManager) MigrateConnectionTo(req *query.MigrateConnToRequest) e
 }
 
 func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromRequest, resp *query.MigrateConnFromResponse) error {
-	routine, ok := rm.routinesByConnID[req.ConnID]
-	if !ok {
+	routine := rm.getRoutineByConnID(req.ConnID)
+	if routine == nil {
 		return moerr.NewInternalError(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
 	return routine.migrateConnectionFrom(resp)

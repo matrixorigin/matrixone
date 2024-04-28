@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -25,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -59,6 +60,7 @@ var _ Engine = new(testEngine)
 type testOperator struct {
 }
 
+func (o *testOperator) SetFootPrints(prints [][2]uint32) {}
 func (o *testOperator) EnterRunSql() {
 	//TODO implement me
 	panic("implement me")
@@ -341,6 +343,10 @@ func (o *testOperator) Txn() txn.TxnMeta {
 }
 
 func (o *testOperator) SnapshotTS() timestamp.Timestamp {
+	panic("should not call")
+}
+
+func (o *testOperator) CreateTS() timestamp.Timestamp {
 	panic("should not call")
 }
 

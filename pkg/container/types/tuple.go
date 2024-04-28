@@ -90,9 +90,17 @@ func (tp Tuple) ErrString(scales []int32) string {
 		case Timestamp:
 			res.WriteString(fmt.Sprintf("%v", t.String()))
 		case Decimal64:
-			res.WriteString(fmt.Sprintf("%v", t.Format(scales[i])))
+			if scales == nil {
+				res.WriteString(fmt.Sprintf("%v", t.Format(0)))
+			} else {
+				res.WriteString(fmt.Sprintf("%v", t.Format(scales[i])))
+			}
 		case Decimal128:
-			res.WriteString(fmt.Sprintf("%v", t.Format(scales[i])))
+			if scales == nil {
+				res.WriteString(fmt.Sprintf("%v", t.Format(0)))
+			} else {
+				res.WriteString(fmt.Sprintf("%v", t.Format(scales[i])))
+			}
 		default:
 			res.WriteString(fmt.Sprintf("%v", t))
 		}
@@ -124,9 +132,17 @@ func (tp Tuple) SQLStrings(scales []int32) []string {
 		case Timestamp:
 			res = append(res, fmt.Sprintf("'%v'", t.String()))
 		case Decimal64:
-			res = append(res, fmt.Sprintf("%v", t.Format(scales[i])))
+			if scales == nil {
+				res = append(res, fmt.Sprintf("%v", t.Format(0)))
+			} else {
+				res = append(res, fmt.Sprintf("%v", t.Format(scales[i])))
+			}
 		case Decimal128:
-			res = append(res, fmt.Sprintf("%v", t.Format(scales[i])))
+			if scales == nil {
+				res = append(res, fmt.Sprintf("%v", t.Format(0)))
+			} else {
+				res = append(res, fmt.Sprintf("%v", t.Format(scales[i])))
+			}
 		default:
 			res = append(res, fmt.Sprintf("%v", t))
 		}

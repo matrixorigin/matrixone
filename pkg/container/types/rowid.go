@@ -180,8 +180,8 @@ func (b *Blockid) ShortString() string {
 }
 
 func (b *Blockid) ShortStringEx() string {
-	var shortuuid [8]byte
-	hex.Encode(shortuuid[:], b[:4])
+	var shortuuid [12]byte
+	hex.Encode(shortuuid[:], b[10:16])
 	filen, blkn := b.Offsets()
 	return fmt.Sprintf("%s-%d-%d", string(shortuuid[:]), filen, blkn)
 }

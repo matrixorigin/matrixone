@@ -23,11 +23,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -595,30 +597,33 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if s.cfg.Txn.EnableLeakCheck == 1 {
 			opts = append(opts, client.WithEnableLeakCheck(
 				s.cfg.Txn.MaxActiveAges.Duration,
-				func(txnID []byte, createAt time.Time, createBy txn.TxnOptions) {
+				func(actives []client.ActiveTxn) {
 					name, _ := uuid.NewV7()
 					profPath := catalog.BuildProfilePath("routine", name.String())
 
-					fields := []zap.Field{
-						zap.String("txn-id", hex.EncodeToString(txnID)),
-						zap.Time("create-at", createAt),
-						zap.String("options", createBy.String()),
-						zap.String("profile", profPath),
+					for _, txn := range actives {
+						fields := []zap.Field{
+							zap.String("txn-id", hex.EncodeToString(txn.ID)),
+							zap.Time("create-at", txn.CreateAt),
+							zap.String("options", txn.Options.String()),
+							zap.String("profile", profPath),
+						}
+						if txn.Options.InRunSql {
+							//the txn runs sql in compile.Run() and doest not exist
+							v2.TxnLongRunningCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found long running txn", fields...)
+						} else if txn.Options.InCommit {
+							v2.TxnInCommitCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found txn in commit", fields...)
+						} else if txn.Options.InRollback {
+							v2.TxnInRollbackCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found txn in rollback", fields...)
+						} else {
+							v2.TxnLeakCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found leak txn", fields...)
+						}
 					}
-					if createBy.InRunSql {
-						//the txn runs sql in compile.Run() and doest not exist
-						v2.TxnLongRunningCounter.Inc()
-						runtime.DefaultRuntime().Logger().Error("found long running txn", fields...)
-					} else if createBy.InCommit {
-						v2.TxnInCommitCounter.Inc()
-						runtime.DefaultRuntime().Logger().Error("found txn in commit", fields...)
-					} else if createBy.InRollback {
-						v2.TxnInRollbackCounter.Inc()
-						runtime.DefaultRuntime().Logger().Error("found txn in rollback", fields...)
-					} else {
-						v2.TxnLeakCounter.Inc()
-						runtime.DefaultRuntime().Logger().Error("found leak txn", fields...)
-					}
+
 					s.saveProfile(profPath)
 				}))
 		}

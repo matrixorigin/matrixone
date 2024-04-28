@@ -441,9 +441,9 @@ var MoLocksView = &table.Table{
 		table.StringColumn("lock_status", "acquired or wait"),
 		table.StringColumn("lock_wait", "the txn that waits on the lock"),
 	},
-	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_locks` AS SELECT * FROM mo_locks() AS mo_locks_tmp;",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp",
 	//actually drop view here
-	CreateTableSql: "drop view if exists `mo_catalog`.`mo_locks`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_locks`",
 }
 
 var MoVariablesView = &table.Table{
@@ -459,7 +459,7 @@ var MoVariablesView = &table.Table{
 		table.StringColumn("variable_value", "the value of variable"),
 		table.StringColumn("system_variables", "is system variable or not"),
 	},
-	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_variables` AS SELECT * FROM mo_catalog.mo_mysql_compatibility_mode;",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode",
 	//actually drop view here
 	CreateTableSql: "drop view if exists `mo_catalog`.`mo_variables`;",
 }
@@ -495,9 +495,9 @@ var MoTransactionsView = &table.Table{
 		table.StringColumn("lock_content", "the content the clock is on"),
 		table.StringColumn("lock_mode", "shared or exclusive"),
 	},
-	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_transactions` AS SELECT * FROM mo_transactions() AS mo_transactions_tmp;",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp",
 	//actually drop view here
-	CreateTableSql: "drop view if exists `mo_catalog`.`mo_transactions`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_transactions`",
 }
 
 var MoCacheView = &table.Table{
@@ -512,7 +512,7 @@ var MoCacheView = &table.Table{
 		table.StringColumn("free", "free bytes of the cache"),
 		table.StringColumn("hit_ratio", "the hit ratio of the cache"),
 	},
-	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_cache` AS SELECT * FROM mo_cache() AS mo_cache_tmp;",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp",
 	//actually drop view here
 	CreateTableSql: "drop view if exists `mo_catalog`.`mo_cache`;",
 }
@@ -549,12 +549,7 @@ var transactionMetricView = &table.Table{
 		"where `metric_name` = 'sql_statement_duration_total'",
 }
 
-var registeredViews = []*table.Table{
-	MoLocksView,
-	MoVariablesView,
-	MoTransactionsView,
-	MoCacheView,
-}
+var registeredViews = []*table.Table{}
 
 var needUpgradeNewView = []*table.Table{
 	transactionMetricView,
@@ -612,7 +607,8 @@ var InformationSchemaCOLUMNS = &table.Table{
 		"att_comment as COLUMN_COMMENT,"+
 		"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 		"if(true, NULL, 0) as SRS_ID "+
-		"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
+		"from mo_catalog.mo_columns "+
+		"where account_id = current_account_id() and att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
 	CreateTableSql: "drop view if exists information_schema.COLUMNS",
 }
 
@@ -620,7 +616,7 @@ var InformationSchemaPARTITIONS = &table.Table{
 	Account:  table.AccountAll,
 	Database: sysview.InformationDBConst,
 	Table:    "PARTITIONS",
-	CreateViewSql: fmt.Sprintf("CREATE VIEW information_schema.PARTITIONS AS " +
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS information_schema.`PARTITIONS` AS " +
 		"SELECT " +
 		"'def' AS `TABLE_CATALOG`," +
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
@@ -659,7 +655,7 @@ var InformationSchemaPARTITIONS = &table.Table{
 		"NULL AS `TABLESPACE_NAME` " +
 		"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` " +
 		"ON `part`.`table_id` = `tbl`.`rel_id` " +
-		"WHERE `tbl`.`partitioned` = 1;"),
+		"WHERE `tbl`.`account_id` = current_account_id() and `tbl`.`partitioned` = 1;",
 	CreateTableSql: "drop view if exists information_schema.PARTITIONS",
 }
 
@@ -698,10 +694,35 @@ var InformationSchemaTABLES = &table.Table{
 	CreateTableSql: "drop view if exists information_schema.TABLES",
 }
 
+var InformationSchemaViews = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "VIEWS",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS information_schema.VIEWS AS " +
+		"SELECT 'def' AS `TABLE_CATALOG`," +
+		"tbl.reldatabase AS `TABLE_SCHEMA`," +
+		"tbl.relname AS `TABLE_NAME`," +
+		"tbl.rel_createsql AS `VIEW_DEFINITION`," +
+		"'NONE' AS `CHECK_OPTION`," +
+		"'YES' AS `IS_UPDATABLE`," +
+		"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
+		"'DEFINER' AS `SECURITY_TYPE`," +
+		"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
+		"'utf8mb4_0900_ai_ci' AS `COLLATION_CONNECTION` " +
+		"FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
+		"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'",
+	CreateTableSql: "drop view if exists information_schema.VIEWS",
+}
+
 var needUpgradeExistingView = []*table.Table{
 	InformationSchemaSCHEMATA,
 	InformationSchemaCOLUMNS,
 	InformationSchemaPARTITIONS,
 	InformationSchemaTABLES,
+	InformationSchemaViews,
 	processlistView,
+	MoLocksView,
+	MoVariablesView,
+	MoTransactionsView,
+	MoCacheView,
 }

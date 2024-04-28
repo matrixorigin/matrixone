@@ -547,9 +547,9 @@ col1    col2    col3    col4
 4    null    null    13
 drop index m2_index on create_index_18;
 create unique index m3_index on create_index_18(col2);
-Duplicate entry 'apple' for key 'col2'
+Duplicate entry 'apple' for key '__mo_index_idx_col'
 create unique index m4_index on create_index_18(col3);
-Duplicate entry '2' for key 'col3'
+Duplicate entry '2' for key '__mo_index_idx_col'
 create unique index m5_index on create_index_18(col4);
 select * from create_index_18;
 col1    col2    col3    col4

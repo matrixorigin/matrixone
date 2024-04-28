@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"net/http"
 	"runtime/trace"
 	"sync"
@@ -36,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/tidwall/btree"
 )
 
@@ -752,40 +752,41 @@ func (p *PartitionState) HandleMetadataInsert(
 					}
 					p.dataObjects.Set(objEntry)
 					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
-					return
-				}
-				objEntry = objPivot
-				objEntry.EntryState = entryStateVector[i]
-				objEntry.Sorted = sortedStateVector[i]
-				if !isEmptyDelta {
-					objEntry.HasDeltaLoc = true
-				}
-				objEntry.CommitTS = commitTimeVector[i]
-				objEntry.CreateTime = createTimeVector[i]
+				} else {
 
-				blkCnt := blockID.Sequence() + 1
-				if uint32(blkCnt) > objEntry.BlkCnt() {
-					objectio.SetObjectStatsBlkCnt(&objEntry.ObjectStats, uint32(blkCnt))
-				}
-
-				p.dataObjects.Set(objEntry)
-
-				//prefetch the object meta
-				if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
-					logutil.Errorf("prefetch object meta failed. %v", err)
-				}
-
-				p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
-
-				{
-					e := ObjectIndexByTSEntry{
-						Time:         createTimeVector[i],
-						ShortObjName: *objEntry.ObjectShortName(),
-						IsDelete:     false,
-
-						IsAppendable: objEntry.EntryState,
+					objEntry = objPivot
+					objEntry.EntryState = entryStateVector[i]
+					objEntry.Sorted = sortedStateVector[i]
+					if !isEmptyDelta {
+						objEntry.HasDeltaLoc = true
 					}
-					p.objectIndexByTS.Set(e)
+					objEntry.CommitTS = commitTimeVector[i]
+					objEntry.CreateTime = createTimeVector[i]
+
+					blkCnt := blockID.Sequence() + 1
+					if uint32(blkCnt) > objEntry.BlkCnt() {
+						objectio.SetObjectStatsBlkCnt(&objEntry.ObjectStats, uint32(blkCnt))
+					}
+
+					p.dataObjects.Set(objEntry)
+
+					//prefetch the object meta
+					if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
+						logutil.Errorf("prefetch object meta failed. %v", err)
+					}
+
+					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+
+					{
+						e := ObjectIndexByTSEntry{
+							Time:         createTimeVector[i],
+							ShortObjName: *objEntry.ObjectShortName(),
+							IsDelete:     false,
+
+							IsAppendable: objEntry.EntryState,
+						}
+						p.objectIndexByTS.Set(e)
+					}
 				}
 			}
 

@@ -574,21 +574,31 @@ func jitteredInterval(interval time.Duration) time.Duration {
 }
 
 func TestCanStartTransfer(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
+	logger := rt.Logger()
+
 	t.Run("not_started", func(t *testing.T) {
-		tu := &tunnel{}
+		tu := &tunnel{
+			logger: logger,
+		}
 		can := tu.canStartTransfer(false)
 		require.False(t, can)
 	})
 
 	t.Run("inTransfer", func(t *testing.T) {
-		tu := &tunnel{}
+		tu := &tunnel{
+			logger: logger,
+		}
 		tu.mu.inTransfer = true
 		can := tu.canStartTransfer(false)
 		require.False(t, can)
 	})
 
 	t.Run("lastCmd", func(t *testing.T) {
-		tu := &tunnel{}
+		tu := &tunnel{
+			logger: logger,
+		}
 		tu.mu.csp = &pipe{}
 		tu.mu.scp = &pipe{}
 		tu.mu.started = true
@@ -601,7 +611,9 @@ func TestCanStartTransfer(t *testing.T) {
 	})
 
 	t.Run("inTxn", func(t *testing.T) {
-		tu := &tunnel{}
+		tu := &tunnel{
+			logger: logger,
+		}
 		tu.mu.scp = &pipe{}
 		tu.mu.scp.src = newMySQLConn("", nil, 0, nil, nil, 0)
 		tu.mu.scp.src.inTxn.Store(true)
@@ -610,7 +622,9 @@ func TestCanStartTransfer(t *testing.T) {
 	})
 
 	t.Run("ok", func(t *testing.T) {
-		tu := &tunnel{}
+		tu := &tunnel{
+			logger: logger,
+		}
 		tu.mu.csp = &pipe{}
 		tu.mu.scp = &pipe{}
 		tu.mu.scp.src = newMySQLConn("", nil, 0, nil, nil, 0)

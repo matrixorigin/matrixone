@@ -19,11 +19,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/google/uuid"
+
 	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -693,6 +695,8 @@ If it is Case2, Then
 */
 func (ses *Session) TxnCommitSingleStatement(stmt tree.Statement) error {
 	var err error
+	enterFPrint(ses, 9)
+	defer exitFPrint(ses, 9)
 	/*
 		Commit Rules:
 		1, if it is in single-statement mode:
@@ -733,6 +737,9 @@ If it is Case2, Then
 func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement, inputErr error) error {
 	var err error
 	var rollbackWholeTxn bool
+	enterFPrint(ses, 10)
+	defer exitFPrint(ses, 10)
+
 	if inputErr != nil {
 		rollbackWholeTxn = isErrorRollbackWholeTxn(inputErr)
 	}
