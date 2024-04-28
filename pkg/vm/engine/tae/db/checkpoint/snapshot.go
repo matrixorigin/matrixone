@@ -63,7 +63,12 @@ func ListSnapshotCheckpoint(
 	return ListSnapshotCheckpointWithMeta(ctx, fs, files, idx, types.TS{}, false)
 }
 
-func ListSnapshotMeta(ctx context.Context, fs fileservice.FileService, snapshot types.TS, listFunc GetCheckpointRange) ([]*MetaFile, int, error) {
+func ListSnapshotMeta(
+	ctx context.Context,
+	fs fileservice.FileService,
+	snapshot types.TS,
+	listFunc GetCheckpointRange,
+) ([]*MetaFile, int, error) {
 	dirs, err := fs.List(ctx, CheckpointDir)
 	if err != nil {
 		return nil, 0, err

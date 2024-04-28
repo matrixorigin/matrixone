@@ -412,7 +412,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 		(c.GeteCkpStage() != nil && c.GeteCkpStage().GreaterEq(&stage)) {
 		return nil
 	}
-	logutil.Infof("mergeCheckpointFiles: %v", stage.ToString())
+	logutil.Infof("mergeCheckpointFiles stage: %v", stage.ToString())
 	files, idx, err := checkpoint.ListSnapshotMeta(c.ctx, c.fs.Service, stage, nil)
 	if err != nil {
 		return err
@@ -434,9 +434,8 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 	deleteFiles := make([]string, 0)
 	for _, ckp := range ckps {
 		end := ckp.GetEnd()
-		logutil.Infof("ckps: %v, %v", ckp.GetStart().ToString(), end.ToString())
 		if end.Less(&stage) {
-			logutil.Infof("deleteFiles11: %v", ckp.GetTNLocation().Name().String())
+			logutil.Infof("GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
 			locations, err := logtail.LoadCheckpointLocations(c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
@@ -446,7 +445,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 				return err
 			}
 			for name, location := range locations {
-				logutil.Infof("deleteFiles22: %v, location %v", name, location.String())
 				deleteFiles = append(deleteFiles, name)
 			}
 			deleteFiles = append(deleteFiles, ckp.GetTNLocation().Name().String())
@@ -455,15 +453,12 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 	}
 	for i := 0; i < idx+1; i++ {
 		end := files[i].GetEnd()
-		logutil.Infof("files: %v", files[i].String())
 		if end.Less(&stage) {
-			logutil.Infof("deleteFiles: %v", files[i].String())
 			deleteFiles = append(deleteFiles, CKPMetaDir+files[i].GetName())
 		}
 	}
-	logutil.Infof("deleteFiles start: %v", deleteFiles)
+	logutil.Infof("CKP GC: %v", deleteFiles)
 	err = c.fs.DelFiles(c.ctx, deleteFiles)
-	logutil.Infof("deleteFiles end: %v", deleteFiles)
 	if err != nil {
 		logutil.Errorf("DelFiles failed: %v", err.Error())
 		return err
