@@ -556,7 +556,7 @@ func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
 func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
-	encodedPrimaryKey []byte,
+	pkVal []byte,
 	ts timestamp.Timestamp,
 	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
@@ -574,8 +574,8 @@ func newBlockMergeReader(
 			fs,
 			proc,
 		),
-		encodedPrimaryKey: encodedPrimaryKey,
-		deletaLocs:        make(map[string][]objectio.Location),
+		pkVal:      pkVal,
+		deletaLocs: make(map[string][]objectio.Location),
 	}
 	return r
 }
@@ -659,10 +659,10 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	}
 	ts := types.TimestampToTS(r.ts)
 
-	if filter != nil && info.Sorted && len(r.encodedPrimaryKey) > 0 {
+	if filter != nil && info.Sorted && len(r.pkVal) > 0 {
 		iter := state.NewPrimaryKeyDelIter(
 			ts,
-			logtailreplay.Prefix(r.encodedPrimaryKey),
+			logtailreplay.Prefix(r.pkVal),
 			info.BlockID,
 		)
 		for iter.Next() {

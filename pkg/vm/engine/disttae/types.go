@@ -795,7 +795,7 @@ type blockMergeReader struct {
 	*blockReader
 	table *txnTable
 
-	encodedPrimaryKey []byte
+	pkVal []byte
 
 	//for perfetch deletes
 	loaded     bool
