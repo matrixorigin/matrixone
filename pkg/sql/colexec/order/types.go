@@ -85,38 +85,33 @@ type container struct {
 func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
-		if ctr.batWaitForSort != nil {
-			ctr.batWaitForSort.Clean(proc.Mp())
-			ctr.batWaitForSort = nil
-		}
-
-		if ctr.rbat != nil {
-			ctr.rbat.Clean(proc.Mp())
-			ctr.rbat = nil
-		}
-		ctr.resultOrderList = ctr.resultOrderList[:0]
+		ctr.cleanBatch(proc)
+		ctr.resultOrderList = nil
+		ctr.state = vm.Build
 	}
 }
 
 func (arg *Argument) Free(proc *process.Process, _ bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
+		ctr.cleanBatch(proc)
 		for i := range ctr.sortExprExecutor {
 			if ctr.sortExprExecutor[i] != nil {
 				ctr.sortExprExecutor[i].Free()
 			}
 		}
-
 		ctr.sortExprExecutor = nil
-
-		if ctr.batWaitForSort != nil {
-			ctr.batWaitForSort.Clean(proc.Mp())
-			ctr.batWaitForSort = nil
-		}
-		if ctr.rbat != nil {
-			ctr.rbat.Clean(proc.Mp())
-			ctr.rbat = nil
-		}
 		ctr.resultOrderList = nil
+	}
+}
+
+func (ctr *container) cleanBatch(proc *process.Process) {
+	if ctr.batWaitForSort != nil {
+		ctr.batWaitForSort.Clean(proc.Mp())
+		ctr.batWaitForSort = nil
+	}
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(proc.Mp())
+		ctr.rbat = nil
 	}
 }

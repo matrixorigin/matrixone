@@ -76,6 +76,9 @@ func (arg *Argument) Release() {
 }
 
 func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if arg.ctr != nil {
+		arg.ctr.seen = 0
+	}
 	arg.cleanBuf(proc)
 }
 

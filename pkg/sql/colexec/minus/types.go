@@ -87,9 +87,13 @@ type container struct {
 
 func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	mp := proc.Mp()
-	if arg.ctr != nil {
-		arg.ctr.cleanBatch(mp)
-		arg.ctr.cleanHashMap()
+	if ctr := arg.ctr; ctr != nil {
+		ctr.cleanBatch(mp)
+		if ctr.hashTable != nil {
+			ctr.hashTable.Free()
+		}
+		ctr.state = buildingHashMap
+		ctr.FreeAllReg()
 	}
 }
 

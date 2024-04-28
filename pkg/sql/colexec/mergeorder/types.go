@@ -96,56 +96,44 @@ type container struct {
 
 func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if ctr := arg.ctr; ctr != nil {
-		mp := proc.Mp()
-		if ctr.buf != nil {
-			ctr.buf.Clean(mp)
-			ctr.buf = nil
-		}
-		for i := range ctr.batchList {
-			if ctr.batchList[i] != nil {
-				ctr.batchList[i].Clean(mp)
-			}
-		}
-		for i := range ctr.orderCols {
-			if ctr.orderCols[i] != nil {
-				for j := range ctr.orderCols[i] {
-					if ctr.orderCols[i][j] != nil {
-						ctr.orderCols[i][j].Free(mp)
-					}
-				}
-			}
-		}
+		ctr.cleanBatch(proc)
+		ctr.status = receiving
+		ctr.indexList = nil
 	}
-
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if ctr := arg.ctr; ctr != nil {
-		mp := proc.Mp()
-		for i := range ctr.batchList {
-			if ctr.batchList[i] != nil {
-				ctr.batchList[i].Clean(mp)
-			}
-		}
-		for i := range ctr.orderCols {
-			if ctr.orderCols[i] != nil {
-				for j := range ctr.orderCols[i] {
-					if ctr.orderCols[i][j] != nil {
-						ctr.orderCols[i][j].Free(mp)
-					}
-				}
-			}
-		}
+		ctr.cleanBatch(proc)
 		for i := range ctr.executors {
 			if ctr.executors[i] != nil {
 				ctr.executors[i].Free()
 			}
 		}
 		ctr.executors = nil
+	}
+}
 
-		if ctr.buf != nil {
-			ctr.buf.Clean(proc.Mp())
-			ctr.buf = nil
+func (ctr *container) cleanBatch(proc *process.Process) {
+	mp := proc.Mp()
+	for i := range ctr.batchList {
+		if ctr.batchList[i] != nil {
+			ctr.batchList[i].Clean(mp)
 		}
+	}
+	ctr.batchList = ctr.batchList[:0]
+	for i := range ctr.orderCols {
+		if ctr.orderCols[i] != nil {
+			for j := range ctr.orderCols[i] {
+				if ctr.orderCols[i][j] != nil {
+					ctr.orderCols[i][j].Free(mp)
+				}
+			}
+		}
+	}
+	ctr.orderCols = ctr.orderCols[:0]
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
 	}
 }

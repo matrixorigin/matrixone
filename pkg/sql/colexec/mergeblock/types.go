@@ -99,7 +99,7 @@ func (arg *Argument) Release() {
 }
 
 func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-
+	arg.affectedRows = 0
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

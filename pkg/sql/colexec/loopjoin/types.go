@@ -89,7 +89,10 @@ func (arg *Argument) Release() {
 func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
+		ctr.FreeAllReg()
 		ctr.cleanBatch(proc.Mp())
+		ctr.state = Build
+		ctr.probeIdx = 0
 	}
 }
 
