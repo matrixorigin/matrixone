@@ -60,7 +60,7 @@ func ListSnapshotCheckpoint(
 	if len(files) == 0 {
 		return nil, nil
 	}
-	return ListSnapshotCheckpointWithMeta(ctx, fs, files, idx, false)
+	return ListSnapshotCheckpointWithMeta(ctx, fs, files, idx, types.TS{}, false)
 }
 
 func ListSnapshotMeta(ctx context.Context, fs fileservice.FileService, snapshot types.TS, listFunc GetCheckpointRange) ([]*MetaFile, int, error) {
@@ -96,6 +96,7 @@ func ListSnapshotCheckpointWithMeta(
 	fs fileservice.FileService,
 	files []*MetaFile,
 	idx int,
+	gcStage types.TS,
 	isAll bool,
 ) ([]*CheckpointEntry, error) {
 	reader, err := blockio.NewFileReader(fs, CheckpointDir+files[idx].name)
@@ -131,13 +132,22 @@ func ListSnapshotCheckpointWithMeta(
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].end.Less(&entries[j].end)
 	})
-	if isAll {
+	if isAll && gcStage.IsEmpty() {
 		return entries, nil
 	}
 	for i := range entries {
-		if entries[i].end.Equal(&maxGlobalEnd) && entries[i].entryType == ET_Global {
+		if !gcStage.IsEmpty() {
+			if entries[i].end.Less(&gcStage) {
+				continue
+			}
 			return entries[i:], nil
 		}
+
+		if entries[i].end.Equal(&maxGlobalEnd) &&
+			entries[i].entryType == ET_Global {
+			return entries[i:], nil
+		}
+
 	}
 	return entries, nil
 }

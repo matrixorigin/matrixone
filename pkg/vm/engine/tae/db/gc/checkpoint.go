@@ -50,6 +50,7 @@ type checkpointCleaner struct {
 	maxCompared atomic.Pointer[checkpoint.CheckpointEntry]
 
 	ckpStage atomic.Pointer[types.TS]
+	ckpGC    atomic.Pointer[types.TS]
 
 	// minMergeCount is the configuration of the merge GC metadata file.
 	// When the GC file is greater than or equal to minMergeCount,
@@ -245,6 +246,10 @@ func (c *checkpointCleaner) updateCkpStage(ts *types.TS) {
 	c.ckpStage.Store(ts)
 }
 
+func (c *checkpointCleaner) updateCkpGC(ts *types.TS) {
+	c.ckpGC.Store(ts)
+}
+
 func (c *checkpointCleaner) updateInputs(input *GCTable) {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
@@ -271,6 +276,10 @@ func (c *checkpointCleaner) GetMaxCompared() *checkpoint.CheckpointEntry {
 
 func (c *checkpointCleaner) GeteCkpStage() *types.TS {
 	return c.ckpStage.Load()
+}
+
+func (c *checkpointCleaner) GeteCkpGC() *types.TS {
+	return c.ckpGC.Load()
 }
 
 func (c *checkpointCleaner) GetInputs() *GCTable {
@@ -411,7 +420,11 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 	if len(files) == 0 {
 		return nil
 	}
-	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(c.ctx, c.fs.Service, files, idx, true)
+	ckpGC := c.GeteCkpGC()
+	if ckpGC == nil {
+		ckpGC = new(types.TS)
+	}
+	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(c.ctx, c.fs.Service, files, idx, *ckpGC, true)
 	if err != nil {
 		return err
 	}
@@ -423,7 +436,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 		end := ckp.GetEnd()
 		logutil.Infof("ckps: %v, %v", ckp.GetStart().ToString(), end.ToString())
 		if end.Less(&stage) {
-			logutil.Infof("deleteFiles11: %v", ckp.GetLocation().Name().String())
+			logutil.Infof("deleteFiles11: %v", ckp.GetTNLocation().Name().String())
 			locations, err := logtail.LoadCheckpointLocations(c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
@@ -436,7 +449,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 				logutil.Infof("deleteFiles22: %v, location %v", name, location.String())
 				deleteFiles = append(deleteFiles, name)
 			}
-			deleteFiles = append(deleteFiles, ckp.GetLocation().Name().String())
+			deleteFiles = append(deleteFiles, ckp.GetTNLocation().Name().String())
 		}
 
 	}
@@ -448,13 +461,15 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 			deleteFiles = append(deleteFiles, CKPMetaDir+files[i].GetName())
 		}
 	}
-	logutil.Infof("deleteFiles: %v", deleteFiles)
+	logutil.Infof("deleteFiles start: %v", deleteFiles)
 	err = c.fs.DelFiles(c.ctx, deleteFiles)
+	logutil.Infof("deleteFiles end: %v", deleteFiles)
 	if err != nil {
 		logutil.Errorf("DelFiles failed: %v", err.Error())
 		return err
 	}
 	c.updateCkpStage(&stage)
+	c.updateCkpGC(&stage)
 	return nil
 }
 
