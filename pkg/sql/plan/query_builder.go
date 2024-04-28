@@ -4107,17 +4107,7 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (Snapshot, 
 				}
 
 			} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
-				tsValue, err := builder.compCtx.ResolveSnapshotTsWithSnapShotName(lit.Sval)
-				if err != nil {
-					return Snapshot{TS: &timestamp.Timestamp{}}, err
-				}
-
-				return Snapshot{
-					TS: &timestamp.Timestamp{
-						PhysicalTime: tsValue,
-					},
-					CreatedByTenant: tenant,
-				}, nil
+				return builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
 			} else if tsExpr.Type == tree.ATMOTIMESTAMP {
 				ts, err := timestamp.ParseTimestamp(lit.Sval)
 				if err != nil {

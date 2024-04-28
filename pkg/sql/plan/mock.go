@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -950,8 +951,8 @@ func (m *MockCompilerContext) IsPublishing(dbName string) (bool, error) {
 	return false, nil
 }
 
-func (m *MockCompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
-	return 0, nil
+func (m *MockCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (Snapshot, error) {
+	return plan.Snapshot{TS: &timestamp.Timestamp{}}, nil
 }
 
 func (m *MockCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {

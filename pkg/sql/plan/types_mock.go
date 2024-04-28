@@ -375,19 +375,19 @@ func (mr *MockCompilerContext2MockRecorder) ResolveById(tableId, snapshot interf
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveById", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveById), tableId, snapshot)
 }
 
-// ResolveSnapshotTsWithSnapShotName mocks base method.
-func (m *MockCompilerContext2) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
+// ResolveSnapshotWithSnapshotName mocks base method.
+func (m *MockCompilerContext2) ResolveSnapshotWithSnapshotName(snapshotName string) (Snapshot, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ResolveSnapshotTsWithSnapShotName", snapshotName)
-	ret0, _ := ret[0].(int64)
+	ret := m.ctrl.Call(m, "ResolveSnapshotWithSnapshotName", snapshotName)
+	ret0, _ := ret[0].(Snapshot)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// ResolveSnapshotTsWithSnapShotName indicates an expected call of ResolveSnapshotTsWithSnapShotName.
-func (mr *MockCompilerContext2MockRecorder) ResolveSnapshotTsWithSnapShotName(snapshotName interface{}) *gomock.Call {
+// ResolveSnapshotWithSnapshotName indicates an expected call of ResolveSnapshotWithSnapshotName.
+func (mr *MockCompilerContext2MockRecorder) ResolveSnapshotWithSnapshotName(snapshotName interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveSnapshotTsWithSnapShotName", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveSnapshotTsWithSnapShotName), snapshotName)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveSnapshotWithSnapshotName", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveSnapshotWithSnapshotName), snapshotName)
 }
 
 // ResolveUdf mocks base method.
