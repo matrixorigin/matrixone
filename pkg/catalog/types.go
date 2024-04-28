@@ -105,6 +105,10 @@ const (
 )
 
 const (
+	MO_COMMENT_NO_DEL_HINT = "[mo_no_del_hint]"
+)
+
+const (
 	// Non-hard-coded data dictionary table
 	MO_INDEXES = "mo_indexes"
 
