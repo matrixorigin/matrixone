@@ -16,7 +16,9 @@ package disttae
 
 import (
 	"context"
+	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -48,6 +50,8 @@ type cnMergeTask struct {
 	colattrs    []string     // no rowid column
 	sortkeyPos  int          // (composite) primary key, cluster by etc. -1 meas no sort key
 	sortkeyIsPK bool
+
+	doTransfer bool
 
 	// targets
 	targets []logtailreplay.ObjectInfo
@@ -113,11 +117,17 @@ func newCNMergeTask(
 		blkCnts:     blkCnts,
 		blkIters:    blkIters,
 
+
 		targetObjSize: targetObjSize,
+    doTransfer:  !strings.Contains(tbl.comment, catalog.MO_COMMENT_NO_DEL_HINT),
 	}, nil
 }
 
-func (t *cnMergeTask) GetObjectCnt() int {
+func (t *CNMergeTask) DoTransfer() bool {
+	return t.doTransfer
+}
+
+func (t *CNMergeTask) GetObjectCnt() int {
 	return len(t.targets)
 }
 

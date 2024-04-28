@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -2647,7 +2648,7 @@ func (tbl *txnTable) transferDeletes(
 func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	blks []objectio.BlockInfo) (types.Rowid, bool, error) {
 	var auxIdCnt int32
-	var typ *plan.Type
+	var typ plan.Type
 	var rowid types.Rowid
 	var objMeta objectio.ObjectMeta
 
@@ -2656,7 +2657,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	tableDef := tbl.GetTableDef(context.TODO())
 	for _, col := range tableDef.Cols {
 		if col.Name == tableDef.Pkey.PkeyColName {
-			typ = &col.Typ
+			typ = col.Typ
 			columns = append(columns, uint16(col.Seqnum))
 			colTypes = append(colTypes, types.T(col.Typ.Id).ToType())
 		}
@@ -2775,23 +2776,67 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		return nil, err
 	}
 
+	if taskHost.DoTransfer() {
+		return taskHost.commitEntry, nil
+	}
+
 	// if transfer info is too large, write it down to s3
-	if size := taskHost.commitEntry.Booking.ProtoSize(); size > 60*common.Const1MBytes {
-		logutil.Infof("mergeblocks on cn: write s3 transfer info %v", common.HumanReadableBytes(size))
-		t := types.T_varchar.ToType()
-		v, releasev := taskHost.GetVector(&t)
-		defer releasev()
-		vectorRowCnt := 1
-		data, err := taskHost.commitEntry.Booking.Marshal()
-		if err != nil {
+	if size := taskHost.commitEntry.Booking.ProtoSize(); size > 80*common.Const1MBytes {
+		if err := dumpTransferInfo(ctx, taskHost); err != nil {
 			return taskHost.commitEntry, err
 		}
-		vector.AppendBytes(v, data, false, taskHost.GetMPool())
-		taskHost.commitEntry.Booking.Marshal()
-		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-		writer, err := blockio.NewBlockWriterNew(taskHost.fs, name, 0, nil)
+		idx := 0
+		locstr := ""
+		locations := taskHost.commitEntry.BookingLoc
+		for ; idx < len(locations); idx += objectio.LocationLen {
+			loc := objectio.Location(locations[idx : idx+objectio.LocationLen])
+			locstr += loc.String() + ","
+		}
+		logutil.Infof("mergeblocks %v-%v on cn: write s3 transfer info (%v) %v",
+			tbl.tableId, tbl.tableName, common.HumanReadableBytes(size), locstr)
+	}
+
+	// commit this to tn
+	return taskHost.commitEntry, nil
+}
+
+func dumpTransferInfo(ctx context.Context, taskHost *CNMergeTask) (err error) {
+	defer func() {
 		if err != nil {
-			return taskHost.commitEntry, err
+			idx := 0
+			locations := taskHost.commitEntry.BookingLoc
+			for ; idx < len(locations); idx += objectio.LocationLen {
+				loc := objectio.Location(locations[idx : idx+objectio.LocationLen])
+				taskHost.fs.Delete(ctx, loc.Name().String())
+			}
+		}
+	}()
+	data, err := taskHost.commitEntry.Booking.Marshal()
+	if err != nil {
+		return
+	}
+	taskHost.commitEntry.BookingLoc = make([]byte, 0, objectio.LocationLen)
+	chunkSize := 1000 * mpool.MB
+	for len(data) > 0 {
+		var chunck []byte
+		if len(data) > chunkSize {
+			chunck = data[:chunkSize]
+			data = data[chunkSize:]
+		} else {
+			chunck = data
+			data = nil
+		}
+
+		t := types.T_varchar.ToType()
+		v, releasev := taskHost.GetVector(&t)
+		vectorRowCnt := 1
+		vector.AppendBytes(v, chunck, false, taskHost.GetMPool())
+		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+		var writer *blockio.BlockWriter
+		writer, err = blockio.NewBlockWriterNew(taskHost.fs, name, 0, nil)
+		if err != nil {
+			releasev()
+			return
 		}
 
 		batch := batch.New(true, []string{"payload"})
@@ -2799,22 +2844,23 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		batch.Vecs[0] = v
 		_, err = writer.WriteTombstoneBatch(batch)
 		if err != nil {
-			return taskHost.commitEntry, err
+			releasev()
+			return
 		}
-		blocks, _, err := writer.Sync(ctx)
+		var blocks []objectio.BlockObject
+		blocks, _, err = writer.Sync(ctx)
+		releasev()
 		if err != nil {
-			return taskHost.commitEntry, err
+			return
 		}
 		location := blockio.EncodeLocation(
 			name,
 			blocks[0].GetExtent(),
 			uint32(vectorRowCnt),
 			blocks[0].GetID())
-		taskHost.commitEntry.BookingLoc = make([]byte, len(location))
-		copy(taskHost.commitEntry.BookingLoc[:], location[:])
-		taskHost.commitEntry.Booking = nil
+		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, location...)
 	}
 
-	// commit this to tn
-	return taskHost.commitEntry, nil
+	taskHost.commitEntry.Booking = nil
+	return
 }

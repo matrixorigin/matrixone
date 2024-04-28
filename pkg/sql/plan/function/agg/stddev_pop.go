@@ -25,6 +25,7 @@ func RegisterStdDevPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[uint64],
+			InitAggVarPop1[uint64],
 			FillAggVarPop1[uint64], nil, FillsAggVarPop1[uint64],
 			MergeAggVarPop1[uint64],
 			FlushAggStdDevPop1[uint64],
@@ -34,6 +35,7 @@ func RegisterStdDevPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[int8],
+			InitAggVarPop1[int8],
 			FillAggVarPop1[int8], nil, FillsAggVarPop1[int8],
 			MergeAggVarPop1[int8],
 			FlushAggStdDevPop1[int8],
@@ -43,6 +45,7 @@ func RegisterStdDevPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[int16],
+			InitAggVarPop1[int16],
 			FillAggVarPop1[int16], nil, FillsAggVarPop1[int16],
 			MergeAggVarPop1[int16],
 			FlushAggStdDevPop1[int16],
@@ -52,6 +55,7 @@ func RegisterStdDevPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[int32],
+			InitAggVarPop1[int32],
 			FillAggVarPop1[int32], nil, FillsAggVarPop1[int32],
 			MergeAggVarPop1[int32],
 			FlushAggStdDevPop1[int32],
@@ -61,6 +65,7 @@ func RegisterStdDevPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[int64],
+			InitAggVarPop1[int64],
 			FillAggVarPop1[int64], nil, FillsAggVarPop1[int64],
 			MergeAggVarPop1[int64],
 			FlushAggStdDevPop1[int64],
@@ -70,6 +75,7 @@ func RegisterStdDevPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[uint8],
+			InitAggVarPop1[uint8],
 			FillAggVarPop1[uint8], nil, FillsAggVarPop1[uint8],
 			MergeAggVarPop1[uint8],
 			FlushAggStdDevPop1[uint8],
@@ -79,6 +85,7 @@ func RegisterStdDevPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[uint16],
+			InitAggVarPop1[uint16],
 			FillAggVarPop1[uint16], nil, FillsAggVarPop1[uint16],
 			MergeAggVarPop1[uint16],
 			FlushAggStdDevPop1[uint16],
@@ -88,6 +95,7 @@ func RegisterStdDevPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[uint32],
+			InitAggVarPop1[uint32],
 			FillAggVarPop1[uint32], nil, FillsAggVarPop1[uint32],
 			MergeAggVarPop1[uint32],
 			FlushAggStdDevPop1[uint32],
@@ -97,6 +105,7 @@ func RegisterStdDevPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[uint64],
+			InitAggVarPop1[uint64],
 			FillAggVarPop1[uint64], nil, FillsAggVarPop1[uint64],
 			MergeAggVarPop1[uint64],
 			FlushAggStdDevPop1[uint64],
@@ -106,6 +115,7 @@ func RegisterStdDevPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[float32],
+			InitAggVarPop1[float32],
 			FillAggVarPop1[float32], nil, FillsAggVarPop1[float32],
 			MergeAggVarPop1[float32],
 			FlushAggStdDevPop1[float32],
@@ -115,6 +125,7 @@ func RegisterStdDevPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), VarPopReturnType, false, true),
 			newAggVarPop[float64],
+			InitAggVarPop1[float64],
 			FillAggVarPop1[float64], nil, FillsAggVarPop1[float64],
 			MergeAggVarPop1[float64],
 			FlushAggStdDevPop1[float64],
@@ -124,6 +135,7 @@ func RegisterStdDevPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), VarPopReturnType, false, true),
 			newAggVarPopDecimal64,
+			InitAggVarPop1Decimal64,
 			FillAggVarPop1Decimal64, nil, FillsAggVarPop1Decimal64,
 			MergeAggVarPop1Decimal64,
 			FlushAggStdDevPopDecimal64,
@@ -133,6 +145,7 @@ func RegisterStdDevPop1(id int64) {
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), VarPopReturnType, false, true),
 			newAggVarPopDecimal128,
+			InitAggVarPop1Decimal128,
 			FillAggVarPop1Decimal128, nil, FillsAggVarPop1Decimal128,
 			MergeAggVarPop1Decimal128,
 			FlushAggStdDevPopDecimal128,

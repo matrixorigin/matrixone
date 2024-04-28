@@ -126,7 +126,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 
 	var filterList *plan.Expr
 	indexKeyCol := &plan.Expr{
-		Typ: *makePlan2Type(&varcharType),
+		Typ: makePlan2Type(&varcharType),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: idxScanTag, //__mo_index_idx_col
@@ -192,7 +192,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		// d. convert result vector to LiteralVec
 		arg1ForPrefixInBytes, _ := arg1ForPrefixInVec.MarshalBinary()
 		arg1ForPrefixInLitVec := &plan.Expr{
-			Typ: *makePlan2Type(&varcharType),
+			Typ: makePlan2Type(&varcharType),
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
 					Len:  int32(len(arg1ForPrefixInBytes)),
@@ -225,7 +225,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 
 	// b. Project __mo_index_pk_col
 	projPkCol := &Expr{
-		Typ: *makePlan2Type(&varcharType),
+		Typ: makePlan2Type(&varcharType),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: idxScanTag, //__mo_index_pk_col

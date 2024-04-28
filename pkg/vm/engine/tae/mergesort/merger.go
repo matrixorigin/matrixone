@@ -17,6 +17,7 @@ package mergesort
 import (
 	"context"
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -95,7 +96,10 @@ func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, 
 	for _, cnt := range m.objBlkCnts {
 		totalBlkCnt += cnt
 	}
-	initTransferMapping(host.GetCommitEntry(), totalBlkCnt)
+
+	if host.DoTransfer() {
+		initTransferMapping(host.GetCommitEntry(), totalBlkCnt)
+	}
 
 	return m
 }
@@ -144,10 +148,12 @@ func (m *merger[T]) Merge(ctx context.Context) {
 			}
 		}
 
-		commitEntry.Booking.Mappings[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1].M[int32(rowIdx)] = api.TransDestPos{
-			ObjIdx: int32(objCnt),
-			BlkIdx: int32(uint32(objBlkCnt)),
-			RowIdx: int32(bufferRowCnt),
+		if m.host.DoTransfer() {
+			commitEntry.Booking.Mappings[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1].M[int32(rowIdx)] = api.TransDestPos{
+				ObjIdx: int32(objCnt),
+				BlkIdx: int32(uint32(blkCnt)),
+				RowIdx: int32(bufferRowCnt),
+			}
 		}
 
 		bufferRowCnt++

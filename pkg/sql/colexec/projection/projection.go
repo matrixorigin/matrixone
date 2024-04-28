@@ -85,6 +85,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for i := range arg.ctr.projExecutors {
 		vec, err := arg.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
+			for _, newV := range arg.buf.Vecs {
+				if newV != nil {
+					for k, oldV := range bat.Vecs {
+						if oldV != nil && newV == oldV {
+							bat.Vecs[k] = nil
+						}
+					}
+				}
+			}
+			arg.buf = nil
 			return result, err
 		}
 		arg.buf.Vecs[i] = vec

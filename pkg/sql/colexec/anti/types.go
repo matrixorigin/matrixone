@@ -65,8 +65,6 @@ type container struct {
 
 type Argument struct {
 	ctr        *container
-	Ibucket    uint64
-	Nbucket    uint64
 	Result     []int32
 	Typs       []types.Type
 	Cond       *plan.Expr
@@ -159,7 +157,9 @@ func (ctr *container) cleanHashMap() {
 
 func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.executorForVecs {
-		ctr.executorForVecs[i].Free()
+		if ctr.executorForVecs[i] != nil {
+			ctr.executorForVecs[i].Free()
+		}
 	}
 	ctr.executorForVecs = nil
 }

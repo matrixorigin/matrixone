@@ -310,7 +310,7 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		// expr must be bool type, if not, try to do type convert
 		// but just ignore the subQuery. It will be solved at optimizer.
 		if expr.GetSub() == nil {
-			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, &plan.Type{Id: int32(types.T_bool)})
+			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, plan.Type{Id: int32(types.T_bool)})
 			if err != nil {
 				return nil, err
 			}
@@ -1995,6 +1995,21 @@ func MakeRuntimeFilter(tag int32, matchPrefix bool, upperlimit int32, expr *Expr
 		UpperLimit:  upperlimit,
 		Expr:        expr,
 		MatchPrefix: matchPrefix,
+	}
+}
+
+func MakeIntervalExpr(num int64, str string) *Expr {
+	arg0 := makePlan2Int64ConstExprWithType(num)
+	arg1 := makePlan2StringConstExprWithType(str, false)
+	return &plan.Expr{
+		Typ: plan.Type{
+			Id: int32(types.T_interval),
+		},
+		Expr: &plan.Expr_List{
+			List: &plan.ExprList{
+				List: []*Expr{arg0, arg1},
+			},
+		},
 	}
 }
 

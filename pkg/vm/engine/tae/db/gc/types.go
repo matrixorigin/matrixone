@@ -23,6 +23,7 @@ import (
 const (
 	PrefixGCMeta   = "gc"
 	PrefixSnapMeta = "snap"
+	PrefixAcctMeta = "acct"
 	GCMetaDir      = "gc/"
 )
 

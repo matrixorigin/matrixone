@@ -307,6 +307,7 @@ message CannotCommitRequest {
 
 // CannotCommitResponse cannot commit response. TN -> CN
 message CannotCommitResponse {
+  repeated bytes CommittingTxn = 1;
 }
 
 message GetActiveTxnRequest {
