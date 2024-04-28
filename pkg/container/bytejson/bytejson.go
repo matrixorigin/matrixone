@@ -108,17 +108,6 @@ func (bj *ByteJson) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (bj *ByteJson) UnmarshalObject(obj interface{}) (err error) {
-	buf := make([]byte, 0, 64)
-	var tpCode TpCode
-	if tpCode, buf, err = addElem(buf, obj); err != nil {
-		return
-	}
-	bj.Type = tpCode
-	bj.Data = buf
-	return
-}
-
 func (bj ByteJson) IsNull() bool {
 	return bj.Type == TpCodeLiteral && bj.Data[0] == LiteralNull
 }
@@ -607,89 +596,103 @@ func ParseJsonByteFromString(s string) ([]byte, error) {
 }
 
 func ParseJsonByte(data []byte) ([]byte, error) {
-	p := parser{
-		src:   data,
-		stack: make([]*Group, 0, 2),
-		dst: byteJsonWriter{
-			buf: make([]byte, 0, len(data)*2),
-		},
-	}
-	err := p.do()
+	n, err := ParseNode(data)
 	if err != nil {
 		return nil, err
 	}
-	return p.dst.buf, nil
+	w := byteJsonWriter{
+		buf: make([]byte, 0, len(data)*2),
+	}
+	_, _, err = w.writeNode(true, n)
+	n.Free()
+	if err != nil {
+		return nil, err
+	}
+	return w.buf, nil
+}
+
+func ParseNodeString(s string) (Node, error) {
+	return ParseNode(util.UnsafeStringToBytes(s))
+}
+
+func ParseNode(data []byte) (Node, error) {
+	p := parser{
+		src:   data,
+		stack: make([]*Group, 0, 2),
+	}
+	return p.do()
 }
 
 type parser struct {
 	src   []byte
 	stack []*Group
-	dst   byteJsonWriter
 }
 
-func (p *parser) do() error {
+func (p *parser) do() (Node, error) {
+	var z Node
 	de := json2.NewDecoder(bytes.NewReader(p.src))
 	de.UseNumber()
-	checkEOF := func(err error) error {
-		if err != nil {
-			return err
-		}
-		_, err = de.Token()
+	checkEOF := func(v any) (Node, error) {
+		_, err := de.Token()
 		if !errors.Is(err, io.EOF) {
-			return moerr.NewInvalidInputNoCtx("invalid json: %s", p.src)
+			if g, ok := v.(*Group); ok {
+				g.free()
+			}
+			return z, moerr.NewInvalidInputNoCtx("invalid json: %s", p.src)
 		}
-		return nil
+		return Node{v}, nil
 	}
+	var tk json2.Token
+	var err error
 	for {
-		tk, err := de.Token()
-		if errors.Is(err, io.EOF) {
-			return io.ErrUnexpectedEOF
-		}
+		tk, err = de.Token()
 		if err != nil {
-			return err
+			break
 		}
 		switch tk := tk.(type) {
 		case json.Delim:
 			g := p.addDelim(tk)
 			if g != nil {
-				_, _, err := p.dst.writeAny(true, g)
-				g.Free()
-				return checkEOF(err)
+				return checkEOF(g)
 			}
 		case bool:
 			if len(p.stack) > 0 {
 				g := p.stack[len(p.stack)-1]
-				g.Values = append(g.Values, tk)
+				g.Values = append(g.Values, Node{tk})
 			} else {
-				_, _, err := p.dst.writeAny(true, tk)
-				return checkEOF(err)
+				return checkEOF(tk)
 			}
 		case json.Number:
 			if len(p.stack) > 0 {
 				g := p.stack[len(p.stack)-1]
-				g.Values = append(g.Values, tk)
+				g.Values = append(g.Values, Node{tk})
 			} else {
-				_, _, err := p.dst.writeAny(true, tk)
-				return checkEOF(err)
+				return checkEOF(tk)
 			}
 		case string:
 			if len(p.stack) > 0 {
 				g := p.stack[len(p.stack)-1]
 				g.addString(tk)
 			} else {
-				_, _, err := p.dst.writeAny(true, tk)
-				return checkEOF(err)
+				return checkEOF(tk)
 			}
 		case nil:
 			if len(p.stack) > 0 {
 				g := p.stack[len(p.stack)-1]
-				g.Values = append(g.Values, nil)
+				g.Values = append(g.Values, Node{nil})
 			} else {
-				_, _, err := p.dst.writeAny(true, tk)
-				return checkEOF(err)
+				return checkEOF(tk)
 			}
 		}
 	}
+
+	for _, g := range p.stack {
+		g.free()
+	}
+	if errors.Is(err, io.EOF) {
+		return z, io.ErrUnexpectedEOF
+	}
+	return z, err
 }
 
 func (p *parser) addDelim(r json.Delim) *Group {
@@ -708,7 +711,7 @@ func (p *parser) addDelim(r json.Delim) *Group {
 		}
 
 		pg := p.stack[len(p.stack)-1]
-		pg.Values = append(pg.Values, g)
+		pg.Values = append(pg.Values, Node{g})
 	default:
 		panic("unknown Delim " + string(r))
 	}
@@ -728,12 +731,12 @@ func init() {
 type Group struct {
 	Obj    bool
 	Keys   []string
-	Values []any
+	Values []Node
 }
 
 func (g *Group) addString(s string) error {
 	if !g.Obj || len(g.Keys) > len(g.Values) {
-		g.Values = append(g.Values, s)
+		g.Values = append(g.Values, Node{s})
 	} else {
 		if len(s) > math.MaxUint16 {
 			return moerr.NewInvalidInputNoCtx("json key %s", s)
@@ -753,15 +756,15 @@ func (g *Group) reset() {
 	g.Values = g.Values[:0]
 }
 
-func (g *Group) Free() {
+func (g *Group) free() {
 	g.Obj = false
 	g.Keys = g.Keys[:0]
 	for _, sub := range g.Values {
-		sg, ok := sub.(*Group)
+		sg, ok := sub.V.(*Group)
 		if !ok {
 			continue
 		}
-		sg.Free()
+		sg.free()
 	}
 	g.Values = g.Values[:0]
 	reuse.Free(g, nil)
@@ -771,9 +774,9 @@ type byteJsonWriter struct {
 	buf []byte
 }
 
-func (w *byteJsonWriter) writeAny(root bool, v any) (TpCode, uint32, error) {
+func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error) {
 	start := len(w.buf)
-	switch val := v.(type) {
+	switch val := node.V.(type) {
 	case *Group:
 		if val.Obj {
 			obj := val
@@ -782,38 +785,38 @@ func (w *byteJsonWriter) writeAny(root bool, v any) (TpCode, uint32, error) {
 			baseOffset := start
 			if root {
 				w.buf = append(w.buf, byte(TpCodeObject))
-				baseOffset += 1
+				baseOffset += valTypeSize
 			}
 			w.buf = endian.AppendUint32(w.buf, uint32(n))
 			w.buf = endian.AppendUint32(w.buf, 0) // object buf length
 
-			w.buf = extendByte(w.buf, n*(4+2+1+4))
+			w.buf = extendByte(w.buf, n*(keyEntrySize+valEntrySize))
 
-			loc := uint32(8 + n*(4+2+1+4))
+			loc := uint32(headerSize + n*(keyEntrySize+valEntrySize))
 			for i, k := range keys {
-				o := baseOffset + 8 + i*6
+				o := baseOffset + headerSize + i*keyEntrySize
 				length := uint32(len(k))
 				if length > math.MaxUint16 {
 					return 0, 0, moerr.NewInvalidInputNoCtx("json key %s", k)
 				}
 				endian.PutUint32(w.buf[o:], loc)
-				endian.PutUint16(w.buf[o+4:], uint16(length))
+				endian.PutUint16(w.buf[o+keyOriginOff:], uint16(length))
 				loc += length
 				w.buf = append(w.buf, k...)
 			}
 
 			for i := range keys {
-				tp, length, err := w.writeAny(false, obj.Values[i])
+				tp, length, err := w.writeNode(false, obj.Values[i])
 				if err != nil {
 					return 0, 0, err
 				}
-				o := baseOffset + 8 + n*6 + i*5
+				o := baseOffset + headerSize + n*keyEntrySize + i*valEntrySize
 				w.buf[o] = byte(tp)
 				if tp == TpCodeLiteral {
-					endian.PutUint32(w.buf[o+1:], length)
+					endian.PutUint32(w.buf[o+valTypeSize:], length)
 					continue
 				}
-				endian.PutUint32(w.buf[o+1:], loc)
+				endian.PutUint32(w.buf[o+valTypeSize:], loc)
 				loc += length
 			}
 
@@ -832,19 +835,19 @@ func (w *byteJsonWriter) writeAny(root bool, v any) (TpCode, uint32, error) {
 		w.buf = endian.AppendUint32(w.buf, 0) // array buf length
 		w.buf = extendByte(w.buf, n*5)
 
-		loc := uint32(8 + n*5)
+		loc := uint32(headerSize + n*valEntrySize)
 		for i := range arr.Values {
-			tp, length, err := w.writeAny(false, arr.Values[i])
+			tp, length, err := w.writeNode(false, arr.Values[i])
 			if err != nil {
 				return 0, 0, err
 			}
-			o := baseOffset + 8 + i*5
+			o := baseOffset + headerSize + i*valEntrySize
 			w.buf[o] = byte(tp)
 			if tp == TpCodeLiteral {
-				endian.PutUint32(w.buf[o+1:], length)
+				endian.PutUint32(w.buf[o+valTypeSize:], length)
 				continue
 			}
-			endian.PutUint32(w.buf[o+1:], loc)
+			endian.PutUint32(w.buf[o+valTypeSize:], loc)
 			loc += length
 		}
 
@@ -881,7 +884,7 @@ func (w *byteJsonWriter) writeAny(root bool, v any) (TpCode, uint32, error) {
 		w.buf = addString(w.buf, val)
 		return TpCodeString, uint32(len(w.buf) - start), nil
 	default:
-		return 0, 0, moerr.NewInvalidInputNoCtx("unknown type %T", v)
+		return 0, 0, moerr.NewInvalidInputNoCtx("unknown type %T", node)
 	}
 }
 
@@ -918,6 +921,33 @@ func (w *byteJsonWriter) parseNumber(in json.Number) (TpCode, []byte, error) {
 	return tpCode, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
 }
 
-type Node any
+type Node struct {
+	V any
+}
 
-// func (n Node)
+func (n Node) Free() {
+	g, ok := n.V.(*Group)
+	if ok {
+		g.free()
+	}
+}
+
+func (n Node) ByteJson() (ByteJson, error) {
+	buf, err := n.ByteJsonRaw()
+	if err != nil {
+		return ByteJson{}, err
+	}
+	return ByteJson{
+		Data: buf[1:],
+		Type: TpCode(buf[0]),
+	}, nil
+}
+
+func (n Node) ByteJsonRaw() ([]byte, error) {
+	w := byteJsonWriter{}
+	_, _, err := w.writeNode(true, n)
+	if err != nil {
+		return nil, err
+	}
+	return w.buf, nil
+}
