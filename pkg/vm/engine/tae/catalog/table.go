@@ -176,8 +176,8 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		Stats:      common.NewTableCompactStat(),
 	}
 }
-func (entry *TableEntry) GCTombstone(id objectio.ObjectId){
-	pivot:=DeleteEntry{
+func (entry *TableEntry) GCTombstone(id objectio.ObjectId) {
+	pivot := DeleteEntry{
 		ObjectID: id,
 	}
 	entry.deleteList.Delete(pivot)
