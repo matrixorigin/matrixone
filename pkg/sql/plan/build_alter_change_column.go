@@ -69,7 +69,7 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	}
 
 	// check if the newly added column type is valid
-	if err = checkAddColumnType(ctx.GetContext(), colType, newColName); err != nil {
+	if err = checkAddColumnType(ctx.GetContext(), &colType, newColName); err != nil {
 		return err
 	}
 
@@ -107,7 +107,7 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 
 // buildChangeColumnAndConstraint Build the changed new column definition, and check its column level integrity constraints,
 // and check other table level constraints, such as primary keys, indexes, etc
-func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable, originalCol *ColDef, specNewColumn *tree.ColumnTableDef, colType *plan.Type) (*ColDef, error) {
+func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable, originalCol *ColDef, specNewColumn *tree.ColumnTableDef, colType plan.Type) (*ColDef, error) {
 	newColName := specNewColumn.Name.Parts[0]
 	// Check if the new column name is valid and conflicts with internal hidden columns
 	err := CheckColumnNameValid(ctx.GetContext(), newColName)
@@ -120,7 +120,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 		Primary:   originalCol.Primary,
 		ClusterBy: originalCol.ClusterBy,
 		Name:      newColName,
-		Typ:       *colType,
+		Typ:       colType,
 		Alg:       plan.CompressType_Lz4,
 	}
 

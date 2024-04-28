@@ -544,18 +544,18 @@ func (mr *MockRelationMockRecorder) MaxAndMinValues(ctx interface{}) *gomock.Cal
 }
 
 // MergeObjects mocks base method.
-func (m *MockRelation) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, filter string, targetObjSize uint32) (*api.MergeCommitEntry, error) {
+func (m *MockRelation) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MergeObjects", ctx, objstats, targetObjSize)
+	ret := m.ctrl.Call(m, "MergeObjects", ctx, objstats, policyName, targetObjSize)
 	ret0, _ := ret[0].(*api.MergeCommitEntry)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // MergeObjects indicates an expected call of MergeObjects.
-func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, targetObjSize interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, policyName, targetObjSize interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MergeObjects", reflect.TypeOf((*MockRelation)(nil).MergeObjects), ctx, objstats, targetObjSize)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MergeObjects", reflect.TypeOf((*MockRelation)(nil).MergeObjects), ctx, objstats, policyName, targetObjSize)
 }
 
 // NewReader mocks base method.

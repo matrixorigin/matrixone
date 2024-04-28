@@ -114,6 +114,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case SendHashMap:
 			result.Batch = batch.NewWithSize(0)
+
 			if ctr.inputBatchRowCount > 0 {
 				var jm *hashmap.JoinMap
 				if ap.NeedHashMap {
@@ -131,6 +132,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.cleanHashMap()
 			}
+
+			// this is just a dummy batch to indicate that the batch is must not empty.
+			// we should make sure this batch can be sent to the next join operator in other pipelines.
+			if result.Batch.IsEmpty() && ap.NeedHashMap {
+				result.Batch.AddRowCount(1)
+			}
+
 			ctr.state = SendBatch
 			return result, nil
 		case SendBatch:
