@@ -213,6 +213,7 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 		select {
 		case err = <-errC:
 			return nil, err
+		default:
 		}
 	}
 
