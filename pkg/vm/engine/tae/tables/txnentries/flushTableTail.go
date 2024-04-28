@@ -101,20 +101,22 @@ func NewFlushTableTailEntry(
 		dirtyEndTs:         dirtyEndTs,
 	}
 
-	if entry.createdBlkHandles != nil {
-		entry.delTbls = make([]*model.TransDels, entry.createdBlkHandles.GetMeta().(*catalog.ObjectEntry).BlockCnt())
-		entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
-		// collect deletes phase 1
-		entry.collectTs = rt.Now()
-		var err error
-		entry.transCntBeforeCommit, err = entry.collectDelsAndTransfer(entry.txn.GetStartTS(), entry.collectTs)
-		if err != nil {
-			return nil, err
+	if entry.transMappings != nil {
+		if entry.createdBlkHandles != nil {
+			entry.delTbls = make([]*model.TransDels, entry.createdBlkHandles.GetMeta().(*catalog.ObjectEntry).BlockCnt())
+			entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
+			// collect deletes phase 1
+			entry.collectTs = rt.Now()
+			var err error
+			entry.transCntBeforeCommit, err = entry.collectDelsAndTransfer(entry.txn.GetStartTS(), entry.collectTs)
+			if err != nil {
+				return nil, err
+			}
 		}
+		// prepare transfer pages
+		entry.addTransferPages()
 	}
 
-	// prepare transfer pages
-	entry.addTransferPages()
 	return entry, nil
 }
 
@@ -204,6 +206,10 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 	defer func() {
 		v2.TaskCommitTableTailDurationHistogram.Observe(time.Since(inst).Seconds())
 	}()
+	if entry.transMappings == nil {
+		// no del table, no transfer
+		return nil
+	}
 	trans, err := entry.collectDelsAndTransfer(entry.collectTs, entry.txn.GetPrepareTS())
 	if err != nil {
 		return err
