@@ -15,14 +15,12 @@
 package db
 
 import (
-	"sync/atomic"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"sync/atomic"
 )
 
 type ScannerOp interface {
@@ -62,38 +60,6 @@ func newMergeTaskBuilder(db *DB) *MergeTaskBuilder {
 	op.PostObjectFn = op.onPostObject
 	op.PostTableFn = op.onPostTable
 	return op
-}
-
-func (s *MergeTaskBuilder) ManuallyMerge(entry *catalog.TableEntry, objs []*catalog.ObjectEntry, policy merge.Policy) error {
-	// stop new merge task
-	s.suspend.Store(true)
-	defer s.suspend.Store(false)
-	// waiting the runing merge sched task to finish
-	for s.suspendCnt.Load() < 2 {
-		time.Sleep(50 * time.Millisecond)
-	}
-	policy.ResetForTable(entry)
-	if len(objs) != 0 {
-		// all status are safe in the TaskBuilder
-		for _, obj := range objs {
-			// TODO(_), delete this if every object has objectStat in memory
-			if err := obj.CheckAndLoad(); err != nil {
-				return err
-			}
-			policy.OnObject(obj)
-		}
-	} else {
-		iter := entry.MakeObjectIt(false)
-		for iter.Valid() {
-			obj := iter.Get().GetPayload()
-			if obj.IsActive() && obj.GetLoaded() {
-				policy.OnObject(obj)
-			}
-			iter.Next()
-		}
-	}
-	s.executor.ExecuteFor(entry, policy)
-	return nil
 }
 
 func (s *MergeTaskBuilder) ConfigPolicy(tbl *catalog.TableEntry, c any) {

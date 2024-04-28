@@ -2830,7 +2830,7 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 	return taskHost.commitEntry, nil
 }
 
-func dumpTransferInfo(ctx context.Context, taskHost *CNMergeTask) (err error) {
+func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 	defer func() {
 		if err != nil {
 			idx := 0
@@ -2893,27 +2893,4 @@ func dumpTransferInfo(ctx context.Context, taskHost *CNMergeTask) (err error) {
 
 	taskHost.commitEntry.Booking = nil
 	return
-}
-
-func (tbl *txnTable) GetObjects(
-	ctx context.Context,
-	filters []func([]logtailreplay.ObjectEntry) []logtailreplay.ObjectEntry,
-) ([]logtailreplay.ObjectEntry, error) {
-	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
-	state, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
-	objs := make([]logtailreplay.ObjectEntry, 0)
-	iter, err := state.NewObjectsIter(snapshot)
-	if err != nil {
-		return nil, err
-	}
-	for iter.Next() {
-		objs = append(objs, iter.Entry())
-	}
-	for _, f := range filters {
-		objs = f(objs)
-	}
-	return objs, nil
 }

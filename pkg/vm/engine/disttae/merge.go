@@ -118,15 +118,15 @@ func newCNMergeTask(
 		blkIters:    blkIters,
 
 		targetObjSize: targetObjSize,
-		doTransfer:  !strings.Contains(tbl.comment, catalog.MO_COMMENT_NO_DEL_HINT),
+		doTransfer:    !strings.Contains(tbl.comment, catalog.MO_COMMENT_NO_DEL_HINT),
 	}, nil
 }
 
-func (t *cnMergeTask) GetObjectCnt() int {
-	return len(t.targets)
-}
 func (t *cnMergeTask) DoTransfer() bool {
 	return t.doTransfer
+}
+func (t *cnMergeTask) GetObjectCnt() int {
+	return len(t.targets)
 }
 
 func (t *cnMergeTask) GetBlkCnts() []int {
