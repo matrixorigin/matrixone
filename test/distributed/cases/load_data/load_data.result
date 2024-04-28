@@ -705,3 +705,19 @@ col1    col2
 @@ db"    -234242
    32423"    3283
 drop table test09;
+
+drop table if exists test10;
+create table test10(col1 text, col2 text);
+load data infile {'filepath'='$resources/load_data/text.csv.tar.gz', 'compression'='tar.gz'} into table test10 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
+select * from test10;
+col1    col2
+hello    1
+hello    2
+load data infile {'filepath'='$resources/load_data/text.csv.tar.bz2', 'compression'='tar.bz2'} into table test10 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
+select * from test10;
+col1    col2
+hello    1
+hello    2
+hello    1
+hello    2
+drop table test10;

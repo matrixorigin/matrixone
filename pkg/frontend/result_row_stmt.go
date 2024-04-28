@@ -32,8 +32,6 @@ import (
 func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
 
-	mrs := ses.GetMysqlResultSet()
-
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 
@@ -47,35 +45,8 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 		if c, ok := execCtx.cw.(*TxnComputationWrapper); ok {
 			ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
 		}
-		/*
-			Step 1 : send column count and column definition.
-		*/
-		//send column count
-		colCnt := uint64(len(columns))
-		err = execCtx.proto.SendColumnCountPacket(colCnt)
-		if err != nil {
-			return
-		}
-		//send columns
-		//column_count * Protocol::ColumnDefinition packets
-		cmd := ses.GetCmd()
-		for _, c := range columns {
-			mysqlc := c.(Column)
-			mrs.AddColumn(mysqlc)
-			/*
-				mysql COM_QUERY response: send the column definition per column
-			*/
-			err = execCtx.proto.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
-			if err != nil {
-				return
-			}
-		}
 
-		/*
-			mysql COM_QUERY response: End after the column has been sent.
-			send EOF packet
-		*/
-		err = execCtx.proto.SendEOFPacketIf(0, ses.GetTxnHandler().GetServerStatus())
+		err = respColumnDefsWithoutFlush(requestCtx, ses, execCtx, columns)
 		if err != nil {
 			return
 		}
@@ -104,34 +75,8 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 				zap.Error(err))
 			return
 		}
-		/*
-			Step 1 : send column count and column definition.
-		*/
-		//send column count
-		colCnt := uint64(len(columns))
-		err = execCtx.proto.SendColumnCountPacket(colCnt)
-		if err != nil {
-			return
-		}
-		//send columns
-		//column_count * Protocol::ColumnDefinition packets
-		cmd := ses.GetCmd()
-		for _, c := range columns {
-			mysqlc := c.(Column)
-			mrs.AddColumn(mysqlc)
-			/*
-				mysql COM_QUERY response: send the column definition per column
-			*/
-			err = execCtx.proto.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
-			if err != nil {
-				return
-			}
-		}
-		/*
-			mysql COM_QUERY response: End after the column has been sent.
-			send EOF packet
-		*/
-		err = execCtx.proto.SendEOFPacketIf(0, ses.GetTxnHandler().GetServerStatus())
+
+		err = respColumnDefsWithoutFlush(requestCtx, ses, execCtx, columns)
 		if err != nil {
 			return
 		}
@@ -160,35 +105,8 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 		if c, ok := execCtx.cw.(*TxnComputationWrapper); ok {
 			ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
 		}
-		/*
-			Step 1 : send column count and column definition.
-		*/
-		//send column count
-		colCnt := uint64(len(columns))
-		err = execCtx.proto.SendColumnCountPacket(colCnt)
-		if err != nil {
-			return
-		}
-		//send columns
-		//column_count * Protocol::ColumnDefinition packets
-		cmd := ses.GetCmd()
-		for _, c := range columns {
-			mysqlc := c.(Column)
-			mrs.AddColumn(mysqlc)
-			/*
-				mysql COM_QUERY response: send the column definition per column
-			*/
-			err = execCtx.proto.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
-			if err != nil {
-				return
-			}
-		}
 
-		/*
-			mysql COM_QUERY response: End after the column has been sent.
-			send EOF packet
-		*/
-		err = execCtx.proto.SendEOFPacketIf(0, ses.GetTxnHandler().GetServerStatus())
+		err = respColumnDefsWithoutFlush(requestCtx, ses, execCtx, columns)
 		if err != nil {
 			return
 		}
@@ -218,6 +136,47 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 	return
 }
 
+func respColumnDefsWithoutFlush(requestCtx context.Context, ses *Session, execCtx *ExecCtx, columns []any) (err error) {
+	//!!!carefully to use
+	execCtx.proto.DisableAutoFlush()
+	defer execCtx.proto.EnableAutoFlush()
+
+	mrs := ses.GetMysqlResultSet()
+	/*
+		Step 1 : send column count and column definition.
+	*/
+	//send column count
+	colCnt := uint64(len(columns))
+	err = execCtx.proto.SendColumnCountPacket(colCnt)
+	if err != nil {
+		return
+	}
+	//send columns
+	//column_count * Protocol::ColumnDefinition packets
+	cmd := ses.GetCmd()
+	for _, c := range columns {
+		mysqlc := c.(Column)
+		mrs.AddColumn(mysqlc)
+		/*
+			mysql COM_QUERY response: send the column definition per column
+		*/
+		err = execCtx.proto.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
+		if err != nil {
+			return
+		}
+	}
+
+	/*
+		mysql COM_QUERY response: End after the column has been sent.
+		send EOF packet
+	*/
+	err = execCtx.proto.SendEOFPacketIf(0, ses.GetTxnHandler().GetServerStatus())
+	if err != nil {
+		return
+	}
+	return
+}
+
 func respStreamResultRow(requestCtx context.Context,
 	ses *Session,
 	execCtx *ExecCtx) (err error) {
@@ -227,8 +186,7 @@ func respStreamResultRow(requestCtx context.Context,
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
-
-		err2 := execCtx.proto.sendEOFOrOkPacket(0, ses.GetTxnHandler().GetServerStatus())
+		err2 := execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd())
 		if err2 != nil {
 			err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(requestCtx, ses, execCtx.stmt, fail, err)
@@ -268,13 +226,13 @@ func respStreamResultRow(requestCtx context.Context,
 				return
 			}
 
-			err = execCtx.proto.sendEOFOrOkPacket(0, ses.GetTxnHandler().GetServerStatus())
+			err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd())
 			if err != nil {
 				return
 			}
 		}
 	default:
-		err = execCtx.proto.sendEOFOrOkPacket(0, ses.GetTxnHandler().GetServerStatus())
+		err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd())
 		if err != nil {
 			return
 		}
@@ -304,7 +262,7 @@ func respMixedResultRow(requestCtx context.Context,
 			zap.Error(err))
 		return err
 	}
-	err = execCtx.proto.sendEOFOrOkPacket(0, ses.GetTxnHandler().GetServerStatus())
+	err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd())
 	if err != nil {
 		return
 	}

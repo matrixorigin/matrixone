@@ -508,26 +508,26 @@ func readBlockData(
 }
 
 func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, isPersistedByCN bool, release func(), err error) {
-	isPersistedByCN, err = persistedByCN(ctx, deltaloc, fs)
+	isPersistedByCN, err = IsPersistedByCN(ctx, deltaloc, fs)
 	if err != nil {
 		return
 	}
-	if isPersistedByCN {
-		bat, release, err = LoadTombstoneColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
-		if err != nil {
-			return
-		}
-		return
-	} else {
-		bat, release, err = LoadTombstoneColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
-		if err != nil {
-			return
-		}
-		return
-	}
+	bat, release, err = ReadBlockDeleteBySchema(ctx, deltaloc, fs, isPersistedByCN)
+	return
 }
 
-func persistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bool, error) {
+func ReadBlockDeleteBySchema(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService, isPersistedByCN bool) (bat *batch.Batch, release func(), err error) {
+	var cols []uint16
+	if isPersistedByCN {
+		cols = []uint16{0, 1}
+	} else {
+		cols = []uint16{0, 1, 2, 3}
+	}
+	bat, release, err = LoadTombstoneColumns(ctx, cols, nil, fs, deltaloc, nil)
+	return
+}
+
+func IsPersistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bool, error) {
 	objectMeta, err := objectio.FastLoadObjectMeta(ctx, &deltaloc, false, fs)
 	if err != nil {
 		return false, err

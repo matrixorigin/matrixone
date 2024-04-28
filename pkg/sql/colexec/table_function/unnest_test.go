@@ -183,6 +183,7 @@ func TestUnnestCall(t *testing.T) {
 			require.False(t, end)
 			cleanResult(&result, ut.proc)
 			inputBat.Clean(ut.proc.Mp())
+			ut.arg.Free(ut.proc, false, nil)
 			afterMem := ut.proc.Mp().CurrNB()
 			require.Equal(t, beforeMem, afterMem)
 		case "json":
@@ -199,6 +200,7 @@ func TestUnnestCall(t *testing.T) {
 			require.False(t, end)
 			cleanResult(&result, ut.proc)
 			inputBat.Clean(ut.proc.Mp())
+			ut.arg.Free(ut.proc, false, nil)
 			afterMem := ut.proc.Mp().CurrNB()
 			require.Equal(t, beforeMem, afterMem)
 		}
