@@ -2341,12 +2341,7 @@ func LoadCheckpointLocations(
 ) (map[string]objectio.Location, error) {
 	var err error
 	data := NewCheckpointData(common.CheckpointAllocator)
-	defer func() {
-		if err != nil {
-			data.Close()
-			data = nil
-		}
-	}()
+	defer data.Close()
 
 	var reader *blockio.BlockReader
 	if reader, err = blockio.NewObjectReader(fs, location); err != nil {
