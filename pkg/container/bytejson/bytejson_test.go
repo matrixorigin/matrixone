@@ -16,6 +16,8 @@ package bytejson
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"strconv"
 	"testing"
 
@@ -91,9 +93,26 @@ func TestObject(t *testing.T) {
 	}
 	for _, x := range j {
 		bj, err := ParseFromString(x)
-		require.Nil(t, err)
+		require.NoError(t, err)
 		require.JSONEq(t, x, bj.String())
 	}
+	t.Run("last win", func(t *testing.T) {
+		s := `{"x": 17, "x": "red", "x": [3, 5, 7]}`
+		bj, err := ParseFromString(s)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"x":[3,5,7]}`, bj.String())
+	})
+	t.Run("sort key", func(t *testing.T) {
+		s := `{"c":1,"a":2,"b":3}`
+		bj, err := ParseFromString(s)
+		require.NoError(t, err)
+		require.Equal(t, `{"a": 2, "b": 3, "c": 1}`, bj.String())
+	})
+	t.Run("unexpected EOF", func(t *testing.T) {
+		s := `{"c":1,"a":2,"b":3`
+		_, err := ParseNodeString(s)
+		require.True(t, errors.Is(err, io.ErrUnexpectedEOF))
+	})
 }
 
 func TestArray(t *testing.T) {

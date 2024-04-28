@@ -675,6 +675,9 @@ func (p *parser) do() (Node, error) {
 	if errors.Is(err, io.EOF) {
 		return z, io.ErrUnexpectedEOF
 	}
+	if strings.HasSuffix(err.Error(), "unexpected end of JSON input") {
+		return z, io.ErrUnexpectedEOF
+	}
 	return z, err
 }
 
