@@ -1311,7 +1311,6 @@ func appendPrimaryConstrantPlan(
 						},
 					},
 				},
-				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
 			}
 			lastNodeId = builder.appendNode(sinkScanNode, bindCtx)
 
@@ -1352,6 +1351,7 @@ func appendPrimaryConstrantPlan(
 						},
 					},
 				}},
+				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
 			}
 
 			var tableScanId int32
