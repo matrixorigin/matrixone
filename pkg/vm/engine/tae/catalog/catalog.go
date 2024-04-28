@@ -185,7 +185,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		obj.RUnlock()
 		if needGC {
 			tbl := obj.table
-			tbl.RemoveEntry(obj)
+			tbl.GCTombstone(obj.ID)
 		}
 		return nil
 	}
