@@ -32,7 +32,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type Arguments struct {
+type arguments struct {
 	db, tbl       string
 	objs          []objectio.ObjectStats
 	filter        string
@@ -51,20 +51,20 @@ type Arguments struct {
 // Example: "db1.tbl1"
 // Example: "db1.tbl1:all:small:100M"
 // Example: "db1.tbl1:obj1,obj2:100M"
-func parseArgs(arg string) (Arguments, error) {
+func parseArgs(arg string) (arguments, error) {
 	args := strings.Split(arg, ":")
 	if len(args) < 1 || len(args) > 4 {
-		return Arguments{}, moerr.NewInternalErrorNoCtx("handleMerge: invalid arg format")
+		return arguments{}, moerr.NewInternalErrorNoCtx("handleMerge: invalid arg format")
 	}
 
-	a := Arguments{
+	a := arguments{
 		targetObjSize: 120 * common.Const1MBytes,
 	}
 
 	// Parse db and table
 	dbtbl := strings.Split(args[0], ".")
 	if len(dbtbl) != 2 {
-		return Arguments{}, moerr.NewInternalErrorNoCtx("handleMerge: invalid db.table format")
+		return arguments{}, moerr.NewInternalErrorNoCtx("handleMerge: invalid db.table format")
 	}
 	a.db, a.tbl = dbtbl[0], dbtbl[1]
 
@@ -77,15 +77,15 @@ func parseArgs(arg string) (Arguments, error) {
 			objStr = strings.TrimSpace(objStr)
 			parts := strings.Split(objStr, "_")
 			if len(parts) != 2 {
-				return Arguments{}, moerr.NewInternalErrorNoCtx("handleMerge: invalid obj format: %s", objStr)
+				return arguments{}, moerr.NewInternalErrorNoCtx("handleMerge: invalid obj format: %s", objStr)
 			}
 			uuid, err := types.ParseUuid(parts[0])
 			if err != nil {
-				return Arguments{}, errors.Join(moerr.NewInternalErrorNoCtx("handleMerge: invalid obj uuid format: %s", objStr), err)
+				return arguments{}, errors.Join(moerr.NewInternalErrorNoCtx("handleMerge: invalid obj uuid format: %s", objStr), err)
 			}
 			num, err := strconv.Atoi(parts[1])
 			if err != nil {
-				return Arguments{}, errors.Join(moerr.NewInternalErrorNoCtx("handleMerge: invalid obj num format: %s", objStr), err)
+				return arguments{}, errors.Join(moerr.NewInternalErrorNoCtx("handleMerge: invalid obj num format: %s", objStr), err)
 			}
 			objectname := objectio.BuildObjectName(&uuid, uint16(num))
 			obj := objectio.NewObjectStats()
@@ -107,7 +107,7 @@ func parseArgs(arg string) (Arguments, error) {
 	// Parse targetObjSize
 	size, err := units.RAMInBytes(args[3])
 	if err != nil {
-		return Arguments{}, errors.Join(moerr.NewInternalErrorNoCtx("handleMerge: invalid targetObjSize format: %s", args[3]), err)
+		return arguments{}, errors.Join(moerr.NewInternalErrorNoCtx("handleMerge: invalid targetObjSize format: %s", args[3]), err)
 	}
 	a.targetObjSize = int(size)
 	return a, nil
