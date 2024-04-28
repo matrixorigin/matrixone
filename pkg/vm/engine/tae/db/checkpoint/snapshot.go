@@ -36,9 +36,11 @@ func SpecifiedCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int
 }
 
 func AllAfterAndGCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int, error) {
-	var prev *MetaFile
+	prev := &MetaFile{}
 	for i, file := range files {
-		if snapshot.LessEq(&file.end) && snapshot.Less(&prev.end) && file.start.IsEmpty() {
+		if snapshot.LessEq(&file.end) &&
+			snapshot.Less(&prev.end) &&
+			file.start.IsEmpty() {
 			return files, i - 1, nil
 		}
 		prev = file
