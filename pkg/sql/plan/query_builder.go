@@ -1491,6 +1491,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.generateRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
+		if builder.isForUpdate {
+			reCheckifNeedLockWholeTable(builder)
+		}
+
 		builder.handleMessgaes(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
@@ -2854,10 +2858,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 	if isRoot {
 		builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
-	}
-	
-	if builder.isForUpdate {
-		reCheckifNeedLockWholeTable(builder)
 	}
 
 	return nodeID, nil

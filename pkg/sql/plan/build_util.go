@@ -59,8 +59,8 @@ func reCheckifNeedLockWholeTable(builder *QueryBuilder) {
 		if !n.LockTargets[0].LockTable {
 			reCheckIfNeed := n.Stats.Outcnt > float64(lockconfig.MaxLockRowCount)
 			if reCheckIfNeed {
-				logutil.Warnf("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
-				logutil.Warnf("the outcnt stats is %f", n.Stats.Outcnt)
+				logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
+				logutil.Infof("the outcnt stats is %f", n.Stats.Outcnt)
 				n.LockTargets[0].LockTable = reCheckIfNeed
 			}
 		}
