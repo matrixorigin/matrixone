@@ -135,6 +135,7 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 	// record files
 	taeFileList := make([]*taeFile, 0, len(files))
 	errC := make(chan error, 1)
+	defer close(errC)
 	jobScheduler := tasks.NewParallelJobScheduler(parallelCount)
 	defer jobScheduler.Stop()
 	go func() {
@@ -212,6 +213,7 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 		}
 		select {
 		case err = <-errC:
+			logutil.Infof("copy file failed %v", err.Error())
 			return nil, err
 		default:
 		}
