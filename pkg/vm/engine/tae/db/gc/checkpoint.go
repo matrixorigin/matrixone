@@ -458,10 +458,12 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 		}
 	}
 	logutil.Infof("CKP GC: %v", deleteFiles)
-	err = c.fs.DelFiles(c.ctx, deleteFiles)
-	if err != nil {
-		logutil.Errorf("DelFiles failed: %v", err.Error())
-		return err
+	if !c.disableGC {
+		err = c.fs.DelFiles(c.ctx, deleteFiles)
+		if err != nil {
+			logutil.Errorf("DelFiles failed: %v", err.Error())
+			return err
+		}
 	}
 	c.updateCkpStage(&stage)
 	c.updateCkpGC(&stage)
