@@ -82,6 +82,8 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 		if ctr.batch != nil {
 			proc.PutBatch(ctr.batch)
 		}
+		ctr.state = ReceiveBatch
+		ctr.runtimeFilterHandled = false
 	}
 }
 

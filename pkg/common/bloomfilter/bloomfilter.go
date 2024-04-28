@@ -22,7 +22,6 @@ import (
 
 func (bf *BloomFilter) Reset() {
 	bf.bitmap.Reset()
-	bf.addVals = bf.addVals[:0]
 }
 
 func (bf *BloomFilter) Clean() {
@@ -33,6 +32,10 @@ func (bf *BloomFilter) Clean() {
 	bf.states = nil
 	bf.vals = nil
 	bf.addVals = nil
+}
+
+func (bf *BloomFilter) Prepare() {
+	bf.bitmap.InitWithSize(bf.bitSize)
 }
 
 func (bf *BloomFilter) Add(v *vector.Vector) {

@@ -167,6 +167,7 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
+		ctr.state = vm.Build
 	}
 }
 

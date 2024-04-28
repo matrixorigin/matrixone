@@ -97,6 +97,7 @@ func TestAnti(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- bats[0]
 		tc.proc.Reg.MergeReceivers[1].Ch <- bats[1]
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			ok, err := tc.arg.Call(tc.proc)
@@ -104,8 +105,8 @@ func TestAnti(t *testing.T) {
 				break
 			}
 		}
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- nil
+		// tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		// tc.proc.Reg.MergeReceivers[1].Ch <- nil
 
 		tc.arg.Reset(tc.proc, false, nil)
 
@@ -123,6 +124,7 @@ func TestAnti(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- bats[0]
 		tc.proc.Reg.MergeReceivers[1].Ch <- bats[1]
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			ok, err := tc.arg.Call(tc.proc)
@@ -130,8 +132,8 @@ func TestAnti(t *testing.T) {
 				break
 			}
 		}
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- nil
+		// tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		// tc.proc.Reg.MergeReceivers[1].Ch <- nil
 
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()

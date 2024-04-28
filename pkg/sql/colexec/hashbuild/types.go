@@ -118,6 +118,7 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
 		}
+		ctr.state = BuildHashMap
 	}
 }
 

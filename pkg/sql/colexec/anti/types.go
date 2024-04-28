@@ -115,16 +115,15 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 		ctr.cleanHashMap()
 		ctr.FreeAllReg()
 
-		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
-
-		ctr.maxAllocSize = 0
 		ctr.state = Build
 		ctr.hasNull = false
-
 		ctr.batchRowCount = 0
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
 		ctr.maxAllocSize = 0
 	}
+	arg.lastrow = 0
 	if arg.bat != nil {
 		arg.bat.Clean(proc.GetMPool())
 		arg.bat = nil

@@ -98,6 +98,7 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 		arg.roaringFilter.b.Clear()
 	}
 	arg.cleanBatch(proc)
+	arg.FreeAllReg()
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

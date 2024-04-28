@@ -66,40 +66,44 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.InitReceiver(proc, false)
-	rowCount := int64(arg.N)
-	if rowCount < 1000 {
-		rowCount = 1000
-	}
+	if arg.roaringFilter == nil && arg.bloomFilter == nil {
+		arg.InitReceiver(proc, false)
+		rowCount := int64(arg.N)
+		if rowCount < 1000 {
+			rowCount = 1000
+		}
 
-	if err := arg.generate(proc); err != nil {
-		return err
-	}
+		if err := arg.generate(proc); err != nil {
+			return err
+		}
 
-	useRoaring := IfCanUseRoaringFilter(types.T(arg.PkTyp.Id))
+		useRoaring := IfCanUseRoaringFilter(types.T(arg.PkTyp.Id))
 
-	if useRoaring {
-		if arg.roaringFilter == nil {
+		if useRoaring {
 			arg.roaringFilter = newroaringFilter(types.T(arg.PkTyp.Id))
+		} else {
+			//@see https://hur.st/bloomfilter/
+			if arg.bloomFilter == nil {
+				var probability float64
+				if rowCount < 100001 {
+					probability = 0.00001
+				} else if rowCount < 1000001 {
+					probability = 0.000003
+				} else if rowCount < 10000001 {
+					probability = 0.000001
+				} else if rowCount < 100000001 {
+					probability = 0.0000005
+				} else if rowCount < 1000000001 {
+					probability = 0.0000002
+				} else {
+					probability = 0.0000001
+				}
+				arg.bloomFilter = bloomfilter.New(rowCount, probability)
+			}
 		}
 	} else {
-		//@see https://hur.st/bloomfilter/
-		if arg.bloomFilter == nil {
-			var probability float64
-			if rowCount < 100001 {
-				probability = 0.00001
-			} else if rowCount < 1000001 {
-				probability = 0.000003
-			} else if rowCount < 10000001 {
-				probability = 0.000001
-			} else if rowCount < 100000001 {
-				probability = 0.0000005
-			} else if rowCount < 1000000001 {
-				probability = 0.0000002
-			} else {
-				probability = 0.0000001
-			}
-			arg.bloomFilter = bloomfilter.New(rowCount, probability)
+		if arg.bloomFilter != nil {
+			arg.bloomFilter.Prepare()
 		}
 	}
 

@@ -36,12 +36,14 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		panic("there must be runtime filter in index build!")
 	}
 
-	ap.ctr = new(container)
-	if len(proc.Reg.MergeReceivers) > 1 {
-		ap.ctr.InitReceiver(proc, true)
-		ap.ctr.isMerge = true
-	} else {
-		ap.ctr.InitReceiver(proc, false)
+	if ap.ctr == nil {
+		ap.ctr = new(container)
+		if len(proc.Reg.MergeReceivers) > 1 {
+			ap.ctr.InitReceiver(proc, true)
+			ap.ctr.isMerge = true
+		} else {
+			ap.ctr.InitReceiver(proc, false)
+		}
 	}
 
 	return nil
