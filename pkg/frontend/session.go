@@ -18,12 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/google/uuid"
 
@@ -1178,7 +1179,7 @@ func (ses *Session) GetSessionVar(name string) (interface{}, error) {
 	if def, gVal, ok := gSysVars.GetGlobalSysVar(name); ok {
 		ciname := strings.ToLower(name)
 		if def.GetScope() == ScopeGlobal {
-			return gVal, nil
+			return gVal, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableIsGlobal())
 		}
 		return ses.GetSysVar(ciname), nil
 	} else {
