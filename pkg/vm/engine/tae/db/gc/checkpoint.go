@@ -444,7 +444,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 				}
 				return err
 			}
-			for name, location := range locations {
+			for name := range locations {
 				deleteFiles = append(deleteFiles, name)
 			}
 			deleteFiles = append(deleteFiles, ckp.GetTNLocation().Name().String())
