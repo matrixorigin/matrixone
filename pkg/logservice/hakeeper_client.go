@@ -547,12 +547,18 @@ type hakeeperClient struct {
 
 func newHAKeeperClient(ctx context.Context,
 	cfg HAKeeperClientConfig) (*hakeeperClient, error) {
-	client, err := connectToHAKeeper(ctx, cfg.ServiceAddresses, cfg)
-	if client != nil && err == nil {
-		return client, nil
-	}
+	var err error
+	// If the discovery address is configured, we used it first.
 	if len(cfg.DiscoveryAddress) > 0 {
-		return connectByReverseProxy(ctx, cfg.DiscoveryAddress, cfg)
+		c, err := connectByReverseProxy(ctx, cfg.DiscoveryAddress, cfg)
+		if c != nil && err == nil {
+			return c, nil
+		}
+	} else if len(cfg.ServiceAddresses) > 0 {
+		c, err := connectToHAKeeper(ctx, cfg.ServiceAddresses, cfg)
+		if c != nil && err == nil {
+			return c, nil
+		}
 	}
 	if err != nil {
 		return nil, err
