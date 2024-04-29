@@ -95,7 +95,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 func (arg *Argument) cleanBuf(proc *process.Process) {
 	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
+		proc.PutBatch(arg.buf)
 		arg.buf = nil
 	}
 }

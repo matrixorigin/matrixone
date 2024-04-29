@@ -77,12 +77,12 @@ func (arg *Argument) Release() {
 
 func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
+	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
 	if ctr != nil {
 		if ctr.batch != nil {
 			proc.PutBatch(ctr.batch)
 		}
 		ctr.state = ReceiveBatch
-		ctr.runtimeFilterHandled = false
 	}
 }
 
