@@ -181,6 +181,9 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	for i := 0; i < delTableTxn.Length(); i++ {
 		tid := delTableIDs[i]
 		dropAt := delDropAts[i]
+		if sm.acctIndexes[tid] == nil {
+			continue
+		}
 		table := sm.acctIndexes[tid]
 		table.deleteAt = dropAt
 		sm.acctIndexes[tid] = table
