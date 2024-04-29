@@ -100,21 +100,28 @@ func parseArgs(arg string) (arguments, error) {
 		return a, nil
 	}
 
-	// Parse filter
-	// only parse filter if obj is not specified
 	if args[1] == "all" {
+		// Parse filter
+		// only parse filter if obj is not specified
 		a.filter = strings.TrimSpace(strings.ToLower(args[2]))
 		if len(args) == 3 {
 			return a, nil
 		}
+		// Parse targetObjSize
+		size, err := units.RAMInBytes(args[3])
+		if err != nil {
+			return arguments{}, errors.Join(moerr.NewInternalErrorNoCtx("handleMerge: invalid targetObjSize format: %s", args[3]), err)
+		}
+		a.targetObjSize = int(size)
+	} else {
+		// Parse targetObjSize
+		size, err := units.RAMInBytes(args[2])
+		if err != nil {
+			return arguments{}, errors.Join(moerr.NewInternalErrorNoCtx("handleMerge: invalid targetObjSize format: %s", args[3]), err)
+		}
+		a.targetObjSize = int(size)
 	}
 
-	// Parse targetObjSize
-	size, err := units.RAMInBytes(args[3])
-	if err != nil {
-		return arguments{}, errors.Join(moerr.NewInternalErrorNoCtx("handleMerge: invalid targetObjSize format: %s", args[3]), err)
-	}
-	a.targetObjSize = int(size)
 	return a, nil
 }
 
