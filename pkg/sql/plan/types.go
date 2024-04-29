@@ -112,6 +112,7 @@ type CompilerContext interface {
 	SetQueryingSubscription(meta *SubscriptionMeta)
 	GetQueryingSubscription() *SubscriptionMeta
 	IsPublishing(dbName string) (bool, error)
+	ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef)
 }
 
 type Optimizer interface {
