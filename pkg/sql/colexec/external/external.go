@@ -420,13 +420,19 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, cols []*p
 func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) (int64, error) {
 	bufR := bufio.NewReader(r)
 	// ensure the first character is not field quote symbol
+	quoteByte := byte('"')
+	if param.Tail.Fields != nil {
+		if enclosed := param.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
+			quoteByte = enclosed.Value
+		}
+	}
 	skipCount := int64(0)
 	for {
 		ch, err := bufR.ReadByte()
 		if err != nil {
 			return 0, err
 		}
-		if ch != '"' {
+		if ch != quoteByte {
 			err = bufR.UnreadByte()
 			if err != nil {
 				return 0, err
