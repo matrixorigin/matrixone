@@ -14,6 +14,8 @@
 
 package process
 
+import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 const (
 	RuntimeFilter_IN          = 0
 	RuntimeFilter_BITMAP      = 1
@@ -50,4 +52,20 @@ func (rt RuntimeFilterMessage) GetMsgTag() int32 {
 
 func (rt RuntimeFilterMessage) GetReceiverAddr() MessageAddress {
 	return AddrBroadCastOnCurrentCN()
+}
+
+func (proc *Process) SendRuntimeFilter(rt RuntimeFilterMessage, m *plan.RuntimeFilterSpec) {
+	if m != nil {
+		proc.SendMessage(rt)
+		m.Handled = true
+	}
+}
+
+func (proc *Process) FinalizeRuntimeFilter(m *plan.RuntimeFilterSpec) {
+	if m != nil && !m.Handled {
+		var runtimeFilter RuntimeFilterMessage
+		runtimeFilter.Tag = m.Tag
+		runtimeFilter.Typ = RuntimeFilter_DROP
+		proc.SendMessage(runtimeFilter)
+	}
 }

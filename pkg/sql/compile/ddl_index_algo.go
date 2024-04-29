@@ -516,3 +516,56 @@ func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
 
 	return fmt.Sprintf("%v", val) == "1", nil
 }
+
+func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile,
+	metadataTableName string,
+	centroidsTableName string,
+	entriesTableName string,
+	qryDatabase string) error {
+
+	pruneCentroidsTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
+		"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
+		qryDatabase,
+		centroidsTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	)
+
+	pruneEntriesTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
+		"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
+		qryDatabase,
+		entriesTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	)
+
+	err := s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_start")
+	if err != nil {
+		return err
+	}
+
+	err = c.runSql(pruneCentroidsTbl)
+	if err != nil {
+		return err
+	}
+
+	err = c.runSql(pruneEntriesTbl)
+	if err != nil {
+		return err
+	}
+
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_end")
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

@@ -30,6 +30,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -56,7 +57,7 @@ type LocalFS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 
-	ioLocks *IOLocks
+	ioMerger *IOMerger
 }
 
 var _ FileService = new(LocalFS)
@@ -102,7 +103,7 @@ func NewLocalFS(
 		dirFiles:        make(map[string]*os.File),
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
-		ioLocks:         NewIOLocks(),
+		ioMerger:        NewIOMerger(),
 	}
 
 	if err := fs.initCaches(ctx, cacheConfig); err != nil {
@@ -307,15 +308,15 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	stats := statistic.StatsInfoFromContext(ctx)
 
 	startLock := time.Now()
-	_, task := gotrace.NewTask(ctx, "LocalFS.Read: wait io lock")
-	unlock, wait := l.ioLocks.Lock(vector.ioLockKey())
-	if unlock != nil {
-		defer unlock()
+	_, task := gotrace.NewTask(ctx, "LocalFS.Read: wait io")
+	done, wait := l.ioMerger.Merge(vector.ioMergeKey())
+	if done != nil {
+		defer done()
 	} else {
 		wait()
 	}
 	task.End()
-	stats.AddLocalFSReadIOLockTimeConsumption(time.Since(startLock))
+	stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
 
 	allocator := l.allocator
 	if vector.Policy.Any(SkipMemoryCache) {
@@ -394,13 +395,13 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	startLock := time.Now()
-	unlock, wait := l.ioLocks.Lock(vector.ioLockKey())
-	if unlock != nil {
-		defer unlock()
+	done, wait := l.ioMerger.Merge(vector.ioMergeKey())
+	if done != nil {
+		defer done()
 	} else {
 		wait()
 	}
-	statistic.StatsInfoFromContext(ctx).AddLocalFSReadCacheIOLockTimeConsumption(time.Since(startLock))
+	statistic.StatsInfoFromContext(ctx).AddLocalFSReadCacheIOMergerTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -581,7 +582,9 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 
 			} else {
 				if int64(len(entry.Data)) < entry.Size {
-					entry.Data = make([]byte, entry.Size)
+					vector.onRelease = append(vector.onRelease,
+						malloc.Alloc(int(entry.Size), &entry.Data).Free,
+					)
 				}
 				var n int
 				n, err = io.ReadFull(r, entry.Data)

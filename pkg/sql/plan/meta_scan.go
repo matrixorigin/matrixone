@@ -121,7 +121,7 @@ func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindCon
 	} else {
 		return 0, err
 	}
-	exprs[0], err = appendCastBeforeExpr(builder.GetContext(), exprs[0], &plan.Type{
+	exprs[0], err = appendCastBeforeExpr(builder.GetContext(), exprs[0], plan.Type{
 		Id:          int32(types.T_uuid),
 		NotNullable: true,
 	})
