@@ -498,7 +498,6 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 		statsCache:   plan2.NewStatsCache(),
 	}
 	if isNotBackgroundSession {
-		ses.sysVars = gSysVars.CopySysVarsToSession()
 		ses.userDefinedVars = make(map[string]*UserDefinedVar)
 		ses.prepareStmts = make(map[string]*PrepareStmt)
 		// For seq init values.
@@ -1519,6 +1518,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	if checkPassword(psw, salt, authResponse) {
 		logDebugf(sessionInfo, "check password succeeded")
 		ses.InitGlobalSystemVariables()
+		ses.sysVars = ses.gSysVars.CopySysVarsToSession()
 	} else {
 		return nil, moerr.NewInternalError(tenantCtx, "check password failed")
 	}
