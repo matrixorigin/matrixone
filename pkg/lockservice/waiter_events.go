@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"encoding/hex"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,10 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"go.uber.org/zap"
 )
 
 var (
 	defaultLazyCheckDuration atomic.Value
+	waitTooLong              = time.Minute
 )
 
 func init() {
@@ -211,8 +214,9 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 			continue
 		}
 
-		mw.addToOrphanCheck(w)
-		if now.Sub(w.waitAt.Load().(time.Time)) >= timeout {
+		wait := now.Sub(w.waitAt.Load().(time.Time))
+		mw.addToOrphanCheck(w, wait)
+		if wait >= timeout {
 			mw.addToDeadlockCheck(w)
 		}
 		newBlockedWaiters = append(newBlockedWaiters, w)
@@ -261,7 +265,25 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 	}
 }
 
-func (mw *waiterEvents) addToOrphanCheck(w *waiter) {
+func (mw *waiterEvents) addToOrphanCheck(
+	w *waiter,
+	wait time.Duration,
+) {
+	if wait >= waitTooLong {
+		lockDetail := ""
+		w.lt.mu.RLock()
+		lock, ok := w.lt.mu.store.Get(w.conflictKey)
+		if ok {
+			lockDetail = lock.String()
+		}
+		getLogger().Warn("wait too long",
+			zap.String("key", hex.EncodeToString(w.conflictKey)),
+			zap.String("bind", w.lt.bind.DebugString()),
+			zap.String("lock", lockDetail),
+			zap.String("txn", hex.EncodeToString(w.txn.TxnID)))
+		w.lt.mu.RUnlock()
+	}
+
 	v := checkOrphan{
 		key: w.conflictKey,
 		lt:  w.lt,
