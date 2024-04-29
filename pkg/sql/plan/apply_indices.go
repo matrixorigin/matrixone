@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -127,6 +128,10 @@ END0:
 	{
 		return builder.applyIndicesForFiltersRegularIndex(nodeID, node, colRefCnt, idxColMap)
 	}
+}
+
+func getColSeqFromColDef(tblCol *plan.ColDef) string {
+	return fmt.Sprintf("%d", tblCol.GetSeqnum())
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {

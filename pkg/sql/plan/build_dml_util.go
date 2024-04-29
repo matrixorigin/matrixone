@@ -577,9 +577,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 										// in the index table will be same value (ie that from the original table).
 										// So, when we do UNION it automatically removes the duplicate values.
 										// ie
-										//  <"a_arjun_1",1, 1> -->  (select serial_full("a", a, c),__mo_pk_key, __mo_row_id)
+										//  <"a_arjun_1",1, 1> -->  (select serial_full("0", a, c),__mo_pk_key, __mo_row_id)
 										//  <"a_arjun_1",1, 1>
-										//  <"b_sunil_1",1, 1> -->  (select serial_full("b", b,c),__mo_pk_key, __mo_row_id)
+										//  <"b_sunil_1",1, 1> -->  (select serial_full("2", b,c),__mo_pk_key, __mo_row_id)
 										//  <"b_sunil_1",1, 1>
 										//  when we use UNION, we remove the duplicate values
 										// 3. RowID is added here: https://github.com/arjunsk/matrixone/blob/d7db178e1c7298e2a3e4f99e7292425a7ef0ef06/pkg/vm/engine/disttae/txn.go#L95
@@ -2395,7 +2395,7 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 		return -1, moerr.NewInternalErrorNoCtx("index parts is empty. file a bug")
 	} else if len(idxDef.Parts) == 1 {
 		// 2.a build single project
-		projectNode, err := buildSerialFullAndPKColsProj(builder, bindCtx, tableDef, genLastNodeIdFn, originPkPos, idxDef.Parts[0], colsType, colsPos, originPkType)
+		projectNode, err := buildSerialFullAndPKColsProjMasterIndex(builder, bindCtx, tableDef, genLastNodeIdFn, originPkPos, idxDef.Parts[0], colsType, colsPos, originPkType)
 		if err != nil {
 			return -1, err
 		}
@@ -2407,7 +2407,7 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 		var unionChildren []int32
 		for _, part := range idxDef.Parts {
 			// 2.b.i build project
-			projectNode, err := buildSerialFullAndPKColsProj(builder, bindCtx, tableDef, genLastNodeIdFn, originPkPos, part, colsType, colsPos, originPkType)
+			projectNode, err := buildSerialFullAndPKColsProjMasterIndex(builder, bindCtx, tableDef, genLastNodeIdFn, originPkPos, part, colsType, colsPos, originPkType)
 			if err != nil {
 				return -1, err
 			}
@@ -2453,7 +2453,7 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 	return newSourceStep, nil
 }
 
-func buildSerialFullAndPKColsProj(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, genLastNodeIdFn func() int32, originPkPos int, part string, colsType map[string]*Type, colsPos map[string]int, originPkType Type) (*Node, error) {
+func buildSerialFullAndPKColsProjMasterIndex(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, genLastNodeIdFn func() int32, originPkPos int, part string, colsType map[string]*Type, colsPos map[string]int, originPkType Type) (*Node, error) {
 	var err error
 	// 1. get new source sink
 	var currLastNodeId = genLastNodeIdFn()
@@ -2461,12 +2461,12 @@ func buildSerialFullAndPKColsProj(builder *QueryBuilder, bindCtx *BindContext, t
 	//2. recompute CP PK.
 	currLastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, currLastNodeId, originPkPos)
 
-	//3. add a new project for < serial_full(a, "a", pk), pk >
+	//3. add a new project for < serial_full("0", a, pk), pk >
 	projectProjection := make([]*Expr, 2)
 
-	//3.i build serial_full("a", a, pk)
+	//3.i build serial_full("0", a, pk)
 	serialArgs := make([]*plan.Expr, 3)
-	serialArgs[0] = makePlan2StringConstExprWithType(part)
+	serialArgs[0] = makePlan2StringConstExprWithType(getColSeqFromColDef(tableDef.Cols[colsPos[part]]))
 	serialArgs[1] = &Expr{
 		Typ: *colsType[part],
 		Expr: &plan.Expr_Col{
@@ -3135,13 +3135,13 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 
 	// join conditions
 	// Example :-
-	//  ( (serial_full('a', a, c) = __mo_index_idx_col) or (serial_full('b', b, c) = __mo_index_idx_col) )
+	//  ( (serial_full('1', a, c) = __mo_index_idx_col) or (serial_full('1', b, c) = __mo_index_idx_col) )
 	var joinConds *Expr
 	for idx, part := range indexDef.Parts {
-		// serial_full("col1", col1, pk)
+		// serial_full("colPos", col1, pk)
 		var leftExpr *Expr
 		leftExprArgs := make([]*Expr, 3)
-		leftExprArgs[0] = makePlan2StringConstExprWithType(part)
+		leftExprArgs[0] = makePlan2StringConstExprWithType(getColSeqFromColDef(tableDef.Cols[posMap[part]]))
 		leftExprArgs[1] = &Expr{
 			Typ: typMap[part],
 			Expr: &plan.Expr_Col{
