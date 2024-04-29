@@ -1179,7 +1179,7 @@ func (ses *Session) GetSessionVar(name string) (interface{}, error) {
 	if def, gVal, ok := gSysVars.GetGlobalSysVar(name); ok {
 		ciname := strings.ToLower(name)
 		if def.GetScope() == ScopeGlobal {
-			return gVal, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableIsGlobal())
+			return gVal, nil
 		}
 		return ses.GetSysVar(ciname), nil
 	} else {
