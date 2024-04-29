@@ -462,7 +462,6 @@ func isValidateLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvpa
 		if isNullOrEmpty {
 			continue
 		}
-
 		switch id {
 		case types.T_bool:
 			_, err := types.ParseBool(field.Val)
@@ -597,7 +596,7 @@ func isValidateLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvpa
 
 			}
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			// XXX Memory accounting?
+			continue
 		case types.T_array_float32:
 			_, err := types.StringToArrayToBytes[float32](field.Val)
 			if err != nil {
