@@ -386,7 +386,7 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, cols []*p
 	offset = append(offset, 0)
 
 	for i := 1; i < mcpu; i++ {
-		vec.Entries[0].Offset = offset[i-1] + int64(i)*batchSize
+		vec.Entries[0].Offset = offset[i-1] + batchSize
 		if vec.Entries[0].Offset >= fileSize {
 			break
 		}
