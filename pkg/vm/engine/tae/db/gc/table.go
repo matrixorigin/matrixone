@@ -331,16 +331,16 @@ func (t *GCTable) replayData(ctx context.Context,
 	types []types.Type,
 	bats []*containers.Batch,
 	bs []objectio.BlockObject,
-	reader *blockio.BlockReader) error {
+	reader *blockio.BlockReader) (func(), error) {
 	idxes := make([]uint16, len(attrs))
 	for i := range attrs {
 		idxes[i] = uint16(i)
 	}
 	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[typ].GetID(), common.DefaultAllocator)
 	if err != nil {
-		return err
+		release()
+		return nil, err
 	}
-	defer release()
 	for i := range attrs {
 		pkgVec := mobat.Vecs[i]
 		var vec containers.Vector
@@ -351,11 +351,23 @@ func (t *GCTable) replayData(ctx context.Context,
 		}
 		bats[typ].AddVector(attrs[i], vec)
 	}
-	return nil
+	return release, nil
 }
 
 // ReadTable reads an s3 file and replays a GCTable in memory
 func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS, ts types.TS) error {
+	var release, releaseCreateBlock, releaseDeleteBlock func()
+	defer func() {
+		if release != nil {
+			release()
+		}
+		if releaseCreateBlock != nil {
+			releaseCreateBlock()
+		}
+		if releaseDeleteBlock != nil {
+			releaseDeleteBlock()
+		}
+	}()
 	reader, err := blockio.NewFileReaderNoCache(fs.Service, name)
 	if err != nil {
 		return err
@@ -367,7 +379,7 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	if len(bs) == 1 {
 		bats := t.makeBatchWithGCTable()
 		defer t.closeBatch(bats)
-		err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
+		release, err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
 		if err != nil {
 			return err
 		}
@@ -376,11 +388,11 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	}
 	bats := t.makeBatchWithGCTableV1()
 	defer t.closeBatch(bats)
-	err = t.replayData(ctx, CreateBlock, BlockSchemaAttrV1, BlockSchemaTypesV1, bats, bs, reader)
+	releaseCreateBlock, err = t.replayData(ctx, CreateBlock, BlockSchemaAttrV1, BlockSchemaTypesV1, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DeleteBlock, BlockSchemaAttrV1, BlockSchemaTypesV1, bats, bs, reader)
+	releaseDeleteBlock, err = t.replayData(ctx, DeleteBlock, BlockSchemaAttrV1, BlockSchemaTypesV1, bats, bs, reader)
 	if err != nil {
 		return err
 	}
