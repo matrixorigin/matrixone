@@ -122,6 +122,11 @@ func TestRowLockWithSharedAndExclusive(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
+
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -235,6 +240,7 @@ func TestRangeLockWithSharedAndExclusive(t *testing.T) {
 					// keep txn1 cannot close by orphan txn
 					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
 						f(txn1)
+						f(txn2)
 					}
 
 					// txn1 hold the lock
@@ -324,6 +330,11 @@ func TestRowLockWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
+
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -367,6 +378,11 @@ func TestRangeLockWithConflict(t *testing.T) {
 					rows := newTestRows(1, 2)
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -416,6 +432,12 @@ func TestRowLockWithWaitQueue(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+					}
 
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -484,6 +506,12 @@ func TestRangeLockWithWaitQueue(t *testing.T) {
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
 
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+					}
+
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
 
@@ -538,6 +566,11 @@ func TestRowLockWithSameTxnWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
+
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
 
@@ -591,6 +624,11 @@ func TestRangeLockWithSameTxnWithConflict(t *testing.T) {
 					rows := newTestRows(1, 2)
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
 
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -713,6 +751,11 @@ func TestManyRowLockWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
+
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -759,6 +802,11 @@ func TestManyRangeLockWithConflict(t *testing.T) {
 					rows := newTestRows(1, 2, 3, 4)
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -881,6 +929,12 @@ func TestCtxCancelWhileWaiting(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+					}
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -1082,6 +1136,13 @@ func TestDeadLockWithIndirectDependsOn(t *testing.T) {
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
 					txn4 := newTestTxnID(4)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+						f(txn4)
+					}
 
 					mustAddTestLock(t, ctx, s, table, txn1, row1, pb.Granularity_Row)
 					mustAddTestLock(t, ctx, s, table, txn4, row4, pb.Granularity_Row)
@@ -2255,6 +2316,11 @@ func TestRowLockWithConflictAndUnlock(t *testing.T) {
 			txn1 := newTestTxnID(1)
 			txn2 := newTestTxnID(2)
 
+			s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+				f(txn1)
+				f(txn2)
+			}
+
 			// txn1 hold the lock
 			_, err := s.Lock(ctx, table, rows, txn1, option)
 			require.NoError(t, err)
@@ -2296,6 +2362,12 @@ func TestUnlockRangeLockCanNotifyAllWaiters(t *testing.T) {
 			txn1 := newTestTxnID(1)
 			txn2 := newTestTxnID(2)
 			txn3 := newTestTxnID(3)
+
+			s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+				f(txn1)
+				f(txn2)
+				f(txn3)
+			}
 
 			// txn1 hold the lock
 			_, err := s.Lock(ctx, table, rows, txn1, rangeOption)
@@ -2349,6 +2421,12 @@ func TestHasAnyHolderCannotNotifyWaiters(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+					}
 
 					// txn1 get lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
