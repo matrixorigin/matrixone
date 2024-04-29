@@ -134,7 +134,8 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 	}()
 	// record files
 	taeFileList := make([]*taeFile, 0, len(files))
-
+	errC := make(chan error, 1)
+	defer close(errC)
 	jobScheduler := tasks.NewParallelJobScheduler(parallelCount)
 	defer jobScheduler.Stop()
 	go func() {
@@ -164,7 +165,7 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 
 				name := location.Name().String()
 				size := location.Extent().End() + objectio.FooterSize
-				checksum, err := CopyFile(context.Background(), srcFs, dstFs, location.Name().String(), "")
+				checksum, err := CopyFileWithRetry(context.Background(), srcFs, dstFs, location.Name().String(), "")
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 						// TODO: handle file not found, maybe GC
@@ -175,6 +176,7 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 							Res: nil,
 						}
 					} else {
+						errC <- err
 						return &tasks.JobResult{
 							Err: err,
 							Res: nil,
@@ -209,11 +211,15 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 			logutil.Infof("schedule job failed %v", err.Error())
 			return nil, err
 		}
-
+		select {
+		case err = <-errC:
+			logutil.Infof("copy file failed %v", err.Error())
+			return nil, err
+		default:
+		}
 	}
 
 	for n := range backupJobs {
-
 		ret := backupJobs[n].WaitDone()
 		if ret.Err != nil {
 			logutil.Infof("wait job done failed %v", ret.Err.Error())
@@ -393,7 +399,7 @@ func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir stri
 			logutil.Infof("[Backup] skip file %v", file.Name)
 			continue
 		}
-		checksum, err = CopyFile(ctx, srcFs, dstFs, file.Name, dir)
+		checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, file.Name, dir)
 		if err != nil {
 			return nil, err
 		}
@@ -404,6 +410,17 @@ func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir stri
 		})
 	}
 	return taeFileList, nil
+}
+
+func CopyFileWithRetry(ctx context.Context, srcFs, dstFs fileservice.FileService, name, dstDir string) ([]byte, error) {
+	return fileservice.DoWithRetry(
+		"CopyFile",
+		func() ([]byte, error) {
+			return CopyFile(ctx, srcFs, dstFs, name, dstDir)
+		},
+		64,
+		fileservice.IsRetryableError,
+	)
 }
 
 // CopyFile copy file from srcFs to dstFs and return checksum of the written file.

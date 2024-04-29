@@ -218,6 +218,7 @@ func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles 
 	if err != nil {
 		return err
 	}
+
 	return writeFile(ctx, Fs, taeSum, []byte(metas))
 }
 
