@@ -25,6 +25,7 @@ const (
 	PrefixSnapMeta = "snap"
 	PrefixAcctMeta = "acct"
 	GCMetaDir      = "gc/"
+	CKPMetaDir     = "ckp/"
 )
 
 type BatchType int8
