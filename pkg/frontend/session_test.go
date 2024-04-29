@@ -759,7 +759,7 @@ func Test_doSelectGlobalSystemVariable(t *testing.T) {
 		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, err := ses.getGlobalSystemVariableValue("autocommit")
+		_, err := ses.GetGlobalSystemVariableValue("autocommit")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -791,7 +791,7 @@ func Test_doSelectGlobalSystemVariable(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		_, err := ses.getGlobalSystemVariableValue("autocommit")
+		_, err := ses.GetGlobalSystemVariableValue("autocommit")
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

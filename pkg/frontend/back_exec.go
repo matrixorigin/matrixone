@@ -887,7 +887,7 @@ func (backSes *backSession) GetSessionVar(name string) (interface{}, error) {
 	return nil, nil
 }
 
-func (backSes *backSession) getGlobalSystemVariableValue(name string) (interface{}, error) {
+func (backSes *backSession) GetGlobalSystemVariableValue(name string) (interface{}, error) {
 	return nil, moerr.NewInternalError(backSes.requestCtx, "do not support system variable in background exec")
 }
 

@@ -671,10 +671,6 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar, sql string) er
 				if err != nil {
 					return err
 				}
-				err = ses.SetGlobalVar(name, value)
-				if err != nil {
-					return err
-				}
 				err = doSetGlobalSystemVariable(ctx, ses, name, value)
 				if err != nil {
 					return err
