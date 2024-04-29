@@ -255,6 +255,13 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				return nil
 			}),
 		gc.WithCronJob(
+			"metadata-check",
+			time.Minute,
+			func(ctx context.Context) error {
+				db.Catalog.CheckMetadata()
+				return nil
+			}),
+		gc.WithCronJob(
 			"logtail-gc",
 			opts.CheckpointCfg.GCCheckpointInterval,
 			func(ctx context.Context) error {
