@@ -2736,6 +2736,21 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 	if err != nil {
 		return nil, err
 	}
+
+	sortkeyPos := -1
+	sortkeyIsPK := false
+	if tbl.primaryIdx >= 0 && tbl.tableDef.Cols[tbl.primaryIdx].Name != catalog.FakePrimaryKeyColName {
+		if tbl.clusterByIdx < 0 {
+			sortkeyPos = tbl.primaryIdx
+			sortkeyIsPK = true
+		} else {
+			panic(fmt.Sprintf("bad schema pk %v, ck %v", tbl.primaryIdx, tbl.clusterByIdx))
+		}
+	} else if tbl.clusterByIdx >= 0 {
+		sortkeyPos = tbl.clusterByIdx
+		sortkeyIsPK = false
+	}
+
 	var objInfos []logtailreplay.ObjectInfo
 	if len(objstats) != 0 {
 		objInfos = make([]logtailreplay.ObjectInfo, 0, len(objstats))
@@ -2758,36 +2773,26 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 			if obj.EntryState {
 				continue
 			}
-			sortKeyZM := obj.SortKeyZoneMap()
-			if !sortKeyZM.IsInited() {
-				continue
+			if sortkeyPos != -1 {
+				sortKeyZM := obj.SortKeyZoneMap()
+				if !sortKeyZM.IsInited() {
+					continue
+				}
 			}
 			objInfos = append(objInfos, obj)
 		}
 		switch policyName {
 		case "small":
-			objInfos = logtailreplay.NewSmall().Filter(objInfos)
+			objInfos = logtailreplay.NewSmall(110 * common.Const1MBytes).Filter(objInfos)
 		case "overlap":
-			objInfos = logtailreplay.NewOverlap().Filter(objInfos)
+			if sortkeyPos != -1 {
+				objInfos = logtailreplay.NewOverlap(100).Filter(objInfos)
+			}
 		}
 	}
 
 	if len(objInfos) < 2 {
 		return nil, moerr.NewInternalErrorNoCtx("no object match")
-	}
-
-	sortkeyPos := -1
-	sortkeyIsPK := false
-	if tbl.primaryIdx >= 0 && tbl.tableDef.Cols[tbl.primaryIdx].Name != catalog.FakePrimaryKeyColName {
-		if tbl.clusterByIdx < 0 {
-			sortkeyPos = tbl.primaryIdx
-			sortkeyIsPK = true
-		} else {
-			panic(fmt.Sprintf("bad schema pk %v, ck %v", tbl.primaryIdx, tbl.clusterByIdx))
-		}
-	} else if tbl.clusterByIdx >= 0 {
-		sortkeyPos = tbl.clusterByIdx
-		sortkeyIsPK = false
 	}
 
 	tbl.ensureSeqnumsAndTypesExpectRowid()

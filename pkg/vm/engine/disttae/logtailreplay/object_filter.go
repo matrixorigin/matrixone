@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
@@ -29,12 +28,12 @@ type Filter interface {
 	Filter([]ObjectInfo) []ObjectInfo
 }
 
-func NewSmall() Filter {
-	return &small{110 * common.Const1MBytes}
+func NewSmall(threshold uint32) Filter {
+	return &small{threshold}
 }
 
-func NewOverlap() Filter {
-	return &overlap{}
+func NewOverlap(maxObjects int) Filter {
+	return &overlap{maxEntries: maxObjects}
 }
 
 type small struct {
@@ -55,8 +54,9 @@ func (s *small) Filter(objs []ObjectInfo) []ObjectInfo {
 }
 
 type overlap struct {
-	t         types.T
-	intervals []entryInterval
+	t          types.T
+	intervals  []entryInterval
+	maxEntries int
 }
 
 func (o *overlap) Filter(objs []ObjectInfo) []ObjectInfo {
@@ -89,9 +89,11 @@ func (o *overlap) Filter(objs []ObjectInfo) []ObjectInfo {
 			set.reset(o.t)
 			set.add(o.t, interval)
 		} else {
-			// return the first intervals which overlaps with each other
-			return set.entries
+			break
 		}
+	}
+	if len(set.entries) > o.maxEntries {
+		return set.entries[:o.maxEntries]
 	}
 	return set.entries
 }

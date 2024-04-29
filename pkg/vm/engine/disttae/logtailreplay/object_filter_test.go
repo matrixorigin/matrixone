@@ -43,7 +43,7 @@ func TestOverlap(t *testing.T) {
 		info2 := ObjectInfo{}
 		objectio.SetObjectStatsSortKeyZoneMap(&info2.ObjectStats, zm2)
 
-		result := NewOverlap().Filter([]ObjectInfo{info1, info2})
+		result := NewOverlap(10).Filter([]ObjectInfo{info1, info2})
 		require.Equal(t, 2, len(result))
 	}
 
@@ -66,7 +66,7 @@ func TestOverlap(t *testing.T) {
 		info2 := ObjectInfo{}
 		objectio.SetObjectStatsSortKeyZoneMap(&info2.ObjectStats, zm2)
 
-		result := NewOverlap().Filter([]ObjectInfo{info1, info2})
+		result := NewOverlap(10).Filter([]ObjectInfo{info1, info2})
 		require.Equal(t, 2, len(result))
 	}
 
@@ -89,7 +89,7 @@ func TestOverlap(t *testing.T) {
 		info2 := ObjectInfo{}
 		objectio.SetObjectStatsSortKeyZoneMap(&info2.ObjectStats, zm2)
 
-		result := NewOverlap().Filter([]ObjectInfo{info1, info2})
+		result := NewOverlap(10).Filter([]ObjectInfo{info1, info2})
 		require.Equal(t, 2, len(result))
 	}
 
@@ -120,7 +120,7 @@ func TestOverlap(t *testing.T) {
 		info3 := ObjectInfo{}
 		objectio.SetObjectStatsSortKeyZoneMap(&info3.ObjectStats, zm3)
 
-		result := NewOverlap().Filter([]ObjectInfo{info1, info2, info3})
+		result := NewOverlap(10).Filter([]ObjectInfo{info1, info2, info3})
 		require.Equal(t, 3, len(result))
 	}
 
@@ -151,7 +151,7 @@ func TestOverlap(t *testing.T) {
 		info3 := ObjectInfo{}
 		objectio.SetObjectStatsSortKeyZoneMap(&info3.ObjectStats, zm3)
 
-		result := NewOverlap().Filter([]ObjectInfo{info1, info2, info3})
+		result := NewOverlap(10).Filter([]ObjectInfo{info1, info2, info3})
 		require.Equal(t, 2, len(result))
 	}
 }
