@@ -16,6 +16,7 @@ package external
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/bzip2"
 	"compress/flate"
@@ -418,9 +419,26 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, cols []*p
 }
 
 func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) (int64, error) {
+	bufR := bufio.NewReader(r)
+	// ensure the first character is not field quote symbol
+	skipCount := int64(0)
+	for {
+		ch, err := bufR.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		if ch != '"' {
+			err = bufR.UnreadByte()
+			if err != nil {
+				return 0, err
+			}
+			break
+		}
+		skipCount++
+	}
 	csvReader, err := newReaderWithParam(&ExternalParam{
 		ExParamConst: ExParamConst{Extern: param},
-		ExParam:      ExParam{reader: r},
+		ExParam:      ExParam{reader: io.NopCloser(bufR)},
 	}, true)
 	if err != nil {
 		return 0, err
@@ -441,7 +459,7 @@ func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) 
 			continue
 		}
 		if isValidateLine(param, visibleCols, fields) {
-			return csvReader.Pos(), nil
+			return csvReader.Pos() + skipCount, nil
 		}
 	}
 }
