@@ -577,3 +577,36 @@ func FuzzParseJsonByteFromString(f *testing.F) {
 		require.NotNil(t, err)
 	})
 }
+
+func TestNormalizeToIntString(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "0", want: "0"},
+		{input: "0.0", want: "0"},
+		{input: "-0", want: "0"},
+		{input: "-0.0", want: "0"},
+		{input: "-1.0e0", want: "-1"},
+		{input: "1.0e-000", want: "1"},
+		{input: "1.00000", want: "1"},
+		{input: "1.0000000001"},
+		{input: "0e0", want: "0"},
+		{input: "1E1", want: "10"},
+		{input: "-100.00e-02", want: "-1"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			part, ok := ParseNumberParts([]byte(tc.input))
+			require.True(t, ok)
+
+			got, ok := NormalizeToIntString(part)
+			if tc.want != "" {
+				require.True(t, ok)
+				require.Equal(t, tc.want, got)
+			} else {
+				require.False(t, ok)
+			}
+		})
+	}
+}
