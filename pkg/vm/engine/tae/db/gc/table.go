@@ -338,7 +338,6 @@ func (t *GCTable) replayData(ctx context.Context,
 	}
 	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[typ].GetID(), common.DefaultAllocator)
 	if err != nil {
-		release()
 		return nil, err
 	}
 	for i := range attrs {
