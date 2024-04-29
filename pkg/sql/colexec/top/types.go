@@ -96,6 +96,12 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
+
+		ctr.n = 0
+		ctr.state = vm.Build
+		ctr.sels = ctr.sels[:0]
+		ctr.poses = ctr.poses[:0]
+		ctr.topValueZM.Reset()
 	}
 
 }

@@ -72,6 +72,7 @@ func (arg *Argument) Release() {
 
 func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	arg.cleanBuf(proc)
+	arg.packers.Free()
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

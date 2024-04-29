@@ -131,10 +131,20 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()
 
+		ctr.state = Build
+		if ctr.matched != nil {
+			ctr.matched.Reset()
+			ctr.matched = nil
+		}
+		ctr.handledLast = false
+		ctr.batchRowCount = 0
+
 		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
+		ctr.maxAllocSize = 0
 	}
-	ctr.maxAllocSize = 0
+	arg.cleanBatch(proc)
+	arg.lastpos = 0
 
 }
 
@@ -163,6 +173,14 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 	}
+	arg.cleanBatch(proc)
+}
+
+func (arg *Argument) cleanBatch(proc *process.Process) {
+	for _, bat := range arg.rbat {
+		bat.Clean(proc.GetMPool())
+	}
+	arg.rbat = nil
 }
 
 func (ctr *container) cleanExprExecutor() {
