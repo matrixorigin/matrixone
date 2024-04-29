@@ -16,6 +16,76 @@ package aggexec
 
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
+type AggContext struct {
+	hasCommonContext bool
+	hasGroupContext  bool
+	commonContext    AggCommonExecContext
+	groupContext     []AggGroupExecContext
+}
+
+func (a *AggContext) setCommonContext(c AggCommonExecContext) {
+	if c == nil {
+		return
+	}
+	a.hasCommonContext = true
+	a.commonContext = c
+}
+
+func (a *AggContext) preExtend(n int) {
+	if !a.hasGroupContext {
+		return
+	}
+	if n <= cap(a.groupContext) {
+		return
+	}
+
+	oldLen := len(a.groupContext)
+	a.groupContext = append(a.groupContext, make([]AggGroupExecContext, n-cap(a.groupContext))...)
+	a.groupContext = a.groupContext[:oldLen]
+}
+
+func (a *AggContext) growsGroupContext(initGroup func() AggGroupExecContext, n int) {
+	if !a.hasGroupContext {
+		return
+	}
+	oldLen, newLen := len(a.groupContext), len(a.groupContext)+n
+	if newLen > cap(a.groupContext) {
+		a.groupContext = append(a.groupContext, make([]AggGroupExecContext, n)...)
+		for i := oldLen; i < newLen; i++ {
+			a.groupContext[i] = initGroup()
+		}
+
+	} else {
+		a.groupContext = a.groupContext[:newLen]
+		for i := oldLen; i < newLen; i++ {
+			a.groupContext[i] = initGroup()
+		}
+	}
+}
+
+func (a *AggContext) getCommonContext() AggCommonExecContext {
+	return a.commonContext
+}
+
+func (a *AggContext) getGroupContext(i int) AggGroupExecContext {
+	if a.hasGroupContext {
+		return a.groupContext[i]
+	}
+	return nil
+}
+
+// AggCommonExecContext stores the common context for all the groups.
+// like the type scale, timezone and so on.
+type AggCommonExecContext interface {
+	AggCanMarshal
+}
+
+// AggGroupExecContext store the content of each group individually.
+// like the row-count has been filled, the sum of the values and so on.
+type AggGroupExecContext interface {
+	AggCanMarshal
+}
+
 /*
 	prepared context structures for agg.
 
