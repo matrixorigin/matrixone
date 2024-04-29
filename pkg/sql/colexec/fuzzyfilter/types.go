@@ -53,9 +53,8 @@ type Argument struct {
 	rbat         *batch.Batch
 
 	// about runtime filter
-	pass2RuntimeFilter   *vector.Vector
-	RuntimeFilterSpec    *plan.RuntimeFilterSpec
-	runtimeFilterHandled bool
+	pass2RuntimeFilter *vector.Vector
+	RuntimeFilterSpec  *plan.RuntimeFilterSpec
 	vm.OperatorBase
 }
 
@@ -90,17 +89,8 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) cleanRuntimeFilters(proc *process.Process, runtimeFilterSpec *plan.RuntimeFilterSpec) {
-	if !arg.runtimeFilterHandled && runtimeFilterSpec != nil {
-		var runtimeFilter process.RuntimeFilterMessage
-		runtimeFilter.Tag = runtimeFilterSpec.Tag
-		runtimeFilter.Typ = process.RuntimeFilter_DROP
-		proc.SendMessage(runtimeFilter)
-	}
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	arg.cleanRuntimeFilters(proc, arg.RuntimeFilterSpec)
+	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
 	if arg.bloomFilter != nil {
 		arg.bloomFilter.Clean()
 		arg.bloomFilter = nil
