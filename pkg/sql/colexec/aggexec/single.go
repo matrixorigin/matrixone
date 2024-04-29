@@ -96,11 +96,12 @@ type singleAggFuncExec1[from, to types.FixedSizeTExceptStrType] struct {
 	ret    aggFuncResult[to]
 	groups []SingleAggFromFixedRetFixed[from, to]
 
-	fill     SingleAggFill1[from, to]
-	fillNull SingleAggFillNull1[from, to]
-	fills    SingleAggFills1[from, to]
-	merge    SingleAggMerge1[from, to]
-	flush    SingleAggFlush1[from, to]
+	initGroup SingleAggInit1[from, to]
+	fill      SingleAggFill1[from, to]
+	fillNull  SingleAggFillNull1[from, to]
+	fills     SingleAggFills1[from, to]
+	merge     SingleAggMerge1[from, to]
+	flush     SingleAggFlush1[from, to]
 
 	// method to new the private structure for group growing.
 	gGroup func() SingleAggFromFixedRetFixed[from, to]
@@ -115,11 +116,12 @@ type singleAggFuncExec2[from types.FixedSizeTExceptStrType] struct {
 	ret    aggFuncBytesResult
 	groups []SingleAggFromFixedRetVar[from]
 
-	fill     SingleAggFill2[from]
-	fillNull SingleAggFillNull2[from]
-	fills    SingleAggFills2[from]
-	merge    SingleAggMerge2[from]
-	flush    SingleAggFlush2[from]
+	initGroup SingleAggInit2[from]
+	fill      SingleAggFill2[from]
+	fillNull  SingleAggFillNull2[from]
+	fills     SingleAggFills2[from]
+	merge     SingleAggMerge2[from]
+	flush     SingleAggFlush2[from]
 
 	// method to new the private structure for group growing.
 	gGroup func() SingleAggFromFixedRetVar[from]
@@ -134,11 +136,12 @@ type singleAggFuncExec3[to types.FixedSizeTExceptStrType] struct {
 	ret    aggFuncResult[to]
 	groups []SingleAggFromVarRetFixed[to]
 
-	fill     SingleAggFill3[to]
-	fillNull SingleAggFillNull3[to]
-	fills    SingleAggFills3[to]
-	merge    SingleAggMerge3[to]
-	flush    SingleAggFlush3[to]
+	initGroup SingleAggInit3[to]
+	fill      SingleAggFill3[to]
+	fillNull  SingleAggFillNull3[to]
+	fills     SingleAggFills3[to]
+	merge     SingleAggMerge3[to]
+	flush     SingleAggFlush3[to]
 
 	// method to new the private structure for group growing.
 	gGroup func() SingleAggFromVarRetFixed[to]
@@ -153,11 +156,12 @@ type singleAggFuncExec4 struct {
 	ret    aggFuncBytesResult
 	groups []SingleAggFromVarRetVar
 
-	fill     SingleAggFill4
-	fillNull SingleAggFillNull4
-	fills    SingleAggFills4
-	merge    SingleAggMerge4
-	flush    SingleAggFlush4
+	initGroup SingleAggInit4
+	fill      SingleAggFill4
+	fillNull  SingleAggFillNull4
+	fills     SingleAggFills4
+	merge     SingleAggMerge4
+	flush     SingleAggFlush4
 
 	// method to new the private structure for group growing.
 	gGroup func() SingleAggFromVarRetVar
@@ -184,6 +188,9 @@ func (exec *singleAggFuncExec1[from, to]) init(
 	if impl.flush != nil {
 		exec.flush = impl.flush.(SingleAggFlush1[from, to])
 	}
+	if impl.init != nil {
+		exec.initGroup = impl.init.(SingleAggInit1[from, to])
+	}
 
 	if info.distinct {
 		exec.distinctHash = newDistinctHash(mg.Mp(), opt.receiveNull)
@@ -206,10 +213,14 @@ func (exec *singleAggFuncExec1[from, to]) GroupGrow(more int) error {
 	exec.groups = append(exec.groups, make([]SingleAggFromFixedRetFixed[from, to], more)...)
 	for i, j := oldLength, len(exec.groups); i < j; i++ {
 		exec.groups[i] = exec.gGroup()
+	}
 
-		exec.ret.groupToSet = i
-		if err := exec.groups[i].Init(setter, exec.singleAggInfo.argType, exec.singleAggInfo.retType); err != nil {
-			return err
+	if exec.initGroup != nil {
+		for i, j := oldLength, len(exec.groups); i < j; i++ {
+			exec.ret.groupToSet = i
+			if err := exec.initGroup(exec.groups[i], setter, exec.singleAggInfo.argType, exec.singleAggInfo.retType); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -520,6 +531,9 @@ func (exec *singleAggFuncExec2[from]) init(
 	if agg.flush != nil {
 		exec.flush = agg.flush.(SingleAggFlush2[from])
 	}
+	if agg.init != nil {
+		exec.initGroup = agg.init.(SingleAggInit2[from])
+	}
 
 	if info.distinct {
 		exec.distinctHash = newDistinctHash(mg.Mp(), opt.receiveNull)
@@ -542,10 +556,13 @@ func (exec *singleAggFuncExec2[from]) GroupGrow(more int) error {
 	exec.groups = append(exec.groups, make([]SingleAggFromFixedRetVar[from], more)...)
 	for i, j := oldLength, len(exec.groups); i < j; i++ {
 		exec.groups[i] = exec.gGroup()
-
-		exec.ret.groupToSet = i
-		if err := exec.groups[i].Init(setter, exec.singleAggInfo.argType, exec.singleAggInfo.retType); err != nil {
-			return err
+	}
+	if exec.initGroup != nil {
+		for i, j := oldLength, len(exec.groups); i < j; i++ {
+			exec.ret.groupToSet = i
+			if err := exec.initGroup(exec.groups[i], setter, exec.singleAggInfo.argType, exec.singleAggInfo.retType); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -854,6 +871,9 @@ func (exec *singleAggFuncExec3[to]) init(
 	if impl.flush != nil {
 		exec.flush = impl.flush.(SingleAggFlush3[to])
 	}
+	if impl.init != nil {
+		exec.initGroup = impl.init.(SingleAggInit3[to])
+	}
 
 	if info.distinct {
 		exec.distinctHash = newDistinctHash(mg.Mp(), opt.receiveNull)
@@ -876,10 +896,14 @@ func (exec *singleAggFuncExec3[to]) GroupGrow(more int) error {
 	exec.groups = append(exec.groups, make([]SingleAggFromVarRetFixed[to], more)...)
 	for i, j := oldLength, len(exec.groups); i < j; i++ {
 		exec.groups[i] = exec.gGroup()
+	}
 
-		exec.ret.groupToSet = i
-		if err := exec.groups[i].Init(setter, exec.singleAggInfo.argType, exec.singleAggInfo.retType); err != nil {
-			return err
+	if exec.initGroup != nil {
+		for i, j := oldLength, len(exec.groups); i < j; i++ {
+			exec.ret.groupToSet = i
+			if err := exec.initGroup(exec.groups[i], setter, exec.singleAggInfo.argType, exec.singleAggInfo.retType); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -1187,6 +1211,9 @@ func (exec *singleAggFuncExec4) init(
 	if impl.flush != nil {
 		exec.flush = impl.flush.(SingleAggFlush4)
 	}
+	if impl.init != nil {
+		exec.initGroup = impl.init.(SingleAggInit4)
+	}
 
 	if info.distinct {
 		exec.distinctHash = newDistinctHash(mg.Mp(), opt.receiveNull)
@@ -1209,10 +1236,14 @@ func (exec *singleAggFuncExec4) GroupGrow(more int) error {
 	exec.groups = append(exec.groups, make([]SingleAggFromVarRetVar, more)...)
 	for i, j := oldLength, len(exec.groups); i < j; i++ {
 		exec.groups[i] = exec.gGroup()
+	}
 
-		exec.ret.groupToSet = i
-		if err := exec.groups[i].Init(setter, exec.singleAggInfo.argType, exec.singleAggInfo.retType); err != nil {
-			return err
+	if exec.initGroup != nil {
+		for i, j := oldLength, len(exec.groups); i < j; i++ {
+			exec.ret.groupToSet = i
+			if err := exec.initGroup(exec.groups[i], setter, exec.singleAggInfo.argType, exec.singleAggInfo.retType); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
