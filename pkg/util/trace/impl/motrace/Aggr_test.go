@@ -22,15 +22,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 func TestAggregator(t *testing.T) {
 
-	var sessionId = "01"
-	var sessionId2 = "02"
+	var sessionId = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
+	var sessionId2 = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x11}
 	const aggrWindow = 5 * time.Second
 
 	ctx := context.Background()
@@ -301,7 +302,7 @@ func TestAggregatorWithStmtMerge(t *testing.T) {
 	c := GetTracerProvider()
 	c.enableStmtMerge = true
 
-	var sessionId = "01"
+	var sessionId = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
 	const aggrWindow = 5 * time.Second
 
 	ctx := context.Background()
@@ -378,7 +379,7 @@ func TestAggregator_MarkExported(t *testing.T) {
 	const aggrWindow = 5 * time.Second
 
 	var err error
-	var sessionId = "01"
+	var sessionId = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
 	var ctx = context.TODO()
 	// Aggregate some Select
 	var fixedTime = time.Date(2023, time.June, 10, 12, 0, 1, 0, time.UTC)
