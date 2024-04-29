@@ -39,6 +39,9 @@ func isRuntimeConstExpr(expr *plan.Expr) bool {
 }
 
 func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+	if builder.optimizerHints != nil && builder.optimizerHints.applyIndices != 0 {
+		return nodeID
+	}
 	node := builder.qry.Nodes[nodeID]
 	for i, childID := range node.Children {
 		node.Children[i] = builder.applyIndices(childID, colRefCnt, idxColMap)
