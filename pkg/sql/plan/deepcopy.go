@@ -140,8 +140,8 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 	newCtx := &plan.PreInsertUkCtx{
 		Columns:  make([]int32, len(ctx.Columns)),
 		PkColumn: ctx.PkColumn,
-		PkType:   DeepCopyType(ctx.PkType),
-		UkType:   DeepCopyType(ctx.UkType),
+		PkType:   ctx.PkType,
+		UkType:   ctx.UkType,
 	}
 	copy(newCtx.Columns, ctx.Columns)
 
@@ -167,7 +167,7 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 	return &plan.LockTarget{
 		TableId:            target.TableId,
 		PrimaryColIdxInBat: target.PrimaryColIdxInBat,
-		PrimaryColTyp:      DeepCopyType(target.PrimaryColTyp),
+		PrimaryColTyp:      target.PrimaryColTyp,
 		RefreshTsIdxInBat:  target.RefreshTsIdxInBat,
 		FilterColIdxInBat:  target.FilterColIdxInBat,
 		LockTable:          target.LockTable,

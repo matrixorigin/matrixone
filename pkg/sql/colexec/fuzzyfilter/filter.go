@@ -16,7 +16,6 @@ package fuzzyfilter
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -328,7 +327,7 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 	//                                                 the number of data insert is greater than inFilterCardLimit
 	if arg.RuntimeFilterSpec.Expr == nil || arg.pass2RuntimeFilter == nil {
 		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		sendFilter(ctr, proc, runtimeFilter)
+		proc.SendRuntimeFilter(runtimeFilter, ctr.RuntimeFilterSpec)
 		return nil
 	}
 
@@ -346,14 +345,7 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 
 	runtimeFilter.Typ = process.RuntimeFilter_IN
 	runtimeFilter.Data = data
-	sendFilter(ctr, proc, runtimeFilter)
+	proc.SendRuntimeFilter(runtimeFilter, ctr.RuntimeFilterSpec)
 	return nil
 
-}
-
-func sendFilter(ap *Argument, proc *process.Process, runtimeFilter process.RuntimeFilterMessage) {
-	anal := proc.GetAnalyze(ap.GetIdx(), ap.GetParallelIdx(), ap.GetParallelMajor())
-	sendRuntimeFilterStart := time.Now()
-	proc.SendMessage(runtimeFilter)
-	anal.WaitStop(sendRuntimeFilterStart)
 }

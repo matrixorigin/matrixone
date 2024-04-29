@@ -242,18 +242,15 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						return err
 					}
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
-						vec.Free(proc.Mp())
 						continue
 					}
 					bs := vector.MustFixedCol[bool](vec)
 					if bs[0] {
 						if matched {
-							vec.Free(proc.Mp())
 							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 						}
 						matched = true
 					}
-					vec.Free(proc.Mp())
 				}
 				if ap.Cond != nil && !matched {
 					for j, rp := range ap.Result {
@@ -292,19 +289,16 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 							return err
 						}
 						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
-							vec.Free(proc.Mp())
 							continue
 						}
 						bs := vector.MustFixedCol[bool](vec)
 						if bs[0] {
 							if matched {
-								vec.Free(proc.Mp())
 								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 							}
 							matched = true
 							idx = j
 						}
-						vec.Free(proc.Mp())
 					}
 				} else if len(sels) > 1 {
 					return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
