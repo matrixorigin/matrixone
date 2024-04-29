@@ -1978,6 +1978,8 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			}
 		}
 	}
+
+	logutil.Infof("offset size %v", fileOffset)
 	if time.Since(t) > time.Second {
 		logutil.Infof("read file offset cost %v", time.Since(t))
 	}
@@ -2007,6 +2009,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{0, -1}...)
 			}
 		}
+		logutil.Infof("offset tmp %v", fileOffsetTmp)
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.External,
 			Idx:     c.anal.curr,
