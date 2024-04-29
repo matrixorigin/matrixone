@@ -430,7 +430,7 @@ func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, reader io.Reader)
 			visibleCols = append(visibleCols, col)
 		}
 	}
-	fields := make([]csvparser.Field, 0)
+	var fields []csvparser.Field
 	for {
 		fields, err = csvReader.Read()
 		if err != nil {
