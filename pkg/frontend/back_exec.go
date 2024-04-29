@@ -475,6 +475,9 @@ var NewBackgroundExec = func(
 	backSes.uuid, _ = uuid.NewV7()
 	backSes.GetTxnCompileCtx().SetSession(backSes)
 	backSes.GetTxnHandler().SetSession(backSes)
+	if up, ok := upstream.(*Session); ok {
+		backSes.upstream = up
+	}
 	bh := &backExec{
 		backSes: backSes,
 	}
@@ -622,6 +625,7 @@ func (backSes *backSession) Close() {
 	backSes.feSessionImpl.Close()
 	backSes.requestCtx = nil
 	backSes.connectCtx = nil
+	backSes.upstream = nil
 }
 
 func (backSes *backSession) Clear() {
