@@ -451,6 +451,9 @@ func GetShuffleDop() (dop int) {
 func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 	n.Stats.HashmapStats.Shuffle = true
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
+	if builder.optimizerHints != nil && builder.optimizerHints.determineShuffle == 2 { // always go hashshuffle for scan
+		return
+	}
 	s := builder.getStatsInfoByTableID(n.TableDef.TblId)
 	if s == nil {
 		return
@@ -484,6 +487,9 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 }
 
 func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
+	if builder.optimizerHints != nil && builder.optimizerHints.determineShuffle == 1 {
+		return
+	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
@@ -503,6 +509,9 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 
 // second pass of determine shuffle
 func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
+	if builder.optimizerHints != nil && builder.optimizerHints.determineShuffle == 1 {
+		return
+	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {

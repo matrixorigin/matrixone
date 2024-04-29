@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -38,6 +39,9 @@ func isRuntimeConstExpr(expr *plan.Expr) bool {
 }
 
 func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+	if builder.optimizerHints != nil && builder.optimizerHints.applyIndices != 0 {
+		return nodeID
+	}
 	node := builder.qry.Nodes[nodeID]
 	for i, childID := range node.Children {
 		node.Children[i] = builder.applyIndices(childID, colRefCnt, idxColMap)
@@ -127,6 +131,10 @@ END0:
 	{
 		return builder.applyIndicesForFiltersRegularIndex(nodeID, node, colRefCnt, idxColMap)
 	}
+}
+
+func getColSeqFromColDef(tblCol *plan.ColDef) string {
+	return fmt.Sprintf("%d", tblCol.GetSeqnum())
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {

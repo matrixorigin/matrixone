@@ -16,7 +16,6 @@ package indexbuild
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -131,11 +130,11 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 
 	if ap.RuntimeFilterSpec.Expr == nil {
 		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		sendFilter(ap, proc, runtimeFilter)
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		return nil
 	} else if ctr.batch == nil || ctr.batch.RowCount() == 0 {
 		runtimeFilter.Typ = process.RuntimeFilter_DROP
-		sendFilter(ap, proc, runtimeFilter)
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		return nil
 	}
 
@@ -143,7 +142,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 
 	if ctr.batch.RowCount() > int(inFilterCardLimit) {
 		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		sendFilter(ap, proc, runtimeFilter)
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		return nil
 	} else {
 		if len(ctr.batch.Vecs) != 1 {
@@ -159,15 +158,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		runtimeFilter.Typ = process.RuntimeFilter_IN
 		runtimeFilter.Card = int32(vec.Length())
 		runtimeFilter.Data = data
-		sendFilter(ap, proc, runtimeFilter)
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 	}
 	return nil
-}
-
-func sendFilter(ap *Argument, proc *process.Process, runtimeFilter process.RuntimeFilterMessage) {
-	anal := proc.GetAnalyze(ap.GetIdx(), ap.GetParallelIdx(), ap.GetParallelMajor())
-	sendRuntimeFilterStart := time.Now()
-	proc.SendMessage(runtimeFilter)
-	anal.WaitStop(sendRuntimeFilterStart)
-	ap.ctr.runtimeFilterHandled = true
 }
