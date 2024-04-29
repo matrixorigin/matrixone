@@ -150,7 +150,7 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeFloat64:
 		buf, err = bj.toFloat64(buf)
 	case TpCodeString:
-		buf = bj.toString(buf)
+		buf, err = bj.toString(buf)
 	default:
 		err = moerr.NewInvalidInputNoCtx("invalid json type '%v'", bj.Type)
 	}
@@ -181,7 +181,10 @@ func (bj ByteJson) toObject(buf []byte) ([]byte, error) {
 			buf = append(buf, ", "...)
 		}
 		var err error
-		buf = toString(buf, bj.getObjectKey(i))
+		buf, err = toString(buf, bj.getObjectKey(i))
+		if err != nil {
+			return nil, err
+		}
 		buf = append(buf, ": "...)
 		buf, err = bj.getObjectVal(i).to(buf)
 		if err != nil {
@@ -233,7 +236,7 @@ func (bj ByteJson) toFloat64(buf []byte) ([]byte, error) {
 }
 
 // transform byte string to visible string
-func (bj ByteJson) toString(buf []byte) []byte {
+func (bj ByteJson) toString(buf []byte) ([]byte, error) {
 	data := bj.GetString()
 	return toString(buf, data)
 }

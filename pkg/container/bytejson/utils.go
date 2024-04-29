@@ -51,9 +51,8 @@ func ParseFromByteSlice(s []byte) (bj ByteJson, err error) {
 	return
 }
 
-func toString(buf, data []byte) []byte {
-	bs, _ := appendString(buf, string(data))
-	return bs
+func toString(buf, data []byte) ([]byte, error) {
+	return appendString(buf, util.UnsafeBytesToString(data))
 }
 
 // extend slice to have n zero bytes

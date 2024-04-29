@@ -850,6 +850,7 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols
 		param.prevStr = str
 		return nil, err
 	}
+	defer jsonNode.Free()
 	g, ok := jsonNode.V.(*bytejson.Group)
 	if !ok || !g.Obj {
 		return nil, moerr.NewInvalidInput(ctx, "not a object")
@@ -902,6 +903,7 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 		param.prevStr = str
 		return nil, err
 	}
+	defer jsonNode.Free()
 	g, ok := jsonNode.V.(*bytejson.Group)
 	if !ok || g.Obj {
 		return nil, moerr.NewInvalidInput(ctx, "not a json array")
