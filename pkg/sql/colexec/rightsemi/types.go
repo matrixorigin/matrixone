@@ -126,26 +126,7 @@ func (arg *Argument) Release() {
 }
 
 func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	if ctr != nil {
-		ctr.cleanBatch(proc)
-		ctr.cleanHashMap()
-
-		ctr.state = Build
-		if ctr.matched != nil {
-			ctr.matched.Reset()
-			ctr.matched = nil
-		}
-		ctr.handledLast = false
-		ctr.batchRowCount = 0
-
-		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
-		ctr.maxAllocSize = 0
-	}
-	arg.cleanBatch(proc)
-	arg.lastpos = 0
-
+	arg.Free(proc, pipelineFailed, err)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
