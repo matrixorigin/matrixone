@@ -16,7 +16,6 @@ package external
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
 	"compress/bzip2"
 	"compress/flate"
@@ -394,7 +393,7 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, cols []*p
 		if err = fs.Read(param.Ctx, &vec); err != nil {
 			return nil, err
 		}
-		tailSize, err := getTailSize(param, cols, bufio.NewReader(r))
+		tailSize, err := getTailSize(param, cols, r)
 		if err != nil {
 			if err == io.EOF {
 				break
@@ -417,11 +416,11 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, cols []*p
 	return arr, nil
 }
 
-func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, reader io.Reader) (int64, error) {
+func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) (int64, error) {
 	csvReader, err := newReaderWithParam(&ExternalParam{
 		ExParamConst: ExParamConst{Extern: param},
-		ExParam:      ExParam{reader: io.NopCloser(reader)},
-	})
+		ExParam:      ExParam{reader: r},
+	}, true)
 	if err != nil {
 		return 0, err
 	}
@@ -850,7 +849,7 @@ func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 		return nil, err
 	}
 
-	csvReader, err := newReaderWithParam(param)
+	csvReader, err := newReaderWithParam(param, false)
 	if err != nil {
 		return nil, err
 	}
