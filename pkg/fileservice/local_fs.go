@@ -138,9 +138,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			l.diskCache, err = NewDiskCache(
 				ctx,
 				*config.DiskPath,
-				int64(*config.DiskCapacity),
-				config.DiskMinEvictInterval.Duration,
-				*config.DiskEvictTarget,
+				int(*config.DiskCapacity),
 				l.perfCounterSets,
 			)
 			if err != nil {

@@ -2434,6 +2434,11 @@ func (ses *Session) StatusSession() *status.Session {
 	}
 }
 
+func (ses *Session) getStatusWitTxnEnd() uint16 {
+	ses.maybeUnsetTxnStatus()
+	return extendStatus(ses.GetServerStatus())
+}
+
 func uuid2Str(uid uuid.UUID) string {
 	if bytes.Equal(uid[:], dumpUUID[:]) {
 		return ""
@@ -2482,26 +2487,41 @@ func checkPlanIsInsertValues(proc *process.Process,
 	return false, nil
 }
 
-func commitAfterMigrate(ses *Session, err error) {
+func commitAfterMigrate(ses *Session, err error) error {
+	if ses == nil {
+		logutil.Error("session is nil")
+		return moerr.NewInternalErrorNoCtx("session is nil")
+	}
+	txnHandler := ses.GetTxnHandler()
+	if txnHandler == nil {
+		logutil.Error("txn handler is nil")
+		return moerr.NewInternalErrorNoCtx("txn handler is nil")
+	}
+	if txnHandler.GetSession() == nil {
+		logutil.Error("ses in txn handler is nil")
+		return moerr.NewInternalErrorNoCtx("ses in txn handler is nil")
+	}
+	defer func() {
+		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+		ses.ClearOptionBits(OPTION_BEGIN)
+	}()
 	if err != nil {
-		rErr := ses.GetTxnHandler().RollbackTxn()
-		if rErr != nil {
+		if rErr := txnHandler.RollbackTxn(); rErr != nil {
 			logutil.Errorf("failed to rollback txn: %v", rErr)
 		}
+		return err
+	} else {
+		if cErr := txnHandler.CommitTxn(); cErr != nil {
+			logutil.Errorf("failed to commit txn: %v", cErr)
+			return cErr
+		}
 	}
-
-	// Commit txn manually.
-	if cErr := ses.GetTxnHandler().CommitTxn(); cErr != nil {
-		logutil.Errorf("failed to commit txn: %v", cErr)
-		return
-	}
-	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
-	ses.ClearOptionBits(OPTION_BEGIN)
+	return nil
 }
 
 type dbMigration struct {
 	db       string
-	commitFn func(*Session, error)
+	commitFn func(*Session, error) error
 }
 
 func newDBMigration(db string) *dbMigration {
@@ -2517,13 +2537,10 @@ func (d *dbMigration) Migrate(ses *Session) error {
 	if d.db == "" {
 		return nil
 	}
-	var err error
-	defer func() {
-		if d.commitFn != nil {
-			d.commitFn(ses, err)
-		}
-	}()
-	err = doUse(ses.requestCtx, ses, d.db)
+	err := doUse(ses.requestCtx, ses, d.db)
+	if d.commitFn != nil {
+		return d.commitFn(ses, err)
+	}
 	return err
 }
 
@@ -2531,7 +2548,7 @@ type prepareStmtMigration struct {
 	name       string
 	sql        string
 	paramTypes []byte
-	commitFn   func(*Session, error)
+	commitFn   func(*Session, error) error
 }
 
 func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepareStmtMigration {
@@ -2544,7 +2561,6 @@ func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepar
 }
 
 func (p *prepareStmtMigration) Migrate(ses *Session) error {
-	var err error
 	enterFPrint(ses, 14)
 	defer exitFPrint(ses, 14)
 
@@ -2559,18 +2575,23 @@ func (p *prepareStmtMigration) Migrate(ses *Session) error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if p.commitFn != nil {
-			p.commitFn(ses, err)
-		}
-	}()
-	if _, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql, p.paramTypes); err != nil {
-		return err
+	_, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql, p.paramTypes)
+	if p.commitFn != nil {
+		return p.commitFn(ses, err)
 	}
-	return nil
+	return err
 }
 
 func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
+	accountID, err := defines.GetAccountId(ses.requestCtx)
+	if err != nil {
+		logutil.Errorf("failed to get account ID: %v", err)
+		return err
+	}
+	userID := defines.GetUserId(ses.requestCtx)
+	logutil.Infof("do migration on connection %d, db: %s, account id: %d, user id: %d",
+		req.ConnID, req.DB, accountID, userID)
+
 	dbm := newDBMigration(req.DB)
 	if err := dbm.Migrate(ses); err != nil {
 		return err
