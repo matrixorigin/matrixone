@@ -1968,7 +1968,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	t = time.Now()
 	var fileOffset [][]int64
 	cols := n.TableDef.Cols
-	logutil.Infof("offset size: debug mcpu %v", mcpu)
 	for i := 0; i < len(fileList); i++ {
 		param.Filepath = fileList[i]
 		if param.Parallel {
