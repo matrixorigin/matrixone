@@ -451,10 +451,6 @@ type statementStatus int
 const (
 	success statementStatus = iota
 	fail
-	sessionId = "session_id"
-
-	txnId       = "txn_id"
-	statementId = "statement_id"
 )
 
 func (s statementStatus) String() string {

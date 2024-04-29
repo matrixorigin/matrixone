@@ -275,7 +275,7 @@ func (pi *ProtocolImpl) IsEstablished() bool {
 }
 
 func (pi *ProtocolImpl) SetEstablished() {
-	logutil.Debugf("SWITCH ESTABLISHED to true", zap.String(ConnectionInfoKey, pi.GetDebugString()))
+	logutil.Debug("SWITCH ESTABLISHED to true", zap.String(ConnectionInfoKey, pi.GetDebugString()))
 	pi.established.Store(true)
 }
 
@@ -284,7 +284,7 @@ func (pi *ProtocolImpl) IsTlsEstablished() bool {
 }
 
 func (pi *ProtocolImpl) SetTlsEstablished() {
-	logutil.Debugf("SWITCH TLS_ESTABLISHED to true", zap.String(ConnectionInfoKey, pi.GetDebugString()))
+	logutil.Debug("SWITCH TLS_ESTABLISHED to true", zap.String(ConnectionInfoKey, pi.GetDebugString()))
 	pi.tlsEstablished.Store(true)
 }
 
