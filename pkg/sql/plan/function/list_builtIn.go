@@ -3650,7 +3650,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return types.T_uint8.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return buildInPurgeLog
+					return builtInPurgeLog
 				},
 			},
 		},
