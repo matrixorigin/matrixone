@@ -424,28 +424,30 @@ func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, reader io.Reader)
 	if err != nil {
 		return 0, err
 	}
-	var fields []csvparser.Field
+	visibleCols := make([]*plan.ColDef, 0)
+	for _, col := range cols {
+		if !col.Hidden {
+			visibleCols = append(visibleCols, col)
+		}
+	}
+	fields := make([]csvparser.Field, 0)
 	for {
 		fields, err = csvReader.Read()
 		if err != nil {
 			return 0, err
 		}
-		if isValidateLine(param, cols, fields) {
+		if len(fields) != len(visibleCols) {
+			continue
+		}
+		if isValidateLine(param, visibleCols, fields) {
 			return csvReader.Pos(), nil
 		}
 	}
 }
 
 func isValidateLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparser.Field) bool {
-	fieldIdx := 0
-	for _, col := range cols {
-		if col.Hidden {
-			continue
-		}
-		if fieldIdx >= len(fields) {
-			return false
-		}
-		field := fields[fieldIdx]
+	for idx, col := range cols {
+		field := fields[idx]
 		id := types.T(col.Typ.Id)
 		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text {
