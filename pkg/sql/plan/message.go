@@ -38,6 +38,9 @@ func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32) i
 
 // send message from top to scan. if block node(like group or window), no need to send this message
 func (builder *QueryBuilder) handleMessgaeFromTopToScan(nodeID int32) {
+	if builder.optimizerHints != nil && builder.optimizerHints.sendMessageFromTopToScan != 0 {
+		return
+	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {

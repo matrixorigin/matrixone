@@ -367,14 +367,15 @@ func (t *tunnel) transfer(ctx context.Context) error {
 	}
 	if err := t.doReplaceConnection(ctx, false); err != nil {
 		v2.ProxyTransferFailCounter.Inc()
-		return err
+		t.logger.Error("failed to replace connection", zap.Error(err))
 	}
-	// After replace connections, restart pipes.
+	// Restart pipes even if the error happened in last step.
 	if err := t.kickoff(); err != nil {
 		t.logger.Error("failed to kickoff tunnel", zap.Error(err))
 		_ = t.Close()
+	} else {
+		v2.ProxyTransferSuccessCounter.Inc()
 	}
-	v2.ProxyTransferSuccessCounter.Inc()
 	return nil
 }
 
