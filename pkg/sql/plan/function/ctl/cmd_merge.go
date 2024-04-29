@@ -32,6 +32,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const defaultTargetObjectSize = 120 * common.Const1MBytes
+
 type arguments struct {
 	db, tbl       string
 	objs          []objectio.ObjectStats
@@ -58,7 +60,7 @@ func parseArgs(arg string) (arguments, error) {
 	}
 
 	a := arguments{
-		targetObjSize: 120 * common.Const1MBytes,
+		targetObjSize: defaultTargetObjectSize,
 	}
 
 	// Parse db and table
@@ -98,10 +100,13 @@ func parseArgs(arg string) (arguments, error) {
 		return a, nil
 	}
 
-	// Parse filters
-	a.filter = strings.TrimSpace(strings.ToLower(args[2]))
-	if len(args) == 3 {
-		return a, nil
+	// Parse filter
+	// only parse filter if obj is not specified
+	if args[1] == "all" {
+		a.filter = strings.TrimSpace(strings.ToLower(args[2]))
+		if len(args) == 3 {
+			return a, nil
+		}
 	}
 
 	// Parse targetObjSize
