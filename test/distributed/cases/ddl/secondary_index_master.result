@@ -13,6 +13,9 @@ create index idx1 using master on t1(a,b);
 insert into t1 values("Changing","Expanse", "4");
 update t1 set a = "Altering" where c = "4";
 delete from t1 where c = "2";
+select * from t1 where a = "Congress" and b="Lane";
+a    b    c
+Congress    Lane    1
 create table t2(a varchar(30), b bigint, c varchar(30) primary key);
 insert into t2 values("Congress",1, "1");
 insert into t2 values("Juniper",2, "2");
@@ -26,17 +29,48 @@ insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 create index idx1 using master on t1(a,b);
 insert into t1 values("Alberta","Blvd", "4");
+select * from t1 where a = "Alberta" and b="Blvd";
+a    b    c
+Alberta    Blvd    4
 insert into t1 values("Nightingale","Lane", "5");
+select * from t1 where a = "Nightingale" and b="Lane";
+a    b    c
+Nightingale    Lane    3
+Nightingale    Lane    5
 insert into t1 values(NULL,"Lane", "6");
+select * from t1 where b="Lane";
+a    b    c
+Congress    Lane    1
+Nightingale    Lane    3
+Nightingale    Lane    5
+null    Lane    6
 drop table if exists t2;
 create table t2(a varchar(30), b varchar(30), c varchar(30));
 insert into t2 values("arjun", "sk", "7");
 insert into t2 values("albin", "john", "8");
 insert into t1 select * from t2;
+select * from t1 where b="Lane";
+a    b    c
+Congress    Lane    1
+Nightingale    Lane    3
+Nightingale    Lane    5
+null    Lane    6
 update t1 set a="albin" ,b="john" where c="7";
+select * from t1 where a="albin";
+a    b    c
+albin    john    8
+albin    john    7
 update t1 set a=NULL ,b="john" where c="7";
+select * from t1 where b="john";
+a    b    c
+albin    john    8
+null    john    7
 delete from t1 where c="7";
+select * from t1 where a="john";
+a    b    c
 truncate table t1;
+select * from t1;
+a    b    c
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 t1    0    PRIMARY    1    c    A    0    NULL    NULL                        YES    NULL
@@ -63,6 +97,9 @@ insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 create index idx1 using master on t1(a);
 insert into t1 values("Abi","Ma", "4");
+select * from t1 where a = "Abi";
+a    b    c
+Abi    Ma    4
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 insert into t1 values("Congress","Lane", "1");
@@ -71,35 +108,55 @@ insert into t1 values("Nightingale","Lane", "3");
 create index idx1 using master on t1(a,b,c);
 insert into t1 values("Abel","John", "4");
 insert into t1 values("Amy","Brian", "5");
+select * from t1 where a = "Congress" and b="Lane" and c="1";
+a    b    c
+Congress    Lane    1
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 create index idx1 using master on t1(a,b);
 insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
+select * from t1 where a = "Congress" and b="Lane";
+a    b    c
+Congress    Lane    1
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key, index idx1 using master (a,b));
 insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
+select * from t1 where a = "Congress" and b="Lane";
+a    b    c
+Congress    Lane    1
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 alter table t1 add index idx1 using master(a,b);
+insert into t1 values("Congress","Lane", "4");
+select * from t1 where a = "Congress" and b="Lane";
+a    b    c
+Congress    Lane    1
+Congress    Lane    4
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30));
 create index idx1 using master on t1(a,b);
 insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
+select * from t1 where a="Congress" and b="Lane";
+a    b    c
+Congress    Lane    1
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30), primary key(a,b));
 create index idx1 using master on t1(a,b);
 insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
+select * from t1 where a="Congress" and b="Lane";
+a    b    c
+Congress    Lane    1
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 create index idx1 using master on t1(a,b);
@@ -107,6 +164,11 @@ insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 alter table t1 drop column b;
+insert into t1 values("Congress", "4");
+select * from t1 where a="Congress";
+a    c
+Congress    1
+Congress    4
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 create index idx1 using master on t1(a);
@@ -114,14 +176,23 @@ insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 alter table t1 rename column a to a1;
+insert into t1 values("Congress","Lane", "4");
+select * from t1 where a1="Congress";
+a1    b    c
+Congress    Lane    1
+Congress    Lane    4
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 create index idx1 using master on t1(a);
 insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
-alter table t1 modify column a int;
-not supported: column 'a' is not varchar type.
+alter table t1 modify column c int;
+insert into t1 values("Congress","Lane", 4);
+select * from t1 where a="Congress";
+a    b    c
+Congress    Lane    1
+Congress    Lane    4
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 create index idx1 using master on t1(a);
@@ -130,6 +201,11 @@ insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 alter table t1 drop primary key;
 alter table t1 add primary key (a,b);
+insert into t1 values("Congress","Lane2", "4");
+select * from t1 where a="Congress";
+a    b    c
+Congress    Lane    1
+Congress    Lane2    4
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 create index idx1 using master on t1(a);
@@ -137,6 +213,11 @@ insert into t1 values("Congress","Lane", "4");
 insert into t1 values("Juniper","Way", "5");
 insert into t1 values("Nightingale","Lane", "6");
 alter table t1 drop primary key;
+insert into t1 values("Congress","Lane", "7");
+select * from t1 where a="Congress";
+a    b    c
+Congress    Lane    4
+Congress    Lane    7
 drop table if exists t1;
 create table t1(a varchar(30), b bigint, c varchar(30) primary key);
 create index idx1 using master on t1(a,b);
