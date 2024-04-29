@@ -30,9 +30,8 @@ type ObjectsIter interface {
 }
 
 type objectsIter struct {
-	ts          types.TS
-	iter        btree.IterG[ObjectIndexByCreateTSEntry]
-	firstCalled bool
+	ts   types.TS
+	iter btree.IterG[ObjectEntry]
 }
 
 // not accurate!  only used by stats
@@ -44,7 +43,7 @@ func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
 	if ts.Less(&p.minTS) {
 		return nil, moerr.NewTxnStaleNoCtx()
 	}
-	iter := p.dataObjectsByCreateTS.Copy().Iter()
+	iter := p.dataObjects.Copy().Iter()
 	ret := &objectsIter{
 		ts:   ts,
 		iter: iter,
@@ -55,35 +54,15 @@ func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
 var _ ObjectsIter = new(objectsIter)
 
 func (b *objectsIter) Next() bool {
-	for {
-
-		pivot := ObjectIndexByCreateTSEntry{
-			ObjectInfo{
-				CreateTime: b.ts.Next(),
-			},
-		}
-		if !b.firstCalled {
-			if !b.iter.Seek(pivot) {
-				if !b.iter.Last() {
-					return false
-				}
-			}
-			b.firstCalled = true
-		} else {
-			if !b.iter.Prev() {
-				return false
-			}
-		}
-
+	for b.iter.Next() {
 		entry := b.iter.Item()
-
 		if !entry.Visible(b.ts) {
 			// not visible
 			continue
 		}
-
 		return true
 	}
+	return false
 }
 
 func (b *objectsIter) Entry() ObjectEntry {
