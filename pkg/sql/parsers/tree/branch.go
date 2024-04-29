@@ -58,7 +58,9 @@ func NewElseIfStmt(cond Expr, body []Statement) *ElseIfStmt {
 func (node *ElseIfStmt) reset() {
 	if node.Body != nil {
 		for _, item := range node.Body {
-			item.Free()
+			if item != nil {
+				item.Free()
+			}
 		}
 	}
 	// if node.Cond != nil {
@@ -108,17 +110,23 @@ func NewIfStmt(cond Expr, body []Statement, elifs []*ElseIfStmt, elseStmt []Stat
 func (node *IfStmt) reset() {
 	if node.Body != nil {
 		for _, item := range node.Body {
-			item.Free()
+			if item != nil {
+				item.Free()
+			}
 		}
 	}
 	if node.Elifs != nil {
 		for _, item := range node.Elifs {
-			item.Free()
+			if item != nil {
+				item.Free()
+			}
 		}
 	}
 	if node.Else != nil {
 		for _, item := range node.Else {
-			item.Free()
+			if item != nil {
+				item.Free()
+			}
 		}
 	}
 	*node = IfStmt{}
@@ -177,7 +185,9 @@ func NewWhenStmt(cond Expr, body []Statement) *WhenStmt {
 func (node *WhenStmt) reset() {
 	if node.Body != nil {
 		for _, item := range node.Body {
-			item.Free()
+			if item != nil {
+				item.Free()
+			}
 		}
 	}
 	*node = WhenStmt{}
@@ -222,12 +232,16 @@ func NewCaseStmt(expr Expr, whens []*WhenStmt, elseStmt []Statement) *CaseStmt {
 func (node *CaseStmt) reset() {
 	if node.Whens != nil {
 		for _, item := range node.Whens {
-			item.Free()
+			if item != nil {
+				item.Free()
+			}
 		}
 	}
 	if node.Else != nil {
 		for _, item := range node.Else {
-			item.Free()
+			if item != nil {
+				item.Free()
+			}
 		}
 	}
 	*node = CaseStmt{}

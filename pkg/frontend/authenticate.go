@@ -9391,6 +9391,11 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	}
 
 	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1, 0)
+	defer func() {
+		for _, s := range stmt {
+			s.Free()
+		}
+	}()
 	if err != nil {
 		return nil, err
 	}

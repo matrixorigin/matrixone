@@ -64,6 +64,7 @@ type ProcedureArg interface {
 	NodeFormatter
 	GetName(ctx *FmtCtx) string
 	GetType() int
+	Free()
 }
 
 type ProcedureArgImpl struct {
@@ -211,6 +212,9 @@ func (node *CreateProcedure) GetQueryType() string { return QueryTypeOth }
 func (node *CreateProcedure) reset() {
 	if node.Name != nil {
 		node.Name.Free()
+	}
+	for _, arg := range node.Args {
+		arg.Free()
 	}
 	*node = CreateProcedure{}
 }

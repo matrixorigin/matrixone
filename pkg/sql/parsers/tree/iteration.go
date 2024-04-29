@@ -66,7 +66,9 @@ func NewRepeatStmt(name Identifier, body []Statement, cond Expr) *RepeatStmt {
 func (node *RepeatStmt) reset() {
 	if node.Body != nil {
 		for _, item := range node.Body {
-			item.Free()
+			if item != nil {
+				item.Free()
+			}
 		}
 	}
 	*node = RepeatStmt{}
@@ -141,7 +143,9 @@ func (node *WhileStmt) Format(ctx *FmtCtx) {
 func (node *WhileStmt) reset() {
 	if node.Body != nil {
 		for _, item := range node.Body {
-			item.Free()
+			if item != nil {
+				item.Free()
+			}
 		}
 	}
 	*node = WhileStmt{}
@@ -192,7 +196,9 @@ func (node *LoopStmt) Format(ctx *FmtCtx) {
 func (node *LoopStmt) reset() {
 	if node.Body != nil {
 		for _, item := range node.Body {
-			item.Free()
+			if item != nil {
+				item.Free()
+			}
 		}
 	}
 	*node = LoopStmt{}
