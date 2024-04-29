@@ -113,7 +113,8 @@ const (
 type Session struct {
 	feSessionImpl
 
-	logger *log.MOLogger
+	logger     *log.MOLogger
+	loggerOnce sync.Once
 
 	//cmd from the client
 	cmd CommandType
@@ -510,8 +511,6 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 		ses.seqCurValues = make(map[uint64]string)
 		ses.seqLastValue = new(string)
 	}
-
-	ses.logger = getRuntime().Logger().Named("frontend")
 
 	ses.buf = buffer.New()
 	ses.isNotBackgroundSession = isNotBackgroundSession
@@ -1952,99 +1951,78 @@ func (ses *Session) GetLogLevel() zapcore.Level {
 	return zap.InfoLevel
 }
 
-func (ses *Session) Info(ctx context.Context, msg string, fields ...zap.Field) {
-	if ses.logger.Enabled(zap.InfoLevel) {
+func (ses *Session) log(ctx context.Context, level zapcore.Level, msg string, fields ...zap.Field) {
+	if ses == nil {
+		return
+	}
+	ses.loggerOnce.Do(func() {
+		if ses.logger == nil {
+			ses.logger = getRuntime().Logger().Named("frontend")
+		}
+	})
+	if ses.logger.Enabled(level) {
 		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
+		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
 	}
+}
+
+func (ses *Session) logf(ctx context.Context, level zapcore.Level, format string, args ...any) {
+	if ses == nil {
+		return
+	}
+	ses.loggerOnce.Do(func() {
+		if ses.logger == nil {
+			ses.logger = getRuntime().Logger().Named("frontend")
+		}
+	})
+	if ses.logger.Enabled(level) {
+		fields := make([]zap.Field, 0, 5)
+		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
+		fields = appendSessionField(fields, ses)
+		fields = appendTraceField(fields, ctx)
+		ses.logger.Log(fmt.Sprintf(format, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(1), fields...)
+	}
+}
+
+func (ses *Session) Info(ctx context.Context, msg string, fields ...zap.Field) {
+	ses.log(ctx, zap.InfoLevel, msg, fields...)
 }
 
 func (ses *Session) Error(ctx context.Context, msg string, fields ...zap.Field) {
-	if ses.logger.Enabled(zap.ErrorLevel) {
-		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
-		fields = appendSessionField(fields, ses)
-		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
-	}
+	ses.log(ctx, zap.ErrorLevel, msg, fields...)
 }
 
 func (ses *Session) Warn(ctx context.Context, msg string, fields ...zap.Field) {
-	if ses.logger.Enabled(zap.WarnLevel) {
-		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
-		fields = appendSessionField(fields, ses)
-		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.WarnLevel).AddCallerSkip(1), fields...)
-	}
+	ses.log(ctx, zap.WarnLevel, msg, fields...)
 }
 
 func (ses *Session) Fatal(ctx context.Context, msg string, fields ...zap.Field) {
-	if ses.logger.Enabled(zap.FatalLevel) {
-		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
-		fields = appendSessionField(fields, ses)
-		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.FatalLevel).AddCallerSkip(1), fields...)
-	}
+	ses.log(ctx, zap.FatalLevel, msg, fields...)
 }
 
 func (ses *Session) Debug(ctx context.Context, msg string, fields ...zap.Field) {
-	if ses.logger.Enabled(zap.DebugLevel) {
-		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
-		fields = appendSessionField(fields, ses)
-		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
-	}
+	ses.log(ctx, zap.DebugLevel, msg, fields...)
 }
 
-func (ses *Session) Infof(ctx context.Context, msg string, args ...any) {
-	if ses.logger.Enabled(zap.InfoLevel) {
-		fields := make([]zap.Field, 0, 5)
-		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
-		fields = appendSessionField(fields, ses)
-		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
-	}
+func (ses *Session) Infof(ctx context.Context, format string, args ...any) {
+	ses.logf(ctx, zap.InfoLevel, format, args...)
+}
+func (ses *Session) Errorf(ctx context.Context, format string, args ...any) {
+	ses.logf(ctx, zap.ErrorLevel, format, args...)
 }
 
-func (ses *Session) Errorf(ctx context.Context, msg string, args ...any) {
-	if ses.logger.Enabled(zap.ErrorLevel) {
-		fields := make([]zap.Field, 0, 5)
-		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
-		fields = appendSessionField(fields, ses)
-		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
-	}
+func (ses *Session) Warnf(ctx context.Context, format string, args ...any) {
+	ses.logf(ctx, zap.WarnLevel, format, args...)
 }
 
-func (ses *Session) Warnf(ctx context.Context, msg string, args ...any) {
-	if ses.logger.Enabled(zap.WarnLevel) {
-		fields := make([]zap.Field, 0, 5)
-		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
-		fields = appendSessionField(fields, ses)
-		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.WarnLevel).AddCallerSkip(1), fields...)
-	}
+func (ses *Session) Fatalf(ctx context.Context, format string, args ...any) {
+	ses.logf(ctx, zap.FatalLevel, format, args...)
 }
 
-func (ses *Session) Fatalf(ctx context.Context, msg string, args ...any) {
-	if ses.logger.Enabled(zap.FatalLevel) {
-		fields := make([]zap.Field, 0, 5)
-		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
-		fields = appendSessionField(fields, ses)
-		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.FatalLevel).AddCallerSkip(1), fields...)
-	}
-}
-
-func (ses *Session) Debugf(ctx context.Context, msg string, args ...any) {
-	if ses.logger.Enabled(zap.DebugLevel) {
-		fields := make([]zap.Field, 0, 5)
-		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
-		fields = appendSessionField(fields, ses)
-		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
-	}
+func (ses *Session) Debugf(ctx context.Context, format string, args ...any) {
+	ses.logf(ctx, zap.DebugLevel, format, args...)
 }
 
 func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
