@@ -147,18 +147,22 @@ type aggImplementation struct {
 
 	generator any
 	ret       func([]types.Type) types.Type
-	fill      any
-	fillNull  any
-	fills     any
-	merge     any
-	flush     any
+
+	init     any
+	fill     any
+	fillNull any
+	fills    any
+	merge    any
+	flush    any
 }
 
 type multiColumnAggImplementation struct {
 	setNullForEmptyGroup bool
 
-	generator     any
-	ret           func([]types.Type) types.Type
+	generator any
+	ret       func([]types.Type) types.Type
+
+	init          any
 	fillWhich     []any
 	fillNullWhich any
 	rowValid      any
@@ -208,16 +212,19 @@ func MakeMultiColumnAggInformation(
 type SingleAggImplementationFixedFixed[from, to types.FixedSizeTExceptStrType] struct {
 	SingleColumnAggInformation
 	generator func() SingleAggFromFixedRetFixed[from, to]
-	fill      SingleAggFill1[from, to]
-	fillNull  SingleAggFillNull1[from, to]
-	fills     SingleAggFills1[from, to]
-	merge     SingleAggMerge1[from, to]
-	flush     SingleAggFlush1[from, to]
+
+	init     SingleAggInit1[from, to]
+	fill     SingleAggFill1[from, to]
+	fillNull SingleAggFillNull1[from, to]
+	fills    SingleAggFills1[from, to]
+	merge    SingleAggMerge1[from, to]
+	flush    SingleAggFlush1[from, to]
 }
 
 func MakeSingleAgg1RegisteredInfo[from, to types.FixedSizeTExceptStrType](
 	info SingleColumnAggInformation,
 	impl func() SingleAggFromFixedRetFixed[from, to],
+	init SingleAggInit1[from, to],
 	fill SingleAggFill1[from, to],
 	fillNull SingleAggFillNull1[from, to],
 	fills SingleAggFills1[from, to],
@@ -228,6 +235,7 @@ func MakeSingleAgg1RegisteredInfo[from, to types.FixedSizeTExceptStrType](
 	registeredInfo1 := SingleAggImplementationFixedFixed[from, to]{
 		SingleColumnAggInformation: info,
 		generator:                  impl,
+		init:                       init,
 		fill:                       fill,
 		fillNull:                   fillNull,
 		fills:                      fills,
@@ -253,6 +261,7 @@ func RegisterSingleAggFromFixedToFixed[from, to types.FixedSizeTExceptStrType](
 		},
 		generator: info.generator,
 		ret:       info.ret,
+		init:      info.init,
 		fill:      info.fill,
 		fillNull:  info.fillNull,
 		fills:     info.fills,
@@ -265,16 +274,19 @@ func RegisterSingleAggFromFixedToFixed[from, to types.FixedSizeTExceptStrType](
 type SingleAggImplementationFixedVar[from types.FixedSizeTExceptStrType] struct {
 	SingleColumnAggInformation
 	generator func() SingleAggFromFixedRetVar[from]
-	fill      SingleAggFill2[from]
-	fillNull  SingleAggFillNull2[from]
-	fills     SingleAggFills2[from]
-	merge     SingleAggMerge2[from]
-	flush     SingleAggFlush2[from]
+
+	init     SingleAggInit2[from]
+	fill     SingleAggFill2[from]
+	fillNull SingleAggFillNull2[from]
+	fills    SingleAggFills2[from]
+	merge    SingleAggMerge2[from]
+	flush    SingleAggFlush2[from]
 }
 
 func MakeSingleAgg2RegisteredInfo[from types.FixedSizeTExceptStrType](
 	info SingleColumnAggInformation,
 	impl func() SingleAggFromFixedRetVar[from],
+	init SingleAggInit2[from],
 	fill SingleAggFill2[from],
 	fillNull SingleAggFillNull2[from],
 	fills SingleAggFills2[from],
@@ -285,6 +297,7 @@ func MakeSingleAgg2RegisteredInfo[from types.FixedSizeTExceptStrType](
 	registeredInfo2 := SingleAggImplementationFixedVar[from]{
 		SingleColumnAggInformation: info,
 		generator:                  impl,
+		init:                       init,
 		fill:                       fill,
 		fillNull:                   fillNull,
 		fills:                      fills,
@@ -310,6 +323,7 @@ func RegisterSingleAggFromFixedToVar[from types.FixedSizeTExceptStrType](
 		},
 		generator: info.generator,
 		ret:       info.ret,
+		init:      info.init,
 		fill:      info.fill,
 		fillNull:  info.fillNull,
 		fills:     info.fills,
@@ -322,6 +336,7 @@ func RegisterSingleAggFromFixedToVar[from types.FixedSizeTExceptStrType](
 type SingleAggImplementationVarVar struct {
 	SingleColumnAggInformation
 	generator func() SingleAggFromVarRetVar
+	init      SingleAggInit4
 	fill      SingleAggFill4
 	fillNull  SingleAggFillNull4
 	fills     SingleAggFills4
@@ -332,6 +347,7 @@ type SingleAggImplementationVarVar struct {
 func MakeSingleAgg4RegisteredInfo(
 	info SingleColumnAggInformation,
 	impl func() SingleAggFromVarRetVar,
+	init SingleAggInit4,
 	fill SingleAggFill4,
 	fillNull SingleAggFillNull4,
 	fills SingleAggFills4,
@@ -342,6 +358,7 @@ func MakeSingleAgg4RegisteredInfo(
 	registeredInfo4 := SingleAggImplementationVarVar{
 		SingleColumnAggInformation: info,
 		generator:                  impl,
+		init:                       init,
 		fill:                       fill,
 		fillNull:                   fillNull,
 		fills:                      fills,
@@ -367,6 +384,7 @@ func RegisterSingleAggFromVarToVar(
 		},
 		generator: info.generator,
 		ret:       info.ret,
+		init:      info.init,
 		fill:      info.fill,
 		fillNull:  info.fillNull,
 		fills:     info.fills,
@@ -379,6 +397,7 @@ func RegisterSingleAggFromVarToVar(
 type MultiColumnAggRetFixedRegisteredInfo[to types.FixedSizeTExceptStrType] struct {
 	MultiColumnAggInformation
 	generator     func() MultiAggRetFixed[to]
+	init          MultiAggInit1[to]
 	fillWhich     []any
 	fillNullWhich []MultiAggFillNull1[to]
 	rowValid      rowValidForMultiAgg1[to]
@@ -390,6 +409,7 @@ type MultiColumnAggRetFixedRegisteredInfo[to types.FixedSizeTExceptStrType] stru
 func MakeMultiAggRetFixedRegisteredInfo[to types.FixedSizeTExceptStrType](
 	info MultiColumnAggInformation,
 	impl func() MultiAggRetFixed[to],
+	init MultiAggInit1[to],
 	fillWhich []any,
 	fillNullWhich []MultiAggFillNull1[to],
 	rowValid rowValidForMultiAgg1[to],
@@ -406,6 +426,7 @@ func MakeMultiAggRetFixedRegisteredInfo[to types.FixedSizeTExceptStrType](
 	registeredInfo := MultiColumnAggRetFixedRegisteredInfo[to]{
 		MultiColumnAggInformation: info,
 		generator:                 impl,
+		init:                      init,
 		fillWhich:                 fillWhich,
 		fillNullWhich:             fillNullWhich,
 		rowValid:                  rowValid,
@@ -428,6 +449,7 @@ func RegisterMultiAggRetFixed[to types.FixedSizeTExceptStrType](
 		setNullForEmptyGroup: info.setNullForEmptyGroup,
 		generator:            info.generator,
 		ret:                  info.ret,
+		init:                 info.init,
 		fillWhich:            info.fillWhich,
 		fillNullWhich:        any(info.fillNullWhich),
 		rowValid:             info.rowValid,
