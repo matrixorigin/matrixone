@@ -121,7 +121,7 @@ func waitLocalWaiters(
 		}
 
 		if !ok {
-			panic("missing lock")
+			return false
 		}
 
 		waiters := make([]*waiter, 0)
