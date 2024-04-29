@@ -1557,6 +1557,83 @@ func TestOldTxnLockInRollingRestartCN(t *testing.T) {
 	)
 }
 
+func TestLeaveGetBindInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			l1 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			err = l.Unlock(
+				ctx,
+				[]byte("txn1"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+
+			// test
+			t2, _ := l1.clock.Now()
+			option.SnapShotTs = t2
+			_, err = l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+
+			err = l1.Unlock(
+				ctx,
+				[]byte("txn2"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+
+			for {
+				if l.isStatus(pb.Status_ServiceCanRestart) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			// get bind
+			_, err = getLockTableBind(
+				l.remote.client,
+				0,
+				0,
+				0,
+				l.serviceID,
+				pb.Sharding_ByRow)
+			require.Error(t, err)
+			require.True(t, alloc.canRestartService("s1"))
+		},
+	)
+}
+
 func TestNewTxnLockInRollingRestartCN(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -1713,14 +1790,14 @@ func TestRemoteLockFailedInRollingRestartCN(t *testing.T) {
 			}
 			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
 
-			// remote lock should be failed
+			// remote lock should be failed,
 			t2, _ := l2.clock.Now()
 			option.SnapShotTs = t2
 			_, err = l2.Lock(
 				ctx,
 				0,
 				[][]byte{{1}},
-				[]byte("txn1"),
+				[]byte("txn2"),
 				option)
 			require.Error(t, err)
 		},
