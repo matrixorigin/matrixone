@@ -2628,6 +2628,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("open_files_limit", 0, 1048576, false),
 		Default:           int64(5000),
 	},
+	"optimizer_hints": {
+		Name:              "optimizer_hints",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("optimizer_hints"),
+		Default:           "",
+	},
 	"optimizer_prune_level": {
 		Name:              "optimizer_prune_level",
 		Scope:             ScopeBoth,
