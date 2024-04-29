@@ -21,19 +21,19 @@ func init() {
 		func() *BeginCompound { return &BeginCompound{} },
 		func(b *BeginCompound) { b.reset() },
 		reuse.DefaultOptions[BeginCompound](),
-		)
+	)
 
 	reuse.CreatePool[EndCompound](
 		func() *EndCompound { return &EndCompound{} },
 		func(e *EndCompound) { e.reset() },
 		reuse.DefaultOptions[EndCompound](),
-		)
+	)
 
 	reuse.CreatePool[CompoundStmt](
 		func() *CompoundStmt { return &CompoundStmt{} },
 		func(c *CompoundStmt) { c.reset() },
 		reuse.DefaultOptions[CompoundStmt](),
-		)
+	)
 }
 
 // Begin statement
@@ -82,7 +82,7 @@ func (node *CompoundStmt) reset() {
 	*node = CompoundStmt{}
 }
 
-func (node CompoundStmt) TypeName() string { return "tree.CompoundStmt"}
+func (node CompoundStmt) TypeName() string { return "tree.CompoundStmt" }
 
 func (node *CompoundStmt) GetStatementType() string { return "compound" }
 
@@ -100,7 +100,7 @@ func (node *BeginCompound) reset() {
 	*node = BeginCompound{}
 }
 
-func (node BeginCompound) TypeName() string { return "tree.BeginCompound"}
+func (node BeginCompound) TypeName() string { return "tree.BeginCompound" }
 
 func (node *BeginCompound) GetStatementType() string { return "begin" }
 
@@ -122,4 +122,4 @@ func (node *EndCompound) GetStatementType() string { return "end" }
 
 func (node *EndCompound) GetQueryType() string { return QueryTypeTCL }
 
-func (node EndCompound) TypeName() string { return "tree.EndCompound"}
+func (node EndCompound) TypeName() string { return "tree.EndCompound" }
