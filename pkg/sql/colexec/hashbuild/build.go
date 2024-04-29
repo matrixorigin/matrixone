@@ -17,7 +17,6 @@ package hashbuild
 import (
 	"bytes"
 	"runtime"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -383,11 +382,11 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 
 	if ap.RuntimeFilterSpec.Expr == nil {
 		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		sendFilter(ap, proc, runtimeFilter)
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		return nil
 	} else if ctr.inputBatchRowCount == 0 || len(ctr.uniqueJoinKeys) == 0 || ctr.uniqueJoinKeys[0].Length() == 0 {
 		runtimeFilter.Typ = process.RuntimeFilter_DROP
-		sendFilter(ap, proc, runtimeFilter)
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		return nil
 	}
 
@@ -415,7 +414,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 
 	if hashmapCount > uint64(inFilterCardLimit) {
 		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		sendFilter(ap, proc, runtimeFilter)
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		return nil
 	} else {
 		// Composite primary key
@@ -445,7 +444,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		runtimeFilter.Typ = process.RuntimeFilter_IN
 		runtimeFilter.Card = int32(vec.Length())
 		runtimeFilter.Data = data
-		sendFilter(ap, proc, runtimeFilter)
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		ctr.runtimeFilterIn = true
 	}
 	return nil
@@ -464,12 +463,4 @@ func (ctr *container) evalJoinCondition(proc *process.Process) error {
 		}
 	}
 	return nil
-}
-
-func sendFilter(ap *Argument, proc *process.Process, runtimeFilter process.RuntimeFilterMessage) {
-	anal := proc.GetAnalyze(ap.GetIdx(), ap.GetParallelIdx(), ap.GetParallelMajor())
-	sendRuntimeFilterStart := time.Now()
-	proc.SendMessage(runtimeFilter)
-	anal.WaitStop(sendRuntimeFilterStart)
-	ap.ctr.runtimeFilterHandled = true
 }
