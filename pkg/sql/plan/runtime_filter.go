@@ -157,6 +157,10 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			}
 		}
 
+		if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && node.JoinType != plan.Node_INDEX {
+			return
+		}
+
 		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0])))
 		col := probeExprs[0].GetCol()
 		inLimit := GetInFilterCardLimit()
@@ -216,6 +220,10 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 
 	pkIdx, ok := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
 	if !ok {
+		return
+	}
+
+	if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && node.JoinType != plan.Node_INDEX {
 		return
 	}
 

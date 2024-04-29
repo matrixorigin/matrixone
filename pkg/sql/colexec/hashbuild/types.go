@@ -57,9 +57,8 @@ type container struct {
 	strHashMap *hashmap.StrHashMap
 	keyWidth   int // keyWidth is the width of hash columns, it determines which hash map to use.
 
-	uniqueJoinKeys       []*vector.Vector
-	runtimeFilterIn      bool
-	runtimeFilterHandled bool
+	uniqueJoinKeys  []*vector.Vector
+	runtimeFilterIn bool
 }
 
 type Argument struct {
@@ -124,8 +123,8 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
+	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
 	if ctr != nil {
-		ctr.cleanRuntimeFilters(proc, arg.RuntimeFilterSpec)
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors()
 		if !arg.NeedHashMap {
@@ -137,15 +136,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		} else {
 			ctr.FreeAllReg()
 		}
-	}
-}
-
-func (ctr *container) cleanRuntimeFilters(proc *process.Process, runtimeFilterSpec *pbplan.RuntimeFilterSpec) {
-	if !ctr.runtimeFilterHandled && runtimeFilterSpec != nil {
-		var runtimeFilter process.RuntimeFilterMessage
-		runtimeFilter.Tag = runtimeFilterSpec.Tag
-		runtimeFilter.Typ = process.RuntimeFilter_DROP
-		proc.SendMessage(runtimeFilter)
 	}
 }
 
