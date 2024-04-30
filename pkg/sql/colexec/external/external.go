@@ -381,6 +381,13 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, cols []*p
 		},
 	}
 
+	visibleCols := make([]*plan.ColDef, 0)
+	for _, col := range cols {
+		if !col.Hidden {
+			visibleCols = append(visibleCols, col)
+		}
+	}
+
 	var offset []int64
 	batchSize := fileSize / int64(mcpu)
 
@@ -394,7 +401,7 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, cols []*p
 		if err = fs.Read(param.Ctx, &vec); err != nil {
 			return nil, err
 		}
-		tailSize, err := getTailSize(param, cols, r)
+		tailSize, err := getTailSize(param, visibleCols, r)
 		if err != nil {
 			break
 		}
@@ -444,28 +451,22 @@ func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) 
 	if err != nil {
 		return 0, err
 	}
-	visibleCols := make([]*plan.ColDef, 0)
-	for _, col := range cols {
-		if !col.Hidden {
-			visibleCols = append(visibleCols, col)
-		}
-	}
 	var fields []csvparser.Field
 	for {
 		fields, err = csvReader.Read()
 		if err != nil {
 			return 0, err
 		}
-		if len(fields) != len(visibleCols) {
+		if len(fields) != len(cols) {
 			continue
 		}
-		if isValidateLine(param, visibleCols, fields) {
+		if isLegalLine(param, cols, fields) {
 			return csvReader.Pos() + skipCount, nil
 		}
 	}
 }
 
-func isValidateLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparser.Field) bool {
+func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparser.Field) bool {
 	for idx, col := range cols {
 		field := fields[idx]
 		id := types.T(col.Typ.Id)

@@ -1967,11 +1967,10 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 	t = time.Now()
 	var fileOffset [][]int64
-	cols := n.TableDef.Cols
 	for i := 0; i < len(fileList); i++ {
 		param.Filepath = fileList[i]
 		if param.Parallel {
-			arr, err := external.ReadFileOffset(param, mcpu, fileSize[i], cols)
+			arr, err := external.ReadFileOffset(param, mcpu, fileSize[i], n.TableDef.Cols)
 			fileOffset = append(fileOffset, arr)
 			if err != nil {
 				return nil, err
