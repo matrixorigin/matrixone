@@ -146,7 +146,6 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	//rowid := types.DecodeFixed[types.Rowid](types.EncodeSlice([]uint64{databaseId}))
 
 	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId,
 		name, databaseId, typ, txn.proc.Mp())
