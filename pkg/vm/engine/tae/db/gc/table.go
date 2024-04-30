@@ -108,31 +108,32 @@ func (t *GCTable) getObjects() map[string]*ObjectEntry {
 }
 
 // SoftGC is to remove objectentry that can be deleted from GCTable
-func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint64]containers.Vector) []string {
+func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]containers.Vector, meta *logtail.SnapshotMeta) ([]string, map[uint32][]types.TS) {
 	gc := make([]string, 0)
-	snapList := make(map[uint64][]types.TS)
+	snapList := make(map[uint32][]types.TS)
 	objects := t.getObjects()
-	for tid, snap := range snapShotList {
-		snapList[tid] = vector.MustFixedCol[types.TS](snap.GetDownstreamVector())
+	for acct, snap := range snapShotList {
+		snapList[acct] = vector.MustFixedCol[types.TS](snap.GetDownstreamVector())
 	}
 	for name, entry := range objects {
 		objectEntry := table.objects[name]
-		if snapList[entry.table] == nil {
+		tsList := meta.GetSnapshotList(snapList, entry.table)
+		if tsList == nil {
 			if objectEntry == nil && entry.commitTS.Less(&ts) {
 				gc = append(gc, name)
 				t.deleteObject(name)
 			}
 			continue
 		}
-		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, snapList[entry.table]) {
+		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, tsList, name) {
 			gc = append(gc, name)
 			t.deleteObject(name)
 		}
 	}
-	return gc
+	return gc, snapList
 }
 
-func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS) bool {
+func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, name string) bool {
 	if len(snapVec) == 0 {
 		return false
 	}
@@ -140,9 +141,9 @@ func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS) bool {
 	for left <= right {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
-		if snapTS.GreaterEq(&obj.createTS) && snapTS.Less(&obj.dropTS) {
-			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v",
-				snapTS.ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
+		if snapTS.GreaterEq(&obj.createTS) && (obj.dropTS.IsEmpty() || snapTS.Less(&obj.dropTS)) {
+			logutil.Infof("name: %v, isSnapshotRefers: %s, create %v, drop %v",
+				name, snapTS.ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
 			return true
 		} else if snapTS.Less(&obj.createTS) {
 			left = mid + 1
@@ -330,16 +331,15 @@ func (t *GCTable) replayData(ctx context.Context,
 	types []types.Type,
 	bats []*containers.Batch,
 	bs []objectio.BlockObject,
-	reader *blockio.BlockReader) error {
+	reader *blockio.BlockReader) (func(), error) {
 	idxes := make([]uint16, len(attrs))
 	for i := range attrs {
 		idxes[i] = uint16(i)
 	}
 	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[typ].GetID(), common.DefaultAllocator)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer release()
 	for i := range attrs {
 		pkgVec := mobat.Vecs[i]
 		var vec containers.Vector
@@ -350,11 +350,23 @@ func (t *GCTable) replayData(ctx context.Context,
 		}
 		bats[typ].AddVector(attrs[i], vec)
 	}
-	return nil
+	return release, nil
 }
 
 // ReadTable reads an s3 file and replays a GCTable in memory
 func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS, ts types.TS) error {
+	var release, releaseCreateBlock, releaseDeleteBlock func()
+	defer func() {
+		if release != nil {
+			release()
+		}
+		if releaseCreateBlock != nil {
+			releaseCreateBlock()
+		}
+		if releaseDeleteBlock != nil {
+			releaseDeleteBlock()
+		}
+	}()
 	reader, err := blockio.NewFileReaderNoCache(fs.Service, name)
 	if err != nil {
 		return err
@@ -366,7 +378,7 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	if len(bs) == 1 {
 		bats := t.makeBatchWithGCTable()
 		defer t.closeBatch(bats)
-		err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
+		release, err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
 		if err != nil {
 			return err
 		}
@@ -375,11 +387,11 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	}
 	bats := t.makeBatchWithGCTableV1()
 	defer t.closeBatch(bats)
-	err = t.replayData(ctx, CreateBlock, BlockSchemaAttrV1, BlockSchemaTypesV1, bats, bs, reader)
+	releaseCreateBlock, err = t.replayData(ctx, CreateBlock, BlockSchemaAttrV1, BlockSchemaTypesV1, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DeleteBlock, BlockSchemaAttrV1, BlockSchemaTypesV1, bats, bs, reader)
+	releaseDeleteBlock, err = t.replayData(ctx, DeleteBlock, BlockSchemaAttrV1, BlockSchemaTypesV1, bats, bs, reader)
 	if err != nil {
 		return err
 	}

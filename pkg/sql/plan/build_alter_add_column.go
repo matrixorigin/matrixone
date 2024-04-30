@@ -48,7 +48,7 @@ func AddColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alter
 	if err != nil {
 		return err
 	}
-	if err = checkAddColumnType(ctx.GetContext(), colType, newColName); err != nil {
+	if err = checkAddColumnType(ctx.GetContext(), &colType, newColName); err != nil {
 		return err
 	}
 	newCol, err := buildAddColumnAndConstraint(ctx, alterPlan, specNewColumn, colType)
@@ -83,7 +83,7 @@ func handleAddColumnPosition(ctx context.Context, tableDef *TableDef, newCol *Co
 	return nil
 }
 
-func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable, specNewColumn *tree.ColumnTableDef, colType *plan.Type) (*ColDef, error) {
+func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable, specNewColumn *tree.ColumnTableDef, colType plan.Type) (*ColDef, error) {
 	newColName := specNewColumn.Name.Parts[0]
 	// Check if the new column name is valid and conflicts with internal hidden columns
 	err := CheckColumnNameValid(ctx.GetContext(), newColName)
@@ -99,7 +99,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		//Comment:  originalCol.Comment,
 		//OnUpdate: originalCol.OnUpdate,
 		Name: newColName,
-		Typ:  *colType,
+		Typ:  colType,
 		Alg:  plan.CompressType_Lz4,
 	}
 
@@ -210,7 +210,7 @@ func checkAddColumnType(ctx context.Context, colType *plan.Type, columnName stri
 	return nil
 }
 
-func checkPrimaryKeyPartType(ctx context.Context, colType *plan.Type, columnName string) error {
+func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName string) error {
 	if colType.GetId() == int32(types.T_blob) {
 		return moerr.NewNotSupported(ctx, "blob type in primary key")
 	}
@@ -226,7 +226,7 @@ func checkPrimaryKeyPartType(ctx context.Context, colType *plan.Type, columnName
 	return nil
 }
 
-func checkUniqueKeyPartType(ctx context.Context, colType *plan.Type, columnName string) error {
+func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName string) error {
 	if colType.GetId() == int32(types.T_blob) {
 		return moerr.NewNotSupported(ctx, "blob type in primary key")
 	}

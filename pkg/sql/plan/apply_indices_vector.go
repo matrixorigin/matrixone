@@ -251,7 +251,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 	// 4. Sort by l2_distance(centroid, normalize_l2(literal)) limit @probe_limit
 	// 4.1 @probe_limit is a system variable
 	probeLimitValueExpr := &plan.Expr{
-		Typ: *makePlan2Type(&textType), // T_text
+		Typ: makePlan2Type(&textType), // T_text
 		Expr: &plan.Expr_V{
 			V: &plan.VarRef{
 				Name:   "probe_limit",

@@ -102,7 +102,7 @@ func TestSerial_SingleAggFuncExecSerial(t *testing.T) {
 		MakeSingleAgg1RegisteredInfo(
 			MakeSingleColumnAggInformation(info.aggID, info.argType, tSinglePrivate1Ret, true, info.emptyNull),
 			gTestSingleAggPrivateSer1,
-			fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
+			nil, fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
 
 	// methods to check the correctness of the serialized AggFuncExec.
 	checkFn := func(src, dst AggFuncExec) error {
@@ -505,7 +505,7 @@ func TestSerial_Agg1(t *testing.T) {
 		MakeSingleAgg1RegisteredInfo(
 			MakeSingleColumnAggInformation(info.aggID, info.argType, tSinglePrivate1Ret, true, info.emptyNull),
 			gTestSingleAggPrivateSer1,
-			fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
+			nil, fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
 
 	{
 		executor := MakeAgg(

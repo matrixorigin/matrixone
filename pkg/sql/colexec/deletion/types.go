@@ -66,12 +66,11 @@ type container struct {
 	batch_size     uint32
 	deleted_length uint32
 	pool           *BatchPool
-	debug_len      uint32
+	// debug_len      uint32
 
 	state vm.CtrState
 }
 type Argument struct {
-	Ts           uint64
 	DeleteCtx    *DeleteCtx
 	affectedRows uint64
 
@@ -245,7 +244,6 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Batch, rowIdIdx int, pIdx int, pkIdx int) {
 	vs := vector.MustFixedCol[types.Rowid](destBatch.GetVector(int32(rowIdIdx)))
 	var bitmap *nulls.Nulls
-	arg.ctr.debug_len += uint32(len(vs))
 	for i, rowId := range vs {
 		blkid := rowId.CloneBlockID()
 		segid := rowId.CloneSegmentID()

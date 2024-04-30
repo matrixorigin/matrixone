@@ -68,6 +68,21 @@ func (mr *MockCompilerContext2MockRecorder) CheckSubscriptionValid(subName, accN
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckSubscriptionValid", reflect.TypeOf((*MockCompilerContext2)(nil).CheckSubscriptionValid), subName, accName, pubName)
 }
 
+// ResolveSubscriptionTableById mocks base method.
+func (m *MockCompilerContext2) ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResolveSubscriptionTableById", tableId, pubmeta)
+	ret0, _ := ret[0].(*ObjectRef)
+	ret1, _ := ret[1].(*TableDef)
+	return ret0, ret1
+}
+
+// ResolveSubscriptionTableById indicates an expected call of ResolveSubscriptionTableById.
+func (mr *MockCompilerContext2MockRecorder) ResolveSubscriptionTableById(tableId, pubmeta interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsPubliResolveSubscriptionTableByIdshing", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveSubscriptionTableById), tableId, pubmeta)
+}
+
 // DatabaseExists mocks base method.
 func (m *MockCompilerContext2) DatabaseExists(name string, ts timestamp.Timestamp) bool {
 	m.ctrl.T.Helper()

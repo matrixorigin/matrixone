@@ -854,6 +854,14 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		}
 
+	case plan.Node_INSERT:
+		if len(node.Children) > 0 && childStats != nil {
+			node.Stats.Outcnt = childStats.Outcnt
+			node.Stats.Cost = childStats.Outcnt
+			node.Stats.Selectivity = childStats.Selectivity
+			node.Stats.Rowsize = GetRowSizeFromTableDef(node.TableDef, true) * 0.8
+		}
+
 	default:
 		if len(node.Children) > 0 && childStats != nil {
 			node.Stats.Outcnt = childStats.Outcnt
@@ -1029,10 +1037,28 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	for i := range node.FilterList {
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
 		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s)
-		if currentBlockSel < 1 {
-			copyOfExpr := DeepCopyExpr(node.FilterList[i])
-			copyOfExpr.Selectivity = currentBlockSel
-			blockExprList = append(blockExprList, copyOfExpr)
+		if builder.optimizerHints != nil {
+			if builder.optimizerHints.blockFilter == 1 { //always trying to pushdown blockfilters if zonemappable
+				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
+					copyOfExpr := DeepCopyExpr(node.FilterList[i])
+					copyOfExpr.Selectivity = currentBlockSel
+					blockExprList = append(blockExprList, copyOfExpr)
+				}
+			} else if builder.optimizerHints.blockFilter == 2 { // never pushdown blockfilters
+				node.BlockFilterList = nil
+			} else {
+				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
+					copyOfExpr := DeepCopyExpr(node.FilterList[i])
+					copyOfExpr.Selectivity = currentBlockSel
+					blockExprList = append(blockExprList, copyOfExpr)
+				}
+			}
+		} else {
+			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
+				copyOfExpr := DeepCopyExpr(node.FilterList[i])
+				copyOfExpr.Selectivity = currentBlockSel
+				blockExprList = append(blockExprList, copyOfExpr)
+			}
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
@@ -1115,6 +1141,10 @@ func resetHashMapStats(stats *plan.Stats) {
 }
 
 func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive bool) {
+	if builder.optimizerHints != nil && builder.optimizerHints.joinOrdering != 0 {
+		return
+	}
+
 	node := builder.qry.Nodes[nodeID]
 	if recursive && len(node.Children) > 0 {
 		for _, child := range node.Children {

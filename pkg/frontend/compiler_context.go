@@ -319,6 +319,32 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, ts timestamp.Timestam
 	return obj, tableDef
 }
 
+func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan2.ObjectRef, *plan2.TableDef) {
+	txnCtx, txn, err := tcc.GetTxnHandler().GetTxn()
+	if err != nil {
+		return nil, nil
+	}
+
+	pubContext := txnCtx
+	if pubmeta != nil {
+		pubContext = context.WithValue(pubContext, defines.TenantIDKey{}, uint32(pubmeta.AccountId))
+	}
+
+	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(pubContext, txn, tableId)
+	if err != nil {
+		return nil, nil
+	}
+
+	// convert
+	obj := &plan2.ObjectRef{
+		SchemaName: dbName,
+		ObjName:    tableName,
+		Obj:        int64(tableId),
+	}
+	tableDef := table.CopyTableDef(txnCtx)
+	return obj, tableDef
+}
+
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, ts timestamp.Timestamp) (*plan2.ObjectRef, *plan2.TableDef) {
 	start := time.Now()
 	defer func() {
