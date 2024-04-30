@@ -1015,6 +1015,16 @@ snapshot_restore_stmt:
             ToAccountName: tree.Identifier($9.ToLower()),
         }
     }
+|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident TO ACCOUNT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELDATABASE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            SnapShotName: tree.Identifier($8.ToLower()),
+            ToAccountName: tree.Identifier($11.ToLower()),
+        }
+    }
 |   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident TO ACCOUNT ident
     {
         $$ = &tree.RestoreSnapShot{

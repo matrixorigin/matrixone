@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+type tableType string
+
+const table tableType = "BASE TABLE"
+const view tableType = "VIEW"
 
 var (
 	insertIntoMoSnapshots = `insert into mo_catalog.mo_snapshots(
@@ -49,6 +55,8 @@ var (
 	checkSnapshotTsFormat = `select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id;`
 
 	restoreTableDataFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {snapshot = '%s'}"
+
+	restoreSkipDbs = []string{"mysql", "system", "system_metric", "mo_task", "mo_debug"}
 )
 
 type snapshotRecord struct {
@@ -60,6 +68,12 @@ type snapshotRecord struct {
 	databaseName string
 	tableName    string
 	objId        uint64
+}
+
+type tableInfo struct {
+	name      string
+	typ       tableType
+	createSql string
 }
 
 func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) error {
@@ -264,14 +278,8 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	curAccount := ses.GetTenantInfo()
-	srcAccountId, err := getAccountId(ctx, bh, srcAccountName)
-	if err != nil {
-		return err
-	}
-
 	// default restore to self
 	toAccountId := curAccount.TenantID
-
 	if len(toAccountName) > 0 {
 		// can't restore to another account if cur account is not sys
 		if !curAccount.IsSysTenant() {
@@ -300,65 +308,66 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	case tree.RESTORELEVELCLUSTER:
 		// TODO
 	case tree.RESTORELEVELACCOUNT:
-		return restoreToAccount(ctx, bh, snapshotName, srcAccountId, toAccountId)
+		return restoreToAccount(ctx, bh, snapshotName, toAccountId)
 	case tree.RESTORELEVELDATABASE:
-		return restoreToDatabase(ctx, bh, snapshotName, srcAccountId, dbName, toAccountId)
+		return restoreToDatabase(ctx, bh, snapshotName, dbName, toAccountId)
 	case tree.RESTORELEVELTABLE:
-		return restoreToTable(ctx, bh, snapshotName, srcAccountId, dbName, tblName, toAccountId)
+		return restoreToTable(ctx, bh, snapshotName, dbName, tblName, toAccountId)
 	}
 	return
 }
 
-func restoreToAccount(ctx context.Context, bh BackgroundExec, snapshotName string, accountId uint32, toAccountId uint32) (err error) {
+func restoreToAccount(ctx context.Context, bh BackgroundExec, snapshotName string, toAccountId uint32) (err error) {
 	dbNames, err := showDatabases(ctx, bh, snapshotName)
 	if err != nil {
 		return
 	}
 
 	for _, dbName := range dbNames {
-		if err = restoreToDatabase(ctx, bh, snapshotName, accountId, dbName, toAccountId); err != nil {
+		if err = restoreToDatabase(ctx, bh, snapshotName, dbName, toAccountId); err != nil {
 			return
 		}
 	}
 	return
 }
 
-func restoreToDatabase(ctx context.Context, bh BackgroundExec, snapshotName string, srcAccountId uint32, dbName string, toAccountId uint32) (err error) {
-	if err = bh.Exec(ctx, "drop database if exists "+dbName); err != nil {
-		return
-	}
-
-	if err = bh.Exec(ctx, "create database if not exists "+dbName); err != nil {
-		return
-	}
-
-	if err = bh.Exec(ctx, "use "+dbName); err != nil {
-		return
-	}
-
-	createTableSqls, err := getCreateTableSqls(ctx, bh, snapshotName, dbName)
-	if err != nil {
-		return err
-	}
-
-	for tblName, createTableSql := range createTableSqls {
-		// create table
-		if err = bh.Exec(ctx, createTableSql); err != nil {
-			return
-		}
-
-		// insert data
-		insertIntoSql := fmt.Sprintf(restoreTableDataFmt, dbName, tblName, dbName, tblName, snapshotName)
-		if err = bh.Exec(ctx, insertIntoSql); err != nil {
-			return
-		}
-	}
-
-	return
+func restoreToDatabase(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, toAccountId uint32) (err error) {
+	return restoreToDatabaseOrTable(ctx, bh, snapshotName, dbName, "", toAccountId)
 }
 
-func restoreToTable(ctx context.Context, bh BackgroundExec, snapshotName string, srcAccountId uint32, dbName string, tblName string, toAccountId uint32) (err error) {
+func restoreToTable(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string, toAccountId uint32) (err error) {
+	return restoreToDatabaseOrTable(ctx, bh, snapshotName, dbName, tblName, toAccountId)
+}
+
+func needSkip(dbName string, tblName string) bool {
+	if slices.Contains(restoreSkipDbs, dbName) {
+		return true
+	}
+
+	if dbName == "information_schema" {
+		return true
+	}
+
+	if dbName == "mo_catalog" {
+		return true
+	}
+
+	return false
+}
+
+func restoreToDatabaseOrTable(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string, toAccountId uint32) (err error) {
+	if needSkip(dbName, tblName) {
+		return
+	}
+
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
+
+	// if restore to db, delete the same name db first
+	if tblName == "" {
+		if err = bh.Exec(toCtx, "drop database if exists "+dbName); err != nil {
+			return
+		}
+	}
 
 	if err = bh.Exec(toCtx, "create database if not exists "+dbName); err != nil {
 		return
@@ -368,36 +377,53 @@ func restoreToTable(ctx context.Context, bh BackgroundExec, snapshotName string,
 		return
 	}
 
-	if err = bh.Exec(toCtx, "drop table if exists "+dbName+"."+tblName); err != nil {
-		return
+	// if restore to table, delete the same name table first
+	if tblName != "" {
+		if err = bh.Exec(toCtx, "drop table if exists "+dbName+"."+tblName); err != nil {
+			return
+		}
 	}
 
-	createTableSql, err := getCreateTableSql(ctx, bh, snapshotName, dbName, tblName)
+	tableInfos, err := getTableInfos(ctx, bh, snapshotName, dbName)
 	if err != nil {
-		return err
-	}
-
-	// create table
-	if err = bh.Exec(toCtx, createTableSql); err != nil {
 		return
 	}
 
-	// insert data
-	insertIntoSql := fmt.Sprintf(restoreTableDataFmt, dbName, tblName, dbName, tblName, snapshotName)
+	// if restore to table, expect only one table here
+	if tblName != "" && len(tableInfos) != 1 {
+		return moerr.NewNoSuchTable(ctx, dbName, tblName)
+	}
 
 	curAccountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
 	}
-	if curAccountId == toAccountId {
-		if err = bh.Exec(ctx, insertIntoSql); err != nil {
+
+	for _, tblInfo := range tableInfos {
+		// TODO handle view restoration
+		if tblInfo.typ == view {
+			continue
+		}
+
+		// create table
+		if err = bh.Exec(toCtx, tblInfo.createSql); err != nil {
 			return
 		}
-	} else {
-		if err = bh.ExecRestore(toCtx, insertIntoSql, curAccountId, toAccountId); err != nil {
-			return
+
+		// insert data
+		insertIntoSql := fmt.Sprintf(restoreTableDataFmt, dbName, tblInfo.name, dbName, tblInfo.name, snapshotName)
+
+		if curAccountId == toAccountId {
+			if err = bh.Exec(ctx, insertIntoSql); err != nil {
+				return
+			}
+		} else {
+			if err = bh.ExecRestore(toCtx, insertIntoSql, curAccountId, toAccountId); err != nil {
+				return
+			}
 		}
 	}
+
 	return
 }
 
@@ -550,7 +576,7 @@ func getSqlForDropSnapshot(snapshotName string) string {
 	return fmt.Sprintf(dropSnapshotFormat, snapshotName)
 }
 
-func getStringList(ctx context.Context, bh BackgroundExec, sql string) (ans []string, err error) {
+func getStringColsList(ctx context.Context, bh BackgroundExec, sql string, colIndices ...uint64) (ans [][]string, err error) {
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, sql); err != nil {
 		return
@@ -563,12 +589,13 @@ func getStringList(ctx context.Context, bh BackgroundExec, sql string) (ans []st
 
 	for _, rs := range resultSet {
 		for row := uint64(0); row < rs.GetRowCount(); row++ {
-			val, err := rs.GetString(ctx, row, 0)
-			if err != nil {
-				return nil, err
+			ansRow := make([]string, len(colIndices))
+			for i := 0; i < len(colIndices); i++ {
+				if ansRow[i], err = rs.GetString(ctx, row, colIndices[i]); err != nil {
+					return nil, err
+				}
 			}
-
-			ans = append(ans, val)
+			ans = append(ans, ansRow)
 		}
 	}
 	return
@@ -576,49 +603,62 @@ func getStringList(ctx context.Context, bh BackgroundExec, sql string) (ans []st
 
 func showDatabases(ctx context.Context, bh BackgroundExec, snapshotName string) ([]string, error) {
 	sql := fmt.Sprintf("show databases {snapshot = '%s'}", snapshotName)
-	return getStringList(ctx, bh, sql)
-}
-
-func showTables(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string) ([]string, error) {
-	sql := fmt.Sprintf("show tables from `%s` {snapshot = '%s'}", dbName, snapshotName)
-	return getStringList(ctx, bh, sql)
-}
-
-func getCreateTableSqls(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string) (map[string]string, error) {
-	tables, err := showTables(ctx, bh, snapshotName, dbName)
+	// cols: dbname
+	colsList, err := getStringColsList(ctx, bh, sql, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	createSqlMap := make(map[string]string)
-	for _, tblName := range tables {
-		tableDef, err := getCreateTableSql(ctx, bh, snapshotName, dbName, tblName)
-		if err != nil {
+	dbNames := make([]string, len(colsList))
+	for i, cols := range colsList {
+		dbNames[i] = cols[0]
+	}
+	return dbNames, nil
+}
+
+func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string) ([]*tableInfo, error) {
+	sql := fmt.Sprintf("show full tables from `%s` {snapshot = '%s'}", dbName, snapshotName)
+	// cols: table name, table type
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	if err != nil {
+		return nil, err
+	}
+
+	ans := make([]*tableInfo, len(colsList))
+	for i, cols := range colsList {
+		ans[i] = &tableInfo{
+			name: cols[0],
+			typ:  tableType(cols[1]),
+		}
+	}
+	return ans, nil
+}
+
+func getTableInfos(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string) ([]*tableInfo, error) {
+	tableInfos, err := showFullTables(ctx, bh, snapshotName, dbName)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, tblInfo := range tableInfos {
+		if tblInfo.createSql, err = getCreateTableSql(ctx, bh, snapshotName, dbName, tblInfo.name); err != nil {
 			return nil, err
 		}
-		createSqlMap[tblName] = tableDef
 	}
-	return createSqlMap, nil
+	return tableInfos, nil
 }
 
 func getCreateTableSql(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (string, error) {
 	sql := fmt.Sprintf("show create table `%s`.`%s` {snapshot = '%s'}", dbName, tblName, snapshotName)
-
-	bh.ClearExecResultSet()
-	if err := bh.Exec(ctx, sql); err != nil {
-		return "", err
-	}
-
-	resultSet, err := getResultSet(ctx, bh)
+	// cols: table_name, create_sql
+	colsList, err := getStringColsList(ctx, bh, sql, 1)
 	if err != nil {
-		return "", err
+		return "", nil
 	}
-
-	if len(resultSet) == 0 || resultSet[0].GetRowCount() == 0 {
+	if len(colsList) == 0 || len(colsList[0]) == 0 {
 		return "", moerr.NewNoSuchTable(ctx, dbName, tblName)
 	}
-
-	return resultSet[0].GetString(ctx, 0, 1)
+	return colsList[0][0], nil
 }
 
 func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) (uint32, error) {
@@ -647,29 +687,4 @@ func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) (u
 	}
 
 	return 0, moerr.NewInternalError(ctx, "new such account, account name: %v", accountName)
-}
-
-func getTableDefFromSnapshot(ctx context.Context, bh BackgroundExec, snapshotName string, schemaName string, tableName string) (string, error) {
-	sql := fmt.Sprintf("show create table `%s`.`%s` {snapshot = '%s'}", schemaName, tableName, snapshotName)
-
-	bh.ClearExecResultSet()
-	err := bh.Exec(ctx, sql)
-	if err != nil {
-		return "", err
-	}
-
-	resultSet, err := getResultSet(ctx, bh)
-	if err != nil {
-		return "", err
-	}
-
-	if len(resultSet) == 0 || resultSet[0].GetRowCount() == 0 {
-		return "", moerr.NewNoSuchTable(ctx, schemaName, tableName)
-	}
-
-	createTableSQL, err := resultSet[0].GetString(ctx, 0, 1)
-	if err != nil {
-		return "", err
-	}
-	return createTableSQL, nil
 }
