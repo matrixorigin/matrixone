@@ -75,6 +75,10 @@ func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 	return exec.ret.grows(more)
 }
 
+func (exec *medianColumnExecSelf[T, R]) PreAllocateGroups(more int) error {
+	return exec.ret.preAllocate(more)
+}
+
 func (exec *medianColumnExecSelf[T, R]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	if vectors[0].IsNull(uint64(row)) {
 		return nil

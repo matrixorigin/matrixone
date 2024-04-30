@@ -207,6 +207,11 @@ func (r *aggFuncResult[T]) grows(more int) error {
 	return nil
 }
 
+func (r *aggFuncResult[T]) preAllocate(more int) error {
+	_, _, err := r.preExtend(more)
+	return err
+}
+
 func (r *aggFuncResult[T]) aggGet() T {
 	return r.values[r.groupToSet]
 }
@@ -265,6 +270,11 @@ func (r *aggFuncBytesResult) grows(more int) error {
 		_ = vector.SetBytesAt(r.res, i, v, r.mp)
 	}
 	return nil
+}
+
+func (r *aggFuncBytesResult) preAllocate(more int) error {
+	_, _, err := r.preExtend(more)
+	return err
 }
 
 func (r *aggFuncBytesResult) aggGet() []byte {

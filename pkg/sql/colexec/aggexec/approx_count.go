@@ -115,6 +115,10 @@ func (exec *approxCountFixedExec[T]) GroupGrow(more int) error {
 	return exec.ret.grows(more)
 }
 
+func (exec *approxCountFixedExec[T]) PreAllocateGroups(more int) error {
+	return exec.ret.preAllocate(more)
+}
+
 func (exec *approxCountFixedExec[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	if vectors[0].IsNull(uint64(row)) {
 		return nil
@@ -237,6 +241,10 @@ func (exec *approxCountVarExec) GroupGrow(more int) error {
 		exec.groups[i] = hll.New()
 	}
 	return exec.ret.grows(more)
+}
+
+func (exec *approxCountVarExec) PreAllocateGroups(more int) error {
+	return exec.ret.preAllocate(more)
 }
 
 func (exec *approxCountVarExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {

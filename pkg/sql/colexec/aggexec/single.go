@@ -226,6 +226,12 @@ func (exec *singleAggFuncExec1[from, to]) GroupGrow(more int) error {
 	return nil
 }
 
+func (exec *singleAggFuncExec1[from, to]) PreAllocateGroups(more int) error {
+	// todo: only expand the memory of the result now.
+	//  should expand the groups, distinctHash as well next day.
+	return exec.ret.preAllocate(more)
+}
+
 func (exec *singleAggFuncExec1[from, to]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	vec := vectors[0]
 	if vec.IsConst() {
@@ -566,6 +572,10 @@ func (exec *singleAggFuncExec2[from]) GroupGrow(more int) error {
 		}
 	}
 	return nil
+}
+
+func (exec *singleAggFuncExec2[from]) PreAllocateGroups(more int) error {
+	return exec.ret.preAllocate(more)
 }
 
 func (exec *singleAggFuncExec2[from]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -909,6 +919,10 @@ func (exec *singleAggFuncExec3[to]) GroupGrow(more int) error {
 	return nil
 }
 
+func (exec *singleAggFuncExec3[to]) PreAllocateGroups(more int) error {
+	return exec.ret.preAllocate(more)
+}
+
 func (exec *singleAggFuncExec3[to]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	vec := vectors[0]
 	if vec.IsConst() {
@@ -1247,6 +1261,10 @@ func (exec *singleAggFuncExec4) GroupGrow(more int) error {
 		}
 	}
 	return nil
+}
+
+func (exec *singleAggFuncExec4) PreAllocateGroups(more int) error {
+	return exec.ret.preAllocate(more)
 }
 
 func (exec *singleAggFuncExec4) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
