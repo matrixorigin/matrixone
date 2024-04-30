@@ -122,6 +122,11 @@ func TestRowLockWithSharedAndExclusive(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
+
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -225,11 +230,18 @@ func TestRangeLockWithSharedAndExclusive(t *testing.T) {
 					ctx context.Context,
 					s *service,
 					lt *localLockTable) {
+
 					option := newTestRangeExclusiveOptions()
 					sharedOptions := newTestRangeSharedOptions()
 					rows := newTestRows(1, 2)
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
+
+					// keep txn1 cannot close by orphan txn
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -318,6 +330,11 @@ func TestRowLockWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
+
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -361,6 +378,11 @@ func TestRangeLockWithConflict(t *testing.T) {
 					rows := newTestRows(1, 2)
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -410,6 +432,12 @@ func TestRowLockWithWaitQueue(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+					}
 
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -478,6 +506,12 @@ func TestRangeLockWithWaitQueue(t *testing.T) {
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
 
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+					}
+
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
 
@@ -532,6 +566,11 @@ func TestRowLockWithSameTxnWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
+
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
 
@@ -585,6 +624,11 @@ func TestRangeLockWithSameTxnWithConflict(t *testing.T) {
 					rows := newTestRows(1, 2)
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
 
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -707,6 +751,11 @@ func TestManyRowLockWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
+
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -753,6 +802,11 @@ func TestManyRangeLockWithConflict(t *testing.T) {
 					rows := newTestRows(1, 2, 3, 4)
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -875,6 +929,12 @@ func TestCtxCancelWhileWaiting(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+					}
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -1076,6 +1136,13 @@ func TestDeadLockWithIndirectDependsOn(t *testing.T) {
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
 					txn4 := newTestTxnID(4)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+						f(txn4)
+					}
 
 					mustAddTestLock(t, ctx, s, table, txn1, row1, pb.Granularity_Row)
 					mustAddTestLock(t, ctx, s, table, txn4, row4, pb.Granularity_Row)
@@ -2326,6 +2393,11 @@ func TestRowLockWithConflictAndUnlock(t *testing.T) {
 			txn1 := newTestTxnID(1)
 			txn2 := newTestTxnID(2)
 
+			s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+				f(txn1)
+				f(txn2)
+			}
+
 			// txn1 hold the lock
 			_, err := s.Lock(ctx, table, rows, txn1, option)
 			require.NoError(t, err)
@@ -2367,6 +2439,12 @@ func TestUnlockRangeLockCanNotifyAllWaiters(t *testing.T) {
 			txn1 := newTestTxnID(1)
 			txn2 := newTestTxnID(2)
 			txn3 := newTestTxnID(3)
+
+			s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+				f(txn1)
+				f(txn2)
+				f(txn3)
+			}
 
 			// txn1 hold the lock
 			_, err := s.Lock(ctx, table, rows, txn1, rangeOption)
@@ -2420,6 +2498,12 @@ func TestHasAnyHolderCannotNotifyWaiters(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+					}
 
 					// txn1 get lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -2881,7 +2965,8 @@ func maybeAddTestLockWithDeadlockWithWaitRetry(
 	})
 
 	if moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) ||
-		moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
+		moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) ||
+		moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
 		return res
 	}
 	require.NoError(t, err)
@@ -2891,14 +2976,18 @@ func maybeAddTestLockWithDeadlockWithWaitRetry(
 func runLockServiceTests(
 	t assert.TestingT,
 	serviceIDs []string,
-	fn func(*lockTableAllocator, []*service)) {
+	fn func(*lockTableAllocator, []*service),
+	opts ...Option,
+) {
 	runLockServiceTestsWithLevel(
 		t,
 		zapcore.DebugLevel,
 		serviceIDs,
 		time.Second*10,
 		fn,
-		nil)
+		nil,
+		opts...,
+	)
 }
 
 func runLockServiceTestsWithAdjustConfig(
@@ -2922,7 +3011,9 @@ func runLockServiceTestsWithLevel(
 	serviceIDs []string,
 	lockTableBindTimeout time.Duration,
 	fn func(*lockTableAllocator, []*service),
-	adjustConfig func(*Config)) {
+	adjustConfig func(*Config),
+	opts ...Option,
+) {
 	defer leaktest.AfterTest(t.(testing.TB))()
 
 	reuse.RunReuseTests(func() {
@@ -2938,6 +3029,7 @@ func runLockServiceTestsWithLevel(
 				fn(lta.(*lockTableAllocator), services)
 			},
 			adjustConfig,
+			opts...,
 		)
 	})
 }
