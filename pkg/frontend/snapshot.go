@@ -293,6 +293,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 	}
 
+	if toAccountId == sysAccountID && snapshot.accountName != sysAccountName {
+		err = moerr.NewInternalError(ctx, "non-sys account's snapshot can't restore to sys account")
+		return
+	}
+
 	// TODO stop toAccount
 	// TODO defer open toAccount
 
