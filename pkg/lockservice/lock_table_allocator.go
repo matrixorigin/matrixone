@@ -278,14 +278,33 @@ func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
 		zap.String("service", b.serviceID))
 }
 
+func (l *lockTableAllocator) disableTableBindsWithoutDelete(b *serviceBinds) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// we can't just delete the LockTable's effectiveness binding directly, we
+	// need to keep the binding version.
+	for g, tables := range b.groupTables {
+		for table := range tables {
+			if old, ok := l.getLockTablesLocked(g)[table]; ok &&
+				old.ServiceID == b.serviceID {
+				old.Valid = false
+				l.getLockTablesLocked(g)[table] = old
+			}
+		}
+	}
+}
+
 func (l *lockTableAllocator) disableGroupTables(groupTables []pb.LockTable, b *serviceBinds) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	b.Lock()
+	defer b.Unlock()
 	for _, t := range groupTables {
 		if old, ok := l.getLockTablesLocked(t.Group)[t.Table]; ok &&
 			old.ServiceID == b.serviceID {
 			old.Valid = false
 			l.getLockTablesLocked(t.Group)[t.Table] = old
+			delete(b.groupTables[t.Group], t.Table)
 		}
 	}
 }
@@ -697,7 +716,7 @@ func (l *lockTableAllocator) handleGetBind(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	if !l.canGetBind(req.GetBind.Group, req.GetBind.Table) {
+	if !l.canGetBind(req.GetBind.ServiceID) {
 		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
 		return
 	}
@@ -718,6 +737,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	cs morpc.ClientSession) {
 	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
 	if !resp.KeepLockTableBind.OK {
+		// resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
 		writeResponse(ctx, cancel, resp, nil, cs)
 		return
 	}
@@ -734,7 +754,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 		}
 	case pb.Status_ServiceUnLockSucc:
 		b.disable()
-		l.disableTableBinds(b)
+		l.disableTableBindsWithoutDelete(b)
 		b.setStatus(pb.Status_ServiceCanRestart)
 		resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
 	default:
@@ -784,23 +804,6 @@ func (l *lockTableAllocator) getLockTablesLocked(group uint32) map[uint64]pb.Loc
 	m = make(map[uint64]pb.LockTable, 10240)
 	l.mu.lockTables[group] = m
 	return m
-}
-
-func (l *lockTableAllocator) canGetBind(group uint32, tableID uint64) bool {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-
-	t, ok := l.mu.lockTables[group][tableID]
-	if !ok || !t.Valid {
-		return true
-	}
-	b := l.mu.services[t.ServiceID]
-	if b != nil &&
-		!b.disabled &&
-		!b.isStatus(pb.Status_ServiceLockEnable) {
-		return false
-	}
-	return true
 }
 
 func (l *lockTableAllocator) handleCannotCommit(
@@ -888,4 +891,17 @@ func (c *commitCtl) disconnected() (bool, time.Time) {
 		return false, time.Time{}
 	}
 	return true, *v
+}
+
+func (l *lockTableAllocator) canGetBind(serviceID string) bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	b := l.mu.services[serviceID]
+	if b != nil &&
+		!b.isStatus(pb.Status_ServiceLockEnable) {
+		return false
+	}
+
+	return true
 }
