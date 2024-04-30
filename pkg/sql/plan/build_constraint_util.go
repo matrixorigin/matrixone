@@ -526,19 +526,9 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			if err != nil {
 				return false, nil, err
 			}
-			if col.Typ.AutoIncr {
-				if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-					for _, name := range tableDef.Pkey.Names {
-						if col.Name == name {
-							ifExistAutoPkCol = true
-							break
-						}
-					}
-				} else {
-					if col.Name == tableDef.Pkey.PkeyColName {
-						ifExistAutoPkCol = true
-					}
-				}
+
+			if col.Typ.AutoIncr && col.Name == tableDef.Pkey.PkeyColName {
+				ifExistAutoPkCol = true
 			}
 
 			projectList = append(projectList, defExpr)

@@ -53,9 +53,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	_ "go.uber.org/automaxprocs"
 )
 
 var _ engine.Engine = new(Engine)
+var ncpu = runtime.GOMAXPROCS(0)
 
 func New(
 	ctx context.Context,
@@ -687,7 +689,7 @@ func (e *Engine) Nodes(
 	if len(cnLabel) == 0 {
 		cluster.GetCNService(selector, func(c metadata.CNService) bool {
 			nodes = append(nodes, engine.Node{
-				Mcpu: runtime.NumCPU(),
+				Mcpu: ncpu,
 				Id:   c.ServiceID,
 				Addr: c.PipelineServiceAddress,
 			})
@@ -700,7 +702,7 @@ func (e *Engine) Nodes(
 	if isInternal || strings.ToLower(tenant) == "sys" {
 		route.RouteForSuperTenant(selector, username, nil, func(s *metadata.CNService) {
 			nodes = append(nodes, engine.Node{
-				Mcpu: runtime.NumCPU(),
+				Mcpu: ncpu,
 				Id:   s.ServiceID,
 				Addr: s.PipelineServiceAddress,
 			})
@@ -708,7 +710,7 @@ func (e *Engine) Nodes(
 	} else {
 		route.RouteForCommonTenant(selector, nil, func(s *metadata.CNService) {
 			nodes = append(nodes, engine.Node{
-				Mcpu: runtime.NumCPU(),
+				Mcpu: ncpu,
 				Id:   s.ServiceID,
 				Addr: s.PipelineServiceAddress,
 			})
