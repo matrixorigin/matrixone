@@ -430,7 +430,7 @@ drop database test_snapshot_restore;
 drop database snapshot_read;
 -- @session
 
-restore account test_account from snapshot snapshot_01;
+restore account test_account from snapshot snapshot_01 to account test_account;
 
 -- @session:id=5&user=test_account:test_user&password=111
 use test_snapshot_restore;

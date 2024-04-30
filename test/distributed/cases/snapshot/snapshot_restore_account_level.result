@@ -424,23 +424,27 @@ count(*)
 create snapshot snapshot_01 for account test_account;
 drop database test_snapshot_restore;
 drop database snapshot_read;
-restore account test_account from snapshot snapshot_01;
+restore account test_account from snapshot snapshot_01 to account test_account;
 use test_snapshot_restore;
-invalid database test_snapshot_restore
 select count(*) from test_snapshot_restore.test_restore;
-invalid database test_snapshot_restore
+count(*)
+100
 select count(*) from test_snapshot_restore.test_restore_2;
-invalid database test_snapshot_restore
+count(*)
+50
 select count(*) from test_snapshot_restore.factories;
-invalid database test_snapshot_restore
+count(*)
+100
 use snapshot_read;
-invalid database snapshot_read
 select count(*) from snapshot_read.test_snapshot_read;
-invalid database snapshot_read
+count(*)
+100
 select count(*) from snapshot_read.users;
-invalid database snapshot_read
+count(*)
+11
 select count(*) from snapshot_read.students;
-invalid database snapshot_read
+count(*)
+50
 drop account test_account;
 drop snapshot snapshot_01;
 create account test_account admin_name = 'test_user' identified by '111';
