@@ -879,7 +879,8 @@ func makeResultMetaPath(accountName string, statementId string) string {
 	return fmt.Sprintf("query_result_meta/%s_%s.blk", accountName, statementId)
 }
 
-func (tcc *TxnCompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
+func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (plan2.Snapshot, error) {
+	tenantCtx := tcc.GetContext()
 	if tcc.restoreInfo != nil {
 		tenantInfo := TenantInfo{
 			Tenant:        "xxx",
@@ -889,10 +890,9 @@ func (tcc *TxnCompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName st
 			DefaultRoleID: GetAccountAdminRoleId(),
 			DefaultRole:   GetAccountAdminRole(),
 		}
-		tenantCtx := defines.AttachAccount(tcc.GetContext(), tenantInfo.TenantID, tenantInfo.UserID, uint32(accountAdminRoleID))
-		return doResolveSnapshotTsWithSnapShotName(tenantCtx, tcc.GetSession(), snapshotName)
+		tenantCtx = defines.AttachAccount(tcc.GetContext(), tenantInfo.TenantID, tenantInfo.UserID, uint32(accountAdminRoleID))
 	}
-	return doResolveSnapshotTsWithSnapShotName(tcc.GetContext(), tcc.GetSession(), snapshotName)
+	return doResolveSnapshotTsWithSnapShotName(tenantCtx, tcc.GetSession(), snapshotName)
 }
 
 func (tcc *TxnCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {

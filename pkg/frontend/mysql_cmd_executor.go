@@ -2404,7 +2404,7 @@ func executeStmtWithResponse(requestCtx context.Context,
 	}
 
 	// TODO put in one txn
-	// insert data after create table in create table ... as select ... stmt
+	// insert data after create table in "create table ... as select ..." stmt
 	if ses.createAsSelectSql != "" {
 		sql := ses.createAsSelectSql
 		ses.createAsSelectSql = ""
@@ -2604,12 +2604,7 @@ func executeStmt(requestCtx context.Context,
 			return err
 		}
 	case tree.OUTPUT_UNDEFINED:
-		isExecute := false
-		switch execCtx.stmt.(type) {
-		case *tree.Execute:
-			isExecute = true
-		}
-		if !isExecute {
+		if _, ok := execCtx.stmt.(*tree.Execute); !ok {
 			return moerr.NewInternalError(requestCtx, "need set result type for %s", execCtx.sqlOfStmt)
 		}
 	}

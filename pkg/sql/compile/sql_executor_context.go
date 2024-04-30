@@ -61,7 +61,7 @@ func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
+func (c *compilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (plan.Snapshot, error) {
 	panic("not supported in internal sql executor")
 }
 

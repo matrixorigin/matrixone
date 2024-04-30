@@ -55,7 +55,7 @@ func (c *CompilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("implement me")
 }
 
-func (c *CompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
+func (c *CompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (plan.Snapshot, error) {
 	//TODO implement me
 	panic("implement me")
 }

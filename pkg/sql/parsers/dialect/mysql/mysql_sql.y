@@ -46,6 +46,7 @@ import (
 
     PartitionNames tree.IdentifierList
 
+    atTimeStamp *tree.AtTimeStamp
     tableDef tree.TableDef
     tableDefs tree.TableDefs
     tableName *tree.TableName
@@ -568,6 +569,7 @@ import (
 %type <procArgDecl> proc_arg_decl
 %type <procArgType> proc_arg_in_out_type
 
+%type <atTimeStamp> table_snapshot_opt
 %type <tableDefs> table_elem_list_opt table_elem_list
 %type <tableDef> table_elem constaint_def constraint_elem index_def table_elem_2
 %type <tableName> table_name table_name_opt_wild
@@ -956,7 +958,7 @@ snapshot_object_opt:
             ObjName: "",
         }
     }
-|    ACCOUNT ident
+|   ACCOUNT ident
     {
         spLevel := tree.SnapshotLevelType{
             Level: tree.SNAPSHOTLEVELACCOUNT,
@@ -1013,16 +1015,6 @@ snapshot_restore_stmt:
             ToAccountName: tree.Identifier($9.ToLower()),
         }
     }
-|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident TO ACCOUNT ident
-    {
-        $$ = &tree.RestoreSnapShot{
-            Level: tree.RESTORELEVELDATABASE,
-            AccountName: tree.Identifier($3.ToLower()),
-            DatabaseName: tree.Identifier($5.ToLower()),
-            SnapShotName: tree.Identifier($8.ToLower()),
-            ToAccountName: tree.Identifier($11.ToLower()),
-        }
-    }
 |   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident TO ACCOUNT ident
     {
         $$ = &tree.RestoreSnapShot{
@@ -1034,7 +1026,6 @@ snapshot_restore_stmt:
             ToAccountName: tree.Identifier($13.ToLower()),
         }
     }
-
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
@@ -8098,69 +8089,45 @@ table_name_list:
 // <table>
 // <schema>.<table>
 table_name:
-    ident
+    ident table_snapshot_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, nil)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, $2)
     }
-|   ident '.' ident
+|   ident '.' ident table_snapshot_opt
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, $4)
     }
-|   ident '{' TIMESTAMP '=' expression '}'
+
+table_snapshot_opt:
     {
-        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        atTs := &tree.AtTimeStamp{
+        $$ = nil
+    }
+|   '{' '}'
+    {
+        $$ = nil
+    }
+|   '{' TIMESTAMP '=' expression '}'
+    {
+        $$ = &tree.AtTimeStamp{
             Type: tree.ATTIMESTAMPTIME,
-            Expr: $5,
+            Expr: $4,
         }
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
     }
-|   ident '{' SNAPSHOT '=' expression '}'
+|   '{' SNAPSHOT '=' expression '}'
     {
-        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        atTs := &tree.AtTimeStamp{
+        $$ = &tree.AtTimeStamp{
             Type: tree.ATTIMESTAMPSNAPSHOT,
-            Expr: $5,
+            Expr: $4,
         }
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
     }
-|   ident '{' MO_TS '=' expression '}'
+|   '{' MO_TS '=' expression '}'
     {
-        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        atTs := &tree.AtTimeStamp{
+        $$ = &tree.AtTimeStamp{
             Type: tree.ATMOTIMESTAMP,
-            Expr: $5,
+            Expr: $4,
         }
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
-    }
-|   ident '.' ident '{' TIMESTAMP '=' expression '}'
-    {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        atTs := &tree.AtTimeStamp{
-            Type: tree.ATTIMESTAMPTIME,
-            Expr: $7,
-        }
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
-    }
-|   ident '.' ident '{' SNAPSHOT '=' expression '}'
-    {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        atTs := &tree.AtTimeStamp{
-            Type: tree.ATTIMESTAMPSNAPSHOT,
-            Expr: $7,
-        }
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
-    }
-|   ident '.' ident '{' MO_TS '=' expression '}'
-    {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        atTs := &tree.AtTimeStamp{
-            Type: tree.ATMOTIMESTAMP,
-            Expr: $7,
-        }
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
     }
 
 table_elem_list_opt:
