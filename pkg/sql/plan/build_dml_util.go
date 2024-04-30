@@ -35,13 +35,12 @@ import (
 	"golang.org/x/exp/slices"
 )
 
-var CNPrimaryCheck = false
-
 var dmlPlanCtxPool = sync.Pool{
 	New: func() any {
 		return &dmlPlanCtx{}
 	},
 }
+
 var deleteNodeInfoPool = sync.Pool{
 	New: func() any {
 		return &deleteNodeInfo{}
@@ -1578,6 +1577,7 @@ func appendPureInsertBranch(ctx CompilerContext, builder *QueryBuilder, bindCtx 
 		NodeType: plan.Node_INSERT,
 		Children: []int32{lastNodeId},
 		ObjRef:   objRef,
+		TableDef: tableDef,
 		InsertCtx: &plan.InsertCtx{
 			Ref:                 objRef,
 			AddAffectedRows:     addAffectedRows,
