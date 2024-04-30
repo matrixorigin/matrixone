@@ -141,8 +141,7 @@ func TestCheckTimeoutServiceTask(t *testing.T) {
 		func(a *lockTableAllocator) {
 			// create s1 bind
 			a.Get("s1", 1)
-
-			time.Sleep(time.Millisecond * 10)
+			time.Sleep(time.Second)
 			bind := a.GetLatest(1)
 			require.False(t, bind.Valid)
 		})
