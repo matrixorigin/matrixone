@@ -16,6 +16,9 @@ package disttae
 
 import (
 	"context"
+	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -33,19 +36,26 @@ func consumeEntry(
 	state *logtailreplay.PartitionState,
 	e *api.Entry,
 ) error {
+	start := time.Now()
+	defer func() {
+		v2.LogtailUpdatePartitonConsumeLogtailOneEntryDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	var packer *types.Packer
 	put := engine.packerPool.Get(&packer)
 	defer put.Put()
 
 	if state != nil {
+		t0 := time.Now()
 		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer)
+		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
 	if logtailreplay.IsMetaTable(e.TableName) {
 		return nil
 	}
 
+	t0 := time.Now()
 	if e.EntryType == api.Entry_Insert {
 		switch e.TableId {
 		case catalog.MO_TABLES_ID:
@@ -64,6 +74,7 @@ func consumeEntry(
 				cache.InsertColumns(bat)
 			}
 		}
+		v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
 		return nil
 	}
 
@@ -79,6 +90,7 @@ func consumeEntry(
 			cache.DeleteDatabase(bat)
 		}
 	}
+	v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
 
 	return nil
 }

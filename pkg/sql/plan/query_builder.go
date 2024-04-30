@@ -1426,6 +1426,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
 
+	builder.parseOptimizeHints()
 	for i, rootID := range builder.qry.Steps {
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
@@ -1489,6 +1490,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.generateRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
+
+		if builder.isForUpdate {
+			reCheckifNeedLockWholeTable(builder)
+		}
 
 		builder.handleMessgaes(rootID)
 

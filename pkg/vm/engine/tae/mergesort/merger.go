@@ -17,6 +17,7 @@ package mergesort
 import (
 	"context"
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 type Merger interface {
@@ -49,7 +51,6 @@ type merger[T any] struct {
 
 	objCnt           int
 	objBlkCnts       []int
-	totalBlkCnt      int
 	accObjBlkCnts    []int
 	loadedObjBlkCnts []int
 
@@ -61,8 +62,11 @@ type merger[T any] struct {
 
 	mustColFunc func(*vector.Vector) []T
 
-	rowPerBlk uint32
-	blkPerObj uint16
+	totalRowCnt   uint32
+	totalSize     uint32
+	rowPerBlk     uint32
+	rowSize       uint32
+	targetObjSize uint32
 }
 
 func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, mustColFunc func(*vector.Vector) []T) Merger {
@@ -80,15 +84,21 @@ func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, 
 
 		accObjBlkCnts:    host.GetAccBlkCnts(),
 		objBlkCnts:       host.GetBlkCnts(),
+		rowPerBlk:        host.GetBlockMaxRows(),
+		targetObjSize:    host.GetTargetObjSize(),
+		totalSize:        host.GetTotalSize(),
+		totalRowCnt:      host.GetTotalRowCnt(),
 		loadedObjBlkCnts: make([]int, size),
 		mustColFunc:      mustColFunc,
 	}
-	m.rowPerBlk, m.blkPerObj = host.GetObjLayout()
+	m.rowSize = m.totalSize / m.totalRowCnt
+	totalBlkCnt := 0
 	for _, cnt := range m.objBlkCnts {
-		m.totalBlkCnt += cnt
+		totalBlkCnt += cnt
 	}
-
-	initTransferMapping(host.GetCommitEntry(), m.totalBlkCnt)
+	if host.DoTransfer() {
+		initTransferMapping(host.GetCommitEntry(), totalBlkCnt)
+	}
 
 	return m
 }
@@ -111,8 +121,10 @@ func (m *merger[T]) Merge(ctx context.Context) {
 	defer releaseF()
 
 	objCnt := 0
-	blkCnt := 0
+	objBlkCnt := 0
 	bufferRowCnt := 0
+	objRowCnt := uint32(0)
+	mergedRowCnt := uint32(0)
 	commitEntry := m.host.GetCommitEntry()
 	for m.heap.Len() != 0 {
 		select {
@@ -135,17 +147,21 @@ func (m *merger[T]) Merge(ctx context.Context) {
 			}
 		}
 
-		commitEntry.Booking.Mappings[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1].M[int32(rowIdx)] = api.TransDestPos{
-			ObjIdx: int32(objCnt),
-			BlkIdx: int32(uint32(blkCnt)),
-			RowIdx: int32(bufferRowCnt),
+		if m.host.DoTransfer() {
+			commitEntry.Booking.Mappings[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1].M[int32(rowIdx)] = api.TransDestPos{
+				ObjIdx: int32(objCnt),
+				BlkIdx: int32(uint32(objBlkCnt)),
+				RowIdx: int32(bufferRowCnt),
+			}
 		}
 
 		bufferRowCnt++
+		objRowCnt++
+		mergedRowCnt++
 		// write new block
 		if bufferRowCnt == int(m.rowPerBlk) {
 			bufferRowCnt = 0
-			blkCnt++
+			objBlkCnt++
 
 			if m.writer == nil {
 				m.writer = m.host.PrepareNewWriter()
@@ -158,13 +174,13 @@ func (m *merger[T]) Merge(ctx context.Context) {
 			m.buffer.CleanOnlyData()
 
 			// write new object
-			if blkCnt == int(m.blkPerObj) {
+			if m.needNewObject(objBlkCnt, objRowCnt, mergedRowCnt) {
 				// write object and reset writer
 				m.syncObject(ctx)
 				// reset writer after sync
-				blkCnt = 0
+				objBlkCnt = 0
+				objRowCnt = 0
 				objCnt++
-
 			}
 		}
 
@@ -173,7 +189,7 @@ func (m *merger[T]) Merge(ctx context.Context) {
 
 	// write remain data
 	if bufferRowCnt > 0 {
-		blkCnt++
+		objBlkCnt++
 
 		if m.writer == nil {
 			m.writer = m.host.PrepareNewWriter()
@@ -183,9 +199,20 @@ func (m *merger[T]) Merge(ctx context.Context) {
 		}
 		m.buffer.CleanOnlyData()
 	}
-	if blkCnt > 0 {
+	if objBlkCnt > 0 {
 		m.syncObject(ctx)
 	}
+}
+
+func (m *merger[T]) needNewObject(objBlkCnt int, objRowCnt, mergedRowCnt uint32) bool {
+	if m.targetObjSize == 0 {
+		return objBlkCnt == int(options.DefaultBlocksPerObject)
+	}
+
+	if objRowCnt*m.rowSize > m.targetObjSize {
+		return (m.totalRowCnt-mergedRowCnt)*m.rowSize > m.targetObjSize
+	}
+	return false
 }
 
 func (m *merger[T]) nextPos() uint32 {

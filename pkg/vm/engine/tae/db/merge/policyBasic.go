@@ -29,7 +29,7 @@ import (
 )
 
 var (
-	_                  Policy = (*Basic)(nil)
+	_                  Policy = (*basic)(nil)
 	defaultBasicConfig        = &BasicPolicyConfig{
 		MergeMaxOneRun:   common.DefaultMaxMergeObjN,
 		MaxRowsMergedObj: common.DefaultMaxRowsObj,
@@ -63,7 +63,7 @@ type customConfigProvider struct {
 	configs map[uint64]*BasicPolicyConfig // works like a cache
 }
 
-func NewCustomConfigProvider() *customConfigProvider {
+func newCustomConfigProvider() *customConfigProvider {
 	return &customConfigProvider{
 		configs: make(map[uint64]*BasicPolicyConfig),
 	}
@@ -131,7 +131,7 @@ func (o *customConfigProvider) ResetConfig() {
 	o.configs = make(map[uint64]*BasicPolicyConfig)
 }
 
-type Basic struct {
+type basic struct {
 	id      uint64
 	schema  *catalog.Schema
 	hist    *common.MergeHistory
@@ -142,18 +142,18 @@ type Basic struct {
 	configProvider *customConfigProvider
 }
 
-func NewBasicPolicy() *Basic {
-	return &Basic{
+func NewBasicPolicy() Policy {
+	return &basic{
 		objHeap: &heapBuilder[*catalog.ObjectEntry]{
 			items: make(itemSet[*catalog.ObjectEntry], 0, 32),
 		},
 		accBuf:         make([]int, 1, 32),
-		configProvider: NewCustomConfigProvider(),
+		configProvider: newCustomConfigProvider(),
 	}
 }
 
 // impl Policy for Basic
-func (o *Basic) OnObject(obj *catalog.ObjectEntry) {
+func (o *basic) OnObject(obj *catalog.ObjectEntry) {
 	rowsLeftOnObj := obj.GetRemainingRows()
 	// it has too few rows, merge it
 	iscandidate := func() bool {
@@ -177,7 +177,7 @@ func (o *Basic) OnObject(obj *catalog.ObjectEntry) {
 	}
 }
 
-func (o *Basic) SetConfig(tbl *catalog.TableEntry, f func() txnif.AsyncTxn, c any) {
+func (o *basic) SetConfig(tbl *catalog.TableEntry, f func() txnif.AsyncTxn, c any) {
 	txn := f()
 	if tbl == nil || txn == nil {
 		return
@@ -201,7 +201,7 @@ func (o *Basic) SetConfig(tbl *catalog.TableEntry, f func() txnif.AsyncTxn, c an
 	o.configProvider.InvalidCache(tbl)
 }
 
-func (o *Basic) GetConfig(tbl *catalog.TableEntry) any {
+func (o *basic) GetConfig(tbl *catalog.TableEntry) any {
 	r := o.configProvider.GetConfig(tbl)
 	if r == nil {
 		r = &BasicPolicyConfig{
@@ -213,7 +213,7 @@ func (o *Basic) GetConfig(tbl *catalog.TableEntry) any {
 	return r
 }
 
-func (o *Basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (o *basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	objs := o.objHeap.finish()
 	sort.Slice(objs, func(i, j int) bool {
 		return objs[i].GetRemainingRows() < objs[j].GetRemainingRows()
@@ -222,7 +222,7 @@ func (o *Basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	isStandalone := common.IsStandaloneBoost.Load()
 	mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
 
-	dnobjs := o.controlMem(objs, mem)
+	dnobjs := controlMem(objs, mem)
 	dnobjs = o.optimize(dnobjs)
 
 	dnosize, _, _ := estimateMergeConsume(dnobjs)
@@ -238,7 +238,7 @@ func (o *Basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	}
 
 	schedCN := func() ([]*catalog.ObjectEntry, TaskHostKind) {
-		cnobjs := o.controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load()))
+		cnobjs := controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load()))
 		cnobjs = o.optimize(cnobjs)
 		return cnobjs, TaskHostCN
 	}
@@ -258,12 +258,12 @@ func (o *Basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	return schedDN()
 }
 
-func (o *Basic) ConfigString() string {
+func (o *basic) ConfigString() string {
 	r := o.configProvider.String()
 	return r
 }
 
-func (o *Basic) optimize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
+func (o *basic) optimize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 	// objs are sorted by remaining rows
 	o.accBuf = o.accBuf[:1]
 	for i, obj := range objs {
@@ -300,7 +300,7 @@ func (o *Basic) optimize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 	return objs
 }
 
-func (o *Basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
+func controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
@@ -329,7 +329,7 @@ func (o *Basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.Ob
 	return objs
 }
 
-func (o *Basic) ResetForTable(entry *catalog.TableEntry) {
+func (o *basic) ResetForTable(entry *catalog.TableEntry) {
 	o.id = entry.ID
 	o.schema = entry.GetLastestSchemaLocked()
 	o.hist = entry.Stats.GetLastMerge()
