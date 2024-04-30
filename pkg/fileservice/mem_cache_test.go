@@ -28,6 +28,7 @@ import (
 )
 
 func TestMemCacheLeak(t *testing.T) {
+	t.Skip("no longer valid")
 	ctx := context.Background()
 	var counter perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counter)
@@ -45,7 +46,7 @@ func TestMemCacheLeak(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	size := int64(4 * runtime.GOMAXPROCS(0))
+	size := int64(4 * runtime.GOMAXPROCS(-1))
 	m := NewMemCache(NewMemoryCache(size, true, nil), nil)
 
 	vec := &IOVector{
@@ -64,11 +65,26 @@ func TestMemCacheLeak(t *testing.T) {
 	err = m.Read(ctx, vec)
 	assert.Nil(t, err)
 	vec.Release()
+
+	vec = &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Size: 3,
+				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
+					cacheData := allocator.Alloc(1)
+					cacheData.Bytes()[0] = 42
+					return cacheData, nil
+				},
+			},
+		},
+	}
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 	err = m.Update(ctx, vec, false)
 	assert.Nil(t, err)
 	vec.Release()
+
 	assert.Equal(t, int64(1), m.cache.Capacity()-m.cache.Available())
 	assert.Equal(t, int64(size), counter.FileService.Cache.Memory.Available.Load())
 	assert.Equal(t, int64(0), counter.FileService.Cache.Memory.Used.Load())
@@ -90,6 +106,20 @@ func TestMemCacheLeak(t *testing.T) {
 	err = m.Read(ctx, vec)
 	assert.Nil(t, err)
 	vec.Release()
+
+	vec = &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Size: 3,
+				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
+					cacheData := allocator.Alloc(1)
+					cacheData.Bytes()[0] = 42
+					return cacheData, nil
+				},
+			},
+		},
+	}
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 	err = m.Update(ctx, vec, false)

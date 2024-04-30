@@ -283,7 +283,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		upPlanCtx.rowIdPos = rowIdPos
 		upPlanCtx.insertColPos = insertColPos
 		upPlanCtx.updateColPosMap = updateColPosMap
-		upPlanCtx.lockTable = ifNeedLockWholeTable(builder, lastNodeId)
 
 		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, true)
 		if err != nil {
@@ -307,6 +306,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
 	ReCalcQueryStats(builder, query)
+	reCheckifNeedLockWholeTable(builder)
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -633,7 +633,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	var bat *batch.Batch
 	var pkLocationInfo orderAndIdx
 	var ok bool
-	var colTyp *Type
+	var colTyp Type
 	proc := ctx.GetProcess()
 	node := builder.qry.Nodes[0]
 	isCompound := len(lmap.m) > 1
@@ -651,7 +651,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	colExprs := make([][]*Expr, len(lmap.m))
 	// If the expression is nil, it creates a constant expression with either the UUID value or a constant value.
 	for idx, name := range insertColsNameFromStmt {
-		var varcharTyp *Type
+		var varcharTyp Type
 		if pkLocationInfo, ok = lmap.m[name]; !ok {
 			continue
 		}
@@ -681,7 +681,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					// we have not uuid type in plan.Const. so use string & cast string to uuid
 					val := vector.MustFixedCol[types.Uuid](bat.Vecs[idx])[i]
 					constExpr := &plan.Expr{
-						Typ: *varcharTyp,
+						Typ: varcharTyp,
 						Expr: &plan.Expr_Lit{
 							Lit: &plan.Literal{
 								Value: &plan.Literal_Sval{
@@ -700,7 +700,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 						return nil, err
 					}
 					valExprs[i] = &plan.Expr{
-						Typ: *colTyp,
+						Typ: colTyp,
 						Expr: &plan.Expr_Lit{
 							Lit: constExpr,
 						},
@@ -726,7 +726,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			var orExpr *Expr
 			for i := 0; i < rowsCount; i++ {
 				expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
-					Typ: *colTyp,
+					Typ: colTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							// ColPos: int32(pkOrderInTableDef),
@@ -753,7 +753,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			// pk in (a1, a2, a3)
 			// args in list must be constant
 			expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
-				Typ: *colTyp,
+				Typ: colTyp,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						// ColPos: int32(pkOrderInTableDef),

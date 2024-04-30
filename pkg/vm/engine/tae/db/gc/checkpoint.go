@@ -86,10 +86,7 @@ type checkpointCleaner struct {
 		enableGC bool
 	}
 
-	snapshot struct {
-		sync.RWMutex
-		snapshotMeta *logtail.SnapshotMeta
-	}
+	snapshotMeta *logtail.SnapshotMeta
 
 	mPool *mpool.MPool
 }
@@ -108,7 +105,7 @@ func NewCheckpointCleaner(
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.minMergeCount.count = MinMergeCount
-	cleaner.snapshot.snapshotMeta = logtail.NewSnapshotMeta()
+	cleaner.snapshotMeta = logtail.NewSnapshotMeta()
 	cleaner.option.enableGC = true
 	cleaner.mPool = common.DebugAllocator
 	return cleaner
@@ -122,9 +119,9 @@ func (c *checkpointCleaner) GetMPool() *mpool.MPool {
 }
 
 func (c *checkpointCleaner) SetTid(tid uint64) {
-	c.snapshot.Lock()
-	defer c.snapshot.Unlock()
-	c.snapshot.snapshotMeta.SetTid(tid)
+	c.snapshotMeta.Lock()
+	defer c.snapshotMeta.Unlock()
+	c.snapshotMeta.SetTid(tid)
 }
 
 func (c *checkpointCleaner) EnableGCForTest() {
@@ -157,9 +154,11 @@ func (c *checkpointCleaner) Replay() error {
 	minMergedEnd := types.TS{}
 	maxConsumedStart := types.TS{}
 	maxConsumedEnd := types.TS{}
+	maxSnapEnd := types.TS{}
+	maxAcctEnd := types.TS{}
 	var fullGCFile fileservice.DirEntry
 	// Get effective minMerged
-	var snapFile string
+	var snapFile, acctFile string
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
 		if ext == blockio.GCFullExt {
@@ -171,8 +170,13 @@ func (c *checkpointCleaner) Replay() error {
 				fullGCFile = dir
 			}
 		}
-		if ext == blockio.SnapshotExt && maxConsumedEnd.Equal(&end) {
+		if ext == blockio.SnapshotExt && maxSnapEnd.Less(&end) {
+			maxSnapEnd = end
 			snapFile = dir.Name
+		}
+		if ext == blockio.AcctExt && maxAcctEnd.Less(&end) {
+			maxAcctEnd = end
+			acctFile = dir.Name
 		}
 	}
 	readDirs := make([]fileservice.DirEntry, 0)
@@ -181,7 +185,7 @@ func (c *checkpointCleaner) Replay() error {
 	}
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
-		if ext == blockio.GCFullExt || ext == blockio.SnapshotExt {
+		if ext == blockio.GCFullExt || ext == blockio.SnapshotExt || ext == blockio.AcctExt {
 			continue
 		}
 		if (maxConsumedStart.IsEmpty() || maxConsumedStart.Less(&end)) &&
@@ -204,7 +208,13 @@ func (c *checkpointCleaner) Replay() error {
 		c.updateInputs(table)
 	}
 	if snapFile != "" {
-		err = c.snapshot.snapshotMeta.ReadMeta(c.ctx, GCMetaDir+snapFile, c.fs.Service)
+		err = c.snapshotMeta.ReadMeta(c.ctx, GCMetaDir+snapFile, c.fs.Service)
+		if err != nil {
+			return err
+		}
+	}
+	if acctFile != "" {
+		err = c.snapshotMeta.ReadTableInfo(c.ctx, GCMetaDir+acctFile, c.fs.Service)
 		if err != nil {
 			return err
 		}
@@ -285,14 +295,52 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	if maxConsumed == nil {
 		return nil
 	}
+	maxSnapEnd := types.TS{}
+	maxAcctEnd := types.TS{}
+	var snapFile, acctFile string
 	dirs, err := c.fs.ListDir(GCMetaDir)
 	if err != nil {
 		return err
 	}
 	deleteFiles := make([]string, 0)
+	mergeSnapAcctFile := func(name string, ts, max *types.TS, file *string) error {
+		if *file != "" {
+			if max.Less(ts) {
+				max = ts
+				err = c.fs.Delete(*file)
+				if err != nil {
+					logutil.Errorf("DelFiles failed: %v, max: %v", err.Error(), max.ToString())
+					return err
+				}
+				*file = GCMetaDir + name
+			} else {
+				err = c.fs.Delete(GCMetaDir + name)
+				if err != nil {
+					logutil.Errorf("DelFiles failed: %v, max: %v", err.Error(), max.ToString())
+					return err
+				}
+			}
+		} else {
+			*file = GCMetaDir + name
+			max = ts
+			logutil.Debugf("mergeSnapAcctFile: %v, max: %v", name, max.ToString())
+		}
+		return nil
+	}
 	for _, dir := range dirs {
-		_, _, ext := blockio.DecodeGCMetadataFileName(dir.Name)
+		_, ts, ext := blockio.DecodeGCMetadataFileName(dir.Name)
 		if ext == blockio.SnapshotExt {
+			err = mergeSnapAcctFile(dir.Name, &ts, &maxSnapEnd, &snapFile)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		if ext == blockio.AcctExt {
+			err = mergeSnapAcctFile(dir.Name, &ts, &maxAcctEnd, &acctFile)
+			if err != nil {
+				return err
+			}
 			continue
 		}
 		_, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
@@ -394,7 +442,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 	return nil
 }
 
-func (c *checkpointCleaner) softGC(t *GCTable, gckp *checkpoint.CheckpointEntry, snapshots map[uint64]containers.Vector) []string {
+func (c *checkpointCleaner) softGC(t *GCTable, gckp *checkpoint.CheckpointEntry, snapshots map[uint32]containers.Vector) []string {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
 	if len(c.inputs.tables) == 0 {
@@ -404,10 +452,11 @@ func (c *checkpointCleaner) softGC(t *GCTable, gckp *checkpoint.CheckpointEntry,
 	for _, table := range c.inputs.tables {
 		mergeTable.Merge(table)
 	}
-	gc := mergeTable.SoftGC(t, gckp.GetEnd(), snapshots)
+	gc, snapList := mergeTable.SoftGC(t, gckp.GetEnd(), snapshots, c.snapshotMeta)
 	c.inputs.tables = make([]*GCTable, 0)
 	c.inputs.tables = append(c.inputs.tables, mergeTable)
 	c.updateMaxCompared(gckp)
+	c.snapshotMeta.MergeTableInfo(snapList)
 	//logutil.Infof("SoftGC is %v, merge table: %v", gc, mergeTable.String())
 	return gc
 }
@@ -480,7 +529,7 @@ func (c *checkpointCleaner) CheckGC() error {
 		return moerr.NewInternalErrorNoCtx("processing clean GetSnapshots %s: %v", debugCandidates[0].String(), err)
 	}
 	defer logtail.CloseSnapshotList(snapshots)
-	debugTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
+	debugTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots, c.snapshotMeta)
 	var mergeTable *GCTable
 	if len(c.inputs.tables) > 1 {
 		mergeTable = NewGCTable()
@@ -490,7 +539,7 @@ func (c *checkpointCleaner) CheckGC() error {
 	} else {
 		mergeTable = c.inputs.tables[0]
 	}
-	mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
+	mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots, c.snapshotMeta)
 	if !mergeTable.Compare(debugTable) {
 		logutil.Errorf("inputs :%v", c.inputs.tables[0].String())
 		logutil.Errorf("debugTable :%v", debugTable.String())
@@ -603,9 +652,16 @@ func (c *checkpointCleaner) createNewInput(
 	}
 	name := blockio.EncodeSnapshotMetadataFileName(GCMetaDir,
 		PrefixSnapMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
-	err = c.snapshot.snapshotMeta.SaveMeta(name, c.fs.Service)
+	err = c.snapshotMeta.SaveMeta(name, c.fs.Service)
 	if err != nil {
 		logutil.Infof("SaveMeta is failed")
+		return
+	}
+	name = blockio.EncodeTableMetadataFileName(GCMetaDir,
+		PrefixAcctMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
+	err = c.snapshotMeta.SaveTableInfo(name, c.fs.Service)
+	if err != nil {
+		logutil.Infof("SaveTableInfo is failed")
 		return
 	}
 	files := c.GetAndClearOutputs()
@@ -623,14 +679,10 @@ func (c *checkpointCleaner) createNewInput(
 }
 
 func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
-	c.snapshot.Lock()
-	defer c.snapshot.Unlock()
-	c.snapshot.snapshotMeta.Update(data)
+	c.snapshotMeta.Update(data)
 	return nil
 }
 
-func (c *checkpointCleaner) GetSnapshots() (map[uint64]containers.Vector, error) {
-	c.snapshot.RLock()
-	defer c.snapshot.RUnlock()
-	return c.snapshot.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, c.mPool)
+func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {
+	return c.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, c.mPool)
 }

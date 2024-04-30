@@ -2407,6 +2407,21 @@ var (
 			input: "create publication pub1 database db1 comment 'test'",
 		},
 		{
+			input: "create publication pub1 table t1",
+		},
+		{
+			input: "create publication pub1 table t1 account acc0",
+		},
+		{
+			input: "create publication pub1 table t1 account acc0, acc1",
+		},
+		{
+			input: "create publication pub1 table t1 account acc0, acc1, acc2 comment 'test'",
+		},
+		{
+			input: "create publication pub1 table t1 comment 'test'",
+		},
+		{
 			input:  "CREATE STAGE my_ext_stage URL='s3://load/files/'",
 			output: "create stage my_ext_stage url='s3://load/files/'",
 		},
@@ -2440,6 +2455,18 @@ var (
 		},
 		{
 			input: "create database db1 from acc0 publication pub1",
+		},
+		{
+			input: "create table t1 from acc0 publication pub1",
+		},
+		{
+			input: "create temporary table t1 from acc0 publication pub1",
+		},
+		{
+			input: "create table if not exists t1 from acc0 publication pub1",
+		},
+		{
+			input: "create temporary table if not exists t1 from acc0 publication pub1",
 		},
 		{
 			input: "drop publication pub1",

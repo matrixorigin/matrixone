@@ -868,7 +868,7 @@ message ExternScan {
 message LockTarget {
 	uint64 table_id           	= 1;
 	int32 primary_col_idx_in_bat  = 2;
-	Type primary_col_typ          = 3;
+	Type primary_col_typ          = 3 [(gogoproto.nullable) = false];
 	int32 refresh_ts_idx_in_bat   = 4;
 	int32 filter_col_idx_in_bat   = 5;
 	bool lock_table 				= 6;
@@ -882,8 +882,8 @@ message PreInsertUkCtx {
 	// index of columns(parts of unique key) in pre batch
 	repeated int32 columns 	= 1;
 	int32 pk_column 		= 2;
-	Type pk_type 			= 3;
-	Type uk_type			= 4;
+	Type pk_type 			= 3 [(gogoproto.nullable) = false];
+	Type uk_type			= 4 [(gogoproto.nullable) = false];
 }
 
 message PreDeleteCtx {
@@ -903,6 +903,7 @@ message RuntimeFilterSpec {
 	bool match_prefix = 2;
 	int32 upper_limit = 3;
 	Expr expr = 4;
+	bool handled = 5;
 }
 
 message IdList {
@@ -1257,7 +1258,7 @@ message AlterTableName {
 message AlterAddColumn {
 	string name = 1;
 	string pre_name = 2;
-	Type type = 3;
+	Type type = 3 [(gogoproto.nullable) = false];
 	int32 pos = 4;
 }
 

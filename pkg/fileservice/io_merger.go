@@ -23,28 +23,29 @@ import (
 	"go.uber.org/zap"
 )
 
-type IOLockKey struct {
+type IOMergeKey struct {
 	Path   string
 	Offset int64
 	End    int64
+	Policy Policy
 }
 
-type IOLocks struct {
-	locks sync.Map // IOLockKey -> chan struct{}
+type IOMerger struct {
+	flying sync.Map // IOMergeKey -> chan struct{}
 }
 
-func NewIOLocks() *IOLocks {
-	return &IOLocks{}
+func NewIOMerger() *IOMerger {
+	return &IOMerger{}
 }
 
 var slowIOWaitDuration = time.Second * 10
 
-func (i *IOLocks) waitFunc(key IOLockKey, ch chan struct{}) func() {
-	metric.IOLockCounterWait.Add(1)
+func (i *IOMerger) waitFunc(key IOMergeKey, ch chan struct{}) func() {
+	metric.IOMergerCounterWait.Add(1)
 	return func() {
 		t0 := time.Now()
 		defer func() {
-			metric.IOLockDurationWait.Observe(time.Since(t0).Seconds())
+			metric.IOMergerDurationWait.Observe(time.Since(t0).Seconds())
 		}()
 		for {
 			timer := time.NewTimer(slowIOWaitDuration)
@@ -53,7 +54,7 @@ func (i *IOLocks) waitFunc(key IOLockKey, ch chan struct{}) func() {
 				timer.Stop()
 				return
 			case <-timer.C:
-				logutil.Warn("wait io lock for too long",
+				logutil.Warn("wait io for too long",
 					zap.Any("wait", time.Since(t0)),
 					zap.Any("key", key),
 				)
@@ -62,28 +63,46 @@ func (i *IOLocks) waitFunc(key IOLockKey, ch chan struct{}) func() {
 	}
 }
 
-func (i *IOLocks) Lock(key IOLockKey) (unlock func(), wait func()) {
-	if v, ok := i.locks.Load(key); ok {
+func (i *IOMerger) Merge(key IOMergeKey) (done func(), wait func()) {
+	if v, ok := i.flying.Load(key); ok {
 		// wait
 		return nil, i.waitFunc(key, v.(chan struct{}))
 	}
 
-	// try lock
+	// try initiate
 	ch := make(chan struct{})
-	v, loaded := i.locks.LoadOrStore(key, ch)
+	v, loaded := i.flying.LoadOrStore(key, ch)
 	if loaded {
-		// lock failed, wait
+		// not the first request, wait
 		return nil, i.waitFunc(key, v.(chan struct{}))
 	}
 
-	// locked
-	metric.IOLockCounterLocked.Add(1)
+	// initiated
+	metric.IOMergerCounterInitiate.Add(1)
 	t0 := time.Now()
 	return func() {
 		defer func() {
-			metric.IOLockDurationLocked.Observe(time.Since(t0).Seconds())
+			metric.IOMergerDurationInitiate.Observe(time.Since(t0).Seconds())
 		}()
-		i.locks.Delete(key)
+		i.flying.Delete(key)
 		close(ch)
 	}, nil
+}
+
+func (i *IOVector) ioMergeKey() IOMergeKey {
+	key := IOMergeKey{
+		Path:   i.FilePath,
+		Policy: i.Policy,
+	}
+	min, max, readFull := i.readRange()
+	if readFull {
+		return key
+	}
+	if min != nil {
+		key.Offset = *min
+	}
+	if max != nil {
+		key.End = *max
+	}
+	return key
 }

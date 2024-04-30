@@ -95,6 +95,19 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 
+	// check if the database is a subscription
+	sub, err := ctx.GetSubscriptionMeta(dbName, snapshot)
+	if err != nil {
+		return nil, err
+	}
+
+	if sub != nil {
+		ctx.SetQueryingSubscription(sub)
+		defer func() {
+			ctx.SetQueryingSubscription(nil)
+		}()
+	}
+
 	_, tableDef := ctx.Resolve(dbName, tblName, snapshot)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
@@ -308,7 +321,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		if fk.ForeignTbl == 0 {
 			fkTableDef = tableDef
 		} else {
-			_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
+			if ctx.GetQueryingSubscription() != nil {
+				_, fkTableDef = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
+			} else {
+				_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
+			}
 		}
 
 		fkColIdToName := make(map[uint64]string)
