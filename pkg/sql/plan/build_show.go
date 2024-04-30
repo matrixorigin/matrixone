@@ -508,7 +508,6 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 
 	var sql string
 	snapshotSpec := ""
-	// Any account should show database MO_CATALOG_DB_NAME
 	if len(stmt.SnapshotName) > 0 {
 		snapshot, err := ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName)
 		if err != nil {
@@ -516,17 +515,8 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 		}
 		accountId = snapshot.CreatedByTenant.TenantID
 		snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.SnapshotName)
-
-		//	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", snapshot.CreatedByTenant.TenantID, MO_CATALOG_DB_NAME)
-		//	sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database{snapshot = '%s'} where (%s) ORDER BY %s", MO_CATALOG_DB_NAME, stmt.SnapshotName, accountClause, catalog.SystemDBAttr_Name)
-		//} else {
-		//	if accountId == catalog.System_Account {
-		//		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
-		//		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where (%s) ORDER BY %s", MO_CATALOG_DB_NAME, accountClause, catalog.SystemDBAttr_Name)
-		//	} else {
-		//		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database ORDER BY %s", MO_CATALOG_DB_NAME, catalog.SystemDBAttr_Name)
-		//	}
 	}
+	// Any account should show database MO_CATALOG_DB_NAME
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
 	sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database %s where (%s) ORDER BY %s", MO_CATALOG_DB_NAME, snapshotSpec, accountClause, catalog.SystemDBAttr_Name)
 
