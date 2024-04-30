@@ -82,6 +82,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
+	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
 )
 
@@ -94,7 +95,7 @@ const (
 )
 
 var (
-	ncpu           = runtime.NumCPU()
+	ncpu           = runtime.GOMAXPROCS(0)
 	ctxCancelError = context.Canceled.Error()
 )
 
@@ -885,7 +886,7 @@ func (c *Compile) getCNList() (engine.Nodes, error) {
 	cnList = append(cnList, engine.Node{
 		Id:   cnID,
 		Addr: c.addr,
-		Mcpu: runtime.NumCPU(),
+		Mcpu: ncpu,
 	})
 	return cnList, nil
 }
@@ -1532,7 +1533,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 				}
 
-				if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
+				if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize {
 					_, arg := constructDispatchLocalAndRemote(0, scopes, c.addr)
 					arg.FuncId = dispatch.ShuffleToAllFunc
 					arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
