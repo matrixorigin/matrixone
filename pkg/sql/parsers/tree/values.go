@@ -51,6 +51,8 @@ type ValuesStatement struct {
 	Limit   *Limit
 }
 
+func (node *ValuesStatement) Free() {}
+
 func (node *ValuesStatement) Format(ctx *FmtCtx) {
 	ctx.WriteString("values ")
 
@@ -79,4 +81,5 @@ func (node *ValuesStatement) Format(ctx *FmtCtx) {
 	}
 }
 func (node *ValuesStatement) GetStatementType() string { return "Values" }
-func (node *ValuesStatement) GetQueryType() string     { return QueryTypeDQL }
+
+func (node *ValuesStatement) GetQueryType() string { return QueryTypeDQL }
