@@ -8393,7 +8393,7 @@ func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenan
 	var err error
 	subscriptions := make([]string, 0)
 	//process the syspublications
-	syspublications_value, err := ses.GetGlobalSystemVariableValue("syspublications")
+	syspublications_value, err := ses.GetGlobalVar("syspublications")
 	if err != nil {
 		return err
 	}
