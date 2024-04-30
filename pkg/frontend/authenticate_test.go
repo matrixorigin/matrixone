@@ -1318,9 +1318,10 @@ func Test_determineGrantRole(t *testing.T) {
 		}
 
 		g := &tree.Grant{
-			Typ: tree.GrantTypeRole,
+			Typ:       tree.GrantTypeRole,
+			GrantRole: &tree.GrantRole{},
 		}
-		gr := &g.GrantRole
+		gr := g.GrantRole
 		for _, name := range roleNames {
 			gr.Roles = append(gr.Roles, &tree.Role{UserName: name})
 		}
@@ -1420,9 +1421,10 @@ func Test_determineGrantRole(t *testing.T) {
 		}
 
 		g := &tree.Grant{
-			Typ: tree.GrantTypeRole,
+			Typ:       tree.GrantTypeRole,
+			GrantRole: &tree.GrantRole{},
 		}
-		gr := &g.GrantRole
+		gr := g.GrantRole
 		for _, name := range roleNames {
 			gr.Roles = append(gr.Roles, &tree.Role{UserName: name})
 		}
@@ -1522,9 +1524,10 @@ func Test_determineGrantRole(t *testing.T) {
 		}
 
 		g := &tree.Grant{
-			Typ: tree.GrantTypeRole,
+			Typ:       tree.GrantTypeRole,
+			GrantRole: &tree.GrantRole{},
 		}
-		gr := &g.GrantRole
+		gr := g.GrantRole
 		for _, name := range roleNames {
 			gr.Roles = append(gr.Roles, &tree.Role{UserName: name})
 		}
@@ -1621,9 +1624,10 @@ func Test_determineGrantRole(t *testing.T) {
 		}
 
 		g := &tree.Grant{
-			Typ: tree.GrantTypeRole,
+			Typ:       tree.GrantTypeRole,
+			GrantRole: &tree.GrantRole{},
 		}
-		gr := &g.GrantRole
+		gr := g.GrantRole
 		for _, name := range roleNames {
 			gr.Roles = append(gr.Roles, &tree.Role{UserName: name})
 		}

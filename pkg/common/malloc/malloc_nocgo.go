@@ -12,26 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !cgo
+// +build !cgo
+
 package malloc
 
-import "testing"
-
-func TestAllocFree(t *testing.T) {
-	// Test that Alloc and Free work.
-	for i := 0; i < 100; i++ {
-		b := Alloc(1024)
-		if len(b) != 1024 {
-			t.Errorf("Alloc returned slice of length %d, want 1024", len(b))
-		}
-		Free(b)
-	}
+func Alloc(n int) []byte {
+	return make([]byte, n)
 }
 
-func TestAllocZero(t *testing.T) {
-	// Test that Alloc(0) returns a non-nil slice.
-	b := Alloc(0)
-	if b == nil {
-		t.Errorf("Alloc(0) returned nil slice")
-	}
-	Free(b)
+func Free(b []byte) {
 }
