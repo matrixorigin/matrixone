@@ -101,7 +101,7 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 	runRPCTests(
 		t,
 		func(c Client, s Server) {
-			events := newWaiterEvents(1, nil)
+			events := newWaiterEvents(1, nil, nil, nil)
 			defer events.close()
 
 			s.RegisterMethodHandler(

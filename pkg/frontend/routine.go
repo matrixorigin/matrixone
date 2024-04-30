@@ -22,8 +22,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"go.uber.org/zap"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -33,6 +32,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 // Routine handles requests.
@@ -67,7 +67,7 @@ type Routine struct {
 
 	printInfoOnce bool
 
-	migrateOnce sync.Once
+	mc *migrateController
 }
 
 func (rt *Routine) needPrintSessionInfo() bool {
@@ -391,6 +391,9 @@ func (rt *Routine) cleanup() {
 	//step 1: cancel the query if there is a running query.
 	//step 2: close the connection.
 	rt.closeOnce.Do(func() {
+		// we should wait for the migration and close the migration controller.
+		rt.mc.waitAndClose()
+
 		ses := rt.getSession()
 		//step A: rollback the txn
 		if ses != nil {
@@ -424,7 +427,12 @@ func (rt *Routine) cleanup() {
 
 func (rt *Routine) migrateConnectionTo(req *query.MigrateConnToRequest) error {
 	var err error
-	rt.migrateOnce.Do(func() {
+	rt.mc.migrateOnce.Do(func() {
+		if !rt.mc.beginMigrate() {
+			err = moerr.NewInternalErrorNoCtx("cannot start migrate as routine has been closed")
+			return
+		}
+		defer rt.mc.endMigrate()
 		ses := rt.getSession()
 		err = ses.Migrate(req)
 	})
@@ -453,6 +461,7 @@ func NewRoutine(ctx context.Context, protocol MysqlProtocol, parameters *config.
 		cancelRoutineFunc: cancelRoutineFunc,
 		parameters:        parameters,
 		printInfoOnce:     true,
+		mc:                newMigrateController(),
 	}
 
 	return ri

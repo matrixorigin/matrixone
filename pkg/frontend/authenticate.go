@@ -1545,7 +1545,7 @@ const (
 	grantOwnershipOnTableFormat = `grant ownership on table %s.%s to %s;`
 
 	// revoke ownership on database owner
-	revokeOwnershipFromDatabaseFormat = `revoke ownership on database %s form %s;`
+	revokeOwnershipFromDatabaseFormat = `revoke ownership on database %s from %s;`
 
 	// revoke ownership on table owner
 	revokeOwnershipFromTableFormat = `revoke ownership on table %s.%s from %s;`

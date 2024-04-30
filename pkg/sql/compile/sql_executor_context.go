@@ -56,6 +56,10 @@ func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubNam
 	panic("not supported in internal sql executor")
 }
 
+func (c *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef) {
+	panic("not supported in internal sql executor")
+}
+
 func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("not supported in internal sql executor")
 }

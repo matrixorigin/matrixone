@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -296,6 +297,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
 	ReCalcQueryStats(builder, query)
+	reCheckifNeedLockWholeTable(builder)
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -369,7 +371,7 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 		isCompound = len(tableDef.Pkey.Names) > 1
 	}
 
-	if !CNPrimaryCheck {
+	if !config.CNPrimaryCheck {
 		return false // break condition 0
 	}
 
