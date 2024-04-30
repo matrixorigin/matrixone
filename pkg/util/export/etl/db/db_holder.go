@@ -82,7 +82,11 @@ func SetSQLWriterDBAddressFunc(f func(context.Context, bool) (string, error)) {
 }
 
 func GetSQLWriterDBAddressFunc() func(context.Context, bool) (string, error) {
-	return dbAddressFunc.Load().(func(context.Context, bool) (string, error))
+	if f := dbAddressFunc.Load(); f == nil {
+		return nil
+	} else {
+		return f.(func(context.Context, bool) (string, error))
+	}
 }
 
 func SetDBConn(conn *sql.DB) {
