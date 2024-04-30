@@ -39,7 +39,7 @@ func (p *PartitionState) ApproxObjectsNum() int {
 	return p.dataObjects.Len()
 }
 
-func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
+func (p *PartitionState) NewObjectsIter(ts types.TS) (ObjectsIter, error) {
 	if ts.Less(&p.minTS) {
 		return nil, moerr.NewTxnStaleNoCtx()
 	}
@@ -87,7 +87,7 @@ type dirtyBlocksIter struct {
 	firstCalled bool
 }
 
-func (p *PartitionState) NewDirtyBlocksIter() *dirtyBlocksIter {
+func (p *PartitionState) NewDirtyBlocksIter() BlocksIter {
 	iter := p.dirtyBlocks.Copy().Iter()
 	ret := &dirtyBlocksIter{
 		iter: iter,
