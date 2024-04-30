@@ -384,10 +384,20 @@ func restoreToTable(ctx context.Context, bh BackgroundExec, snapshotName string,
 
 	// insert data
 	insertIntoSql := fmt.Sprintf(restoreTableDataFmt, dbName, tblName, dbName, tblName, snapshotName)
-	if err = bh.ExecRestore(ctx, insertIntoSql, srcAccountId, toAccountId); err != nil {
-		return
-	}
 
+	curAccountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	if curAccountId == toAccountId {
+		if err = bh.Exec(ctx, insertIntoSql); err != nil {
+			return
+		}
+	} else {
+		if err = bh.ExecRestore(toCtx, insertIntoSql, curAccountId, toAccountId); err != nil {
+			return
+		}
+	}
 	return
 }
 
