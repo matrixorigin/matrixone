@@ -93,11 +93,40 @@ func (s *service) initRemote() {
 			defer releaseResponse(resp)
 			return resp.CannotCommit.CommittingTxn, nil
 		},
+		func(txn pb.WaitTxn) (bool, error) {
+			req := acquireRequest()
+			defer releaseRequest(req)
+
+			req.Method = pb.Method_GetActiveTxn
+			req.GetActiveTxn.ServiceID = txn.CreatedOn
+
+			ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+			defer cancel()
+
+			resp, err := s.remote.client.Send(ctx, req)
+			if err != nil {
+				return false, err
+			}
+			defer releaseResponse(resp)
+
+			// cn restarted
+			if !resp.GetActiveTxn.Valid {
+				return false, nil
+			}
+
+			for _, v := range resp.GetActiveTxn.Txn {
+				if bytes.Equal(v, txn.TxnID) {
+					return true, nil
+				}
+			}
+			return false, nil
+		},
 	)
 
 	rpcServer, err := NewServer(
 		s.cfg.ListenAddress,
-		s.cfg.RPC)
+		s.cfg.RPC,
+		s.option.serverOpts...)
 	if err != nil {
 		panic(err)
 	}

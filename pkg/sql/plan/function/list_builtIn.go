@@ -3330,6 +3330,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			if len(inputs) == 0 {
 				return newCheckResultWithSuccess(0)
 			}
+			if len(inputs) == 1 && inputs[0].Oid == types.T_int64 {
+				return newCheckResultWithSuccess(0)
+			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
 
