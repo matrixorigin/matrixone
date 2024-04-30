@@ -384,17 +384,6 @@ func (c *objectPruneArg) Run() error {
 	var minR, maxR, totalR, minS, maxS, totalS int
 	ago := types.BuildTS(now.Physical()-int64(c.ago), now.Logical())
 
-	hasDels := func(obj *catalog.ObjectEntry) bool {
-		it := obj.MakeBlockIt(true)
-		for ; it.Valid(); it.Next() {
-			blk := it.Get().GetPayload()
-			if blk.HasPersistedDeltaData() || blk.GetBlockData().GetTotalChanges() > 0 {
-				return true
-			}
-		}
-		return false
-	}
-
 	selectedObjs := make([]*catalog.ObjectEntry, 0, 64)
 
 	for ; it.Valid(); it.Next() {
@@ -407,11 +396,11 @@ func (c *objectPruneArg) Run() error {
 		obj.RLock()
 		createTs := obj.GetCreatedAtLocked()
 		obj.RUnlock()
-		if createTs.GreaterEq(ago) {
+		if createTs.GreaterEq(&ago) {
 			continue
 		}
 		stale++
-		if hasDels(obj) {
+		if obj.GetObjectData().GetTotalChanges() > 0 { // has deletes
 			continue
 		}
 		selected++
@@ -493,20 +482,6 @@ func (c *objectPruneArg) executePrune() error {
 	notfound := 0
 	w := &bytes.Buffer{}
 	for _, obj := range task.objs {
-		it := obj.MakeBlockIt(true)
-		objHandle, err := tblHdl.GetObject(&obj.ID)
-		if err != nil {
-			logutil.Warnf("objprune: %v not found", obj.ID.String())
-			notfound++
-			continue
-		}
-		for ; it.Valid(); it.Next() {
-			blk := it.Get().GetPayload()
-			if err := objHandle.SoftDeleteBlock(blk.ID); err != nil {
-				logutil.Errorf("objprune: del blk %s: %v", blk.ID.String(), err)
-				return err
-			}
-		}
 		if err := tblHdl.SoftDeleteObject(&obj.ID); err != nil {
 			logutil.Errorf("objprune: del obj %s: %v", obj.ID.String(), err)
 			return err
