@@ -227,13 +227,11 @@ func (d *DiskCache) Read(
 			d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
 		}
 
-		if releaseFunc, err := entry.ReadFromOSFile(file); err != nil {
+		if err := entry.ReadFromOSFile(file); err != nil {
 			// ignore error
 			numError++
 			logutil.Warn("read disk cache error", zap.Any("error", err))
 			return nil
-		} else if releaseFunc != nil {
-			vector.onRelease = append(vector.onRelease, releaseFunc)
 		}
 
 		entry.done = true
