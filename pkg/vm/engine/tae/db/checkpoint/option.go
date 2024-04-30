@@ -89,9 +89,3 @@ func WithReserveWALEntryCount(count uint64) Option {
 		r.options.reservedWALEntryCount = count
 	}
 }
-
-func WithDisableGC(disable bool) Option {
-	return func(r *runner) {
-		r.options.disableGC = disable
-	}
-}

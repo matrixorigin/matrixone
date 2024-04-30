@@ -49,6 +49,9 @@ type checkpointCleaner struct {
 
 	maxCompared atomic.Pointer[checkpoint.CheckpointEntry]
 
+	ckpStage atomic.Pointer[types.TS]
+	ckpGC    atomic.Pointer[types.TS]
+
 	// minMergeCount is the configuration of the merge GC metadata file.
 	// When the GC file is greater than or equal to minMergeCount,
 	// the merge GC metadata file will be triggered and the expired file will be deleted.
@@ -239,6 +242,14 @@ func (c *checkpointCleaner) updateMaxCompared(e *checkpoint.CheckpointEntry) {
 	c.maxCompared.Store(e)
 }
 
+func (c *checkpointCleaner) updateCkpStage(ts *types.TS) {
+	c.ckpStage.Store(ts)
+}
+
+func (c *checkpointCleaner) updateCkpGC(ts *types.TS) {
+	c.ckpGC.Store(ts)
+}
+
 func (c *checkpointCleaner) updateInputs(input *GCTable) {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
@@ -261,6 +272,14 @@ func (c *checkpointCleaner) GetMinMerged() *checkpoint.CheckpointEntry {
 
 func (c *checkpointCleaner) GetMaxCompared() *checkpoint.CheckpointEntry {
 	return c.maxCompared.Load()
+}
+
+func (c *checkpointCleaner) GeteCkpStage() *types.TS {
+	return c.ckpStage.Load()
+}
+
+func (c *checkpointCleaner) GeteCkpGC() *types.TS {
+	return c.ckpGC.Load()
 }
 
 func (c *checkpointCleaner) GetInputs() *GCTable {
@@ -385,6 +404,68 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	logutil.Info("[DiskCleaner]",
 		common.OperationField("MergeGCFile end"),
 		common.OperandField(maxConsumed.String()))
+	return nil
+}
+
+func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
+	if stage.IsEmpty() ||
+		(c.GeteCkpStage() != nil && c.GeteCkpStage().GreaterEq(&stage)) {
+		return nil
+	}
+	logutil.Infof("mergeCheckpointFiles stage: %v", stage.ToString())
+	files, idx, err := checkpoint.ListSnapshotMeta(c.ctx, c.fs.Service, stage, nil)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	ckpGC := c.GeteCkpGC()
+	if ckpGC == nil {
+		ckpGC = new(types.TS)
+	}
+	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(c.ctx, c.fs.Service, files, idx, *ckpGC, true)
+	if err != nil {
+		return err
+	}
+	if len(ckps) == 0 {
+		return nil
+	}
+	deleteFiles := make([]string, 0)
+	for _, ckp := range ckps {
+		end := ckp.GetEnd()
+		if end.Less(&stage) {
+			logutil.Infof("GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
+			locations, err := logtail.LoadCheckpointLocations(c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
+			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+					continue
+				}
+				return err
+			}
+			for name := range locations {
+				deleteFiles = append(deleteFiles, name)
+			}
+			deleteFiles = append(deleteFiles, ckp.GetTNLocation().Name().String())
+		}
+
+	}
+	for i := 0; i < idx+1; i++ {
+		end := files[i].GetEnd()
+		if end.Less(&stage) {
+			deleteFiles = append(deleteFiles, CKPMetaDir+files[i].GetName())
+		}
+	}
+	logutil.Infof("CKP GC: %v", deleteFiles)
+	if !c.disableGC {
+		err = c.fs.DelFiles(c.ctx, deleteFiles)
+		if err != nil {
+			logutil.Errorf("DelFiles failed: %v", err.Error())
+			return err
+		}
+	}
+	c.updateCkpStage(&stage)
+	c.updateCkpGC(&stage)
 	return nil
 }
 
@@ -612,6 +693,13 @@ func (c *checkpointCleaner) Process() {
 		}
 	}
 	err = c.mergeGCFile()
+	if err != nil {
+		// TODO: Error handle
+		return
+	}
+
+	err = c.mergeCheckpointFiles(c.ckpClient.GetStage())
+
 	if err != nil {
 		// TODO: Error handle
 		return
