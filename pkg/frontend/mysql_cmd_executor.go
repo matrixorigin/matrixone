@@ -787,6 +787,12 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar, sql string) er
 			if err != nil {
 				return err
 			}
+		} else if name == "optimizer_hints" {
+			err = setVarFunc(assign.System, assign.Global, name, value, sql)
+			if err != nil {
+				return err
+			}
+			runtime.ProcessLevelRuntime().SetGlobalVariables("optimizer_hints", value)
 		} else if name == "runtime_filter_limit_in" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {

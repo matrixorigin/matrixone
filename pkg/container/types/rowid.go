@@ -59,6 +59,10 @@ func CompareBlockidBlockidAligned(a, b Blockid) int {
 	return bytes.Compare(a[:], b[:])
 }
 
+func (r Rowid) Compare(other Rowid) int {
+	return bytes.Compare(r[:], other[:])
+}
+
 func (r Rowid) Less(than Rowid) bool {
 	return bytes.Compare(r[:], than[:]) < 0
 }

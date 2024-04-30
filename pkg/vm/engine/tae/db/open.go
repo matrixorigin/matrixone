@@ -161,8 +161,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
 		checkpoint.WithGlobalMinCount(int(opts.CheckpointCfg.GlobalMinCount)),
 		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval),
-		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount),
-		checkpoint.WithDisableGC(opts.GCCfg.DisableGC))
+		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
 
 	now := time.Now()
 	checkpointed, ckpLSN, valid, err := db.BGCheckpointRunner.Replay(dataFactory)
@@ -187,7 +186,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
-	db.MergeHandle = newMergeTaskBuiler(db)
+	db.MergeHandle = newMergeTaskBuilder(db)
 	scanner.RegisterOp(db.MergeHandle)
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()

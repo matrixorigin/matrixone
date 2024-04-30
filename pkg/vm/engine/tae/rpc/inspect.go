@@ -76,9 +76,6 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 	policy := &mergePolicyArg{}
 	rootCmd.AddCommand(policy.PrepareCommand())
 
-	mmerge := &manuallyMergeArg{}
-	rootCmd.AddCommand(mmerge.PrepareCommand())
-
 	info := &infoArg{}
 	rootCmd.AddCommand(info.PrepareCommand())
 
@@ -504,97 +501,6 @@ func (c *infoArg) Run() error {
 		}
 	}
 	c.ctx.resp.Payload = b.Bytes()
-	return nil
-}
-
-type manuallyMergeArg struct {
-	ctx     *inspectContext
-	tbl     *catalog.TableEntry
-	objects []*catalog.ObjectEntry
-}
-
-func (c *manuallyMergeArg) PrepareCommand() *cobra.Command {
-	mmCmd := &cobra.Command{
-		Use:   "merge",
-		Short: "manually merge objects",
-		Run:   RunFactory(c),
-	}
-
-	mmCmd.Flags().StringP("target", "t", "*", "format: db.table")
-	mmCmd.Flags().StringSliceP("objects", "o", nil, "format: object_id_0000,object_id_0000")
-	return mmCmd
-}
-
-func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
-	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-
-	address, _ := cmd.Flags().GetString("target")
-	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
-	if err != nil {
-		return err
-	}
-	if c.tbl == nil {
-		return moerr.NewInvalidInputNoCtx("need table target")
-	}
-
-	objects, _ := cmd.Flags().GetStringSlice("objects")
-
-	dedup := make(map[string]struct{}, len(objects))
-	for _, o := range objects {
-		if _, ok := dedup[o]; ok {
-			return moerr.NewInvalidInputNoCtx("duplicate object %s", o)
-		}
-		dedup[o] = struct{}{}
-	}
-	if len(dedup) < 2 {
-		return moerr.NewInvalidInputNoCtx("need at least 2 objects")
-	}
-	objs := make([]*catalog.ObjectEntry, 0, len(objects))
-	for o := range dedup {
-		parts := strings.Split(o, "_")
-		uid, err := types.ParseUuid(parts[0])
-		if err != nil {
-			return err
-		}
-		objects, err := c.tbl.GetObjectsByID(&uid)
-		if err != nil {
-			return moerr.NewInvalidInputNoCtx("not found object %s", o)
-		}
-		for _, obj := range objects {
-			if !obj.IsActive() || obj.IsAppendable() {
-				return moerr.NewInvalidInputNoCtx("object is deleted or not a flushed one %s", o)
-			}
-			objs = append(objs, obj)
-		}
-	}
-
-	c.objects = objs
-	return nil
-}
-
-func (c *manuallyMergeArg) String() string {
-	t := "*"
-	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
-	}
-
-	b := &bytes.Buffer{}
-	for _, o := range c.objects {
-		b.WriteString(fmt.Sprintf("%s_0000,", o.ID.String()))
-	}
-
-	return fmt.Sprintf("(%s) objects: %s", t, b.String())
-}
-
-func (c *manuallyMergeArg) Run() error {
-	err := c.ctx.db.MergeHandle.ManuallyMerge(c.tbl, c.objects)
-	if err != nil {
-		return err
-	}
-	c.ctx.resp.Payload = []byte(fmt.Sprintf(
-		"success. see more to run select mo_ctl('dn', 'inspect', 'object -t %s.%s')\\G",
-		c.tbl.GetDB().GetName(), c.tbl.GetLastestSchemaLocked().Name,
-	))
 	return nil
 }
 
