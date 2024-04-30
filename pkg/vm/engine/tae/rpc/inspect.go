@@ -505,13 +505,13 @@ func (c *infoArg) Run() error {
 }
 
 type mergePolicyArg struct {
-	ctx              *inspectContext
-	tbl              *catalog.TableEntry
-	maxMergeObjN     int32
-	minRowsQualified int32
-	maxRowsObj       int32
-	cnMinMergeSize   int32
-	hints            []api.MergeHint
+	ctx               *inspectContext
+	tbl               *catalog.TableEntry
+	maxMergeObjN      int32
+	minOsizeQualified int32
+	maxOsizeObject    int32
+	cnMinMergeSize    int32
+	hints             []api.MergeHint
 }
 
 func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
@@ -522,8 +522,9 @@ func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
 	}
 	policyCmd.Flags().StringP("target", "t", "*", "format: db.table")
 	policyCmd.Flags().Int32P("maxMergeObjN", "r", common.DefaultMaxMergeObjN, "max number of objects merged for one run")
-	policyCmd.Flags().Int32P("minRowsQualified", "m", common.DefaultMinRowsQualified, "objects which are less than minRowsQualified will be picked up to merge")
-	policyCmd.Flags().Int32P("minCNMergeSize", "c", common.DefaultMinCNMergeSize, "Merget task whose memory occupation exceeds minCNMergeSize will be moved to CN")
+	policyCmd.Flags().Int32P("minOsizeQualified", "m", common.DefaultMinOsizeQualifiedMB, "objects whose osize are less than minOsizeQualified(MB) will be picked up to merge")
+	policyCmd.Flags().Int32P("maxOsizeObject", "o", common.DefaultMaxOsizeObjMB, "merged objects' osize should be near maxOsizeObject(MB)")
+	policyCmd.Flags().Int32P("minCNMergeSize", "c", common.DefaultMinCNMergeSize, "Merge task whose memory occupation exceeds minCNMergeSize(MB) will be moved to CN")
 	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
 	return policyCmd
 }
@@ -537,9 +538,12 @@ func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 		return err
 	}
 	c.maxMergeObjN, _ = cmd.Flags().GetInt32("maxMergeObjN")
-	c.maxRowsObj, _ = cmd.Flags().GetInt32("maxRowsObj")
-	c.minRowsQualified, _ = cmd.Flags().GetInt32("minRowsQualified")
+	c.maxOsizeObject, _ = cmd.Flags().GetInt32("maxOsizeObject")
+	c.minOsizeQualified, _ = cmd.Flags().GetInt32("minOsizeQualified")
 	c.cnMinMergeSize, _ = cmd.Flags().GetInt32("minCNMergeSize")
+	if c.maxOsizeObject > 2048 || c.minOsizeQualified > 2048 {
+		return moerr.NewInvalidInputNoCtx("maxOsizeObject or minOsizeQualified should be less than 2048")
+	}
 	hints, _ := cmd.Flags().GetInt32Slice("mergeHints")
 	for _, h := range hints {
 		if _, ok := api.MergeHint_name[h]; !ok {
@@ -556,29 +560,33 @@ func (c *mergePolicyArg) String() string {
 		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
 	}
 	return fmt.Sprintf(
-		"(%s) maxMergeObjN: %v, minRowsQualified: %v, cnSize: %vMB, hints: %v",
-		t, c.maxMergeObjN, c.minRowsQualified, c.cnMinMergeSize, c.hints,
+		"(%s) maxMergeObjN: %v, maxOsizeObj: %vMB, minOsizeQualified: %vMB, offloadToCnSize: %vMB, hints: %v",
+		t, c.maxMergeObjN, c.maxOsizeObject, c.minOsizeQualified, c.cnMinMergeSize, c.hints,
 	)
 }
 
 func (c *mergePolicyArg) Run() error {
+	maxosize := uint32(c.maxOsizeObject * common.Const1MBytes)
+	minosize := uint32(c.minOsizeQualified * common.Const1MBytes)
+	cnsize := uint64(c.cnMinMergeSize) * common.Const1MBytes
+
 	if c.tbl == nil {
 		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)
-		common.RuntimeMinRowsQualified.Store(c.minRowsQualified)
-		common.RuntimeMinCNMergeSize.Store(uint64(c.cnMinMergeSize) * common.Const1MBytes)
-		if c.maxMergeObjN == 0 && c.minRowsQualified == 0 {
+		common.RuntimeOsizeRowsQualified.Store(minosize)
+		common.RuntimeMaxObjOsize.Store(maxosize)
+		common.RuntimeMinCNMergeSize.Store(cnsize)
+		if c.maxMergeObjN == 0 && c.minOsizeQualified == 0 {
 			merge.StopMerge.Store(true)
 		} else {
 			merge.StopMerge.Store(false)
 		}
-		common.RuntimeMaxRowsObj.Store(c.maxRowsObj)
 	} else {
 		c.ctx.db.MergeHandle.ConfigPolicy(c.tbl, &merge.BasicPolicyConfig{
-			MergeMaxOneRun:   int(c.maxMergeObjN),
-			ObjectMinRows:    int(c.minRowsQualified),
-			MaxRowsMergedObj: int(c.maxRowsObj),
-			MinCNMergeSize:   uint64(c.cnMinMergeSize) * common.Const1MBytes,
-			MergeHints:       c.hints,
+			MergeMaxOneRun:    int(c.maxMergeObjN),
+			ObjectMinOsize:    minosize,
+			MaxOsizeMergedObj: maxosize,
+			MinCNMergeSize:    cnsize,
+			MergeHints:        c.hints,
 		})
 	}
 	c.ctx.resp.Payload = []byte("<empty>")
