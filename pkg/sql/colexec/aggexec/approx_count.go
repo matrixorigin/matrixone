@@ -115,6 +115,10 @@ func (exec *approxCountFixedExec[T]) GroupGrow(more int) error {
 	return exec.ret.grows(more)
 }
 
+func (exec *approxCountFixedExec[T]) PreAllocateGroups(more int) error {
+	return exec.ret.preAllocate(more)
+}
+
 func (exec *approxCountFixedExec[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	if vectors[0].IsNull(uint64(row)) {
 		return nil
@@ -232,11 +236,28 @@ func (exec *approxCountFixedExec[T]) Free() {
 
 func (exec *approxCountVarExec) GroupGrow(more int) error {
 	oldLen, newLen := len(exec.groups), len(exec.groups)+more
-	exec.groups = append(exec.groups, make([]*hll.Sketch, more)...)
+	if cap(exec.groups) >= newLen {
+		exec.groups = exec.groups[:newLen]
+	} else {
+		exec.groups = append(exec.groups, make([]*hll.Sketch, more)...)
+	}
+
 	for i := oldLen; i < newLen; i++ {
 		exec.groups[i] = hll.New()
 	}
 	return exec.ret.grows(more)
+}
+
+func (exec *approxCountVarExec) PreAllocateGroups(more int) error {
+	if len(exec.groups) == 0 {
+		exec.groups = make([]*hll.Sketch, 0, more)
+	} else {
+		oldLength := len(exec.groups)
+		exec.groups = append(exec.groups, make([]*hll.Sketch, more)...)
+		exec.groups = exec.groups[:oldLength]
+	}
+
+	return exec.ret.preAllocate(more)
 }
 
 func (exec *approxCountVarExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {

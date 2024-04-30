@@ -282,6 +282,10 @@ func NewNewTxnInCNRollingRestart() *Error {
 	return newError(Context(), ErrNewTxnInCNRollingRestart)
 }
 
+func NewPrevCheckpointNotFinished() *Error {
+	return newError(Context(), ErrPrevCheckpointNotFinished)
+}
+
 func NewNotFoundNoCtx() *Error {
 	return newError(Context(), ErrNotFound)
 }

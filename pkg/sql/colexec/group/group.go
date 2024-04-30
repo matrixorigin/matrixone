@@ -147,6 +147,13 @@ func (ctr *container) generateAggStructures(proc *process.Process, arg *Argument
 		}
 	}
 
+	if preAllocate := int(arg.PreAllocSize); preAllocate > 0 {
+		for _, ag := range ctr.bat.Aggs {
+			if err := ag.PreAllocateGroups(preAllocate); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
