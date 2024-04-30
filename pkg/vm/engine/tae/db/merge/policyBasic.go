@@ -149,7 +149,7 @@ func (o *customConfigProvider) ResetConfig() {
 	o.configs = make(map[uint64]*BasicPolicyConfig)
 }
 
-type Basic struct {
+type basic struct {
 	id        uint64
 	schema    *catalog.Schema
 	hist      *common.MergeHistory
@@ -246,7 +246,7 @@ func (o *basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	isStandalone := common.IsStandaloneBoost.Load()
 	mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
 
-	dnobjs := controlMem(objs, mem)
+	dnobjs := o.controlMem(objs, mem)
 	dnobjs = o.optimize(dnobjs)
 
 	dnosize, _, _ := estimateMergeConsume(dnobjs)
@@ -262,7 +262,7 @@ func (o *basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	}
 
 	schedCN := func() ([]*catalog.ObjectEntry, TaskHostKind) {
-		cnobjs := controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load()))
+		cnobjs := o.controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load()))
 		cnobjs = o.optimize(cnobjs)
 		return cnobjs, TaskHostCN
 	}
@@ -321,7 +321,7 @@ func (o *basic) optimize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 	return objs
 }
 
-func controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
+func (o *basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
