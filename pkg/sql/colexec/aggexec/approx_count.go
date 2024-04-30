@@ -236,7 +236,12 @@ func (exec *approxCountFixedExec[T]) Free() {
 
 func (exec *approxCountVarExec) GroupGrow(more int) error {
 	oldLen, newLen := len(exec.groups), len(exec.groups)+more
-	exec.groups = append(exec.groups, make([]*hll.Sketch, more)...)
+	if cap(exec.groups) >= newLen {
+		exec.groups = exec.groups[:newLen]
+	} else {
+		exec.groups = append(exec.groups, make([]*hll.Sketch, more)...)
+	}
+
 	for i := oldLen; i < newLen; i++ {
 		exec.groups[i] = hll.New()
 	}
@@ -244,6 +249,14 @@ func (exec *approxCountVarExec) GroupGrow(more int) error {
 }
 
 func (exec *approxCountVarExec) PreAllocateGroups(more int) error {
+	if len(exec.groups) == 0 {
+		exec.groups = make([]*hll.Sketch, 0, more)
+	} else {
+		oldLength := len(exec.groups)
+		exec.groups = append(exec.groups, make([]*hll.Sketch, more)...)
+		exec.groups = exec.groups[:oldLength]
+	}
+
 	return exec.ret.preAllocate(more)
 }
 
