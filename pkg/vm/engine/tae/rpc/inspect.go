@@ -328,7 +328,7 @@ func (c *objectPruneArg) PrepareCommand() *cobra.Command {
 		Run:   RunFactory(c),
 	}
 	objectPruneCmd.Flags().StringP("target", "t", "*", "format: db.table")
-	objectPruneCmd.Flags().DurationP("duration", "d", 24*time.Hour, "prune objects older than duration")
+	objectPruneCmd.Flags().DurationP("duration", "d", 72*time.Hour, "prune objects older than duration")
 	objectPruneCmd.Flags().IntP("ack", "a", -1, "execute task by ack")
 
 	return objectPruneCmd
@@ -400,7 +400,7 @@ func (c *objectPruneArg) Run() error {
 			continue
 		}
 		stale++
-		if obj.GetObjectData().GetTotalChanges() > 0 { // has deletes
+		if c.tbl.TryGetTombstone(obj.ID) != nil || obj.GetObjectData().GetTotalChanges() > 0 { // has deletes
 			continue
 		}
 		selected++
