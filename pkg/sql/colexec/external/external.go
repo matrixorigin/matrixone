@@ -15,6 +15,7 @@
 package external
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"compress/bzip2"
@@ -410,17 +411,19 @@ func GetCompressType(param *tree.ExternParam, filepath string) string {
 	if param.CompressType != "" && param.CompressType != tree.AUTO {
 		return param.CompressType
 	}
-	index := strings.LastIndex(filepath, ".")
-	if index == -1 {
-		return tree.NOCOMPRESS
-	}
-	tail := string([]byte(filepath)[index+1:])
-	switch tail {
-	case "gz", "gzip":
+
+	filepath = strings.ToLower(filepath)
+
+	switch {
+	case strings.HasSuffix(filepath, ".tar.gz") || strings.HasSuffix(filepath, ".tar.gzip"):
+		return tree.TAR_GZ
+	case strings.HasSuffix(filepath, ".tar.bz2") || strings.HasSuffix(filepath, ".tar.bzip2"):
+		return tree.TAR_BZ2
+	case strings.HasSuffix(filepath, ".gz") || strings.HasSuffix(filepath, ".gzip"):
 		return tree.GZIP
-	case "bz2", "bzip2":
+	case strings.HasSuffix(filepath, ".bz2") || strings.HasSuffix(filepath, ".bzip2"):
 		return tree.BZIP2
-	case "lz4":
+	case strings.HasSuffix(filepath, ".lz4"):
 		return tree.LZ4
 	default:
 		return tree.NOCOMPRESS
@@ -443,9 +446,35 @@ func getUnCompressReader(param *tree.ExternParam, filepath string, r io.ReadClos
 		return io.NopCloser(lz4.NewReader(r)), nil
 	case tree.LZW:
 		return nil, moerr.NewInternalError(param.Ctx, "the compress type '%s' is not support now", param.CompressType)
+	case tree.TAR_GZ:
+		gzipReader, err := gzip.NewReader(r)
+		if err != nil {
+			return nil, err
+		}
+		return getTarReader(param.Ctx, gzipReader)
+	case tree.TAR_BZ2:
+		return getTarReader(param.Ctx, bzip2.NewReader(r))
 	default:
 		return nil, moerr.NewInternalError(param.Ctx, "the compress type '%s' is not support now", param.CompressType)
 	}
+}
+
+func getTarReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
+	tarReader := tar.NewReader(r)
+	// move to first file
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			return nil, moerr.NewInternalError(ctx, "failed to decompress the file, no available files found")
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !header.FileInfo().IsDir() && !strings.HasPrefix(header.FileInfo().Name(), ".") {
+			break
+		}
+	}
+	return io.NopCloser(tarReader), nil
 }
 
 func makeType(typ *plan.Type, flag bool) types.Type {
@@ -616,6 +645,11 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	defer func() {
 		span.End()
 		if tmpBat != nil {
+			for i, v := range tmpBat.Vecs {
+				if v == vecTmp {
+					tmpBat.Vecs[i] = nil
+				}
+			}
 			tmpBat.Clean(mp)
 		}
 		if vecTmp != nil {

@@ -54,12 +54,6 @@ func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 		if err != nil && rbat != nil {
 			rbat.Clean(proc.Mp())
 		}
-		if source != nil {
-			source.Free(proc.Mp())
-		}
-		if col != nil {
-			col.Free(proc.Mp())
-		}
 	}()
 
 	bat := result.Batch

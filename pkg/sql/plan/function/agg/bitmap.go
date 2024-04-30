@@ -25,6 +25,7 @@ func RegisterBitmapConstruct1(id int64) {
 		aggexec.MakeSingleAgg2RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), BitmapConstructReturnType, false, true),
 			newAggBitmapConstruct,
+			InitAggBitmapConstruct,
 			FillAggBitmapConstruct, nil, FillsAggBitmapConstruct,
 			MergeAggBitmapConstruct,
 			FlushAggBitmapConstruct,
@@ -36,6 +37,7 @@ func RegisterBitmapOr1(id int64) {
 		aggexec.MakeSingleAgg4RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitmapOrReturnType, false, true),
 			newAggBitmapOr,
+			InitAggBitmapOr,
 			FillAggBitmapOr, nil, FillsAggBitmapOr,
 			MergeAggBitmapOr,
 			FlushAggBitmapOr,
@@ -66,11 +68,13 @@ func (a *aggBitmapConstruct) Unmarshal(bs []byte) {
 	a.bmp = roaring.New()
 	_ = a.bmp.UnmarshalBinary(bs)
 }
-func (a *aggBitmapConstruct) Init(set aggexec.AggBytesSetter, arg, ret types.Type) error {
+
+func InitAggBitmapConstruct(
+	exec aggexec.SingleAggFromFixedRetVar[uint64], set aggexec.AggBytesSetter, arg, ret types.Type) error {
+	a := exec.(*aggBitmapConstruct)
 	a.bmp = roaring.New()
 	return nil
 }
-
 func FillAggBitmapConstruct(
 	exec aggexec.SingleAggFromFixedRetVar[uint64],
 	value uint64, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
@@ -127,11 +131,13 @@ func (a *aggBitmapOr) Unmarshal(bs []byte) {
 	a.bmp = roaring.New()
 	_ = a.bmp.UnmarshalBinary(bs)
 }
-func (a *aggBitmapOr) Init(set aggexec.AggBytesSetter, arg, ret types.Type) error {
+
+func InitAggBitmapOr(
+	exec aggexec.SingleAggFromVarRetVar, set aggexec.AggBytesSetter, arg, ret types.Type) error {
+	a := exec.(*aggBitmapOr)
 	a.bmp = roaring.New()
 	return nil
 }
-
 func FillAggBitmapOr(
 	exec aggexec.SingleAggFromVarRetVar,
 	value []byte, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {

@@ -82,6 +82,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
+	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
 )
 
@@ -94,7 +95,7 @@ const (
 )
 
 var (
-	ncpu           = runtime.NumCPU()
+	ncpu           = runtime.GOMAXPROCS(0)
 	ctxCancelError = context.Canceled.Error()
 )
 
@@ -885,7 +886,7 @@ func (c *Compile) getCNList() (engine.Nodes, error) {
 	cnList = append(cnList, engine.Node{
 		Id:   cnID,
 		Addr: c.addr,
-		Mcpu: runtime.NumCPU(),
+		Mcpu: ncpu,
 	})
 	return cnList, nil
 }
@@ -1516,10 +1517,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				if c.anal.qry.LoadTag {
 					dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, dataScope.NodeInfo.Mcpu) // reset the channel buffer of sink for load
 				}
-				mcpu := dataScope.NodeInfo.Mcpu
-				scopes := make([]*Scope, 0, mcpu)
-				regs := make([]*process.WaitRegister, 0, mcpu)
-				for i := 0; i < mcpu; i++ {
+				parallelSize := c.getParallelSizeForExternalScan(n, dataScope.NodeInfo.Mcpu)
+				scopes := make([]*Scope, 0, parallelSize)
+				regs := make([]*process.WaitRegister, 0, parallelSize)
+				for i := 0; i < parallelSize; i++ {
 					s := newScope(Merge)
 					s.Instructions = []vm.Instruction{{Op: vm.Merge, Arg: merge.NewArgument()}}
 					scopes = append(scopes, s)
@@ -1532,7 +1533,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 				}
 
-				if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
+				if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize {
 					_, arg := constructDispatchLocalAndRemote(0, scopes, c.addr)
 					arg.FuncId = dispatch.ShuffleToAllFunc
 					arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
@@ -2012,9 +2013,24 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	return ss, nil
 }
 
+func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
+	if n.Stats == nil {
+		return cpuNum
+	}
+	totalSize := n.Stats.Cost * n.Stats.Rowsize
+	parallelSize := int(totalSize / float64(colexec.WriteS3Threshold))
+	if parallelSize < 1 {
+		return 1
+	} else if parallelSize < cpuNum {
+		return parallelSize
+	}
+	return cpuNum
+}
+
 func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) ([]*Scope, error) {
-	ss := make([]*Scope, ncpu)
-	for i := 0; i < ncpu; i++ {
+	parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
+	ss := make([]*Scope, parallelSize)
+	for i := 0; i < parallelSize; i++ {
 		ss[i] = c.constructLoadMergeScope()
 	}
 	s := c.constructScopeForExternal(c.addr, false)
@@ -3536,6 +3552,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 // target with new index targetIdx
 func regTransplant(source, target *Scope, sourceIdx, targetIdx int) {
 	target.Proc.Reg.MergeReceivers[targetIdx] = source.Proc.Reg.MergeReceivers[sourceIdx]
+	target.Proc.Reg.MergeReceivers[targetIdx].Ctx = target.Proc.Ctx
 	i := 0
 	for i < len(source.RemoteReceivRegInfos) {
 		op := &source.RemoteReceivRegInfos[i]
@@ -3615,9 +3632,6 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
-	if plan2.InternalTable(n.TableDef) {
-		return true
-	}
 	if n.TableDef.Partition != nil {
 		return true
 	}
@@ -3625,9 +3639,6 @@ func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
 		return true
 	}
 	if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
-		return true
-	}
-	if rel.GetEngineType() != engine.Disttae {
 		return true
 	}
 	if n.AggList != nil { //need to handle partial results
@@ -4304,17 +4315,17 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, rel eng
 	var newNodes engine.Nodes
 	for i := range nodes {
 		if len(nodes[i].Data) > maxWorkLoad {
-			maxWorkLoad = len(nodes[i].Data)
+			maxWorkLoad = len(nodes[i].Data) / objectio.BlockInfoSize
 		}
 		if len(nodes[i].Data) < minWorkLoad {
-			minWorkLoad = len(nodes[i].Data)
+			minWorkLoad = len(nodes[i].Data) / objectio.BlockInfoSize
 		}
 		if len(nodes[i].Data) > 0 {
 			newNodes = append(newNodes, nodes[i])
 		}
 	}
 	if minWorkLoad*2 < maxWorkLoad {
-		logstring := fmt.Sprintf("read table %v ,workload among %v nodes not balanced, max %v, min %v,", n.TableDef.Name, len(newNodes), maxWorkLoad, minWorkLoad)
+		logstring := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,", n.TableDef.Name, ranges.Len(), len(newNodes), maxWorkLoad, minWorkLoad)
 		logstring = logstring + " cnlist: "
 		for i := range c.cnList {
 			logstring = logstring + c.cnList[i].Addr + " "

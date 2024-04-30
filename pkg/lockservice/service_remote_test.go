@@ -189,7 +189,8 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 			"s1",
 			newFixedSlicePool(16),
 			func(sid string) (bool, error) { return true, nil },
-			func(ot []pb.OrphanTxn) error { return nil },
+			func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+			func(txn pb.WaitTxn) (bool, error) { return true, nil },
 		).(*mapBasedTxnHolder)
 		defer hold.close()
 
@@ -212,7 +213,8 @@ func TestKeepRemoteActiveTxn(t *testing.T) {
 			"s1",
 			newFixedSlicePool(16),
 			func(sid string) (bool, error) { return false, nil },
-			func(ot []pb.OrphanTxn) error { return nil },
+			func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+			func(txn pb.WaitTxn) (bool, error) { return true, nil },
 		).(*mapBasedTxnHolder)
 		defer hold.close()
 

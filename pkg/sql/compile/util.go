@@ -61,13 +61,13 @@ var (
 )
 
 var (
-	insertIntoSingleIndexTableWithPKeyFormat    = "insert into  %s.`%s` select (%s), %s from %s.%s where (%s) is not null;"
-	insertIntoUniqueIndexTableWithPKeyFormat    = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
-	insertIntoSecondaryIndexTableWithPKeyFormat = "insert into  %s.`%s` select serial_full(%s), %s from %s.%s;"
-	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select (%s) from %s.%s where (%s) is not null;"
-	insertIntoIndexTableWithoutPKeyFormat       = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
-	insertIntoMasterIndexTableFormat            = "insert into  %s.`%s` select serial_full('%s', %s, %s), %s from %s.`%s`;"
-	createIndexTableForamt                      = "create table %s.`%s` (%s);"
+	insertIntoSingleIndexTableWithPKeyFormat    = "insert into  `%s`.`%s` select (%s), %s from `%s`.`%s` where (%s) is not null;"
+	insertIntoUniqueIndexTableWithPKeyFormat    = "insert into  `%s`.`%s` select serial(%s), %s from `%s`.`%s` where serial(%s) is not null;"
+	insertIntoSecondaryIndexTableWithPKeyFormat = "insert into  `%s`.`%s` select serial_full(%s), %s from `%s`.`%s`;"
+	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  `%s`.`%s` select (%s) from `%s`.`%s` where (%s) is not null;"
+	insertIntoIndexTableWithoutPKeyFormat       = "insert into  `%s`.`%s` select serial(%s) from `%s`.`%s` where serial(%s) is not null;"
+	insertIntoMasterIndexTableFormat            = "insert into  `%s`.`%s` select serial_full('%s', %s, %s), %s from `%s`.`%s`;"
+	createIndexTableForamt                      = "create table `%s`.`%s` (%s);"
 )
 
 var (
@@ -230,10 +230,18 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 		pKeyMsg = pkeyName
 	}
 
+	colSeqNumMap := make(map[string]string)
+	for _, col := range originTableDef.Cols {
+		// NOTE:
+		// ColDef.ColId is not used as "after alter table, different columns may have the same colId"
+		// ColDef.SeqNum is used instead as it is always unique.
+		colSeqNumMap[col.GetName()] = fmt.Sprintf("%d", col.GetSeqnum())
+	}
+
 	for i, part := range indexDef.Parts {
 		insertSQLs[i] = fmt.Sprintf(insertIntoMasterIndexTableFormat,
 			DBName, indexDef.IndexTableName,
-			part, part, pKeyMsg, pKeyMsg, DBName, originTableDef.Name)
+			colSeqNumMap[part], part, pKeyMsg, pKeyMsg, DBName, originTableDef.Name)
 	}
 
 	return insertSQLs
