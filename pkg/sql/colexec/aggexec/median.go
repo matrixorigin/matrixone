@@ -76,8 +76,7 @@ func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 	}
 
 	for i, j := oldLength, len(exec.groups); i < j; i++ {
-		v := exec.ret.mg.GetVector(exec.singleAggInfo.argType)
-		exec.groups = append(exec.groups, v)
+		exec.groups[i] = exec.ret.mg.GetVector(exec.singleAggInfo.argType)
 	}
 	return exec.ret.grows(more)
 }
