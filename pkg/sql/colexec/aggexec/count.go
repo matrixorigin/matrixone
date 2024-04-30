@@ -54,6 +54,10 @@ func (exec *countColumnExec) GroupGrow(more int) error {
 	return exec.ret.grows(more)
 }
 
+func (exec *countColumnExec) PreAllocateGroups(more int) error {
+	return exec.ret.preAllocate(more)
+}
+
 func (exec *countColumnExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	if vectors[0].IsNull(uint64(row)) {
 		return nil
@@ -232,6 +236,10 @@ func newCountStarExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
 
 func (exec *countStarExec) GroupGrow(more int) error {
 	return exec.ret.grows(more)
+}
+
+func (exec *countStarExec) PreAllocateGroups(more int) error {
+	return exec.ret.preAllocate(more)
 }
 
 func (exec *countStarExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {

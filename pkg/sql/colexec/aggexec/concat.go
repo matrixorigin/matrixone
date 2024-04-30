@@ -72,6 +72,10 @@ func (exec *groupConcatExec) GroupGrow(more int) error {
 	return exec.ret.grows(more)
 }
 
+func (exec *groupConcatExec) PreAllocateGroups(more int) error {
+	return exec.ret.preAllocate(more)
+}
+
 func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	// if any value was null, there is no need to Fill.
 	u64Row := uint64(row)
