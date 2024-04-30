@@ -55,9 +55,6 @@ func (rt RuntimeFilterMessage) GetReceiverAddr() MessageAddress {
 }
 
 func (proc *Process) SendRuntimeFilter(rt RuntimeFilterMessage, m *plan.RuntimeFilterSpec) {
-	if m.Handled {
-		panic("error sending runtime filter!")
-	}
 	if m != nil {
 		proc.SendMessage(rt)
 		m.Handled = true
@@ -70,6 +67,5 @@ func (proc *Process) FinalizeRuntimeFilter(m *plan.RuntimeFilterSpec) {
 		runtimeFilter.Tag = m.Tag
 		runtimeFilter.Typ = RuntimeFilter_DROP
 		proc.SendMessage(runtimeFilter)
-		m.Handled = false
 	}
 }

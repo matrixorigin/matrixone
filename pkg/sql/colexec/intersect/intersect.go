@@ -96,9 +96,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 // build hash table
-func (c *container) buildHashTable(proc *process.Process, analyse process.Analyze, idx int, isFirst bool) error {
+func (ctr *container) buildHashTable(proc *process.Process, analyse process.Analyze, idx int, isFirst bool) error {
 	for {
-		btc, _, err := c.ReceiveFromSingleReg(idx, analyse)
+		btc, _, err := ctr.ReceiveFromSingleReg(idx, analyse)
 		if err != nil {
 			return err
 		}
@@ -117,9 +117,9 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 		analyse.Input(btc, isFirst)
 
 		cnt := btc.RowCount()
-		itr := c.hashTable.NewIterator()
+		itr := ctr.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
-			rowcnt := c.hashTable.GroupCount()
+			rowcnt := ctr.hashTable.GroupCount()
 
 			n := cnt - i
 			if n > hashmap.UnitLimit {
@@ -138,8 +138,8 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 				}
 
 				if v > rowcnt {
-					c.cnts = append(c.cnts, proc.Mp().GetSels())
-					c.cnts[v-1] = append(c.cnts[v-1], 1)
+					ctr.cnts = append(ctr.cnts, proc.Mp().GetSels())
+					ctr.cnts[v-1] = append(ctr.cnts[v-1], 1)
 					rowcnt++
 				}
 			}
@@ -149,9 +149,9 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 	return nil
 }
 
-func (c *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
+func (ctr *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
 	for {
-		btc, _, err := c.ReceiveFromSingleReg(idx, analyze)
+		btc, _, err := ctr.ReceiveFromSingleReg(idx, analyze)
 		if err != nil {
 			return false, err
 		}
@@ -168,33 +168,33 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		}
 
 		analyze.Input(btc, isFirst)
-		if c.btc != nil {
-			proc.PutBatch(c.btc)
-			c.btc = nil
+		if ctr.btc != nil {
+			proc.PutBatch(ctr.btc)
+			ctr.btc = nil
 		}
-		c.btc = batch.NewWithSize(len(btc.Vecs))
+		ctr.btc = batch.NewWithSize(len(btc.Vecs))
 		for i := range btc.Vecs {
-			c.btc.Vecs[i] = proc.GetVector(*btc.Vecs[i].GetType())
+			ctr.btc.Vecs[i] = proc.GetVector(*btc.Vecs[i].GetType())
 		}
 		needInsert := make([]uint8, hashmap.UnitLimit)
 		resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
 		cnt := btc.RowCount()
-		itr := c.hashTable.NewIterator()
+		itr := ctr.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
 			n := cnt - i
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
 
-			copy(c.inBuckets, hashmap.OneUInt8s)
+			copy(ctr.inBuckets, hashmap.OneUInt8s)
 			copy(needInsert, resetsNeedInsert)
 			insertcnt := 0
 
-			vs, zs := itr.Find(i, n, btc.Vecs, c.inBuckets)
+			vs, zs := itr.Find(i, n, btc.Vecs, ctr.inBuckets)
 
 			for j, v := range vs {
 				// not in the processed bucket
-				if c.inBuckets[j] == 0 {
+				if ctr.inBuckets[j] == 0 {
 					continue
 				}
 
@@ -209,19 +209,19 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 				}
 
 				// has been added into output batch
-				if c.cnts[v-1][0] == 0 {
+				if ctr.cnts[v-1][0] == 0 {
 					continue
 				}
 
 				needInsert[j] = 1
-				c.cnts[v-1][0] = 0
+				ctr.cnts[v-1][0] = 0
 				insertcnt++
 			}
-			c.btc.AddRowCount(insertcnt)
+			ctr.btc.AddRowCount(insertcnt)
 
 			if insertcnt > 0 {
 				for pos := range btc.Vecs {
-					if err := c.btc.Vecs[pos].UnionBatch(btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
+					if err := ctr.btc.Vecs[pos].UnionBatch(btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
 						btc.Clean(proc.Mp())
 						return false, err
 					}
@@ -230,10 +230,10 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		}
 
 		proc.PutBatch(btc)
-		analyze.Alloc(int64(c.btc.Size()))
-		analyze.Output(c.btc, isLast)
+		analyze.Alloc(int64(ctr.btc.Size()))
+		analyze.Output(ctr.btc, isLast)
 
-		result.Batch = c.btc
+		result.Batch = ctr.btc
 		return false, nil
 	}
 }

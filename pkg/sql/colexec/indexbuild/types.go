@@ -76,7 +76,6 @@ func (arg *Argument) Release() {
 }
 
 func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
 	ctr := arg.ctr
 	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
 	if ctr != nil {
