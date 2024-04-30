@@ -135,10 +135,7 @@ func NewSnapshotMeta() *SnapshotMeta {
 	}
 }
 
-func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
-	sm.Lock()
-	defer sm.Unlock()
-
+func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
 	insTable, _, _, _, delTableTxn := data.GetTblBatchs()
 	insAccIDs := vector.MustFixedCol[uint32](insTable.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
 	insTIDs := vector.MustFixedCol[uint64](insTable.GetVectorByName(catalog2.SystemRelAttr_ID).GetDownstreamVector())
@@ -191,6 +188,13 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		sm.acctIndexes[tid] = table
 		sm.tables[table.accID][tid] = table
 	}
+}
+
+func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
+	sm.Lock()
+	defer sm.Unlock()
+
+	sm.updateTableInfo(data)
 	if sm.tid == 0 {
 		return sm
 	}
@@ -570,6 +574,12 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 	}
 	sm.RebuildTableInfo(bat)
 	return nil
+}
+
+func (sm *SnapshotMeta) InitTableInfo(data *CheckpointData) {
+	sm.Lock()
+	defer sm.Unlock()
+	sm.updateTableInfo(data)
 }
 
 func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint32][]types.TS, tid uint64) []types.TS {

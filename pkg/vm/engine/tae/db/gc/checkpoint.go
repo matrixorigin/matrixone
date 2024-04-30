@@ -221,6 +221,19 @@ func (c *checkpointCleaner) Replay() error {
 		if err != nil {
 			return err
 		}
+	} else {
+		//No account table information, it may be a new cluster or an upgraded cluster,
+		//and the table information needs to be initialized from the checkpoint
+		gckp := c.ckpClient.MaxGlobalCheckpoint()
+		if gckp != nil {
+			_, gData, err := logtail.LoadCheckpointEntriesFromKey(c.ctx, c.fs.Service,
+				gckp.GetLocation(), gckp.GetVersion(), nil)
+			if err != nil {
+				logutil.Warnf("load global checkpoint failed, err[%v]", err)
+			} else {
+				c.snapshotMeta.InitTableInfo(gData)
+			}
+		}
 	}
 	ckp := checkpoint.NewCheckpointEntry(maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
 	c.updateMaxConsumed(ckp)
