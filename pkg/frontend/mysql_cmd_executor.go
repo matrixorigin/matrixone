@@ -787,6 +787,12 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar, sql string) er
 			if err != nil {
 				return err
 			}
+		} else if name == "optimizer_hints" {
+			err = setVarFunc(assign.System, assign.Global, name, value, sql)
+			if err != nil {
+				return err
+			}
+			runtime.ProcessLevelRuntime().SetGlobalVariables("optimizer_hints", value)
 		} else if name == "runtime_filter_limit_in" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
@@ -3334,7 +3340,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 		val := int64(statsByte.GetTimeConsumed()) +
 			int64(statsInfo.ParseDuration+
 				statsInfo.CompileDuration+
-				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOLockTimeConsumption())
+				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
 		if val < 0 {
 			logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
 				uuid.UUID(h.stmt.StatementID).String(),
@@ -3342,7 +3348,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				statsInfo.CompileDuration,
 				statsInfo.PlanDuration,
 				statsInfo.IOAccessTimeConsumption,
-				statsInfo.IOLockTimeConsumption(),
+				statsInfo.IOMergerTimeConsumption(),
 				val)
 			v2.GetTraceNegativeCUCounter("cpu").Inc()
 		} else {

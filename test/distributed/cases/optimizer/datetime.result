@@ -1,0 +1,41 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+create table t1(c1 int primary key, c2 datetime);
+explain select * from t1 where date_format(c2,'%Y-%m-%d')='2024-04-01';
+QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: t1.c2 BETWEEN 2024-04-01 00:00:00 AND 2024-04-01 23:59:59
+explain select * from t1 where date_format(c2,'%Y%m%d')='20240401';
+QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: t1.c2 BETWEEN 2024-04-01 00:00:00 AND 2024-04-01 23:59:59
+explain select * from t1 where date_format(c2,'%Y:%m:%d')='2024:04:01';
+QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: (date_format(t1.c2, '%Y:%m:%d') = '2024:04:01')
+explain select * from t1 where date_format(c2,'%Y-%m-%d')='aa';
+QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: (date_format(t1.c2, '%Y-%m-%d') = 'aa')
+explain select * from t1 where date_format(c2,'%d')='2024:04:01';
+QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: (date_format(t1.c2, '%d') = '2024:04:01')
+explain select * from t1 where date_format(c2,'%Y:%m:%d')='2024-04-01';
+QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: (date_format(t1.c2, '%Y:%m:%d') = '2024-04-01')
+explain select * from t1 where date_format(c2,'%Y')='2024';
+QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: t1.c2 BETWEEN 2024-01-01 00:00:00 AND 2024-12-31 23:59:59
+drop database if exists d1;
