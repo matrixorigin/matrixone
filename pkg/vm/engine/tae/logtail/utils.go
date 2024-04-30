@@ -2328,6 +2328,29 @@ func (data *CheckpointData) ReadFrom(
 	return
 }
 
+func LoadCheckpointLocations(
+	ctx context.Context,
+	location objectio.Location,
+	version uint32,
+	fs fileservice.FileService,
+) (map[string]objectio.Location, error) {
+	var err error
+	data := NewCheckpointData(common.CheckpointAllocator)
+	defer data.Close()
+
+	var reader *blockio.BlockReader
+	if reader, err = blockio.NewObjectReader(fs, location); err != nil {
+		return nil, err
+	}
+
+	if err = data.readMetaBatch(ctx, version, reader, nil); err != nil {
+		return nil, err
+	}
+
+	data.replayMetaBatch(version)
+	return data.locations, nil
+}
+
 // LoadSpecifiedCkpBatch loads a specified checkpoint data batch
 func LoadSpecifiedCkpBatch(
 	ctx context.Context,

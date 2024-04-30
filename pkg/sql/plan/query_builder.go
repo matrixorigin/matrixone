@@ -1491,6 +1491,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.generateRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
+		if builder.isForUpdate {
+			reCheckifNeedLockWholeTable(builder)
+		}
+
 		builder.handleMessgaes(rootID)
 
 		builder.rewriteStarApproxCount(rootID)

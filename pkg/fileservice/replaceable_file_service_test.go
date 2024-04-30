@@ -60,7 +60,6 @@ func testReplaceableFileService(
 	}
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
-	vec.Release()
 
 	assert.Equal(t, 2, len(vec.Entries[0].Data))
 

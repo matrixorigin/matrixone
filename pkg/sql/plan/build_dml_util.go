@@ -35,13 +35,12 @@ import (
 	"golang.org/x/exp/slices"
 )
 
-var CNPrimaryCheck = false
-
 var dmlPlanCtxPool = sync.Pool{
 	New: func() any {
 		return &dmlPlanCtx{}
 	},
 }
+
 var deleteNodeInfoPool = sync.Pool{
 	New: func() any {
 		return &deleteNodeInfo{}
@@ -1519,15 +1518,15 @@ func makeOneInsertPlan(
 
 	// there will be some cases that no need to check if primary key is duplicate
 	//  case 1: For SQL that contains on duplicate update
-	//  case 2: (the only primary key is auto increment type or auto increment is part of compound primary key) AND auto incr col has no value
+	//  case 2: the only primary key is auto increment type
 	//  case 3: create hidden table for secondary index
 
 	isSecondaryHidden := strings.Contains(tableDef.Name, catalog.SecondaryIndexTableNamePrefix)
-	if isSecondaryHidden || ifExistAutoPkCol {
+	if isSecondaryHidden {
 		return nil
 	}
 
-	if ifCheckPkDup {
+	if ifCheckPkDup && !ifExistAutoPkCol {
 		if err = appendPrimaryConstrantPlan(builder, bindCtx, tableDef, objRef, partitionExpr, pkFilterExprs,
 			indexSourceColTypes, sourceStep, updateColLength > 0, updatePkCol, fuzzymessage); err != nil {
 			return err
