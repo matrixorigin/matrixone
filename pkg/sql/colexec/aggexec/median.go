@@ -68,11 +68,29 @@ func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 		}
 	}
 
-	for i := 0; i < more; i++ {
-		v := exec.ret.mg.GetVector(exec.singleAggInfo.argType)
-		exec.groups = append(exec.groups, v)
+	oldLength := len(exec.groups)
+	if cap(exec.groups) >= oldLength+more {
+		exec.groups = exec.groups[:oldLength+more]
+	} else {
+		exec.groups = append(exec.groups, make([]*vector.Vector, more)...)
+	}
+
+	for i, j := oldLength, len(exec.groups); i < j; i++ {
+		exec.groups[i] = exec.ret.mg.GetVector(exec.singleAggInfo.argType)
 	}
 	return exec.ret.grows(more)
+}
+
+func (exec *medianColumnExecSelf[T, R]) PreAllocateGroups(more int) error {
+	if len(exec.groups) == 0 {
+		exec.groups = make([]*vector.Vector, 0, more)
+	} else {
+		oldLength := len(exec.groups)
+		exec.groups = append(exec.groups, make([]*vector.Vector, more)...)
+		exec.groups = exec.groups[:oldLength]
+	}
+
+	return exec.ret.preAllocate(more)
 }
 
 func (exec *medianColumnExecSelf[T, R]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
