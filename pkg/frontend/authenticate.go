@@ -7662,7 +7662,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		switch gp := stmt.(type) {
 		case *tree.Grant:
 			if gp.Typ == tree.GrantTypePrivilege {
-				yes, err := checkGrantPrivilege(&gp.GrantPrivilege)
+				yes, err := checkGrantPrivilege(gp.GrantPrivilege)
 				if err != nil {
 					return yes, err
 				}
@@ -9394,6 +9394,11 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	}
 
 	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1, 0)
+	defer func() {
+		for _, s := range stmt {
+			s.Free()
+		}
+	}()
 	if err != nil {
 		return nil, err
 	}
