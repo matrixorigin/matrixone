@@ -77,6 +77,27 @@ var (
 	LogTailApplyNotifyDurationHistogram        = logTailApplyDurationHistogram.WithLabelValues("apply-notify")
 	LogTailApplyNotifyLatencyDurationHistogram = logTailApplyDurationHistogram.WithLabelValues("apply-notify-latency")
 
+	logtailUpdatePartitionDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "update_partition_duration_seconds",
+			Help:      "Bucketed histogram of partiton update duration.",
+			Buckets:   getDurationBuckets(),
+		}, []string{"step"})
+	LogtailUpdatePartitonEnqueueGlobalStatsDurationHistogram                       = logtailUpdatePartitionDurationHistogram.WithLabelValues("enqueue-global-stats")
+	LogtailUpdatePartitonGetPartitionDurationHistogram                             = logtailUpdatePartitionDurationHistogram.WithLabelValues("get-partition")
+	LogtailUpdatePartitonGetLockDurationHistogram                                  = logtailUpdatePartitionDurationHistogram.WithLabelValues("get-lock")
+	LogtailUpdatePartitonGetCatalogDurationHistogram                               = logtailUpdatePartitionDurationHistogram.WithLabelValues("get-catalog")
+	LogtailUpdatePartitonHandleCheckpointDurationHistogram                         = logtailUpdatePartitionDurationHistogram.WithLabelValues("handle-checkpoint")
+	LogtailUpdatePartitonConsumeLogtailDurationHistogram                           = logtailUpdatePartitionDurationHistogram.WithLabelValues("consume")
+	LogtailUpdatePartitonConsumeLogtailCatalogTableDurationHistogram               = logtailUpdatePartitionDurationHistogram.WithLabelValues("consume-catalog-table")
+	LogtailUpdatePartitonConsumeLogtailCommandsDurationHistogram                   = logtailUpdatePartitionDurationHistogram.WithLabelValues("consume-commands")
+	LogtailUpdatePartitonConsumeLogtailOneEntryDurationHistogram                   = logtailUpdatePartitionDurationHistogram.WithLabelValues("consume-one-entry")
+	LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram      = logtailUpdatePartitionDurationHistogram.WithLabelValues("consume-one-entry-logtailreplay")
+	LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram = logtailUpdatePartitionDurationHistogram.WithLabelValues("consume-one-entry-catalog-cache")
+	LogtailUpdatePartitonUpdateTimestampsDurationHistogram                         = logtailUpdatePartitionDurationHistogram.WithLabelValues("update-timestamps")
+
 	LogTailAppendDurationHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
