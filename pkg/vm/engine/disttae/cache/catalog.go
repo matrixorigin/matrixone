@@ -322,19 +322,66 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 
 func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 	var find bool
+	var ts timestamp.Timestamp
+	var databaseId uint64
+
+	deleted := make(map[uint64]bool)
+	inserted := make(map[uint64]*DatabaseItem)
+	db.Id = math.MaxUint64
 
 	cc.databases.data.Ascend(db, func(item *DatabaseItem) bool {
-		if !item.deleted && item.AccountId == db.AccountId &&
-			item.Name == db.Name {
-			find = true
-			db.Id = item.Id
-			db.Rowid = item.Rowid
-			db.CreateSql = item.CreateSql
-			db.Typ = item.Typ
+		if item.deleted && item.AccountId == db.AccountId && item.Name == db.Name {
+			if !ts.IsEmpty() {
+				if item.Ts.Equal(ts) {
+					deleted[item.Id] = true
+					return true
+				} else {
+					return false
+				}
+			}
+			ts = item.Ts
+			databaseId = item.Id
+			deleted[item.Id] = true
+			return true
+		}
+
+		if !item.deleted && item.AccountId == db.AccountId && item.Name == db.Name &&
+			(ts.IsEmpty() || ts.Equal(item.Ts) && databaseId != item.Id) {
+			if !ts.IsEmpty() && ts.Equal(item.Ts) && databaseId != item.Id {
+				inserted[item.Id] = item
+				return true
+			} else {
+				find = true
+				copyDatabaseItem(db, item)
+				return false
+			}
 		}
 		return false
 	})
-	return find
+
+	if find {
+		return true
+	}
+
+	for rowid := range deleted {
+		delete(inserted, rowid)
+	}
+
+	//if there is no inserted item, it means that the database is deleted.
+	if len(inserted) == 0 {
+		return false
+	}
+
+	//if there is more than one inserted item, it means that it is wrong
+	if len(inserted) > 1 {
+		panic(fmt.Sprintf("account %d has multiple database %s", db.AccountId, db.Name))
+	}
+
+	//get item
+	for _, item := range inserted {
+		copyDatabaseItem(db, item)
+	}
+	return true
 }
 
 func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
