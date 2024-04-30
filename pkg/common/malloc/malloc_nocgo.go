@@ -12,28 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !cgo
+// +build !cgo
+
 package malloc
 
-type Handle struct {
-	slice []byte
-	class int
+func Alloc(n int) []byte {
+	return make([]byte, n)
 }
 
-var dumbHandle = &Handle{
-	class: -1,
-}
-
-func (h *Handle) Free() {
-	if h.class < 0 {
-		return
-	}
-	pid := runtime_procPin()
-	runtime_procUnpin()
-	if pid >= len(shards) {
-		pid = 0
-	}
-	select {
-	case shards[pid][h.class] <- h:
-	default:
-	}
+func Free(b []byte) {
 }
