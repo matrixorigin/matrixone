@@ -16,8 +16,6 @@ package table_scan
 
 import (
 	"bytes"
-	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -106,9 +104,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				arg.Reader.SetFilterZM(msg.TopValueZM)
 			}
-		}
-		if arg.TableID == catalog.MO_DATABASE_ID {
-			fmt.Println("-----------------------------------------------")
 		}
 		// read data from storage engine
 		bat, err := arg.Reader.Read(proc.Ctx, arg.Attrs, nil, proc.Mp(), proc)
