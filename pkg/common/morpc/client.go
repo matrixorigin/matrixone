@@ -260,6 +260,17 @@ func (c *client) Close() error {
 	return nil
 }
 
+func (c *client) CloseBackend() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, backends := range c.mu.backends {
+		for _, b := range backends {
+			b.Close()
+		}
+	}
+	return nil
+}
+
 func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 	c.mu.Lock()
 	b, err := c.getBackendLocked(backend, lock)

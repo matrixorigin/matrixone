@@ -181,6 +181,11 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	for i := 0; i < delTableTxn.Length(); i++ {
 		tid := delTableIDs[i]
 		dropAt := delDropAts[i]
+		if sm.acctIndexes[tid] == nil {
+			//In the upgraded cluster, because the inc checkpoint is consumed halfway,
+			// there may be no record of the create table entry, only the delete entry
+			continue
+		}
 		table := sm.acctIndexes[tid]
 		table.deleteAt = dropAt
 		sm.acctIndexes[tid] = table
