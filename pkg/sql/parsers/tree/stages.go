@@ -89,7 +89,8 @@ func (node *CreateStage) reset() {
 func (node CreateStage) TypeName() string { return "tree.CreateStage" }
 
 func (node *CreateStage) GetStatementType() string { return "Create Stage" }
-func (node *CreateStage) GetQueryType() string     { return QueryTypeOth }
+
+func (node *CreateStage) GetQueryType() string { return QueryTypeOth }
 
 type DropStage struct {
 	statementImpl
@@ -114,7 +115,8 @@ func (node *DropStage) reset() {
 }
 
 func (node *DropStage) GetStatementType() string { return "Drop Stage" }
-func (node *DropStage) GetQueryType() string     { return QueryTypeOth }
+
+func (node *DropStage) GetQueryType() string { return QueryTypeOth }
 
 func (node DropStage) TypeName() string { return "tree.DropStage" }
 
@@ -157,7 +159,8 @@ func (node *AlterStage) reset() {
 }
 
 func (node *AlterStage) GetStatementType() string { return "Alter Stage" }
-func (node *AlterStage) GetQueryType() string     { return QueryTypeOth }
+
+func (node *AlterStage) GetQueryType() string { return QueryTypeOth }
 
 func (node AlterStage) TypeName() string { return "tree.AlterStage" }
 
@@ -264,4 +267,5 @@ func (node *ShowStages) Format(ctx *FmtCtx) {
 	}
 }
 func (node *ShowStages) GetStatementType() string { return "Show Stages" }
-func (node *ShowStages) GetQueryType() string     { return QueryTypeOth }
+
+func (node *ShowStages) GetQueryType() string { return QueryTypeOth }
