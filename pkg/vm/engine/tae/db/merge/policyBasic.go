@@ -353,48 +353,4 @@ func (o *basic) ResetForTable(entry *catalog.TableEntry) {
 	o.objHeap.reset()
 
 	o.config = o.configProvider.GetConfig(entry)
-
-	// updateConfig := func(min, max, run int) {
-	// 	if o.config == nil {
-	// 		o.config = &BasicPolicyConfig{
-	// 			name:           o.schema.Name,
-	// 			MinCNMergeSize: common.RuntimeMinCNMergeSize.Load(),
-	// 		}
-	// 	}
-	// 	o.config.ObjectMinOsize = min
-	// 	o.config.MaxOsizeMergedObj = max
-	// 	o.config.MergeMaxOneRun = run
-	// 	o.configProvider.SetCache(entry, o.config)
-	// }
-
-	// if o.config == nil || !o.config.FromUser {
-	// 	switch o.guessType {
-	// 	case common.WorkApInsert:
-	// 		updateConfig(20*8192, common.DefaultMaxRowsObj, 50)
-	// 	case common.WorkApQuiet:
-	// 		updateConfig(80*8192, common.DefaultMaxRowsObj, 30)
-	// 	default:
-	// 		o.config = defaultBasicConfig
-	// 		o.config.ObjectMinOsize = determineObjectMinRows(o.schema)
-	// 		o.config.MaxOsizeMergedObj = int(common.RuntimeMaxObjOsize.Load())
-	// 		o.config.MergeMaxOneRun = int(common.RuntimeMaxMergeObjN.Load())
-	// 		o.config.MinCNMergeSize = common.RuntimeMinCNMergeSize.Load()
-	// 		o.configProvider.InvalidCache(entry)
-	// 	}
-	// }
 }
-
-// func determineObjectMinRows(schema *catalog.Schema) int {
-// 	runtimeMinRows := int(common.RuntimeOsizeRowsQualified.Load())
-// 	if runtimeMinRows > common.DefaultMinRowsQualified {
-// 		return runtimeMinRows
-// 	}
-// 	// the max rows of a full object
-// 	objectFullRows := int(schema.ObjectMaxBlocks) * int(schema.BlockMaxRows)
-// 	// we want every object has at least 5 blks rows
-// 	objectMinRows := constMergeMinBlks * int(schema.BlockMaxRows)
-// 	if objectFullRows < objectMinRows { // for small config in unit test
-// 		return objectFullRows
-// 	}
-// 	return objectMinRows
-// }
