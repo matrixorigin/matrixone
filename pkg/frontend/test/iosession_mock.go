@@ -190,6 +190,19 @@ func (mr *MockIOSessionMockRecorder) RemoteAddress() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoteAddress", reflect.TypeOf((*MockIOSession)(nil).RemoteAddress))
 }
 
+func (m *MockIOSession) GetGlobalVar(varnama string) (interface{}, error){
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetGlobalVar", varnama)
+	ret0, _ := ret[0].(interface{})
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+func (mr *MockIOSessionMockRecorder) GetGlobalVar(varnama interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetGlobalVar", reflect.TypeOf((*MockIOSession)(nil).GetGlobalVar), varnama)
+}
+
 // UseConn mocks base method.
 func (m *MockIOSession) UseConn(arg0 net.Conn) {
 	m.ctrl.T.Helper()

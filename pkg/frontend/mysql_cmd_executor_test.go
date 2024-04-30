@@ -383,34 +383,6 @@ func Test_mce_selfhandle(t *testing.T) {
 		proto.SetSession(ses)
 
 		ses.mrs = &MysqlResultSet{}
-		st1, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@max_allowed_packet", 1, 0)
-		convey.So(err, convey.ShouldBeNil)
-		sv1 := st1.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		err = handleSelectVariables(ses, sv1, true)
-		convey.So(err, convey.ShouldBeNil)
-
-		ses.mrs = &MysqlResultSet{}
-		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@version_comment", 1, 0)
-		convey.So(err, convey.ShouldBeNil)
-		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		err = handleSelectVariables(ses, sv2, true)
-		convey.So(err, convey.ShouldBeNil)
-
-		ses.mrs = &MysqlResultSet{}
-		st3, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@global.version_comment", 1, 0)
-		convey.So(err, convey.ShouldBeNil)
-		sv3 := st3.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		err = handleSelectVariables(ses, sv3, true)
-		convey.So(err, convey.ShouldBeNil)
-
-		ses.mrs = &MysqlResultSet{}
-		st4, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @version_comment", 1, 0)
-		convey.So(err, convey.ShouldBeNil)
-		sv4 := st4.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		err = handleSelectVariables(ses, sv4, true)
-		convey.So(err, convey.ShouldBeNil)
-
-		ses.mrs = &MysqlResultSet{}
 		queryData := []byte("A")
 		queryData = append(queryData, 0)
 		query := string(queryData)
@@ -698,51 +670,6 @@ func Test_mysqlerror(t *testing.T) {
 	})
 }
 
-func Test_handleSelectVariables(t *testing.T) {
-	ctx := context.TODO()
-	convey.Convey("handleSelectVariables succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-		ioses.EXPECT().Ref().AnyTimes()
-		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		if err != nil {
-			t.Error(err)
-		}
-		setGlobalPu(pu)
-
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, &gSys, true, nil)
-		ses.SetRequestContext(ctx)
-		ses.SetConnectContext(ctx)
-		ses.mrs = &MysqlResultSet{}
-
-		proto.SetSession(ses)
-		st2, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@tx_isolation", 1, 0)
-		convey.So(err, convey.ShouldBeNil)
-		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		convey.So(handleSelectVariables(ses, sv2, true), convey.ShouldBeNil)
-
-		st3, err := parsers.ParseOne(ctx, dialect.MYSQL, "select @@XXX", 1, 0)
-		convey.So(err, convey.ShouldBeNil)
-		sv3 := st3.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
-		convey.So(handleSelectVariables(ses, sv3, true), convey.ShouldNotBeNil)
-
-	})
-}
-
 func Test_handleShowVariables(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), 0)
 	convey.Convey("handleShowVariables succ", t, func() {
@@ -823,15 +750,39 @@ func Test_GetColumns(t *testing.T) {
 
 func Test_GetComputationWrapper(t *testing.T) {
 	convey.Convey("GetComputationWrapper succ", t, func() {
-		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
 		proc := &process.Process{}
-		InitGlobalSystemVariables(GSysVariables)
-		ses := &Session{planCache: newPlanCache(1),
-			feSessionImpl: feSessionImpl{
-				gSysVars: GSysVariables,
-			},
-		}
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		var err error
+		//prepare session
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+
+		sql := getSqlForGetSystemVariableValueWithAccount(uint64(ses.accountId), "lower_case_table_names")
+		mrs := newMrsForSqlForGetVariableValue([][]interface{}{
+			{"1"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql1 := getSqlForGetSystemVariableValueWithAccount(uint64(ses.accountId), "keep_user_target_list_in_result")
+		mrs1 := newMrsForSqlForGetVariableValue([][]interface{}{
+			{"0"},
+		})
+		bh.sql2result[sql1] = mrs1
+
+		db, sql, user := "T", "SHOW TABLES", "root"
+
 		cw, err := GetComputationWrapper(db, &UserInput{sql: sql}, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)

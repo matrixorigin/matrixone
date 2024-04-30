@@ -72,6 +72,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 	ioses.EXPECT().Ref().AnyTimes()
+	ioses.EXPECT().GetGlobalVar(gomock.Any()).Return(1, nil).AnyTimes()
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	testutil.SetupAutoIncrService()
@@ -79,6 +80,17 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	ses := NewSession(proto, testPool, GSysVariables, true, nil)
 	var c clock.Clock
 	_, _ = ses.SetTempTableStorage(c)
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+
 	return ses
 }
 

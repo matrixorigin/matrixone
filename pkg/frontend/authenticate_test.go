@@ -7844,6 +7844,22 @@ func newMrsForSqlForCheckUserHasRole(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+func newMrsForSqlForGetVariableValue(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("value")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func newMrsForRoleIdOfRole(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
@@ -8751,9 +8767,31 @@ func TestCheckSubscriptionValid(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	ctx := context.Background()
+	//prepare session
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+	sql := getSqlForGetSystemVariableValueWithAccount(uint64(ses.accountId), "lower_case_table_names")
+	mrs := newMrsForSqlForGetVariableValue([][]interface{}{
+		{"1"},
+	})
+	bh.sql2result[sql] = mrs
+
+	sql1 := getSqlForGetSystemVariableValueWithAccount(uint64(ses.accountId), "keep_user_target_list_in_result")
+	mrs1 := newMrsForSqlForGetVariableValue([][]interface{}{
+		{"0"},
+	})
+	bh.sql2result[sql1] = mrs1
 
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
@@ -8926,6 +8964,7 @@ func TestCheckSubscriptionValid(t *testing.T) {
 	initData := func(idx int) {
 		sql1, _ := getSqlForAccountIdAndStatus(ctx, kases[idx].accName, true)
 		sql2, _ := getSqlForPubInfoForSub(ctx, kases[idx].pubName, true)
+
 		kases[idx].sqls = []string{
 			sql1, sql2,
 		}
