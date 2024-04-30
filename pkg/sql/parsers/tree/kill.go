@@ -23,7 +23,7 @@ import (
 func init() {
 	reuse.CreatePool[KillOption](
 		func() *KillOption { return &KillOption{} },
-		func(k *KillOption) { k.reset() },
+		func(node *KillOption) { node.reset() },
 		reuse.DefaultOptions[KillOption](),
 	)
 
@@ -35,7 +35,7 @@ func init() {
 
 	reuse.CreatePool[Kill](
 		func() *Kill { return &Kill{} },
-		func(k *Kill) { k.reset() },
+		func(node *Kill) { node.reset() },
 		reuse.DefaultOptions[Kill](),
 	)
 }
@@ -47,8 +47,8 @@ const (
 	KillTypeQuery
 )
 
-func (k KillType) String() string {
-	switch k {
+func (node KillType) String() string {
+	switch node {
 	case KillTypeConnection:
 		return "connection"
 	case KillTypeQuery:
@@ -68,7 +68,7 @@ func NewKillOption() *KillOption {
 	return ko
 }
 
-func (node KillOption) Format(ctx *FmtCtx) {
+func (node *KillOption) Format(ctx *FmtCtx) {
 	if node.Exist {
 		ctx.WriteString(node.Typ.String())
 	}
@@ -98,7 +98,7 @@ func (node *StatementOption) reset() {
 	*node = StatementOption{}
 }
 
-func (node StatementOption) Format(ctx *FmtCtx) {
+func (node *StatementOption) Format(ctx *FmtCtx) {
 	if node.Exist {
 		ctx.WriteString(node.StatementId)
 	}
@@ -142,8 +142,12 @@ func (node *Kill) Format(ctx *FmtCtx) {
 }
 
 func (node *Kill) reset() {
-	node.Option.Free()
-	node.StmtOption.Free()
+	if node.Option != nil {
+		node.Option.Free()
+	}
+	if node.StmtOption != nil {
+		node.StmtOption.Free()
+	}
 	*node = Kill{}
 }
 

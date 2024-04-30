@@ -1318,7 +1318,8 @@ func Test_determineGrantRole(t *testing.T) {
 		}
 
 		g := &tree.Grant{
-			Typ: tree.GrantTypeRole,
+			Typ:       tree.GrantTypeRole,
+			GrantRole: &tree.GrantRole{},
 		}
 		gr := g.GrantRole
 		for _, name := range roleNames {
@@ -1420,7 +1421,8 @@ func Test_determineGrantRole(t *testing.T) {
 		}
 
 		g := &tree.Grant{
-			Typ: tree.GrantTypeRole,
+			Typ:       tree.GrantTypeRole,
+			GrantRole: &tree.GrantRole{},
 		}
 		gr := g.GrantRole
 		for _, name := range roleNames {
@@ -1522,7 +1524,8 @@ func Test_determineGrantRole(t *testing.T) {
 		}
 
 		g := &tree.Grant{
-			Typ: tree.GrantTypeRole,
+			Typ:       tree.GrantTypeRole,
+			GrantRole: &tree.GrantRole{},
 		}
 		gr := g.GrantRole
 		for _, name := range roleNames {
@@ -1621,7 +1624,8 @@ func Test_determineGrantRole(t *testing.T) {
 		}
 
 		g := &tree.Grant{
-			Typ: tree.GrantTypeRole,
+			Typ:       tree.GrantTypeRole,
+			GrantRole: &tree.GrantRole{},
 		}
 		gr := g.GrantRole
 		for _, name := range roleNames {

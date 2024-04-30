@@ -3747,7 +3747,7 @@ func (node *Partition) Format(ctx *FmtCtx) {
 func (node Partition) TypeName() string { return "tree.Partition" }
 
 func (node *Partition) reset() {
-	if node.NewFromNonParserPlace == false {
+	if !node.NewFromNonParserPlace {
 		if node.Options != nil {
 			for _, item := range node.Options {
 				switch opt := item.(type) {
