@@ -2,11 +2,11 @@
 DROP DATABASE IF EXISTS db1;
 begin;
 create database db1;
-show databases;
+show databases like 'db1';
 drop database db1;
-show databases;
+show databases like 'db1';
 create database db1;
-show databases;
+show databases like 'db1';
 commit;
 
 use db1;
@@ -47,11 +47,11 @@ drop database if exists db2;
 
 begin;
 create database db2;
-show databases;
+show databases like 'db2';
 drop database db2;
-show databases;
+show databases like 'db2';
 create database db2;
-show databases;
+show databases like 'db2';
 use db2;
 DROP TABLE IF EXISTS dept;
 create table dept(
@@ -70,7 +70,7 @@ SELECT * FROM db2.dept;
 
 drop database db2;
 commit;
-show databases;
+show databases like 'db2';
 
 ------------------------------------------------------------------------------------------------------------
 create database if not exists db3;
@@ -95,7 +95,7 @@ INSERT INTO dept VALUES (40,'OPERATIONS','BOSTON');
 SELECT * FROM db3.dept;
 
 commit;
-show databases;
+show databases like 'db3';
 
 use db3;
 show tables;
@@ -155,10 +155,10 @@ INSERT INTO dept VALUES (40,'OPERATIONS','BOSTON');
 select * from db4.dept;
 drop database db4;
 commit;
-show databases;
+show databases like 'db4';
 
 create database db4;
-show databases;
+show databases like 'db4';
 use db4;
 DROP TABLE IF EXISTS emp;
 create table emp(

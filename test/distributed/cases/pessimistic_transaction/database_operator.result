@@ -1,46 +1,16 @@
 DROP DATABASE IF EXISTS db1;
 begin;
 create database db1;
-show databases;
+show databases like 'db1';
 Database
-database_operator
 db1
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
-test02
-test03
 drop database db1;
-show databases;
+show databases like 'db1';
 Database
-database_operator
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
-test02
-test03
 create database db1;
-show databases;
+show databases like 'db1';
 Database
-database_operator
 db1
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
-test02
-test03
 commit;
 use db1;
 DROP TABLE IF EXISTS emp;
@@ -92,46 +62,16 @@ DROP DATABASE db1;
 drop database if exists db2;
 begin;
 create database db2;
-show databases;
+show databases like 'db2';
 Database
-database_operator
 db2
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
-test02
-test03
 drop database db2;
-show databases;
+show databases like 'db2';
 Database
-database_operator
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
-test02
-test03
 create database db2;
-show databases;
+show databases like 'db2';
 Database
-database_operator
 db2
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
-test02
-test03
 use db2;
 DROP TABLE IF EXISTS dept;
 create table dept(
@@ -152,18 +92,8 @@ deptno    dname    loc
 40    OPERATIONS    BOSTON
 drop database db2;
 commit;
-show databases;
+show databases like 'db2';
 Database
-database_operator
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
-test02
-test03
 create database if not exists db3;
 begin;
 drop database if exists db3;
@@ -187,19 +117,9 @@ deptno    dname    loc
 30    SALES    CHICAGO
 40    OPERATIONS    BOSTON
 commit;
-show databases;
+show databases like 'db3';
 Database
-database_operator
 db3
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
-test02
-test03
 use db3;
 show tables;
 Tables_in_db3
@@ -275,32 +195,12 @@ deptno    dname    loc
 40    OPERATIONS    BOSTON
 drop database db4;
 commit;
-show databases;
+show databases like 'db4';
 Database
-database_operator
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
-test02
-test03
 create database db4;
-show databases;
+show databases like 'db4';
 Database
-database_operator
 db4
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
-test02
-test03
 use db4;
 DROP TABLE IF EXISTS emp;
 create table emp(
