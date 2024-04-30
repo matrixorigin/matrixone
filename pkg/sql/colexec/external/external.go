@@ -396,11 +396,7 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, cols []*p
 		}
 		tailSize, err := getTailSize(param, cols, r)
 		if err != nil {
-			if err == io.EOF {
-				break
-			} else {
-				return nil, err
-			}
+			break
 		}
 		offset = append(offset, vec.Entries[0].Offset+tailSize)
 	}
