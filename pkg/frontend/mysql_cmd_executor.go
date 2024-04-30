@@ -787,6 +787,12 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar, sql string) er
 			if err != nil {
 				return err
 			}
+		} else if name == "optimizer_hints" {
+			err = setVarFunc(assign.System, assign.Global, name, value, sql)
+			if err != nil {
+				return err
+			}
+			runtime.ProcessLevelRuntime().SetGlobalVariables("optimizer_hints", value)
 		} else if name == "runtime_filter_limit_in" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
@@ -936,7 +942,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		if err != nil {
 			return err
 		}
-		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
+		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
 		planExpr, err := binder.BindExpr(sv.Where.Expr, 0, false)
 		if err != nil {
 			return err
@@ -1421,36 +1427,34 @@ func handleDropUser(ctx context.Context, ses FeSession, du *tree.DropUser) error
 }
 
 func handleAlterUser(ctx context.Context, ses FeSession, st *tree.AlterUser) error {
-	if len(st.Users) != 1 {
-		return moerr.NewInternalError(ctx, "can only alter one user at a time")
-	}
-	su := st.Users[0]
-
-	u := &user{
-		Username: su.Username,
-		Hostname: su.Hostname,
-	}
-	if su.AuthOption != nil {
-		u.AuthExist = true
-		u.IdentTyp = su.AuthOption.Typ
-		switch u.IdentTyp {
-		case tree.AccountIdentifiedByPassword,
-			tree.AccountIdentifiedWithSSL:
-			var err error
-			u.IdentStr, err = unboxExprStr(ctx, su.AuthOption.Str)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	au := &alterUser{
 		IfExists: st.IfExists,
-		User:     u,
+		Users:    make([]*user, 0, len(st.Users)),
 		Role:     st.Role,
 		MiscOpt:  st.MiscOpt,
 
 		CommentOrAttribute: st.CommentOrAttribute,
+	}
+
+	for _, su := range st.Users {
+		u := &user{
+			Username: su.Username,
+			Hostname: su.Hostname,
+		}
+		if su.AuthOption != nil {
+			u.AuthExist = true
+			u.IdentTyp = su.AuthOption.Typ
+			switch u.IdentTyp {
+			case tree.AccountIdentifiedByPassword,
+				tree.AccountIdentifiedWithSSL:
+				var err error
+				u.IdentStr, err = unboxExprStr(ctx, su.AuthOption.Str)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		au.Users = append(au.Users, u)
 	}
 
 	return doAlterUser(ctx, ses.(*Session), au)
@@ -1665,7 +1669,7 @@ func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation
 	}
 
 	if sc.Where != nil {
-		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"collation", "charset", "id", "default", "compiled", "sortlen", "pad_attribute"})
+		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"collation", "charset", "id", "default", "compiled", "sortlen", "pad_attribute"})
 		planExpr, err := binder.BindExpr(sc.Where.Expr, 0, false)
 		if err != nil {
 			return err
@@ -2394,9 +2398,6 @@ func executeStmtWithResponse(requestCtx context.Context,
 	ses.SetQueryInExecute(true)
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
-
-	execCtx.proto.DisableAutoFlush()
-	defer execCtx.proto.EnableAutoFlush()
 
 	err = executeStmtWithTxn(requestCtx, ses, execCtx)
 	if err != nil {
@@ -3339,7 +3340,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 		val := int64(statsByte.GetTimeConsumed()) +
 			int64(statsInfo.ParseDuration+
 				statsInfo.CompileDuration+
-				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOLockTimeConsumption())
+				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
 		if val < 0 {
 			logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
 				uuid.UUID(h.stmt.StatementID).String(),
@@ -3347,7 +3348,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				statsInfo.CompileDuration,
 				statsInfo.PlanDuration,
 				statsInfo.IOAccessTimeConsumption,
-				statsInfo.IOLockTimeConsumption(),
+				statsInfo.IOMergerTimeConsumption(),
 				val)
 			v2.GetTraceNegativeCUCounter("cpu").Inc()
 		} else {

@@ -553,6 +553,23 @@ func (th *TxnHandler) GetServerStatus() uint16 {
 	return th.serverStatus
 }
 
+func (ses *Session) maybeUnsetTxnStatus() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.txnHandler == nil {
+		return
+	}
+	if ses.txnHandler.serverStatus&SERVER_STATUS_AUTOCOMMIT != 0 {
+		ses.txnHandler.serverStatus &= ^SERVER_STATUS_IN_TRANS
+	} else {
+		if v, err := ses.GetSessionVarLocked("autocommit"); err == nil {
+			if ac, vErr := valueIsBoolTrue(v); vErr == nil && ac {
+				ses.txnHandler.serverStatus &= ^SERVER_STATUS_IN_TRANS
+			}
+		}
+	}
+}
+
 /*
 InMultiStmtTransactionMode checks the session is in multi-statement transaction mode.
 OPTION_NOT_AUTOCOMMIT: After the autocommit is off, the multi-statement transaction is

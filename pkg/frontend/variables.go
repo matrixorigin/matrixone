@@ -2628,6 +2628,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("open_files_limit", 0, 1048576, false),
 		Default:           int64(5000),
 	},
+	"optimizer_hints": {
+		Name:              "optimizer_hints",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("optimizer_hints"),
+		Default:           "",
+	},
 	"optimizer_prune_level": {
 		Name:              "optimizer_prune_level",
 		Scope:             ScopeBoth,
@@ -3410,6 +3418,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("thread_pool_transaction_delay", 0, 300000, false),
+		Default:           int64(0),
+	},
+	"transferred": {
+		Name:              "transferred",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("autocommit"),
 		Default:           int64(0),
 	},
 	"tls_ciphersuites": {

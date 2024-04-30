@@ -16,7 +16,6 @@ package hashbuild
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -58,9 +57,8 @@ type container struct {
 	strHashMap *hashmap.StrHashMap
 	keyWidth   int // keyWidth is the width of hash columns, it determines which hash map to use.
 
-	uniqueJoinKeys       []*vector.Vector
-	runtimeFilterIn      bool
-	runtimeFilterHandled bool
+	uniqueJoinKeys  []*vector.Vector
+	runtimeFilterIn bool
 }
 
 type Argument struct {
@@ -114,10 +112,10 @@ func (arg *Argument) Release() {
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
+	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
 	if ctr != nil {
-		ctr.cleanRuntimeFilters(proc, arg.RuntimeFilterSpec)
 		ctr.cleanBatches(proc)
-		ctr.cleanEvalVectors(proc.Mp())
+		ctr.cleanEvalVectors()
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
 		}
@@ -130,15 +128,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	}
 }
 
-func (ctr *container) cleanRuntimeFilters(proc *process.Process, runtimeFilterSpec *pbplan.RuntimeFilterSpec) {
-	if !ctr.runtimeFilterHandled && runtimeFilterSpec != nil {
-		var runtimeFilter process.RuntimeFilterMessage
-		runtimeFilter.Tag = runtimeFilterSpec.Tag
-		runtimeFilter.Typ = process.RuntimeFilter_DROP
-		proc.SendMessage(runtimeFilter)
-	}
-}
-
 func (ctr *container) cleanBatches(proc *process.Process) {
 	for i := range ctr.batches {
 		proc.PutBatch(ctr.batches[i])
@@ -146,7 +135,7 @@ func (ctr *container) cleanBatches(proc *process.Process) {
 	ctr.batches = nil
 }
 
-func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
+func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.executor {
 		if ctr.executor[i] != nil {
 			ctr.executor[i].Free()

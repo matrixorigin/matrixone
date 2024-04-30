@@ -53,7 +53,7 @@ func TestLockAdded(t *testing.T) {
 
 func TestClose(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		events := newWaiterEvents(1, nil)
+		events := newWaiterEvents(1, nil, nil, nil)
 		defer events.close()
 
 		id := []byte("t1")
