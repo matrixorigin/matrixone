@@ -216,6 +216,11 @@ func (c *checkpointCleaner) Replay() error {
 			return err
 		}
 	}
+	ckp := checkpoint.NewCheckpointEntry(maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
+	c.updateMaxConsumed(ckp)
+	ckp = checkpoint.NewCheckpointEntry(minMergedStart, minMergedEnd, checkpoint.ET_Incremental)
+	c.updateMinMerged(ckp)
+
 	if acctFile != "" {
 		err = c.snapshotMeta.ReadTableInfo(c.ctx, GCMetaDir+acctFile, c.fs.Service)
 		if err != nil {
@@ -224,21 +229,31 @@ func (c *checkpointCleaner) Replay() error {
 	} else {
 		//No account table information, it may be a new cluster or an upgraded cluster,
 		//and the table information needs to be initialized from the checkpoint
-		gckp := c.ckpClient.MaxGlobalCheckpoint()
-		if gckp != nil {
-			_, gData, err := logtail.LoadCheckpointEntriesFromKey(c.ctx, c.fs.Service,
-				gckp.GetLocation(), gckp.GetVersion(), nil)
-			if err != nil {
-				logutil.Warnf("load global checkpoint failed, err[%v]", err)
-			} else {
-				c.snapshotMeta.InitTableInfo(gData)
-			}
+		maxConsumed := c.maxConsumed.Load()
+		checkpointEntries, err := checkpoint.ListSnapshotCheckpoint(c.ctx, c.fs.Service, ckp.GetEnd(), 0, checkpoint.SpecifiedCheckpoint)
+		if err != nil {
+			logutil.Warnf("list checkpoint failed, err[%v]", err)
 		}
+		if len(checkpointEntries) == 0 {
+			return nil
+		}
+		for _, entry := range checkpointEntries {
+			logutil.Infof("load checkpoint: %s, consumedEnd: %s", entry.String(), maxConsumed.String())
+			end := entry.GetEnd()
+			consumedEnd := maxConsumed.GetEnd()
+			if end.Greater(&consumedEnd) {
+				logutil.Infof("skip checkpoint: %s", entry.String())
+				continue
+			}
+			ckpData, err := c.collectCkpData(entry)
+			if err != nil {
+				logutil.Warnf("load checkpoint data failed, err[%v]", err)
+				continue
+			}
+			c.snapshotMeta.InitTableInfo(ckpData)
+		}
+		logutil.Infof("table info initialized: %s", c.snapshotMeta.TableInfoString())
 	}
-	ckp := checkpoint.NewCheckpointEntry(maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
-	c.updateMaxConsumed(ckp)
-	ckp = checkpoint.NewCheckpointEntry(minMergedStart, minMergedEnd, checkpoint.ET_Incremental)
-	c.updateMinMerged(ckp)
 	return nil
 
 }

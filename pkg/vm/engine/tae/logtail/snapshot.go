@@ -15,7 +15,9 @@
 package logtail
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -580,6 +582,20 @@ func (sm *SnapshotMeta) InitTableInfo(data *CheckpointData) {
 	sm.Lock()
 	defer sm.Unlock()
 	sm.updateTableInfo(data)
+}
+
+func (sm *SnapshotMeta) TableInfoString() string {
+	sm.RLock()
+	defer sm.RUnlock()
+	var buf bytes.Buffer
+	for accID, tables := range sm.tables {
+		buf.WriteString(fmt.Sprintf("accountID: %d\n", accID))
+		for tid, table := range tables {
+			buf.WriteString(fmt.Sprintf("tableID: %d, create: %s, deleteAt: %s\n",
+				tid, table.createAt.ToString(), table.deleteAt.ToString()))
+		}
+	}
+	return buf.String()
 }
 
 func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint32][]types.TS, tid uint64) []types.TS {
