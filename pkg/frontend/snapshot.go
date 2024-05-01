@@ -30,7 +30,6 @@ import (
 
 type tableType string
 
-const table tableType = "BASE TABLE"
 const view tableType = "VIEW"
 
 var (

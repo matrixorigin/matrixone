@@ -256,7 +256,7 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (o
 		}
 	}
 
-	dbName, tableName, _ := c.engine.GetNameById(c.ctx, txnOpt, tableId)
+	dbName, tableName, _ := c.engine.GetNameById(ctx, txnOpt, tableId)
 	if dbName == "" || tableName == "" {
 		return nil, nil
 	}

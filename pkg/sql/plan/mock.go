@@ -881,11 +881,11 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot 
 	return m.objects[name], tableDef
 }
 
-func (c *MockCompilerContext) GetRestoreInfo() *RestoreInfo {
+func (m *MockCompilerContext) GetRestoreInfo() *RestoreInfo {
 	panic("unimplement")
 }
 
-func (c *MockCompilerContext) SetRestoreInfo(restoreInfo *RestoreInfo) {
+func (m *MockCompilerContext) SetRestoreInfo(restoreInfo *RestoreInfo) {
 	panic("unimplement")
 }
 
