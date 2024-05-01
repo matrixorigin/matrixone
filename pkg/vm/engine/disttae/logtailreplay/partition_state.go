@@ -969,16 +969,6 @@ func (p *PartitionState) HandleMetadataDelete(
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataDelete")
 	defer task.End()
 
-	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
-	deleteTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
-
-	for i, rowID := range rowIDVector {
-		blockID := rowID.CloneBlockID()
-		pivot := ObjectEntry{}
-		objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(&blockID))
-		p.objectDeleteHelper(tableID, pivot, deleteTimeVector[i])
-	}
-
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)
 		c.DistTAE.Logtail.MetadataDeleteEntries.Add(1)
