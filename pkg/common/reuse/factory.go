@@ -84,7 +84,7 @@ func CreatePool[T ReusableObject](
 		panic(fmt.Sprintf("%T pool already created", v))
 	}
 
-	tp := getType[T]()
+	tp := typeOf[T]()
 	switch defaultSPI {
 	case SyncBased:
 		pools[tp] = newSyncPoolBased(new, reset, opts)
@@ -117,13 +117,13 @@ func Free[T ReusableObject](v *T, p Pool[T]) {
 }
 
 func get[T ReusableObject]() Pool[T] {
-	if pool, ok := pools[getType[T]()]; ok {
+	if pool, ok := pools[typeOf[T]()]; ok {
 		return pool.(Pool[T])
 	}
 	return nil
 }
 
-func getType[T any]() unsafe.Pointer {
+func typeOf[T any]() unsafe.Pointer {
 	var v *T
 	i := any(v)
 	// any is a fat point and reflect.Type is a *abi.Type

@@ -215,9 +215,9 @@ func (p person) TypeName() string {
 	return "person"
 }
 
-func TestGetType(t *testing.T) {
-	rt := reflect.TypeFor[*person]()
+func TestTypeOf(t *testing.T) {
+	rt := reflect.TypeOf((*person)(nil))
 	want := reflect.ValueOf(rt).Pointer()
-	got := uintptr(getType[person]())
+	got := uintptr(typeOf[person]())
 	assert.Equal(t, want, got)
 }
