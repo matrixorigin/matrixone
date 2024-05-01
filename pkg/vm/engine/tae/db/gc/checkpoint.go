@@ -239,12 +239,6 @@ func (c *checkpointCleaner) Replay() error {
 		}
 		for _, entry := range checkpointEntries {
 			logutil.Infof("load checkpoint: %s, consumedEnd: %s", entry.String(), maxConsumed.String())
-			end := entry.GetEnd()
-			consumedEnd := maxConsumed.GetEnd()
-			if end.Greater(&consumedEnd) {
-				logutil.Infof("skip checkpoint: %s", entry.String())
-				continue
-			}
 			ckpData, err := c.collectCkpData(entry)
 			if err != nil {
 				logutil.Warnf("load checkpoint data failed, err[%v]", err)
