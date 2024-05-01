@@ -19,7 +19,6 @@ import (
 	"io"
 	"os"
 
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 )
 
@@ -41,38 +40,38 @@ func (i *IOEntry) setCachedData() error {
 	return nil
 }
 
-func (i *IOEntry) ReadFromOSFile(file *os.File) (releaseFunc func(), err error) {
+func (i *IOEntry) ReadFromOSFile(file *os.File) error {
 	r := io.LimitReader(file, i.Size)
 
 	if cap(i.Data) < int(i.Size) {
-		releaseFunc = malloc.Alloc(int(i.Size), &i.Data).Free
+		i.Data = make([]byte, i.Size)
 	} else {
 		i.Data = i.Data[:i.Size]
 	}
 
 	n, err := io.ReadFull(r, i.Data)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if n != int(i.Size) {
-		return nil, io.ErrUnexpectedEOF
+		return io.ErrUnexpectedEOF
 	}
 
 	if i.WriterForRead != nil {
 		if _, err := i.WriterForRead.Write(i.Data); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if i.ReadCloserForRead != nil {
 		*i.ReadCloserForRead = io.NopCloser(bytes.NewReader(i.Data))
 	}
 	if err := i.setCachedData(); err != nil {
-		return nil, err
+		return err
 	}
 
 	i.done = true
 
-	return
+	return nil
 }
 
 func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData memorycache.CacheData, err error) {
