@@ -364,7 +364,7 @@ func (c *checkpointCleaner) mergeGCFile() error {
 		} else {
 			*file = GCMetaDir + name
 			max = ts
-			logutil.Debugf("mergeSnapAcctFile: %v, max: %v", name, max.ToString())
+			logutil.Infof("mergeSnapAcctFile: %v, max: %v", name, max.ToString())
 		}
 		return nil
 	}

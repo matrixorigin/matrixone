@@ -287,7 +287,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				if snapshotType == SnapshotTypeCluster {
 					for account := range sm.tables {
 						if snapshotList[account] == nil {
-							snapshotList[account] = containers.MakeVector(colTypes[0], mp)
+							snapshotList[account] = containers.MakeVector(types.T_TS.ToType(), mp)
 						}
 						err = vector.AppendFixed[types.TS](snapshotList[account].GetDownstreamVector(), snapTs, false, mp)
 						if err != nil {
@@ -298,7 +298,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				}
 				id := uint32(acct)
 				if snapshotList[id] == nil {
-					snapshotList[id] = containers.MakeVector(colTypes[0], mp)
+					snapshotList[id] = containers.MakeVector(types.T_TS.ToType(), mp)
 				}
 				logutil.Infof("GetSnapshot: id %d, ts %v", id, snapTs.ToString())
 				err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), snapTs, false, mp)
