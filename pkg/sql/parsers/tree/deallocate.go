@@ -45,7 +45,8 @@ func (node *Deallocate) Format(ctx *FmtCtx) {
 }
 
 func (node *Deallocate) GetStatementType() string { return "Deallocate" }
-func (node *Deallocate) GetQueryType() string     { return QueryTypeOth }
+
+func (node *Deallocate) GetQueryType() string { return QueryTypeOth }
 
 func (node Deallocate) TypeName() string { return "tree.Deallocate" }
 
