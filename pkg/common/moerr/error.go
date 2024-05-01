@@ -218,6 +218,7 @@ const (
 	ErrWaiterPaused               uint16 = 20633
 	ErrRetryForCNRollingRestart   uint16 = 20634
 	ErrNewTxnInCNRollingRestart   uint16 = 20635
+	ErrPrevCheckpointNotFinished  uint16 = 20636
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -436,6 +437,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWaiterPaused:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "waiter is paused"},
 	ErrRetryForCNRollingRestart:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "retry for CN rolling restart"},
 	ErrNewTxnInCNRollingRestart:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "new txn in CN rolling restart"},
+	ErrPrevCheckpointNotFinished:  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "prev checkpoint not finished"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
