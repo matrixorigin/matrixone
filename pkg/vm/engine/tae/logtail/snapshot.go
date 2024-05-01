@@ -97,7 +97,7 @@ var (
 	snapshotSchemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
-		types.New(types.T_TS, types.MaxVarcharLen, 0),
+		types.New(types.T_int16, 0, 0),
 		types.New(types.T_enum, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
