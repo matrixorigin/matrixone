@@ -36,6 +36,7 @@ func (c *DashboardCreator) initLogTailDashboard() error {
 			c.initLogtailLoadCheckpointRow(),
 			c.initLogtailCollectRow(),
 			c.initLogtailSubscriptionRow(),
+			c.initLogtailUpdatePartitionRow(),
 		)...)
 	if err != nil {
 		return err
@@ -153,6 +154,45 @@ func (c *DashboardCreator) initLogtailOverviewRow() dashboard.Option {
 				"apply-notify",
 				"apply-notify-latency",
 				"wait-commit-apply",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Unit("s"),
+			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initLogtailUpdatePartitionRow() dashboard.Option {
+	return dashboard.Row(
+		"Logtail update partition",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="enqueue-global-stats"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="get-partition"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="get-lock"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="get-catalog"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="handle-checkpoint"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="consume"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="consume-catalog-table"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="consume-catalog-table"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="consume-one-entry"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="consume-one-entry-logtailreplay"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="consume-one-entry-catalog-cache"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="update-timestamps"`),
+			},
+			[]string{
+				"enqueue-global-stats",
+				"get-partition",
+				"get-lock",
+				"get-catalog",
+				"handle-checkpoint",
+				"consume",
+				"consume-catalog-table",
+				"consume-catalog-table",
+				"consume-one-entry",
+				"consume-one-entry-logtailreplay",
+				"consume-one-entry-catalog-cache",
+				"update-timestamps",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},

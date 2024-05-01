@@ -16,11 +16,13 @@ package disttae
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
@@ -31,17 +33,26 @@ func consumeEntry(
 	state *logtailreplay.PartitionState,
 	e *api.Entry,
 ) error {
+	start := time.Now()
+	defer func() {
+		v2.LogtailUpdatePartitonConsumeLogtailOneEntryDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	var packer *types.Packer
 	put := engine.packerPool.Get(&packer)
 	defer put.Put()
 
-	state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer)
+	if state != nil {
+		t0 := time.Now()
+		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer)
+		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
+	}
 
 	if logtailreplay.IsMetaTable(e.TableName) {
 		return nil
 	}
 
+	t0 := time.Now()
 	if e.EntryType == api.Entry_Insert {
 		switch e.TableId {
 		case catalog.MO_TABLES_ID:
@@ -54,6 +65,7 @@ func consumeEntry(
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			engine.catalog.InsertColumns(bat)
 		}
+		v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
 		return nil
 	}
 
@@ -65,6 +77,7 @@ func consumeEntry(
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
 		engine.catalog.DeleteDatabase(bat)
 	}
+	v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
 
 	return nil
 }
