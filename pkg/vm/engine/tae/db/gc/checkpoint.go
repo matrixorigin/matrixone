@@ -26,9 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"go.uber.org/zap"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type checkpointCleaner struct {
@@ -660,6 +663,7 @@ func (c *checkpointCleaner) Process() {
 	if !c.isEnableGC() {
 		return
 	}
+
 	maxConsumed := c.maxConsumed.Load()
 	if maxConsumed != nil {
 		ts = maxConsumed.GetEnd()
@@ -747,6 +751,14 @@ func (c *checkpointCleaner) AddChecker(checker func(item any) bool) {
 
 func (c *checkpointCleaner) createNewInput(
 	ckps []*checkpoint.CheckpointEntry) (input *GCTable, err error) {
+	now := time.Now()
+	logutil.Info("[DiskCleaner]", common.OperationField("Consume-Start"),
+		common.AnyField("entry count :", len(ckps)))
+	defer func() {
+		logutil.Info("[DiskCleaner]", common.OperationField("Consume-End"),
+			common.AnyField("cost :", time.Since(now).String()),
+			common.OperandField(c.snapshotMeta.Info()))
+	}()
 	input = NewGCTable()
 	var data *logtail.CheckpointData
 	for _, candidate := range ckps {

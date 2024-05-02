@@ -634,6 +634,19 @@ func (sm *SnapshotMeta) MergeTableInfo(SnapshotList map[uint32][]types.TS) error
 	return nil
 }
 
+func (sm *SnapshotMeta) GetTableInfo() map[uint64]*TableInfo {
+	sm.RLock()
+	defer sm.RUnlock()
+	return sm.acctIndexes
+}
+
+func (sm *SnapshotMeta) Info() string {
+	sm.RLock()
+	defer sm.RUnlock()
+	return fmt.Sprintf("account count: %d, table count: %d, object count: %d",
+		len(sm.tables), len(sm.acctIndexes), len(sm.objects))
+}
+
 func isSnapshotRefers(table *TableInfo, snapVec []types.TS) bool {
 	if len(snapVec) == 0 {
 		return false
