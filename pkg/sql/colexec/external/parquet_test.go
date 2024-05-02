@@ -35,7 +35,7 @@ func Test_getMapper(t *testing.T) {
 		var buf bytes.Buffer
 		schema := parquet.NewSchema("x", parquet.Group{
 			// TODO: check why parquet.PlainDictionary not work
-			"c": parquet.Optional(parquet.Encoded(parquet.Leaf(parquet.String().Type()), &parquet.RLEDictionary)),
+			"c": parquet.Compressed(parquet.Optional(parquet.Encoded(parquet.String(), &parquet.RLEDictionary)), &parquet.Gzip),
 		})
 		w := parquet.NewWriter(&buf, schema)
 
