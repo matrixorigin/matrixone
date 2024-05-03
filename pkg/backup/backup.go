@@ -125,7 +125,7 @@ func backupConfigs(ctx context.Context, cfg *Config) error {
 
 var backupTae = func(ctx context.Context, config *Config) error {
 	fs := fileservice.SubPath(config.TaeDir, taeDir)
-	return BackupData(ctx, config.SharedFs, fs, "")
+	return BackupData(ctx, config.SharedFs, fs, "", int(config.Parallelism))
 }
 
 func backupHakeeper(ctx context.Context, config *Config) error {
@@ -218,6 +218,7 @@ func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles 
 	if err != nil {
 		return err
 	}
+
 	return writeFile(ctx, Fs, taeSum, []byte(metas))
 }
 
