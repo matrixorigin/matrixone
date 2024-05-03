@@ -467,7 +467,3 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, d
 	}
 	return hasher.Sum(nil), nil
 }
-
-func isGC(gcFileMap map[string]string, name string) bool {
-	return gcFileMap[name] != ""
-}
