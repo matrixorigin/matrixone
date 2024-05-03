@@ -318,9 +318,9 @@ func (sm *SnapshotMeta) SetTid(tid uint64) {
 	sm.tid = tid
 }
 
-func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) error {
+func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint32, error) {
 	if len(sm.objects) == 0 {
-		return nil
+		return 0, nil
 	}
 	bat := containers.NewBatch()
 	for i, attr := range objectInfoSchemaAttr {
@@ -355,25 +355,26 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) error 
 	defer deltaBat.Close()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(bat)); err != nil {
-		return err
+		return 0, err
 	}
 	if deltaBat.Length() > 0 {
 		logutil.Infof("deltaBat length is %d", deltaBat.Length())
 		if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(deltaBat)); err != nil {
-			return err
+			return 0, err
 		}
 	}
 
 	_, err = writer.WriteEnd(context.Background())
-	return err
+	size := writer.GetObjectStats()[0].OriginSize()
+	return size, err
 }
 
-func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) error {
+func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (uint32, error) {
 	if len(sm.tables) == 0 {
-		return nil
+		return 0, nil
 	}
 	bat := containers.NewBatch()
 	for i, attr := range tableInfoSchemaAttr {
@@ -401,14 +402,15 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) e
 	defer bat.Close()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(bat)); err != nil {
-		return err
+		return 0, err
 	}
 
 	_, err = writer.WriteEnd(context.Background())
-	return err
+	size := writer.GetObjectStats()[0].OriginSize()
+	return size, err
 }
 
 func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
@@ -634,13 +636,7 @@ func (sm *SnapshotMeta) MergeTableInfo(SnapshotList map[uint32][]types.TS) error
 	return nil
 }
 
-func (sm *SnapshotMeta) GetTableInfo() map[uint64]*TableInfo {
-	sm.RLock()
-	defer sm.RUnlock()
-	return sm.acctIndexes
-}
-
-func (sm *SnapshotMeta) Info() string {
+func (sm *SnapshotMeta) String() string {
 	sm.RLock()
 	defer sm.RUnlock()
 	return fmt.Sprintf("account count: %d, table count: %d, object count: %d",
