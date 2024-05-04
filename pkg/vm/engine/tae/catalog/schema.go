@@ -172,8 +172,8 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 	switch req.Kind {
 	case apipb.AlterKind_UpdatePolicy:
 		p := req.GetUpdatePolicy()
-		s.Extra.MaxRowsMergedObj = p.GetMaxObjOnerun()
-		s.Extra.MinRowsQuailifed = p.GetMinRowsQuailifed()
+		s.Extra.MaxOsizeMergedObj = p.GetMaxOsizeMergedObj()
+		s.Extra.MinOsizeQuailifed = p.GetMinOsizeQuailifed()
 		s.Extra.MaxObjOnerun = p.GetMaxObjOnerun()
 		s.Extra.MinCnMergeSize = p.GetMinCnMergeSize()
 		s.Extra.Hints = p.GetHints()
