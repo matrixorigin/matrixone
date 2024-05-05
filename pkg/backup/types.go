@@ -268,6 +268,8 @@ type taeFile struct {
 	path     string
 	size     int64
 	checksum []byte
+	needCopy bool
+	ts       types.TS
 }
 
 func (tfs *taeFile) String() string {
