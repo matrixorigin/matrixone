@@ -42,6 +42,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 const DefaultBatchSize = 8192
@@ -118,7 +119,6 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.prepareParams = p.prepareParams
 	proc.resolveVariableFunc = p.resolveVariableFunc
 
-	// TODO
 	proc.logger = p.logger
 
 	// reg and cancel
@@ -408,89 +408,63 @@ func (vp *vectorPool) getVector(typ types.Type) *vector.Vector {
 	return nil
 }
 
-func (proc *Process) Info(ctx context.Context, msg string, fields ...zap.Field) {
-	if proc.SessionInfo.LogLevel.Enabled(zap.InfoLevel) {
+// log do logging.
+// just for Info/Error/Warn/Debug/Fatal
+func (proc *Process) log(ctx context.Context, level zapcore.Level, msg string, fields ...zap.Field) {
+	if proc.SessionInfo.LogLevel.Enabled(level) {
 		fields = appendSessionField(fields, proc)
 		fields = appendTraceField(fields, ctx)
-		proc.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
+		proc.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
 	}
+}
+
+func (proc *Process) logf(ctx context.Context, level zapcore.Level, msg string, args ...any) {
+	if proc.SessionInfo.LogLevel.Enabled(level) {
+		fields := make([]zap.Field, 0, 5)
+		fields = appendSessionField(fields, proc)
+		fields = appendTraceField(fields, ctx)
+		proc.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
+	}
+}
+
+func (proc *Process) Info(ctx context.Context, msg string, fields ...zap.Field) {
+	proc.log(ctx, zap.InfoLevel, msg, fields...)
 }
 
 func (proc *Process) Error(ctx context.Context, msg string, fields ...zap.Field) {
-	if proc.SessionInfo.LogLevel.Enabled(zap.ErrorLevel) {
-		fields = appendSessionField(fields, proc)
-		fields = appendTraceField(fields, ctx)
-		proc.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
-	}
+	proc.log(ctx, zap.ErrorLevel, msg, fields...)
 }
 
 func (proc *Process) Warn(ctx context.Context, msg string, fields ...zap.Field) {
-	if proc.SessionInfo.LogLevel.Enabled(zap.WarnLevel) {
-		fields = appendSessionField(fields, proc)
-		fields = appendTraceField(fields, ctx)
-		proc.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.WarnLevel).AddCallerSkip(1), fields...)
-	}
+	proc.log(ctx, zap.WarnLevel, msg, fields...)
 }
 
 func (proc *Process) Fatal(ctx context.Context, msg string, fields ...zap.Field) {
-	if proc.SessionInfo.LogLevel.Enabled(zap.FatalLevel) {
-		fields = appendSessionField(fields, proc)
-		fields = appendTraceField(fields, ctx)
-		proc.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.FatalLevel).AddCallerSkip(1), fields...)
-	}
+	proc.log(ctx, zap.FatalLevel, msg, fields...)
 }
 
 func (proc *Process) Debug(ctx context.Context, msg string, fields ...zap.Field) {
-	if proc.SessionInfo.LogLevel.Enabled(zap.DebugLevel) {
-		fields = appendSessionField(fields, proc)
-		fields = appendTraceField(fields, ctx)
-		proc.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
-	}
+	proc.log(ctx, zap.DebugLevel, msg, fields...)
 }
 
 func (proc *Process) Infof(ctx context.Context, msg string, args ...any) {
-	if proc.SessionInfo.LogLevel.Enabled(zap.InfoLevel) {
-		fields := make([]zap.Field, 0, 5)
-		fields = appendSessionField(fields, proc)
-		fields = appendTraceField(fields, ctx)
-		proc.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
-	}
+	proc.logf(ctx, zap.InfoLevel, msg, args...)
 }
 
 func (proc *Process) Errorf(ctx context.Context, msg string, args ...any) {
-	if proc.SessionInfo.LogLevel.Enabled(zap.ErrorLevel) {
-		fields := make([]zap.Field, 0, 5)
-		fields = appendSessionField(fields, proc)
-		fields = appendTraceField(fields, ctx)
-		proc.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
-	}
+	proc.logf(ctx, zap.ErrorLevel, msg, args...)
 }
 
 func (proc *Process) Warnf(ctx context.Context, msg string, args ...any) {
-	if proc.SessionInfo.LogLevel.Enabled(zap.WarnLevel) {
-		fields := make([]zap.Field, 0, 5)
-		fields = appendSessionField(fields, proc)
-		fields = appendTraceField(fields, ctx)
-		proc.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.WarnLevel).AddCallerSkip(1), fields...)
-	}
+	proc.logf(ctx, zap.WarnLevel, msg, args...)
 }
 
 func (proc *Process) Fatalf(ctx context.Context, msg string, args ...any) {
-	if proc.SessionInfo.LogLevel.Enabled(zap.FatalLevel) {
-		fields := make([]zap.Field, 0, 5)
-		fields = appendSessionField(fields, proc)
-		fields = appendTraceField(fields, ctx)
-		proc.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.FatalLevel).AddCallerSkip(1), fields...)
-	}
+	proc.logf(ctx, zap.FatalLevel, msg, args...)
 }
 
 func (proc *Process) Debugf(ctx context.Context, msg string, args ...any) {
-	if proc.SessionInfo.LogLevel.Enabled(zap.DebugLevel) {
-		fields := make([]zap.Field, 0, 5)
-		fields = appendSessionField(fields, proc)
-		fields = appendTraceField(fields, ctx)
-		proc.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
-	}
+	proc.logf(ctx, zap.DebugLevel, msg, args...)
 }
 
 // appendSessionField append session id, transaction id and statement id to the fields
