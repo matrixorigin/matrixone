@@ -368,6 +368,9 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 	}
 
 	_, err = writer.WriteEnd(context.Background())
+	if err != nil {
+		return 0, err
+	}
 	size := writer.GetObjectStats()[0].OriginSize()
 	return size, err
 }
