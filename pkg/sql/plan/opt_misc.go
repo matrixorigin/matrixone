@@ -15,8 +15,10 @@
 package plan
 
 import (
+	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -258,6 +260,9 @@ func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32,
 
 // if join cond is a=b and a=c, we can remove a=c to improve join performance
 func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2]int32]int, colGroup []int) []int {
+	if builder.optimizerHints != nil && builder.optimizerHints.removeRedundantJoinCond != 0 {
+		return colGroup
+	}
 	node := builder.qry.Nodes[nodeID]
 	for i := range node.Children {
 		colGroup = builder.removeRedundantJoinCond(node.Children[i], colMap, colGroup)
@@ -312,6 +317,9 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2
 }
 
 func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[int32]int) int32 {
+	if builder.optimizerHints != nil && builder.optimizerHints.removeEffectLessLeftJoins != 0 {
+		return nodeID
+	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) == 0 {
 		return nodeID
@@ -405,6 +413,9 @@ func findHashOnPKTable(nodeID, tag int32, builder *QueryBuilder) *plan.TableDef 
 }
 
 func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
+	if builder.optimizerHints != nil && builder.optimizerHints.determineHashOnPK != 0 {
+		return
+	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
@@ -625,6 +636,9 @@ func makeBetweenExprFromDateFormat(equalFunc *plan.Function, dateformatFunc *pla
 }
 
 func (builder *QueryBuilder) optimizeDateFormatExpr(nodeID int32) {
+	if builder.optimizerHints != nil && builder.optimizerHints.optimizeDateFormatExpr != 0 {
+		return
+	}
 	// for date_format(col,'%Y-%m-%d')= '2024-01-19', change this to col between [2024-01-19 00:00:00,2024-01-19 23:59:59]
 	node := builder.qry.Nodes[nodeID]
 	for _, childID := range node.Children {
@@ -682,6 +696,9 @@ func (builder *QueryBuilder) optimizeDateFormatExpr(nodeID int32) {
 }
 
 func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
+	if builder.optimizerHints != nil && builder.optimizerHints.optimizeLikeExpr != 0 {
+		return
+	}
 	// for a like "abc%", change it to prefix_equal(a,"abc")
 	// for a like "abc%def", add an extra filter prefix_equal(a,"abc")
 	node := builder.qry.Nodes[nodeID]
@@ -754,5 +771,69 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 	if len(newFilters) > 0 {
 		node.FilterList = append(node.FilterList, newFilters...)
 		node.BlockFilterList = append(node.BlockFilterList, DeepCopyExprList(newFilters)...)
+	}
+}
+
+func handleOptimizerHints(str string, builder *QueryBuilder) {
+	strs := strings.Split(str, "=")
+	if len(strs) != 2 {
+		return
+	}
+	key := strs[0]
+	value, err := strconv.Atoi(strs[1])
+	if err != nil {
+		return
+	}
+	if builder.optimizerHints == nil {
+		builder.optimizerHints = &OptimizerHints{}
+	}
+	switch key {
+	case "pushDownLimitToScan":
+		builder.optimizerHints.pushDownLimitToScan = value
+	case "pushDownTopThroughLeftJoin":
+		builder.optimizerHints.pushDownTopThroughLeftJoin = value
+	case "pushDownSemiAntiJoins":
+		builder.optimizerHints.pushDownSemiAntiJoins = value
+	case "aggPushDown":
+		builder.optimizerHints.aggPushDown = value
+	case "aggPullUp":
+		builder.optimizerHints.aggPullUp = value
+	case "removeEffectLessLeftJoins":
+		builder.optimizerHints.removeEffectLessLeftJoins = value
+	case "removeRedundantJoinCond":
+		builder.optimizerHints.removeRedundantJoinCond = value
+	case "optimizeLikeExpr":
+		builder.optimizerHints.optimizeLikeExpr = value
+	case "optimizeDateFormatExpr":
+		builder.optimizerHints.optimizeDateFormatExpr = value
+	case "determineHashOnPK":
+		builder.optimizerHints.determineHashOnPK = value
+	case "sendMessageFromTopToScan":
+		builder.optimizerHints.sendMessageFromTopToScan = value
+	case "determineShuffle":
+		builder.optimizerHints.determineShuffle = value
+	case "blockFilter":
+		builder.optimizerHints.blockFilter = value
+	case "applyIndices":
+		builder.optimizerHints.applyIndices = value
+	case "runtimeFilter":
+		builder.optimizerHints.runtimeFilter = value
+	case "joinOrdering":
+		builder.optimizerHints.joinOrdering = value
+	}
+}
+
+func (builder *QueryBuilder) parseOptimizeHints() {
+	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("optimizer_hints")
+	if !ok {
+		return
+	}
+	str := v.(string)
+	if len(str) == 0 {
+		return
+	}
+	kvs := strings.Split(str, ",")
+	for i := range kvs {
+		handleOptimizerHints(kvs[i], builder)
 	}
 }

@@ -170,11 +170,22 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	}
 	processor.ObjectFn = func(se *ObjectEntry) error {
 		se.RLock()
-		needGC := se.DeleteBefore(ts)
+		needGC := se.DeleteBefore(ts) && !se.InMemoryDeletesExisted()
 		se.RUnlock()
 		if needGC {
 			tbl := se.table
 			tbl.RemoveEntry(se)
+		}
+		return nil
+	}
+	processor.TombstoneFn = func(t data.Tombstone) error {
+		obj := t.GetObject().(*ObjectEntry)
+		obj.RLock()
+		needGC := obj.DeleteBefore(ts) && !obj.InMemoryDeletesExisted()
+		obj.RUnlock()
+		if needGC {
+			tbl := obj.table
+			tbl.GCTombstone(obj.ID)
 		}
 		return nil
 	}

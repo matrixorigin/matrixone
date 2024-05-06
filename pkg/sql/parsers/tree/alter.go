@@ -286,7 +286,8 @@ func (node *AlterUser) reset() {
 }
 
 func (node *AlterUser) GetStatementType() string { return "Alter User" }
-func (node *AlterUser) GetQueryType() string     { return QueryTypeDCL }
+
+func (node *AlterUser) GetQueryType() string { return QueryTypeDCL }
 
 type AlterAccountAuthOption struct {
 	Exist          bool
@@ -356,7 +357,8 @@ func (node *AlterAccount) Format(ctx *FmtCtx) {
 }
 
 func (node *AlterAccount) GetStatementType() string { return "Alter Account" }
-func (node *AlterAccount) GetQueryType() string     { return QueryTypeDCL }
+
+func (node *AlterAccount) GetQueryType() string { return QueryTypeDCL }
 
 func (node AlterAccount) TypeName() string { return "tree.AlterAccount" }
 
@@ -403,7 +405,8 @@ func (node *AlterView) Format(ctx *FmtCtx) {
 }
 
 func (node *AlterView) GetStatementType() string { return "Alter View" }
-func (node *AlterView) GetQueryType() string     { return QueryTypeDDL }
+
+func (node *AlterView) GetQueryType() string { return QueryTypeDDL }
 
 func (node AlterView) TypeName() string { return "tree.AlterView" }
 
@@ -456,7 +459,8 @@ func (node *AlterDataBaseConfig) Format(ctx *FmtCtx) {
 }
 
 func (node *AlterDataBaseConfig) GetStatementType() string { return "Alter DataBase config" }
-func (node *AlterDataBaseConfig) GetQueryType() string     { return QueryTypeDDL }
+
+func (node *AlterDataBaseConfig) GetQueryType() string { return QueryTypeDDL }
 
 func (node AlterDataBaseConfig) TypeName() string { return "tree.AlterDataBaseConfig" }
 
@@ -500,7 +504,8 @@ func (node *AlterTable) Format(ctx *FmtCtx) {
 }
 
 func (node *AlterTable) GetStatementType() string { return "Alter Table" }
-func (node *AlterTable) GetQueryType() string     { return QueryTypeDDL }
+
+func (node *AlterTable) GetQueryType() string { return QueryTypeDDL }
 
 func (node AlterTable) TypeName() string { return "tree.AlterTable" }
 
@@ -984,7 +989,8 @@ func (node *AlterPublication) Format(ctx *FmtCtx) {
 }
 
 func (node *AlterPublication) GetStatementType() string { return "Alter Publication" }
-func (node *AlterPublication) GetQueryType() string     { return QueryTypeDCL }
+
+func (node *AlterPublication) GetQueryType() string { return QueryTypeDCL }
 
 func (node AlterPublication) TypeName() string { return "tree.AlterPublication" }
 
@@ -1218,9 +1224,9 @@ func (node *AlterTableAlterColumnClause) reset() {
 	// if node.ColumnName != nil {
 	// node.ColumnName.Free()
 	// }
-	// if node.DefalutExpr != nil {
-	// node.DefalutExpr.Free()
-	// }
+	if node.DefalutExpr != nil {
+		node.DefalutExpr.Free()
+	}
 	*node = AlterTableAlterColumnClause{}
 }
 

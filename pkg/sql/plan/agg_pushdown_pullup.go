@@ -123,6 +123,9 @@ func applyAggPushdown(agg, join, leftChild *plan.Node, builder *QueryBuilder) {
 }
 
 func (builder *QueryBuilder) aggPushDown(nodeID int32) int32 {
+	if builder.optimizerHints != nil && builder.optimizerHints.aggPushDown != 0 {
+		return nodeID
+	}
 	node := builder.qry.Nodes[nodeID]
 
 	if node.NodeType != plan.Node_AGG {
@@ -337,6 +340,9 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 func (builder *QueryBuilder) aggPullup(rootID, nodeID int32) int32 {
 	// agg pullup only support node->(filter)->inner join->agg for now
 	// we can change it to node->agg->(filter)->inner join
+	if builder.optimizerHints != nil && builder.optimizerHints.aggPullUp != 0 {
+		return nodeID
+	}
 	node := builder.qry.Nodes[nodeID]
 
 	if len(node.Children) > 0 {
