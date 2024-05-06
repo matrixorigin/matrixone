@@ -48,7 +48,7 @@ type MergeExecutor struct {
 	rt                  *dbutils.Runtime
 	cnSched             CNMergeScheduler
 	memAvail            int
-	memSpare            int // 15% of total memory
+	memSpare            int // 10% of total memory
 	cpuPercent          float64
 	activeMergeBlkCount int32
 	activeEstimateBytes int64
@@ -70,7 +70,7 @@ func (e *MergeExecutor) RefreshMemInfo() {
 	if stats, err := mem.VirtualMemory(); err == nil {
 		e.memAvail = int(stats.Available)
 		if e.memSpare == 0 {
-			e.memSpare = int(float32(stats.Total) * 0.15)
+			e.memSpare = int(float32(stats.Total) * 0.1)
 		}
 	}
 	if percents, err := cpu.Percent(0, false); err == nil {
@@ -214,11 +214,9 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 	if taskId == math.MaxUint64 {
 		platform = "CN"
 		v2.TaskCNMergeScheduledByCounter.Inc()
-		v2.TaskCNMergedBlocksCounter.Add(float64(blkn))
 		v2.TaskCNMergedSizeCounter.Add(float64(osize))
 	} else {
 		v2.TaskDNMergeScheduledByCounter.Inc()
-		v2.TaskDNMergedBlocksCounter.Add(float64(blkn))
 		v2.TaskDNMergedSizeCounter.Add(float64(osize))
 	}
 	logutil.Infof(

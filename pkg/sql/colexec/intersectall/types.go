@@ -88,14 +88,22 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := arg.ctr
+	if ctr != nil {
+		ctr.cleanBatch(proc)
+		if ctr.hashTable != nil {
+			ctr.hashTable.Free()
+		}
+		ctr.state = Build
+	}
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
+		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()
-		if ctr.buf != nil {
-			ctr.buf.Clean(proc.Mp())
-			ctr.buf = nil
-		}
 	}
 }
 
@@ -103,5 +111,12 @@ func (ctr *container) cleanHashMap() {
 	if ctr.hashTable != nil {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil
+	}
+}
+
+func (ctr *container) cleanBatch(proc *process.Process) {
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
 	}
 }

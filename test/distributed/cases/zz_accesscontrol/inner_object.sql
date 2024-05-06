@@ -116,3 +116,165 @@ drop account if exists accx11;
 drop role if exists revoke_role_1;
 set global enable_privilege_cache = on;
 desc mo_catalog.mo_stages;
+
+-- sys and non sys account admin user information_schema:columns，schemata,tables，views，partitions isolation
+create account ac_1 ADMIN_NAME 'admin' IDENTIFIED BY '111';
+create database sys_db1;
+create table sys_db1.sys_t1(c1 char);
+create view sys_db1.sys_v1  as select * from sys_db1.sys_t1;
+create table sys_db1.test01 (
+emp_no      int             not null,
+birth_date  date            not null,
+first_name  varchar(14)     not null,
+last_name   varchar(16)     not null,
+gender      varchar(5)      not null,
+hire_date   date            not null,
+primary key (emp_no)
+) partition by range columns (emp_no)(
+partition p01 values less than (100001),
+partition p02 values less than (200001),
+partition p03 values less than (300001),
+partition p04 values less than (400001)
+);
+-- @session:id=3&user=ac_1:admin&password=111
+create database ac_db;
+create table ac_db.ac_t1(c1 int);
+create view ac_db.ac_v1  as select * from ac_db.ac_t1;
+create table ac_db.test02 (
+emp_no      int             not null,
+birth_date  date            not null,
+first_name  varchar(14)     not null,
+last_name   varchar(16)     not null,
+gender      varchar(5)      not null,
+hire_date   date            not null,
+primary key (emp_no)
+) partition by range columns (emp_no)(
+partition p01 values less than (100001),
+partition p02 values less than (200001),
+partition p03 values less than (300001),
+partition p04 values less than (400001)
+);
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="ac_db" and table_name='ac_t1';
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="ac_db" and table_name='test02';
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="sys_db1";
+select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
+select * from information_schema.schemata where schema_name='ac_db';
+select * from information_schema.schemata where schema_name='sys_db1';
+select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
+select table_schema,table_name  from information_schema.tables where table_name='sys_t1';
+select table_schema,table_name from information_schema.tables where table_name='ac_t1';
+select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
+select * from information_schema.views where table_name='ac_v1';
+select * from information_schema.views where table_name='sys_v1';
+select count(*),table_name from information_schema.views group by table_name having count(*)>1;
+select count(*) from information_schema.partitions where table_schema='ac_db' and table_name='test02';
+select table_schema,table_name,partition_name  from information_schema.partitions where table_schema='sys_db1';
+select count(*),table_schema,table_name,partition_name  from information_schema.partitions group by table_schema,table_name,partition_name having count(*) >1;
+-- @session
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_name='ac_t1';
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_name='sys_t1';
+select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
+select * from information_schema.schemata where schema_name='ac_db';
+select * from information_schema.schemata where schema_name='sys_db1';
+select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
+select table_schema,table_name from information_schema.tables where table_name='sys_t1';
+select table_schema,table_name from information_schema.tables where table_name='ac_t1';
+select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
+select * from information_schema.views where table_name='sys_v1';
+select * from information_schema.views where table_name='ac_v1';
+select count(*),table_name from information_schema.views group by table_name having count(*)>1;
+select count(*) from information_schema.partitions where table_schema='sys_db1' and table_name='test01';
+select table_schema,table_name from information_schema.partitions where table_schema='ac_db';
+select count(*),table_schema,table_name,partition_name  from information_schema.partitions group by table_schema,table_name,partition_name having count(*) >1;
+
+-- sys and non sys account non admin user information_schema:columns，schemata,tables，views，partitions isolation
+create user 'sys_user' identified by '123456';
+create role 'sys_role';
+grant  all on account *  to 'sys_role';
+grant OWNERSHIP on database *.* to sys_role;
+grant select on table *.* to sys_role;
+grant sys_role to sys_user;
+-- @session:id=3&user=ac_1:admin&password=111
+create user 'ac_user' identified by '123456';
+create role 'ac_role';
+grant  all on account *  to 'ac_role';
+grant OWNERSHIP on database *.* to ac_role;
+grant select on table *.* to ac_role;
+grant ac_role to ac_user;
+-- @session
+-- @session:id=4&user=sys:sys_user:sys_role&password=123456
+create database user_db;
+create table user_db.user_t1(c1 int,c2 varchar);
+create view user_db.sysuser_v1  as select * from user_db.user_t1;
+create table user_db.test02 (
+emp_no      int             not null,
+birth_date  date            not null,
+first_name  varchar(14)     not null,
+last_name   varchar(16)     not null,
+gender      varchar(5)      not null,
+hire_date   date            not null,
+primary key (emp_no)
+) partition by range columns (emp_no)(
+partition p01 values less than (100001),
+partition p02 values less than (200001),
+partition p03 values less than (300001),
+partition p04 values less than (400001)
+);
+-- @session
+-- @session:id=5&user=ac_1:ac_user:ac_role&password=123456
+create database acuser_db;
+create table acuser_db.acuser_t1(c1 int,c2 varchar);
+create view acuser_db.acuser_v1  as select * from acuser_db.acuser_t1;
+create table acuser_db.test (
+emp_no      int             not null,
+birth_date  date            not null,
+first_name  varchar(14)     not null,
+last_name   varchar(16)     not null,
+gender      varchar(5)      not null,
+hire_date   date            not null,
+primary key (emp_no)
+) partition by range columns (emp_no)(
+partition p01 values less than (100001),
+partition p02 values less than (200001),
+partition p03 values less than (300001),
+partition p04 values less than (400001)
+);
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="acuser_db" and table_name='acuser_t1';
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="user_db";
+select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
+select * from information_schema.schemata where schema_name='acuser_db';
+select * from information_schema.schemata where schema_name='user_db1';
+select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
+select table_schema,table_name from information_schema.tables where table_name='user_t1';
+select table_schema,table_name from information_schema.tables where table_name='acuser_t1';
+select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
+select table_schema,table_name from information_schema.views where table_name='acuser_v1';
+select table_schema,table_name from information_schema.views where table_name='sysuser_v1';
+select count(*),table_name from information_schema.views group by table_name having count(*)>1;
+select table_schema,table_name,partition_name from information_schema.partitions where table_schema='acuser_db';
+select table_schema,table_name,partition_name from information_schema.partitions where table_schema='user_db';
+select count(*),table_schema,table_name,partition_name  from information_schema.partitions group by table_schema,table_name,partition_name having count(*) >1;
+-- @session
+-- @session:id=4&user=sys:sys_user:sys_role&password=123456
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="user_db" and table_name='user_t1';
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="acuser_db";
+select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
+select * from information_schema.schemata where schema_name='acuser_db';
+select * from information_schema.schemata where schema_name='user_db';
+select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
+select table_schema,table_name from information_schema.tables where table_name='user_t1';
+select table_schema,table_name from information_schema.tables where table_name='acuser_t1';
+select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
+select table_schema,table_name from information_schema.views where table_name='acuser_v1';
+select table_schema,table_name from information_schema.views where table_name='sysuser_v1';
+select count(*),table_name from information_schema.views group by table_name having count(*)>1;
+select table_schema,table_name,partition_name from information_schema.partitions where table_schema='acuser_db';
+select table_schema,table_name,partition_name from information_schema.partitions where table_schema='user_db';
+select count(*),table_schema,table_name,partition_name  from information_schema.partitions group by table_schema,table_name,partition_name having count(*) >1;
+-- @session
+
+drop database sys_db1;
+drop database user_db;
+drop account ac_1;
+drop user sys_user;
+drop role sys_role;

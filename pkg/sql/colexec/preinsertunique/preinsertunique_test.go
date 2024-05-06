@@ -53,6 +53,21 @@ func TestPreInsertUnique(t *testing.T) {
 	proc := testutil.NewProc()
 	proc.TxnClient = txnClient
 	proc.Ctx = ctx
+	argument := Argument{
+		PreInsertCtx: &plan.PreInsertUkCtx{
+			Columns:  []int32{1},
+			PkColumn: 0,
+			PkType:   plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
+			UkType:   plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
+		},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+	}
 	// create table t1(
 	// col1 int primary key,
 	// col2 int unique key,
@@ -70,27 +85,27 @@ func TestPreInsertUnique(t *testing.T) {
 		Cnt: 1,
 	}
 	testBatch.SetRowCount(3)
-
-	argument := Argument{
-		PreInsertCtx: &plan.PreInsertUkCtx{
-			Columns:  []int32{1},
-			PkColumn: 0,
-			PkType:   plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
-			UkType:   plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
-		},
-		OperatorBase: vm.OperatorBase{
-			OperatorInfo: vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			},
-		},
-	}
-
-	types.T_int64.ToType()
 	resetChildren(&argument, testBatch)
 	_, err := argument.Call(proc)
 	require.NoError(t, err)
+
+	argument.Reset(proc, false, nil)
+
+	testBatch = &batch.Batch{
+		Vecs: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1, 2, 3}, nil),
+			testutil.MakeInt64Vector([]int64{11, 22, 33}, nil),
+			testutil.MakeInt64Vector([]int64{23, 23, 23}, nil),
+		},
+		Cnt: 1,
+	}
+	testBatch.SetRowCount(3)
+	resetChildren(&argument, testBatch)
+	_, err = argument.Call(proc)
+	require.NoError(t, err)
+	argument.Free(proc, false, nil)
+	proc.FreeVectors()
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {

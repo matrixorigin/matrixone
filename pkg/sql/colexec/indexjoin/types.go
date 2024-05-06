@@ -76,12 +76,26 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.cleanBuf(proc)
+	ctr := arg.ctr
+	if ctr != nil {
+		ctr.FreeAllReg()
+		ctr.state = Probe
+	}
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	arg.cleanBuf(proc)
 	ctr := arg.ctr
 	if ctr != nil {
 		ctr.FreeAllReg()
 	}
+}
+
+func (arg *Argument) cleanBuf(proc *process.Process) {
 	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
 	}
 }
