@@ -32,6 +32,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -114,6 +115,7 @@ type Session struct {
 	feSessionImpl
 
 	logger     *log.MOLogger
+	logLevel   zapcore.Level
 	loggerOnce sync.Once
 
 	//cmd from the client
@@ -1948,19 +1950,25 @@ func (ses *Session) GetSessId() uuid.UUID {
 }
 
 func (ses *Session) GetLogLevel() zapcore.Level {
-	return zap.InfoLevel
+	return ses.logLevel
+}
+
+func (ses *Session) initLogger() {
+	ses.loggerOnce.Do(func() {
+		if ses.logger == nil {
+			ses.logger = getRuntime().Logger().Named("frontend")
+		}
+		config := logutil.GetDefaultConfig()
+		ses.logLevel = config.GetLevel().Level()
+	})
 }
 
 func (ses *Session) log(ctx context.Context, level zapcore.Level, msg string, fields ...zap.Field) {
 	if ses == nil {
 		return
 	}
-	ses.loggerOnce.Do(func() {
-		if ses.logger == nil {
-			ses.logger = getRuntime().Logger().Named("frontend")
-		}
-	})
-	if ses.logger.Enabled(level) {
+	ses.initLogger()
+	if ses.logLevel.Enabled(level) {
 		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
@@ -1972,12 +1980,8 @@ func (ses *Session) logf(ctx context.Context, level zapcore.Level, format string
 	if ses == nil {
 		return
 	}
-	ses.loggerOnce.Do(func() {
-		if ses.logger == nil {
-			ses.logger = getRuntime().Logger().Named("frontend")
-		}
-	})
-	if ses.logger.Enabled(level) {
+	ses.initLogger()
+	if ses.logLevel.Enabled(level) {
 		fields := make([]zap.Field, 0, 5)
 		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
 		fields = appendSessionField(fields, ses)

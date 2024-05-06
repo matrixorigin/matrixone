@@ -22,8 +22,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -397,7 +395,7 @@ func (th *TxnHandler) CommitTxn() error {
 		}
 	}()
 
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+	if ses.GetLogLevel().Enabled(zap.DebugLevel) {
 		txnId := txnOp.Txn().DebugString()
 		ses.Errorf(ctx2, "CommitTxn txnId:%s", txnId)
 		defer func() {
@@ -456,7 +454,7 @@ func (th *TxnHandler) RollbackTxn() error {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
 		}
 	}()
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+	if ses.GetLogLevel().Enabled(zap.DebugLevel) {
 		txnId := txnOp.Txn().DebugString()
 		ses.Debugf(ctx2, "RollbackTxn txnId:%s", txnId)
 		defer func() {

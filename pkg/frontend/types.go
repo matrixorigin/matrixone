@@ -353,7 +353,7 @@ type FeSession interface {
 }
 
 type SessionLogger interface {
-	SessionGetter
+	SessionLoggerGetter
 	Info(ctx context.Context, msg string, fields ...zap.Field)
 	Error(ctx context.Context, msg string, fields ...zap.Field)
 	Warn(ctx context.Context, msg string, fields ...zap.Field)
@@ -366,7 +366,7 @@ type SessionLogger interface {
 	Debugf(ctx context.Context, msg string, args ...any)
 }
 
-type SessionGetter interface {
+type SessionLoggerGetter interface {
 	GetSessId() uuid.UUID
 	GetStmtId() uuid.UUID
 	GetTxnId() uuid.UUID
