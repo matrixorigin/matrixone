@@ -23,6 +23,8 @@ header:
     - '**/goyacc.go'
     - 'pkg/sql/parsers/dialect/postgresql/postgresql_sql.go'
     - 'pkg/sql/parsers/dialect/mysql/mysql_sql.go'
+    - 'pkg/common/fastrand/'
+    - 'pkg/common/arenaskl/'
   comment: on-failure
 dependency:
   files:
