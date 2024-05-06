@@ -38,11 +38,11 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	if arg.ctr == nil {
-		arg.ctr = new(container)
-		filterList := colexec.SplitAndExprs([]*plan.Expr{arg.E})
-		arg.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filterList)
-	}
+	ap := arg
+	ap.ctr = new(container)
+
+	filterList := colexec.SplitAndExprs([]*plan.Expr{ap.E})
+	ap.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filterList)
 	return err
 }
 
