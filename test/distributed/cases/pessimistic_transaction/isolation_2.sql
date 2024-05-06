@@ -81,7 +81,7 @@ begin;
 create table dis_table_04(a int);
 insert into dis_table_04 values (4);
 -- @session:id=1{
-use isolation_2;
+use dis_db_01;
 -- @wait:0:commit
 create table dis_table_04(a int);
 insert into dis_table_04 values (4);
