@@ -176,6 +176,12 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		Stats:      common.NewTableCompactStat(),
 	}
 }
+func (entry *TableEntry) GCTombstone(id objectio.ObjectId) {
+	pivot := DeleteEntry{
+		ObjectID: id,
+	}
+	entry.deleteList.Delete(pivot)
+}
 func (entry *TableEntry) GetDeleteList() *btree.BTreeG[DeleteEntry] {
 	return entry.deleteList.Copy()
 }
@@ -699,12 +705,12 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 		var hints []apipb.MergeHint
 		copy(hints, newSchema.Extra.Hints)
 		newSchema.Extra = &apipb.SchemaExtra{
-			NextColSeqnum:    newSchema.Extra.NextColSeqnum,
-			MinRowsQuailifed: newSchema.Extra.MinRowsQuailifed,
-			MaxObjOnerun:     newSchema.Extra.MaxObjOnerun,
-			MaxRowsMergedObj: newSchema.Extra.MaxRowsMergedObj,
-			MinCnMergeSize:   newSchema.Extra.MinCnMergeSize,
-			Hints:            hints,
+			NextColSeqnum:     newSchema.Extra.NextColSeqnum,
+			MinOsizeQuailifed: newSchema.Extra.MinOsizeQuailifed,
+			MaxObjOnerun:      newSchema.Extra.MaxObjOnerun,
+			MaxOsizeMergedObj: newSchema.Extra.MaxOsizeMergedObj,
+			MinCnMergeSize:    newSchema.Extra.MinCnMergeSize,
+			Hints:             hints,
 		}
 
 	}

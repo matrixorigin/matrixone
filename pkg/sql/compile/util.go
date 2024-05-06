@@ -230,10 +230,18 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 		pKeyMsg = pkeyName
 	}
 
+	colSeqNumMap := make(map[string]string)
+	for _, col := range originTableDef.Cols {
+		// NOTE:
+		// ColDef.ColId is not used as "after alter table, different columns may have the same colId"
+		// ColDef.SeqNum is used instead as it is always unique.
+		colSeqNumMap[col.GetName()] = fmt.Sprintf("%d", col.GetSeqnum())
+	}
+
 	for i, part := range indexDef.Parts {
 		insertSQLs[i] = fmt.Sprintf(insertIntoMasterIndexTableFormat,
 			DBName, indexDef.IndexTableName,
-			part, part, pKeyMsg, pKeyMsg, DBName, originTableDef.Name)
+			colSeqNumMap[part], part, pKeyMsg, pKeyMsg, DBName, originTableDef.Name)
 	}
 
 	return insertSQLs

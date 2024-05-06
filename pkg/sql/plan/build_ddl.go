@@ -1661,6 +1661,8 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	}
 
 	nameCount := make(map[string]int)
+	// Note: Index Parts will store the ColName, as Parts is used to populate mo_index_table.
+	// However, when inserting Index, we convert Parts (ie ColName) to ColIdx.
 	indexParts := make([]string, 0)
 
 	for _, keyPart := range indexInfo.KeyParts {

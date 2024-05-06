@@ -97,6 +97,10 @@ func (exec *clusterCentersExec) GroupGrow(more int) error {
 	return nil
 }
 
+func (exec *clusterCentersExec) PreAllocateGroups(more int) error {
+	return exec.ret.preAllocate(more)
+}
+
 func (exec *clusterCentersExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	if vectors[0].IsNull(uint64(row)) {
 		return nil
