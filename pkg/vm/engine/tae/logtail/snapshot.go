@@ -409,6 +409,9 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 	}
 
 	_, err = writer.WriteEnd(context.Background())
+	if err != nil {
+		return 0, err
+	}
 	size := writer.GetObjectStats()[0].OriginSize()
 	return size, err
 }
