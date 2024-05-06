@@ -205,6 +205,8 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 					path:     name,
 					size:     int64(size),
 					checksum: checksum,
+					needCopy: backupObject.NeedCopy,
+					ts:       backupObject.CrateTS,
 				})
 				fileMutex.Unlock()
 				return &tasks.JobResult{
