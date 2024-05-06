@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -528,11 +529,10 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	if err != nil {
 		return processHelper{}, err
 	}
-	{
-		sessLogger := procInfo.SessionLogger
+	if sessLogger := procInfo.SessionLogger; sessLogger != nil {
 		copy(result.sessionInfo.SessionId[:], sessLogger.SessId)
-		result.sessionInfo.LogLevel = enumLogLevel2ZapLogLevel(sessLogger.LogLevel)
 		copy(result.StmtId[:], sessLogger.StmtId)
+		result.sessionInfo.LogLevel = enumLogLevel2ZapLogLevel(sessLogger.LogLevel)
 		// txnId, ignore. more in txnOperator.
 	}
 
