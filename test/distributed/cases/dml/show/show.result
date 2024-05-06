@@ -18,22 +18,22 @@ t1
 t2
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO        null        
-str    CHAR(10)    YES        null        
-name    VARCHAR(10)    YES        null        
+id    INT(32)    NO        null
+str    CHAR(10)    YES        null
+name    VARCHAR(10)    YES        null
 show full columns from t1;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT(32)    null    NO        null        select,insert,update,references    
-str    CHAR(10)    null    YES        null        select,insert,update,references    
-name    VARCHAR(10)    null    YES        null        select,insert,update,references    
+id    INT(32)    null    NO        null        select,insert,update,references
+str    CHAR(10)    null    YES        null        select,insert,update,references
+name    VARCHAR(10)    null    YES        null        select,insert,update,references
 show full columns from t1 like '%';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT(32)    null    NO        null        select,insert,update,references    
-str    CHAR(10)    null    YES        null        select,insert,update,references    
-name    VARCHAR(10)    null    YES        null        select,insert,update,references    
+id    INT(32)    null    NO        null        select,insert,update,references
+str    CHAR(10)    null    YES        null        select,insert,update,references
+name    VARCHAR(10)    null    YES        null        select,insert,update,references
 show full columns from t1 where Field ='id';
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT(32)    null    NO        null        select,insert,update,references    
+id    INT(32)    null    NO        null        select,insert,update,references
 drop database if exists test01;
 show charset;
 Charset    Description    Default collation    Maxlen
@@ -45,10 +45,10 @@ create database test01;
 use test01;
 show columns from test02.t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    TINYINT(8)    YES        null        
-b    SMALLINT(16)    YES        null        
-c    INT(32)    YES        null        
-d    BIGINT(64)    YES        null        
+a    TINYINT(8)    YES        null
+b    SMALLINT(16)    YES        null
+c    INT(32)    YES        null
+d    BIGINT(64)    YES        null
 create database if not exists db11111111111;
 show table status from db11111111111;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment
@@ -374,25 +374,25 @@ drop table if exists t1;
 create table t1(a int, b int, c int, primary key(a));
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    INT(32)    YES        null        
-c    INT(32)    YES        null        
+a    INT(32)    NO    PRI    null
+b    INT(32)    YES        null
+c    INT(32)    YES        null
 drop table t1;
 drop table if exists t2;
 create table t2(a int, b int, c int, primary key(a, b));
 show columns from t2;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    INT(32)    NO    PRI    null        
-c    INT(32)    YES        null        
+a    INT(32)    NO    PRI    null
+b    INT(32)    NO    PRI    null
+c    INT(32)    YES        null
 drop table t2;
 drop table if exists t3;
 create table t3(a int, b int, c int, primary key(a, b, c));
 show columns from t3;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    INT(32)    NO    PRI    null        
-c    INT(32)    NO    PRI    null        
+a    INT(32)    NO    PRI    null
+b    INT(32)    NO    PRI    null
+c    INT(32)    NO    PRI    null
 drop table t3;
 drop database test;
 DROP DATABASE test;
@@ -447,5 +447,5 @@ create database test;
 use test;
 SHOW CREATE TABLE information_schema.columns;
 View    Create View    character_set_client    collation_connection
-columns    CREATE VIEW information_schema.COLUMNS AS select 'def' as TABLE_CATALOG,att_database as TABLE_SCHEMA,att_relname AS TABLE_NAME,attname AS COLUMN_NAME,attnum AS ORDINAL_POSITION,mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,(case when attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,mo_show_visible_bin(atttyp,2) as DATA_TYPE,internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(atttyp) AS NUMERIC_SCALE,internal_datetime_scale(atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns where att_relname!='mo_increment_columns' and att_relname not like '__mo_cpkey_%' and attname != '__mo_rowid'    utf8mb4    utf8mb4_general_ci
+columns    CREATE VIEW information_schema.COLUMNS AS select 'def' as TABLE_CATALOG,att_database as TABLE_SCHEMA,att_relname AS TABLE_NAME,attname AS COLUMN_NAME,attnum AS ORDINAL_POSITION,mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,(case when attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,mo_show_visible_bin(atttyp,2) as DATA_TYPE,internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(atttyp) AS NUMERIC_SCALE,internal_datetime_scale(atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns where account_id = current_account_id() and att_relname!='mo_increment_columns' and att_relname not like '__mo_cpkey_%' and attname != '__mo_rowid'    utf8mb4    utf8mb4_general_ci
 drop database test;

@@ -117,16 +117,23 @@ func etlFSDir(filepath string) string {
 func writeFile(ctx context.Context, fs fileservice.FileService, path string, data []byte) error {
 	var err error
 	//write file
-	err = fs.Write(ctx, fileservice.IOVector{
-		FilePath: path,
-		Entries: []fileservice.IOEntry{
-			{
-				Offset: 0,
-				Size:   int64(len(data)),
-				Data:   data,
-			},
+	_, err = fileservice.DoWithRetry(
+		"BackupWrite",
+		func() (int, error) {
+			return 0, fs.Write(ctx, fileservice.IOVector{
+				FilePath: path,
+				Entries: []fileservice.IOEntry{
+					{
+						Offset: 0,
+						Size:   int64(len(data)),
+						Data:   data,
+					},
+				},
+			})
 		},
-	})
+		64,
+		fileservice.IsRetryableError,
+	)
 	if err != nil {
 		return err
 	}
@@ -135,16 +142,23 @@ func writeFile(ctx context.Context, fs fileservice.FileService, path string, dat
 
 	//write checksum file for the file
 	checksumFile := path + ".sha256"
-	err = fs.Write(ctx, fileservice.IOVector{
-		FilePath: checksumFile,
-		Entries: []fileservice.IOEntry{
-			{
-				Offset: 0,
-				Size:   int64(len(checksum)),
-				Data:   checksum[:],
-			},
+	_, err = fileservice.DoWithRetry(
+		"BackupWrite",
+		func() (int, error) {
+			return 0, fs.Write(ctx, fileservice.IOVector{
+				FilePath: checksumFile,
+				Entries: []fileservice.IOEntry{
+					{
+						Offset: 0,
+						Size:   int64(len(checksum)),
+						Data:   checksum[:],
+					},
+				},
+			})
 		},
-	})
+		64,
+		fileservice.IsRetryableError,
+	)
 	return err
 }
 
