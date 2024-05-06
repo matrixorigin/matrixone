@@ -23,6 +23,8 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -277,6 +278,9 @@ func (sp *StmtProfile) SetTxnId(id []byte) {
 }
 
 func (sp *StmtProfile) GetTxnId() uuid.UUID {
+	if sp == nil {
+		return uuid.UUID{}
+	}
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	return sp.txnId
@@ -289,6 +293,9 @@ func (sp *StmtProfile) SetStmtId(id uuid.UUID) {
 }
 
 func (sp *StmtProfile) GetStmtId() uuid.UUID {
+	if sp == nil {
+		return uuid.UUID{}
+	}
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	return sp.stmtId
