@@ -42,13 +42,42 @@ func TestIntersectAll(t *testing.T) {
 		{3, 4, 5}				{1, 2, 3}
 		{3, 4, 5}
 	*/
-	var end vm.CallResult
-	c, ctx := newIntersectAllTestCase(proc)
-
-	setProcForTest(ctx, proc)
+	c := newIntersectAllTestCase(
+		proc,
+		[]*batch.Batch{
+			testutil.NewBatchWithVectors(
+				[]*vector.Vector{
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 1}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{2, 2}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
+				}, nil),
+			testutil.NewBatchWithVectors(
+				[]*vector.Vector{
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{4, 4}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{5, 5}),
+				}, nil),
+		},
+		[]*batch.Batch{
+			testutil.NewBatchWithVectors(
+				[]*vector.Vector{
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 1}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{2, 2}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
+				}, nil),
+			testutil.NewBatchWithVectors(
+				[]*vector.Vector{
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{4}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{5}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{6}),
+				}, nil),
+		},
+	)
 	err := c.arg.Prepare(c.proc)
 	require.NoError(t, err)
 	cnt := 0
+	var end vm.CallResult
+
 	for {
 		end, err = c.arg.Call(c.proc)
 		require.NoError(t, err)
@@ -60,27 +89,7 @@ func TestIntersectAll(t *testing.T) {
 			break
 		}
 	}
-	require.Equal(t, 2, cnt) // 1 row
-	c.proc.Reg.MergeReceivers[0].Ch <- nil
-	c.proc.Reg.MergeReceivers[1].Ch <- nil
 
-	c.arg.Reset(c.proc, false, nil)
-
-	setProcForTest(ctx, proc)
-	err = c.arg.Prepare(c.proc)
-	require.NoError(t, err)
-	cnt = 0
-	for {
-		end, err = c.arg.Call(c.proc)
-		require.NoError(t, err)
-		result := end.Batch
-		if result != nil && !result.IsEmpty() {
-			cnt += result.RowCount()
-			require.Equal(t, 3, len(result.Vecs))
-		} else {
-			break
-		}
-	}
 	require.Equal(t, 2, cnt) // 1 row
 	c.proc.Reg.MergeReceivers[0].Ch <- nil
 	c.proc.Reg.MergeReceivers[1].Ch <- nil
@@ -89,52 +98,8 @@ func TestIntersectAll(t *testing.T) {
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
-func newIntersectAllTestCase(proc *process.Process) (intersectAllTestCase, context.Context) {
+func newIntersectAllTestCase(proc *process.Process, leftBatches, rightBatches []*batch.Batch) intersectAllTestCase {
 	ctx, cancel := context.WithCancel(context.Background())
-	arg := new(Argument)
-	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
-		Idx:     0,
-		IsFirst: false,
-		IsLast:  false,
-	}
-	return intersectAllTestCase{
-		proc:   proc,
-		arg:    arg,
-		cancel: cancel,
-	}, ctx
-}
-
-func setProcForTest(ctx context.Context, proc *process.Process) {
-	leftBatches := []*batch.Batch{
-		testutil.NewBatchWithVectors(
-			[]*vector.Vector{
-				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 1}),
-				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{2, 2}),
-				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
-			}, nil),
-		testutil.NewBatchWithVectors(
-			[]*vector.Vector{
-				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
-				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{4, 4}),
-				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{5, 5}),
-			}, nil),
-	}
-
-	rightBatches := []*batch.Batch{
-		testutil.NewBatchWithVectors(
-			[]*vector.Vector{
-				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 1}),
-				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{2, 2}),
-				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
-			}, nil),
-		testutil.NewBatchWithVectors(
-			[]*vector.Vector{
-				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{4}),
-				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{5}),
-				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{6}),
-			}, nil),
-	}
-
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	{
 		c := make(chan *batch.Batch, len(leftBatches)+1)
@@ -157,5 +122,16 @@ func setProcForTest(ctx context.Context, proc *process.Process) {
 			Ctx: ctx,
 			Ch:  c,
 		}
+	}
+	arg := new(Argument)
+	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
+		Idx:     0,
+		IsFirst: false,
+		IsLast:  false,
+	}
+	return intersectAllTestCase{
+		proc:   proc,
+		arg:    arg,
+		cancel: cancel,
 	}
 }

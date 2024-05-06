@@ -41,14 +41,13 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	if arg.ctr == nil {
-		arg.ctr = new(container)
-		arg.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Es)
-		arg.ctr.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(arg.Es))
-		for i, e := range arg.Es {
-			if e.Typ.Id != 0 {
-				arg.ctr.uafs[i] = vector.GetUnionAllFunction(plan.MakeTypeByPlan2Expr(e), proc.Mp())
-			}
+	ap := arg
+	ap.ctr = new(container)
+	ap.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, ap.Es)
+	ap.ctr.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(ap.Es))
+	for i, e := range ap.Es {
+		if e.Typ.Id != 0 {
+			ap.ctr.uafs[i] = vector.GetUnionAllFunction(plan.MakeTypeByPlan2Expr(e), proc.Mp())
 		}
 	}
 	return err
