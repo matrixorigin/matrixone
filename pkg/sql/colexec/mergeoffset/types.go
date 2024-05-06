@@ -75,10 +75,21 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if arg.ctr != nil {
+		arg.ctr.seen = 0
+	}
+	arg.cleanBuf(proc)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
 	}
+	arg.cleanBuf(proc)
+}
+
+func (arg *Argument) cleanBuf(proc *process.Process) {
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())
 		arg.buf = nil

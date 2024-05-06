@@ -93,6 +93,37 @@ func TestConnector(t *testing.T) {
 			}
 			bat.Clean(tc.proc.Mp())
 		}
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+
+		tc.arg.Reset(tc.proc, false, nil)
+
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+
+		bats = []*batch.Batch{
+			newBatch(tc.types, tc.proc, Rows),
+			batch.EmptyBatch,
+		}
+		resetChildren(tc.arg, bats)
+		/*{
+			for _, vec := range bat.Vecs {
+				if vec.IsOriginal() {
+					vec.FreeOriginal(tc.proc.Mp())
+				}
+			}
+		}*/
+		_, _ = tc.arg.Call(tc.proc)
+		for len(tc.arg.Reg.Ch) > 0 {
+			bat := <-tc.arg.Reg.Ch
+			if bat == nil {
+				break
+			}
+			if bat.IsEmpty() {
+				continue
+			}
+			bat.Clean(tc.proc.Mp())
+		}
+
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()

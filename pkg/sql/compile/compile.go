@@ -1971,7 +1971,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	for i := 0; i < len(fileList); i++ {
 		param.Filepath = fileList[i]
 		if param.Parallel {
-			arr, err := external.ReadFileOffset(param, mcpu, fileSize[i])
+			arr, err := external.ReadFileOffset(param, mcpu, fileSize[i], n.TableDef.Cols)
 			fileOffset = append(fileOffset, arr)
 			if err != nil {
 				return nil, err
@@ -1996,7 +1996,13 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			fileOffsetTmp[j] = &pipeline.FileOffset{}
 			fileOffsetTmp[j].Offset = make([]int64, 0)
 			if param.Parallel {
-				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+				if 2*preIndex+2*count < len(fileOffset[j]) {
+					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+				} else if 2*preIndex < len(fileOffset[j]) {
+					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
+				} else {
+					continue
+				}
 			} else {
 				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{0, -1}...)
 			}
@@ -2857,7 +2863,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 
 	rs.Instructions[0].Idx = c.anal.curr
 
-	arg := constructFuzzyFilter(c, n, ns[n.Children[1]])
+	arg := constructFuzzyFilter(n, ns[n.Children[1]])
 
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.FuzzyFilter,
@@ -3524,7 +3530,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
 
-	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], s.ShuffleCnt, ss != nil))
+	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], ss != nil))
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
@@ -3631,7 +3637,7 @@ func (c *Compile) fillAnalyzeInfo() {
 	}
 }
 
-func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
+func (c *Compile) determinExpandRanges(n *plan.Node) bool {
 	if n.TableDef.Partition != nil {
 		return true
 	}
@@ -3784,7 +3790,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		}
 	}
 
-	if c.determinExpandRanges(n, rel) {
+	if c.determinExpandRanges(n) {
 		ranges, err = c.expandRanges(n, rel, n.BlockFilterList)
 		if err != nil {
 			return nil, nil, nil, err
@@ -3830,7 +3836,16 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			}
 		}
 
-		if partialResults != nil {
+		if len(n.AggList) == 1 && n.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName == "starcount" {
+			for i := 1; i < ranges.Len(); i++ {
+				blk := ranges.(*objectio.BlockInfoSlice).Get(i)
+				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
+					newranges = append(newranges, ranges.(*objectio.BlockInfoSlice).GetBytes(i)...)
+					continue
+				}
+				partialResults[0] = partialResults[0].(int64) + int64(blk.MetaLocation().Rows())
+			}
+		} else if partialResults != nil {
 			columnMap := make(map[int]int)
 			for i := range n.AggList {
 				agg := n.AggList[i].Expr.(*plan.Expr_F)
@@ -4150,11 +4165,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 					}
 				}
 			}
-			if ranges.Size() == len(newranges) {
-				partialResults = nil
-			} else if partialResults != nil {
-				ranges.SetBytes(newranges)
-			}
+		}
+		if ranges.Size() == len(newranges) {
+			partialResults = nil
+		} else if partialResults != nil {
+			ranges.SetBytes(newranges)
 		}
 		if partialResults == nil {
 			partialResultTypes = nil

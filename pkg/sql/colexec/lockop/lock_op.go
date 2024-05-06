@@ -792,6 +792,17 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 	return arg
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if arg.rt == nil {
+		return
+	}
+	if arg.rt.parker != nil {
+		arg.rt.parker.FreeMem()
+	}
+	arg.rt.retryError = nil
+	arg.cleanCachedBatch(proc)
+}
+
 // Free free mem
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.rt == nil {

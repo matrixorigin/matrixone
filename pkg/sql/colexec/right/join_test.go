@@ -107,6 +107,31 @@ func TestJoin(t *testing.T) {
 				break
 			}
 		}
+
+		tc.arg.Reset(tc.proc, false, nil)
+
+		bats = hashBuild(t, tc)
+		if jm, ok := bats[0].AuxData.(*hashmap.JoinMap); ok {
+			jm.SetDupCount(int64(1))
+		}
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		tc.proc.Reg.MergeReceivers[1].Ch <- bats[0]
+		tc.proc.Reg.MergeReceivers[1].Ch <- bats[1]
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		tc.proc.Reg.MergeReceivers[1].Ch <- nil
+		for {
+			ok, err := tc.arg.Call(tc.proc)
+			if ok.Status == vm.ExecStop || err != nil {
+				break
+			}
+		}
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		nb1 := tc.proc.Mp().CurrNB()

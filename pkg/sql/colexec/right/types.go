@@ -125,6 +125,10 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
@@ -149,8 +153,13 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 	}
+	arg.ctr = nil
+	arg.cleanBatch(proc)
+}
+
+func (arg *Argument) cleanBatch(proc *process.Process) {
 	if arg.bat != nil {
-		proc.PutBatch(arg.bat)
+		arg.bat.Clean(proc.GetMPool())
 		arg.bat = nil
 	}
 }

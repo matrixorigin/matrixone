@@ -59,17 +59,6 @@ func TestPreInsertNormal(t *testing.T) {
 	proc := testutil.NewProc()
 	proc.TxnClient = txnClient
 	proc.SessionInfo.StorageEngine = eng
-	batch1 := &batch.Batch{
-		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{3}),
-			testutil.MakeScalarInt64(3, 3),
-			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil),
-			testutil.MakeScalarVarchar("d", 3),
-			testutil.MakeScalarNull(types.T_int64, 3),
-		},
-		Cnt: 1,
-	}
-	batch1.SetRowCount(3)
 	argument1 := Argument{
 		SchemaName: "testDb",
 		TableDef: &plan.TableDef{
@@ -93,6 +82,18 @@ func TestPreInsertNormal(t *testing.T) {
 			},
 		},
 	}
+
+	batch1 := &batch.Batch{
+		Vecs: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{3}),
+			testutil.MakeScalarInt64(3, 3),
+			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil),
+			testutil.MakeScalarVarchar("d", 3),
+			testutil.MakeScalarNull(types.T_int64, 3),
+		},
+		Cnt: 1,
+	}
+	batch1.SetRowCount(3)
 	checkResultBat, _ := batch1.Dup(proc.Mp())
 	resetChildren(&argument1, batch1)
 	callResult, err := argument1.Call(proc)
@@ -109,6 +110,34 @@ func TestPreInsertNormal(t *testing.T) {
 		checkResultBat.Clean(proc.Mp())
 	}
 
+	argument1.Reset(proc, false, nil)
+
+	batch1 = &batch.Batch{
+		Vecs: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{3}),
+			testutil.MakeScalarInt64(3, 3),
+			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil),
+			testutil.MakeScalarVarchar("d", 3),
+			testutil.MakeScalarNull(types.T_int64, 3),
+		},
+		Cnt: 1,
+	}
+	batch1.SetRowCount(3)
+	checkResultBat, _ = batch1.Dup(proc.Mp())
+	resetChildren(&argument1, batch1)
+	callResult, err = argument1.Call(proc)
+	require.NoError(t, err)
+	{
+		result := callResult.Batch
+		// check attr names
+		require.Equal(t, []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"}, result.Attrs)
+		// check vector
+		require.Equal(t, len(checkResultBat.Vecs), len(result.Vecs))
+		for i, vec := range result.Vecs {
+			require.Equal(t, checkResultBat.RowCount(), vec.Length(), fmt.Sprintf("column number: %d", i))
+		}
+		checkResultBat.Clean(proc.Mp())
+	}
 	argument1.Free(proc, false, nil)
 	proc.FreeVectors()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())

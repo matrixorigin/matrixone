@@ -43,22 +43,21 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
-	if ap.Limit > 1024 {
-		ap.ctr.sels = make([]int64, 0, 1024)
-	} else {
-		ap.ctr.sels = make([]int64, 0, ap.Limit)
-	}
-	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
-
-	ctr := ap.ctr
-	ctr.executorsForOrderList = make([]colexec.ExpressionExecutor, len(ap.Fs))
-	for i := range ctr.executorsForOrderList {
-		ctr.executorsForOrderList[i], err = colexec.NewExpressionExecutor(proc, ap.Fs[i].Expr)
-		if err != nil {
-			return err
+	if arg.ctr == nil {
+		arg.ctr = new(container)
+		arg.ctr.InitReceiver(proc, true)
+		if arg.Limit > 1024 {
+			arg.ctr.sels = make([]int64, 0, 1024)
+		} else {
+			arg.ctr.sels = make([]int64, 0, arg.Limit)
+		}
+		arg.ctr.poses = make([]int32, 0, len(arg.Fs))
+		arg.ctr.executorsForOrderList = make([]colexec.ExpressionExecutor, len(arg.Fs))
+		for i := range arg.ctr.executorsForOrderList {
+			arg.ctr.executorsForOrderList[i], err = colexec.NewExpressionExecutor(proc, arg.Fs[i].Expr)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
