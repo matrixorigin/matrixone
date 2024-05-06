@@ -267,3 +267,249 @@ stage_credentials    TEXT(0)    YES        null
 stage_status    VARCHAR(64)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        
 comment    TEXT(0)    YES        null        
+create account ac_1 ADMIN_NAME 'admin' IDENTIFIED BY '111';
+create database sys_db1;
+create table sys_db1.sys_t1(c1 char);
+create view sys_db1.sys_v1  as select * from sys_db1.sys_t1;
+create table sys_db1.test01 (
+emp_no      int             not null,
+birth_date  date            not null,
+first_name  varchar(14)     not null,
+last_name   varchar(16)     not null,
+gender      varchar(5)      not null,
+hire_date   date            not null,
+primary key (emp_no)
+) partition by range columns (emp_no)(
+partition p01 values less than (100001),
+partition p02 values less than (200001),
+partition p03 values less than (300001),
+partition p04 values less than (400001)
+);
+create database ac_db;
+create table ac_db.ac_t1(c1 int);
+create view ac_db.ac_v1  as select * from ac_db.ac_t1;
+create table ac_db.test02 (
+emp_no      int             not null,
+birth_date  date            not null,
+first_name  varchar(14)     not null,
+last_name   varchar(16)     not null,
+gender      varchar(5)      not null,
+hire_date   date            not null,
+primary key (emp_no)
+) partition by range columns (emp_no)(
+partition p01 values less than (100001),
+partition p02 values less than (200001),
+partition p03 values less than (300001),
+partition p04 values less than (400001)
+);
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="ac_db" and table_name='ac_t1';
+table_catalog    table_schema    table_name    column_name
+def    ac_db    ac_t1    __mo_fake_pk_col
+def    ac_db    ac_t1    c1
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="ac_db" and table_name='test02';
+table_catalog    table_schema    table_name    column_name
+def    ac_db    test02    birth_date
+def    ac_db    test02    emp_no
+def    ac_db    test02    first_name
+def    ac_db    test02    gender
+def    ac_db    test02    hire_date
+def    ac_db    test02    last_name
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="sys_db1";
+table_catalog    table_schema    table_name    column_name
+select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
+count(*)    table_name    column_name
+select * from information_schema.schemata where schema_name='ac_db';
+catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+def    ac_db    utf8mb4    utf8mb4_0900_ai_ci    null    NO
+select * from information_schema.schemata where schema_name='sys_db1';
+catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
+count(*)    schema_name
+select table_schema,table_name  from information_schema.tables where table_name='sys_t1';
+table_schema    table_name
+select table_schema,table_name from information_schema.tables where table_name='ac_t1';
+table_schema    table_name
+ac_db    ac_t1
+select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
+count(*)    table_name
+select * from information_schema.views where table_name='ac_v1';
+table_catalog    table_schema    table_name    view_definition    check_option    is_updatable    definer    security_type    character_set_client    collation_connection
+def    ac_db    ac_v1    create view ac_db.ac_v1  as select * from ac_db.ac_t1;    NONE    YES    admin@localhost    DEFINER    utf8mb4    utf8mb4_0900_ai_ci
+select * from information_schema.views where table_name='sys_v1';
+table_catalog    table_schema    table_name    view_definition    check_option    is_updatable    definer    security_type    character_set_client    collation_connection
+select count(*),table_name from information_schema.views group by table_name having count(*)>1;
+count(*)    table_name
+select count(*) from information_schema.partitions where table_schema='ac_db' and table_name='test02';
+count(*)
+4
+select table_schema,table_name,partition_name  from information_schema.partitions where table_schema='sys_db1';
+table_schema    table_name    partition_name
+select count(*),table_schema,table_name,partition_name  from information_schema.partitions group by table_schema,table_name,partition_name having count(*) >1;
+count(*)    table_schema    table_name    partition_name
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_name='ac_t1';
+table_catalog    table_schema    table_name    column_name
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_name='sys_t1';
+table_catalog    table_schema    table_name    column_name
+def    sys_db1    sys_t1    __mo_fake_pk_col
+def    sys_db1    sys_t1    c1
+select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
+count(*)    table_name    column_name
+select * from information_schema.schemata where schema_name='ac_db';
+catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+select * from information_schema.schemata where schema_name='sys_db1';
+catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+def    sys_db1    utf8mb4    utf8mb4_0900_ai_ci    null    NO
+select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
+count(*)    schema_name
+select table_schema,table_name from information_schema.tables where table_name='sys_t1';
+table_schema    table_name
+sys_db1    sys_t1
+select table_schema,table_name from information_schema.tables where table_name='ac_t1';
+table_schema    table_name
+select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
+count(*)    table_name
+select * from information_schema.views where table_name='sys_v1';
+table_catalog    table_schema    table_name    view_definition    check_option    is_updatable    definer    security_type    character_set_client    collation_connection
+def    sys_db1    sys_v1    create view sys_db1.sys_v1  as select * from sys_db1.sys_t1;    NONE    YES    dump@localhost    DEFINER    utf8mb4    utf8mb4_0900_ai_ci
+select * from information_schema.views where table_name='ac_v1';
+table_catalog    table_schema    table_name    view_definition    check_option    is_updatable    definer    security_type    character_set_client    collation_connection
+select count(*),table_name from information_schema.views group by table_name having count(*)>1;
+count(*)    table_name
+select count(*) from information_schema.partitions where table_schema='sys_db1' and table_name='test01';
+count(*)
+4
+select table_schema,table_name from information_schema.partitions where table_schema='ac_db';
+table_schema    table_name
+select count(*),table_schema,table_name,partition_name  from information_schema.partitions group by table_schema,table_name,partition_name having count(*) >1;
+count(*)    table_schema    table_name    partition_name
+create user 'sys_user' identified by '123456';
+create role 'sys_role';
+grant  all on account *  to 'sys_role';
+grant OWNERSHIP on database *.* to sys_role;
+grant select on table *.* to sys_role;
+grant sys_role to sys_user;
+create user 'ac_user' identified by '123456';
+create role 'ac_role';
+grant  all on account *  to 'ac_role';
+grant OWNERSHIP on database *.* to ac_role;
+grant select on table *.* to ac_role;
+grant ac_role to ac_user;
+create database user_db;
+create table user_db.user_t1(c1 int,c2 varchar);
+create view user_db.sysuser_v1  as select * from user_db.user_t1;
+create table user_db.test02 (
+emp_no      int             not null,
+birth_date  date            not null,
+first_name  varchar(14)     not null,
+last_name   varchar(16)     not null,
+gender      varchar(5)      not null,
+hire_date   date            not null,
+primary key (emp_no)
+) partition by range columns (emp_no)(
+partition p01 values less than (100001),
+partition p02 values less than (200001),
+partition p03 values less than (300001),
+partition p04 values less than (400001)
+);
+create database acuser_db;
+create table acuser_db.acuser_t1(c1 int,c2 varchar);
+create view acuser_db.acuser_v1  as select * from acuser_db.acuser_t1;
+create table acuser_db.test (
+emp_no      int             not null,
+birth_date  date            not null,
+first_name  varchar(14)     not null,
+last_name   varchar(16)     not null,
+gender      varchar(5)      not null,
+hire_date   date            not null,
+primary key (emp_no)
+) partition by range columns (emp_no)(
+partition p01 values less than (100001),
+partition p02 values less than (200001),
+partition p03 values less than (300001),
+partition p04 values less than (400001)
+);
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="acuser_db" and table_name='acuser_t1';
+table_catalog    table_schema    table_name    column_name
+def    acuser_db    acuser_t1    __mo_fake_pk_col
+def    acuser_db    acuser_t1    c1
+def    acuser_db    acuser_t1    c2
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="user_db";
+table_catalog    table_schema    table_name    column_name
+select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
+count(*)    table_name    column_name
+select * from information_schema.schemata where schema_name='acuser_db';
+catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+def    acuser_db    utf8mb4    utf8mb4_0900_ai_ci    null    NO
+select * from information_schema.schemata where schema_name='user_db1';
+catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
+count(*)    schema_name
+select table_schema,table_name from information_schema.tables where table_name='user_t1';
+table_schema    table_name
+select table_schema,table_name from information_schema.tables where table_name='acuser_t1';
+table_schema    table_name
+acuser_db    acuser_t1
+select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
+count(*)    table_name
+select table_schema,table_name from information_schema.views where table_name='acuser_v1';
+table_schema    table_name
+acuser_db    acuser_v1
+select table_schema,table_name from information_schema.views where table_name='sysuser_v1';
+table_schema    table_name
+select count(*),table_name from information_schema.views group by table_name having count(*)>1;
+count(*)    table_name
+select table_schema,table_name,partition_name from information_schema.partitions where table_schema='acuser_db';
+table_schema    table_name    partition_name
+acuser_db    test    p01
+acuser_db    test    p02
+acuser_db    test    p03
+acuser_db    test    p04
+select table_schema,table_name,partition_name from information_schema.partitions where table_schema='user_db';
+table_schema    table_name    partition_name
+select count(*),table_schema,table_name,partition_name  from information_schema.partitions group by table_schema,table_name,partition_name having count(*) >1;
+count(*)    table_schema    table_name    partition_name
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="user_db" and table_name='user_t1';
+table_catalog    table_schema    table_name    column_name
+def    user_db    user_t1    __mo_fake_pk_col
+def    user_db    user_t1    c1
+def    user_db    user_t1    c2
+select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="acuser_db";
+table_catalog    table_schema    table_name    column_name
+select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
+count(*)    table_name    column_name
+select * from information_schema.schemata where schema_name='acuser_db';
+catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+select * from information_schema.schemata where schema_name='user_db';
+catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+def    user_db    utf8mb4    utf8mb4_0900_ai_ci    null    NO
+select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
+count(*)    schema_name
+select table_schema,table_name from information_schema.tables where table_name='user_t1';
+table_schema    table_name
+user_db    user_t1
+select table_schema,table_name from information_schema.tables where table_name='acuser_t1';
+table_schema    table_name
+select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
+count(*)    table_name
+select table_schema,table_name from information_schema.views where table_name='acuser_v1';
+table_schema    table_name
+select table_schema,table_name from information_schema.views where table_name='sysuser_v1';
+table_schema    table_name
+user_db    sysuser_v1
+select count(*),table_name from information_schema.views group by table_name having count(*)>1;
+count(*)    table_name
+select table_schema,table_name,partition_name from information_schema.partitions where table_schema='acuser_db';
+table_schema    table_name    partition_name
+select table_schema,table_name,partition_name from information_schema.partitions where table_schema='user_db';
+table_schema    table_name    partition_name
+user_db    test02    p01
+user_db    test02    p02
+user_db    test02    p03
+user_db    test02    p04
+select count(*),table_schema,table_name,partition_name  from information_schema.partitions group by table_schema,table_name,partition_name having count(*) >1;
+count(*)    table_schema    table_name    partition_name
+drop database sys_db1;
+drop database user_db;
+drop account ac_1;
+drop user sys_user;
+drop role sys_role;
