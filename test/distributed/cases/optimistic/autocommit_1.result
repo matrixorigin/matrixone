@@ -266,8 +266,8 @@ drop database if exists db;
 begin;
 create database db;
 show databases like 'db';
-db
 Database
+db
 use db;
 begin;
 create table table3(a int, b int);
