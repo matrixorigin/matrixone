@@ -208,20 +208,11 @@ func (arg *Argument) SimpleDup() *Argument {
 	return a
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.cleanBuf(proc)
-	if arg.ctr != nil {
-		if arg.ctr.intHashMap != nil {
-			arg.ctr.intHashMap.Free()
-		}
-		if arg.ctr.strHashMap != nil {
-			arg.ctr.strHashMap.Free()
-		}
-	}
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	arg.cleanBuf(proc)
+	if arg.buf != nil {
+		arg.buf.Clean(proc.Mp())
+		arg.buf = nil
+	}
 
 	if arg.ctr != nil {
 		if arg.ctr.intHashMap != nil {
@@ -247,13 +238,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		if arg.ctr.samplePool != nil {
 			arg.ctr.samplePool.Free()
 		}
-	}
-}
-
-func (arg *Argument) cleanBuf(proc *process.Process) {
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
 	}
 }
 
