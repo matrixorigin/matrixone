@@ -16,9 +16,10 @@ package window
 
 import (
 	"bytes"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -40,21 +41,22 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
+	if arg.ctr == nil {
+		arg.ctr = new(container)
+		arg.ctr.InitReceiver(proc, true)
 
-	ctr := ap.ctr
-	ctr.aggVecs = make([]group.ExprEvalVector, len(ap.Aggs))
-	for i, ag := range ap.Aggs {
-		expressions := ag.GetArgExpressions()
-		if ctr.aggVecs[i], err = group.MakeEvalVector(proc, expressions); err != nil {
-			return err
+		ctr := arg.ctr
+		ctr.aggVecs = make([]group.ExprEvalVector, len(arg.Aggs))
+		for i, ag := range arg.Aggs {
+			expressions := ag.GetArgExpressions()
+			if ctr.aggVecs[i], err = group.MakeEvalVector(proc, expressions); err != nil {
+				return err
+			}
 		}
-	}
-	w := ap.WinSpecList[0].Expr.(*plan.Expr_W).W
-	if len(w.PartitionBy) == 0 {
-		ctr.status = receiveAll
+		w := arg.WinSpecList[0].Expr.(*plan.Expr_W).W
+		if len(w.PartitionBy) == 0 {
+			ctr.status = receiveAll
+		}
 	}
 
 	return nil

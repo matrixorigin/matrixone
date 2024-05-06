@@ -178,20 +178,21 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ctr := ap.ctr
-	ap.ctr.InitReceiver(proc, true)
+	if arg.ctr == nil {
+		arg.ctr = new(container)
+		ctr := arg.ctr
+		ctr.InitReceiver(proc, true)
 
-	length := 2 * len(proc.Reg.MergeReceivers)
-	ctr.batchList = make([]*batch.Batch, 0, length)
-	ctr.orderCols = make([][]*vector.Vector, 0, length)
+		length := 2 * len(proc.Reg.MergeReceivers)
+		ctr.batchList = make([]*batch.Batch, 0, length)
+		ctr.orderCols = make([][]*vector.Vector, 0, length)
 
-	ap.ctr.executors = make([]colexec.ExpressionExecutor, len(ap.OrderBySpecs))
-	for i := range ap.ctr.executors {
-		ap.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, ap.OrderBySpecs[i].Expr)
-		if err != nil {
-			return err
+		ctr.executors = make([]colexec.ExpressionExecutor, len(arg.OrderBySpecs))
+		for i := range ctr.executors {
+			ctr.executors[i], err = colexec.NewExpressionExecutor(proc, arg.OrderBySpecs[i].Expr)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
