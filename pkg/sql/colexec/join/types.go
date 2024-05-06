@@ -113,6 +113,28 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := arg.ctr
+	if ctr != nil {
+		ctr.cleanBatch(proc)
+		ctr.cleanHashMap()
+		ctr.FreeAllReg()
+
+		ctr.batchRowCount = 0
+		ctr.state = Build
+		ctr.batchRowCount = 0
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
+		ctr.maxAllocSize = 0
+	}
+	if arg.bat != nil {
+		proc.PutBatch(arg.bat)
+		arg.bat = nil
+	}
+	arg.lastrow = 0
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {

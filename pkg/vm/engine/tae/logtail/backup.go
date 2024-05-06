@@ -442,17 +442,17 @@ func LoadCheckpointEntriesFromKey(
 	location objectio.Location,
 	version uint32,
 	softDeletes *map[string]bool,
-) ([]objectio.ObjectName, *CheckpointData, error) {
-	locations := make([]objectio.ObjectName, 0)
+) ([]objectio.Location, *CheckpointData, error) {
+	locations := make([]objectio.Location, 0)
 	data, err := getCheckpointData(ctx, fs, location, version)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	locations = append(locations, location.Name())
+	locations = append(locations, location)
 
 	for _, location = range data.locations {
-		locations = append(locations, location.Name())
+		locations = append(locations, location)
 	}
 	for i := 0; i < data.bats[ObjectInfoIDX].Length(); i++ {
 		var objectStats objectio.ObjectStats
@@ -468,7 +468,7 @@ func LoadCheckpointEntriesFromKey(
 			panic(fmt.Sprintf("object %v is not deleted", objectStats.ObjectName().String()))
 		}
 
-		locations = append(locations, objectStats.ObjectName())
+		locations = append(locations, objectStats.ObjectLocation())
 		if !deletedAt.IsEmpty() {
 			if softDeletes != nil {
 				if !(*softDeletes)[objectStats.ObjectName().String()] {
@@ -500,7 +500,7 @@ func LoadCheckpointEntriesFromKey(
 				data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte))
 			panic(fmt.Sprintf("block %v deltaLoc is empty", metaLoc.String()))
 		}
-		locations = append(locations, deltaLoc.Name())
+		locations = append(locations, deltaLoc)
 	}
 	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
 		metaLoc := objectio.Location(
@@ -521,7 +521,7 @@ func LoadCheckpointEntriesFromKey(
 		if deltaLoc.IsEmpty() {
 			panic(fmt.Sprintf("block %v deltaLoc is empty", deltaLoc.String()))
 		}
-		locations = append(locations, deltaLoc.Name())
+		locations = append(locations, deltaLoc)
 	}
 	return locations, data, nil
 }

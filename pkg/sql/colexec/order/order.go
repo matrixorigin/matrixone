@@ -184,32 +184,30 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ctr := ap.ctr
-	ctr.state = vm.Build
-	{
-		ctr.desc = make([]bool, len(ap.OrderBySpec))
-		ctr.nullsLast = make([]bool, len(ap.OrderBySpec))
-		ctr.sortVectors = make([]*vector.Vector, len(ap.OrderBySpec))
-		for i, f := range ap.OrderBySpec {
+	if arg.ctr == nil {
+		arg.ctr = new(container)
+		ctr := arg.ctr
+		ctr.state = vm.Build
+		ctr.desc = make([]bool, len(arg.OrderBySpec))
+		ctr.nullsLast = make([]bool, len(arg.OrderBySpec))
+		for i, f := range arg.OrderBySpec {
 			ctr.desc[i] = f.Flag&pbplan.OrderBySpec_DESC != 0
 			if f.Flag&pbplan.OrderBySpec_NULLS_FIRST != 0 {
-				ap.ctr.nullsLast[i] = false
+				ctr.nullsLast[i] = false
 			} else if f.Flag&pbplan.OrderBySpec_NULLS_LAST != 0 {
-				ap.ctr.nullsLast[i] = true
+				ctr.nullsLast[i] = true
 			} else {
-				ap.ctr.nullsLast[i] = ap.ctr.desc[i]
+				ctr.nullsLast[i] = ctr.desc[i]
 			}
 		}
-	}
 
-	ctr.sortVectors = make([]*vector.Vector, len(ap.OrderBySpec))
-	ctr.sortExprExecutor = make([]colexec.ExpressionExecutor, len(ap.OrderBySpec))
-	for i := range ctr.sortVectors {
-		ctr.sortExprExecutor[i], err = colexec.NewExpressionExecutor(proc, ap.OrderBySpec[i].Expr)
-		if err != nil {
-			return err
+		ctr.sortVectors = make([]*vector.Vector, len(arg.OrderBySpec))
+		ctr.sortExprExecutor = make([]colexec.ExpressionExecutor, len(arg.OrderBySpec))
+		for i := range ctr.sortVectors {
+			ctr.sortExprExecutor[i], err = colexec.NewExpressionExecutor(proc, arg.OrderBySpec[i].Expr)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
