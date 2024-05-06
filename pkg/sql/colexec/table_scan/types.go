@@ -72,7 +72,25 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.cleanBuf(proc)
+
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal.Alloc(int64(arg.maxAllocSize))
+	arg.maxAllocSize = 0
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	arg.cleanBuf(proc)
+
+	if arg.msgReceiver != nil {
+		arg.msgReceiver.Free()
+	}
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal.Alloc(int64(arg.maxAllocSize))
+}
+
+func (arg *Argument) cleanBuf(proc *process.Process) {
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())
 		arg.buf = nil
@@ -82,10 +100,4 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		arg.tmpBuf.Clean(proc.Mp())
 		arg.tmpBuf = nil
 	}
-
-	if arg.msgReceiver != nil {
-		arg.msgReceiver.Free()
-	}
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Alloc(int64(arg.maxAllocSize))
 }
