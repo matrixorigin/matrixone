@@ -452,6 +452,7 @@ func LoadCheckpointEntriesFromKey(
 
 	locations = append(locations, &objectio.BackupObject{
 		Location: location,
+		NeedCopy: true,
 	})
 
 	for _, location = range data.locations {
