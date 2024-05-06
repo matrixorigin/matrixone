@@ -43,7 +43,6 @@ func (list *PackerList) Free() {
 			p.FreeMem()
 		}
 	}
-	list.ps = nil
 }
 
 func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {

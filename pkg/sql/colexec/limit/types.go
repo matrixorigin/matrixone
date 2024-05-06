@@ -64,9 +64,5 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Seen = 0
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 }
