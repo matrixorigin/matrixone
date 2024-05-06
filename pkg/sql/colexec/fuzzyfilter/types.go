@@ -55,7 +55,6 @@ type Argument struct {
 	// about runtime filter
 	pass2RuntimeFilter *vector.Vector
 	RuntimeFilterSpec  *plan.RuntimeFilterSpec
-
 	vm.OperatorBase
 }
 
@@ -90,7 +89,20 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
+	if arg.bloomFilter != nil {
+		arg.bloomFilter.Reset()
+	}
+	if arg.roaringFilter != nil {
+		arg.roaringFilter.b.Clear()
+	}
+	arg.cleanBatch(proc)
+	arg.FreeAllReg()
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
 	if arg.bloomFilter != nil {
 		arg.bloomFilter.Clean()
 		arg.bloomFilter = nil
@@ -98,6 +110,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	if arg.roaringFilter != nil {
 		arg.roaringFilter = nil
 	}
+	arg.cleanBatch(proc)
+	arg.FreeAllReg()
+}
+
+func (arg *Argument) cleanBatch(proc *process.Process) {
 	if arg.rbat != nil {
 		arg.rbat.Clean(proc.GetMPool())
 		arg.rbat = nil
@@ -106,8 +123,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		arg.pass2RuntimeFilter.Free(proc.GetMPool())
 		arg.pass2RuntimeFilter = nil
 	}
-
-	arg.FreeAllReg()
 }
 
 func IfCanUseRoaringFilter(t types.T) bool {

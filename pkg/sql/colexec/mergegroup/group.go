@@ -16,12 +16,13 @@ package mergegroup
 
 import (
 	"bytes"
+	"runtime"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"runtime"
 )
 
 const argName = "merge_group"
@@ -32,11 +33,12 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
-	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
-	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
+	if arg.ctr == nil {
+		arg.ctr = new(container)
+		arg.ctr.InitReceiver(proc, true)
+		arg.ctr.inserted = make([]uint8, hashmap.UnitLimit)
+		arg.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
+	}
 	return nil
 }
 

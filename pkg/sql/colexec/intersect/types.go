@@ -91,6 +91,17 @@ type container struct {
 	inBuckets []uint8
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := arg.ctr
+	if ctr != nil {
+		if ctr.hashTable != nil {
+			ctr.hashTable.Free()
+		}
+		ctr.cleanBuf(proc)
+		ctr.state = build
+	}
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
@@ -98,16 +109,20 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			ctr.hashTable.Free()
 			ctr.hashTable = nil
 		}
-		if ctr.btc != nil {
-			ctr.btc.Clean(proc.Mp())
-			ctr.btc = nil
-		}
-		if ctr.cnts != nil {
-			for i := range ctr.cnts {
-				proc.Mp().PutSels(ctr.cnts[i])
-			}
-			ctr.cnts = nil
-		}
-		ctr.FreeAllReg()
+		ctr.cleanBuf(proc)
 	}
+}
+
+func (ctr *container) cleanBuf(proc *process.Process) {
+	if ctr.btc != nil {
+		ctr.btc.Clean(proc.Mp())
+		ctr.btc = nil
+	}
+	if ctr.cnts != nil {
+		for i := range ctr.cnts {
+			proc.Mp().PutSels(ctr.cnts[i])
+		}
+		ctr.cnts = nil
+	}
+	ctr.FreeAllReg()
 }

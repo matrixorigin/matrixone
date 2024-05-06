@@ -33,10 +33,9 @@ const (
 
 type container struct {
 	colexec.ReceiverOperator
-	state                int
-	isMerge              bool
-	batch                *batch.Batch
-	runtimeFilterHandled bool
+	state   int
+	isMerge bool
+	batch   *batch.Batch
 }
 
 type Argument struct {
@@ -76,12 +75,23 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
+	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
 	if ctr != nil {
-		ctr.cleanRuntimeFilters(proc, arg.RuntimeFilterSpec)
 		if ctr.batch != nil {
 			proc.PutBatch(ctr.batch)
+		}
+		ctr.state = ReceiveBatch
+	}
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := arg.ctr
+	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
+	if ctr != nil {
+		if ctr.batch != nil {
+			ctr.batch.Clean(proc.GetMPool())
 		}
 		ctr.FreeMergeTypeOperator(pipelineFailed)
 		if ctr.isMerge {
@@ -89,14 +99,5 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		} else {
 			ctr.FreeAllReg()
 		}
-	}
-}
-
-func (ctr *container) cleanRuntimeFilters(proc *process.Process, runtimeFilterSpec *plan.RuntimeFilterSpec) {
-	if !ctr.runtimeFilterHandled && runtimeFilterSpec != nil {
-		var runtimeFilter process.RuntimeFilterMessage
-		runtimeFilter.Tag = runtimeFilterSpec.Tag
-		runtimeFilter.Typ = process.RuntimeFilter_DROP
-		proc.SendMessage(runtimeFilter)
 	}
 }

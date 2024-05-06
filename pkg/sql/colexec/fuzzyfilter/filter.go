@@ -16,7 +16,6 @@ package fuzzyfilter
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -66,37 +65,45 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.InitReceiver(proc, false)
-	rowCount := int64(arg.N)
-	if rowCount < 1000 {
-		rowCount = 1000
-	}
-
-	if err := arg.generate(proc); err != nil {
-		return err
-	}
-
-	useRoaring := IfCanUseRoaringFilter(types.T(arg.PkTyp.Id))
-
-	if useRoaring {
-		arg.roaringFilter = newroaringFilter(types.T(arg.PkTyp.Id))
-	} else {
-		//@see https://hur.st/bloomfilter/
-		var probability float64
-		if rowCount < 100001 {
-			probability = 0.00001
-		} else if rowCount < 1000001 {
-			probability = 0.000003
-		} else if rowCount < 10000001 {
-			probability = 0.000001
-		} else if rowCount < 100000001 {
-			probability = 0.0000005
-		} else if rowCount < 1000000001 {
-			probability = 0.0000002
-		} else {
-			probability = 0.0000001
+	if arg.roaringFilter == nil && arg.bloomFilter == nil {
+		arg.InitReceiver(proc, false)
+		rowCount := int64(arg.N)
+		if rowCount < 1000 {
+			rowCount = 1000
 		}
-		arg.bloomFilter = bloomfilter.New(rowCount, probability)
+
+		if err := arg.generate(proc); err != nil {
+			return err
+		}
+
+		useRoaring := IfCanUseRoaringFilter(types.T(arg.PkTyp.Id))
+
+		if useRoaring {
+			arg.roaringFilter = newroaringFilter(types.T(arg.PkTyp.Id))
+		} else {
+			//@see https://hur.st/bloomfilter/
+			if arg.bloomFilter == nil {
+				var probability float64
+				if rowCount < 100001 {
+					probability = 0.00001
+				} else if rowCount < 1000001 {
+					probability = 0.000003
+				} else if rowCount < 10000001 {
+					probability = 0.000001
+				} else if rowCount < 100000001 {
+					probability = 0.0000005
+				} else if rowCount < 1000000001 {
+					probability = 0.0000002
+				} else {
+					probability = 0.0000001
+				}
+				arg.bloomFilter = bloomfilter.New(rowCount, probability)
+			}
+		}
+	} else {
+		if arg.bloomFilter != nil {
+			arg.bloomFilter.Prepare()
+		}
 	}
 
 	return nil
@@ -328,7 +335,7 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 	//                                                 the number of data insert is greater than inFilterCardLimit
 	if arg.RuntimeFilterSpec.Expr == nil || arg.pass2RuntimeFilter == nil {
 		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		sendFilter(ctr, proc, runtimeFilter)
+		proc.SendRuntimeFilter(runtimeFilter, ctr.RuntimeFilterSpec)
 		return nil
 	}
 
@@ -346,14 +353,7 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 
 	runtimeFilter.Typ = process.RuntimeFilter_IN
 	runtimeFilter.Data = data
-	sendFilter(ctr, proc, runtimeFilter)
+	proc.SendRuntimeFilter(runtimeFilter, ctr.RuntimeFilterSpec)
 	return nil
 
-}
-
-func sendFilter(ap *Argument, proc *process.Process, runtimeFilter process.RuntimeFilterMessage) {
-	anal := proc.GetAnalyze(ap.GetIdx(), ap.GetParallelIdx(), ap.GetParallelMajor())
-	sendRuntimeFilterStart := time.Now()
-	proc.SendMessage(runtimeFilter)
-	anal.WaitStop(sendRuntimeFilterStart)
 }

@@ -30,6 +30,7 @@ type RunnerReader interface {
 	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
 	MaxGlobalCheckpoint() *CheckpointEntry
+	GetStage() types.TS
 	MaxLSN() uint64
 }
 
@@ -127,6 +128,26 @@ func (r *runner) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
 		}
 	}
 	return incrementals
+}
+
+func (r *runner) GetStage() types.TS {
+	r.storage.RLock()
+	defer r.storage.RUnlock()
+	global, okG := r.storage.globals.Min()
+	incremental, okI := r.storage.entries.Min()
+	if !okG && !okI {
+		return types.TS{}
+	}
+	if !okG {
+		return incremental.start
+	}
+	if !okI {
+		return global.start
+	}
+	if global.end.Less(&incremental.start) {
+		return global.end
+	}
+	return incremental.start
 }
 
 func (r *runner) GetPenddingIncrementalCount() int {

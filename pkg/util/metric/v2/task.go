@@ -94,10 +94,8 @@ var (
 			Help:      "Total number of stuff a task have generated",
 		}, []string{"type", "nodetype"})
 
-	TaskDNMergedBlocksCounter = taskGeneratedStuffCounter.WithLabelValues("merged_block", "dn")
-	TaskDNMergedSizeCounter   = taskGeneratedStuffCounter.WithLabelValues("merged_size", "dn")
-	TaskCNMergedBlocksCounter = taskGeneratedStuffCounter.WithLabelValues("merged_block", "cn")
-	TaskCNMergedSizeCounter   = taskGeneratedStuffCounter.WithLabelValues("merged_size", "cn")
+	TaskDNMergedSizeCounter = taskGeneratedStuffCounter.WithLabelValues("merged_size", "dn")
+	TaskCNMergedSizeCounter = taskGeneratedStuffCounter.WithLabelValues("merged_size", "cn")
 
 	taskSelectivityCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
