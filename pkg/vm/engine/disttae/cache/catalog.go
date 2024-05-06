@@ -92,6 +92,9 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) {
 		})
 		for _, item := range items {
 			cc.tables.data.Delete(item)
+			cc.tableIDToTableItem.Delete([2]uint64{
+				item.DatabaseId, item.Id,
+			})
 			if !item.deleted {
 				cc.tables.rowidIndex.Delete(item)
 			}
@@ -159,8 +162,15 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 	return rs, rids
 }
 
-func (cc *CatalogCache) GetTableById(databaseId, tblId uint64) *TableItem {
-	var rel *TableItem
+func (cc *CatalogCache) GetTableById(databaseId, tblId uint64) (ret *TableItem) {
+
+	k := [2]uint64{databaseId, tblId}
+	if v, ok := cc.tableIDToTableItem.Load(k); ok {
+		return v.(*TableItem)
+	}
+	defer func() {
+		cc.tableIDToTableItem.Store(k, ret)
+	}()
 
 	key := &TableItem{
 		DatabaseId: databaseId,
@@ -168,12 +178,12 @@ func (cc *CatalogCache) GetTableById(databaseId, tblId uint64) *TableItem {
 	// If account is much, the performance is very bad.
 	cc.tables.data.Ascend(key, func(item *TableItem) bool {
 		if item.Id == tblId {
-			rel = item
+			ret = item
 			return false
 		}
 		return true
 	})
-	return rel
+	return
 }
 
 // GetTableByName returns the table item whose name is tableName in the database.

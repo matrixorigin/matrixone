@@ -55,8 +55,9 @@ type CatalogCache struct {
 		end   types.TS
 	}
 	//tables and database is safe to be read concurrently.
-	tables    *tableCache
-	databases *databaseCache
+	tables             *tableCache
+	databases          *databaseCache
+	tableIDToTableItem sync.Map
 }
 
 // database cache:
