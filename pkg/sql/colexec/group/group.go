@@ -51,64 +51,65 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
-	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
+	if arg.ctr == nil {
+		arg.ctr = new(container)
+		arg.ctr.inserted = make([]uint8, hashmap.UnitLimit)
+		arg.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 
-	ctr := ap.ctr
-	ctr.state = vm.Build
+		ctr := arg.ctr
+		ctr.state = vm.Build
 
-	// create executors for aggregation functions.
-	if len(ap.Aggs) > 0 {
-		ctr.aggVecs = make([]ExprEvalVector, len(ap.Aggs))
-		for i, ag := range ap.Aggs {
-			expressions := ag.GetArgExpressions()
-			if ctr.aggVecs[i], err = MakeEvalVector(proc, expressions); err != nil {
-				return err
-			}
-		}
-	}
-
-	// create executors for group by columns.
-	ctr.keyWidth = 0
-	if ap.Exprs != nil {
-		ctr.groupVecsNullable = false
-		ctr.groupVecs, err = MakeEvalVector(proc, ap.Exprs)
-		if err != nil {
-			return err
-		}
-		for _, gv := range ap.Exprs {
-			ctr.groupVecsNullable = ctr.groupVecsNullable || (!gv.Typ.NotNullable)
-		}
-
-		for _, expr := range ap.Exprs {
-			typ := expr.Typ
-			width := types.T(typ.Id).TypeLen()
-			if types.T(typ.Id).FixedLength() < 0 {
-				if typ.Width == 0 {
-					switch types.T(typ.Id) {
-					case types.T_array_float32:
-						width = 128 * 4
-					case types.T_array_float64:
-						width = 128 * 8
-					default:
-						width = 128
-					}
-				} else {
-					switch types.T(typ.Id) {
-					case types.T_array_float32:
-						width = int(typ.Width) * 4
-					case types.T_array_float64:
-						width = int(typ.Width) * 8
-					default:
-						width = int(typ.Width)
-					}
+		// create executors for aggregation functions.
+		if len(arg.Aggs) > 0 {
+			ctr.aggVecs = make([]ExprEvalVector, len(arg.Aggs))
+			for i, ag := range arg.Aggs {
+				expressions := ag.GetArgExpressions()
+				if ctr.aggVecs[i], err = MakeEvalVector(proc, expressions); err != nil {
+					return err
 				}
 			}
-			ctr.keyWidth += width
-			if ctr.groupVecsNullable {
-				ctr.keyWidth += 1
+		}
+
+		// create executors for group by columns.
+		ctr.keyWidth = 0
+		if arg.Exprs != nil {
+			ctr.groupVecsNullable = false
+			ctr.groupVecs, err = MakeEvalVector(proc, arg.Exprs)
+			if err != nil {
+				return err
+			}
+			for _, gv := range arg.Exprs {
+				ctr.groupVecsNullable = ctr.groupVecsNullable || (!gv.Typ.NotNullable)
+			}
+
+			for _, expr := range arg.Exprs {
+				typ := expr.Typ
+				width := types.T(typ.Id).TypeLen()
+				if types.T(typ.Id).FixedLength() < 0 {
+					if typ.Width == 0 {
+						switch types.T(typ.Id) {
+						case types.T_array_float32:
+							width = 128 * 4
+						case types.T_array_float64:
+							width = 128 * 8
+						default:
+							width = 128
+						}
+					} else {
+						switch types.T(typ.Id) {
+						case types.T_array_float32:
+							width = int(typ.Width) * 4
+						case types.T_array_float64:
+							width = int(typ.Width) * 8
+						default:
+							width = int(typ.Width)
+						}
+					}
+				}
+				ctr.keyWidth += width
+				if ctr.groupVecsNullable {
+					ctr.keyWidth += 1
+				}
 			}
 		}
 	}
@@ -147,6 +148,13 @@ func (ctr *container) generateAggStructures(proc *process.Process, arg *Argument
 		}
 	}
 
+	if preAllocate := int(arg.PreAllocSize); preAllocate > 0 {
+		for _, ag := range ctr.bat.Aggs {
+			if err := ag.PreAllocateGroups(preAllocate); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

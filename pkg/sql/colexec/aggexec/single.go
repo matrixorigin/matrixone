@@ -210,7 +210,11 @@ func (exec *singleAggFuncExec1[from, to]) GroupGrow(more int) error {
 
 	setter := exec.ret.aggSet
 	oldLength := len(exec.groups)
-	exec.groups = append(exec.groups, make([]SingleAggFromFixedRetFixed[from, to], more)...)
+	if cap(exec.groups) >= oldLength+more {
+		exec.groups = exec.groups[:oldLength+more]
+	} else {
+		exec.groups = append(exec.groups, make([]SingleAggFromFixedRetFixed[from, to], more)...)
+	}
 	for i, j := oldLength, len(exec.groups); i < j; i++ {
 		exec.groups[i] = exec.gGroup()
 	}
@@ -224,6 +228,20 @@ func (exec *singleAggFuncExec1[from, to]) GroupGrow(more int) error {
 		}
 	}
 	return nil
+}
+
+func (exec *singleAggFuncExec1[from, to]) PreAllocateGroups(more int) error {
+	// todo: only expand the memory of the result now.
+	//  should expand the groups, distinctHash as well next day.
+	if len(exec.groups) == 0 {
+		exec.groups = make([]SingleAggFromFixedRetFixed[from, to], 0, more)
+	} else {
+		oldLength := len(exec.groups)
+		exec.groups = append(exec.groups, make([]SingleAggFromFixedRetFixed[from, to], more)...)
+		exec.groups = exec.groups[:oldLength]
+	}
+
+	return exec.ret.preAllocate(more)
 }
 
 func (exec *singleAggFuncExec1[from, to]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -553,7 +571,11 @@ func (exec *singleAggFuncExec2[from]) GroupGrow(more int) error {
 
 	setter := exec.ret.aggSet
 	oldLength := len(exec.groups)
-	exec.groups = append(exec.groups, make([]SingleAggFromFixedRetVar[from], more)...)
+	if cap(exec.groups) >= oldLength+more {
+		exec.groups = exec.groups[:oldLength+more]
+	} else {
+		exec.groups = append(exec.groups, make([]SingleAggFromFixedRetVar[from], more)...)
+	}
 	for i, j := oldLength, len(exec.groups); i < j; i++ {
 		exec.groups[i] = exec.gGroup()
 	}
@@ -566,6 +588,18 @@ func (exec *singleAggFuncExec2[from]) GroupGrow(more int) error {
 		}
 	}
 	return nil
+}
+
+func (exec *singleAggFuncExec2[from]) PreAllocateGroups(more int) error {
+	if len(exec.groups) == 0 {
+		exec.groups = make([]SingleAggFromFixedRetVar[from], 0, more)
+	} else {
+		oldLength := len(exec.groups)
+		exec.groups = append(exec.groups, make([]SingleAggFromFixedRetVar[from], more)...)
+		exec.groups = exec.groups[:oldLength]
+	}
+
+	return exec.ret.preAllocate(more)
 }
 
 func (exec *singleAggFuncExec2[from]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -893,7 +927,11 @@ func (exec *singleAggFuncExec3[to]) GroupGrow(more int) error {
 
 	setter := exec.ret.aggSet
 	oldLength := len(exec.groups)
-	exec.groups = append(exec.groups, make([]SingleAggFromVarRetFixed[to], more)...)
+	if cap(exec.groups) >= oldLength+more {
+		exec.groups = exec.groups[:oldLength+more]
+	} else {
+		exec.groups = append(exec.groups, make([]SingleAggFromVarRetFixed[to], more)...)
+	}
 	for i, j := oldLength, len(exec.groups); i < j; i++ {
 		exec.groups[i] = exec.gGroup()
 	}
@@ -907,6 +945,18 @@ func (exec *singleAggFuncExec3[to]) GroupGrow(more int) error {
 		}
 	}
 	return nil
+}
+
+func (exec *singleAggFuncExec3[to]) PreAllocateGroups(more int) error {
+	if len(exec.groups) == 0 {
+		exec.groups = make([]SingleAggFromVarRetFixed[to], 0, more)
+	} else {
+		oldLength := len(exec.groups)
+		exec.groups = append(exec.groups, make([]SingleAggFromVarRetFixed[to], more)...)
+		exec.groups = exec.groups[:oldLength]
+	}
+
+	return exec.ret.preAllocate(more)
 }
 
 func (exec *singleAggFuncExec3[to]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -1233,7 +1283,11 @@ func (exec *singleAggFuncExec4) GroupGrow(more int) error {
 
 	setter := exec.ret.aggSet
 	oldLength := len(exec.groups)
-	exec.groups = append(exec.groups, make([]SingleAggFromVarRetVar, more)...)
+	if cap(exec.groups) >= oldLength+more {
+		exec.groups = exec.groups[:oldLength+more]
+	} else {
+		exec.groups = append(exec.groups, make([]SingleAggFromVarRetVar, more)...)
+	}
 	for i, j := oldLength, len(exec.groups); i < j; i++ {
 		exec.groups[i] = exec.gGroup()
 	}
@@ -1247,6 +1301,18 @@ func (exec *singleAggFuncExec4) GroupGrow(more int) error {
 		}
 	}
 	return nil
+}
+
+func (exec *singleAggFuncExec4) PreAllocateGroups(more int) error {
+	if len(exec.groups) == 0 {
+		exec.groups = make([]SingleAggFromVarRetVar, 0, more)
+	} else {
+		oldLength := len(exec.groups)
+		exec.groups = append(exec.groups, make([]SingleAggFromVarRetVar, more)...)
+		exec.groups = exec.groups[:oldLength]
+	}
+
+	return exec.ret.preAllocate(more)
 }
 
 func (exec *singleAggFuncExec4) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
