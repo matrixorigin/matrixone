@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"runtime"
 	"strings"
 	"sync"
@@ -2033,10 +2032,16 @@ func (ses *Session) GetLogger() SessionLogger {
 }
 
 func (ses *Session) GetSessId() uuid.UUID {
+	if ses == nil {
+		return uuid.UUID{}
+	}
 	return uuid.UUID(ses.GetUUID())
 }
 
 func (ses *Session) GetLogLevel() zapcore.Level {
+	if ses == nil {
+		return zap.InfoLevel
+	}
 	return ses.logLevel
 }
 

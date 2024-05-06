@@ -872,6 +872,9 @@ func (backSes *backSession) GetFromRealUser() bool {
 }
 
 func (backSes *backSession) GetDebugString() string {
+	if backSes.upstream != nil {
+		return backSes.upstream.GetDebugString()
+	}
 	return ""
 }
 
@@ -990,35 +993,47 @@ func (backSes *backSession) ReplaceDerivedStmt(b bool) bool {
 }
 
 func (backSes *backSession) GetSessId() uuid.UUID {
-	return backSes.upstream.GetSessId()
+	return uuid.UUID(backSes.GetUUID())
 }
 
 func (backSes *backSession) GetLogLevel() zapcore.Level {
+	if backSes.upstream == nil {
+		config := logutil.GetDefaultConfig()
+		return config.GetLevel().Level()
+	}
 	return backSes.upstream.GetLogLevel()
 }
 
 func (backSes *backSession) GetLogger() SessionLogger {
-	return backSes.upstream
+	return backSes
+}
+
+func (backSes *backSession) getMOLogger() *log.MOLogger {
+	if backSes.upstream == nil {
+		return getRuntime().Logger()
+	} else {
+		return backSes.upstream.logger
+	}
 }
 
 func (backSes *backSession) log(ctx context.Context, level zapcore.Level, msg string, fields ...zap.Field) {
-	ses := backSes.upstream
-	if ses.logger.Enabled(level) {
-		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
-		fields = appendSessionField(fields, ses)
+	logger := backSes.getMOLogger()
+	if logger.Enabled(level) {
+		fields = append(fields, zap.String("session_info", backSes.GetDebugString()), zap.Bool("background", true))
+		fields = appendSessionField(fields, backSes)
 		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
+		logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
 	}
 }
 
 func (backSes *backSession) logf(ctx context.Context, level zapcore.Level, msg string, args ...any) {
-	ses := backSes.upstream
-	if ses.logger.Enabled(level) {
+	logger := backSes.getMOLogger()
+	if logger.Enabled(level) {
 		fields := make([]zap.Field, 0, 5)
-		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
-		fields = appendSessionField(fields, ses)
+		fields = append(fields, zap.String("session_info", backSes.GetDebugString()), zap.Bool("background", true))
+		fields = appendSessionField(fields, backSes)
 		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
+		logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
 	}
 }
 
