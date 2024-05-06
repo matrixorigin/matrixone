@@ -479,8 +479,8 @@ func LoadCheckpointEntriesFromKey(
 			CrateTS:  createAt,
 			DropTS:   deletedAt,
 		}
-		if !baseTS.IsEmpty() &&
-			(createAt.GreaterEq(baseTS) || commitAt.GreaterEq(baseTS)) {
+		if baseTS.IsEmpty() || (!baseTS.IsEmpty() &&
+			(createAt.GreaterEq(baseTS) || commitAt.GreaterEq(baseTS))) {
 			bo.NeedCopy = true
 		}
 		locations = append(locations, bo)
@@ -520,7 +520,8 @@ func LoadCheckpointEntriesFromKey(
 			Location: deltaLoc,
 			CrateTS:  commitTS,
 		}
-		if !baseTS.IsEmpty() && commitTS.GreaterEq(baseTS) {
+		if baseTS.IsEmpty() ||
+			(!baseTS.IsEmpty() && commitTS.GreaterEq(baseTS)) {
 			bo.NeedCopy = true
 		}
 		locations = append(locations, bo)
@@ -549,7 +550,8 @@ func LoadCheckpointEntriesFromKey(
 			Location: deltaLoc,
 			CrateTS:  commitTS,
 		}
-		if !baseTS.IsEmpty() && commitTS.GreaterEq(baseTS) {
+		if baseTS.IsEmpty() ||
+			(!baseTS.IsEmpty() && commitTS.GreaterEq(baseTS)) {
 			bo.NeedCopy = true
 		}
 		locations = append(locations, bo)
