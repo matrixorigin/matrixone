@@ -417,7 +417,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, fill func
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 	if stm := cwft.ses.GetStmtInfo(); stm != nil {
-		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.plan))
+		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan))
 	}
 	return nil
 }

@@ -997,6 +997,10 @@ func (backSes *backSession) GetLogLevel() zapcore.Level {
 	return backSes.upstream.GetLogLevel()
 }
 
+func (backSes *backSession) GetLogger() SessionLogger {
+	return backSes.upstream
+}
+
 func (backSes *backSession) log(ctx context.Context, level zapcore.Level, msg string, fields ...zap.Field) {
 	ses := backSes.upstream
 	if ses.logger.Enabled(level) {
