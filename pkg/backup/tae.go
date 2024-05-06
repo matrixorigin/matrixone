@@ -396,7 +396,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	}
 	reWriteDuration += time.Since(now)
 	//save tae files size
-	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime)
+	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime, start)
 	if err != nil {
 		return err
 	}

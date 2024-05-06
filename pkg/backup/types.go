@@ -293,6 +293,6 @@ func taeFileListToCsv(files []*taeFile) ([][]string, int64) {
 	return lines, ret
 }
 
-func taeBackupTimeAndSizeToCsv(backupTime string, size int64) []string {
-	return []string{backupTime, fmt.Sprintf("%d", size)}
+func taeBackupTimeAndSizeToCsv(backupTime, backupTS string, size int64) []string {
+	return []string{backupTime, backupTS, fmt.Sprintf("%d", size)}
 }
