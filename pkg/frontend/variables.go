@@ -3570,7 +3570,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("keep_user_target_list_in_result", 0, 2, false),
-		Default:           int64(0),
+		Default:           int64(1),
 	},
 	"experimental_ivf_index": {
 		Name:              "experimental_ivf_index",
