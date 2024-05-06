@@ -144,13 +144,24 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.cleanBuf(proc)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal.Alloc(int64(arg.maxAllocSize))
+	arg.maxAllocSize = 0
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	arg.cleanBuf(proc)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal.Alloc(int64(arg.maxAllocSize))
+}
+
+func (arg *Argument) cleanBuf(proc *process.Process) {
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())
 		arg.buf = nil
 	}
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Alloc(int64(arg.maxAllocSize))
 }
 
 type ParseLineHandler struct {
@@ -161,7 +172,7 @@ type ParseLineHandler struct {
 	moCsvLineArray [][]csvparser.Field
 }
 
-func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
+func newReaderWithParam(param *ExternalParam, reuseRow bool) (*csvparser.CSVParser, error) {
 	fieldsTerminatedBy := "\t"
 	fieldsEnclosedBy := "\""
 	fieldsEscapedBy := "\\"
@@ -211,7 +222,7 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 		Comment:            '#',
 	}
 
-	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false, false)
+	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false, reuseRow)
 }
 
 type ParquetHandler struct {

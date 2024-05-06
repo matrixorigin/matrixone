@@ -34,11 +34,13 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 func (arg *Argument) Prepare(proc *process.Process) error {
 	var err error
 
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
+	if arg.ctr == nil {
+		arg.ctr = new(container)
+		arg.ctr.InitReceiver(proc, false)
 
-	if arg.Cond != nil {
-		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+		if arg.Cond != nil {
+			arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+		}
 	}
 	return err
 }
