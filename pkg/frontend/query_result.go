@@ -676,11 +676,11 @@ func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize
 
 // getFileSize finds the fileName in the file handlers ,returns the file size
 // and returns -1 if not exists
-func getFileSize(files []fileservice.DirEntry, fileName string) int64 {
-	for _, file := range files {
-		if file.Name == fileName {
-			return file.Size
-		}
-	}
-	return -1
-}
+// func getFileSize(files []fileservice.DirEntry, fileName string) int64 {
+// 	for _, file := range files {
+// 		if file.Name == fileName {
+// 			return file.Size
+// 		}
+// 	}
+// 	return -1
+// }
