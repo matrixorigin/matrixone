@@ -42,42 +42,13 @@ func TestMinus(t *testing.T) {
 		{3, 4, 5}
 		{3, 4, 5}
 	*/
-	c := newMinusTestCase(
-		proc,
-		[]*batch.Batch{
-			testutil.NewBatchWithVectors(
-				[]*vector.Vector{
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 1}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{2, 2}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
-				}, nil),
-			testutil.NewBatchWithVectors(
-				[]*vector.Vector{
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{4, 4}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{5, 5}),
-				}, nil),
-		},
-		[]*batch.Batch{
-			testutil.NewBatchWithVectors(
-				[]*vector.Vector{
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{2}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{3}),
-				}, nil),
-			testutil.NewBatchWithVectors(
-				[]*vector.Vector{
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{4}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{5}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{6}),
-				}, nil),
-		},
-	)
+	var end vm.CallResult
+	c, ctx := newMinusTestCase(proc)
 
+	setProcForTest(ctx, proc)
 	err := c.arg.Prepare(c.proc)
 	require.NoError(t, err)
 	cnt := 0
-	var end vm.CallResult
 	for {
 		end, err = c.arg.Call(c.proc)
 		if end.Status == vm.ExecStop {
@@ -93,13 +64,78 @@ func TestMinus(t *testing.T) {
 	require.Equal(t, 1, cnt) // 1 row
 	c.proc.Reg.MergeReceivers[0].Ch <- nil
 	c.proc.Reg.MergeReceivers[1].Ch <- nil
+
+	c.arg.Reset(c.proc, false, nil)
+
+	setProcForTest(ctx, proc)
+	err = c.arg.Prepare(c.proc)
+	require.NoError(t, err)
+	cnt = 0
+	for {
+		end, err = c.arg.Call(c.proc)
+		if end.Status == vm.ExecStop {
+			break
+		}
+		require.NoError(t, err)
+		result := end.Batch
+		if result != nil && !result.IsEmpty() {
+			cnt += result.RowCount()
+			require.Equal(t, 3, len(result.Vecs))
+		}
+	}
+	require.Equal(t, 1, cnt) // 1 row
+	c.proc.Reg.MergeReceivers[0].Ch <- nil
+	c.proc.Reg.MergeReceivers[1].Ch <- nil
+
 	c.arg.Free(c.proc, false, nil)
 	c.proc.FreeVectors()
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
-func newMinusTestCase(proc *process.Process, leftBatches, rightBatches []*batch.Batch) minusTestCase {
+func newMinusTestCase(proc *process.Process) (minusTestCase, context.Context) {
 	ctx, cancel := context.WithCancel(context.Background())
+	arg := new(Argument)
+	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
+		Idx:     0,
+		IsFirst: false,
+		IsLast:  false,
+	}
+	return minusTestCase{
+		proc:   proc,
+		arg:    arg,
+		cancel: cancel,
+	}, ctx
+}
+
+func setProcForTest(ctx context.Context, proc *process.Process) {
+	leftBatches := []*batch.Batch{
+		testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 1}),
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{2, 2}),
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
+			}, nil),
+		testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{4, 4}),
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{5, 5}),
+			}, nil),
+	}
+	rightBatches := []*batch.Batch{
+		testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1}),
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{2}),
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{3}),
+			}, nil),
+		testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{4}),
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{5}),
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{6}),
+			}, nil),
+	}
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	{
 		c := make(chan *batch.Batch, len(leftBatches)+5)
@@ -125,15 +161,4 @@ func newMinusTestCase(proc *process.Process, leftBatches, rightBatches []*batch.
 	}
 	proc.Reg.MergeReceivers[0].Ch <- nil
 	proc.Reg.MergeReceivers[1].Ch <- nil
-	arg := new(Argument)
-	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
-		Idx:     0,
-		IsFirst: false,
-		IsLast:  false,
-	}
-	return minusTestCase{
-		proc:   proc,
-		arg:    arg,
-		cancel: cancel,
-	}
 }

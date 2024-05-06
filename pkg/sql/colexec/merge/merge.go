@@ -30,9 +30,10 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
+	if arg.ctr == nil {
+		arg.ctr = new(container)
+		arg.ctr.InitReceiver(proc, true)
+	}
 	return nil
 }
 

@@ -86,12 +86,30 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if ctr := arg.ctr; ctr != nil {
+		ctr.cleanBatch(proc.Mp())
+		ctr.FreeAllReg()
+		ctr.state = Build
+	}
+	arg.lastrow = 0
+	arg.cleanBatch(proc.Mp())
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if ctr := arg.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 		arg.ctr = nil
+	}
+	arg.cleanBatch(proc.Mp())
+}
+
+func (arg *Argument) cleanBatch(mp *mpool.MPool) {
+	if arg.bat != nil {
+		arg.bat.Clean(mp)
+		arg.bat = nil
 	}
 }
 

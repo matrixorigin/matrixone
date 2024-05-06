@@ -124,8 +124,26 @@ func TestMark(t *testing.T) {
 				break
 			}
 		}
-		tc.proc.FreeVectors()
+		tc.arg.Reset(tc.proc, false, nil)
+
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[1].Ch <- nil
+		for {
+			ok, err := tc.arg.Call(tc.proc)
+			if ok.Status == vm.ExecStop || err != nil {
+				break
+			}
+		}
 		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
