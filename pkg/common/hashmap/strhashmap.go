@@ -69,15 +69,6 @@ func (m *StrHashMap) Free() {
 	m.hashMap.Free(m.m)
 }
 
-func (m *StrHashMap) Init() error {
-	err := m.hashMap.Init(m.m)
-	if err != nil {
-		return err
-	}
-	m.rows = 0
-	return nil
-}
-
 func (m *StrHashMap) PreAlloc(n uint64, mp *mpool.MPool) error {
 	return m.hashMap.ResizeOnDemand(n, mp)
 }
