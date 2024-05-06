@@ -273,6 +273,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			common.AnyField("rewrite checkpoint cost", reWriteDuration))
 	}()
 	now := time.Now()
+	baseTS := types.StringToTS("1714984023125602821-1")
 	for i, name := range names {
 		if len(name) == 0 {
 			continue
@@ -293,9 +294,9 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		var oneNames []*objectio.BackupObject
 		var data *logtail.CheckpointData
 		if i == 0 {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), nil, &types.TS{})
+			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), nil, &baseTS)
 		} else {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), &softDeletes, &types.TS{})
+			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), &softDeletes, &baseTS)
 		}
 		if err != nil {
 			return err
