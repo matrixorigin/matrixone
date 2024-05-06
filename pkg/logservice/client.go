@@ -253,12 +253,19 @@ type client struct {
 }
 
 func newClient(ctx context.Context, cfg ClientConfig) (*client, error) {
-	client, err := connectToLogService(ctx, cfg.ServiceAddresses, cfg)
-	if client != nil && err == nil {
-		return client, nil
-	}
+	var c *client
+	var err error
+	// If the discovery address is configured, we used it first.
 	if len(cfg.DiscoveryAddress) > 0 {
-		return connectToLogServiceByReverseProxy(ctx, cfg.DiscoveryAddress, cfg)
+		c, err = connectToLogServiceByReverseProxy(ctx, cfg.DiscoveryAddress, cfg)
+		if c != nil && err == nil {
+			return c, nil
+		}
+	} else if len(cfg.ServiceAddresses) > 0 {
+		c, err = connectToLogService(ctx, cfg.ServiceAddresses, cfg)
+		if c != nil && err == nil {
+			return c, nil
+		}
 	}
 	if err != nil {
 		return nil, err
