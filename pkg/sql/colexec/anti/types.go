@@ -65,8 +65,6 @@ type container struct {
 
 type Argument struct {
 	ctr        *container
-	Ibucket    uint64
-	Nbucket    uint64
 	Result     []int32
 	Typs       []types.Type
 	Cond       *plan.Expr
@@ -110,6 +108,25 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := arg.ctr
+	if ctr != nil {
+		ctr.cleanBatch(proc)
+		ctr.cleanHashMap()
+		ctr.FreeAllReg()
+
+		ctr.state = Build
+		ctr.hasNull = false
+		ctr.batchRowCount = 0
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
+		ctr.maxAllocSize = 0
+	}
+	arg.cleanBatch(proc)
+	arg.lastrow = 0
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
@@ -121,6 +138,14 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
+	}
+	arg.cleanBatch(proc)
+}
+
+func (arg *Argument) cleanBatch(proc *process.Process) {
+	if arg.bat != nil {
+		arg.bat.Clean(proc.GetMPool())
+		arg.bat = nil
 	}
 }
 
@@ -159,7 +184,9 @@ func (ctr *container) cleanHashMap() {
 
 func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.executorForVecs {
-		ctr.executorForVecs[i].Free()
+		if ctr.executorForVecs[i] != nil {
+			ctr.executorForVecs[i].Free()
+		}
 	}
 	ctr.executorForVecs = nil
 }

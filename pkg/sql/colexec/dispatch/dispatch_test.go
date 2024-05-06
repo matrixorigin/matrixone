@@ -83,8 +83,28 @@ func TestDispatch(t *testing.T) {
 			}
 		}*/
 		_, _ = tc.arg.Call(tc.proc)
-		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.Children[0].Free(tc.proc, false, nil)
+
+		tc.arg.Reset(tc.proc, false, nil)
+
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		bats = []*batch.Batch{
+			newBatch(tc.types, tc.proc, Rows),
+			batch.EmptyBatch,
+		}
+		resetChildren(tc.arg, bats)
+		/*{
+			for _, vec := range bat.Vecs {
+				if vec.IsOriginal() {
+					vec.FreeOriginal(tc.proc.Mp())
+				}
+			}
+		}*/
+		_, _ = tc.arg.Call(tc.proc)
+		tc.arg.Children[0].Free(tc.proc, false, nil)
+
+		tc.arg.Free(tc.proc, false, nil)
 		for _, re := range tc.arg.LocalRegs {
 			for len(re.Ch) > 0 {
 				bat := <-re.Ch

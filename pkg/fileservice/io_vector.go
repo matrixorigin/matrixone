@@ -68,20 +68,3 @@ func (i *IOVector) readRange() (min *int64, max *int64, readFull bool) {
 
 	return
 }
-
-func (i *IOVector) ioLockKey() IOLockKey {
-	key := IOLockKey{
-		Path: i.FilePath,
-	}
-	min, max, readFull := i.readRange()
-	if readFull {
-		return key
-	}
-	if min != nil {
-		key.Offset = *min
-	}
-	if max != nil {
-		key.End = *max
-	}
-	return key
-}

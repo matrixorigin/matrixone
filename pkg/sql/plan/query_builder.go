@@ -1253,7 +1253,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_LOCK_OP:
 		preNode := builder.qry.Nodes[node.Children[0]]
 		pkexpr := &plan.Expr{
-			Typ: *node.LockTargets[0].GetPrimaryColTyp(),
+			Typ: node.LockTargets[0].GetPrimaryColTyp(),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: node.BindingTags[1],
@@ -1426,6 +1426,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
 
+	builder.parseOptimizeHints()
 	for i, rootID := range builder.qry.Steps {
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
@@ -1435,6 +1436,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
+		builder.optimizeDateFormatExpr(rootID)
 
 		builder.pushdownLimitToTableScan(rootID)
 
@@ -1488,6 +1490,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.generateRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
+
+		if builder.isForUpdate {
+			reCheckifNeedLockWholeTable(builder)
+		}
 
 		builder.handleMessgaes(rootID)
 
@@ -1643,7 +1649,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 					argsCastType[i].Scale = 0
 				}
 			}
-			var targetType *plan.Type
+			var targetType plan.Type
 			var targetArgType types.Type
 			if len(argsCastType) == 0 {
 				targetArgType = tmpArgsType[0]
@@ -1668,7 +1674,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 				if !argsType[idx].Eq(targetArgType) {
 					node := builder.qry.Nodes[tmpID]
 					if argsType[idx].Oid == types.T_any {
-						node.ProjectList[columnIdx].Typ = *targetType
+						node.ProjectList[columnIdx].Typ = targetType
 					} else {
 						node.ProjectList[columnIdx], err = appendCastBeforeExpr(builder.GetContext(), node.ProjectList[columnIdx], targetType)
 						if err != nil {
@@ -2089,13 +2095,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
 		}
 		bat := batch.NewWithSize(len(valuesClause.Rows[0]))
-		strTyp := &plan.Type{
+		strTyp := plan.Type{
 			Id:          int32(types.T_text),
 			NotNullable: false,
 		}
 		strColTyp := makeTypeByPlan2Type(strTyp)
 		strColTargetTyp := &plan.Expr{
-			Typ: *strTyp,
+			Typ: strTyp,
 			Expr: &plan.Expr_T{
 				T: &plan.TargetType{},
 			},
@@ -2155,7 +2161,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			tableDef.Cols[i] = &plan.ColDef{
 				ColId: 0,
 				Name:  colName,
-				Typ:   *strTyp,
+				Typ:   strTyp,
 			}
 		}
 		bat.SetRowCount(rowCount)
@@ -2211,13 +2217,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if builder.isForUpdate {
 			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
 			pkPos, pkTyp := getPkPos(tableDef, false)
-			ifLockTable := ifNeedLockWholeTable(builder, nodeID)
 			lockTarget := &plan.LockTarget{
 				TableId:            tableDef.TblId,
 				PrimaryColIdxInBat: int32(pkPos),
 				PrimaryColTyp:      pkTyp,
 				Block:              true,
-				LockTable:          ifLockTable,
 				RefreshTsIdxInBat:  -1, //unsupport now
 				FilterColIdxInBat:  -1, //unsupport now
 			}
@@ -2454,7 +2458,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					}
 				}
 				if astTimeWindow.Fill.Val != nil {
-					e, err := appendCastBeforeExpr(builder.GetContext(), v, &t.Typ)
+					e, err := appendCastBeforeExpr(builder.GetContext(), v, t.Typ)
 					if err != nil {
 						return 0, err
 					}
@@ -2479,7 +2483,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					if err != nil {
 						return 0, err
 					}
-					col, err := appendCastBeforeExpr(builder.GetContext(), v, &fillCols[i].Typ)
+					col, err := appendCastBeforeExpr(builder.GetContext(), v, fillCols[i].Typ)
 					if err != nil {
 						return 0, err
 					}
@@ -3364,7 +3368,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						}
 						for i := range n.ProjectList {
 							projTyp := projects[i].GetTyp()
-							n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], &projTyp)
+							n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
 							if err != nil {
 								return
 							}
@@ -3596,7 +3600,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	case *tree.ParenTableExpr:
 		return builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
 
-	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
+	case *tree.AliasedTableExpr: // always AliasedTableExpr first
 		if _, ok := tbl.Expr.(*tree.Select); ok {
 			if tbl.As.Alias == "" {
 				return 0, moerr.NewSyntaxError(builder.GetContext(), "subquery in FROM must have an alias: %T", stmt)
@@ -4048,7 +4052,7 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 		return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
 	}
 
-	binder := NewDefaultBinder(builder.GetContext(), nil, nil, nil, nil)
+	binder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
 	binder.builder = builder
 	defExpr, err := binder.BindExpr(conds[0], 0, false)
 	if err != nil {

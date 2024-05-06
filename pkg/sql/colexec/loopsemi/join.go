@@ -34,12 +34,15 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 func (arg *Argument) Prepare(proc *process.Process) error {
 	var err error
 
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
+	if arg.ctr == nil {
+		arg.ctr = new(container)
+		arg.ctr.InitReceiver(proc, false)
 
-	if arg.Cond != nil {
-		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+		if arg.Cond != nil {
+			arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+		}
 	}
+
 	return err
 }
 
@@ -161,7 +164,6 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			if !null && b {
 				for k, pos := range ap.Result {
 					if err = ctr.rbat.Vecs[k].UnionOne(ap.bat.Vecs[pos], int64(i), proc.Mp()); err != nil {
-						vec.Free(proc.Mp())
 						return err
 					}
 				}

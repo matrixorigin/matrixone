@@ -68,8 +68,6 @@ type container struct {
 
 type Argument struct {
 	ctr        *container
-	Ibucket    uint64 // index in buckets
-	Nbucket    uint64 // buckets count
 	Result     []colexec.ResultPos
 	Typs       []types.Type
 	Cond       *plan.Expr
@@ -113,6 +111,28 @@ func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := arg.ctr
+	if ctr != nil {
+		ctr.cleanBatch(proc)
+		ctr.cleanHashMap()
+		ctr.FreeAllReg()
+
+		ctr.batchRowCount = 0
+		ctr.state = Build
+		ctr.batchRowCount = 0
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
+		ctr.maxAllocSize = 0
+	}
+	if arg.bat != nil {
+		proc.PutBatch(arg.bat)
+		arg.bat = nil
+	}
+	arg.lastrow = 0
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

@@ -115,6 +115,9 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		if arg.ctr.isRemote {
@@ -130,13 +133,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		}
 	}
 
+	// told the local receiver to stop if it is still running.
 	for i := range arg.LocalRegs {
-		if !pipelineFailed {
-			select {
-			case <-arg.LocalRegs[i].Ctx.Done():
-			case arg.LocalRegs[i].Ch <- nil:
-			}
+		select {
+		case <-arg.LocalRegs[i].Ctx.Done():
+		case arg.LocalRegs[i].Ch <- nil:
 		}
-		close(arg.LocalRegs[i].Ch)
 	}
 }

@@ -293,8 +293,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, fill func
 		originSQL = sql
 		cwft.plan = plan
 
-		cwft.stmt.Free()
 		// reset plan & stmt
+		cwft.stmt.Free()
 		cwft.stmt = stmt
 		cwft.ifIsExeccute = true
 		// reset some special stmt for execute statement

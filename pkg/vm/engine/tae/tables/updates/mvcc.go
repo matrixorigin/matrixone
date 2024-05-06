@@ -436,10 +436,10 @@ func (n *ObjectMVCCHandle) EstimateMemSizeLocked() (dsize int) {
 	return
 }
 
-func (n *ObjectMVCCHandle) GetDeltaLocAndCommitTS(blkID uint16) (objectio.Location, types.TS) {
+func (n *ObjectMVCCHandle) GetDeltaLocAndCommitTS(blkID uint16) (loc objectio.Location, start, end types.TS) {
 	deletes := n.deletes[blkID]
 	if deletes == nil {
-		return nil, types.TS{}
+		return
 	}
 	return deletes.GetDeltaLocAndCommitTS()
 }
@@ -1003,16 +1003,17 @@ func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
 func (n *MVCCHandle) GetDeleteNodeByRow(row uint32) (an *DeleteNode) {
 	return n.deletes.GetDeleteNodeByRow(row)
 }
-func (n *MVCCHandle) GetDeltaLocAndCommitTS() (objectio.Location, types.TS) {
+func (n *MVCCHandle) GetDeltaLocAndCommitTS() (objectio.Location, types.TS, types.TS) {
 	n.RLock()
 	defer n.RUnlock()
 	node := n.deltaloc.GetLatestNodeLocked()
 	if node == nil {
-		return nil, types.TS{}
+		return nil, types.TS{}, types.TS{}
 	}
 	str := node.BaseNode.DeltaLoc
-	ts := node.End
-	return str, ts
+	committs := node.End
+	startts := node.Start
+	return str, startts, committs
 }
 func (n *MVCCHandle) GetDeltaLocAndCommitTSByTxn(txn txnif.TxnReader) (objectio.Location, types.TS) {
 	n.RLock()

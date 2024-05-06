@@ -127,11 +127,6 @@ type Argument struct {
 	ctr *container
 	// the five attributes below are passed by the outside
 
-	// Ibucket determines the data partition this operator need to deal with
-	Ibucket uint64
-	// Nbucket means how many partitions there are
-	Nbucket uint64
-
 	// // the input batch's columns' type
 	// Typs []types.Type
 
@@ -195,6 +190,28 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := arg.ctr
+	if ctr != nil {
+		ctr.cleanBatch(proc.Mp())
+		ctr.cleanHashMap()
+		ctr.FreeAllReg()
+
+		ctr.state = Build
+		ctr.nullSels = nil
+		ctr.sels = nil
+		ctr.markVals = nil
+		if ctr.markNulls != nil {
+			ctr.markNulls.Reset()
+			ctr.markNulls = nil
+		}
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
+		ctr.maxAllocSize = 0
+	}
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
@@ -239,6 +256,10 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.joinBat2 != nil {
 		ctr.joinBat2.Clean(mp)
 		ctr.joinBat2 = nil
+	}
+	if ctr.nullWithBatch != nil {
+		ctr.nullWithBatch.Clean(mp)
+		ctr.nullWithBatch = nil
 	}
 }
 

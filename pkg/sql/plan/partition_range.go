@@ -157,7 +157,7 @@ func (rpb *rangePartitionBuilder) buildEvalPartitionExpression(ctx context.Conte
 		if err != nil {
 			return err
 		}
-		partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, &plan.Type{
+		partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, plan.Type{
 			Id:          int32(types.T_int32),
 			NotNullable: true,
 		})
@@ -177,7 +177,7 @@ func (rpb *rangePartitionBuilder) buildEvalPartitionExpression(ctx context.Conte
 		if err != nil {
 			return err
 		}
-		partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, &plan.Type{
+		partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, plan.Type{
 			Id:          int32(types.T_int32),
 			NotNullable: true,
 		})
@@ -206,6 +206,7 @@ func (rpb *rangePartitionBuilder) buildAddPartition(ctx context.Context, partiti
 	//------------------------------------------------------------------------------------------------------------------
 	// Regenerate the syntax tree for the partition by clause
 	ast, err := mysql.ParseOne(ctx, "create table t1() "+partitionInfo.PartitionMsg, 1, 0)
+	defer ast.Free()
 	if err != nil {
 		return err
 	}
@@ -217,7 +218,20 @@ func (rpb *rangePartitionBuilder) buildAddPartition(ctx context.Context, partiti
 
 	// Regenerate partition calculation expression
 	partitionBy := createTable.PartitionOption
-	partitionBy.Partitions = append(partitionBy.Partitions, stmt.Partitions...)
+
+	/*
+		WARNING: This code is dangerous when the Parser's memory reuse feature is enabled.
+		The memory for stmt.Partitions is passed from the Parser stage, while partitionBy.Partitions is generated in the Plan stage. ( mysql.ParseOne(ctx, "create table t1() "+partitionInfo.PartitionMsg, 1, 0) above)
+		Appending the memory from these two stages together can cause a DOUBLE FREE issue.
+		It is important to ensure that the memory management is handled correctly when using the reuse feature to avoid memory corruption and crashes.
+
+		partitionBy.Partitions = append(partitionBy.Partitions, stmt.Partitions...)
+	*/
+
+	for _, p := range stmt.Partitions {
+		partitionBy.Partitions = append(partitionBy.Partitions, tree.CopyPartition(p))
+	}
+
 	err = rpb.buildEvalPartitionExpression(ctx, partitionBinder, partitionBy, partitionInfo)
 	if err != nil {
 		return err

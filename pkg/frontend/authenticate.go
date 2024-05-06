@@ -1544,7 +1544,7 @@ const (
 	grantOwnershipOnTableFormat = `grant ownership on table %s.%s to %s;`
 
 	// revoke ownership on database owner
-	revokeOwnershipFromDatabaseFormat = `revoke ownership on database %s form %s;`
+	revokeOwnershipFromDatabaseFormat = `revoke ownership on database %s from %s;`
 
 	// revoke ownership on table owner
 	revokeOwnershipFromTableFormat = `revoke ownership on table %s.%s from %s;`
@@ -7658,7 +7658,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		switch gp := stmt.(type) {
 		case *tree.Grant:
 			if gp.Typ == tree.GrantTypePrivilege {
-				yes, err := checkGrantPrivilege(&gp.GrantPrivilege)
+				yes, err := checkGrantPrivilege(gp.GrantPrivilege)
 				if err != nil {
 					return yes, err
 				}
@@ -9390,6 +9390,11 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	}
 
 	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1, 0)
+	defer func() {
+		for _, s := range stmt {
+			s.Free()
+		}
+	}()
 	if err != nil {
 		return nil, err
 	}

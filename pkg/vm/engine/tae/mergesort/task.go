@@ -46,15 +46,18 @@ type MergeTaskHost interface {
 	DisposableVecPool
 	HostHintName() string
 	PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error)
-	PrepareCommitEntry() *api.MergeCommitEntry
 	GetCommitEntry() *api.MergeCommitEntry
 	PrepareNewWriter() *blockio.BlockWriter
+	DoTransfer() bool
 	GetObjectCnt() int
 	GetBlkCnts() []int
 	GetAccBlkCnts() []int
 	GetSortKeyType() types.Type
-	GetObjLayout() (uint32, uint16)
 	LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error)
+	GetTotalSize() uint32
+	GetTotalRowCnt() uint32
+	GetBlockMaxRows() uint32
+	GetTargetObjSize() uint32
 }
 
 func initTransferMapping(e *api.MergeCommitEntry, blkcnt int) {
@@ -110,7 +113,7 @@ func DoMergeAndWrite(
 ) (err error) {
 	now := time.Now()
 	/*out args, keep the transfer infomation*/
-	commitEntry := mergehost.PrepareCommitEntry()
+	commitEntry := mergehost.GetCommitEntry()
 	fromObjsDesc := ""
 	for _, o := range commitEntry.MergedObjs {
 		obj := objectio.ObjectStats(o)
@@ -226,7 +229,9 @@ func DoMergeAndWrite(
 	}
 	defer release()
 
-	initTransferMapping(commitEntry, len(batches))
+	if mergehost.DoTransfer() {
+		initTransferMapping(commitEntry, len(batches))
+	}
 
 	fromLayout := make([]uint32, len(batches))
 	totalRowCount := 0
@@ -250,7 +255,9 @@ func DoMergeAndWrite(
 				continue
 			}
 		}
-		AddSortPhaseMapping(commitEntry.Booking, i, rowCntBeforeApplyDelete, del, nil)
+		if mergehost.DoTransfer() {
+			AddSortPhaseMapping(commitEntry.Booking, i, rowCntBeforeApplyDelete, del, nil)
+		}
 		fromLayout[i] = uint32(batches[i].RowCount())
 		totalRowCount += batches[i].RowCount()
 	}
@@ -259,7 +266,9 @@ func DoMergeAndWrite(
 		logutil.Info("[Done] Mergeblocks due to all deleted",
 			zap.String("table", tableDesc),
 			zap.String("txn-start-ts", commitEntry.StartTs.DebugString()))
-		CleanTransMapping(commitEntry.Booking)
+		if mergehost.DoTransfer() {
+			CleanTransMapping(commitEntry.Booking)
+		}
 		return
 	}
 
@@ -269,7 +278,9 @@ func DoMergeAndWrite(
 
 	retBatches, releaseF := ReshapeBatches(batches, fromLayout, toLayout, mergehost)
 	defer releaseF()
-	UpdateMappingAfterMerge(commitEntry.Booking, nil, toLayout)
+	if mergehost.DoTransfer() {
+		UpdateMappingAfterMerge(commitEntry.Booking, nil, toLayout)
+	}
 
 	// -------------------------- phase 2
 	phaseDesc = "new writer to write down"

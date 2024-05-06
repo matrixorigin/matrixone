@@ -68,8 +68,6 @@ type container struct {
 
 type Argument struct {
 	ctr        *container
-	Ibucket    uint64
-	Nbucket    uint64
 	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
@@ -109,6 +107,22 @@ func NewArgument() *Argument {
 func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
+	}
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := arg.ctr
+	if ctr != nil {
+		ctr.cleanBatch(proc)
+		ctr.cleanHashMap()
+		ctr.FreeAllReg()
+
+		ctr.batchRowCount = 0
+		ctr.state = Build
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
+		ctr.maxAllocSize = 0
 	}
 }
 

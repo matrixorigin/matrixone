@@ -3330,6 +3330,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			if len(inputs) == 0 {
 				return newCheckResultWithSuccess(0)
 			}
+			if len(inputs) == 1 && inputs[0].Oid == types.T_int64 {
+				return newCheckResultWithSuccess(0)
+			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
 
@@ -3839,7 +3842,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return types.T_uint8.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return buildInPurgeLog
+					return builtInPurgeLog
 				},
 			},
 		},

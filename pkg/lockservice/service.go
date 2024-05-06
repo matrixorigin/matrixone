@@ -71,7 +71,8 @@ type service struct {
 	}
 
 	option struct {
-		wait func()
+		wait       func()
+		serverOpts []ServerOption
 	}
 }
 
@@ -104,9 +105,10 @@ func NewLockService(
 	s.deadlockDetector = newDeadlockDetector(
 		s.fetchTxnWaitingList,
 		s.abortDeadlockTxn)
-	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector)
 	s.clock = runtime.ProcessLevelRuntime().Clock()
+
 	s.initRemote()
+	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector, s.activeTxnHolder, s.Unlock)
 	s.events.start()
 	for i := 0; i < fetchWhoWaitingListTaskCount; i++ {
 		_ = s.stopper.RunTask(s.handleFetchWhoWaitingMe)
@@ -567,13 +569,15 @@ type activeTxnHolder interface {
 		timeoutServices map[string]struct{},
 		timeoutTxns [][]byte,
 		maxKeepInterval time.Duration) [][]byte
+	isValidRemoteTxn(pb.WaitTxn) bool
 }
 
 type mapBasedTxnHolder struct {
 	serviceID string
 	fsp       *fixedSlicePool
+	validTxn  func(txn pb.WaitTxn) (bool, error)
 	valid     func(sid string) (bool, error)
-	notify    func([]pb.OrphanTxn) error
+	notify    func([]pb.OrphanTxn) ([][]byte, error)
 	mu        struct {
 		sync.RWMutex
 		// remoteServices known remote service
@@ -589,12 +593,14 @@ func newMapBasedTxnHandler(
 	serviceID string,
 	fsp *fixedSlicePool,
 	valid func(sid string) (bool, error),
-	notify func([]pb.OrphanTxn) error,
+	notify func([]pb.OrphanTxn) ([][]byte, error),
+	validTxn func(txn pb.WaitTxn) (bool, error),
 ) activeTxnHolder {
 	h := &mapBasedTxnHolder{}
 	h.fsp = fsp
 	h.valid = valid
 	h.notify = notify
+	h.validTxn = validTxn
 	h.serviceID = serviceID
 	h.mu.activeTxns = make(map[string]*activeTxn, 1024)
 	h.mu.activeTxnServices = make(map[string]string)
@@ -752,10 +758,30 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 	h.mu.Unlock()
 
 	if len(cannotCommit) > 0 {
-		if err := h.notify(cannotCommit); err == nil {
+		// found txn1 cannot commit, but txn1 is still running in other cn.
+		// There are 2 possible timings here:
+		// 1. txn1's commit request arrive TN before cannot commit request
+		// 2. txn1's commit request arrive TN after cannot commit request
+		//
+		// In case1: we cannot make txn1 as timeout txn.
+		// In case2: txn1'commit request will failed, and we can make txn1 as
+		//           timeout txn.
+		if committing, err := h.notify(cannotCommit); err == nil {
 			for sid, idx := range cannotCommitServices {
-				needRemoved = append(needRemoved, cannotCommit[idx].Txn...)
-				timeoutServices[sid] = struct{}{}
+				if len(committing) == 0 {
+					needRemoved = append(needRemoved, cannotCommit[idx].Txn...)
+					timeoutServices[sid] = struct{}{}
+				} else {
+					m := make(map[string]struct{}, len(committing))
+					for _, v := range committing {
+						m[util.UnsafeBytesToString(v)] = struct{}{}
+					}
+					for _, v := range cannotCommit[idx].Txn {
+						if _, ok := m[util.UnsafeBytesToString(v)]; !ok {
+							needRemoved = append(needRemoved, v)
+						}
+					}
+				}
 			}
 		}
 	}
@@ -769,6 +795,32 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 		}
 	}
 	return needRemoved
+}
+
+func (h *mapBasedTxnHolder) isValidRemoteTxn(txn pb.WaitTxn) bool {
+	if txn.CreatedOn == h.serviceID {
+		return true
+	}
+
+	valid, err := h.validTxn(txn)
+	if err == nil {
+		return valid
+	}
+
+	cannotCommit := []pb.OrphanTxn{
+		{
+			Service: txn.CreatedOn,
+			Txn:     [][]byte{txn.TxnID},
+		},
+	}
+
+	committing, err := h.notify(cannotCommit)
+	if err != nil {
+		// any error, we cannot make txn as a invalid txn
+		return true
+	}
+	// the target txn is committing, valid
+	return len(committing) != 0
 }
 
 func (h *mapBasedTxnHolder) close() {

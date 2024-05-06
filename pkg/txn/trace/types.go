@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
-var (
+const (
 	DebugDB                   = "mo_debug"
 	FeaturesTables            = "trace_features"
 	TraceTableFilterTable     = "trace_table_filters"
@@ -45,111 +45,129 @@ var (
 	FeatureTraceData         = "data"
 	StateEnable              = "enable"
 	StateDisable             = "disable"
+)
 
+var (
+	EventTxnTableSQL = fmt.Sprintf(`create table %s.%s(
+		ts 			          bigint       not null,
+		txn_id                varchar(50)  not null,
+		cn                    varchar(100) not null,
+		event_type            varchar(50)  not null,
+		txn_status			  varchar(10),
+		snapshot_ts           varchar(50),
+		commit_ts             varchar(50),
+		info                  varchar(1000)
+	)`, DebugDB, EventTxnTable)
+
+	EventDataTableSQL = fmt.Sprintf(`create table %s.%s(
+		ts 			          bigint          not null,
+		cn                    varchar(100)    not null,
+		event_type            varchar(50)     not null,
+		entry_type			  varchar(50)     not null,
+		table_id 	          bigint UNSIGNED not null,
+		txn_id                varchar(50),
+		row_data              varchar(500)    not null, 
+		committed_ts          varchar(50),
+		snapshot_ts           varchar(50)
+	)`, DebugDB, EventDataTable)
+
+	TraceTableFilterTableSQL = fmt.Sprintf(`create table %s.%s(
+		id                    bigint UNSIGNED primary key auto_increment,
+		table_id			  bigint UNSIGNED not null,
+		table_name            varchar(50)     not null,
+		columns               varchar(200)
+	)`, DebugDB, TraceTableFilterTable)
+
+	TraceTxnFilterTableSQL = fmt.Sprintf(`create table %s.%s(
+		id             bigint UNSIGNED primary key auto_increment,
+		method         varchar(50)     not null,
+		value          varchar(500)    not null
+	)`, DebugDB, TraceTxnFilterTable)
+
+	TraceStatementFilterTableSQL = fmt.Sprintf(`create table %s.%s(
+		id             bigint UNSIGNED primary key auto_increment,
+		method         varchar(50)     not null,
+		value          varchar(500)    not null
+	)`, DebugDB, TraceStatementFilterTable)
+
+	EventErrorTableSQL = fmt.Sprintf(`create table %s.%s(
+		ts 			          bigint          not null,
+		txn_id                varchar(50)     not null,
+		error_info            varchar(1000)   not null
+	)`, DebugDB, EventErrorTable)
+
+	TraceStatementTableSQL = fmt.Sprintf(`create table %s.%s(
+		ts 			   bigint          not null,
+		txn_id         varchar(50)     not null,
+		sql            varchar(1000)   not null,
+		cost_us        bigint          not null
+	)`, DebugDB, TraceStatementTable)
+
+	EventTxnActionTableSQL = fmt.Sprintf(`create table %s.%s(
+		ts 			          bigint          not null,
+		txn_id                varchar(50)     not null,
+		cn                    varchar(50)     not null,
+		table_id              bigint UNSIGNED,
+		action                varchar(100)    not null,
+		action_sequence       bigint UNSIGNED not null,
+		value                 bigint,
+		unit                  varchar(10),
+		err                   varchar(100) 
+	)`, DebugDB, EventTxnActionTable)
+
+	FeaturesTablesSQL = fmt.Sprintf(`create table %s.%s(
+		name    varchar(50) not null primary key,
+		state   varchar(20) not null
+	)`, DebugDB, FeaturesTables)
+
+	InitFeatureTraceTxnSQL = fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
+		DebugDB,
+		FeaturesTables,
+		FeatureTraceTxn,
+		StateDisable)
+
+	InitFeatureTraceTxnActionSQL = fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
+		DebugDB,
+		FeaturesTables,
+		FeatureTraceTxnAction,
+		StateDisable)
+
+	InitFeatureTraceDataSQL = fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
+		DebugDB,
+		FeaturesTables,
+		FeatureTraceData,
+		StateDisable)
+
+	InitFeatureTraceStatementSQL = fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
+		DebugDB,
+		FeaturesTables,
+		FeatureTraceStatement,
+		StateDisable)
+
+	InitFeatureTraceTxnWorkspaceSQL = fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
+		DebugDB,
+		FeaturesTables,
+		FeatureTraceTxnWorkspace,
+		StateDisable)
+)
+
+var (
 	InitSQLs = []string{
 		fmt.Sprintf("create database %s", DebugDB),
-
-		fmt.Sprintf(`create table %s.%s(
-			ts 			          bigint       not null,
-			txn_id                varchar(50)  not null,
-			cn                    varchar(100) not null,
-			event_type            varchar(50)  not null,
-			txn_status			  varchar(10),
-			snapshot_ts           varchar(50),
-			commit_ts             varchar(50),
-			info                  varchar(1000)
-		)`, DebugDB, EventTxnTable),
-
-		fmt.Sprintf(`create table %s.%s(
-			ts 			          bigint          not null,
-			cn                    varchar(100)    not null,
-			event_type            varchar(50)     not null,
-			entry_type			  varchar(50)     not null,
-			table_id 	          bigint UNSIGNED not null,
-			txn_id                varchar(50),
-			row_data              varchar(500)    not null, 
-			committed_ts          varchar(50),
-			snapshot_ts           varchar(50)
-		)`, DebugDB, EventDataTable),
-
-		fmt.Sprintf(`create table %s.%s(
-			id                    bigint UNSIGNED primary key auto_increment,
-			table_id			  bigint UNSIGNED not null,
-			table_name            varchar(50)     not null,
-			columns               varchar(200)
-		)`, DebugDB, TraceTableFilterTable),
-
-		fmt.Sprintf(`create table %s.%s(
-			id             bigint UNSIGNED primary key auto_increment,
-			method         varchar(50)     not null,
-			value          varchar(500)    not null
-		)`, DebugDB, TraceTxnFilterTable),
-
-		fmt.Sprintf(`create table %s.%s(
-			id             bigint UNSIGNED primary key auto_increment,
-			method         varchar(50)     not null,
-			value          varchar(500)    not null
-		)`, DebugDB, TraceStatementFilterTable),
-
-		fmt.Sprintf(`create table %s.%s(
-			ts 			          bigint          not null,
-			txn_id                varchar(50)     not null,
-			error_info            varchar(1000)   not null
-		)`, DebugDB, EventErrorTable),
-
-		fmt.Sprintf(`create table %s.%s(
-			ts 			   bigint          not null,
-			txn_id         varchar(50)     not null,
-			sql            varchar(1000)   not null,
-			cost_us        bigint          not null
-		)`, DebugDB, TraceStatementTable),
-
-		fmt.Sprintf(`create table %s.%s(
-			ts 			          bigint          not null,
-			txn_id                varchar(50)     not null,
-			cn                    varchar(50)     not null,
-			table_id              bigint UNSIGNED,
-			action                varchar(100)    not null,
-			action_sequence       bigint UNSIGNED not null,
-			value                 bigint,
-			unit                  varchar(10),
-			err                   varchar(100) 
-		)`, DebugDB, EventTxnActionTable),
-
-		fmt.Sprintf(`create table %s.%s(
-			name    varchar(50) not null primary key,
-			state   varchar(20) not null
-		)`, DebugDB, FeaturesTables),
-
-		fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
-			DebugDB,
-			FeaturesTables,
-			FeatureTraceTxn,
-			StateDisable),
-
-		fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
-			DebugDB,
-			FeaturesTables,
-			FeatureTraceTxnAction,
-			StateDisable),
-
-		fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
-			DebugDB,
-			FeaturesTables,
-			FeatureTraceData,
-			StateDisable),
-
-		fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
-			DebugDB,
-			FeaturesTables,
-			FeatureTraceStatement,
-			StateDisable),
-
-		fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
-			DebugDB,
-			FeaturesTables,
-			FeatureTraceTxnWorkspace,
-			StateDisable),
+		EventTxnTableSQL,
+		EventDataTableSQL,
+		TraceTableFilterTableSQL,
+		TraceTxnFilterTableSQL,
+		TraceStatementFilterTableSQL,
+		EventErrorTableSQL,
+		TraceStatementTableSQL,
+		EventTxnActionTableSQL,
+		FeaturesTablesSQL,
+		InitFeatureTraceTxnSQL,
+		InitFeatureTraceTxnActionSQL,
+		InitFeatureTraceDataSQL,
+		InitFeatureTraceStatementSQL,
+		InitFeatureTraceTxnWorkspaceSQL,
 	}
 )
 

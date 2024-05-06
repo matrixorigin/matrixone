@@ -66,12 +66,11 @@ type container struct {
 	batch_size     uint32
 	deleted_length uint32
 	pool           *BatchPool
-	debug_len      uint32
+	// debug_len      uint32
 
 	state vm.CtrState
 }
 type Argument struct {
-	Ts           uint64
 	DeleteCtx    *DeleteCtx
 	affectedRows uint64
 
@@ -132,6 +131,14 @@ type DeleteCtx struct {
 	PrimaryKeyIdx         int
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.cleanBatch(proc)
+	arg.affectedRows = 0
+	if arg.ctr != nil {
+		arg.ctr.state = vm.Build
+	}
+}
+
 // delete from t1 using t1 join t2 on t1.a = t2.a;
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.RemoteDelete {
@@ -158,6 +165,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			arg.ctr.pool = nil
 		}
 	}
+	arg.cleanBatch(proc)
+}
+
+func (arg *Argument) cleanBatch(proc *process.Process) {
 	if arg.resBat != nil {
 		arg.resBat.Clean(proc.Mp())
 		arg.resBat = nil
@@ -245,7 +256,6 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Batch, rowIdIdx int, pIdx int, pkIdx int) {
 	vs := vector.MustFixedCol[types.Rowid](destBatch.GetVector(int32(rowIdIdx)))
 	var bitmap *nulls.Nulls
-	arg.ctr.debug_len += uint32(len(vs))
 	for i, rowId := range vs {
 		blkid := rowId.CloneBlockID()
 		segid := rowId.CloneSegmentID()

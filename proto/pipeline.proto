@@ -104,7 +104,7 @@ message Group {
   uint64 ibucket = 2;
   uint64 nbucket = 3;
   repeated plan.Expr  exprs = 4;
-  repeated plan.Type  types = 5;
+  repeated plan.Type  types = 5 [(gogoproto.nullable) = false];
   repeated Aggregate  aggs = 6;
   repeated MultiArguemnt MultiAggs = 7;
   bool isShuffle = 8;
@@ -136,23 +136,22 @@ message Map{
 }
 
 message Deletion{
-  uint64 Ts = 1;
-  uint64 AffectedRows = 2;
-  bool RemoteDelete = 3;
-  uint32 IBucket =4;
-  uint32 NBucket = 5;
+  uint64 AffectedRows = 1;
+  bool RemoteDelete = 2;
+  uint32 IBucket = 3;
+  uint32 NBucket = 4;
   // DeleteCtx
 
-  int32 row_id_idx                      = 6;
-  repeated uint64 partition_table_ids   = 7;
-  repeated string partition_table_names = 8;
-  int32 partition_index_in_batch        = 9;
-  plan.ObjectRef ref                    = 10;
-  bool add_affected_rows                = 11;
-  map<string,int32> SegmentMap          = 12;
-  bool can_truncate                     = 13;
-  bool is_end                           = 14;
-  int32 primary_key_idx                 = 15;
+  int32 row_id_idx                      = 5;
+  repeated uint64 partition_table_ids   = 6;
+  repeated string partition_table_names = 7;
+  int32 partition_index_in_batch        = 8;
+  plan.ObjectRef ref                    = 9;
+  bool add_affected_rows                = 10;
+  map<string,int32> SegmentMap          = 11;
+  bool can_truncate                     = 12;
+  bool is_end                           = 13;
+  int32 primary_key_idx                 = 14;
 }
 
 message PreInsert {
@@ -167,7 +166,7 @@ message PreInsert {
 message LockTarget {
   uint64 table_id           	  = 1;
   int32 primary_col_idx_in_bat  = 2;
-  plan.Type primary_col_typ     = 3;
+  plan.Type primary_col_typ     = 3 [(gogoproto.nullable) = false];
   int32 refresh_ts_idx_in_bat   = 4;
   int32 filter_col_idx_in_bat   = 5;
   bool lock_table               = 6;
@@ -201,140 +200,122 @@ message OnDuplicateKey{
 message FuzzyFilter {
   float N = 1;
   string PkName = 2;
-  plan.Type PkTyp = 3;
+  plan.Type PkTyp = 3 [(gogoproto.nullable) = false];
 }
 
 message Join {
-  uint64 ibucket = 1;
-  uint64 nbucket = 2;
-  repeated int32 rel_list = 3;
-  repeated int32 col_list = 4;
-  plan.Expr  expr = 5;
-  repeated plan.Type  types = 6;
-  repeated plan.Expr left_cond = 7;
-  repeated plan.Expr right_cond = 8;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
-  bool hash_on_pk = 10;
-  bool is_shuffle =11;
-}
-
-message AntiJoin{
-  uint64 ibucket = 1;
-  uint64 nbucket = 2;
-  repeated int32 result = 3;
-  plan.Expr  expr = 4;
-  repeated plan.Type  types = 5;
-  repeated plan.Expr left_cond = 6;
-  repeated plan.Expr right_cond = 7;
+  repeated int32 rel_list = 1;
+  repeated int32 col_list = 2;
+  plan.Expr  expr = 3;
+  repeated plan.Type  types = 4 [(gogoproto.nullable) = false];
+  repeated plan.Expr left_cond = 5;
+  repeated plan.Expr right_cond = 6;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
   bool hash_on_pk = 8;
   bool is_shuffle =9;
 }
 
+message AntiJoin{
+  repeated int32 result = 1;
+  plan.Expr  expr = 2;
+  repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
+  repeated plan.Expr left_cond = 4;
+  repeated plan.Expr right_cond = 5;
+  bool hash_on_pk = 6;
+  bool is_shuffle = 7;
+}
+
 message LeftJoin {
-  uint64 ibucket = 1;
-  uint64 nbucket = 2;
-  repeated int32 rel_list = 3;
-  repeated int32 col_list = 4;
-  plan.Expr  expr = 5;
-  repeated plan.Type  types = 6;
-  repeated plan.Expr left_cond = 7;
-  repeated plan.Expr right_cond = 8;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
-  bool hash_on_pk = 10;
-  bool is_shuffle =11;
+  repeated int32 rel_list = 1;
+  repeated int32 col_list = 2;
+  plan.Expr  expr = 3;
+  repeated plan.Type  types = 4 [(gogoproto.nullable) = false];
+  repeated plan.Expr left_cond = 5;
+  repeated plan.Expr right_cond = 6;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
+  bool hash_on_pk = 8;
+  bool is_shuffle = 9;
 }
 
 message RightJoin {
-  uint64 ibucket = 1;
-  uint64 nbucket = 2;
-  repeated int32 rel_list = 3;
-  repeated int32 col_list = 4;
-  plan.Expr  expr = 5;
-  repeated plan.Type  left_types = 6;
-  repeated plan.Type  right_types = 7;
-  repeated plan.Expr left_cond = 8;
-  repeated plan.Expr right_cond = 9;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 10;
-  bool hash_on_pk = 11;
-  bool is_shuffle =12;
+  repeated int32 rel_list = 1;
+  repeated int32 col_list = 2;
+  plan.Expr  expr = 3;
+  repeated plan.Type  left_types = 4 [(gogoproto.nullable) = false];
+  repeated plan.Type  right_types = 5 [(gogoproto.nullable) = false];
+  repeated plan.Expr left_cond = 6;
+  repeated plan.Expr right_cond = 7;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
+  bool hash_on_pk = 9;
+  bool is_shuffle = 10;
 }
 
 message RightSemiJoin {
-  uint64 ibucket = 1;
-  uint64 nbucket = 2;
-  repeated int32 result = 3;
-  plan.Expr  expr = 4;
-  repeated plan.Type right_types = 5;
-  repeated plan.Expr left_cond = 6;
-  repeated plan.Expr right_cond = 7;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
-  bool hash_on_pk = 9;
-  bool is_shuffle =10;
+  repeated int32 result = 1;
+  plan.Expr  expr = 2;
+  repeated plan.Type right_types = 3 [(gogoproto.nullable) = false];
+  repeated plan.Expr left_cond = 4;
+  repeated plan.Expr right_cond = 5;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
+  bool hash_on_pk = 7;
+  bool is_shuffle = 8;
 }
 
 message RightAntiJoin {
-  uint64 ibucket = 1;
-  uint64 nbucket = 2;
-  repeated int32 result = 3;
-  plan.Expr  expr = 4;
-  repeated plan.Type right_types = 5;
-  repeated plan.Expr left_cond = 6;
-  repeated plan.Expr right_cond = 7;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
-  bool hash_on_pk = 9;
-  bool is_shuffle =10;
+  repeated int32 result = 1;
+  plan.Expr  expr = 2;
+  repeated plan.Type right_types = 3 [(gogoproto.nullable) = false];
+  repeated plan.Expr left_cond = 4;
+  repeated plan.Expr right_cond = 5;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
+  bool hash_on_pk = 7;
+  bool is_shuffle = 8;
 }
 
 message SemiJoin {
-  uint64 ibucket = 1;
-  uint64 nbucket = 2;
-  repeated int32 result = 3;
-  plan.Expr  expr = 4;
-  repeated plan.Type  types = 5;
-  repeated plan.Expr left_cond = 6;
-  repeated plan.Expr right_cond = 7;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
-  bool hash_on_pk = 9;
-  bool is_shuffle =10;
+  repeated int32 result = 1;
+  plan.Expr  expr = 2;
+  repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
+  repeated plan.Expr left_cond = 4;
+  repeated plan.Expr right_cond = 5;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
+  bool hash_on_pk = 7;
+  bool is_shuffle = 8;
 }
 
 message SingleJoin {
-  uint64 ibucket = 1;
-  uint64 nbucket = 2;
-  repeated int32 rel_list = 3;
-  repeated int32 col_list = 4;
-  plan.Expr  expr = 5;
-  repeated plan.Type  types = 6;
-  repeated plan.Expr left_cond = 7;
-  repeated plan.Expr right_cond = 8;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
-  bool hash_on_pk = 10;
-  bool is_shuffle =11;
+  repeated int32 rel_list = 1;
+  repeated int32 col_list = 2;
+  plan.Expr  expr = 3;
+  repeated plan.Type  types = 4 [(gogoproto.nullable) = false];
+  repeated plan.Expr left_cond = 5;
+  repeated plan.Expr right_cond = 6;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
+  bool hash_on_pk = 8;
+  bool is_shuffle = 9;
 }
 
 message MarkJoin {
-  uint64 ibucket = 1;
-  uint64 nbucket = 2;
-  repeated int32 result = 3;
-  plan.Expr expr = 4;
-  repeated plan.Type types = 5;
-  repeated plan.Expr left_cond = 6;
-  repeated plan.Expr right_cond = 7;
-  repeated plan.Expr on_list = 8;
-  bool hash_on_pk = 9;
-  bool is_shuffle =10;
+  repeated int32 result = 1;
+  plan.Expr expr = 2;
+  repeated plan.Type types = 3 [(gogoproto.nullable) = false];
+  repeated plan.Expr left_cond = 4;
+  repeated plan.Expr right_cond = 5;
+  repeated plan.Expr on_list = 6;
+  bool hash_on_pk = 7;
+  bool is_shuffle = 8;
 }
 
 message Product {
   repeated int32 rel_list = 1;
   repeated int32 col_list = 2;
-  repeated plan.Type  types = 3;
+  repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
   bool is_shuffle =4;
 }
 
 message IndexJoin {
   repeated int32 result = 1;
-  repeated plan.Type  types = 2;
+  repeated plan.Type  types = 2 [(gogoproto.nullable) = false];
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 3;
 }
 
@@ -351,7 +332,7 @@ message HashBuild {
   bool need_hash = 2;
   uint64 ibucket = 3;
   uint64 nbucket = 4;
-  repeated plan.Type types = 5;
+  repeated plan.Type types = 5 [(gogoproto.nullable) = false];
   repeated plan.Expr conds = 6;
   bool hash_on_pk = 7;
   bool need_merged_batch = 8;
