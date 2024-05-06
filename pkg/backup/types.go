@@ -294,5 +294,5 @@ func taeFileListToCsv(files []*taeFile) ([][]string, int64) {
 }
 
 func taeBackupTimeAndSizeToCsv(backupTime, backupTS string, size int64) []string {
-	return []string{backupTime, backupTS, fmt.Sprintf("%d", size)}
+	return []string{backupTime, fmt.Sprintf("%d", size), backupTS}
 }
