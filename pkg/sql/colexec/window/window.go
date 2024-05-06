@@ -41,23 +41,23 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	if arg.ctr == nil {
-		arg.ctr = new(container)
-		arg.ctr.InitReceiver(proc, true)
+	//	if arg.ctr == nil {
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, true)
 
-		ctr := arg.ctr
-		ctr.aggVecs = make([]group.ExprEvalVector, len(arg.Aggs))
-		for i, ag := range arg.Aggs {
-			expressions := ag.GetArgExpressions()
-			if ctr.aggVecs[i], err = group.MakeEvalVector(proc, expressions); err != nil {
-				return err
-			}
-		}
-		w := arg.WinSpecList[0].Expr.(*plan.Expr_W).W
-		if len(w.PartitionBy) == 0 {
-			ctr.status = receiveAll
+	ctr := arg.ctr
+	ctr.aggVecs = make([]group.ExprEvalVector, len(arg.Aggs))
+	for i, ag := range arg.Aggs {
+		expressions := ag.GetArgExpressions()
+		if ctr.aggVecs[i], err = group.MakeEvalVector(proc, expressions); err != nil {
+			return err
 		}
 	}
+	w := arg.WinSpecList[0].Expr.(*plan.Expr_W).W
+	if len(w.PartitionBy) == 0 {
+		ctr.status = receiveAll
+	}
+	// }
 
 	return nil
 }

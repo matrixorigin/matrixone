@@ -33,12 +33,12 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	if arg.ctr == nil {
-		arg.ctr = new(container)
-		arg.ctr.InitReceiver(proc, true)
-		arg.ctr.inserted = make([]uint8, hashmap.UnitLimit)
-		arg.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
-	}
+	//	if arg.ctr == nil {
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, true)
+	arg.ctr.inserted = make([]uint8, hashmap.UnitLimit)
+	arg.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
+	// }
 	return nil
 }
 

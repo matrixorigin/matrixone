@@ -184,32 +184,32 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	if arg.ctr == nil {
-		arg.ctr = new(container)
-		ctr := arg.ctr
-		ctr.state = vm.Build
-		ctr.desc = make([]bool, len(arg.OrderBySpec))
-		ctr.nullsLast = make([]bool, len(arg.OrderBySpec))
-		for i, f := range arg.OrderBySpec {
-			ctr.desc[i] = f.Flag&pbplan.OrderBySpec_DESC != 0
-			if f.Flag&pbplan.OrderBySpec_NULLS_FIRST != 0 {
-				ctr.nullsLast[i] = false
-			} else if f.Flag&pbplan.OrderBySpec_NULLS_LAST != 0 {
-				ctr.nullsLast[i] = true
-			} else {
-				ctr.nullsLast[i] = ctr.desc[i]
-			}
-		}
-
-		ctr.sortVectors = make([]*vector.Vector, len(arg.OrderBySpec))
-		ctr.sortExprExecutor = make([]colexec.ExpressionExecutor, len(arg.OrderBySpec))
-		for i := range ctr.sortVectors {
-			ctr.sortExprExecutor[i], err = colexec.NewExpressionExecutor(proc, arg.OrderBySpec[i].Expr)
-			if err != nil {
-				return err
-			}
+	//	if arg.ctr == nil {
+	arg.ctr = new(container)
+	ctr := arg.ctr
+	ctr.state = vm.Build
+	ctr.desc = make([]bool, len(arg.OrderBySpec))
+	ctr.nullsLast = make([]bool, len(arg.OrderBySpec))
+	for i, f := range arg.OrderBySpec {
+		ctr.desc[i] = f.Flag&pbplan.OrderBySpec_DESC != 0
+		if f.Flag&pbplan.OrderBySpec_NULLS_FIRST != 0 {
+			ctr.nullsLast[i] = false
+		} else if f.Flag&pbplan.OrderBySpec_NULLS_LAST != 0 {
+			ctr.nullsLast[i] = true
+		} else {
+			ctr.nullsLast[i] = ctr.desc[i]
 		}
 	}
+
+	ctr.sortVectors = make([]*vector.Vector, len(arg.OrderBySpec))
+	ctr.sortExprExecutor = make([]colexec.ExpressionExecutor, len(arg.OrderBySpec))
+	for i := range ctr.sortVectors {
+		ctr.sortExprExecutor[i], err = colexec.NewExpressionExecutor(proc, arg.OrderBySpec[i].Expr)
+		if err != nil {
+			return err
+		}
+	}
+	// }
 
 	return nil
 }

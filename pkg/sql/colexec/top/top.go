@@ -49,29 +49,29 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	if arg.ctr == nil {
-		arg.ctr = new(container)
-		if arg.Limit > 1024 {
-			arg.ctr.sels = make([]int64, 0, 1024)
-		} else {
-			arg.ctr.sels = make([]int64, 0, arg.Limit)
-		}
-		arg.ctr.poses = make([]int32, 0, len(arg.Fs))
+	//	if arg.ctr == nil {
+	arg.ctr = new(container)
+	if arg.Limit > 1024 {
+		arg.ctr.sels = make([]int64, 0, 1024)
+	} else {
+		arg.ctr.sels = make([]int64, 0, arg.Limit)
+	}
+	arg.ctr.poses = make([]int32, 0, len(arg.Fs))
 
-		ctr := arg.ctr
-		ctr.executorsForOrderColumn = make([]colexec.ExpressionExecutor, len(arg.Fs))
-		for i := range ctr.executorsForOrderColumn {
-			ctr.executorsForOrderColumn[i], err = colexec.NewExpressionExecutor(proc, arg.Fs[i].Expr)
-			if err != nil {
-				return err
-			}
-		}
-		typ := arg.Fs[0].Expr.Typ
-		if arg.TopValueTag > 0 {
-			ctr.desc = arg.Fs[0].Flag&plan.OrderBySpec_DESC != 0
-			ctr.topValueZM = objectio.NewZM(types.T(typ.Id), typ.Scale)
+	ctr := arg.ctr
+	ctr.executorsForOrderColumn = make([]colexec.ExpressionExecutor, len(arg.Fs))
+	for i := range ctr.executorsForOrderColumn {
+		ctr.executorsForOrderColumn[i], err = colexec.NewExpressionExecutor(proc, arg.Fs[i].Expr)
+		if err != nil {
+			return err
 		}
 	}
+	typ := arg.Fs[0].Expr.Typ
+	if arg.TopValueTag > 0 {
+		ctr.desc = arg.Fs[0].Flag&plan.OrderBySpec_DESC != 0
+		ctr.topValueZM = objectio.NewZM(types.T(typ.Id), typ.Scale)
+	}
+	// }
 	return nil
 }
 

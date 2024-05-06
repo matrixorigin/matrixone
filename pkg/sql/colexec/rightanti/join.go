@@ -35,24 +35,24 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	if arg.ctr == nil {
-		arg.ctr = new(container)
-		arg.ctr.InitReceiver(proc, false)
-		arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-		arg.ctr.vecs = make([]*vector.Vector, len(arg.Conditions[0]))
-		arg.ctr.evecs = make([]evalVector, len(arg.Conditions[0]))
-		for i := range arg.ctr.evecs {
-			arg.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, arg.Conditions[0][i])
-			if err != nil {
-				return err
-			}
+	//	if arg.ctr == nil {
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, false)
+	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	arg.ctr.vecs = make([]*vector.Vector, len(arg.Conditions[0]))
+	arg.ctr.evecs = make([]evalVector, len(arg.Conditions[0]))
+	for i := range arg.ctr.evecs {
+		arg.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, arg.Conditions[0][i])
+		if err != nil {
+			return err
 		}
-		if arg.Cond != nil {
-			arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
-		}
-
-		arg.ctr.tmpBatches = make([]*batch.Batch, 2)
 	}
+	if arg.Cond != nil {
+		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+	}
+
+	arg.ctr.tmpBatches = make([]*batch.Batch, 2)
+	// }
 	return err
 }
 

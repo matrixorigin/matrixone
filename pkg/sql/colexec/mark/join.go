@@ -38,29 +38,29 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 func (arg *Argument) Prepare(proc *process.Process) error {
 	var err error
 
-	if arg.ctr == nil {
-		arg.ctr = new(container)
-		arg.ctr.InitReceiver(proc, false)
-		arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-		arg.ctr.evecs = make([]evalVector, len(arg.Conditions[0]))
-		arg.ctr.vecs = make([]*vector.Vector, len(arg.Conditions[0]))
-		arg.ctr.bat = batch.NewWithSize(len(arg.Typs))
-		for i, typ := range arg.Typs {
-			arg.ctr.bat.Vecs[i] = proc.GetVector(typ)
-		}
-
-		arg.ctr.buildEqVec = make([]*vector.Vector, len(arg.Conditions[1]))
-		arg.ctr.buildEqEvecs = make([]evalVector, len(arg.Conditions[1]))
-
-		if arg.Cond != nil {
-			arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
-		}
-	} else {
-		arg.ctr.bat = batch.NewWithSize(len(arg.Typs))
-		for i, typ := range arg.Typs {
-			arg.ctr.bat.Vecs[i] = proc.GetVector(typ)
-		}
+	//	if arg.ctr == nil {
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, false)
+	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	arg.ctr.evecs = make([]evalVector, len(arg.Conditions[0]))
+	arg.ctr.vecs = make([]*vector.Vector, len(arg.Conditions[0]))
+	arg.ctr.bat = batch.NewWithSize(len(arg.Typs))
+	for i, typ := range arg.Typs {
+		arg.ctr.bat.Vecs[i] = proc.GetVector(typ)
 	}
+
+	arg.ctr.buildEqVec = make([]*vector.Vector, len(arg.Conditions[1]))
+	arg.ctr.buildEqEvecs = make([]evalVector, len(arg.Conditions[1]))
+
+	if arg.Cond != nil {
+		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+	}
+	// } else {
+	// 	arg.ctr.bat = batch.NewWithSize(len(arg.Typs))
+	// 	for i, typ := range arg.Typs {
+	// 		arg.ctr.bat.Vecs[i] = proc.GetVector(typ)
+	// 	}
+	// }
 	return err
 }
 

@@ -32,10 +32,10 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	if arg.ctr == nil {
-		arg.ctr = new(container)
-		arg.ctr.InitReceiver(proc, false)
-	}
+	//	if arg.ctr == nil {
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, false)
+	// }
 	return nil
 }
 

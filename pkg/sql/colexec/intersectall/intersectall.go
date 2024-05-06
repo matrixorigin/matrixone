@@ -38,21 +38,21 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) error {
 	var err error
-	if arg.ctr == nil {
-		arg.ctr = new(container)
-		arg.ctr.InitReceiver(proc, false)
-		if arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp()); err != nil {
-			return err
-		}
-		arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-		arg.ctr.inserted = make([]uint8, hashmap.UnitLimit)
-		arg.ctr.resetInserted = make([]uint8, hashmap.UnitLimit)
-	} else {
-		err = arg.ctr.hashTable.Init()
-		if err != nil {
-			return err
-		}
+	//	if arg.ctr == nil {
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, false)
+	if arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp()); err != nil {
+		return err
 	}
+	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	arg.ctr.inserted = make([]uint8, hashmap.UnitLimit)
+	arg.ctr.resetInserted = make([]uint8, hashmap.UnitLimit)
+	// } else {
+	// 	err = arg.ctr.hashTable.Init()
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// }
 	return nil
 }
 

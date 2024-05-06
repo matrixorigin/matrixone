@@ -32,13 +32,13 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	if arg.ctr == nil {
-		arg.ctr = new(container)
-		arg.ctr.InitReceiver(proc, true)
-		arg.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
-		arg.ctr.curNodeCnt = arg.ctr.nodeCnt
-		arg.ctr.status = sendInitial
-	}
+	//	if arg.ctr == nil {
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, true)
+	arg.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
+	arg.ctr.curNodeCnt = arg.ctr.nodeCnt
+	arg.ctr.status = sendInitial
+	// }
 	return nil
 }
 

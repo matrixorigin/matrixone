@@ -104,13 +104,13 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
-	if ctr != nil {
-		if ctr.hashTable != nil {
-			ctr.hashTable.Free()
-			ctr.hashTable = nil
-		}
-		ctr.cleanBuf(proc)
+	// if ctr != nil {
+	if ctr.hashTable != nil {
+		ctr.hashTable.Free()
+		ctr.hashTable = nil
 	}
+	ctr.cleanBuf(proc)
+	// }
 }
 
 func (ctr *container) cleanBuf(proc *process.Process) {
