@@ -29,13 +29,13 @@ import (
 )
 
 var (
-	errUnterminatedQuotedField = moerr.NewInvalidInputNoCtx("csvParser error: unterminated quoted field")
-	errDanglingBackslash       = moerr.NewInvalidInputNoCtx("csvParser error: no character after backslash")
-	errUnexpectedQuoteField    = moerr.NewInvalidInputNoCtx("csvParser error: cannot have consecutive fields without separator")
+	errUnterminatedQuotedField       = moerr.NewInvalidInputNoCtx("csvParser error: unterminated quoted field")
+	errDanglingBackslash             = moerr.NewInvalidInputNoCtx("csvParser error: no character after backslash")
+	errUnexpectedQuoteField          = moerr.NewInvalidInputNoCtx("csvParser error: cannot have consecutive fields without separator")
+	BufferSizeScale                  = int64(1)
+	ReadBlockSize              int64 = 64 * 1024
 	// LargestEntryLimit is the max size for reading file to buf
-	LargestEntryLimit       = 120 * 1024 * 1024
-	BufferSizeScale         = int64(5)
-	ReadBlockSize     int64 = 64 * 1024
+	LargestEntryLimit = 1024 * 1024
 )
 
 type Field struct {

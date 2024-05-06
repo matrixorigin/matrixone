@@ -211,11 +211,11 @@ func NewUpdatePolicyReq(c *BasicPolicyConfig) *api.AlterTableReq {
 		Kind: api.AlterKind_UpdatePolicy,
 		Operation: &api.AlterTableReq_UpdatePolicy{
 			UpdatePolicy: &api.AlterTablePolicy{
-				MinRowsQuailifed: uint32(c.ObjectMinRows),
-				MaxObjOnerun:     uint32(c.MergeMaxOneRun),
-				MaxRowsMergedObj: uint32(c.MaxRowsMergedObj),
-				MinCnMergeSize:   uint64(c.MinCNMergeSize),
-				Hints:            c.MergeHints,
+				MinOsizeQuailifed: uint32(c.ObjectMinOsize),
+				MaxObjOnerun:      uint32(c.MergeMaxOneRun),
+				MaxOsizeMergedObj: uint32(c.MaxOsizeMergedObj),
+				MinCnMergeSize:    uint64(c.MinCNMergeSize),
+				Hints:             c.MergeHints,
 			},
 		},
 	}
