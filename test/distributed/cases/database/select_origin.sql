@@ -6,7 +6,7 @@ select aa from tt;
 select aA from tt;
 select count(*) from tt;
 select COUNT(*)  from tt;
-show variables like 'keep_user_target%';
+show global variables like 'keep_user_target%';
 set global keep_user_target_list_in_result = 1;
 select aa from tt;
 select aA from tt;
