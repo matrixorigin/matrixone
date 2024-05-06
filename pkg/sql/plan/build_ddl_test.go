@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -100,7 +99,7 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().GetUserName().Return("sys:dump").AnyTimes()
 	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
 	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, ts timestamp.Timestamp) (*ObjectRef, *TableDef) {
+		func(schemaName string, tableName string, snapshot Snapshot) (*ObjectRef, *TableDef) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
@@ -188,7 +187,7 @@ func TestBuildLockTables(t *testing.T) {
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
 	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, ts timestamp.Timestamp) (*ObjectRef, *TableDef) {
+		func(schemaName string, tableName string, snapshot Snapshot) (*ObjectRef, *TableDef) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
