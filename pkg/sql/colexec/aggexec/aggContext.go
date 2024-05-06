@@ -23,6 +23,8 @@ type AggContext struct {
 	groupContext     []AggGroupExecContext
 }
 
+type AggGroupContextInit func(resultType types.Type, parameters ...types.Type) AggGroupExecContext
+
 func (a *AggContext) setCommonContext(c AggCommonExecContext) {
 	if c == nil {
 		return
@@ -44,7 +46,9 @@ func (a *AggContext) preAllocate(n int) {
 	a.groupContext = a.groupContext[:oldLen]
 }
 
-func (a *AggContext) growsGroupContext(initGroup func() AggGroupExecContext, more int) {
+func (a *AggContext) growsGroupContext(
+	initGroup AggGroupContextInit, more int,
+	resultType types.Type, parameters ...types.Type) {
 	if !a.hasGroupContext {
 		return
 	}
@@ -52,13 +56,13 @@ func (a *AggContext) growsGroupContext(initGroup func() AggGroupExecContext, mor
 	if newLen > cap(a.groupContext) {
 		a.groupContext = append(a.groupContext, make([]AggGroupExecContext, more)...)
 		for i := oldLen; i < newLen; i++ {
-			a.groupContext[i] = initGroup()
+			a.groupContext[i] = initGroup(resultType, parameters...)
 		}
 
 	} else {
 		a.groupContext = a.groupContext[:newLen]
 		for i := oldLen; i < newLen; i++ {
-			a.groupContext[i] = initGroup()
+			a.groupContext[i] = initGroup(resultType, parameters...)
 		}
 	}
 }
