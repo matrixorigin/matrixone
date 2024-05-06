@@ -21,6 +21,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -87,6 +89,9 @@ func (be *BaseEntryImpl[T]) CreateWithTS(ts types.TS, baseNode T) {
 }
 
 func (be *BaseEntryImpl[T]) CreateWithTxn(txn txnif.AsyncTxn, baseNode T) {
+	if txn == nil {
+		logutil.Warnf("unexpected txn is nil: %+v", stack.Callers(0))
+	}
 	node := &MVCCNode[T]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnif.UncommitTS,
