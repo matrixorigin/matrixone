@@ -388,14 +388,22 @@ func restoreToDatabaseOrTable(ctx context.Context, bh BackgroundExec, snapshotNa
 		}
 	}
 
-	tableInfos, err := getTableInfos(ctx, bh, snapshotName, dbName)
-	if err != nil {
-		return
+	var tableInfos []*tableInfo
+	if tblName == "" {
+		tableInfos, err = getTableInfos(ctx, bh, snapshotName, dbName)
+		if err != nil {
+			return
+		}
+	} else {
+		tableInfos, err = getTableInfo(ctx, bh, snapshotName, dbName, tblName)
+		if err != nil {
+			return
+		}
 	}
 
 	// if restore to table, expect only one table here
 	if tblName != "" && len(tableInfos) != 1 {
-		return moerr.NewNoSuchTable(ctx, dbName, tblName)
+		return moerr.NewInternalError(ctx, "find %v tableInfos by name, expect only 1", len(tableInfos))
 	}
 
 	curAccountId, err := defines.GetAccountId(ctx)
@@ -650,6 +658,28 @@ func getTableInfos(ctx context.Context, bh BackgroundExec, snapshotName string, 
 		}
 	}
 	return tableInfos, nil
+}
+
+func getTableInfo(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) ([]*tableInfo, error) {
+	tableInfos, err := showFullTables(ctx, bh, snapshotName, dbName)
+	if err != nil {
+		return nil, err
+	}
+
+	// filter by tblName
+	var ans []*tableInfo
+	for _, tblInfo := range tableInfos {
+		if tblInfo.name == tblName {
+			ans = append(ans, tblInfo)
+		}
+	}
+
+	for _, tblInfo := range ans {
+		if tblInfo.createSql, err = getCreateTableSql(ctx, bh, snapshotName, dbName, tblInfo.name); err != nil {
+			return nil, err
+		}
+	}
+	return ans, nil
 }
 
 func getCreateTableSql(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (string, error) {
