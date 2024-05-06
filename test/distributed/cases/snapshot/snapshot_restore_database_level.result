@@ -262,16 +262,20 @@ create snapshot sp_01 for account test_account;
 use snapshot_read;
 drop table students;
 drop table users;
-restore account test_account database snapshot_read from snapshot sp_01;
+restore account test_account database snapshot_read from snapshot sp_01 to account test_account;
 select count(*) from snapshot_read.students;
-SQL parser error: table "students" does not exist
+count(*)
+50
 select count(*) from snapshot_read.users;
-SQL parser error: table "users" does not exist
+count(*)
+11
 drop database snapshot_read;
-restore account test_account database snapshot_read from snapshot sp_01;
+restore account test_account database snapshot_read from snapshot sp_01 to account test_account;
 select count(*) from snapshot_read.students;
-invalid database snapshot_read
+count(*)
+50
 select count(*) from snapshot_read.users;
-invalid database snapshot_read
+count(*)
+11
 drop snapshot sp_01;
 drop account test_account;
