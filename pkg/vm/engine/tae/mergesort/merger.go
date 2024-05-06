@@ -64,7 +64,6 @@ type merger[T any] struct {
 	mustColFunc func(*vector.Vector) []T
 
 	totalRowCnt   uint32
-	totalSize     uint32
 	rowPerBlk     uint32
 	rowSize       uint32
 	targetObjSize uint32
@@ -87,12 +86,11 @@ func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, 
 		objBlkCnts:       host.GetBlkCnts(),
 		rowPerBlk:        host.GetBlockMaxRows(),
 		targetObjSize:    host.GetTargetObjSize(),
-		totalSize:        host.GetTotalSize(),
 		totalRowCnt:      host.GetTotalRowCnt(),
 		loadedObjBlkCnts: make([]int, size),
 		mustColFunc:      mustColFunc,
 	}
-	m.rowSize = m.totalSize / m.totalRowCnt
+	m.rowSize = host.GetTotalSize() / m.totalRowCnt
 	totalBlkCnt := 0
 	for _, cnt := range m.objBlkCnts {
 		totalBlkCnt += cnt
@@ -116,6 +114,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			src:    uint32(i),
 		})
 	}
+	defer m.release()
 
 	var releaseF func()
 	m.buffer, releaseF = getSimilarBatch(m.bats[0].bat, int(m.rowPerBlk), m.host)
@@ -277,9 +276,25 @@ func (m *merger[T]) syncObject(ctx context.Context) error {
 		commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobj.Clone().Marshal())
 	}
 	m.writer = nil
+<<<<<<< Updated upstream
 	return nil
 }
 
+=======
+<<<<<<< Updated upstream
+=======
+	return nil
+}
+
+func (m *merger[T]) release() {
+	for _, bat := range m.bats {
+		if bat.releaseF != nil {
+			bat.releaseF()
+		}
+	}
+}
+
+>>>>>>> Stashed changes
 func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) error {
 	var merger Merger
 	typ := mergeHost.GetSortKeyType()
@@ -338,4 +353,8 @@ func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) err
 		}
 	}
 	return merger.merge(ctx)
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 }
