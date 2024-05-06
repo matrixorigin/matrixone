@@ -278,7 +278,9 @@ func (tfs *taeFile) String() string {
 }
 
 func (tfs *taeFile) CsvString() []string {
-	return []string{tfs.path, fmt.Sprintf("%d", tfs.size), fmt.Sprintf("%x", tfs.checksum)}
+	return []string{tfs.path, fmt.Sprintf("%d", tfs.size),
+		fmt.Sprintf("%x", tfs.checksum), fmt.Sprintf("%t", tfs.needCopy),
+		fmt.Sprintf("%s", tfs.ts.ToString())}
 }
 
 func taeFileListToCsv(files []*taeFile) ([][]string, int64) {
