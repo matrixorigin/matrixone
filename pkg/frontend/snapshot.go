@@ -55,7 +55,7 @@ var (
 
 	restoreTableDataFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {snapshot = '%s'}"
 
-	restoreSkipDbs = []string{"mysql", "system", "system_metric", "mo_task", "mo_debug"}
+	restoreSkipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug"}
 )
 
 type snapshotRecord struct {
