@@ -1,3 +1,4 @@
+-- @bvt:issue#14784
 -- account level
 create database if not exists snapshot_read;
 use snapshot_read;
@@ -601,3 +602,4 @@ select count(*) from snapshot_read.students;
 drop account test_account;
 drop account test_account_01;
 drop snapshot snapshot_01;
+-- @bvt:issue
