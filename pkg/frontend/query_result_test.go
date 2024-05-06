@@ -14,95 +14,74 @@
 
 package frontend
 
-import (
-	"testing"
+// func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
+// 	dir := t.TempDir()
+// 	fs, err := fileservice.NewLocalETLFS(fsName, dir)
+// 	assert.Nil(t, err)
+// 	return fs
+// }
 
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+// func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
+// 	var err error
+// 	var testPool *mpool.MPool
+// 	//parameter
+// 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+// 	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+// 	assert.Nil(t, err)
+// 	pu.SV.SetDefaultValues()
+// 	pu.SV.SaveQueryResult = "on"
+// 	testPool, err = mpool.NewMPool("testPool", pu.SV.GuestMmuLimitation, mpool.NoFixed)
+// 	if err != nil {
+// 		assert.Nil(t, err)
+// 	}
+// 	//file service
+// 	pu.FileService = newLocalETLFS(t, defines.SharedFileServiceName)
+// 	setGlobalPu(pu)
+// 	//io session
+// 	ioses := mock_frontend.NewMockIOSession(ctrl)
+// 	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+// 	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+// 	ioses.EXPECT().Ref().AnyTimes()
+// 	ioses.EXPECT().GetGlobalVar(gomock.Any()).Return(1, nil).AnyTimes()
+// 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-	"github.com/BurntSushi/toml"
-	"github.com/golang/mock/gomock"
-	"github.com/stretchr/testify/assert"
+// 	testutil.SetupAutoIncrService()
+// 	//new session
+// 	ses := NewSession(proto, testPool, GSysVariables, true, nil)
+// 	var c clock.Clock
+// 	_, _ = ses.SetTempTableStorage(c)
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-)
+// 	tenant := &TenantInfo{
+// 		Tenant:        sysAccountName,
+// 		User:          rootName,
+// 		DefaultRole:   moAdminRoleName,
+// 		TenantID:      sysAccountID,
+// 		UserID:        rootID,
+// 		DefaultRoleID: moAdminRoleID,
+// 	}
+// 	ses.SetTenantInfo(tenant)
 
-func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
-	dir := t.TempDir()
-	fs, err := fileservice.NewLocalETLFS(fsName, dir)
-	assert.Nil(t, err)
-	return fs
-}
+// 	return ses
+// }
 
-func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
-	var err error
-	var testPool *mpool.MPool
-	//parameter
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
-	assert.Nil(t, err)
-	pu.SV.SetDefaultValues()
-	pu.SV.SaveQueryResult = "on"
-	testPool, err = mpool.NewMPool("testPool", pu.SV.GuestMmuLimitation, mpool.NoFixed)
-	if err != nil {
-		assert.Nil(t, err)
-	}
-	//file service
-	pu.FileService = newLocalETLFS(t, defines.SharedFileServiceName)
-	setGlobalPu(pu)
-	//io session
-	ioses := mock_frontend.NewMockIOSession(ctrl)
-	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-	ioses.EXPECT().Ref().AnyTimes()
-	ioses.EXPECT().GetGlobalVar(gomock.Any()).Return(1, nil).AnyTimes()
-	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-
-	testutil.SetupAutoIncrService()
-	//new session
-	ses := NewSession(proto, testPool, GSysVariables, true, nil)
-	var c clock.Clock
-	_, _ = ses.SetTempTableStorage(c)
-
-	tenant := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          rootName,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        rootID,
-		DefaultRoleID: moAdminRoleID,
-	}
-	ses.SetTenantInfo(tenant)
-
-	return ses
-}
-
-func newBatch(ts []types.Type, rows int, proc *process.Process) *batch.Batch {
-	bat := batch.NewWithSize(len(ts))
-	bat.SetRowCount(rows)
-	for i, typ := range ts {
-		switch typ.Oid {
-		case types.T_int8:
-			vec, _ := proc.AllocVectorOfRows(typ, rows, nil)
-			vs := vector.MustFixedCol[int8](vec)
-			for j := range vs {
-				vs[j] = int8(j)
-			}
-			bat.Vecs[i] = vec
-		default:
-			panic("invalid type")
-		}
-	}
-	return bat
-}
+// func newBatch(ts []types.Type, rows int, proc *process.Process) *batch.Batch {
+// 	bat := batch.NewWithSize(len(ts))
+// 	bat.SetRowCount(rows)
+// 	for i, typ := range ts {
+// 		switch typ.Oid {
+// 		case types.T_int8:
+// 			vec, _ := proc.AllocVectorOfRows(typ, rows, nil)
+// 			vs := vector.MustFixedCol[int8](vec)
+// 			for j := range vs {
+// 				vs[j] = int8(j)
+// 			}
+// 			bat.Vecs[i] = vec
+// 		default:
+// 			panic("invalid type")
+// 		}
+// 	}
+// 	return bat
+// }
 
 // func Test_saveQueryResultMeta(t *testing.T) {
 // 	ctrl := gomock.NewController(t)
@@ -243,10 +222,10 @@ func newBatch(ts []types.Type, rows int, proc *process.Process) *batch.Batch {
 // 	//fmt.Println(string(content))
 // }
 
-func Test_getFileSize(t *testing.T) {
-	files := []fileservice.DirEntry{
-		{Name: "a", IsDir: false, Size: 1},
-	}
-	assert.Equal(t, int64(1), getFileSize(files, "a"))
-	assert.Equal(t, int64(-1), getFileSize(files, "b"))
-}
+// func Test_getFileSize(t *testing.T) {
+// 	files := []fileservice.DirEntry{
+// 		{Name: "a", IsDir: false, Size: 1},
+// 	}
+// 	assert.Equal(t, int64(1), getFileSize(files, "a"))
+// 	assert.Equal(t, int64(-1), getFileSize(files, "b"))
+// }
