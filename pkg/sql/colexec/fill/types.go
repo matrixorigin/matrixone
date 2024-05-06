@@ -107,13 +107,6 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	if ctr != nil {
-		ctr.cleanBatch(proc.Mp())
-	}
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {

@@ -115,9 +115,6 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		if arg.ctr.isRemote {
