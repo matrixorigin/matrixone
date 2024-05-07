@@ -170,16 +170,16 @@ func (m *mockedBackgroundHandler) Clear() {}
 
 var _ BackgroundExec = &mockedBackgroundHandler{}
 
-var bh = &mockedBackgroundHandler{}
+// var bh = &mockedBackgroundHandler{}
 
-var tenant = &TenantInfo{
-	Tenant:        sysAccountName,
-	User:          rootName,
-	DefaultRole:   moAdminRoleName,
-	TenantID:      sysAccountID,
-	UserID:        rootID,
-	DefaultRoleID: moAdminRoleID,
-}
+// var tenant = &TenantInfo{
+// 	Tenant:        sysAccountName,
+// 	User:          rootName,
+// 	DefaultRole:   moAdminRoleName,
+// 	TenantID:      sysAccountID,
+// 	UserID:        rootID,
+// 	DefaultRoleID: moAdminRoleID,
+// }
 
 // func TestDoShowSubscriptions(t *testing.T) {
 // 	ctrl := gomock.NewController(t)
