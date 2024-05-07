@@ -41,7 +41,7 @@ type TxnTimestampAware interface {
 	// GetLatestCommitTS get latest commit timestamp
 	GetLatestCommitTS() timestamp.Timestamp
 	// SyncLatestCommitTS sync latest commit timestamp
-	SyncLatestCommitTS(timestamp.Timestamp)
+	SyncLatestCommitTS(timestamp.Timestamp) error
 	// GetSyncLatestCommitTSTimes returns times of sync latest commit ts
 	GetSyncLatestCommitTSTimes() uint64
 }

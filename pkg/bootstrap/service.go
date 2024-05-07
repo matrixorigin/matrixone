@@ -400,7 +400,9 @@ func (s *service) execBootstrap(ctx context.Context) error {
 
 		// if we bootstrapped, in current cn, we must wait logtails to be applied. All subsequence operations need to see the
 		// bootstrap data.
-		s.client.SyncLatestCommitTS(s.now())
+		if err := s.client.SyncLatestCommitTS(s.now()); err != nil {
+			return err
+		}
 	}
 
 	getLogger().Info("successfully completed bootstrap")

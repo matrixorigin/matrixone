@@ -141,18 +141,18 @@ func (s *sqlExecutor) ExecTxn(
 	if err = exec.commit(); err != nil {
 		return err
 	}
-	s.maybeWaitCommittedLogApplied(exec.opts)
-	return nil
+	return s.maybeWaitCommittedLogApplied(exec.opts)
 }
 
-func (s *sqlExecutor) maybeWaitCommittedLogApplied(opts executor.Options) {
+func (s *sqlExecutor) maybeWaitCommittedLogApplied(opts executor.Options) error {
 	if !opts.WaitCommittedLogApplied() {
-		return
+		return nil
 	}
 	ts := opts.Txn().Txn().CommitTS
 	if !ts.IsEmpty() {
-		s.txnClient.SyncLatestCommitTS(ts)
+		return s.txnClient.SyncLatestCommitTS(ts)
 	}
+	return nil
 }
 
 func (s *sqlExecutor) getCompileContext(

@@ -82,9 +82,11 @@ func (mr *MockTxnTimestampAwareMockRecorder) MinTimestamp() *gomock.Call {
 }
 
 // SyncLatestCommitTS mocks base method.
-func (m *MockTxnTimestampAware) SyncLatestCommitTS(arg0 timestamp.Timestamp) {
+func (m *MockTxnTimestampAware) SyncLatestCommitTS(arg0 timestamp.Timestamp) error {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SyncLatestCommitTS", arg0)
+	ret := m.ctrl.Call(m, "SyncLatestCommitTS", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
 }
 
 // SyncLatestCommitTS indicates an expected call of SyncLatestCommitTS.
@@ -372,9 +374,11 @@ func (mr *MockTxnClientMockRecorder) Resume() *gomock.Call {
 }
 
 // SyncLatestCommitTS mocks base method.
-func (m *MockTxnClient) SyncLatestCommitTS(arg0 timestamp.Timestamp) {
+func (m *MockTxnClient) SyncLatestCommitTS(arg0 timestamp.Timestamp) error {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SyncLatestCommitTS", arg0)
+	ret := m.ctrl.Call(m, "SyncLatestCommitTS", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
 }
 
 // SyncLatestCommitTS indicates an expected call of SyncLatestCommitTS.

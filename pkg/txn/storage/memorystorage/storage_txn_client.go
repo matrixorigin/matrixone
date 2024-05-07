@@ -91,13 +91,13 @@ func (*StorageTxnClient) WaitLogTailAppliedAt(
 	return timestamp.Timestamp{}, nil
 }
 
-func (*StorageTxnClient) GetLatestCommitTS() timestamp.Timestamp { panic("unimplemented") }
-func (*StorageTxnClient) SyncLatestCommitTS(timestamp.Timestamp) { panic("unimplemented") }
-func (*StorageTxnClient) GetSyncLatestCommitTSTimes() uint64     { panic("unimplemented") }
-func (*StorageTxnClient) Pause()                                 { panic("unimplemented") }
-func (*StorageTxnClient) Resume()                                { panic("unimplemented") }
-func (*StorageTxnClient) RefreshExpressionEnabled() bool         { panic("unimplemented") }
-func (*StorageTxnClient) CNBasedConsistencyEnabled() bool        { panic("unimplemented") }
+func (*StorageTxnClient) GetLatestCommitTS() timestamp.Timestamp       { panic("unimplemented") }
+func (*StorageTxnClient) SyncLatestCommitTS(timestamp.Timestamp) error { panic("unimplemented") }
+func (*StorageTxnClient) GetSyncLatestCommitTSTimes() uint64           { panic("unimplemented") }
+func (*StorageTxnClient) Pause()                                       { panic("unimplemented") }
+func (*StorageTxnClient) Resume()                                      { panic("unimplemented") }
+func (*StorageTxnClient) RefreshExpressionEnabled() bool               { panic("unimplemented") }
+func (*StorageTxnClient) CNBasedConsistencyEnabled() bool              { panic("unimplemented") }
 
 type StorageTxnOperator struct {
 	storages map[string]*Storage

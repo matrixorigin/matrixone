@@ -424,17 +424,18 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 	return client.adjustTimestamp(timestamp.Timestamp{})
 }
 
-func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
+func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) error {
 	client.updateLastCommitTS(TxnEvent{Txn: txn.TxnMeta{CommitTS: ts}})
 	if client.timestampWaiter != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 		defer cancel()
 		_, err := client.timestampWaiter.GetTimestamp(ctx, ts)
 		if err != nil {
-			util.GetLogger().Fatal("wait latest commit ts failed", zap.Error(err))
+			return err
 		}
 	}
 	client.atomic.forceSyncCommitTimes.Add(1)
+	return nil
 }
 
 func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {

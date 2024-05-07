@@ -181,8 +181,7 @@ func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp
 }
 
 func (s *service) handleSyncCommit(ctx context.Context, req *query.Request, resp *query.Response) error {
-	s._txnClient.SyncLatestCommitTS(req.SycnCommit.LatestCommitTS)
-	return nil
+	return s._txnClient.SyncLatestCommitTS(req.SycnCommit.LatestCommitTS)
 }
 
 func (s *service) handleGetCommit(ctx context.Context, req *query.Request, resp *query.Response) error {
