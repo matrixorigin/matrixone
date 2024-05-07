@@ -349,10 +349,15 @@ func (be *MVCCChain[T]) CloneCommittedInRange(start, end types.TS) (ret *MVCCCha
 	return
 }
 
-// PXU-1 TODO
+func (be *MVCCChain[T]) ClonePreparedInRange(start, end types.TS) (ret []T) {
+	be.RLock()
+	defer be.RUnlock()
+	return be.ClonePreparedInRangeLocked(start, end)
+}
+
 // ClonePreparedInRange will collect all txn node prepared in the time window.
 // Wait txn to complete committing if it didn't.
-func (be *MVCCChain[T]) ClonePreparedInRange(start, end types.TS) (ret []T) {
+func (be *MVCCChain[T]) ClonePreparedInRangeLocked(start, end types.TS) (ret []T) {
 	needWait, txn := be.NeedWaitCommittingLocked(end.Next())
 	if needWait {
 		be.RUnlock()
