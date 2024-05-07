@@ -78,6 +78,14 @@ func (a *AggContext) getGroupContext(i int) AggGroupExecContext {
 	return nil
 }
 
+func (a *AggContext) Marshal() []byte {
+	return nil
+}
+
+func (a *AggContext) Unmarshal(_ []byte) {
+	return
+}
+
 // AggCommonExecContext stores the common context for all the groups.
 // like the type scale, timezone and so on.
 type AggCommonExecContext interface {
