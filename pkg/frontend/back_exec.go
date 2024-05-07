@@ -513,7 +513,7 @@ var NewBackgroundExec = func(
 			proto:          &FakeProtocol{},
 			buf:            buffer.New(),
 			stmtProfile:    process.StmtProfile{},
-			tenant:         nil,
+			tenant:         GetBackgroundTenant(),
 			txnHandler:     txnHandler,
 			txnCompileCtx:  InitTxnCompilerContext(txnHandler, ""),
 			mrs:            nil,

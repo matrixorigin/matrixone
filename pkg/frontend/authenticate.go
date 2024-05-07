@@ -35,6 +35,8 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -58,7 +60,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-	"github.com/tidwall/btree"
 )
 
 type TenantInfo struct {
@@ -286,6 +287,17 @@ func GetAccountAdminRoleId() uint32 {
 
 func GetAdminUserId() uint32 {
 	return dumpID + 1
+}
+
+func GetBackgroundTenant() *TenantInfo {
+	return &TenantInfo{
+		Tenant:        GetDefaultTenant(),
+		User:          GetUserRoot(),
+		DefaultRole:   GetDefaultRole(),
+		TenantID:      GetSysTenantId(),
+		UserID:        GetUserRootId(),
+		DefaultRoleID: GetDefaultRoleId(),
+	}
 }
 
 func isCaseInsensitiveEqual(n string, role string) bool {
@@ -7806,7 +7818,8 @@ func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, f
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
 	upstream := &Session{
 		feSessionImpl: feSessionImpl{
-			proto: &FakeProtocol{},
+			proto:  &FakeProtocol{},
+			tenant: GetBackgroundTenant(),
 		},
 		connectCtx: ctx,
 
