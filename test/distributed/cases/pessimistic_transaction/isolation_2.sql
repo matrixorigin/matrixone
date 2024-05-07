@@ -81,7 +81,7 @@ begin;
 create table dis_table_04(a int);
 insert into dis_table_04 values (4);
 -- @session:id=1{
-use isolation_2;
+use dis_db_01;
 -- @wait:0:commit
 create table dis_table_04(a int);
 insert into dis_table_04 values (4);
@@ -99,6 +99,7 @@ use isolation_2;
 create external table ex_table_dis(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select num_col1,num_col2 from ex_table_dis;
 -- @session:id=1{
+use isolation_2;
 select * from ex_table_dis;
 -- @session}
 update ex_table_dis set num_col1=1000;
