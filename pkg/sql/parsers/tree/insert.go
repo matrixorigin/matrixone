@@ -17,12 +17,16 @@ package tree
 // the INSERT statement.
 type Insert struct {
 	statementImpl
-	Table             TableExpr
+	Table TableExpr
+
 	Accounts          IdentifierList
 	PartitionNames    IdentifierList
 	Columns           IdentifierList
 	Rows              *Select
 	OnDuplicateUpdate UpdateExprs
+	IsRestore         bool
+	DestTableTenantID uint32
+	FromDataTenantID  uint32
 }
 
 func (node *Insert) Format(ctx *FmtCtx) {
@@ -56,8 +60,7 @@ func (node *Insert) Format(ctx *FmtCtx) {
 }
 
 func (node *Insert) GetStatementType() string { return "Insert" }
-
-func (node *Insert) GetQueryType() string { return QueryTypeDML }
+func (node *Insert) GetQueryType() string     { return QueryTypeDML }
 
 func NewInsert(t TableExpr, c IdentifierList, r *Select, p IdentifierList) *Insert {
 	return &Insert{
