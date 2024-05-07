@@ -1,4 +1,3 @@
--- @bvt:issue#14784
 -- account level
 create database if not exists snapshot_read;
 use snapshot_read;
