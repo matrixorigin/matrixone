@@ -876,7 +876,7 @@ func TestSession_Migrate(t *testing.T) {
 	gSysVars := &GlobalSystemVariables{}
 	InitGlobalSystemVariables(gSysVars)
 	s := genSession(ctrl, gSysVars)
-	err := s.Migrate(&query.MigrateConnToRequest{
+	err := Migrate(s, &query.MigrateConnToRequest{
 		DB: "d1",
 		PrepareStmts: []*query.PrepareStmt{
 			{Name: "p1", SQL: `select ?`},

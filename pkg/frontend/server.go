@@ -80,9 +80,17 @@ func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
 
-var globalRtMgr *RoutineManager
+var globalRtMgr atomic.Value
 var globalPu atomic.Value
-var globalAicm *defines.AutoIncrCacheManager
+var globalAicm atomic.Value
+
+func setGlobalRtMgr(rtMgr *RoutineManager) {
+	globalRtMgr.Store(rtMgr)
+}
+
+func getGlobalRtMgr() *RoutineManager {
+	return globalRtMgr.Load().(*RoutineManager)
+}
 
 func setGlobalPu(pu *config.ParameterUnit) {
 	globalPu.Store(pu)
@@ -90,6 +98,17 @@ func setGlobalPu(pu *config.ParameterUnit) {
 
 func getGlobalPu() *config.ParameterUnit {
 	return globalPu.Load().(*config.ParameterUnit)
+}
+
+func setGlobalAicm(aicm *defines.AutoIncrCacheManager) {
+	globalAicm.Store(aicm)
+}
+
+func getGlobalAic() *defines.AutoIncrCacheManager {
+	if globalAicm.Load() != nil {
+		return globalAicm.Load().(*defines.AutoIncrCacheManager)
+	}
+	return nil
 }
 
 func NewMOServer(
@@ -100,13 +119,13 @@ func NewMOServer(
 	baseService BaseService,
 ) *MOServer {
 	setGlobalPu(pu)
-	globalAicm = aicm
+	setGlobalAicm(aicm)
 	codec := NewSqlCodec()
 	rm, err := NewRoutineManager(ctx)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-	globalRtMgr = rm
+	setGlobalRtMgr(rm)
 	rm.setBaseService(baseService)
 	if baseService != nil {
 		rm.setSessionMgr(baseService.SessionMgr())
