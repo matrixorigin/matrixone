@@ -73,21 +73,6 @@ void _mi_os_init(void) {
 bool _mi_os_decommit(void* addr, size_t size, mi_stats_t* stats);
 bool _mi_os_commit(void* addr, size_t size, bool* is_zero, mi_stats_t* tld_stats);
 
-static inline uintptr_t _mi_align_down(uintptr_t sz, size_t alignment) {
-  mi_assert_internal(alignment != 0);
-  uintptr_t mask = alignment - 1;
-  if ((alignment & mask) == 0) { // power of two?
-    return (sz & ~mask);
-  }
-  else {
-    return ((sz / alignment) * alignment);
-  }
-}
-
-static void* mi_align_down_ptr(void* p, size_t alignment) {
-  return (void*)_mi_align_down((uintptr_t)p, alignment);
-}
-
 
 /* -----------------------------------------------------------
   aligned hinting
@@ -485,7 +470,7 @@ bool _mi_os_purge_ex(void* p, size_t size, bool allow_reset, mi_stats_t* stats)
   _mi_stat_increase(&stats->purged, size);
 
   if (mi_option_is_enabled(mi_option_purge_decommits) &&   // should decommit?
-    !_mi_preloading())                                     // don't decommit during preloading (unsafe)
+      !_mi_preloading())                                   // don't decommit during preloading (unsafe)
   {
     bool needs_recommit = true;
     mi_os_decommit_ex(p, size, &needs_recommit, stats);
@@ -504,7 +489,6 @@ bool _mi_os_purge_ex(void* p, size_t size, bool allow_reset, mi_stats_t* stats)
 bool _mi_os_purge(void* p, size_t size, mi_stats_t * stats) {
   return _mi_os_purge_ex(p, size, true, stats);
 }
-
 
 // Protect a region in memory to be not accessible.
 static  bool mi_os_protectx(void* addr, size_t size, bool protect) {
