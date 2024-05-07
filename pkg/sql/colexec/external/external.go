@@ -457,7 +457,7 @@ func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) 
 		if err != nil {
 			return 0, err
 		}
-		if len(fields) != len(cols) {
+		if len(fields) < len(cols) {
 			continue
 		}
 		if isLegalLine(param, cols, fields) {
