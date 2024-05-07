@@ -190,7 +190,7 @@ func (be *MVCCChain[T]) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) 
 }
 
 // PXU-1 TODO
-func (be *MVCCChain[T]) HasUncommittedNode() bool {
+func (be *MVCCChain[T]) HasUncommittedNodeLocked() bool {
 	var found bool
 	be.LoopChainLocked(func(n T) bool {
 		if n.IsCommitted() {
@@ -205,8 +205,7 @@ func (be *MVCCChain[T]) HasUncommittedNode() bool {
 	return found
 }
 
-// PXU-1 TODO
-func (be *MVCCChain[T]) HasCommittedNode() bool {
+func (be *MVCCChain[T]) HasCommittedNodeLocked() bool {
 	var found bool
 	be.LoopChainLocked(func(n T) bool {
 		if n.IsCommitted() {

@@ -348,7 +348,7 @@ func (obj *aobject) estimateRawScore() (score int, dropped bool, err error) {
 		return
 	}
 	obj.meta.RLock()
-	atLeastOneCommitted := obj.meta.HasCommittedNode()
+	atLeastOneCommitted := obj.meta.HasCommittedNodeLocked()
 	obj.meta.RUnlock()
 	if !atLeastOneCommitted {
 		score = 1

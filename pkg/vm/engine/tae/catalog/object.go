@@ -574,10 +574,10 @@ func (entry *ObjectEntry) GetSchemaLocked() *Schema {
 func (entry *ObjectEntry) PrepareCompact() bool {
 	entry.RLock()
 	defer entry.RUnlock()
-	if entry.HasUncommittedNode() {
+	if entry.HasUncommittedNodeLocked() {
 		return false
 	}
-	if !entry.HasCommittedNode() {
+	if !entry.HasCommittedNodeLocked() {
 		return false
 	}
 	if entry.HasDropCommittedLocked() {
