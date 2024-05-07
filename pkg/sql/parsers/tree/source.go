@@ -25,25 +25,25 @@ func init() {
 		func() *CreateSource { return &CreateSource{} },
 		func(c *CreateSource) { c.reset() },
 		reuse.DefaultOptions[CreateSource](), //.
-	) // WithEnableChecker()
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateSourceWithOption](
 		func() *CreateSourceWithOption { return &CreateSourceWithOption{} },
 		func(c *CreateSourceWithOption) { c.reset() },
 		reuse.DefaultOptions[CreateSourceWithOption](), //.
-	) // WithEnableChecker()
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeHeader](
 		func() *AttributeHeader { return &AttributeHeader{} },
 		func(a *AttributeHeader) { a.reset() },
 		reuse.DefaultOptions[AttributeHeader](), //.
-	) // WithEnableChecker()
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeHeaders](
 		func() *AttributeHeaders { return &AttributeHeaders{} },
 		func(a *AttributeHeaders) { a.reset() },
 		reuse.DefaultOptions[AttributeHeaders](), //.
-	) // WithEnableChecker()
+	) //WithEnableChecker()
 }
 
 type CreateSource struct {
@@ -118,8 +118,7 @@ func (node *CreateSource) Format(ctx *FmtCtx) {
 }
 
 func (node *CreateSource) GetStatementType() string { return "Create Source" }
-
-func (node *CreateSource) GetQueryType() string { return QueryTypeDDL }
+func (node *CreateSource) GetQueryType() string     { return QueryTypeDDL }
 
 func (node CreateSource) TypeName() string { return "tree.CreateSource" }
 
@@ -221,10 +220,6 @@ func (node *CreateSource) reset() {
 				d.Free()
 			case *CheckIndex:
 				d.Free()
-			default:
-				if d != nil {
-					panic(fmt.Sprintf("miss Free for %v", d))
-				}
 			}
 		}
 	}
@@ -285,7 +280,6 @@ func (node *AttributeHeader) reset() {
 func (node *AttributeHeader) Free() {
 	reuse.Free[AttributeHeader](node, nil)
 }
-
 func NewAttributeHeader(key string) *AttributeHeader {
 	return &AttributeHeader{
 		Key: key,
@@ -309,7 +303,6 @@ func (node *AttributeHeaders) reset() {
 func (node *AttributeHeaders) Free() {
 	reuse.Free[AttributeHeaders](node, nil)
 }
-
 func NewAttributeHeaders() *AttributeHeaders {
 	return &AttributeHeaders{}
 }

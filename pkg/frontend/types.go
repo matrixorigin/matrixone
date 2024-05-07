@@ -176,6 +176,7 @@ func execResultArrayHasData(arr []ExecResult) bool {
 type BackgroundExec interface {
 	Close()
 	Exec(context.Context, string) error
+	ExecRestore(context.Context, string, uint32, uint32) error
 	ExecStmt(context.Context, tree.Statement) error
 	GetExecResultSet() []interface{}
 	ClearExecResultSet()
