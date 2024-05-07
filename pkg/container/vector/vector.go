@@ -418,6 +418,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 
 	v.nsp.Reset()
 	v.sorted = false
+	v.isBin = false
 
 	// if !v.OnUsed || v.OnPut {
 	// 	panic("free vector which unalloc or in put list")

@@ -22,17 +22,18 @@ import (
 func init() {
 	reuse.CreatePool[Vector](
 		func() *Vector {
-			res := &Vector{}
+			res := new(Vector)
+			res.nsp = &nulls.Nulls{}
 			return res
 		},
 		func(v *Vector) {
-			*v = Vector{
-				// AllocMsg: v.AllocMsg,
-				// FreeMsg:  v.FreeMsg,
-				// PutMsg:   v.PutMsg,
-				// GetMsg:   v.GetMsg,
-				// OnUsed: v.OnUsed,
-			}
+			// *v = Vector{
+			// 	// AllocMsg: v.AllocMsg,
+			// 	// FreeMsg:  v.FreeMsg,
+			// 	// PutMsg:   v.PutMsg,
+			// 	// GetMsg:   v.GetMsg,
+			// 	// OnUsed: v.OnUsed,
+			// }
 		},
 		reuse.DefaultOptions[Vector](),
 	)
@@ -44,7 +45,7 @@ func (v Vector) TypeName() string {
 
 func NewVecFromReuse() *Vector {
 	v := reuse.Alloc[Vector](nil)
-	v.nsp = &nulls.Nulls{}
+	// v.nsp = &nulls.Nulls{}
 	// if v.OnUsed {
 	// 	panic("alloc onused vector")
 	// }
