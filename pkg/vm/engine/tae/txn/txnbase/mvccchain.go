@@ -242,8 +242,8 @@ func (be *MVCCChain[T]) IsCreatingOrAborted() bool {
 	return un.IsActive() || un.IsAborted()
 }
 
-func (be *MVCCChain[T]) CheckConflict(txn txnif.TxnReader) (err error) {
-	if be.IsEmpty() {
+func (be *MVCCChain[T]) CheckConflictLocked(txn txnif.TxnReader) (err error) {
+	if be.IsEmptyLocked() {
 		return
 	}
 	node := be.GetLatestNodeLocked()
@@ -280,7 +280,7 @@ func (be *MVCCChain[T]) WriteAllTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (be *MVCCChain[T]) IsEmpty() bool {
+func (be *MVCCChain[T]) IsEmptyLocked() bool {
 	head := be.MVCC.GetHead()
 	return head == nil
 }
@@ -302,17 +302,6 @@ func (be *MVCCChain[T]) Apply1PCCommit() error {
 	be.Lock()
 	defer be.Unlock()
 	return be.GetLatestNodeLocked().ApplyCommit()
-}
-
-func (be *MVCCChain[T]) CloneLatestNode() (*MVCCChain[T], T) {
-	cloned := &MVCCChain[T]{
-		MVCC:    common.NewGenericSortedDList(be.comparefn),
-		RWMutex: &sync.RWMutex{},
-	}
-	un := be.GetLatestNodeLocked()
-	uncloned := un.CloneData()
-	cloned.Insert(uncloned)
-	return cloned, uncloned
 }
 
 // In /Catalog, there're three states: Active, Committing and Committed.
@@ -339,7 +328,7 @@ func (be *MVCCChain[T]) PrepareRollback() (bool, error) {
 	node := be.MVCC.GetHead()
 	_ = node.GetPayload().PrepareRollback()
 	be.MVCC.Delete(node)
-	isEmpty := be.IsEmpty()
+	isEmpty := be.IsEmptyLocked()
 	return isEmpty, nil
 }
 

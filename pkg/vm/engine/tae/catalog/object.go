@@ -372,7 +372,7 @@ func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.
 		txnToWait.GetTxnState(true)
 		entry.Lock()
 	}
-	err = entry.CheckConflict(txn)
+	err = entry.CheckConflictLocked(txn)
 	if err != nil {
 		return
 	}
@@ -589,7 +589,7 @@ func (entry *ObjectEntry) PrepareCompact() bool {
 // for old flushed objects, stats may be empty
 func (entry *ObjectEntry) ObjectPersisted() bool {
 	entry.RLock()
-	if entry.IsEmpty() {
+	if entry.IsEmptyLocked() {
 		entry.RUnlock()
 		return false
 	}
@@ -605,7 +605,7 @@ func (entry *ObjectEntry) ObjectPersisted() bool {
 // for old flushed objects, stats may be empty
 func (entry *ObjectEntry) HasCommittedPersistedData() bool {
 	entry.RLock()
-	if entry.IsEmpty() {
+	if entry.IsEmptyLocked() {
 		entry.RUnlock()
 		return false
 	}

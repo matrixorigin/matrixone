@@ -691,7 +691,7 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 		txnToWait.GetTxnState(true)
 		entry.Lock()
 	}
-	err = entry.CheckConflict(txn)
+	err = entry.CheckConflictLocked(txn)
 	if err != nil {
 		return
 	}

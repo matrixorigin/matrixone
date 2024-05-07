@@ -1035,11 +1035,11 @@ func (n *MVCCHandle) isEmptyLocked() bool {
 	}
 	return true
 }
-func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.Location, needCheckWhenCommit bool) (entry txnif.TxnEntry, ok bool, err error) {
+func (n *MVCCHandle) TryDeleteByDeltalocLocked(txn txnif.AsyncTxn, deltaLoc objectio.Location, needCheckWhenCommit bool) (entry txnif.TxnEntry, ok bool, err error) {
 	if !n.isEmptyLocked() {
 		return
 	}
-	_, entry, err = n.UpdateDeltaLoc(txn, deltaLoc, needCheckWhenCommit)
+	_, entry, err = n.UpdateDeltaLocLocked(txn, deltaLoc, needCheckWhenCommit)
 	if err != nil {
 		return
 	}
@@ -1067,14 +1067,14 @@ func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.L
 	}
 	return
 }
-func (n *MVCCHandle) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc objectio.Location, needCheckWhenCommit bool) (isNewNode bool, entry txnif.TxnEntry, err error) {
+func (n *MVCCHandle) UpdateDeltaLocLocked(txn txnif.TxnReader, deltaloc objectio.Location, needCheckWhenCommit bool) (isNewNode bool, entry txnif.TxnEntry, err error) {
 	needWait, txnToWait := n.deltaloc.NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
 		n.Unlock()
 		txnToWait.GetTxnState(true)
 		n.Lock()
 	}
-	err = n.deltaloc.CheckConflict(txn)
+	err = n.deltaloc.CheckConflictLocked(txn)
 	if err != nil {
 		return
 	}
@@ -1084,7 +1084,7 @@ func (n *MVCCHandle) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc objectio.Locat
 	}
 	entry = n.deltaloc
 
-	if !n.deltaloc.IsEmpty() {
+	if !n.deltaloc.IsEmptyLocked() {
 		node := n.deltaloc.GetLatestNodeLocked()
 		if node.IsSameTxn(txn) {
 			node.BaseNode.Update(baseNode)

@@ -153,7 +153,7 @@ func (be *BaseEntryImpl[T]) ConflictCheck(txn txnif.TxnReader) (err error) {
 			waitTxn.GetTxnState(true)
 			be.RLock()
 		}
-		err = be.CheckConflict(txn)
+		err = be.CheckConflictLocked(txn)
 		if err != nil {
 			return
 		}
@@ -243,7 +243,7 @@ func (be *BaseEntryImpl[T]) IsVisible(txn txnif.TxnReader, mu *sync.RWMutex) (ok
 }
 
 func (be *BaseEntryImpl[T]) DropEntryLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
-	err = be.CheckConflict(txn)
+	err = be.CheckConflictLocked(txn)
 	if err != nil {
 		return
 	}

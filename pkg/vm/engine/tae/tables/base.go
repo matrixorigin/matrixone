@@ -776,7 +776,7 @@ func (blk *baseObject) TryDeleteByDeltaloc(
 	blk.Lock()
 	defer blk.Unlock()
 	blkMVCC := blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID)
-	return blkMVCC.TryDeleteByDeltaloc(txn, deltaLoc, true)
+	return blkMVCC.TryDeleteByDeltalocLocked(txn, deltaLoc, true)
 }
 
 func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {
@@ -1066,7 +1066,7 @@ func (blk *baseObject) UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLo
 	blk.Lock()
 	defer blk.Unlock()
 	mvcc := blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID)
-	return mvcc.UpdateDeltaLoc(txn, deltaLoc, false)
+	return mvcc.UpdateDeltaLocLocked(txn, deltaLoc, false)
 }
 
 func (blk *baseObject) GetDeltaPersistedTS() types.TS {
