@@ -181,7 +181,7 @@ func (be *MVCCChain[T]) LoopChainLocked(fn func(T) bool) {
 	}, false)
 }
 
-func (be *MVCCChain[T]) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
+func (be *MVCCChain[T]) NeedWaitCommittingLocked(ts types.TS) (bool, txnif.TxnReader) {
 	un := be.GetLatestNodeLocked()
 	if un.IsNil() {
 		return false, nil
@@ -189,7 +189,6 @@ func (be *MVCCChain[T]) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) 
 	return un.NeedWaitCommitting(ts)
 }
 
-// PXU-1 TODO
 func (be *MVCCChain[T]) HasUncommittedNodeLocked() bool {
 	var found bool
 	be.LoopChainLocked(func(n T) bool {
@@ -326,8 +325,9 @@ func (be *MVCCChain[T]) IsCommitted() bool {
 	return un.IsCommitted()
 }
 
+// PXU-1 TODO
 func (be *MVCCChain[T]) CloneCommittedInRange(start, end types.TS) (ret *MVCCChain[T]) {
-	needWait, txn := be.NeedWaitCommitting(end.Next())
+	needWait, txn := be.NeedWaitCommittingLocked(end.Next())
 	if needWait {
 		be.RUnlock()
 		txn.GetTxnState(true)
@@ -349,10 +349,11 @@ func (be *MVCCChain[T]) CloneCommittedInRange(start, end types.TS) (ret *MVCCCha
 	return
 }
 
+// PXU-1 TODO
 // ClonePreparedInRange will collect all txn node prepared in the time window.
 // Wait txn to complete committing if it didn't.
 func (be *MVCCChain[T]) ClonePreparedInRange(start, end types.TS) (ret []T) {
-	needWait, txn := be.NeedWaitCommitting(end.Next())
+	needWait, txn := be.NeedWaitCommittingLocked(end.Next())
 	if needWait {
 		be.RUnlock()
 		txn.GetTxnState(true)
