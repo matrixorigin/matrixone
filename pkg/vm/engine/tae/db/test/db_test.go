@@ -5626,7 +5626,7 @@ func TestGCDropDB(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetDeleteAt())
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetDeleteAtLocked())
 	now := time.Now()
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
@@ -5713,7 +5713,7 @@ func TestGCDropTable(t *testing.T) {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
-	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetDeleteAt())
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetDeleteAtLocked())
 	t.Log(time.Since(now))
 	err = manager.GC(context.Background())
 	assert.Nil(t, err)

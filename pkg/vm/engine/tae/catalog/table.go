@@ -490,7 +490,7 @@ func (entry *TableEntry) StringLockedWithLevel(level common.PPLevel) string {
 	name := entry.GetLastestSchemaLocked().Name
 	if level <= common.PPL1 {
 		return fmt.Sprintf("TBL[%d][name=%s][C@%s,D@%s]",
-			entry.ID, name, entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAt().ToString())
+			entry.ID, name, entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAtLocked().ToString())
 	}
 	return fmt.Sprintf("TBL%s[name=%s, id=%d]", entry.BaseEntryImpl.StringLocked(), name, entry.ID)
 }
@@ -694,7 +694,7 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 		return
 	}
 	var node *MVCCNode[*TableMVCCNode]
-	isNewNode, node = entry.getOrSetUpdateNode(txn)
+	isNewNode, node = entry.getOrSetUpdateNodeLocked(txn)
 
 	newSchema = node.BaseNode.Schema
 	if isNewNode {

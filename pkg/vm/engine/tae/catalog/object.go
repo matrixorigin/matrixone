@@ -378,7 +378,7 @@ func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.
 	}
 	baseNode := NewObjectInfoWithObjectStats(stats)
 	var node *MVCCNode[*ObjectMVCCNode]
-	isNewNode, node = entry.getOrSetUpdateNode(txn)
+	isNewNode, node = entry.getOrSetUpdateNodeLocked(txn)
 	node.BaseNode.Update(baseNode)
 	return
 }
@@ -429,7 +429,7 @@ func (entry *ObjectEntry) StringWithLevel(level common.PPLevel) string {
 func (entry *ObjectEntry) StringWithLevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
 		return fmt.Sprintf("[%s-%s]OBJ[%s][C@%s,D@%s]",
-			entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAt().ToString())
+			entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAtLocked().ToString())
 	}
 	return fmt.Sprintf("[%s-%s]OBJ[%s]%s", entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.BaseEntryImpl.StringLocked())
 }

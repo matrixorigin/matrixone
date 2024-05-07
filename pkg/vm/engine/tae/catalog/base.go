@@ -32,6 +32,7 @@ type BaseEntry interface {
 	//for global checkpoint
 	RLock()
 	RUnlock()
+	DeleteBeforeLocked(ts types.TS) bool
 	DeleteBefore(ts types.TS) bool
 }
 
@@ -166,7 +167,7 @@ func (be *BaseEntryImpl[T]) ConflictCheck(txn txnif.TxnReader) (err error) {
 	}
 	return
 }
-func (be *BaseEntryImpl[T]) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *MVCCNode[T]) {
+func (be *BaseEntryImpl[T]) getOrSetUpdateNodeLocked(txn txnif.TxnReader) (newNode bool, node *MVCCNode[T]) {
 	entry := be.GetLatestNodeLocked()
 	if entry.IsSameTxn(txn) {
 		return false, entry
@@ -180,13 +181,19 @@ func (be *BaseEntryImpl[T]) getOrSetUpdateNode(txn txnif.TxnReader) (newNode boo
 
 func (be *BaseEntryImpl[T]) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
 	var entry *MVCCNode[T]
-	isNewNode, entry = be.getOrSetUpdateNode(txn)
+	isNewNode, entry = be.getOrSetUpdateNodeLocked(txn)
 	entry.Delete()
 	return
 }
 
 func (be *BaseEntryImpl[T]) DeleteBefore(ts types.TS) bool {
-	createAt := be.GetDeleteAt()
+	be.RLock()
+	defer be.RUnlock()
+	return be.DeleteBeforeLocked(ts)
+}
+
+func (be *BaseEntryImpl[T]) DeleteBeforeLocked(ts types.TS) bool {
+	createAt := be.GetDeleteAtLocked()
 	if createAt.IsEmpty() {
 		return false
 	}
@@ -276,7 +283,7 @@ func (be *BaseEntryImpl[T]) GetCreatedAtLocked() types.TS {
 	return un.CreatedAt
 }
 
-func (be *BaseEntryImpl[T]) GetDeleteAt() types.TS {
+func (be *BaseEntryImpl[T]) GetDeleteAtLocked() types.TS {
 	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return types.TS{}

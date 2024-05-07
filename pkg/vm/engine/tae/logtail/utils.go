@@ -2836,7 +2836,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 func (collector *GlobalCollector) isEntryDeletedBeforeThreshold(entry catalog.BaseEntry) bool {
 	entry.RLock()
 	defer entry.RUnlock()
-	return entry.DeleteBefore(collector.versionThershold)
+	return entry.DeleteBeforeLocked(collector.versionThershold)
 }
 func (collector *GlobalCollector) VisitDB(entry *catalog.DBEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {

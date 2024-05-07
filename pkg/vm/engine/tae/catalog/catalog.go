@@ -150,18 +150,14 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	logutil.Infof("GC Catalog %v", ts.ToString())
 	processor := LoopProcessor{}
 	processor.DatabaseFn = func(d *DBEntry) error {
-		d.RLock()
 		needGC := d.DeleteBefore(ts)
-		d.RUnlock()
 		if needGC {
 			catalog.RemoveEntry(d)
 		}
 		return nil
 	}
 	processor.TableFn = func(te *TableEntry) error {
-		te.RLock()
 		needGC := te.DeleteBefore(ts)
-		te.RUnlock()
 		if needGC {
 			db := te.db
 			db.RemoveEntry(te)
@@ -170,7 +166,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	}
 	processor.ObjectFn = func(se *ObjectEntry) error {
 		se.RLock()
-		needGC := se.DeleteBefore(ts) && !se.InMemoryDeletesExisted()
+		needGC := se.DeleteBeforeLocked(ts) && !se.InMemoryDeletesExisted()
 		se.RUnlock()
 		if needGC {
 			tbl := se.table
@@ -181,7 +177,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	processor.TombstoneFn = func(t data.Tombstone) error {
 		obj := t.GetObject().(*ObjectEntry)
 		obj.RLock()
-		needGC := obj.DeleteBefore(ts) && !obj.InMemoryDeletesExisted()
+		needGC := obj.DeleteBeforeLocked(ts) && !obj.InMemoryDeletesExisted()
 		obj.RUnlock()
 		if needGC {
 			tbl := obj.table
@@ -320,7 +316,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 		logutil.Info("delete %d", zap.Uint64("dbid", dbid), zap.String("catalog pp", catalog.SimplePPString(common.PPL3)))
 		panic(err)
 	}
-	dbDeleteAt := db.GetDeleteAt()
+	dbDeleteAt := db.GetDeleteAtLocked()
 	if !dbDeleteAt.IsEmpty() {
 		if !dbDeleteAt.Equal(&txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), dbDeleteAt.ToString()))
@@ -502,7 +498,7 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	tableDeleteAt := tbl.GetDeleteAt()
+	tableDeleteAt := tbl.GetDeleteAtLocked()
 	if !tableDeleteAt.IsEmpty() {
 		if !tableDeleteAt.Equal(&txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tableDeleteAt.ToString()))
@@ -562,7 +558,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {
-		deleteAt := obj.GetDeleteAt()
+		deleteAt := obj.GetDeleteAtLocked()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
 			obj.objData.UpgradeAllDeleteChain()
@@ -633,7 +629,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {
-		deleteAt := obj.GetDeleteAt()
+		deleteAt := obj.GetDeleteAtLocked()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
 			obj.objData.UpgradeAllDeleteChain()
@@ -692,7 +688,7 @@ func (catalog *Catalog) replayObjectByBlock(
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {
-		deleteAt := obj.GetDeleteAt()
+		deleteAt := obj.GetDeleteAtLocked()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
 			obj.objData.UpgradeAllDeleteChain()
