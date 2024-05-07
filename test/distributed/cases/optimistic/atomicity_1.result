@@ -223,7 +223,7 @@ internal error: administrative command is unsupported in transactions
 truncate table  t_code_rule;
 drop table t_code_rule;
 drop database atomic_1;
-internal error: CREATE/DROP of database is not supported in transactions
+Can't drop database 'atomic_1'; database doesn't exist
 drop role role1,role2;
 internal error: administrative command is unsupported in transactions
 commit;
