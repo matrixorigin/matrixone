@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,21 +14,22 @@
 
 package malloc
 
-import (
-	"github.com/nnsgmsone/mmap"
-)
+/*
+#include "mimalloc/static.c"
+#cgo CFLAGS: -Imimalloc -Wstringop-overflow=0
+*/
+import "C"
+import "unsafe"
 
-// New allocates a slice of size n. The returned slice is from manually managed
-// memory and MUST be released by calling Free. Failure to do so will result in
-// a memory leak.
 func Alloc(n int) []byte {
-	return mmap.Alloc(n)
+	ptr := C.mi_malloc(C.ulong(n))
+	slice := unsafe.Slice((*byte)(ptr), n)
+	return slice
 }
 
 func Free(b []byte) {
 	if cap(b) == 0 {
 		return
 	}
-	b = b[:cap(b)]
-	mmap.Free(b)
+	C.mi_free((unsafe.Pointer)(unsafe.SliceData(b)))
 }

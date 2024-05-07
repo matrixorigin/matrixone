@@ -85,18 +85,6 @@ type container struct {
 	bat *batch.Batch
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mp := proc.Mp()
-	if ctr := arg.ctr; ctr != nil {
-		ctr.cleanBatch(mp)
-		if ctr.hashTable != nil {
-			ctr.hashTable.Free()
-		}
-		ctr.state = buildingHashMap
-		ctr.FreeAllReg()
-	}
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	mp := proc.Mp()
 	if arg.ctr != nil {

@@ -33,21 +33,14 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 func (arg *Argument) Prepare(proc *process.Process) error {
 	var err error
 
-	if arg.ctr == nil {
-		arg.ctr = new(container)
-		arg.ctr.InitReceiver(proc, false)
-		arg.ctr.btc = nil
-		arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp())
-		if err != nil {
-			return err
-		}
-		arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-	} else {
-		err = arg.ctr.hashTable.Init()
-		if err != nil {
-			return err
-		}
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, false)
+	arg.ctr.btc = nil
+	arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp())
+	if err != nil {
+		return err
 	}
+	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	return nil
 }
 
@@ -96,9 +89,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 // build hash table
-func (ctr *container) buildHashTable(proc *process.Process, analyse process.Analyze, idx int, isFirst bool) error {
+func (c *container) buildHashTable(proc *process.Process, analyse process.Analyze, idx int, isFirst bool) error {
 	for {
-		btc, _, err := ctr.ReceiveFromSingleReg(idx, analyse)
+		btc, _, err := c.ReceiveFromSingleReg(idx, analyse)
 		if err != nil {
 			return err
 		}
@@ -117,9 +110,9 @@ func (ctr *container) buildHashTable(proc *process.Process, analyse process.Anal
 		analyse.Input(btc, isFirst)
 
 		cnt := btc.RowCount()
-		itr := ctr.hashTable.NewIterator()
+		itr := c.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
-			rowcnt := ctr.hashTable.GroupCount()
+			rowcnt := c.hashTable.GroupCount()
 
 			n := cnt - i
 			if n > hashmap.UnitLimit {
@@ -138,8 +131,8 @@ func (ctr *container) buildHashTable(proc *process.Process, analyse process.Anal
 				}
 
 				if v > rowcnt {
-					ctr.cnts = append(ctr.cnts, proc.Mp().GetSels())
-					ctr.cnts[v-1] = append(ctr.cnts[v-1], 1)
+					c.cnts = append(c.cnts, proc.Mp().GetSels())
+					c.cnts[v-1] = append(c.cnts[v-1], 1)
 					rowcnt++
 				}
 			}
@@ -149,9 +142,9 @@ func (ctr *container) buildHashTable(proc *process.Process, analyse process.Anal
 	return nil
 }
 
-func (ctr *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
+func (c *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
 	for {
-		btc, _, err := ctr.ReceiveFromSingleReg(idx, analyze)
+		btc, _, err := c.ReceiveFromSingleReg(idx, analyze)
 		if err != nil {
 			return false, err
 		}
@@ -168,33 +161,33 @@ func (ctr *container) probeHashTable(proc *process.Process, analyze process.Anal
 		}
 
 		analyze.Input(btc, isFirst)
-		if ctr.btc != nil {
-			proc.PutBatch(ctr.btc)
-			ctr.btc = nil
+		if c.btc != nil {
+			proc.PutBatch(c.btc)
+			c.btc = nil
 		}
-		ctr.btc = batch.NewWithSize(len(btc.Vecs))
+		c.btc = batch.NewWithSize(len(btc.Vecs))
 		for i := range btc.Vecs {
-			ctr.btc.Vecs[i] = proc.GetVector(*btc.Vecs[i].GetType())
+			c.btc.Vecs[i] = proc.GetVector(*btc.Vecs[i].GetType())
 		}
 		needInsert := make([]uint8, hashmap.UnitLimit)
 		resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
 		cnt := btc.RowCount()
-		itr := ctr.hashTable.NewIterator()
+		itr := c.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
 			n := cnt - i
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
 
-			copy(ctr.inBuckets, hashmap.OneUInt8s)
+			copy(c.inBuckets, hashmap.OneUInt8s)
 			copy(needInsert, resetsNeedInsert)
 			insertcnt := 0
 
-			vs, zs := itr.Find(i, n, btc.Vecs, ctr.inBuckets)
+			vs, zs := itr.Find(i, n, btc.Vecs, c.inBuckets)
 
 			for j, v := range vs {
 				// not in the processed bucket
-				if ctr.inBuckets[j] == 0 {
+				if c.inBuckets[j] == 0 {
 					continue
 				}
 
@@ -209,19 +202,19 @@ func (ctr *container) probeHashTable(proc *process.Process, analyze process.Anal
 				}
 
 				// has been added into output batch
-				if ctr.cnts[v-1][0] == 0 {
+				if c.cnts[v-1][0] == 0 {
 					continue
 				}
 
 				needInsert[j] = 1
-				ctr.cnts[v-1][0] = 0
+				c.cnts[v-1][0] = 0
 				insertcnt++
 			}
-			ctr.btc.AddRowCount(insertcnt)
+			c.btc.AddRowCount(insertcnt)
 
 			if insertcnt > 0 {
 				for pos := range btc.Vecs {
-					if err := ctr.btc.Vecs[pos].UnionBatch(btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
+					if err := c.btc.Vecs[pos].UnionBatch(btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
 						btc.Clean(proc.Mp())
 						return false, err
 					}
@@ -230,10 +223,10 @@ func (ctr *container) probeHashTable(proc *process.Process, analyze process.Anal
 		}
 
 		proc.PutBatch(btc)
-		analyze.Alloc(int64(ctr.btc.Size()))
-		analyze.Output(ctr.btc, isLast)
+		analyze.Alloc(int64(c.btc.Size()))
+		analyze.Output(c.btc, isLast)
 
-		result.Batch = ctr.btc
+		result.Batch = c.btc
 		return false, nil
 	}
 }
