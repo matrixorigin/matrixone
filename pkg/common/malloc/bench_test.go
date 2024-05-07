@@ -14,22 +14,13 @@
 
 package malloc
 
-/*
-#include "mimalloc/static.c"
-#cgo CFLAGS: -Imimalloc -Wstringop-overflow=0
-*/
-import "C"
-import "unsafe"
+import (
+	"testing"
+)
 
-func Alloc(n int) []byte {
-	ptr := C.mi_malloc(C.ulong(n))
-	slice := unsafe.Slice((*byte)(ptr), n)
-	return slice
-}
-
-func Free(b []byte) {
-	if cap(b) == 0 {
-		return
+func BenchmarkAllocFree(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		bs := Alloc(4096)
+		Free(bs)
 	}
-	C.mi_free((unsafe.Pointer)(unsafe.SliceData(b)))
 }

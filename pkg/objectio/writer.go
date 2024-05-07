@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"math"
 	"sync"
 
@@ -542,10 +543,17 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 
 // Sync is for testing
 func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error {
+	var err error
 	w.buffer.SetDataOptions(items...)
+	defer func() {
+		if err != nil {
+			w.buffer = nil
+			logutil.Error("[DoneWithErr] Write Sync error", zap.Error(err))
+		}
+	}()
 	// if a compact task is rollbacked, it may leave a written file in fs
 	// here we just delete it and write again
-	_, err := fileservice.DoWithRetry(
+	_, err = fileservice.DoWithRetry(
 		"ObjectSync",
 		func() (int, error) {
 			return 0, w.object.fs.Write(ctx, w.buffer.GetData())
