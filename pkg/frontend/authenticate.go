@@ -219,6 +219,9 @@ func (ti *TenantInfo) IsAdminRole() bool {
 }
 
 func (ti *TenantInfo) IsNameOfAdminRoles(name string) bool {
+	if ti == nil {
+		return false
+	}
 	ti.mu.Lock()
 	defer ti.mu.Unlock()
 	n := strings.ToLower(name)
@@ -7818,8 +7821,7 @@ func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, f
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
 	upstream := &Session{
 		feSessionImpl: feSessionImpl{
-			proto:  &FakeProtocol{},
-			tenant: GetBackgroundTenant(),
+			proto: &FakeProtocol{},
 		},
 		connectCtx: ctx,
 
