@@ -67,7 +67,7 @@ func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, fina
 
 	//initialize the default data of tables for the tenant
 	//step 1: add new tenant entry to the mo_account
-	initMoAccount = fmt.Sprintf(initMoAccountFormat, sysAccountID, sysAccountName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments, finalVersion)
+	initMoAccount = fmt.Sprintf(initMoAccountFormat, sysAccountID, sysAccountName, rootName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments, finalVersion)
 	addSqlIntoSet(initMoAccount)
 
 	//step 2:add new role entries to the mo_role
