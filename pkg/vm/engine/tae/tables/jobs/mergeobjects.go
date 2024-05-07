@@ -170,7 +170,7 @@ func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
 
 func (task *mergeObjectsTask) HostHintName() string { return "DN" }
 
-func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error) {
+func (task *mergeObjectsTask) PrepareData(ctx context.Context) ([]*batch.Batch, []*nulls.Nulls, func(), error) {
 	var err error
 	views := make([]*containers.BlockView, task.totalMergedBlkCnt)
 	releaseF := func() {
@@ -204,7 +204,7 @@ func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, fun
 		minBlockOffset := task.mergedBlkCnt[i]
 
 		for j := 0; j < maxBlockOffset-minBlockOffset; j++ {
-			if views[minBlockOffset+j], err = obj.GetColumnDataByIds(context.Background(), uint16(j), idxs, common.MergeAllocator); err != nil {
+			if views[minBlockOffset+j], err = obj.GetColumnDataByIds(ctx, uint16(j), idxs, common.MergeAllocator); err != nil {
 				return nil, nil, nil, err
 			}
 		}
@@ -228,7 +228,7 @@ func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, fun
 	return batches, dels, releaseF, nil
 }
 
-func (task *mergeObjectsTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
+func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
 	if objIdx >= uint32(len(task.mergedObjs)) {
 		panic("invalid objIdx")
 	}
@@ -249,7 +249,7 @@ func (task *mergeObjectsTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls
 	}()
 
 	obj := task.mergedObjsHandle[objIdx]
-	view, err = obj.GetColumnDataByIds(context.Background(), uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
+	view, err = obj.GetColumnDataByIds(ctx, uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
 	if err != nil {
 		return nil, nil, nil, err
 	}
