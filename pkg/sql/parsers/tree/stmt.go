@@ -257,7 +257,7 @@ func (node *Revoke) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
-func (node *Kill) StmtKind() StmtKind {
+func (k *Kill) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
@@ -600,5 +600,9 @@ func (node *ShowSnapShots) StmtKind() StmtKind {
 }
 
 func (node *UpgradeStatement) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *RestoreSnapShot) StmtKind() StmtKind {
 	return frontendStatusTyp
 }

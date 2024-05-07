@@ -310,11 +310,11 @@ func execInFrontend(requestCtx context.Context,
 		ses.InvalidatePrivilegeCache()
 		switch st.Typ {
 		case tree.GrantTypeRole:
-			if err = handleGrantRole(requestCtx, ses, st.GrantRole); err != nil {
+			if err = handleGrantRole(requestCtx, ses, &st.GrantRole); err != nil {
 				return
 			}
 		case tree.GrantTypePrivilege:
-			if err = handleGrantPrivilege(requestCtx, ses, st.GrantPrivilege); err != nil {
+			if err = handleGrantPrivilege(requestCtx, ses, &st.GrantPrivilege); err != nil {
 				return
 			}
 		}
@@ -323,11 +323,11 @@ func execInFrontend(requestCtx context.Context,
 		ses.InvalidatePrivilegeCache()
 		switch st.Typ {
 		case tree.RevokeTypeRole:
-			if err = handleRevokeRole(requestCtx, ses, st.RevokeRole); err != nil {
+			if err = handleRevokeRole(requestCtx, ses, &st.RevokeRole); err != nil {
 				return
 			}
 		case tree.RevokeTypePrivilege:
-			if err = handleRevokePrivilege(requestCtx, ses, st.RevokePrivilege); err != nil {
+			if err = handleRevokePrivilege(requestCtx, ses, &st.RevokePrivilege); err != nil {
 				return
 			}
 		}
@@ -377,6 +377,11 @@ func execInFrontend(requestCtx context.Context,
 	case *tree.DropSnapShot:
 		//TODO: invalidate privilege cache
 		if err = handleDropSnapshot(requestCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.RestoreSnapShot:
+		//TODO: invalidate privilege cache
+		if err = handleRestoreSnapshot(requestCtx, ses, st); err != nil {
 			return
 		}
 	case *tree.UpgradeStatement:
