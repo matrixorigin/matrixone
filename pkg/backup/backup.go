@@ -200,7 +200,7 @@ func ToCsvLine2(s [][]string) (string, error) {
 	return ss.String(), nil
 }
 
-func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles []*taeFile, backupTime, backupTS string) error {
+func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles []*taeFile, backupTime, backupTS, typ string) error {
 	var err error
 	if Fs == nil {
 		return moerr.NewInternalError(ctx, "fileservice is nil")
@@ -221,7 +221,7 @@ func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles 
 	}
 
 	//save tae files size
-	lines = [][]string{taeBackupTimeAndSizeToCsv(backupTime, backupTS, size)}
+	lines = [][]string{taeBackupTimeAndSizeToCsv(backupTime, backupTS, typ, size)}
 	metas, err = ToCsvLine2(lines)
 	if err != nil {
 		return err

@@ -97,7 +97,7 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 		return err
 	}
 	count := config.Parallelism
-	return execBackup(ctx, srcFs, dstFs, fileName, int(count), config.BackupTs)
+	return execBackup(ctx, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType)
 }
 
 func getParallelCount(count int) int {
@@ -259,6 +259,7 @@ func execBackup(
 	names []string,
 	count int,
 	ts types.TS,
+	typ string,
 ) error {
 	backupTime := names[0]
 	trimInfo := names[1]
@@ -404,7 +405,7 @@ func execBackup(
 	}
 	reWriteDuration += time.Since(now)
 	//save tae files size
-	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime, start.ToString())
+	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime, start.ToString(), typ)
 	if err != nil {
 		return err
 	}
