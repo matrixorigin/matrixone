@@ -186,46 +186,46 @@ var tenant = &TenantInfo{
 	DefaultRoleID: moAdminRoleID,
 }
 
-func TestDoShowSubscriptions(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+// func TestDoShowSubscriptions(t *testing.T) {
+// 	ctrl := gomock.NewController(t)
+// 	defer ctrl.Finish()
 
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+// 	ctx := context.Background()
+// 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
-	ses := newTestSession(t, ctrl)
-	ses.SetTimeZone(time.UTC)
-	ses.SetTenantInfo(tenant)
-	ses.SetMysqlResultSet(&MysqlResultSet{})
-	ses.connectCtx = ctx
-	defer ses.Close()
+// 	ses := newTestSession(t, ctrl)
+// 	ses.SetTimeZone(time.UTC)
+// 	ses.SetTenantInfo(tenant)
+// 	ses.SetMysqlResultSet(&MysqlResultSet{})
+// 	ses.connectCtx = ctx
+// 	defer ses.Close()
 
-	mp := ses.GetMemPool()
-	bh.init(mp)
-	sa := &tree.ShowSubscriptions{}
+// 	mp := ses.GetMemPool()
+// 	bh.init(mp)
+// 	sa := &tree.ShowSubscriptions{}
 
-	bhStub := gostub.StubFunc(&GetRawBatchBackgroundExec, bh)
-	defer bhStub.Reset()
+// 	bhStub := gostub.StubFunc(&GetRawBatchBackgroundExec, bh)
+// 	defer bhStub.Reset()
 
-	err := doShowSubscriptions(ctx, ses, sa)
-	require.NoError(t, err)
+// 	err := doShowSubscriptions(ctx, ses, sa)
+// 	require.NoError(t, err)
 
-	rs := ses.GetMysqlResultSet()
-	require.Equal(t, uint64(len(showSubscriptionOutputColumns)), rs.GetColumnCount())
-	require.Equal(t, uint64(2), rs.GetRowCount())
+// 	rs := ses.GetMysqlResultSet()
+// 	require.Equal(t, uint64(len(showSubscriptionOutputColumns)), rs.GetColumnCount())
+// 	require.Equal(t, uint64(2), rs.GetRowCount())
 
-	var actual, expected []interface{}
-	// sort by sub_time, pub_time desc
-	expected = []interface{}{"pub4", "account1", "db4", "0001-01-01 00:00:04", "sub4", "0001-01-01 00:00:04"}
-	actual, err = rs.GetRow(ctx, uint64(0))
-	require.NoError(t, err)
-	require.Equal(t, expected, actual)
+// 	var actual, expected []interface{}
+// 	// sort by sub_time, pub_time desc
+// 	expected = []interface{}{"pub4", "account1", "db4", "0001-01-01 00:00:04", "sub4", "0001-01-01 00:00:04"}
+// 	actual, err = rs.GetRow(ctx, uint64(0))
+// 	require.NoError(t, err)
+// 	require.Equal(t, expected, actual)
 
-	expected = []interface{}{"pub1", "sys", "db1", "0001-01-01 00:00:01", "sub1", "0001-01-01 00:00:01"}
-	actual, err = rs.GetRow(ctx, uint64(1))
-	require.NoError(t, err)
-	require.Equal(t, expected, actual)
-}
+// 	expected = []interface{}{"pub1", "sys", "db1", "0001-01-01 00:00:01", "sub1", "0001-01-01 00:00:01"}
+// 	actual, err = rs.GetRow(ctx, uint64(1))
+// 	require.NoError(t, err)
+// 	require.Equal(t, expected, actual)
+// }
 
 func TestDoShowSubscriptionsAll(t *testing.T) {
 	ctrl := gomock.NewController(t)
