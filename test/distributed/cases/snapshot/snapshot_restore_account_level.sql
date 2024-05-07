@@ -601,4 +601,3 @@ select count(*) from snapshot_read.students;
 drop account test_account;
 drop account test_account_01;
 drop snapshot snapshot_01;
--- @bvt:issue
