@@ -17,27 +17,28 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/predefine"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/predefine"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"go.uber.org/zap"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
 var (

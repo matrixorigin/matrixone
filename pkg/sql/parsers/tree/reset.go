@@ -14,27 +14,12 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/reuse"
-
-func init() {
-	reuse.CreatePool[Reset](
-		func() *Reset { return &Reset{} },
-		func(r *Reset) { r.reset() },
-		reuse.DefaultOptions[Reset](),
-	)
-}
-
 type Reset struct {
 	Statement
 	Name Identifier
 }
 
 func (node *Reset) Free() {
-	reuse.Free[Reset](node, nil)
-}
-
-func (node *Reset) reset() {
-	*node = Reset{}
 }
 
 func (node *Reset) Format(ctx *FmtCtx) {
@@ -44,13 +29,10 @@ func (node *Reset) Format(ctx *FmtCtx) {
 }
 
 func (node *Reset) GetStatementType() string { return "Reset" }
-
-func (node *Reset) GetQueryType() string { return QueryTypeDCL }
-
-func (node Reset) TypeName() string { return "tree.Reset" }
+func (node *Reset) GetQueryType() string     { return QueryTypeDCL }
 
 func NewReset(name Identifier) *Reset {
-	r := reuse.Alloc[Reset](nil)
-	r.Name = name
-	return r
+	return &Reset{
+		Name: name,
+	}
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 // serverBaseConnID is the base connection ID for server.
@@ -73,7 +74,11 @@ var _ ServerConn = (*serverConn)(nil)
 
 // newServerConn creates a connection to CN server.
 func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Duration) (ServerConn, error) {
-	c, err := cn.Connect(timeout)
+	var logger *zap.Logger
+	if r != nil && r.logger != nil {
+		logger = r.logger.RawLogger()
+	}
+	c, err := cn.Connect(logger, timeout)
 	if err != nil {
 		return nil, err
 	}

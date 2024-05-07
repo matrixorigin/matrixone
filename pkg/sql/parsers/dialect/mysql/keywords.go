@@ -626,5 +626,6 @@ func init() {
 		"upgrade":                    UPGRADE,
 		"retry":                      RETRY,
 		"mo_ts":                      MO_TS,
+		"restore":                    RESTORE,
 	}
 }
