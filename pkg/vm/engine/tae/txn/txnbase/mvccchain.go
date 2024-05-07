@@ -16,7 +16,6 @@ package txnbase
 
 import (
 	"bytes"
-	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -236,35 +235,6 @@ func (be *MVCCChain[T]) CheckConflictLocked(txn txnif.TxnReader) (err error) {
 	return
 }
 
-func (be *MVCCChain[T]) WriteOneNodeTo(w io.Writer) (n int64, err error) {
-	var n2 int64
-	n2, err = be.GetLatestNodeLocked().WriteTo(w)
-	if err != nil {
-		return
-	}
-	n += n2
-	return
-}
-
-func (be *MVCCChain[T]) WriteAllTo(w io.Writer) (n int64, err error) {
-	depth := uint64(be.MVCC.Depth())
-	var sn int
-	if sn, err = w.Write(types.EncodeUint64(&depth)); err != nil {
-		return
-	}
-	n += int64(sn)
-	be.MVCC.Loop(func(node *common.GenericDLNode[T]) bool {
-		var n2 int64
-		n2, err = node.GetPayload().WriteTo(w)
-		if err != nil {
-			return false
-		}
-		n += n2
-		return true
-	}, true)
-	return
-}
-
 func (be *MVCCChain[T]) IsEmptyLocked() bool {
 	head := be.MVCC.GetHead()
 	return head == nil
@@ -289,18 +259,6 @@ func (be *MVCCChain[T]) Apply1PCCommit() error {
 	return be.GetLatestNodeLocked().ApplyCommit()
 }
 
-// In /Catalog, there're three states: Active, Committing and Committed.
-// A txn is Active before its CommitTs is allocated.
-// It's Committed when its state will never change, i.e. TxnStateCommitted and  TxnStateRollbacked.
-// It's Committing when it's in any other state, including TxnStateCommitting, TxnStateRollbacking, TxnStatePrepared and so on. When read or write an entry, if the last txn of the entry is Committing, we wait for it. When write on an Entry, if there's an Active txn, we report w-w conflict.
-func (be *MVCCChain[T]) IsCommitting() bool {
-	node := be.GetLatestNodeLocked()
-	if node.IsNil() {
-		return false
-	}
-	return node.IsCommitting()
-}
-
 func (be *MVCCChain[T]) PrepareCommit() error {
 	be.Lock()
 	defer be.Unlock()
@@ -317,7 +275,7 @@ func (be *MVCCChain[T]) PrepareRollback() (bool, error) {
 	return isEmpty, nil
 }
 
-func (be *MVCCChain[T]) IsCommitted() bool {
+func (be *MVCCChain[T]) IsCommittedLocked() bool {
 	un := be.GetLatestNodeLocked()
 	if un.IsNil() {
 		return false

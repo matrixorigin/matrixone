@@ -596,6 +596,7 @@ func (entry *ObjectEntry) ObjectPersisted() bool {
 	lastNode := entry.GetLatestNodeLocked()
 	entry.RUnlock()
 	if entry.IsAppendable() {
+		// PXU TODO
 		return lastNode.HasDropIntent()
 	} else {
 		return true
