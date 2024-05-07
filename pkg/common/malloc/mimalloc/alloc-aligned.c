@@ -25,7 +25,7 @@ static mi_decl_noinline void* mi_heap_malloc_zero_aligned_at_fallback(mi_heap_t*
   const size_t padsize = size + MI_PADDING_SIZE;
 
   // use regular allocation if it is guaranteed to fit the alignment constraints
-  if (offset == 0 && alignment <= padsize && padsize <= MI_MEDIUM_OBJ_SIZE_MAX && (padsize & align_mask) == 0) {
+  if (offset==0 && alignment<=padsize && padsize<=MI_MAX_ALIGN_GUARANTEE && (padsize&align_mask)==0) {
     void* p = _mi_heap_malloc_zero(heap, size, zero);
     mi_assert_internal(p == NULL || ((uintptr_t)p % alignment) == 0);
     return p;
@@ -139,7 +139,7 @@ mi_decl_nodiscard mi_decl_restrict void* mi_heap_malloc_aligned_at(mi_heap_t* he
 }
 
 mi_decl_nodiscard mi_decl_restrict void* mi_heap_malloc_aligned(mi_heap_t* heap, size_t size, size_t alignment) mi_attr_noexcept {
-  if (alignment == 0 || !_mi_is_power_of_two(alignment)) return NULL;
+  if mi_unlikely(alignment == 0 || !_mi_is_power_of_two(alignment)) return NULL;
   #if !MI_PADDING
   // without padding, any small sized allocation is naturally aligned (see also `_mi_segment_page_start`)
   if mi_likely(_mi_is_power_of_two(size) && size >= alignment && size <= MI_SMALL_SIZE_MAX)
@@ -156,6 +156,11 @@ mi_decl_nodiscard mi_decl_restrict void* mi_heap_malloc_aligned(mi_heap_t* heap,
     return mi_heap_malloc_aligned_at(heap, size, alignment, 0);
   }
 }
+
+// ensure a definition is emitted
+#if defined(__cplusplus)
+void* _mi_extern_heap_malloc_aligned = (void*)&mi_heap_malloc_aligned;
+#endif
 
 // ------------------------------------------------------
 // Aligned Allocation
