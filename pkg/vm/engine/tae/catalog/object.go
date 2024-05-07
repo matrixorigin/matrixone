@@ -546,16 +546,14 @@ func (entry *ObjectEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	dbEntry := tableEntry.GetDB()
 
 	dbEntry.RLock()
-	terminated, ts = dbEntry.TryGetTerminatedTS(true)
+	terminated, ts = dbEntry.TryGetTerminatedTSLocked(true)
 	if terminated {
 		dbEntry.RUnlock()
 		return
 	}
 	dbEntry.RUnlock()
 
-	tableEntry.RLock()
 	terminated, ts = tableEntry.TryGetTerminatedTS(true)
-	tableEntry.RUnlock()
 	return
 }
 

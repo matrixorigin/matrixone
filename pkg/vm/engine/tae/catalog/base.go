@@ -115,6 +115,12 @@ func (be *BaseEntryImpl[T]) CreateWithStartAndEnd(start, end types.TS, baseNode 
 }
 
 func (be *BaseEntryImpl[T]) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
+	be.RLock()
+	defer be.RUnlock()
+	return be.TryGetTerminatedTSLocked(waitIfcommitting)
+}
+
+func (be *BaseEntryImpl[T]) TryGetTerminatedTSLocked(waitIfcommitting bool) (terminated bool, TS types.TS) {
 	node := be.GetLatestCommittedNodeLocked()
 	if node == nil {
 		return

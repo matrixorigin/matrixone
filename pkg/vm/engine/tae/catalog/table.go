@@ -675,9 +675,7 @@ func (entry *TableEntry) IsActive() bool {
 func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	dbEntry := entry.GetDB()
 
-	dbEntry.RLock()
 	terminated, ts = dbEntry.TryGetTerminatedTS(true)
-	dbEntry.RUnlock()
 
 	return
 }
