@@ -94,46 +94,33 @@ type container struct {
 	buf *batch.Batch
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := arg.ctr; ctr != nil {
-		ctr.cleanBatch(proc)
-		ctr.status = receiving
-		ctr.indexList = nil
-	}
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if ctr := arg.ctr; ctr != nil {
-		ctr.cleanBatch(proc)
+		mp := proc.Mp()
+		for i := range ctr.batchList {
+			if ctr.batchList[i] != nil {
+				ctr.batchList[i].Clean(mp)
+			}
+		}
+		for i := range ctr.orderCols {
+			if ctr.orderCols[i] != nil {
+				for j := range ctr.orderCols[i] {
+					if ctr.orderCols[i][j] != nil {
+						ctr.orderCols[i][j].Free(mp)
+					}
+				}
+			}
+		}
 		for i := range ctr.executors {
 			if ctr.executors[i] != nil {
 				ctr.executors[i].Free()
 			}
 		}
 		ctr.executors = nil
-	}
-}
 
-func (ctr *container) cleanBatch(proc *process.Process) {
-	mp := proc.Mp()
-	for i := range ctr.batchList {
-		if ctr.batchList[i] != nil {
-			ctr.batchList[i].Clean(mp)
+		if ctr.buf != nil {
+			ctr.buf.Clean(proc.Mp())
+			ctr.buf = nil
 		}
-	}
-	ctr.batchList = ctr.batchList[:0]
-	for i := range ctr.orderCols {
-		if ctr.orderCols[i] != nil {
-			for j := range ctr.orderCols[i] {
-				if ctr.orderCols[i][j] != nil {
-					ctr.orderCols[i][j].Free(mp)
-				}
-			}
-		}
-	}
-	ctr.orderCols = ctr.orderCols[:0]
-	if ctr.buf != nil {
-		ctr.buf.Clean(proc.Mp())
-		ctr.buf = nil
 	}
 }

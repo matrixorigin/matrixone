@@ -97,7 +97,7 @@ func (db *DB) ForceCheckpoint(
 	defer db.BGCheckpointRunner.EnableCheckpoint()
 	db.BGCheckpointRunner.CleanPenddingCheckpoint()
 	if flushDuration == 0 {
-		flushDuration = time.Minute
+		flushDuration = time.Minute * 3 / 2
 	}
 	t0 := time.Now()
 	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)

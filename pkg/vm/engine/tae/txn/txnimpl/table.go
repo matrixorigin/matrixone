@@ -15,12 +15,14 @@
 package txnimpl
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"runtime/trace"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -1443,12 +1445,27 @@ func (tbl *txnTable) PrePrepare() (err error) {
 	return
 }
 
+func (tbl *txnTable) dumpCore(errMsg string) {
+	var errInfo bytes.Buffer
+	errInfo.WriteString(fmt.Sprintf("Table: %s", tbl.entry.String()))
+	errInfo.WriteString(fmt.Sprintf("\nTxn: %s", tbl.store.txn.String()))
+	errInfo.WriteString(fmt.Sprintf("\nErr: %s", errMsg))
+	logutil.Error(errInfo.String())
+	util.EnableCoreDump()
+	util.CoreDump()
+}
+
 func (tbl *txnTable) PrepareCommit() (err error) {
 	for idx, node := range tbl.txnEntries.entries {
 		if tbl.txnEntries.IsDeleted(idx) {
 			continue
 		}
 		if err = node.PrepareCommit(); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
+				var buf bytes.Buffer
+				buf.WriteString(fmt.Sprintf("%d/%d No Txn", idx, len(tbl.txnEntries.entries)))
+				tbl.dumpCore(buf.String())
+			}
 			break
 		}
 	}

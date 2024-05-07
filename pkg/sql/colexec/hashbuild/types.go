@@ -110,18 +110,6 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
-	ctr := arg.ctr
-	if ctr != nil {
-		ctr.cleanBatches(proc)
-		if !arg.NeedHashMap {
-			ctr.cleanHashMap()
-		}
-		ctr.state = BuildHashMap
-	}
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
