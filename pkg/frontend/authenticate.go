@@ -969,6 +969,7 @@ var (
 		`create table mo_account(
 				account_id int signed auto_increment primary key,
 				account_name varchar(300) unique key,
+				admin_name varchar(300),
 				status varchar(300),
 				created_time timestamp,
 				comments varchar(256),
@@ -1202,16 +1203,18 @@ var (
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
 				account_name,
+                admin_name,
 				status,
 				created_time,
 				comments,
-                create_version) values (%d,"%s","%s","%s","%s","%s");`
+                create_version) values (%d,"%s","%s","%s","%s","%s","%s");`
 	initMoAccountWithoutIDFormat = `insert into mo_catalog.mo_account(
 				account_name,
+                admin_name,
 				status,
 				created_time,
 				comments,
-				create_version) values ("%s","%s","%s","%s","%s");`
+				create_version) values ("%s","%s","%s","%s","%s","%s");`
 	initMoRoleFormat = `insert into mo_catalog.mo_role(
 				role_id,
 				role_name,
@@ -8133,7 +8136,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		}
 	}
 
-	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, status, types.CurrentTimestamp().String2(time.UTC, 0), comment, finalVersion)
+	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, ca.AdminName, status, types.CurrentTimestamp().String2(time.UTC, 0), comment, finalVersion)
 	//execute the insert
 	err = bh.Exec(ctx, initMoAccount)
 	if err != nil {
