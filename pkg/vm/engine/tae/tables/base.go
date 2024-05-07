@@ -112,12 +112,13 @@ func (blk *baseObject) tryGetMVCC() *updates.ObjectMVCCHandle {
 func (blk *baseObject) getOrCreateMVCC() *updates.ObjectMVCCHandle {
 	return blk.meta.GetTable().GetOrCreateTombstone(blk.meta, DefaultTOmbstoneFactory).(*updates.ObjectMVCCHandle)
 }
-func (blk *baseObject) GCInMemeoryDeletesByTS(ts types.TS) {
+
+func (blk *baseObject) GCInMemeoryDeletesByTSForTest(ts types.TS) {
 	mvcc := blk.tryGetMVCC()
 	if mvcc == nil {
 		return
 	}
-	mvcc.UpgradeDeleteChainByTS(ts)
+	mvcc.UpgradeDeleteChainByTSLocked(ts)
 }
 
 func (blk *baseObject) UpgradeAllDeleteChain() {

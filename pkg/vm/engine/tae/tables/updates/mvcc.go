@@ -406,7 +406,7 @@ func (n *ObjectMVCCHandle) UpgradeAllDeleteChain() {
 func (n *ObjectMVCCHandle) GetDeltaPersistedTS() types.TS {
 	persisted := types.TS{}
 	for _, deletes := range n.deletes {
-		ts := deletes.getDeltaPersistedTS()
+		ts := deletes.getDeltaPersistedTSLocked()
 		if ts.Greater(&persisted) {
 			persisted = ts
 		}
@@ -423,9 +423,9 @@ func (n *ObjectMVCCHandle) UpgradeDeleteChain(blkID uint16) {
 }
 
 // for test
-func (n *ObjectMVCCHandle) UpgradeDeleteChainByTS(ts types.TS) {
+func (n *ObjectMVCCHandle) UpgradeDeleteChainByTSLocked(ts types.TS) {
 	for _, deletes := range n.deletes {
-		deletes.upgradeDeleteChainByTS(ts)
+		deletes.upgradeDeleteChainByTSLocked(ts)
 	}
 }
 
@@ -721,8 +721,7 @@ func (n *MVCCHandle) EstimateMemSizeLocked() (dsize int) {
 // *************** All deletes related APIs *****************
 // ==========================================================
 
-// PXU-1 TODO
-func (n *MVCCHandle) getDeltaPersistedTS() types.TS {
+func (n *MVCCHandle) getDeltaPersistedTSLocked() types.TS {
 	persisted := types.TS{}
 	n.deltaloc.LoopChainLocked(func(m *catalog.MVCCNode[*catalog.MetadataMVCCNode]) bool {
 		if !m.BaseNode.DeltaLoc.IsEmpty() && m.IsCommitted() {
@@ -734,7 +733,7 @@ func (n *MVCCHandle) getDeltaPersistedTS() types.TS {
 	return persisted
 }
 
-func (n *MVCCHandle) upgradeDeleteChainByTS(flushed types.TS) {
+func (n *MVCCHandle) upgradeDeleteChainByTSLocked(flushed types.TS) {
 	if n.persistedTS.Equal(&flushed) {
 		return
 	}
@@ -744,8 +743,8 @@ func (n *MVCCHandle) upgradeDeleteChainByTS(flushed types.TS) {
 }
 
 func (n *MVCCHandle) upgradeDeleteChain() {
-	persisted := n.getDeltaPersistedTS()
-	n.upgradeDeleteChainByTS(persisted)
+	persisted := n.getDeltaPersistedTSLocked()
+	n.upgradeDeleteChainByTSLocked(persisted)
 }
 
 func (n *MVCCHandle) IncChangeIntentionCnt() {
