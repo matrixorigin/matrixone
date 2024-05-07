@@ -225,7 +225,7 @@ func (entry *ObjectEntry) GetObjectData() data.Object { return entry.objData }
 func (entry *ObjectEntry) GetObjectStats() (stats objectio.ObjectStats) {
 	entry.RLock()
 	defer entry.RUnlock()
-	entry.LoopChain(func(node *MVCCNode[*ObjectMVCCNode]) bool {
+	entry.LoopChainLocked(func(node *MVCCNode[*ObjectMVCCNode]) bool {
 		if !node.BaseNode.IsEmpty() {
 			stats = node.BaseNode.ObjectStats
 			return false
@@ -295,7 +295,7 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 	stats := *objectio.NewObjectStats()
 
 	entry.RLock()
-	entry.LoopChain(func(n *MVCCNode[*ObjectMVCCNode]) bool {
+	entry.LoopChainLocked(func(n *MVCCNode[*ObjectMVCCNode]) bool {
 		if !n.BaseNode.IsEmpty() {
 			stats = *n.BaseNode.ObjectStats.Clone()
 			return false

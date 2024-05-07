@@ -721,9 +721,10 @@ func (n *MVCCHandle) EstimateMemSizeLocked() (dsize int) {
 // *************** All deletes related APIs *****************
 // ==========================================================
 
+// PXU-1 TODO
 func (n *MVCCHandle) getDeltaPersistedTS() types.TS {
 	persisted := types.TS{}
-	n.deltaloc.LoopChain(func(m *catalog.MVCCNode[*catalog.MetadataMVCCNode]) bool {
+	n.deltaloc.LoopChainLocked(func(m *catalog.MVCCNode[*catalog.MetadataMVCCNode]) bool {
 		if !m.BaseNode.DeltaLoc.IsEmpty() && m.IsCommitted() {
 			persisted = m.GetStart()
 			return false
@@ -820,7 +821,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 		pkVec = containers.MakeVector(pkType, mp)
 		aborts = &nulls.Bitmap{}
 		id := objectio.NewBlockidWithObjectID(&n.meta.ID, n.blkID)
-		n.deletes.LoopChain(
+		n.deletes.LoopChainLocked(
 			func(node *DeleteNode) bool {
 				needWait, txn := node.NeedWaitCommitting(end.Next())
 				if needWait {
@@ -970,12 +971,13 @@ func (n *MVCCHandle) CollectDeleteInRangeAfterDeltalocation(
 	return
 }
 
+// PXU-1 TODO
 // ExistDeleteInRange check if there is any delete in the range [start, end]
 // it loops the delete chain and check if there is any delete node in the range
 func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
 	for {
 		needWaitFound := false
-		n.deletes.LoopChain(
+		n.deletes.LoopChainLocked(
 			func(node *DeleteNode) bool {
 				needWait, txn := node.NeedWaitCommitting(end.Next())
 				if needWait {

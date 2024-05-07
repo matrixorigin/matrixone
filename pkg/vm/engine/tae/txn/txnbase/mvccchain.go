@@ -174,7 +174,7 @@ func (be *MVCCChain[T]) SearchNodeLocked(o T) (node T) {
 	return
 }
 
-func (be *MVCCChain[T]) LoopChain(fn func(T) bool) {
+func (be *MVCCChain[T]) LoopChainLocked(fn func(T) bool) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[T]) bool {
 		un := n.GetPayload()
 		return fn(un)
@@ -189,9 +189,10 @@ func (be *MVCCChain[T]) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) 
 	return un.NeedWaitCommitting(ts)
 }
 
+// PXU-1 TODO
 func (be *MVCCChain[T]) HasUncommittedNode() bool {
 	var found bool
-	be.LoopChain(func(n T) bool {
+	be.LoopChainLocked(func(n T) bool {
 		if n.IsCommitted() {
 			return false
 		} else {
@@ -204,9 +205,10 @@ func (be *MVCCChain[T]) HasUncommittedNode() bool {
 	return found
 }
 
+// PXU-1 TODO
 func (be *MVCCChain[T]) HasCommittedNode() bool {
 	var found bool
-	be.LoopChain(func(n T) bool {
+	be.LoopChainLocked(func(n T) bool {
 		if n.IsCommitted() {
 			found = true
 			return false

@@ -486,7 +486,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 		defer table.RUnlock()
 		prevname := ""
 		// clean all name because RemoveEntry can be called by GC、
-		table.LoopChain(func(m *MVCCNode[*TableMVCCNode]) bool {
+		table.LoopChainLocked(func(m *MVCCNode[*TableMVCCNode]) bool {
 			if prevname == m.BaseNode.Schema.Name {
 				return true
 			}

@@ -335,7 +335,7 @@ func (entry *TableEntry) GetVersionSchema(ver uint32) *Schema {
 	entry.RLock()
 	defer entry.RUnlock()
 	var ret *Schema
-	entry.LoopChain(func(m *MVCCNode[*TableMVCCNode]) bool {
+	entry.LoopChainLocked(func(m *MVCCNode[*TableMVCCNode]) bool {
 		if cur := m.BaseNode.Schema.Version; cur > ver {
 			return true
 		} else if cur == ver {
