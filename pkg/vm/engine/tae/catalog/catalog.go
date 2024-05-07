@@ -248,7 +248,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 		return
 	}
 
-	dbun := db.SearchNode(un)
+	dbun := db.SearchNodeLocked(un)
 	if dbun == nil {
 		db.Insert(un)
 	} else {
@@ -375,7 +375,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		}
 		return
 	}
-	tblun := tbl.SearchNode(un)
+	tblun := tbl.SearchNodeLocked(un)
 	if tblun == nil {
 		tbl.Insert(un) //TODO isvalid
 		if tbl.isColumnChangedInSchema() {
@@ -552,7 +552,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 		obj.ObjectNode = cmd.node
 		tbl.AddEntryLocked(obj)
 	} else {
-		node := obj.SearchNode(un)
+		node := obj.SearchNodeLocked(un)
 		if node == nil {
 			obj.Insert(un)
 		} else {
@@ -624,7 +624,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		BaseNode:      objNode,
 		TxnMVCCNode:   txnNode,
 	}
-	node := obj.SearchNode(un)
+	node := obj.SearchNodeLocked(un)
 	if node == nil {
 		obj.Insert(un)
 	} else {
@@ -668,7 +668,7 @@ func (catalog *Catalog) replayObjectByBlock(
 	}
 	// delete
 	if delete {
-		node := obj.SearchNode(
+		node := obj.SearchNodeLocked(
 			&MVCCNode[*ObjectMVCCNode]{
 				TxnMVCCNode: &txnbase.TxnMVCCNode{
 					Start: start,

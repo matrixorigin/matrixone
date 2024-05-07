@@ -3044,7 +3044,7 @@ func (collector *BaseCollector) loadObjectInfo() error {
 						return err
 					}
 					obj.Lock()
-					obj.SearchNode(node).BaseNode.ObjectStats = stats
+					obj.SearchNodeLocked(node).BaseNode.ObjectStats = stats
 					obj.Unlock()
 				}
 
@@ -3064,7 +3064,7 @@ func (collector *BaseCollector) loadObjectInfo() error {
 					return err
 				}
 				obj.Lock()
-				obj.SearchNode(node).BaseNode.ObjectStats = stats
+				obj.SearchNodeLocked(node).BaseNode.ObjectStats = stats
 				obj.Unlock()
 			}
 		}

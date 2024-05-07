@@ -159,23 +159,8 @@ func (be *MVCCChain[T]) GetVisibleNodeLocked(txn txnif.TxnReader) (node T) {
 	return
 }
 
-// GetVisibleNode gets mvcc node according to the timestamp.
-// It returns the latest mvcc node with commitTS less than the timestamp.
-func (be *MVCCChain[T]) GetVisibleNodeByTS(ts types.TS) (node T) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[T]) (goNext bool) {
-		un := n.GetPayload()
-		var visible bool
-		if visible = un.IsVisibleByTS(ts); visible {
-			node = un
-		}
-		goNext = !visible
-		return
-	}, false)
-	return
-}
-
 // It's only used in replay
-func (be *MVCCChain[T]) SearchNode(o T) (node T) {
+func (be *MVCCChain[T]) SearchNodeLocked(o T) (node T) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[T]) bool {
 		un := n.GetPayload()
 		compare := be.comparefn(un, o)
