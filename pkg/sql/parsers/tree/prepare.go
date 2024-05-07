@@ -56,8 +56,7 @@ func (node *PrepareStmt) Format(ctx *FmtCtx) {
 }
 
 func (node *PrepareStmt) GetStatementType() string { return "Prepare" }
-
-func (node *PrepareStmt) GetQueryType() string { return QueryTypeOth }
+func (node *PrepareStmt) GetQueryType() string     { return QueryTypeOth }
 
 func (node *PrepareStmt) Free() {
 	reuse.Free[PrepareStmt](node, nil)
@@ -83,8 +82,7 @@ func (node *PrepareString) Format(ctx *FmtCtx) {
 }
 
 func (node *PrepareString) GetStatementType() string { return "Prepare" }
-
-func (node *PrepareString) GetQueryType() string { return QueryTypeOth }
+func (node *PrepareString) GetQueryType() string     { return QueryTypeOth }
 
 func (node *PrepareString) Free() {
 	reuse.Free[PrepareString](node, nil)

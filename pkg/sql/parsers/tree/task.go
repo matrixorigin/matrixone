@@ -26,8 +26,7 @@ func (node *PauseDaemonTask) Format(ctx *FmtCtx) {
 }
 
 func (node *PauseDaemonTask) GetStatementType() string { return "Pause Daemon Task" }
-
-func (node *PauseDaemonTask) GetQueryType() string { return QueryTypeDML }
+func (node *PauseDaemonTask) GetQueryType() string     { return QueryTypeDML }
 
 type CancelDaemonTask struct {
 	statementImpl
@@ -41,8 +40,7 @@ func (node *CancelDaemonTask) Format(ctx *FmtCtx) {
 }
 
 func (node *CancelDaemonTask) GetStatementType() string { return "Cancel Daemon Task" }
-
-func (node *CancelDaemonTask) GetQueryType() string { return QueryTypeDML }
+func (node *CancelDaemonTask) GetQueryType() string     { return QueryTypeDML }
 
 type ResumeDaemonTask struct {
 	statementImpl
@@ -56,5 +54,4 @@ func (node *ResumeDaemonTask) Format(ctx *FmtCtx) {
 }
 
 func (node *ResumeDaemonTask) GetStatementType() string { return "Resume Daemon Task" }
-
-func (node *ResumeDaemonTask) GetQueryType() string { return QueryTypeDML }
+func (node *ResumeDaemonTask) GetQueryType() string     { return QueryTypeDML }

@@ -139,7 +139,8 @@ func TestAObjMerge(t *testing.T) {
 		}
 	}
 
-	ret, releaseF, mapping := testAObjMerger(vecType.ToType(), testPool)(batches, 0, uint32(rowCnt), batCnt).Merge(context.Background())
+	ret, releaseF, mapping, err := testAObjMerger(vecType.ToType(), testPool)(batches, 0, uint32(rowCnt), batCnt).Merge(context.Background())
+	require.NoError(t, err)
 	for i := 0; i < batCnt; i++ {
 		for j := 0; j < vecCnt; j++ {
 			t.Log(vector.MustFixedCol[int32](ret[i].Vecs[j]))
@@ -173,7 +174,8 @@ func TestAObjMergeContainsNull(t *testing.T) {
 		}
 	}
 
-	ret, releaseF, mapping := testAObjMerger(vecType.ToType(), testPool)(batches, 0, uint32(rowCnt), batCnt).Merge(context.Background())
+	ret, releaseF, mapping, err := testAObjMerger(vecType.ToType(), testPool)(batches, 0, uint32(rowCnt), batCnt).Merge(context.Background())
+	require.NoError(t, err)
 	for _, bat := range ret {
 		for _, vec := range bat.Vecs {
 			s := vector.MustFixedCol[int32](vec)
@@ -202,7 +204,8 @@ func TestAObjMergeAllTypes(t *testing.T) {
 		batches[0].AddVector("", vec)
 		batches[1] = containers.NewBatch()
 		batches[1].AddVector("", vec2)
-		_, releaseF, _ := testAObjMerger(vecType, testPool)(batches, 0, 50000, 2).Merge(context.Background())
+		_, releaseF, _, err := testAObjMerger(vecType, testPool)(batches, 0, 50000, 2).Merge(context.Background())
+		require.NoError(t, err)
 		t.Logf("%-20v takes %v", vecType, time.Since(t0))
 		releaseF()
 	}

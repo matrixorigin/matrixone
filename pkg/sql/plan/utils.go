@@ -1778,7 +1778,7 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 }
 
 // databaseIsValid checks whether the database exists or not.
-func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
+func databaseIsValid(dbName string, ctx CompilerContext, snapshot Snapshot) (string, error) {
 	connectDBFirst := false
 	if len(dbName) == 0 {
 		connectDBFirst = true
@@ -1787,7 +1787,7 @@ func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
 		dbName = ctx.DefaultDatabase()
 	}
 
-	if len(dbName) == 0 || !ctx.DatabaseExists(dbName) {
+	if len(dbName) == 0 || !ctx.DatabaseExists(dbName, snapshot) {
 		if connectDBFirst {
 			return "", moerr.NewNoDB(ctx.GetContext())
 		} else {
