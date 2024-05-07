@@ -3330,6 +3330,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			if len(inputs) == 0 {
 				return newCheckResultWithSuccess(0)
 			}
+			if len(inputs) == 1 && inputs[0].Oid == types.T_int64 {
+				return newCheckResultWithSuccess(0)
+			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
 
@@ -3840,6 +3843,28 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInPurgeLog
+				},
+			},
+		},
+	},
+
+	// function `mo_admin_name`
+	{
+		functionId: MO_ADMIN_NAME,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInternalGetAdminName
 				},
 			},
 		},

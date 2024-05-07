@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -838,11 +839,11 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 }
 
-func (m *MockCompilerContext) DatabaseExists(name string) bool {
+func (m *MockCompilerContext) DatabaseExists(name string, snapshot Snapshot) bool {
 	return strings.ToLower(name) == "tpch" || strings.ToLower(name) == "mo" || strings.ToLower(name) == "mo_catalog"
 }
 
-func (m *MockCompilerContext) GetDatabaseId(dbName string) (uint64, error) {
+func (m *MockCompilerContext) GetDatabaseId(dbName string, snapshot Snapshot) (uint64, error) {
 	return 0, nil
 }
 
@@ -858,7 +859,7 @@ func (m *MockCompilerContext) GetUserName() string {
 	return "root"
 }
 
-func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectRef, *TableDef) {
+func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot Snapshot) (*ObjectRef, *TableDef) {
 	name := strings.ToLower(tableName)
 	tableDef := DeepCopyTableDef(m.tables[name], true)
 	if tableDef != nil && !m.isDml {
@@ -880,7 +881,15 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectR
 	return m.objects[name], tableDef
 }
 
-func (m *MockCompilerContext) ResolveById(tableId uint64) (*ObjectRef, *TableDef) {
+func (m *MockCompilerContext) GetRestoreInfo() *RestoreInfo {
+	panic("unimplement")
+}
+
+func (m *MockCompilerContext) SetRestoreInfo(restoreInfo *RestoreInfo) {
+	panic("unimplement")
+}
+
+func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot Snapshot) (*ObjectRef, *TableDef) {
 	name := m.id2name[tableId]
 	tableDef := DeepCopyTableDef(m.tables[name], true)
 	if tableDef != nil && !m.isDml {
@@ -894,7 +903,7 @@ func (m *MockCompilerContext) ResolveById(tableId uint64) (*ObjectRef, *TableDef
 	return m.objects[name], tableDef
 }
 
-func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*ColDef {
+func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string, snapshot Snapshot) []*ColDef {
 	defs := make([]*ColDef, 0, 2)
 	for _, pk := range m.pks[tableName] {
 		defs = append(defs, m.tables[tableName].Cols[pk])
@@ -902,7 +911,7 @@ func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) 
 	return defs
 }
 
-func (m *MockCompilerContext) Stats(obj *ObjectRef) (*pb.StatsInfo, error) {
+func (m *MockCompilerContext) Stats(obj *ObjectRef, snapshot Snapshot) (*pb.StatsInfo, error) {
 	return nil, nil
 }
 
@@ -933,7 +942,7 @@ func (m *MockCompilerContext) GetBuildingAlterView() (bool, string, string) {
 	return false, "", ""
 }
 
-func (m *MockCompilerContext) GetSubscriptionMeta(dbName string) (*SubscriptionMeta, error) {
+func (m *MockCompilerContext) GetSubscriptionMeta(dbName string, snapshot Snapshot) (*SubscriptionMeta, error) {
 	return nil, nil
 }
 func (m *MockCompilerContext) SetQueryingSubscription(*SubscriptionMeta) {
@@ -946,8 +955,8 @@ func (m *MockCompilerContext) IsPublishing(dbName string) (bool, error) {
 	return false, nil
 }
 
-func (m *MockCompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
-	return 0, nil
+func (m *MockCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (Snapshot, error) {
+	return plan.Snapshot{TS: &timestamp.Timestamp{}}, nil
 }
 
 func (m *MockCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {

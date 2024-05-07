@@ -45,6 +45,10 @@ func (exec *singleWindowExec) GroupGrow(more int) error {
 	return exec.ret.grows(more)
 }
 
+func (exec *singleWindowExec) PreAllocateGroups(more int) error {
+	return exec.ret.preAllocate(more)
+}
+
 func (exec *singleWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	value := vector.MustFixedCol[int64](vectors[0])[row]
 	exec.groups[groupIndex] = append(exec.groups[groupIndex], value)

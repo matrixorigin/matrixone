@@ -147,6 +147,10 @@ func (exec *multiAggFuncExec1[T]) GroupGrow(more int) error {
 	return nil
 }
 
+func (exec *multiAggFuncExec1[T]) PreAllocateGroups(more int) error {
+	return exec.ret.preAllocate(more)
+}
+
 func (exec *multiAggFuncExec1[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	var err error
 	for i, arg := range exec.args {
@@ -346,6 +350,10 @@ func (exec *multiAggFuncExec2) GroupGrow(more int) error {
 
 	exec.groups = append(exec.groups, moreGroup...)
 	return nil
+}
+
+func (exec *multiAggFuncExec2) PreAllocateGroups(more int) error {
+	return exec.ret.preAllocate(more)
 }
 
 func (exec *multiAggFuncExec2) Fill(groupIndex int, row int, vectors []*vector.Vector) error {

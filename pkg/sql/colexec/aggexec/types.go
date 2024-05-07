@@ -76,6 +76,8 @@ type AggFuncExec interface {
 
 	// GroupGrow is used to increase the aggregation's group size.
 	GroupGrow(more int) error
+	// PreAllocateGroups is used to pre-extend the agg memory to reduce gc cost.
+	PreAllocateGroups(more int) error
 
 	// Fill BulkFill and BatchFill add the value to the aggregation.
 	Fill(groupIndex int, row int, vectors []*vector.Vector) error

@@ -61,13 +61,16 @@ type mergeObjectsTask struct {
 	schema     *catalog.Schema
 	idxs       []int
 	attrs      []string
+
+	targetObjSize uint32
 }
 
 func NewMergeObjectsTask(
-	ctx *tasks.Context, txn txnif.AsyncTxn,
+	ctx *tasks.Context,
+	txn txnif.AsyncTxn,
 	mergedObjs []*catalog.ObjectEntry,
 	rt *dbutils.Runtime,
-) (task *mergeObjectsTask, err error) {
+	targetObjSize uint32) (task *mergeObjectsTask, err error) {
 	if len(mergedObjs) == 0 {
 		panic("empty mergedObjs")
 	}
@@ -79,6 +82,8 @@ func NewMergeObjectsTask(
 		mergedBlkCnt: make([]int, len(mergedObjs)),
 		nMergedBlk:   make([]int, len(mergedObjs)),
 		blkCnt:       make([]int, len(mergedObjs)),
+
+		targetObjSize: targetObjSize,
 	}
 	for i, obj := range mergedObjs {
 		task.mergedBlkCnt[i] = task.totalMergedBlkCnt
@@ -130,8 +135,12 @@ func (task *mergeObjectsTask) GetAccBlkCnts() []int {
 	return task.mergedBlkCnt
 }
 
-func (task *mergeObjectsTask) GetObjLayout() (uint32, uint16) {
-	return task.schema.BlockMaxRows, task.schema.ObjectMaxBlocks
+func (task *mergeObjectsTask) GetBlockMaxRows() uint32 {
+	return task.schema.BlockMaxRows
+}
+
+func (task *mergeObjectsTask) GetTargetObjSize() uint32 {
+	return task.targetObjSize
 }
 
 func (task *mergeObjectsTask) GetSortKeyPos() int {
@@ -161,7 +170,7 @@ func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
 
 func (task *mergeObjectsTask) HostHintName() string { return "DN" }
 
-func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error) {
+func (task *mergeObjectsTask) PrepareData(ctx context.Context) ([]*batch.Batch, []*nulls.Nulls, func(), error) {
 	var err error
 	views := make([]*containers.BlockView, task.totalMergedBlkCnt)
 	releaseF := func() {
@@ -195,7 +204,7 @@ func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, fun
 		minBlockOffset := task.mergedBlkCnt[i]
 
 		for j := 0; j < maxBlockOffset-minBlockOffset; j++ {
-			if views[minBlockOffset+j], err = obj.GetColumnDataByIds(context.Background(), uint16(j), idxs, common.MergeAllocator); err != nil {
+			if views[minBlockOffset+j], err = obj.GetColumnDataByIds(ctx, uint16(j), idxs, common.MergeAllocator); err != nil {
 				return nil, nil, nil, err
 			}
 		}
@@ -219,7 +228,7 @@ func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, fun
 	return batches, dels, releaseF, nil
 }
 
-func (task *mergeObjectsTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
+func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
 	if objIdx >= uint32(len(task.mergedObjs)) {
 		panic("invalid objIdx")
 	}
@@ -240,7 +249,7 @@ func (task *mergeObjectsTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls
 	}()
 
 	obj := task.mergedObjsHandle[objIdx]
-	view, err = obj.GetColumnDataByIds(context.Background(), uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
+	view, err = obj.GetColumnDataByIds(ctx, uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -259,12 +268,12 @@ func (task *mergeObjectsTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls
 
 func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {
 	if task.commitEntry == nil {
-		return task.PrepareCommitEntry()
+		return task.prepareCommitEntry()
 	}
 	return task.commitEntry
 }
 
-func (task *mergeObjectsTask) PrepareCommitEntry() *api.MergeCommitEntry {
+func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
 	schema := task.rel.Schema().(*catalog.Schema)
 	commitEntry := &api.MergeCommitEntry{}
 	commitEntry.DbId = task.did
@@ -400,6 +409,22 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *
 	}
 
 	return createdObjs, nil
+}
+
+func (task *mergeObjectsTask) GetTotalSize() uint32 {
+	totalSize := uint32(0)
+	for _, obj := range task.mergedObjs {
+		totalSize += uint32(obj.GetOriginSize())
+	}
+	return totalSize
+}
+
+func (task *mergeObjectsTask) GetTotalRowCnt() uint32 {
+	totalRowCnt := 0
+	for _, obj := range task.mergedObjs {
+		totalRowCnt += obj.GetRows()
+	}
+	return uint32(totalRowCnt)
 }
 
 // for UT

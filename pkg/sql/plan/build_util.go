@@ -25,7 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -40,6 +42,31 @@ import (
 
 // 	return nodeID
 // }
+
+// reCheckifNeedLockWholeTable checks if the whole table needs to be locked based on the last node's statistics.
+// It returns true if the out count of the last node is greater than the maximum lock count, otherwise it returns false.
+func reCheckifNeedLockWholeTable(builder *QueryBuilder) {
+	lockService := builder.compCtx.GetProcess().LockService
+	if lockService == nil {
+		// MockCompilerContext
+		return
+	}
+	lockconfig := lockService.GetConfig()
+
+	for _, n := range builder.qry.Nodes {
+		if n.NodeType != plan.Node_LOCK_OP {
+			continue
+		}
+		if !n.LockTargets[0].LockTable {
+			reCheckIfNeed := n.Stats.Outcnt > float64(lockconfig.MaxLockRowCount)
+			if reCheckIfNeed {
+				logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
+				logutil.Infof("the outcnt stats is %f", n.Stats.Outcnt)
+				n.LockTargets[0].LockTable = reCheckIfNeed
+			}
+		}
+	}
+}
 
 // GetFunctionArgTypeStrFromAst function arg type do not have scale and width, it depends on the data that it process
 func GetFunctionArgTypeStrFromAst(arg tree.FunctionArg) (string, error) {
@@ -636,12 +663,12 @@ func rewriteForCreateTableLike(stmt *tree.CreateTable, ctx CompilerContext) (new
 
 	tblName := formatStr(string(oldTable.ObjectName))
 	dbName := formatStr(string(oldTable.SchemaName))
-	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx)
+	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, Snapshot{TS: &timestamp.Timestamp{}})
 	if err != nil {
 		return nil, err
 	}
 
-	_, tableDef := ctx.Resolve(dbName, tblName)
+	_, tableDef := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -820,7 +847,7 @@ func rewriteForCreateTableLike(stmt *tree.CreateTable, ctx CompilerContext) (new
 		if fk.ForeignTbl == 0 {
 			fkTableDef = tableDef
 		} else {
-			_, fkTableDef = ctx.ResolveById(fk.ForeignTbl)
+			_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
 		}
 
 		fkColIdToName := make(map[uint64]string)

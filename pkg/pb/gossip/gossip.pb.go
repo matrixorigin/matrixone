@@ -11,9 +11,9 @@ import (
 
 	_ "github.com/gogo/protobuf/gogoproto"
 	proto "github.com/gogo/protobuf/proto"
-	_ "github.com/golang/protobuf/ptypes/any"
 	query "github.com/matrixorigin/matrixone/pkg/pb/query"
 	statsinfo "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	_ "google.golang.org/protobuf/types/known/anypb"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.

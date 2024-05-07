@@ -46,6 +46,7 @@ import (
 
     PartitionNames tree.IdentifierList
 
+    atTimeStamp *tree.AtTimeStamp
     tableDef tree.TableDef
     tableDefs tree.TableDefs
     tableName *tree.TableName
@@ -256,7 +257,7 @@ import (
     timeFill *tree.Fill
     fillMode tree.FillMode
 
-    snapshotObject tree.ObejectInfo
+    snapshotObject tree.ObjectInfo
 
 }
 
@@ -506,7 +507,7 @@ import (
 %type <statement> mo_dump_stmt
 %type <statement> load_extension_stmt
 %type <statement> kill_stmt
-%type <statement> backup_stmt
+%type <statement> backup_stmt snapshot_restore_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -568,6 +569,7 @@ import (
 %type <procArgDecl> proc_arg_decl
 %type <procArgType> proc_arg_in_out_type
 
+%type <atTimeStamp> table_snapshot_opt
 %type <tableDefs> table_elem_list_opt table_elem_list
 %type <tableDef> table_elem constaint_def constraint_elem index_def table_elem_2
 %type <tableName> table_name table_name_opt_wild
@@ -626,7 +628,7 @@ import (
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
 %type <fullOpt> full_opt
-%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword
+%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword snapshot_option_opt
 %type <userMiscOption> pwd_or_lck pwd_or_lck_opt
 //%type <userMiscOptions> pwd_or_lck_list
 
@@ -779,7 +781,7 @@ import (
 
 %token <str> KILL
 %type <killOption> kill_opt
-%token <str> BACKUP FILESYSTEM PARALLELISM
+%token <str> BACKUP FILESYSTEM PARALLELISM RESTORE
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %type<tableLock> table_lock_elem
@@ -911,7 +913,8 @@ normal_stmt:
         $$ = $1
     }
 |   kill_stmt
-|   backup_stmt   
+|   backup_stmt
+|   snapshot_restore_stmt
 
 
 backup_stmt:
@@ -940,7 +943,7 @@ create_snapshot_stmt:
         $$ = &tree.CreateSnapShot{
             IfNotExists: $3,
             Name: tree.Identifier($4.Compare()),
-            Obeject: $6,
+            Object: $6,
         }
     }
 
@@ -950,22 +953,89 @@ snapshot_object_opt:
         spLevel := tree.SnapshotLevelType{
             Level: tree.SNAPSHOTLEVELCLUSTER,
         }
-        $$ = tree.ObejectInfo{
+        $$ = tree.ObjectInfo{
             SLevel: spLevel,
             ObjName: "",
         }
     }
-|    ACCOUNT ident
+|   ACCOUNT ident
     {
         spLevel := tree.SnapshotLevelType{
             Level: tree.SNAPSHOTLEVELACCOUNT,
         }
-        $$ = tree.ObejectInfo{
+        $$ = tree.ObjectInfo{
             SLevel: spLevel,
             ObjName: tree.Identifier($2.Compare()),
         }
     }
 
+
+snapshot_restore_stmt:
+    RESTORE CLUSTER FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELCLUSTER,
+            SnapShotName: tree.Identifier($5.ToLower()),
+        }
+
+    }
+|   RESTORE ACCOUNT ident FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELACCOUNT,
+            AccountName:tree.Identifier($3.ToLower()),
+            SnapShotName:tree.Identifier($6.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELDATABASE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            SnapShotName: tree.Identifier($8.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELTABLE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            TableName: tree.Identifier($7.ToLower()),
+            SnapShotName: tree.Identifier($10.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident FROM SNAPSHOT ident TO ACCOUNT ident
+    {
+        $$ = &tree.RestoreSnapShot{ 
+            Level: tree.RESTORELEVELACCOUNT,
+            AccountName:tree.Identifier($3.ToLower()),
+            SnapShotName:tree.Identifier($6.ToLower()),
+            ToAccountName: tree.Identifier($9.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident TO ACCOUNT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELDATABASE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            SnapShotName: tree.Identifier($8.ToLower()),
+            ToAccountName: tree.Identifier($11.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident TO ACCOUNT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELTABLE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            TableName: tree.Identifier($7.ToLower()),
+            SnapShotName: tree.Identifier($10.ToLower()),
+            ToAccountName: tree.Identifier($13.ToLower()),
+        }
+    }
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
@@ -3813,7 +3883,7 @@ show_sequences_stmt:
     }
 
 show_tables_stmt:
-    SHOW full_opt TABLES database_name_opt like_opt where_expression_opt
+    SHOW full_opt TABLES database_name_opt like_opt where_expression_opt snapshot_option_opt
     {
         $$ = &tree.ShowTables{
             Open: false,
@@ -3821,6 +3891,7 @@ show_tables_stmt:
             DBName: $4,
             Like: $5,
             Where: $6,
+            SnapshotName : $7,
         }
     }
 |   SHOW OPEN full_opt TABLES database_name_opt like_opt where_expression_opt
@@ -3835,9 +3906,13 @@ show_tables_stmt:
     }
 
 show_databases_stmt:
-    SHOW DATABASES like_opt where_expression_opt
+    SHOW DATABASES like_opt where_expression_opt snapshot_option_opt
     {
-        $$ = &tree.ShowDatabases{Like: $3, Where: $4}
+        $$ = &tree.ShowDatabases{
+            Like: $3, 
+            Where: $4,
+            SnapshotName: $5,
+        }
     }
 |   SHOW SCHEMAS like_opt where_expression_opt
     {
@@ -3927,6 +4002,17 @@ table_column_name:
         $$ = $2
     }
 
+snapshot_option_opt:
+    {
+        $$ = ""
+    }
+|   '{' SNAPSHOT '=' STRING '}'
+    {
+        $$ = $4
+    }
+
+
+
 from_or_in:
     FROM
 |   IN
@@ -3945,14 +4031,20 @@ full_opt:
     }
 
 show_create_stmt:
-    SHOW CREATE TABLE table_name_unresolved
+    SHOW CREATE TABLE table_name_unresolved snapshot_option_opt
     {
-        $$ = &tree.ShowCreateTable{Name: $4}
+        $$ = &tree.ShowCreateTable{
+            Name: $4,
+            SnapshotName: $5,
+        }
     }
 |
-    SHOW CREATE VIEW table_name_unresolved
+    SHOW CREATE VIEW table_name_unresolved snapshot_option_opt
     {
-        $$ = &tree.ShowCreateView{Name: $4}
+        $$ = &tree.ShowCreateView{
+            Name: $4,
+            SnapshotName: $5,
+        }
     }
 |   SHOW CREATE DATABASE not_exists_opt db_name
     {
@@ -8035,69 +8127,45 @@ table_name_list:
 // <table>
 // <schema>.<table>
 table_name:
-    ident
+    ident table_snapshot_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, nil)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, $2)
     }
-|   ident '.' ident
+|   ident '.' ident table_snapshot_opt
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, $4)
     }
-|   ident '{' TIMESTAMP '=' expression '}'
+
+table_snapshot_opt:
     {
-        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        atTs := &tree.AtTimeStamp{
+        $$ = nil
+    }
+|   '{' '}'
+    {
+        $$ = nil
+    }
+|   '{' TIMESTAMP '=' expression '}'
+    {
+        $$ = &tree.AtTimeStamp{
             Type: tree.ATTIMESTAMPTIME,
-            Expr: $5,
+            Expr: $4,
         }
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
     }
-|   ident '{' SNAPSHOT '=' expression '}'
+|   '{' SNAPSHOT '=' expression '}'
     {
-        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        atTs := &tree.AtTimeStamp{
+        $$ = &tree.AtTimeStamp{
             Type: tree.ATTIMESTAMPSNAPSHOT,
-            Expr: $5,
+            Expr: $4,
         }
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
     }
-|   ident '{' MO_TS '=' expression '}'
+|   '{' MO_TS '=' expression '}'
     {
-        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        atTs := &tree.AtTimeStamp{
+        $$ = &tree.AtTimeStamp{
             Type: tree.ATMOTIMESTAMP,
-            Expr: $5,
+            Expr: $4,
         }
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
-    }
-|   ident '.' ident '{' TIMESTAMP '=' expression '}'
-    {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        atTs := &tree.AtTimeStamp{
-            Type: tree.ATTIMESTAMPTIME,
-            Expr: $7,
-        }
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
-    }
-|   ident '.' ident '{' SNAPSHOT '=' expression '}'
-    {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        atTs := &tree.AtTimeStamp{
-            Type: tree.ATTIMESTAMPSNAPSHOT,
-            Expr: $7,
-        }
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
-    }
-|   ident '.' ident '{' MO_TS '=' expression '}'
-    {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        atTs := &tree.AtTimeStamp{
-            Type: tree.ATMOTIMESTAMP,
-            Expr: $7,
-        }
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
     }
 
 table_elem_list_opt:
@@ -11792,6 +11860,7 @@ non_reserved_keyword:
 |   SNAPSHOTS
 |   STAGES
 |   BACKUP
+|   RESTORE
 |   FILESYSTEM
 |   PARALLELISM
 |	VALUE

@@ -190,7 +190,7 @@ var upg_mo_snapshots = versions.UpgradeEntry{
 	UpgSql: fmt.Sprintf(`CREATE TABLE %s.%s (
 			snapshot_id uuid unique key,
 			sname varchar(64) primary key,
-			ts timestamp,
+			ts bigint,
 			level enum('cluster','account','database','table'),
 	        account_name varchar(300),
 			database_name varchar(5000),

@@ -17,7 +17,6 @@ package memoryengine
 import (
 	"context"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -547,6 +546,6 @@ func (t *Table) ApproxObjectsNum(ctx context.Context) int {
 	return 0
 }
 
-func (t *Table) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats) (*api.MergeCommitEntry, error) {
+func (t *Table) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error) {
 	return nil, nil
 }

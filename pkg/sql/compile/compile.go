@@ -82,6 +82,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
+	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
 )
 
@@ -94,7 +95,7 @@ const (
 )
 
 var (
-	ncpu           = runtime.NumCPU()
+	ncpu           = runtime.GOMAXPROCS(0)
 	ctxCancelError = context.Canceled.Error()
 )
 
@@ -885,7 +886,7 @@ func (c *Compile) getCNList() (engine.Nodes, error) {
 	cnList = append(cnList, engine.Node{
 		Id:   cnID,
 		Addr: c.addr,
-		Mcpu: runtime.NumCPU(),
+		Mcpu: ncpu,
 	})
 	return cnList, nil
 }
@@ -1516,10 +1517,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				if c.anal.qry.LoadTag {
 					dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, dataScope.NodeInfo.Mcpu) // reset the channel buffer of sink for load
 				}
-				mcpu := dataScope.NodeInfo.Mcpu
-				scopes := make([]*Scope, 0, mcpu)
-				regs := make([]*process.WaitRegister, 0, mcpu)
-				for i := 0; i < mcpu; i++ {
+				parallelSize := c.getParallelSizeForExternalScan(n, dataScope.NodeInfo.Mcpu)
+				scopes := make([]*Scope, 0, parallelSize)
+				regs := make([]*process.WaitRegister, 0, parallelSize)
+				for i := 0; i < parallelSize; i++ {
 					s := newScope(Merge)
 					s.Instructions = []vm.Instruction{{Op: vm.Merge, Arg: merge.NewArgument()}}
 					scopes = append(scopes, s)
@@ -1532,7 +1533,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 				}
 
-				if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
+				if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize {
 					_, arg := constructDispatchLocalAndRemote(0, scopes, c.addr)
 					arg.FuncId = dispatch.ShuffleToAllFunc
 					arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
@@ -1970,7 +1971,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	for i := 0; i < len(fileList); i++ {
 		param.Filepath = fileList[i]
 		if param.Parallel {
-			arr, err := external.ReadFileOffset(param, mcpu, fileSize[i])
+			arr, err := external.ReadFileOffset(param, mcpu, fileSize[i], n.TableDef.Cols)
 			fileOffset = append(fileOffset, arr)
 			if err != nil {
 				return nil, err
@@ -1995,7 +1996,13 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			fileOffsetTmp[j] = &pipeline.FileOffset{}
 			fileOffsetTmp[j].Offset = make([]int64, 0)
 			if param.Parallel {
-				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+				if 2*preIndex+2*count < len(fileOffset[j]) {
+					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+				} else if 2*preIndex < len(fileOffset[j]) {
+					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
+				} else {
+					continue
+				}
 			} else {
 				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{0, -1}...)
 			}
@@ -2012,9 +2019,24 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	return ss, nil
 }
 
+func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
+	if n.Stats == nil {
+		return cpuNum
+	}
+	totalSize := n.Stats.Cost * n.Stats.Rowsize
+	parallelSize := int(totalSize / float64(colexec.WriteS3Threshold))
+	if parallelSize < 1 {
+		return 1
+	} else if parallelSize < cpuNum {
+		return parallelSize
+	}
+	return cpuNum
+}
+
 func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) ([]*Scope, error) {
-	ss := make([]*Scope, ncpu)
-	for i := 0; i < ncpu; i++ {
+	parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
+	ss := make([]*Scope, parallelSize)
+	for i := 0; i < parallelSize; i++ {
 		ss[i] = c.constructLoadMergeScope()
 	}
 	s := c.constructScopeForExternal(c.addr, false)
@@ -2127,21 +2149,32 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		attrs[j] = col.Name
 	}
 
-	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) {
-		if n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
-			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
-		} else {
-			return moerr.NewInvalidInput(c.ctx, "scan timestamp is greater than current txn timestamp")
+	//-----------------------------------------------------------------------------------------------------
+	//if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+	//	txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+	//} else {
+	//	txnOp = c.proc.TxnOperator
+	//}
+
+	ctx := c.ctx
+	txnOp = c.proc.TxnOperator
+	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
+		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+			n.ScanSnapshot.TS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+
+			if n.ScanSnapshot.CreatedByTenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.CreatedByTenant.TenantID)
+			}
 		}
-	} else {
-		txnOp = c.proc.TxnOperator
 	}
+	//-----------------------------------------------------------------------------------------------------
 
 	if c.proc != nil && c.proc.TxnOperator != nil {
 		ts = txnOp.Txn().SnapshotTS
 	}
 	{
-		ctx := c.ctx
+		//ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
@@ -3635,7 +3668,29 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 	var err error
 	var db engine.Database
 	var ranges engine.Ranges
+	var txnOp client.TxnOperator
+
+	//-----------------------------------------------------------------------------------------------------
+	//if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+	//	txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+	//} else {
+	//	txnOp = c.proc.TxnOperator
+	//}
+
 	ctx := c.ctx
+	txnOp = c.proc.TxnOperator
+	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
+		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+			n.ScanSnapshot.TS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+
+			if n.ScanSnapshot.CreatedByTenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.CreatedByTenant.TenantID)
+			}
+		}
+	}
+	//-----------------------------------------------------------------------------------------------------
+
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
@@ -3646,7 +3701,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 
-	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 	if err != nil {
 		return nil, err
 	}
@@ -3713,22 +3768,33 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var nodes engine.Nodes
 	var txnOp client.TxnOperator
 
-	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) {
-		if n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
-			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
-		} else {
-			return nil, nil, nil, moerr.NewInvalidInput(c.ctx, "scan timestamp is greater than current txn timestamp")
+	//------------------------------------------------------------------------------------------------------------------
+	//if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+	//	txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+	//} else {
+	//	txnOp = c.proc.TxnOperator
+	//}
+
+	ctx := c.ctx
+	txnOp = c.proc.TxnOperator
+	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
+		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+			n.ScanSnapshot.TS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+
+			if n.ScanSnapshot.CreatedByTenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.CreatedByTenant.TenantID)
+			}
 		}
-	} else {
-		txnOp = c.proc.TxnOperator
 	}
+	//-------------------------------------------------------------------------------------------------------------
 
 	isPartitionTable := false
 	if n.TableDef.Partition != nil {
 		isPartitionTable = true
 	}
 
-	ctx := c.ctx
+	//ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
@@ -3814,7 +3880,16 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			}
 		}
 
-		if partialResults != nil {
+		if len(n.AggList) == 1 && n.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName == "starcount" {
+			for i := 1; i < ranges.Len(); i++ {
+				blk := ranges.(*objectio.BlockInfoSlice).Get(i)
+				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
+					newranges = append(newranges, ranges.(*objectio.BlockInfoSlice).GetBytes(i)...)
+					continue
+				}
+				partialResults[0] = partialResults[0].(int64) + int64(blk.MetaLocation().Rows())
+			}
+		} else if partialResults != nil {
 			columnMap := make(map[int]int)
 			for i := range n.AggList {
 				agg := n.AggList[i].Expr.(*plan.Expr_F)
@@ -4134,11 +4209,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 					}
 				}
 			}
-			if ranges.Size() == len(newranges) {
-				partialResults = nil
-			} else if partialResults != nil {
-				ranges.SetBytes(newranges)
-			}
+		}
+		if ranges.Size() == len(newranges) {
+			partialResults = nil
+		} else if partialResults != nil {
+			ranges.SetBytes(newranges)
 		}
 		if partialResults == nil {
 			partialResultTypes = nil
