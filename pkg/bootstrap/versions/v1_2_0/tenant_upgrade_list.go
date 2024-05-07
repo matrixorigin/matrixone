@@ -553,7 +553,9 @@ var upg_information_schema_columns = versions.UpgradeEntry{
 		"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 		"if(true, NULL, 0) as SRS_ID "+
 		"from mo_catalog.mo_columns "+
-		"where account_id = current_account_id() and att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
+		"where account_id = current_account_id() "+
+		"and att_relname!='%s' and att_relname not like '%s' and attname != '%s' and att_relname not like '%s'",
+		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
 		if err != nil {
@@ -584,7 +586,9 @@ var upg_information_schema_columns = versions.UpgradeEntry{
 			"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 			"if(true, NULL, 0) as SRS_ID "+
 			"from mo_catalog.mo_columns "+
-			"where account_id = current_account_id() and att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID) {
+			"where account_id = current_account_id() "+
+			"and att_relname!='%s' and att_relname not like '%s' and attname != '%s' and att_relname not like '%s'",
+			catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard) {
 			return true, nil
 		}
 		return false, nil
