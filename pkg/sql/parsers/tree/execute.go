@@ -14,16 +14,6 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/reuse"
-
-func init() {
-	reuse.CreatePool[Execute](
-		func() *Execute { return &Execute{} },
-		func(e *Execute) { e.reset() },
-		reuse.DefaultOptions[Execute](),
-	)
-}
-
 type Execute struct {
 	Statement
 	Name      Identifier
@@ -45,34 +35,21 @@ func (node *Execute) Format(ctx *FmtCtx) {
 }
 
 func (node *Execute) Free() {
-	reuse.Free[Execute](node, nil)
+
 }
 
 func (node *Execute) GetStatementType() string { return "Execute" }
-
-func (node *Execute) GetQueryType() string { return QueryTypeOth }
-
-func (node Execute) TypeName() string { return "tree.Execute" }
+func (node *Execute) GetQueryType() string     { return QueryTypeOth }
 
 func NewExecute(name Identifier) *Execute {
-	e := reuse.Alloc[Execute](nil)
-	e.Name = name
-	return e
+	return &Execute{
+		Name: name,
+	}
 }
 
 func NewExecuteWithVariables(name Identifier, variables []*VarExpr) *Execute {
-	e := reuse.Alloc[Execute](nil)
-	e.Name = name
-	e.Variables = variables
-	return e
-}
-
-func (node *Execute) reset() {
-	// if node.Variables != nil {
-	// for _, item := range node.Variables {
-	// switch item.(type) {
-	// case *IntVal:
-	// }
-	// }
-	*node = Execute{}
+	return &Execute{
+		Name:      name,
+		Variables: variables,
+	}
 }

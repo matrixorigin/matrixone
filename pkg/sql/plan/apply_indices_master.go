@@ -37,12 +37,14 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 	var prevLastNodeId int32
 	var lastNodeId int32
 
-	ts := scanNode.ScanTS
+	//ts1 := scanNode.ScanTS
 	for i, filterExp := range scanNode.FilterList {
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName)
+		// TODO: node should hold snapshot info and account info
+		//idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName, timestamp.Timestamp{})
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
 
 		// 1. SELECT pk from idx WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value"))
-		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, *ts, colDefs)
+		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, scanNode.ScanSnapshot, colDefs)
 
 		// 2. (SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value1")) )
 		//    	INNER JOIN
@@ -119,7 +121,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 }
 
 func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *plan.Expr,
-	idxTableDef *TableDef, idxObjRef *ObjectRef, scanTs timestamp.Timestamp, colDefs []*plan.ColDef) (int32, int32) {
+	idxTableDef *TableDef, idxObjRef *ObjectRef, scanSnapshot *Snapshot, colDefs []*plan.ColDef) (int32, int32) {
 
 	// a. Scan * WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value"))
 	idxScanTag := builder.genNewTag()
@@ -221,7 +223,8 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		ObjRef:      idxObjRef,
 		FilterList:  []*plan.Expr{filterList},
 		BindingTags: []int32{idxScanTag},
-		ScanTS:      &scanTs,
+		//ScanTS:       &scanTs,
+		ScanSnapshot: scanSnapshot,
 	}, bindCtx)
 
 	// b. Project __mo_index_pk_col
