@@ -1018,7 +1018,7 @@ func (n *MVCCHandle) GetDeltaLocAndCommitTS() (objectio.Location, types.TS, type
 func (n *MVCCHandle) GetDeltaLocAndCommitTSByTxn(txn txnif.TxnReader) (objectio.Location, types.TS) {
 	n.RLock()
 	defer n.RUnlock()
-	node := n.deltaloc.GetVisibleNode(txn)
+	node := n.deltaloc.GetVisibleNodeLocked(txn)
 	if node == nil {
 		return nil, types.TS{}
 	}

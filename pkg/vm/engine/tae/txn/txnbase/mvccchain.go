@@ -146,7 +146,7 @@ func (be *MVCCChain[T]) GetLatestCommittedNodeLocked() (node T) {
 // GetVisibleNode gets mvcc node according to the txnReader.
 // It returns the mvcc node in the same txn as the read txn
 // or returns the latest mvcc node with commitTS less than the timestamp.
-func (be *MVCCChain[T]) GetVisibleNode(txn txnif.TxnReader) (node T) {
+func (be *MVCCChain[T]) GetVisibleNodeLocked(txn txnif.TxnReader) (node T) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[T]) (goNext bool) {
 		un := n.GetPayload()
 		var visible bool

@@ -218,7 +218,7 @@ func (be *BaseEntryImpl[T]) ensureVisibleAndNotDropped(txn txnif.TxnReader) bool
 }
 
 func (be *BaseEntryImpl[T]) GetVisibilityLocked(txn txnif.TxnReader) (visible, dropped bool) {
-	un := be.GetVisibleNode(txn)
+	un := be.GetVisibleNodeLocked(txn)
 	if un == nil {
 		return
 	}

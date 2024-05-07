@@ -324,7 +324,7 @@ func (entry *TableEntry) GetLastestSchema() *Schema {
 func (entry *TableEntry) GetVisibleSchema(txn txnif.TxnReader) *Schema {
 	entry.RLock()
 	defer entry.RUnlock()
-	node := entry.GetVisibleNode(txn)
+	node := entry.GetVisibleNodeLocked(txn)
 	if node != nil {
 		return node.BaseNode.Schema
 	}
@@ -745,7 +745,7 @@ func (entry *TableEntry) GetVisibilityAndName(txn txnif.TxnReader) (visible, dro
 		txnToWait.GetTxnState(true)
 		entry.RLock()
 	}
-	un := entry.GetVisibleNode(txn)
+	un := entry.GetVisibleNodeLocked(txn)
 	if un == nil {
 		return
 	}
