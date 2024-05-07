@@ -276,13 +276,6 @@ func (m *merger[T]) syncObject(ctx context.Context) error {
 		commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobj.Clone().Marshal())
 	}
 	m.writer = nil
-<<<<<<< Updated upstream
-	return nil
-}
-
-=======
-<<<<<<< Updated upstream
-=======
 	return nil
 }
 
@@ -294,7 +287,6 @@ func (m *merger[T]) release() {
 	}
 }
 
->>>>>>> Stashed changes
 func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) error {
 	var merger Merger
 	typ := mergeHost.GetSortKeyType()
@@ -353,8 +345,4 @@ func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) err
 		}
 	}
 	return merger.merge(ctx)
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 }
