@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -662,12 +663,12 @@ func rewriteForCreateTableLike(stmt *tree.CreateTable, ctx CompilerContext) (new
 
 	tblName := formatStr(string(oldTable.ObjectName))
 	dbName := formatStr(string(oldTable.SchemaName))
-	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx)
+	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, Snapshot{TS: &timestamp.Timestamp{}})
 	if err != nil {
 		return nil, err
 	}
 
-	_, tableDef := ctx.Resolve(dbName, tblName)
+	_, tableDef := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -846,7 +847,7 @@ func rewriteForCreateTableLike(stmt *tree.CreateTable, ctx CompilerContext) (new
 		if fk.ForeignTbl == 0 {
 			fkTableDef = tableDef
 		} else {
-			_, fkTableDef = ctx.ResolveById(fk.ForeignTbl)
+			_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
 		}
 
 		fkColIdToName := make(map[uint64]string)
