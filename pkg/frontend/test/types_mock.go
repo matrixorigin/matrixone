@@ -485,6 +485,18 @@ func (mr *MockBackgroundExecMockRecorder) ExecStmt(arg0, arg1 interface{}) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecStmt", reflect.TypeOf((*MockBackgroundExec)(nil).ExecStmt), arg0, arg1)
 }
 
+func (m *MockBackgroundExec) ExecRestore(arg0 context.Context, arg1 string, arg2 uint32, arg3 uint32) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ExecStmt", arg0, arg1, arg2, arg3)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+func (mr *MockBackgroundExecMockRecorder) ExecRestore(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecStmt", reflect.TypeOf((*MockBackgroundExec)(nil).ExecStmt), arg0, arg1, arg2, arg3)
+}
+
 // GetExecResultBatches mocks base method.
 func (m *MockBackgroundExec) GetExecResultBatches() []*batch.Batch {
 	m.ctrl.T.Helper()

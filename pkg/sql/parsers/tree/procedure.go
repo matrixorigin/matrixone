@@ -21,31 +21,31 @@ func init() {
 		func() *DropProcedure { return &DropProcedure{} },
 		func(d *DropProcedure) { d.reset() },
 		reuse.DefaultOptions[DropProcedure](), //.
-	) // WithEnableChecker()
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ProcedureArgDecl](
 		func() *ProcedureArgDecl { return &ProcedureArgDecl{} },
 		func(p *ProcedureArgDecl) { p.reset() },
 		reuse.DefaultOptions[ProcedureArgDecl](), //.
-	) // WithEnableChecker()
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ProcedureName](
 		func() *ProcedureName { return &ProcedureName{} },
 		func(p *ProcedureName) { p.reset() },
 		reuse.DefaultOptions[ProcedureName](), //.
-	) // WithEnableChecker()
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateProcedure](
 		func() *CreateProcedure { return &CreateProcedure{} },
 		func(c *CreateProcedure) { c.reset() },
 		reuse.DefaultOptions[CreateProcedure](), //.
-	) // WithEnableChecker()
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CallStmt](
 		func() *CallStmt { return &CallStmt{} },
 		func(c *CallStmt) { c.reset() },
 		reuse.DefaultOptions[CallStmt](), //.
-	) // WithEnableChecker()
+	) //WithEnableChecker()
 }
 
 type InOutArgType int
@@ -64,7 +64,6 @@ type ProcedureArg interface {
 	NodeFormatter
 	GetName(ctx *FmtCtx) string
 	GetType() int
-	Free()
 }
 
 type ProcedureArgImpl struct {
@@ -157,18 +156,20 @@ func (node *ProcedureName) Free() {
 }
 
 func NewProcedureName(name Identifier, prefix ObjectNamePrefix) *ProcedureName {
-	pc := reuse.Alloc[ProcedureName](nil)
-	pc.Name.ObjectName = name
-	pc.Name.ObjectNamePrefix = prefix
-	return pc
+	return &ProcedureName{
+		Name: objName{
+			ObjectName:       name,
+			ObjectNamePrefix: prefix,
+		},
+	}
 }
 
 func NewProcedureArgDecl(f InOutArgType, n *UnresolvedName, t ResolvableTypeReference) *ProcedureArgDecl {
-	pa := reuse.Alloc[ProcedureArgDecl](nil)
-	pa.Name = n
-	pa.Type = t
-	pa.InOutType = f
-	return pa
+	return &ProcedureArgDecl{
+		Name:      n,
+		Type:      t,
+		InOutType: f,
+	}
 }
 
 type CreateProcedure struct {
@@ -212,9 +213,6 @@ func (node *CreateProcedure) GetQueryType() string { return QueryTypeOth }
 func (node *CreateProcedure) reset() {
 	if node.Name != nil {
 		node.Name.Free()
-	}
-	for _, arg := range node.Args {
-		arg.Free()
 	}
 	*node = CreateProcedure{}
 }
@@ -282,13 +280,6 @@ func (node *CallStmt) Format(ctx *FmtCtx) {
 func (node *CallStmt) GetStatementType() string { return "Call" }
 
 func (node *CallStmt) GetQueryType() string { return QueryTypeOth }
-
-func NewCallStmt(n *ProcedureName, a Exprs) *CallStmt {
-	ca := reuse.Alloc[CallStmt](nil)
-	ca.Name = n
-	ca.Args = a
-	return ca
-}
 
 func (node *CallStmt) reset() {
 	if node.Name != nil {

@@ -1020,20 +1020,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if b.ctx == nil {
 			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid field reference to COUNT")
 		}
-		switch nval := astArgs[0].(type) {
-		case *tree.NumVal:
-			if nval.String() == "*" {
-				if len(b.ctx.bindings) == 0 || len(b.ctx.bindings[0].cols) == 0 {
-					name = "count"
-				} else {
-					astArgs = []tree.Expr{tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)}
-				}
-			} else {
-				name = "count"
-			}
-		default:
-			name = "count"
-		}
+		name = "count"
 
 	case "trim":
 		astArgs = astArgs[1:]
@@ -1155,11 +1142,6 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 		if !strings.Contains(sql, "select") {
 			sql = "select " + sql
 			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1, 0)
-			defer func() {
-				for _, s := range substmts {
-					s.Free()
-				}
-			}()
 			if err != nil {
 				return nil, err
 			}
@@ -1169,11 +1151,6 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 			}
 		} else {
 			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1, 0)
-			defer func() {
-				for _, s := range substmts {
-					s.Free()
-				}
-			}()
 			if err != nil {
 				return nil, err
 			}
