@@ -68,22 +68,22 @@ func execInFrontendInBack(requestCtx context.Context,
 	case *tree.Grant:
 		switch st.Typ {
 		case tree.GrantTypeRole:
-			if err = handleGrantRole(requestCtx, backSes, st.GrantRole); err != nil {
+			if err = handleGrantRole(requestCtx, backSes, &st.GrantRole); err != nil {
 				return
 			}
 		case tree.GrantTypePrivilege:
-			if err = handleGrantPrivilege(requestCtx, backSes, st.GrantPrivilege); err != nil {
+			if err = handleGrantPrivilege(requestCtx, backSes, &st.GrantPrivilege); err != nil {
 				return
 			}
 		}
 	case *tree.Revoke:
 		switch st.Typ {
 		case tree.RevokeTypeRole:
-			if err = handleRevokeRole(requestCtx, backSes, st.RevokeRole); err != nil {
+			if err = handleRevokeRole(requestCtx, backSes, &st.RevokeRole); err != nil {
 				return
 			}
 		case tree.RevokeTypePrivilege:
-			if err = handleRevokePrivilege(requestCtx, backSes, st.RevokePrivilege); err != nil {
+			if err = handleRevokePrivilege(requestCtx, backSes, &st.RevokePrivilege); err != nil {
 				return
 			}
 		}
