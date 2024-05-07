@@ -86,8 +86,7 @@ func (node *DropDatabase) Format(ctx *FmtCtx) {
 }
 
 func (node *DropDatabase) GetStatementType() string { return "Drop Database" }
-
-func (node *DropDatabase) GetQueryType() string { return QueryTypeDDL }
+func (node *DropDatabase) GetQueryType() string     { return QueryTypeDDL }
 
 func (node *DropDatabase) Free() {
 	reuse.Free[DropDatabase](node, nil)
@@ -123,8 +122,7 @@ func (node *DropTable) Format(ctx *FmtCtx) {
 }
 
 func (node *DropTable) GetStatementType() string { return "Drop Table" }
-
-func (node *DropTable) GetQueryType() string { return QueryTypeDDL }
+func (node *DropTable) GetQueryType() string     { return QueryTypeDDL }
 
 func (node *DropTable) Free() {
 	reuse.Free[DropTable](node, nil)
@@ -160,8 +158,7 @@ func (node *DropView) Format(ctx *FmtCtx) {
 }
 
 func (node *DropView) GetStatementType() string { return "Drop View" }
-
-func (node *DropView) GetQueryType() string { return QueryTypeDDL }
+func (node *DropView) GetQueryType() string     { return QueryTypeDDL }
 
 func (node *DropView) Free() {
 	reuse.Free[DropView](node, nil)
@@ -201,8 +198,7 @@ func (node *DropIndex) Format(ctx *FmtCtx) {
 }
 
 func (node *DropIndex) GetStatementType() string { return "Drop Index" }
-
-func (node *DropIndex) GetQueryType() string { return QueryTypeDDL }
+func (node *DropIndex) GetQueryType() string     { return QueryTypeDDL }
 
 func (node *DropIndex) Free() {
 	reuse.Free[DropIndex](node, nil)
@@ -250,8 +246,7 @@ func (node *DropRole) Format(ctx *FmtCtx) {
 }
 
 func (node *DropRole) GetStatementType() string { return "Drop Role" }
-
-func (node *DropRole) GetQueryType() string { return QueryTypeDCL }
+func (node *DropRole) GetQueryType() string     { return QueryTypeDCL }
 
 func (node *DropRole) Free() {
 	reuse.Free[DropRole](node, nil)
@@ -295,8 +290,7 @@ func (node *DropUser) Format(ctx *FmtCtx) {
 }
 
 func (node *DropUser) GetStatementType() string { return "Drop User" }
-
-func (node *DropUser) GetQueryType() string { return QueryTypeDCL }
+func (node *DropUser) GetQueryType() string     { return QueryTypeDCL }
 
 func (node *DropUser) Free() {
 	reuse.Free[DropUser](node, nil)
@@ -336,8 +330,7 @@ func (node *DropAccount) Format(ctx *FmtCtx) {
 }
 
 func (node *DropAccount) GetStatementType() string { return "Drop Account" }
-
-func (node *DropAccount) GetQueryType() string { return QueryTypeDCL }
+func (node *DropAccount) GetQueryType() string     { return QueryTypeDCL }
 
 func (node *DropAccount) Free() {
 	reuse.Free[DropAccount](node, nil)
@@ -379,8 +372,7 @@ func (node *DropPublication) Format(ctx *FmtCtx) {
 }
 
 func (node *DropPublication) GetStatementType() string { return "Drop Publication" }
-
-func (node *DropPublication) GetQueryType() string { return QueryTypeDCL }
+func (node *DropPublication) GetQueryType() string     { return QueryTypeDCL }
 
 func (node *DropPublication) Free() {
 	reuse.Free[DropPublication](node, nil)
