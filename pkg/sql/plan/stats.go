@@ -1018,7 +1018,18 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if shouldReturnMinimalStats(node) {
 		return DefaultMinimalStats()
 	}
-	s, err := builder.compCtx.Stats(node.ObjRef)
+
+	//ts := timestamp.Timestamp{}
+	//if node.ScanTS != nil {
+	//	ts = *node.ScanTS
+	//}
+
+	scanSnapshot := node.ScanSnapshot
+	if scanSnapshot == nil {
+		scanSnapshot = &Snapshot{}
+	}
+
+	s, err := builder.compCtx.Stats(node.ObjRef, *scanSnapshot)
 	if err != nil || s == nil {
 		return DefaultStats()
 	}

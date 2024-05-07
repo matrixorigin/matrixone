@@ -3848,6 +3848,28 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_admin_name`
+	{
+		functionId: MO_ADMIN_NAME,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInternalGetAdminName
+				},
+			},
+		},
+	},
+
 	// function `mo_cu`
 	{
 		functionId: MO_CU,

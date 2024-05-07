@@ -14,28 +14,6 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/reuse"
-
-func init() {
-	reuse.CreatePool[BeginCompound](
-		func() *BeginCompound { return &BeginCompound{} },
-		func(b *BeginCompound) { b.reset() },
-		reuse.DefaultOptions[BeginCompound](),
-	)
-
-	reuse.CreatePool[EndCompound](
-		func() *EndCompound { return &EndCompound{} },
-		func(e *EndCompound) { e.reset() },
-		reuse.DefaultOptions[EndCompound](),
-	)
-
-	reuse.CreatePool[CompoundStmt](
-		func() *CompoundStmt { return &CompoundStmt{} },
-		func(c *CompoundStmt) { c.reset() },
-		reuse.DefaultOptions[CompoundStmt](),
-	)
-}
-
 // Begin statement
 type BeginCompound struct {
 	statementImpl
@@ -67,59 +45,19 @@ func (node *CompoundStmt) Format(ctx *FmtCtx) {
 	ctx.WriteString("end")
 }
 
-func (node *CompoundStmt) Free() {
-	reuse.Free[CompoundStmt](node, nil)
-}
-
-func (node *CompoundStmt) reset() {
-	if node.Stmts != nil {
-		for _, item := range node.Stmts {
-			if item != nil {
-				item.Free()
-			}
-		}
-	}
-	*node = CompoundStmt{}
-}
-
-func (node CompoundStmt) TypeName() string { return "tree.CompoundStmt" }
-
 func (node *CompoundStmt) GetStatementType() string { return "compound" }
-
-func (node *CompoundStmt) GetQueryType() string { return QueryTypeTCL }
+func (node *CompoundStmt) GetQueryType() string     { return QueryTypeTCL }
 
 func (node *BeginCompound) Format(ctx *FmtCtx) {
 	ctx.WriteString("begin")
 }
 
-func (node *BeginCompound) Free() {
-	reuse.Free[BeginCompound](node, nil)
-}
-
-func (node *BeginCompound) reset() {
-	*node = BeginCompound{}
-}
-
-func (node BeginCompound) TypeName() string { return "tree.BeginCompound" }
-
 func (node *BeginCompound) GetStatementType() string { return "begin" }
-
-func (node *BeginCompound) GetQueryType() string { return QueryTypeTCL }
+func (node *BeginCompound) GetQueryType() string     { return QueryTypeTCL }
 
 func (node *EndCompound) Format(ctx *FmtCtx) {
 	ctx.WriteString("end")
 }
 
-func (node *EndCompound) Free() {
-	reuse.Free[EndCompound](node, nil)
-}
-
-func (node *EndCompound) reset() {
-	*node = EndCompound{}
-}
-
 func (node *EndCompound) GetStatementType() string { return "end" }
-
-func (node *EndCompound) GetQueryType() string { return QueryTypeTCL }
-
-func (node EndCompound) TypeName() string { return "tree.EndCompound" }
+func (node *EndCompound) GetQueryType() string     { return QueryTypeTCL }
