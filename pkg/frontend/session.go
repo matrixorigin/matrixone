@@ -18,12 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/google/uuid"
 
@@ -238,6 +239,18 @@ type Session struct {
 	proxyAddr  string
 
 	disableTrace bool
+}
+
+func (ses *Session) GetTxnHandler() *TxnHandler {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.txnHandler
+}
+
+func (ses *Session) GetTenantInfo() *TenantInfo {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.tenant
 }
 
 func (ses *Session) SendRows() int64 {
@@ -553,6 +566,8 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 }
 
 func (ses *Session) Close() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.feSessionImpl.Close()
 	ses.feSessionImpl.Clear()
 	ses.proto = nil
@@ -1269,22 +1284,8 @@ func (ses *Session) SetTempEngine(ctx context.Context, te engine.Engine) error {
 	return nil
 }
 
-func (ses *Session) GetDatabaseName() string {
-	return ses.GetMysqlProtocol().GetDatabaseName()
-}
-
-func (ses *Session) SetDatabaseName(db string) {
-	ses.GetMysqlProtocol().SetDatabaseName(db)
-	ses.GetTxnCompileCtx().SetDatabase(db)
-}
-
 func (ses *Session) DatabaseNameIsEmpty() bool {
 	return len(ses.GetDatabaseName()) == 0
-}
-
-// GetUserName returns the user_ame and the account_name
-func (ses *Session) GetUserName() string {
-	return ses.GetMysqlProtocol().GetUserName()
 }
 
 func (ses *Session) SetUserName(uname string) {
@@ -1936,7 +1937,7 @@ func (d *dbMigration) Migrate(ses *Session) error {
 		return nil
 	}
 	var err error
-	if err := doUse(ses.requestCtx, ses, d.db); err != nil {
+	if err := doUse(ses.GetRequestContext(), ses, d.db); err != nil {
 		return err
 	}
 	if d.commitFn != nil {
@@ -1970,11 +1971,11 @@ func (p *prepareStmtMigration) Migrate(ses *Session) error {
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
 		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
 	}
-	stmts, err := mysql.Parse(ses.requestCtx, p.sql, v.(int64), 0)
+	stmts, err := mysql.Parse(ses.GetRequestContext(), p.sql, v.(int64), 0)
 	if err != nil {
 		return err
 	}
-	if _, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql, p.paramTypes); err != nil {
+	if _, err = doPrepareStmt(ses.GetRequestContext(), ses, stmts[0].(*tree.PrepareStmt), p.sql, p.paramTypes); err != nil {
 		return err
 	}
 	if p.commitFn != nil {
@@ -1983,7 +1984,7 @@ func (p *prepareStmtMigration) Migrate(ses *Session) error {
 	return nil
 }
 
-func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
+func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	accountID, err := defines.GetAccountId(ses.requestCtx)
 	if err != nil {
 		logutil.Errorf("failed to get account ID: %v", err)
