@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"os"
 	"path"
 	"strconv"
@@ -76,6 +77,13 @@ func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
 		cfg.Parallelism = s3Conf.parallelism
 	}
 
+	if bs.Timestamp == "" {
+		cfg.Timestamp = types.TS{}
+	} else {
+		cfg.Timestamp = types.StringToTS(bs.Timestamp)
+	}
+	cfg.BackupType = bs.BackupType
+
 	// step 2 : backup mo
 	if err = backupBuildInfo(ctx, cfg); err != nil {
 		return err
@@ -125,7 +133,7 @@ func backupConfigs(ctx context.Context, cfg *Config) error {
 
 var backupTae = func(ctx context.Context, config *Config) error {
 	fs := fileservice.SubPath(config.TaeDir, taeDir)
-	return BackupData(ctx, config.SharedFs, fs, "", int(config.Parallelism))
+	return BackupData(ctx, config.SharedFs, fs, "", config)
 }
 
 func backupHakeeper(ctx context.Context, config *Config) error {

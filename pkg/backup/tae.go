@@ -72,7 +72,7 @@ func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
 	return fileName, err
 }
 
-func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string, count int) error {
+func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string, config *Config) error {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
 	if !ok {
 		return moerr.NewNotSupported(ctx, "no implement sqlExecutor")
@@ -96,7 +96,8 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 	if err != nil {
 		return err
 	}
-	return execBackup(ctx, srcFs, dstFs, fileName, count)
+	count := config.Parallelism
+	return execBackup(ctx, srcFs, dstFs, fileName, int(count), config.Timestamp, config.BackupType)
 }
 
 func getParallelCount(count int) int {
@@ -252,7 +253,14 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 	return taeFileList, nil
 }
 
-func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string, count int) error {
+func execBackup(
+	ctx context.Context,
+	srcFs, dstFs fileservice.FileService,
+	names []string,
+	count int,
+	ts types.TS,
+	tye string,
+) error {
 	backupTime := names[0]
 	trimInfo := names[1]
 	names = names[1:]
@@ -273,7 +281,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			common.AnyField("rewrite checkpoint cost", reWriteDuration))
 	}()
 	now := time.Now()
-	baseTS := types.StringToTS("1714984023125602821-1")
+	baseTS := ts
 	for i, name := range names {
 		if len(name) == 0 {
 			continue

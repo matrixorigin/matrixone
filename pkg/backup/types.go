@@ -224,6 +224,8 @@ type Config struct {
 
 	// For parallel backup
 	Parallelism uint16
+
+	BackupType string
 }
 
 // metasGeneralFsMustBeSet denotes metas and generalFs must be ready
