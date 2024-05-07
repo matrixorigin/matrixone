@@ -89,6 +89,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 						if err := syncObject(ctx, writer, host.GetCommitEntry()); err != nil {
 							return err
 						}
+						writer = nil
 					}
 				}
 			}
@@ -116,6 +117,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		if err := syncObject(ctx, writer, host.GetCommitEntry()); err != nil {
 			return err
 		}
+		writer = nil
 	}
 
 	return nil
@@ -129,7 +131,6 @@ func syncObject(ctx context.Context, writer *blockio.BlockWriter, commitEntry *a
 	for _, cobj := range cobjstats {
 		commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobj.Clone().Marshal())
 	}
-	writer = nil
 	return nil
 }
 
