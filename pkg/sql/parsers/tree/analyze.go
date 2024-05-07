@@ -40,8 +40,7 @@ func (node *AnalyzeStmt) Format(ctx *FmtCtx) {
 }
 
 func (node *AnalyzeStmt) GetStatementType() string { return "Analyze Table" }
-
-func (node *AnalyzeStmt) GetQueryType() string { return QueryTypeOth }
+func (node *AnalyzeStmt) GetQueryType() string     { return QueryTypeOth }
 
 func (node *AnalyzeStmt) Free() {
 	reuse.Free[AnalyzeStmt](node, nil)

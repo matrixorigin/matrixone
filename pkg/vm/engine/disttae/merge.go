@@ -36,7 +36,6 @@ import (
 )
 
 type cnMergeTask struct {
-	ctx  context.Context
 	host *txnTable
 	// txn
 	snapshot types.TS // start ts, fixed
@@ -101,7 +100,6 @@ func newCNMergeTask(
 	}
 
 	return &cnMergeTask{
-		ctx:         ctx,
 		host:        tbl,
 		snapshot:    snapshot,
 		state:       state,
@@ -158,7 +156,7 @@ func (t *cnMergeTask) GetSortKeyType() types.Type {
 	return types.Type{}
 }
 
-func (t *cnMergeTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
+func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
 	iter := t.blkIters[objIdx]
 	if iter.Next() {
 		blk := iter.Entry()
@@ -174,7 +172,7 @@ func (t *cnMergeTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, 
 				blk.CommitTs = commitTs
 			}
 		}
-		return t.readblock(&blk)
+		return t.readblock(ctx, &blk)
 	}
 	return nil, nil, nil, mergesort.ErrNoMoreBlocks
 }
@@ -198,8 +196,8 @@ func (t *cnMergeTask) GetMPool() *mpool.MPool {
 
 func (t *cnMergeTask) HostHintName() string { return "CN" }
 
-func (t *cnMergeTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error) {
-	r, release, d, e := t.readAllData()
+func (t *cnMergeTask) PrepareData(ctx context.Context) ([]*batch.Batch, []*nulls.Nulls, func(), error) {
+	r, release, d, e := t.readAllData(ctx)
 	return r, d, release, e
 }
 
@@ -237,7 +235,7 @@ func (t *cnMergeTask) PrepareNewWriter() *blockio.BlockWriter {
 	return mergesort.GetNewWriter(t.fs, t.version, t.colseqnums, t.sortkeyPos, t.sortkeyIsPK)
 }
 
-func (t *cnMergeTask) readAllData() ([]*batch.Batch, func(), []*nulls.Nulls, error) {
+func (t *cnMergeTask) readAllData(ctx context.Context) ([]*batch.Batch, func(), []*nulls.Nulls, error) {
 	var cnt uint32
 	for _, t := range t.targets {
 		cnt += t.BlkCnt()
@@ -254,7 +252,7 @@ func (t *cnMergeTask) readAllData() ([]*batch.Batch, func(), []*nulls.Nulls, err
 
 	for _, obj := range t.targets {
 		loc := obj.ObjectLocation()
-		meta, err := objectio.FastLoadObjectMeta(t.ctx, &loc, false, t.fs)
+		meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, t.fs)
 		if err != nil {
 			release()
 			return nil, nil, nil, err
@@ -274,7 +272,7 @@ func (t *cnMergeTask) readAllData() ([]*batch.Batch, func(), []*nulls.Nulls, err
 					blk.CommitTs = commitTs
 				}
 			}
-			bat, delmask, releasef, err := t.readblock(&blk)
+			bat, delmask, releasef, err := t.readblock(ctx, &blk)
 			if err != nil {
 				innerErr = err
 				return false
@@ -297,16 +295,16 @@ func (t *cnMergeTask) readAllData() ([]*batch.Batch, func(), []*nulls.Nulls, err
 }
 
 // readblock reads block data. there is no rowid column, no ablk
-func (t *cnMergeTask) readblock(info *objectio.BlockInfo) (bat *batch.Batch, dels *nulls.Nulls, release func(), err error) {
+func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfo) (bat *batch.Batch, dels *nulls.Nulls, release func(), err error) {
 	// read data
-	bat, release, err = blockio.LoadColumns(t.ctx, t.colseqnums, t.coltypes, t.fs, info.MetaLocation(), t.proc.GetMPool(), fileservice.Policy(0))
+	bat, release, err = blockio.LoadColumns(ctx, t.colseqnums, t.coltypes, t.fs, info.MetaLocation(), t.proc.GetMPool(), fileservice.Policy(0))
 	if err != nil {
 		return
 	}
 
 	// read tombstone on disk
 	if !info.DeltaLocation().IsEmpty() {
-		obat, byCN, delRelease, err2 := blockio.ReadBlockDelete(t.ctx, info.DeltaLocation(), t.fs)
+		obat, byCN, delRelease, err2 := blockio.ReadBlockDelete(ctx, info.DeltaLocation(), t.fs)
 		if err2 != nil {
 			err = err2
 			return

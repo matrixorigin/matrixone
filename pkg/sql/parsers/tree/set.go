@@ -38,8 +38,7 @@ func (node *SetVar) Accept(v Visitor) (Expr, bool) {
 }
 
 func (node *SetVar) GetStatementType() string { return "Set Var" }
-
-func (node *SetVar) GetQueryType() string { return QueryTypeOth }
+func (node *SetVar) GetQueryType() string     { return QueryTypeOth }
 
 func NewSetVar(a []*VarAssignmentExpr) *SetVar {
 	return &SetVar{
@@ -123,8 +122,7 @@ func (node *SetDefaultRole) Format(ctx *FmtCtx) {
 }
 
 func (node *SetDefaultRole) GetStatementType() string { return "Set Role" }
-
-func (node *SetDefaultRole) GetQueryType() string { return QueryTypeOth }
+func (node *SetDefaultRole) GetQueryType() string     { return QueryTypeOth }
 
 func NewSetDefaultRole(t SetDefaultRoleType, r []*Role, u []*User) *SetDefaultRole {
 	return &SetDefaultRole{
@@ -170,8 +168,7 @@ func (node *SetRole) Format(ctx *FmtCtx) {
 }
 
 func (node *SetRole) GetStatementType() string { return "Set Role" }
-
-func (node *SetRole) GetQueryType() string { return QueryTypeOth }
+func (node *SetRole) GetQueryType() string     { return QueryTypeOth }
 
 type SetPassword struct {
 	statementImpl
@@ -197,8 +194,7 @@ func NewSetPassword(u *User, p string) *SetPassword {
 }
 
 func (node *SetPassword) GetStatementType() string { return "Set Password" }
-
-func (node *SetPassword) GetQueryType() string { return QueryTypeOth }
+func (node *SetPassword) GetQueryType() string     { return QueryTypeOth }
 
 type IsolationLevelType int
 
@@ -284,5 +280,4 @@ func (node *SetTransaction) Format(ctx *FmtCtx) {
 }
 
 func (node *SetTransaction) GetStatementType() string { return "Set Transaction" }
-
-func (node *SetTransaction) GetQueryType() string { return QueryTypeTCL }
+func (node *SetTransaction) GetQueryType() string     { return QueryTypeTCL }

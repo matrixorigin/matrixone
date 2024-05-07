@@ -72,10 +72,10 @@ func (node *CreateView) Format(ctx *FmtCtx) {
 
 func (node *CreateView) reset() {
 	// if node.Name != nil {
-	// 	 node.Name.Free()
+	// node.Name.Free()
 	// }
 	// if node.AsSource != nil {
-	// 	node.AsSource.Free()
+	// node.AsSource.Free()
 	// }
 	*node = CreateView{}
 }
@@ -83,5 +83,4 @@ func (node *CreateView) reset() {
 func (node CreateView) TypeName() string { return "tree.CreateView" }
 
 func (node *CreateView) GetStatementType() string { return "Create View" }
-
-func (node *CreateView) GetQueryType() string { return QueryTypeDDL }
+func (node *CreateView) GetQueryType() string     { return QueryTypeDDL }

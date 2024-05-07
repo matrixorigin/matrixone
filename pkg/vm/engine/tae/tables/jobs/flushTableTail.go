@@ -522,7 +522,10 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	var releaseF func()
 	var mapping []uint32
 	if schema.HasSortKey() {
-		writtenBatches, releaseF, mapping = mergesort.MergeAObj(task, readedBats, sortKeyPos, schema.BlockMaxRows, len(toLayout))
+		writtenBatches, releaseF, mapping, err = mergesort.MergeAObj(ctx, task, readedBats, sortKeyPos, schema.BlockMaxRows, len(toLayout))
+		if err != nil {
+			return
+		}
 	} else {
 		cnBatches := make([]*batch.Batch, len(readedBats))
 		for i := range readedBats {

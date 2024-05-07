@@ -45,7 +45,7 @@ type DisposableVecPool interface {
 type MergeTaskHost interface {
 	DisposableVecPool
 	HostHintName() string
-	PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error)
+	PrepareData(context.Context) ([]*batch.Batch, []*nulls.Nulls, func(), error)
 	GetCommitEntry() *api.MergeCommitEntry
 	PrepareNewWriter() *blockio.BlockWriter
 	DoTransfer() bool
@@ -53,7 +53,7 @@ type MergeTaskHost interface {
 	GetBlkCnts() []int
 	GetAccBlkCnts() []int
 	GetSortKeyType() types.Type
-	LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error)
+	LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error)
 	GetTotalSize() uint32
 	GetTotalRowCnt() uint32
 	GetBlockMaxRows() uint32
@@ -143,63 +143,9 @@ func DoMergeAndWrite(
 	}
 
 	if hasSortKey {
-		var merger Merger
-		typ := mergehost.GetSortKeyType()
-		if typ.IsVarlen() {
-			merger = newMerger(mergehost, NumericLess[string], sortkeyPos, vector.MustStrCol)
-		} else {
-			switch typ.Oid {
-			case types.T_bool:
-				merger = newMerger(mergehost, BoolLess, sortkeyPos, vector.MustFixedCol[bool])
-			case types.T_bit:
-				merger = newMerger(mergehost, NumericLess[uint64], sortkeyPos, vector.MustFixedCol[uint64])
-			case types.T_int8:
-				merger = newMerger(mergehost, NumericLess[int8], sortkeyPos, vector.MustFixedCol[int8])
-			case types.T_int16:
-				merger = newMerger(mergehost, NumericLess[int16], sortkeyPos, vector.MustFixedCol[int16])
-			case types.T_int32:
-				merger = newMerger(mergehost, NumericLess[int32], sortkeyPos, vector.MustFixedCol[int32])
-			case types.T_int64:
-				merger = newMerger(mergehost, NumericLess[int64], sortkeyPos, vector.MustFixedCol[int64])
-			case types.T_float32:
-				merger = newMerger(mergehost, NumericLess[float32], sortkeyPos, vector.MustFixedCol[float32])
-			case types.T_float64:
-				merger = newMerger(mergehost, NumericLess[float64], sortkeyPos, vector.MustFixedCol[float64])
-			case types.T_uint8:
-				merger = newMerger(mergehost, NumericLess[uint8], sortkeyPos, vector.MustFixedCol[uint8])
-			case types.T_uint16:
-				merger = newMerger(mergehost, NumericLess[uint16], sortkeyPos, vector.MustFixedCol[uint16])
-			case types.T_uint32:
-				merger = newMerger(mergehost, NumericLess[uint32], sortkeyPos, vector.MustFixedCol[uint32])
-			case types.T_uint64:
-				merger = newMerger(mergehost, NumericLess[uint64], sortkeyPos, vector.MustFixedCol[uint64])
-			case types.T_date:
-				merger = newMerger(mergehost, NumericLess[types.Date], sortkeyPos, vector.MustFixedCol[types.Date])
-			case types.T_timestamp:
-				merger = newMerger(mergehost, NumericLess[types.Timestamp], sortkeyPos, vector.MustFixedCol[types.Timestamp])
-			case types.T_datetime:
-				merger = newMerger(mergehost, NumericLess[types.Datetime], sortkeyPos, vector.MustFixedCol[types.Datetime])
-			case types.T_time:
-				merger = newMerger(mergehost, NumericLess[types.Time], sortkeyPos, vector.MustFixedCol[types.Time])
-			case types.T_enum:
-				merger = newMerger(mergehost, NumericLess[types.Enum], sortkeyPos, vector.MustFixedCol[types.Enum])
-			case types.T_decimal64:
-				merger = newMerger(mergehost, LtTypeLess[types.Decimal64], sortkeyPos, vector.MustFixedCol[types.Decimal64])
-			case types.T_decimal128:
-				merger = newMerger(mergehost, LtTypeLess[types.Decimal128], sortkeyPos, vector.MustFixedCol[types.Decimal128])
-			case types.T_uuid:
-				merger = newMerger(mergehost, LtTypeLess[types.Uuid], sortkeyPos, vector.MustFixedCol[types.Uuid])
-			case types.T_TS:
-				merger = newMerger(mergehost, TsLess, sortkeyPos, vector.MustFixedCol[types.TS])
-			case types.T_Rowid:
-				merger = newMerger(mergehost, RowidLess, sortkeyPos, vector.MustFixedCol[types.Rowid])
-			case types.T_Blockid:
-				merger = newMerger(mergehost, BlockidLess, sortkeyPos, vector.MustFixedCol[types.Blockid])
-			default:
-				panic(fmt.Sprintf("unsupported type %s", typ.String()))
-			}
+		if err := mergeObjs(ctx, mergehost, sortkeyPos); err != nil {
+			return err
 		}
-		merger.Merge(ctx)
 
 		toObjsDesc := ""
 		for _, o := range commitEntry.CreatedObjs {
@@ -223,7 +169,7 @@ func DoMergeAndWrite(
 	//
 	// batches[i] means the i-th non-appendable block to be merged and
 	// it has no rowid
-	batches, dels, release, err := mergehost.PrepareData()
+	batches, dels, release, err := mergehost.PrepareData(ctx)
 	if err != nil {
 		return err
 	}
