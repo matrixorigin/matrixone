@@ -325,30 +325,6 @@ func (be *MVCCChain[T]) IsCommitted() bool {
 	return un.IsCommitted()
 }
 
-// PXU-1 TODO
-func (be *MVCCChain[T]) CloneCommittedInRange(start, end types.TS) (ret *MVCCChain[T]) {
-	needWait, txn := be.NeedWaitCommittingLocked(end.Next())
-	if needWait {
-		be.RUnlock()
-		txn.GetTxnState(true)
-		be.RLock()
-	}
-	be.MVCC.Loop(func(n *common.GenericDLNode[T]) bool {
-		un := n.GetPayload()
-		in, before := un.CommittedIn(start, end)
-		if in {
-			if ret == nil {
-				ret = NewMVCCChain(be.comparefn, be.newnodefn)
-			}
-			ret.Insert(un.CloneAll())
-		} else if !before {
-			return false
-		}
-		return true
-	}, true)
-	return
-}
-
 func (be *MVCCChain[T]) ClonePreparedInRange(start, end types.TS) (ret []T) {
 	be.RLock()
 	defer be.RUnlock()

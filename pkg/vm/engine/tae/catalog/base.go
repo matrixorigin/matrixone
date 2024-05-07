@@ -262,16 +262,6 @@ func (be *BaseEntryImpl[T]) DeleteAfter(ts types.TS) bool {
 	return un.DeletedAt.Greater(&ts)
 }
 
-func (be *BaseEntryImpl[T]) CloneCommittedInRange(start, end types.TS) BaseEntry {
-	chain := be.MVCCChain.CloneCommittedInRange(start, end)
-	if chain == nil {
-		return nil
-	}
-	return &BaseEntryImpl[T]{
-		MVCCChain: chain,
-	}
-}
-
 func (be *BaseEntryImpl[T]) GetCreatedAtLocked() types.TS {
 	un := be.GetLatestNodeLocked()
 	if un == nil {
