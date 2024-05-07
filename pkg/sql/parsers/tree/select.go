@@ -64,8 +64,7 @@ func (node *Select) Format(ctx *FmtCtx) {
 }
 
 func (node *Select) GetStatementType() string { return "Select" }
-
-func (node *Select) GetQueryType() string { return QueryTypeDQL }
+func (node *Select) GetQueryType() string     { return QueryTypeDQL }
 
 func NewSelect(s SelectStatement, o OrderBy, l *Limit) *Select {
 	return &Select{
@@ -185,7 +184,7 @@ type Order struct {
 	Expr          Expr
 	Direction     Direction
 	NullsPosition NullsPosition
-	// without order
+	//without order
 	NullOrder bool
 }
 
@@ -347,8 +346,7 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 }
 
 func (node *SelectClause) GetStatementType() string { return "Select" }
-
-func (node *SelectClause) GetQueryType() string { return QueryTypeDQL }
+func (node *SelectClause) GetQueryType() string     { return QueryTypeDQL }
 
 // WHERE or HAVING clause.
 type Where struct {
