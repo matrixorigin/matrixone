@@ -154,7 +154,7 @@ func (be *BaseEntryImpl[T]) ConflictCheck(txn txnif.TxnReader) (err error) {
 	be.RLock()
 	defer be.RUnlock()
 	if txn != nil {
-		needWait, waitTxn := be.NeedWaitCommitting(txn.GetStartTS())
+		needWait, waitTxn := be.NeedWaitCommittingLocked(txn.GetStartTS())
 		if needWait {
 			be.RUnlock()
 			waitTxn.GetTxnState(true)
@@ -200,7 +200,7 @@ func (be *BaseEntryImpl[T]) DeleteBeforeLocked(ts types.TS) bool {
 	return createAt.Less(&ts)
 }
 
-func (be *BaseEntryImpl[T]) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
+func (be *BaseEntryImpl[T]) NeedWaitCommittingLocked(startTS types.TS) (bool, txnif.TxnReader) {
 	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return false, nil
@@ -244,8 +244,9 @@ func (be *BaseEntryImpl[T]) GetVisibilityLocked(txn txnif.TxnReader) (visible, d
 	return
 }
 
-func (be *BaseEntryImpl[T]) IsVisible(txn txnif.TxnReader, mu *sync.RWMutex) (ok bool, err error) {
-	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
+// PXU-1 TODO
+func (be *BaseEntryImpl[T]) IsVisibleWithLock(txn txnif.TxnReader, mu *sync.RWMutex) (ok bool, err error) {
+	needWait, txnToWait := be.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {
 		mu.RUnlock()
 		txnToWait.GetTxnState(true)
@@ -294,7 +295,7 @@ func (be *BaseEntryImpl[T]) GetDeleteAtLocked() types.TS {
 func (be *BaseEntryImpl[T]) GetVisibility(txn txnif.TxnReader) (visible, dropped bool) {
 	be.RLock()
 	defer be.RUnlock()
-	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
+	needWait, txnToWait := be.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {
 		be.RUnlock()
 		txnToWait.GetTxnState(true)

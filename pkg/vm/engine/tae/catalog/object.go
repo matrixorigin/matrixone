@@ -366,7 +366,7 @@ func (entry *ObjectEntry) Less(b *ObjectEntry) int {
 func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.ObjectStats) (isNewNode bool, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
+	needWait, txnToWait := entry.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {
 		entry.Unlock()
 		txnToWait.GetTxnState(true)

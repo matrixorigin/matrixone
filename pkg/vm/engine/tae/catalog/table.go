@@ -562,7 +562,7 @@ func (entry *TableEntry) DropObjectEntry(id *types.Objectid, txn txnif.AsyncTxn)
 	}
 	obj.Lock()
 	defer obj.Unlock()
-	needWait, waitTxn := obj.NeedWaitCommitting(txn.GetStartTS())
+	needWait, waitTxn := obj.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {
 		obj.Unlock()
 		waitTxn.GetTxnState(true)
@@ -683,7 +683,7 @@ func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, req *apipb.AlterTableReq) (isNewNode bool, newSchema *Schema, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
+	needWait, txnToWait := entry.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {
 		entry.Unlock()
 		txnToWait.GetTxnState(true)
@@ -737,7 +737,7 @@ func (entry *TableEntry) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Sche
 func (entry *TableEntry) GetVisibilityAndName(txn txnif.TxnReader) (visible, dropped bool, name string) {
 	entry.RLock()
 	defer entry.RUnlock()
-	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
+	needWait, txnToWait := entry.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {
 		entry.RUnlock()
 		txnToWait.GetTxnState(true)
