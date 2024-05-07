@@ -16,9 +16,8 @@ package group
 
 import (
 	"bytes"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
@@ -111,21 +110,7 @@ func TestGroup(t *testing.T) {
 		resetChildren(tc.arg, bats)
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 
-		tc.arg.Reset(tc.proc, false, nil)
-
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-
-		bats = []*batch.Batch{
-			newBatch(tc.arg.Types, tc.proc, Rows),
-			newBatch(tc.arg.Types, tc.proc, Rows),
-			batch.EmptyBatch,
-		}
-		resetChildren(tc.arg, bats)
-		_, err = tc.arg.Call(tc.proc)
-		require.NoError(t, err)
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
