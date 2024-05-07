@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 
 	"github.com/google/uuid"
