@@ -1,3 +1,4 @@
+-- @bvt:issue#3140
 drop database if exists database01;
 drop database if exists test02;
 drop database if exists test03;
@@ -234,3 +235,4 @@ drop database sub_database01;
 
 drop account test_tenant_1;
 drop account test_tenant_2;
+-- @bvt:issue
