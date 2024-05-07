@@ -42,6 +42,13 @@ var (
 	statusServer          = status.NewServer()
 )
 
+func init() {
+	// mutex profile
+	runtime.SetMutexProfileFraction(256)
+	// block profile
+	runtime.SetBlockProfileRate(100)
+}
+
 func startCPUProfile() func() {
 	cpuProfilePath := *cpuProfilePathFlag
 	if cpuProfilePath == "" {
