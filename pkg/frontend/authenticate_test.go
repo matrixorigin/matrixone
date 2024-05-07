@@ -8767,256 +8767,251 @@ func TestDoAlterPublication(t *testing.T) {
 
 }
 
-// func TestCheckSubscriptionValid(t *testing.T) {
+func TestCheckSubscriptionValid(t *testing.T) {
 
-// 	ctrl := gomock.NewController(t)
-// 	defer ctrl.Finish()
-// 	ses := newTestSession(t, ctrl)
-// 	_ = ses.SetGlobalVar("lower_case_table_names", int8(1))
-// 	defer ses.Close()
-// 	ses.SetConnectContext(context.Background())
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	_ = ses.SetGlobalVar("lower_case_table_names", int64(1))
+	defer ses.Close()
+	ses.SetConnectContext(context.Background())
 
-// 	bh := &backgroundExecTest{}
-// 	bh.init()
+	bh := &backgroundExecTest{}
+	bh.init()
 
-// 	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-// 	defer bhStub.Reset()
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
 
-// 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-// 	pu.SV.SetDefaultValues()
-// 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-// 	rm, _ := NewRoutineManager(ctx)
-// 	ses.rm = rm
+	rm, _ := NewRoutineManager(ctx)
+	ses.rm = rm
 
-// 	tenant := &TenantInfo{
-// 		Tenant:        sysAccountName,
-// 		User:          rootName,
-// 		DefaultRole:   moAdminRoleName,
-// 		TenantID:      sysAccountID,
-// 		UserID:        rootID,
-// 		DefaultRoleID: moAdminRoleID,
-// 	}
-// 	ses.SetTenantInfo(tenant)
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
 
-// 	proc := testutil.NewProcess()
-// 	proc.FileService = getGlobalPu().FileService
-// 	ses.GetTxnCompileCtx().SetProcess(proc)
-// 	ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
+	proc := testutil.NewProcess()
+	proc.FileService = getGlobalPu().FileService
+	ses.GetTxnCompileCtx().SetProcess(proc)
+	ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
 
-// 	//no result set
-// 	bh.sql2result["begin;"] = nil
-// 	bh.sql2result["commit;"] = nil
-// 	bh.sql2result["rollback;"] = nil
+	columns := [][]Column{
+		{
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "account_id",
+					columnType: defines.MYSQL_TYPE_LONGLONG,
+				},
+			},
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "status",
+					columnType: defines.MYSQL_TYPE_VARCHAR,
+				},
+			},
+		},
+		{
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "database_name",
+					columnType: defines.MYSQL_TYPE_VARCHAR,
+				},
+			},
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "all_account",
+					columnType: defines.MYSQL_TYPE_BOOL,
+				},
+			},
+			&MysqlColumn{
+				ColumnImpl: ColumnImpl{
+					name:       "account_list",
+					columnType: defines.MYSQL_TYPE_VARCHAR,
+				},
+			},
+		},
+	}
 
-// 	sql := getSqlForGetSystemVariableValueWithAccount(uint64(ses.GetTenantInfo().GetTenantID()), "lower_case_table_names")
-// 	bh.sql2result[sql] = newMrsForSqlForGetVariableValue([][]interface{}{
-// 		{"1"},
-// 	})
+	kases := []struct {
+		createSql string
 
-// 	columns := [][]Column{
-// 		{
-// 			&MysqlColumn{
-// 				ColumnImpl: ColumnImpl{
-// 					name:       "account_id",
-// 					columnType: defines.MYSQL_TYPE_LONGLONG,
-// 				},
-// 			},
-// 			&MysqlColumn{
-// 				ColumnImpl: ColumnImpl{
-// 					name:       "status",
-// 					columnType: defines.MYSQL_TYPE_VARCHAR,
-// 				},
-// 			},
-// 		},
-// 		{
-// 			&MysqlColumn{
-// 				ColumnImpl: ColumnImpl{
-// 					name:       "database_name",
-// 					columnType: defines.MYSQL_TYPE_VARCHAR,
-// 				},
-// 			},
-// 			&MysqlColumn{
-// 				ColumnImpl: ColumnImpl{
-// 					name:       "all_account",
-// 					columnType: defines.MYSQL_TYPE_BOOL,
-// 				},
-// 			},
-// 			&MysqlColumn{
-// 				ColumnImpl: ColumnImpl{
-// 					name:       "account_list",
-// 					columnType: defines.MYSQL_TYPE_VARCHAR,
-// 				},
-// 			},
-// 		},
-// 	}
+		accName   string
+		pubName   string
+		pubExists bool
+		accExists bool
 
-// 	kases := []struct {
-// 		createSql string
+		subName string
 
-// 		accName   string
-// 		pubName   string
-// 		pubExists bool
-// 		accExists bool
+		accId     uint32
+		accStatus string
 
-// 		subName string
+		databaseName string
+		accountList  string
 
-// 		accId     uint32
-// 		accStatus string
+		sqls  []string
+		datas [][][]interface{}
 
-// 		databaseName string
-// 		accountList  string
+		err bool
+	}{
+		{
+			createSql: "create database sub1 from acc0 publication",
+			accName:   "acc0",
+			pubName:   "",
+			subName:   "sub1",
+			accId:     1,
+			err:       true,
+		},
+		{
+			createSql: "create database sub1 from sys publication pub1",
+			accName:   "sys",
+			pubName:   "pub1",
+			subName:   "sub1",
+			accId:     0,
+			accStatus: "",
+			err:       true,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: true,
+			accExists: true,
+			accId:     1,
+			accStatus: "",
 
-// 		sqls  []string
-// 		datas [][][]interface{}
+			databaseName: "t1",
+			accountList:  "all",
 
-// 		err bool
-// 	}{
-// 		{
-// 			createSql: "create database sub1 from acc0 publication",
-// 			accName:   "acc0",
-// 			pubName:   "",
-// 			subName:   "sub1",
-// 			accId:     1,
-// 			err:       true,
-// 		},
-// 		{
-// 			createSql: "create database sub1 from sys publication pub1",
-// 			accName:   "sys",
-// 			pubName:   "pub1",
-// 			subName:   "sub1",
-// 			accId:     0,
-// 			accStatus: "",
-// 			err:       true,
-// 		},
-// 		{
-// 			createSql: "create database sub1 from acc0 publication pub1",
-// 			accName:   "acc0",
-// 			pubName:   "pub1",
-// 			subName:   "sub1",
-// 			pubExists: true,
-// 			accExists: true,
-// 			accId:     1,
-// 			accStatus: "",
+			sqls: []string{},
+			err:  false,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: true,
+			accExists: true,
+			accId:     1,
+			accStatus: "",
 
-// 			databaseName: "t1",
-// 			accountList:  "all",
+			databaseName: "t1",
+			accountList:  "sys",
 
-// 			sqls: []string{},
-// 			err:  false,
-// 		},
-// 		{
-// 			createSql: "create database sub1 from acc0 publication pub1",
-// 			accName:   "acc0",
-// 			pubName:   "pub1",
-// 			subName:   "sub1",
-// 			pubExists: true,
-// 			accExists: true,
-// 			accId:     1,
-// 			accStatus: "",
+			sqls: []string{},
+			err:  false,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: true,
+			accExists: false,
+			accId:     1,
+			accStatus: "",
 
-// 			databaseName: "t1",
-// 			accountList:  "sys",
+			databaseName: "t1",
+			accountList:  "sys",
 
-// 			sqls: []string{},
-// 			err:  false,
-// 		},
-// 		{
-// 			createSql: "create database sub1 from acc0 publication pub1",
-// 			accName:   "acc0",
-// 			pubName:   "pub1",
-// 			subName:   "sub1",
-// 			pubExists: true,
-// 			accExists: false,
-// 			accId:     1,
-// 			accStatus: "",
+			sqls: []string{},
+			err:  true,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: true,
+			accExists: true,
+			accId:     1,
+			accStatus: tree.AccountStatusSuspend.String(),
 
-// 			databaseName: "t1",
-// 			accountList:  "sys",
+			databaseName: "t1",
+			accountList:  "sys",
 
-// 			sqls: []string{},
-// 			err:  true,
-// 		},
-// 		{
-// 			createSql: "create database sub1 from acc0 publication pub1",
-// 			accName:   "acc0",
-// 			pubName:   "pub1",
-// 			subName:   "sub1",
-// 			pubExists: true,
-// 			accExists: true,
-// 			accId:     1,
-// 			accStatus: tree.AccountStatusSuspend.String(),
+			sqls: []string{},
+			err:  true,
+		},
+		{
+			createSql: "create database sub1 from acc0 publication pub1",
+			accName:   "acc0",
+			pubName:   "pub1",
+			subName:   "sub1",
+			pubExists: false,
+			accExists: true,
+			accId:     1,
+			accStatus: tree.AccountStatusSuspend.String(),
 
-// 			databaseName: "t1",
-// 			accountList:  "sys",
+			databaseName: "t1",
+			accountList:  "sys",
 
-// 			sqls: []string{},
-// 			err:  true,
-// 		},
-// 		{
-// 			createSql: "create database sub1 from acc0 publication pub1",
-// 			accName:   "acc0",
-// 			pubName:   "pub1",
-// 			subName:   "sub1",
-// 			pubExists: false,
-// 			accExists: true,
-// 			accId:     1,
-// 			accStatus: tree.AccountStatusSuspend.String(),
+			sqls: []string{},
+			err:  true,
+		},
+	}
 
-// 			databaseName: "t1",
-// 			accountList:  "sys",
+	initData := func(idx int) {
+		sql1, _ := getSqlForAccountIdAndStatus(ctx, kases[idx].accName, true)
+		sql2, _ := getSqlForPubInfoForSub(ctx, kases[idx].pubName, true)
+		kases[idx].sqls = []string{
+			sql1, sql2,
+		}
+		kases[idx].datas = [][][]interface{}{
+			{{kases[idx].accId, kases[idx].accStatus}},
+			{{kases[idx].databaseName, kases[idx].accountList}},
+		}
 
-// 			sqls: []string{},
-// 			err:  true,
-// 		},
-// 	}
+		if !kases[idx].accExists {
+			kases[idx].datas[0] = nil
+		}
+		if !kases[idx].pubExists {
+			kases[idx].datas[1] = nil
+		}
+	}
 
-// 	initData := func(idx int) {
-// 		sql1, _ := getSqlForAccountIdAndStatus(ctx, kases[idx].accName, true)
-// 		sql2, _ := getSqlForPubInfoForSub(ctx, kases[idx].pubName, true)
-// 		kases[idx].sqls = []string{
-// 			sql1, sql2,
-// 		}
-// 		kases[idx].datas = [][][]interface{}{
-// 			{{kases[idx].accId, kases[idx].accStatus}},
-// 			{{kases[idx].databaseName, kases[idx].accountList}},
-// 		}
+	for idx := range kases {
+		initData(idx)
 
-// 		if !kases[idx].accExists {
-// 			kases[idx].datas[0] = nil
-// 		}
-// 		if !kases[idx].pubExists {
-// 			kases[idx].datas[1] = nil
-// 		}
-// 	}
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
 
-// 	for idx := range kases {
-// 		initData(idx)
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
 
-// 		bh := &backgroundExecTest{}
-// 		bh.init()
-// 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-// 		defer bhStub.Reset()
+		sql := getSqlForGetSystemVariableValueWithAccount(uint64(ses.GetTenantInfo().GetTenantID()), "lower_case_table_names")
+		bh.sql2result[sql] = newMrsForSqlForGetVariableValue([][]interface{}{
+			{int64(1)},
+		})
+		for i := range kases[idx].sqls {
+			bh.sql2result[kases[idx].sqls[i]] = &MysqlResultSet{
+				Data:    kases[idx].datas[i],
+				Columns: columns[i],
+			}
+		}
 
-// 		bh.sql2result["begin;"] = nil
-// 		bh.sql2result["commit;"] = nil
-// 		bh.sql2result["rollback;"] = nil
-// 		for i := range kases[idx].sqls {
-// 			bh.sql2result[kases[idx].sqls[i]] = &MysqlResultSet{
-// 				Data:    kases[idx].datas[i],
-// 				Columns: columns[i],
-// 			}
-// 		}
+		_, err := checkSubscriptionValid(ctx, ses, kases[idx].createSql)
+		if kases[idx].err {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
+		}
+	}
 
-// 		_, err := checkSubscriptionValid(ctx, ses, kases[idx].createSql)
-// 		if kases[idx].err {
-// 			require.Error(t, err)
-// 		} else {
-// 			require.NoError(t, err)
-// 		}
-// 	}
-
-// }
+}
 
 func TestDoCheckRole(t *testing.T) {
 	ctrl := gomock.NewController(t)
