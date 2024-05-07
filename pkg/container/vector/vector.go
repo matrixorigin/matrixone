@@ -69,6 +69,11 @@ type typedSlice struct {
 	Cap int
 }
 
+func (t *typedSlice) reset() {
+	t.Ptr = nil
+	t.Cap = -1
+}
+
 func (t *typedSlice) setFromVector(v *Vector) {
 	sz := v.typ.TypeSize()
 	if cap(v.data) >= sz {
@@ -408,7 +413,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 		mp.Free(v.area)
 	}
 	v.class = FLAT
-	v.col = typedSlice{}
+	v.col.reset()
 	v.data = nil
 	v.area = nil
 	v.capacity = 0
