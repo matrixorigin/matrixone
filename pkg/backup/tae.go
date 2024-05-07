@@ -97,7 +97,7 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 		return err
 	}
 	count := config.Parallelism
-	return execBackup(ctx, srcFs, dstFs, fileName, int(count), config.Timestamp, config.BackupType)
+	return execBackup(ctx, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType)
 }
 
 func getParallelCount(count int) int {

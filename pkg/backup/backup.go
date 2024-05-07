@@ -77,10 +77,10 @@ func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
 		cfg.Parallelism = s3Conf.parallelism
 	}
 
-	if bs.Timestamp == "" {
-		cfg.Timestamp = types.TS{}
+	if bs.BackupTs == "" {
+		cfg.BackupTs = types.TS{}
 	} else {
-		cfg.Timestamp = types.StringToTS(bs.Timestamp)
+		cfg.BackupTs = types.StringToTS(bs.BackupTs)
 	}
 	cfg.BackupType = bs.BackupType
 
