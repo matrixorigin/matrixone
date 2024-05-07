@@ -51,6 +51,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_mo_catalog_mo_variables,
 	upg_mo_catalog_mo_transactions,
 	upg_mo_catalog_mo_cache,
+	upg_mo_pub,
 }
 
 var UpgPrepareEntres = []versions.UpgradeEntry{
@@ -849,4 +850,22 @@ var upg_mo_catalog_mo_cache = versions.UpgradeEntry{
 		return false, nil
 	},
 	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_cache"),
+}
+
+var upg_mo_pub = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_PUBS,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    "alter table `mo_catalog`.`mo_pubs` add column `update_time` timestamp",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, "mo_catalog", catalog.MO_PUBS, "update_time")
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.IsExits {
+			return true, nil
+		}
+		return false, nil
+	},
 }
