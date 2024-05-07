@@ -88,23 +88,27 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 				mergedRowCnt++
 
 				if blkRowCnt == int(maxRowCnt) {
+					blkRowCnt = 0
+					objBlkCnt++
+
 					if writer == nil {
 						writer = host.PrepareNewWriter()
 					}
+
 					if _, err := writer.WriteBatch(buffer); err != nil {
 						return err
 					}
 					buffer.CleanOnlyData()
-					blkRowCnt = 0
-					objBlkCnt++
+
 					if needNewObject(objBlkCnt, objRowCnt, totalRowCnt, uint32(mergedRowCnt), rowSize, host.GetTargetObjSize()) {
-						objCnt++
-						objBlkCnt = 0
-						objRowCnt = 0
 						if err := syncObject(ctx, writer, host.GetCommitEntry()); err != nil {
 							return err
 						}
 						writer = nil
+
+						objBlkCnt = 0
+						objRowCnt = 0
+						objCnt++
 					}
 				}
 			}

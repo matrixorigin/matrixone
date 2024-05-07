@@ -169,22 +169,6 @@ func DoMergeAndWrite(
 	return nil
 }
 
-// layout [blkMaxRow, blkMaxRow, blkMaxRow,..., blkMaxRow, totalRowCount - blkMaxRow*N]
-func arrangeToLayout(totalRowCount int, blkMaxRow int) []uint32 {
-	toLayout := make([]uint32, 0, totalRowCount/blkMaxRow)
-	unconsumed := totalRowCount
-	for unconsumed > 0 {
-		if unconsumed > blkMaxRow {
-			toLayout = append(toLayout, uint32(blkMaxRow))
-			unconsumed -= blkMaxRow
-		} else {
-			toLayout = append(toLayout, uint32(unconsumed))
-			unconsumed = 0
-		}
-	}
-	return toLayout
-}
-
 // not defined in api.go to avoid import cycle
 
 func NewBlkTransferBooking(size int) *api.BlkTransferBooking {
