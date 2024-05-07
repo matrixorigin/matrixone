@@ -16,7 +16,7 @@ jobs:
     outputs:
       pr_valid: ${{ steps.check_pr_valid.outputs.pull_valid }}
     steps:
-      - uses: guguducken/pulls-content-check@main
+      - uses: matrixorigin/CI/actions/pulls-content-check@main
         id: check_pr_valid
         with:
           github_token: ${{ secrets.TOKEN_ACTION }}

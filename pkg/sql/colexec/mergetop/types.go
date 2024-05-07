@@ -89,19 +89,6 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-
-		ctr.n = 0
-		ctr.sels = ctr.sels[:0]
-		ctr.poses = ctr.poses[:0]
-		ctr.cmps = nil
-	}
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {

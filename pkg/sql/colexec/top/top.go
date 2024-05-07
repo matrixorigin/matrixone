@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -49,28 +48,27 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	if arg.ctr == nil {
-		arg.ctr = new(container)
-		if arg.Limit > 1024 {
-			arg.ctr.sels = make([]int64, 0, 1024)
-		} else {
-			arg.ctr.sels = make([]int64, 0, arg.Limit)
-		}
-		arg.ctr.poses = make([]int32, 0, len(arg.Fs))
+	ap := arg
+	ap.ctr = new(container)
+	if ap.Limit > 1024 {
+		ap.ctr.sels = make([]int64, 0, 1024)
+	} else {
+		ap.ctr.sels = make([]int64, 0, ap.Limit)
+	}
+	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
 
-		ctr := arg.ctr
-		ctr.executorsForOrderColumn = make([]colexec.ExpressionExecutor, len(arg.Fs))
-		for i := range ctr.executorsForOrderColumn {
-			ctr.executorsForOrderColumn[i], err = colexec.NewExpressionExecutor(proc, arg.Fs[i].Expr)
-			if err != nil {
-				return err
-			}
+	ctr := ap.ctr
+	ctr.executorsForOrderColumn = make([]colexec.ExpressionExecutor, len(ap.Fs))
+	for i := range ctr.executorsForOrderColumn {
+		ctr.executorsForOrderColumn[i], err = colexec.NewExpressionExecutor(proc, ap.Fs[i].Expr)
+		if err != nil {
+			return err
 		}
-		typ := arg.Fs[0].Expr.Typ
-		if arg.TopValueTag > 0 {
-			ctr.desc = arg.Fs[0].Flag&plan.OrderBySpec_DESC != 0
-			ctr.topValueZM = objectio.NewZM(types.T(typ.Id), typ.Scale)
-		}
+	}
+	typ := ap.Fs[0].Expr.Typ
+	if arg.TopValueTag > 0 {
+		ctr.desc = arg.Fs[0].Flag&plan.OrderBySpec_DESC != 0
+		ctr.topValueZM = objectio.NewZM(types.T(typ.Id), typ.Scale)
 	}
 	return nil
 }

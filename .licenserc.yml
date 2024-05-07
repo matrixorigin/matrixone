@@ -25,6 +25,7 @@ header:
     - 'pkg/sql/parsers/dialect/mysql/mysql_sql.go'
     - 'pkg/common/fastrand/'
     - 'pkg/common/arenaskl/'
+    - 'pkg/common/malloc/mimalloc/'
   comment: on-failure
 dependency:
   files:
