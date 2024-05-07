@@ -131,7 +131,7 @@ func (be *MVCCChain[T]) GetLatestNodeLocked() T {
 
 // GetLatestCommittedNode gets the latest committed mvcc node.
 // It's useful when check whether the catalog/metadata entry is deleted.
-func (be *MVCCChain[T]) GetLatestCommittedNode() (node T) {
+func (be *MVCCChain[T]) GetLatestCommittedNodeLocked() (node T) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[T]) bool {
 		un := n.GetPayload()
 		if !un.IsActive() && !un.IsCommitting() {

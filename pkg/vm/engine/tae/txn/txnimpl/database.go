@@ -124,7 +124,7 @@ func (db *txnDatabase) DropRelationByID(id uint64) (rel handle.Relation, err err
 }
 
 func cloneLatestSchema(meta *catalog.TableEntry) *catalog.Schema {
-	latest := meta.MVCCChain.GetLatestCommittedNode()
+	latest := meta.MVCCChain.GetLatestCommittedNodeLocked()
 	if latest != nil {
 		return latest.BaseNode.Schema.Clone()
 	}

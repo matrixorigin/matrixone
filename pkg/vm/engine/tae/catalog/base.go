@@ -115,7 +115,7 @@ func (be *BaseEntryImpl[T]) CreateWithStartAndEnd(start, end types.TS, baseNode 
 }
 
 func (be *BaseEntryImpl[T]) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
-	node := be.GetLatestCommittedNode()
+	node := be.GetLatestCommittedNodeLocked()
 	if node == nil {
 		return
 	}
@@ -202,7 +202,7 @@ func (be *BaseEntryImpl[T]) HasDropCommitted() bool {
 }
 
 func (be *BaseEntryImpl[T]) HasDropCommittedLocked() bool {
-	un := be.GetLatestCommittedNode()
+	un := be.GetLatestCommittedNodeLocked()
 	if un == nil {
 		return false
 	}

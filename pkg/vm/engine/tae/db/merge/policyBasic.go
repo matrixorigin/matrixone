@@ -78,7 +78,7 @@ func (o *customConfigProvider) GetConfig(tbl *catalog.TableEntry) *BasicPolicyCo
 	p, ok := o.configs[tbl.ID]
 	if !ok {
 		extra := tbl.GetLastestSchemaLocked().Extra
-		tbl.GetLatestCommittedNode()
+		tbl.GetLatestCommittedNodeLocked()
 		if extra.MaxObjOnerun != 0 || extra.MinOsizeQuailifed != 0 {
 			// compatible with old version
 			cnSize := extra.MinCnMergeSize

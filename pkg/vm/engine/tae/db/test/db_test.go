@@ -4421,7 +4421,7 @@ func TestBlockRead(t *testing.T) {
 
 	tae.CompactBlocks(false)
 
-	objStats := blkEntry.GetLatestCommittedNode().BaseNode
+	objStats := blkEntry.GetLatestCommittedNodeLocked().BaseNode
 	deltaloc := rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(blkEntry.ID).GetLatestDeltaloc(0)
 	assert.False(t, objStats.IsEmpty())
 	assert.NotEmpty(t, deltaloc)
@@ -4577,7 +4577,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
 		t.Log(tae.Catalog.SimplePPString(3))
-		assert.True(t, !meta.GetLatestCommittedNode().BaseNode.IsEmpty())
+		assert.True(t, !meta.GetLatestCommittedNodeLocked().BaseNode.IsEmpty())
 		assert.True(t, !rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(meta.ID).GetLatestDeltaloc(0).IsEmpty())
 		created := task.GetCreatedObjects()[0]
 		assert.False(t, created.GetLatestNodeLocked().BaseNode.IsEmpty())

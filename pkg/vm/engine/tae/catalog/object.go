@@ -306,7 +306,7 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 	if stats.Rows() != 0 {
 		return stats, nil
 	}
-	metaLoc := entry.GetLatestCommittedNode().BaseNode.ObjectStats.ObjectLocation()
+	metaLoc := entry.GetLatestCommittedNodeLocked().BaseNode.ObjectStats.ObjectLocation()
 
 	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, entry.objData.GetFs().Service)
 	if err != nil {
@@ -337,7 +337,7 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 
 func (entry *ObjectEntry) LoadObjectInfoForLastNode() (stats objectio.ObjectStats, err error) {
 	entry.RLock()
-	startTS := entry.GetLatestCommittedNode().Start
+	startTS := entry.GetLatestCommittedNodeLocked().Start
 	entry.RUnlock()
 
 	stats, err = entry.LoadObjectInfoWithTxnTS(startTS)
@@ -351,7 +351,7 @@ func (entry *ObjectEntry) LoadObjectInfoForLastNode() (stats objectio.ObjectStat
 
 // for test
 func (entry *ObjectEntry) GetInMemoryObjectInfo() *ObjectMVCCNode {
-	return entry.BaseEntryImpl.GetLatestCommittedNode().BaseNode
+	return entry.BaseEntryImpl.GetLatestCommittedNodeLocked().BaseNode
 }
 
 func (entry *ObjectEntry) Less(b *ObjectEntry) int {

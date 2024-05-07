@@ -509,7 +509,7 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 		}
 		return
 	}
-	prev := tbl.MVCCChain.GetLatestCommittedNode()
+	prev := tbl.MVCCChain.GetLatestCommittedNodeLocked()
 	un := &MVCCNode[*TableMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: prev.CreatedAt,
