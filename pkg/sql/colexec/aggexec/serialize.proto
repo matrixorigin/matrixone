@@ -56,3 +56,10 @@ message EncodedAgg {
     bytes  result = 3;
     repeated bytes groups = 4;
 }
+
+message EncodedAggContext {
+    bool hasCommonContext = 1;
+    bool hasGroupContext = 2;
+    bytes commonContext = 3;
+    repeated bytes groupContext = 4;
+}
