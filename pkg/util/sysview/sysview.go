@@ -198,7 +198,9 @@ var (
 			"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 			"if(true, NULL, 0) as SRS_ID "+
 			"from mo_catalog.mo_columns "+
-			"where account_id = current_account_id() and att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
+			"where account_id = current_account_id() "+
+			"and att_relname!='%s' and att_relname not like '%s' and attname != '%s' and att_relname not like '%s'",
+			catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard),
 
 		"CREATE TABLE IF NOT EXISTS PROFILING (" +
 			"QUERY_ID int NOT NULL DEFAULT '0'," +
