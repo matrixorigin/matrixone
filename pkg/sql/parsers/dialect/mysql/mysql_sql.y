@@ -618,6 +618,7 @@ import (
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam
 %type <str> charset_keyword db_name db_name_opt
+%type <str> backup_type_opt
 %type <str> not_keyword func_not_keyword
 %type <str> non_reserved_keyword
 %type <str> equal_opt column_keyword_opt
@@ -918,23 +919,34 @@ normal_stmt:
 
 
 backup_stmt:
-    BACKUP STRING FILESYSTEM STRING PARALLELISM STRING
+    BACKUP STRING FILESYSTEM STRING PARALLELISM STRING backup_type_opt
 	{
         var timestamp = $2
         var isS3 = false
         var dir = $4
         var parallelism = $6
         var option []string
-        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option)
+        var backuptype = $7
+        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option, backuptype)
 	}
-    | BACKUP STRING S3OPTION '{' infile_or_s3_params '}'
+    | BACKUP STRING S3OPTION '{' infile_or_s3_params '}' backup_type_opt
     {
         var timestamp = $2
         var isS3 = true
         var dir string
         var parallelism string
         var option = $5
-        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option)
+        var backuptype = $7
+        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option, backuptype)
+    }
+
+backup_type_opt:
+    {
+        $$ = ""
+    }
+|    TYPE STRING
+    {
+        $$ = $2
     }
 
 create_snapshot_stmt:
