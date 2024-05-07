@@ -27,6 +27,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+	"go.uber.org/zap"
 )
 
 const (
@@ -94,8 +95,11 @@ type CNServer struct {
 }
 
 // Connect connects to backend server and returns IOSession.
-func (s *CNServer) Connect(timeout time.Duration) (goetty.IOSession, error) {
-	c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()))
+func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IOSession, error) {
+	c := goetty.NewIOSession(
+		goetty.WithSessionCodec(frontend.NewSqlCodec()),
+		goetty.WithSessionLogger(logger),
+	)
 	err := c.Connect(s.addr, timeout)
 	if err != nil {
 		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, error: %v",
