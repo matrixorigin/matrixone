@@ -136,7 +136,7 @@ func statementCanBeExecutedInUncommittedTransaction(ses FeSession, stmt tree.Sta
 		}
 		return true, nil
 	case *tree.CreateDatabase, *tree.DropDatabase:
-		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
+		return true, nil
 	case *tree.CreateSequence: //Case1, Case3 above
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
 		//dml statement
