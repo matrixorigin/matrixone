@@ -299,10 +299,10 @@ func (txn *Transaction) checkDup() error {
 			continue
 		}
 
-		//dbkey := genDatabaseKey(e.accountId, e.databaseName)
-		//if _, ok := txn.deletedDatabaseMap.Load(dbkey); ok {
-		//	continue
-		//}
+		dbkey := genDatabaseKey(e.accountId, e.databaseName)
+		if _, ok := txn.deletedDatabaseMap.Load(dbkey); ok {
+			continue
+		}
 
 		tableKey := genTableKey(e.accountId, e.tableName, e.databaseId)
 		if _, ok := txn.deletedTableMap.Load(tableKey); ok {

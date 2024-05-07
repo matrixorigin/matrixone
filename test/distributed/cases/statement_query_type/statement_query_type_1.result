@@ -151,7 +151,6 @@ internal error: administrative command is unsupported in transactions
 create user user_name identified by 'password';
 internal error: administrative command is unsupported in transactions
 create database if not exists db1;
-internal error: CREATE/DROP of database is not supported in transactions
 grant create table,drop table on database *.* to test_role;
 internal error: administrative command is unsupported in transactions
 revoke test_role from user_name;
@@ -163,9 +162,7 @@ internal error: administrative command is unsupported in transactions
 drop account test_account;
 internal error: do not have privilege to execute the statement
 drop database db1;
-internal error: CREATE/DROP of database is not supported in transactions
 create database db2;
-internal error: CREATE/DROP of database is not supported in transactions
 create table table_2(
 col1 int,
 col2 varchar
@@ -176,7 +173,6 @@ drop index index_table_2 on table_2;
 drop view view_2;
 drop table table_2;
 drop database db2;
-internal error: CREATE/DROP of database is not supported in transactions
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;
