@@ -283,14 +283,31 @@ func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
 		zap.String("service", b.serviceID))
 }
 
+func (l *lockTableAllocator) disableTableBindsWithoutDelete(b *serviceBinds) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// we can't just delete the LockTable's effectiveness binding directly, we
+	// need to keep the binding version.
+	for table := range b.tables {
+		if old, ok := l.mu.lockTables[table]; ok &&
+			old.ServiceID == b.serviceID {
+			old.Valid = false
+			l.mu.lockTables[table] = old
+		}
+	}
+}
+
 func (l *lockTableAllocator) disableGroupTables(groupTables []pb.LockTable, b *serviceBinds) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	b.Lock()
+	defer b.Unlock()
 	for _, t := range groupTables {
 		if old, ok := l.mu.lockTables[t.Table]; ok &&
 			old.ServiceID == b.serviceID {
 			old.Valid = false
 			l.mu.lockTables[t.Table] = old
+			delete(b.tables, t.Table)
 		}
 	}
 }
@@ -675,7 +692,7 @@ func (l *lockTableAllocator) handleGetBind(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	if !l.canGetBind(req.GetBind.Table) {
+	if !l.canGetBind(req.GetBind.ServiceID) {
 		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
 		return
 	}
@@ -693,6 +710,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	cs morpc.ClientSession) {
 	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
 	if !resp.KeepLockTableBind.OK {
+		// resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
 		writeResponse(ctx, cancel, resp, nil, cs)
 		return
 	}
@@ -709,7 +727,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 		}
 	case pb.Status_ServiceUnLockSucc:
 		b.disable()
-		l.disableTableBinds(b)
+		l.disableTableBindsWithoutDelete(b)
 		b.setStatus(pb.Status_ServiceCanRestart)
 		resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
 	default:
@@ -838,19 +856,15 @@ func (l *lockTableAllocator) handleRemainTxnInService(
 	writeResponse(ctx, cancel, resp, nil, cs)
 }
 
-func (l *lockTableAllocator) canGetBind(tableID uint64) bool {
+func (l *lockTableAllocator) canGetBind(serviceID string) bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	t, ok := l.mu.lockTables[tableID]
-	if !ok || !t.Valid {
-		return true
-	}
-	b := l.mu.services[t.ServiceID]
+	b := l.mu.services[serviceID]
 	if b != nil &&
-		!b.disabled &&
 		!b.isStatus(pb.Status_ServiceLockEnable) {
 		return false
 	}
+
 	return true
 }

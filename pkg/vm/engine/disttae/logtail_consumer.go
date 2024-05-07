@@ -1262,7 +1262,9 @@ func updatePartitionOfPush(
 	e *Engine,
 	tl *logtail.TableLogtail,
 	lazyLoad bool,
-	receiveAt time.Time) (err error) {
+	receiveAt time.Time,
+) (err error) {
+
 	start := time.Now()
 	v2.LogTailApplyLatencyDurationHistogram.Observe(start.Sub(receiveAt).Seconds())
 	defer func() {
@@ -1272,23 +1274,33 @@ func updatePartitionOfPush(
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
+	t0 := time.Now()
 	partition := e.getPartition(dbId, tblId)
+	v2.LogtailUpdatePartitonGetPartitionDurationHistogram.Observe(time.Since(t0).Seconds())
 
+	t0 = time.Now()
 	lockErr := partition.Lock(ctx)
 	if lockErr != nil {
+		v2.LogtailUpdatePartitonGetLockDurationHistogram.Observe(time.Since(t0).Seconds())
 		return lockErr
 	}
 	defer partition.Unlock()
+	v2.LogtailUpdatePartitonGetLockDurationHistogram.Observe(time.Since(t0).Seconds())
 
 	state, doneMutate := partition.MutateState()
 
+	t0 = time.Now()
 	key := e.catalog.GetTableById(dbId, tblId)
+	v2.LogtailUpdatePartitonGetCatalogDurationHistogram.Observe(time.Since(t0).Seconds())
 
 	if lazyLoad {
 		if len(tl.CkpLocation) > 0 {
+			t0 = time.Now()
 			state.AppendCheckpoint(tl.CkpLocation, partition)
+			v2.LogtailUpdatePartitonHandleCheckpointDurationHistogram.Observe(time.Since(t0).Seconds())
 		}
 
+		t0 = time.Now()
 		err = consumeLogTailOfPushWithLazyLoad(
 			ctx,
 			key.PrimarySeqnum,
@@ -1296,8 +1308,12 @@ func updatePartitionOfPush(
 			state,
 			tl,
 		)
+		v2.LogtailUpdatePartitonConsumeLogtailDurationHistogram.Observe(time.Since(t0).Seconds())
+
 	} else {
+		t0 = time.Now()
 		err = consumeLogTailOfPushWithoutLazyLoad(ctx, key.PrimarySeqnum, e, state, tl, dbId, key.Id, key.Name)
+		v2.LogtailUpdatePartitonConsumeLogtailDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
 	if err != nil {
@@ -1365,7 +1381,9 @@ func hackConsumeLogtail(
 	put := engine.packerPool.Get(&packer)
 	defer put.Put()
 
+	t0 := time.Now()
 	switch lt.Table.TbId {
+
 	case catalog.MO_TABLES_ID:
 		primarySeqnum = catalog.MO_TABLES_CATALOG_VERSION_IDX + 1
 		for i := 0; i < len(lt.Commands); i++ {
@@ -1399,7 +1417,9 @@ func hackConsumeLogtail(
 				return err
 			}
 		}
+		v2.LogtailUpdatePartitonConsumeLogtailCatalogTableDurationHistogram.Observe(time.Since(t0).Seconds())
 		return nil
+
 	case catalog.MO_DATABASE_ID:
 		primarySeqnum = catalog.MO_DATABASE_DAT_TYPE_IDX + 1
 		for i := 0; i < len(lt.Commands); i++ {
@@ -1431,13 +1451,18 @@ func hackConsumeLogtail(
 				return err
 			}
 		}
+		v2.LogtailUpdatePartitonConsumeLogtailCatalogTableDurationHistogram.Observe(time.Since(t0).Seconds())
 		return nil
 	}
+
+	t0 = time.Now()
 	for i := 0; i < len(lt.Commands); i++ {
 		if err := consumeEntry(ctx, primarySeqnum,
 			engine, state, &lt.Commands[i]); err != nil {
 			return err
 		}
 	}
+	v2.LogtailUpdatePartitonConsumeLogtailCommandsDurationHistogram.Observe(time.Since(t0).Seconds())
+
 	return nil
 }

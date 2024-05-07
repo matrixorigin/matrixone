@@ -901,6 +901,10 @@ func (m *MockCompilerContext) IsPublishing(dbName string) (bool, error) {
 	return false, nil
 }
 
+func (m *MockCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef) {
+	return nil, nil
+}
+
 type MockOptimizer struct {
 	ctxt MockCompilerContext
 }
