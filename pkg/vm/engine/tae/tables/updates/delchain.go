@@ -211,8 +211,7 @@ func (chain *DeleteChain) DeleteInDeleteView(deleteNode *DeleteNode) {
 	}
 }
 
-// PXU-1 TODO
-func (chain *DeleteChain) shrinkDeleteChainByTS(flushed types.TS) *DeleteChain {
+func (chain *DeleteChain) shrinkDeleteChainByTSLocked(flushed types.TS) *DeleteChain {
 	new := NewDeleteChain(chain.RWMutex, chain.mvcc)
 	new.persistedMask = chain.persistedMask
 
@@ -291,7 +290,7 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 
 // PXU-1 TODO
 // CollectDeletesInRange collects [startTs, endTs)
-func (chain *DeleteChain) CollectDeletesInRange(
+func (chain *DeleteChain) CollectDeletesInRangeWithLock(
 	startTs, endTs types.TS,
 	rwlocker *sync.RWMutex) (mask *nulls.Bitmap, err error) {
 	for {

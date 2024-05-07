@@ -737,7 +737,7 @@ func (n *MVCCHandle) upgradeDeleteChainByTSLocked(flushed types.TS) {
 	if n.persistedTS.Equal(&flushed) {
 		return
 	}
-	n.deletes = n.deletes.shrinkDeleteChainByTS(flushed)
+	n.deletes = n.deletes.shrinkDeleteChainByTSLocked(flushed)
 
 	n.persistedTS = flushed
 }
@@ -800,7 +800,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 	if n.deletes.IsEmpty() {
 		return
 	}
-	if !n.ExistDeleteInRange(start, end) {
+	if !n.ExistDeleteInRangeLocked(start, end) {
 		return
 	}
 
@@ -970,10 +970,9 @@ func (n *MVCCHandle) CollectDeleteInRangeAfterDeltalocation(
 	return
 }
 
-// PXU-1 TODO
 // ExistDeleteInRange check if there is any delete in the range [start, end]
 // it loops the delete chain and check if there is any delete node in the range
-func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
+func (n *MVCCHandle) ExistDeleteInRangeLocked(start, end types.TS) (exist bool) {
 	for {
 		needWaitFound := false
 		n.deletes.LoopChainLocked(

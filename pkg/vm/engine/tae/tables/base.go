@@ -853,7 +853,7 @@ func (blk *baseObject) inMemoryCollectDeletesInRange(blkID uint16, start, end ty
 	}
 	deleteChain := blkMvcc.GetDeleteChain()
 	deletes, err =
-		deleteChain.CollectDeletesInRange(start, end, blk.RWMutex)
+		deleteChain.CollectDeletesInRangeWithLock(start, end, blk.RWMutex)
 	return
 }
 

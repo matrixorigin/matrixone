@@ -213,20 +213,20 @@ func TestDeleteChain2(t *testing.T) {
 	assert.True(t, mask.IsEmpty())
 
 	var startTs1 types.TS
-	mask, err = chain.CollectDeletesInRange(startTs1, txn3.GetCommitTS(), nil)
+	mask, err = chain.CollectDeletesInRangeWithLock(startTs1, txn3.GetCommitTS(), nil)
 	assert.NoError(t, err)
 	t.Log(mask.GetBitmap().String())
 	assert.Equal(t, 8, mask.GetCardinality())
 
 	var startTs2 types.TS
 	commitTS := txn3.GetCommitTS()
-	mask, err = chain.CollectDeletesInRange(startTs2, commitTS.Next(), nil)
+	mask, err = chain.CollectDeletesInRangeWithLock(startTs2, commitTS.Next(), nil)
 	assert.NoError(t, err)
 	t.Log(mask.GetBitmap().String())
 	assert.Equal(t, 8, mask.GetCardinality())
 
 	commitTS = txn3.GetCommitTS()
-	mask, err = chain.CollectDeletesInRange(txn1.GetCommitTS(), commitTS.Next(), nil)
+	mask, err = chain.CollectDeletesInRangeWithLock(txn1.GetCommitTS(), commitTS.Next(), nil)
 	assert.NoError(t, err)
 	t.Log(mask.GetBitmap().String())
 	assert.Equal(t, 4, mask.GetCardinality())
