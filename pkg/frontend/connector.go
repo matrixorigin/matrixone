@@ -85,7 +85,7 @@ func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.Create
 	options[moconnector.OptConnectorSql] = tree.String(st.AsSource, dialect.MYSQL)
 	if err := createConnector(
 		ctx,
-		ses.GetTenantInfo().TenantID,
+		ses.GetTenantInfo().GetTenantID(),
 		ses.GetTenantName(),
 		ses.GetUserName(),
 		ts,
@@ -115,7 +115,7 @@ func handleCreateConnector(ctx context.Context, ses *Session, st *tree.CreateCon
 	}
 	if err := createConnector(
 		ctx,
-		ses.GetTenantInfo().TenantID,
+		ses.GetTenantInfo().GetTenantID(),
 		ses.GetTenantName(),
 		ses.GetUserName(),
 		ts,

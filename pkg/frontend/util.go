@@ -209,7 +209,6 @@ func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient)
 	if err != nil {
 		return nil, err
 	}
-	logutil.Info("Using Dump Storage Engine and Cluster Nodes.")
 	pu := mo_config.NewParameterUnit(sv, eng, txnClient, engine.Nodes{})
 
 	return pu, nil
@@ -540,7 +539,7 @@ func appendSessionField(fields []zap.Field, ses FeSession) []zap.Field {
 }
 
 func logInfo(ses FeSession, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().User == db_holder.MOLoggerUser {
+	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().GetUser() == db_holder.MOLoggerUser {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
@@ -556,7 +555,7 @@ func logInfof(info string, msg string, fields ...zap.Field) {
 }
 
 func logDebug(ses FeSession, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().User == db_holder.MOLoggerUser {
+	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().GetUser() == db_holder.MOLoggerUser {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
@@ -565,7 +564,7 @@ func logDebug(ses FeSession, info string, msg string, fields ...zap.Field) {
 }
 
 func logError(ses FeSession, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().User == db_holder.MOLoggerUser {
+	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().GetUser() == db_holder.MOLoggerUser {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
@@ -933,12 +932,12 @@ func (ui *UserInput) genSqlSourceType(ses FeSession) {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
-	flag, _, _ := isSpecialUser(tenant.User)
+	flag, _, _ := isSpecialUser(tenant.GetUser())
 	if flag {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
-	if tenant.Tenant == sysAccountName && tenant.User == "internal" {
+	if tenant.GetTenant() == sysAccountName && tenant.GetUser() == "internal" {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}

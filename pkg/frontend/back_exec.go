@@ -146,7 +146,7 @@ func doComQueryInBack(requestCtx context.Context,
 		getGlobalPu().QueryClient,
 		getGlobalPu().HAKeeperClient,
 		getGlobalPu().UdfService,
-		globalAicm)
+		getGlobalAic())
 	proc.Id = backSes.getNextProcessId()
 	proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
 	proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows

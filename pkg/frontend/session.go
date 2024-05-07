@@ -548,7 +548,7 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 		getGlobalPu().QueryClient,
 		getGlobalPu().HAKeeperClient,
 		getGlobalPu().UdfService,
-		globalAicm)
+		getGlobalAic())
 
 	ses.proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
 	ses.proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows

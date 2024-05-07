@@ -24,10 +24,12 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 
 	// mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/BurntSushi/toml"
@@ -45,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -108,8 +111,9 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	// A mock autoincrcache manager.
-	globalAicm = &defines.AutoIncrCacheManager{}
+	setGlobalAicm(&defines.AutoIncrCacheManager{})
 	rm, _ := NewRoutineManager(ctx)
+	setGlobalRtMgr(rm)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -117,18 +121,19 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	//running server
 	go func() {
 		defer wg.Done()
-		echoServer(rm.Handler, rm, NewSqlCodec())
+		echoServer(getGlobalRtMgr().Handler, getGlobalRtMgr(), NewSqlCodec())
 	}()
 
 	time.Sleep(time.Second * 2)
 	db, err = openDbConn(t, 6001)
 	require.NoError(t, err)
-	closeDbConn(t, db)
 
 	time.Sleep(time.Millisecond * 10)
 	//close server
 	setServer(1)
 	wg.Wait()
+
+	closeDbConn(t, db)
 }
 
 func newMrsForConnectionId(rows [][]interface{}) *MysqlResultSet {
@@ -163,7 +168,7 @@ func newMrsForSleep(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
-func TestKIll(t *testing.T) {
+func TestKill(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connect
 	//ion method: mysql -h 127.0.0.1 -P 6001 -udump -p
@@ -247,8 +252,9 @@ func TestKIll(t *testing.T) {
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	// A mock autoincrcache manager.
-	globalAicm = &defines.AutoIncrCacheManager{}
-	globalRtMgr, _ = NewRoutineManager(ctx)
+	setGlobalAicm(&defines.AutoIncrCacheManager{})
+	temp, _ := NewRoutineManager(ctx)
+	setGlobalRtMgr(temp)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -256,29 +262,37 @@ func TestKIll(t *testing.T) {
 	//running server
 	go func() {
 		defer wg.Done()
-		echoServer(globalRtMgr.Handler, globalRtMgr, NewSqlCodec())
+		echoServer(getGlobalRtMgr().Handler, getGlobalRtMgr(), NewSqlCodec())
 	}()
 
+	logutil.Infof("open conn1")
 	time.Sleep(time.Second * 2)
 	conn1, err = openDbConn(t, 6001)
 	require.NoError(t, err)
+	logutil.Infof("open conn1 done")
 
+	logutil.Infof("open conn2")
 	time.Sleep(time.Second * 2)
 	conn2, err = openDbConn(t, 6001)
 	require.NoError(t, err)
+	logutil.Infof("open conn2 done")
 
+	logutil.Infof("get the connection id of conn1")
 	//get the connection id of conn1
 	var conn1Id uint64
 	connIdRow = conn1.QueryRow(sql1)
 	err = connIdRow.Scan(&conn1Id)
 	require.NoError(t, err)
+	logutil.Infof("get the connection id of conn1 done")
 
+	logutil.Infof("get the connection id of conn2")
 	//get the connection id of conn2
 	var conn2Id uint64
 	connIdRow = conn2.QueryRow(sql1)
 	err = connIdRow.Scan(&conn2Id)
 	require.NoError(t, err)
-	fmt.Println("conn==>", conn1Id, conn2Id)
+	logutil.Infof("get the connection id of conn2 done")
+	logutil.Infof("conn==>%v %v", conn1Id, conn2Id)
 
 	wgSleep := sync.WaitGroup{}
 	wgSleep.Add(1)
@@ -288,25 +302,30 @@ func TestKIll(t *testing.T) {
 	go func() {
 		defer wgSleep.Done()
 		var resultId int
+		logutil.Infof("conn1 sleep(30)")
 		connIdRow = conn1.QueryRow(sql5)
 		//find race on err here
 		err := connIdRow.Scan(&resultId)
 		require.NoError(t, err)
+		logutil.Infof("conn1 sleep(30) done")
 	}()
 
 	//sleep before cancel
 	time.Sleep(time.Second * 2)
 
+	logutil.Infof("conn2 kill query on conn1")
 	//conn2 kills the query
 	sql3 = fmt.Sprintf("kill query %d;", conn1Id)
 	noResultSet[sql3] = true
 	_, err = conn2.Exec(sql3)
 	require.NoError(t, err)
+	logutil.Infof("conn2 kill query on conn1: KILL query done")
 
 	//check killed result
 	wgSleep.Wait()
 	res := resultSet[sql5]
 	require.Equal(t, res.resultX.Load(), contextCancel)
+	logutil.Infof("conn2 kill query on conn1 done")
 
 	//================================
 
@@ -316,47 +335,58 @@ func TestKIll(t *testing.T) {
 	go func() {
 		defer wgSleep2.Done()
 		var resultId int
+		logutil.Infof("conn1 sleep(30) 2")
 		connIdRow = conn1.QueryRow(sql6)
 		err = connIdRow.Scan(&resultId)
 		require.NoError(t, err)
+		logutil.Infof("conn1 sleep(30) 2 done")
 	}()
 
 	//sleep before cancel
 	time.Sleep(time.Second * 2)
 
+	logutil.Infof("conn2 kill conn1")
 	//conn2 kills the connection 1
 	sql2 = fmt.Sprintf("kill %d;", conn1Id)
 	noResultSet[sql2] = true
 	_, err = conn2.Exec(sql2)
 	require.NoError(t, err)
+	logutil.Infof("conn2 kill conn1 : KILL connection done")
 
 	//check killed result
 	wgSleep2.Wait()
 	res = resultSet[sql6]
 	require.Equal(t, res.resultX.Load(), contextCancel)
+	logutil.Infof("conn2 kill conn1 done")
 
+	logutil.Infof("conn1 test itself after being killed")
 	//==============================
 	//conn 1 is killed by conn2
 	//check conn1 is disconnected or not
 	err = conn1.Ping()
 	require.Error(t, err)
+	logutil.Infof("conn1 test itself after being killed done")
 
 	//==============================
 
+	logutil.Infof("conn2 kill itself")
 	//conn2 kills itself
 	sql4 = fmt.Sprintf("kill %d;", conn2Id)
 	noResultSet[sql4] = true
 	_, err = conn2.Exec(sql4)
 	require.NoError(t, err)
-
-	//close the connection
-	closeDbConn(t, conn1)
-	closeDbConn(t, conn2)
+	logutil.Infof("conn2 kill itself done")
 
 	time.Sleep(time.Millisecond * 10)
 	//close server
 	setServer(1)
 	wg.Wait()
+
+	logutil.Infof("close conn1,conn2")
+	//close the connection
+	closeDbConn(t, conn1)
+	closeDbConn(t, conn2)
+	logutil.Infof("close conn1,conn2 done")
 }
 
 func TestReadIntLenEnc(t *testing.T) {
@@ -1524,13 +1554,17 @@ func TestMysqlResultSet(t *testing.T) {
 	pu.SV.SkipCheckUser = true
 
 	trm := NewTestRoutineManager(pu)
+	var atomTrm atomic.Value
+	atomTrm.Store(trm)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 
 	go func() {
 		defer wg.Done()
-		echoServer(trm.resultsetHandler, trm, NewSqlCodec())
+
+		temTrm := atomTrm.Load().(*TestRoutineManager)
+		echoServer(temTrm.resultsetHandler, temTrm, NewSqlCodec())
 	}()
 
 	// to := NewTimeout(1*time.Minute, false)
@@ -1565,12 +1599,12 @@ func TestMysqlResultSet(t *testing.T) {
 	do_query_resp_resultset(t, db, false, false, "16mbrow", make16MBRowResultSet())
 	do_query_resp_resultset(t, db, false, false, "16mb", makeMoreThan16MBResultSet())
 
-	closeDbConn(t, db)
-
 	time.Sleep(time.Millisecond * 10)
 	//close server
 	setServer(1)
 	wg.Wait()
+
+	closeDbConn(t, db)
 }
 
 // func open_tls_db(t *testing.T, port int) *sql.DB {
@@ -1623,8 +1657,21 @@ func TestMysqlResultSet(t *testing.T) {
 // 	return db
 // }
 
-func openDbConn(t *testing.T, port int) (*sql.DB, error) {
+func openDbConn(t *testing.T, port int) (db *sql.DB, err error) {
 	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=30s&timeout=30s&writeTimeout=30s", port)
+	for i := 0; i < 3; i++ {
+		db, err = tryConn(dsn)
+		if err != nil {
+			logger.Error("open conn failed.", zap.Error(err))
+			time.Sleep(time.Second)
+			continue
+		}
+		break
+	}
+	return
+}
+
+func tryConn(dsn string) (*sql.DB, error) {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, err
@@ -1645,10 +1692,11 @@ func openDbConn(t *testing.T, port int) (*sql.DB, error) {
 
 func closeDbConn(t *testing.T, db *sql.DB) {
 	err := db.Close()
-	require.NoError(t, err)
+	assert.NoError(t, err)
 }
 
 func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResultsetCheck bool, query string, mrs *MysqlResultSet) {
+	logutil.Infof("query: %v", query)
 	rows, err := db.Query(query)
 	if wantErr {
 		require.Error(t, err)
