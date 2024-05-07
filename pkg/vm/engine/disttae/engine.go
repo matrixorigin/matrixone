@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/panjf2000/ants/v2"
+	_ "go.uber.org/automaxprocs"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -53,7 +54,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	_ "go.uber.org/automaxprocs"
 )
 
 var _ engine.Engine = new(Engine)
