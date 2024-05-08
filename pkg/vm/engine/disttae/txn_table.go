@@ -1921,7 +1921,9 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 	return tbl.db.databaseId
 }
 
-func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges []byte, orderedScan bool) ([]engine.Reader, error) {
+func (tbl *txnTable) NewReader(
+	ctx context.Context, num int, expr *plan.Expr, ranges []byte, orderedScan bool,
+) ([]engine.Reader, error) {
 	encodedPK, hasNull, _ := tbl.makeEncodedPK(expr)
 	blkArray := objectio.BlockInfoSlice(ranges)
 	if hasNull || plan2.IsFalseExpr(expr) {
@@ -1985,7 +1987,7 @@ func (tbl *txnTable) makeEncodedPK(
 	isExactlyEqual bool) {
 	pk := tbl.tableDef.Pkey
 	if pk != nil && expr != nil {
-		if pk.CompPkeyCol != nil {
+		if !checkPrimaryKeyOnly && pk.CompPkeyCol != nil {
 			pkVals := make([]*plan.Literal, len(pk.Names))
 			_, hasNull = getCompositPKVals(expr, pk.Names, pkVals, tbl.proc.Load())
 			if hasNull {
