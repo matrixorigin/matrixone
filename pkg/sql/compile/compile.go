@@ -1970,8 +1970,14 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	var fileOffset [][]int64
 	for i := 0; i < len(fileList); i++ {
 		param.Filepath = fileList[i]
-		if param.Parallel {
-			arr, err := external.ReadFileOffset(param, mcpu, fileSize[i], n.TableDef.Cols)
+		if param.Parallel && param.Strict {
+			arr, err := external.ReadFileOffsetStrict(param, mcpu, fileSize[i], n.TableDef.Cols)
+			fileOffset = append(fileOffset, arr)
+			if err != nil {
+				return nil, err
+			}
+		} else if param.Parallel && !param.Strict {
+			arr, err := external.ReadFileOffsetNoStrict(param, mcpu, fileSize[i])
 			fileOffset = append(fileOffset, arr)
 			if err != nil {
 				return nil, err
@@ -1996,12 +2002,16 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			fileOffsetTmp[j] = &pipeline.FileOffset{}
 			fileOffsetTmp[j].Offset = make([]int64, 0)
 			if param.Parallel {
-				if 2*preIndex+2*count < len(fileOffset[j]) {
-					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
-				} else if 2*preIndex < len(fileOffset[j]) {
-					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
+				if param.Strict {
+					if 2*preIndex+2*count < len(fileOffset[j]) {
+						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+					} else if 2*preIndex < len(fileOffset[j]) {
+						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
+					} else {
+						continue
+					}
 				} else {
-					continue
+					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
 				}
 			} else {
 				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{0, -1}...)

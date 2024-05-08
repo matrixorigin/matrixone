@@ -169,6 +169,7 @@ type ExParam struct {
 	QueryResult bool
 	SysTable    bool
 	Parallel    bool
+	Strict		bool
 }
 
 type S3Parameter struct {
