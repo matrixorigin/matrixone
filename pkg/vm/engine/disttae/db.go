@@ -316,8 +316,11 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 	//TODO:: insert mo_tables, or mo_colunms, or mo_database, mo_catalog into snapCata.
 	//       ref to engine.init.
 	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, 0, nil)
-	if err != nil || ckps == nil {
-		return nil, moerr.NewInternalErrorNoCtx("Load checkpoints failed for snapshot read")
+	if ckps == nil {
+		return nil, moerr.NewInternalErrorNoCtx("No checkpoints for snapshot read")
+	}
+	if err != nil {
+		return nil, err
 	}
 	//Notice that checkpoints must contain only one or zero global checkpoint
 	//followed by zero or multi continuous incremental checkpoints.
@@ -426,6 +429,9 @@ func (e *Engine) getOrCreateSnapPart(
 	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
 	//      we should init the partition,ref to engine.init
 	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, tableId, nil)
+	if ckps == nil {
+		return nil, moerr.NewInternalErrorNoCtx("No checkpoints for snapshot read")
+	}
 	if err != nil {
 		return nil, err
 	}
