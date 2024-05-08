@@ -43,3 +43,14 @@ md5(flijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589
 select md5(concat('aife',' 883fdg'));
 md5(concat(aife,  883fdg))
 34b22bd4f84cbbd547f5d0a03f6805cd
+select md5(4336);
+md5(4336)
+672d30ab508237ac28b92c3472c56688
+select md5(2008-09-09);
+md5(2008 - 9 - 9)
+dc513ea4fbdaa7a14786ffdebc4ef64e
+select md5('2008-09-09');
+md5(2008-09-09)
+185e43039cc36b4fa960427d7c693b6c
+select md5(fsfsf);
+invalid input: column fsfsf does not exist
