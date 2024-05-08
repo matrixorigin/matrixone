@@ -408,7 +408,7 @@ func ReadFileOffsetNoStrict(param *tree.ExternParam, mcpu int, fileSize int64) (
 	return arr, nil
 }
 
-func ReadFileOffsetStrict(param *tree.ExternParam, mcpu int, fileSize int64, cols []*plan.ColDef) ([]int64, error) {
+func ReadFileOffsetStrict(param *tree.ExternParam, mcpu int, fileSize int64, visibleCols []*plan.ColDef) ([]int64, error) {
 	arr := make([]int64, 0)
 
 	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
@@ -425,13 +425,6 @@ func ReadFileOffsetStrict(param *tree.ExternParam, mcpu int, fileSize int64, col
 				ReadCloserForRead: &r,
 			},
 		},
-	}
-
-	visibleCols := make([]*plan.ColDef, 0)
-	for _, col := range cols {
-		if !col.Hidden {
-			visibleCols = append(visibleCols, col)
-		}
 	}
 
 	var offset []int64

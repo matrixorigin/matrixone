@@ -1968,22 +1968,39 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 	t = time.Now()
 	var fileOffset [][]int64
-	for i := 0; i < len(fileList); i++ {
-		param.Filepath = fileList[i]
-		if param.Parallel && param.Strict {
-			arr, err := external.ReadFileOffsetStrict(param, mcpu, fileSize[i], n.TableDef.Cols)
-			fileOffset = append(fileOffset, arr)
-			if err != nil {
-				return nil, err
+	if param.Parallel {
+		if param.Strict {
+			visibleCols := make([]*plan.ColDef, 0)
+			for _, col := range n.TableDef.Cols {
+				if !col.Hidden {
+					visibleCols = append(visibleCols, col)
+				}
 			}
-		} else if param.Parallel && !param.Strict {
-			arr, err := external.ReadFileOffsetNoStrict(param, mcpu, fileSize[i])
-			fileOffset = append(fileOffset, arr)
-			if err != nil {
-				return nil, err
+			for i := 0; i < len(fileList); i++ {
+				param.Filepath = fileList[i]
+				arr, err := external.ReadFileOffsetStrict(param, mcpu, fileSize[i], visibleCols)
+				fileOffset = append(fileOffset, arr)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			for i := 0; i < len(fileList); i++ {
+				param.Filepath = fileList[i]
+				arr, err := external.ReadFileOffsetNoStrict(param, mcpu, fileSize[i])
+				fileOffset = append(fileOffset, arr)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
+
+	} else {
+		for i := 0; i < len(fileList); i++ {
+			param.Filepath = fileList[i]
+		}
 	}
+
 	if time.Since(t) > time.Second {
 		logutil.Infof("read file offset cost %v", time.Since(t))
 	}
