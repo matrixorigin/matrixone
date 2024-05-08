@@ -103,27 +103,26 @@ a    b    c
 3    ccc    null
 start transaction ;
 create database dis_db_01;
-internal error: CREATE/DROP of database is not supported in transactions
 use dis_db_01;
-invalid database dis_db_01
 begin;
 create table dis_table_04(a int);
 insert into dis_table_04 values (4);
-use isolation_2;
+use dis_db_01;
 create table dis_table_04(a int);
 table dis_table_04 already exists
 insert into dis_table_04 values (4);
 drop database dis_db_01;
-Can't drop database 'dis_db_01'; database doesn't exist
 delete from dis_table_04 where a=4;
+no such table dis_db_01.dis_table_04
 select * from dis_table_04;
-a
+not connect to a database
 rollback ;
 select * from dis_db_01.dis_table_04;
 invalid database dis_db_01
 drop database dis_db_01;
 Can't drop database 'dis_db_01'; database doesn't exist
 drop table isolation_2.dis_table_04;
+no such table isolation_2.dis_table_04
 begin;
 use isolation_2;
 create external table ex_table_dis(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
@@ -133,6 +132,7 @@ num_col1    num_col2
 -128    -32768
 127    32767
 null    null
+use isolation_2;
 select * from ex_table_dis;
 SQL parser error: table "ex_table_dis" does not exist
 update ex_table_dis set num_col1=1000;
@@ -228,7 +228,6 @@ ccc    null
 vvv    2000-09-08 00:00:00
 begin ;
 create database dis_db_02;
-internal error: CREATE/DROP of database is not supported in transactions
 rollback ;
 commit;
 select b, c from dis_table_02;

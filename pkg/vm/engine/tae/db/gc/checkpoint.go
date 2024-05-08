@@ -496,7 +496,7 @@ func (c *checkpointCleaner) collectGlobalCkpData(
 	ckp *checkpoint.CheckpointEntry,
 ) (data *logtail.CheckpointData, err error) {
 	_, data, err = logtail.LoadCheckpointEntriesFromKey(c.ctx, c.fs.Service,
-		ckp.GetLocation(), ckp.GetVersion(), nil)
+		ckp.GetLocation(), ckp.GetVersion(), nil, &types.TS{})
 	return
 }
 
@@ -504,7 +504,7 @@ func (c *checkpointCleaner) collectCkpData(
 	ckp *checkpoint.CheckpointEntry,
 ) (data *logtail.CheckpointData, err error) {
 	_, data, err = logtail.LoadCheckpointEntriesFromKey(c.ctx, c.fs.Service,
-		ckp.GetLocation(), ckp.GetVersion(), nil)
+		ckp.GetLocation(), ckp.GetVersion(), nil, &types.TS{})
 	return
 }
 

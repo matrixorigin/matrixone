@@ -45,6 +45,16 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_information_schema_columns,
 	upg_information_schema_views,
 	upg_information_schema_partitions,
+	upg_mo_mysql_compatibility_mode1,
+	upg_mo_mysql_compatibility_mode2,
+	upg_mo_mysql_compatibility_mode3,
+	upg_mo_catalog_mo_sessions,
+	upg_mo_catalog_mo_configurations,
+	upg_mo_catalog_mo_locks,
+	upg_mo_catalog_mo_variables,
+	upg_mo_catalog_mo_transactions,
+	upg_mo_catalog_mo_cache,
+	upg_mo_pub,
 }
 
 var UpgPrepareEntres = []versions.UpgradeEntry{
@@ -547,7 +557,9 @@ var upg_information_schema_columns = versions.UpgradeEntry{
 		"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 		"if(true, NULL, 0) as SRS_ID "+
 		"from mo_catalog.mo_columns "+
-		"where account_id = current_account_id() and att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
+		"where account_id = current_account_id() "+
+		"and att_relname!='%s' and att_relname not like '%s' and attname != '%s' and att_relname not like '%s'",
+		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
 		if err != nil {
@@ -578,7 +590,9 @@ var upg_information_schema_columns = versions.UpgradeEntry{
 			"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 			"if(true, NULL, 0) as SRS_ID "+
 			"from mo_catalog.mo_columns "+
-			"where account_id = current_account_id() and att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID) {
+			"where account_id = current_account_id() "+
+			"and att_relname!='%s' and att_relname not like '%s' and attname != '%s' and att_relname not like '%s'",
+			catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard) {
 			return true, nil
 		}
 		return false, nil
@@ -724,4 +738,170 @@ var upg_information_schema_partitions = versions.UpgradeEntry{
 		return false, nil
 	},
 	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "PARTITIONS"),
+}
+
+var upg_mo_mysql_compatibility_mode1 = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_mysql_compatibility_mode",
+	UpgType:   versions.MODIFY_METADATA,
+	UpgSql:    "insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (current_account_id(), current_account_name(), 'experimental_ivf_index', '0',  true)",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		sql := "select * from mo_catalog.mo_mysql_compatibility_mode where variable_name = 'experimental_ivf_index'"
+		return versions.CheckTableDataExist(txn, accountId, sql)
+	},
+}
+
+var upg_mo_mysql_compatibility_mode2 = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_mysql_compatibility_mode",
+	UpgType:   versions.MODIFY_METADATA,
+	UpgSql:    "insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (current_account_id(), current_account_name(), 'experimental_master_index', '0',  true)",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		sql := "select * from mo_catalog.mo_mysql_compatibility_mode where variable_name = 'experimental_master_index'"
+		return versions.CheckTableDataExist(txn, accountId, sql)
+	},
+}
+
+var upg_mo_mysql_compatibility_mode3 = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_mysql_compatibility_mode",
+	UpgType:   versions.MODIFY_METADATA,
+	UpgSql:    "insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (current_account_id(), current_account_name(), 'keep_user_target_list_in_result', '1',  true)",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		sql := "select * from mo_catalog.mo_mysql_compatibility_mode where variable_name = 'keep_user_target_list_in_result'"
+		return versions.CheckTableDataExist(txn, accountId, sql)
+	},
+}
+
+// ----------------------------------------------------------------------------------------------------------------------
+var upg_mo_catalog_mo_sessions = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_sessions",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_sessions")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_sessions"),
+}
+
+var upg_mo_catalog_mo_configurations = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_configurations",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_configurations")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_configurations"),
+}
+
+var upg_mo_catalog_mo_locks = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_locks",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_locks")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_locks"),
+}
+
+var upg_mo_catalog_mo_variables = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_variables",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_variables")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_variables"),
+}
+
+var upg_mo_catalog_mo_transactions = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_transactions",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_transactions")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_transactions"),
+}
+
+var upg_mo_catalog_mo_cache = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_cache",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_cache")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_cache"),
+}
+
+var upg_mo_pub = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_PUBS,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    "alter table `mo_catalog`.`mo_pubs` add column `update_time` timestamp",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, "mo_catalog", catalog.MO_PUBS, "update_time")
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.IsExits {
+			return true, nil
+		}
+		return false, nil
+	},
 }

@@ -72,7 +72,7 @@ func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
 	return fileName, err
 }
 
-func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string, count int) error {
+func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string, config *Config) error {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
 	if !ok {
 		return moerr.NewNotSupported(ctx, "no implement sqlExecutor")
@@ -96,7 +96,8 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 	if err != nil {
 		return err
 	}
-	return execBackup(ctx, srcFs, dstFs, fileName, count)
+	count := config.Parallelism
+	return execBackup(ctx, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType)
 }
 
 func getParallelCount(count int) int {
@@ -118,7 +119,7 @@ func getParallelCount(count int) int {
 
 // parallelCopyData copy data from srcFs to dstFs in parallel
 func parallelCopyData(srcFs, dstFs fileservice.FileService,
-	files map[string]objectio.Location,
+	files map[string]*objectio.BackupObject,
 	parallelCount int,
 	gcFileMap map[string]string,
 ) ([]*taeFile, error) {
@@ -158,14 +159,29 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 	}()
 
 	backupJobs := make([]*tasks.Job, len(files))
-	getJob := func(srcFs, dstFs fileservice.FileService, location objectio.Location) *tasks.Job {
+	getJob := func(srcFs, dstFs fileservice.FileService, backupObject *objectio.BackupObject) *tasks.Job {
 		job := new(tasks.Job)
-		job.Init(context.Background(), location.Name().String(), tasks.JTAny,
+		job.Init(context.Background(), backupObject.Location.Name().String(), tasks.JTAny,
 			func(_ context.Context) *tasks.JobResult {
 
-				name := location.Name().String()
-				size := location.Extent().End() + objectio.FooterSize
-				checksum, err := CopyFileWithRetry(context.Background(), srcFs, dstFs, location.Name().String(), "")
+				name := backupObject.Location.Name().String()
+				size := backupObject.Location.Extent().End() + objectio.FooterSize
+				if !backupObject.NeedCopy {
+					fileMutex.Lock()
+					copyCount++
+					copySize += int64(size)
+					taeFileList = append(taeFileList, &taeFile{
+						path:     name,
+						size:     int64(size),
+						needCopy: false,
+						ts:       backupObject.CrateTS,
+					})
+					fileMutex.Unlock()
+					return &tasks.JobResult{
+						Res: nil,
+					}
+				}
+				checksum, err := CopyFileWithRetry(context.Background(), srcFs, dstFs, backupObject.Location.Name().String(), "")
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 						// TODO: handle file not found, maybe GC
@@ -190,6 +206,8 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 					path:     name,
 					size:     int64(size),
 					checksum: checksum,
+					needCopy: backupObject.NeedCopy,
+					ts:       backupObject.CrateTS,
 				})
 				fileMutex.Unlock()
 				return &tasks.JobResult{
@@ -235,15 +253,22 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 	return taeFileList, nil
 }
 
-func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string, count int) error {
+func execBackup(
+	ctx context.Context,
+	srcFs, dstFs fileservice.FileService,
+	names []string,
+	count int,
+	ts types.TS,
+	typ string,
+) error {
 	backupTime := names[0]
 	trimInfo := names[1]
 	names = names[1:]
-	files := make(map[string]objectio.Location, 0)
+	files := make(map[string]*objectio.BackupObject, 0)
 	gcFileMap := make(map[string]string)
 	softDeletes := make(map[string]bool)
 	var loadDuration, copyDuration, reWriteDuration time.Duration
-	var oNames []objectio.Location
+	var oNames []*objectio.BackupObject
 	parallelNum := getParallelCount(count)
 	logutil.Info("backup", common.OperationField("start backup"),
 		common.AnyField("backup time", backupTime),
@@ -256,6 +281,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			common.AnyField("rewrite checkpoint cost", reWriteDuration))
 	}()
 	now := time.Now()
+	baseTS := ts
 	for i, name := range names {
 		if len(name) == 0 {
 			continue
@@ -273,12 +299,12 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		if err != nil {
 			return err
 		}
-		var oneNames []objectio.Location
+		var oneNames []*objectio.BackupObject
 		var data *logtail.CheckpointData
 		if i == 0 {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), nil)
+			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), nil, &baseTS)
 		} else {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), &softDeletes)
+			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), &softDeletes, &baseTS)
 		}
 		if err != nil {
 			return err
@@ -289,8 +315,8 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	loadDuration += time.Since(now)
 	now = time.Now()
 	for _, oName := range oNames {
-		if files[oName.Name().String()] == nil {
-			files[oName.Name().String()] = oName
+		if files[oName.Location.Name().String()] == nil {
+			files[oName.Location.Name().String()] = oName
 		}
 	}
 
@@ -353,8 +379,10 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 				return err
 			}
 			taeFileList = append(taeFileList, &taeFile{
-				path: dentry.Name,
-				size: dentry.Size,
+				path:     dentry.Name,
+				size:     dentry.Size,
+				needCopy: true,
+				ts:       start,
 			})
 		}
 		if err != nil {
@@ -369,13 +397,15 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			return err
 		}
 		taeFileList = append(taeFileList, &taeFile{
-			path: "ckp/" + dentry.Name,
-			size: dentry.Size,
+			path:     "ckp/" + dentry.Name,
+			size:     dentry.Size,
+			needCopy: true,
+			ts:       start,
 		})
 	}
 	reWriteDuration += time.Since(now)
 	//save tae files size
-	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime)
+	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime, start.ToString(), typ)
 	if err != nil {
 		return err
 	}
@@ -407,6 +437,8 @@ func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir stri
 			path:     dir + string(os.PathSeparator) + file.Name,
 			size:     file.Size,
 			checksum: checksum,
+			needCopy: true,
+			ts:       backup,
 		})
 	}
 	return taeFileList, nil
