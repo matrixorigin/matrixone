@@ -4331,7 +4331,8 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, rel eng
 		return nodes, nil
 	}
 	// only one cn
-	if len(c.cnList) == 1 {
+	if len(c.cnList) == 1 || n.TableDef.Name[:10] == "__mo_index" {
+		fmt.Println("__mo_index", c.proc.Id)
 		nodes[0].Data = append(nodes[0].Data, ranges.GetAllBytes()...)
 		return nodes, nil
 	}
