@@ -533,9 +533,7 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 	skipInMemory bool) (delBatch *containers.Batch, deltalocStart, deltalocEnd int, err error) {
 	deltalocStart = deltalocBat.Length()
 	for blkOffset, mvcc := range n.deletes {
-		n.RLock()
 		nodes := mvcc.deltaloc.ClonePreparedInRange(start, end)
-		n.RUnlock()
 		var skipData bool
 		if len(nodes) != 0 {
 			blkID := objectio.NewBlockidWithObjectID(&n.meta.ID, blkOffset)
