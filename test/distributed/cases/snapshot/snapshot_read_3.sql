@@ -1,3 +1,4 @@
+-- @bvt:issue#14784
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
@@ -48,3 +49,4 @@ show create table snapshot_read.test_snapshot_read {snapshot = 'snapshot_01'};
 show create table snapshot_read.test_snapshot_read_view {snapshot = 'snapshot_01'};
 show databases like 'snapshot_read' {snapshot = 'snapshot_01'};
 drop snapshot snapshot_01;
+-- @bvt:issue

@@ -1,3 +1,4 @@
+-- @bvt:issue#14784
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
@@ -49,3 +50,4 @@ select count(*) from t3;
 drop database snapshot_read;
 drop snapshot snapshot_01;
 drop snapshot snapshot_02;
+-- @bvt:issue
