@@ -403,8 +403,8 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 		if err := fr.vec.PreExtend(more, fr.mp); err != nil {
 			return err
 		}
-		fr.vec.Reset(fr.typ)
 	}
+	fr.vec.Reset(fr.typ)
 
 	if !fr.isVarlena {
 		fr.length = 0
