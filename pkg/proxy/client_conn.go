@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 // clientBaseConnID is the base connection ID for client.
@@ -57,7 +58,7 @@ func (c *clientInfo) parse(full string) error {
 	if err != nil {
 		return err
 	}
-	c.labelInfo.Tenant = Tenant(tenant.Tenant)
+	c.labelInfo.Tenant = Tenant(tenant.GetTenant())
 	c.username = tenant.GetUser()
 
 	// For label part.
