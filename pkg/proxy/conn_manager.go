@@ -142,18 +142,18 @@ type connManager struct {
 	// Map from connection ID to CN server.
 	connIDServers map[uint32]*CNServer
 
-	// proxyToBackendConnID maps proxy connection ID to
-	// backend connection ID.
-	proxyToBackendConnID map[uint32]uint32
+	// transferredConnIDs keeps the connection IDs that are transferred.
+	// We don't remove these IDs when close connection.
+	transferredConnIDs map[uint32]struct{}
 }
 
 // newConnManager creates a new connManager.
 func newConnManager() *connManager {
 	m := &connManager{
-		conns:                make(map[LabelHash]*connInfo),
-		connIDServers:        make(map[uint32]*CNServer),
-		proxyToBackendConnID: make(map[uint32]uint32),
-		cnTunnels:            make(cnTunnels),
+		conns:              make(map[LabelHash]*connInfo),
+		connIDServers:      make(map[uint32]*CNServer),
+		transferredConnIDs: make(map[uint32]struct{}),
+		cnTunnels:          make(cnTunnels),
 	}
 	return m
 }
@@ -197,8 +197,12 @@ func (m *connManager) connect(cn *CNServer, t *tunnel) {
 		m.conns[cn.hash] = newConnInfo(cn.reqLabel)
 	}
 	m.conns[cn.hash].cnTunnels.add(cn.uuid, t)
-	m.connIDServers[cn.backendConnID] = cn
-	m.proxyToBackendConnID[cn.proxyConnID] = cn.backendConnID
+	if _, ok := m.connIDServers[cn.connID]; ok {
+		// this connection is transferred to a new CN server.
+		m.transferredConnIDs[cn.connID] = struct{}{}
+	} else {
+		m.connIDServers[cn.connID] = cn
+	}
 
 	if _, ok := m.cnTunnels[cn.uuid]; !ok {
 		m.cnTunnels[cn.uuid] = make(tunnelSet)
@@ -214,9 +218,12 @@ func (m *connManager) disconnect(cn *CNServer, t *tunnel) {
 	if ok {
 		ci.cnTunnels.del(cn.uuid, t)
 	}
-	delete(m.connIDServers, cn.backendConnID)
-	delete(m.proxyToBackendConnID, cn.proxyConnID)
 	delete(m.cnTunnels[cn.uuid], t)
+	if _, ok := m.transferredConnIDs[cn.connID]; !ok {
+		delete(m.connIDServers, cn.connID)
+	} else {
+		delete(m.transferredConnIDs, cn.connID)
+	}
 }
 
 // count returns the total connection count.
@@ -269,13 +276,6 @@ func (m *connManager) getLabelInfo(hash LabelHash) labelInfo {
 func (m *connManager) getCNServerByConnID(connID uint32) *CNServer {
 	m.Lock()
 	defer m.Unlock()
-	// The proxy connection ID and backend connection ID are global unique.
-	// So we should check if the connID from parameter is proxy connection ID
-	// or backend connection ID.
-	backendConnID, ok := m.proxyToBackendConnID[connID]
-	if ok {
-		connID = backendConnID
-	}
 	cn, ok := m.connIDServers[connID]
 	if ok {
 		return cn

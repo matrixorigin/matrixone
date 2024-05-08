@@ -357,7 +357,7 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 	// Before connect to backend server, update the salt.
 	cn.salt = c.mysqlProto.GetSalt()
 
-	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", cn.backendConnID), resp)
+	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", cn.connID), resp)
 }
 
 // handleSetVar handles the set variable event.
@@ -407,8 +407,8 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 			v2.ProxyConnectRouteFailCounter.Inc()
 			return nil, err
 		}
-		// We have to set proxy connection ID after cn is returned.
-		cn.proxyConnID = c.connID
+		// We have to set connection ID after cn is returned.
+		cn.connID = c.connID
 
 		// Set the salt value of cn server.
 		cn.salt = c.mysqlProto.GetSalt()
@@ -474,6 +474,13 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		break
 	}
 	if !isOKPacket(r) {
+		// If we do not close here, there will be a lot of unused connections
+		// in connManager.
+		if sc != nil {
+			if closeErr := sc.Close(); closeErr != nil {
+				c.log.Error("failed to close server connection", zap.Error(closeErr))
+			}
+		}
 		v2.ProxyConnectCommonFailCounter.Inc()
 		return nil, withCode(moerr.NewInternalErrorNoCtx("access error"),
 			codeAuthFailed)
