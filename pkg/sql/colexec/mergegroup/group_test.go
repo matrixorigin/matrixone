@@ -34,6 +34,7 @@ const (
 )
 
 // add unit tests for cases
+
 type groupTestCase struct {
 	arg    *Argument
 	flgs   []bool // flgs[i] == true: nullable
@@ -101,10 +102,10 @@ func TestGroup(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
@@ -139,10 +140,10 @@ func BenchmarkGroup(b *testing.B) {
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+			tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
@@ -181,17 +182,21 @@ func newTestCase(flgs []bool, needEval bool, ts []types.Type) groupTestCase {
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &Argument{NeedEval: needEval,
-			info: &vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			}},
+		arg: &Argument{
+			NeedEval: needEval,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
+			},
+		},
 	}
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
-func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 

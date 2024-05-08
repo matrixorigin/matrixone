@@ -58,10 +58,23 @@ type client struct {
 	client  morpc.RPCClient
 }
 
-func NewClient(cfg morpc.Config) (Client, error) {
+type ClientOption func(c *client)
+
+func WithMOCluster(cluster clusterservice.MOCluster) ClientOption {
+	return func(c *client) {
+		c.cluster = cluster
+	}
+}
+
+func NewClient(cfg morpc.Config, opts ...ClientOption) (Client, error) {
 	c := &client{
-		cfg:     &cfg,
-		cluster: clusterservice.GetMOCluster(),
+		cfg: &cfg,
+	}
+	for _, applyFn := range opts {
+		applyFn(c)
+	}
+	if c.cluster == nil {
+		c.cluster = clusterservice.GetMOCluster()
 	}
 	c.cfg.Adjust()
 	// add read timeout for lockservice client, to avoid remote lock hung and cannot read the lock response
@@ -122,7 +135,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 		switch request.Method {
 		case pb.Method_ForwardLock:
 			sid = getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -133,7 +146,15 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			pb.Method_GetTxnLock,
 			pb.Method_KeepRemoteLock:
 			sid = getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
+		case pb.Method_ValidateService:
+			sid := getUUIDFromServiceIdentifier(request.ValidateService.ServiceID)
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -141,19 +162,25 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_GetWaitingList:
 			sid = getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
+		case pb.Method_GetActiveTxn:
+			sid := getUUIDFromServiceIdentifier(request.GetActiveTxn.ServiceID)
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
 					return false
 				})
 		default:
-			c.cluster.GetTNService(
-				clusterservice.NewSelector(),
-				func(d metadata.TNService) bool {
-					address = d.LockServiceAddress
-					return false
-				})
+			values := c.cluster.GetAllTNServices()
+			if len(values) > 0 {
+				address = values[0].LockServiceAddress
+			}
 		}
 		if address != "" {
 			break
@@ -164,7 +191,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 	}
 	if address == "" {
 		var cns []string
-		c.cluster.GetCNService(
+		c.cluster.GetCNServiceWithoutWorkingState(
 			clusterservice.NewSelectAll(),
 			func(s metadata.CNService) bool {
 				cns = append(cns, s.ServiceID)
@@ -174,6 +201,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			zap.String("target", sid),
 			zap.Any("cns", cns),
 			zap.String("request", request.DebugString()))
+
 	}
 	return c.client.Send(ctx, address, request)
 }

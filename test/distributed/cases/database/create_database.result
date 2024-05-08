@@ -10,16 +10,17 @@ create database `测试数据库`;
 create database t01234567890123456789012345678901234567890123456789012345678901234567890123456789;
 show databases;
 Database
-mo_task
+create_database
+information_schema
 mo_catalog
+mo_debug
+mo_task
+mysql
 system
 system_metrics
-mysql
-information_schema
-create_database
+t01234567890123456789012345678901234567890123456789012345678901234567890123456789
 test01
 测试数据库
-t01234567890123456789012345678901234567890123456789012345678901234567890123456789
 drop database if exists test01;
 drop database if exists test03;
 drop database if exists test04;
@@ -34,12 +35,13 @@ drop database if exists db1;
 create database if not exists db1;
 show schemas;
 Database
-mo_task
-mo_catalog
-system
-system_metrics
-mysql
-information_schema
 create_database
 db1
+information_schema
+mo_catalog
+mo_debug
+mo_task
+mysql
+system
+system_metrics
 drop database if exists db1;

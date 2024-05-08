@@ -55,7 +55,7 @@ insert into rename03 (col1, col2, col3) values (3,4,'121131312');
 insert into rename03 (col1New, col2, col3New) values (3,4,'121131312');
 select * from rename03;
 update rename03 set col1New = 100 where col1New = 1;
-update rename03 set col3New = '2798u3d3frew' where col3New = 6;
+update rename03 set col3New = '2798u3d3frew' where col3New = '6';
 delete from rename03 where col3New is null;
 select * from rename03;
 show columns from rename03;
@@ -141,7 +141,7 @@ drop table if exists foreign02;
 create table foreign02(col1 int,
                        col2 int,
                        col3 int primary key,
-                       foreign key(col1) references foreign01(col1));
+                       constraint `c1` foreign key(col1) references foreign01(col1));
 show create table foreign01;
 show create table foreign02;
 insert into foreign01 values(1,'sfhuwe',1,1);

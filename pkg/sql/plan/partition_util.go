@@ -147,7 +147,7 @@ func collectArgsType(ctx context.Context, tblInfo *plan.TableDef, exprs ...tree.
 		if column == nil {
 			return nil, moerr.NewBadFieldError(ctx, col.Parts[0], "partition function")
 		}
-		types = append(types, column.GetTyp().GetId())
+		types = append(types, column.GetTyp().Id)
 	}
 	return types, nil
 }
@@ -247,7 +247,7 @@ func checkListColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionDef *p
 }
 
 // checkPartitionColumnValue check whether the types of partition column and partition value match
-func checkPartitionColumnValue(binder *PartitionBinder, colType *Type, colExpr *plan.Expr) error {
+func checkPartitionColumnValue(binder *PartitionBinder, colType Type, colExpr *plan.Expr) error {
 	val, err := EvalPlanExpr(binder.GetContext(), colExpr, binder.builder.compCtx.GetProcess())
 	if err != nil {
 		return err
@@ -262,9 +262,9 @@ func checkPartitionColumnValue(binder *PartitionBinder, colType *Type, colExpr *
 		default:
 			return moerr.NewWrongTypeColumnValue(binder.GetContext())
 		}
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 		switch vkind {
-		case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_any:
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit, types.T_any:
 		default:
 			return moerr.NewWrongTypeColumnValue(binder.GetContext())
 		}
@@ -317,7 +317,7 @@ func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Part
 			}
 
 			switch types.T(evalExpr.Typ.Id) {
-			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_any:
+			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit, types.T_any:
 			case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 				switch value := cval.Lit.Value.(type) {
 				case *plan.Literal_I8Val:
@@ -410,9 +410,9 @@ func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionDef *
 					//return moerr.NewInternalError(binder.GetContext(), "Partition column values of incorrect type")
 					return moerr.NewWrongTypeColumnValue(binder.GetContext())
 				}
-			case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 				switch types.T(vkind.Id) {
-				case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64: //+types.T_null:
+				case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit: //+types.T_null:
 				default:
 					//return moerr.NewInternalError(binder.GetContext(), "Partition column values of incorrect type")
 					return moerr.NewWrongTypeColumnValue(binder.GetContext())
@@ -465,7 +465,7 @@ func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partitio
 			}
 
 			switch types.T(evalExpr.Typ.Id) {
-			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_any:
+			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit, types.T_any:
 			case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 				switch value := cval.Lit.Value.(type) {
 				case *plan.Literal_I8Val:
@@ -530,7 +530,7 @@ func checkListPartitionValue(partitionBinder *PartitionBinder, partitionDef *pla
 
 func formatListPartitionValue(binder *PartitionBinder, tblInfo *TableDef, pi *plan.PartitionByDef) ([]string, error) {
 	defs := pi.Partitions
-	var colTps []*Type
+	var colTps []Type
 	if pi.PartitionExpr != nil {
 		tp := types.T_int64
 		if isPartExprUnsigned(pi) {
@@ -538,9 +538,9 @@ func formatListPartitionValue(binder *PartitionBinder, tblInfo *TableDef, pi *pl
 		}
 		toType := tp.ToType()
 		makePlan2Type(&toType)
-		colTps = []*Type{makePlan2Type(&toType)}
+		colTps = []Type{makePlan2Type(&toType)}
 	} else {
-		colTps = make([]*Type, 0, len(pi.PartitionColumns.PartitionColumns))
+		colTps = make([]Type, 0, len(pi.PartitionColumns.PartitionColumns))
 		for _, colName := range pi.PartitionColumns.PartitionColumns {
 			colInfo := findColumnByName(colName, tblInfo)
 			if colInfo == nil {
@@ -590,7 +590,7 @@ func isPartExprUnsigned(pi *plan.PartitionByDef) bool {
 	return types.T(pi.PartitionExpr.Expr.Typ.Id).IsUnsignedInt()
 }
 
-func evalPartitionFieldExpr(ctx context.Context, process *process.Process, colType *Type, colExpr *plan.Expr) (string, error) {
+func evalPartitionFieldExpr(ctx context.Context, process *process.Process, colType Type, colExpr *plan.Expr) (string, error) {
 	evalExpr, err := EvalPlanExpr(ctx, colExpr, process)
 	if err != nil {
 		return "", err
@@ -614,9 +614,9 @@ func evalPartitionFieldExpr(ctx context.Context, process *process.Process, colTy
 }
 
 // collectPartitionColumnsType
-func collectColumnsType(partitionDef *plan.PartitionByDef) []*Type {
+func collectColumnsType(partitionDef *plan.PartitionByDef) []Type {
 	if len(partitionDef.PartitionColumns.Columns) > 0 {
-		colTypes := make([]*Type, 0, len(partitionDef.PartitionColumns.Columns))
+		colTypes := make([]Type, 0, len(partitionDef.PartitionColumns.Columns))
 		for _, col := range partitionDef.PartitionColumns.Columns {
 			colTypes = append(colTypes, col.Typ)
 		}
@@ -675,7 +675,7 @@ func PartitionFuncConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Pro
 		}
 		defer vec.Free(proc.Mp())
 
-		vec.InplaceSort()
+		vec.InplaceSortAndCompact()
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return nil, err

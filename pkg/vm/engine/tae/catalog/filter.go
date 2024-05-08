@@ -14,7 +14,7 @@
 
 package catalog
 
-func ActiveWithNoTxnFilter(be *BaseEntryImpl[*MetadataMVCCNode]) bool {
+func ActiveWithNoTxnFilter(be *BaseEntryImpl[*ObjectMVCCNode]) bool {
 	return !be.HasDropCommittedLocked() && !be.IsCreatingOrAborted()
 }
 
@@ -22,35 +22,35 @@ func ActiveObjectWithNoTxnFilter(be *BaseEntryImpl[*ObjectMVCCNode]) bool {
 	return !be.HasDropCommittedLocked() && !be.IsCreatingOrAborted()
 }
 
-func AppendableBlkFilter(be *BlockEntry) bool {
+func AppendableBlkFilter(be *ObjectEntry) bool {
 	return be.IsAppendable()
 }
 
-func NonAppendableBlkFilter(be *BlockEntry) bool {
+func NonAppendableBlkFilter(be *ObjectEntry) bool {
 	return !be.IsAppendable()
 }
 
 type ComposedFilter struct {
-	CommitFilters []func(*BaseEntryImpl[*MetadataMVCCNode]) bool
-	BlockFilters  []func(*BlockEntry) bool
+	CommitFilters []func(*BaseEntryImpl[*ObjectMVCCNode]) bool
+	BlockFilters  []func(*ObjectEntry) bool
 }
 
 func NewComposedFilter() *ComposedFilter {
 	return &ComposedFilter{
-		CommitFilters: make([]func(*BaseEntryImpl[*MetadataMVCCNode]) bool, 0),
-		BlockFilters:  make([]func(*BlockEntry) bool, 0),
+		CommitFilters: make([]func(*BaseEntryImpl[*ObjectMVCCNode]) bool, 0),
+		BlockFilters:  make([]func(*ObjectEntry) bool, 0),
 	}
 }
 
-func (filter *ComposedFilter) AddCommitFilter(f func(*BaseEntryImpl[*MetadataMVCCNode]) bool) {
+func (filter *ComposedFilter) AddCommitFilter(f func(*BaseEntryImpl[*ObjectMVCCNode]) bool) {
 	filter.CommitFilters = append(filter.CommitFilters, f)
 }
 
-func (filter *ComposedFilter) AddBlockFilter(f func(*BlockEntry) bool) {
+func (filter *ComposedFilter) AddBlockFilter(f func(*ObjectEntry) bool) {
 	filter.BlockFilters = append(filter.BlockFilters, f)
 }
 
-func (filter *ComposedFilter) FilteCommit(be *BaseEntryImpl[*MetadataMVCCNode]) bool {
+func (filter *ComposedFilter) FilteCommit(be *BaseEntryImpl[*ObjectMVCCNode]) bool {
 	ret := false
 	for _, f := range filter.CommitFilters {
 		if !f(be) {
@@ -62,7 +62,7 @@ func (filter *ComposedFilter) FilteCommit(be *BaseEntryImpl[*MetadataMVCCNode]) 
 	return ret
 }
 
-func (filter *ComposedFilter) FilteBlock(be *BlockEntry) bool {
+func (filter *ComposedFilter) FilteBlock(be *ObjectEntry) bool {
 	ret := false
 	for _, f := range filter.BlockFilters {
 		if !f(be) {

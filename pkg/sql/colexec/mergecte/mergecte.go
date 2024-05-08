@@ -46,7 +46,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	var end bool
@@ -96,8 +96,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
-	anal.Input(arg.buf, arg.info.IsFirst)
-	anal.Output(arg.buf, arg.info.IsLast)
+	anal.Input(arg.buf, arg.GetIsFirst())
+	anal.Output(arg.buf, arg.GetIsLast())
 	result.Batch = arg.buf
 	return result, nil
 }

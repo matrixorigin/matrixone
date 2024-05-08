@@ -350,6 +350,34 @@ func TestZM(t *testing.T) {
 	require.Equal(t, zm2.GetMinBuf(), zm3.GetMinBuf())
 	require.Equal(t, zm2.GetMaxBuf(), zm3.GetMaxBuf())
 	require.True(t, zm3.MaxTruncated())
+
+	{ // bit
+		v := uint64(500)
+		zm := BuildZM(types.T_bit, types.EncodeUint64(&v))
+		require.Equal(t, v, zm.GetMin())
+		require.Equal(t, v, zm.GetMax())
+
+		vMin := v - 200
+		vMax := v + 100
+		require.True(t, zm.ContainsKey(types.EncodeUint64(&v)))
+		require.False(t, zm.ContainsKey(types.EncodeUint64(&vMin)))
+		require.False(t, zm.ContainsKey(types.EncodeUint64(&vMax)))
+
+		UpdateZMAny(zm, vMin)
+		t.Log(zm.String())
+		require.True(t, zm.ContainsKey(types.EncodeUint64(&v)))
+		require.True(t, zm.ContainsKey(types.EncodeUint64(&vMin)))
+		require.False(t, zm.ContainsKey(types.EncodeUint64(&vMax)))
+
+		UpdateZMAny(zm, vMax)
+		t.Log(zm.String())
+		require.True(t, zm.ContainsKey(types.EncodeUint64(&v)))
+		require.True(t, zm.ContainsKey(types.EncodeUint64(&vMin)))
+		require.True(t, zm.ContainsKey(types.EncodeUint64(&vMax)))
+
+		require.Equal(t, vMin, zm.GetMin())
+		require.Equal(t, vMax, zm.GetMax())
+	}
 }
 
 func TestZMSum(t *testing.T) {
@@ -361,6 +389,7 @@ func TestZMSum(t *testing.T) {
 	testUIntSum(t, types.T_uint16)
 	testUIntSum(t, types.T_uint32)
 	testUIntSum(t, types.T_uint64)
+	testUIntSum(t, types.T_bit)
 	testFloatSum(t, types.T_float32)
 	testFloatSum(t, types.T_float64)
 	testDecimal64Sum(t)

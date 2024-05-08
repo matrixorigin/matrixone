@@ -243,7 +243,7 @@ create table emp(
                     comm decimal(7,2),
                     deptno varchar(20),
                     primary key(empno),
-                    FOREIGN KEY (deptno) REFERENCES dept(deptno)
+                    constraint `c1` FOREIGN KEY (deptno) REFERENCES dept(deptno)
 );
 
 INSERT INTO emp VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
@@ -290,7 +290,7 @@ desc t1;
 insert into t1 values (1, 'cdsdsa');
 select * from t1;
 drop table t1;
-drop database if exists db2;
+drop database if exists db1;
 
 -- @suit
 -- @case
@@ -298,6 +298,7 @@ drop database if exists db2;
 -- @label:bvt
 
 drop database if exists test;
+create database test;
 use test;
 
 -- abnormal test: modify column to bool
@@ -584,7 +585,7 @@ drop table if exists foreign02;
 create table foreign02(col1 int,
                        col2 int,
                        col3 int primary key,
-                       foreign key(col1) references foreign01(col1));
+                       constraint `c1` foreign key(col1) references foreign01(col1));
 show create table foreign01;
 show create table foreign02;
 insert into foreign01 values(1,'sfhuwe',1,1);
@@ -979,4 +980,16 @@ commit;
 select * from table01;
 select col1 from table01;
 drop table table01;
+
+-- alter table modify enum column
+drop table if exists t1;
+create table t1 (a int,b enum('abc','def','database'));
+insert into t1 values (1, 'abc');
+insert into t1 values (2, 'database');
+select * from t1;
+alter table t1 modify column b enum('abc','def','database') first;
+show create table t1;
+select * from t1;
+drop table t1;
+
 drop database test;

@@ -16,11 +16,12 @@ package backup
 
 import (
 	"fmt"
+	"sort"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"sort"
-	"strings"
 )
 
 const (
@@ -220,6 +221,12 @@ type Config struct {
 	HAkeeper logservice.CNHAKeeperClient
 
 	Metas *Metas
+
+	// For parallel backup
+	Parallelism uint16
+
+	BackupType string
+	BackupTs   types.TS
 }
 
 // metasGeneralFsMustBeSet denotes metas and generalFs must be ready
@@ -246,6 +253,7 @@ type s3Config struct {
 	format          string
 	jsonData        string
 	isMinio         bool
+	parallelism     uint16
 }
 
 type filesystemConfig struct {
@@ -263,6 +271,8 @@ type taeFile struct {
 	path     string
 	size     int64
 	checksum []byte
+	needCopy bool
+	ts       types.TS
 }
 
 func (tfs *taeFile) String() string {
@@ -271,7 +281,9 @@ func (tfs *taeFile) String() string {
 }
 
 func (tfs *taeFile) CsvString() []string {
-	return []string{tfs.path, fmt.Sprintf("%d", tfs.size), fmt.Sprintf("%x", tfs.checksum)}
+	return []string{tfs.path, fmt.Sprintf("%d", tfs.size),
+		fmt.Sprintf("%x", tfs.checksum), fmt.Sprintf("%t", tfs.needCopy),
+		tfs.ts.ToString()}
 }
 
 func taeFileListToCsv(files []*taeFile) ([][]string, int64) {
@@ -284,6 +296,6 @@ func taeFileListToCsv(files []*taeFile) ([][]string, int64) {
 	return lines, ret
 }
 
-func taeBackupTimeAndSizeToCsv(backupTime string, size int64) []string {
-	return []string{backupTime, fmt.Sprintf("%d", size)}
+func taeBackupTimeAndSizeToCsv(backupTime, backupTS, typ string, size int64) []string {
+	return []string{backupTime, fmt.Sprintf("%d", size), backupTS, typ}
 }

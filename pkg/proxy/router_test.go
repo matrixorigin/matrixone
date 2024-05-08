@@ -37,7 +37,7 @@ func TestCNServer(t *testing.T) {
 		addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 		require.NoError(t, os.RemoveAll(addr))
 		cn := testMakeCNServer("", addr, 0, "", labelInfo{})
-		c, err := cn.Connect(0)
+		c, err := cn.Connect(nil, 0)
 		require.Error(t, err)
 		require.Nil(t, c)
 	})
@@ -52,7 +52,7 @@ func TestCNServer(t *testing.T) {
 			require.NoError(t, stopFn())
 		}()
 		cn := testMakeCNServer("", addr, 0, "", labelInfo{})
-		c, err := cn.Connect(0)
+		c, err := cn.Connect(nil, 0)
 		require.NoError(t, err)
 		require.NotNil(t, c)
 	})
@@ -183,8 +183,7 @@ func TestRouter_RouteForSys(t *testing.T) {
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
 	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second,
-		clusterservice.WithDisableRefresh())
+	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	re := testRebalancer(t, st, logger, mc)
@@ -339,7 +338,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu1 := newTunnel(context.TODO(), nil, nil)
+	tu1 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -356,7 +355,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu2 := newTunnel(context.TODO(), nil, nil)
+	tu2 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu2)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -373,7 +372,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu3 := newTunnel(context.TODO(), nil, nil)
+	tu3 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu3)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -448,7 +447,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu1 := newTunnel(context.TODO(), nil, nil)
+	tu1 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -464,7 +463,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu2 := newTunnel(context.TODO(), nil, nil)
+	tu2 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu2)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -480,7 +479,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu3 := newTunnel(context.TODO(), nil, nil)
+	tu3 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu3)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -533,7 +532,7 @@ func TestRouter_Filter(t *testing.T) {
 	ru := newRouter(mc, re, true)
 
 	cn, err := ru.Route(ctx, clientInfo{username: "dump"}, func(s string) bool {
-		return s == "cn1"
+		return s == addr1
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
@@ -595,19 +594,19 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	}
 	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1}, func(s string) bool {
 		// choose cn2
-		return s == "cn1" || s == "cn3"
+		return s == addr1 || s == addr3
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu1 := newTunnel(context.TODO(), nil, nil)
+	tu1 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu1)
 	require.True(t, isRetryableErr(err))
 
 	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, func(s string) bool {
 		// choose cn1
-		return s == "cn2" || s == "cn3"
+		return s == addr2 || s == addr3
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
@@ -620,13 +619,13 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	// could not connect to cn3, because of timeout.
 	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, func(s string) bool {
 		// choose cn3
-		return s == "cn1" || s == "cn2"
+		return s == addr1 || s == addr2
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu3 := newTunnel(context.TODO(), nil, nil)
+	tu3 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu3)
 	require.True(t, isRetryableErr(err))
 }

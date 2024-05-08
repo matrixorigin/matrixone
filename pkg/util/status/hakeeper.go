@@ -43,12 +43,15 @@ type HAKeeperStatus struct {
 	ErrMsg       string       `json:"err_msg"`
 }
 
-func (s *Status) fillHAKeeper(client logservice.ClusterHAKeeperClient) {
+func (s *HAKeeperStatus) fill(client logservice.ClusterHAKeeperClient) {
+	if client == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 	details, err := client.GetClusterDetails(ctx)
 	if err != nil {
-		s.HAKeeperStatus.ErrMsg = err.Error()
+		s.ErrMsg = err.Error()
 		return
 	}
 	for _, cn := range details.CNStores {
@@ -57,7 +60,7 @@ func (s *Status) fillHAKeeper(client logservice.ClusterHAKeeperClient) {
 		if len(addrItems) > 1 {
 			addr = addrItems[0]
 		}
-		s.HAKeeperStatus.Nodes = append(s.HAKeeperStatus.Nodes, NodeStatus{
+		s.Nodes = append(s.Nodes, NodeStatus{
 			NodeID:    cn.UUID,
 			NodeType:  "CN",
 			Address:   addr,
@@ -68,7 +71,7 @@ func (s *Status) fillHAKeeper(client logservice.ClusterHAKeeperClient) {
 		})
 	}
 	for _, deleted := range details.DeletedStores {
-		s.HAKeeperStatus.DeletedNodes = append(s.HAKeeperStatus.DeletedNodes, NodeStatus{
+		s.DeletedNodes = append(s.DeletedNodes, NodeStatus{
 			NodeID:   deleted.UUID,
 			NodeType: deleted.StoreType,
 			Address:  deleted.Address,

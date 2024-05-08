@@ -16,36 +16,7 @@ package tables
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 )
 
-func BuildObjectCompactionTaskFactory(meta *catalog.ObjectEntry, rt *dbutils.Runtime) (
-	factory tasks.TxnTaskFactory, taskType tasks.TaskType, scopes []common.ID, err error,
-) {
-	if !meta.IsAppendable() {
-		return
-	}
-	meta.RLock()
-	dropped := meta.HasDropCommittedLocked()
-	inTxn := meta.IsCreatingOrAborted()
-	meta.RUnlock()
-	if dropped || inTxn {
-		return
-	}
-	filter := catalog.NewComposedFilter()
-	filter.AddBlockFilter(catalog.NonAppendableBlkFilter)
-	filter.AddCommitFilter(catalog.ActiveWithNoTxnFilter)
-	blks := meta.CollectBlockEntries(filter.FilteCommit, filter.FilteBlock)
-	if len(blks) < int(meta.GetTable().GetLastestSchema().ObjectMaxBlocks) {
-		return
-	}
-	for _, blk := range blks {
-		scopes = append(scopes, *blk.AsCommonID())
-	}
-	factory = jobs.CompactObjectTaskFactory(blks, rt)
-	taskType = tasks.DataCompactionTask
-	return
-}
+type BlockDataFactory = func(meta *catalog.ObjectEntry) data.Object

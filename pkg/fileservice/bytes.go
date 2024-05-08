@@ -14,6 +14,8 @@
 
 package fileservice
 
+import "github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+
 type Bytes []byte
 
 func (b Bytes) Size() int64 {
@@ -24,7 +26,7 @@ func (b Bytes) Bytes() []byte {
 	return b
 }
 
-func (b Bytes) Slice(length int) CacheData {
+func (b Bytes) Slice(length int) memorycache.CacheData {
 	return b[:length]
 }
 
@@ -38,6 +40,6 @@ type bytesAllocator struct{}
 
 var _ CacheDataAllocator = new(bytesAllocator)
 
-func (b *bytesAllocator) Alloc(size int) CacheData {
+func (b *bytesAllocator) Alloc(size int) memorycache.CacheData {
 	return make(Bytes, size)
 }

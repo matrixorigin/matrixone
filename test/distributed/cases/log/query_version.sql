@@ -4,7 +4,8 @@ select @@version_comment limit 1;
 
 select sleep(15) as s;
 use system;
-use mysql; select * from user limit 0;
+use mysql;
+select * from user limit 0;
 
 select sleep(15) as s;
 

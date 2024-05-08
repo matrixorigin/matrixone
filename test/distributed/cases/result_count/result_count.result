@@ -50,8 +50,8 @@ show create database db1;
 Database    Create Database
 db1    CREATE DATABASE `db1`
 show create view v1;
-View    Create View
-v1    create view v1 as select * from t1;
+View    Create View    character_set_client    collation_connection
+v1    create view v1 as select * from t1;    utf8mb4    utf8mb4_general_ci
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(65535) DEFAULT NULL\n)
@@ -120,8 +120,8 @@ select 1;
 1
 select 1 union select 2;
 1
-1
 2
+1
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3

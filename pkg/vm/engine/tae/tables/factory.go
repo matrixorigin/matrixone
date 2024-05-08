@@ -40,12 +40,16 @@ func (factory *DataFactory) MakeTableFactory() catalog.TableDataFactory {
 	}
 }
 
-func (factory *DataFactory) MakeBlockFactory() catalog.BlockDataFactory {
-	return func(meta *catalog.BlockEntry) data.Block {
+func (factory *DataFactory) MakeObjectFactory() catalog.ObjectDataFactory {
+	return func(meta *catalog.ObjectEntry) data.Object {
 		if meta.IsAppendable() {
-			return newABlock(meta, factory.rt)
+			return newAObject(meta, factory.rt)
 		} else {
-			return newBlock(meta, factory.rt)
+			return newObject(meta, factory.rt)
 		}
 	}
+}
+
+func (factory *DataFactory) MakeTombstoneFactory() catalog.TombstoneFactory {
+	return DefaultTOmbstoneFactory
 }

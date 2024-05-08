@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -158,6 +158,14 @@ var (
 	defaultLongQueryTime = 1.0
 	// defaultSkipRunningStmt
 	defaultSkipRunningStmt = true
+	// defaultLoggerLabelKey and defaultLoggerLabelVal
+	defaultLoggerLabelKey = "role"
+	defaultLoggerLabelVal = "logging_cn"
+
+	// default lower_case_table_names
+	defaultLowerCaseTableNames = "1"
+
+	CNPrimaryCheck = false
 )
 
 // FrontendParameters of the frontend
@@ -258,7 +266,7 @@ type FrontendParameters struct {
 
 	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
 
-	LowerCaseTableNames int64 `toml:"lowerCaseTableNames" user_setting:"advanced"`
+	LowerCaseTableNames string `toml:"lowerCaseTableNames" user_setting:"advanced"`
 
 	PrintDebug bool `toml:"printDebug"`
 
@@ -381,8 +389,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.AutoIncrCacheSize = 3000000
 	}
 
-	if fp.LowerCaseTableNames == 0 {
-		fp.LowerCaseTableNames = 1
+	if fp.LowerCaseTableNames == "" {
+		fp.LowerCaseTableNames = defaultLowerCaseTableNames
 	}
 
 	if fp.PrintDebugInterval == 0 {
@@ -531,6 +539,16 @@ type ObservabilityParameters struct {
 	// Disable merge statements
 	EnableStmtMerge bool `toml:"enableStmtMerge"`
 
+	// LabelSelector
+	LabelSelector map[string]string `toml:"labelSelector"`
+
+	// estimate tcp network packet cost
+	TCPPacket bool `toml:"tcpPacket"`
+
+	// for cu calculation
+	CU   OBCUConfig `toml:"cu"`
+	CUv1 OBCUConfig `toml:"cu_v1"`
+
 	OBCollectorConfig
 }
 
@@ -559,6 +577,10 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		AggregationWindow:                  toml.Duration{},
 		SelectAggrThreshold:                toml.Duration{},
 		EnableStmtMerge:                    false,
+		LabelSelector:                      map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal}, /*role=logging_cn*/
+		TCPPacket:                          false,
+		CU:                                 *NewOBCUConfig(),
+		CUv1:                               *NewOBCUConfig(),
 		OBCollectorConfig:                  *NewOBCollectorConfig(),
 	}
 	op.MetricInternalGatherInterval.Duration = defaultMetricInternalGatherInterval
@@ -573,6 +595,8 @@ func NewObservabilityParameters() *ObservabilityParameters {
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
 	op.OBCollectorConfig.SetDefaultValues()
+	op.CU.SetDefaultValues()
+	op.CUv1.SetDefaultValues()
 
 	op.MoVersion = version
 
@@ -675,6 +699,69 @@ func (c *OBCollectorConfig) SetDefaultValues() {
 	}
 }
 
+type OBCUConfig struct {
+	// cu unit
+	CUUnit float64 `toml:"cu_unit"`
+	// price
+	CpuPrice      float64 `toml:"cpu_price"`
+	MemPrice      float64 `toml:"mem_price"`
+	IoInPrice     float64 `toml:"io_in_price"`
+	IoOutPrice    float64 `toml:"io_out_price"`
+	TrafficPrice0 float64 `toml:"traffic_price_0"`
+	TrafficPrice1 float64 `toml:"traffic_price_1"`
+	TrafficPrice2 float64 `toml:"traffic_price_2"`
+}
+
+const CUUnitDefault = 1.002678e-06
+const CUCpuPriceDefault = 3.45e-14
+const CUMemPriceDefault = 4.56e-24
+const CUIOInPriceDefault = 5.67e-06
+const CUIOOutPriceDefault = 6.78e-06
+const CUTrafficPrice0Default = 7.89e-10
+const CUTrafficPrice1Default = 7.89e-10
+const CUTrafficPrice2Default = 7.89e-10
+
+func NewOBCUConfig() *OBCUConfig {
+	cfg := &OBCUConfig{
+		CUUnit:        CUUnitDefault,
+		CpuPrice:      CUCpuPriceDefault,
+		MemPrice:      CUMemPriceDefault,
+		IoInPrice:     CUIOInPriceDefault,
+		IoOutPrice:    CUIOOutPriceDefault,
+		TrafficPrice0: CUTrafficPrice0Default,
+		TrafficPrice1: CUTrafficPrice1Default,
+		TrafficPrice2: CUTrafficPrice2Default,
+	}
+	return cfg
+}
+
+func (c *OBCUConfig) SetDefaultValues() {
+	if c.CUUnit <= 0 {
+		c.CUUnit = CUUnitDefault
+	}
+	if c.CpuPrice <= 0 {
+		c.CpuPrice = CUCpuPriceDefault
+	}
+	if c.MemPrice <= 0 {
+		c.MemPrice = CUMemPriceDefault
+	}
+	if c.IoInPrice <= 0 {
+		c.IoInPrice = CUIOInPriceDefault
+	}
+	if c.IoOutPrice <= 0 {
+		c.IoOutPrice = CUIOOutPriceDefault
+	}
+	if c.TrafficPrice0 <= 0 {
+		c.TrafficPrice0 = CUTrafficPrice0Default
+	}
+	if c.TrafficPrice1 <= 0 {
+		c.TrafficPrice1 = CUTrafficPrice1Default
+	}
+	if c.TrafficPrice2 <= 0 {
+		c.TrafficPrice2 = CUTrafficPrice2Default
+	}
+}
+
 type ParameterUnit struct {
 	SV *FrontendParameters
 
@@ -693,8 +780,8 @@ type ParameterUnit struct {
 	// LockService instance
 	LockService lockservice.LockService
 
-	// QueryService instance
-	QueryService queryservice.QueryService
+	// QueryClient instance
+	QueryClient qclient.QueryClient
 
 	UdfService udf.Service
 

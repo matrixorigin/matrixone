@@ -28,16 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-var enableCacheRelease bool
-
-func init() {
-	enableCacheRelease = false
+func ReleaseIOEntry(entry *fileservice.IOEntry) {
+	entry.CachedData.Release()
 }
 
-func ReleaseIOEntry(entry *fileservice.IOEntry) {
-	if enableCacheRelease {
-		entry.CachedData.Release()
-	}
+func ReleaseIOVector(vector *fileservice.IOVector) {
+	vector.Release()
 }
 
 func ReadExtent(

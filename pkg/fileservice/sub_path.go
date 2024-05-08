@@ -56,6 +56,9 @@ func (s *subPathFS) toUpstreamPath(p string) (string, error) {
 	return parsed.String(), nil
 }
 
+func (s *subPathFS) Close() {
+}
+
 func (s *subPathFS) Write(ctx context.Context, vector IOVector) error {
 	p, err := s.toUpstreamPath(vector.FilePath)
 	if err != nil {

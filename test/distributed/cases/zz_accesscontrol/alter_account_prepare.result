@@ -1,0 +1,27 @@
+drop account if exists test;
+create account test ADMIN_NAME 'admin' IDENTIFIED BY '111';
+PREPARE alter_ac_1 FROM alter account ? admin_name= ? IDENTIFIED BY ?;
+set @a_var = 'test';
+set @b_var = 'admin';
+set @c_var = '222';
+EXECUTE alter_ac_1 USING @a_var, @b_var, @c_var;
+DEALLOCATE PREPARE alter_ac_1;
+select 1;
+1
+1
+PREPARE alter_ac_2 FROM "alter account ? admin_name 'admin' IDENTIFIED BY ?";
+set @a_var = 'test';
+set @c_var = '333';
+EXECUTE alter_ac_2 USING @a_var, @c_var;
+DEALLOCATE PREPARE alter_ac_2;
+select 1;
+1
+1
+PREPARE alter_ac_3 FROM "alter account test admin_name 'admin' IDENTIFIED BY ?";
+set @c_var = '444';
+EXECUTE alter_ac_3 USING @c_var;
+DEALLOCATE PREPARE alter_ac_3;
+select 1;
+1
+1
+drop account if exists test;

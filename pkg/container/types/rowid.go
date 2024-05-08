@@ -59,6 +59,10 @@ func CompareBlockidBlockidAligned(a, b Blockid) int {
 	return bytes.Compare(a[:], b[:])
 }
 
+func (r Rowid) Compare(other Rowid) int {
+	return bytes.Compare(r[:], other[:])
+}
+
 func (r Rowid) Less(than Rowid) bool {
 	return bytes.Compare(r[:], than[:]) < 0
 }
@@ -180,8 +184,8 @@ func (b *Blockid) ShortString() string {
 }
 
 func (b *Blockid) ShortStringEx() string {
-	var shortuuid [8]byte
-	hex.Encode(shortuuid[:], b[:4])
+	var shortuuid [12]byte
+	hex.Encode(shortuuid[:], b[10:16])
 	filen, blkn := b.Offsets()
 	return fmt.Sprintf("%s-%d-%d", string(shortuuid[:]), filen, blkn)
 }
@@ -207,7 +211,12 @@ func (o *Objectid) Segment() *Segmentid {
 	return (*Uuid)(unsafe.Pointer(&o[0]))
 }
 func (o *Objectid) String() string {
-	return fmt.Sprintf("%v-%d", o.Segment().ToString(), o.Offset())
+	return fmt.Sprintf("%v_%d", o.Segment().ToString(), o.Offset())
+}
+func (o *Objectid) ShortStringEx() string {
+	var shortuuid [12]byte
+	hex.Encode(shortuuid[:], o[10:16])
+	return string(shortuuid[:])
 }
 func (o *Objectid) Offset() uint16 {
 	filen := DecodeUint16(o[UuidSize:ObjectBytesSize])

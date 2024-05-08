@@ -131,19 +131,19 @@ drop table if exists t3;
 create table t3(a int);
 insert into t3 values (10),(20),(30);
 
--- echo mo throw exception
+-- no error. autocommit from OFF to ON. Commit the transaction.
 set @@autocommit=ON;
 select @@autocommit;
 
--- echo mo throw exception
+-- no error. autocommit from ON to OFF.
 set @@autocommit=OFF;
 select @@autocommit;
 
--- echo mo throw exception
+-- no error. autocommit from OFF to ON. Commit the transaction.
 set @@autocommit=1;
 select @@autocommit;
 
--- echo mo throw exception
+-- no error. autocommit from ON to OFF.
 set @@autocommit=0;
 select @@autocommit;
 
@@ -153,19 +153,19 @@ rollback;
 drop table if exists tab3;
 create table tab3 (a int, b varchar(25));
 insert into tab3 values (10, 'aa'),(20, 'bb'),(30, 'cc');
--- echo mo throw exception
+-- no error. autocommit from OFF to ON. Commit the transaction.
 set @@autocommit=ON;
 select @@autocommit;
 
--- echo mo throw exception
+-- no error. autocommit from ON to OFF.
 set @@autocommit=OFF;
 select @@autocommit;
 
--- echo mo throw exception
+-- no error. autocommit from OFF to ON. Commit the transaction.
 set @@autocommit=1;
 select @@autocommit;
 
--- echo mo throw exception
+-- no error. autocommit from ON to OFF.
 set @@autocommit=0;
 commit;
 
@@ -223,19 +223,19 @@ drop database if exists test_xx;
 begin;
 create database test_xx;
 
--- echo internal error: Uncommitted transaction exists. Please commit or rollback first.
+-- no error. autocommit from ON to ON.
 SET @@session.autocommit=1;
 SELECT @@session.autocommit;
 
--- echo internal error: Uncommitted transaction exists. Please commit or rollback first.
+-- no error. autocommit from ON to OFF.
 SET @@session.autocommit= 0;
 SELECT @@session.autocommit;
 
--- echo internal error: Uncommitted transaction exists. Please commit or rollback first.
+-- no error. autocommit from OFF to OFF.
 SET @@session.autocommit=OFF;
 SELECT @@session.autocommit;
 
--- echo internal error: Uncommitted transaction exists. Please commit or rollback first.
+-- no error. autocommit from OFF to ON. Commit the transaction.
 SET @@session.autocommit=ON;
 SELECT @@session.autocommit;
 commit;

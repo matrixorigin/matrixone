@@ -17,14 +17,16 @@ package plan
 import (
 	"context"
 	"fmt"
+	"math"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"math"
-	"strings"
 )
 
 // AddColumn will add a new column to the table.
@@ -46,7 +48,7 @@ func AddColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alter
 	if err != nil {
 		return err
 	}
-	if err = checkAddColumnType(ctx.GetContext(), colType, newColName); err != nil {
+	if err = checkAddColumnType(ctx.GetContext(), &colType, newColName); err != nil {
 		return err
 	}
 	newCol, err := buildAddColumnAndConstraint(ctx, alterPlan, specNewColumn, colType)
@@ -81,7 +83,7 @@ func handleAddColumnPosition(ctx context.Context, tableDef *TableDef, newCol *Co
 	return nil
 }
 
-func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable, specNewColumn *tree.ColumnTableDef, colType *plan.Type) (*ColDef, error) {
+func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable, specNewColumn *tree.ColumnTableDef, colType plan.Type) (*ColDef, error) {
 	newColName := specNewColumn.Name.Parts[0]
 	// Check if the new column name is valid and conflicts with internal hidden columns
 	err := CheckColumnNameValid(ctx.GetContext(), newColName)
@@ -208,7 +210,7 @@ func checkAddColumnType(ctx context.Context, colType *plan.Type, columnName stri
 	return nil
 }
 
-func checkPrimaryKeyPartType(ctx context.Context, colType *plan.Type, columnName string) error {
+func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName string) error {
 	if colType.GetId() == int32(types.T_blob) {
 		return moerr.NewNotSupported(ctx, "blob type in primary key")
 	}
@@ -218,10 +220,13 @@ func checkPrimaryKeyPartType(ctx context.Context, colType *plan.Type, columnName
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))
 	}
+	if colType.GetId() == int32(types.T_enum) {
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("ENUM column '%s' cannot be in primary key", columnName))
+	}
 	return nil
 }
 
-func checkUniqueKeyPartType(ctx context.Context, colType *plan.Type, columnName string) error {
+func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName string) error {
 	if colType.GetId() == int32(types.T_blob) {
 		return moerr.NewNotSupported(ctx, "blob type in primary key")
 	}
@@ -391,6 +396,11 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 					// remove 3 index records: metadata, centroids, entries
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+3:]...)
 				}
+			case catalog.MOIndexMasterAlgo.ToString():
+				if len(indexInfo.Parts) == 0 {
+					// TODO: verify this
+					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+				}
 			}
 		}
 	}
@@ -439,7 +449,7 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 	}
 
 	for _, referredTblId := range tbInfo.RefChildTbls {
-		_, refTableDef := ctx.ResolveById(referredTblId)
+		_, refTableDef := ctx.ResolveById(referredTblId, Snapshot{TS: &timestamp.Timestamp{}})
 		if refTableDef == nil {
 			return moerr.NewInternalError(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
 		}

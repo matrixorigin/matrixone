@@ -74,15 +74,15 @@ func TestOrder(t *testing.T) {
 		require.NoError(t, err)
 
 		bats := []*batch.Batch{
-			newBatch(t, tc.types, tc.proc, Rows),
-			newBatch(t, tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
 			batch.EmptyBatch,
 		}
 		resetChildren(tc.arg, bats)
 		_, _ = tc.arg.Call(tc.proc)
 
 		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.children[0].Free(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -100,14 +100,14 @@ func BenchmarkOrder(b *testing.B) {
 			require.NoError(t, err)
 
 			bats := []*batch.Batch{
-				newBatch(t, tc.types, tc.proc, BenchmarkRows),
-				newBatch(t, tc.types, tc.proc, BenchmarkRows),
+				newBatch(tc.types, tc.proc, BenchmarkRows),
+				newBatch(tc.types, tc.proc, BenchmarkRows),
 				batch.EmptyBatch,
 			}
 			resetChildren(tc.arg, bats)
 			_, _ = tc.arg.Call(tc.proc)
 			tc.arg.Free(tc.proc, false, nil)
-			tc.arg.children[0].Free(tc.proc, false, nil)
+			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		}
 	}
 }
@@ -118,10 +118,12 @@ func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 		proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
 		arg: &Argument{
 			OrderBySpec: fs,
-			info: &vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 	}
@@ -134,28 +136,23 @@ func newExpression(pos int32) *plan.Expr {
 				ColPos: pos,
 			},
 		},
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int64),
 		},
 	}
 }
 
 // create a new block based on the type information
-func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
 func resetChildren(arg *Argument, bats []*batch.Batch) {
-	if len(arg.children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
+	arg.SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: bats,
+			},
 		})
-
-	} else {
-		arg.children = arg.children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
-	}
 	arg.ctr.state = vm.Build
 }

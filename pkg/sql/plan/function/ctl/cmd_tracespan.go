@@ -117,7 +117,7 @@ func handleTraceSpan(proc *process.Process,
 	info := map[string]string{}
 	for idx := range cns {
 		// the current cn also need to process this span cmd
-		if cns[idx] == proc.QueryService.ServiceID() {
+		if cns[idx] == proc.QueryClient.ServiceID() {
 			info[cns[idx]] = SelfProcess(args[1], args[2], threshold)
 		} else {
 			// transfer query to another cn and receive its response
@@ -159,7 +159,7 @@ func SelfProcess(cmd string, spans string, threshold int64) string {
 func transferRequest(proc *process.Process, uuid string, cmd string, spans string, threshold int64) (resp *query.Response, err error) {
 	clusterservice.GetMOCluster().GetCNService(clusterservice.NewServiceIDSelector(uuid),
 		func(cn metadata.CNService) bool {
-			request := proc.QueryService.NewRequest(query.CmdMethod_TraceSpan)
+			request := proc.QueryClient.NewRequest(query.CmdMethod_TraceSpan)
 			request.TraceSpanRequest = &query.TraceSpanRequest{
 				Cmd:       cmd,
 				Spans:     spans,
@@ -168,7 +168,7 @@ func transferRequest(proc *process.Process, uuid string, cmd string, spans strin
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 
-			resp, err = proc.QueryService.SendMessage(ctx, cn.QueryAddress, request)
+			resp, err = proc.QueryClient.SendMessage(ctx, cn.QueryAddress, request)
 			return true
 		})
 	return

@@ -30,7 +30,8 @@ func (c *DashboardCreator) initFrontendDashboard() error {
 	build, err := dashboard.New(
 		"Frontend Metrics",
 		c.withRowOptions(
-			c.initFrontendOverviewRow(),
+			c.initFrontendAcceptConnectionDuration(),
+			c.initFrontendRoutineAndRequestCount(),
 		)...)
 	if err != nil {
 		return err
@@ -39,9 +40,9 @@ func (c *DashboardCreator) initFrontendDashboard() error {
 	return err
 }
 
-func (c *DashboardCreator) initFrontendOverviewRow() dashboard.Option {
+func (c *DashboardCreator) initFrontendAcceptConnectionDuration() dashboard.Option {
 	return dashboard.Row(
-		"Frontend overview",
+		"Accept Connection Duration",
 		c.getMultiHistogram(
 			[]string{
 				c.getMetricWithFilter(`mo_frontend_accept_connection_duration_bucket`, `label="created"`),
@@ -69,5 +70,33 @@ func (c *DashboardCreator) initFrontendOverviewRow() dashboard.Option {
 			[]float32{3, 3, 3, 3},
 			axis.Unit("s"),
 			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initFrontendRoutineAndRequestCount() dashboard.Option {
+	return dashboard.Row(
+		"Routine and request count",
+		c.withMultiGraph(
+			"Routine Count",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter(`mo_frontend_routine_count`, `label="created"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter(`mo_frontend_routine_count`, `label="close"`) + `[$interval]))`,
+			},
+			[]string{
+				"created",
+				"close",
+			}),
+		c.withMultiGraph(
+			"Request Count",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter(`mo_frontend_request_count`, `label="start-handle"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter(`mo_frontend_request_count`, `label="end-handle"`) + `[$interval]))`,
+			},
+			[]string{
+				"start-handle",
+				"end-handle",
+			}),
 	)
 }

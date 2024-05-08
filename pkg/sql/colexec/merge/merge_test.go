@@ -68,10 +68,10 @@ func TestMerge(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
@@ -114,8 +114,8 @@ func newTestCase() mergeTestCase {
 		arg:    new(Argument),
 		cancel: cancel,
 	}
-	cases.arg.info =
-		&vm.OperatorInfo{
+	cases.arg.OperatorBase.OperatorInfo =
+		vm.OperatorInfo{
 			Idx:     0,
 			IsFirst: false,
 			IsLast:  false,
@@ -124,6 +124,6 @@ func newTestCase() mergeTestCase {
 }
 
 // create a new block based on the type information
-func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }

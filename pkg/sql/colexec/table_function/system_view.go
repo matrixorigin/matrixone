@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"strconv"
 	"strings"
 	"time"
@@ -236,7 +237,7 @@ func getLocks(proc *process.Process) ([]*query.GetLockInfoResponse, error) {
 		})
 
 	genRequest := func() *query.Request {
-		req := proc.QueryService.NewRequest(query.CmdMethod_GetLockInfo)
+		req := proc.QueryClient.NewRequest(query.CmdMethod_GetLockInfo)
 		req.GetLockInfoRequest = &query.GetLockInfoRequest{}
 		return req
 	}
@@ -249,7 +250,7 @@ func getLocks(proc *process.Process) ([]*query.GetLockInfoResponse, error) {
 		}
 	}
 
-	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryService, genRequest, handleValidResponse, nil)
+	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryClient, genRequest, handleValidResponse, nil)
 	return rsps, err
 }
 
@@ -586,7 +587,7 @@ func getTxns(proc *process.Process) ([]*query.GetTxnInfoResponse, error) {
 		})
 
 	genRequest := func() *query.Request {
-		req := proc.QueryService.NewRequest(query.CmdMethod_GetTxnInfo)
+		req := proc.QueryClient.NewRequest(query.CmdMethod_GetTxnInfo)
 		req.GetTxnInfoRequest = &query.GetTxnInfoRequest{}
 		return req
 	}
@@ -599,7 +600,7 @@ func getTxns(proc *process.Process) ([]*query.GetTxnInfoResponse, error) {
 		}
 	}
 
-	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryService, genRequest, handleValidResponse, nil)
+	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryClient, genRequest, handleValidResponse, nil)
 	return rsps, err
 }
 
@@ -714,7 +715,7 @@ func getCacheStats(proc *process.Process) ([]*query.GetCacheInfoResponse, error)
 	})
 
 	genRequest := func() *query.Request {
-		req := proc.QueryService.NewRequest(query.CmdMethod_GetCacheInfo)
+		req := proc.QueryClient.NewRequest(query.CmdMethod_GetCacheInfo)
 		req.GetCacheInfoRequest = &query.GetCacheInfoRequest{}
 		return req
 	}
@@ -727,7 +728,7 @@ func getCacheStats(proc *process.Process) ([]*query.GetCacheInfoResponse, error)
 		}
 	}
 
-	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryService, genRequest, handleValidResponse, nil)
+	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryClient, genRequest, handleValidResponse, nil)
 	return rsps, err
 }
 
@@ -746,6 +747,6 @@ var listTnService = func(appendFn func(service *metadata.TNService)) {
 	disttae.ListTnService(appendFn)
 }
 
-var requestMultipleCn = func(ctx context.Context, nodes []string, qs queryservice.QueryService, genRequest func() *query.Request, handleValidResponse func(string, *query.Response), handleInvalidResponse func(string)) error {
-	return queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, handleInvalidResponse)
+var requestMultipleCn = func(ctx context.Context, nodes []string, qc qclient.QueryClient, genRequest func() *query.Request, handleValidResponse func(string, *query.Response), handleInvalidResponse func(string)) error {
+	return queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 }

@@ -186,16 +186,21 @@ func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int
 	return pubs, nil
 }
 
-func getSubInfoFromSql(ctx context.Context, ses *Session, sql string) (subName, pubAccountName, pubName string, err error) {
+func getSubInfoFromSql(ctx context.Context, ses FeSession, sql string) (subName, pubAccountName, pubName string, err error) {
 	var lowerAny interface{}
 	if lowerAny, err = ses.GetGlobalVar("lower_case_table_names"); err != nil {
 		return
 	}
 
 	var ast []tree.Statement
-	if ast, err = mysql.Parse(ctx, sql, lowerAny.(int64)); err != nil {
+	if ast, err = mysql.Parse(ctx, sql, lowerAny.(int64), 0); err != nil {
 		return
 	}
+	defer func() {
+		for _, s := range ast {
+			s.Free()
+		}
+	}()
 
 	subName = string(ast[0].(*tree.CreateDatabase).Name)
 	pubAccountName = string(ast[0].(*tree.CreateDatabase).SubscriptionOption.From)

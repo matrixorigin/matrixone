@@ -15,21 +15,21 @@
 package cnclient
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"go.uber.org/zap"
 )
 
 const (
-	defaultRPCTimeout = 10 * time.Second
+	//@todo need to find out why rpc timeout, or move heartbeat check to another way.
+	defaultRPCTimeout = 120 * time.Second
 )
 
 // client each node will hold only one client.
@@ -79,10 +79,7 @@ func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
 	}
 
 	if backend == c.localServiceAddress {
-		runtime.ProcessLevelRuntime().Logger().
-			Fatal("remote run pipeline in local",
-				zap.String("local-address", c.localServiceAddress),
-				zap.String("remote-address", backend))
+		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("remote run pipeline in local: %s", backend))
 	}
 	return c.client.NewStream(backend, true)
 }

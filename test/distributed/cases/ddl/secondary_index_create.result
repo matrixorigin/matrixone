@@ -102,11 +102,12 @@ Table    Create Table
 t1    CREATE TABLE `t1` (\n`id` VARCHAR(255) NOT NULL,\n`name` VARCHAR(255) DEFAULT NULL,\n`age` INT DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `name` (`name`)\n)
 select name, type, column_name from mo_catalog.mo_indexes mi where mi.column_name ="name" or mi.column_name="__mo_alias_id";
 name    type    column_name
+name    MULTIPLE    name
+name    MULTIPLE    __mo_alias_id
+PRIMARY    PRIMARY    name
 PRIMARY    PRIMARY    name
 name    UNIQUE    name
 name    UNIQUE    name
-name    MULTIPLE    name
-name    MULTIPLE    __mo_alias_id
 drop table if exists t1;
 create table t1(a double primary key, b int);
 insert into t1 values(1.5,100);

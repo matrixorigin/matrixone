@@ -239,7 +239,7 @@ func newTestTableDef(autoCols int) []AutoColumn {
 }
 
 func waitStoreCachesCommitted(
-	t *testing.T,
+	_ *testing.T,
 	store *memStore,
 	n int) {
 	for {

@@ -1,0 +1,40 @@
+create database if not exists test;
+use test;
+drop table if exists tlonglonglong;
+CREATE TABLE table01(
+c1 BIGINT NOT NULL AUTO_INCREMENT,
+c2 VARCHAR(200) NULL,
+c3 VARCHAR(200) NULL,
+c4 VARCHAR(200) NULL,
+c5 VARCHAR(200) NULL,
+c6 TINYINT NULL,
+c7 DATETIME NULL,
+c8 VARCHAR(200) NULL,
+c9 TINYINT NOT NULL,
+PRIMARY KEY (`c1`) USING BTREE
+)ENGINE=INNODB DEFAULT CHARSET=utf8 ROW_FORMAT=DYNAMIC;
+show tables;
+Tables_in_test
+table01
+show create table table01;
+Table    Create Table
+table01    CREATE TABLE `table01` (\n`c1` BIGINT NOT NULL AUTO_INCREMENT,\n`c2` VARCHAR(200) DEFAULT NULL,\n`c3` VARCHAR(200) DEFAULT NULL,\n`c4` VARCHAR(200) DEFAULT NULL,\n`c5` VARCHAR(200) DEFAULT NULL,\n`c6` TINYINT DEFAULT NULL,\n`c7` DATETIME DEFAULT NULL,\n`c8` VARCHAR(200) DEFAULT NULL,\n`c9` TINYINT NOT NULL,\nPRIMARY KEY (`c1`)\n)
+drop table table01;
+drop table if exists table02;
+create table table02(id int PRIMARY KEY,name VARCHAR(255),age int);
+insert into table02 values(1,"Abby", 24);
+insert into table02 values(2,"Bob", 25);
+insert into table02 values(3,"Carol", 23);
+insert into table02 values(4,"Dora", 29);
+create unique index idx on table02(name);
+select * from table02;
+id    name    age
+1    Abby    24
+2    Bob    25
+3    Carol    23
+4    Dora    29
+show create table table02;
+Table    Create Table
+table02    CREATE TABLE `table02` (\n`id` INT NOT NULL,\n`name` VARCHAR(255) DEFAULT NULL,\n`age` INT DEFAULT NULL,\nPRIMARY KEY (`id`),\nUNIQUE KEY `idx` (`name`)\n)
+drop table table02;
+drop database test;

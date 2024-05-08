@@ -48,8 +48,8 @@ func TestWithLogShardNum(t *testing.T) {
 
 func TestWithTnShartnum(t *testing.T) {
 	num := uint64(5)
-	opt := Options{}.WithTNShartnum(num)
-	require.Equal(t, num, opt.initial.tnShartnum)
+	opt := Options{}.WithTNShardNum(num)
+	require.Equal(t, num, opt.initial.tnShardNum)
 }
 
 func TestWithLogReplicaNum(t *testing.T) {

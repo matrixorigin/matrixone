@@ -140,7 +140,9 @@ Insert into test_11 values(50,50);
 
 -- @session:id=1{
 -- @wait:0:commit
+-- duplicate 50 will not rollback the txn
 Insert into test_11 values(50,50);
+-- txn does not rollback. record (5,4) also exists.
 select * from test_11;
 -- @session}
 

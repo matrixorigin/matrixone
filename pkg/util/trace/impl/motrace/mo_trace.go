@@ -30,7 +30,6 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
@@ -73,13 +72,6 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanSta
 	}
 
 	span := newMOSpan()
-
-	// per statement profiler
-	ctx, end := fileservice.StatementProfileNewSpan(ctx)
-	if end != nil {
-		// Tips: check the BenchmarkMOSpan_if_vs_for result
-		span.onEnd = append(span.onEnd, end)
-	}
 
 	span.tracer = t
 	span.ctx = ctx

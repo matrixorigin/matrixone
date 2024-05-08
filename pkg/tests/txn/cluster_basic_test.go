@@ -202,7 +202,7 @@ func TestBasicSingleShardWithInternalSQLExecutor(t *testing.T) {
 					require.NoError(t, err)
 					var ids []int32
 					var names []string
-					res.ReadRows(func(cols []*vector.Vector) bool {
+					res.ReadRows(func(_ int, cols []*vector.Vector) bool {
 						ids = append(ids, executor.GetFixedRows[int32](cols[0])...)
 						names = append(names, executor.GetStringRows(cols[1])...)
 						return true
@@ -357,7 +357,7 @@ func checkWrite(t *testing.T, txn Txn, key, value string, expectError error, com
 
 func getBasicClusterOptions(opts ...func(opts service.Options) service.Options) service.Options {
 	basic := service.DefaultOptions().
-		WithTNShartnum(1).
+		WithTNShardNum(1).
 		WithLogShardNum(1).
 		WithTNServiceNum(1).
 		WithLogServiceNum(3).

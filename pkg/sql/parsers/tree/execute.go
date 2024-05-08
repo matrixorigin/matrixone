@@ -34,6 +34,10 @@ func (node *Execute) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *Execute) Free() {
+
+}
+
 func (node *Execute) GetStatementType() string { return "Execute" }
 func (node *Execute) GetQueryType() string     { return QueryTypeOth }
 

@@ -25,15 +25,11 @@ import (
 var DefaultReadMaxSize = uint64(10)
 
 type Config struct {
-	ClientPoolMaxSize     int
-	ClientPoolInitSize    int
+	ClientMaxCount        int
 	GetClientRetryTimeOut time.Duration
 
 	RecordSize           int
 	ReadCacheSize        int
-	AppenderMaxCount     int
-	ReadMaxSize          uint64
-	NewRecordSize        int
 	NewClientDuration    time.Duration
 	ClientAppendDuration time.Duration
 	TruncateDuration     time.Duration
@@ -49,15 +45,11 @@ type LogServiceClientFactory logservice.ClientFactory
 
 func NewDefaultConfig(clientFactory LogServiceClientFactory) *Config {
 	return &Config{
-		ClientPoolMaxSize:     10,
-		ClientPoolInitSize:    10,
+		ClientMaxCount:        100,
 		GetClientRetryTimeOut: time.Second * 3,
 
-		RecordSize:        int(mpool.KB * 16),
+		RecordSize:        int(mpool.MB * 1),
 		ReadCacheSize:     100,
-		ReadMaxSize:       mpool.KB * 20,
-		AppenderMaxCount:  10,
-		NewRecordSize:     int(mpool.KB * 20),
 		NewClientDuration: time.Second * 3,
 		// AppendFrequency:      time.Millisecond * 5,
 		RetryTimeout:         time.Minute * 3,
@@ -71,15 +63,11 @@ func NewDefaultConfig(clientFactory LogServiceClientFactory) *Config {
 
 func NewTestConfig(ccfg *logservice.ClientConfig) *Config {
 	cfg := &Config{
-		ClientPoolMaxSize:     10,
-		ClientPoolInitSize:    5,
+		ClientMaxCount:        10,
 		GetClientRetryTimeOut: time.Second,
 
-		RecordSize:       int(mpool.MB * 10),
-		ReadCacheSize:    10,
-		ReadMaxSize:      mpool.KB * 20,
-		AppenderMaxCount: 10,
-		NewRecordSize:    int(mpool.KB * 20),
+		RecordSize:    int(mpool.MB * 10),
+		ReadCacheSize: 10,
 		// AppendFrequency:      time.Millisecond /1000,
 		RetryTimeout:         time.Minute,
 		NewClientDuration:    time.Second,

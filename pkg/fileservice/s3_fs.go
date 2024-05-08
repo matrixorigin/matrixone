@@ -20,7 +20,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
-	"math"
 	"net/http/httptrace"
 	pathpkg "path"
 	"sort"
@@ -44,6 +43,7 @@ type S3FS struct {
 	storage   ObjectStorage
 	keyPrefix string
 
+	allocator   CacheDataAllocator
 	memCache    *MemCache
 	diskCache   *DiskCache
 	remoteCache *RemoteCache
@@ -51,7 +51,7 @@ type S3FS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 
-	ioLocks IOLocks
+	ioMerger *IOMerger
 }
 
 // key mapping scheme:
@@ -65,13 +65,17 @@ func NewS3FS(
 	cacheConfig CacheConfig,
 	perfCounterSets []*perfcounter.CounterSet,
 	noCache bool,
+	noDefaultCredential bool,
 ) (*S3FS, error) {
+
+	args.NoDefaultCredentials = noDefaultCredential
 
 	fs := &S3FS{
 		name:            args.Name,
 		keyPrefix:       args.KeyPrefix,
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
+		ioMerger:        NewIOMerger(),
 	}
 
 	var err error
@@ -102,21 +106,13 @@ func NewS3FS(
 			return nil, err
 		}
 	}
+	if fs.memCache != nil {
+		fs.allocator = fs.memCache
+	} else {
+		fs.allocator = DefaultCacheDataAllocator
+	}
 
 	return fs, nil
-}
-
-// NewS3FSOnMinio creates S3FS on minio server
-// this is needed because the URL scheme of minio server does not compatible with AWS'
-func NewS3FSOnMinio(
-	ctx context.Context,
-	args ObjectStorageArguments,
-	cacheConfig CacheConfig,
-	perfCounterSets []*perfcounter.CounterSet,
-	noCache bool,
-) (*S3FS, error) {
-	args.IsMinio = true
-	return NewS3FS(ctx, args, cacheConfig, perfCounterSets, noCache)
 }
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
@@ -124,10 +120,10 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 
 	// Init the remote cache first, because the callback needs to be set for mem and disk cache.
 	if config.RemoteCacheEnabled {
-		if config.CacheClient == nil {
-			return moerr.NewInternalError(ctx, "cache client is nil")
+		if config.QueryClient == nil {
+			return moerr.NewInternalError(ctx, "query client is nil")
 		}
-		s.remoteCache = NewRemoteCache(config.CacheClient, config.KeyRouterFactory)
+		s.remoteCache = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
 		logutil.Info("fileservice: remote cache initialized",
 			zap.Any("fs-name", s.name),
 		)
@@ -136,7 +132,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	// memory cache
 	if *config.MemoryCapacity > DisableCacheCapacity {
 		s.memCache = NewMemCache(
-			NewLRUCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
+			NewMemoryCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
 			s.perfCounterSets,
 		)
 		logutil.Info("fileservice: memory cache initialized",
@@ -259,14 +255,16 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 		return err
 	}
 
-	unlock, wait := s.ioLocks.Lock(IOLockKey{
-		File: filePath,
+	startLock := time.Now()
+	done, wait := s.ioMerger.Merge(IOMergeKey{
+		Path: filePath,
 	})
-	if unlock != nil {
-		defer unlock()
+	if done != nil {
+		defer done()
 	} else {
 		wait()
 	}
+	statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
 
 	// load to disk cache
 	if s.diskCache != nil {
@@ -404,13 +402,22 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
-	unlock, wait := s.ioLocks.Lock(IOLockKey{
-		File: vector.FilePath,
-	})
-	if unlock != nil {
-		defer unlock()
+	startLock := time.Now()
+	done, wait := s.ioMerger.Merge(vector.ioMergeKey())
+	if done != nil {
+		defer done()
 	} else {
 		wait()
+	}
+	stats := statistic.StatsInfoFromContext(ctx)
+	stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
+
+	allocator := s.allocator
+	if vector.Policy.Any(SkipMemoryCache) {
+		allocator = DefaultCacheDataAllocator
+	}
+	for i := range vector.Entries {
+		vector.Entries[i].allocator = allocator
 	}
 
 	for _, cache := range vector.Caches {
@@ -437,6 +444,11 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 			err = s.memCache.Update(ctx, vector, s.asyncUpdate)
 		}()
 	}
+
+	ioStart := time.Now()
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
 
 	if s.diskCache != nil {
 		if err := readCache(ctx, s.diskCache, vector); err != nil {
@@ -471,14 +483,14 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
-	unlock, wait := s.ioLocks.Lock(IOLockKey{
-		File: vector.FilePath,
-	})
-	if unlock != nil {
-		defer unlock()
+	startLock := time.Now()
+	done, wait := s.ioMerger.Merge(vector.ioMergeKey())
+	if done != nil {
+		defer done()
 	} else {
 		wait()
 	}
+	statistic.StatsInfoFromContext(ctx).AddS3FSReadCacheIOMergerTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -513,38 +525,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		return err
 	}
 
-	readFullObject := vector.Policy.CacheFullFile() &&
-		!vector.Policy.Any(SkipDiskCache)
-
-	var min, max *int64
-	if readFullObject {
-		// full range
-		min = ptrTo[int64](0)
-		max = (*int64)(nil)
-
-	} else {
-		// minimal range
-		min = ptrTo(int64(math.MaxInt))
-		max = ptrTo(int64(0))
-		for _, entry := range vector.Entries {
-			entry := entry
-			if entry.done {
-				continue
-			}
-			if entry.Offset < *min {
-				min = &entry.Offset
-			}
-			if entry.Size < 0 {
-				entry.Size = 0
-				max = nil
-			}
-			if max != nil {
-				if end := entry.Offset + entry.Size; end > *max {
-					max = &end
-				}
-			}
-		}
-	}
+	min, max, readFullObject := vector.readRange()
 
 	// a function to get an io.ReadCloser
 	getReader := func(ctx context.Context, min *int64, max *int64) (io.ReadCloser, error) {
@@ -564,7 +545,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 			},
 			closeFunc: func() error {
 				s3ReadIODuration := time.Since(t0)
-				statistic.StatsInfoFromContext(ctx).AddS3AccessTimeConsumption(s3ReadIODuration)
 
 				metric.S3ReadIODurationHistogram.Observe(s3ReadIODuration.Seconds())
 				metric.S3ReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
@@ -795,6 +775,10 @@ func (*S3FS) ETLCompatible() {}
 
 var _ CachingFileService = new(S3FS)
 
+func (s *S3FS) Close() {
+	s.FlushCache()
+}
+
 func (s *S3FS) FlushCache() {
 	if s.memCache != nil {
 		s.memCache.Flush()
@@ -828,7 +812,7 @@ func newTracePoint() *tracePoint {
 	return tp
 }
 
-func (tp tracePoint) Name() string {
+func (tp tracePoint) TypeName() string {
 	return "fileservice.tracePoint"
 }
 

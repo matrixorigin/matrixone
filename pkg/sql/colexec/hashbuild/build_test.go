@@ -72,7 +72,7 @@ func TestBuild(t *testing.T) {
 	for _, tc := range tcs[:1] {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		for {
@@ -104,7 +104,7 @@ func BenchmarkBuild(b *testing.B) {
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			for {
@@ -123,7 +123,7 @@ func BenchmarkBuild(b *testing.B) {
 
 func newExpr(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:    int32(typ.Oid),
 			Width: typ.Width,
 			Scale: typ.Scale,
@@ -153,16 +153,18 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 			Typs:        ts,
 			Conditions:  cs,
 			NeedHashMap: true,
-			Info: &vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 	}
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
-func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }

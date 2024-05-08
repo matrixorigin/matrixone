@@ -19,9 +19,10 @@ import (
 	"fmt"
 
 	"github.com/hashicorp/memberlist"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/cache"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/pierrec/lz4/v4"
 	"go.uber.org/zap"
 )
@@ -30,25 +31,42 @@ var (
 	binaryEnc = binary.BigEndian
 )
 
+type Module interface {
+	// Data returns all data that need to send to other nodes.
+	// The second return value is the left size of the limit size.
+	Data(limit int) ([]gossip.GossipData, int)
+}
+
 type delegate struct {
 	logger *zap.Logger
-	// distKeyCache keeps the key cache of local set/delete
-	// items and remote key info.
-	distKeyCache *DistKeyCache
 	//cacheServiceAddr is the service address of the remote cache server.
 	cacheServiceAddr string
+
+	// dataCacheKey keeps the key cache of local set/delete
+	// items and remote key info.
+	// dataCacheKey *DataCacheKey
+	dataCacheKey *BaseStore[query.CacheKey]
+
+	// statsInfoKey keeps the keys of stats info.
+	statsInfoKey *BaseStore[statsinfo.StatsInfoKey]
 }
 
 func newDelegate(logger *zap.Logger, addr string) *delegate {
-	return &delegate{
+	d := &delegate{
 		logger:           logger,
 		cacheServiceAddr: addr,
-		distKeyCache:     newDistKeyCache(addr),
+		dataCacheKey:     newBaseStore[query.CacheKey](addr),
+		statsInfoKey:     newBaseStore[statsinfo.StatsInfoKey](addr),
 	}
+	return d
 }
 
-func (d *delegate) getDistKeyCache() fileservice.KeyRouter {
-	return d.distKeyCache
+func (d *delegate) getDataCacheKey() client.KeyRouter[query.CacheKey] {
+	return d.dataCacheKey
+}
+
+func (d *delegate) getStatsInfoKey() client.KeyRouter[statsinfo.StatsInfoKey] {
+	return d.statsInfoKey
 }
 
 // NodeMeta implements the memberlist.Delegate interface.
@@ -65,18 +83,69 @@ func (d *delegate) NotifyMsg(data []byte) {
 	if len(data) == 0 {
 		return
 	}
-	var item gossip.CacheKeyItem
+	var item gossip.GossipData
 	if err := item.Unmarshal(data); err != nil {
 		d.logger.Error("failed to unmarshal cache item from buf", zap.Error(err))
 		return
 	}
-	d.distKeyCache.cacheMu.Lock()
-	defer d.distKeyCache.cacheMu.Unlock()
-	if item.Operation == gossip.Operation_Set {
-		d.distKeyCache.cacheMu.keyTarget[item.CacheKey] = item.TargetAddress
-	} else if item.Operation == gossip.Operation_Delete {
-		delete(d.distKeyCache.cacheMu.keyTarget, item.CacheKey)
+	switch t := item.Data.(type) {
+	case *gossip.GossipData_CacheKeyItem:
+		d.dataCacheKey.mu.Lock()
+		defer d.dataCacheKey.mu.Unlock()
+		m := d.dataCacheKey.mu.keyTarget
+
+		if t.CacheKeyItem.Operation == gossip.Operation_Set {
+			m[t.CacheKeyItem.CacheKey] = t.CacheKeyItem.TargetAddress
+		} else if t.CacheKeyItem.Operation == gossip.Operation_Delete {
+			delete(m, t.CacheKeyItem.CacheKey)
+		}
+
+	case *gossip.GossipData_StatsInfoKeyItem:
+		d.statsInfoKey.mu.Lock()
+		defer d.statsInfoKey.mu.Unlock()
+		m := d.statsInfoKey.mu.keyTarget
+
+		if t.StatsInfoKeyItem.Operation == gossip.Operation_Set {
+			m[t.StatsInfoKeyItem.StatsInfoKey] = t.StatsInfoKeyItem.TargetAddress
+		} else if t.StatsInfoKeyItem.Operation == gossip.Operation_Delete {
+			delete(m, t.StatsInfoKeyItem.StatsInfoKey)
+		}
 	}
+}
+
+func (d *delegate) broadcastData(limit int) []gossip.GossipData {
+	left := limit
+	items, left := d.dataCacheKey.Data(left)
+	data := make([]gossip.GossipData, len(items))
+	for _, item := range items {
+		data = append(data, gossip.GossipData{
+			Data: &gossip.GossipData_CacheKeyItem{
+				CacheKeyItem: &gossip.CacheKeyItem{
+					Operation:     item.Operation,
+					TargetAddress: item.TargetAddress,
+					CacheKey:      *item.Key.(*gossip.CommonItem_CacheKey).CacheKey,
+				},
+			},
+		})
+	}
+	if left == 0 {
+		return data
+	}
+
+	items, _ = d.statsInfoKey.Data(left)
+	for _, item := range items {
+		data = append(data, gossip.GossipData{
+			Data: &gossip.GossipData_StatsInfoKeyItem{
+				StatsInfoKeyItem: &gossip.StatsInfoKeyItem{
+					Operation:     item.Operation,
+					TargetAddress: item.TargetAddress,
+					StatsInfoKey:  *item.Key.(*gossip.CommonItem_StatsInfoKey).StatsInfoKey,
+				},
+			},
+		})
+	}
+
+	return data
 }
 
 // GetBroadcasts implements the memberlist.Delegate interface.
@@ -85,35 +154,43 @@ func (d *delegate) GetBroadcasts(overhead, limit int) [][]byte {
 	if d == nil {
 		return nil
 	}
-	var items []gossip.CacheKeyItem
-	d.distKeyCache.queueMu.Lock()
-	count := len(d.distKeyCache.queueMu.itemQueue)
-	if count == 0 {
-		d.distKeyCache.queueMu.Unlock()
-		return nil
-	}
-	sz := d.distKeyCache.queueMu.itemQueue[0].Size()
-	limitCount := (limit - overhead) / sz
-	if count < limitCount {
-		items = d.distKeyCache.queueMu.itemQueue
-		d.distKeyCache.queueMu.itemQueue = make([]gossip.CacheKeyItem, 0, defaultCacheQueueSize)
-		d.distKeyCache.queueMu.Unlock()
-	} else {
-		items = d.distKeyCache.queueMu.itemQueue[:limitCount]
-		d.distKeyCache.queueMu.itemQueue = d.distKeyCache.queueMu.itemQueue[limitCount:]
-		d.distKeyCache.queueMu.Unlock()
-	}
-
+	items := d.broadcastData(limit - overhead)
 	data := make([][]byte, 0, len(items))
 	for _, item := range items {
 		bytes, err := item.Marshal()
 		if err != nil {
-			d.logger.Error("failed to marshal cache item", zap.Error(err))
+			d.logger.Error("failed to marshal item", zap.Error(err))
 			return nil
 		}
 		data = append(data, bytes)
 	}
 	return data
+}
+
+func (d *delegate) dataCacheState() map[string]*query.CacheKeys {
+	d.dataCacheKey.mu.Lock()
+	defer d.dataCacheKey.mu.Unlock()
+	targetCacheKeys := make(map[string]*query.CacheKeys)
+	for key, target := range d.dataCacheKey.mu.keyTarget {
+		if _, ok := targetCacheKeys[target]; !ok {
+			targetCacheKeys[target] = &query.CacheKeys{}
+		}
+		targetCacheKeys[target].Keys = append(targetCacheKeys[target].Keys, key)
+	}
+	return targetCacheKeys
+}
+
+func (d *delegate) statsInfoState() map[string]*statsinfo.StatsInfoKeys {
+	d.dataCacheKey.mu.Lock()
+	defer d.dataCacheKey.mu.Unlock()
+	targetStatsInfo := make(map[string]*statsinfo.StatsInfoKeys)
+	for key, target := range d.statsInfoKey.mu.keyTarget {
+		if _, ok := targetStatsInfo[target]; !ok {
+			targetStatsInfo[target] = &statsinfo.StatsInfoKeys{}
+		}
+		targetStatsInfo[target].Keys = append(targetStatsInfo[target].Keys, key)
+	}
+	return targetStatsInfo
 }
 
 // LocalState implements the memberlist.Delegate interface.
@@ -122,20 +199,27 @@ func (d *delegate) LocalState(join bool) []byte {
 	if join {
 		return nil
 	}
-	// By converting structure, the space could be less.
-	tk := cache.TargetCacheKey{
-		TargetKey: make(map[string]*cache.CacheKeys),
+	targetState := gossip.TargetState{
+		Data: map[string]*gossip.LocalState{},
 	}
-	d.distKeyCache.cacheMu.Lock()
-	for key, target := range d.distKeyCache.cacheMu.keyTarget {
-		if _, ok := tk.TargetKey[target]; !ok {
-			tk.TargetKey[target] = &cache.CacheKeys{}
-		}
-		tk.TargetKey[target].Keys = append(tk.TargetKey[target].Keys, key)
-	}
-	d.distKeyCache.cacheMu.Unlock()
 
-	data, err := tk.Marshal()
+	for addr, st := range d.dataCacheState() {
+		_, ok := targetState.Data[addr]
+		if !ok {
+			targetState.Data[addr] = &gossip.LocalState{}
+		}
+		targetState.Data[addr].CacheKeys = *st
+	}
+
+	for addr, st := range d.statsInfoState() {
+		_, ok := targetState.Data[addr]
+		if !ok {
+			targetState.Data[addr] = &gossip.LocalState{}
+		}
+		targetState.Data[addr].StatsInfoKeys = *st
+	}
+
+	data, err := targetState.Marshal()
 	if err != nil {
 		d.logger.Error("failed to marshal cache data", zap.Error(err))
 		return nil
@@ -167,12 +251,16 @@ func (d *delegate) MergeRemoteState(buf []byte, join bool) {
 		return
 	}
 	dst = dst[:n]
-	tk := cache.TargetCacheKey{}
-	if err := tk.Unmarshal(dst); err != nil {
+	targetState := gossip.TargetState{}
+	if err := targetState.Unmarshal(dst); err != nil {
 		d.logger.Error("failed to unmarshal cache data", zap.Error(err))
 		return
 	}
-	d.distKeyCache.updateCache(&tk)
+
+	for target, state := range targetState.Data {
+		d.dataCacheKey.update(target, state.CacheKeys.Keys)
+		d.statsInfoKey.update(target, state.StatsInfoKeys.Keys)
+	}
 }
 
 // NotifyJoin implements the memberlist.EventDelegate interface.
@@ -184,11 +272,11 @@ func (d *delegate) NotifyLeave(node *memberlist.Node) {
 	if len(cacheServiceAddr) == 0 {
 		return
 	}
-	d.distKeyCache.cacheMu.Lock()
-	defer d.distKeyCache.cacheMu.Unlock()
-	for key, target := range d.distKeyCache.cacheMu.keyTarget {
+	d.dataCacheKey.mu.Lock()
+	defer d.dataCacheKey.mu.Unlock()
+	for key, target := range d.dataCacheKey.mu.keyTarget {
 		if cacheServiceAddr == target {
-			delete(d.distKeyCache.cacheMu.keyTarget, key)
+			delete(d.dataCacheKey.mu.keyTarget, key)
 		}
 	}
 }

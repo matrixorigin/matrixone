@@ -49,6 +49,7 @@ func (idx ImmutIndex) BatchDedup(
 	keys containers.Vector,
 	keysZM index.ZM,
 	rt *dbutils.Runtime,
+	blkID uint32,
 ) (sels *nulls.Bitmap, err error) {
 	var exist bool
 	if keysZM.Valid() {
@@ -67,7 +68,7 @@ func (idx ImmutIndex) BatchDedup(
 
 	var buf []byte
 	if len(idx.bf) > 0 {
-		buf = idx.bf.GetBloomFilter(uint32(idx.location.ID()))
+		buf = idx.bf.GetBloomFilter(blkID)
 	} else {
 		var bf objectio.BloomFilter
 		if bf, err = objectio.FastLoadBF(
@@ -78,7 +79,7 @@ func (idx ImmutIndex) BatchDedup(
 		); err != nil {
 			return
 		}
-		buf = bf.GetBloomFilter(uint32(idx.location.ID()))
+		buf = bf.GetBloomFilter(blkID)
 	}
 
 	bfIndex := index.NewEmptyBinaryFuseFilter()
@@ -100,7 +101,7 @@ func (idx ImmutIndex) BatchDedup(
 }
 
 func (idx ImmutIndex) Dedup(
-	ctx context.Context, key any, rt *dbutils.Runtime,
+	ctx context.Context, key any, rt *dbutils.Runtime, blkID uint32,
 ) (err error) {
 	exist := idx.zm.Contains(key)
 	// 1. if not in [min, max], key is definitely not found
@@ -109,7 +110,7 @@ func (idx ImmutIndex) Dedup(
 	}
 	var buf []byte
 	if len(idx.bf) > 0 {
-		buf = idx.bf.GetBloomFilter(uint32(idx.location.ID()))
+		buf = idx.bf.GetBloomFilter(blkID)
 	} else {
 		var bf objectio.BloomFilter
 		if bf, err = objectio.FastLoadBF(
@@ -120,7 +121,7 @@ func (idx ImmutIndex) Dedup(
 		); err != nil {
 			return
 		}
-		buf = bf.GetBloomFilter(uint32(idx.location.ID()))
+		buf = bf.GetBloomFilter(blkID)
 	}
 
 	bfIndex := index.NewEmptyBinaryFuseFilter()

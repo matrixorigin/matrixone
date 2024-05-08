@@ -23,7 +23,7 @@ sal decimal(7,2) COMMENT '雇员的基本工资',
 comm decimal(7,2) COMMENT '奖金',
 deptno int unsigned COMMENT '所在部门',
 primary key(empno),
-FOREIGN KEY (deptno) REFERENCES dept(deptno)
+constraint `c1` FOREIGN KEY (deptno) REFERENCES dept(deptno)
 );
 INSERT INTO emp VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
 INSERT INTO emp VALUES (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
@@ -40,17 +40,17 @@ INSERT INTO emp VALUES (7900,'JAMES','CLERK',7698,'1981-12-03',950,NULL,30);
 INSERT INTO emp VALUES (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
 INSERT INTO emp VALUES (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 alter table dept modify deptno int unsigned after dname;
-Cannot change column 'deptno': used in a foreign key constraint '' of table 'db7.emp'
+Cannot change column 'deptno': used in a foreign key constraint 'c1' of table 'db7.emp'
 alter table dept modify deptno int unsigned;
-Cannot change column 'deptno': used in a foreign key constraint '' of table 'db7.emp'
+Cannot change column 'deptno': used in a foreign key constraint 'c1' of table 'db7.emp'
 alter table dept change deptno deptId int unsigned after dname;
 Columns participating in a foreign key are renamed
 alter table dept change deptno deptId int unsigned;
 Columns participating in a foreign key are renamed
 alter table dept change deptno deptno int unsigned;
-Cannot change column 'deptno': used in a foreign key constraint '' of table 'db7.emp'
+Cannot change column 'deptno': used in a foreign key constraint 'c1' of table 'db7.emp'
 alter table dept change deptno deptno int unsigned after dname;
-Cannot change column 'deptno': used in a foreign key constraint '' of table 'db7.emp'
+Cannot change column 'deptno': used in a foreign key constraint 'c1' of table 'db7.emp'
 alter table dept modify deptno int unsigned auto_increment;
 desc dept;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -119,7 +119,7 @@ sal decimal(7,2) COMMENT '雇员的基本工资',
 comm decimal(7,2) COMMENT '奖金',
 deptno int unsigned COMMENT '所在部门',
 primary key(empno),
-FOREIGN KEY (deptno) REFERENCES dept(deptno)
+constraint `c1` FOREIGN KEY (deptno) REFERENCES dept(deptno)
 );
 INSERT INTO emp VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
 INSERT INTO emp VALUES (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
@@ -136,9 +136,9 @@ INSERT INTO emp VALUES (7900,'JAMES','CLERK',7698,'1981-12-03',950,NULL,30);
 INSERT INTO emp VALUES (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
 INSERT INTO emp VALUES (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 alter table dept modify deptno int unsigned auto_increment;
-Cannot change column 'deptno': used in a foreign key constraint '' of table 'db7.emp'
+Cannot change column 'deptno': used in a foreign key constraint 'c1' of table 'db7.emp'
 alter table dept modify deptno int unsigned auto_increment after dname;
-Cannot change column 'deptno': used in a foreign key constraint '' of table 'db7.emp'
+Cannot change column 'deptno': used in a foreign key constraint 'c1' of table 'db7.emp'
 alter table dept change deptno deptId int unsigned auto_increment after dname;
 Columns participating in a foreign key are renamed
 alter table dept change deptno deptId int unsigned auto_increment;
@@ -193,7 +193,7 @@ sal decimal(7,2) COMMENT '雇员的基本工资',
 comm decimal(7,2) COMMENT '奖金',
 deptno int unsigned COMMENT '所在部门',
 primary key(empno),
-FOREIGN KEY (deptno) REFERENCES dept(deptno)
+constraint `c1` FOREIGN KEY (deptno) REFERENCES dept(deptno)
 );
 INSERT INTO emp VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
 INSERT INTO emp VALUES (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
@@ -277,7 +277,7 @@ sal decimal(7,2) COMMENT '雇员的基本工资',
 comm decimal(7,2) COMMENT '奖金',
 deptno int unsigned COMMENT '所在部门',
 primary key(empno),
-FOREIGN KEY (deptno) REFERENCES dept(deptno)
+constraint `c1` FOREIGN KEY (deptno) REFERENCES dept(deptno)
 );
 INSERT INTO emp VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
 INSERT INTO emp VALUES (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);

@@ -98,8 +98,8 @@ func TestForceRefreshLockTableBinds(t *testing.T) {
 			alloc *lockTableAllocator,
 			l1, l2 *service,
 			table uint64) {
-			l1.ForceRefreshLockTableBinds()
-			l2.ForceRefreshLockTableBinds()
+			l1.ForceRefreshLockTableBinds(nil, nil)
+			l2.ForceRefreshLockTableBinds(nil, nil)
 
 			mustAddTestLock(
 				t,
@@ -160,6 +160,14 @@ func TestIterLocks(t *testing.T) {
 			txn3 := newTestTxnID(3)
 			txn4 := newTestTxnID(4)
 			txn5 := newTestTxnID(5)
+
+			s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+				f(txn1)
+				f(txn2)
+				f(txn3)
+				f(txn4)
+				f(txn5)
+			}
 
 			rows := newTestRows(1)
 			rangeRows := newTestRows(2, 3)

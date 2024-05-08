@@ -56,10 +56,10 @@ func (s *taskService) CreateAsyncTask(ctx context.Context, value task.TaskMetada
 		select {
 		case <-ctx.Done():
 			s.rt.Logger().Error("create task timeout")
-			return errNotReady
+			return ErrNotReady
 		default:
 			if _, err := s.store.AddAsyncTask(ctx, newTaskFromMetadata(value)); err != nil {
-				if err == errNotReady {
+				if err == ErrNotReady {
 					time.Sleep(300 * time.Millisecond)
 					continue
 				}
@@ -80,10 +80,10 @@ func (s *taskService) CreateBatch(ctx context.Context, tasks []task.TaskMetadata
 		select {
 		case <-ctx.Done():
 			s.rt.Logger().Error("create task timeout")
-			return errNotReady
+			return ErrNotReady
 		default:
 			if _, err := s.store.AddAsyncTask(ctx, values...); err != nil {
-				if err == errNotReady {
+				if err == ErrNotReady {
 					time.Sleep(300 * time.Millisecond)
 					continue
 				}
@@ -208,8 +208,8 @@ func (s *taskService) QueryAsyncTask(ctx context.Context, conds ...Condition) ([
 	return s.store.QueryAsyncTask(ctx, conds...)
 }
 
-func (s *taskService) QueryCronTask(ctx context.Context) ([]task.CronTask, error) {
-	return s.store.QueryCronTask(ctx)
+func (s *taskService) QueryCronTask(ctx context.Context, c ...Condition) ([]task.CronTask, error) {
+	return s.store.QueryCronTask(ctx, c...)
 }
 
 func (s *taskService) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error) {

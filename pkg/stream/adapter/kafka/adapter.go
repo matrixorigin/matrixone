@@ -550,6 +550,18 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 			}
 			cols := vector.MustFixedCol[bool](vec)
 			cols[rowIdx] = val
+		case types.T_bit:
+			switch v := fieldValue.(type) {
+			default:
+				strVal := fmt.Sprintf("%v", v)
+				val, err := strconv.ParseUint(strVal, 0, int(typ.Width))
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				cols := vector.MustFixedCol[uint64](vec)
+				cols[rowIdx] = val
+			}
 		case types.T_int8:
 			var val int8
 			switch v := fieldValue.(type) {
@@ -816,7 +828,6 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				continue
 			}
 			buf.Reset()
-
 		case types.T_json:
 			var jsonBytes []byte
 			valueStr := fmt.Sprintf("%v", fieldValue)
@@ -879,7 +890,6 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-
 		case types.T_enum:
 			valueStr := fmt.Sprintf("%v", fieldValue)
 

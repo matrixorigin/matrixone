@@ -16,11 +16,11 @@ package hashbuild
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -57,7 +57,8 @@ type container struct {
 	strHashMap *hashmap.StrHashMap
 	keyWidth   int // keyWidth is the width of hash columns, it determines which hash map to use.
 
-	uniqueJoinKeys []*vector.Vector
+	uniqueJoinKeys  []*vector.Vector
+	runtimeFilterIn bool
 }
 
 type Argument struct {
@@ -71,13 +72,15 @@ type Argument struct {
 	Typs        []types.Type
 	Conditions  []*plan.Expr
 
-	HashOnPK             bool
-	NeedMergedBatch      bool
-	NeedAllocateSels     bool
-	RuntimeFilterSenders []*colexec.RuntimeFilterChan
+	HashOnPK          bool
+	NeedMergedBatch   bool
+	NeedAllocateSels  bool
+	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
+	vm.OperatorBase
+}
 
-	Info     *vm.OperatorInfo
-	children []vm.Operator
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -93,7 +96,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -107,39 +110,12 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetRuntimeFilterSenders(rfs []*colexec.RuntimeFilterChan) {
-	arg.RuntimeFilterSenders = rfs
-}
-
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.Info = info
-}
-
-func (arg *Argument) GetCnAddr() string {
-	return arg.Info.CnAddr
-}
-
-func (arg *Argument) GetOperatorID() int32 {
-	return arg.Info.OperatorID
-}
-
-func (arg *Argument) GetParalleID() int32 {
-	return arg.Info.ParallelID
-}
-
-func (arg *Argument) GetMaxParallel() int32 {
-	return arg.Info.MaxParallel
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
+	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
 	if ctr != nil {
 		ctr.cleanBatches(proc)
-		ctr.cleanEvalVectors(proc.Mp())
+		ctr.cleanEvalVectors()
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
 		}
@@ -159,12 +135,13 @@ func (ctr *container) cleanBatches(proc *process.Process) {
 	ctr.batches = nil
 }
 
-func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
+func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.executor {
 		if ctr.executor[i] != nil {
 			ctr.executor[i].Free()
 		}
 	}
+	ctr.executor = nil
 }
 
 func (ctr *container) cleanHashMap() {

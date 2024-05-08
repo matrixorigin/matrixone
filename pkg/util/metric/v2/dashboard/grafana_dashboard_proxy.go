@@ -128,18 +128,23 @@ func (c *DashboardCreator) initProxyOthersRow() dashboard.Option {
 		"Proxy Others State",
 		c.withGraph(
 			"Available Backend Server Num",
-			4,
+			3,
 			`sum(rate(`+c.getMetricWithFilter("mo_proxy_available_backend_server_num", "")+`[$interval]))`,
 			""),
 		c.withGraph(
 			"Transfer Queue Size",
-			4,
+			3,
 			`sum(rate(`+c.getMetricWithFilter("mo_proxy_transfer_queue_size", "")+`[$interval]))`,
 			""),
 		c.withGraph(
 			"Connections Need To Transfer",
-			4,
+			3,
 			`sum(rate(`+c.getMetricWithFilter("mo_proxy_connections_need_to_transfer", "")+`[$interval]))`,
+			""),
+		c.withGraph(
+			"Connections In Transfer Intent State",
+			3,
+			`sum(rate(`+c.getMetricWithFilter("mo_proxy_connections_transfer_intent", "")+`[$interval]))`,
 			""),
 	)
 }

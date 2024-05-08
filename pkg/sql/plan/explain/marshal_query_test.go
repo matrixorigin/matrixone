@@ -303,7 +303,7 @@ func buildPlanMarshalTest(opt plan.Optimizer, t *testing.T, sqls []string) {
 }
 
 func runSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

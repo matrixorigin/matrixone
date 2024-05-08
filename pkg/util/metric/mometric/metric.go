@@ -17,14 +17,13 @@ package mometric
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -238,9 +237,54 @@ func initConfigByParameterUnit(SV *config.ObservabilityParameters) {
 	metric.SetGatherInterval(time.Second * time.Duration(SV.MetricGatherInterval))
 }
 
-func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
-	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
-	initTables(ctx, ieFactory)
+func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
+	if metric.GetForceInit() {
+		if _, err := txn.Exec(SqlDropDBConst, executor.StatementOption{}); err != nil {
+			return err
+		}
+	}
+
+	if _, err := txn.Exec(SqlCreateDBConst, executor.StatementOption{}); err != nil {
+		return err
+	}
+
+	var createCost time.Duration
+	defer func() {
+		logutil.Debugf("[Metric] init metrics tables: create cost %d ms", createCost.Milliseconds())
+	}()
+
+	instant := time.Now()
+	descChan := make(chan *prom.Desc, 10)
+	go func() {
+		for _, c := range metric.InitCollectors {
+			c.Describe(descChan)
+		}
+		for _, c := range metric.InternalCollectors {
+			c.Describe(descChan)
+		}
+		close(descChan)
+	}()
+
+	createSql := SingleMetricTable.ToCreateSql(ctx, true)
+	if _, err := txn.Exec(createSql, executor.StatementOption{}); err != nil {
+		//panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
+		return moerr.NewInternalError(ctx, "[Metric] init metric tables error: %v, sql: %s", err, createSql)
+	}
+
+	createSql = SqlStatementCUTable.ToCreateSql(ctx, true)
+	if _, err := txn.Exec(createSql, executor.StatementOption{}); err != nil {
+		//panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
+		return moerr.NewInternalError(ctx, "[Metric] init metric tables error: %v, sql: %s", err, createSql)
+	}
+
+	for desc := range descChan {
+		view := getView(ctx, desc)
+		sql := view.ToCreateSql(ctx, true)
+		if _, err := txn.Exec(sql, executor.StatementOption{}); err != nil {
+			return moerr.NewInternalError(ctx, "[Metric] init metric tables error: %v, sql: %s", err, sql)
+		}
+	}
+	createCost = time.Since(instant)
 	return nil
 }
 
@@ -278,6 +322,7 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor) {
 	}()
 
 	mustExec(SingleMetricTable.ToCreateSql(ctx, true))
+	mustExec(SqlStatementCUTable.ToCreateSql(ctx, true))
 	for desc := range descChan {
 		view := getView(ctx, desc)
 		sql := view.ToCreateSql(ctx, true)
@@ -381,6 +426,8 @@ var (
 	metricRoleColumn        = table.StringDefaultColumn(`role`, ALL_IN_ONE_MODE, `mo node role, like: CN, DN, LOG`)
 	metricAccountColumn     = table.StringDefaultColumn(`account`, `sys`, `account name`)
 	metricTypeColumn        = table.StringColumn(`type`, `sql type, like: insert, select, ...`)
+
+	sqlSourceTypeColumn = table.StringColumn(`sql_source_type`, `sql_source_type, val like: external_sql, cloud_nonuser_sql, cloud_user_sql, internal_sql, ...`)
 )
 
 var SingleMetricTable = &table.Table{
@@ -402,11 +449,30 @@ var SingleMetricTable = &table.Table{
 	SupportConstAccess: true,
 }
 
+var SqlStatementCUTable = &table.Table{
+	Account:          table.AccountSys,
+	Database:         MetricDBConst,
+	Table:            catalog.MO_SQL_STMT_CU,
+	Columns:          []table.Column{metricAccountColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, sqlSourceTypeColumn},
+	PrimaryKeyColumn: []table.Column{},
+	ClusterBy:        []table.Column{metricAccountColumn, metricCollectTimeColumn},
+	Engine:           table.NormalTableEngine,
+	Comment:          `sql_statement_cu metric data`,
+	PathBuilder:      table.NewAccountDatePathBuilder(),
+	AccountColumn:    &metricAccountColumn,
+	// TimestampColumn
+	TimestampColumn: &metricCollectTimeColumn,
+	// SupportUserAccess
+	SupportUserAccess: true,
+	// SupportConstAccess
+	SupportConstAccess: true,
+}
+
 // GetAllTables
 //
 // Deprecated: use table.GetAllTables() instead.
 func GetAllTables() []*table.Table {
-	return []*table.Table{SingleMetricTable}
+	return []*table.Table{SingleMetricTable, SqlStatementCUTable}
 }
 
 func NewMetricView(tbl string, opts ...table.ViewOption) *table.View {
@@ -473,6 +539,9 @@ func GetSchemaForAccount(ctx context.Context, account string) []string {
 	tbl := SingleMetricTable.Clone()
 	tbl.Account = account
 	sqls = append(sqls, tbl.ToCreateSql(ctx, true))
+	tbl = SqlStatementCUTable.Clone()
+	tbl.Account = account
+	sqls = append(sqls, tbl.ToCreateSql(ctx, true))
 
 	descChan := make(chan *prom.Desc, 10)
 	go func() {
@@ -495,5 +564,8 @@ func GetSchemaForAccount(ctx context.Context, account string) []string {
 func init() {
 	if table.RegisterTableDefine(SingleMetricTable) != nil {
 		panic(moerr.NewInternalError(context.Background(), "metric table already registered"))
+	}
+	if table.RegisterTableDefine(SqlStatementCUTable) != nil {
+		panic(moerr.NewInternalError(context.Background(), "metric table 'sql_statement_cu' already registered"))
 	}
 }

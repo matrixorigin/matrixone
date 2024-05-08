@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -33,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -57,6 +57,18 @@ func getPosInCompositPK(name string, pks []string) int {
 	return -1
 }
 
+func getColDefByName(name string, tableDef *plan.TableDef) *plan.ColDef {
+	idx := strings.Index(name, ".")
+	var pos int32
+	if idx >= 0 {
+		subName := name[idx+1:]
+		pos = tableDef.Name2ColIndex[subName]
+	} else {
+		pos = tableDef.Name2ColIndex[name]
+	}
+	return tableDef.Cols[pos]
+}
+
 func getValidCompositePKCnt(vals []*plan.Literal) int {
 	if len(vals) == 0 {
 		return 0
@@ -70,6 +82,237 @@ func getValidCompositePKCnt(vals []*plan.Literal) int {
 	}
 
 	return cnt
+}
+
+func MustGetFullCompositePKValue(
+	expr *plan.Expr,
+	pkName string,
+	keys []string,
+	packer *types.Packer,
+	proc *process.Process,
+) (canEval, isVec bool, val []byte) {
+	ok, rExpr := MustGetFullCompositePK(expr, pkName, keys, packer, proc)
+	if !ok || rExpr == nil {
+		return false, false, nil
+	}
+
+	switch rExprImpl := rExpr.Expr.(type) {
+	case *plan.Expr_Lit:
+		return true, false, []byte(rExprImpl.Lit.Value.(*plan.Literal_Sval).Sval)
+	case *plan.Expr_Vec:
+		return true, true, rExprImpl.Vec.Data
+	case *plan.Expr_List:
+		ok, vec, put := evalExprListToVec(types.T_char, rExprImpl, proc)
+		if !ok || vec == nil || vec.Length() == 0 {
+			return false, false, nil
+		}
+		data, _ := vec.MarshalBinary()
+		put()
+		return true, true, data
+	}
+	return false, false, nil
+}
+
+func MustGetFullCompositePK(
+	expr *plan.Expr,
+	pkName string,
+	keys []string,
+	packer *types.Packer,
+	proc *process.Process,
+) (bool, *plan.Expr) {
+	tmpExprs := make([]*plan.Literal, len(keys))
+	ok, expr := mustGetFullCompositePK(expr, pkName, keys, tmpExprs, packer, proc)
+	if !ok {
+		return false, nil
+	}
+	if expr != nil {
+		return true, expr
+	}
+	packer.Reset()
+	for i := 0; i < len(tmpExprs); i++ {
+		if tmpExprs[i] == nil {
+			packer.Reset()
+			return false, nil
+		}
+	}
+	val := packer.Bytes()
+	packer.Reset()
+	return true, &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Sval{
+					Sval: util.UnsafeBytesToString(val),
+				},
+			},
+		},
+	}
+}
+
+func mustGetFullCompositePK(
+	expr *plan.Expr,
+	pkName string,
+	keys []string,
+	tmpExprs []*plan.Literal,
+	packer *types.Packer,
+	proc *process.Process,
+) (bool, *plan.Expr) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "=":
+			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
+				// if it is a composite pk
+				if compPkCol(leftExpr.Col.Name, pkName) {
+					rExpr := getConstValueByExpr(exprImpl.F.Args[1], proc)
+					if rExpr == nil || rExpr.Isnull {
+						return false, nil
+					}
+					return true, &plan.Expr{
+						Expr: &plan.Expr_Lit{Lit: rExpr},
+					}
+				}
+				// if it is one of the composite pks
+				if pos := getPosInCompositPK(leftExpr.Col.Name, keys); pos != -1 {
+					rExpr := getConstValueByExpr(exprImpl.F.Args[1], proc)
+					if rExpr != nil && !rExpr.Isnull {
+						tmpExprs[pos] = rExpr
+					}
+					return true, nil
+				}
+
+				return false, nil
+			}
+			if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
+				// if it is a composite pk
+				if compPkCol(rightExpr.Col.Name, pkName) {
+					rExpr := getConstValueByExpr(exprImpl.F.Args[0], proc)
+					if rExpr == nil || rExpr.Isnull {
+						return false, nil
+					}
+					return true, &plan.Expr{
+						Expr: &plan.Expr_Lit{Lit: rExpr},
+					}
+				}
+				// if it is one of the composite pks
+				if pos := getPosInCompositPK(rightExpr.Col.Name, keys); pos != -1 {
+					rExpr := getConstValueByExpr(exprImpl.F.Args[0], proc)
+					if rExpr != nil && !rExpr.Isnull {
+						tmpExprs[pos] = rExpr
+					}
+					return true, nil
+				}
+				return false, nil
+			}
+			return false, nil
+		case "and":
+			ok, leftPkExpr := mustGetFullCompositePK(
+				exprImpl.F.Args[0], pkName, keys, tmpExprs, packer, proc,
+			)
+			if !ok || leftPkExpr != nil {
+				return ok, leftPkExpr
+			}
+			all := true
+			for _, expr := range tmpExprs {
+				if expr == nil {
+					all = false
+				}
+			}
+			if all {
+				packer.Reset()
+				for i, expr := range tmpExprs {
+					serialTupleByConstExpr(expr, packer)
+					tmpExprs[i] = nil
+				}
+				val := packer.Bytes()
+				packer.Reset()
+				return true, &plan.Expr{
+					Expr: &plan.Expr_Lit{
+						Lit: &plan.Literal{
+							Isnull: false,
+							Value: &plan.Literal_Sval{
+								Sval: util.UnsafeBytesToString(val),
+							},
+						},
+					},
+				}
+			}
+			ok, rightPkExpr := mustGetFullCompositePK(
+				exprImpl.F.Args[1], pkName, keys, tmpExprs, packer, proc,
+			)
+			if !ok || rightPkExpr != nil {
+				return ok, rightPkExpr
+			}
+			all = true
+			for _, expr := range tmpExprs {
+				if expr == nil {
+					all = false
+				}
+			}
+			if all {
+				packer.Reset()
+				for i, expr := range tmpExprs {
+					serialTupleByConstExpr(expr, packer)
+					tmpExprs[i] = nil
+				}
+				val := packer.Bytes()
+				packer.Reset()
+
+				return true, &plan.Expr{
+					Expr: &plan.Expr_Lit{
+						Lit: &plan.Literal{
+							Isnull: false,
+							Value: &plan.Literal_Sval{
+								Sval: util.UnsafeBytesToString(val),
+							},
+						},
+					},
+				}
+			}
+			return true, nil
+		case "or":
+			for i := 0; i < len(tmpExprs); i++ {
+				tmpExprs[i] = nil
+			}
+			ok, leftPkExpr := mustGetFullCompositePK(
+				exprImpl.F.Args[0], pkName, keys, tmpExprs, packer, proc,
+			)
+			for i := 0; i < len(tmpExprs); i++ {
+				tmpExprs[i] = nil
+			}
+			if !ok || leftPkExpr == nil {
+				return false, nil
+			}
+			ok, rightPkExpr := mustGetFullCompositePK(
+				exprImpl.F.Args[1], pkName, keys, tmpExprs, packer, proc,
+			)
+			for i := 0; i < len(tmpExprs); i++ {
+				tmpExprs[i] = nil
+			}
+			if !ok || rightPkExpr == nil {
+				return false, nil
+			}
+			return true, &plan.Expr{
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{
+						List: []*plan.Expr{leftPkExpr, rightPkExpr},
+					},
+				},
+				Typ: plan.Type{
+					Id: int32(types.T_tuple),
+				},
+			}
+
+		case "in":
+			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
+				if !compPkCol(leftExpr.Col.Name, pkName) {
+					return false, nil
+				}
+				return true, exprImpl.F.Args[1]
+			}
+		}
+	}
+	return false, nil
 }
 
 func getCompositPKVals(
@@ -139,13 +382,23 @@ func getPkExpr(
 			if rightPK == nil {
 				return nil
 			}
+			if litExpr, ok := leftPK.Expr.(*plan.Expr_Lit); ok {
+				if litExpr.Lit.Isnull {
+					return rightPK
+				}
+			}
+			if litExpr, ok := rightPK.Expr.(*plan.Expr_Lit); ok {
+				if litExpr.Lit.Isnull {
+					return leftPK
+				}
+			}
 			return &plan.Expr{
 				Expr: &plan.Expr_List{
 					List: &plan.ExprList{
 						List: []*plan.Expr{leftPK, rightPK},
 					},
 				},
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_tuple),
 				},
 			}
@@ -158,8 +411,8 @@ func getPkExpr(
 			return getPkExpr(exprImpl.F.Args[1], pkName, proc)
 
 		case "=":
-			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
-				if !compPkCol(leftExpr.Col.Name, pkName) {
+			if col := exprImpl.F.Args[0].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
 					return nil
 				}
 				constVal := getConstValueByExpr(exprImpl.F.Args[1], proc)
@@ -167,14 +420,14 @@ func getPkExpr(
 					return nil
 				}
 				return &plan.Expr{
-					Typ: plan2.DeepCopyType(exprImpl.F.Args[1].Typ),
+					Typ: exprImpl.F.Args[1].Typ,
 					Expr: &plan.Expr_Lit{
 						Lit: constVal,
 					},
 				}
 			}
-			if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
-				if !compPkCol(rightExpr.Col.Name, pkName) {
+			if col := exprImpl.F.Args[1].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
 					return nil
 				}
 				constVal := getConstValueByExpr(exprImpl.F.Args[0], proc)
@@ -182,7 +435,7 @@ func getPkExpr(
 					return nil
 				}
 				return &plan.Expr{
-					Typ: plan2.DeepCopyType(exprImpl.F.Args[0].Typ),
+					Typ: exprImpl.F.Args[0].Typ,
 					Expr: &plan.Expr_Lit{
 						Lit: constVal,
 					},
@@ -191,11 +444,19 @@ func getPkExpr(
 			return nil
 
 		case "in":
-			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
-				if !compPkCol(leftExpr.Col.Name, pkName) {
+			if col := exprImpl.F.Args[0].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
 					return nil
 				}
 				return exprImpl.F.Args[1]
+			}
+
+		case "prefix_eq", "prefix_between", "prefix_in":
+			if col := exprImpl.F.Args[0].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
+					return nil
+				}
+				return expr
 			}
 		}
 	}
@@ -203,8 +464,353 @@ func getPkExpr(
 	return nil
 }
 
+func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []int32 {
+	mp := make(map[any]bool)
+	switch pk.GetType().Oid {
+	case types.T_bool:
+		vs := vector.MustFixedCol[bool](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_bit:
+		vs := vector.MustFixedCol[uint64](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_int8:
+		vs := vector.MustFixedCol[int8](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_int16:
+		vs := vector.MustFixedCol[int16](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_int32:
+		vs := vector.MustFixedCol[int32](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_int64:
+		vs := vector.MustFixedCol[int64](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_uint8:
+		vs := vector.MustFixedCol[uint8](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_uint16:
+		vs := vector.MustFixedCol[uint16](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_uint32:
+		vs := vector.MustFixedCol[uint32](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_uint64:
+		vs := vector.MustFixedCol[uint64](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_decimal64:
+		vs := vector.MustFixedCol[types.Decimal64](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_decimal128:
+		vs := vector.MustFixedCol[types.Decimal128](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_uuid:
+		vs := vector.MustFixedCol[types.Uuid](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_float32:
+		vs := vector.MustFixedCol[float32](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_float64:
+		vs := vector.MustFixedCol[float64](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_date:
+		vs := vector.MustFixedCol[types.Date](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_timestamp:
+		vs := vector.MustFixedCol[types.Timestamp](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_time:
+		vs := vector.MustFixedCol[types.Time](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_datetime:
+		vs := vector.MustFixedCol[types.Datetime](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_enum:
+		vs := vector.MustFixedCol[types.Enum](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_TS:
+		vs := vector.MustFixedCol[types.TS](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_Rowid:
+		vs := vector.MustFixedCol[types.Rowid](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_Blockid:
+		vs := vector.MustFixedCol[types.Blockid](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		for i := 0; i < pk.Length(); i++ {
+			v := pk.GetStringAt(i)
+			mp[v] = true
+		}
+	case types.T_array_float32:
+		for i := 0; i < pk.Length(); i++ {
+			v := types.ArrayToString[float32](vector.GetArrayAt[float32](pk, i))
+			mp[v] = true
+		}
+	case types.T_array_float64:
+		for i := 0; i < pk.Length(); i++ {
+			v := types.ArrayToString[float64](vector.GetArrayAt[float64](pk, i))
+			mp[v] = true
+		}
+	default:
+		panic(moerr.NewInternalErrorNoCtx("%s not supported", pk.GetType().String()))
+	}
+
+	return func(vec *vector.Vector) []int32 {
+		var sels []int32
+		switch vec.GetType().Oid {
+		case types.T_bool:
+			vs := vector.MustFixedCol[bool](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_bit:
+			vs := vector.MustFixedCol[uint64](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_int8:
+			vs := vector.MustFixedCol[int8](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_int16:
+			vs := vector.MustFixedCol[int16](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_int32:
+			vs := vector.MustFixedCol[int32](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_int64:
+			vs := vector.MustFixedCol[int64](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_uint8:
+			vs := vector.MustFixedCol[uint8](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_uint16:
+			vs := vector.MustFixedCol[uint16](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_uint32:
+			vs := vector.MustFixedCol[uint32](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_uint64:
+			vs := vector.MustFixedCol[uint64](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_decimal64:
+			vs := vector.MustFixedCol[types.Decimal64](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_decimal128:
+			vs := vector.MustFixedCol[types.Decimal128](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_uuid:
+			vs := vector.MustFixedCol[types.Uuid](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_float32:
+			vs := vector.MustFixedCol[float32](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_float64:
+			vs := vector.MustFixedCol[float64](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_date:
+			vs := vector.MustFixedCol[types.Date](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_timestamp:
+			vs := vector.MustFixedCol[types.Timestamp](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_time:
+			vs := vector.MustFixedCol[types.Time](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_datetime:
+			vs := vector.MustFixedCol[types.Datetime](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_enum:
+			vs := vector.MustFixedCol[types.Enum](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_TS:
+			vs := vector.MustFixedCol[types.TS](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_Rowid:
+			vs := vector.MustFixedCol[types.Rowid](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_Blockid:
+			vs := vector.MustFixedCol[types.Blockid](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_char, types.T_varchar, types.T_json,
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			for i := 0; i < vec.Length(); i++ {
+				v := vec.GetStringAt(i)
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_array_float32:
+			for i := 0; i < vec.Length(); i++ {
+				v := types.ArrayToString[float32](vector.GetArrayAt[float32](vec, i))
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_array_float64:
+			for i := 0; i < vec.Length(); i++ {
+				v := types.ArrayToString[float64](vector.GetArrayAt[float64](vec, i))
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		default:
+			panic(moerr.NewInternalErrorNoCtx("%s not supported", vec.GetType().String()))
+		}
+		return sels
+	}
+}
+
+func getNonSortedPKSearchFuncByPKVec(
+	vec *vector.Vector,
+) blockio.ReadFilter {
+
+	searchPKFunc := LinearSearchOffsetByValFactory(vec)
+
+	if searchPKFunc != nil {
+		return func(vecs []*vector.Vector) []int32 {
+			return searchPKFunc(vecs[0])
+		}
+	}
+	return nil
+}
+
 func getNonCompositePKSearchFuncByExpr(
-	expr *plan.Expr, pkName string, oid types.T, proc *process.Process,
+	expr *plan.Expr, pkName string, proc *process.Process,
 ) (bool, bool, blockio.ReadFilter) {
 	valExpr := getPkExpr(expr, pkName, proc)
 	if valExpr == nil {
@@ -261,11 +867,30 @@ func getNonCompositePKSearchFuncByExpr(
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Enum{types.Enum(val.EnumVal)})
 		}
 
+	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "prefix_eq":
+			val := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
+			searchPKFunc = vector.CollectOffsetsByPrefixEqFactory(val)
+
+		case "prefix_between":
+			lval := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
+			rval := util.UnsafeStringToBytes(exprImpl.F.Args[2].GetLit().GetSval())
+			searchPKFunc = vector.CollectOffsetsByPrefixBetweenFactory(lval, rval)
+
+		case "prefix_in":
+			vec := vector.NewVec(types.T_any.ToType())
+			vec.UnmarshalBinary(exprImpl.F.Args[1].GetVec().Data)
+			searchPKFunc = vector.CollectOffsetsByPrefixInFactory(vec)
+		}
+
 	case *plan.Expr_Vec:
 		vec := vector.NewVec(types.T_any.ToType())
 		vec.UnmarshalBinary(exprImpl.Vec.Data)
 
 		switch vec.GetType().Oid {
+		case types.T_bit:
+			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint64](vec))
 		case types.T_int8:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int8](vec))
 		case types.T_int16:
@@ -315,8 +940,85 @@ func getNonCompositePKSearchFuncByExpr(
 	return false, false, nil
 }
 
-func evalLiteralExpr(expr *plan.Expr_Lit, oid types.T) (canEval bool, val any) {
-	switch val := expr.Lit.Value.(type) {
+func evalLiteralExpr2(expr *plan.Literal, oid types.T) (ret []byte, can bool) {
+	can = true
+	switch val := expr.Value.(type) {
+	case *plan.Literal_I8Val:
+		i8 := int8(val.I8Val)
+		ret = types.EncodeInt8(&i8)
+	case *plan.Literal_I16Val:
+		i16 := int16(val.I16Val)
+		ret = types.EncodeInt16(&i16)
+	case *plan.Literal_I32Val:
+		i32 := int32(val.I32Val)
+		ret = types.EncodeInt32(&i32)
+	case *plan.Literal_I64Val:
+		i64 := int64(val.I64Val)
+		ret = types.EncodeInt64(&i64)
+	case *plan.Literal_Dval:
+		if oid == types.T_float32 {
+			fval := float32(val.Dval)
+			ret = types.EncodeFloat32(&fval)
+		} else {
+			dval := val.Dval
+			ret = types.EncodeFloat64(&dval)
+		}
+	case *plan.Literal_Sval:
+		ret = util.UnsafeStringToBytes(val.Sval)
+	case *plan.Literal_Bval:
+		ret = types.EncodeBool(&val.Bval)
+	case *plan.Literal_U8Val:
+		u8 := uint8(val.U8Val)
+		ret = types.EncodeUint8(&u8)
+	case *plan.Literal_U16Val:
+		u16 := uint16(val.U16Val)
+		ret = types.EncodeUint16(&u16)
+	case *plan.Literal_U32Val:
+		u32 := uint32(val.U32Val)
+		ret = types.EncodeUint32(&u32)
+	case *plan.Literal_U64Val:
+		u64 := uint64(val.U64Val)
+		ret = types.EncodeUint64(&u64)
+	case *plan.Literal_Fval:
+		if oid == types.T_float32 {
+			fval := float32(val.Fval)
+			ret = types.EncodeFloat32(&fval)
+		} else {
+			fval := float64(val.Fval)
+			ret = types.EncodeFloat64(&fval)
+		}
+	case *plan.Literal_Dateval:
+		v := types.Date(val.Dateval)
+		ret = types.EncodeDate(&v)
+	case *plan.Literal_Timeval:
+		v := types.Time(val.Timeval)
+		ret = types.EncodeTime(&v)
+	case *plan.Literal_Datetimeval:
+		v := types.Datetime(val.Datetimeval)
+		ret = types.EncodeDatetime(&v)
+	case *plan.Literal_Timestampval:
+		v := types.Timestamp(val.Timestampval)
+		ret = types.EncodeTimestamp(&v)
+	case *plan.Literal_Decimal64Val:
+		v := types.Decimal64(val.Decimal64Val.A)
+		ret = types.EncodeDecimal64(&v)
+	case *plan.Literal_Decimal128Val:
+		v := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
+		ret = types.EncodeDecimal128(&v)
+	case *plan.Literal_EnumVal:
+		v := types.Enum(val.EnumVal)
+		ret = types.EncodeEnum(&v)
+	case *plan.Literal_Jsonval:
+		ret = util.UnsafeStringToBytes(val.Jsonval)
+	default:
+		can = false
+	}
+
+	return
+}
+
+func evalLiteralExpr(expr *plan.Literal, oid types.T) (canEval bool, val any) {
+	switch val := expr.Value.(type) {
 	case *plan.Literal_I8Val:
 		return transferIval(val.I8Val, oid)
 	case *plan.Literal_I16Val:
@@ -361,45 +1063,67 @@ func evalLiteralExpr(expr *plan.Expr_Lit, oid types.T) (canEval bool, val any) {
 	return
 }
 
+// return canEval, isNull, isVec, evaledVal
 func getPkValueByExpr(
 	expr *plan.Expr,
 	pkName string,
 	oid types.T,
 	mustOne bool,
 	proc *process.Process,
-) (bool, bool, any) {
+) (bool, bool, bool, any) {
 	valExpr := getPkExpr(expr, pkName, proc)
 	if valExpr == nil {
-		return false, false, nil
+		return false, false, false, nil
 	}
 
 	switch exprImpl := valExpr.Expr.(type) {
 	case *plan.Expr_Lit:
 		if exprImpl.Lit.Isnull {
-			return false, true, nil
+			return false, true, false, nil
 		}
-		canEval, val := evalLiteralExpr(exprImpl, oid)
+		canEval, val := evalLiteralExpr(exprImpl.Lit, oid)
 		if canEval {
-			return true, false, val
+			return true, false, false, val
 		} else {
-			return false, false, nil
+			return false, false, false, nil
 		}
 
-		// case *plan.Expr_Vec:
-		// if mustOne {
-		// 	return false, false, nil
-		// }
-		// vec := vector.NewVec(types.T_any.ToType())
-		// _ = vec.UnmarshalBinary(exprImpl.Vec.Data)
-		// return true, false, vec
+	case *plan.Expr_Vec:
+		if mustOne {
+			vec := vector.NewVec(types.T_any.ToType())
+			vec.UnmarshalBinary(exprImpl.Vec.Data)
+			if vec.Length() != 1 {
+				return false, false, false, nil
+			}
+			exprLit := rule.GetConstantValue(vec, true, 0)
+			if exprLit == nil {
+				return false, false, false, nil
+			}
+			if exprLit.Isnull {
+				return false, true, false, nil
+			}
+			canEval, val := evalLiteralExpr(exprLit, oid)
+			if canEval {
+				return true, false, false, val
+			}
+			return false, false, false, nil
+		}
+		return true, false, true, exprImpl.Vec.Data
 
-		// case *plan.Expr_List:
-		// 	if mustOne {
-		// 		return false, false, nil
-		// 	}
+	case *plan.Expr_List:
+		if mustOne {
+			return false, false, false, nil
+		}
+		canEval, vec, put := evalExprListToVec(oid, exprImpl, proc)
+		if !canEval || vec == nil || vec.Length() == 0 {
+			return false, false, false, nil
+		}
+		data, _ := vec.MarshalBinary()
+		put()
+		return true, false, true, data
 	}
 
-	return false, false, nil
+	return false, false, false, nil
 }
 
 func evalExprListToVec(
@@ -409,7 +1133,10 @@ func evalExprListToVec(
 		return false, nil, nil
 	}
 	canEval, vec = recurEvalExprList(oid, expr, nil, proc)
-	if !canEval || vec == nil {
+	if !canEval {
+		if vec != nil {
+			proc.PutVector(vec)
+		}
 		return false, nil, nil
 	}
 	put = func() {
@@ -426,7 +1153,7 @@ func recurEvalExprList(
 	for _, expr := range inputExpr.List.List {
 		switch expr2 := expr.Expr.(type) {
 		case *plan.Expr_Lit:
-			canEval, val := evalLiteralExpr(expr2, oid)
+			canEval, val := evalLiteralExpr(expr2.Lit, oid)
 			if !canEval {
 				return false, outputVec
 			}
@@ -802,23 +1529,24 @@ func serialTupleByConstExpr(expr *plan.Literal, packer *types.Packer) {
 	}
 }
 
-func getConstValueByExpr(expr *plan.Expr,
-	proc *process.Process) *plan.Literal {
+func getConstValueByExpr(
+	expr *plan.Expr, proc *process.Process,
+) *plan.Literal {
 	exec, err := colexec.NewExpressionExecutor(proc, expr)
 	if err != nil {
 		return nil
 	}
+	defer exec.Free()
 	vec, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
 	if err != nil {
 		return nil
 	}
-	defer exec.Free()
 	return rule.GetConstantValue(vec, true, 0)
 }
 
 func getConstExpr(oid int32, c *plan.Literal) *plan.Expr {
 	return &plan.Expr{
-		Typ:  &plan.Type{Id: oid},
+		Typ:  plan.Type{Id: oid},
 		Expr: &plan.Expr_Lit{Lit: c},
 	}
 }
@@ -871,19 +1599,43 @@ func extractPKValueFromEqualExprs(
 	pkIdx int,
 	proc *process.Process,
 	pool *fileservice.Pool[*types.Packer],
-) (val []byte) {
+) (val []byte, isVec bool) {
+	var canEval bool
 	pk := def.Pkey
-	if pk.CompPkeyCol != nil {
-		return extractCompositePKValueFromEqualExprs(
-			exprs, pk, proc, pool,
-		)
-	}
 	column := def.Cols[pkIdx]
 	name := column.Name
+	if pk.CompPkeyCol != nil {
+		if len(exprs) == 1 {
+			expr := exprs[0]
+			var packer *types.Packer
+			put := pool.Get(&packer)
+			defer put.Put()
+			if canEval, isVec, v := MustGetFullCompositePKValue(
+				expr, name, pk.Names, packer, proc,
+			); canEval {
+				return v, isVec
+			}
+			return nil, false
+		} else {
+			// PXU TODO:
+			// we need to change the pushdown fiter exprs in
+			// the composite pk scenario.
+			val = extractCompositePKValueFromEqualExprs(
+				exprs, pk, proc, pool,
+			)
+			return
+		}
+	}
+
 	colType := types.T(column.Typ.Id)
 	for _, expr := range exprs {
-		if ok, _, v := getPkValueByExpr(expr, name, colType, true, proc); ok {
-			val = types.EncodeValue(v, colType)
+		var v any
+		if canEval, _, isVec, v = getPkValueByExpr(expr, name, colType, false, proc); canEval {
+			if isVec {
+				val = v.([]byte)
+			} else {
+				val = types.EncodeValue(v, colType)
+			}
 			break
 		}
 	}
@@ -941,7 +1693,7 @@ func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []objectio.Blo
 func ForeachBlkInObjStatsList(
 	next bool,
 	dataMeta objectio.ObjectDataMeta,
-	onBlock func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool,
+	onBlock func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool,
 	objects ...objectio.ObjectStats,
 ) {
 	stop := false
@@ -1001,7 +1753,7 @@ func (i *StatsBlkIter) Next() bool {
 	return i.cur < int(i.blkCnt)
 }
 
-func (i *StatsBlkIter) Entry() *objectio.BlockInfo {
+func (i *StatsBlkIter) Entry() objectio.BlockInfo {
 	if i.cur == -1 {
 		i.cur = 0
 	}
@@ -1016,12 +1768,35 @@ func (i *StatsBlkIter) Entry() *objectio.BlockInfo {
 	}
 
 	loc := objectio.BuildLocation(i.name, i.extent, i.curBlkRows, uint16(i.cur))
-	blk := &objectio.BlockInfo{
+	blk := objectio.BlockInfo{
 		BlockID:   *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
 		SegmentID: i.name.SegmentId(),
 		MetaLoc:   objectio.ObjectLocation(loc),
 	}
 	return blk
+}
+
+func ForeachCommittedObjects(
+	createObjs map[objectio.ObjectNameShort]struct{},
+	delObjs map[objectio.ObjectNameShort]struct{},
+	p *logtailreplay.PartitionState,
+	onObj func(info logtailreplay.ObjectInfo) error) (err error) {
+	for obj := range createObjs {
+		if objInfo, ok := p.GetObject(obj); ok {
+			if err = onObj(objInfo); err != nil {
+				return
+			}
+		}
+	}
+	for obj := range delObjs {
+		if objInfo, ok := p.GetObject(obj); ok {
+			if err = onObj(objInfo); err != nil {
+				return
+			}
+		}
+	}
+	return nil
+
 }
 
 func ForeachSnapshotObjects(

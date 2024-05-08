@@ -1,0 +1,104 @@
+create table t1(a int, b int unique key);
+-- @separator:table
+explain insert into t1(a) values (1);
+create table t2(a int, b int, c int, unique key(b, c));
+-- @separator:table
+explain insert into t2(a) values (1);
+create table t3(a int auto_increment, b int, unique key(a));
+insert into t3(b) values (1);
+--+--------------------------------------------------------------------+
+--| QUERY PLAN                                                         |
+--+--------------------------------------------------------------------+
+--| Plan 0:                                                            |
+--| Sink                                                               |
+--|   ->  PreInsert on t.t3                                            |
+--|         ->  Project                                                |
+--|               ->  Project                                          |
+--|                     ->  Values Scan "*VALUES*"                     |
+--| Plan 1:                                                            |
+--| Insert on t.__mo_index_unique_018e35ac-0098-72aa-ba7c-081ab2e7d49e |  should not contain plan that do dup check
+--|   ->  Lock                                                         |
+--|         ->  PreInsert UniqueKey                                    |
+--|               ->  Sink Scan                                        |
+--|                     DataSource: Plan 0                             |
+--| Plan 2:                                                            |
+--| Insert on t.t3                                                     |
+--|   ->  Sink Scan                                                    |
+--|         DataSource: Plan 0                                         |
+--+--------------------------------------------------------------------+
+insert into t3(a) values (1);
+--+------------------------------------------------------------------------------+
+--| QUERY PLAN                                                                   |
+--+------------------------------------------------------------------------------+
+--| Plan 0:                                                                      |
+--| Sink                                                                         |
+--|   ->  PreInsert on t.t3                                                      |
+--|         ->  Project                                                          |
+--|               ->  Project                                                    |
+--|                     ->  Values Scan "*VALUES*"                               |
+--| Plan 1:                                                                      |
+--| Sink                                                                         |
+--|   ->  Lock                                                                   |
+--|         ->  PreInsert UniqueKey                                              |
+--|               ->  Sink Scan                                                  |
+--|                     DataSource: Plan 0                                       |
+--| Plan 2:                                                                      |
+--| Insert on t.__mo_index_unique_018e35ae-c21b-790f-8d5c-938bd2f430a3           |
+--|   ->  Sink Scan                                                              |
+--|         DataSource: Plan 1                                                   |
+--| Plan 3:                                                                      | <- should contain plan that do dup check
+--| Fuzzy Filter for duplicate key                                               | 
+--|   ->  Table Scan on t.__mo_index_unique_018e35ae-c21b-790f-8d5c-938bd2f430a3 |
+--|         Filter Cond: (__mo_index_idx_col = 1)                                |
+--|         Block Filter Cond: (__mo_index_idx_col = 1)                          |
+--|   ->  Sink Scan                                                              |
+--|         DataSource: Plan 1                                                   |
+--| Plan 4:                                                                      |
+--| Insert on t.t3                                                               |
+--|   ->  Sink Scan                                                              |
+--|         DataSource: Plan 0                                                   |
+--+------------------------------------------------------------------------------+
+create table t4(a int auto_increment, b int auto_increment, unique key(a, b));
+insert into t4(b) values (1);
+--mysql> explain insert into t4(b) values (1);
+--+--------------------------------------------------------------------+
+--| QUERY PLAN                                                         |
+--+--------------------------------------------------------------------+
+--| Plan 0:                                                            |
+--| Sink                                                               |
+--|   ->  PreInsert on t.t4                                            |
+--|         ->  Project                                                |
+--|               ->  Project                                          |
+--|                     ->  Values Scan "*VALUES*"                     |
+--| Plan 1:                                                            |
+--| Insert on t.__mo_index_unique_018e35aa-b3cd-7335-8b14-0427179f7e2d |
+--|   ->  Lock                                                         |
+--|         ->  PreInsert UniqueKey                                    |
+--|               ->  Sink Scan                                        |
+--|                     DataSource: Plan 0                             |
+--| Plan 2:                                                            |  should not contain plan that do dup check
+--| Insert on t.t4                                                     |
+--|   ->  Sink Scan                                                    |
+--|         DataSource: Plan 0                                         |
+--+--------------------------------------------------------------------+
+insert into t4(a) values (2);
+--+--------------------------------------------------------------------+
+--| QUERY PLAN                                                         |
+--+--------------------------------------------------------------------+
+--| Plan 0:                                                            |
+--| Sink                                                               |
+--|   ->  PreInsert on t.t4                                            |
+--|         ->  Project                                                |
+--|               ->  Project                                          |
+--|                     ->  Values Scan "*VALUES*"                     |
+--| Plan 1:                                                            |
+--| Insert on t.__mo_index_unique_018e35aa-b3cd-7335-8b14-0427179f7e2d |  should not contain plan that do dup check
+--|   ->  Lock                                                         |
+--|         ->  PreInsert UniqueKey                                    |
+--|               ->  Sink Scan                                        |
+--|                     DataSource: Plan 0                             |
+--| Plan 2:                                                            |
+--| Insert on t.t4                                                     |
+--|   ->  Sink Scan                                                    |
+--|         DataSource: Plan 0                                         |
+--+--------------------------------------------------------------------+

@@ -29,7 +29,7 @@ type AppendNode struct {
 	*txnbase.TxnMVCCNode
 	startRow uint32
 	maxRow   uint32
-	mvcc     *MVCCHandle
+	mvcc     *AppendMVCCHandle
 	id       *common.ID
 }
 
@@ -37,7 +37,7 @@ func CompareAppendNode(e, o *AppendNode) int {
 	return e.Compare(o.TxnMVCCNode)
 }
 
-func MockAppendNode(ts types.TS, startRow, maxRow uint32, mvcc *MVCCHandle) *AppendNode {
+func MockAppendNode(ts types.TS, startRow, maxRow uint32, mvcc *AppendMVCCHandle) *AppendNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: ts,
@@ -51,7 +51,7 @@ func MockAppendNode(ts types.TS, startRow, maxRow uint32, mvcc *MVCCHandle) *App
 func NewCommittedAppendNode(
 	ts types.TS,
 	startRow, maxRow uint32,
-	mvcc *MVCCHandle) *AppendNode {
+	mvcc *AppendMVCCHandle) *AppendNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start:   ts,
@@ -67,7 +67,7 @@ func NewCommittedAppendNode(
 func NewAppendNode(
 	txn txnif.AsyncTxn,
 	startRow, maxRow uint32,
-	mvcc *MVCCHandle) *AppendNode {
+	mvcc *AppendMVCCHandle) *AppendNode {
 	var startTs, ts types.TS
 	if txn != nil {
 		startTs = txn.GetStartTS()

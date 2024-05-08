@@ -177,6 +177,12 @@ set @@sql_mode = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 select @@sql_mode;
 set @@sql_mode = default;
 
+--double type
+set global long_query_time = 1.1;
+show global variables like 'long_query_time';
+set global long_query_time = default;
+show global variables like 'long_query_time';
+
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 create database test_for_navicat;
 -- @session:id=2&user=acc_idx:root&password=123456

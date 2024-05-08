@@ -176,6 +176,8 @@ func (v *Vector) setupColFromData() {
 		switch v.typ.Oid {
 		case types.T_bool:
 			v.col.setFromVector(v)
+		case types.T_bit:
+			v.col.setFromVector(v)
 		case types.T_int8:
 			v.col.setFromVector(v)
 		case types.T_int16:
@@ -226,13 +228,13 @@ func (v *Vector) setupColFromData() {
 	v.capacity = cap(v.data) / tlen
 }
 
-func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
+func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 	nsp, err := vec.nsp.Show()
 	if err != nil {
-		return nil, err
+		return
 	}
 	sz := vec.typ.TypeSize()
-	return &api.Vector{
+	return api.Vector{
 		Nsp:      nsp,
 		Nullable: true,
 		Area:     vec.area,
@@ -243,7 +245,7 @@ func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
 	}, nil
 }
 
-func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
+func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 	rvec := &Vector{
 		area:         vec.Area,
 		length:       int(vec.Len),
@@ -296,6 +298,8 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 	switch t.Oid {
 	case types.T_bool:
 		return appendBytesToFixSized[bool](vec)
+	case types.T_bit:
+		return appendBytesToFixSized[uint64](vec)
 	case types.T_int8:
 		return appendBytesToFixSized[int8](vec)
 	case types.T_int16:

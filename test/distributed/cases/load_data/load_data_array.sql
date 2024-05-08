@@ -6,7 +6,7 @@ drop table if exists vec_table;
 create table vec_table(a int, b vecf32(3), c vecf64(3));
 
 -- read from an already exported file
-load data infile '$resources/load_data/array_out.csv' into table vec_table ignore 1 lines;
+load data infile '$resources/load_data/array_out.csv' into table vec_table fields terminated by ',' ignore 1 lines;
 select * from vec_table;
 
 -- write a new export file
@@ -15,7 +15,7 @@ select * from vec_table into outfile '$resources/into_outfile/array_out.csv';
 delete from vec_table;
 
 -- read from the newly exported file
-load data infile '$resources/into_outfile/array_out.csv' into table vec_table ignore 1 lines;
+load data infile '$resources/into_outfile/array_out.csv' into table vec_table fields terminated by ',' ignore 1 lines;
 select * from vec_table;
 
 -- post

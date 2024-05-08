@@ -345,7 +345,6 @@ Data truncation: data out of range: data type int32, value '2147483649'
 begin;
 insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(33,'66','77',1) on duplicate key update col1=col1+1,col2='888';
 Duplicate entry '24' for key 'col1'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from indup_07;
 col1    col2    col3    col4
 23    22    55    2
@@ -362,7 +361,6 @@ col1    col2    col3    col4
 start transaction ;
 insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(33,'66','77',1) on duplicate key update col1=col1+1,col2='888';
 Duplicate entry '24' for key 'col1'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from indup_07;
 col1    col2    col3    col4
 23    22    55    2

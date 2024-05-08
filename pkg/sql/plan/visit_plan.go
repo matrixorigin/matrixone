@@ -124,14 +124,12 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	targetTyp := &plan.Expr{
 		Typ: toTyp,
 		Expr: &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: toTyp,
-			},
+			T: &plan.TargetType{},
 		},
 	}
 
 	applyAndResetType := func(e *Expr) (*Expr, error) {
-		oldType := DeepCopyType(e.Typ)
+		oldType := e.Typ
 		e, err = rule.ApplyExpr(e)
 		if err != nil {
 			return nil, err

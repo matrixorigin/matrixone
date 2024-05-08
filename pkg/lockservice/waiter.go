@@ -58,7 +58,7 @@ func newWaiter() *waiter {
 	return w
 }
 
-func (w waiter) Name() string {
+func (w waiter) TypeName() string {
 	return "lockservice.wait"
 }
 
@@ -66,13 +66,15 @@ func (w waiter) Name() string {
 // lock to be released if a conflict is encountered.
 type waiter struct {
 	// belong to which txn
-	txn      pb.WaitTxn
-	waitFor  [][]byte
-	status   *atomic.Int32
-	refCount *atomic.Int32
-	c        chan notifyValue
-	event    event
-	waitAt   atomic.Value
+	txn         pb.WaitTxn
+	waitFor     [][]byte
+	conflictKey []byte
+	lt          *localLockTable
+	status      *atomic.Int32
+	refCount    *atomic.Int32
+	c           chan notifyValue
+	event       event
+	waitAt      atomic.Value
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -245,6 +247,8 @@ func (w *waiter) reset() {
 	w.txn = pb.WaitTxn{}
 	w.event = event{}
 	w.waitFor = w.waitFor[:0]
+	w.conflictKey = nil
+	w.lt = nil
 	w.setStatus(ready)
 }
 

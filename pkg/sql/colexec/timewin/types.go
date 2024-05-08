@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -86,7 +86,7 @@ type container struct {
 	curIdx int
 
 	group int
-	aggs  []agg.Agg[any]
+	aggs  []aggexec.AggFuncExec
 
 	wstart []int64
 	wend   []int64
@@ -99,7 +99,7 @@ type Argument struct {
 	ctr *container
 
 	Types []types.Type
-	Aggs  []agg.Aggregate
+	Aggs  []aggexec.AggFuncExecExpression
 
 	Interval *Interval
 	Sliding  *Interval
@@ -108,8 +108,11 @@ type Argument struct {
 	WStart bool
 	WEnd   bool
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -125,7 +128,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -142,30 +145,6 @@ func (arg *Argument) Release() {
 type Interval struct {
 	Typ types.IntervalType
 	Val int64
-}
-
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) GetCnAddr() string {
-	return arg.info.CnAddr
-}
-
-func (arg *Argument) GetOperatorID() int32 {
-	return arg.info.OperatorID
-}
-
-func (arg *Argument) GetParalleID() int32 {
-	return arg.info.ParallelID
-}
-
-func (arg *Argument) GetMaxParallel() int32 {
-	return arg.info.MaxParallel
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -194,6 +173,7 @@ func (ctr *container) cleanTsVector() {
 		ctr.tsExe.Free()
 	}
 	ctr.tsVec = nil
+	ctr.tsExe = nil
 }
 
 func (ctr *container) cleanAggVector() {
@@ -203,6 +183,7 @@ func (ctr *container) cleanAggVector() {
 		}
 	}
 	ctr.aggVec = nil
+	ctr.aggExe = nil
 }
 
 func (ctr *container) cleanWin() {

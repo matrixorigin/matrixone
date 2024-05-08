@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -242,37 +241,39 @@ func (c *APP1Client) CheckBound() {
 // TODO: rewrite
 func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint32, count uint64, err error) {
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
-	blockIt := rel.MakeBlockIt()
+	blockIt := rel.MakeObjectIt()
 	var view *containers.ColumnView
 	found := false
 	for blockIt.Valid() {
-		blk := blockIt.GetBlock()
-		view, err = blk.GetColumnDataByName(context.Background(), repertory.ColDefs[1].Name, common.DefaultAllocator)
-		if err != nil {
-			return
-		}
-		defer view.Close()
-		_ = view.GetData().Foreach(func(v any, _ bool, row int) (err error) {
-			pk := v.(uint64)
-			if pk != goodId {
-				return
-			}
-			if view.DeleteMask.Contains(uint64(row)) {
-				return
-			}
-			id = blk.Fingerprint()
-			key := *objectio.NewRowid(&id.BlockID, uint32(row))
-			cntv, _, err := rel.GetValueByPhyAddrKey(key, 2)
+		blk := blockIt.GetObject()
+		for j := 0; j < blk.BlkCnt(); j++ {
+			view, err = blk.GetColumnDataByName(context.Background(), uint16(j), repertory.ColDefs[1].Name, common.DefaultAllocator)
 			if err != nil {
 				return
 			}
-			found = true
-			offset = uint32(row)
-			count = cntv.(uint64)
-			return moerr.NewInternalErrorNoCtx("stop iteration")
-		}, nil)
-		if found {
-			return
+			defer view.Close()
+			_ = view.GetData().Foreach(func(v any, _ bool, row int) (err error) {
+				pk := v.(uint64)
+				if pk != goodId {
+					return
+				}
+				if view.DeleteMask.Contains(uint64(row)) {
+					return
+				}
+				id = blk.Fingerprint()
+				key := *objectio.NewRowid(&id.BlockID, uint32(row))
+				cntv, _, err := rel.GetValueByPhyAddrKey(key, 2)
+				if err != nil {
+					return
+				}
+				found = true
+				offset = uint32(row)
+				count = cntv.(uint64)
+				return moerr.NewInternalErrorNoCtx("stop iteration")
+			}, nil)
+			if found {
+				return
+			}
 		}
 		blockIt.Next()
 	}
@@ -549,9 +550,9 @@ func TestWarehouse(t *testing.T) {
 		txn, _ = db.StartTxn(nil)
 		rel, err := GetWarehouseRelation("test", txn)
 		assert.Nil(t, err)
-		it := rel.MakeBlockIt()
-		blk := it.GetBlock()
-		view, _ := blk.GetColumnDataById(context.Background(), 1, common.DefaultAllocator)
+		it := rel.MakeObjectIt()
+		blk := it.GetObject()
+		view, _ := blk.GetColumnDataById(context.Background(), 0, 1, common.DefaultAllocator)
 		t.Log(view.GetData().String())
 		defer view.Close()
 		testutil.CheckAllColRowsByScan(t, rel, 20, false)
@@ -670,43 +671,42 @@ func TestTxn9(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	var val atomic.Uint32
-
-	scanNames := func() {
+	scanNames := func(txn txnif.AsyncTxn) {
 		defer wg.Done()
-		txn, _ := tae.StartTxn(nil)
-		db, _ := txn.GetDatabase("db")
+		txn2, _ := tae.StartTxn(nil)
+		db, _ := txn2.GetDatabase("db")
 		it := db.MakeRelationIt()
 		cnt := 0
 		for it.Valid() {
 			cnt++
 			it.Next()
 		}
-		val.Store(2)
-		// Use max commit ts as start ts
-		// 2nd relation is not visible
-		assert.Equal(t, 1, cnt)
-		assert.NoError(t, txn.Commit(context.Background()))
+		startTS := txn2.GetStartTS()
+		prepareTS := txn.GetPrepareTS()
+		if startTS.Greater(&prepareTS) {
+			assert.Equal(t, 2, cnt)
+		} else {
+			assert.Equal(t, 1, cnt)
+		}
+		assert.NoError(t, txn2.Commit(context.Background()))
 	}
 
-	scanCol := func() {
+	scanCol := func(waitExpect, nowaitExpect int, waitTxn txnif.AsyncTxn) {
 		defer wg.Done()
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		rows := 0
-		it := rel.MakeBlockIt()
-		for it.Valid() {
-			blk := it.GetBlock()
-			view, err := blk.GetColumnDataById(context.Background(), 2, common.DefaultAllocator)
-			assert.NoError(t, err)
-			defer view.Close()
-			t.Log(view.GetData().String())
-			rows += blk.Rows()
-			it.Next()
+		if waitTxn != nil {
+			startTS := txn.GetStartTS()
+			prepareTS := waitTxn.GetPrepareTS()
+			if startTS.Greater(&prepareTS) {
+				testutil.CheckAllColRowsByScan(t, rel, waitExpect, true)
+			} else {
+				testutil.CheckAllColRowsByScan(t, rel, nowaitExpect, true)
+			}
+		} else {
+			testutil.CheckAllColRowsByScan(t, rel, nowaitExpect, true)
 		}
-		val.Store(2)
-		// assert.Equal(t, int(expectRows/5*2), rows)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -714,9 +714,8 @@ func TestTxn9(t *testing.T) {
 	db, _ = txn.GetDatabase("db")
 	txn.SetApplyCommitFn(func(txn txnif.AsyncTxn) error {
 		wg.Add(1)
-		go scanNames()
+		go scanNames(txn)
 		time.Sleep(time.Millisecond * 10)
-		val.Store(1)
 		store := txn.GetStore()
 		return store.ApplyCommit()
 	})
@@ -727,22 +726,20 @@ func TestTxn9(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	wg.Wait()
-	// Use max commit ts as start ts
-	// When reading snapshot, it's not necessary to wait commit.
-	assert.Equal(t, uint32(1), val.Load())
 
-	apply := func(_ txnif.AsyncTxn) error {
-		wg.Add(1)
-		go scanCol()
-		time.Sleep(time.Millisecond * 10)
-		val.Store(1)
-		store := txn.GetStore()
-		return store.ApplyCommit()
+	apply := func(waitExpect, nowaitExpect int, waitTxn txnif.AsyncTxn) func(txnif.AsyncTxn) error {
+		return func(txn txnif.AsyncTxn) error {
+			wg.Add(1)
+			go scanCol(waitExpect, nowaitExpect, waitTxn)
+			time.Sleep(time.Millisecond * 10)
+			store := txn.GetStore()
+			return store.ApplyCommit()
+		}
 	}
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
-	txn.SetApplyCommitFn(apply)
+	txn.SetApplyCommitFn(apply(int(expectRows)/5*2, int(expectRows/5), txn))
 	rel, _ = db.GetRelationByName(schema.Name)
 	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
@@ -751,7 +748,7 @@ func TestTxn9(t *testing.T) {
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
-	txn.SetApplyCommitFn(apply)
+	txn.SetApplyCommitFn(apply(int(expectRows/5*2)-1, int(expectRows/5)*2, txn))
 	rel, _ = db.GetRelationByName(schema.Name)
 	v := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(v)
@@ -764,7 +761,7 @@ func TestTxn9(t *testing.T) {
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
-	txn.SetApplyCommitFn(apply)
+	txn.SetApplyCommitFn(apply(0, int(expectRows/5*2)-1, nil))
 	rel, _ = db.GetRelationByName(schema.Name)
 	v = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter = handle.NewEQFilter(v)

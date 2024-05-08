@@ -503,6 +503,7 @@ func Test_newETLReader(t *testing.T) {
 			got, err := newETLReader(tt.args.ctx, tt.args.tbl, tt.args.fs, path, tt.args.size, tt.args.mp)
 			assert.Nil(t, err)
 			assert.Equal(t, reflect.TypeOf(tt.want), reflect.TypeOf(got))
+			defer got.Close()
 		})
 	}
 }

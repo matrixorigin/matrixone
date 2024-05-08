@@ -93,6 +93,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 			// citizen
 			TestGossipProbeInterval: cfg.GossipProbeInterval.Duration,
 			LogDB:                   logdb,
+			ExplicitHostname:        cfg.ExplicitHostname,
 		},
 		Gossip: config.GossipConfig{
 			BindAddress:      cfg.GossipListenAddr(),

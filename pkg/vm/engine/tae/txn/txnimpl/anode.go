@@ -38,7 +38,7 @@ type anode struct {
 // NewANode creates a InsertNode with data in memory.
 func NewANode(
 	tbl *txnTable,
-	meta *catalog.BlockEntry,
+	meta *catalog.ObjectEntry,
 ) *anode {
 	impl := new(anode)
 	impl.baseNode = newBaseNode(tbl, meta)
@@ -88,21 +88,13 @@ func (n *anode) Close() (err error) {
 }
 
 func (n *anode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
-	left := uint32(data.Length()) - offset
-	nodeLeft := MaxNodeRows - n.rows
-	if left <= nodeLeft {
-		return left
-	}
-	return nodeLeft
+	return uint32(data.Length()) - offset
 }
 
 func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
 	schema := n.table.GetLocalSchema()
 	if n.data == nil {
 		capacity := data.Length() - int(offset)
-		if capacity > int(MaxNodeRows) {
-			capacity = int(MaxNodeRows)
-		}
 		n.data = containers.BuildBatchWithPool(
 			schema.AllNames(),
 			schema.AllTypes(),
@@ -137,9 +129,10 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 
 func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	col := n.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+	blkID := objectio.NewBlockidWithObjectID(&n.meta.ID, 0)
 	if err = objectio.ConstructRowidColumnTo(
 		col.GetDownstreamVector(),
-		&n.meta.ID, startRow, length,
+		blkID, startRow, length,
 		col.GetAllocator(),
 	); err != nil {
 		col.Close()
@@ -165,10 +158,6 @@ func (n *anode) FillColumnView(view *containers.ColumnView, mp *mpool.MPool) (er
 	view.SetData(orig.CloneWindow(0, orig.Length(), mp))
 	view.DeleteMask = n.data.Deletes
 	return
-}
-
-func (n *anode) GetSpace() uint32 {
-	return MaxNodeRows - n.rows
 }
 
 func (n *anode) Compact() {

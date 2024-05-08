@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -63,32 +62,21 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 
 }
 
-type internalMiniExec interface {
-	doComQuery(requestCtx context.Context, input *UserInput) error
-	SetSession(*Session)
-}
-
 type internalExecutor struct {
 	sync.Mutex
 	proto        *internalProtocol
-	executor     internalMiniExec // MySqlCmdExecutor struct impls miniExec
-	pu           *config.ParameterUnit
 	baseSessOpts ie.SessionOverrideOptions
-	aicm         *defines.AutoIncrCacheManager
 }
 
-func NewInternalExecutor(pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) *internalExecutor {
-	return newIe(pu, NewMysqlCmdExecutor(), aicm)
+func NewInternalExecutor() *internalExecutor {
+	return newIe()
 }
 
-func newIe(pu *config.ParameterUnit, inner internalMiniExec, aicm *defines.AutoIncrCacheManager) *internalExecutor {
+func newIe() *internalExecutor {
 	proto := &internalProtocol{result: &internalExecResult{}}
 	ret := &internalExecutor{
 		proto:        proto,
-		executor:     inner,
-		pu:           pu,
 		baseSessOpts: ie.NewOptsBuilder().Finish(),
-		aicm:         aicm,
 	}
 	return ret
 }
@@ -154,13 +142,14 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	ie.Lock()
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
-	defer sess.Close()
-	ie.executor.SetSession(sess)
+	defer func() {
+		sess.Close()
+	}()
 	ie.proto.stashResult = false
 	if sql == "" {
 		return
 	}
-	return ie.executor.doComQuery(ctx, &UserInput{sql: sql})
+	return doComQuery(ctx, sess, &UserInput{sql: sql})
 }
 
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
@@ -168,10 +157,9 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
-	ie.executor.SetSession(sess)
 	ie.proto.stashResult = true
 	logutil.Info("internalExecutor new session", trace.ContextField(ctx), zap.String("session uuid", sess.uuid.String()))
-	err := ie.executor.doComQuery(ctx, &UserInput{sql: sql})
+	err := doComQuery(ctx, sess, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
 	res.err = err
 	return res
@@ -187,16 +175,32 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	//
 	// Session does not have a close call.   We need a Close() call in the Exec/Query method above.
 	//
-	mp, err := mpool.NewMPool("internal_exec_cmd_session", ie.pu.SV.GuestMmuLimitation, mpool.NoFixed)
+	mp, err := mpool.NewMPool("internal_exec_cmd_session", getGlobalPu().SV.GuestMmuLimitation, mpool.NoFixed)
 	if err != nil {
 		logutil.Fatalf("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
-	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true, ie.aicm, nil)
+	sess := NewSession(ie.proto, mp, GSysVariables, true, nil)
 	sess.SetRequestContext(ctx)
 	sess.SetConnectContext(ctx)
+	sess.disableTrace = true
 
-	t, _ := GetTenantInfo(ctx, DefaultTenantMoAdmin)
+	var t *TenantInfo
+	if accountId, err := defines.GetAccountId(ctx); err == nil {
+		t = &TenantInfo{
+			TenantID:      accountId,
+			UserID:        defines.GetUserId(ctx),
+			DefaultRoleID: defines.GetRoleId(ctx),
+		}
+		if accountId == sysAccountID {
+			t.Tenant = sysAccountName // fixme: fix empty tencent value, while do metric collection.
+			t.User = "internal"
+			// more details in authenticateUserCanExecuteStatementWithObjectTypeNone()
+			t.DefaultRole = moAdminRoleName
+		}
+	} else {
+		t, _ = GetTenantInfo(ctx, DefaultTenantMoAdmin)
+	}
 	sess.SetTenantInfo(t)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
@@ -422,7 +426,7 @@ func (ip *internalProtocol) ResetStatistics() {
 
 func (ip *internalProtocol) GetStats() string { return "internal unknown stats" }
 
-func (ip *internalProtocol) CalculateOutTrafficBytes() int64 { return 0 }
+func (ip *internalProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
 func (ip *internalProtocol) sendLocalInfileRequest(filename string) error {
 	return nil
@@ -431,5 +435,15 @@ func (ip *internalProtocol) sendLocalInfileRequest(filename string) error {
 func (ip *internalProtocol) incDebugCount(int) {}
 
 func (ip *internalProtocol) resetDebugCount() []uint64 {
+	return nil
+}
+
+func (ip *internalProtocol) DisableAutoFlush() {
+}
+
+func (ip *internalProtocol) EnableAutoFlush() {
+}
+
+func (ip *internalProtocol) Flush() error {
 	return nil
 }

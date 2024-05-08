@@ -1,0 +1,63 @@
+drop database if exists rollbacktest;
+create database rollbacktest;
+set @@autocommit = 0;
+create table t1(a int primary key );
+insert into t1 values(1);
+insert into t1 values(1);
+Duplicate entry '1' for key 'a'
+select * from t1;
+a
+1
+delete from t1 where a = 1;
+insert into t1 values(1);
+insert into t1 values(1);
+Duplicate entry '1' for key 'a'
+select * from t1;
+a
+1
+insert into t1 values(2);
+insert into t1 values(2);
+Duplicate entry '2' for key 'a'
+select * from t1;
+a
+1
+2
+insert into t1 values(3);
+delete from t1 where a = 3;
+delete from t1 where b = 3;
+invalid input: column b does not exist
+insert into t1 values(3);
+update t1 set a = 2;
+Duplicate entry '2' for key 'a'
+commit ;
+select * from t1;
+a
+1
+2
+3
+create table if not exists t2( id int primary key );
+insert into t2 values(1);
+select * from t2;
+id
+1
+insert into t2 values(2);
+select * from t2;
+id
+1
+2
+insert into t2 values(1);
+Duplicate entry '1' for key 'id'
+select * from t2;
+id
+1
+2
+commit;
+select * from t2;
+id
+1
+2
+commit;
+drop table t1;
+drop table t2;
+drop database if exists rollbacktest;
+set @@autocommit = 1;

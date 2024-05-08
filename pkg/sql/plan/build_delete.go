@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -58,6 +59,10 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		allDelTableIDs[tableDef.TblId] = struct{}{}
 	}
 
+	allDelTables := make(map[FkReferKey]struct{})
+	for i, tableDef := range tblInfo.tableDefs {
+		allDelTables[FkReferKey{Db: tblInfo.objRef[i].SchemaName, Tbl: tableDef.Name}] = struct{}{}
+	}
 	// append delete plans
 	beginIdx := 0
 	// needLockTable := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
@@ -76,6 +81,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		delPlanCtx.updateColLength = 0
 		delPlanCtx.rowIdPos = getRowIdPos(tableDef)
 		delPlanCtx.allDelTableIDs = allDelTableIDs
+		delPlanCtx.allDelTables = allDelTables
 		delPlanCtx.lockTable = needLockTable
 		delPlanCtx.isDeleteWithoutFilters = isDeleteWithoutFilters
 
@@ -83,7 +89,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 			partTableIds := make([]uint64, tableDef.Partition.PartitionNum)
 			partTableNames := make([]string, tableDef.Partition.PartitionNum)
 			for j, partition := range tableDef.Partition.Partitions {
-				_, partTableDef := ctx.Resolve(tblInfo.objRef[i].SchemaName, partition.PartitionTableName)
+				_, partTableDef := ctx.Resolve(tblInfo.objRef[i].SchemaName, partition.PartitionTableName, Snapshot{TS: &timestamp.Timestamp{}})
 				partTableIds[j] = partTableDef.TblId
 				partTableNames[j] = partition.PartitionTableName
 			}
@@ -112,6 +118,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 
 	reduceSinkSinkScanNodes(query)
 	ReCalcQueryStats(builder, query)
+	reCheckifNeedLockWholeTable(builder)
 	query.StmtType = plan.Query_DELETE
 	return &Plan{
 		Plan: &plan.Plan_Query{

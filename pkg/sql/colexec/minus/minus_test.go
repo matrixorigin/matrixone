@@ -126,7 +126,7 @@ func newMinusTestCase(proc *process.Process, leftBatches, rightBatches []*batch.
 	proc.Reg.MergeReceivers[0].Ch <- nil
 	proc.Reg.MergeReceivers[1].Ch <- nil
 	arg := new(Argument)
-	arg.info = &vm.OperatorInfo{
+	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 		Idx:     0,
 		IsFirst: false,
 		IsLast:  false,

@@ -59,7 +59,8 @@ func (s *memStore) Create(
 		s.uncommitted[string(txnOp.Txn().ID)] = m
 		txnOp.AppendEventCallback(
 			client.ClosedEvent,
-			func(txnMeta txn.TxnMeta) {
+			func(event client.TxnEvent) {
+				txnMeta := event.Txn
 				s.Lock()
 				defer s.Unlock()
 				delete(s.uncommitted, string(txnMeta.ID))

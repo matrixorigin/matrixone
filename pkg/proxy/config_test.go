@@ -27,8 +27,8 @@ func TestFillDefault(t *testing.T) {
 	require.NotEqual(t, "", c.ListenAddress)
 	require.NotEqual(t, 0, c.RebalanceInterval.Duration)
 	require.NotEqual(t, true, c.RebalanceDisabled)
-	require.NotEqual(t, 0, c.RebalanceToerance)
-	require.Less(t, c.RebalanceToerance, float64(1))
+	require.NotEqual(t, 0, c.RebalanceTolerance)
+	require.Less(t, c.RebalanceTolerance, float64(1))
 	require.NotEqual(t, 0, c.Cluster.RefreshInterval.Duration)
 }
 

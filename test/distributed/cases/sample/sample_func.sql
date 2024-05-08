@@ -89,3 +89,8 @@ select sample(max(c1), 1 rows) from s_t3;
 /* 1. expression (not only simple column) should be OK */
 select c1, sample(c1+1, 100 percent) from s_t3 order by c1;
 
+-- test `sample(expression, n rows, unit)` syntax.
+-- it's same as sample(n rows) but will avoid centroids skewed.
+select count(*) from (select sample(c1, 2 rows, 'row') from s_t3);
+select count(*) from (select sample(c1, 2 rows, 'block') from s_t3);
+select c1, sample(c2, 1 rows, 'row') from s_t3 group by c1 order by c1;

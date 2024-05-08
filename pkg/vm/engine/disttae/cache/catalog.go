@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -45,7 +46,35 @@ func NewCatalog() *CatalogCache {
 			data:       btree.NewBTreeG(databaseItemLess),
 			rowidIndex: btree.NewBTreeG(databaseItemRowidLess),
 		},
+		mu: struct {
+			sync.Mutex
+			start types.TS
+			end   types.TS
+		}{start: types.MaxTs()},
 	}
+}
+
+func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	cc.mu.start = start
+	cc.mu.end = end
+}
+
+var _ = (&CatalogCache{}).UpdateStart
+
+func (cc *CatalogCache) UpdateStart(ts types.TS) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	if cc.mu.start != types.MaxTs() {
+		cc.mu.start = ts
+	}
+}
+
+func (cc *CatalogCache) CanServe(ts types.TS) bool {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	return ts.GreaterEq(&cc.mu.start) && ts.LessEq(&cc.mu.end)
 }
 
 func (cc *CatalogCache) GC(ts timestamp.Timestamp) {
@@ -139,6 +168,22 @@ func (cc *CatalogCache) GetTableById(databaseId, tblId uint64) *TableItem {
 	// If account is much, the performance is very bad.
 	cc.tables.data.Ascend(key, func(item *TableItem) bool {
 		if item.Id == tblId {
+			rel = item
+			return false
+		}
+		return true
+	})
+	return rel
+}
+
+// GetTableByName returns the table item whose name is tableName in the database.
+func (cc *CatalogCache) GetTableByName(databaseID uint64, tableName string) *TableItem {
+	var rel *TableItem
+	key := &TableItem{
+		DatabaseId: databaseID,
+	}
+	cc.tables.data.Ascend(key, func(item *TableItem) bool {
+		if item.Name == tableName {
 			rel = item
 			return false
 		}
@@ -277,18 +322,66 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 
 func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 	var find bool
+	var ts timestamp.Timestamp
+	var databaseId uint64
+
+	deleted := make(map[uint64]bool)
+	inserted := make(map[uint64]*DatabaseItem)
+	db.Id = math.MaxUint64
 
 	cc.databases.data.Ascend(db, func(item *DatabaseItem) bool {
-		if !item.deleted && item.AccountId == db.AccountId &&
-			item.Name == db.Name {
-			find = true
-			db.Id = item.Id
-			db.CreateSql = item.CreateSql
-			db.Typ = item.Typ
+		if item.deleted && item.AccountId == db.AccountId && item.Name == db.Name {
+			if !ts.IsEmpty() {
+				if item.Ts.Equal(ts) {
+					deleted[item.Id] = true
+					return true
+				} else {
+					return false
+				}
+			}
+			ts = item.Ts
+			databaseId = item.Id
+			deleted[item.Id] = true
+			return true
+		}
+
+		if !item.deleted && item.AccountId == db.AccountId && item.Name == db.Name &&
+			(ts.IsEmpty() || ts.Equal(item.Ts) && databaseId != item.Id) {
+			if !ts.IsEmpty() && ts.Equal(item.Ts) && databaseId != item.Id {
+				inserted[item.Id] = item
+				return true
+			} else {
+				find = true
+				copyDatabaseItem(db, item)
+				return false
+			}
 		}
 		return false
 	})
-	return find
+
+	if find {
+		return true
+	}
+
+	for rowid := range deleted {
+		delete(inserted, rowid)
+	}
+
+	//if there is no inserted item, it means that the database is deleted.
+	if len(inserted) == 0 {
+		return false
+	}
+
+	//if there is more than one inserted item, it means that it is wrong
+	if len(inserted) > 1 {
+		panic(fmt.Sprintf("account %d has multiple database %s", db.AccountId, db.Name))
+	}
+
+	//get item
+	for _, item := range inserted {
+		copyDatabaseItem(db, item)
+	}
+	return true
 }
 
 func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
@@ -653,7 +746,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) *plan.TableDef {
 			cols = append(cols, &plan.ColDef{
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
 					Scale:       attr.Attr.Type.Scale,
@@ -773,68 +866,4 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) *plan.TableDef {
 		Indexes:       indexes,
 		Version:       tblItem.Version,
 	}
-}
-
-// TODO(ghs)
-// is debug for #13151, will remove later
-func (cc *CatalogCache) TraverseDbAndTbl() (dbs []DebugDatabaseItem, tbls []DebugTableItem) {
-	dbs = cc.databases.TraverseDatabaseCache()
-	tbls = cc.tables.TraverseTableCache()
-	return
-}
-
-type DebugTableItem struct {
-	AccountId  uint32
-	DatabaseId uint64
-	Name       string
-	Ts         timestamp.Timestamp
-	Id         uint64
-	Deleted    bool
-}
-
-func (dt *DebugTableItem) String() string {
-	return fmt.Sprintf("%d-%d-%d-%s-%v-%s",
-		dt.AccountId, dt.DatabaseId, dt.Id, dt.Name, dt.Deleted, types.TimestampToTS(dt.Ts).ToString())
-}
-
-type DebugDatabaseItem struct {
-	AccountId uint32
-	Name      string
-	Ts        timestamp.Timestamp
-	Id        uint64
-	Deleted   bool
-}
-
-func (dd *DebugDatabaseItem) String() string {
-	return fmt.Sprintf("%d-%d-%s-%v-%s",
-		dd.AccountId, dd.Id, dd.Name, dd.Deleted, types.TimestampToTS(dd.Ts).ToString())
-}
-
-func (c *tableCache) TraverseTableCache() (ret []DebugTableItem) {
-	c.data.Scan(func(tblItem *TableItem) bool {
-		ret = append(ret, DebugTableItem{
-			Ts:         tblItem.Ts,
-			Id:         tblItem.Id,
-			Name:       tblItem.Name,
-			Deleted:    tblItem.deleted,
-			AccountId:  tblItem.AccountId,
-			DatabaseId: tblItem.DatabaseId,
-		})
-		return true
-	})
-	return
-}
-
-func (t *databaseCache) TraverseDatabaseCache() (ret []DebugDatabaseItem) {
-	t.data.Scan(func(dbItem *DatabaseItem) bool {
-		ret = append(ret, DebugDatabaseItem{
-			Ts:        dbItem.Ts,
-			Id:        dbItem.Id,
-			Name:      dbItem.Name,
-			Deleted:   dbItem.deleted,
-			AccountId: dbItem.AccountId,
-		})
-		return true
-	})
-	return
 }

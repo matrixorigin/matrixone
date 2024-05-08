@@ -107,6 +107,8 @@ type container struct {
 
 	nullWithBatch *batch.Batch
 	rewriteCond   *plan.Expr
+
+	maxAllocSize int64
 }
 
 // // for join operator, it's a two-ary operator, we will reference to two table
@@ -124,11 +126,6 @@ type Argument struct {
 	// container means the local parameters defined by the operator constructor
 	ctr *container
 	// the five attributes below are passed by the outside
-
-	// Ibucket determines the data partition this operator need to deal with
-	Ibucket uint64
-	// Nbucket means how many partitions there are
-	Nbucket uint64
 
 	// // the input batch's columns' type
 	// Typs []types.Type
@@ -159,8 +156,11 @@ type Argument struct {
 	OnList   []*plan.Expr
 	HashOnPK bool
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -176,7 +176,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -190,30 +190,6 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) GetCnAddr() string {
-	return arg.info.CnAddr
-}
-
-func (arg *Argument) GetOperatorID() int32 {
-	return arg.info.OperatorID
-}
-
-func (arg *Argument) GetParalleID() int32 {
-	return arg.info.ParallelID
-}
-
-func (arg *Argument) GetMaxParallel() int32 {
-	return arg.info.MaxParallel
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
@@ -224,6 +200,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
 		arg.ctr = nil
 	}
 }
@@ -231,6 +210,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
+		ctr.expr = nil
 	}
 }
 
@@ -269,7 +249,9 @@ func (ctr *container) cleanEvalVectors() {
 		if ctr.evecs[i].executor != nil {
 			ctr.evecs[i].executor.Free()
 		}
+		ctr.evecs[i].vec = nil
 	}
+	ctr.evecs = nil
 }
 
 func (ctr *container) cleanEqVectors() {
@@ -277,5 +259,6 @@ func (ctr *container) cleanEqVectors() {
 		if ctr.buildEqEvecs[i].executor != nil {
 			ctr.buildEqEvecs[i].executor.Free()
 		}
+		ctr.buildEqEvecs[i].vec = nil
 	}
 }

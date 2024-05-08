@@ -20,7 +20,7 @@ use db2;
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int primary key, b varchar(5));
-create table t2(a int ,b varchar(5), c int, foreign key(c) references t1(a));
+create table t2(a int ,b varchar(5), c int, constraint `c1` foreign key(c) references t1(a));
 desc t2;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
@@ -28,4 +28,4 @@ b    VARCHAR(5)    YES        null
 c    INT(32)    YES    MUL    null        
 show create table t2;
 Table    Create Table
-t2    CREATE TABLE `t2` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(5) DEFAULT NULL,\n`c` INT DEFAULT NULL,\nCONSTRAINT `` FOREIGN KEY (`c`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+t2    CREATE TABLE `t2` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(5) DEFAULT NULL,\n`c` INT DEFAULT NULL,\nCONSTRAINT `c1` FOREIGN KEY (`c`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)

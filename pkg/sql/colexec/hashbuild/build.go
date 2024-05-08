@@ -16,14 +16,13 @@ package hashbuild
 
 import (
 	"bytes"
+	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -86,7 +85,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.Info.Idx, arg.Info.ParallelIdx, arg.Info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
@@ -95,7 +94,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := ctr.build(ap, proc, anal, arg.Info.IsFirst); err != nil {
+			if err := ctr.build(ap, proc, anal, arg.GetIsFirst()); err != nil {
 				ctr.cleanHashMap()
 				return result, err
 			}
@@ -110,16 +109,21 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
 				return result, err
 			}
+			ctr.state = SendHashMap
 
 		case SendHashMap:
 			result.Batch = batch.NewWithSize(0)
+
 			if ctr.inputBatchRowCount > 0 {
+				var jm *hashmap.JoinMap
 				if ap.NeedHashMap {
 					if ctr.keyWidth <= 8 {
-						result.Batch.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
+						jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
 					} else {
-						result.Batch.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
+						jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
 					}
+					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+					result.Batch.AuxData = jm
 				}
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil
@@ -127,6 +131,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.cleanHashMap()
 			}
+
+			// this is just a dummy batch to indicate that the batch is must not empty.
+			// we should make sure this batch can be sent to the next join operator in other pipelines.
+			if result.Batch.IsEmpty() && ap.NeedHashMap {
+				result.Batch.AddRowCount(1)
+			}
+
 			ctr.state = SendBatch
 			return result, nil
 		case SendBatch:
@@ -156,7 +167,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 		appendRows := 0
 		length := src.RowCount()
 		for offset < length {
-			ctr.tmpBatch, appendRows, err = proc.AppendBatchFromOffset(ctr.tmpBatch, src, offset)
+			ctr.tmpBatch, appendRows, err = proc.AppendToFixedSizeFromOffset(ctr.tmpBatch, src, offset)
 			if err != nil {
 				return err
 			}
@@ -243,6 +254,9 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 	)
 
 	for i := 0; i < ctr.inputBatchRowCount; i += hashmap.UnitLimit {
+		if i%(hashmap.UnitLimit*32) == 0 {
+			runtime.Gosched()
+		}
 		n := ctr.inputBatchRowCount - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
@@ -295,7 +309,7 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 			}
 		}
 
-		if len(ap.RuntimeFilterSenders) > 0 && ap.RuntimeFilterSenders[0].Spec.Expr != nil {
+		if ap.RuntimeFilterSpec != nil {
 			if len(ap.ctr.uniqueJoinKeys) == 0 {
 				ap.ctr.uniqueJoinKeys = make([]*vector.Vector, len(ctr.executor))
 				for j, vec := range ctr.vecs[vecIdx1] {
@@ -359,32 +373,20 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
-	if len(ap.RuntimeFilterSenders) == 0 {
-		ctr.state = SendHashMap
+	if ap.RuntimeFilterSpec == nil {
 		return nil
 	}
 
-	var runtimeFilter *pipeline.RuntimeFilter
+	var runtimeFilter process.RuntimeFilterMessage
+	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
 
-	if ap.RuntimeFilterSenders[0].Spec.Expr == nil {
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ: pipeline.RuntimeFilter_PASS,
-		}
+	if ap.RuntimeFilterSpec.Expr == nil {
+		runtimeFilter.Typ = process.RuntimeFilter_PASS
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		return nil
 	} else if ctr.inputBatchRowCount == 0 || len(ctr.uniqueJoinKeys) == 0 || ctr.uniqueJoinKeys[0].Length() == 0 {
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ: pipeline.RuntimeFilter_DROP,
-		}
-	}
-
-	if runtimeFilter != nil {
-		select {
-		case <-proc.Ctx.Done():
-			ctr.state = End
-
-		case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-			ctr.state = SendHashMap
-		}
-
+		runtimeFilter.Typ = process.RuntimeFilter_DROP
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		return nil
 	}
 
@@ -395,7 +397,8 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		hashmapCount = ctr.strHashMap.GroupCount()
 	}
 
-	inFilterCardLimit := plan.GetInFilterCardLimit()
+	inFilterCardLimit := ap.RuntimeFilterSpec.UpperLimit
+	//inFilterCardLimit := plan.GetInFilterCardLimit()
 	//bloomFilterCardLimit := int64(plan.BloomFilterCardLimit)
 	//v, ok = runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_bloom_filter")
 	//if ok {
@@ -410,17 +413,17 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 	}()
 
 	if hashmapCount > uint64(inFilterCardLimit) {
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ: pipeline.RuntimeFilter_PASS,
-		}
+		runtimeFilter.Typ = process.RuntimeFilter_PASS
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		return nil
 	} else {
 		// Composite primary key
-		if len(ctr.uniqueJoinKeys) > 1 {
+		if ap.RuntimeFilterSpec.Expr.GetF() != nil {
 			bat := batch.NewWithSize(len(ctr.uniqueJoinKeys))
 			bat.SetRowCount(vec.Length())
 			copy(bat.Vecs, ctr.uniqueJoinKeys)
 
-			newVec, err := colexec.EvalExpressionOnce(proc, ap.RuntimeFilterSenders[0].Spec.Expr, []*batch.Batch{bat})
+			newVec, err := colexec.EvalExpressionOnce(proc, ap.RuntimeFilterSpec.Expr, []*batch.Batch{bat})
 			if err != nil {
 				return err
 			}
@@ -438,21 +441,12 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 			return err
 		}
 
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ:  pipeline.RuntimeFilter_IN,
-			Card: int32(vec.Length()),
-			Data: data,
-		}
+		runtimeFilter.Typ = process.RuntimeFilter_IN
+		runtimeFilter.Card = int32(vec.Length())
+		runtimeFilter.Data = data
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		ctr.runtimeFilterIn = true
 	}
-
-	select {
-	case <-proc.Ctx.Done():
-		ctr.state = End
-
-	case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-		ctr.state = SendHashMap
-	}
-
 	return nil
 }
 
@@ -463,7 +457,6 @@ func (ctr *container) evalJoinCondition(proc *process.Process) error {
 		for idx2 := range ctr.executor {
 			vec, err := ctr.executor[idx2].Eval(proc, []*batch.Batch{ctr.batches[idx1]})
 			if err != nil {
-				ctr.cleanEvalVectors(proc.Mp())
 				return err
 			}
 			ctr.vecs[idx1][idx2] = vec

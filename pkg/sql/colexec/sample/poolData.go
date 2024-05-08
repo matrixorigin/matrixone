@@ -86,9 +86,9 @@ func (pd *poolData) replaceValidRow(mp *mpool.MPool, bat *batch.Batch, row1, row
 	return nil
 }
 
-// output1 returns the result of poolData and set the source pointer to be nil.
+// flush returns the result of poolData and set the source pointer to be nil.
 // priority: validBatch > invalidBatch.
-func (pd *poolData) output() (bat *batch.Batch) {
+func (pd *poolData) flush() (bat *batch.Batch) {
 	if pd.validBatch != nil {
 		bat = pd.validBatch
 		pd.validBatch = nil
@@ -114,6 +114,9 @@ var replaceMethods []replaceFunc
 
 func init() {
 	replaceMethods = make([]replaceFunc, 256)
+	replaceMethods[types.T_bit] = func(toVec, fromVec *vector.Vector, row1, row2 int, mp *mpool.MPool) error {
+		return vector.SetFixedAt[uint64](toVec, row1, vector.GetFixedAt[uint64](fromVec, row2))
+	}
 	replaceMethods[types.T_int8] = func(toVec, fromVec *vector.Vector, row1, row2 int, mp *mpool.MPool) error {
 		return vector.SetFixedAt[int8](toVec, row1, vector.GetFixedAt[int8](fromVec, row2))
 	}

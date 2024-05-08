@@ -8,7 +8,6 @@ show tables;
 Tables_in_autocommit_1
 insert into t5 values(100),(2000),(3000);
 no such table drop_table_truncate.t5
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 rollback;
 set @@autocommit=on;
 drop table if exists t5;
@@ -21,7 +20,6 @@ create table dis_table_03(b varchar(25) primary key,c datetime);
 begin ;
 insert into dis_table_03 select b,c from dis_table_02;
 Duplicate entry 'aaaa' for key 'b'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from dis_table_03;
 b    c
 use drop_table_truncate;

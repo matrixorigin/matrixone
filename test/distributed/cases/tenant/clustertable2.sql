@@ -54,7 +54,7 @@ select * from a;
 delete from a;
 
 -- load into cluster table
-load data infile '$resources/load_data/cluster_table1.csv' into table a;
+load data infile '$resources/load_data/cluster_table1.csv' into table a fields terminated by ',';
 update a set account_id=(select account_id from mo_account where account_name="account_test") where account_id=1;
 select a from a;
 

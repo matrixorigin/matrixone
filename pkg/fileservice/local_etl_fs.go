@@ -80,6 +80,9 @@ func (l *LocalETLFS) Name() string {
 	return l.name
 }
 
+func (l *LocalETLFS) Close() {
+}
+
 func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
 	select {
 	case <-ctx.Done():
@@ -521,6 +524,10 @@ func (l *LocalETLFS) ensureDir(nativePath string) error {
 
 	// create
 	if err := os.Mkdir(nativePath, 0755); err != nil {
+		if os.IsExist(err) {
+			// existed
+			return nil
+		}
 		return err
 	}
 

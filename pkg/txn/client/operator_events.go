@@ -15,36 +15,92 @@
 package client
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
 // TxnEvent txn events
-type EventType int
+type EventType struct {
+	Value int
+	Name  string
+}
 
-const (
-	// ClosedEvent txn closed event
-	ClosedEvent = EventType(0)
+var (
+	OpenEvent            = EventType{0, "open"}
+	WaitActiveEvent      = EventType{1, "wait-active"}
+	UpdateSnapshotEvent  = EventType{2, "update-snapshot"}
+	LockEvent            = EventType{3, "lock"}
+	UnlockEvent          = EventType{4, "unlock"}
+	RangesEvent          = EventType{5, "ranges"}
+	BuildPlanEvent       = EventType{6, "build-plan"}
+	ExecuteSQLEvent      = EventType{7, "execute-sql"}
+	CompileEvent         = EventType{8, "compile"}
+	TableScanEvent       = EventType{9, "table-scan"}
+	WorkspaceWriteEvent  = EventType{10, "workspace-write"}
+	WorkspaceAdjustEvent = EventType{11, "workspace-adjust"}
+	CommitEvent          = EventType{95, "commit"}
+	CommitResponseEvent  = EventType{96, "commit-response"}
+	CommitWaitApplyEvent = EventType{97, "wait-applied"}
+	RollbackEvent        = EventType{98, "rollback"}
+	ClosedEvent          = EventType{99, "closed"}
 )
 
 func (tc *txnOperator) AppendEventCallback(
 	event EventType,
-	callbacks ...func(txn.TxnMeta)) {
+	callbacks ...func(TxnEvent)) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	if tc.mu.closed {
 		panic("append callback on closed txn")
 	}
 	if tc.mu.callbacks == nil {
-		tc.mu.callbacks = make(map[EventType][]func(txn.TxnMeta), 1)
+		tc.mu.callbacks = make(map[EventType][]func(TxnEvent), 1)
 	}
 	tc.mu.callbacks[event] = append(tc.mu.callbacks[event], callbacks...)
 }
 
-func (tc *txnOperator) triggerEventLocked(event EventType) {
+func (tc *txnOperator) triggerEvent(event TxnEvent) {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	tc.triggerEventLocked(event)
+}
+
+func (tc *txnOperator) triggerEventLocked(event TxnEvent) {
 	if tc.mu.callbacks == nil {
 		return
 	}
-	for _, cb := range tc.mu.callbacks[event] {
-		cb(tc.mu.txn)
+	for _, cb := range tc.mu.callbacks[event.Event] {
+		cb(event)
+	}
+}
+
+func newCostEvent(
+	event EventType,
+	txn txn.TxnMeta,
+	Sequence uint64,
+	err error,
+	cost time.Duration) TxnEvent {
+	return TxnEvent{
+		Event:     event,
+		Txn:       txn,
+		Sequence:  Sequence,
+		Err:       err,
+		Cost:      cost,
+		CostEvent: true,
+	}
+}
+
+func newEvent(
+	event EventType,
+	txn txn.TxnMeta,
+	Sequence uint64,
+	err error) TxnEvent {
+	return TxnEvent{
+		Event:     event,
+		Txn:       txn,
+		Sequence:  Sequence,
+		Err:       err,
+		CostEvent: false,
 	}
 }

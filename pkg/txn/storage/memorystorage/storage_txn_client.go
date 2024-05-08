@@ -17,7 +17,6 @@ package memorystorage
 import (
 	"context"
 	"fmt"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -105,6 +104,24 @@ type StorageTxnOperator struct {
 	meta     txn.TxnMeta
 }
 
+func (s *StorageTxnOperator) IsSnapOp() bool {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) client.TxnOperator {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) EnterRunSql() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *StorageTxnOperator) ExitRunSql() {
+	//TODO implement me
+	panic("implement me")
+}
+
 var _ client.TxnOperator = new(StorageTxnOperator)
 
 func (s *StorageTxnOperator) AddWorkspace(_ client.Workspace) {
@@ -135,7 +152,7 @@ func (s *StorageTxnOperator) IsOpenLog() bool {
 	panic("unimplemented")
 }
 
-func (s *StorageTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta)) {
+func (s *StorageTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(client.TxnEvent)) {
 	panic("unimplemented")
 }
 
@@ -211,6 +228,10 @@ func (s *StorageTxnOperator) Txn() txn.TxnMeta {
 }
 
 func (s *StorageTxnOperator) SnapshotTS() timestamp.Timestamp {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) CreateTS() timestamp.Timestamp {
 	panic("unimplemented")
 }
 
@@ -310,5 +331,13 @@ func (s *StorageTxnOperator) GetOverview() client.TxnOverview {
 }
 
 func (s *StorageTxnOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) TxnOptions() txn.TxnOptions {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) NextSequence() uint64 {
 	panic("should not call")
 }

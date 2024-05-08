@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,31 +14,22 @@
 
 package malloc
 
-// #include <stdlib.h>
+/*
+#include "mimalloc/static.c"
+#cgo CFLAGS: -Imimalloc
+*/
 import "C"
 import "unsafe"
 
-//go:linkname throw runtime.throw
-func throw(s string)
-
-// alloc allocates a byte slice of size use cgo
 func Alloc(n int) []byte {
-	if n == 0 {
-		return make([]byte, 0)
-	}
-	ptr := C.calloc(C.size_t(n), 1)
-	if ptr == nil {
-		// NB: throw is like panic, except it guarantees the process will be
-		// terminated. The call below is exactly what the Go runtime invokes when
-		// it cannot allocate memory.
-		throw("out of memory")
-	}
-	return unsafe.Slice((*byte)(ptr), n)
+	ptr := C.mi_malloc(C.ulong(n))
+	slice := unsafe.Slice((*byte)(ptr), n)
+	return slice
 }
 
 func Free(b []byte) {
-	if cap(b) != 0 {
-		b = b[:cap(b)]
-		C.free(unsafe.Pointer(&b[0]))
+	if cap(b) == 0 {
+		return
 	}
+	C.mi_free((unsafe.Pointer)(unsafe.SliceData(b)))
 }

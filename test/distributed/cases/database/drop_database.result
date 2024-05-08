@@ -4,9 +4,10 @@ create database test01;
 drop database test01;
 show databases;
 Database
-mo_task
+information_schema
 mo_catalog
+mo_debug
+mo_task
+mysql
 system
 system_metrics
-mysql
-information_schema

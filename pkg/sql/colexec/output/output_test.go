@@ -43,7 +43,7 @@ var (
 	tcs []outputTestCase
 )
 
-func sqlOutput(_ interface{}, _ *batch.Batch) error {
+func sqlOutput(_ *batch.Batch) error {
 	return nil
 }
 
@@ -57,10 +57,12 @@ func init() {
 			arg: &Argument{
 				Data: nil,
 				Func: sqlOutput,
-				info: &vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
 				},
 			},
 		},
@@ -87,35 +89,30 @@ func TestOutput(t *testing.T) {
 		require.NoError(t, err)
 
 		bats := []*batch.Batch{
-			newBatch(t, tc.types, tc.proc, Rows),
-			newBatch(t, tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
 			batch.EmptyBatch,
 		}
 		resetChildren(tc.arg, bats)
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.children[0].Free(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 // create a new block based on the type information
-func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
 func resetChildren(arg *Argument, bats []*batch.Batch) {
-	if len(arg.children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
+	arg.SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: bats,
+			},
 		})
-
-	} else {
-		arg.children = arg.children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
-	}
 }

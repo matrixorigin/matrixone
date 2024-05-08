@@ -52,3 +52,15 @@ func TestCreateK8SDashboard(t *testing.T) {
 	c := NewK8SDashboardCreator("http://127.0.0.1", "admin", "admin", "Prometheus")
 	require.NoError(t, c.Create())
 }
+
+// TestCreateCloudCtrlPlaneDashboard creates a dashboard for cloud env. (used in control-plane)
+// diff TestCreateCloudDashboard, which is used in data-plane (unit).
+func TestCreateCloudCtrlPlaneDashboard(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
+	c := NewCloudCtrlPlaneDashboardCreator("http://127.0.0.1", "admin", "admin", "Prometheus")
+	require.NoError(t, c.Create())
+}

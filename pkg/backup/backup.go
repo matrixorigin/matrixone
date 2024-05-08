@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,11 +50,17 @@ func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
 		if err != nil {
 			return err
 		}
-		//for tae hakeeper
+		// for tae hakeeper
 		cfg.TaeDir, _, err = setupFilesystem(ctx, bs.Dir, false)
 		if err != nil {
 			return err
 		}
+		// for parallel backup
+		parallel, err := strconv.ParseUint(bs.Parallelism, 10, 16)
+		if err != nil {
+			return err
+		}
+		cfg.Parallelism = uint16(parallel)
 	} else {
 		s3Conf, err = getS3Config(ctx, bs.Option)
 		if err != nil {
@@ -66,7 +74,15 @@ func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
 		if err != nil {
 			return err
 		}
+		cfg.Parallelism = s3Conf.parallelism
 	}
+
+	if bs.BackupTs == "" {
+		cfg.BackupTs = types.TS{}
+	} else {
+		cfg.BackupTs = types.StringToTS(bs.BackupTs)
+	}
+	cfg.BackupType = bs.BackupType
 
 	// step 2 : backup mo
 	if err = backupBuildInfo(ctx, cfg); err != nil {
@@ -117,7 +133,7 @@ func backupConfigs(ctx context.Context, cfg *Config) error {
 
 var backupTae = func(ctx context.Context, config *Config) error {
 	fs := fileservice.SubPath(config.TaeDir, taeDir)
-	return BackupData(ctx, config.SharedFs, fs, "")
+	return BackupData(ctx, config.SharedFs, fs, "", config)
 }
 
 func backupHakeeper(ctx context.Context, config *Config) error {
@@ -184,7 +200,7 @@ func ToCsvLine2(s [][]string) (string, error) {
 	return ss.String(), nil
 }
 
-func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles []*taeFile, backupTime string) error {
+func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles []*taeFile, backupTime, backupTS, typ string) error {
 	var err error
 	if Fs == nil {
 		return moerr.NewInternalError(ctx, "fileservice is nil")
@@ -205,11 +221,12 @@ func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles 
 	}
 
 	//save tae files size
-	lines = [][]string{taeBackupTimeAndSizeToCsv(backupTime, size)}
+	lines = [][]string{taeBackupTimeAndSizeToCsv(backupTime, backupTS, typ, size)}
 	metas, err = ToCsvLine2(lines)
 	if err != nil {
 		return err
 	}
+
 	return writeFile(ctx, Fs, taeSum, []byte(metas))
 }
 

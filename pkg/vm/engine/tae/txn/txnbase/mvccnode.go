@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -90,7 +91,8 @@ func (un *TxnMVCCNode) CheckConflict(txn txnif.TxnReader) error {
 	// For a committed node, it is w-w conflict if ts is lt the node commit ts
 	// -------+-------------+-------------------->
 	//        ts         CommitTs            time
-	if un.End.Greater(txn.GetStartTS()) {
+	startTS := txn.GetStartTS()
+	if un.End.Greater(&startTS) {
 		return txnif.ErrTxnWWConflict
 	}
 	return nil
@@ -110,7 +112,8 @@ func (un *TxnMVCCNode) IsVisible(txn txnif.TxnReader) (visible bool) {
 	}
 
 	// Node is visible if the commit ts is le ts
-	if un.End.LessEq(txn.GetStartTS()) && !un.Aborted {
+	startTS := txn.GetStartTS()
+	if un.End.LessEq(&startTS) && !un.Aborted {
 		return true
 	}
 
@@ -128,7 +131,7 @@ func (un *TxnMVCCNode) IsVisibleByTS(ts types.TS) (visible bool) {
 	}
 
 	// Node is visible if the commit ts is le ts
-	if un.End.LessEq(ts) && !un.Aborted {
+	if un.End.LessEq(&ts) && !un.Aborted {
 		return true
 	}
 
@@ -160,7 +163,7 @@ func (un *TxnMVCCNode) PreparedIn(minTS, maxTS types.TS) (in, before bool) {
 	// Created by other committed txn
 	// false: not prepared in range
 	// true: prepared before minTs
-	if un.Prepare.Less(minTS) {
+	if un.Prepare.Less(&minTS) {
 		return false, true
 	}
 
@@ -170,7 +173,7 @@ func (un *TxnMVCCNode) PreparedIn(minTS, maxTS types.TS) (in, before bool) {
 	// Created by other committed txn
 	// true: prepared in range
 	// false: not prepared before minTs
-	if un.Prepare.GreaterEq(minTS) && un.Prepare.LessEq(maxTS) {
+	if un.Prepare.GreaterEq(&minTS) && un.Prepare.LessEq(&maxTS) {
 		return true, false
 	}
 
@@ -204,7 +207,7 @@ func (un *TxnMVCCNode) CommittedIn(minTS, maxTS types.TS) (in, before bool) {
 	// Created by other committed txn
 	// false: not committed in range
 	// true: committed before minTs
-	if un.End.Less(minTS) {
+	if un.End.Less(&minTS) {
 		return false, true
 	}
 
@@ -214,7 +217,7 @@ func (un *TxnMVCCNode) CommittedIn(minTS, maxTS types.TS) (in, before bool) {
 	// Created by other committed txn
 	// true: committed in range
 	// false: not committed before minTs
-	if un.End.GreaterEq(minTS) && un.End.LessEq(maxTS) {
+	if un.End.GreaterEq(&minTS) && un.End.LessEq(&maxTS) {
 		return true, false
 	}
 
@@ -238,7 +241,8 @@ func (un *TxnMVCCNode) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 	// --------+----------------+------------------------>
 	//         Ts           PrepareTs                Time
 	// If ts is before the prepare ts. not to wait
-	if un.Txn.GetPrepareTS().GreaterEq(ts) {
+	prepareTS := un.Txn.GetPrepareTS()
+	if prepareTS.GreaterEq(&ts) {
 		return false, nil
 	}
 
@@ -290,20 +294,20 @@ func (un *TxnMVCCNode) GetTxn() txnif.TxnReader {
 }
 
 func (un *TxnMVCCNode) Compare(o *TxnMVCCNode) int {
-	if un.Start.Less(o.Start) {
+	if un.Start.Less(&o.Start) {
 		return -1
 	}
-	if un.Start.Equal(o.Start) {
+	if un.Start.Equal(&o.Start) {
 		return 0
 	}
 	return 1
 }
 
 func (un *TxnMVCCNode) Compare2(o *TxnMVCCNode) int {
-	if un.Prepare.Less(o.Prepare) {
+	if un.Prepare.Less(&o.Prepare) {
 		return -1
 	}
-	if un.Prepare.Equal(o.Prepare) {
+	if un.Prepare.Equal(&o.Prepare) {
 		return un.Compare(o)
 	}
 	return 1
@@ -381,10 +385,10 @@ func CompareTxnMVCCNode(e, o *TxnMVCCNode) int {
 }
 
 func (un *TxnMVCCNode) Update(o *TxnMVCCNode) {
-	if !un.Start.Equal(o.Start) {
+	if !un.Start.Equal(&o.Start) {
 		panic(fmt.Sprintf("logic err, expect %s, start at %s", un.Start.ToString(), o.Start.ToString()))
 	}
-	if !un.Prepare.Equal(o.Prepare) {
+	if !un.Prepare.Equal(&o.Prepare) {
 		panic(fmt.Sprintf("logic err expect %s, prepare at %s", un.Prepare.ToString(), o.Prepare.ToString()))
 	}
 }
@@ -404,6 +408,10 @@ func (un *TxnMVCCNode) String() string {
 }
 
 func (un *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {
+	if un.Txn == nil {
+		err = moerr.NewTxnNotFoundNoCtx()
+		return
+	}
 	un.Prepare = un.Txn.GetPrepareTS()
 	ts = un.Prepare
 	return

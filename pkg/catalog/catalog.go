@@ -52,6 +52,48 @@ func init() {
 	for i, name := range MoTableMetaSchema {
 		MoTableMetaDefs[i] = newAttributeDef(name, MoTableMetaTypes[i], i == 0)
 	}
+
+	def := &engine.ConstraintDef{
+		Cts: []engine.Constraint{
+			&engine.PrimaryKeyDef{
+				Pkey: &plan.PrimaryKeyDef{
+					Cols:        []uint64{0},
+					PkeyColId:   0,
+					PkeyColName: SystemDBAttr_ID,
+					Names:       []string{SystemDBAttr_ID},
+				},
+			},
+		},
+	}
+	MoDatabaseConstraint, _ = def.MarshalBinary()
+
+	def = &engine.ConstraintDef{
+		Cts: []engine.Constraint{
+			&engine.PrimaryKeyDef{
+				Pkey: &plan.PrimaryKeyDef{
+					Cols:        []uint64{0},
+					PkeyColId:   0,
+					PkeyColName: SystemRelAttr_ID,
+					Names:       []string{SystemRelAttr_ID},
+				},
+			},
+		},
+	}
+	MoTableConstraint, _ = def.MarshalBinary()
+
+	def = &engine.ConstraintDef{
+		Cts: []engine.Constraint{
+			&engine.PrimaryKeyDef{
+				Pkey: &plan.PrimaryKeyDef{
+					Cols:        []uint64{0},
+					PkeyColId:   0,
+					PkeyColName: SystemColAttr_UniqName,
+					Names:       []string{SystemColAttr_UniqName},
+				},
+			},
+		},
+	}
+	MoColumnConstraint, _ = def.MarshalBinary()
 }
 
 func newAttributeDef(name string, typ types.Type, isPrimary bool) engine.TableDef {
@@ -166,8 +208,8 @@ func genCreateDatabases(rows [][]any) []CreateDatabase {
 func genDropDatabases(rows [][]any) []DropDatabase {
 	cmds := make([]DropDatabase, len(rows))
 	for i, row := range rows {
-		cmds[i].Id = row[MO_DATABASE_DAT_ID_IDX].(uint64)
-		cmds[i].Name = string(row[MO_DATABASE_DAT_NAME_IDX].([]byte))
+		cmds[i].Id = row[SKIP_ROWID_OFFSET+MO_DATABASE_DAT_ID_IDX].(uint64)
+		cmds[i].Name = string(row[SKIP_ROWID_OFFSET+MO_DATABASE_DAT_NAME_IDX].([]byte))
 	}
 	return cmds
 }
@@ -308,6 +350,11 @@ func GenRows(bat *batch.Batch) [][]any {
 		switch vec.GetType().Oid {
 		case types.T_bool:
 			col := vector.MustFixedCol[bool](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_bit:
+			col := vector.MustFixedCol[uint64](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
@@ -452,4 +499,8 @@ func BuildQueryResultPath(accountName, statementId string, blockIdx int) string 
 
 func BuildQueryResultMetaPath(accountName, statementId string) string {
 	return fmt.Sprintf(QueryResultMetaPath, accountName, statementId)
+}
+
+func BuildProfilePath(typ, name string) string {
+	return fmt.Sprintf("%s/%s_%s", ProfileDir, typ, name)
 }

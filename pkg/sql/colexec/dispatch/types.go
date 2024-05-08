@@ -81,8 +81,11 @@ type Argument struct {
 	ShuffleRegIdxLocal  []int
 	ShuffleRegIdxRemote []int
 
-	info     *vm.OperatorInfo
-	Children []vm.Operator
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -98,7 +101,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -112,30 +115,6 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) GetCnAddr() string {
-	return arg.info.CnAddr
-}
-
-func (arg *Argument) GetOperatorID() int32 {
-	return arg.info.OperatorID
-}
-
-func (arg *Argument) GetParalleID() int32 {
-	return arg.info.ParallelID
-}
-
-func (arg *Argument) GetMaxParallel() int32 {
-	return arg.info.MaxParallel
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.Children = append(arg.Children, child)
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		if arg.ctr.isRemote {
@@ -147,17 +126,15 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			for i := range arg.RemoteRegs {
 				uuids = append(uuids, arg.RemoteRegs[i].Uuid)
 			}
-			colexec.Srv.DeleteUuids(uuids)
+			colexec.Get().DeleteUuids(uuids)
 		}
 	}
 
+	// told the local receiver to stop if it is still running.
 	for i := range arg.LocalRegs {
-		if !pipelineFailed {
-			select {
-			case <-arg.LocalRegs[i].Ctx.Done():
-			case arg.LocalRegs[i].Ch <- nil:
-			}
+		select {
+		case <-arg.LocalRegs[i].Ctx.Done():
+		case arg.LocalRegs[i].Ch <- nil:
 		}
-		close(arg.LocalRegs[i].Ch)
 	}
 }

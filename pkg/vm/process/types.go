@@ -37,7 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -332,13 +332,15 @@ type Process struct {
 	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	prepareParams       *vector.Vector
 
-	QueryService queryservice.QueryService
+	QueryClient qclient.QueryClient
 
 	Hakeeper logservice.CNHAKeeperClient
 
 	UdfService udf.Service
 
 	WaitPolicy lock.WaitPolicy
+
+	MessageBoard *MessageBoard
 }
 
 type vectorPool struct {

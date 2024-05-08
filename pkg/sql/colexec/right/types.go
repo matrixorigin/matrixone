@@ -17,7 +17,6 @@ package right
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -69,12 +68,12 @@ type container struct {
 	matched *bitmap.Bitmap
 
 	handledLast bool
+
+	maxAllocSize int64
 }
 
 type Argument struct {
 	ctr        *container
-	Ibucket    uint64
-	Nbucket    uint64
 	Result     []colexec.ResultPos
 	LeftTypes  []types.Type
 	RightTypes []types.Type
@@ -92,8 +91,11 @@ type Argument struct {
 	IsShuffle          bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -109,7 +111,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -121,30 +123,6 @@ func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
-}
-
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) GetCnAddr() string {
-	return arg.info.CnAddr
-}
-
-func (arg *Argument) GetOperatorID() int32 {
-	return arg.info.OperatorID
-}
-
-func (arg *Argument) GetParalleID() int32 {
-	return arg.info.ParallelID
-}
-
-func (arg *Argument) GetMaxParallel() int32 {
-	return arg.info.MaxParallel
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -166,12 +144,21 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+		ctr.cleanEvalVectors()
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
+	}
+	if arg.bat != nil {
+		proc.PutBatch(arg.bat)
+		arg.bat = nil
 	}
 }
 
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
+		ctr.expr = nil
 	}
 }
 
@@ -201,10 +188,12 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
+func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.evecs {
 		if ctr.evecs[i].executor != nil {
 			ctr.evecs[i].executor.Free()
 		}
+		ctr.evecs[i].vec = nil
 	}
+	ctr.evecs = nil
 }

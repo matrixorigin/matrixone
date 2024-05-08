@@ -141,10 +141,12 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 			go func() {
 				defer close(c)
 				arg2 := &Argument{
-					info: &vm.OperatorInfo{
-						Idx:     1,
-						IsFirst: false,
-						IsLast:  false,
+					OperatorBase: vm.OperatorBase{
+						OperatorInfo: vm.OperatorInfo{
+							Idx:     1,
+							IsFirst: false,
+							IsLast:  false,
+						},
 					},
 				}
 				arg2.rt = &state{}
@@ -152,7 +154,7 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
 				arg2.rt.hasNewVersionInRange = testFunc
-				valueScan := arg.children[0].(*value_scan.Argument)
+				valueScan := arg.GetChildren(0).(*value_scan.Argument)
 				resetChildren(arg2, valueScan.Batchs[0])
 				defer arg2.rt.parker.FreeMem()
 
@@ -208,17 +210,20 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 			go func() {
 				defer close(c)
 				arg2 := &Argument{
-					info: &vm.OperatorInfo{
-						Idx:     1,
-						IsFirst: false,
-						IsLast:  false,
-					}}
+					OperatorBase: vm.OperatorBase{
+						OperatorInfo: vm.OperatorInfo{
+							Idx:     1,
+							IsFirst: false,
+							IsLast:  false,
+						},
+					},
+				}
 				arg2.rt = &state{}
 				arg2.rt.retryError = nil
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
 				arg2.rt.hasNewVersionInRange = testFunc
-				valueScan := arg.children[0].(*value_scan.Argument)
+				valueScan := arg.GetChildren(0).(*value_scan.Argument)
 				resetChildren(arg2, valueScan.Batchs[0])
 				defer arg2.rt.parker.FreeMem()
 
@@ -274,17 +279,20 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 			go func() {
 				defer close(c)
 				arg2 := &Argument{
-					info: &vm.OperatorInfo{
-						Idx:     1,
-						IsFirst: false,
-						IsLast:  false,
-					}}
+					OperatorBase: vm.OperatorBase{
+						OperatorInfo: vm.OperatorInfo{
+							Idx:     1,
+							IsFirst: false,
+							IsLast:  false,
+						},
+					},
+				}
 				arg2.rt = &state{}
 				arg2.rt.retryError = nil
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
 				arg2.rt.hasNewVersionInRange = testFunc
-				valueScan := arg.children[0].(*value_scan.Argument)
+				valueScan := arg.GetChildren(0).(*value_scan.Argument)
 				resetChildren(arg2, valueScan.Batchs[0])
 				defer arg2.rt.parker.FreeMem()
 
@@ -317,7 +325,7 @@ func TestLockWithBlocking(t *testing.T) {
 			idx int,
 			isFirst, isLast bool) (bool, error) {
 			arg.rt.hasNewVersionInRange = testFunc
-			arg.info = &vm.OperatorInfo{
+			arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 				Idx:     idx,
 				IsFirst: isFirst,
 				IsLast:  isLast,
@@ -378,7 +386,7 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			idx int,
 			isFirst, isLast bool) (bool, error) {
 			arg.rt.hasNewVersionInRange = testFunc
-			arg.info = &vm.OperatorInfo{
+			arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 				Idx:     idx,
 				IsFirst: isFirst,
 				IsLast:  isLast,
@@ -456,7 +464,7 @@ func runLockNonBlockingOpTest(
 			pkType := types.New(types.T_int32, 0, 0)
 			tsType := types.New(types.T_TS, 0, 0)
 			arg := NewArgumentByEngine(nil)
-			arg.info = &vm.OperatorInfo{
+			arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 				Idx:     0,
 				IsFirst: false,
 				IsLast:  false,
@@ -591,15 +599,10 @@ func runLockOpTest(
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {
-	if len(arg.children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
+	arg.SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: []*batch.Batch{bat},
+			},
 		})
-
-	} else {
-		arg.children = arg.children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
-		})
-	}
 }

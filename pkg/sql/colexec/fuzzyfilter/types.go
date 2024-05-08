@@ -42,7 +42,7 @@ type Argument struct {
 	// Estimates of the number of data items obtained from statistical information
 	N      float64
 	PkName string
-	PkTyp  *plan.Type
+	PkTyp  plan.Type
 
 	bloomFilter   *bloomfilter.BloomFilter
 	roaringFilter *roaringFilter
@@ -53,13 +53,13 @@ type Argument struct {
 	rbat         *batch.Batch
 
 	// about runtime filter
-	inFilterCardLimit    int64
-	pass2RuntimeFilter   *vector.Vector
-	RuntimeFilterSpecs   []*plan.RuntimeFilterSpec
-	RuntimeFilterSenders []*colexec.RuntimeFilterChan
+	pass2RuntimeFilter *vector.Vector
+	RuntimeFilterSpec  *plan.RuntimeFilterSpec
+	vm.OperatorBase
+}
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -75,7 +75,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -89,35 +89,8 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetRuntimeFilterSenders(rfs []*colexec.RuntimeFilterChan) {
-	arg.RuntimeFilterSenders = rfs
-}
-
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) GetCnAddr() string {
-	return arg.info.CnAddr
-}
-
-func (arg *Argument) GetOperatorID() int32 {
-	return arg.info.OperatorID
-}
-
-func (arg *Argument) GetParalleID() int32 {
-	return arg.info.ParallelID
-}
-
-func (arg *Argument) GetMaxParallel() int32 {
-	return arg.info.MaxParallel
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
 	if arg.bloomFilter != nil {
 		arg.bloomFilter.Clean()
 		arg.bloomFilter = nil
@@ -130,7 +103,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		arg.rbat = nil
 	}
 	if arg.pass2RuntimeFilter != nil {
-		proc.PutVector(arg.pass2RuntimeFilter)
+		arg.pass2RuntimeFilter.Free(proc.GetMPool())
+		arg.pass2RuntimeFilter = nil
 	}
 
 	arg.FreeAllReg()

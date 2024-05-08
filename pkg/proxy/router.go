@@ -22,10 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+	"go.uber.org/zap"
 )
 
 const (
@@ -87,28 +89,33 @@ type CNServer struct {
 	addr string
 	// internalConn indicates the connection is from internal network. Default is false,
 	internalConn bool
+
+	// clientAddr is the real client address.
+	clientAddr string
 }
 
 // Connect connects to backend server and returns IOSession.
-func (s *CNServer) Connect(timeout time.Duration) (goetty.IOSession, error) {
-	c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()))
+func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IOSession, error) {
+	c := goetty.NewIOSession(
+		goetty.WithSessionCodec(frontend.NewSqlCodec()),
+		goetty.WithSessionLogger(logger),
+	)
 	err := c.Connect(s.addr, timeout)
 	if err != nil {
+		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, error: %v",
+			timeout, s.backendConnID, s.addr, err)
 		return nil, newConnectErr(err)
 	}
 	if len(s.salt) != 20 {
 		return nil, moerr.NewInternalErrorNoCtx("salt is empty")
 	}
-	info := pb.NewVersionedExtraInfo(pb.Version0,
-		&pb.ExtraInfoV0{
-			Salt: s.salt,
-			Label: pb.RequestLabel{
-				Labels: s.reqLabel.allLabels(),
-			},
-			ConnectionID: s.proxyConnID,
-			InternalConn: s.internalConn,
-		},
-	)
+	info := pb.ExtraInfo{
+		Salt:         s.salt,
+		InternalConn: s.internalConn,
+		ConnectionID: s.proxyConnID,
+		Label:        s.reqLabel.allLabels(),
+		ClientAddr:   s.clientAddr,
+	}
 	data, err := info.Encode()
 	if err != nil {
 		return nil, err

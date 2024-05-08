@@ -35,6 +35,50 @@ import (
 	"golang.org/x/exp/rand"
 )
 
+func TestGetBindInRestartService(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			a.setRestartService("s1")
+			l := a.getLockTablesLocked(0)[1]
+			assert.False(t, a.getServiceBinds(l.ServiceID).isStatus(pb.Status_ServiceLockEnable))
+		})
+}
+
+func TestSetRestartService(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.setRestartService("s1")
+			assert.True(t, a.canRestartService("s1"))
+		})
+}
+
+func TestCanRestartService(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			a.setRestartService("s1")
+			assert.False(t, a.canRestartService("s1"))
+		})
+}
+
+func TestRemainTxnInService(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			a.setRestartService("s1")
+			assert.Equal(t, int32(-1), a.remainTxnInService("s1"))
+		})
+}
+
 func TestGetWithNoBind(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
@@ -100,21 +144,12 @@ func TestCheckTimeoutServiceTask(t *testing.T) {
 			// create s1 bind
 			a.Get("s1", 0, 1, 0, pb.Sharding_None)
 
-			// wait bind timeout
 			for {
+				bind := a.GetLatest(0, 1)
+				if !bind.Valid {
+					return
+				}
 				time.Sleep(time.Millisecond * 10)
-				binds := a.getServiceBinds("s1")
-				if binds != nil {
-					continue
-				}
-				a.mu.Lock()
-				if len(a.getLockTablesLocked(0)) > 0 {
-					assert.Equal(t,
-						pb.LockTable{ServiceID: "s1", Table: 1, Version: 1, OriginTable: 1, Valid: false},
-						a.getLockTablesLocked(0)[1])
-				}
-				a.mu.Unlock()
-				return
 			}
 		})
 }
@@ -142,7 +177,7 @@ func TestKeepaliveBind(t *testing.T) {
 					bind,
 					c,
 					func(lt pb.LockTable) {}))
-			k := NewLockTableKeeper("s1", c, interval/5, interval/5, m)
+			k := NewLockTableKeeper("s1", c, interval/5, interval/5, m, &service{})
 
 			binds := a.getServiceBinds("s1")
 			assert.NotNil(t, binds)
@@ -157,13 +192,13 @@ func TestKeepaliveBind(t *testing.T) {
 				a.mu.Lock()
 				valid := a.getLockTablesLocked(0)[1].Valid
 				a.mu.Unlock()
-				if !valid {
+				if valid {
 					break
 				}
 				time.Sleep(time.Millisecond * 20)
 			}
 
-			assert.False(t, a.KeepLockTableBind("s1"))
+			assert.True(t, a.KeepLockTableBind("s1"))
 		})
 }
 
@@ -173,7 +208,13 @@ func TestValid(t *testing.T) {
 		time.Hour,
 		func(a *lockTableAllocator) {
 			b := a.Get("s1", 0, 4, 0, pb.Sharding_None)
-			assert.Empty(t, a.Valid([]pb.LockTable{b}))
+			valid, _ := a.Valid("s1", []byte{}, []pb.LockTable{b})
+			assert.Empty(t, valid)
+
+			c := a.getCtl("s1")
+			state, ok := c.states.Load(string([]byte{}))
+			require.True(t, ok)
+			require.Equal(t, committingState, state)
 		})
 }
 
@@ -184,7 +225,8 @@ func TestValidWithServiceInvalid(t *testing.T) {
 		func(a *lockTableAllocator) {
 			b := a.Get("s1", 0, 4, 0, pb.Sharding_None)
 			b.ServiceID = "s2"
-			assert.NotEmpty(t, a.Valid([]pb.LockTable{b}))
+			valid, _ := a.Valid("", []byte{}, []pb.LockTable{b})
+			assert.NotEmpty(t, valid)
 		})
 }
 
@@ -195,7 +237,83 @@ func TestValidWithVersionChanged(t *testing.T) {
 		func(a *lockTableAllocator) {
 			b := a.Get("s1", 0, 4, 0, pb.Sharding_None)
 			b.Version++
-			assert.NotEmpty(t, a.Valid([]pb.LockTable{b}))
+			valid, _ := a.Valid("", []byte{}, []pb.LockTable{b})
+			assert.NotEmpty(t, valid)
+		})
+}
+
+func TestValidWithCannotCommitState(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			txn := []byte{1}
+
+			c := a.getCtl("s1")
+			require.Equal(t, cannotCommitState, c.add(string(txn), cannotCommitState))
+
+			b := a.Get("s1", 0, 4, 0, pb.Sharding_None)
+			_, err := a.Valid("s1", txn, []pb.LockTable{b})
+			assert.Error(t, err)
+		})
+}
+
+func TestCtlCanRemovedByInvalidService(t *testing.T) {
+	ch := make(chan struct{})
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			c := a.getCtl("s1")
+			c.add("t1", committingState)
+			close(ch)
+			for {
+				n := 0
+				a.ctl.Range(func(key, value any) bool {
+					n++
+					return true
+				})
+				if n == 0 {
+					return
+				}
+			}
+		},
+		func(lta *lockTableAllocator) {
+			lta.keepBindTimeout = time.Millisecond * 100
+			lta.options.getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
+				<-ch
+				return false, nil, nil
+			}
+		})
+}
+
+func TestCtlCanRemovedByNotActiveTxn(t *testing.T) {
+	ch := make(chan struct{})
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			c := a.getCtl("s1")
+			c.add("t1", committingState)
+			c.add("t2", committingState)
+			close(ch)
+			for {
+				n := 0
+				c.states.Range(func(key, value any) bool {
+					n++
+					return true
+				})
+				if n == 1 {
+					return
+				}
+			}
+		},
+		func(lta *lockTableAllocator) {
+			lta.keepBindTimeout = time.Millisecond * 100
+			lta.options.getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
+				<-ch
+				return true, [][]byte{[]byte("t2")}, nil
+			}
 		})
 }
 
@@ -235,7 +353,7 @@ func runValidBenchmark(b *testing.B, name string, tables int) {
 			for p.Next() {
 				v := rand.Intn(tables)
 				values[0] = binds[v]
-				a.Valid(values)
+				a.Valid("", []byte{}, values)
 			}
 		})
 	})
@@ -244,7 +362,9 @@ func runValidBenchmark(b *testing.B, name string, tables int) {
 func runLockTableAllocatorTest(
 	t *testing.T,
 	timeout time.Duration,
-	fn func(*lockTableAllocator)) {
+	fn func(*lockTableAllocator),
+	opts ...AllocatorOption,
+) {
 	reuse.RunReuseTests(func() {
 		defer leaktest.AfterTest(t)()
 		testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
@@ -268,7 +388,7 @@ func runLockTableAllocatorTest(
 				}))
 		runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 
-		a := NewLockTableAllocator(testSockets, timeout, morpc.Config{})
+		a := NewLockTableAllocator(testSockets, timeout, morpc.Config{}, opts...)
 		defer func() {
 			assert.NoError(t, a.Close())
 		}()

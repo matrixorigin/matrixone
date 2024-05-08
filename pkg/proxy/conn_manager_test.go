@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"sync"
 	"testing"
 
@@ -114,23 +115,24 @@ func TestConnManagerConnection(t *testing.T) {
 		}),
 	)
 
-	tu0 := newTunnel(context.TODO(), nil, nil)
+	rt := runtime.DefaultRuntime()
+	tu0 := newTunnel(context.TODO(), rt.Logger(), nil)
 
-	tu11 := newTunnel(context.TODO(), nil, nil)
+	tu11 := newTunnel(context.TODO(), rt.Logger(), nil)
 	cm.connect(cn11, tu11)
 	require.Equal(t, 1, cm.count())
 	require.Equal(t, 1, len(cm.getLabelHashes()))
 	require.Equal(t, 1, cm.getCNTunnels("hash1").count())
 	require.Equal(t, 0, cm.getCNTunnels("hash2").count())
 
-	tu12 := newTunnel(context.TODO(), nil, nil)
+	tu12 := newTunnel(context.TODO(), rt.Logger(), nil)
 	cm.connect(cn12, tu12)
 	require.Equal(t, 2, cm.count())
 	require.Equal(t, 1, len(cm.getLabelHashes()))
 	require.Equal(t, 2, cm.getCNTunnels("hash1").count())
 	require.Equal(t, 0, cm.getCNTunnels("hash2").count())
 
-	tu21 := newTunnel(context.TODO(), nil, nil)
+	tu21 := newTunnel(context.TODO(), rt.Logger(), nil)
 	cm.connect(cn21, tu21)
 	require.Equal(t, 3, cm.count())
 	require.Equal(t, 2, len(cm.getLabelHashes()))
@@ -183,6 +185,7 @@ func TestConnManagerConnection(t *testing.T) {
 func TestConnManagerConnectionConcurrency(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
+	rt := runtime.DefaultRuntime()
 	cm := newConnManager()
 	require.NotNil(t, cm)
 
@@ -195,7 +198,7 @@ func TestConnManagerConnectionConcurrency(t *testing.T) {
 					"k1": "v1",
 				}),
 			)
-			tu11 := newTunnel(context.TODO(), nil, nil)
+			tu11 := newTunnel(context.TODO(), rt.Logger(), nil)
 			cm.connect(cn11, tu11)
 			wg.Done()
 		}(i)
@@ -205,7 +208,7 @@ func TestConnManagerConnectionConcurrency(t *testing.T) {
 					"k2": "v2",
 				}),
 			)
-			tu11 := newTunnel(context.TODO(), nil, nil)
+			tu11 := newTunnel(context.TODO(), rt.Logger(), nil)
 			cm.connect(cn11, tu11)
 			wg.Done()
 		}(i)
@@ -219,6 +222,7 @@ func TestConnManagerConnectionConcurrency(t *testing.T) {
 }
 
 func TestConnManagerLabelInfo(t *testing.T) {
+	rt := runtime.DefaultRuntime()
 	cm := newConnManager()
 	require.NotNil(t, cm)
 
@@ -228,7 +232,7 @@ func TestConnManagerLabelInfo(t *testing.T) {
 		}),
 	)
 
-	tu11 := newTunnel(context.TODO(), nil, nil)
+	tu11 := newTunnel(context.TODO(), rt.Logger(), nil)
 	cm.connect(cn11, tu11)
 	require.Equal(t, 1, cm.count())
 	require.Equal(t, 1, len(cm.getLabelHashes()))

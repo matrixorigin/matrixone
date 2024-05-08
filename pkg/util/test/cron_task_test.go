@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -93,11 +92,8 @@ func TestCalculateStorageUsage(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	pu.SV.SetDefaultValues()
 
-	// Mock autoIncrCache
-	aicm := &defines.AutoIncrCacheManager{}
-
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor(pu, aicm)
+		return frontend.NewInternalExecutor()
 	}
 
 	err = mometric.CalculateStorageUsage(ctx, ieFactory)

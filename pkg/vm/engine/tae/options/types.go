@@ -18,10 +18,13 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 )
 
@@ -40,6 +43,7 @@ const (
 	DefaultCheckpointGlobalMinCount     = 10
 	DefaultGlobalVersionInterval        = time.Hour
 	DefaultGCCheckpointInterval         = time.Minute
+	DefaultOverallFlushMemControl       = common.Const1GBytes
 
 	DefaultScanGCInterval = time.Minute * 30
 	DefaultGCTTL          = time.Hour
@@ -65,13 +69,15 @@ type Options struct {
 	StorageCfg    *StorageCfg    `toml:"storage-cfg"`
 	CheckpointCfg *CheckpointCfg `toml:"checkpoint-cfg"`
 	SchedulerCfg  *SchedulerCfg  `toml:"scheduler-cfg"`
-	GCCfg         *GCCfg
+	GCCfg         *GCCfg         `toml:"gc-cfg"`
 	LogtailCfg    *LogtailCfg
+	MergeCfg      *MergeConfig
 	CatalogCfg    *CatalogCfg
 
 	TransferTableTTL time.Duration
 
 	IncrementalDedup bool
+	IsStandalone     bool
 
 	Clock     clock.Clock
 	Fs        fileservice.FileService
@@ -81,4 +87,6 @@ type Options struct {
 	Ctx       context.Context
 	// MaxMessageSize is the size of max message which is sent to log-service.
 	MaxMessageSize uint64
+
+	TaskServiceGetter taskservice.Getter
 }

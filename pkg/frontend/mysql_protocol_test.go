@@ -35,6 +35,10 @@ import (
 	goetty_buf "github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -49,9 +53,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/require"
 )
 
 type TestRoutineManager struct {
@@ -63,11 +64,10 @@ type TestRoutineManager struct {
 
 func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024, tRM.pu.SV)
-	exe := NewMysqlCmdExecutor()
-	routine := NewRoutine(context.TODO(), pro, exe, tRM.pu.SV, rs)
+	routine := NewRoutine(context.TODO(), pro, tRM.pu.SV, rs)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
-	err := pro.writePackets(hsV10pkt)
+	err := pro.writePackets(hsV10pkt, true)
 	if err != nil {
 		panic(err)
 	}
@@ -103,12 +103,13 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
+	setGlobalPu(pu)
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	// A mock autoincrcache manager.
-	aicm := &defines.AutoIncrCacheManager{}
-	rm, _ := NewRoutineManager(ctx, pu, aicm)
+	globalAicm = &defines.AutoIncrCacheManager{}
+	rm, _ := NewRoutineManager(ctx)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -179,7 +180,7 @@ func TestKIll(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
-
+	setGlobalPu(pu)
 	sql1 := "select connection_id();"
 	var sql2, sql3, sql4 string
 
@@ -229,7 +230,7 @@ func TestKIll(t *testing.T) {
 			}
 			stmts = append(stmts, cmdFieldStmt)
 		} else {
-			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), 1)
+			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), 1, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -246,8 +247,8 @@ func TestKIll(t *testing.T) {
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	// A mock autoincrcache manager.
-	aicm := &defines.AutoIncrCacheManager{}
-	rm, _ := NewRoutineManager(ctx, pu, aicm)
+	globalAicm = &defines.AutoIncrCacheManager{}
+	globalRtMgr, _ = NewRoutineManager(ctx)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -255,7 +256,7 @@ func TestKIll(t *testing.T) {
 	//running server
 	go func() {
 		defer wg.Done()
-		echoServer(rm.Handler, rm, NewSqlCodec())
+		echoServer(globalRtMgr.Handler, globalRtMgr, NewSqlCodec())
 	}()
 
 	time.Sleep(time.Second * 2)
@@ -277,6 +278,7 @@ func TestKIll(t *testing.T) {
 	connIdRow = conn2.QueryRow(sql1)
 	err = connIdRow.Scan(&conn2Id)
 	require.NoError(t, err)
+	fmt.Println("conn==>", conn1Id, conn2Id)
 
 	wgSleep := sync.WaitGroup{}
 	wgSleep.Add(1)
@@ -287,7 +289,8 @@ func TestKIll(t *testing.T) {
 		defer wgSleep.Done()
 		var resultId int
 		connIdRow = conn1.QueryRow(sql5)
-		err = connIdRow.Scan(&resultId)
+		//find race on err here
+		err := connIdRow.Scan(&resultId)
 		require.NoError(t, err)
 	}()
 
@@ -1274,8 +1277,8 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	if !ok {
 		return moerr.NewInternalError(ctx, "message is not Packet")
 	}
-
-	ses := NewSession(pro, nil, pu, nil, false, nil, nil)
+	setGlobalPu(pu)
+	ses := NewSession(pro, nil, nil, false, nil)
 	ses.SetRequestContext(ctx)
 	pro.SetSession(ses)
 
@@ -1621,7 +1624,7 @@ func TestMysqlResultSet(t *testing.T) {
 // }
 
 func openDbConn(t *testing.T, port int) (*sql.DB, error) {
-	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=10s&timeout=10s&writeTimeout=10s", port)
+	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=30s&timeout=30s&writeTimeout=30s", port)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, err
@@ -1803,13 +1806,14 @@ func Test_writePackets(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize))
+		err = proto.writePackets(make([]byte, MaxPayloadSize), true)
 		convey.So(err, convey.ShouldBeNil)
 	})
 	convey.Convey("writepackets 16MB failed", t, func() {
@@ -1829,13 +1833,14 @@ func Test_writePackets(t *testing.T) {
 		}).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize))
+		err = proto.writePackets(make([]byte, MaxPayloadSize), true)
 		convey.So(err, convey.ShouldBeError)
 	})
 
@@ -1849,13 +1854,14 @@ func Test_writePackets(t *testing.T) {
 		}).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize))
+		err = proto.writePackets(make([]byte, MaxPayloadSize), true)
 		convey.So(err, convey.ShouldBeError)
 	})
 }
@@ -1869,6 +1875,7 @@ func Test_openpacket(t *testing.T) {
 		ioses.EXPECT().OutBuf().Return(goetty_buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -1892,14 +1899,16 @@ func Test_openpacket(t *testing.T) {
 		ioses.EXPECT().Flush(gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		pu, err := getParameterUnit("test/system_vars_config.toml", nil, nil)
 		if err != nil {
 			t.Error(err)
 		}
+		setGlobalPu(pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
-		ses := NewSession(proto, nil, pu, nil, false, nil, nil)
+		ses := NewSession(proto, nil, nil, false, nil)
 		ses.SetRequestContext(context.TODO())
 		proto.ses = ses
 
@@ -1920,14 +1929,16 @@ func Test_openpacket(t *testing.T) {
 		ioses.EXPECT().OutBuf().Return(goetty_buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		pu, err := getParameterUnit("test/system_vars_config.toml", nil, nil)
 		if err != nil {
 			t.Error(err)
 		}
+		setGlobalPu(pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
-		ses := NewSession(proto, nil, pu, nil, false, nil, nil)
+		ses := NewSession(proto, nil, nil, false, nil)
 		ses.SetRequestContext(context.TODO())
 		proto.ses = ses
 
@@ -1948,6 +1959,7 @@ func Test_openpacket(t *testing.T) {
 		ioses.EXPECT().Flush(gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2043,6 +2055,7 @@ func Test_openpacket(t *testing.T) {
 			convey.So(bytes.Equal(res, want), convey.ShouldBeTrue)
 		}
 	})
+
 }
 
 func TestSendPrepareResponse(t *testing.T) {
@@ -2056,16 +2069,21 @@ func TestSendPrepareResponse(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		proto.SetSession(&Session{})
+		proto.SetSession(&Session{
+			feSessionImpl: feSessionImpl{
+				txnHandler: &TxnHandler{},
+			},
+		})
 
 		st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
-		stmts, err := mysql.Parse(ctx, st.Sql, 1)
+		stmts, err := mysql.Parse(ctx, st.Sql, 1, 0)
 		if err != nil {
 			t.Error(err)
 		}
@@ -2093,6 +2111,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2101,7 +2120,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		st := tree.NewPrepareString("stmt1", "select ?, 1")
-		stmts, err := mysql.Parse(ctx, st.Sql, 1)
+		stmts, err := mysql.Parse(ctx, st.Sql, 1, 0)
 		if err != nil {
 			t.Error(err)
 		}
@@ -2133,6 +2152,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 	ioses.EXPECT().Ref().AnyTimes()
+	ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	if err != nil {
 		f.Error(err)
@@ -2141,7 +2161,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 	st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
-	stmts, err := mysql.Parse(ctx, st.Sql, 1)
+	stmts, err := mysql.Parse(ctx, st.Sql, 1, 0)
 	if err != nil {
 		f.Error(err)
 	}
@@ -2204,6 +2224,7 @@ func TestParseExecuteData(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2260,6 +2281,7 @@ func Test_resultset(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2272,9 +2294,10 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
+		setGlobalPu(pu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, false, nil, nil)
+		ses := NewSession(proto, nil, &gSys, true, nil)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
@@ -2293,6 +2316,7 @@ func Test_resultset(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2305,9 +2329,10 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
+		setGlobalPu(pu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, false, nil, nil)
+		ses := NewSession(proto, nil, &gSys, true, nil)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
@@ -2326,6 +2351,7 @@ func Test_resultset(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2338,9 +2364,10 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
+		setGlobalPu(pu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, false, nil, nil)
+		ses := NewSession(proto, nil, &gSys, true, nil)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
@@ -2362,6 +2389,7 @@ func Test_resultset(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2374,9 +2402,10 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
+		setGlobalPu(pu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, false, nil, nil)
+		ses := NewSession(proto, nil, &gSys, true, nil)
 		ses.SetRequestContext(ctx)
 		ses.cmd = COM_STMT_EXECUTE
 		proto.ses = ses
@@ -2398,6 +2427,7 @@ func Test_send_packet(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2417,6 +2447,7 @@ func Test_send_packet(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2442,6 +2473,7 @@ func Test_analyse320resp(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2486,6 +2518,7 @@ func Test_analyse320resp(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2525,6 +2558,7 @@ func Test_analyse41resp(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2575,6 +2609,7 @@ func Test_analyse41resp(t *testing.T) {
 		ioses.EXPECT().Read(gomock.Any()).Return(new(Packet), nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2677,6 +2712,7 @@ func Test_handleHandshake(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		var IO IOPackageImpl
 		var SV = &config.FrontendParameters{}
 		SV.SkipCheckUser = true
@@ -2709,6 +2745,7 @@ func Test_handleHandshake_Recover(t *testing.T) {
 	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 	ioses.EXPECT().Ref().AnyTimes()
+	ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 	convey.Convey("handleHandshake succ", t, func() {
 		var IO IOPackageImpl
 		var SV = &config.FrontendParameters{}
@@ -2740,6 +2777,7 @@ func TestMysqlProtocolImpl_Close(t *testing.T) {
 	ioses.EXPECT().Read(gomock.Any()).Return(new(Packet), nil).AnyTimes()
 	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 	ioses.EXPECT().Ref().AnyTimes()
+	ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 	ioses.EXPECT().Disconnect().AnyTimes()
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	if err != nil {

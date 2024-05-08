@@ -1,0 +1,21 @@
+SELECT unhex('616263');
+unhex(616263)
+abc
+SELECT unhex('68656c6c6f');
+unhex(68656c6c6f)
+hello
+SELECT unhex('');
+unhex()
+
+SELECT unhex(NULL);
+unhex(NULL)
+NULL
+SELECT unhex('invalid');
+unhex(invalid)
+NULL
+SELECT hex(unhex('616263'));
+hex(unhex(616263))
+616263
+SELECT unhex(hex('abc'));
+unhex(hex(abc))
+abc

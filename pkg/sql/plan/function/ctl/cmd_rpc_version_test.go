@@ -18,13 +18,13 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -43,9 +43,11 @@ func TestHandleGetProtocolVersion(t *testing.T) {
 	initRuntime([]string{id}, []string{addr})
 	qs, err := queryservice.NewQueryService(id, addr, morpc.Config{})
 	require.NoError(t, err)
+	qt, err := qclient.NewQueryClient(id, morpc.Config{})
+	require.NoError(t, err)
 
 	arguments.proc = new(process.Process)
-	arguments.proc.QueryService = qs
+	arguments.proc.QueryClient = qt
 	arguments.service = cn
 
 	err = qs.Start()
@@ -69,10 +71,12 @@ func TestHandleSetProtocolVersion(t *testing.T) {
 	id := uuid.New().String()
 	addr := "127.0.0.1:7777"
 	initRuntime([]string{id}, []string{addr})
-	requireVersionValue(t, 1)
+	requireVersionValue(t, defines.MORPCLatestVersion)
 	qs, err := queryservice.NewQueryService(id, addr, morpc.Config{})
 	require.NoError(t, err)
-	proc.QueryService = qs
+	qt, err := qclient.NewQueryClient(id, morpc.Config{})
+	require.NoError(t, err)
+	proc.QueryClient = qt
 
 	cases := []struct {
 		service serviceType

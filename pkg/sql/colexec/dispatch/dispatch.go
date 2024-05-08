@@ -119,10 +119,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	analy := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
-	analy.Start()
-	defer analy.Stop()
-
 	bat := result.Batch
 
 	if result.Batch == nil {
@@ -213,7 +209,7 @@ func (arg *Argument) prepareRemote(proc *process.Process) error {
 		if arg.FuncId == ShuffleToAllFunc {
 			arg.ctr.remoteToIdx[rr.Uuid] = arg.ShuffleRegIdxRemote[i]
 		}
-		if err := colexec.Srv.PutProcIntoUuidMap(rr.Uuid, proc); err != nil {
+		if err := colexec.Get().PutProcIntoUuidMap(rr.Uuid, proc); err != nil {
 			return err
 		}
 	}

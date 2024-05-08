@@ -20,8 +20,10 @@ import (
 
 	"github.com/FastFilter/xorfilter"
 	"github.com/cespare/xxhash/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/samber/lo"
 )
@@ -42,6 +44,7 @@ func NewEmptyBinaryFuseFilter() StaticFilter {
 type StaticFilter interface {
 	MayContainsKey(key []byte) (bool, error)
 	MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Bitmap, error)
+	MayContainsAny(keys *vector.Vector, lowerBound int, upperBound int) bool
 	Marshal() ([]byte, error)
 	Unmarshal(buf []byte) error
 	String() string
@@ -96,6 +99,20 @@ func NewBinaryFuseFilterByVectors(datas []containers.Vector) (StaticFilter, erro
 func (filter *binaryFuseFilter) MayContainsKey(key []byte) (bool, error) {
 	hash := hashV1(key)
 	return filter.Contains(hash), nil
+}
+
+func (filter *binaryFuseFilter) MayContainsAny(keys *vector.Vector, lowerBound int, upperBound int) bool {
+	found := false
+	op := func(v []byte, _ bool, _ int) error {
+		hash := hashV1(v)
+		if filter.Contains(hash) {
+			found = true
+			return moerr.GetOkExpectedEOB()
+		}
+		return nil
+	}
+	_ = containers.ForeachWindowBytes(keys, lowerBound, upperBound-lowerBound, op, nil)
+	return found
 }
 
 func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Bitmap, error) {

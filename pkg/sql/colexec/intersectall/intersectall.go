@@ -62,14 +62,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	var err error
-	analyzer := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	analyzer := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	analyzer.Start()
 	defer analyzer.Stop()
 	result := vm.NewCallResult()
 	for {
 		switch arg.ctr.state {
 		case Build:
-			if err = arg.ctr.build(proc, analyzer, arg.info.IsFirst); err != nil {
+			if err = arg.ctr.build(proc, analyzer, arg.GetIsFirst()); err != nil {
 				return result, err
 			}
 			if arg.ctr.hashTable != nil {
@@ -79,7 +79,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			last := false
-			last, err = arg.ctr.probe(proc, analyzer, arg.info.IsFirst, arg.info.IsLast, &result)
+			last, err = arg.ctr.probe(proc, analyzer, arg.GetIsFirst(), arg.GetIsLast(), &result)
 			if err != nil {
 				return result, err
 			}

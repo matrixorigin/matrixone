@@ -46,20 +46,19 @@ func TestComposedCmd(t *testing.T) {
 	assert.Nil(t, err)
 	composed.AddCmd(tblCmd)
 
-	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil)
+	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
 	objCmd, err := obj.MakeCommand(1)
 	assert.Nil(t, err)
 	composed.AddCmd(objCmd)
 
-	blk, _ := obj.CreateBlock(nil, catalog.ES_Appendable, nil, nil)
-	blkCmd, err := blk.MakeCommand(1)
-	assert.Nil(t, err)
-	composed.AddCmd(blkCmd)
+	objMvcc := updates.NewObjectMVCCHandle(obj)
 
-	controller := updates.NewMVCCHandle(blk)
+	controller := updates.NewMVCCHandle(objMvcc, 0)
 	ts := types.NextGlobalTsForTest()
 
-	node := updates.MockAppendNode(ts, 0, 2515, controller)
+	appenderMvcc := updates.NewAppendMVCCHandle(obj)
+
+	node := updates.MockAppendNode(ts, 0, 2515, appenderMvcc)
 	cmd := updates.NewAppendCmd(1, node)
 
 	composed.AddCmd(cmd)

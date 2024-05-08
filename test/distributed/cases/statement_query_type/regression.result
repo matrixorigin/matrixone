@@ -1,0 +1,22 @@
+drop account if exists bvt_query_type_reg;
+create account if not exists `bvt_query_type_reg` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+create database statement_query_type;
+begin;
+use statement_query_type;
+create table test_table(col1 int,col2 varchar);
+create view test_view as select * from test_table;
+show create view test_view;
+View    Create View    character_set_client    collation_connection
+test_view    create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
+show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+load data infile '$resources/load_data/test.csv' into table test_table fields terminated by ',';
+insert into test_table values (1,'a'),(2,'b'),(3,'c');
+update test_table set col2='xxx' where col1=1;
+delete from test_table where col1=3;
+rollback ;
+drop account if exists bvt_query_type_reg;

@@ -30,11 +30,15 @@ func TestString(t *testing.T) {
 
 func TestCall(t *testing.T) {
 	arg := Argument{FuncName: "unnest",
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
-		}}
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+	}
+
 	resetChildren(&arg, nil)
 	end, err := arg.Call(testutil.NewProc())
 	require.NoError(t, err)
@@ -55,11 +59,14 @@ func TestCall(t *testing.T) {
 
 func TestPrepare(t *testing.T) {
 	arg := Argument{FuncName: "unnest",
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
-		}}
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+	}
 	err := arg.Prepare(testutil.NewProc())
 	require.Error(t, err)
 	arg.FuncName = "generate_series"

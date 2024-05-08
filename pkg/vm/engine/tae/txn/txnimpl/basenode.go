@@ -21,12 +21,10 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 )
 
 const MaxNodeRows = 10000
@@ -45,14 +43,12 @@ type InsertNode interface {
 	FillColumnView(*containers.ColumnView, *mpool.MPool) error
 	Window(start, end uint32) (*containers.Batch, error)
 	WindowColumn(start, end uint32, pos int) (containers.Vector, error)
-	GetSpace() uint32
 	Rows() uint32
 	GetValue(col int, row uint32) (any, bool, error)
 	MakeCommand(uint32) (txnif.TxnCmd, error)
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo
 	GetAppends() []*appendInfo
 	GetTxn() txnif.AsyncTxn
-	GetPersistedLoc() (objectio.Location, objectio.Location)
 }
 
 type appendInfo struct {
@@ -105,13 +101,13 @@ func (info *appendInfo) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 type baseNode struct {
-	meta  *catalog.BlockEntry
+	meta  *catalog.ObjectEntry
 	table *txnTable
 }
 
 func newBaseNode(
 	tbl *txnTable,
-	meta *catalog.BlockEntry,
+	meta *catalog.ObjectEntry,
 ) *baseNode {
 	return &baseNode{
 		meta:  meta,
@@ -125,30 +121,4 @@ func (n *baseNode) IsPersisted() bool {
 
 func (n *baseNode) GetTxn() txnif.AsyncTxn {
 	return n.table.store.txn
-}
-
-func (n *baseNode) GetPersistedLoc() (objectio.Location, objectio.Location) {
-	return n.meta.FastGetMetaLoc(), n.meta.GetDeltaLoc()
-}
-
-func (n *baseNode) Rows() uint32 {
-	return n.meta.FastGetMetaLoc().Rows()
-}
-
-func (n *baseNode) LoadPersistedColumnData(
-	ctx context.Context, colIdx int, mp *mpool.MPool,
-) (vec containers.Vector, err error) {
-	location := n.meta.FastGetMetaLoc()
-	if location.IsEmpty() {
-		panic("cannot load persisted column data from empty location")
-	}
-	def := n.table.GetLocalSchema().ColDefs[colIdx]
-	return tables.LoadPersistedColumnData(
-		ctx,
-		n.table.store.rt,
-		nil,
-		def,
-		location,
-		mp,
-	)
 }

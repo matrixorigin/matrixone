@@ -29,19 +29,17 @@ import (
 	"unsafe"
 
 	"github.com/felixge/fgprof"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 )
 
 var (
-	cpuProfilePathFlag         = flag.String("cpu-profile", "", "write cpu profile to the specified file")
-	allocsProfilePathFlag      = flag.String("allocs-profile", "", "write allocs profile to the specified file")
-	heapProfilePathFlag        = flag.String("heap-profile", "", "write heap profile to the specified file")
-	fileServiceProfilePathFlag = flag.String("file-service-profile", "", "write file service profile to the specified file")
-	httpListenAddr             = flag.String("debug-http", "", "http server listen address")
-	statusServer               = status.NewServer()
+	cpuProfilePathFlag    = flag.String("cpu-profile", "", "write cpu profile to the specified file")
+	allocsProfilePathFlag = flag.String("allocs-profile", "", "write allocs profile to the specified file")
+	heapProfilePathFlag   = flag.String("heap-profile", "", "write heap profile to the specified file")
+	httpListenAddr        = flag.String("debug-http", "", "http server listen address")
+	statusServer          = status.NewServer()
 )
 
 func startCPUProfile() func() {
@@ -102,24 +100,6 @@ func writeHeapProfile() {
 		panic(err)
 	}
 	logutil.Infof("Heap profile written to %s", profilePath)
-}
-
-func startFileServiceProfile() func() {
-	filePath := *fileServiceProfilePathFlag
-	if filePath == "" {
-		filePath = "file-service-profile"
-	}
-	f, err := os.Create(filePath)
-	if err != nil {
-		panic(err)
-	}
-	write, stop := fileservice.FSProfileHandler.StartProfile()
-	logutil.Infof("File service profiling enabled, writing to %s", filePath)
-	return func() {
-		stop()
-		write(f)
-		f.Close()
-	}
 }
 
 func init() {
@@ -284,9 +264,6 @@ func init() {
 		}
 
 	})
-
-	// file service profile
-	http.Handle("/debug/fs/", fileservice.FSProfileHandler)
 
 	// global performance counter
 	v, ok := perfcounter.Named.Load(perfcounter.NameForGlobal)

@@ -210,6 +210,6 @@ type person struct {
 	age   int
 }
 
-func (p person) Name() string {
+func (p person) TypeName() string {
 	return "person"
 }

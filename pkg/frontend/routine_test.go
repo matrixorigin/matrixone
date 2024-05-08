@@ -25,6 +25,12 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	"github.com/prashantv/gostub"
+	pcg "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -36,11 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/prashantv/gostub"
-	pcg "github.com/prometheus/client_model/go"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/errgroup"
 )
 
 func Test_inc_dec(t *testing.T) {
@@ -126,12 +127,12 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	mcw := mock_frontend.NewMockComputationWrapper(ctrl)
 	mcw.EXPECT().GetAst().Return(stmt).AnyTimes()
 	mcw.EXPECT().GetProcess().Return(proc).AnyTimes()
-	mcw.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 	mcw.EXPECT().GetColumns().Return(columns, nil).AnyTimes()
-	mcw.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
+	mcw.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 	mcw.EXPECT().GetUUID().Return(uuid[:]).AnyTimes()
 	mcw.EXPECT().RecordExecPlan(gomock.Any()).Return(nil).AnyTimes()
 	mcw.EXPECT().GetLoadTag().Return(false).AnyTimes()
+	mcw.EXPECT().Clear().AnyTimes()
 	return mcw
 }
 
@@ -151,6 +152,7 @@ func Test_ConnectionCount(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
+	setGlobalPu(pu)
 
 	noResultSet := make(map[string]bool)
 	resultSet := make(map[string]*result)
@@ -167,7 +169,7 @@ func Test_ConnectionCount(t *testing.T) {
 			}
 			stmts = append(stmts, cmdFieldStmt)
 		} else {
-			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), 1)
+			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), 1, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -185,8 +187,8 @@ func Test_ConnectionCount(t *testing.T) {
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	// A mock autoincrcache manager.
-	aicm := &defines.AutoIncrCacheManager{}
-	rm, _ := NewRoutineManager(ctx, pu, aicm)
+	globalAicm = &defines.AutoIncrCacheManager{}
+	rm, _ := NewRoutineManager(ctx)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)

@@ -29,18 +29,20 @@ const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 type OpCode int32
 
 const (
-	OpCode_Nop          OpCode = 0
-	OpCode_OpGetLogTail OpCode = 1000
-	OpCode_OpPreCommit  OpCode = 1001
-	// Debug
-	OpCode_OpPing          OpCode = 2000
-	OpCode_OpFlush         OpCode = 2001
-	OpCode_OpCheckpoint    OpCode = 2003
-	OpCode_OpInspect       OpCode = 2004
-	OpCode_OpAddFaultPoint OpCode = 2005
-	OpCode_OpBackup        OpCode = 2006
-	OpCode_OpTraceSpan     OpCode = 2007
-	OpCode_OpStorageUsage  OpCode = 2008
+	OpCode_Nop                OpCode = 0
+	OpCode_OpGetLogTail       OpCode = 1000
+	OpCode_OpPreCommit        OpCode = 1001
+	OpCode_OpPing             OpCode = 2000
+	OpCode_OpFlush            OpCode = 2001
+	OpCode_OpCheckpoint       OpCode = 2003
+	OpCode_OpInspect          OpCode = 2004
+	OpCode_OpAddFaultPoint    OpCode = 2005
+	OpCode_OpBackup           OpCode = 2006
+	OpCode_OpTraceSpan        OpCode = 2007
+	OpCode_OpStorageUsage     OpCode = 2008
+	OpCode_OpGlobalCheckpoint OpCode = 2009
+	OpCode_OpInterceptCommit  OpCode = 2010
+	OpCode_OpCommitMerge      OpCode = 2011
 )
 
 var OpCode_name = map[int32]string{
@@ -55,20 +57,26 @@ var OpCode_name = map[int32]string{
 	2006: "OpBackup",
 	2007: "OpTraceSpan",
 	2008: "OpStorageUsage",
+	2009: "OpGlobalCheckpoint",
+	2010: "OpInterceptCommit",
+	2011: "OpCommitMerge",
 }
 
 var OpCode_value = map[string]int32{
-	"Nop":             0,
-	"OpGetLogTail":    1000,
-	"OpPreCommit":     1001,
-	"OpPing":          2000,
-	"OpFlush":         2001,
-	"OpCheckpoint":    2003,
-	"OpInspect":       2004,
-	"OpAddFaultPoint": 2005,
-	"OpBackup":        2006,
-	"OpTraceSpan":     2007,
-	"OpStorageUsage":  2008,
+	"Nop":                0,
+	"OpGetLogTail":       1000,
+	"OpPreCommit":        1001,
+	"OpPing":             2000,
+	"OpFlush":            2001,
+	"OpCheckpoint":       2003,
+	"OpInspect":          2004,
+	"OpAddFaultPoint":    2005,
+	"OpBackup":           2006,
+	"OpTraceSpan":        2007,
+	"OpStorageUsage":     2008,
+	"OpGlobalCheckpoint": 2009,
+	"OpInterceptCommit":  2010,
+	"OpCommitMerge":      2011,
 }
 
 func (x OpCode) String() string {
@@ -90,6 +98,7 @@ const (
 	AlterKind_UpdateConstraint AlterKind = 5
 	AlterKind_UpdatePolicy     AlterKind = 6
 	AlterKind_AddPartition     AlterKind = 7
+	AlterKind_RenameColumn     AlterKind = 8
 )
 
 var AlterKind_name = map[int32]string{
@@ -101,6 +110,7 @@ var AlterKind_name = map[int32]string{
 	5: "UpdateConstraint",
 	6: "UpdatePolicy",
 	7: "AddPartition",
+	8: "RenameColumn",
 }
 
 var AlterKind_value = map[string]int32{
@@ -112,6 +122,7 @@ var AlterKind_value = map[string]int32{
 	"UpdateConstraint": 5,
 	"UpdatePolicy":     6,
 	"AddPartition":     7,
+	"RenameColumn":     8,
 }
 
 func (x AlterKind) String() string {
@@ -459,11 +470,11 @@ func (m *Vector) GetArea() []byte {
 }
 
 type Batch struct {
-	Attrs                []string  `protobuf:"bytes,1,rep,name=attrs,proto3" json:"attrs,omitempty"`
-	Vecs                 []*Vector `protobuf:"bytes,2,rep,name=vecs,proto3" json:"vecs,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}  `json:"-"`
-	XXX_unrecognized     []byte    `json:"-"`
-	XXX_sizecache        int32     `json:"-"`
+	Attrs                []string `protobuf:"bytes,1,rep,name=attrs,proto3" json:"attrs,omitempty"`
+	Vecs                 []Vector `protobuf:"bytes,2,rep,name=vecs,proto3" json:"vecs"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
 }
 
 func (m *Batch) Reset()         { *m = Batch{} }
@@ -506,7 +517,7 @@ func (m *Batch) GetAttrs() []string {
 	return nil
 }
 
-func (m *Batch) GetVecs() []*Vector {
+func (m *Batch) GetVecs() []Vector {
 	if m != nil {
 		return m.Vecs
 	}
@@ -1060,10 +1071,11 @@ func (m *MetadataCkp) GetBat() *Batch {
 }
 
 type AlterTablePolicy struct {
-	MinRowsQuailifed     uint32      `protobuf:"varint,1,opt,name=min_rows_quailifed,json=minRowsQuailifed,proto3" json:"min_rows_quailifed,omitempty"`
+	MinOsizeQuailifed    uint32      `protobuf:"varint,1,opt,name=min_osize_quailifed,json=minOsizeQuailifed,proto3" json:"min_osize_quailifed,omitempty"`
 	MaxObjOnerun         uint32      `protobuf:"varint,2,opt,name=max_obj_onerun,json=maxObjOnerun,proto3" json:"max_obj_onerun,omitempty"`
-	MaxRowsMergedObj     uint32      `protobuf:"varint,3,opt,name=max_rows_merged_obj,json=maxRowsMergedObj,proto3" json:"max_rows_merged_obj,omitempty"`
+	MaxOsizeMergedObj    uint32      `protobuf:"varint,3,opt,name=max_osize_merged_obj,json=maxOsizeMergedObj,proto3" json:"max_osize_merged_obj,omitempty"`
 	Hints                []MergeHint `protobuf:"varint,4,rep,packed,name=hints,proto3,enum=api.MergeHint" json:"hints,omitempty"`
+	MinCnMergeSize       uint64      `protobuf:"varint,5,opt,name=min_cn_merge_size,json=minCnMergeSize,proto3" json:"min_cn_merge_size,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}    `json:"-"`
 	XXX_unrecognized     []byte      `json:"-"`
 	XXX_sizecache        int32       `json:"-"`
@@ -1102,9 +1114,9 @@ func (m *AlterTablePolicy) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_AlterTablePolicy proto.InternalMessageInfo
 
-func (m *AlterTablePolicy) GetMinRowsQuailifed() uint32 {
+func (m *AlterTablePolicy) GetMinOsizeQuailifed() uint32 {
 	if m != nil {
-		return m.MinRowsQuailifed
+		return m.MinOsizeQuailifed
 	}
 	return 0
 }
@@ -1116,9 +1128,9 @@ func (m *AlterTablePolicy) GetMaxObjOnerun() uint32 {
 	return 0
 }
 
-func (m *AlterTablePolicy) GetMaxRowsMergedObj() uint32 {
+func (m *AlterTablePolicy) GetMaxOsizeMergedObj() uint32 {
 	if m != nil {
-		return m.MaxRowsMergedObj
+		return m.MaxOsizeMergedObj
 	}
 	return 0
 }
@@ -1128,6 +1140,13 @@ func (m *AlterTablePolicy) GetHints() []MergeHint {
 		return m.Hints
 	}
 	return nil
+}
+
+func (m *AlterTablePolicy) GetMinCnMergeSize() uint64 {
+	if m != nil {
+		return m.MinCnMergeSize
+	}
+	return 0
 }
 
 type AlterTableConstraint struct {
@@ -1279,6 +1298,69 @@ func (m *AlterTableRenameTable) GetNewName() string {
 	return ""
 }
 
+type AlterTableRenameCol struct {
+	OldName              string   `protobuf:"bytes,1,opt,name=old_name,json=oldName,proto3" json:"old_name,omitempty"`
+	NewName              string   `protobuf:"bytes,2,opt,name=new_name,json=newName,proto3" json:"new_name,omitempty"`
+	SequenceNum          uint32   `protobuf:"varint,3,opt,name=sequence_num,json=sequenceNum,proto3" json:"sequence_num,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *AlterTableRenameCol) Reset()         { *m = AlterTableRenameCol{} }
+func (m *AlterTableRenameCol) String() string { return proto.CompactTextString(m) }
+func (*AlterTableRenameCol) ProtoMessage()    {}
+func (*AlterTableRenameCol) Descriptor() ([]byte, []int) {
+	return fileDescriptor_00212fb1f9d3bf1c, []int{17}
+}
+func (m *AlterTableRenameCol) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *AlterTableRenameCol) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_AlterTableRenameCol.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *AlterTableRenameCol) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_AlterTableRenameCol.Merge(m, src)
+}
+func (m *AlterTableRenameCol) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *AlterTableRenameCol) XXX_DiscardUnknown() {
+	xxx_messageInfo_AlterTableRenameCol.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_AlterTableRenameCol proto.InternalMessageInfo
+
+func (m *AlterTableRenameCol) GetOldName() string {
+	if m != nil {
+		return m.OldName
+	}
+	return ""
+}
+
+func (m *AlterTableRenameCol) GetNewName() string {
+	if m != nil {
+		return m.NewName
+	}
+	return ""
+}
+
+func (m *AlterTableRenameCol) GetSequenceNum() uint32 {
+	if m != nil {
+		return m.SequenceNum
+	}
+	return 0
+}
+
 type AlterTableAddColumn struct {
 	Column               *plan.ColDef `protobuf:"bytes,1,opt,name=column,proto3" json:"column,omitempty"`
 	InsertPosition       int32        `protobuf:"varint,2,opt,name=insert_position,json=insertPosition,proto3" json:"insert_position,omitempty"`
@@ -1291,7 +1373,7 @@ func (m *AlterTableAddColumn) Reset()         { *m = AlterTableAddColumn{} }
 func (m *AlterTableAddColumn) String() string { return proto.CompactTextString(m) }
 func (*AlterTableAddColumn) ProtoMessage()    {}
 func (*AlterTableAddColumn) Descriptor() ([]byte, []int) {
-	return fileDescriptor_00212fb1f9d3bf1c, []int{17}
+	return fileDescriptor_00212fb1f9d3bf1c, []int{18}
 }
 func (m *AlterTableAddColumn) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1345,7 +1427,7 @@ func (m *AlterTableAddPartition) Reset()         { *m = AlterTableAddPartition{}
 func (m *AlterTableAddPartition) String() string { return proto.CompactTextString(m) }
 func (*AlterTableAddPartition) ProtoMessage()    {}
 func (*AlterTableAddPartition) Descriptor() ([]byte, []int) {
-	return fileDescriptor_00212fb1f9d3bf1c, []int{18}
+	return fileDescriptor_00212fb1f9d3bf1c, []int{19}
 }
 func (m *AlterTableAddPartition) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1393,7 +1475,7 @@ func (m *AlterTableDropColumn) Reset()         { *m = AlterTableDropColumn{} }
 func (m *AlterTableDropColumn) String() string { return proto.CompactTextString(m) }
 func (*AlterTableDropColumn) ProtoMessage()    {}
 func (*AlterTableDropColumn) Descriptor() ([]byte, []int) {
-	return fileDescriptor_00212fb1f9d3bf1c, []int{19}
+	return fileDescriptor_00212fb1f9d3bf1c, []int{20}
 }
 func (m *AlterTableDropColumn) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1448,6 +1530,7 @@ type AlterTableReq struct {
 	//	*AlterTableReq_UpdateCstr
 	//	*AlterTableReq_UpdatePolicy
 	//	*AlterTableReq_AddPartition
+	//	*AlterTableReq_RenameCol
 	Operation            isAlterTableReq_Operation `protobuf_oneof:"operation"`
 	XXX_NoUnkeyedLiteral struct{}                  `json:"-"`
 	XXX_unrecognized     []byte                    `json:"-"`
@@ -1458,7 +1541,7 @@ func (m *AlterTableReq) Reset()         { *m = AlterTableReq{} }
 func (m *AlterTableReq) String() string { return proto.CompactTextString(m) }
 func (*AlterTableReq) ProtoMessage()    {}
 func (*AlterTableReq) Descriptor() ([]byte, []int) {
-	return fileDescriptor_00212fb1f9d3bf1c, []int{20}
+	return fileDescriptor_00212fb1f9d3bf1c, []int{21}
 }
 func (m *AlterTableReq) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1514,6 +1597,9 @@ type AlterTableReq_UpdatePolicy struct {
 type AlterTableReq_AddPartition struct {
 	AddPartition *AlterTableAddPartition `protobuf:"bytes,10,opt,name=add_partition,json=addPartition,proto3,oneof" json:"add_partition,omitempty"`
 }
+type AlterTableReq_RenameCol struct {
+	RenameCol *AlterTableRenameCol `protobuf:"bytes,11,opt,name=rename_col,json=renameCol,proto3,oneof" json:"rename_col,omitempty"`
+}
 
 func (*AlterTableReq_AddColumn) isAlterTableReq_Operation()     {}
 func (*AlterTableReq_DropColumn) isAlterTableReq_Operation()    {}
@@ -1522,6 +1608,7 @@ func (*AlterTableReq_UpdateComment) isAlterTableReq_Operation() {}
 func (*AlterTableReq_UpdateCstr) isAlterTableReq_Operation()    {}
 func (*AlterTableReq_UpdatePolicy) isAlterTableReq_Operation()  {}
 func (*AlterTableReq_AddPartition) isAlterTableReq_Operation()  {}
+func (*AlterTableReq_RenameCol) isAlterTableReq_Operation()     {}
 
 func (m *AlterTableReq) GetOperation() isAlterTableReq_Operation {
 	if m != nil {
@@ -1600,6 +1687,13 @@ func (m *AlterTableReq) GetAddPartition() *AlterTableAddPartition {
 	return nil
 }
 
+func (m *AlterTableReq) GetRenameCol() *AlterTableRenameCol {
+	if x, ok := m.GetOperation().(*AlterTableReq_RenameCol); ok {
+		return x.RenameCol
+	}
+	return nil
+}
+
 // XXX_OneofWrappers is for the internal use of the proto package.
 func (*AlterTableReq) XXX_OneofWrappers() []interface{} {
 	return []interface{}{
@@ -1610,6 +1704,7 @@ func (*AlterTableReq) XXX_OneofWrappers() []interface{} {
 		(*AlterTableReq_UpdateCstr)(nil),
 		(*AlterTableReq_UpdatePolicy)(nil),
 		(*AlterTableReq_AddPartition)(nil),
+		(*AlterTableReq_RenameCol)(nil),
 	}
 }
 
@@ -1620,10 +1715,11 @@ type SchemaExtra struct {
 	ColumnChanged bool     `protobuf:"varint,3,opt,name=column_changed,json=columnChanged,proto3" json:"column_changed,omitempty"`
 	// sending mo_tables deletes by this.
 	OldName              string      `protobuf:"bytes,4,opt,name=old_name,json=oldName,proto3" json:"old_name,omitempty"`
-	MinRowsQuailifed     uint32      `protobuf:"varint,5,opt,name=min_rows_quailifed,json=minRowsQuailifed,proto3" json:"min_rows_quailifed,omitempty"`
+	MinOsizeQuailifed    uint32      `protobuf:"varint,5,opt,name=min_osize_quailifed,json=minOsizeQuailifed,proto3" json:"min_osize_quailifed,omitempty"`
 	MaxObjOnerun         uint32      `protobuf:"varint,6,opt,name=max_obj_onerun,json=maxObjOnerun,proto3" json:"max_obj_onerun,omitempty"`
-	MaxRowsMergedObj     uint32      `protobuf:"varint,7,opt,name=max_rows_merged_obj,json=maxRowsMergedObj,proto3" json:"max_rows_merged_obj,omitempty"`
+	MaxOsizeMergedObj    uint32      `protobuf:"varint,7,opt,name=max_osize_merged_obj,json=maxOsizeMergedObj,proto3" json:"max_osize_merged_obj,omitempty"`
 	Hints                []MergeHint `protobuf:"varint,8,rep,packed,name=hints,proto3,enum=api.MergeHint" json:"hints,omitempty"`
+	MinCnMergeSize       uint64      `protobuf:"varint,9,opt,name=min_cn_merge_size,json=minCnMergeSize,proto3" json:"min_cn_merge_size,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}    `json:"-"`
 	XXX_unrecognized     []byte      `json:"-"`
 	XXX_sizecache        int32       `json:"-"`
@@ -1633,7 +1729,7 @@ func (m *SchemaExtra) Reset()         { *m = SchemaExtra{} }
 func (m *SchemaExtra) String() string { return proto.CompactTextString(m) }
 func (*SchemaExtra) ProtoMessage()    {}
 func (*SchemaExtra) Descriptor() ([]byte, []int) {
-	return fileDescriptor_00212fb1f9d3bf1c, []int{21}
+	return fileDescriptor_00212fb1f9d3bf1c, []int{22}
 }
 func (m *SchemaExtra) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1690,9 +1786,9 @@ func (m *SchemaExtra) GetOldName() string {
 	return ""
 }
 
-func (m *SchemaExtra) GetMinRowsQuailifed() uint32 {
+func (m *SchemaExtra) GetMinOsizeQuailifed() uint32 {
 	if m != nil {
-		return m.MinRowsQuailifed
+		return m.MinOsizeQuailifed
 	}
 	return 0
 }
@@ -1704,9 +1800,9 @@ func (m *SchemaExtra) GetMaxObjOnerun() uint32 {
 	return 0
 }
 
-func (m *SchemaExtra) GetMaxRowsMergedObj() uint32 {
+func (m *SchemaExtra) GetMaxOsizeMergedObj() uint32 {
 	if m != nil {
-		return m.MaxRowsMergedObj
+		return m.MaxOsizeMergedObj
 	}
 	return 0
 }
@@ -1716,6 +1812,13 @@ func (m *SchemaExtra) GetHints() []MergeHint {
 		return m.Hints
 	}
 	return nil
+}
+
+func (m *SchemaExtra) GetMinCnMergeSize() uint64 {
+	if m != nil {
+		return m.MinCnMergeSize
+	}
+	return 0
 }
 
 // Int64Map mainly used in unit test
@@ -1730,7 +1833,7 @@ func (m *Int64Map) Reset()         { *m = Int64Map{} }
 func (m *Int64Map) String() string { return proto.CompactTextString(m) }
 func (*Int64Map) ProtoMessage()    {}
 func (*Int64Map) Descriptor() ([]byte, []int) {
-	return fileDescriptor_00212fb1f9d3bf1c, []int{22}
+	return fileDescriptor_00212fb1f9d3bf1c, []int{23}
 }
 func (m *Int64Map) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1766,6 +1869,386 @@ func (m *Int64Map) GetM() map[int64]int64 {
 	return nil
 }
 
+type TransDestPos struct {
+	ObjIdx               int32    `protobuf:"varint,1,opt,name=objIdx,proto3" json:"objIdx,omitempty"`
+	BlkIdx               int32    `protobuf:"varint,2,opt,name=blkIdx,proto3" json:"blkIdx,omitempty"`
+	RowIdx               int32    `protobuf:"varint,3,opt,name=rowIdx,proto3" json:"rowIdx,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *TransDestPos) Reset()         { *m = TransDestPos{} }
+func (m *TransDestPos) String() string { return proto.CompactTextString(m) }
+func (*TransDestPos) ProtoMessage()    {}
+func (*TransDestPos) Descriptor() ([]byte, []int) {
+	return fileDescriptor_00212fb1f9d3bf1c, []int{24}
+}
+func (m *TransDestPos) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *TransDestPos) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_TransDestPos.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *TransDestPos) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TransDestPos.Merge(m, src)
+}
+func (m *TransDestPos) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *TransDestPos) XXX_DiscardUnknown() {
+	xxx_messageInfo_TransDestPos.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_TransDestPos proto.InternalMessageInfo
+
+func (m *TransDestPos) GetObjIdx() int32 {
+	if m != nil {
+		return m.ObjIdx
+	}
+	return 0
+}
+
+func (m *TransDestPos) GetBlkIdx() int32 {
+	if m != nil {
+		return m.BlkIdx
+	}
+	return 0
+}
+
+func (m *TransDestPos) GetRowIdx() int32 {
+	if m != nil {
+		return m.RowIdx
+	}
+	return 0
+}
+
+type BlkTransMap struct {
+	M                    map[int32]TransDestPos `protobuf:"bytes,1,rep,name=m,proto3" json:"m" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	XXX_NoUnkeyedLiteral struct{}               `json:"-"`
+	XXX_unrecognized     []byte                 `json:"-"`
+	XXX_sizecache        int32                  `json:"-"`
+}
+
+func (m *BlkTransMap) Reset()         { *m = BlkTransMap{} }
+func (m *BlkTransMap) String() string { return proto.CompactTextString(m) }
+func (*BlkTransMap) ProtoMessage()    {}
+func (*BlkTransMap) Descriptor() ([]byte, []int) {
+	return fileDescriptor_00212fb1f9d3bf1c, []int{25}
+}
+func (m *BlkTransMap) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *BlkTransMap) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_BlkTransMap.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *BlkTransMap) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_BlkTransMap.Merge(m, src)
+}
+func (m *BlkTransMap) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *BlkTransMap) XXX_DiscardUnknown() {
+	xxx_messageInfo_BlkTransMap.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_BlkTransMap proto.InternalMessageInfo
+
+func (m *BlkTransMap) GetM() map[int32]TransDestPos {
+	if m != nil {
+		return m.M
+	}
+	return nil
+}
+
+type BlkTransferBooking struct {
+	Mappings             []BlkTransMap `protobuf:"bytes,1,rep,name=mappings,proto3" json:"mappings"`
+	XXX_NoUnkeyedLiteral struct{}      `json:"-"`
+	XXX_unrecognized     []byte        `json:"-"`
+	XXX_sizecache        int32         `json:"-"`
+}
+
+func (m *BlkTransferBooking) Reset()         { *m = BlkTransferBooking{} }
+func (m *BlkTransferBooking) String() string { return proto.CompactTextString(m) }
+func (*BlkTransferBooking) ProtoMessage()    {}
+func (*BlkTransferBooking) Descriptor() ([]byte, []int) {
+	return fileDescriptor_00212fb1f9d3bf1c, []int{26}
+}
+func (m *BlkTransferBooking) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *BlkTransferBooking) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_BlkTransferBooking.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *BlkTransferBooking) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_BlkTransferBooking.Merge(m, src)
+}
+func (m *BlkTransferBooking) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *BlkTransferBooking) XXX_DiscardUnknown() {
+	xxx_messageInfo_BlkTransferBooking.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_BlkTransferBooking proto.InternalMessageInfo
+
+func (m *BlkTransferBooking) GetMappings() []BlkTransMap {
+	if m != nil {
+		return m.Mappings
+	}
+	return nil
+}
+
+type MergeCommitEntry struct {
+	DbId                 uint64              `protobuf:"varint,1,opt,name=db_id,json=dbId,proto3" json:"db_id,omitempty"`
+	TblId                uint64              `protobuf:"varint,2,opt,name=tbl_id,json=tblId,proto3" json:"tbl_id,omitempty"`
+	TableName            string              `protobuf:"bytes,3,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
+	StartTs              timestamp.Timestamp `protobuf:"bytes,4,opt,name=start_ts,json=startTs,proto3" json:"start_ts"`
+	MergedObjs           [][]byte            `protobuf:"bytes,5,rep,name=merged_objs,json=mergedObjs,proto3" json:"merged_objs,omitempty"`
+	CreatedObjs          [][]byte            `protobuf:"bytes,6,rep,name=created_objs,json=createdObjs,proto3" json:"created_objs,omitempty"`
+	Booking              *BlkTransferBooking `protobuf:"bytes,7,opt,name=booking,proto3" json:"booking,omitempty"`
+	BookingLoc           []byte              `protobuf:"bytes,8,opt,name=booking_loc,json=bookingLoc,proto3" json:"booking_loc,omitempty"`
+	Err                  string              `protobuf:"bytes,9,opt,name=err,proto3" json:"err,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}            `json:"-"`
+	XXX_unrecognized     []byte              `json:"-"`
+	XXX_sizecache        int32               `json:"-"`
+}
+
+func (m *MergeCommitEntry) Reset()         { *m = MergeCommitEntry{} }
+func (m *MergeCommitEntry) String() string { return proto.CompactTextString(m) }
+func (*MergeCommitEntry) ProtoMessage()    {}
+func (*MergeCommitEntry) Descriptor() ([]byte, []int) {
+	return fileDescriptor_00212fb1f9d3bf1c, []int{27}
+}
+func (m *MergeCommitEntry) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *MergeCommitEntry) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_MergeCommitEntry.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *MergeCommitEntry) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_MergeCommitEntry.Merge(m, src)
+}
+func (m *MergeCommitEntry) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *MergeCommitEntry) XXX_DiscardUnknown() {
+	xxx_messageInfo_MergeCommitEntry.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_MergeCommitEntry proto.InternalMessageInfo
+
+func (m *MergeCommitEntry) GetDbId() uint64 {
+	if m != nil {
+		return m.DbId
+	}
+	return 0
+}
+
+func (m *MergeCommitEntry) GetTblId() uint64 {
+	if m != nil {
+		return m.TblId
+	}
+	return 0
+}
+
+func (m *MergeCommitEntry) GetTableName() string {
+	if m != nil {
+		return m.TableName
+	}
+	return ""
+}
+
+func (m *MergeCommitEntry) GetStartTs() timestamp.Timestamp {
+	if m != nil {
+		return m.StartTs
+	}
+	return timestamp.Timestamp{}
+}
+
+func (m *MergeCommitEntry) GetMergedObjs() [][]byte {
+	if m != nil {
+		return m.MergedObjs
+	}
+	return nil
+}
+
+func (m *MergeCommitEntry) GetCreatedObjs() [][]byte {
+	if m != nil {
+		return m.CreatedObjs
+	}
+	return nil
+}
+
+func (m *MergeCommitEntry) GetBooking() *BlkTransferBooking {
+	if m != nil {
+		return m.Booking
+	}
+	return nil
+}
+
+func (m *MergeCommitEntry) GetBookingLoc() []byte {
+	if m != nil {
+		return m.BookingLoc
+	}
+	return nil
+}
+
+func (m *MergeCommitEntry) GetErr() string {
+	if m != nil {
+		return m.Err
+	}
+	return ""
+}
+
+type MergeTaskEntry struct {
+	DbId      uint64 `protobuf:"varint,1,opt,name=db_id,json=dbId,proto3" json:"db_id,omitempty"`
+	TblId     uint64 `protobuf:"varint,2,opt,name=tbl_id,json=tblId,proto3" json:"tbl_id,omitempty"`
+	TableName string `protobuf:"bytes,3,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
+	DbName    string `protobuf:"bytes,4,opt,name=db_name,json=dbName,proto3" json:"db_name,omitempty"`
+	// ObjectStats
+	ToMergeObjs          [][]byte `protobuf:"bytes,5,rep,name=to_merge_objs,json=toMergeObjs,proto3" json:"to_merge_objs,omitempty"`
+	EstimatedMemUsage    uint64   `protobuf:"varint,6,opt,name=estimated_mem_usage,json=estimatedMemUsage,proto3" json:"estimated_mem_usage,omitempty"`
+	AccountId            uint32   `protobuf:"varint,7,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	UserId               uint32   `protobuf:"varint,8,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	RoleId               uint32   `protobuf:"varint,9,opt,name=role_id,json=roleId,proto3" json:"role_id,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *MergeTaskEntry) Reset()         { *m = MergeTaskEntry{} }
+func (m *MergeTaskEntry) String() string { return proto.CompactTextString(m) }
+func (*MergeTaskEntry) ProtoMessage()    {}
+func (*MergeTaskEntry) Descriptor() ([]byte, []int) {
+	return fileDescriptor_00212fb1f9d3bf1c, []int{28}
+}
+func (m *MergeTaskEntry) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *MergeTaskEntry) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_MergeTaskEntry.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *MergeTaskEntry) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_MergeTaskEntry.Merge(m, src)
+}
+func (m *MergeTaskEntry) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *MergeTaskEntry) XXX_DiscardUnknown() {
+	xxx_messageInfo_MergeTaskEntry.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_MergeTaskEntry proto.InternalMessageInfo
+
+func (m *MergeTaskEntry) GetDbId() uint64 {
+	if m != nil {
+		return m.DbId
+	}
+	return 0
+}
+
+func (m *MergeTaskEntry) GetTblId() uint64 {
+	if m != nil {
+		return m.TblId
+	}
+	return 0
+}
+
+func (m *MergeTaskEntry) GetTableName() string {
+	if m != nil {
+		return m.TableName
+	}
+	return ""
+}
+
+func (m *MergeTaskEntry) GetDbName() string {
+	if m != nil {
+		return m.DbName
+	}
+	return ""
+}
+
+func (m *MergeTaskEntry) GetToMergeObjs() [][]byte {
+	if m != nil {
+		return m.ToMergeObjs
+	}
+	return nil
+}
+
+func (m *MergeTaskEntry) GetEstimatedMemUsage() uint64 {
+	if m != nil {
+		return m.EstimatedMemUsage
+	}
+	return 0
+}
+
+func (m *MergeTaskEntry) GetAccountId() uint32 {
+	if m != nil {
+		return m.AccountId
+	}
+	return 0
+}
+
+func (m *MergeTaskEntry) GetUserId() uint32 {
+	if m != nil {
+		return m.UserId
+	}
+	return 0
+}
+
+func (m *MergeTaskEntry) GetRoleId() uint32 {
+	if m != nil {
+		return m.RoleId
+	}
+	return 0
+}
+
 func init() {
 	proto.RegisterEnum("api.OpCode", OpCode_name, OpCode_value)
 	proto.RegisterEnum("api.AlterKind", AlterKind_name, AlterKind_value)
@@ -1788,6 +2271,7 @@ func init() {
 	proto.RegisterType((*AlterTableConstraint)(nil), "api.AlterTableConstraint")
 	proto.RegisterType((*AlterTableComment)(nil), "api.AlterTableComment")
 	proto.RegisterType((*AlterTableRenameTable)(nil), "api.AlterTableRenameTable")
+	proto.RegisterType((*AlterTableRenameCol)(nil), "api.AlterTableRenameCol")
 	proto.RegisterType((*AlterTableAddColumn)(nil), "api.AlterTableAddColumn")
 	proto.RegisterType((*AlterTableAddPartition)(nil), "api.AlterTableAddPartition")
 	proto.RegisterType((*AlterTableDropColumn)(nil), "api.AlterTableDropColumn")
@@ -1795,128 +2279,163 @@ func init() {
 	proto.RegisterType((*SchemaExtra)(nil), "api.SchemaExtra")
 	proto.RegisterType((*Int64Map)(nil), "api.Int64Map")
 	proto.RegisterMapType((map[int64]int64)(nil), "api.Int64Map.MEntry")
+	proto.RegisterType((*TransDestPos)(nil), "api.TransDestPos")
+	proto.RegisterType((*BlkTransMap)(nil), "api.BlkTransMap")
+	proto.RegisterMapType((map[int32]TransDestPos)(nil), "api.BlkTransMap.MEntry")
+	proto.RegisterType((*BlkTransferBooking)(nil), "api.BlkTransferBooking")
+	proto.RegisterType((*MergeCommitEntry)(nil), "api.MergeCommitEntry")
+	proto.RegisterType((*MergeTaskEntry)(nil), "api.MergeTaskEntry")
 }
 
 func init() { proto.RegisterFile("api.proto", fileDescriptor_00212fb1f9d3bf1c) }
 
 var fileDescriptor_00212fb1f9d3bf1c = []byte{
-	// 1846 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xc4, 0x57, 0xcd, 0x6f, 0x23, 0xb7,
-	0x15, 0xd7, 0xe8, 0x5b, 0x6f, 0xf4, 0x31, 0x4b, 0x3b, 0x81, 0xd6, 0x49, 0x6d, 0x77, 0xb2, 0xdd,
-	0xba, 0xdb, 0xac, 0x0d, 0x38, 0x41, 0x9b, 0x2c, 0x16, 0x1b, 0xd8, 0x72, 0x12, 0x0b, 0x5d, 0x5b,
-	0xee, 0x48, 0x9b, 0x00, 0x41, 0x81, 0x01, 0x35, 0x43, 0xcb, 0x5c, 0xcd, 0x90, 0xf4, 0x0c, 0xe5,
-	0x8f, 0x7b, 0xfb, 0x0f, 0x14, 0xe8, 0x3d, 0x39, 0xe7, 0xda, 0x5b, 0x2f, 0xbd, 0x14, 0xe8, 0x31,
-	0x45, 0x3f, 0x8f, 0xc1, 0xf6, 0xd2, 0xa2, 0xff, 0x44, 0x41, 0x72, 0x46, 0x92, 0x9d, 0x74, 0x9b,
-	0xdb, 0x5e, 0x04, 0xbe, 0xdf, 0xfb, 0x98, 0xf7, 0xc8, 0x1f, 0x1f, 0x9f, 0xa0, 0x81, 0x05, 0xdd,
-	0x16, 0x09, 0x97, 0x1c, 0x95, 0xb0, 0xa0, 0x6b, 0x0f, 0x27, 0x54, 0x9e, 0xcd, 0xc6, 0xdb, 0x01,
-	0x8f, 0x77, 0x26, 0x7c, 0xc2, 0x77, 0xb4, 0x6e, 0x3c, 0x3b, 0xd5, 0x92, 0x16, 0xf4, 0xca, 0xf8,
-	0xac, 0x75, 0x24, 0x8d, 0x49, 0x2a, 0x71, 0x2c, 0x32, 0x00, 0x44, 0x84, 0x99, 0x59, 0xbb, 0x3f,
-	0x85, 0xd6, 0xe8, 0xf8, 0x84, 0xb2, 0x89, 0x47, 0xce, 0x67, 0x24, 0x95, 0xe8, 0x4d, 0x68, 0x08,
-	0x9c, 0xe0, 0x98, 0x48, 0x92, 0x74, 0xad, 0x4d, 0x6b, 0xab, 0xe1, 0x2d, 0x80, 0x47, 0xf5, 0xcf,
-	0xbf, 0xd8, 0xb0, 0xbe, 0xfe, 0x62, 0xa3, 0xe0, 0xfe, 0xd6, 0x82, 0x76, 0xee, 0x99, 0x0a, 0xce,
-	0x52, 0x82, 0xba, 0x50, 0x4b, 0x25, 0x4f, 0x48, 0xff, 0x20, 0x73, 0xcc, 0x45, 0x74, 0x1f, 0xda,
-	0x29, 0x49, 0x2e, 0x68, 0x40, 0xf6, 0xc2, 0x30, 0x21, 0x69, 0xda, 0x2d, 0x6a, 0x83, 0x5b, 0xa8,
-	0x8e, 0x70, 0x86, 0x93, 0xb0, 0x7f, 0xd0, 0x2d, 0x6d, 0x5a, 0x5b, 0x65, 0x2f, 0x17, 0x55, 0x5a,
-	0x09, 0x11, 0x11, 0x0d, 0x70, 0xff, 0xa0, 0x5b, 0xd6, 0xba, 0x05, 0x80, 0xd6, 0x01, 0x22, 0x3e,
-	0x19, 0x66, 0xae, 0x15, 0xad, 0x5e, 0x42, 0x96, 0xd2, 0x7e, 0x04, 0xce, 0xe8, 0x78, 0x28, 0x93,
-	0xe5, 0xbc, 0x75, 0x6c, 0x39, 0x4b, 0xd8, 0x50, 0xce, 0x4b, 0x9e, 0x03, 0x4b, 0xbe, 0x5f, 0x5a,
-	0x50, 0xfd, 0x84, 0x04, 0x92, 0x27, 0x08, 0x41, 0x39, 0xc4, 0x12, 0x6b, 0xeb, 0xa6, 0xa7, 0xd7,
-	0x68, 0x1d, 0xca, 0xf2, 0x5a, 0x10, 0x5d, 0x9a, 0xbd, 0x0b, 0xdb, 0x7a, 0x97, 0x47, 0xd7, 0x82,
-	0x78, 0x1a, 0x47, 0x6b, 0x50, 0x67, 0xb3, 0x28, 0xc2, 0xe3, 0x88, 0xe8, 0xea, 0xea, 0xde, 0x5c,
-	0x46, 0x0e, 0x94, 0x58, 0x2a, 0x74, 0x61, 0x4d, 0x4f, 0x2d, 0xd1, 0x5d, 0xa8, 0xd3, 0xd4, 0x0f,
-	0x38, 0x4b, 0xa5, 0x2e, 0xa8, 0xee, 0xd5, 0x68, 0xda, 0x53, 0xa2, 0x32, 0x8e, 0x08, 0xeb, 0x56,
-	0x37, 0xad, 0xad, 0x96, 0xa7, 0x96, 0x2a, 0x1d, 0x9c, 0x10, 0xdc, 0xad, 0x99, 0x74, 0xd4, 0xda,
-	0x7d, 0x02, 0x95, 0x7d, 0x2c, 0x83, 0x33, 0xb4, 0x0a, 0x15, 0x2c, 0x65, 0x92, 0x76, 0xad, 0xcd,
-	0xd2, 0x56, 0xc3, 0x33, 0x02, 0xda, 0x80, 0xf2, 0x05, 0x09, 0xd4, 0x41, 0x94, 0xb6, 0xec, 0x5d,
-	0x7b, 0x5b, 0x71, 0xcc, 0x14, 0xe7, 0x69, 0x85, 0xfb, 0x09, 0xd4, 0x46, 0x2a, 0xb7, 0xfe, 0x01,
-	0x5a, 0x81, 0x4a, 0x38, 0xf6, 0x69, 0xa8, 0xcb, 0x2d, 0x7b, 0xe5, 0x70, 0xdc, 0x0f, 0x15, 0x28,
-	0x35, 0x58, 0x34, 0xa0, 0x54, 0xe0, 0xf7, 0xa1, 0x29, 0x70, 0x22, 0xa9, 0xa4, 0x9c, 0x29, 0x9d,
-	0x39, 0x45, 0x7b, 0x8e, 0xf5, 0x43, 0xf7, 0xd7, 0x16, 0xb4, 0x87, 0xd7, 0x2c, 0x78, 0xca, 0x27,
-	0x23, 0x4c, 0x23, 0x8f, 0x9c, 0xa3, 0x87, 0x50, 0x0b, 0x98, 0x7f, 0x86, 0x2f, 0x88, 0xfe, 0x82,
-	0xbd, 0xbb, 0xba, 0xbd, 0xe0, 0xec, 0x28, 0x5f, 0x79, 0xd5, 0x80, 0x1d, 0xe2, 0x0b, 0x92, 0x99,
-	0x5f, 0x62, 0x26, 0xb3, 0xbd, 0xfe, 0x9f, 0xe6, 0x9f, 0x62, 0x26, 0x91, 0x0b, 0x15, 0x39, 0xdf,
-	0x74, 0x7b, 0xb7, 0xa9, 0x4b, 0xcd, 0x4a, 0xf3, 0x8c, 0xca, 0xfd, 0x05, 0x74, 0x6e, 0xe4, 0x94,
-	0x0a, 0x55, 0x4a, 0x30, 0x15, 0x7e, 0xc4, 0x03, 0xac, 0x32, 0xcf, 0x88, 0x61, 0x07, 0x53, 0xf1,
-	0x34, 0x83, 0xd0, 0x7d, 0xa8, 0x07, 0x3c, 0x8e, 0x31, 0x0b, 0xf3, 0x7d, 0x04, 0x1d, 0xfc, 0x43,
-	0x26, 0x93, 0x6b, 0x6f, 0xae, 0x73, 0x9f, 0xc0, 0x9d, 0x93, 0x84, 0x28, 0x91, 0xca, 0x4f, 0x13,
-	0x2a, 0x49, 0x2f, 0x0e, 0xd1, 0x8f, 0x00, 0x88, 0xb2, 0xf3, 0x23, 0x9a, 0x4a, 0x7d, 0x36, 0x37,
-	0xdd, 0x1b, 0x5a, 0xfb, 0x94, 0xa6, 0xd2, 0xfd, 0x4f, 0x11, 0x2a, 0x1a, 0x44, 0xef, 0xe4, 0x4e,
-	0x9a, 0x69, 0x2a, 0xa5, 0xf6, 0xee, 0xea, 0xc2, 0xc9, 0xfc, 0x6a, 0xce, 0x19, 0x77, 0xb5, 0x54,
-	0x54, 0xd2, 0x55, 0x2e, 0x0e, 0xab, 0xa6, 0xe5, 0x7e, 0x88, 0x36, 0xc0, 0x56, 0xdc, 0x1d, 0xe3,
-	0x94, 0x2c, 0x8e, 0x0b, 0x72, 0xa8, 0x1f, 0xa2, 0xef, 0x01, 0x18, 0x5f, 0x86, 0x63, 0xa2, 0xf9,
-	0xd9, 0xf0, 0x1a, 0x1a, 0x39, 0xc6, 0x31, 0x41, 0x6f, 0x41, 0x6b, 0xee, 0xaf, 0x2d, 0x2a, 0xda,
-	0xa2, 0x99, 0x83, 0xda, 0xe8, 0x0d, 0x68, 0x9c, 0xd2, 0x3c, 0x44, 0x55, 0x1b, 0xd4, 0x15, 0xa0,
-	0x95, 0x6f, 0x42, 0x69, 0x8c, 0xa5, 0x66, 0x6e, 0x5e, 0xbf, 0xa6, 0xad, 0xa7, 0x60, 0xf4, 0x16,
-	0xb4, 0xc5, 0xd4, 0x0f, 0xce, 0x48, 0x30, 0xf5, 0xc7, 0xd7, 0xbe, 0x64, 0xdd, 0xfa, 0xa6, 0xb5,
-	0x55, 0xf1, 0x6c, 0x31, 0xed, 0x29, 0x70, 0xff, 0x7a, 0xc4, 0xdc, 0x23, 0x68, 0xcc, 0xeb, 0x46,
-	0x00, 0xd5, 0x3e, 0x4b, 0x49, 0x22, 0x9d, 0x82, 0x5a, 0x1f, 0x90, 0x88, 0x48, 0xe2, 0x58, 0x6a,
-	0xfd, 0x4c, 0x84, 0x58, 0x12, 0xa7, 0x88, 0x1a, 0x50, 0xd9, 0x8b, 0x24, 0x49, 0x9c, 0x12, 0xba,
-	0x03, 0xad, 0xa1, 0x20, 0x01, 0xc5, 0x51, 0x66, 0x59, 0x76, 0x7f, 0x69, 0x01, 0xe8, 0xe0, 0x82,
-	0x53, 0x26, 0xd1, 0x8f, 0xa1, 0x1a, 0x53, 0xe6, 0xcb, 0xf4, 0xa5, 0xdc, 0xac, 0xc4, 0x94, 0x8d,
-	0x52, 0x6d, 0x8c, 0xaf, 0x94, 0x71, 0xf1, 0xa5, 0xc6, 0xf8, 0x6a, 0x94, 0xe6, 0xa5, 0x97, 0xbe,
-	0xb5, 0x74, 0x93, 0x06, 0x96, 0x38, 0xe2, 0x93, 0xde, 0x54, 0xbc, 0xb2, 0x34, 0x7e, 0x65, 0x81,
-	0x7d, 0x44, 0x24, 0x56, 0x27, 0xfa, 0x2a, 0xf3, 0xf8, 0x9d, 0x05, 0x8e, 0x3e, 0x34, 0x7d, 0x73,
-	0x4f, 0x78, 0x44, 0x83, 0x6b, 0xf4, 0x36, 0x20, 0x95, 0x4c, 0xc2, 0x2f, 0x53, 0xff, 0x7c, 0x86,
-	0x69, 0x44, 0x4f, 0x89, 0xe9, 0x52, 0x2d, 0xcf, 0x89, 0x29, 0xf3, 0xf8, 0x65, 0xfa, 0xf3, 0x1c,
-	0x47, 0xf7, 0xa0, 0xad, 0xb2, 0xe1, 0xe3, 0xe7, 0x3e, 0x67, 0x24, 0x99, 0x31, 0x9d, 0x55, 0xcb,
-	0x6b, 0xc6, 0xf8, 0x6a, 0x30, 0x7e, 0x3e, 0xd0, 0x18, 0x7a, 0x08, 0x2b, 0xca, 0x4a, 0xc7, 0x8c,
-	0x49, 0x32, 0x21, 0xa1, 0xf2, 0xd0, 0x69, 0xa9, 0xa0, 0xf8, 0x4a, 0x05, 0x3d, 0xd2, 0x8a, 0xc1,
-	0xf8, 0x39, 0xba, 0x07, 0x95, 0x33, 0xca, 0x64, 0xda, 0x2d, 0x6f, 0x96, 0xb6, 0xda, 0xbb, 0x6d,
-	0x9d, 0xb7, 0x56, 0x1f, 0x52, 0x26, 0x3d, 0xa3, 0x74, 0xdf, 0x83, 0xd5, 0x45, 0xf2, 0xba, 0x8b,
-	0x27, 0x58, 0x91, 0x6b, 0x13, 0xec, 0x60, 0x2e, 0xa5, 0xd9, 0x73, 0xb2, 0x0c, 0xb9, 0x0f, 0xe1,
-	0xce, 0xb2, 0x67, 0x1c, 0x13, 0x26, 0xd5, 0x3b, 0x19, 0x98, 0x65, 0xfe, 0xd2, 0x66, 0xa2, 0x7b,
-	0x04, 0xaf, 0x2d, 0xcc, 0x3d, 0xa2, 0xae, 0x9c, 0x5e, 0xaa, 0x26, 0xc0, 0xa3, 0xd0, 0xdc, 0xc1,
-	0xcc, 0x87, 0x47, 0xa1, 0xbe, 0x82, 0x77, 0xa1, 0xce, 0xc8, 0xa5, 0x51, 0x99, 0x77, 0xb9, 0xc6,
-	0xc8, 0xa5, 0x52, 0xb9, 0x21, 0xac, 0x2c, 0xc2, 0xed, 0x85, 0x61, 0x8f, 0x47, 0xb3, 0x98, 0xa1,
-	0x7b, 0x50, 0x0d, 0xf4, 0x2a, 0x23, 0x41, 0xd3, 0x3c, 0x76, 0x3d, 0x1e, 0x1d, 0x90, 0x53, 0x2f,
-	0xd3, 0xa1, 0x1f, 0x42, 0x87, 0xea, 0xab, 0xe8, 0x0b, 0x9e, 0xea, 0xf6, 0xaf, 0xc3, 0x57, 0xbc,
-	0xb6, 0x81, 0x4f, 0x32, 0xd4, 0x1d, 0xc2, 0xeb, 0x37, 0xbe, 0x72, 0x92, 0x3f, 0x17, 0xe8, 0x7d,
-	0x68, 0x2d, 0xde, 0x93, 0x90, 0x9c, 0xce, 0x49, 0xa7, 0xbf, 0x37, 0xb7, 0xdb, 0xbf, 0x56, 0xdf,
-	0x5d, 0x3c, 0x3d, 0x07, 0xe4, 0xd4, 0xfd, 0x6c, 0x79, 0xcb, 0x0f, 0x12, 0x2e, 0xb2, 0xdc, 0x37,
-	0xc0, 0x8e, 0xf8, 0x84, 0x06, 0x38, 0xf2, 0x69, 0x78, 0x95, 0x91, 0x05, 0x32, 0xa8, 0x1f, 0x5e,
-	0xa9, 0xc6, 0x9f, 0xaa, 0x61, 0x88, 0x05, 0xc4, 0x67, 0xb3, 0x38, 0x23, 0x89, 0x9d, 0x63, 0xc7,
-	0xb3, 0xd8, 0xfd, 0xb2, 0x0c, 0xad, 0xe5, 0x6d, 0x3e, 0xbf, 0xd1, 0x63, 0xad, 0x9b, 0x3d, 0x76,
-	0xfe, 0x7a, 0x16, 0x97, 0x5e, 0x4f, 0x17, 0xca, 0x53, 0xca, 0x4c, 0xc7, 0xcd, 0x59, 0xa3, 0x23,
-	0xfe, 0x8c, 0xb2, 0xd0, 0xd3, 0x3a, 0xf4, 0x3e, 0x00, 0x0e, 0x43, 0x3f, 0xdb, 0xe9, 0xb2, 0xae,
-	0xbc, 0xbb, 0xb0, 0xbc, 0x79, 0x26, 0x87, 0x05, 0xaf, 0x81, 0xe7, 0x07, 0xf4, 0x18, 0xec, 0x30,
-	0xe1, 0x22, 0xf7, 0xad, 0x68, 0xdf, 0xbb, 0xb7, 0x7c, 0x17, 0x9b, 0x72, 0x58, 0xf0, 0x20, 0x5c,
-	0x6c, 0xd1, 0x07, 0xd0, 0x4c, 0x34, 0x75, 0x7c, 0xf3, 0x70, 0x56, 0xb5, 0xfb, 0xda, 0x2d, 0xf7,
-	0x25, 0x76, 0x1d, 0x16, 0x3c, 0x3b, 0x59, 0x22, 0xdb, 0x07, 0xd0, 0x9e, 0xe9, 0x66, 0xeb, 0xe7,
-	0x34, 0x35, 0xfd, 0xfd, 0xf5, 0x5b, 0x21, 0x32, 0x3e, 0x1f, 0x16, 0xbc, 0x96, 0xb1, 0xcf, 0x09,
-	0xfe, 0x18, 0xec, 0x3c, 0x40, 0x2a, 0x13, 0xdd, 0xf4, 0xbf, 0x99, 0xff, 0xe2, 0x1e, 0xa9, 0xfc,
-	0xb3, 0x00, 0xa9, 0x4c, 0xd0, 0x63, 0xc8, 0xc2, 0xf9, 0x42, 0xf7, 0x89, 0x6e, 0x43, 0xfb, 0xbf,
-	0x76, 0xcb, 0xdf, 0x34, 0x91, 0xc3, 0x82, 0xd7, 0x34, 0xd6, 0x59, 0x53, 0xd9, 0x87, 0x96, 0xda,
-	0xf6, 0x39, 0x99, 0xba, 0xa0, 0xbd, 0xdf, 0xf8, 0xe6, 0xce, 0xcf, 0xf9, 0xa7, 0x62, 0xe0, 0x25,
-	0x79, 0xdf, 0x86, 0x06, 0x17, 0x24, 0xd1, 0x63, 0x82, 0xfb, 0x87, 0x22, 0xd8, 0xc3, 0xe0, 0x8c,
-	0xc4, 0xf8, 0xc3, 0x2b, 0x99, 0x60, 0x74, 0x1f, 0x3a, 0x8c, 0x5c, 0x49, 0x75, 0x38, 0x7e, 0x4a,
-	0xce, 0x15, 0xc7, 0x0c, 0x0b, 0x5b, 0x0a, 0xee, 0xf1, 0x68, 0xa8, 0x41, 0xfd, 0xb8, 0x26, 0x5c,
-	0x08, 0x12, 0xfa, 0x66, 0x80, 0x2b, 0xea, 0x01, 0xae, 0x99, 0x81, 0x7b, 0x7a, 0x8e, 0xfb, 0x01,
-	0xb4, 0xcd, 0x21, 0xfb, 0xc1, 0x19, 0x66, 0x13, 0x12, 0x66, 0xb3, 0x65, 0xcb, 0xa0, 0x3d, 0x03,
-	0xde, 0xb8, 0xfe, 0xe5, 0x9b, 0xd7, 0xff, 0xdb, 0x9b, 0x68, 0xe5, 0x3b, 0x37, 0xd1, 0xea, 0x77,
-	0x6f, 0xa2, 0xb5, 0xff, 0xd7, 0x44, 0xeb, 0x2f, 0x6b, 0xa2, 0x21, 0xd4, 0xfb, 0x4c, 0xfe, 0xe4,
-	0xdd, 0x23, 0x2c, 0x90, 0x0b, 0x56, 0x9c, 0x0d, 0x4d, 0x66, 0xfe, 0xc9, 0x35, 0xdb, 0x47, 0x66,
-	0x7c, 0xb2, 0xe2, 0xb5, 0x77, 0xa1, 0x6a, 0x04, 0x35, 0x31, 0x4f, 0xc9, 0xb5, 0xde, 0xe5, 0x92,
-	0xa7, 0x96, 0x6a, 0x28, 0xbe, 0xc0, 0xd1, 0xcc, 0x34, 0xbc, 0x92, 0x67, 0x84, 0x47, 0xc5, 0xf7,
-	0xac, 0x07, 0xbf, 0xb7, 0xa0, 0x3a, 0x10, 0x3d, 0x1e, 0x12, 0x54, 0x83, 0xd2, 0x31, 0x17, 0x4e,
-	0x01, 0xdd, 0x81, 0xe6, 0x40, 0x7c, 0x4c, 0x64, 0x36, 0x1f, 0x3a, 0xff, 0xaa, 0x21, 0x07, 0xec,
-	0x81, 0x38, 0x49, 0x34, 0x63, 0xa9, 0x74, 0xfe, 0x5d, 0x43, 0xb6, 0xf2, 0x53, 0x7f, 0x88, 0x9c,
-	0xaf, 0x3a, 0xa8, 0x09, 0xb5, 0x81, 0xf8, 0x28, 0x9a, 0xa5, 0x67, 0xce, 0x9f, 0x3a, 0xc6, 0x7f,
-	0x31, 0x53, 0x38, 0x7f, 0xee, 0xa0, 0x36, 0x34, 0x06, 0xa2, 0xcf, 0x52, 0x41, 0x02, 0xe9, 0xfc,
-	0xa5, 0x83, 0x56, 0xa1, 0x33, 0x10, 0x7b, 0x61, 0xf8, 0x11, 0x9e, 0x45, 0xf2, 0x44, 0x5b, 0xfd,
-	0xb5, 0x83, 0x5a, 0x50, 0x1f, 0x88, 0x7d, 0x1c, 0x4c, 0x67, 0xc2, 0xf9, 0x5b, 0xc7, 0x7c, 0x74,
-	0x94, 0xe0, 0x80, 0x0c, 0x05, 0x66, 0xce, 0xdf, 0x3b, 0x68, 0x05, 0xda, 0x03, 0x31, 0x94, 0x3c,
-	0xc1, 0x13, 0xf2, 0x2c, 0xc5, 0x13, 0xe2, 0xfc, 0xa3, 0xf3, 0xe0, 0x37, 0x16, 0x34, 0xe6, 0xcd,
-	0x04, 0xd9, 0x50, 0xeb, 0xb3, 0x0b, 0x1c, 0xd1, 0xd0, 0x29, 0xa0, 0x16, 0x34, 0xe6, 0x2d, 0xc3,
-	0xb1, 0x50, 0x1b, 0x60, 0xd1, 0x05, 0x9c, 0x22, 0xea, 0x80, 0xbd, 0x74, 0xad, 0xcd, 0x7c, 0xf4,
-	0x6c, 0xf9, 0x66, 0x3a, 0x65, 0xb4, 0x0a, 0x4e, 0x0e, 0xe5, 0xf7, 0xcf, 0xa9, 0x20, 0x07, 0x9a,
-	0xcf, 0x96, 0x6e, 0x91, 0x53, 0x55, 0xc8, 0xf2, 0x1d, 0x71, 0x6a, 0x0f, 0x3e, 0x86, 0xc6, 0xfc,
-	0x50, 0x51, 0x1d, 0xca, 0x7b, 0x33, 0xc9, 0x4d, 0x4e, 0xc7, 0xdc, 0x8c, 0x5f, 0xa9, 0x63, 0xa1,
-	0x26, 0xd4, 0xf7, 0xe9, 0xc4, 0x24, 0x50, 0x44, 0x2b, 0xd0, 0xe9, 0x71, 0x26, 0x29, 0x9b, 0xf1,
-	0x59, 0xaa, 0x87, 0x67, 0xa7, 0xb4, 0xff, 0xe4, 0x8f, 0x2f, 0xd6, 0xad, 0xaf, 0x5e, 0xac, 0x5b,
-	0x5f, 0xbf, 0x58, 0x2f, 0x7c, 0xfe, 0xcf, 0x75, 0xeb, 0xb3, 0xb7, 0x97, 0xfe, 0x13, 0xc7, 0x58,
-	0x26, 0xf4, 0x8a, 0x27, 0x74, 0x42, 0x59, 0x2e, 0x30, 0xb2, 0x23, 0xa6, 0x93, 0x1d, 0x31, 0xde,
-	0xc1, 0x82, 0x8e, 0xab, 0xfa, 0xcf, 0xef, 0x3b, 0xff, 0x0d, 0x00, 0x00, 0xff, 0xff, 0x84, 0x4e,
-	0x16, 0x4a, 0x5a, 0x0f, 0x00, 0x00,
+	// 2305 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xc4, 0x58, 0x4b, 0x6f, 0x23, 0xc7,
+	0xf1, 0xd7, 0xf0, 0xcd, 0x1a, 0x3e, 0x46, 0xbd, 0xf2, 0x9a, 0x96, 0xfd, 0xdf, 0xd5, 0x7f, 0xec,
+	0xd8, 0xb2, 0x1d, 0x6b, 0x11, 0xd9, 0x49, 0x6c, 0xc3, 0xb0, 0xb1, 0xa2, 0xec, 0x15, 0x93, 0x95,
+	0xa8, 0x8c, 0xb8, 0x36, 0x60, 0x04, 0x18, 0x34, 0x67, 0x5a, 0xd4, 0x2c, 0x67, 0xba, 0x7b, 0x67,
+	0x9a, 0x5a, 0xc9, 0xd7, 0xc4, 0x5f, 0x20, 0xb7, 0xdc, 0xec, 0x53, 0x0e, 0xb9, 0xe6, 0x9c, 0xb3,
+	0x8f, 0x0e, 0xf2, 0x4e, 0x80, 0xc0, 0x70, 0x80, 0x20, 0x8f, 0x6b, 0x3e, 0x40, 0xd0, 0xd5, 0x33,
+	0x24, 0xa5, 0xdd, 0x75, 0xe2, 0x20, 0x80, 0x2f, 0x44, 0xd7, 0xaf, 0x1e, 0x5d, 0x55, 0x5d, 0xdd,
+	0x55, 0x43, 0x68, 0x52, 0x19, 0x6d, 0xc9, 0x54, 0x28, 0x41, 0xca, 0x54, 0x46, 0xeb, 0x2f, 0x4d,
+	0x22, 0x75, 0x32, 0x1b, 0x6f, 0x05, 0x22, 0xb9, 0x31, 0x11, 0x13, 0x71, 0x03, 0x79, 0xe3, 0xd9,
+	0x31, 0x52, 0x48, 0xe0, 0xca, 0xe8, 0xac, 0x77, 0x55, 0x94, 0xb0, 0x4c, 0xd1, 0x44, 0xe6, 0x00,
+	0xc8, 0x98, 0x72, 0xb3, 0x76, 0xbf, 0x0d, 0xed, 0xd1, 0xc1, 0x61, 0xc4, 0x27, 0x1e, 0xbb, 0x37,
+	0x63, 0x99, 0x22, 0x4f, 0x41, 0x53, 0xd2, 0x94, 0x26, 0x4c, 0xb1, 0xb4, 0x67, 0x6d, 0x58, 0x9b,
+	0x4d, 0x6f, 0x01, 0xbc, 0xde, 0xf8, 0xe8, 0xe3, 0xeb, 0xd6, 0x67, 0x1f, 0x5f, 0x5f, 0x71, 0x7f,
+	0x66, 0x41, 0xa7, 0xd0, 0xcc, 0xa4, 0xe0, 0x19, 0x23, 0x3d, 0xa8, 0x67, 0x4a, 0xa4, 0x6c, 0xb0,
+	0x9b, 0x2b, 0x16, 0x24, 0x79, 0x16, 0x3a, 0x19, 0x4b, 0x4f, 0xa3, 0x80, 0xdd, 0x0c, 0xc3, 0x94,
+	0x65, 0x59, 0xaf, 0x84, 0x02, 0x97, 0x50, 0xb4, 0x70, 0x42, 0xd3, 0x70, 0xb0, 0xdb, 0x2b, 0x6f,
+	0x58, 0x9b, 0x15, 0xaf, 0x20, 0xb5, 0x5b, 0x29, 0x93, 0x71, 0x14, 0xd0, 0xc1, 0x6e, 0xaf, 0x82,
+	0xbc, 0x05, 0x40, 0xae, 0x01, 0xc4, 0x62, 0x72, 0x94, 0xab, 0x56, 0x91, 0xbd, 0x84, 0x2c, 0xb9,
+	0xfd, 0x3a, 0x38, 0xa3, 0x83, 0x23, 0x95, 0x2e, 0xfb, 0x8d, 0xb6, 0xd5, 0x2c, 0xe5, 0x47, 0x6a,
+	0x1e, 0xf2, 0x1c, 0x58, 0xd2, 0xfd, 0xa9, 0x05, 0xb5, 0x77, 0x59, 0xa0, 0x44, 0x4a, 0x08, 0x54,
+	0x42, 0xaa, 0x28, 0x4a, 0xb7, 0x3c, 0x5c, 0x93, 0x6b, 0x50, 0x51, 0xe7, 0x92, 0x61, 0x68, 0xf6,
+	0x36, 0x6c, 0x61, 0x96, 0x47, 0xe7, 0x92, 0x79, 0x88, 0x93, 0x75, 0x68, 0xf0, 0x59, 0x1c, 0xd3,
+	0x71, 0xcc, 0x30, 0xba, 0x86, 0x37, 0xa7, 0x89, 0x03, 0x65, 0x9e, 0x49, 0x0c, 0xac, 0xe5, 0xe9,
+	0x25, 0x79, 0x02, 0x1a, 0x51, 0xe6, 0x07, 0x82, 0x67, 0x0a, 0x03, 0x6a, 0x78, 0xf5, 0x28, 0xeb,
+	0x6b, 0x52, 0x0b, 0xc7, 0x8c, 0xf7, 0x6a, 0x1b, 0xd6, 0x66, 0xdb, 0xd3, 0x4b, 0xed, 0x0e, 0x4d,
+	0x19, 0xed, 0xd5, 0x8d, 0x3b, 0x7a, 0xed, 0x7e, 0x07, 0xaa, 0x3b, 0x54, 0x05, 0x27, 0x64, 0x1d,
+	0xaa, 0x54, 0xa9, 0x34, 0xeb, 0x59, 0x1b, 0xe5, 0xcd, 0xe6, 0x4e, 0xe5, 0x93, 0x3f, 0x5d, 0x5f,
+	0xf1, 0x0c, 0x44, 0xbe, 0x06, 0x95, 0x53, 0x16, 0xe8, 0xe3, 0x28, 0x6f, 0xda, 0xdb, 0xf6, 0x96,
+	0xae, 0x34, 0x13, 0x62, 0x2e, 0x87, 0x6c, 0xf7, 0x5d, 0xa8, 0x8f, 0xb4, 0x9f, 0x83, 0x5d, 0x72,
+	0x05, 0xaa, 0xe1, 0xd8, 0x8f, 0x42, 0x0c, 0xbd, 0xe2, 0x55, 0xc2, 0xf1, 0x20, 0xd4, 0xa0, 0x42,
+	0xb0, 0x64, 0x40, 0xa5, 0xc1, 0xff, 0x87, 0x96, 0xa4, 0xa9, 0x8a, 0x54, 0x24, 0xb8, 0xe6, 0x99,
+	0x13, 0xb5, 0xe7, 0xd8, 0x20, 0x74, 0x7f, 0x64, 0x41, 0xe7, 0xe8, 0x9c, 0x07, 0xb7, 0xc5, 0x64,
+	0x44, 0xa3, 0xd8, 0x63, 0xf7, 0xc8, 0x4b, 0x50, 0x0f, 0xb8, 0x7f, 0x42, 0x4f, 0x19, 0xee, 0x60,
+	0x6f, 0xaf, 0x6d, 0x2d, 0xea, 0x77, 0x54, 0xac, 0xbc, 0x5a, 0xc0, 0xf7, 0xe8, 0x29, 0xcb, 0xc5,
+	0xef, 0x53, 0xae, 0xf2, 0xbc, 0x3f, 0x52, 0xfc, 0x3d, 0xca, 0x15, 0x71, 0xa1, 0xaa, 0xe6, 0x07,
+	0x60, 0x6f, 0xb7, 0x30, 0xe0, 0x3c, 0x34, 0xcf, 0xb0, 0xdc, 0xef, 0x43, 0xf7, 0x82, 0x4f, 0x99,
+	0xd4, 0xa1, 0x04, 0x53, 0xe9, 0xc7, 0x22, 0xa0, 0xda, 0xf3, 0xbc, 0x48, 0xec, 0x60, 0x2a, 0x6f,
+	0xe7, 0x10, 0x79, 0x16, 0x1a, 0x81, 0x48, 0x12, 0xca, 0xc3, 0x22, 0x9b, 0x80, 0xc6, 0xdf, 0xe6,
+	0x2a, 0x3d, 0xf7, 0xe6, 0x3c, 0xf7, 0x4d, 0x58, 0x3d, 0x4c, 0x99, 0x26, 0x23, 0xf5, 0x5e, 0x1a,
+	0x29, 0xd6, 0x4f, 0x42, 0xf2, 0x3c, 0x00, 0xd3, 0x72, 0x7e, 0x1c, 0x65, 0x0a, 0xcf, 0xe9, 0xa2,
+	0x7a, 0x13, 0xb9, 0xb7, 0xa3, 0x4c, 0xb9, 0xff, 0x28, 0x41, 0x15, 0x41, 0xf2, 0x72, 0xa1, 0x84,
+	0x55, 0xa7, 0x5d, 0xea, 0x6c, 0xaf, 0x2d, 0x94, 0xcc, 0x2f, 0xd6, 0x9f, 0x51, 0xd7, 0x4b, 0x5d,
+	0x56, 0x18, 0xe5, 0xe2, 0xb0, 0xea, 0x48, 0x0f, 0x42, 0x72, 0x1d, 0x6c, 0x5d, 0xc7, 0x63, 0x9a,
+	0xb1, 0xc5, 0x71, 0x41, 0x01, 0x0d, 0x42, 0xf2, 0x7f, 0x00, 0x46, 0x97, 0xd3, 0x84, 0x61, 0xad,
+	0x36, 0xbd, 0x26, 0x22, 0x07, 0x34, 0x61, 0xe4, 0x69, 0x68, 0xcf, 0xf5, 0x51, 0xa2, 0x8a, 0x12,
+	0xad, 0x02, 0x44, 0xa1, 0x27, 0xa1, 0x79, 0x1c, 0x15, 0x26, 0x6a, 0x28, 0xd0, 0xd0, 0x00, 0x32,
+	0x9f, 0x82, 0xf2, 0x98, 0x2a, 0xac, 0xe2, 0x22, 0x7e, 0x2c, 0x61, 0x4f, 0xc3, 0xe4, 0x69, 0xe8,
+	0xc8, 0xa9, 0x1f, 0x9c, 0xb0, 0x60, 0xea, 0x8f, 0xcf, 0x7d, 0xc5, 0x7b, 0x8d, 0x0d, 0x6b, 0xb3,
+	0xea, 0xd9, 0x72, 0xda, 0xd7, 0xe0, 0xce, 0xf9, 0x88, 0xbb, 0xfb, 0xd0, 0x9c, 0xc7, 0x4d, 0x00,
+	0x6a, 0x03, 0x9e, 0xb1, 0x54, 0x39, 0x2b, 0x7a, 0xbd, 0xcb, 0x62, 0xa6, 0x98, 0x63, 0xe9, 0xf5,
+	0x1d, 0x19, 0x52, 0xc5, 0x9c, 0x12, 0x69, 0x42, 0xf5, 0x66, 0xac, 0x58, 0xea, 0x94, 0xc9, 0x2a,
+	0xb4, 0x8f, 0x24, 0x0b, 0x22, 0x1a, 0xe7, 0x92, 0x15, 0xf7, 0x87, 0x16, 0x00, 0x1a, 0x97, 0x22,
+	0xe2, 0x8a, 0xbc, 0x08, 0xb5, 0x24, 0xe2, 0xbe, 0xca, 0xbe, 0xb0, 0x36, 0xab, 0x49, 0xc4, 0x47,
+	0x19, 0x0a, 0xd3, 0x33, 0x2d, 0x5c, 0xfa, 0x42, 0x61, 0x7a, 0x36, 0xca, 0x8a, 0xd0, 0xcb, 0x0f,
+	0x0d, 0xdd, 0xb8, 0x41, 0x15, 0x8d, 0xc5, 0xa4, 0x3f, 0x95, 0x5f, 0x99, 0x1b, 0x1f, 0x5a, 0x60,
+	0xef, 0x33, 0x45, 0xf5, 0x89, 0x7e, 0x95, 0x7e, 0xfc, 0xdd, 0x02, 0x07, 0x0f, 0x0d, 0x6f, 0xee,
+	0xa1, 0x88, 0xa3, 0xe0, 0x9c, 0x6c, 0xc1, 0x15, 0xed, 0x8c, 0xc8, 0xa2, 0x0f, 0x98, 0x7f, 0x6f,
+	0x46, 0xa3, 0x38, 0x3a, 0x66, 0xe6, 0x99, 0x6a, 0x7b, 0xab, 0x49, 0xc4, 0x87, 0x9a, 0xf3, 0xbd,
+	0x82, 0x41, 0x9e, 0x81, 0x8e, 0xf6, 0x47, 0x8c, 0xef, 0xfa, 0x82, 0xb3, 0x74, 0xc6, 0xd1, 0xaf,
+	0xb6, 0xd7, 0x4a, 0xe8, 0xd9, 0x70, 0x7c, 0x77, 0x88, 0x18, 0xb9, 0x01, 0x6b, 0x28, 0x85, 0x56,
+	0x13, 0x96, 0x4e, 0x58, 0xa8, 0x55, 0xd0, 0x33, 0x6d, 0x96, 0x9e, 0xa1, 0xd9, 0x7d, 0xe4, 0x0c,
+	0xc7, 0x77, 0xc9, 0x33, 0x50, 0x3d, 0x89, 0xb8, 0xca, 0x7a, 0x95, 0x8d, 0xf2, 0x66, 0x67, 0xbb,
+	0x83, 0xbe, 0x23, 0x7b, 0x2f, 0xe2, 0xca, 0x33, 0x4c, 0xf2, 0x3c, 0x68, 0x8f, 0xfc, 0x80, 0x1b,
+	0x9b, 0xbe, 0xb6, 0x91, 0xf7, 0xad, 0x4e, 0x12, 0xf1, 0x3e, 0x47, 0x8d, 0xa3, 0xe8, 0x03, 0xe6,
+	0xbe, 0x0a, 0x6b, 0x8b, 0x58, 0xb1, 0x01, 0xa4, 0x54, 0xd7, 0xe2, 0x06, 0xd8, 0xc1, 0x9c, 0xca,
+	0xf2, 0x4e, 0xb4, 0x0c, 0xb9, 0x2f, 0xc1, 0xea, 0xb2, 0x66, 0x92, 0x30, 0xae, 0x74, 0x8b, 0x0d,
+	0xcc, 0xb2, 0x68, 0xd2, 0x39, 0xe9, 0xee, 0xc3, 0x63, 0x0b, 0x71, 0x8f, 0xe9, 0x1b, 0x8a, 0x4b,
+	0xfd, 0x66, 0x88, 0x38, 0x34, 0x57, 0x36, 0xd7, 0x11, 0x71, 0x88, 0x37, 0xf6, 0x09, 0x68, 0x70,
+	0x76, 0xdf, 0xb0, 0x4c, 0x4b, 0xaf, 0x73, 0x76, 0x5f, 0xb3, 0x5c, 0x0e, 0x57, 0x2e, 0x9b, 0xeb,
+	0x8b, 0xf8, 0xbf, 0x33, 0xa6, 0x1f, 0xe0, 0x4c, 0x0f, 0x28, 0x3c, 0x60, 0x3e, 0x9f, 0x25, 0x79,
+	0xfa, 0xed, 0x02, 0x3b, 0x98, 0x25, 0x6e, 0xb8, 0xbc, 0xdf, 0xcd, 0x30, 0xec, 0x8b, 0x78, 0x96,
+	0x70, 0xf2, 0x0c, 0xd4, 0x02, 0x5c, 0xe5, 0x35, 0xda, 0x32, 0x7d, 0xb9, 0x2f, 0xe2, 0x5d, 0x76,
+	0xec, 0xe5, 0x3c, 0xf2, 0x1c, 0x74, 0x23, 0x7c, 0x29, 0x7c, 0x29, 0x32, 0xec, 0x4e, 0xe8, 0x41,
+	0xd5, 0xeb, 0x18, 0xf8, 0x30, 0x47, 0xdd, 0x23, 0xb8, 0x7a, 0x61, 0x97, 0xc3, 0xa2, 0x9b, 0x91,
+	0xd7, 0xa0, 0xbd, 0x68, 0x77, 0x21, 0x3b, 0x9e, 0xdf, 0x09, 0xdc, 0x6f, 0x2e, 0xb7, 0x73, 0xae,
+	0xf7, 0x5d, 0x74, 0xc6, 0x5d, 0x76, 0xec, 0xbe, 0xbf, 0x7c, 0xc4, 0xbb, 0xa9, 0x90, 0xb9, 0xef,
+	0xd7, 0xc1, 0x8e, 0xc5, 0x24, 0x0a, 0x68, 0xec, 0x47, 0xe1, 0x59, 0x5e, 0xca, 0x90, 0x43, 0x83,
+	0xf0, 0xec, 0x81, 0xb4, 0x94, 0x1e, 0x4c, 0xcb, 0x5f, 0x2a, 0xd0, 0x5e, 0x3e, 0x87, 0x7b, 0x17,
+	0x5a, 0x80, 0x75, 0xb1, 0x05, 0xcc, 0x9b, 0x7b, 0x69, 0xa9, 0xb9, 0xbb, 0x50, 0x99, 0x46, 0xdc,
+	0x34, 0x84, 0xa2, 0xa0, 0xd1, 0xe2, 0x77, 0x23, 0x1e, 0x7a, 0xc8, 0x23, 0xaf, 0x01, 0xd0, 0x30,
+	0xf4, 0xf3, 0x4c, 0x57, 0x30, 0xf2, 0xde, 0x42, 0xf2, 0xe2, 0x99, 0xec, 0xad, 0x78, 0x4d, 0x3a,
+	0x3f, 0xa0, 0x37, 0xc0, 0x0e, 0x53, 0x21, 0x0b, 0xdd, 0x2a, 0xea, 0x3e, 0x71, 0x49, 0x77, 0x91,
+	0x94, 0xbd, 0x15, 0x0f, 0xc2, 0x45, 0x8a, 0xde, 0x82, 0x56, 0x8a, 0xb5, 0xe5, 0x9b, 0xbe, 0x5e,
+	0x43, 0xf5, 0xf5, 0x4b, 0xea, 0x4b, 0xd5, 0xbc, 0xb7, 0xe2, 0xd9, 0xe9, 0x52, 0x71, 0xbf, 0x05,
+	0x9d, 0x19, 0xf6, 0x02, 0xbf, 0xb8, 0x16, 0xa6, 0xfd, 0x5c, 0xbd, 0x64, 0x22, 0xbf, 0x3f, 0x7b,
+	0x2b, 0x5e, 0xdb, 0xc8, 0x17, 0x17, 0xea, 0x0d, 0xb0, 0x0b, 0x03, 0x99, 0x4a, 0xb1, 0x27, 0x3d,
+	0xe8, 0xff, 0xe2, 0xde, 0x6a, 0xff, 0x73, 0x03, 0x99, 0x4a, 0xc9, 0x1b, 0x90, 0x9b, 0xf3, 0x25,
+	0x3e, 0x63, 0xbd, 0x26, 0xea, 0x3f, 0x76, 0x49, 0xdf, 0xbc, 0x71, 0x7b, 0x2b, 0x5e, 0xcb, 0x48,
+	0xe7, 0x6f, 0xde, 0x0e, 0xb4, 0x75, 0xda, 0xe7, 0xc5, 0xd4, 0x03, 0xd4, 0x7e, 0xf2, 0xc1, 0xcc,
+	0xcf, 0xeb, 0x4f, 0xdb, 0xa0, 0x17, 0xeb, 0x16, 0xf2, 0x0c, 0x06, 0x22, 0xee, 0xd9, 0x0f, 0x3d,
+	0xba, 0xf9, 0xf5, 0xd5, 0x47, 0x97, 0x16, 0xc4, 0x8e, 0x0d, 0x4d, 0x21, 0x59, 0x8a, 0x03, 0x90,
+	0xfb, 0xcf, 0x12, 0xd8, 0x47, 0xc1, 0x09, 0x4b, 0xe8, 0xdb, 0x67, 0x2a, 0xa5, 0xe4, 0x59, 0xe8,
+	0x72, 0x76, 0xa6, 0xb4, 0x55, 0x3f, 0x63, 0xf7, 0x74, 0x79, 0x9a, 0x02, 0x6e, 0x6b, 0xb8, 0x2f,
+	0xe2, 0x23, 0x04, 0x71, 0x6c, 0x48, 0x85, 0x94, 0x2c, 0xf4, 0xcd, 0x98, 0xaa, 0xa7, 0x27, 0x3d,
+	0x36, 0x18, 0xf0, 0x66, 0x3e, 0xa7, 0x76, 0x4c, 0x7d, 0xf8, 0xc1, 0x09, 0xe5, 0x13, 0x16, 0xe6,
+	0x13, 0x74, 0xdb, 0xa0, 0x7d, 0x03, 0x5e, 0x78, 0x5c, 0x2a, 0x17, 0x1f, 0x97, 0x47, 0xb4, 0x87,
+	0xea, 0x7f, 0xde, 0x1e, 0x6a, 0x5f, 0xa2, 0x3d, 0xd4, 0xff, 0x6d, 0x7b, 0x68, 0x7c, 0xe9, 0xf6,
+	0xd0, 0x7c, 0x68, 0x7b, 0x08, 0xa1, 0x31, 0xe0, 0xea, 0x5b, 0xaf, 0xec, 0x53, 0x49, 0x5c, 0xb0,
+	0x92, 0x7c, 0x7a, 0x34, 0x83, 0x60, 0xc1, 0xd9, 0xda, 0x37, 0x73, 0xa4, 0x95, 0xac, 0xbf, 0x02,
+	0x35, 0x43, 0xe8, 0xcf, 0x88, 0x29, 0x3b, 0xc7, 0x43, 0x29, 0x7b, 0x7a, 0x49, 0xd6, 0xa0, 0x7a,
+	0x4a, 0xe3, 0x99, 0x79, 0x7d, 0xcb, 0x9e, 0x21, 0x5e, 0x2f, 0xbd, 0x6a, 0xb9, 0xef, 0x42, 0x6b,
+	0x94, 0x52, 0x9e, 0xed, 0xb2, 0x4c, 0xbf, 0x85, 0xe4, 0x2a, 0xd4, 0xc4, 0xf8, 0xee, 0x20, 0x7f,
+	0x94, 0xaa, 0x5e, 0x4e, 0x69, 0x7c, 0x1c, 0x4f, 0x35, 0x6e, 0x9e, 0xcf, 0x9c, 0xd2, 0x78, 0x2a,
+	0xee, 0x6b, 0xbc, 0x6c, 0x70, 0x43, 0xb9, 0x3f, 0xb0, 0xc0, 0xde, 0x89, 0xa7, 0x68, 0x5b, 0x47,
+	0xf0, 0xe2, 0x22, 0x82, 0xc7, 0x4d, 0xd7, 0x5f, 0x30, 0xf3, 0x20, 0xf2, 0x0f, 0x13, 0x2b, 0x59,
+	0xbf, 0xf5, 0xb0, 0x50, 0xaa, 0x26, 0x94, 0xe7, 0x96, 0x43, 0xb1, 0xb7, 0x57, 0xcd, 0xa0, 0xbf,
+	0x14, 0xc2, 0x72, 0x74, 0x7b, 0x40, 0x8a, 0x7d, 0x8e, 0x59, 0xba, 0x23, 0xc4, 0x34, 0xe2, 0x13,
+	0xb2, 0x0d, 0x8d, 0x84, 0x4a, 0x19, 0xf1, 0x49, 0x96, 0xbb, 0xe4, 0x5c, 0x76, 0x29, 0xf7, 0x65,
+	0x2e, 0xe7, 0xfe, 0xbc, 0x04, 0x0e, 0x9e, 0x4d, 0x1f, 0x07, 0x7c, 0xe3, 0xdd, 0x43, 0x3f, 0x99,
+	0x1e, 0x83, 0x9a, 0x1a, 0xc7, 0x8b, 0xb7, 0xb6, 0xaa, 0xc6, 0xf1, 0x03, 0x33, 0x76, 0xf9, 0xf2,
+	0x8c, 0xfd, 0x4d, 0x68, 0x64, 0x8a, 0xa6, 0xca, 0xc7, 0x01, 0xe3, 0x91, 0x63, 0x54, 0xee, 0x57,
+	0x1d, 0x65, 0x47, 0x99, 0x6e, 0x24, 0x8b, 0xe2, 0xcc, 0x7a, 0xd5, 0x8d, 0xf2, 0x66, 0xcb, 0x83,
+	0xa4, 0xa8, 0xca, 0x0c, 0x3f, 0x70, 0x52, 0x46, 0x55, 0x21, 0x51, 0x43, 0x09, 0x3b, 0xc7, 0x50,
+	0xe4, 0x1b, 0x50, 0x1f, 0x9b, 0xcc, 0xe4, 0x2f, 0xe4, 0xc5, 0x03, 0x5a, 0x24, 0xce, 0x2b, 0xe4,
+	0xf4, 0xb6, 0xf9, 0x52, 0x7f, 0x3a, 0xe1, 0xd3, 0xd8, 0xf2, 0x20, 0x87, 0x6e, 0x8b, 0x40, 0x9f,
+	0x1b, 0x4b, 0x53, 0xac, 0xec, 0xa6, 0xa7, 0x97, 0xee, 0x8f, 0x4b, 0xd0, 0xc1, 0x04, 0x8e, 0x68,
+	0x36, 0xfd, 0x9f, 0xa7, 0xef, 0x71, 0xa8, 0x87, 0xe3, 0xe5, 0xe7, 0xa1, 0x16, 0x8e, 0x91, 0xe1,
+	0x42, 0x5b, 0x89, 0xfc, 0xb2, 0x2d, 0xa5, 0xc8, 0x56, 0x02, 0x9d, 0xc1, 0x04, 0x6c, 0xc1, 0x15,
+	0x96, 0xa9, 0x28, 0xc1, 0x2c, 0x25, 0x2c, 0xf1, 0x67, 0x19, 0x9d, 0x98, 0x8e, 0x53, 0xf1, 0x56,
+	0xe7, 0xac, 0x7d, 0x96, 0xdc, 0xd1, 0x0c, 0xed, 0x0b, 0x0d, 0x02, 0x31, 0xe3, 0x4a, 0xbb, 0x69,
+	0x5e, 0x84, 0x66, 0x8e, 0x0c, 0x42, 0xed, 0xcb, 0x2c, 0x63, 0xa9, 0xe6, 0x35, 0x90, 0x57, 0xd3,
+	0xa4, 0x61, 0xa4, 0xc2, 0xb4, 0xe7, 0xa6, 0x61, 0x68, 0x72, 0x10, 0xbe, 0xf0, 0x61, 0x09, 0x6a,
+	0x43, 0xd9, 0x17, 0x21, 0x23, 0x75, 0x28, 0x1f, 0x08, 0xe9, 0xac, 0x90, 0x55, 0x68, 0x0d, 0xe5,
+	0x2d, 0xa6, 0xf2, 0xaf, 0x55, 0xe7, 0xaf, 0x75, 0xe2, 0x80, 0x3d, 0x94, 0x87, 0x69, 0x5e, 0x82,
+	0xce, 0xdf, 0xea, 0xc4, 0xd6, 0x7a, 0x87, 0x11, 0x9f, 0x38, 0x9f, 0x76, 0x49, 0x0b, 0xea, 0x43,
+	0xf9, 0x4e, 0x3c, 0xcb, 0x4e, 0x9c, 0x5f, 0x74, 0x8d, 0xfe, 0xe2, 0x0b, 0xc7, 0xf9, 0x65, 0x97,
+	0x74, 0xa0, 0x39, 0x94, 0x03, 0x9e, 0x49, 0x16, 0x28, 0xe7, 0x57, 0x5d, 0xb2, 0x06, 0xdd, 0xa1,
+	0xbc, 0x19, 0x86, 0xef, 0xd0, 0x59, 0xac, 0x0e, 0x51, 0xea, 0xd7, 0x5d, 0xd2, 0x86, 0xc6, 0x50,
+	0xee, 0xd0, 0x60, 0x3a, 0x93, 0xce, 0x6f, 0xba, 0x66, 0xd3, 0x51, 0x4a, 0x03, 0x76, 0x24, 0x29,
+	0x77, 0x7e, 0xdb, 0x25, 0x57, 0xa0, 0x33, 0x94, 0x47, 0x4a, 0xa4, 0x74, 0xc2, 0x30, 0x21, 0xce,
+	0xef, 0xba, 0xe4, 0x71, 0x20, 0x43, 0x79, 0x2b, 0x16, 0x63, 0x1a, 0x2f, 0x6d, 0xfa, 0xfb, 0x2e,
+	0xb9, 0x0a, 0xab, 0x7a, 0x53, 0xc5, 0xd2, 0x80, 0x49, 0x95, 0xbb, 0xfe, 0x87, 0x2e, 0x21, 0xd0,
+	0xd6, 0x21, 0x6b, 0x12, 0x4f, 0xc2, 0xf9, 0x63, 0xf7, 0x85, 0x9f, 0x58, 0xd0, 0x9c, 0x0f, 0x20,
+	0xc4, 0x86, 0xfa, 0x80, 0x9f, 0xd2, 0x38, 0x0a, 0x9d, 0x15, 0xd2, 0x86, 0xe6, 0x7c, 0xcc, 0x70,
+	0x2c, 0xd2, 0x01, 0x58, 0x4c, 0x0e, 0x4e, 0x89, 0x74, 0xc1, 0x5e, 0x1a, 0x05, 0xcc, 0x27, 0xdf,
+	0x9d, 0xe5, 0x6e, 0xee, 0x54, 0xc8, 0x1a, 0x38, 0x05, 0x54, 0xf4, 0x6c, 0xa7, 0x4a, 0x1c, 0x68,
+	0xdd, 0x59, 0xea, 0xbc, 0x4e, 0x4d, 0x23, 0xcb, 0x7d, 0xd5, 0xd1, 0x89, 0x6f, 0xcd, 0x1b, 0xa5,
+	0xde, 0xaf, 0xf1, 0xc2, 0x2d, 0x68, 0xce, 0xdf, 0x76, 0xd2, 0x80, 0xca, 0xcd, 0x99, 0x12, 0xc6,
+	0xcb, 0x03, 0x61, 0xbe, 0x31, 0x33, 0xc7, 0x22, 0x2d, 0x68, 0xec, 0x44, 0x13, 0xe3, 0x52, 0x89,
+	0x5c, 0x81, 0x6e, 0x5f, 0x70, 0x15, 0xf1, 0x99, 0x98, 0x65, 0xf8, 0x0f, 0x81, 0x53, 0xde, 0x79,
+	0xf3, 0x93, 0xcf, 0xaf, 0x59, 0x9f, 0x7e, 0x7e, 0xcd, 0xfa, 0xec, 0xf3, 0x6b, 0x2b, 0x1f, 0xfd,
+	0xf9, 0x9a, 0xf5, 0xfe, 0xd7, 0x97, 0xfe, 0x04, 0x4c, 0xa8, 0x4a, 0xa3, 0x33, 0x91, 0x46, 0x93,
+	0x88, 0x17, 0x04, 0x67, 0x37, 0xe4, 0x74, 0x72, 0x43, 0x8e, 0x6f, 0x50, 0x19, 0x8d, 0x6b, 0xf8,
+	0x6f, 0xdf, 0xcb, 0xff, 0x0a, 0x00, 0x00, 0xff, 0xff, 0x6b, 0x24, 0x22, 0xee, 0x4b, 0x14, 0x00,
+	0x00,
 }
 
 func (m *TNPingRequest) Marshal() (dAtA []byte, err error) {
@@ -2665,6 +3184,11 @@ func (m *AlterTablePolicy) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.MinCnMergeSize != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.MinCnMergeSize))
+		i--
+		dAtA[i] = 0x28
+	}
 	if len(m.Hints) > 0 {
 		dAtA16 := make([]byte, len(m.Hints)*10)
 		var j15 int
@@ -2683,8 +3207,8 @@ func (m *AlterTablePolicy) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x22
 	}
-	if m.MaxRowsMergedObj != 0 {
-		i = encodeVarintApi(dAtA, i, uint64(m.MaxRowsMergedObj))
+	if m.MaxOsizeMergedObj != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.MaxOsizeMergedObj))
 		i--
 		dAtA[i] = 0x18
 	}
@@ -2693,8 +3217,8 @@ func (m *AlterTablePolicy) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x10
 	}
-	if m.MinRowsQuailifed != 0 {
-		i = encodeVarintApi(dAtA, i, uint64(m.MinRowsQuailifed))
+	if m.MinOsizeQuailifed != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.MinOsizeQuailifed))
 		i--
 		dAtA[i] = 0x8
 	}
@@ -2792,6 +3316,52 @@ func (m *AlterTableRenameTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.NewName) > 0 {
+		i -= len(m.NewName)
+		copy(dAtA[i:], m.NewName)
+		i = encodeVarintApi(dAtA, i, uint64(len(m.NewName)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.OldName) > 0 {
+		i -= len(m.OldName)
+		copy(dAtA[i:], m.OldName)
+		i = encodeVarintApi(dAtA, i, uint64(len(m.OldName)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *AlterTableRenameCol) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *AlterTableRenameCol) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterTableRenameCol) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.SequenceNum != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.SequenceNum))
+		i--
+		dAtA[i] = 0x18
 	}
 	if len(m.NewName) > 0 {
 		i -= len(m.NewName)
@@ -3128,6 +3698,27 @@ func (m *AlterTableReq_AddPartition) MarshalToSizedBuffer(dAtA []byte) (int, err
 	}
 	return len(dAtA) - i, nil
 }
+func (m *AlterTableReq_RenameCol) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterTableReq_RenameCol) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.RenameCol != nil {
+		{
+			size, err := m.RenameCol.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintApi(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x5a
+	}
+	return len(dAtA) - i, nil
+}
 func (m *SchemaExtra) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
@@ -3152,26 +3743,31 @@ func (m *SchemaExtra) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.MinCnMergeSize != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.MinCnMergeSize))
+		i--
+		dAtA[i] = 0x48
+	}
 	if len(m.Hints) > 0 {
-		dAtA27 := make([]byte, len(m.Hints)*10)
-		var j26 int
+		dAtA28 := make([]byte, len(m.Hints)*10)
+		var j27 int
 		for _, num := range m.Hints {
 			for num >= 1<<7 {
-				dAtA27[j26] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA28[j27] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j26++
+				j27++
 			}
-			dAtA27[j26] = uint8(num)
-			j26++
+			dAtA28[j27] = uint8(num)
+			j27++
 		}
-		i -= j26
-		copy(dAtA[i:], dAtA27[:j26])
-		i = encodeVarintApi(dAtA, i, uint64(j26))
+		i -= j27
+		copy(dAtA[i:], dAtA28[:j27])
+		i = encodeVarintApi(dAtA, i, uint64(j27))
 		i--
 		dAtA[i] = 0x42
 	}
-	if m.MaxRowsMergedObj != 0 {
-		i = encodeVarintApi(dAtA, i, uint64(m.MaxRowsMergedObj))
+	if m.MaxOsizeMergedObj != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.MaxOsizeMergedObj))
 		i--
 		dAtA[i] = 0x38
 	}
@@ -3180,8 +3776,8 @@ func (m *SchemaExtra) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x30
 	}
-	if m.MinRowsQuailifed != 0 {
-		i = encodeVarintApi(dAtA, i, uint64(m.MinRowsQuailifed))
+	if m.MinOsizeQuailifed != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.MinOsizeQuailifed))
 		i--
 		dAtA[i] = 0x28
 	}
@@ -3257,6 +3853,316 @@ func (m *Int64Map) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			i--
 			dAtA[i] = 0xa
 		}
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *TransDestPos) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *TransDestPos) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *TransDestPos) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.RowIdx != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.RowIdx))
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.BlkIdx != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.BlkIdx))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.ObjIdx != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.ObjIdx))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *BlkTransMap) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *BlkTransMap) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *BlkTransMap) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.M) > 0 {
+		for k := range m.M {
+			v := m.M[k]
+			baseI := i
+			{
+				size, err := (&v).MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintApi(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x12
+			i = encodeVarintApi(dAtA, i, uint64(k))
+			i--
+			dAtA[i] = 0x8
+			i = encodeVarintApi(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0xa
+		}
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *BlkTransferBooking) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *BlkTransferBooking) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *BlkTransferBooking) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.Mappings) > 0 {
+		for iNdEx := len(m.Mappings) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Mappings[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintApi(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0xa
+		}
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *MergeCommitEntry) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *MergeCommitEntry) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *MergeCommitEntry) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.Err) > 0 {
+		i -= len(m.Err)
+		copy(dAtA[i:], m.Err)
+		i = encodeVarintApi(dAtA, i, uint64(len(m.Err)))
+		i--
+		dAtA[i] = 0x4a
+	}
+	if len(m.BookingLoc) > 0 {
+		i -= len(m.BookingLoc)
+		copy(dAtA[i:], m.BookingLoc)
+		i = encodeVarintApi(dAtA, i, uint64(len(m.BookingLoc)))
+		i--
+		dAtA[i] = 0x42
+	}
+	if m.Booking != nil {
+		{
+			size, err := m.Booking.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintApi(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x3a
+	}
+	if len(m.CreatedObjs) > 0 {
+		for iNdEx := len(m.CreatedObjs) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.CreatedObjs[iNdEx])
+			copy(dAtA[i:], m.CreatedObjs[iNdEx])
+			i = encodeVarintApi(dAtA, i, uint64(len(m.CreatedObjs[iNdEx])))
+			i--
+			dAtA[i] = 0x32
+		}
+	}
+	if len(m.MergedObjs) > 0 {
+		for iNdEx := len(m.MergedObjs) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.MergedObjs[iNdEx])
+			copy(dAtA[i:], m.MergedObjs[iNdEx])
+			i = encodeVarintApi(dAtA, i, uint64(len(m.MergedObjs[iNdEx])))
+			i--
+			dAtA[i] = 0x2a
+		}
+	}
+	{
+		size, err := m.StartTs.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintApi(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x22
+	if len(m.TableName) > 0 {
+		i -= len(m.TableName)
+		copy(dAtA[i:], m.TableName)
+		i = encodeVarintApi(dAtA, i, uint64(len(m.TableName)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if m.TblId != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.TblId))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.DbId != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.DbId))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *MergeTaskEntry) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *MergeTaskEntry) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *MergeTaskEntry) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.RoleId != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.RoleId))
+		i--
+		dAtA[i] = 0x48
+	}
+	if m.UserId != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.UserId))
+		i--
+		dAtA[i] = 0x40
+	}
+	if m.AccountId != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.AccountId))
+		i--
+		dAtA[i] = 0x38
+	}
+	if m.EstimatedMemUsage != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.EstimatedMemUsage))
+		i--
+		dAtA[i] = 0x30
+	}
+	if len(m.ToMergeObjs) > 0 {
+		for iNdEx := len(m.ToMergeObjs) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.ToMergeObjs[iNdEx])
+			copy(dAtA[i:], m.ToMergeObjs[iNdEx])
+			i = encodeVarintApi(dAtA, i, uint64(len(m.ToMergeObjs[iNdEx])))
+			i--
+			dAtA[i] = 0x2a
+		}
+	}
+	if len(m.DbName) > 0 {
+		i -= len(m.DbName)
+		copy(dAtA[i:], m.DbName)
+		i = encodeVarintApi(dAtA, i, uint64(len(m.DbName)))
+		i--
+		dAtA[i] = 0x22
+	}
+	if len(m.TableName) > 0 {
+		i -= len(m.TableName)
+		copy(dAtA[i:], m.TableName)
+		i = encodeVarintApi(dAtA, i, uint64(len(m.TableName)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if m.TblId != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.TblId))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.DbId != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.DbId))
+		i--
+		dAtA[i] = 0x8
 	}
 	return len(dAtA) - i, nil
 }
@@ -3597,14 +4503,14 @@ func (m *AlterTablePolicy) ProtoSize() (n int) {
 	}
 	var l int
 	_ = l
-	if m.MinRowsQuailifed != 0 {
-		n += 1 + sovApi(uint64(m.MinRowsQuailifed))
+	if m.MinOsizeQuailifed != 0 {
+		n += 1 + sovApi(uint64(m.MinOsizeQuailifed))
 	}
 	if m.MaxObjOnerun != 0 {
 		n += 1 + sovApi(uint64(m.MaxObjOnerun))
 	}
-	if m.MaxRowsMergedObj != 0 {
-		n += 1 + sovApi(uint64(m.MaxRowsMergedObj))
+	if m.MaxOsizeMergedObj != 0 {
+		n += 1 + sovApi(uint64(m.MaxOsizeMergedObj))
 	}
 	if len(m.Hints) > 0 {
 		l = 0
@@ -3612,6 +4518,9 @@ func (m *AlterTablePolicy) ProtoSize() (n int) {
 			l += sovApi(uint64(e))
 		}
 		n += 1 + sovApi(uint64(l)) + l
+	}
+	if m.MinCnMergeSize != 0 {
+		n += 1 + sovApi(uint64(m.MinCnMergeSize))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -3664,6 +4573,29 @@ func (m *AlterTableRenameTable) ProtoSize() (n int) {
 	l = len(m.NewName)
 	if l > 0 {
 		n += 1 + l + sovApi(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *AlterTableRenameCol) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.OldName)
+	if l > 0 {
+		n += 1 + l + sovApi(uint64(l))
+	}
+	l = len(m.NewName)
+	if l > 0 {
+		n += 1 + l + sovApi(uint64(l))
+	}
+	if m.SequenceNum != 0 {
+		n += 1 + sovApi(uint64(m.SequenceNum))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -3832,6 +4764,18 @@ func (m *AlterTableReq_AddPartition) ProtoSize() (n int) {
 	}
 	return n
 }
+func (m *AlterTableReq_RenameCol) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.RenameCol != nil {
+		l = m.RenameCol.ProtoSize()
+		n += 1 + l + sovApi(uint64(l))
+	}
+	return n
+}
 func (m *SchemaExtra) ProtoSize() (n int) {
 	if m == nil {
 		return 0
@@ -3854,14 +4798,14 @@ func (m *SchemaExtra) ProtoSize() (n int) {
 	if l > 0 {
 		n += 1 + l + sovApi(uint64(l))
 	}
-	if m.MinRowsQuailifed != 0 {
-		n += 1 + sovApi(uint64(m.MinRowsQuailifed))
+	if m.MinOsizeQuailifed != 0 {
+		n += 1 + sovApi(uint64(m.MinOsizeQuailifed))
 	}
 	if m.MaxObjOnerun != 0 {
 		n += 1 + sovApi(uint64(m.MaxObjOnerun))
 	}
-	if m.MaxRowsMergedObj != 0 {
-		n += 1 + sovApi(uint64(m.MaxRowsMergedObj))
+	if m.MaxOsizeMergedObj != 0 {
+		n += 1 + sovApi(uint64(m.MaxOsizeMergedObj))
 	}
 	if len(m.Hints) > 0 {
 		l = 0
@@ -3869,6 +4813,9 @@ func (m *SchemaExtra) ProtoSize() (n int) {
 			l += sovApi(uint64(e))
 		}
 		n += 1 + sovApi(uint64(l)) + l
+	}
+	if m.MinCnMergeSize != 0 {
+		n += 1 + sovApi(uint64(m.MinCnMergeSize))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -3889,6 +4836,158 @@ func (m *Int64Map) ProtoSize() (n int) {
 			mapEntrySize := 1 + sovApi(uint64(k)) + 1 + sovApi(uint64(v))
 			n += mapEntrySize + 1 + sovApi(uint64(mapEntrySize))
 		}
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *TransDestPos) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.ObjIdx != 0 {
+		n += 1 + sovApi(uint64(m.ObjIdx))
+	}
+	if m.BlkIdx != 0 {
+		n += 1 + sovApi(uint64(m.BlkIdx))
+	}
+	if m.RowIdx != 0 {
+		n += 1 + sovApi(uint64(m.RowIdx))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *BlkTransMap) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if len(m.M) > 0 {
+		for k, v := range m.M {
+			_ = k
+			_ = v
+			l = v.ProtoSize()
+			mapEntrySize := 1 + sovApi(uint64(k)) + 1 + l + sovApi(uint64(l))
+			n += mapEntrySize + 1 + sovApi(uint64(mapEntrySize))
+		}
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *BlkTransferBooking) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if len(m.Mappings) > 0 {
+		for _, e := range m.Mappings {
+			l = e.ProtoSize()
+			n += 1 + l + sovApi(uint64(l))
+		}
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *MergeCommitEntry) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.DbId != 0 {
+		n += 1 + sovApi(uint64(m.DbId))
+	}
+	if m.TblId != 0 {
+		n += 1 + sovApi(uint64(m.TblId))
+	}
+	l = len(m.TableName)
+	if l > 0 {
+		n += 1 + l + sovApi(uint64(l))
+	}
+	l = m.StartTs.ProtoSize()
+	n += 1 + l + sovApi(uint64(l))
+	if len(m.MergedObjs) > 0 {
+		for _, b := range m.MergedObjs {
+			l = len(b)
+			n += 1 + l + sovApi(uint64(l))
+		}
+	}
+	if len(m.CreatedObjs) > 0 {
+		for _, b := range m.CreatedObjs {
+			l = len(b)
+			n += 1 + l + sovApi(uint64(l))
+		}
+	}
+	if m.Booking != nil {
+		l = m.Booking.ProtoSize()
+		n += 1 + l + sovApi(uint64(l))
+	}
+	l = len(m.BookingLoc)
+	if l > 0 {
+		n += 1 + l + sovApi(uint64(l))
+	}
+	l = len(m.Err)
+	if l > 0 {
+		n += 1 + l + sovApi(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *MergeTaskEntry) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.DbId != 0 {
+		n += 1 + sovApi(uint64(m.DbId))
+	}
+	if m.TblId != 0 {
+		n += 1 + sovApi(uint64(m.TblId))
+	}
+	l = len(m.TableName)
+	if l > 0 {
+		n += 1 + l + sovApi(uint64(l))
+	}
+	l = len(m.DbName)
+	if l > 0 {
+		n += 1 + l + sovApi(uint64(l))
+	}
+	if len(m.ToMergeObjs) > 0 {
+		for _, b := range m.ToMergeObjs {
+			l = len(b)
+			n += 1 + l + sovApi(uint64(l))
+		}
+	}
+	if m.EstimatedMemUsage != 0 {
+		n += 1 + sovApi(uint64(m.EstimatedMemUsage))
+	}
+	if m.AccountId != 0 {
+		n += 1 + sovApi(uint64(m.AccountId))
+	}
+	if m.UserId != 0 {
+		n += 1 + sovApi(uint64(m.UserId))
+	}
+	if m.RoleId != 0 {
+		n += 1 + sovApi(uint64(m.RoleId))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -4578,7 +5677,7 @@ func (m *Batch) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.Vecs = append(m.Vecs, &Vector{})
+			m.Vecs = append(m.Vecs, Vector{})
 			if err := m.Vecs[len(m.Vecs)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
@@ -5841,9 +6940,9 @@ func (m *AlterTablePolicy) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field MinRowsQuailifed", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field MinOsizeQuailifed", wireType)
 			}
-			m.MinRowsQuailifed = 0
+			m.MinOsizeQuailifed = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowApi
@@ -5853,7 +6952,7 @@ func (m *AlterTablePolicy) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.MinRowsQuailifed |= uint32(b&0x7F) << shift
+				m.MinOsizeQuailifed |= uint32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -5879,9 +6978,9 @@ func (m *AlterTablePolicy) Unmarshal(dAtA []byte) error {
 			}
 		case 3:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field MaxRowsMergedObj", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field MaxOsizeMergedObj", wireType)
 			}
-			m.MaxRowsMergedObj = 0
+			m.MaxOsizeMergedObj = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowApi
@@ -5891,7 +6990,7 @@ func (m *AlterTablePolicy) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.MaxRowsMergedObj |= uint32(b&0x7F) << shift
+				m.MaxOsizeMergedObj |= uint32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -5964,6 +7063,25 @@ func (m *AlterTablePolicy) Unmarshal(dAtA []byte) error {
 				}
 			} else {
 				return fmt.Errorf("proto: wrong wireType = %d for field Hints", wireType)
+			}
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MinCnMergeSize", wireType)
+			}
+			m.MinCnMergeSize = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MinCnMergeSize |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
 			}
 		default:
 			iNdEx = preIndex
@@ -6248,6 +7366,140 @@ func (m *AlterTableRenameTable) Unmarshal(dAtA []byte) error {
 			}
 			m.NewName = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipApi(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthApi
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *AlterTableRenameCol) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowApi
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: AlterTableRenameCol: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: AlterTableRenameCol: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OldName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.OldName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NewName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.NewName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SequenceNum", wireType)
+			}
+			m.SequenceNum = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.SequenceNum |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipApi(dAtA[iNdEx:])
@@ -6883,6 +8135,41 @@ func (m *AlterTableReq) Unmarshal(dAtA []byte) error {
 			}
 			m.Operation = &AlterTableReq_AddPartition{v}
 			iNdEx = postIndex
+		case 11:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RenameCol", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &AlterTableRenameCol{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Operation = &AlterTableReq_RenameCol{v}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipApi(dAtA[iNdEx:])
@@ -7039,9 +8326,9 @@ func (m *SchemaExtra) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 5:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field MinRowsQuailifed", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field MinOsizeQuailifed", wireType)
 			}
-			m.MinRowsQuailifed = 0
+			m.MinOsizeQuailifed = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowApi
@@ -7051,7 +8338,7 @@ func (m *SchemaExtra) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.MinRowsQuailifed |= uint32(b&0x7F) << shift
+				m.MinOsizeQuailifed |= uint32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -7077,9 +8364,9 @@ func (m *SchemaExtra) Unmarshal(dAtA []byte) error {
 			}
 		case 7:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field MaxRowsMergedObj", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field MaxOsizeMergedObj", wireType)
 			}
-			m.MaxRowsMergedObj = 0
+			m.MaxOsizeMergedObj = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowApi
@@ -7089,7 +8376,7 @@ func (m *SchemaExtra) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.MaxRowsMergedObj |= uint32(b&0x7F) << shift
+				m.MaxOsizeMergedObj |= uint32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -7162,6 +8449,25 @@ func (m *SchemaExtra) Unmarshal(dAtA []byte) error {
 				}
 			} else {
 				return fmt.Errorf("proto: wrong wireType = %d for field Hints", wireType)
+			}
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MinCnMergeSize", wireType)
+			}
+			m.MinCnMergeSize = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MinCnMergeSize |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
 			}
 		default:
 			iNdEx = preIndex
@@ -7313,6 +8619,946 @@ func (m *Int64Map) Unmarshal(dAtA []byte) error {
 			}
 			m.M[mapkey] = mapvalue
 			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipApi(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthApi
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *TransDestPos) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowApi
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: TransDestPos: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: TransDestPos: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ObjIdx", wireType)
+			}
+			m.ObjIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ObjIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BlkIdx", wireType)
+			}
+			m.BlkIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.BlkIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RowIdx", wireType)
+			}
+			m.RowIdx = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.RowIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipApi(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthApi
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *BlkTransMap) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowApi
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: BlkTransMap: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: BlkTransMap: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field M", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.M == nil {
+				m.M = make(map[int32]TransDestPos)
+			}
+			var mapkey int32
+			mapvalue := &TransDestPos{}
+			for iNdEx < postIndex {
+				entryPreIndex := iNdEx
+				var wire uint64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowApi
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					wire |= uint64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				fieldNum := int32(wire >> 3)
+				if fieldNum == 1 {
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowApi
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapkey |= int32(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+				} else if fieldNum == 2 {
+					var mapmsglen int
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowApi
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapmsglen |= int(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+					if mapmsglen < 0 {
+						return ErrInvalidLengthApi
+					}
+					postmsgIndex := iNdEx + mapmsglen
+					if postmsgIndex < 0 {
+						return ErrInvalidLengthApi
+					}
+					if postmsgIndex > l {
+						return io.ErrUnexpectedEOF
+					}
+					mapvalue = &TransDestPos{}
+					if err := mapvalue.Unmarshal(dAtA[iNdEx:postmsgIndex]); err != nil {
+						return err
+					}
+					iNdEx = postmsgIndex
+				} else {
+					iNdEx = entryPreIndex
+					skippy, err := skipApi(dAtA[iNdEx:])
+					if err != nil {
+						return err
+					}
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
+						return ErrInvalidLengthApi
+					}
+					if (iNdEx + skippy) > postIndex {
+						return io.ErrUnexpectedEOF
+					}
+					iNdEx += skippy
+				}
+			}
+			m.M[mapkey] = *mapvalue
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipApi(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthApi
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *BlkTransferBooking) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowApi
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: BlkTransferBooking: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: BlkTransferBooking: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Mappings", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Mappings = append(m.Mappings, BlkTransMap{})
+			if err := m.Mappings[len(m.Mappings)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipApi(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthApi
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *MergeCommitEntry) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowApi
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: MergeCommitEntry: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: MergeCommitEntry: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DbId", wireType)
+			}
+			m.DbId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.DbId |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TblId", wireType)
+			}
+			m.TblId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.TblId |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TableName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.TableName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field StartTs", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.StartTs.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MergedObjs", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.MergedObjs = append(m.MergedObjs, make([]byte, postIndex-iNdEx))
+			copy(m.MergedObjs[len(m.MergedObjs)-1], dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CreatedObjs", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.CreatedObjs = append(m.CreatedObjs, make([]byte, postIndex-iNdEx))
+			copy(m.CreatedObjs[len(m.CreatedObjs)-1], dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Booking", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.Booking == nil {
+				m.Booking = &BlkTransferBooking{}
+			}
+			if err := m.Booking.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 8:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BookingLoc", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BookingLoc = append(m.BookingLoc[:0], dAtA[iNdEx:postIndex]...)
+			if m.BookingLoc == nil {
+				m.BookingLoc = []byte{}
+			}
+			iNdEx = postIndex
+		case 9:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Err", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Err = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipApi(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthApi
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *MergeTaskEntry) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowApi
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: MergeTaskEntry: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: MergeTaskEntry: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DbId", wireType)
+			}
+			m.DbId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.DbId |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TblId", wireType)
+			}
+			m.TblId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.TblId |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TableName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.TableName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DbName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.DbName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ToMergeObjs", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthApi
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ToMergeObjs = append(m.ToMergeObjs, make([]byte, postIndex-iNdEx))
+			copy(m.ToMergeObjs[len(m.ToMergeObjs)-1], dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field EstimatedMemUsage", wireType)
+			}
+			m.EstimatedMemUsage = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.EstimatedMemUsage |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AccountId", wireType)
+			}
+			m.AccountId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.AccountId |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field UserId", wireType)
+			}
+			m.UserId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.UserId |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RoleId", wireType)
+			}
+			m.RoleId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.RoleId |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipApi(dAtA[iNdEx:])

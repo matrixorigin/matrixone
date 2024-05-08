@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -86,7 +87,7 @@ func makeInExprForTest[T any](arg0 *plan.Expr, vals []T, oid types.T, mp *mpool.
 	data, _ := vec.MarshalBinary()
 	vec.Free(mp)
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: true,
 		},
@@ -99,7 +100,7 @@ func makeInExprForTest[T any](arg0 *plan.Expr, vals []T, oid types.T, mp *mpool.
 				Args: []*plan.Expr{
 					arg0,
 					{
-						Typ: &plan.Type{
+						Typ: plan.Type{
 							Id: int32(types.T_tuple),
 						},
 						Expr: &plan.Expr_Vec{
@@ -325,6 +326,226 @@ func TestEvalZonemapFilter(t *testing.T) {
 	require.Zero(t, m.CurrNB())
 }
 
+func TestMustGetFullCompositePK(t *testing.T) {
+	m := mpool.MustNewNoFixed(t.Name())
+	proc := testutil.NewProcessWithMPool(m)
+	packer := types.NewPacker(m)
+	type myCase struct {
+		desc    []string
+		exprs   []*plan.Expr
+		can     []bool
+		expects []func(bool, []byte) bool
+	}
+	// a, b, c, d are columns of table t1
+	// d,a,c are composite primary keys
+	// b is the serialized primary key
+
+	var placeHolder func(bool, []byte) bool
+	returnTrue := func(bool, []byte) bool { return true }
+
+	var val_1_2_3 []byte
+	packer.EncodeInt64(1)
+	packer.EncodeInt64(2)
+	packer.EncodeInt64(3)
+	val_1_2_3 = packer.Bytes()
+	packer.Reset()
+	packer.EncodeInt64(4)
+	packer.EncodeInt64(5)
+	packer.EncodeInt64(6)
+	val_4_5_6 := packer.Bytes()
+	packer.Reset()
+
+	tc := myCase{
+		// (d,a,c) => b
+		desc: []string{
+			"1. c=1 and (d=2 and a=3)",
+			"2. c=1 and d=2",
+			"3. d=1 and b=(1:2:3)",
+			"4. d=1 and b in ((1:2:3),(4:5:6))",
+			"5. (d=1 and a=2) or c=1",
+			"6. (d=1 and a=2) or (d=1 and a=2 and c=3)",
+			"7. (d=1 and a=2 and c=3) or (d=4 and a=5 and c=6)",
+		},
+		exprs: []*plan.Expr{
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(1),
+				}),
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(2),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(3),
+					}),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(1),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(2),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(1),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_varchar),
+					plan2.MakePlan2StringConstExprWithType(string(util.UnsafeBytesToString(val_1_2_3))),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(1),
+				}),
+				makeFunctionExprForTest("in", []*plan.Expr{
+					makeColExprForTest(1, types.T_varchar),
+					plan2.MakePlan2StringVecExprWithType(m, util.UnsafeBytesToString(val_1_2_3), util.UnsafeBytesToString(val_4_5_6)),
+				}),
+			}),
+			// "5. (d=1 and a=2) or c=1",
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(1),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(2),
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(1),
+				}),
+			}),
+			// "6. (d=1 and a=2) or (d=1 and a=2 and c=3)",
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(1),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(2),
+					}),
+				}),
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(1),
+					}),
+					makeFunctionExprForTest("and", []*plan.Expr{
+						makeFunctionExprForTest("=", []*plan.Expr{
+							makeColExprForTest(0, types.T_int64),
+							plan2.MakePlan2Int64ConstExprWithType(2),
+						}),
+						makeFunctionExprForTest("=", []*plan.Expr{
+							makeColExprForTest(2, types.T_int64),
+							plan2.MakePlan2Int64ConstExprWithType(3),
+						}),
+					}),
+				}),
+			}),
+			// "7. (d=1 and a=2 and c=3) or (d=4 and a=5 and c=6)",
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(1),
+					}),
+					makeFunctionExprForTest("and", []*plan.Expr{
+						makeFunctionExprForTest("=", []*plan.Expr{
+							makeColExprForTest(0, types.T_int64),
+							plan2.MakePlan2Int64ConstExprWithType(2),
+						}),
+						makeFunctionExprForTest("=", []*plan.Expr{
+							makeColExprForTest(2, types.T_int64),
+							plan2.MakePlan2Int64ConstExprWithType(3),
+						}),
+					}),
+				}),
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(4),
+					}),
+					makeFunctionExprForTest("and", []*plan.Expr{
+						makeFunctionExprForTest("=", []*plan.Expr{
+							makeColExprForTest(0, types.T_int64),
+							plan2.MakePlan2Int64ConstExprWithType(5),
+						}),
+						makeFunctionExprForTest("=", []*plan.Expr{
+							makeColExprForTest(2, types.T_int64),
+							plan2.MakePlan2Int64ConstExprWithType(6),
+						}),
+					}),
+				}),
+			}),
+		},
+		can: []bool{
+			true, false, true, true, false, false, true,
+		},
+		expects: []func(bool, []byte) bool{
+			placeHolder, returnTrue, placeHolder, placeHolder, returnTrue,
+			returnTrue, placeHolder,
+		},
+	}
+
+	tc.expects[0] = func(isVec bool, actual []byte) bool {
+		require.False(t, isVec)
+		packer.Reset()
+		packer.EncodeInt64(2)
+		packer.EncodeInt64(3)
+		packer.EncodeInt64(1)
+		expect := packer.Bytes()
+		packer.Reset()
+		return bytes.Equal(expect, actual)
+	}
+	tc.expects[2] = func(isVec bool, actual []byte) bool {
+		require.False(t, isVec)
+		return bytes.Equal(val_1_2_3, actual)
+	}
+	tc.expects[3] = func(isVec bool, actual []byte) bool {
+		require.True(t, isVec)
+		vec := vector.NewVec(types.T_any.ToType())
+		vec.UnmarshalBinary(actual)
+		return bytes.Equal(val_1_2_3, vec.GetBytesAt(0)) && bytes.Equal(val_4_5_6, vec.GetBytesAt(1))
+	}
+	tc.expects[6] = func(isVec bool, actual []byte) bool {
+		require.True(t, isVec)
+		vec := vector.NewVec(types.T_any.ToType())
+		vec.UnmarshalBinary(actual)
+		return bytes.Equal(val_1_2_3, vec.GetBytesAt(0)) && bytes.Equal(val_4_5_6, vec.GetBytesAt(1))
+	}
+
+	pkName := "b"
+	keys := []string{"d", "a", "c"}
+	for i := 0; i < len(tc.desc); i++ {
+		expr := tc.exprs[i]
+		can, isVec, data := MustGetFullCompositePKValue(
+			expr, pkName, keys, packer, proc,
+		)
+		require.Equalf(t, tc.can[i], can, tc.desc[i])
+		require.Truef(t, tc.expects[i](isVec, data), tc.desc[i])
+	}
+	packer.FreeMem()
+	proc.FreeVectors()
+	require.Zero(t, m.CurrNB())
+}
+
 func TestGetCompositePkValueByExpr(t *testing.T) {
 	type myCase struct {
 		desc    []string
@@ -537,7 +758,7 @@ func TestGetNonIntPkValueByExpr(t *testing.T) {
 
 	t.Run("test getPkValueByExpr", func(t *testing.T) {
 		for i, testCase := range testCases {
-			result, _, data := getPkValueByExpr(testCase.expr, "a", testCase.typ, true, nil)
+			result, _, _, data := getPkValueByExpr(testCase.expr, "a", testCase.typ, true, nil)
 			if result != testCase.result {
 				t.Fatalf("test getPkValueByExpr at cases[%d], get result is different with expected", i)
 			}
@@ -596,7 +817,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	statsList := mockStatsList(t, 100)
 
 	count := 0
-	ForeachBlkInObjStatsList(false, nil, func(blk *objectio.BlockInfo, _ objectio.BlockObject) bool {
+	ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return false
 	}, statsList...)
@@ -604,7 +825,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, 1)
 
 	count = 0
-	ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo, _ objectio.BlockObject) bool {
+	ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return false
 	}, statsList...)
@@ -612,7 +833,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, len(statsList))
 
 	count = 0
-	ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo, _ objectio.BlockObject) bool {
+	ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return true
 	}, statsList...)
@@ -625,7 +846,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, 0)
 
 	count = 0
-	ForeachBlkInObjStatsList(false, nil, func(blk *objectio.BlockInfo, _ objectio.BlockObject) bool {
+	ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return true
 	}, statsList...)
@@ -636,6 +857,41 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	}, statsList...)
 
 	require.Equal(t, count, 0)
+}
+
+func TestGetNonCompositePKSerachFuncByExpr(t *testing.T) {
+	m := mpool.MustNewNoFixed(t.Name())
+	proc := testutil.NewProcessWithMPool(m)
+
+	bat := makeBatchForTest(m, 0, 2, 3, 4)
+
+	vals := vector.NewVec(types.T_int64.ToType())
+	ints := []int64{3, 4, 2}
+	for _, n := range ints {
+		vector.AppendFixed(vals, n, false, m)
+	}
+	colExpr := newColumnExpr(0, plan2.MakePlan2Type(vals.GetType()), "pk")
+
+	//vals must be sorted
+	vals.InplaceSort()
+	bytes, _ := vals.MarshalBinary()
+	vals.Free(m)
+
+	inExpr := plan2.MakeInExpr(
+		context.Background(),
+		colExpr,
+		int32(vals.Length()),
+		bytes,
+		false)
+	_, _, filter := getNonCompositePKSearchFuncByExpr(
+		inExpr,
+		"pk",
+		proc)
+	sels := filter(bat.Vecs)
+	require.Equal(t, 3, len(sels))
+	require.True(t, sels[0] == 1)
+	require.True(t, sels[1] == 2)
+	require.True(t, sels[2] == 3)
 }
 
 func TestGetPKExpr(t *testing.T) {
@@ -814,7 +1070,7 @@ func TestGetPKExpr(t *testing.T) {
 						},
 					},
 				},
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_tuple),
 				},
 			},
@@ -827,7 +1083,7 @@ func TestGetPKExpr(t *testing.T) {
 						},
 					},
 				},
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_tuple),
 				},
 			},
@@ -842,7 +1098,7 @@ func TestGetPKExpr(t *testing.T) {
 						},
 					},
 				},
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_tuple),
 				},
 			},
@@ -856,6 +1112,168 @@ func TestGetPKExpr(t *testing.T) {
 		// }
 		require.Equalf(t, tc.valExprs[i], rExpr, tc.desc[i])
 	}
+	require.Zero(t, m.CurrNB())
+}
+
+func TestGetPkExprValue(t *testing.T) {
+	m := mpool.MustNewZeroNoFixed()
+	proc := testutil.NewProcessWithMPool(m)
+	type testCase struct {
+		desc       []string
+		exprs      []*plan.Expr
+		expectVals [][]int64
+		canEvals   []bool
+		hasNull    []bool
+	}
+	equalToVecFn := func(expect []int64, actual any) bool {
+		vec := vector.NewVec(types.T_any.ToType())
+		_ = vec.UnmarshalBinary(actual.([]byte))
+		actualVals := vector.MustFixedCol[int64](vec)
+		if len(expect) != len(actualVals) {
+			return false
+		}
+		for i := range expect {
+			if expect[i] != actualVals[i] {
+				return false
+			}
+		}
+		return true
+	}
+	equalToValFn := func(expect []int64, actual any) bool {
+		if len(expect) != 1 {
+			return false
+		}
+		actualVal := actual.(int64)
+		return expect[0] == actualVal
+	}
+
+	nullExpr := plan2.MakePlan2Int64ConstExprWithType(0)
+	nullExpr.Expr.(*plan.Expr_Lit).Lit.Isnull = true
+
+	tc := testCase{
+		desc: []string{
+			"a=2 and a=1",
+			"a in vec(1,2)",
+			"a=2 or a=1 or a=3",
+			"a in vec(1,10) or a=5 or (a=6 and a=7)",
+			"a=null",
+			"a=1 or a=null or a=2",
+		},
+		canEvals: []bool{
+			true, true, true, true, false, true,
+		},
+		hasNull: []bool{
+			false, false, false, false, true, false,
+		},
+		exprs: []*plan.Expr{
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(2),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(1),
+				}),
+			}),
+			makeFunctionExprForTest("in", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64VecExprWithType(m, int64(1), int64(2)),
+			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("or", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(2),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(1),
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(3),
+				}),
+			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("or", []*plan.Expr{
+					makeFunctionExprForTest("in", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64VecExprWithType(m, int64(1), int64(10)),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(5),
+					}),
+				}),
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(6),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(7),
+					}),
+				}),
+			}),
+			makeFunctionExprForTest("=", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				nullExpr,
+			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("or", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(1),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						nullExpr,
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(2),
+				}),
+			}),
+		},
+		expectVals: [][]int64{
+			{2}, {1, 2}, {1, 2, 3}, {1, 5, 6, 10}, {}, {1, 2},
+		},
+	}
+	for i, expr := range tc.exprs {
+		canEval, isNull, isVec, val := getPkValueByExpr(expr, "a", types.T_int64, false, proc)
+		require.Equalf(t, tc.hasNull[i], isNull, tc.desc[i])
+		require.Equalf(t, tc.canEvals[i], canEval, tc.desc[i])
+		if !canEval {
+			continue
+		}
+		if isVec {
+			require.Truef(t, equalToVecFn(tc.expectVals[i], val), tc.desc[i])
+		} else {
+			require.Truef(t, equalToValFn(tc.expectVals[i], val), tc.desc[i])
+		}
+	}
+	expr := makeFunctionExprForTest("in", []*plan.Expr{
+		makeColExprForTest(0, types.T_int64),
+		plan2.MakePlan2Int64VecExprWithType(m, int64(1), int64(10)),
+	})
+	canEval, _, _, _ := getPkValueByExpr(expr, "a", types.T_int64, true, proc)
+	require.False(t, canEval)
+	canEval, _, _, _ = getPkValueByExpr(expr, "a", types.T_int64, false, proc)
+	require.True(t, canEval)
+
+	expr = makeFunctionExprForTest("in", []*plan.Expr{
+		makeColExprForTest(0, types.T_int64),
+		plan2.MakePlan2Int64VecExprWithType(m, int64(1)),
+	})
+	canEval, _, _, val := getPkValueByExpr(expr, "a", types.T_int64, true, proc)
+	require.True(t, canEval)
+	require.True(t, equalToValFn([]int64{1}, val))
+
+	proc.FreeVectors()
 	require.Zero(t, m.CurrNB())
 }
 
@@ -943,7 +1361,7 @@ func TestEvalExprListToVec(t *testing.T) {
 		// 	t.Log(plan2.FormatExpr(e2))
 		// }
 		canEval, vec, put := evalExprListToVec(tc.oids[i], expr, proc)
-		require.Equal(t, tc.canEvals[i], canEval)
+		require.Equalf(t, tc.canEvals[i], canEval, tc.desc[i])
 		if canEval {
 			require.NotNil(t, vec)
 			require.Equal(t, tc.expects[i].String(), vec.String())

@@ -70,7 +70,7 @@ func (u *Udf) GetPlanExpr() *plan.Expr {
 		},
 	})
 	return &plan.Expr{
-		Typ: type2PlanType(types.T_text.ToType()),
+		Typ: *type2PlanType(types.T_text.ToType()),
 		Expr: &plan.Expr_Lit{
 			Lit: &plan.Literal{
 				Isnull: false,

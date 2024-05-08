@@ -14,6 +14,16 @@
 
 package tree
 
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+
+func init() {
+	reuse.CreatePool[AnalyzeStmt](
+		func() *AnalyzeStmt { return &AnalyzeStmt{} },
+		func(a *AnalyzeStmt) { a.reset() },
+		reuse.DefaultOptions[AnalyzeStmt](), //.
+	) //WithEnableChecker()
+}
+
 // Use statement
 type AnalyzeStmt struct {
 	statementImpl
@@ -32,6 +42,22 @@ func (node *AnalyzeStmt) Format(ctx *FmtCtx) {
 func (node *AnalyzeStmt) GetStatementType() string { return "Analyze Table" }
 func (node *AnalyzeStmt) GetQueryType() string     { return QueryTypeOth }
 
+func (node *AnalyzeStmt) Free() {
+	reuse.Free[AnalyzeStmt](node, nil)
+}
+
+func (node AnalyzeStmt) TypeName() string { return "tree.AnalyzeStmt" }
+
+func (node *AnalyzeStmt) reset() {
+	// if node.Table != nil {
+	// node.Table.Free()
+	// }
+	*node = AnalyzeStmt{}
+}
+
 func NewAnalyzeStmt(tbl *TableName, cols IdentifierList) *AnalyzeStmt {
-	return &AnalyzeStmt{Table: tbl, Cols: cols}
+	analyzestmt := reuse.Alloc[AnalyzeStmt](nil)
+	analyzestmt.Table = tbl
+	analyzestmt.Cols = cols
+	return analyzestmt
 }

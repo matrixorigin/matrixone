@@ -27,7 +27,7 @@ create table emp(
                     comm decimal(7,2) COMMENT '奖金',
                     deptno int unsigned COMMENT '所在部门',
                     primary key(empno),
-                    FOREIGN KEY (deptno) REFERENCES dept(deptno)
+                    constraint `c1` FOREIGN KEY (deptno) REFERENCES dept(deptno)
 );
 
 
@@ -182,8 +182,8 @@ CREATE TABLE product_order (
         PRIMARY KEY (no),
         INDEX(product_category, product_id),
         INDEX(customer_id),
-        FOREIGN KEY (product_category, product_id) REFERENCES product (category, id) ON DELETE RESTRICT ON UPDATE CASCADE,
-        FOREIGN KEY (customer_id) REFERENCES customer (id)
+        constraint `c1` FOREIGN KEY (product_category, product_id) REFERENCES product (category, id) ON DELETE RESTRICT ON UPDATE CASCADE,
+        constraint `c2` FOREIGN KEY (customer_id) REFERENCES customer (id)
 );
 INSERT INTO product_order VALUES (1, 10, 1, 1, '2016-12-02 15:41:39');
 INSERT INTO product_order VALUES (2, 10, 2, 2, '2016-12-01 15:42:42');
@@ -224,5 +224,26 @@ INSERT INTO product_order VALUES (6, 30, 4, 5, '2016-12-31 15:43:26');
 drop table product_order;
 drop table customer;
 drop table product;
+
+drop table if exists organization;
+create table organization (
+    id int auto_increment primary key,
+    name varchar(255) not null ,
+    parent_id int default null,
+    foreign key (parent_id) references organization(id)
+);
+
+insert into organization (id, name, parent_id ) values (1, 'ceo', null);
+insert into organization (id, name, parent_id ) values (2, 'cto', null);
+insert into organization (id, name, parent_id ) values (3, 'dev', 2);
+insert into organization (id, name, parent_id ) values (4, 'test', 2);
+insert into organization (id, name, parent_id ) values (5, 'marketing', 1);
+insert into organization (id, name, parent_id ) values (6, 'finance', 1);
+
+select * from organization;
+insert into organization (id, name, parent_id ) values (7, 'unknown', 99);
+insert into organization (id, name ) values (8, 'unknown');
+select * from organization;
+drop table organization;
 
 drop database if exists db8;

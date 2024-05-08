@@ -715,7 +715,6 @@ c1    c2    c3
 1    results    20
 insert into su_04 values(10,'tell',96);
 Duplicate entry '10' for key '__mo_index_idx_col'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 update su_04 set c2='wed';
 delete from su_04 where c1=2;
 commit;

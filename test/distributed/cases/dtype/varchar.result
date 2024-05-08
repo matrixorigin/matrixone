@@ -452,5 +452,5 @@ ab    apple
 drop table t1;
 create table t1 (a varchar(10));
 insert into t1 values("");
-select * from t1 where a=1;
+select * from t1 where a='1';
 a

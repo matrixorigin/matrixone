@@ -231,9 +231,9 @@ func (e *DBEntry) StringWithLevel(level common.PPLevel) string {
 func (e *DBEntry) StringWithlevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
 		return fmt.Sprintf("DB[%d][name=%s][C@%s,D@%s]",
-			e.ID, e.GetFullName(), e.GetCreatedAtLocked().ToString(), e.GetDeleteAt().ToString())
+			e.ID, e.GetFullName(), e.GetCreatedAtLocked().ToString(), e.GetDeleteAtLocked().ToString())
 	}
-	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntryImpl.StringLocked(), e.GetFullName())
+	return fmt.Sprintf("DB%s[name=%s, id=%d]", e.BaseEntryImpl.StringLocked(), e.GetFullName(), e.ID)
 }
 
 func (e *DBEntry) MakeTableIt(reverse bool) *common.GenericSortedDListIt[*TableEntry] {
@@ -262,18 +262,14 @@ func (e *DBEntry) AsCommonID() *common.ID {
 		DbID: e.ID,
 	}
 }
-func (e *DBEntry) GetBlockEntryByID(id *common.ID) (blk *BlockEntry, err error) {
+func (e *DBEntry) GetObjectEntryByID(id *common.ID) (obj *ObjectEntry, err error) {
 	e.RLock()
 	table, err := e.GetTableEntryByID(id.TableID)
 	e.RUnlock()
 	if err != nil {
 		return
 	}
-	obj, err := table.GetObjectByID(id.ObjectID())
-	if err != nil {
-		return
-	}
-	blk, err = obj.GetBlockEntryByID(&id.BlockID)
+	obj, err = table.GetObjectByID(id.ObjectID())
 	return
 }
 
@@ -490,7 +486,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 		defer table.RUnlock()
 		prevname := ""
 		// clean all name because RemoveEntry can be called by GC、
-		table.LoopChain(func(m *MVCCNode[*TableMVCCNode]) bool {
+		table.LoopChainLocked(func(m *MVCCNode[*TableMVCCNode]) bool {
 			if prevname == m.BaseNode.Schema.Name {
 				return true
 			}
@@ -540,7 +536,7 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 		nn.CreateNode(table.ID)
 	} else {
 		if !skipDedup {
-			name := table.GetLastestSchema().Name
+			name := table.GetLastestSchemaLocked().Name
 			err = e.checkAddNameConflictLocked(name, table.ID, nn, txn)
 			if err != nil {
 				return
@@ -650,4 +646,15 @@ func MockDBEntryWithAccInfo(accId uint64, dbId uint64) *DBEntry {
 	entry.DBNode.acInfo.TenantID = uint32(accId)
 
 	return entry
+}
+
+func (e *DBEntry) GetBlockEntryByID(id *common.ID) (obj *ObjectEntry, err error) {
+	e.RLock()
+	table, err := e.GetTableEntryByID(id.TableID)
+	e.RUnlock()
+	if err != nil {
+		return
+	}
+	obj, err = table.GetObjectByID(id.ObjectID())
+	return
 }

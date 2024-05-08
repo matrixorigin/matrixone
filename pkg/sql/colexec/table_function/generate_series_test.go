@@ -428,11 +428,12 @@ func TestGenerateSeriesString(t *testing.T) {
 
 func TestGenerateSeriesPrepare(t *testing.T) {
 	err := generateSeriesPrepare(nil, &Argument{
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
-		}})
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			}}})
 	require.Nil(t, err)
 }
 func TestGenStep(t *testing.T) {
@@ -459,10 +460,12 @@ func TestGenerateSeriesCall(t *testing.T) {
 	arg := &Argument{
 		Attrs:    []string{"result"},
 		FuncName: "generate_series",
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 	}
 
@@ -478,6 +481,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 	require.Equal(t, false, end)
 	require.Equal(t, 3, result.Batch.GetVector(0).Length())
 	cleanResult(&result, proc)
+	arg.Free(proc, false, nil)
 
 	arg.Args = makeDatetimeList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second", 0)
 	arg.Rets = plan.GSColDefs[1]
@@ -492,6 +496,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 	require.Equal(t, false, end)
 	require.Equal(t, 60, result.Batch.GetVector(0).Length())
 	cleanResult(&result, proc)
+	arg.Free(proc, false, nil)
 
 	arg.Args = makeVarcharList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second")
 	arg.Rets = plan.GSColDefs[2]
@@ -506,6 +511,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 	require.Equal(t, false, end)
 	require.Equal(t, 60, result.Batch.GetVector(0).Length())
 	cleanResult(&result, proc)
+	arg.Free(proc, false, nil)
 
 	bat.Clean(proc.Mp())
 	require.Equal(t, beforeCall, proc.Mp().CurrNB())
@@ -544,7 +550,7 @@ func makeVarcharList(start, end, step string) []*plan.Expr {
 
 func makeInt64Expr(val int64) *plan.Expr {
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int64),
 		},
 		Expr: &plan2.Expr_Lit{
@@ -558,7 +564,7 @@ func makeInt64Expr(val int64) *plan.Expr {
 }
 func makeVarcharExpr(val string) *plan.Expr {
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_varchar),
 		},
 		Expr: &plan2.Expr_Lit{
@@ -574,7 +580,7 @@ func makeVarcharExpr(val string) *plan.Expr {
 func makeDatetimeExpr(s string, p int32) *plan.Expr {
 	dt, _ := types.ParseDatetime(s, p)
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:    int32(types.T_datetime),
 			Scale: p,
 		},

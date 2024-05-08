@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 func WithTransferTableTTL(ttl time.Duration) func(*Options) {
@@ -155,6 +156,9 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.CheckpointCfg.GlobalMinCount <= 0 {
 		o.CheckpointCfg.GlobalMinCount = DefaultCheckpointMinCount
 	}
+	if o.CheckpointCfg.OverallFlushMemControl <= 0 {
+		o.CheckpointCfg.OverallFlushMemControl = DefaultOverallFlushMemControl
+	}
 	if o.CheckpointCfg.MinCount <= 0 {
 		o.CheckpointCfg.MinCount = DefaultCheckpointMinCount
 	}
@@ -163,6 +167,17 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 	if o.CheckpointCfg.GCCheckpointInterval <= 0 {
 		o.CheckpointCfg.GCCheckpointInterval = DefaultGCCheckpointInterval
+	}
+
+	if o.MergeCfg == nil {
+		o.MergeCfg = new(MergeConfig)
+	}
+	if o.MergeCfg.CNMergeMemControlHint == 0 {
+		o.MergeCfg.CNMergeMemControlHint = common.DefaultCNMergeMemControlHint * common.Const1MBytes
+	}
+
+	if o.MergeCfg.CNTakeOverExceed == 0 {
+		o.MergeCfg.CNTakeOverExceed = common.DefaultMinCNMergeSize * common.Const1MBytes
 	}
 
 	if o.CatalogCfg == nil {
@@ -187,9 +202,9 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.SchedulerCfg == nil {
 		ioworkers := DefaultIOWorkers
 		if ioworkers < runtime.NumCPU() {
-			ioworkers = runtime.NumCPU()
+			ioworkers = min(runtime.NumCPU(), 100)
 		}
-		workers := runtime.NumCPU() / 4
+		workers := min(runtime.NumCPU()/4, 100)
 		if workers < 1 {
 			workers = 1
 		}

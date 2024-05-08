@@ -44,7 +44,7 @@ type columnCache struct {
 	ranges      *ranges
 	allocator   valueAllocator
 	allocating  bool
-	allocatingC chan struct{}
+	allocatingC chan error
 	overflow    bool
 	// For the load scenario, if the machine is good enough, there will be very many goroutines to
 	// concurrently fetch the value of the self-increasing column, which will immediately trigger
@@ -55,6 +55,7 @@ type columnCache struct {
 	// imprecise, but it doesn't matter), and then allocate more than one at a time.
 	concurrencyApply atomic.Uint64
 	allocateCount    atomic.Uint64
+	committed        bool
 }
 
 func newColumnCache(
@@ -62,6 +63,7 @@ func newColumnCache(
 	tableID uint64,
 	col AutoColumn,
 	cfg Config,
+	committed bool,
 	allocator valueAllocator,
 	txnOp client.TxnOperator) (*columnCache, error) {
 	item := &columnCache{
@@ -71,6 +73,7 @@ func newColumnCache(
 		allocator: allocator,
 		overflow:  col.Offset == math.MaxUint64,
 		ranges:    &ranges{step: col.Step, values: make([]uint64, 0, 1)},
+		committed: committed,
 	}
 	item.preAllocate(ctx, tableID, cfg.CountPerAllocate, txnOp)
 	item.Lock()
@@ -81,9 +84,7 @@ func newColumnCache(
 	return item, nil
 }
 
-func (col *columnCache) current(
-	ctx context.Context,
-	tableID uint64) (uint64, error) {
+func (col *columnCache) current(ctx context.Context) (uint64, error) {
 	col.Lock()
 	defer col.Unlock()
 	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
@@ -261,7 +262,6 @@ func (col *columnCache) lockDo(fn func()) {
 func (col *columnCache) updateTo(
 	ctx context.Context,
 	tableID uint64,
-	count int,
 	manualValue uint64,
 	txnOp client.TxnOperator) error {
 	col.Lock()
@@ -356,7 +356,7 @@ func (col *columnCache) preAllocate(
 		return
 	}
 	col.allocating = true
-	col.allocatingC = make(chan struct{})
+	col.allocatingC = make(chan error, 1)
 	if col.cfg.CountPerAllocate > count {
 		count = col.cfg.CountPerAllocate
 	}
@@ -368,9 +368,9 @@ func (col *columnCache) preAllocate(
 		txnOp,
 		func(from, to uint64, err error) {
 			if err == nil {
-				col.applyAllocate(from, to)
+				col.applyAllocate(from, to, err)
 			} else {
-				col.applyAllocate(0, 0)
+				col.applyAllocate(0, 0, err)
 			}
 		})
 }
@@ -386,7 +386,7 @@ func (col *columnCache) allocateLocked(
 	}
 
 	col.allocating = true
-	col.allocatingC = make(chan struct{})
+	col.allocatingC = make(chan error, 1)
 	if col.cfg.CountPerAllocate > count {
 		count = col.cfg.CountPerAllocate
 	}
@@ -414,15 +414,16 @@ func (col *columnCache) allocateLocked(
 			zap.Uint64("table", col.col.TableID),
 			zap.String("col", col.col.ColName))
 	}
-	col.applyAllocateLocked(from, to)
+	col.applyAllocateLocked(from, to, err)
 	return err
 }
 
 func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp client.TxnOperator) error {
 	col.Lock()
+	committed := col.committed
 	low := col.ranges.left() <= col.cfg.LowCapacity
 	col.Unlock()
-	if low {
+	if low && committed {
 		accountId, err := defines.GetAccountId(ctx)
 		if err != nil {
 			return err
@@ -437,16 +438,25 @@ func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp
 
 func (col *columnCache) applyAllocate(
 	from uint64,
-	to uint64) {
+	to uint64,
+	err error) {
 	col.Lock()
 	defer col.Unlock()
 
-	col.applyAllocateLocked(from, to)
+	col.applyAllocateLocked(from, to, err)
 }
 
 func (col *columnCache) applyAllocateLocked(
 	from uint64,
-	to uint64) {
+	to uint64,
+	err error) {
+	if err != nil {
+		select {
+		case col.allocatingC <- err:
+		default:
+		}
+	}
+
 	if to > from {
 		col.ranges.add(from, to)
 		if col.logger.Enabled(zap.DebugLevel) {
@@ -474,7 +484,11 @@ func (col *columnCache) waitPrevAllocatingLocked(ctx context.Context) error {
 		case <-ctx.Done():
 			col.Lock()
 			return ctx.Err()
-		case <-c:
+		case err := <-c:
+			if err != nil {
+				col.Lock()
+				return err
+			}
 		}
 		col.Lock()
 	}
@@ -535,7 +549,6 @@ func insertAutoValues[T constraints.Integer](
 			if err := col.updateTo(
 				ctx,
 				tableID,
-				rows,
 				maxValue,
 				txnOp); err != nil {
 				return 0, err

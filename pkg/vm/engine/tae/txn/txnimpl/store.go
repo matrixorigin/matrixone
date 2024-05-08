@@ -16,9 +16,12 @@ package txnimpl
 
 import (
 	"context"
+	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"go.uber.org/zap"
@@ -40,6 +43,93 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+var (
+	_tracerPool = sync.Pool{
+		New: func() any {
+			return &txnTracer{}
+		},
+	}
+)
+
+func getTracer() *txnTracer {
+	return _tracerPool.Get().(*txnTracer)
+}
+
+func putTracer(tracer *txnTracer) {
+	tracer.task = nil
+	tracer.state = 0
+	_tracerPool.Put(tracer)
+}
+
+type txnTracer struct {
+	state uint8
+	task  *trace.Task
+	stamp time.Time
+}
+
+func (tracer *txnTracer) Trigger(state uint8) {
+	switch state {
+	case 0: // start preparing wait
+		_, tracer.task = trace.NewTask(context.Background(), "1-PreparingWait")
+		tracer.stamp = time.Now()
+		tracer.state = 0
+
+	case 1: // end preparing wait and start preparing
+		if tracer.task != nil && tracer.state == 0 {
+			tracer.task.End()
+			v2.TxnPreparingWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "2-Preparing")
+		tracer.stamp = time.Now()
+		tracer.state = 1
+
+	case 2: // end preparing and start prepare wal wait
+		if tracer.task != nil && tracer.state == 1 {
+			tracer.task.End()
+			v2.TxnPreparingDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "3-PrepareWalWait")
+		tracer.stamp = time.Now()
+		tracer.state = 2
+
+	case 3: // end prepare wal wait and start prepare wal
+		if tracer.task != nil && tracer.state == 2 {
+			tracer.task.End()
+			v2.TxnPrepareWalWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "4-PrepareWal")
+		tracer.stamp = time.Now()
+		tracer.state = 3
+
+	case 4: // end prepare wal and start prepared wait
+		if tracer.task != nil && tracer.state == 3 {
+			tracer.task.End()
+			v2.TxnPrepareWalDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "5-PreparedWait")
+		tracer.stamp = time.Now()
+		tracer.state = 4
+
+	case 5: // end prepared wait and start prepared
+		if tracer.task != nil && tracer.state == 4 {
+			tracer.task.End()
+			v2.TxnPreparedWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "6-Prepared")
+		tracer.stamp = time.Now()
+		tracer.state = 5
+	}
+}
+
+func (tracer *txnTracer) Stop() {
+	if tracer.task != nil && tracer.state == 5 {
+		tracer.task.End()
+		v2.TxnPreparedDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+	}
+	tracer.task = nil
+	tracer.state = 0
+}
+
 type txnStore struct {
 	ctx context.Context
 	txnbase.NoopTxnStore
@@ -54,6 +144,7 @@ type txnStore struct {
 	warChecker  *warChecker
 	dataFactory *tables.DataFactory
 	writeOps    atomic.Uint32
+	tracer      *txnTracer
 
 	wg sync.WaitGroup
 }
@@ -88,6 +179,31 @@ func newStore(
 		dataFactory: dataFactory,
 		wg:          sync.WaitGroup{},
 	}
+}
+
+func (store *txnStore) StartTrace() {
+	if store.IsReadonly() || store.GetTransactionType() == txnif.TxnType_Heartbeat {
+		return
+	}
+	store.tracer = getTracer()
+	store.tracer.Trigger(txnif.TraceStart)
+}
+
+func (store *txnStore) EndTrace() {
+	if store.tracer == nil {
+		return
+	}
+	tracer := store.tracer
+	store.tracer = nil
+	tracer.Stop()
+	putTracer(tracer)
+}
+
+func (store *txnStore) TriggerTrace(state uint8) {
+	if store.tracer == nil {
+		return
+	}
+	store.tracer.Trigger(state)
 }
 
 func (store *txnStore) GetContext() context.Context    { return store.ctx }
@@ -182,7 +298,7 @@ func (store *txnStore) Append(ctx context.Context, dbId, id uint64, data *contai
 	return db.Append(ctx, id, data)
 }
 
-func (store *txnStore) AddBlksWithMetaLoc(
+func (store *txnStore) AddObjsWithMetaLoc(
 	ctx context.Context,
 	dbId, tid uint64,
 	stats containers.Vector,
@@ -192,7 +308,7 @@ func (store *txnStore) AddBlksWithMetaLoc(
 	if err != nil {
 		return err
 	}
-	return db.AddBlksWithMetaLoc(ctx, tid, stats)
+	return db.AddObjsWithMetaLoc(ctx, tid, stats)
 }
 
 func (store *txnStore) RangeDelete(
@@ -214,18 +330,6 @@ func (store *txnStore) TryDeleteByDeltaloc(
 		return
 	}
 	return db.TryDeleteByDeltaloc(id, deltaloc)
-}
-
-func (store *txnStore) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
-	store.IncreateWriteCnt()
-	db, err := store.getOrSetDB(id.DbID)
-	if err != nil {
-		return err
-	}
-	// if table.IsDeleted() {
-	// 	return txnbase.ErrNotFound
-	// }
-	return db.UpdateMetaLoc(id, metaLoc)
 }
 
 func (store *txnStore) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error) {
@@ -396,7 +500,7 @@ func (store *txnStore) ObserveTxn(
 				switch txnEntry := iTxnEntry.(type) {
 				case *catalog.ObjectEntry:
 					visitObject(txnEntry)
-				case *catalog.BlockEntry:
+				case *updates.DeltalocChain:
 					visitMetadata(txnEntry)
 				case *updates.DeleteNode:
 					visitDelete(store.ctx, txnEntry)
@@ -521,12 +625,12 @@ func (store *txnStore) CreateObject(dbId, tid uint64, is1PC bool) (obj handle.Ob
 	return db.CreateObject(tid, is1PC)
 }
 
-func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
+func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, is1PC bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateNonAppendableObject(tid, is1PC)
+	return db.CreateNonAppendableObject(tid, is1PC, opt)
 }
 
 func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
@@ -558,47 +662,6 @@ func (store *txnStore) UpdateObjectStats(id *common.ID, stats *objectio.ObjectSt
 	}
 	db.UpdateObjectStats(id, stats)
 	return nil
-}
-
-func (store *txnStore) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	var db *txnDB
-	if db, err = store.getOrSetDB(id.DbID); err != nil {
-		return
-	}
-	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Block.CreateNonAppendable.Add(1)
-	})
-	return db.CreateNonAppendableBlock(id, opts)
-}
-
-func (store *txnStore) GetBlock(id *common.ID) (blk handle.Block, err error) {
-	var db *txnDB
-	if db, err = store.getOrSetDB(id.DbID); err != nil {
-		return
-	}
-	return db.GetBlock(id)
-}
-
-func (store *txnStore) CreateBlock(id *common.ID, is1PC bool) (blk handle.Block, err error) {
-	var db *txnDB
-	if db, err = store.getOrSetDB(id.DbID); err != nil {
-		return
-	}
-	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Block.Create.Add(1)
-	})
-	return db.CreateBlock(id, is1PC)
-}
-
-func (store *txnStore) SoftDeleteBlock(id *common.ID) (err error) {
-	var db *txnDB
-	if db, err = store.getOrSetDB(id.DbID); err != nil {
-		return
-	}
-	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Block.SoftDelete.Add(1)
-	})
-	return db.SoftDeleteBlock(id)
 }
 
 func (store *txnStore) SoftDeleteObject(id *common.ID) (err error) {

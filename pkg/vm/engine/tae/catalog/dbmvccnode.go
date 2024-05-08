@@ -95,3 +95,8 @@ func (node *DBNode) WriteTo(w io.Writer) (n int64, err error) {
 	n += sn
 	return
 }
+
+// only used in ut test
+func (node *DBNode) TestSetAccId(id uint32) {
+	node.acInfo.TenantID = id
+}

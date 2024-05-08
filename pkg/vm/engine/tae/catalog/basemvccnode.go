@@ -61,7 +61,7 @@ func (un *EntryMVCCNode) GetDeletedAt() types.TS {
 }
 
 func (un *EntryMVCCNode) IsCreating() bool {
-	return un.CreatedAt.Equal(txnif.UncommitTS)
+	return un.CreatedAt.Equal(&txnif.UncommitTS)
 }
 
 func (un *EntryMVCCNode) Clone() *EntryMVCCNode {
@@ -133,7 +133,7 @@ func (un *EntryMVCCNode) AppendTuple(bat *containers.Batch) {
 func (un *EntryMVCCNode) AppendTupleWithCommitTS(bat *containers.Batch, ts types.TS) {
 	startTSVec := bat.GetVectorByName(EntryNode_CreateAt)
 	createTS := un.CreatedAt
-	if createTS.Equal(txnif.UncommitTS) {
+	if createTS.Equal(&txnif.UncommitTS) {
 		createTS = ts
 	}
 	vector.AppendFixed(
@@ -143,7 +143,7 @@ func (un *EntryMVCCNode) AppendTupleWithCommitTS(bat *containers.Batch, ts types
 		startTSVec.GetAllocator(),
 	)
 	deleteTS := un.DeletedAt
-	if deleteTS.Equal(txnif.UncommitTS) {
+	if deleteTS.Equal(&txnif.UncommitTS) {
 		deleteTS = ts
 	}
 	vector.AppendFixed(

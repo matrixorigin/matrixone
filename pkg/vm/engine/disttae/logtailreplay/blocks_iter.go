@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -29,9 +30,8 @@ type ObjectsIter interface {
 }
 
 type objectsIter struct {
-	ts          types.TS
-	iter        btree.IterG[ObjectIndexByCreateTSEntry]
-	firstCalled bool
+	ts   types.TS
+	iter btree.IterG[ObjectEntry]
 }
 
 // not accurate!  only used by stats
@@ -39,11 +39,11 @@ func (p *PartitionState) ApproxObjectsNum() int {
 	return p.dataObjects.Len()
 }
 
-func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
-	if ts.Less(p.minTS) {
+func (p *PartitionState) NewObjectsIter(ts types.TS) (ObjectsIter, error) {
+	if ts.Less(&p.minTS) {
 		return nil, moerr.NewTxnStaleNoCtx()
 	}
-	iter := p.dataObjectsByCreateTS.Copy().Iter()
+	iter := p.dataObjects.Copy().Iter()
 	ret := &objectsIter{
 		ts:   ts,
 		iter: iter,
@@ -54,35 +54,15 @@ func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
 var _ ObjectsIter = new(objectsIter)
 
 func (b *objectsIter) Next() bool {
-	for {
-
-		pivot := ObjectIndexByCreateTSEntry{
-			ObjectInfo{
-				CreateTime: b.ts.Next(),
-			},
-		}
-		if !b.firstCalled {
-			if !b.iter.Seek(pivot) {
-				if !b.iter.Last() {
-					return false
-				}
-			}
-			b.firstCalled = true
-		} else {
-			if !b.iter.Prev() {
-				return false
-			}
-		}
-
+	for b.iter.Next() {
 		entry := b.iter.Item()
-
 		if !entry.Visible(b.ts) {
 			// not visible
 			continue
 		}
-
 		return true
 	}
+	return false
 }
 
 func (b *objectsIter) Entry() ObjectEntry {
@@ -107,7 +87,7 @@ type dirtyBlocksIter struct {
 	firstCalled bool
 }
 
-func (p *PartitionState) NewDirtyBlocksIter() *dirtyBlocksIter {
+func (p *PartitionState) NewDirtyBlocksIter() BlocksIter {
 	iter := p.dirtyBlocks.Copy().Iter()
 	ret := &dirtyBlocksIter{
 		iter: iter,
@@ -137,14 +117,17 @@ func (b *dirtyBlocksIter) Close() error {
 	return nil
 }
 
-// GetChangedObjsBetween get changed objects between [begin, end]
+// GetChangedObjsBetween get changed objects between [begin, end],
+// notice that if an object is created after begin and deleted before end, it will be ignored.
 func (p *PartitionState) GetChangedObjsBetween(
 	begin types.TS,
 	end types.TS,
 ) (
-	deleted []objectio.ObjectNameShort,
-	inserted []objectio.ObjectNameShort,
+	deleted map[objectio.ObjectNameShort]struct{},
+	inserted map[objectio.ObjectNameShort]struct{},
 ) {
+	inserted = make(map[objectio.ObjectNameShort]struct{})
+	deleted = make(map[objectio.ObjectNameShort]struct{})
 
 	iter := p.objectIndexByTS.Copy().Iter()
 	defer iter.Release()
@@ -154,20 +137,22 @@ func (p *PartitionState) GetChangedObjsBetween(
 	}); ok; ok = iter.Next() {
 		entry := iter.Item()
 
-		if entry.Time.Greater(end) {
+		if entry.Time.Greater(&end) {
 			break
 		}
 
 		if entry.IsDelete {
-			deleted = append(deleted, entry.ShortObjName)
-		} else {
-			if !entry.IsAppendable {
-				inserted = append(inserted, entry.ShortObjName)
+			// if the object is inserted and deleted between [begin, end], it will be ignored.
+			if _, ok := inserted[entry.ShortObjName]; !ok {
+				deleted[entry.ShortObjName] = struct{}{}
+			} else {
+				delete(inserted, entry.ShortObjName)
 			}
+		} else {
+			inserted[entry.ShortObjName] = struct{}{}
 		}
 
 	}
-
 	return
 }
 

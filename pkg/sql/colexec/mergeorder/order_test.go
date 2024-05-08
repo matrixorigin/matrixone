@@ -200,10 +200,12 @@ func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 		proc:  proc,
 		arg: &Argument{
 			OrderBySpecs: fs,
-			info: &vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 		cancel: cancel,
@@ -217,7 +219,7 @@ func newExpression(pos int32, typeID types.T) *plan.Expr {
 				ColPos: pos,
 			},
 		},
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(typeID),
 		},
 	}

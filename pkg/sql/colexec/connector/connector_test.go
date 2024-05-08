@@ -71,7 +71,7 @@ func TestConnector(t *testing.T) {
 		require.NoError(t, err)
 
 		bats := []*batch.Batch{
-			newBatch(t, tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
 			batch.EmptyBatch,
 		}
 		resetChildren(tc.arg, bats)
@@ -94,7 +94,7 @@ func TestConnector(t *testing.T) {
 			bat.Clean(tc.proc.Mp())
 		}
 		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.Children[0].Free(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -112,10 +112,12 @@ func newTestCase() connectorTestCase {
 				Ctx: ctx,
 				Ch:  make(chan *batch.Batch, 3),
 			},
-			info: &vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 		cancel: cancel,
@@ -124,20 +126,16 @@ func newTestCase() connectorTestCase {
 }
 
 // create a new block based on the type information
-func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
 func resetChildren(arg *Argument, bats []*batch.Batch) {
-	if len(arg.Children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
-
-	} else {
-		arg.Children = arg.Children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
-	}
+	arg.GetOperatorBase().SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: bats,
+			},
+		},
+	)
 }

@@ -511,7 +511,7 @@ func TestPartitionKeysShouldShowError(t *testing.T) {
 }
 
 func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
-	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
+	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -585,7 +585,7 @@ func mockPartitionBinder(tableDef *plan.TableDef) (*PartitionBinder, error) {
 
 func mockExpr(t *testing.T, s string) (tree.Expr, error) {
 	selStr := "select " + s
-	one, err := parsers.ParseOne(context.TODO(), dialect.MYSQL, selStr, 1)
+	one, err := parsers.ParseOne(context.TODO(), dialect.MYSQL, selStr, 1, 0)
 	require.Nil(t, err)
 	return one.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, err
 }
@@ -609,13 +609,13 @@ func Test_checkPartitionKeys(t *testing.T) {
 
 	addCol(tableDef, &ColDef{
 		Name: "col1",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
 	addCol(tableDef, &ColDef{
 		Name: "col2",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
@@ -636,19 +636,19 @@ func Test_checkPartitionKeys(t *testing.T) {
 
 	addCol(tableDef2, &ColDef{
 		Name: "col1",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
 	addCol(tableDef2, &ColDef{
 		Name: "col2",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
 	addCol(tableDef2, &ColDef{
 		Name: "col3",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
@@ -842,13 +842,13 @@ func Test_checkPartitionExprType(t *testing.T) {
 
 	addCol(tableDef, &ColDef{
 		Name: "col1",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
 	addCol(tableDef, &ColDef{
 		Name: "col2",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
@@ -1005,19 +1005,19 @@ func TestCheckPartitionFuncValid(t *testing.T) {
 
 	addCol(tableDef, &ColDef{
 		Name: "col1",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
 	addCol(tableDef, &ColDef{
 		Name: "col2",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
 	addCol(tableDef, &ColDef{
 		Name: "col3",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_date),
 		},
 	})

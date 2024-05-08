@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -33,7 +33,7 @@ func handleGetProtocolVersion(proc *process.Process,
 	service serviceType,
 	parameter string,
 	sender requestSender) (Result, error) {
-	qs := proc.QueryService
+	qt := proc.QueryClient
 	mc := clusterservice.GetMOCluster()
 	var addrs []string
 	var nodeIds []string
@@ -58,14 +58,14 @@ func handleGetProtocolVersion(proc *process.Process,
 
 	versions := make([]string, 0, len(addrs))
 	for i, addr := range addrs {
-		req := qs.NewRequest(querypb.CmdMethod_GetProtocolVersion)
+		req := qt.NewRequest(querypb.CmdMethod_GetProtocolVersion)
 		req.GetProtocolVersion = &querypb.GetProtocolVersionRequest{}
-		resp, err := qs.SendMessage(ctx, addr, req)
+		resp, err := qt.SendMessage(ctx, addr, req)
 		if err != nil {
 			return Result{}, err
 		}
 		versions = append(versions, fmt.Sprintf("%s:%d", nodeIds[i], resp.GetProtocolVersion.Version))
-		qs.Release(resp)
+		qt.Release(resp)
 	}
 
 	return Result{
@@ -99,7 +99,7 @@ func handleSetProtocolVersion(proc *process.Process,
 	service serviceType,
 	parameter string,
 	sender requestSender) (Result, error) {
-	qs := proc.QueryService
+	qt := proc.QueryClient
 	targets, version, err := checkProtocolParameter(parameter)
 	if err != nil {
 		return Result{}, err
@@ -107,13 +107,13 @@ func handleSetProtocolVersion(proc *process.Process,
 	if service == tn && targets == nil {
 		// set protocol version for tn node
 		// there only exist one tn node, so we don't need to specify the uuid
-		return transferToTN(qs, version)
+		return transferToTN(qt, version)
 	}
 
 	if service == cn && targets != nil {
 		versions := make([]string, 0, len(targets))
 		for _, target := range targets {
-			resp, err := transferToCN(qs, target, version)
+			resp, err := transferToCN(qt, target, version)
 			if err != nil {
 				return Result{}, err
 			}
@@ -153,7 +153,7 @@ func checkProtocolParameter(param string) ([]string, int64, error) {
 	return nil, version, nil
 }
 
-func transferToTN(qs queryservice.QueryService, version int64) (Result, error) {
+func transferToTN(qt qclient.QueryClient, version int64) (Result, error) {
 	var addr string
 	var resp *querypb.Response
 	var err error
@@ -165,11 +165,11 @@ func transferToTN(qs queryservice.QueryService, version int64) (Result, error) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
-			req := qs.NewRequest(querypb.CmdMethod_SetProtocolVersion)
+			req := qt.NewRequest(querypb.CmdMethod_SetProtocolVersion)
 			req.SetProtocolVersion = &querypb.SetProtocolVersionRequest{
 				Version: version,
 			}
-			resp, err = qs.SendMessage(ctx, addr, req)
+			resp, err = qt.SendMessage(ctx, addr, req)
 			return true
 		})
 	if err != nil {
@@ -178,25 +178,25 @@ func transferToTN(qs queryservice.QueryService, version int64) (Result, error) {
 	if resp == nil {
 		return Result{}, moerr.NewInternalErrorNoCtx("no such tn service")
 	}
-	defer qs.Release(resp)
+	defer qt.Release(resp)
 	return Result{
 		Method: SetProtocolVersionMethod,
 		Data:   strconv.FormatInt(resp.SetProtocolVersion.Version, 10),
 	}, nil
 }
 
-func transferToCN(qs queryservice.QueryService, target string, version int64) (resp *querypb.Response, err error) {
+func transferToCN(qt qclient.QueryClient, target string, version int64) (resp *querypb.Response, err error) {
 	clusterservice.GetMOCluster().GetCNService(
 		clusterservice.NewServiceIDSelector(target),
 		func(cn metadata.CNService) bool {
-			req := qs.NewRequest(querypb.CmdMethod_SetProtocolVersion)
+			req := qt.NewRequest(querypb.CmdMethod_SetProtocolVersion)
 			req.SetProtocolVersion = &querypb.SetProtocolVersionRequest{
 				Version: version,
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 
-			resp, err = qs.SendMessage(ctx, cn.QueryAddress, req)
+			resp, err = qt.SendMessage(ctx, cn.QueryAddress, req)
 			return true
 		})
 	if err != nil {

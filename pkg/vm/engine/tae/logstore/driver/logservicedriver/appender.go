@@ -16,6 +16,7 @@ package logservicedriver
 
 import (
 	"context"
+	gotrace "runtime/trace"
 	"sync"
 	"time"
 
@@ -46,9 +47,11 @@ func (a *driverAppender) appendEntry(e *entry.Entry) {
 }
 
 func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
+	_, task := gotrace.NewTask(context.Background(), "logservice.append")
 	start := time.Now()
 	defer func() {
 		v2.LogTailAppendDurationHistogram.Observe(time.Since(start).Seconds())
+		task.End()
 	}()
 
 	size := a.entry.prepareRecord()

@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"go.uber.org/zap"
 )
 
 func getQueryResultDir() string {
@@ -104,7 +105,7 @@ func saveQueryResult(ses *Session, bat *batch.Batch) error {
 		logInfo(ses, ses.GetDebugString(), "open save query result", zap.Float64("current result size:", s))
 		return nil
 	}
-	fs := ses.GetParameterUnit().FileService
+	fs := getGlobalPu().FileService
 	// write query result
 	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), ses.GetIncBlockIdx())
 	logInfo(ses, ses.GetDebugString(), "open save query result", zap.String("statemant id is:", uuid.UUID(ses.tStmt.StatementID).String()), zap.String("fileservice name is:", fs.Name()), zap.String("write path is:", path), zap.Float64("current result size:", s))
@@ -137,9 +138,12 @@ func saveQueryResultMeta(ses *Session) error {
 		ses.tStmt = nil
 		ses.curResultSize = 0
 	}()
-	fs := ses.GetParameterUnit().FileService
+	fs := getGlobalPu().FileService
 	// write query result meta
-	colMap := buildColumnMap(ses.rs)
+	colMap, err := buildColumnMap(ses.GetRequestContext(), ses.rs)
+	if err != nil {
+		return err
+	}
 	b, err := ses.rs.Marshal()
 	if err != nil {
 		return err
@@ -181,7 +185,7 @@ func saveQueryResultMeta(ses *Session) error {
 		Ast:         string(st),
 		ColumnMap:   colMap,
 	}
-	metaBat, err := buildQueryResultMetaBatch(m, ses.mp)
+	metaBat, err := buildQueryResultMetaBatch(m, ses.pool)
 	if err != nil {
 		return err
 	}
@@ -205,7 +209,10 @@ func saveQueryResultMeta(ses *Session) error {
 	return err
 }
 
-func buildColumnMap(rs *plan.ResultColDef) string {
+func buildColumnMap(ctx context.Context, rs *plan.ResultColDef) (string, error) {
+	if rs == nil {
+		return "", moerr.NewInternalError(ctx, "resultColDef is nil")
+	}
 	m := make(map[string][]int)
 	org := make([]string, len(rs.ResultCols))
 	for i, col := range rs.ResultCols {
@@ -231,7 +238,7 @@ func buildColumnMap(rs *plan.ResultColDef) string {
 			buf.WriteString(fmt.Sprintf("%s -> %s", org[i], rs.ResultCols[i].Name))
 		}
 	}
-	return buf.String()
+	return buf.String(), nil
 }
 
 func isResultQuery(p *plan.Plan) []string {
@@ -253,7 +260,7 @@ func isResultQuery(p *plan.Plan) []string {
 }
 
 func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) error {
-	f := ses.GetParameterUnit().FileService
+	f := getGlobalPu().FileService
 	for _, id := range uuids {
 		// var size int64 = -1
 		path := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), id)
@@ -262,10 +269,15 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 			return err
 		}
 		idxs := []uint16{catalog.PLAN_IDX, catalog.AST_IDX}
-		bats, err := reader.LoadAllColumns(requestCtx, idxs, ses.GetMemPool())
+		bats, closeCB, err := reader.LoadAllColumns(requestCtx, idxs, ses.GetMemPool())
 		if err != nil {
 			return err
 		}
+		defer func() {
+			if closeCB != nil {
+				closeCB()
+			}
+		}()
 		bat := bats[0]
 		p := bat.Vecs[0].GetStringAt(0)
 		pn := &plan.Plan{}
@@ -278,6 +290,18 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 			return err
 		}
 		if err = authenticateCanExecuteStatementAndPlan(requestCtx, ses, ast, pn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func maySaveQueryResult(ses *Session, bat *batch.Batch) error {
+	if openSaveQueryResult(ses) {
+		if err := saveQueryResult(ses, bat); err != nil {
+			return err
+		}
+		if err := saveQueryResultMeta(ses); err != nil {
 			return err
 		}
 	}
@@ -309,7 +333,7 @@ func simpleAstMarshal(stmt tree.Statement) ([]byte, error) {
 		s.Typ = int(astShowAboutTable)
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus,
-		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
+		*tree.ShowGrants, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowConnectors:
@@ -487,9 +511,9 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	oq.reset()
 	oq.ep.OutTofile = true
 	//prepare export param
-	exportParam.DefaultBufSize = ses.GetParameterUnit().SV.ExportDataDefaultFlushSize
+	exportParam.DefaultBufSize = getGlobalPu().SV.ExportDataDefaultFlushSize
 	exportParam.UseFileService = true
-	exportParam.FileService = ses.GetParameterUnit().FileService
+	exportParam.FileService = getGlobalPu().FileService
 	exportParam.Ctx = ctx
 	defer func() {
 		exportParam.LineBuffer = nil
@@ -528,10 +552,11 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				break
 			}
 			tmpBatch.Clean(ses.GetMemPool())
-			bat, err := reader.LoadColumns(ctx, indexes, nil, block.BlockHeader().BlockID().Sequence(), ses.GetMemPool())
+			bat, release, err := reader.LoadColumns(ctx, indexes, nil, block.BlockHeader().BlockID().Sequence(), ses.GetMemPool())
 			if err != nil {
 				return err
 			}
+			defer release()
 			tmpBatch = bat
 
 			//step2.1: converts it into the csv string
@@ -548,7 +573,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 					break
 				}
 
-				_, err = extractRowFromEveryVector(ses, tmpBatch, j, oq, false)
+				_, err = extractRowFromEveryVector(ses, tmpBatch, j, oq, true)
 				if err != nil {
 					return err
 				}
@@ -577,20 +602,25 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	}
 	metaFile := catalog.BuildQueryResultMetaPath(account.GetTenant(), queryId)
 	// read meta's meta
-	reader, err := blockio.NewFileReader(ses.GetParameterUnit().FileService, metaFile)
+	reader, err := blockio.NewFileReader(getGlobalPu().FileService, metaFile)
 	if err != nil {
 		return nil, err
 	}
 	idxs := make([]uint16, 1)
 	idxs[0] = catalog.COLUMNS_IDX
 	// read meta's data
-	bats, err := reader.LoadAllColumns(ctx, idxs, ses.GetMemPool())
+	bats, closeCB, err := reader.LoadAllColumns(ctx, idxs, ses.GetMemPool())
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return nil, moerr.NewResultFileNotFound(ctx, makeResultMetaPath(account.GetTenant(), queryId))
 		}
 		return nil, err
 	}
+	defer func() {
+		if closeCB != nil {
+			closeCB()
+		}
+	}()
 	vec := bats[0].Vecs[0]
 	def := vec.GetStringAt(0)
 	r := &plan.ResultColDef{}
@@ -612,7 +642,7 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 	}
 	rti := make([]resultFileInfo, 0, len(fileList))
 	for i, file := range fileList {
-		e, err := ses.GetParameterUnit().FileService.StatFile(ctx, file)
+		e, err := getGlobalPu().FileService.StatFile(ctx, file)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				return nil, moerr.NewResultFileNotFound(ctx, file)
@@ -633,7 +663,7 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize int64) (*blockio.BlockReader, []objectio.BlockObject, error) {
 	// read result's blocks
 	filePath := getPathOfQueryResultFile(fileName)
-	reader, err := blockio.NewFileReader(ses.GetParameterUnit().FileService, filePath)
+	reader, err := blockio.NewFileReader(getGlobalPu().FileService, filePath)
 	if err != nil {
 		return nil, nil, err
 	}

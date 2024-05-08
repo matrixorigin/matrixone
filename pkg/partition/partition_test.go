@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -123,4 +124,12 @@ func TestPartition(t *testing.T) {
 	nulls.Add(v11.GetNulls(), 1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v11)
 	require.Equal(t, []int64{0, 1}, partitions)
+
+	v12 := testutil.NewVector(5, types.T_bit.ToType(), mp, false, []uint64{3, 4, 5, 6, 7, 8})
+	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v12)
+	require.Equal(t, []int64{0, 1}, partitions)
+	nulls.Add(v12.GetNulls(), 1)
+	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v12)
+	require.Equal(t, []int64{0, 1}, partitions)
+
 }

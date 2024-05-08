@@ -29,7 +29,7 @@ type HashPageTable = TransferTable[*TransferHashPage]
 type TransferHashPage struct {
 	common.RefHelper
 	bornTS      time.Time
-	id          *common.ID
+	id          *common.ID // not include blk offset
 	hashmap     map[uint32]types.Rowid
 	isTransient bool
 }

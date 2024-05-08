@@ -17,6 +17,7 @@ package table_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -25,14 +26,23 @@ import (
 var _ vm.Operator = new(Argument)
 
 type Argument struct {
-	Reader engine.Reader
-	Attrs  []string
-
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	msgReceiver    *process.MessageReceiver
+	TopValueMsgTag int32
+	OrderBy        []*plan.OrderBySpec
+	Reader         engine.Reader
+	Attrs          []string
+	TableID        uint64
 
 	buf    *batch.Batch
 	tmpBuf *batch.Batch
+
+	maxAllocSize int
+
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -48,7 +58,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -62,30 +72,6 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) GetCnAddr() string {
-	return arg.info.CnAddr
-}
-
-func (arg *Argument) GetOperatorID() int32 {
-	return arg.info.OperatorID
-}
-
-func (arg *Argument) GetParalleID() int32 {
-	return arg.info.ParallelID
-}
-
-func (arg *Argument) GetMaxParallel() int32 {
-	return arg.info.MaxParallel
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())
@@ -96,4 +82,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		arg.tmpBuf.Clean(proc.Mp())
 		arg.tmpBuf = nil
 	}
+
+	if arg.msgReceiver != nil {
+		arg.msgReceiver.Free()
+	}
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal.Alloc(int64(arg.maxAllocSize))
 }

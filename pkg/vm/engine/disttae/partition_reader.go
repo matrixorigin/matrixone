@@ -17,6 +17,8 @@ package disttae
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"go.uber.org/zap"
@@ -45,6 +47,16 @@ type PartitionReader struct {
 
 var _ engine.Reader = new(PartitionReader)
 
+func (p *PartitionReader) SetFilterZM(objectio.ZoneMap) {
+}
+
+func (p *PartitionReader) GetOrderBy() []*plan.OrderBySpec {
+	return nil
+}
+
+func (p *PartitionReader) SetOrderBy([]*plan.OrderBySpec) {
+}
+
 func (p *PartitionReader) Close() error {
 	//p.withFilterMixin.reset()
 	p.inserts = nil
@@ -53,47 +65,49 @@ func (p *PartitionReader) Close() error {
 }
 
 func (p *PartitionReader) prepare() error {
-	txn := p.table.db.txn
+	txn := p.table.getTxn()
 	var inserts []*batch.Batch
 	var deletes map[types.Rowid]uint8
 	//prepare inserts and deletes for partition reader.
 	if !txn.readOnly.Load() && !p.prepared {
-		inserts = make([]*batch.Batch, 0, len(p.table.writes))
+		inserts = make([]*batch.Batch, 0)
 		deletes = make(map[types.Rowid]uint8)
-		for _, entry := range p.table.writes {
-			if entry.typ == INSERT {
-				if entry.bat == nil || entry.bat.IsEmpty() {
-					continue
+		//load inserts and deletes from txn.writes.
+		p.table.getTxn().forEachTableWrites(p.table.db.databaseId, p.table.tableId,
+			p.table.getTxn().GetSnapshotWriteOffset(), func(entry Entry) {
+				if entry.typ == INSERT || entry.typ == INSERT_TXN {
+					if entry.bat == nil || entry.bat.IsEmpty() {
+						return
+					}
+					if entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+						return
+					}
+					inserts = append(inserts, entry.bat)
+					return
 				}
-				if entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
-					continue
+				//entry.typ == DELETE
+				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+					/*
+						CASE:
+						create table t1(a int);
+						begin;
+						truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+						show tables; // t1 must be shown
+					*/
+					if entry.isGeneratedByTruncate() {
+						return
+					}
+					//deletes in txn.Write maybe comes from PartitionState.Rows ,
+					// PartitionReader need to skip them.
+					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+					for _, v := range vs {
+						deletes[v] = 0
+					}
 				}
-				inserts = append(inserts, entry.bat)
-				continue
-			}
-			//entry.typ == DELETE
-			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-				/*
-					CASE:
-					create table t1(a int);
-					begin;
-					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
-					show tables; // t1 must be shown
-				*/
-				if entry.isGeneratedByTruncate() {
-					continue
-				}
-				//deletes in txn.Write maybe comes from PartitionState.Rows ,
-				// PartitionReader need to skip them.
-				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				for _, v := range vs {
-					deletes[v] = 0
-				}
-			}
-		}
+			})
 		//deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
 		// so, here only load deletes which don't belong to PartitionState.blks.
-		if err := p.table.LoadDeletesForMemBlocksIn(p.table._partState, deletes); err != nil {
+		if err := p.table.LoadDeletesForMemBlocksIn(p.table._partState.Load(), deletes); err != nil {
 			return err
 		}
 		p.inserts = inserts

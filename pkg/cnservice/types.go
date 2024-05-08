@@ -19,9 +19,10 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/cacheservice"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -39,7 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -47,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -71,7 +73,8 @@ type Service interface {
 	ID() string
 	GetTaskRunner() taskservice.TaskRunner
 	GetTaskService() (taskservice.TaskService, bool)
-	WaitSystemInitCompleted(ctx context.Context) error
+	GetSQLExecutor() executor.SQLExecutor
+	GetBootstrapService() bootstrap.Service
 }
 
 type EngineType string
@@ -229,6 +232,16 @@ type Config struct {
 		//PKDedupCount check whether primary key in transaction's workspace is duplicated if the count of pk
 		// is less than PKDedupCount when txn commits. Default value is 0 , which means don't do deduplication.
 		PkDedupCount int `toml:"pk-dedup-count"`
+
+		// Trace trace
+		Trace struct {
+			BufferSize    int           `toml:"buffer-size"`
+			FlushBytes    toml.ByteSize `toml:"flush-bytes"`
+			FlushDuration toml.Duration `toml:"force-flush-duration"`
+			Dir           string        `toml:"dir"`
+			Enable        bool          `toml:"enable"`
+			Tables        []uint64      `toml:"tables"`
+		} `toml:"trace"`
 	} `toml:"txn"`
 
 	// AutoIncrement auto increment config
@@ -248,6 +261,14 @@ type Config struct {
 	InitWorkState string `toml:"init-work-state"`
 
 	PythonUdfClient pythonservice.ClientConfig `toml:"python-udf-client"`
+
+	// LogtailUpdateStatsThreshold is the number that logtail entries received
+	// to trigger stats updating.
+	LogtailUpdateStatsThreshold int `toml:"logtail-update-stats-threshold"`
+
+	// Whether to automatically upgrade when system startup
+	AutomaticUpgrade       bool `toml:"auto-upgrade"`
+	UpgradeTenantBatchSize int  `toml:"upgrade-tenant-batch"`
 }
 
 func (c *Config) Validate() error {
@@ -365,9 +386,9 @@ func (c *Config) Validate() error {
 
 	// pessimistic mode implies primary key check
 	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic || c.PrimaryKeyCheck {
-		plan.CNPrimaryCheck = true
+		config.CNPrimaryCheck = true
 	} else {
-		plan.CNPrimaryCheck = false
+		config.CNPrimaryCheck = false
 	}
 
 	if c.MaxPreparedStmtCount > 0 {
@@ -518,6 +539,12 @@ func (c *Config) SetDefaultValue() {
 		c.InitWorkState = metadata.WorkState_Working.String()
 	}
 
+	if c.UpgradeTenantBatchSize <= 0 {
+		c.UpgradeTenantBatchSize = 16
+	} else if c.UpgradeTenantBatchSize >= 32 {
+		c.UpgradeTenantBatchSize = 32
+	}
+
 	c.Frontend.SetDefaultValues()
 }
 
@@ -525,6 +552,16 @@ func (s *service) getLockServiceConfig() lockservice.Config {
 	s.cfg.LockService.ServiceID = s.cfg.UUID
 	s.cfg.LockService.RPC = s.cfg.RPC
 	s.cfg.LockService.ListenAddress = s.lockServiceListenAddr()
+	s.cfg.LockService.TxnIterFunc = func(f func([]byte) bool) {
+		tc := s._txnClient
+		if tc == nil {
+			return
+		}
+
+		tc.IterTxns(func(to client.TxnOverview) bool {
+			return f(to.Meta.ID)
+		})
+	}
 	return s.cfg.LockService
 }
 
@@ -541,7 +578,7 @@ type service struct {
 		engine engine.Engine,
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
-		queryService queryservice.QueryService,
+		queryClient qclient.QueryClient,
 		hakeeper logservice.CNHAKeeperClient,
 		udfService udf.Service,
 		cli client.TxnClient,
@@ -551,6 +588,7 @@ type service struct {
 	mo                     *frontend.MOServer
 	initHakeeperClientOnce sync.Once
 	_hakeeperClient        logservice.CNHAKeeperClient
+	hakeeperConnected      chan struct{}
 	initTxnSenderOnce      sync.Once
 	_txnSender             rpc.TxnSender
 	initTxnClientOnce      sync.Once
@@ -563,15 +601,18 @@ type service struct {
 	pu                     *config.ParameterUnit
 	moCluster              clusterservice.MOCluster
 	lockService            lockservice.LockService
+	sqlExecutor            executor.SQLExecutor
 	sessionMgr             *queryservice.SessionManager
-	// queryService is used to send query request between CN services.
+	// queryService is used to handle query request from other CN service.
 	queryService queryservice.QueryService
+	// queryClient is used to send query request to other CN services.
+	queryClient qclient.QueryClient
 	// udfService is used to handle non-sql udf
-	udfService udf.Service
+	udfService       udf.Service
+	bootstrapService bootstrap.Service
 
-	stopper     *stopper.Stopper
-	aicm        *defines.AutoIncrCacheManager
-	upgradeOnce sync.Once
+	stopper *stopper.Stopper
+	aicm    *defines.AutoIncrCacheManager
 
 	task struct {
 		sync.RWMutex
@@ -580,10 +621,21 @@ type service struct {
 		storageFactory taskservice.TaskStorageFactory
 	}
 
-	addressMgr  address.AddressManager
-	gossipNode  *gossip.Node
-	cacheServer cacheservice.CacheService
-	config      *util.ConfigData
+	addressMgr address.AddressManager
+	gossipNode *gossip.Node
+	config     *util.ConfigData
+
+	options struct {
+		bootstrapOptions []bootstrap.Option
+		traceDataPath    string
+	}
+
+	// pipelines record running pipelines in the service, used for monitoring.
+	pipelines struct {
+		// counter recording the total number of running pipelines,
+		// details are not recorded for simplicity as suggested by @nnsgmsone
+		counter atomic.Int64
+	}
 }
 
 func dumpCnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {

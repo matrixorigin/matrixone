@@ -20,8 +20,6 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -30,11 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_InitServer(t *testing.T) {
@@ -69,7 +68,7 @@ func Test_InitServer(t *testing.T) {
 		engine engine.Engine,
 		fs fileservice.FileService,
 		lockService lockservice.LockService,
-		queryService queryservice.QueryService,
+		queryClient qclient.QueryClient,
 		hakeeper logservice.CNHAKeeperClient,
 		udfService udf.Service,
 		cli client.TxnClient,

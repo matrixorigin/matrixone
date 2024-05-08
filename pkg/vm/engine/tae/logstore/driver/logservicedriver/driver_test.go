@@ -125,7 +125,7 @@ func TestReplay2(t *testing.T) {
 	defer service.Close()
 
 	cfg := NewTestConfig(ccfg)
-	cfg.NewRecordSize = 100
+	cfg.RecordSize = 100
 	driver := NewLogServiceDriver(cfg)
 
 	entryCount := 10000

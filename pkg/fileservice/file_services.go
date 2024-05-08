@@ -52,6 +52,12 @@ func (f *FileServices) Delete(ctx context.Context, filePaths ...string) error {
 	return nil
 }
 
+func (f *FileServices) Close() {
+	for _, fs := range f.mappings {
+		fs.Close()
+	}
+}
+
 func (f *FileServices) deleteSingle(ctx context.Context, filePath string) error {
 	path, err := ParsePathAtService(filePath, "")
 	if err != nil {

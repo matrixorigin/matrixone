@@ -154,7 +154,7 @@ func TestCommitWithLockTables(t *testing.T) {
 		}()
 
 		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
-		tc.option.lockService = s
+		tc.lockService = s
 		tc.AddLockTable(lock.LockTable{Table: 1})
 		tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 		err := tc.Commit(ctx)
@@ -170,6 +170,7 @@ func TestCommitWithLockTables(t *testing.T) {
 func TestCommitWithLockTablesChanged(t *testing.T) {
 	tableID1 := uint64(10)
 	tableID2 := uint64(20)
+	tableID3 := uint64(30)
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		lockservice.RunLockServicesForTest(
 			zap.DebugLevel,
@@ -182,19 +183,27 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 				assert.NoError(t, err)
 				_, err = s.Lock(ctx, tableID2, [][]byte{[]byte("k1")}, tc.txnID, lock.LockOptions{})
 				assert.NoError(t, err)
+				_, err = s.Lock(ctx, tableID3, [][]byte{[]byte("k1")}, tc.txnID, lock.LockOptions{})
+				assert.NoError(t, err)
 
 				ts.setManual(func(sr *rpc.SendResult, err error) (*rpc.SendResult, error) {
 					sr.Responses[0].TxnError = txn.WrapError(moerr.NewLockTableBindChanged(ctx), 0)
 					sr.Responses[0].CommitResponse = &txn.TxnCommitResponse{
-						InvalidLockTables: []uint64{tableID1},
+						InvalidLockTables: []uint64{tableID1, tableID2},
 					}
 					return sr, nil
 				})
 
 				tc.mu.txn.Mode = txn.TxnMode_Pessimistic
-				tc.option.lockService = s
-				tc.AddLockTable(lock.LockTable{Table: tableID1})
-				tc.AddLockTable(lock.LockTable{Table: tableID2})
+				tc.lockService = s
+
+				// table 1 hold bind same as lockservice, commit failed, will removed
+				tc.AddLockTable(lock.LockTable{Table: tableID1, ServiceID: s.GetServiceID(), Version: 1})
+				// table 2 hold stale bind with lockservice, cannot remove bind in lockservice
+				tc.AddLockTable(lock.LockTable{Table: tableID2, ServiceID: s.GetServiceID(), Version: 0})
+				// table 3 is valid
+				tc.AddLockTable(lock.LockTable{Table: tableID3, ServiceID: s.GetServiceID(), Version: 1})
+
 				tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 				err = tc.Commit(ctx)
 				assert.Error(t, err)
@@ -206,6 +215,11 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 
 				// table 2 will be kept
 				bind, err = s.GetLockTableBind(0, tableID2)
+				require.NoError(t, err)
+				require.NotEqual(t, lock.LockTable{}, bind)
+
+				// table 3 will be kept
+				bind, err = s.GetLockTableBind(0, tableID3)
 				require.NoError(t, err)
 				require.NotEqual(t, lock.LockTable{}, bind)
 			},
@@ -247,17 +261,6 @@ func TestMissingTxnIDWillPanic(t *testing.T) {
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	newTxnOperator(nil, newTestTxnSender(), txn.TxnMeta{})
-}
-
-func TestEmptyTxnSnapshotTSWillPanic(t *testing.T) {
-	defer func() {
-		if err := recover(); err != nil {
-			return
-		}
-		assert.Fail(t, "must panic")
-	}()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(nil, newTestTxnSender(), txn.TxnMeta{ID: []byte{1}})
 }
 
 func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
@@ -417,9 +420,9 @@ func TestSnapshotTxnOperator(t *testing.T) {
 
 		tc2.mu.txn.Mirror = false
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
-		assert.False(t, tc2.option.coordinator)
-		tc2.option.coordinator = true
-		assert.Equal(t, tc.option, tc2.option)
+		assert.False(t, tc2.coordinator)
+		tc2.coordinator = true
+		assert.Equal(t, tc.options, tc2.options)
 		assert.Equal(t, 1, len(tc2.mu.lockTables))
 	}, WithTxnReadyOnly(), WithTxnDisable1PCOpt())
 }

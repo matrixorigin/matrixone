@@ -19,7 +19,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/cache"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -71,12 +71,12 @@ func TestLRUCallbacks(t *testing.T) {
 }
 
 func BenchmarkLRUSet(b *testing.B) {
-	var k cache.CacheKey
+	var k query.CacheKey
 
 	k.Path = "tmp"
 	ctx := context.Background()
 	const capacity = 1024
-	l := New[cache.CacheKey, Bytes](capacity, nil, nil, nil)
+	l := New[query.CacheKey, Bytes](capacity, nil, nil, nil)
 	v := make([]byte, 1)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -89,10 +89,10 @@ func BenchmarkLRUSet(b *testing.B) {
 func BenchmarkLRUParallelSet(b *testing.B) {
 	ctx := context.Background()
 	const capacity = 1024
-	l := New[cache.CacheKey, Bytes](capacity, nil, nil, nil)
+	l := New[query.CacheKey, Bytes](capacity, nil, nil, nil)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		var k cache.CacheKey
+		var k query.CacheKey
 
 		k.Path = "tmp"
 		v := make([]byte, 1)
@@ -107,10 +107,10 @@ func BenchmarkLRUParallelSet(b *testing.B) {
 func BenchmarkLRUParallelSetOrGet(b *testing.B) {
 	ctx := context.Background()
 	const capacity = 1024
-	l := New[cache.CacheKey, Bytes](capacity, nil, nil, nil)
+	l := New[query.CacheKey, Bytes](capacity, nil, nil, nil)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		var k cache.CacheKey
+		var k query.CacheKey
 
 		k.Path = "tmp"
 		v := make([]byte, 1)
@@ -130,13 +130,13 @@ func BenchmarkLRULargeParallelSetOrGet(b *testing.B) {
 
 	ctx := context.Background()
 	const capacity = 1024
-	l := New[cache.CacheKey, Bytes](capacity, nil, nil, nil)
+	l := New[query.CacheKey, Bytes](capacity, nil, nil, nil)
 	b.ResetTimer()
 	for i := 0; i < 1000; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			var k cache.CacheKey
+			var k query.CacheKey
 			k.Path = "tmp"
 			v := make([]byte, 1)
 			for i := 0; i < b.N; i++ {

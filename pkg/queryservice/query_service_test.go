@@ -28,10 +28,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -56,81 +60,62 @@ func TestNewQueryService(t *testing.T) {
 	assert.NotNil(t, qs)
 }
 
-func TestUnwrapResponseError(t *testing.T) {
-	qs := testCreateQueryService(t)
-	assert.NotNil(t, qs)
-	svc, ok := qs.(*queryService)
-	assert.True(t, ok)
-	resp1 := &pb.Response{Error: nil}
-	resp2, err := svc.unwrapResponseError(resp1)
-	assert.Nil(t, err)
-	assert.Equal(t, resp2, resp1)
-
-	e := moerr.NewInternalErrorNoCtx("test")
-	moe, err := e.MarshalBinary()
-	assert.NoError(t, err)
-	resp1 = &pb.Response{Error: moe}
-	resp2, err = svc.unwrapResponseError(resp1)
-	assert.Equal(t, "internal error: test", err.Error())
-	assert.Nil(t, resp2)
-}
-
 func TestQueryService(t *testing.T) {
 	cn := metadata.CNService{
 		ServiceID: "s1",
 	}
 
 	t.Run("sys tenant", func(t *testing.T) {
-		runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
+		runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
-			req := svc.NewRequest(pb.CmdMethod_ShowProcessList)
+			req := cli.NewRequest(pb.CmdMethod_ShowProcessList)
 			req.ShowProcessListRequest = &pb.ShowProcessListRequest{
 				Tenant:    "sys",
 				SysTenant: true,
 			}
-			resp, err := svc.SendMessage(ctx, addr, req)
+			resp, err := cli.SendMessage(ctx, addr, req)
 			assert.NoError(t, err)
-			defer svc.Release(resp)
+			defer cli.Release(resp)
 			assert.NotNil(t, resp.ShowProcessListResponse)
 			assert.Equal(t, 3, len(resp.ShowProcessListResponse.Sessions))
 		})
 	})
 
 	t.Run("common tenant", func(t *testing.T) {
-		runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
+		runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
-			req := svc.NewRequest(pb.CmdMethod_ShowProcessList)
+			req := cli.NewRequest(pb.CmdMethod_ShowProcessList)
 			req.ShowProcessListRequest = &pb.ShowProcessListRequest{
 				Tenant:    "t1",
 				SysTenant: false,
 			}
-			resp, err := svc.SendMessage(ctx, addr, req)
+			resp, err := cli.SendMessage(ctx, addr, req)
 			assert.NoError(t, err)
-			defer svc.Release(resp)
+			defer cli.Release(resp)
 			assert.NotNil(t, resp.ShowProcessListResponse)
 			assert.Equal(t, 1, len(resp.ShowProcessListResponse.Sessions))
 		})
 	})
 
 	t.Run("bad request", func(t *testing.T) {
-		runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
+		runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
-			req := svc.NewRequest(pb.CmdMethod_ShowProcessList)
-			_, err := svc.SendMessage(ctx, addr, req)
+			req := cli.NewRequest(pb.CmdMethod_ShowProcessList)
+			_, err := cli.SendMessage(ctx, addr, req)
 			assert.Error(t, err)
 			assert.Equal(t, "internal error: bad request", err.Error())
 		})
 	})
 
 	t.Run("unsupported cmd", func(t *testing.T) {
-		runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
+		runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
-			req := svc.NewRequest(pb.CmdMethod(math.MaxInt32))
-			_, err := svc.SendMessage(ctx, addr, req)
+			req := cli.NewRequest(pb.CmdMethod(math.MaxInt32))
+			_, err := cli.SendMessage(ctx, addr, req)
 			assert.Error(t, err)
 			assert.Equal(t, "not supported: 2147483647 not support in current version", err.Error())
 		})
@@ -139,23 +124,23 @@ func TestQueryService(t *testing.T) {
 
 func TestQueryServiceKillConn(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1"}
-	runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
-		req := svc.NewRequest(pb.CmdMethod_KillConn)
+		req := cli.NewRequest(pb.CmdMethod_KillConn)
 		req.KillConnRequest = &pb.KillConnRequest{
 			AccountID: 10,
 			Version:   10,
 		}
-		resp, err := svc.SendMessage(ctx, addr, req)
+		resp, err := cli.SendMessage(ctx, addr, req)
 		assert.NoError(t, err)
-		defer svc.Release(resp)
+		defer cli.Release(resp)
 		assert.NotNil(t, resp.KillConnResponse)
 		assert.Equal(t, true, resp.KillConnResponse.Success)
 	})
 }
 
-func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(svc QueryService, addr string)) {
+func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice.FileService, fn func(cli client.QueryClient, addr string)) {
 	defer leaktest.AfterTest(t)()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
@@ -182,6 +167,10 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(svc Qu
 
 	qs, err := NewQueryService(cn.ServiceID, address, morpc.Config{})
 	assert.NoError(t, err)
+
+	qt, err := client.NewQueryClient(cn.ServiceID, morpc.Config{})
+	assert.NoError(t, err)
+
 	qs.AddHandleFunc(pb.CmdMethod_ShowProcessList, func(ctx context.Context, req *pb.Request, resp *pb.Response) error {
 		if req.ShowProcessListRequest == nil {
 			return moerr.NewInternalError(ctx, "bad request")
@@ -254,28 +243,58 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(svc Qu
 		}
 		return nil
 	}, false)
+
+	qs.AddHandleFunc(pb.CmdMethod_GetCacheData,
+		func(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+			wr := &pb.WrappedResponse{
+				Response: resp,
+			}
+			err := fileservice.HandleRemoteRead(ctx, fs, req, wr)
+			if err != nil {
+				return err
+			}
+			qs.SetReleaseFunc(resp, wr.ReleaseFunc)
+			return nil
+		},
+		false,
+	)
+
+	qs.AddHandleFunc(pb.CmdMethod_GetStatsInfo,
+		func(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+			resp.GetStatsInfoResponse = &pb.GetStatsInfoResponse{
+				StatsInfo: &statsinfo.StatsInfo{
+					TableCnt: 100,
+				},
+			}
+			return nil
+		},
+		false,
+	)
+
 	err = qs.Start()
 	assert.NoError(t, err)
 
-	fn(qs, address)
+	fn(qt, address)
 
 	err = qs.Close()
+	assert.NoError(t, err)
+	err = qt.Close()
 	assert.NoError(t, err)
 }
 
 func TestQueryServiceAlterAccount(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1"}
-	runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
-		req := svc.NewRequest(pb.CmdMethod_AlterAccount)
+		req := cli.NewRequest(pb.CmdMethod_AlterAccount)
 		req.AlterAccountRequest = &pb.AlterAccountRequest{
 			TenantId: 10,
 			Status:   "restricted",
 		}
-		resp, err := svc.SendMessage(ctx, addr, req)
+		resp, err := cli.SendMessage(ctx, addr, req)
 		assert.NoError(t, err)
-		defer svc.Release(resp)
+		defer cli.Release(resp)
 		assert.NotNil(t, resp.AlterAccountResponse)
 		assert.Equal(t, true, resp.AlterAccountResponse.AlterSuccess)
 	})
@@ -283,17 +302,17 @@ func TestQueryServiceAlterAccount(t *testing.T) {
 
 func TestQueryServiceTraceSpan(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1"}
-	runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
-		req := svc.NewRequest(pb.CmdMethod_TraceSpan)
+		req := cli.NewRequest(pb.CmdMethod_TraceSpan)
 		req.TraceSpanRequest = &pb.TraceSpanRequest{
 			Cmd:   "cmd",
 			Spans: "spans",
 		}
-		resp, err := svc.SendMessage(ctx, addr, req)
+		resp, err := cli.SendMessage(ctx, addr, req)
 		assert.NoError(t, err)
-		defer svc.Release(resp)
+		defer cli.Release(resp)
 		assert.NotNil(t, resp.TraceSpanResponse)
 		assert.Equal(t, "echo", resp.TraceSpanResponse.Resp)
 	})
@@ -310,7 +329,7 @@ func TestRequestMultipleCn(t *testing.T) {
 	}
 
 	cn := metadata.CNService{ServiceID: "test_request_multi_cn"}
-	runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
 
@@ -358,7 +377,7 @@ func TestRequestMultipleCn(t *testing.T) {
 					nodes: []string{},
 					qs:    nil,
 					genRequest: func() *pb.Request {
-						req := svc.NewRequest(pb.CmdMethod_GetCacheInfo)
+						req := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
 						req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
 						return req
 					},
@@ -381,7 +400,7 @@ func TestRequestMultipleCn(t *testing.T) {
 					nodes: []string{},
 					qs:    nil,
 					genRequest: func() *pb.Request {
-						req := svc.NewRequest(pb.CmdMethod_GetTxnInfo)
+						req := cli.NewRequest(pb.CmdMethod_GetTxnInfo)
 						req.GetTxnInfoRequest = &pb.GetTxnInfoRequest{}
 						return req
 					},
@@ -407,7 +426,7 @@ func TestRequestMultipleCn(t *testing.T) {
 					nodes: []string{},
 					qs:    nil,
 					genRequest: func() *pb.Request {
-						req := svc.NewRequest(pb.CmdMethod_GetLockInfo)
+						req := cli.NewRequest(pb.CmdMethod_GetLockInfo)
 						req.GetLockInfoRequest = &pb.GetLockInfoRequest{}
 						return req
 					},
@@ -438,7 +457,7 @@ func TestRequestMultipleCn(t *testing.T) {
 				tt.wantErr(t,
 					RequestMultipleCn(ctx,
 						[]string{addr},
-						svc,
+						cli,
 						tt.args.genRequest,
 						tt.args.handleValidResponse,
 						tt.args.handleInvalidResponse),
@@ -447,4 +466,162 @@ func TestRequestMultipleCn(t *testing.T) {
 		}
 	})
 
+}
+
+func TestQueryService_RemoteCache(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cn := metadata.CNService{
+		ServiceID: "s1",
+	}
+
+	qt, err := client.NewQueryClient(cn.ServiceID, morpc.Config{})
+	assert.NoError(t, err)
+	defer qt.Close()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	memCap := toml.ByteSize(102400)
+	fs, err := fileservice.NewLocalFS(ctx, "local", dir,
+		fileservice.CacheConfig{
+			MemoryCapacity:     &memCap,
+			RemoteCacheEnabled: true,
+			QueryClient:        qt,
+		}, nil)
+	assert.Nil(t, err)
+	defer func() { fs.Close() }()
+
+	t.Run("main", func(t *testing.T) {
+		runTestWithQueryService(t, cn, fs, func(cli client.QueryClient, addr string) {
+			readEntry0 := fileservice.IOEntry{
+				Offset:      10,
+				Size:        2,
+				ToCacheData: fileservice.CacheOriginalData,
+			}
+			readEntry1 := fileservice.IOEntry{
+				Offset:      20,
+				Size:        3,
+				ToCacheData: fileservice.CacheOriginalData,
+			}
+			writeEntry0 := readEntry0
+			writeEntry0.Data = []byte{10, 20}
+			writeEntry0.ToCacheData = nil
+			writeEntry1 := readEntry1
+			writeEntry1.Data = []byte{30, 40, 50}
+			writeEntry1.ToCacheData = nil
+
+			err = fs.Write(ctx, fileservice.IOVector{
+				FilePath: "foo",
+				Entries:  []fileservice.IOEntry{writeEntry0, writeEntry1},
+			})
+			assert.NoError(t, err)
+			iov := &fileservice.IOVector{
+				FilePath: "foo",
+				Entries:  []fileservice.IOEntry{readEntry0, readEntry1},
+			}
+			defer iov.Release()
+			err = fs.Read(ctx, iov)
+			assert.NoError(t, err)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			req := cli.NewRequest(pb.CmdMethod_GetCacheData)
+			req.GetCacheDataRequest = &pb.GetCacheDataRequest{
+				RequestCacheKey: []*pb.RequestCacheKey{
+					{
+						Index: 0,
+						CacheKey: &pb.CacheKey{
+							Path:   "foo",
+							Offset: 10,
+							Sz:     2,
+						},
+					},
+					{
+						Index: 1,
+						CacheKey: &pb.CacheKey{
+							Path:   "foo",
+							Offset: 20,
+							Sz:     3,
+						},
+					},
+				},
+			}
+			resp1, err := cli.SendMessage(ctx, addr, req)
+			assert.NoError(t, err)
+			defer cli.Release(resp1)
+			assert.NotNil(t, resp1.GetCacheDataResponse)
+			assert.Equal(t, 2, len(resp1.GetCacheDataResponse.ResponseCacheData))
+			assert.Equal(t, pb.ResponseCacheData{Index: 0, Hit: true, Data: []byte{10, 20}},
+				*resp1.GetCacheDataResponse.GetResponseCacheData()[0])
+			assert.Equal(t, pb.ResponseCacheData{Index: 1, Hit: true, Data: []byte{30, 40, 50}},
+				*resp1.GetCacheDataResponse.GetResponseCacheData()[1])
+
+			req.GetCacheDataRequest = &pb.GetCacheDataRequest{
+				RequestCacheKey: []*pb.RequestCacheKey{
+					{
+						Index: 0,
+						CacheKey: &pb.CacheKey{
+							Path:   "foo1",
+							Offset: 40,
+							Sz:     2,
+						},
+					},
+				},
+			}
+			resp2, err := cli.SendMessage(ctx, addr, req)
+			assert.NoError(t, err)
+			defer cli.Release(resp2)
+			assert.NotNil(t, resp2.GetCacheDataResponse)
+			assert.Equal(t, 1, len(resp2.GetCacheDataResponse.ResponseCacheData))
+			assert.Equal(t, pb.ResponseCacheData{Index: 0, Hit: false},
+				*resp2.GetCacheDataResponse.GetResponseCacheData()[0])
+		})
+	})
+
+	t.Run("bad request", func(t *testing.T) {
+		runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			req := cli.NewRequest(pb.CmdMethod_GetCacheData)
+			_, err := cli.SendMessage(ctx, addr, req)
+			assert.Error(t, err)
+			assert.Equal(t, "internal error: bad request", err.Error())
+		})
+	})
+
+	t.Run("unsupported cmd", func(t *testing.T) {
+		runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			req := cli.NewRequest(pb.CmdMethod(90))
+			_, err := cli.SendMessage(ctx, addr, req)
+			assert.Error(t, err)
+			assert.Equal(t, "not supported: 90 not support in current version", err.Error())
+		})
+	})
+}
+
+func TestQueryService_RemoteStatsInfo(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cn := metadata.CNService{
+		ServiceID: "s1",
+	}
+
+	t.Run("main", func(t *testing.T) {
+		runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			req := cli.NewRequest(pb.CmdMethod_GetStatsInfo)
+			req.GetStatsInfoRequest = &pb.GetStatsInfoRequest{
+				StatsInfoKey: &statsinfo.StatsInfoKey{
+					DatabaseID: 1,
+					TableID:    2,
+				},
+			}
+			resp, err := cli.SendMessage(ctx, addr, req)
+			assert.NoError(t, err)
+			defer cli.Release(resp)
+			assert.NotNil(t, resp.GetStatsInfoResponse)
+			assert.NotNil(t, resp.GetStatsInfoResponse.StatsInfo)
+			assert.NotEqual(t, 0, resp.GetStatsInfoResponse.StatsInfo.TableCnt)
+		})
+	})
 }

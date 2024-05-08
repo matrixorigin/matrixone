@@ -40,11 +40,6 @@ func (s *service) initDistributedTAE(
 	}
 	pu.TxnClient = client
 
-	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
-	if ok {
-		ss.(*status.Server).SetTxnClient(s.cfg.UUID, client)
-	}
-
 	// hakeeper
 	hakeeper, err := s.getHAKeeperClient()
 	if err != nil {
@@ -56,7 +51,7 @@ func (s *service) initDistributedTAE(
 	if err != nil {
 		return err
 	}
-	colexec.Srv = colexec.NewServer(hakeeper)
+	colexec.NewServer(hakeeper)
 
 	// start I/O pipeline
 	blockio.Start()
@@ -72,6 +67,8 @@ func (s *service) initDistributedTAE(
 		fs,
 		client,
 		hakeeper,
+		s.gossipNode.StatsKeyRouter(),
+		s.cfg.LogtailUpdateStatsThreshold,
 	)
 	pu.StorageEngine = s.storeEngine
 
@@ -80,6 +77,13 @@ func (s *service) initDistributedTAE(
 	err = cnEngine.InitLogTailPushModel(ctx, s.timestampWaiter)
 	if err != nil {
 		return err
+	}
+
+	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	if ok {
+		statusServer := ss.(*status.Server)
+		statusServer.SetTxnClient(s.cfg.UUID, client)
+		statusServer.SetLogTailClient(s.cfg.UUID, cnEngine.PushClient())
 	}
 
 	// internal sql executor.

@@ -58,6 +58,7 @@ func newTableCache(
 			tableID,
 			col,
 			cfg,
+			committed,
 			allocator,
 			txnOp)
 		if err != nil {
@@ -76,6 +77,11 @@ func (c *tableCache) commit() {
 	}
 	c.mu.committed = true
 	c.mu.txnOp = nil
+	for _, col := range c.mu.cols {
+		col.Lock()
+		col.committed = true
+		col.Unlock()
+	}
 }
 
 func (c *tableCache) getTxn() client.TxnOperator {
@@ -116,7 +122,7 @@ func (c *tableCache) currentValue(
 			if cc == nil {
 				panic("column cache should not be nil, " + col.ColName)
 			}
-			return cc.current(ctx, tableID)
+			return cc.current(ctx)
 		}
 	}
 	return 0, nil
@@ -153,9 +159,7 @@ func (c *tableCache) adjust(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for idx := range c.cols {
-		v, err := c.mu.cols[c.cols[idx].ColName].current(
-			ctx,
-			c.tableID)
+		v, err := c.mu.cols[c.cols[idx].ColName].current(ctx)
 		if err != nil {
 			return err
 		}

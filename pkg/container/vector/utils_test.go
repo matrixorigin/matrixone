@@ -74,3 +74,60 @@ func TestFindFirstIndexInSortedVarlenVector(t *testing.T) {
 		}
 	})
 }
+
+func TestCollectOffsetsByPrefixEqFactory(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v1 := NewVec(types.T_char.ToType())
+	defer v1.Free(mp)
+
+	AppendBytes(v1, []byte("1111"), false, mp)
+	AppendBytes(v1, []byte("1121"), false, mp)
+	AppendBytes(v1, []byte("1211"), false, mp)
+	AppendBytes(v1, []byte("1221"), false, mp)
+	AppendBytes(v1, []byte("1231"), false, mp)
+	AppendBytes(v1, []byte("1311"), false, mp)
+
+	prefix1 := []byte("01")
+	prefix2 := []byte("12")
+	prefix3 := []byte("14")
+	prefix4 := []byte("113")
+
+	fn1 := CollectOffsetsByPrefixEqFactory(prefix1)
+	fn2 := CollectOffsetsByPrefixEqFactory(prefix2)
+	fn3 := CollectOffsetsByPrefixEqFactory(prefix3)
+	fn4 := CollectOffsetsByPrefixEqFactory(prefix4)
+	off1 := fn1(v1)
+	off2 := fn2(v1)
+	off3 := fn3(v1)
+	off4 := fn4(v1)
+	require.Equal(t, 0, len(off1))
+	require.Equal(t, []int32{2, 3, 4}, off2)
+	require.Equal(t, 0, len(off3))
+	require.Equal(t, 0, len(off4))
+}
+
+func TestCollectOffsetsByPrefixBetweenFactory(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v1 := NewVec(types.T_char.ToType())
+	defer v1.Free(mp)
+
+	AppendBytes(v1, []byte("1111"), false, mp)
+	AppendBytes(v1, []byte("1121"), false, mp)
+	AppendBytes(v1, []byte("1211"), false, mp)
+	AppendBytes(v1, []byte("1221"), false, mp)
+	AppendBytes(v1, []byte("1231"), false, mp)
+	AppendBytes(v1, []byte("1311"), false, mp)
+
+	left1 := []byte("11")
+	right1 := []byte("12")
+	left2 := []byte("113")
+	right2 := []byte("124")
+
+	fn1 := CollectOffsetsByPrefixBetweenFactory(left1, right1)
+	fn2 := CollectOffsetsByPrefixBetweenFactory(left2, right2)
+	off1 := fn1(v1)
+	off2 := fn2(v1)
+
+	require.Equal(t, []int32{0, 1, 2, 3, 4}, off1)
+	require.Equal(t, []int32{2, 3, 4}, off2)
+}

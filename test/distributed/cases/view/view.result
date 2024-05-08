@@ -37,15 +37,15 @@ show create view vvvv;
 invalid input: show view 'vvvv' is not a valid view
 create view v1 as select "a";
 show create view v1;
-View    Create View
-v1    create view v1 as select "a";
+View    Create View    character_set_client    collation_connection
+v1    create view v1 as select "a";    utf8mb4    utf8mb4_general_ci
 create view v2 as select 'a';
 show create view v2;
-View    Create View
-v2    create view v2 as select 'a';
+View    Create View    character_set_client    collation_connection
+v2    create view v2 as select 'a';    utf8mb4    utf8mb4_general_ci
 show create table v2;
-View    Create View
-v2    create view v2 as select 'a';
+View    Create View    character_set_client    collation_connection
+v2    create view v2 as select 'a';    utf8mb4    utf8mb4_general_ci
 drop view v1;
 drop view v2;
 create table tt(a int);
@@ -123,8 +123,8 @@ drop view if exists v1;
 create view v1 as select a.project_id as project_id, b.project_name as project_name from t1 a left join t2 b on a.project_id = b.project_id;
 desc v1;
 Field    Type    Null    Key    Default    Extra    Comment
-project_id    VARCHAR(64)    NO        null
-project_name    VARCHAR(255)    YES        null
+project_id    VARCHAR(64)    NO        null        
+project_name    VARCHAR(255)    YES        null        
 drop table t1;
 drop table t2;
 drop view v1;

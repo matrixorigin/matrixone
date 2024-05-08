@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	taskpb "github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -32,6 +32,7 @@ import (
 var (
 	disableTask = "disable"
 	enableTask  = "enable"
+	getUser     = "getuser"
 
 	taskMap = map[string]int32{
 		"storageusage": int32(taskpb.TaskCode_MetricStorageUsage),
@@ -47,6 +48,7 @@ func handleTask(proc *process.Process,
 	service serviceType,
 	parameter string,
 	sender requestSender) (Result, error) {
+	parameter = strings.ToLower(parameter)
 	switch parameter {
 	case disableTask:
 		taskservice.DebugCtlTaskFramework(true)
@@ -60,6 +62,15 @@ func handleTask(proc *process.Process,
 			Method: TaskMethod,
 			Data:   "OK",
 		}, nil
+	case getUser:
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		state, err := proc.Hakeeper.GetClusterState(ctx)
+		cancel()
+		if err != nil {
+			return Result{Method: TaskMethod, Data: "failed to get cluster state"}, err
+		}
+		user := state.GetTaskTableUser()
+		return Result{Method: TaskMethod, Data: user}, nil
 	default:
 	}
 
@@ -67,7 +78,7 @@ func handleTask(proc *process.Process,
 	if err != nil {
 		return Result{}, err
 	}
-	resp, err := transferTaskToCN(proc.QueryService, target, taskCode)
+	resp, err := transferTaskToCN(proc.QueryClient, target, taskCode)
 	if err != nil {
 		return Result{}, err
 	}
@@ -78,7 +89,6 @@ func handleTask(proc *process.Process,
 }
 
 func checkRunTaskParameter(param string) (string, int32, error) {
-	param = strings.ToLower(param)
 	// uuid:taskId
 	args := strings.Split(param, ":")
 	if len(args) != 2 {
@@ -91,16 +101,16 @@ func checkRunTaskParameter(param string) (string, int32, error) {
 	return args[0], taskCode, nil
 }
 
-func transferTaskToCN(qs queryservice.QueryService, target string, taskCode int32) (resp *querypb.Response, err error) {
+func transferTaskToCN(qc qclient.QueryClient, target string, taskCode int32) (resp *querypb.Response, err error) {
 	clusterservice.GetMOCluster().GetCNService(
 		clusterservice.NewServiceIDSelector(target),
 		func(cn metadata.CNService) bool {
-			req := qs.NewRequest(querypb.CmdMethod_RunTask)
+			req := qc.NewRequest(querypb.CmdMethod_RunTask)
 			req.RunTask = &querypb.RunTaskRequest{TaskCode: taskCode}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 
-			resp, err = qs.SendMessage(ctx, cn.QueryAddress, req)
+			resp, err = qc.SendMessage(ctx, cn.QueryAddress, req)
 			return true
 		})
 	return

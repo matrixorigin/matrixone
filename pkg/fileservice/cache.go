@@ -21,11 +21,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/cacheservice/client"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/cache"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"go.uber.org/zap"
 )
@@ -39,10 +40,10 @@ type CacheConfig struct {
 	RemoteCacheEnabled   bool           `toml:"remote-cache-enabled"`
 	RPC                  morpc.Config   `toml:"rpc"`
 
-	CacheClient      client.CacheClient `json:"-"`
-	KeyRouterFactory KeyRouterFactory   `json:"-"`
-	KeyRouter        KeyRouter          `json:"-"`
-	InitKeyRouter    *sync.Once         `json:"-"`
+	QueryClient      client.QueryClient            `json:"-"`
+	KeyRouterFactory KeyRouterFactory[pb.CacheKey] `json:"-"`
+	KeyRouter        client.KeyRouter[pb.CacheKey] `json:"-"`
+	InitKeyRouter    *sync.Once                    `json:"-"`
 	CacheCallbacks   `json:"-"`
 
 	enableDiskCacheForLocalFS bool // for testing only
@@ -54,7 +55,7 @@ type CacheCallbacks struct {
 	PostEvict []CacheCallbackFunc
 }
 
-type CacheCallbackFunc = func(CacheKey, CacheData)
+type CacheCallbackFunc = func(CacheKey, memorycache.CacheData)
 
 func (c *CacheConfig) setDefaults() {
 	if c.MemoryCapacity == nil {
@@ -83,25 +84,35 @@ func (c *CacheConfig) SetRemoteCacheCallback() {
 	}
 	c.InitKeyRouter = &sync.Once{}
 	c.CacheCallbacks.PostSet = append(c.CacheCallbacks.PostSet,
-		func(key CacheKey, data CacheData) {
+		func(key CacheKey, data memorycache.CacheData) {
 			c.InitKeyRouter.Do(func() {
 				c.KeyRouter = c.KeyRouterFactory()
 			})
 			if c.KeyRouter == nil {
 				return
 			}
-			c.KeyRouter.AddItem(key, gossip.Operation_Set)
+			c.KeyRouter.AddItem(gossip.CommonItem{
+				Operation: gossip.Operation_Set,
+				Key: &gossip.CommonItem_CacheKey{
+					CacheKey: &key,
+				},
+			})
 		},
 	)
 	c.CacheCallbacks.PostEvict = append(c.CacheCallbacks.PostEvict,
-		func(key CacheKey, data CacheData) {
+		func(key CacheKey, data memorycache.CacheData) {
 			c.InitKeyRouter.Do(func() {
 				c.KeyRouter = c.KeyRouterFactory()
 			})
 			if c.KeyRouter == nil {
 				return
 			}
-			c.KeyRouter.AddItem(key, gossip.Operation_Delete)
+			c.KeyRouter.AddItem(gossip.CommonItem{
+				Operation: gossip.Operation_Delete,
+				Key: &gossip.CommonItem_CacheKey{
+					CacheKey: &key,
+				},
+			})
 		},
 	)
 }
@@ -135,9 +146,14 @@ type IOVectorCache interface {
 	) error
 }
 
+var slowCacheReadThreshold = time.Second * 0
+
 func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error {
-	ctx, cancel := context.WithTimeout(ctx, slowCacheReadThreshold)
-	defer cancel()
+	if slowCacheReadThreshold > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, slowCacheReadThreshold)
+		defer cancel()
+	}
 	err := cache.Read(ctx, vector)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -156,17 +172,3 @@ func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error
 }
 
 type CacheKey = pb.CacheKey
-
-// DataCache caches IOEntry.CachedData
-type DataCache interface {
-	Set(ctx context.Context, key CacheKey, value CacheData)
-	Get(ctx context.Context, key CacheKey) (value CacheData, ok bool)
-	//TODO file contents may change, so we still need this s.
-	DeletePaths(ctx context.Context, paths []string)
-	Flush()
-	Capacity() int64
-	Used() int64
-	Available() int64
-}
-
-var slowCacheReadThreshold = time.Second * 10

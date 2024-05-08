@@ -101,6 +101,18 @@ func (m *Checkpoint) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
+type InterceptCommit struct {
+	TableName string
+}
+
+func (m *InterceptCommit) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *InterceptCommit) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
 type InspectTN struct {
 	AccessInfo AccessInfo
 	Operation  string
@@ -313,6 +325,37 @@ func (s *StorageUsageReq) MarshalBinary() ([]byte, error) {
 
 func (s *StorageUsageReq) UnmarshalBinary(data []byte) error {
 	return s.Unmarshal(data)
+}
+
+type BlockMetaInfo struct {
+	Info []uint64
+}
+
+func (b *BlockMetaInfo) MarshalBinary() ([]byte, error) {
+	return b.Marshal()
+}
+
+func (b *BlockMetaInfo) UnmarshalBinary(data []byte) error {
+	return b.Unmarshal(data)
+}
+
+type CkpMetaInfo struct {
+	Version  uint32
+	Location []byte
+}
+
+func (c *CkpMetaInfo) MarshalBinary() ([]byte, error) {
+	return c.Marshal()
+}
+
+func (c *CkpMetaInfo) UnmarshalBinary(data []byte) error {
+	return c.Unmarshal(data)
+}
+
+type StorageUsageResp_V0 struct {
+	Succeed      bool
+	CkpEntries   []*CkpMetaInfo
+	BlockEntries []*BlockMetaInfo
 }
 
 type StorageUsageResp struct {

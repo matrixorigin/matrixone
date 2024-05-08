@@ -72,7 +72,7 @@ delete from time_03 where t2 is not null;
 select * from time_03;
 insert into time_03 values (40,"37","gloooooooge","35:50");
 truncate table time_03;
-load data infile "$resources/external_table_file/time_ex_table.csv" into table time_03;
+load data infile "$resources/external_table_file/time_ex_table.csv" into table time_03 fields terminated by ',';
 create external table time_ex_01(t1 int,t2 time,t3 varchar(25),t4 time)  infile{"filepath"='$resources/external_table_file/time_ex_table.csv'} fields terminated by ',' enclosed by '\"';
 select * from time_ex_01;
 select * from time_01 time1 join time_03 time3 on time1.t1=time3.t2;
@@ -104,3 +104,21 @@ select * from (select timediff(t1,t2) from time_01) as t;
 
 select cast('02 10:11:12' as time);
 select cast('255 10:11:12' as time);
+
+create database if not exists test;
+use test;
+drop table if exists mysql_ts_test;
+create table if not exists mysql_ts_test (id int, col_date date, col_time time, col timestamp);
+select * from mysql_ts_test;
+insert into mysql_ts_test values (1, '2024-03-13', '11:30:00', '2024-03-13 11:30:00');
+insert into mysql_ts_test values (2, DATE '2024-03-14', TIME '2024', TIMESTAMP '2024-03-14 11:30:00');
+insert into mysql_ts_test values (3, {d '2024-03-15'}, {t '11:30:30'}, {ts '2024-03-15 11:30:00'});
+-- @ignore:3
+select * from mysql_ts_test;
+insert into mysql_ts_test values (4, {d '2024-03-16'}, {t '23:59:59'}, {ts now()});
+insert into mysql_ts_test values (4, {d '2024-03-16'}, {t '23:59:59'}, {ts current_timestamp});
+-- @ignore:3
+select * from mysql_ts_test;
+drop table mysql_ts_test;
+
+drop database test;

@@ -208,6 +208,10 @@ func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
 	return NewVector(*t, Options{Allocator: p.mp})
 }
 
+func (p *VectorPool) GetMPool() *mpool.MPool {
+	return p.mp
+}
+
 func (p *VectorPool) Allocated() int {
 	size := 0
 	size += p.FixedSizeAllocated()

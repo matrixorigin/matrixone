@@ -19,20 +19,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ vm.Operator = new(Argument)
-
-type evalVector struct {
-	vec      *vector.Vector
-	executor colexec.ExpressionExecutor
-}
 
 const (
 	receive = iota
@@ -49,12 +44,12 @@ type container struct {
 
 	desc      []bool
 	nullsLast []bool
-	orderVecs []evalVector
+	orderVecs []group.ExprEvalVector
 	sels      []int64
 
 	ps      []int64 // index of partition by
 	os      []int64 // Sorted partitions
-	aggVecs []evalVector
+	aggVecs []group.ExprEvalVector
 }
 
 type Argument struct {
@@ -64,10 +59,13 @@ type Argument struct {
 	Fs []*plan.OrderBySpec
 	// agg func
 	Types []types.Type
-	Aggs  []agg.Aggregate
+	Aggs  []aggexec.AggFuncExecExpression
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -83,7 +81,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -97,38 +95,14 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) GetCnAddr() string {
-	return arg.info.CnAddr
-}
-
-func (arg *Argument) GetOperatorID() int32 {
-	return arg.info.OperatorID
-}
-
-func (arg *Argument) GetParalleID() int32 {
-	return arg.info.ParallelID
-}
-
-func (arg *Argument) GetMaxParallel() int32 {
-	return arg.info.MaxParallel
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(mp)
-		ctr.cleanAggVectors(mp)
-		ctr.cleanOrderVectors(mp)
+		ctr.cleanAggVectors()
+		ctr.cleanOrderVectors()
 	}
 }
 
@@ -139,20 +113,16 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	}
 }
 
-func (ctr *container) cleanOrderVectors(_ *mpool.MPool) {
+func (ctr *container) cleanOrderVectors() {
 	for i := range ctr.orderVecs {
-		if ctr.orderVecs[i].executor != nil {
-			ctr.orderVecs[i].executor.Free()
-		}
-		ctr.orderVecs[i].vec = nil
+		ctr.orderVecs[i].Free()
 	}
+	ctr.orderVecs = nil
 }
 
-func (ctr *container) cleanAggVectors(_ *mpool.MPool) {
+func (ctr *container) cleanAggVectors() {
 	for i := range ctr.aggVecs {
-		if ctr.aggVecs[i].executor != nil {
-			ctr.aggVecs[i].executor.Free()
-		}
-		ctr.aggVecs[i].vec = nil
+		ctr.aggVecs[i].Free()
 	}
+	ctr.aggVecs = nil
 }

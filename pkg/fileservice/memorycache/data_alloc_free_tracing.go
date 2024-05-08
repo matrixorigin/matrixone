@@ -17,14 +17,15 @@
 //go:build race
 // +build race
 
-package fileservice
+package memorycache
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"runtime"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 func newData(n int, size *atomic.Int64) *Data {

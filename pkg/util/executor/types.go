@@ -42,7 +42,12 @@ type SQLExecutor interface {
 
 // TxnExecutor exec all sql in a transaction.
 type TxnExecutor interface {
+	Use(db string)
+	LockTable(table string) error
+	// NOTE: If you specify `AccoundId` in `StatementOption`, sql will be executed under that tenant.
+	// If not specified, it will be executed under the system tenant by default.
 	Exec(sql string, options StatementOption) (Result, error)
+	Txn() client.TxnOperator
 }
 
 // Options execute options.
@@ -56,15 +61,19 @@ type Options struct {
 	waitCommittedLogApplied bool
 	timeZone                *time.Location
 	statementOptions        StatementOption
+	txnOpts                 []client.TxnOption
+	enableTrace             bool
 }
 
 // StatementOption statement execute option.
 type StatementOption struct {
 	waitPolicy lock.WaitPolicy
+	accountId  uint32
 }
 
 // Result exec sql result
 type Result struct {
+	LastInsertID uint64
 	AffectedRows uint64
 	Batches      []*batch.Batch
 	mp           *mpool.MPool

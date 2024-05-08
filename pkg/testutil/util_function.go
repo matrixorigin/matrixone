@@ -16,13 +16,13 @@ package testutil
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/assertx"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 
+	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -190,6 +190,27 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			}
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
+			if want != get {
+				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
+					i+1, want, get)
+			}
+		}
+	case types.T_bit:
+		r := vector.GenerateFunctionFixedTypeParameter[uint64](v)
+		s := vector.GenerateFunctionFixedTypeParameter[uint64](vExpected)
+		for i = 0; i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetValue(i)
+			get, null2 := r.GetValue(i)
+			if null1 {
+				if null2 {
+					continue
+				} else {
+					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+				}
 			}
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
@@ -759,6 +780,9 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	switch typ.Oid {
 	case types.T_bool:
 		values := val.([]bool)
+		vector.AppendFixedList(vec, values, nil, mp)
+	case types.T_bit:
+		values := val.([]uint64)
 		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_int8:
 		values := val.([]int8)

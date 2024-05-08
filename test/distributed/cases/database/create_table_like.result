@@ -1,0 +1,33 @@
+create table test(a int);
+insert into test values(1);
+create table new_test like test;
+show create table new_test;
+Table    Create Table
+new_test    CREATE TABLE `new_test` (\n`a` INT DEFAULT null\n)
+drop table test;
+drop table new_test;
+create database test1;
+use test1;
+create table test(a int);
+insert into test values(1);
+create database test2;
+use test2;
+create table new_test like test1.test;
+show create table new_test;
+Table    Create Table
+new_test    CREATE TABLE `new_test` (\n`a` INT DEFAULT null\n)
+drop database test1;
+drop database test2;
+create database test1;
+use test1;
+create table test(a int);
+insert into test values(1);
+create table test like test;
+table test already exists
+create view view1 as select * from test;
+show create view view1;
+View    Create View    character_set_client    collation_connection
+view1    create view view1 as select * from test;    utf8mb4    utf8mb4_general_ci
+create table new_test like view1;
+internal error: test1.view1 is not BASE TABLE
+drop database test1;

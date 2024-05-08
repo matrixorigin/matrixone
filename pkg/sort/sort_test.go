@@ -47,6 +47,9 @@ func init() {
 		newTestCase(true, mp, types.New(types.T_bool, 0, 0)),
 		newTestCase(false, mp, types.New(types.T_bool, 0, 0)),
 
+		newTestCase(true, mp, types.New(types.T_bit, 64, 0)),
+		newTestCase(false, mp, types.New(types.T_bit, 64, 0)),
+
 		newTestCase(true, mp, types.New(types.T_int8, 0, 0)),
 		newTestCase(false, mp, types.New(types.T_int8, 0, 0)),
 		newTestCase(true, mp, types.New(types.T_int16, 0, 0)),
@@ -136,6 +139,24 @@ func BenchmarkSortIntVector(b *testing.B) {
 
 func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 	switch vec.GetType().Oid {
+	case types.T_bit:
+		vs := make([]int, len(os))
+		col := vector.MustFixedCol[uint64](vec)
+		for i := range vs {
+			vs[i] = int(col[i])
+		}
+		sort.Ints(vs)
+		if desc {
+			j := len(vs) - 1
+			for _, v := range vs {
+				require.Equal(t, v, int(col[os[j]]))
+				j--
+			}
+		} else {
+			for i, v := range vs {
+				require.Equal(t, v, int(col[os[i]]))
+			}
+		}
 	case types.T_int32:
 		vs := make([]int, len(os))
 		col := vector.MustFixedCol[int32](vec)

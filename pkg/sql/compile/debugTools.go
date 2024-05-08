@@ -76,6 +76,13 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.LockOp:                  "lockop",
 	vm.MergeBlock:              "merge block",
 	vm.FuzzyFilter:             "fuzzy filter",
+	vm.Sample:                  "sample",
+	vm.Window:                  "window",
+	vm.TimeWin:                 "timewin",
+	vm.Fill:                    "fill",
+	vm.TableScan:               "tablescan",
+	vm.ValueScan:               "valuescan",
+	vm.TableFunction:           "tablefunction",
 }
 
 var debugMagicNames = map[magicType]string{

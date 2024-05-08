@@ -71,7 +71,7 @@ func init() {
 		colname := plan.MetadataScanInfo_MetadataScanInfoType_name[i]
 		coldef := &plan.ColDef{
 			Name: strings.ToLower(colname),
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(tp.Oid),
 				NotNullable: true,
 			},

@@ -187,12 +187,12 @@ func newEmptyEntryCmd[T BaseNode[T], N Node](cmdType uint16, mvccNodeFactory fun
 	return impl
 }
 
-func newBlockCmd(id uint32, cmdType uint16, entry *BlockEntry) *EntryCommand[*MetadataMVCCNode, *BlockNode] {
+func NewDeltalocCmd(id uint32, cmdType uint16, commonID *common.ID, baseEntry *BaseEntryImpl[*MetadataMVCCNode]) *EntryCommand[*MetadataMVCCNode, *BlockNode] {
 	impl := &EntryCommand[*MetadataMVCCNode, *BlockNode]{
-		ID:       entry.AsCommonID(),
+		ID:       commonID,
 		cmdType:  cmdType,
-		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
-		node:     &entry.BlockNode,
+		mvccNode: baseEntry.GetLatestNodeLocked(),
+		node:     &BlockNode{},
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl

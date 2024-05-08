@@ -54,7 +54,7 @@ func TestSessionManger(t *testing.T) {
 	pooler := NewLogtailResponsePool()
 	notifier := mockSessionErrorNotifier(logger.RawLogger())
 	sendTimeout := 5 * time.Second
-	poisionTime := 10 * time.Millisecond
+	poisonTime := 10 * time.Millisecond
 	heartbeatInterval := 50 * time.Millisecond
 	chunkSize := 1024
 
@@ -63,7 +63,7 @@ func TestSessionManger(t *testing.T) {
 	streamA := mockMorpcStream(csA, 10, chunkSize)
 	sessionA := sm.GetSession(
 		ctx, logger, pooler, notifier, streamA,
-		sendTimeout, poisionTime, heartbeatInterval,
+		sendTimeout, poisonTime, heartbeatInterval,
 	)
 	require.NotNil(t, sessionA)
 	require.Equal(t, 1, len(sm.ListSession()))
@@ -73,7 +73,7 @@ func TestSessionManger(t *testing.T) {
 	streamB := mockMorpcStream(csB, 11, chunkSize)
 	sessionB := sm.GetSession(
 		ctx, logger, pooler, notifier, streamB,
-		sendTimeout, poisionTime, heartbeatInterval,
+		sendTimeout, poisonTime, heartbeatInterval,
 	)
 	require.NotNil(t, sessionB)
 	require.Equal(t, 2, len(sm.ListSession()))

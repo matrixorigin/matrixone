@@ -81,17 +81,17 @@ type clientpool struct {
 	mu            sync.Mutex
 }
 
-func newClientPool(maxsize, initsize int, cfg *clientConfig) *clientpool {
+func newClientPool(maxsize int, cfg *clientConfig) *clientpool {
 	pool := &clientpool{
 		maxCount:    maxsize,
 		getTimeout:  cfg.GetClientRetryTimeOut,
-		freeClients: make([]*clientWithRecord, initsize),
+		freeClients: make([]*clientWithRecord, maxsize),
 		mu:          sync.Mutex{},
 	}
 	pool.clientFactory = pool.newClientFactory(cfg)
 	pool.closefn = pool.onClose
 
-	for i := 0; i < initsize; i++ {
+	for i := 0; i < maxsize; i++ {
 		pool.freeClients[i] = pool.clientFactory()
 	}
 	return pool

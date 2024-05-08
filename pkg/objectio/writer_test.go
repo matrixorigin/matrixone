@@ -17,6 +17,13 @@ package objectio
 import (
 	"context"
 	"fmt"
+	"math"
+	"os"
+	"path"
+	"path/filepath"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,12 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"math"
-	"os"
-	"path"
-	"path/filepath"
-	"testing"
-	"time"
 )
 
 const (
@@ -73,9 +74,11 @@ func TestNewObjectWriter(t *testing.T) {
 		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
 		DataDir: dir,
+		Cache:   fileservice.DisabledCacheConfig,
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
+	defer service.Close()
 
 	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
 	assert.Nil(t, err)
@@ -138,6 +141,7 @@ func TestNewObjectWriter(t *testing.T) {
 	typs := []types.Type{types.T_int8.ToType(), types.T_int32.ToType(), types.T_int64.ToType()}
 	vec, err := objectReader.ReadOneBlock(context.Background(), idxs, typs, 0, pool)
 	assert.Nil(t, err)
+	defer vec.Release()
 
 	obj, err := Decode(vec.Entries[0].CachedData.Bytes())
 	assert.Nil(t, err)
@@ -178,6 +182,7 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[2] = 3
 	vec, err = objectReader.ReadOneBlock(context.Background(), idxs, typs, 0, pool)
 	assert.Nil(t, err)
+	defer vec.Release()
 
 	obj, err = Decode(vec.Entries[0].CachedData.Bytes())
 	assert.Nil(t, err)
@@ -294,6 +299,7 @@ func TestNewObjectReader(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
+	defer service.Close()
 
 	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
 	assert.Nil(t, err)

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package memorycache
 
 import (
 	"sync/atomic"
@@ -32,7 +32,7 @@ func TestRCBytes(t *testing.T) {
 	r.Bytes()[0] = 1
 	require.Equal(t, r.Bytes()[0], byte(1))
 	// test Slice
-	r = r.Slice(0)
+	r = r.Slice(0).(RCBytes)
 	require.Equal(t, 0, len(r.Bytes()))
 	// test release
 	r.Release()

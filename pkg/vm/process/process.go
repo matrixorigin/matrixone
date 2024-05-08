@@ -16,9 +16,10 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
@@ -31,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -48,7 +49,7 @@ func New(
 	txnOperator client.TxnOperator,
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
-	queryService queryservice.QueryService,
+	queryClient qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	aicm *defines.AutoIncrCacheManager) *Process {
@@ -68,7 +69,7 @@ func New(
 			Limit: VectorLimit,
 		},
 		valueScanBatch: make(map[[16]byte]*batch.Batch),
-		QueryService:   queryService,
+		QueryClient:    queryClient,
 		Hakeeper:       hakeeper,
 		UdfService:     udfService,
 	}
@@ -97,7 +98,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.SessionInfo = p.SessionInfo
 	proc.FileService = p.FileService
 	proc.IncrService = p.IncrService
-	proc.QueryService = p.QueryService
+	proc.QueryClient = p.QueryClient
 	proc.Hakeeper = p.Hakeeper
 	proc.UdfService = p.UdfService
 	proc.UnixTime = p.UnixTime
@@ -105,6 +106,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.LockService = p.LockService
 	proc.Aicm = p.Aicm
 	proc.LoadTag = p.LoadTag
+	proc.MessageBoard = p.MessageBoard
 
 	proc.prepareParams = p.prepareParams
 	proc.resolveVariableFunc = p.resolveVariableFunc
@@ -279,7 +281,7 @@ func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch
 	return bat, nil
 }
 
-func (proc *Process) AppendBatchFromOffset(dst *batch.Batch, src *batch.Batch, offset int) (*batch.Batch, int, error) {
+func (proc *Process) AppendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int) (*batch.Batch, int, error) {
 	var err error
 	if dst == nil {
 		dst, err = proc.NewBatchFromSrc(src, 0)
@@ -288,7 +290,7 @@ func (proc *Process) AppendBatchFromOffset(dst *batch.Batch, src *batch.Batch, o
 		}
 	}
 	if dst.RowCount() >= DefaultBatchSize {
-		panic("can't call AppendBatchFromOffset when batch is full!")
+		panic("can't call AppendToFixedSizeFromOffset when batch is full!")
 	}
 	if len(dst.Vecs) != len(src.Vecs) {
 		return nil, 0, moerr.NewInternalError(proc.Ctx, "unexpected error happens in batch append")
@@ -301,6 +303,7 @@ func (proc *Process) AppendBatchFromOffset(dst *batch.Batch, src *batch.Batch, o
 		if err = dst.Vecs[i].UnionBatch(src.Vecs[i], int64(offset), length, nil, proc.Mp()); err != nil {
 			return dst, 0, err
 		}
+		dst.Vecs[i].SetSorted(false)
 	}
 	dst.AddRowCount(length)
 	return dst, length, nil
@@ -335,7 +338,7 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 	}
 	for _, agg := range bat.Aggs {
 		if agg != nil {
-			agg.Free(proc.Mp())
+			agg.Free()
 		}
 	}
 	bat.Vecs = nil

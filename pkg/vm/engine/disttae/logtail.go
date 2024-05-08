@@ -16,6 +16,10 @@ package disttae
 
 import (
 	"context"
+	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -28,43 +32,65 @@ func consumeEntry(
 	ctx context.Context,
 	primarySeqnum int,
 	engine *Engine,
+	cache *cache.CatalogCache,
 	state *logtailreplay.PartitionState,
 	e *api.Entry,
 ) error {
+	start := time.Now()
+	defer func() {
+		v2.LogtailUpdatePartitonConsumeLogtailOneEntryDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	var packer *types.Packer
 	put := engine.packerPool.Get(&packer)
 	defer put.Put()
 
-	state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer)
+	if state != nil {
+		t0 := time.Now()
+		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer)
+		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
+	}
 
 	if logtailreplay.IsMetaTable(e.TableName) {
 		return nil
 	}
 
+	t0 := time.Now()
 	if e.EntryType == api.Entry_Insert {
 		switch e.TableId {
 		case catalog.MO_TABLES_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			engine.catalog.InsertTable(bat)
+			if cache != nil {
+				cache.InsertTable(bat)
+			}
 		case catalog.MO_DATABASE_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			engine.catalog.InsertDatabase(bat)
+			if cache != nil {
+				cache.InsertDatabase(bat)
+			}
 		case catalog.MO_COLUMNS_ID:
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			engine.catalog.InsertColumns(bat)
+			if cache != nil {
+				cache.InsertColumns(bat)
+			}
 		}
+		v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
 		return nil
 	}
 
 	switch e.TableId {
 	case catalog.MO_TABLES_ID:
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		engine.catalog.DeleteTable(bat)
+		if cache != nil {
+			cache.DeleteTable(bat)
+		}
 	case catalog.MO_DATABASE_ID:
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		engine.catalog.DeleteDatabase(bat)
+		if cache != nil {
+			cache.DeleteDatabase(bat)
+		}
 	}
+	v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
 
 	return nil
 }

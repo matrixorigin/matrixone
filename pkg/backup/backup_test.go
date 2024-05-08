@@ -51,6 +51,7 @@ func TestBackupData(t *testing.T) {
 	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
 	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer db.Close()
+	defer opts.Fs.Close()
 
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 10
@@ -91,6 +92,7 @@ func TestBackupData(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
+	defer service.Close()
 	for _, data := range bats {
 		txn, rel := db.GetRelation()
 		v := testutil.GetSingleSortKeyValue(data, schema, 2)
@@ -121,7 +123,7 @@ func TestBackupData(t *testing.T) {
 	for _, location := range files {
 		locations = append(locations, location)
 	}
-	err = execBackup(ctx, db.Opts.Fs, service, locations)
+	err = execBackup(ctx, db.Opts.Fs, service, locations, 1, types.TS{}, "full")
 	assert.Nil(t, err)
 	db.Opts.Fs = service
 	db.Restart(ctx)
@@ -231,7 +233,7 @@ func Test_saveTaeFilesList(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.wantErr(t, saveTaeFilesList(tt.args.ctx, tt.args.Fs, tt.args.taeFiles, tt.args.backupTime), fmt.Sprintf("saveTaeFilesList(%v, %v, %v, %v)", tt.args.ctx, tt.args.Fs, tt.args.taeFiles, tt.args.backupTime))
+			tt.wantErr(t, saveTaeFilesList(tt.args.ctx, tt.args.Fs, tt.args.taeFiles, tt.args.backupTime, tt.args.backupTime, ""), fmt.Sprintf("saveTaeFilesList(%v, %v, %v, %v)", tt.args.ctx, tt.args.Fs, tt.args.taeFiles, tt.args.backupTime))
 		})
 	}
 }
@@ -544,8 +546,9 @@ func TestBackup(t *testing.T) {
 	tf1 := getTempFile(t, "", "t1", "test_t1")
 
 	bs := &tree.BackupStart{
-		IsS3: false,
-		Dir:  tDir,
+		IsS3:        false,
+		Dir:         tDir,
+		Parallelism: "10",
 	}
 
 	//backup configs

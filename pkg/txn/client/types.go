@@ -32,21 +32,10 @@ type TxnOption func(*txnOperator)
 // TxnClientCreateOption options for create txn
 type TxnClientCreateOption func(*txnClient)
 
-// TxnClient transaction client, the operational entry point for transactions.
-// Each CN node holds one instance of TxnClient.
-type TxnClient interface {
+// TxnTimestampAware transaction timestamp aware
+type TxnTimestampAware interface {
 	// Minimum Active Transaction Timestamp
 	MinTimestamp() timestamp.Timestamp
-	// New returns a TxnOperator to handle read and write operation for a
-	// transaction.
-	New(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (TxnOperator, error)
-	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
-	// be from a CN coordinator txn operator.
-	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
-	// AbortAllRunningTxn rollback all running transactions. but still keep their workspace to avoid panic.
-	AbortAllRunningTxn()
-	// Close closes client.sender
-	Close() error
 	// WaitLogTailAppliedAt wait log tail applied at ts
 	WaitLogTailAppliedAt(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error)
 	// GetLatestCommitTS get latest commit timestamp
@@ -55,18 +44,37 @@ type TxnClient interface {
 	SyncLatestCommitTS(timestamp.Timestamp)
 	// GetSyncLatestCommitTSTimes returns times of sync latest commit ts
 	GetSyncLatestCommitTSTimes() uint64
+}
+
+type TxnAction interface {
+	// AbortAllRunningTxn rollback all running transactions. but still keep their workspace to avoid panic.
+	AbortAllRunningTxn()
 	// Pause the txn client to prevent new txn from being created.
 	Pause()
 	// Resume the txn client to allow new txn to be created.
 	Resume()
+}
+
+// TxnClient transaction client, the operational entry point for transactions.
+// Each CN node holds one instance of TxnClient.
+type TxnClient interface {
+	TxnTimestampAware
+	TxnAction
+
+	// New returns a TxnOperator to handle read and write operation for a
+	// transaction.
+	New(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (TxnOperator, error)
+	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
+	// be from a CN coordinator txn operator.
+	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
+	// Close closes client.sender
+	Close() error
 	// RefreshExpressionEnabled return true if refresh expression feature enabled
 	RefreshExpressionEnabled() bool
 	// CNBasedConsistencyEnabled return true if cn based consistency feature enabled
 	CNBasedConsistencyEnabled() bool
-
 	// IterTxns iter all txns
 	IterTxns(func(TxnOverview) bool)
-
 	// GetState returns the current state of txn client.
 	GetState() TxnState
 }
@@ -93,8 +101,14 @@ type TxnOperator interface {
 	// GetOverview returns txn overview
 	GetOverview() TxnOverview
 
+	// CloneSnapshotOp clone a read-only snapshot op from parent txn operator
+	CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
+	IsSnapOp() bool
+
 	// Txn returns the current txn metadata
 	Txn() txn.TxnMeta
+	// TxnOptions returns the current txn options
+	TxnOptions() txn.TxnOptions
 	// TxnRef returns pointer of current txn metadata. In RC mode, txn's snapshot ts
 	// will updated before statement executed.
 	TxnRef() *txn.TxnMeta
@@ -111,6 +125,8 @@ type TxnOperator interface {
 	UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error
 	// SnapshotTS returns the snapshot timestamp of the transaction.
 	SnapshotTS() timestamp.Timestamp
+	// CreateTS returns the creation timestamp of the txnOperator.
+	CreateTS() timestamp.Timestamp
 	// Status returns the current transaction status.
 	Status() txn.TxnStatus
 	// ApplySnapshot CN coordinator applies a snapshot of the non-coordinator's transaction
@@ -157,18 +173,18 @@ type TxnOperator interface {
 	ResetRetry(bool)
 	IsRetry() bool
 
-	SetOpenLog(bool)
-	IsOpenLog() bool
-
 	// AppendEventCallback append callback. All append callbacks will be called sequentially
 	// if event happen.
-	AppendEventCallback(event EventType, callbacks ...func(txn.TxnMeta))
+	AppendEventCallback(event EventType, callbacks ...func(TxnEvent))
 
 	// Debug send debug request to DN, after use, SendResult needs to call the Release
 	// method.
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 
-	PKDedupCount() int
+	NextSequence() uint64
+
+	EnterRunSql()
+	ExitRunSql()
 }
 
 // TxnIDGenerator txn id generator
@@ -229,7 +245,8 @@ type Workspace interface {
 	// RollbackLastStatement rollback the last statement.
 	RollbackLastStatement(ctx context.Context) error
 
-	WriteOffset() uint64
+	UpdateSnapshotWriteOffset()
+	GetSnapshotWriteOffset() int
 
 	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
 	Adjust(writeOffset uint64) error
@@ -239,6 +256,10 @@ type Workspace interface {
 
 	IncrSQLCount()
 	GetSQLCount() uint64
+
+	CloneSnapshotWS() Workspace
+
+	BindTxnOp(op TxnOperator)
 }
 
 // TxnOverview txn overview include meta and status
@@ -262,4 +283,14 @@ type Lock struct {
 	Rows [][]byte
 	// Options lock options, include lock type(row|range) and lock mode
 	Options lock.LockOptions
+}
+
+type TxnEvent struct {
+	Event     EventType
+	Txn       txn.TxnMeta
+	TableID   uint64
+	Err       error
+	Sequence  uint64
+	Cost      time.Duration
+	CostEvent bool
 }

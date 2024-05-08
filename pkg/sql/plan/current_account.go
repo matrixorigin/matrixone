@@ -36,42 +36,42 @@ func (builder *QueryBuilder) buildCurrentAccount(tbl *tree.TableFunction, ctx *B
 			Cols: []*plan.ColDef{
 				{
 					Name: "account_name",
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:    int32(types.T_varchar),
 						Width: types.MaxVarcharLen,
 					},
 				},
 				{
 					Name: "account_id",
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:    int32(types.T_uint32),
 						Width: types.MaxVarcharLen,
 					},
 				},
 				{
 					Name: "user_name",
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:    int32(types.T_varchar),
 						Width: types.MaxVarcharLen,
 					},
 				},
 				{
 					Name: "user_id",
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:    int32(types.T_uint32),
 						Width: types.MaxVarcharLen,
 					},
 				},
 				{
 					Name: "role_name",
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:    int32(types.T_varchar),
 						Width: types.MaxVarcharLen,
 					},
 				},
 				{
 					Name: "role_id",
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:    int32(types.T_uint32),
 						Width: types.MaxVarcharLen,
 					},

@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -68,6 +67,8 @@ const (
 
 // Source contains information of a relation which will be used in execution.
 type Source struct {
+	isConst bool
+
 	PushdownId             uint64
 	PushdownAddr           string
 	SchemaName             string
@@ -76,12 +77,14 @@ type Source struct {
 	Attributes             []string
 	R                      engine.Reader
 	Bat                    *batch.Batch
-	Expr                   *plan.Expr
+	FilterExpr             *plan.Expr // todo: change this to []*plan.Expr
+	node                   *plan.Node
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
 	AccountId              *plan.PubInfo
 
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+	OrderBy            []*plan.OrderBySpec // for ordered scan
 }
 
 // Col is the information of attribute
@@ -196,7 +199,7 @@ func (a *anaylze) Nodes() []*process.AnalyzeInfo {
 	return a.analInfos
 }
 
-func (a anaylze) Name() string {
+func (a anaylze) TypeName() string {
 	return "compile.anaylze"
 }
 
@@ -223,11 +226,10 @@ type Compile struct {
 	pn   *plan.Plan
 	info plan2.ExecInfo
 
-	u any
-	//fill is a result writer runs a callback function.
-	//fill will be called when result data is ready.
-	fill func(any, *batch.Batch) error
-	//affectRows stores the number of rows affected while insert / update / delete
+	// fill is a result writer runs a callback function.
+	// fill will be called when result data is ready.
+	fill func(*batch.Batch) error
+	// affectRows stores the number of rows affected while insert / update / delete
 	affectRows *atomic.Uint64
 	// cn address
 	addr string
@@ -238,7 +240,8 @@ type Compile struct {
 	// uid the user who initiated the sql.
 	uid string
 	// sql sql text.
-	sql string
+	sql       string
+	originSQL string
 
 	anal *anaylze
 	// e db engine instance.
@@ -246,6 +249,8 @@ type Compile struct {
 	ctx context.Context
 	// proc stores the execution context.
 	proc *process.Process
+
+	MessageBoard *process.MessageBoard
 
 	cnList engine.Nodes
 	// ast
@@ -256,8 +261,6 @@ type Compile struct {
 	nodeRegs map[[2]int32]*process.WaitRegister
 	stepRegs map[int32][][2]int32
 
-	runtimeFilterReceiverMap map[int32]*runtimeFilterReceiver
-
 	lock *sync.RWMutex
 
 	isInternal bool
@@ -267,25 +270,14 @@ type Compile struct {
 
 	buildPlanFunc func() (*plan2.Plan, error)
 	startAt       time.Time
-	fuzzy         *fuzzyCheck
-	// use for release
-	createdFuzzy []*fuzzyCheck
+	// use for duplicate check
+	fuzzys []*fuzzyCheck
 
 	needLockMeta bool
 	metaTables   map[string]struct{}
 	disableRetry bool
 
 	lastAllocID int32
-}
-
-// runtimeFilterSender is in hashbuild.Argument and fuzzyFilter.Arguement
-type runtimeFilterReceiver struct {
-	size int
-	ch   chan *pipeline.RuntimeFilter
-}
-
-type runtimeFilterSenderSetter interface {
-	SetRuntimeFilterSenders([]*colexec.RuntimeFilterChan)
 }
 
 type RemoteReceivRegInfo struct {
@@ -301,7 +293,12 @@ type fuzzyCheck struct {
 	condition string
 
 	// handle with primary key(a, b, ...) or unique key (a, b, ...)
-	isCompound   bool
+	isCompound bool
+
+	// handle with cases like create a unique index for existed table, or alter add unique key
+	// and the type of unique key is compound
+	onlyInsertHidden bool
+
 	col          *plan.ColDef
 	compoundCols []*plan.ColDef
 

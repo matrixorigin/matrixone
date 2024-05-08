@@ -208,11 +208,7 @@ true
 true
 null
 select (col1,col2) < (col1,0) from row01;
-(col1, col2) < (col1, 0)
-true
-true
-false
-null
+invalid argument cast to int, bad value uc32qr3
 select (col1,col2,0) > (col1,col2,col1) from row01;
 invalid argument cast to int, bad value a
 select (col1,col2) = (col1,col2) from row01;
@@ -226,17 +222,9 @@ col1    col2
 b     09920011
 c    3ru82q ijf
 select col1,(col1,col2) <> (col1,0) from row01;
-col1    (col1, col2) != (col1, 0)
-a    true
-b    true
-c    true
-null    true
+invalid argument cast to int, bad value uc32qr3
 select col1,(col1,col2) != (col1,0) from row01;
-col1    (col1, col2) != (col1, 0)
-a    true
-b    true
-c    true
-null    true
+invalid argument cast to int, bad value uc32qr3
 select (concat_ws(col1,col2),col2) >= (col1,col2) from row01;
 (concat_ws(col1, col2), col2) >= (col1, col2)
 false
@@ -278,17 +266,9 @@ col1    col2
 b     09920011
 c    3ru82q ijf
 select (col1),(reverse(col1),col2) <> (col1,0) from row01;
-col1    (reverse(col1), col2) != (col1, 0)
-a    true
-b    true
-c    true
-null    true
+invalid argument cast to int, bad value uc32qr3
 select col1,(reverse(col1),col2) != (col1,0) from row01;
-col1    (reverse(col1), col2) != (col1, 0)
-a    true
-b    true
-c    true
-null    true
+invalid argument cast to int, bad value uc32qr3
 drop table row01;
 drop table if exists row02;
 create table row02(col1 int,col2 tinyint unsigned,col3 smallint,col4 decimal(20,10),col5 float);
