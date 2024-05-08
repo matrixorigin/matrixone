@@ -106,7 +106,7 @@ static void mi_stats_add(mi_stats_t* stats, const mi_stats_t* src) {
   mi_stat_add(&stats->segments_cache, &src->segments_cache, 1);
   mi_stat_add(&stats->normal, &src->normal, 1);
   mi_stat_add(&stats->huge, &src->huge, 1);
-  mi_stat_add(&stats->giant, &src->giant, 1);
+  mi_stat_add(&stats->large, &src->large, 1);
 
   mi_stat_counter_add(&stats->pages_extended, &src->pages_extended, 1);
   mi_stat_counter_add(&stats->mmap_calls, &src->mmap_calls, 1);
@@ -117,7 +117,8 @@ static void mi_stats_add(mi_stats_t* stats, const mi_stats_t* src) {
   mi_stat_counter_add(&stats->page_no_retire, &src->page_no_retire, 1);
   mi_stat_counter_add(&stats->searches, &src->searches, 1);
   mi_stat_counter_add(&stats->normal_count, &src->normal_count, 1);
-  mi_stat_counter_add(&stats->huge_count, &src->huge_count, 1);  
+  mi_stat_counter_add(&stats->huge_count, &src->huge_count, 1);
+  mi_stat_counter_add(&stats->large_count, &src->large_count, 1);
 #if MI_STAT>1
   for (size_t i = 0; i <= MI_BIN_HUGE; i++) {
     if (src->normal_bins[i].allocated > 0 || src->normal_bins[i].freed > 0) {
@@ -313,9 +314,11 @@ static void _mi_stats_print(mi_stats_t* stats, mi_output_fun* out0, void* arg0) 
   #endif
   #if MI_STAT
   mi_stat_print(&stats->normal, "normal", (stats->normal_count.count == 0 ? 1 : -(stats->normal.allocated / stats->normal_count.count)), out, arg);
-  mi_stat_print(&stats->huge, "huge", (stats->huge_count.count == 0 ? 1 : -(stats->huge.allocated / stats->huge_count.count)), out, arg);  
+  mi_stat_print(&stats->large, "large", (stats->large_count.count == 0 ? 1 : -(stats->large.allocated / stats->large_count.count)), out, arg);
+  mi_stat_print(&stats->huge, "huge", (stats->huge_count.count == 0 ? 1 : -(stats->huge.allocated / stats->huge_count.count)), out, arg);
   mi_stat_count_t total = { 0,0,0,0 };
   mi_stat_add(&total, &stats->normal, 1);
+  mi_stat_add(&total, &stats->large, 1);
   mi_stat_add(&total, &stats->huge, 1);
   mi_stat_print(&total, "total", 1, out, arg);
   #endif
@@ -452,7 +455,7 @@ mi_decl_export void mi_process_info(size_t* elapsed_msecs, size_t* user_msecs, s
   pinfo.page_faults    = 0;
 
   _mi_prim_process_info(&pinfo);
-  
+
   if (elapsed_msecs!=NULL)  *elapsed_msecs  = (pinfo.elapsed < 0 ? 0 : (pinfo.elapsed < (mi_msecs_t)PTRDIFF_MAX ? (size_t)pinfo.elapsed : PTRDIFF_MAX));
   if (user_msecs!=NULL)     *user_msecs     = (pinfo.utime < 0 ? 0 : (pinfo.utime < (mi_msecs_t)PTRDIFF_MAX ? (size_t)pinfo.utime : PTRDIFF_MAX));
   if (system_msecs!=NULL)   *system_msecs   = (pinfo.stime < 0 ? 0 : (pinfo.stime < (mi_msecs_t)PTRDIFF_MAX ? (size_t)pinfo.stime : PTRDIFF_MAX));

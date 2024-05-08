@@ -324,7 +324,7 @@ func (entry *TableEntry) GetLastestSchema() *Schema {
 func (entry *TableEntry) GetVisibleSchema(txn txnif.TxnReader) *Schema {
 	entry.RLock()
 	defer entry.RUnlock()
-	node := entry.GetVisibleNode(txn)
+	node := entry.GetVisibleNodeLocked(txn)
 	if node != nil {
 		return node.BaseNode.Schema
 	}
@@ -335,7 +335,7 @@ func (entry *TableEntry) GetVersionSchema(ver uint32) *Schema {
 	entry.RLock()
 	defer entry.RUnlock()
 	var ret *Schema
-	entry.LoopChain(func(m *MVCCNode[*TableMVCCNode]) bool {
+	entry.LoopChainLocked(func(m *MVCCNode[*TableMVCCNode]) bool {
 		if cur := m.BaseNode.Schema.Version; cur > ver {
 			return true
 		} else if cur == ver {
@@ -490,7 +490,7 @@ func (entry *TableEntry) StringLockedWithLevel(level common.PPLevel) string {
 	name := entry.GetLastestSchemaLocked().Name
 	if level <= common.PPL1 {
 		return fmt.Sprintf("TBL[%d][name=%s][C@%s,D@%s]",
-			entry.ID, name, entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAt().ToString())
+			entry.ID, name, entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAtLocked().ToString())
 	}
 	return fmt.Sprintf("TBL%s[name=%s, id=%d]", entry.BaseEntryImpl.StringLocked(), name, entry.ID)
 }
@@ -562,7 +562,7 @@ func (entry *TableEntry) DropObjectEntry(id *types.Objectid, txn txnif.AsyncTxn)
 	}
 	obj.Lock()
 	defer obj.Unlock()
-	needWait, waitTxn := obj.NeedWaitCommitting(txn.GetStartTS())
+	needWait, waitTxn := obj.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {
 		obj.Unlock()
 		waitTxn.GetTxnState(true)
@@ -675,9 +675,7 @@ func (entry *TableEntry) IsActive() bool {
 func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	dbEntry := entry.GetDB()
 
-	dbEntry.RLock()
 	terminated, ts = dbEntry.TryGetTerminatedTS(true)
-	dbEntry.RUnlock()
 
 	return
 }
@@ -685,18 +683,18 @@ func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, req *apipb.AlterTableReq) (isNewNode bool, newSchema *Schema, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
+	needWait, txnToWait := entry.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {
 		entry.Unlock()
 		txnToWait.GetTxnState(true)
 		entry.Lock()
 	}
-	err = entry.CheckConflict(txn)
+	err = entry.CheckConflictLocked(txn)
 	if err != nil {
 		return
 	}
 	var node *MVCCNode[*TableMVCCNode]
-	isNewNode, node = entry.getOrSetUpdateNode(txn)
+	isNewNode, node = entry.getOrSetUpdateNodeLocked(txn)
 
 	newSchema = node.BaseNode.Schema
 	if isNewNode {
@@ -739,13 +737,13 @@ func (entry *TableEntry) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Sche
 func (entry *TableEntry) GetVisibilityAndName(txn txnif.TxnReader) (visible, dropped bool, name string) {
 	entry.RLock()
 	defer entry.RUnlock()
-	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
+	needWait, txnToWait := entry.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {
 		entry.RUnlock()
 		txnToWait.GetTxnState(true)
 		entry.RLock()
 	}
-	un := entry.GetVisibleNode(txn)
+	un := entry.GetVisibleNodeLocked(txn)
 	if un == nil {
 		return
 	}

@@ -99,6 +99,9 @@ bool _mi_arena_memid_is_suitable(mi_memid_t memid, mi_arena_id_t request_arena_i
   }
 }
 
+bool _mi_arena_memid_is_os_allocated(mi_memid_t memid) {
+  return (memid.memkind == MI_MEM_OS);
+}
 
 /* -----------------------------------------------------------
   Arena allocations get a (currently) 16-bit memory id where the

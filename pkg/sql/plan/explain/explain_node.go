@@ -500,7 +500,7 @@ func (ndesc *NodeDescribeImpl) GetPartitionPruneInfo(ctx context.Context, option
 }
 
 func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf := bytes.NewBuffer(make([]byte, 0, 512))
 	buf.WriteString("Filter Cond: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true

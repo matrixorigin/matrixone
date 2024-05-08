@@ -781,7 +781,7 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 func (e *TestEngine) CheckObjectInfo(onlyCheckName bool) {
 	p := &catalog.LoopProcessor{}
 	p.ObjectFn = func(se *catalog.ObjectEntry) error {
-		se.LoopChain(func(node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
+		se.LoopChainLocked(func(node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
 			if se.GetTable().GetDB().ID == pkgcatalog.MO_CATALOG_ID {
 				return true
 			}
