@@ -1,8 +1,6 @@
 -- prepare
 drop account if exists bvt_result_count;
 create account bvt_result_count admin_name 'admin' identified by '111';
-create database if not exists bvt_result_count;
-create table if not exists bvt_result_count.result (name varchar(1024), `timestamp` DATETIME, start_time DATETIME, end_time DATETIME);
 
 -- case 1
 -- @session:id=2&user=bvt_result_count:admin&password=111
@@ -106,11 +104,8 @@ use system;
 
 -- case 2: 通过dump 账号测试 create account/drop account
 -- test create/drop account
-set @start_ts=now();
 /* cloud_user */create account test_tenant_1 admin_name 'test_account' identified by '111';
 /* cloud_user */drop account test_tenant_1;
-set @end_ts=now();
-insert into bvt_result_count.result values('case2', now(), @start_ts, @end_ts);
 -- case 2: END
 
 -- result check
@@ -128,10 +123,7 @@ select statement, result_count from statement_info where account="bvt_result_cou
 -- @bvt:issue
 
 -- check case 2
-set @start_ts=(select start_time from bvt_result_count.result where name = 'case2' order by `timestamp` desc limit 1);
-set @end_ts=(select end_time from bvt_result_count.result where name = 'case2' order by `timestamp` desc limit 1);
--- @ignore:2,3
-select statement, result_count, concat(@start_ts, ', ', @end_ts) time_range from statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != 'Running' and aggr_count < 1 and request_at between @start_ts and @end_ts order by request_at desc limit 2;
+select statement, result_count from statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != 'Running' and aggr_count < 1 order by request_at desc limit 2;
 
 -- cleanup
 drop account if exists bvt_result_count;
