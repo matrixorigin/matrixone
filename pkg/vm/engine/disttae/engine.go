@@ -280,10 +280,11 @@ func (e *Engine) Database(ctx context.Context, name string,
 			latest := e.getLatestCatalogCache()
 			lstart, lend := latest.GetDuration()
 			sstart, send := catalog.GetDuration()
-			logutil.Infof("xxxx getOrCreateSnapCatalogCache: err:%v, txn:%s, "+
+			logutil.Infof("xxxx getOrCreateSnapCatalogCache: err:%v, txn:%s, parent:%s"+
 				"latestCatalog:%v-[%s_%s], catalog:%v-[%s_%s]",
 				err,
 				txn.op.Txn().DebugString(),
+				txn.op.Parent().Txn().DebugString(),
 				latest,
 				lstart.ToTimestamp().DebugString(),
 				lend.ToTimestamp().DebugString(),

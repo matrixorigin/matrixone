@@ -104,6 +104,7 @@ type TxnOperator interface {
 	// CloneSnapshotOp clone a read-only snapshot op from parent txn operator
 	CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 	IsSnapOp() bool
+	Parent() TxnOperator
 
 	// Txn returns the current txn metadata
 	Txn() txn.TxnMeta

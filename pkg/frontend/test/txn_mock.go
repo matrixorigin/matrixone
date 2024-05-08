@@ -657,6 +657,20 @@ func (mr *MockTxnOperatorMockRecorder) NextSequence() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NextSequence", reflect.TypeOf((*MockTxnOperator)(nil).NextSequence))
 }
 
+// Parent mocks base method.
+func (m *MockTxnOperator) Parent() client.TxnOperator {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Parent")
+	ret0, _ := ret[0].(client.TxnOperator)
+	return ret0
+}
+
+// Parent indicates an expected call of Parent.
+func (mr *MockTxnOperatorMockRecorder) Parent() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Parent", reflect.TypeOf((*MockTxnOperator)(nil).Parent))
+}
+
 // Read mocks base method.
 func (m *MockTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	m.ctrl.T.Helper()

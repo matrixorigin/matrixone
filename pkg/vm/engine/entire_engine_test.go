@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -352,6 +353,10 @@ func (o *testOperator) Txn() txn.TxnMeta {
 }
 
 func (o *testOperator) IsSnapOp() bool {
+	panic("should not call")
+}
+
+func (o *testOperator) Parent() client.TxnOperator {
 	panic("should not call")
 }
 

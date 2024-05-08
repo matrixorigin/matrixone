@@ -17,7 +17,9 @@ package memorystorage
 import (
 	"context"
 	"fmt"
+
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -105,6 +107,10 @@ type StorageTxnOperator struct {
 }
 
 func (s *StorageTxnOperator) IsSnapOp() bool {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) Parent() client.TxnOperator {
 	panic("unimplemented")
 }
 
