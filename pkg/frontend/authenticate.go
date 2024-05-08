@@ -1529,18 +1529,6 @@ const (
 
 	deleteRoleFromMoRolePrivsFormat = `delete from mo_catalog.mo_role_privs where role_id = %d;`
 
-	// grant ownership on database
-	grantOwnershipOnDatabaseFormat = `grant ownership on database %s to %s;`
-
-	// grant ownership on table
-	grantOwnershipOnTableFormat = `grant ownership on table %s.%s to %s;`
-
-	// revoke ownership on database owner
-	revokeOwnershipFromDatabaseFormat = `revoke ownership on database %s from %s;`
-
-	// revoke ownership on table owner
-	revokeOwnershipFromTableFormat = `revoke ownership on table %s.%s from %s;`
-
 	// get the owner of the database
 	getOwnerOfDatabaseFormat = `select owner from mo_catalog.mo_database where datname = '%s';`
 
@@ -2114,26 +2102,6 @@ func isClusterTable(dbName, name string) bool {
 		}
 	}
 	return false
-}
-
-// getSqlForGrantOwnershipOnDatabase get the sql for grant ownership on database
-func getSqlForGrantOwnershipOnDatabase(dbName, roleName string) string {
-	return fmt.Sprintf(grantOwnershipOnDatabaseFormat, dbName, roleName)
-}
-
-// getSqlForGrantOwnershipOnTable get the sql for grant ownership on database
-func getSqlForGrantOwnershipOnTable(dbName, tbName, roleName string) string {
-	return fmt.Sprintf(grantOwnershipOnTableFormat, dbName, tbName, roleName)
-}
-
-// getSqlForRevokeOwnershipFromDatabase get the sql for revoke ownership on database
-func getSqlForRevokeOwnershipFromDatabase(dbName, roleName string) string {
-	return fmt.Sprintf(revokeOwnershipFromDatabaseFormat, dbName, roleName)
-}
-
-// getSqlForGrantOwnershipOnTable get the sql for grant ownership on database
-func getSqlForRevokeOwnershipFromTable(dbName, tbName, roleName string) string {
-	return fmt.Sprintf(revokeOwnershipFromTableFormat, dbName, tbName, roleName)
 }
 
 // getSqlForGetOwnerOfDatabase get the sql for get the owner of the database
