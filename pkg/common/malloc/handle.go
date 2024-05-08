@@ -14,8 +14,10 @@
 
 package malloc
 
+import "unsafe"
+
 type Handle struct {
-	slice []byte
+	ptr   unsafe.Pointer
 	class int
 }
 

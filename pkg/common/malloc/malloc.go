@@ -111,29 +111,27 @@ func classAllocate(class int) *Handle {
 	}
 	select {
 	case handle := <-shards[pid][class]:
-		clear(handle.slice)
+		clear(unsafe.Slice((*byte)(handle.ptr), classSizes[handle.class]))
 		return handle
 	default:
 		slice := make([]byte, classSizes[class])
 		return &Handle{
-			slice: slice,
+			ptr:   unsafe.Pointer(unsafe.SliceData(slice)),
 			class: class,
 		}
 	}
 }
 
-func Alloc(n int, target *[]byte) *Handle {
+func Alloc(n int) (unsafe.Pointer, *Handle) {
 	if n == 0 {
-		return dumbHandle
+		return nil, dumbHandle
 	}
 	class := requestSizeToClass(n)
 	if class == -1 {
-		*target = make([]byte, n)
-		return dumbHandle
+		return unsafe.Pointer(unsafe.SliceData(make([]byte, n))), dumbHandle
 	}
 	handle := classAllocate(class)
-	*target = handle.slice[:n:n]
-	return handle
+	return handle.ptr, handle
 }
 
 func AllocTyped[T any](target **T) *Handle {
@@ -145,7 +143,7 @@ func AllocTyped[T any](target **T) *Handle {
 		return dumbHandle
 	}
 	handle := classAllocate(class)
-	*target = (*T)(unsafe.Pointer(unsafe.SliceData(handle.slice)))
+	*target = (*T)(handle.ptr)
 	return handle
 }
 

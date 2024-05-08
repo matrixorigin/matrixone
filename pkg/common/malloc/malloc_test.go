@@ -14,12 +14,15 @@
 
 package malloc
 
-import "testing"
+import (
+	"testing"
+	"unsafe"
+)
 
 func TestAllocFree(t *testing.T) {
-	var bs []byte
 	for i := 0; i < 1<<19; i++ {
-		handle := Alloc(i, &bs)
+		ptr, handle := Alloc(i)
+		bs := unsafe.Slice((*byte)(ptr), i)
 		if len(bs) != i {
 			t.Fatal()
 		}
