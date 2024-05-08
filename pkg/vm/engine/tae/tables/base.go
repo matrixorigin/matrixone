@@ -112,12 +112,13 @@ func (blk *baseObject) tryGetMVCC() *updates.ObjectMVCCHandle {
 func (blk *baseObject) getOrCreateMVCC() *updates.ObjectMVCCHandle {
 	return blk.meta.GetTable().GetOrCreateTombstone(blk.meta, DefaultTOmbstoneFactory).(*updates.ObjectMVCCHandle)
 }
-func (blk *baseObject) GCInMemeoryDeletesByTS(ts types.TS) {
+
+func (blk *baseObject) GCInMemeoryDeletesByTSForTest(ts types.TS) {
 	mvcc := blk.tryGetMVCC()
 	if mvcc == nil {
 		return
 	}
-	mvcc.UpgradeDeleteChainByTS(ts)
+	mvcc.UpgradeDeleteChainByTSLocked(ts)
 }
 
 func (blk *baseObject) UpgradeAllDeleteChain() {
@@ -776,7 +777,7 @@ func (blk *baseObject) TryDeleteByDeltaloc(
 	blk.Lock()
 	defer blk.Unlock()
 	blkMVCC := blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID)
-	return blkMVCC.TryDeleteByDeltaloc(txn, deltaLoc, true)
+	return blkMVCC.TryDeleteByDeltalocLocked(txn, deltaLoc, true)
 }
 
 func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {
@@ -852,7 +853,7 @@ func (blk *baseObject) inMemoryCollectDeletesInRange(blkID uint16, start, end ty
 	}
 	deleteChain := blkMvcc.GetDeleteChain()
 	deletes, err =
-		deleteChain.CollectDeletesInRange(start, end, blk.RWMutex)
+		deleteChain.CollectDeletesInRangeWithLock(start, end, blk.RWMutex)
 	return
 }
 
@@ -1066,7 +1067,7 @@ func (blk *baseObject) UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLo
 	blk.Lock()
 	defer blk.Unlock()
 	mvcc := blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID)
-	return mvcc.UpdateDeltaLoc(txn, deltaLoc, false)
+	return mvcc.UpdateDeltaLocLocked(txn, deltaLoc, false)
 }
 
 func (blk *baseObject) GetDeltaPersistedTS() types.TS {

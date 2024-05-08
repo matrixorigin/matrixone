@@ -15,12 +15,13 @@
 package db
 
 import (
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"sync/atomic"
 )
 
 type ScannerOp interface {
@@ -128,7 +129,7 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	}
 	tableEntry.RLock()
 	// this table is creating or altering
-	if !tableEntry.IsCommitted() {
+	if !tableEntry.IsCommittedLocked() {
 		tableEntry.RUnlock()
 		return moerr.GetOkStopCurrRecur()
 	}
@@ -154,7 +155,7 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 
 	// Skip uncommitted entries
 	// TODO: consider the case: add metaloc, is it possible to see a constructing object?
-	if !objectEntry.IsCommitted() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
+	if !objectEntry.IsCommittedLocked() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
 		return moerr.GetOkStopCurrRecur()
 	}
 
