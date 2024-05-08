@@ -12,3 +12,4 @@ select md5('中文');
 select md5('0x45df');
 select md5('#$%^&*()!++={}|\~');
 select md5('flijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsfflijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsf');
+select md5(concat('aife',' 883fdg'));

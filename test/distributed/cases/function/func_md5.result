@@ -40,3 +40,6 @@ f71510a000e9f8ec1aa7dd10e2fc61cf
 select md5('flijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsfflijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsf');
 md5(flijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsfflijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsf)
 630b86b6f72337e121f64962284b8510
+select md5(concat('aife',' 883fdg'));
+md5(concat(aife,  883fdg))
+34b22bd4f84cbbd547f5d0a03f6805cd
