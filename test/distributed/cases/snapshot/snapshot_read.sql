@@ -1,4 +1,3 @@
--- @bvt:issue#14784
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
@@ -182,4 +181,3 @@ drop snapshot sp_01;
 drop database if exists snapshot_read;
 -- @session
 drop account if exists test_account;
--- @bvt:issue

@@ -16,14 +16,16 @@ package disttae
 
 import (
 	"context"
+	"strconv"
+	"strings"
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"strconv"
-	"strings"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -314,8 +316,8 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 	//TODO:: insert mo_tables, or mo_colunms, or mo_database, mo_catalog into snapCata.
 	//       ref to engine.init.
 	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, 0, nil)
-	if err != nil {
-		return nil, err
+	if err != nil || ckps == nil {
+		return nil, moerr.NewInternalErrorNoCtx("Load checkpoints failed for snapshot read")
 	}
 	//Notice that checkpoints must contain only one or zero global checkpoint
 	//followed by zero or multi continuous incremental checkpoints.
