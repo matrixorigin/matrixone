@@ -291,7 +291,8 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 // CollectDeletesInRange collects [startTs, endTs)
 func (chain *DeleteChain) CollectDeletesInRangeWithLock(
 	startTs, endTs types.TS,
-	rwlocker *sync.RWMutex) (mask *nulls.Bitmap, err error) {
+	rwlocker *sync.RWMutex,
+) (mask *nulls.Bitmap, err error) {
 	for {
 		needWaitFound := false
 		mask = nil
