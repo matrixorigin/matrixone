@@ -23,6 +23,8 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/tidwall/btree"
 )
 
 func NewCatalog() *CatalogCache {
@@ -59,6 +60,12 @@ func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
 	defer cc.mu.Unlock()
 	cc.mu.start = start
 	cc.mu.end = end
+}
+
+func (cc *CatalogCache) GetDuration() (types.TS, types.TS) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	return cc.mu.start, cc.mu.end
 }
 
 var _ = (&CatalogCache{}).UpdateStart

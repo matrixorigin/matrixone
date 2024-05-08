@@ -273,18 +273,36 @@ func (e *Engine) Database(ctx context.Context, name string,
 	if !txn.op.IsSnapOp() {
 		catalog = e.getLatestCatalogCache()
 	} else {
-		if name == "test" {
-			logutil.Infof("xxxx Database-getOrCreateSnapCatalogCache: txn:%s", txn.op.Txn().DebugString())
-		}
 		catalog, err = e.getOrCreateSnapCatalogCache(
 			ctx,
 			types.TimestampToTS(txn.op.SnapshotTS()))
+		if name == "snapshot_read_2024" {
+			latest := e.getLatestCatalogCache()
+			lstart, lend := latest.GetDuration()
+			sstart, send := catalog.GetDuration()
+			logutil.Infof("xxxx getOrCreateSnapCatalogCache: err:%v, txn:%s, "+
+				"latestCatalog:%v-[%s_%s], catalog:%v-[%s_%s]",
+				err,
+				txn.op.Txn().DebugString(),
+				latest,
+				lstart.ToTimestamp().DebugString(),
+				lend.ToTimestamp().DebugString(),
+				catalog,
+				sstart.ToTimestamp().DebugString(),
+				send.ToTimestamp().DebugString(),
+			)
+
+		}
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	if ok := catalog.GetDatabase(item); !ok {
+		if name == "snapshot_read_2024" {
+			logutil.Infof("xxxx GetDatabase: txn:%s, catalog:%v, item:%v",
+				txn.op.Txn().DebugString(), catalog, item)
+		}
 		return nil, moerr.GetOkExpectedEOB()
 	}
 
