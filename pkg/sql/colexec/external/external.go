@@ -457,7 +457,7 @@ func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) 
 		if err != nil {
 			return 0, err
 		}
-		if len(fields) != len(cols) {
+		if len(fields) < len(cols) {
 			continue
 		}
 		if isLegalLine(param, cols, fields) {
@@ -789,11 +789,12 @@ func makeBatch(param *ExternalParam, batchSize int, proc *process.Process) (bat 
 	for i := range param.Attrs {
 		typ := makeType(&param.Cols[i].Typ, param.ParallelLoad)
 		bat.Vecs[i] = proc.GetVector(typ)
-		err = bat.Vecs[i].PreExtend(batchSize, proc.GetMPool())
-		if err != nil {
-			bat.Clean(proc.GetMPool())
-			return nil, err
-		}
+	}
+	if err = bat.PreExtend(proc.GetMPool(), batchSize); err != nil {
+		bat.Clean(proc.GetMPool())
+		return nil, err
+	}
+	for i := range bat.Vecs {
 		bat.Vecs[i].SetLength(batchSize)
 	}
 	return bat, nil

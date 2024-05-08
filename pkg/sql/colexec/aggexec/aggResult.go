@@ -50,10 +50,10 @@ func (r *basicResult) init(
 
 func (r *basicResult) extend(more int) (oldLen, newLen int, err error) {
 	oldLen, newLen = r.res.Length(), r.res.Length()+more
-	if err = r.res.PreExtend(newLen, r.mp); err != nil {
+	if err = r.res.PreExtend(more, r.mp); err != nil {
 		return oldLen, oldLen, err
 	}
-	if err = r.ess.PreExtend(newLen, r.mp); err != nil {
+	if err = r.ess.PreExtend(more, r.mp); err != nil {
 		return oldLen, oldLen, err
 	}
 	r.res.SetLength(newLen)
@@ -67,11 +67,11 @@ func (r *basicResult) extend(more int) (oldLen, newLen int, err error) {
 }
 
 func (r *basicResult) preAllocate(more int) (err error) {
-	oldLen, newLen := r.res.Length(), r.res.Length()+more
-	if err = r.res.PreExtend(newLen, r.mp); err != nil {
+	oldLen := r.res.Length()
+	if err = r.res.PreExtend(more, r.mp); err != nil {
 		return err
 	}
-	if err = r.ess.PreExtend(newLen, r.mp); err != nil {
+	if err = r.ess.PreExtend(more, r.mp); err != nil {
 		return err
 	}
 	r.res.SetLength(oldLen)

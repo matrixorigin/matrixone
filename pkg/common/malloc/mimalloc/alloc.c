@@ -28,7 +28,7 @@ terms of the MIT license. A copy of the license can be found in the file
 // Fast allocation in a page: just pop from the free list.
 // Fall back to generic allocation only if the list is empty.
 // Note: in release mode the (inlined) routine is about 7 instructions with a single test.
-extern inline void* _mi_page_malloc(mi_heap_t* heap, mi_page_t* page, size_t size, bool zero) mi_attr_noexcept 
+extern inline void* _mi_page_malloc(mi_heap_t* heap, mi_page_t* page, size_t size, bool zero) mi_attr_noexcept
 {
   mi_assert_internal(page->block_size == 0 /* empty heap */ || mi_page_block_size(page) >= size);
   mi_block_t* const block = page->free;
@@ -61,7 +61,7 @@ extern inline void* _mi_page_malloc(mi_heap_t* heap, mi_page_t* page, size_t siz
     }
     else {
       _mi_memzero_aligned(block, page->block_size - MI_PADDING_SIZE);
-    }    
+    }
   }
 
   #if (MI_DEBUG>0) && !MI_TRACK_ENABLED && !MI_TSAN
@@ -74,7 +74,7 @@ extern inline void* _mi_page_malloc(mi_heap_t* heap, mi_page_t* page, size_t siz
 
   #if (MI_STAT>0)
   const size_t bsize = mi_page_usable_block_size(page);
-  if (bsize <= MI_LARGE_OBJ_SIZE_MAX) {
+  if (bsize <= MI_MEDIUM_OBJ_SIZE_MAX) {
     mi_heap_stat_increase(heap, normal, bsize);
     mi_heap_stat_counter_increase(heap, normal_count, 1);
     #if (MI_STAT>1)
@@ -115,9 +115,9 @@ static inline mi_decl_restrict void* mi_heap_malloc_small_zero(mi_heap_t* heap, 
   #if (MI_PADDING)
   if (size == 0) { size = sizeof(void*); }
   #endif
-  
+
   mi_page_t* page = _mi_heap_get_free_small_page(heap, size + MI_PADDING_SIZE);
-  void* const p = _mi_page_malloc(heap, page, size + MI_PADDING_SIZE, zero);  
+  void* const p = _mi_page_malloc(heap, page, size + MI_PADDING_SIZE, zero);
   mi_track_malloc(p,size,zero);
 
   #if MI_STAT>1
@@ -585,7 +585,7 @@ void* _mi_externs[] = {
   (void*)&mi_zalloc_small,
   (void*)&mi_heap_malloc,
   (void*)&mi_heap_zalloc,
-  (void*)&mi_heap_malloc_small
+  (void*)&mi_heap_malloc_small,
   // (void*)&mi_heap_alloc_new,
   // (void*)&mi_heap_alloc_new_n
 };
