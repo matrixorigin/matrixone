@@ -992,18 +992,6 @@ func (catalog *Catalog) txnGetNodeByName(
 	return node.TxnGetNodeLocked(txn, "")
 }
 
-func (catalog *Catalog) GetDBEntryByName(
-	tenantID uint32,
-	name string,
-	txn txnif.TxnReader) (db *DBEntry, err error) {
-	n, err := catalog.txnGetNodeByName(tenantID, name, txn)
-	if err != nil {
-		return
-	}
-	db = n.GetPayload()
-	return
-}
-
 func (catalog *Catalog) TxnGetDBEntryByName(name string, txn txnif.AsyncTxn) (*DBEntry, error) {
 	n, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn)
 	if err != nil {
@@ -1062,13 +1050,8 @@ func (catalog *Catalog) DropDBEntryByID(id uint64, txn txnif.AsyncTxn) (newEntry
 }
 
 func (catalog *Catalog) CreateDBEntry(name, createSql, datTyp string, txn txnif.AsyncTxn) (*DBEntry, error) {
-	var err error
-	catalog.Lock()
-	defer catalog.Unlock()
-	entry := NewDBEntry(catalog, name, createSql, datTyp, txn)
-	err = catalog.AddEntryLocked(entry, txn, false)
-
-	return entry, err
+	id := catalog.NextDB()
+	return catalog.CreateDBEntryWithID(name, createSql, datTyp, id, txn)
 }
 
 func (catalog *Catalog) CreateDBEntryWithID(name, createSql, datTyp string, id uint64, txn txnif.AsyncTxn) (*DBEntry, error) {
