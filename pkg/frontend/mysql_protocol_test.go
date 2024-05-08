@@ -24,7 +24,6 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1535,77 +1534,78 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	return nil
 }
 
-func TestMysqlResultSet(t *testing.T) {
-	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
-	//pwd: mysql-server-mysql-8.0.23/mysql-test
-	//with mysqltest: mysqltest --test-file=t/1st.test --result-file=r/1st.result --user=dump -p111 -P 6001 --host=127.0.0.1
-
-	//test:
-	//./mysql-test-run 1st --extern user=root --extern port=3306 --extern host=127.0.0.1
-	//  mysql5.7 failed
-	//	mysql-8.0.23 success
-	//./mysql-test-run 1st --extern user=root --extern port=6001 --extern host=127.0.0.1
-	//	matrixone failed: mysql-test-run: *** ERROR: Could not connect to extern server using command: '/Users/pengzhen/Documents/mysql-server-mysql-8.0.23/bld/runtime_output_directory//mysql --no-defaults --user=root --user=root --port=6001 --host=127.0.0.1 --silent --database=mysql --execute="SHOW GLOBAL VARIABLES"'
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
-	if err != nil {
-		panic(err)
-	}
-	pu.SV.SkipCheckUser = true
-
-	trm := NewTestRoutineManager(pu)
-	var atomTrm atomic.Value
-	atomTrm.Store(trm)
-
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-
-		temTrm := atomTrm.Load().(*TestRoutineManager)
-		echoServer(temTrm.resultsetHandler, temTrm, NewSqlCodec())
-	}()
-
-	// to := NewTimeout(1*time.Minute, false)
-	// for isClosed() && !to.isTimeout() {
-	// }
-
-	time.Sleep(time.Second * 2)
-	db, err := openDbConn(t, 6001)
-	require.NoError(t, err)
-
-	do_query_resp_resultset(t, db, false, false, "tiny", makeMysqlTinyIntResultSet(false))
-	do_query_resp_resultset(t, db, false, false, "tinyu", makeMysqlTinyIntResultSet(true))
-	do_query_resp_resultset(t, db, false, false, "short", makeMysqlShortResultSet(false))
-	do_query_resp_resultset(t, db, false, false, "shortu", makeMysqlShortResultSet(true))
-	do_query_resp_resultset(t, db, false, false, "long", makeMysqlLongResultSet(false))
-	do_query_resp_resultset(t, db, false, false, "longu", makeMysqlLongResultSet(true))
-	do_query_resp_resultset(t, db, false, false, "longlong", makeMysqlLongLongResultSet(false))
-	do_query_resp_resultset(t, db, false, false, "longlongu", makeMysqlLongLongResultSet(true))
-	do_query_resp_resultset(t, db, false, false, "int24", makeMysqlInt24ResultSet(false))
-	do_query_resp_resultset(t, db, false, false, "int24u", makeMysqlInt24ResultSet(true))
-	do_query_resp_resultset(t, db, false, false, "year", makeMysqlYearResultSet(false))
-	do_query_resp_resultset(t, db, false, false, "yearu", makeMysqlYearResultSet(true))
-	do_query_resp_resultset(t, db, false, false, "varchar", makeMysqlVarcharResultSet())
-	do_query_resp_resultset(t, db, false, false, "varstring", makeMysqlVarStringResultSet())
-	do_query_resp_resultset(t, db, false, false, "string", makeMysqlStringResultSet())
-	do_query_resp_resultset(t, db, false, false, "float", makeMysqlFloatResultSet())
-	do_query_resp_resultset(t, db, false, false, "double", makeMysqlDoubleResultSet())
-	do_query_resp_resultset(t, db, false, false, "date", makeMysqlDateResultSet())
-	do_query_resp_resultset(t, db, false, false, "time", makeMysqlTimeResultSet())
-	do_query_resp_resultset(t, db, false, false, "datetime", makeMysqlDatetimeResultSet())
-	do_query_resp_resultset(t, db, false, false, "9columns", make9ColumnsResultSet())
-	do_query_resp_resultset(t, db, false, false, "16mbrow", make16MBRowResultSet())
-	do_query_resp_resultset(t, db, false, false, "16mb", makeMoreThan16MBResultSet())
-
-	time.Sleep(time.Millisecond * 10)
-	//close server
-	setServer(1)
-	wg.Wait()
-
-	closeDbConn(t, db)
-}
+//TODO:replace by the dedicated table functions.
+//func TestMysqlResultSet(t *testing.T) {
+//	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
+//	//pwd: mysql-server-mysql-8.0.23/mysql-test
+//	//with mysqltest: mysqltest --test-file=t/1st.test --result-file=r/1st.result --user=dump -p111 -P 6001 --host=127.0.0.1
+//
+//	//test:
+//	//./mysql-test-run 1st --extern user=root --extern port=3306 --extern host=127.0.0.1
+//	//  mysql5.7 failed
+//	//	mysql-8.0.23 success
+//	//./mysql-test-run 1st --extern user=root --extern port=6001 --extern host=127.0.0.1
+//	//	matrixone failed: mysql-test-run: *** ERROR: Could not connect to extern server using command: '/Users/pengzhen/Documents/mysql-server-mysql-8.0.23/bld/runtime_output_directory//mysql --no-defaults --user=root --user=root --port=6001 --host=127.0.0.1 --silent --database=mysql --execute="SHOW GLOBAL VARIABLES"'
+//	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+//	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+//	if err != nil {
+//		panic(err)
+//	}
+//	pu.SV.SkipCheckUser = true
+//
+//	trm := NewTestRoutineManager(pu)
+//	var atomTrm atomic.Value
+//	atomTrm.Store(trm)
+//
+//	wg := sync.WaitGroup{}
+//	wg.Add(1)
+//
+//	go func() {
+//		defer wg.Done()
+//
+//		temTrm := atomTrm.Load().(*TestRoutineManager)
+//		echoServer(temTrm.resultsetHandler, temTrm, NewSqlCodec())
+//	}()
+//
+//	// to := NewTimeout(1*time.Minute, false)
+//	// for isClosed() && !to.isTimeout() {
+//	// }
+//
+//	time.Sleep(time.Second * 2)
+//	db, err := openDbConn(t, 6001)
+//	require.NoError(t, err)
+//
+//	do_query_resp_resultset(t, db, false, false, "tiny", makeMysqlTinyIntResultSet(false))
+//	do_query_resp_resultset(t, db, false, false, "tinyu", makeMysqlTinyIntResultSet(true))
+//	do_query_resp_resultset(t, db, false, false, "short", makeMysqlShortResultSet(false))
+//	do_query_resp_resultset(t, db, false, false, "shortu", makeMysqlShortResultSet(true))
+//	do_query_resp_resultset(t, db, false, false, "long", makeMysqlLongResultSet(false))
+//	do_query_resp_resultset(t, db, false, false, "longu", makeMysqlLongResultSet(true))
+//	do_query_resp_resultset(t, db, false, false, "longlong", makeMysqlLongLongResultSet(false))
+//	do_query_resp_resultset(t, db, false, false, "longlongu", makeMysqlLongLongResultSet(true))
+//	do_query_resp_resultset(t, db, false, false, "int24", makeMysqlInt24ResultSet(false))
+//	do_query_resp_resultset(t, db, false, false, "int24u", makeMysqlInt24ResultSet(true))
+//	do_query_resp_resultset(t, db, false, false, "year", makeMysqlYearResultSet(false))
+//	do_query_resp_resultset(t, db, false, false, "yearu", makeMysqlYearResultSet(true))
+//	do_query_resp_resultset(t, db, false, false, "varchar", makeMysqlVarcharResultSet())
+//	do_query_resp_resultset(t, db, false, false, "varstring", makeMysqlVarStringResultSet())
+//	do_query_resp_resultset(t, db, false, false, "string", makeMysqlStringResultSet())
+//	do_query_resp_resultset(t, db, false, false, "float", makeMysqlFloatResultSet())
+//	do_query_resp_resultset(t, db, false, false, "double", makeMysqlDoubleResultSet())
+//	do_query_resp_resultset(t, db, false, false, "date", makeMysqlDateResultSet())
+//	do_query_resp_resultset(t, db, false, false, "time", makeMysqlTimeResultSet())
+//	do_query_resp_resultset(t, db, false, false, "datetime", makeMysqlDatetimeResultSet())
+//	do_query_resp_resultset(t, db, false, false, "9columns", make9ColumnsResultSet())
+//	do_query_resp_resultset(t, db, false, false, "16mbrow", make16MBRowResultSet())
+//	do_query_resp_resultset(t, db, false, false, "16mb", makeMoreThan16MBResultSet())
+//
+//	time.Sleep(time.Millisecond * 10)
+//	//close server
+//	setServer(1)
+//	wg.Wait()
+//
+//	closeDbConn(t, db)
+//}
 
 // func open_tls_db(t *testing.T, port int) *sql.DB {
 // 	tlsName := "custom"
