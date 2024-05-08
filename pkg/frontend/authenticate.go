@@ -32,36 +32,33 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-
 	"github.com/tidwall/btree"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type TenantInfo struct {
@@ -875,36 +872,237 @@ var (
 		"mo_snapshots":                0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
-	createAutoTableSql           = MoCatalogMoAutoIncrTable
+	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
+		table_id   bigint unsigned, 
+		col_name     varchar(770), 
+		col_index      int,
+		offset     bigint unsigned, 
+		step       bigint unsigned,  
+		primary key(table_id, col_name)
+	);`, catalog.MOAutoIncrTable)
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
 	// mo_indexes table does not have `auto_increment` column,
-	createMoIndexesSql = MoCatalogMoIndexes
+	createMoIndexesSql = fmt.Sprintf(`create table %s(
+				id 			bigint unsigned not null,
+				table_id 	bigint unsigned not null,
+				database_id bigint unsigned not null,
+				name 		varchar(64) not null,
+				type        varchar(11) not null,
+				algo	varchar(11),
+    			algo_table_type varchar(11),
+    			algo_params varchar(2048),
+				is_visible  tinyint not null,
+				hidden      tinyint not null,
+				comment 	varchar(2048) not null,
+				column_name    varchar(256) not null,
+				ordinal_position  int unsigned  not null,
+				options     text,
+				index_table_name varchar(5000),
+				primary key(id, column_name)
+			);`, catalog.MO_INDEXES)
 
-	createMoForeignKeysSql = MoCatalogMoForeignKeys
+	createMoForeignKeysSql = fmt.Sprintf(`create table %s(
+				constraint_name varchar(5000) not null,
+				constraint_id BIGINT UNSIGNED not null,
+				db_name varchar(5000) not null,
+				db_id BIGINT UNSIGNED not null,
+				table_name varchar(5000) not null,
+				table_id BIGINT UNSIGNED not null,
+				column_name varchar(256) not null,
+				column_id BIGINT UNSIGNED not null,
+				refer_db_name varchar(5000) not null,
+				refer_db_id BIGINT UNSIGNED not null,
+				refer_table_name varchar(5000) not null,
+				refer_table_id BIGINT UNSIGNED not null,
+				refer_column_name varchar(256) not null,
+				refer_column_id BIGINT UNSIGNED not null,
+				on_delete varchar(128) not null,
+				on_update varchar(128) not null,
+		
+				primary key(
+					constraint_name,
+					constraint_id,
+					db_name,
+					db_id,
+					table_name,
+					table_id,
+					column_name,
+					column_id,
+					refer_db_name,
+					refer_db_id,
+					refer_table_name,
+					refer_table_id,
+					refer_column_name,
+					refer_column_id)
+			);`, catalog.MOForeignKeys)
 
-	createMoTablePartitionsSql = MoCatalogMoTablePartitions
+	createMoTablePartitionsSql = fmt.Sprintf(`CREATE TABLE %s (
+			  table_id bigint unsigned NOT NULL,
+			  database_id bigint unsigned not null,
+			  number smallint unsigned NOT NULL,
+			  name varchar(64) NOT NULL,
+        	  partition_type varchar(50) NOT NULL,
+              partition_expression varchar(2048) NULL,
+			  description_utf8 text,
+			  comment varchar(2048) NOT NULL,
+			  options text,
+			  partition_table_name varchar(1024) NOT NULL,
+			  PRIMARY KEY table_id (table_id, name)
+			);`, catalog.MO_TABLE_PARTITIONS)
 
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
-		MoCatalogMoUser,
-		MoCatalogMoAccount,
-		MoCatalogMoRole,
-		MoCatalogMoUserGrant,
-		MoCatalogMoRoleGrant,
-		MoCatalogMoRolePrivs,
-		MoCatalogMoUserDefinedFunction,
-		MoCatalogMoMysqlCompatibilityMode,
-		MoCatalogMoSnapshots,
-		MoCatalogMoPubs,
-		MoCatalogMoStoredProcedure,
-		MoCatalogMoStages,
-		MoCatalogMoSessions,
-		MoCatalogMoConfigurations,
-		MoCatalogMoLocks,
-		MoCatalogMoVariables,
-		MoCatalogMoTransactions,
-		MoCatalogMoCache,
+		`create table mo_user(
+				user_id int signed auto_increment primary key,
+				user_host varchar(100),
+				user_name varchar(300) unique key,
+				authentication_string varchar(100),
+				status   varchar(8),
+				created_time  timestamp,
+				expired_time timestamp,
+				login_type  varchar(16),
+				creator int signed,
+				owner int signed,
+				default_role int signed
+    		);`,
+		`create table mo_account(
+				account_id int signed auto_increment primary key,
+				account_name varchar(300) unique key,
+				admin_name varchar(300),
+				status varchar(300),
+				created_time timestamp,
+				comments varchar(256),
+				version bigint unsigned auto_increment,
+				suspended_time timestamp default NULL,
+				create_version varchar(50) default '1.2.0'
+			);`,
+		`create table mo_role(
+				role_id int signed auto_increment primary key,
+				role_name varchar(300) unique key,
+				creator int signed,
+				owner int signed,
+				created_time timestamp,
+				comments text
+			);`,
+		`create table mo_user_grant(
+				role_id int signed,
+				user_id int signed,
+				granted_time timestamp,
+				with_grant_option bool,
+				primary key(role_id, user_id)
+			);`,
+		`create table mo_role_grant(
+				granted_id int signed,
+				grantee_id int signed,
+				operation_role_id int signed,
+				operation_user_id int signed,
+				granted_time timestamp,
+				with_grant_option bool,
+				primary key(granted_id, grantee_id)
+			);`,
+		`create table mo_role_privs(
+				role_id int signed,
+				role_name  varchar(100),
+				obj_type  varchar(16),
+				obj_id bigint unsigned,
+				privilege_id int,
+				privilege_name varchar(100),
+				privilege_level varchar(100),
+				operation_user_id int unsigned,
+				granted_time timestamp,
+				with_grant_option bool,
+				primary key(role_id, obj_type, obj_id, privilege_id, privilege_level)
+			);`,
+		`create table mo_user_defined_function(
+				function_id int auto_increment,
+				name     varchar(100) unique key,
+				owner  int unsigned,
+				args     json,
+				retType  varchar(20),
+				body     text,
+				language varchar(20),
+				db       varchar(100),
+				definer  varchar(50),
+				modified_time timestamp,
+				created_time  timestamp,
+				type    varchar(10),
+				security_type varchar(10), 
+				comment  varchar(5000),
+				character_set_client varchar(64),
+				collation_connection varchar(64),
+				database_collation varchar(64),
+				primary key(function_id)
+			);`,
+		`create table mo_mysql_compatibility_mode(
+				configuration_id int auto_increment,
+				account_id int,
+				account_name varchar(300),
+				dat_name     varchar(5000) default NULL,
+				variable_name  varchar(300),
+				variable_value varchar(5000),
+				system_variables bool,
+				primary key(configuration_id)
+			);`,
+
+		`create table mo_snapshots(
+			snapshot_id uuid unique key,
+			sname varchar(64) primary key,
+			ts bigint,
+			level enum('cluster','account','database','table'),
+	        account_name varchar(300),
+			database_name varchar(5000),
+			table_name  varchar(5000),
+			obj_id bigint unsigned
+			);`,
+		`create table mo_pubs(
+    		pub_name varchar(64) primary key,
+    		database_name varchar(5000),
+    		database_id bigint unsigned,
+    		all_table bool,
+    		table_list text,
+    		account_list text,
+    		created_time timestamp,
+    		update_time timestamp default NULL,
+    		owner int unsigned,
+    		creator int unsigned,
+    		comment text
+    		);`,
+		`create table mo_stored_procedure(
+				proc_id int auto_increment,
+				name     varchar(100) unique key,
+				creator  int unsigned,
+				args     text,
+				body     text,
+				db       varchar(100),
+				definer  varchar(50),
+				modified_time timestamp,
+				created_time  timestamp,
+				type    varchar(10),
+				security_type varchar(10), 
+				comment  varchar(5000),
+				character_set_client varchar(64),
+				collation_connection varchar(64),
+				database_collation varchar(64),
+				primary key(proc_id)
+			);`,
+		`create table mo_stages(
+				stage_id int unsigned auto_increment,
+				stage_name varchar(64) unique key,
+				url text,
+				stage_credentials text,
+				stage_status varchar(64),
+				created_time timestamp,
+				comment text,
+				primary key(stage_id)
+			);`,
+
+		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`,
+		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`,
+		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp`,
+		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode`,
+		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp`,
+		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp`,
 	}
 
 	//drop tables for the tenant
@@ -952,16 +1150,6 @@ var (
 		stage_status,
 		created_time,
 		comment) values ('%s','%s', '%s', '%s','%s', '%s');`
-
-	insertIntoMoSnapshots = `insert into mo_catalog.mo_snapshots(
-		snapshot_id,
-		sname,
-		ts,
-		level,
-		account_name,
-		database_name,
-		table_name,
-		obj_id ) values ('%s', '%s', %d, '%s', '%s', '%s', '%s', %d);`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -1015,16 +1203,18 @@ var (
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
 				account_name,
+                admin_name,
 				status,
 				created_time,
 				comments,
-                create_version) values (%d,"%s","%s","%s","%s","%s");`
+                create_version) values (%d,"%s","%s","%s","%s","%s","%s");`
 	initMoAccountWithoutIDFormat = `insert into mo_catalog.mo_account(
 				account_name,
+                admin_name,
 				status,
 				created_time,
 				comments,
-				create_version) values ("%s","%s","%s","%s","%s");`
+				create_version) values ("%s","%s","%s","%s","%s","%s");`
 	initMoRoleFormat = `insert into mo_catalog.mo_role(
 				role_id,
 				role_name,
@@ -1394,21 +1584,13 @@ const (
 
 	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = '%s' order by stage_id;`
 
-	dropSnapshotFormat = `delete from mo_catalog.mo_snapshots where sname = '%s' order by snapshot_id;`
+	updateStageUrlFormat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s' order by stage_id;`
 
-	updateStageUrlFotmat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageCredentialsFormat = `update mo_catalog.mo_stages set stage_credentials = '%s'  where stage_name = '%s' order by stage_id;`
 
-	updateStageCredentialsFotmat = `update mo_catalog.mo_stages set stage_credentials = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageStatusFormat = `update mo_catalog.mo_stages set stage_status = '%s'  where stage_name = '%s' order by stage_id;`
 
-	updateStageStatusFotmat = `update mo_catalog.mo_stages set stage_status = '%s'  where stage_name = '%s' order by stage_id;`
-
-	updateStageCommentFotmat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
-
-	checkSnapshotFormat = `select snapshot_id from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`
-
-	getSnapshotTsWithSnapshotNameFormat = `select ts from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`
-
-	checkSnapshotTsFormat = `select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id;`
+	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
 
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
@@ -1481,26 +1663,6 @@ func getSqlForCheckStage(ctx context.Context, stage string) (string, error) {
 	return fmt.Sprintf(checkStageFormat, stage), nil
 }
 
-func getSqlForCheckSnapshot(ctx context.Context, snapshot string) (string, error) {
-	err := inputNameIsInvalid(ctx, snapshot)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkSnapshotFormat, snapshot), nil
-}
-
-func getSqlForGetSnapshotTsWithSnapshotName(ctx context.Context, snapshot string) (string, error) {
-	err := inputNameIsInvalid(ctx, snapshot)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(getSnapshotTsWithSnapshotNameFormat, snapshot), nil
-}
-
-func getSqlForCheckSnapshotTs(snapshotTs int64) string {
-	return fmt.Sprintf(checkSnapshotTsFormat, snapshotTs)
-}
-
 func getSqlForCheckStageStatus(ctx context.Context, status string) string {
 	return fmt.Sprintf(checkStageStatusFormat, status)
 }
@@ -1524,36 +1686,24 @@ func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credential
 	return fmt.Sprintf(insertIntoMoStages, stageName, url, credentials, status, createdTime, comment), nil
 }
 
-func getSqlForCreateSnapshot(ctx context.Context, snapshotId, snapshotName string, ts int64, level, accountName, databaseName, tableName string, objectId uint64) (string, error) {
-	err := inputNameIsInvalid(ctx, snapshotName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(insertIntoMoSnapshots, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName, objectId), nil
-}
-
 func getSqlForDropStage(stageName string) string {
 	return fmt.Sprintf(dropStageFormat, stageName)
 }
 
-func getSqlForDropSnapshot(snapshotName string) string {
-	return fmt.Sprintf(dropSnapshotFormat, snapshotName)
-}
-
 func getsqlForUpdateStageUrl(stageName, url string) string {
-	return fmt.Sprintf(updateStageUrlFotmat, url, stageName)
+	return fmt.Sprintf(updateStageUrlFormat, url, stageName)
 }
 
 func getsqlForUpdateStageCredentials(stageName, credentials string) string {
-	return fmt.Sprintf(updateStageCredentialsFotmat, credentials, stageName)
+	return fmt.Sprintf(updateStageCredentialsFormat, credentials, stageName)
 }
 
 func getsqlForUpdateStageStatus(stageName, status string) string {
-	return fmt.Sprintf(updateStageStatusFotmat, status, stageName)
+	return fmt.Sprintf(updateStageStatusFormat, status, stageName)
 }
 
 func getsqlForUpdateStageComment(stageName, comment string) string {
-	return fmt.Sprintf(updateStageCommentFotmat, comment, stageName)
+	return fmt.Sprintf(updateStageCommentFormat, comment, stageName)
 }
 
 func getSqlForGetAccountName(tenantId uint32) string {
@@ -5869,6 +6019,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
+	case *tree.RestoreSnapShot:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
+		kind = privilegeKindNone
 	case *tree.TruncateTable:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTruncate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -7982,7 +8136,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		}
 	}
 
-	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, status, types.CurrentTimestamp().String2(time.UTC, 0), comment, finalVersion)
+	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, ca.AdminName, status, types.CurrentTimestamp().String2(time.UTC, 0), comment, finalVersion)
 	//execute the insert
 	err = bh.Exec(ctx, initMoAccount)
 	if err != nil {
@@ -9534,248 +9688,6 @@ func postAlterSessionStatus(
 
 	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
-}
-
-func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) error {
-	var err error
-	var snapshotLevel tree.SnapshotLevel
-	var snapshotForAccount string
-	var snapshotName string
-	var snapshotExist bool
-	var snapshotId string
-	var databaseName string
-	var tableName string
-	var sql string
-	var objId uint64
-
-	// check create stage priv
-	err = doCheckRole(ctx, ses)
-	if err != nil {
-		return err
-	}
-
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	// check create snapshot priv
-
-	// 1.only admin can create tenant level snapshot
-	err = doCheckRole(ctx, ses)
-	if err != nil {
-		return err
-	}
-	// 2.only sys can create cluster level snapshot
-	tenantInfo := ses.GetTenantInfo()
-	currentAccount := tenantInfo.GetTenant()
-	snapshotLevel = stmt.Obeject.SLevel.Level
-	if snapshotLevel == tree.SNAPSHOTLEVELCLUSTER && currentAccount != sysAccountName {
-		return moerr.NewInternalError(ctx, "only sys tenant can create cluster level snapshot")
-	}
-
-	// 3.only sys can create tenant level snapshot for other tenant
-	if snapshotLevel == tree.SNAPSHOTLEVELACCOUNT {
-		snapshotForAccount = string(stmt.Obeject.ObjName)
-		if currentAccount != sysAccountName && currentAccount != snapshotForAccount {
-			return moerr.NewInternalError(ctx, "only sys tenant can create tenant level snapshot for other tenant")
-		}
-
-		// check account exists or not and get accountId
-		getAccountIdFunc := func(accountName string) (accountId uint64, rtnErr error) {
-			var erArray []ExecResult
-			sql, rtnErr = getSqlForCheckTenant(ctx, accountName)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
-			bh.ClearExecResultSet()
-			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
-
-			erArray, rtnErr = getResultSet(ctx, bh)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
-
-			if execResultArrayHasData(erArray) {
-				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-					accountId, rtnErr = erArray[0].GetUint64(ctx, i, 0)
-					if rtnErr != nil {
-						return 0, rtnErr
-					}
-				}
-			} else {
-				return 0, moerr.NewInternalError(ctx, "account %s does not exist", accountName)
-			}
-			return accountId, rtnErr
-		}
-
-		// if sys tenant create snapshots for other tenant, get the account id
-		// otherwise, get the account id from tenantInfo
-		if currentAccount == sysAccountName && currentAccount != snapshotForAccount {
-			objId, err = getAccountIdFunc(snapshotForAccount)
-			if err != nil {
-				return err
-			}
-		} else {
-			objId = uint64(tenantInfo.GetTenantID())
-		}
-	}
-
-	// check snapshot exists or not
-	snapshotName = string(stmt.Name)
-	snapshotExist, err = checkSnapShotExistOrNot(ctx, bh, snapshotName)
-	if err != nil {
-		return err
-	}
-	if snapshotExist {
-		if !stmt.IfNotExists {
-			return moerr.NewInternalError(ctx, "snapshot %s already exists", snapshotName)
-		} else {
-			return nil
-		}
-	} else {
-		// insert record to the system table
-
-		// 1. get snapshot id
-		newUUid, err := uuid.NewV7()
-		if err != nil {
-			return err
-		}
-		snapshotId = newUUid.String()
-
-		// 2. get snapshot ts
-		// ts := ses.proc.TxnOperator.SnapshotTS()
-		// snapshotTs = ts.String()
-
-		sql, err = getSqlForCreateSnapshot(ctx, snapshotId, snapshotName, time.Now().UTC().UnixNano(), snapshotLevel.String(), string(stmt.Obeject.ObjName), databaseName, tableName, objId)
-		if err != nil {
-			return err
-		}
-
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
-		}
-	}
-
-	// insert record to the system table
-
-	return err
-}
-
-func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) (err error) {
-	var sql string
-	var stageExist bool
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	// check create stage priv
-	// only admin can drop snapshot for himself
-	err = doCheckRole(ctx, ses)
-	if err != nil {
-		return err
-	}
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	// check stage
-	stageExist, err = checkSnapShotExistOrNot(ctx, bh, string(stmt.Name))
-	if err != nil {
-		return err
-	}
-
-	if !stageExist {
-		if !stmt.IfExists {
-			return moerr.NewInternalError(ctx, "snapshot %s does not exist", string(stmt.Name))
-		} else {
-			// do nothing
-			return err
-		}
-	} else {
-		sql = getSqlForDropSnapshot(string(stmt.Name))
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
-		}
-	}
-	return err
-}
-
-func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotName string) (bool, error) {
-	var sql string
-	var erArray []ExecResult
-	var err error
-	sql, err = getSqlForCheckSnapshot(ctx, snapshotName)
-	if err != nil {
-		return false, err
-	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return false, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return false, err
-	}
-
-	if execResultArrayHasData(erArray) {
-		return true, nil
-	}
-	return false, nil
-}
-
-func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses FeSession, spName string) (snapshotTs int64, err error) {
-	var sql string
-	var erArray []ExecResult
-	err = inputNameIsInvalid(ctx, spName)
-	if err != nil {
-		return 0, err
-	}
-
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	sql, err = getSqlForGetSnapshotTsWithSnapshotName(ctx, spName)
-	if err != nil {
-		return 0, err
-	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return 0, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return 0, err
-	}
-
-	if execResultArrayHasData(erArray) {
-		snapshotTs, err := erArray[0].GetInt64(ctx, 0, 0)
-		if err != nil {
-			return 0, err
-		}
-
-		return snapshotTs, nil
-	} else {
-		return 0, moerr.NewInternalError(ctx, "snapshot %s does not exist", spName)
-	}
 }
 
 func checkTimeStampValid(ctx context.Context, ses FeSession, snapshotTs int64) (bool, error) {

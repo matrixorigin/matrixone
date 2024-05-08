@@ -1,0 +1,148 @@
+use mo_catalog;
+desc mo_locks;
+Field    Type    Null    Key    Default    Extra    Comment
+cn_id    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+table_id    VARCHAR(65535)    YES        null        
+lock_key    VARCHAR(65535)    YES        null        
+lock_content    VARCHAR(65535)    YES        null        
+lock_mode    VARCHAR(65535)    YES        null        
+lock_status    VARCHAR(65535)    YES        null        
+lock_wait    VARCHAR(65535)    YES        null        
+desc mo_cache;
+Field    Type    Null    Key    Default    Extra    Comment
+node_type    VARCHAR(65535)    YES        null        
+node_id    VARCHAR(65535)    YES        null        
+type    VARCHAR(65535)    YES        null        
+used    BIGINT UNSIGNED(0)    YES        null        
+free    BIGINT UNSIGNED(0)    YES        null        
+hit_ratio    FLOAT(0)    YES        null        
+desc mo_transactions;
+Field    Type    Null    Key    Default    Extra    Comment
+cn_id    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+create_ts    VARCHAR(65535)    YES        null        
+snapshot_ts    VARCHAR(65535)    YES        null        
+prepared_ts    VARCHAR(65535)    YES        null        
+commit_ts    VARCHAR(65535)    YES        null        
+txn_mode    VARCHAR(65535)    YES        null        
+isolation    VARCHAR(65535)    YES        null        
+user_txn    VARCHAR(65535)    YES        null        
+txn_status    VARCHAR(65535)    YES        null        
+table_id    VARCHAR(65535)    YES        null        
+lock_key    VARCHAR(65535)    YES        null        
+lock_content    VARCHAR(65535)    YES        null        
+lock_mode    VARCHAR(65535)    YES        null        
+desc mo_variables;
+Field    Type    Null    Key    Default    Extra    Comment
+configuration_id    INT(32)    NO        null        
+account_id    INT(32)    YES        null        
+account_name    VARCHAR(300)    YES        null        
+dat_name    VARCHAR(5000)    YES        null        
+variable_name    VARCHAR(300)    YES        null        
+variable_value    VARCHAR(5000)    YES        null        
+system_variables    BOOL(0)    YES        null        
+desc mo_configurations;
+Field    Type    Null    Key    Default    Extra    Comment
+node_type    VARCHAR(65535)    YES        null        
+node_id    VARCHAR(65535)    YES        null        
+name    VARCHAR(65535)    YES        null        
+current_value    VARCHAR(65535)    YES        null        
+default_value    VARCHAR(65535)    YES        null        
+internal    VARCHAR(65535)    YES        null        
+desc mo_sessions;
+Field    Type    Null    Key    Default    Extra    Comment
+node_id    VARCHAR(65535)    YES        null        
+conn_id    INT UNSIGNED(0)    YES        null        
+session_id    VARCHAR(65535)    YES        null        
+account    VARCHAR(65535)    YES        null        
+user    VARCHAR(65535)    YES        null        
+host    VARCHAR(65535)    YES        null        
+db    VARCHAR(65535)    YES        null        
+session_start    VARCHAR(65535)    YES        null        
+command    VARCHAR(65535)    YES        null        
+info    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+statement_id    VARCHAR(65535)    YES        null        
+statement_type    VARCHAR(65535)    YES        null        
+query_type    VARCHAR(65535)    YES        null        
+sql_source_type    VARCHAR(65535)    YES        null        
+query_start    VARCHAR(65535)    YES        null        
+client_host    VARCHAR(65535)    YES        null        
+role    VARCHAR(65535)    YES        null        
+proxy_host    VARCHAR(65535)    YES        null        
+create account acc100 admin_name='root' identified by '123456';
+use mo_catalog;
+desc mo_locks;
+Field    Type    Null    Key    Default    Extra    Comment
+cn_id    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+table_id    VARCHAR(65535)    YES        null        
+lock_key    VARCHAR(65535)    YES        null        
+lock_content    VARCHAR(65535)    YES        null        
+lock_mode    VARCHAR(65535)    YES        null        
+lock_status    VARCHAR(65535)    YES        null        
+lock_wait    VARCHAR(65535)    YES        null        
+desc mo_cache;
+Field    Type    Null    Key    Default    Extra    Comment
+node_type    VARCHAR(65535)    YES        null        
+node_id    VARCHAR(65535)    YES        null        
+type    VARCHAR(65535)    YES        null        
+used    BIGINT UNSIGNED(0)    YES        null        
+free    BIGINT UNSIGNED(0)    YES        null        
+hit_ratio    FLOAT(0)    YES        null        
+desc mo_transactions;
+Field    Type    Null    Key    Default    Extra    Comment
+cn_id    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+create_ts    VARCHAR(65535)    YES        null        
+snapshot_ts    VARCHAR(65535)    YES        null        
+prepared_ts    VARCHAR(65535)    YES        null        
+commit_ts    VARCHAR(65535)    YES        null        
+txn_mode    VARCHAR(65535)    YES        null        
+isolation    VARCHAR(65535)    YES        null        
+user_txn    VARCHAR(65535)    YES        null        
+txn_status    VARCHAR(65535)    YES        null        
+table_id    VARCHAR(65535)    YES        null        
+lock_key    VARCHAR(65535)    YES        null        
+lock_content    VARCHAR(65535)    YES        null        
+lock_mode    VARCHAR(65535)    YES        null        
+desc mo_variables;
+Field    Type    Null    Key    Default    Extra    Comment
+configuration_id    INT(32)    NO        null        
+account_id    INT(32)    YES        null        
+account_name    VARCHAR(300)    YES        null        
+dat_name    VARCHAR(5000)    YES        null        
+variable_name    VARCHAR(300)    YES        null        
+variable_value    VARCHAR(5000)    YES        null        
+system_variables    BOOL(0)    YES        null        
+desc mo_configurations;
+Field    Type    Null    Key    Default    Extra    Comment
+node_type    VARCHAR(65535)    YES        null        
+node_id    VARCHAR(65535)    YES        null        
+name    VARCHAR(65535)    YES        null        
+current_value    VARCHAR(65535)    YES        null        
+default_value    VARCHAR(65535)    YES        null        
+internal    VARCHAR(65535)    YES        null        
+desc mo_sessions;
+Field    Type    Null    Key    Default    Extra    Comment
+node_id    VARCHAR(65535)    YES        null        
+conn_id    INT UNSIGNED(0)    YES        null        
+session_id    VARCHAR(65535)    YES        null        
+account    VARCHAR(65535)    YES        null        
+user    VARCHAR(65535)    YES        null        
+host    VARCHAR(65535)    YES        null        
+db    VARCHAR(65535)    YES        null        
+session_start    VARCHAR(65535)    YES        null        
+command    VARCHAR(65535)    YES        null        
+info    VARCHAR(65535)    YES        null        
+txn_id    VARCHAR(65535)    YES        null        
+statement_id    VARCHAR(65535)    YES        null        
+statement_type    VARCHAR(65535)    YES        null        
+query_type    VARCHAR(65535)    YES        null        
+sql_source_type    VARCHAR(65535)    YES        null        
+query_start    VARCHAR(65535)    YES        null        
+client_host    VARCHAR(65535)    YES        null        
+role    VARCHAR(65535)    YES        null        
+proxy_host    VARCHAR(65535)    YES        null        
+drop account acc100;

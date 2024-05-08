@@ -17,6 +17,10 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
+
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"time"
 )
 
 type TestFlushBailoutPos1 struct{}
@@ -68,6 +71,7 @@ type flushTableTailTask struct {
 
 	// record the row mapping from deleted blocks to created blocks
 	transMappings *api.BlkTransferBooking
+	doTransfer    bool
 
 	aObjMetas         []*catalog.ObjectEntry
 	delSrcMetas       []*catalog.ObjectEntry
@@ -168,7 +172,11 @@ func NewFlushTableTailTask(
 			task.delSrcHandles = append(task.delSrcHandles, hdl)
 		}
 	}
-	task.transMappings = mergesort.NewBlkTransferBooking(len(task.aObjHandles))
+
+	task.doTransfer = !strings.Contains(task.schema.Comment, pkgcatalog.MO_COMMENT_NO_DEL_HINT)
+	if task.doTransfer {
+		task.transMappings = mergesort.NewBlkTransferBooking(len(task.aObjHandles))
+	}
 
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 
@@ -411,7 +419,9 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 			return
 		}
 	}
-	mergesort.AddSortPhaseMapping(task.transMappings, objIdx, rowCntBeforeApplyDelete, deletes, sortMapping)
+	if task.doTransfer {
+		mergesort.AddSortPhaseMapping(task.transMappings, objIdx, rowCntBeforeApplyDelete, deletes, sortMapping)
+	}
 	return
 }
 
@@ -474,7 +484,9 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 				return err
 			}
 		}
-		mergesort.CleanTransMapping(task.transMappings)
+		if task.doTransfer {
+			mergesort.CleanTransMapping(task.transMappings)
+		}
 		return nil
 	}
 
@@ -510,7 +522,10 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	var releaseF func()
 	var mapping []uint32
 	if schema.HasSortKey() {
-		writtenBatches, releaseF, mapping = mergesort.MergeAObj(task, readedBats, sortKeyPos, schema.BlockMaxRows, len(toLayout))
+		writtenBatches, releaseF, mapping, err = mergesort.MergeAObj(ctx, task, readedBats, sortKeyPos, schema.BlockMaxRows, len(toLayout))
+		if err != nil {
+			return
+		}
 	} else {
 		cnBatches := make([]*batch.Batch, len(readedBats))
 		for i := range readedBats {
@@ -519,7 +534,9 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 		writtenBatches, releaseF = mergesort.ReshapeBatches(cnBatches, fromLayout, toLayout, task)
 	}
 	defer releaseF()
-	mergesort.UpdateMappingAfterMerge(task.transMappings, mapping, toLayout)
+	if task.doTransfer {
+		mergesort.UpdateMappingAfterMerge(task.transMappings, mapping, toLayout)
+	}
 
 	// write!
 	// create new object to hold merged blocks

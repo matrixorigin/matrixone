@@ -103,16 +103,13 @@ a    b    c
 3    ccc    null
 start transaction ;
 create database dis_db_01;
-internal error: CREATE/DROP of database is not supported in transactions
 use dis_db_01;
-invalid database dis_db_01
 begin;
 create table dis_table_04(a int);
 insert into dis_table_04 values (4);
 create table dis_table_04(a int);
 insert into dis_table_04 values (4);
 drop database dis_db_01;
-Can't drop database 'dis_db_01'; database doesn't exist
 delete from dis_table_04 where a=4;
 select * from dis_table_04;
 a
@@ -221,7 +218,6 @@ vvv    2000-09-08 00:00:00
 ccc    null
 begin ;
 create database dis_db_02;
-internal error: CREATE/DROP of database is not supported in transactions
 rollback ;
 commit;
 w-w conflict

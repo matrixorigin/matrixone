@@ -20,13 +20,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -49,7 +52,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if len(dbName) == 0 {
 		dbName = ctx.DefaultDatabase()
 	}
-	_, t := ctx.Resolve(dbName, tblName)
+
+	_, t := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -77,6 +81,12 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
+	if stmt.IsRestore {
+		builder.compCtx.SetRestoreInfo(&RestoreInfo{
+			Tenant:   "xxx",
+			TenantID: stmt.FromDataTenantID,
+		})
+	}
 
 	bindCtx := NewBindContext(builder, nil)
 	ifExistAutoPkCol, insertWithoutUniqueKeyMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
@@ -296,6 +306,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
 	ReCalcQueryStats(builder, query)
+	reCheckifNeedLockWholeTable(builder)
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -369,7 +380,7 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 		isCompound = len(tableDef.Pkey.Names) > 1
 	}
 
-	if !CNPrimaryCheck {
+	if !config.CNPrimaryCheck {
 		return false // break condition 0
 	}
 
