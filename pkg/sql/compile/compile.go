@@ -1146,6 +1146,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		ss = c.compileSort(n, c.compileProjection(n, []*Scope{ds}))
 		return ss, nil
 	case plan.Node_EXTERNAL_SCAN:
+		if n.ObjRef != nil {
+			c.appendMetaTables(n.ObjRef)
+		}
 		node := plan2.DeepCopyNode(n)
 		ss, err = c.compileExternScan(ctx, node)
 		if err != nil {
@@ -1838,28 +1841,23 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	}()
 
 	t := time.Now()
-	// lock table's meta
-	if n.ObjRef != nil && n.TableDef != nil {
-		if err := lockMoTable(c, n.ObjRef.SchemaName, n.TableDef.Name, lock.LockMode_Shared); err != nil {
-			return nil, err
-		}
-	}
-	// lock table, for tables with no primary key, there is no need to lock the data
-	if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() && n.TableDef != nil &&
-		n.TableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
-		db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
-		if err != nil {
-			panic(err)
-		}
-		rel, err := db.Relation(ctx, n.ObjRef.ObjName, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		err = lockTable(c.ctx, c.e, c.proc, rel, n.ObjRef.SchemaName, nil, false)
-		if err != nil {
-			return nil, err
-		}
-	}
+
+	// // lock table, for tables with no primary key, there is no need to lock the data
+	// if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() && n.TableDef != nil &&
+	// 	n.TableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+	// 	db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+	// 	rel, err := db.Relation(ctx, n.ObjRef.ObjName, c.proc)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	err = lockTable(c.ctx, c.e, c.proc, rel, n.ObjRef.SchemaName, nil, false)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// }
 	if time.Since(t) > time.Second {
 		logutil.Infof("lock table %s.%s cost %v", n.ObjRef.SchemaName, n.ObjRef.ObjName, time.Since(t))
 	}
