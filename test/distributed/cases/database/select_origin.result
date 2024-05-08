@@ -1,3 +1,4 @@
+set global keep_user_target_list_in_result = 0;
 create table tt(aa int, bb int, cc int);
 insert into tt values (1, 1, 1);
 select * from tt;
@@ -15,7 +16,7 @@ count(*)
 select COUNT(*)  from tt;
 count(*)
 1
-show variables like 'keep_user_target%';
+show global variables like 'keep_user_target%';
 Variable_name    Value
 keep_user_target_list_in_result    0
 set global keep_user_target_list_in_result = 1;
@@ -40,7 +41,7 @@ COUNT(*)
 select cOuNt(*)  from tt;
 cOuNt(*)
 1
-set global keep_user_target_list_in_result = default;
+set global keep_user_target_list_in_result = 0;
 drop table tt;
 drop table if exists t1;
 create table t1(
@@ -100,5 +101,5 @@ a
 1
 1
 b
-set global keep_user_target_list_in_result = default;
+set global keep_user_target_list_in_result = 0;
 drop table t1;

@@ -512,50 +512,6 @@ func handleDump(requestCtx context.Context, ses FeSession, dump *tree.MoDump) er
 	return doDumpQueryResult(requestCtx, ses.(*Session), dump.ExportParams)
 }
 
-/*
-handle "SELECT @@xxx.yyyy"
-*/
-func handleSelectVariables(ses FeSession, ve *tree.VarExpr, isLastStmt bool) error {
-	var err error = nil
-	mrs := ses.GetMysqlResultSet()
-
-	col := new(MysqlColumn)
-	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col.SetName("@@" + ve.Name)
-	mrs.AddColumn(col)
-
-	row := make([]interface{}, 1)
-	if ve.System {
-		if ve.Global {
-			val, err := ses.GetGlobalVar(ve.Name)
-			if err != nil {
-				return err
-			}
-			row[0] = val
-		} else {
-			val, err := ses.GetSessionVar(ve.Name)
-			if err != nil {
-				return err
-			}
-			row[0] = val
-		}
-	} else {
-		//user defined variable
-		_, val, err := ses.GetUserDefinedVar(ve.Name)
-		if err != nil {
-			return err
-		}
-		if val != nil {
-			row[0] = val.Value
-		} else {
-			row[0] = nil
-		}
-	}
-
-	mrs.AddRow(row)
-	return err
-}
-
 func doCmdFieldList(requestCtx context.Context, ses *Session, _ *InternalCmdFieldList) error {
 	dbName := ses.GetDatabaseName()
 	if dbName == "" {
@@ -667,10 +623,6 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar, sql string) er
 		if system {
 			if global {
 				err = doCheckRole(ctx, ses)
-				if err != nil {
-					return err
-				}
-				err = ses.SetGlobalVar(name, value)
 				if err != nil {
 					return err
 				}
@@ -1554,9 +1506,9 @@ func doKill(ctx context.Context, ses *Session, k *tree.Kill) error {
 	//false: kill a query in a connection
 	idThatKill := uint64(ses.GetConnectionID())
 	if !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection {
-		err = globalRtMgr.kill(ctx, true, idThatKill, k.ConnectionId, "")
+		err = getGlobalRtMgr().kill(ctx, true, idThatKill, k.ConnectionId, "")
 	} else {
-		err = globalRtMgr.kill(ctx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
+		err = getGlobalRtMgr().kill(ctx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
 	}
 	return err
 }
