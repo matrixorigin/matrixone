@@ -1554,9 +1554,9 @@ func doKill(ctx context.Context, ses *Session, k *tree.Kill) error {
 	//false: kill a query in a connection
 	idThatKill := uint64(ses.GetConnectionID())
 	if !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection {
-		err = globalRtMgr.kill(ctx, true, idThatKill, k.ConnectionId, "")
+		err = getGlobalRtMgr().kill(ctx, true, idThatKill, k.ConnectionId, "")
 	} else {
-		err = globalRtMgr.kill(ctx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
+		err = getGlobalRtMgr().kill(ctx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
 	}
 	return err
 }
