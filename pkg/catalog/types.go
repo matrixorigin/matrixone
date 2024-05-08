@@ -29,6 +29,9 @@ const (
 	PrefixPriColName = "__mo_cpkey_"
 	PrefixCBColName  = "__mo_cbkey_"
 
+	// Wildcard characters for partition subtable name
+	PartitionSubTableWildcard = "\\%!\\%%\\%!\\%%"
+
 	ExternalFilePath = "__mo_filepath"
 
 	// MOAutoIncrTable mo auto increment table name
