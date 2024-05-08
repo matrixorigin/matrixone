@@ -259,7 +259,7 @@ select count(*) from snapshot_read.students;
 
 create snapshot sp_01 for account test_account;
 
--- @session:id=6&user=test_account:test_user&password=111
+-- @session:id=4&user=test_account:test_user&password=111
 use snapshot_read;
 drop table students;
 drop table users;
@@ -267,19 +267,19 @@ drop table users;
 
 restore account test_account database snapshot_read from snapshot sp_01 to account test_account;
 
--- @session:id=8&user=test_account:test_user&password=111
+-- @session:id=5&user=test_account:test_user&password=111
 select count(*) from snapshot_read.students;
 select count(*) from snapshot_read.users;
 -- @session
 
 
--- @session:id=10&user=test_account:test_user&password=111
+-- @session:id=6&user=test_account:test_user&password=111
 drop database snapshot_read;
 -- @session
 
 restore account test_account database snapshot_read from snapshot sp_01 to account test_account;
 
--- @session:id=12&user=test_account:test_user&password=111
+-- @session:id=7&user=test_account:test_user&password=111
 select count(*) from snapshot_read.students;
 select count(*) from snapshot_read.users;
 -- @session
@@ -288,8 +288,9 @@ drop snapshot sp_01;
 drop account test_account;
 
 
+-- restore to new account
 create account test_account admin_name = 'test_user' identified by '111';
--- @session:id=13&user=test_account:test_user&password=111
+-- @session:id=8&user=test_account:test_user&password=111
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
@@ -335,7 +336,7 @@ create snapshot sp_01 for account test_account;
 create account test_account_2 admin_name = 'test_user_2' identified by '111';
 restore account test_account database snapshot_read from snapshot sp_01 to account test_account_2;
 
--- @session:id=15&user=test_account_2:test_user_2&password=111
+-- @session:id=9&user=test_account_2:test_user_2&password=111
 select count(*) from snapshot_read.students;
 select count(*) from snapshot_read.users;
 -- @session

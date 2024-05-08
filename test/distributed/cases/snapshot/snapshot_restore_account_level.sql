@@ -430,7 +430,7 @@ drop database snapshot_read;
 
 restore account test_account from snapshot snapshot_01 to account test_account;
 
--- @session:id=6&user=test_account:test_user&password=111
+-- @session:id=5&user=test_account:test_user&password=111
 use test_snapshot_restore;
 select count(*) from test_snapshot_restore.test_restore;
 select count(*) from test_snapshot_restore.test_restore_2;
@@ -448,10 +448,8 @@ drop snapshot snapshot_01;
 
 
 -- sys account restore normal account to newAccount
-
 create account test_account admin_name = 'test_user' identified by '111';
--- @session:id=8&user=test_account:test_user&password=111
-
+-- @session:id=6&user=test_account:test_user&password=111
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
@@ -573,12 +571,11 @@ INSERT INTO factories (factory_name, address) VALUES ('Factory UUUU', '1991 Oak 
 INSERT INTO factories (factory_name, address) VALUES ('Factory WWWW', '2031 Birch St, Springfield, IL 62801'), ('Factory XXXX', '2051 Cedar St, Springfield, IL 62802');
 
 select count(*) from test_snapshot_restore.factories;
-
 -- @session
 
 create snapshot snapshot_01 for account test_account;
 
--- @session:id=10&user=test_account:test_user&password=111
+-- @session:id=7&user=test_account:test_user&password=111
 drop database test_snapshot_restore;
 drop database snapshot_read;
 -- @session
@@ -586,7 +583,7 @@ drop database snapshot_read;
 create account test_account_01 admin_name = 'test_user' identified by '111';
 restore account test_account from snapshot snapshot_01 to account test_account_01 ;
 
--- @session:id=12&user=test_account_01:test_user&password=111
+-- @session:id=8&user=test_account_01:test_user&password=111
 use test_snapshot_restore;
 select count(*) from test_snapshot_restore.test_restore;
 select count(*) from test_snapshot_restore.test_restore_2;
