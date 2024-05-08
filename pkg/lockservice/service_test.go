@@ -1229,6 +1229,10 @@ func TestDeadLockWithIndirectDependsOn(t *testing.T) {
 					require.NoError(t, s.Unlock(ctx, txn4, timestamp.Timestamp{}))
 
 					wg.Wait()
+
+					// clean waiters
+					require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, txn3, timestamp.Timestamp{}))
 				})
 		})
 	}
