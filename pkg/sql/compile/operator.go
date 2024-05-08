@@ -1102,18 +1102,17 @@ func constructOffset(n *plan.Node, proc *process.Process) *offset.Argument {
 */
 
 func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
-	executor, err := colexec.NewExpressionExecutor(proc, n.Limit)
-	if err != nil {
-		panic(err)
-	}
-	defer executor.Free()
-	vec, err := executor.Eval(proc, []*batch.Batch{constBat})
-	if err != nil {
-		panic(err)
-	}
-
+	// executor, err := colexec.NewExpressionExecutor(proc, n.Limit)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// defer executor.Free()
+	// vec, err := executor.Eval(proc, []*batch.Batch{constBat})
+	// if err != nil {
+	// 	panic(err)
+	// }
 	arg := limit.NewArgument()
-	arg.Limit = uint64(vector.MustFixedCol[int64](vec)[0])
+	arg.Limit = plan2.DeepCopyExpr(n.Limit)
 	return arg
 }
 

@@ -69,6 +69,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -2674,36 +2675,42 @@ func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
-		vec, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
-		if err != nil {
-			panic(err)
+		if rule.IsConstant(n.Limit, false) {
+			vec, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
+			if err != nil {
+				panic(err)
+			}
+			defer vec.Free(c.proc.Mp())
+			return c.compileTop(n, vector.MustFixedCol[int64](vec)[0], ss)
+		} else {
+			return c.compileLimit(n, c.compileOrder(n, ss))
 		}
-		defer vec.Free(c.proc.Mp())
-		return c.compileTop(n, vector.MustFixedCol[int64](vec)[0], ss)
 
 	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileOrder(n, ss)
 
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
-		// get limit
-		vec1, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
-		if err != nil {
-			panic(err)
-		}
-		defer vec1.Free(c.proc.Mp())
+		if rule.IsConstant(n.Limit, false) && rule.IsConstant(n.Offset, false) {
+			// get limit
+			vec1, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
+			if err != nil {
+				panic(err)
+			}
+			defer vec1.Free(c.proc.Mp())
 
-		// get offset
-		vec2, err := colexec.EvalExpressionOnce(c.proc, n.Offset, []*batch.Batch{constBat})
-		if err != nil {
-			panic(err)
-		}
-		defer vec2.Free(c.proc.Mp())
+			// get offset
+			vec2, err := colexec.EvalExpressionOnce(c.proc, n.Offset, []*batch.Batch{constBat})
+			if err != nil {
+				panic(err)
+			}
+			defer vec2.Free(c.proc.Mp())
 
-		limit, offset := vector.MustFixedCol[int64](vec1)[0], vector.MustFixedCol[int64](vec2)[0]
-		topN := limit + offset
-		if topN <= 8192*2 {
-			// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
-			return c.compileOffset(n, c.compileTop(n, topN, ss))
+			limit, offset := vector.MustFixedCol[int64](vec1)[0], vector.MustFixedCol[int64](vec2)[0]
+			topN := limit + offset
+			if topN <= 8192*2 {
+				// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
+				return c.compileOffset(n, c.compileTop(n, topN, ss))
+			}
 		}
 		return c.compileLimit(n, c.compileOffset(n, c.compileOrder(n, ss)))
 
@@ -2840,6 +2847,7 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
+
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {

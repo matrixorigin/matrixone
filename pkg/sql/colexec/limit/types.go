@@ -16,6 +16,8 @@ package limit
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -23,8 +25,9 @@ import (
 var _ vm.Operator = new(Argument)
 
 type Argument struct {
-	Seen  uint64 // seen is the number of tuples seen so far
-	Limit uint64
+	Seen          uint64 // seen is the number of tuples seen so far
+	Limit         *plan.Expr
+	limitExecutor colexec.ExpressionExecutor
 	vm.OperatorBase
 }
 

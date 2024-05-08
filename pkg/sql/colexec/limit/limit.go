@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -30,7 +31,14 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("limit(%v)", arg.Limit))
 }
 
-func (arg *Argument) Prepare(_ *process.Process) error {
+func (arg *Argument) Prepare(proc *process.Process) error {
+	var err error
+	if arg.limitExecutor == nil {
+		arg.limitExecutor, err = colexec.NewExpressionExecutor(proc, arg.Limit)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
