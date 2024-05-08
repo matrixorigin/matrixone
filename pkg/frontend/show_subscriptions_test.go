@@ -194,14 +194,12 @@ func TestDoShowSubscriptions(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(sysAccountID))
 
 	ses := newTestSession(t, ctrl)
 	ses.SetTimeZone(time.UTC)
 	ses.SetTenantInfo(tenant)
 	ses.SetMysqlResultSet(&MysqlResultSet{})
-	ses.connectCtx = ctx
 	defer ses.Close()
 
 	mp := ses.GetMemPool()

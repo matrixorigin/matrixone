@@ -30,6 +30,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
+
+	_ "go.uber.org/automaxprocs"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -72,6 +77,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -81,9 +87,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
-	_ "go.uber.org/automaxprocs"
-	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -191,10 +194,7 @@ func (c *Compile) reset() {
 }
 
 // helper function to judge if init temporary engine is needed
-func (c *Compile) NeedInitTempEngine(InitTempEngine bool) bool {
-	if InitTempEngine {
-		return false
-	}
+func (c *Compile) NeedInitTempEngine() bool {
 	for _, s := range c.scope {
 		ddl := s.Plan.GetDdl()
 		if ddl == nil {
@@ -209,10 +209,12 @@ func (c *Compile) NeedInitTempEngine(InitTempEngine bool) bool {
 	return false
 }
 
-func (c *Compile) SetTempEngine(ctx context.Context, te engine.Engine) {
+func (c *Compile) SetTempEngine(tempEngine engine.Engine, tempStorage *memorystorage.Storage) {
 	e := c.e.(*engine.EntireEngine)
-	e.TempEngine = te
-	c.ctx = ctx
+	e.TempEngine = tempEngine
+	if c.ctx != nil && c.ctx.Value(defines.TemporaryTN{}) == nil {
+		c.ctx = context.WithValue(c.ctx, defines.TemporaryTN{}, tempStorage)
+	}
 }
 
 // Compile is the entrance of the compute-execute-layer.
