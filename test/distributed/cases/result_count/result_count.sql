@@ -127,11 +127,7 @@ use system;
 select statement, result_count from statement_info where account="bvt_result_count" and statement not like '%mo_ctl%' and length(statement) > 0 and status != 'Running' and aggr_count < 1 order by request_at desc limit 50;
 -- @bvt:issue
 
--- check case 2
-set @start_ts=(select start_time from bvt_result_count.result where name = 'case2' order by `timestamp` desc limit 1);
-set @end_ts=(select end_time from bvt_result_count.result where name = 'case2' order by `timestamp` desc limit 1);
--- @ignore:2,3
-select statement, result_count, concat(@start_ts, ', ', @end_ts) time_range from statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != 'Running' and aggr_count < 1 and request_at between @start_ts and @end_ts order by request_at desc limit 2;
+-- check case 2, issue 14,836: move to ../zz_statement_query_type
 
 -- cleanup
 drop account if exists bvt_result_count;
