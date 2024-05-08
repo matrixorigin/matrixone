@@ -133,26 +133,6 @@ func NewDBEntry(catalog *Catalog, name, createSql, datTyp string, txn txnif.Asyn
 	return e
 }
 
-func NewDBEntryByTS(catalog *Catalog, name string, ts types.TS) *DBEntry {
-	id := catalog.NextDB()
-
-	e := &DBEntry{
-		ID: id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
-		catalog: catalog,
-		DBNode: &DBNode{
-			name: name,
-		},
-		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes: make(map[string]*nodeList[*TableEntry]),
-		link:      common.NewGenericSortedDList((*TableEntry).Less),
-	}
-	e.CreateWithTS(ts, &EmptyMVCCNode{})
-	e.acInfo.CreateAt = types.CurrentTimestamp()
-	return e
-}
-
 func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 	entry := &DBEntry{
 		ID: pkgcatalog.MO_CATALOG_ID,

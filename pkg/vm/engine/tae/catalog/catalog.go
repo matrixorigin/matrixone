@@ -1084,12 +1084,6 @@ func (catalog *Catalog) CreateDBEntryWithID(name, createSql, datTyp string, id u
 	return entry, err
 }
 
-func (catalog *Catalog) CreateDBEntryByTS(name string, ts types.TS) (*DBEntry, error) {
-	entry := NewDBEntryByTS(catalog, name, ts)
-	err := catalog.AddEntryLocked(entry, nil, false)
-	return entry, err
-}
-
 func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 	dbIt := catalog.MakeDBIt(true)
 	for dbIt.Valid() {
