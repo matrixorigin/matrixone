@@ -21,8 +21,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"reflect"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -596,526 +594,525 @@ func TestReadStringLenEnc(t *testing.T) {
 // 	wg.Wait()
 // }
 
-func makeMysqlTinyIntResultSet(unsigned bool) *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "Tiny"
-	if unsigned {
-		name = name + "Uint"
-	} else {
-		name = name + "Int"
-	}
-
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_TINY)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-	mysqlCol.SetSigned(!unsigned)
-
-	rs.AddColumn(mysqlCol)
-	if unsigned {
-		var cases = []uint8{0, 1, 254, 255}
-		for _, v := range cases {
-			var data = make([]interface{}, 1)
-			data[0] = v
-			rs.AddRow(data)
-		}
-	} else {
-		var cases = []int8{-128, -127, 127}
-		for _, v := range cases {
-			var data = make([]interface{}, 1)
-			data[0] = v
-			rs.AddRow(data)
-		}
-	}
-
-	return rs
-}
-
-func makeMysqlTinyResult(unsigned bool) *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlTinyIntResultSet(unsigned))
-}
-
-func makeMysqlShortResultSet(unsigned bool) *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "Short"
-	if unsigned {
-		name = name + "Uint"
-	} else {
-		name = name + "Int"
-	}
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_SHORT)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-	mysqlCol.SetSigned(!unsigned)
-
-	rs.AddColumn(mysqlCol)
-	if unsigned {
-		var cases = []uint16{0, 1, 254, 255, 65535}
-		for _, v := range cases {
-			var data = make([]interface{}, 1)
-			data[0] = v
-			rs.AddRow(data)
-		}
-	} else {
-		var cases = []int16{-32768, 0, 32767}
-		for _, v := range cases {
-			var data = make([]interface{}, 1)
-			data[0] = v
-			rs.AddRow(data)
-		}
-	}
-
-	return rs
-}
-
-func makeMysqlShortResult(unsigned bool) *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlShortResultSet(unsigned))
-}
-
-func makeMysqlLongResultSet(unsigned bool) *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "Long"
-	if unsigned {
-		name = name + "Uint"
-	} else {
-		name = name + "Int"
-	}
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_LONG)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-	mysqlCol.SetSigned(!unsigned)
-
-	rs.AddColumn(mysqlCol)
-	if unsigned {
-		var cases = []uint32{0, 4294967295}
-		for _, v := range cases {
-			var data = make([]interface{}, 1)
-			data[0] = v
-			rs.AddRow(data)
-		}
-	} else {
-		var cases = []int32{-2147483648, 0, 2147483647}
-		for _, v := range cases {
-			var data = make([]interface{}, 1)
-			data[0] = v
-			rs.AddRow(data)
-		}
-	}
-
-	return rs
-}
-
-func makeMysqlLongResult(unsigned bool) *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlLongResultSet(unsigned))
-}
-
-func makeMysqlLongLongResultSet(unsigned bool) *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "LongLong"
-	if unsigned {
-		name = name + "Uint"
-	} else {
-		name = name + "Int"
-	}
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-	mysqlCol.SetSigned(!unsigned)
-
-	rs.AddColumn(mysqlCol)
-	if unsigned {
-		var cases = []uint64{0, 4294967295, 18446744073709551615}
-		for _, v := range cases {
-			var data = make([]interface{}, 1)
-			data[0] = v
-			rs.AddRow(data)
-		}
-	} else {
-		var cases = []int64{-9223372036854775808, 0, 9223372036854775807}
-		for _, v := range cases {
-			var data = make([]interface{}, 1)
-			data[0] = v
-			rs.AddRow(data)
-		}
-	}
-
-	return rs
-}
-
-func makeMysqlLongLongResult(unsigned bool) *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlLongLongResultSet(unsigned))
-}
-
-func makeMysqlInt24ResultSet(unsigned bool) *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "Int24"
-	if unsigned {
-		name = name + "Uint"
-	} else {
-		name = name + "Int"
-	}
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_INT24)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-	mysqlCol.SetSigned(!unsigned)
-
-	rs.AddColumn(mysqlCol)
-	if unsigned {
-		//[0,16777215]
-		var cases = []uint32{0, 16777215, 4294967295}
-		for _, v := range cases {
-			var data = make([]interface{}, 1)
-			data[0] = v
-			rs.AddRow(data)
-		}
-	} else {
-		//[-8388608,8388607]
-		var cases = []int32{-2147483648, -8388608, 0, 8388607, 2147483647}
-		for _, v := range cases {
-			var data = make([]interface{}, 1)
-			data[0] = v
-			rs.AddRow(data)
-		}
-	}
-
-	return rs
-}
-
-func makeMysqlInt24Result(unsigned bool) *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlInt24ResultSet(unsigned))
-}
-
-func makeMysqlYearResultSet(unsigned bool) *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "Year"
-	if unsigned {
-		name = name + "Uint"
-	} else {
-		name = name + "Int"
-	}
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_YEAR)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-	mysqlCol.SetSigned(!unsigned)
-
-	rs.AddColumn(mysqlCol)
-	if unsigned {
-		var cases = []uint16{0, 1, 254, 255, 65535}
-		for _, v := range cases {
-			var data = make([]interface{}, 1)
-			data[0] = v
-			rs.AddRow(data)
-		}
-	} else {
-		var cases = []int16{-32768, 0, 32767}
-		for _, v := range cases {
-			var data = make([]interface{}, 1)
-			data[0] = v
-			rs.AddRow(data)
-		}
-	}
-
-	return rs
-}
-
-func makeMysqlYearResult(unsigned bool) *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlYearResultSet(unsigned))
-}
-
-func makeMysqlVarcharResultSet() *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "Varchar"
-
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-
-	rs.AddColumn(mysqlCol)
-
-	var cases = []string{"abc", "abcde", "", "x-", "xx"}
-	for _, v := range cases {
-		var data = make([]interface{}, 1)
-		data[0] = v
-		rs.AddRow(data)
-	}
-
-	return rs
-}
-
-func makeMysqlVarcharResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlVarcharResultSet())
-}
-
-func makeMysqlVarStringResultSet() *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "Varstring"
-
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-
-	rs.AddColumn(mysqlCol)
-
-	var cases = []string{"abc", "abcde", "", "x-", "xx"}
-	for _, v := range cases {
-		var data = make([]interface{}, 1)
-		data[0] = v
-		rs.AddRow(data)
-	}
-
-	return rs
-}
-
-func makeMysqlVarStringResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlVarStringResultSet())
-}
-
-func makeMysqlStringResultSet() *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "String"
-
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_STRING)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-
-	rs.AddColumn(mysqlCol)
-
-	var cases = []string{"abc", "abcde", "", "x-", "xx"}
-	for _, v := range cases {
-		var data = make([]interface{}, 1)
-		data[0] = v
-		rs.AddRow(data)
-	}
-
-	return rs
-}
-
-func makeMysqlStringResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlStringResultSet())
-}
-
-func makeMysqlFloatResultSet() *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "Float"
-
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_FLOAT)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-
-	rs.AddColumn(mysqlCol)
-
-	var cases = []float32{math.MaxFloat32, math.SmallestNonzeroFloat32, -math.MaxFloat32, -math.SmallestNonzeroFloat32}
-	for _, v := range cases {
-		var data = make([]interface{}, 1)
-		data[0] = v
-		rs.AddRow(data)
-	}
-
-	return rs
-}
-
-func makeMysqlFloatResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlFloatResultSet())
-}
-
-func makeMysqlDoubleResultSet() *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "Double"
-
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_DOUBLE)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-
-	rs.AddColumn(mysqlCol)
-
-	var cases = []float64{math.MaxFloat64, math.SmallestNonzeroFloat64, -math.MaxFloat64, -math.SmallestNonzeroFloat64}
-	for _, v := range cases {
-		var data = make([]interface{}, 1)
-		data[0] = v
-		rs.AddRow(data)
-	}
-
-	return rs
-}
-
-func makeMysqlDoubleResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlDoubleResultSet())
-}
-
-func makeMysqlDateResultSet() *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "Date"
-
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATE)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-
-	rs.AddColumn(mysqlCol)
-
-	d1, _ := types.ParseDateCast("1997-01-01")
-	d2, _ := types.ParseDateCast("2008-02-02")
-	var cases = []types.Date{
-		d1,
-		d2,
-	}
-	for _, v := range cases {
-		var data = make([]interface{}, 1)
-		data[0] = v
-		rs.AddRow(data)
-	}
-
-	return rs
-}
-
-func makeMysqlDateResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlDateResultSet())
-}
-
-func makeMysqlTimeResultSet() *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "Time"
-
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIME)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-
-	rs.AddColumn(mysqlCol)
-
-	t1, _ := types.ParseTime("110:21:15", 0)
-	t2, _ := types.ParseTime("2018-04-28 10:21:15.123", 0)
-	t3, _ := types.ParseTime("-112:12:12", 0)
-	var cases = []types.Time{
-		t1,
-		t2,
-		t3,
-	}
-	for _, v := range cases {
-		var data = make([]interface{}, 1)
-		data[0] = v
-		rs.AddRow(data)
-	}
-
-	return rs
-}
-
-func makeMysqlTimeResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlTimeResultSet())
-}
-
-func makeMysqlDatetimeResultSet() *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "Date"
-
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATETIME)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-
-	rs.AddColumn(mysqlCol)
-
-	d1, _ := types.ParseDatetime("2018-04-28 10:21:15", 0)
-	d2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 0)
-	d3, _ := types.ParseDatetime("2015-03-03 12:12:12", 0)
-	var cases = []types.Datetime{
-		d1,
-		d2,
-		d3,
-	}
-	for _, v := range cases {
-		var data = make([]interface{}, 1)
-		data[0] = v
-		rs.AddRow(data)
-	}
-
-	return rs
-}
-
-func makeMysqlDatetimeResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlDatetimeResultSet())
-}
-
+//	func makeMysqlTinyIntResultSet(unsigned bool) *MysqlResultSet {
+//		var rs = &MysqlResultSet{}
+//
+//		name := "Tiny"
+//		if unsigned {
+//			name = name + "Uint"
+//		} else {
+//			name = name + "Int"
+//		}
+//
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(defines.MYSQL_TYPE_TINY)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//		mysqlCol.SetSigned(!unsigned)
+//
+//		rs.AddColumn(mysqlCol)
+//		if unsigned {
+//			var cases = []uint8{0, 1, 254, 255}
+//			for _, v := range cases {
+//				var data = make([]interface{}, 1)
+//				data[0] = v
+//				rs.AddRow(data)
+//			}
+//		} else {
+//			var cases = []int8{-128, -127, 127}
+//			for _, v := range cases {
+//				var data = make([]interface{}, 1)
+//				data[0] = v
+//				rs.AddRow(data)
+//			}
+//		}
+//
+//		return rs
+//	}
+//
+//	func makeMysqlTinyResult(unsigned bool) *MysqlExecutionResult {
+//		return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlTinyIntResultSet(unsigned))
+//	}
+//
+//	func makeMysqlShortResultSet(unsigned bool) *MysqlResultSet {
+//		var rs = &MysqlResultSet{}
+//
+//		name := "Short"
+//		if unsigned {
+//			name = name + "Uint"
+//		} else {
+//			name = name + "Int"
+//		}
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(defines.MYSQL_TYPE_SHORT)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//		mysqlCol.SetSigned(!unsigned)
+//
+//		rs.AddColumn(mysqlCol)
+//		if unsigned {
+//			var cases = []uint16{0, 1, 254, 255, 65535}
+//			for _, v := range cases {
+//				var data = make([]interface{}, 1)
+//				data[0] = v
+//				rs.AddRow(data)
+//			}
+//		} else {
+//			var cases = []int16{-32768, 0, 32767}
+//			for _, v := range cases {
+//				var data = make([]interface{}, 1)
+//				data[0] = v
+//				rs.AddRow(data)
+//			}
+//		}
+//
+//		return rs
+//	}
+//
+//	func makeMysqlShortResult(unsigned bool) *MysqlExecutionResult {
+//		return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlShortResultSet(unsigned))
+//	}
+//
+//	func makeMysqlLongResultSet(unsigned bool) *MysqlResultSet {
+//		var rs = &MysqlResultSet{}
+//
+//		name := "Long"
+//		if unsigned {
+//			name = name + "Uint"
+//		} else {
+//			name = name + "Int"
+//		}
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(defines.MYSQL_TYPE_LONG)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//		mysqlCol.SetSigned(!unsigned)
+//
+//		rs.AddColumn(mysqlCol)
+//		if unsigned {
+//			var cases = []uint32{0, 4294967295}
+//			for _, v := range cases {
+//				var data = make([]interface{}, 1)
+//				data[0] = v
+//				rs.AddRow(data)
+//			}
+//		} else {
+//			var cases = []int32{-2147483648, 0, 2147483647}
+//			for _, v := range cases {
+//				var data = make([]interface{}, 1)
+//				data[0] = v
+//				rs.AddRow(data)
+//			}
+//		}
+//
+//		return rs
+//	}
+//
+//	func makeMysqlLongResult(unsigned bool) *MysqlExecutionResult {
+//		return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlLongResultSet(unsigned))
+//	}
+//
+//	func makeMysqlLongLongResultSet(unsigned bool) *MysqlResultSet {
+//		var rs = &MysqlResultSet{}
+//
+//		name := "LongLong"
+//		if unsigned {
+//			name = name + "Uint"
+//		} else {
+//			name = name + "Int"
+//		}
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//		mysqlCol.SetSigned(!unsigned)
+//
+//		rs.AddColumn(mysqlCol)
+//		if unsigned {
+//			var cases = []uint64{0, 4294967295, 18446744073709551615}
+//			for _, v := range cases {
+//				var data = make([]interface{}, 1)
+//				data[0] = v
+//				rs.AddRow(data)
+//			}
+//		} else {
+//			var cases = []int64{-9223372036854775808, 0, 9223372036854775807}
+//			for _, v := range cases {
+//				var data = make([]interface{}, 1)
+//				data[0] = v
+//				rs.AddRow(data)
+//			}
+//		}
+//
+//		return rs
+//	}
+//
+//	func makeMysqlLongLongResult(unsigned bool) *MysqlExecutionResult {
+//		return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlLongLongResultSet(unsigned))
+//	}
+//
+//	func makeMysqlInt24ResultSet(unsigned bool) *MysqlResultSet {
+//		var rs = &MysqlResultSet{}
+//
+//		name := "Int24"
+//		if unsigned {
+//			name = name + "Uint"
+//		} else {
+//			name = name + "Int"
+//		}
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(defines.MYSQL_TYPE_INT24)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//		mysqlCol.SetSigned(!unsigned)
+//
+//		rs.AddColumn(mysqlCol)
+//		if unsigned {
+//			//[0,16777215]
+//			var cases = []uint32{0, 16777215, 4294967295}
+//			for _, v := range cases {
+//				var data = make([]interface{}, 1)
+//				data[0] = v
+//				rs.AddRow(data)
+//			}
+//		} else {
+//			//[-8388608,8388607]
+//			var cases = []int32{-2147483648, -8388608, 0, 8388607, 2147483647}
+//			for _, v := range cases {
+//				var data = make([]interface{}, 1)
+//				data[0] = v
+//				rs.AddRow(data)
+//			}
+//		}
+//
+//		return rs
+//	}
+//
+//	func makeMysqlInt24Result(unsigned bool) *MysqlExecutionResult {
+//		return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlInt24ResultSet(unsigned))
+//	}
+//
+//	func makeMysqlYearResultSet(unsigned bool) *MysqlResultSet {
+//		var rs = &MysqlResultSet{}
+//
+//		name := "Year"
+//		if unsigned {
+//			name = name + "Uint"
+//		} else {
+//			name = name + "Int"
+//		}
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(defines.MYSQL_TYPE_YEAR)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//		mysqlCol.SetSigned(!unsigned)
+//
+//		rs.AddColumn(mysqlCol)
+//		if unsigned {
+//			var cases = []uint16{0, 1, 254, 255, 65535}
+//			for _, v := range cases {
+//				var data = make([]interface{}, 1)
+//				data[0] = v
+//				rs.AddRow(data)
+//			}
+//		} else {
+//			var cases = []int16{-32768, 0, 32767}
+//			for _, v := range cases {
+//				var data = make([]interface{}, 1)
+//				data[0] = v
+//				rs.AddRow(data)
+//			}
+//		}
+//
+//		return rs
+//	}
+//
+//	func makeMysqlYearResult(unsigned bool) *MysqlExecutionResult {
+//		return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlYearResultSet(unsigned))
+//	}
+//
+//	func makeMysqlVarcharResultSet() *MysqlResultSet {
+//		var rs = &MysqlResultSet{}
+//
+//		name := "Varchar"
+//
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//
+//		rs.AddColumn(mysqlCol)
+//
+//		var cases = []string{"abc", "abcde", "", "x-", "xx"}
+//		for _, v := range cases {
+//			var data = make([]interface{}, 1)
+//			data[0] = v
+//			rs.AddRow(data)
+//		}
+//
+//		return rs
+//	}
+//
+//	func makeMysqlVarcharResult() *MysqlExecutionResult {
+//		return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlVarcharResultSet())
+//	}
+//
+//	func makeMysqlVarStringResultSet() *MysqlResultSet {
+//		var rs = &MysqlResultSet{}
+//
+//		name := "Varstring"
+//
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//
+//		rs.AddColumn(mysqlCol)
+//
+//		var cases = []string{"abc", "abcde", "", "x-", "xx"}
+//		for _, v := range cases {
+//			var data = make([]interface{}, 1)
+//			data[0] = v
+//			rs.AddRow(data)
+//		}
+//
+//		return rs
+//	}
+//
+//	func makeMysqlVarStringResult() *MysqlExecutionResult {
+//		return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlVarStringResultSet())
+//	}
+//
+//	func makeMysqlStringResultSet() *MysqlResultSet {
+//		var rs = &MysqlResultSet{}
+//
+//		name := "String"
+//
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(defines.MYSQL_TYPE_STRING)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//
+//		rs.AddColumn(mysqlCol)
+//
+//		var cases = []string{"abc", "abcde", "", "x-", "xx"}
+//		for _, v := range cases {
+//			var data = make([]interface{}, 1)
+//			data[0] = v
+//			rs.AddRow(data)
+//		}
+//
+//		return rs
+//	}
+//
+//	func makeMysqlStringResult() *MysqlExecutionResult {
+//		return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlStringResultSet())
+//	}
+//
+//	func makeMysqlFloatResultSet() *MysqlResultSet {
+//		var rs = &MysqlResultSet{}
+//
+//		name := "Float"
+//
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(defines.MYSQL_TYPE_FLOAT)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//
+//		rs.AddColumn(mysqlCol)
+//
+//		var cases = []float32{math.MaxFloat32, math.SmallestNonzeroFloat32, -math.MaxFloat32, -math.SmallestNonzeroFloat32}
+//		for _, v := range cases {
+//			var data = make([]interface{}, 1)
+//			data[0] = v
+//			rs.AddRow(data)
+//		}
+//
+//		return rs
+//	}
+//
+//	func makeMysqlFloatResult() *MysqlExecutionResult {
+//		return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlFloatResultSet())
+//	}
+//
+//	func makeMysqlDoubleResultSet() *MysqlResultSet {
+//		var rs = &MysqlResultSet{}
+//
+//		name := "Double"
+//
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(defines.MYSQL_TYPE_DOUBLE)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//
+//		rs.AddColumn(mysqlCol)
+//
+//		var cases = []float64{math.MaxFloat64, math.SmallestNonzeroFloat64, -math.MaxFloat64, -math.SmallestNonzeroFloat64}
+//		for _, v := range cases {
+//			var data = make([]interface{}, 1)
+//			data[0] = v
+//			rs.AddRow(data)
+//		}
+//
+//		return rs
+//	}
+//
+//	func makeMysqlDoubleResult() *MysqlExecutionResult {
+//		return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlDoubleResultSet())
+//	}
+//
+//	func makeMysqlDateResultSet() *MysqlResultSet {
+//		var rs = &MysqlResultSet{}
+//
+//		name := "Date"
+//
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATE)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//
+//		rs.AddColumn(mysqlCol)
+//
+//		d1, _ := types.ParseDateCast("1997-01-01")
+//		d2, _ := types.ParseDateCast("2008-02-02")
+//		var cases = []types.Date{
+//			d1,
+//			d2,
+//		}
+//		for _, v := range cases {
+//			var data = make([]interface{}, 1)
+//			data[0] = v
+//			rs.AddRow(data)
+//		}
+//
+//		return rs
+//	}
+//
+//	func makeMysqlDateResult() *MysqlExecutionResult {
+//		return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlDateResultSet())
+//	}
+//
+//	func makeMysqlTimeResultSet() *MysqlResultSet {
+//		var rs = &MysqlResultSet{}
+//
+//		name := "Time"
+//
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIME)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//
+//		rs.AddColumn(mysqlCol)
+//
+//		t1, _ := types.ParseTime("110:21:15", 0)
+//		t2, _ := types.ParseTime("2018-04-28 10:21:15.123", 0)
+//		t3, _ := types.ParseTime("-112:12:12", 0)
+//		var cases = []types.Time{
+//			t1,
+//			t2,
+//			t3,
+//		}
+//		for _, v := range cases {
+//			var data = make([]interface{}, 1)
+//			data[0] = v
+//			rs.AddRow(data)
+//		}
+//
+//		return rs
+//	}
+//
+//	func makeMysqlTimeResult() *MysqlExecutionResult {
+//		return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlTimeResultSet())
+//	}
+//
+//	func makeMysqlDatetimeResultSet() *MysqlResultSet {
+//		var rs = &MysqlResultSet{}
+//
+//		name := "Date"
+//
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//
+//		rs.AddColumn(mysqlCol)
+//
+//		d1, _ := types.ParseDatetime("2018-04-28 10:21:15", 0)
+//		d2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 0)
+//		d3, _ := types.ParseDatetime("2015-03-03 12:12:12", 0)
+//		var cases = []types.Datetime{
+//			d1,
+//			d2,
+//			d3,
+//		}
+//		for _, v := range cases {
+//			var data = make([]interface{}, 1)
+//			data[0] = v
+//			rs.AddRow(data)
+//		}
+//
+//		return rs
+//	}
+//
+//	func makeMysqlDatetimeResult() *MysqlExecutionResult {
+//		return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlDatetimeResultSet())
+//	}
 func make9ColumnsResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -1184,355 +1181,355 @@ func make9ColumnsResultSet() *MysqlResultSet {
 	return rs
 }
 
-func makeMysql9ColumnsResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, make9ColumnsResultSet())
-}
+//func makeMysql9ColumnsResult() *MysqlExecutionResult {
+//	return NewMysqlExecutionResult(0, 0, 0, 0, make9ColumnsResultSet())
+//}
 
-func makeMoreThan16MBResultSet() *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	var columnTypes = []defines.MysqlType{
-		defines.MYSQL_TYPE_LONGLONG,
-		defines.MYSQL_TYPE_DOUBLE,
-		defines.MYSQL_TYPE_VARCHAR,
-	}
-
-	var names = []string{
-		"Longlong",
-		"Double",
-		"Varchar",
-	}
-
-	var rowCase = []interface{}{int64(9223372036854775807), math.MaxFloat64, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
-
-	for i, ct := range columnTypes {
-		name := names[i]
-		mysqlCol := new(MysqlColumn)
-		mysqlCol.SetName(name)
-		mysqlCol.SetOrgName(name + "OrgName")
-		mysqlCol.SetColumnType(ct)
-		mysqlCol.SetSchema(name + "Schema")
-		mysqlCol.SetTable(name + "Table")
-		mysqlCol.SetOrgTable(name + "Table")
-		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-
-		rs.AddColumn(mysqlCol)
-	}
-
-	//the size of the total result set will be more than 16MB
-	for i := 0; i < 40000; i++ {
-		rs.AddRow(rowCase)
-	}
-
-	return rs
-}
-
-// the size of resultset will be morethan 16MB
-func makeMoreThan16MBResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, makeMoreThan16MBResultSet())
-}
-
-func make16MBRowResultSet() *MysqlResultSet {
-	var rs = &MysqlResultSet{}
-
-	name := "Varstring"
-
-	mysqlCol := new(MysqlColumn)
-	mysqlCol.SetName(name)
-	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	mysqlCol.SetSchema(name + "Schema")
-	mysqlCol.SetTable(name + "Table")
-	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
-
-	rs.AddColumn(mysqlCol)
-
-	/*
-		How to test the max size of the data in one packet that the client can received ?
-		Environment: Mysql Version 8.0.23
-		1. shell: mysql --help | grep allowed-packet
-			something like:
-			"
-			  --max-allowed-packet=#
-			max-allowed-packet                16777216
-			"
-			so, we get:
-				max-allowed-packet means : The maximum packet length to send to or receive from server.
-				default value : 16777216 (16MB)
-		2. shell execution: mysql -uroot -e "select repeat('a',16*1024*1024-4);" > 16MB-mysql.txt
-			we get: ERROR 2020 (HY000) at line 1: Got packet bigger than 'max_allowed_packet' bytes
-		3. shell execution: mysql -uroot -e "select repeat('a',16*1024*1024-5);" > 16MB-mysql.txt
-			execution succeeded
-		4. so, the max size of the data in one packet is (max-allowed-packet - 5).
-		5. To change max-allowed-packet.
-			shell execution: mysql max-allowed-packet=xxxxx ....
-	*/
-
-	//test in shell : mysql -h 127.0.0.1 -P 6001 -udump -p111 -e "16mbrow" > 16mbrow.txt
-	//max data size : 16 * 1024 * 1024 - 5
-	var stuff = make([]byte, 16*1024*1024-5)
-	for i := range stuff {
-		stuff[i] = 'a'
-	}
-
-	var rowCase = []interface{}{string(stuff)}
-	for i := 0; i < 1; i++ {
-		rs.AddRow(rowCase)
-	}
-
-	return rs
-}
-
-// the size of resultset row will be more than 16MB
-func make16MBRowResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, make16MBRowResultSet())
-}
-
-func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interface{}, _ uint64) error {
-	tRM.rwlock.Lock()
-	routine := tRM.clients[rs]
-	tRM.rwlock.Unlock()
-	ctx := context.TODO()
-
-	pu, err := getParameterUnit("test/system_vars_config.toml", nil, nil)
-	if err != nil {
-		return err
-	}
-	pu.SV.SkipCheckUser = true
-	pro := routine.getProtocol().(*MysqlProtocolImpl)
-	packet, ok := msg.(*Packet)
-	pro.SetSequenceID(uint8(packet.SequenceID + 1))
-	if !ok {
-		return moerr.NewInternalError(ctx, "message is not Packet")
-	}
-	setGlobalPu(pu)
-	ses := NewSession(pro, nil, nil, false, nil)
-	ses.SetRequestContext(ctx)
-	pro.SetSession(ses)
-
-	length := packet.Length
-	payload := packet.Payload
-	for uint32(length) == MaxPayloadSize {
-		var err error
-		msg, err = pro.GetTcpConnection().Read(goetty.ReadOptions{})
-		if err != nil {
-			return moerr.NewInternalError(ctx, "read msg error")
-		}
-
-		packet, ok = msg.(*Packet)
-		if !ok {
-			return moerr.NewInternalError(ctx, "message is not Packet")
-		}
-
-		pro.SetSequenceID(uint8(packet.SequenceID + 1))
-		payload = append(payload, packet.Payload...)
-		length = packet.Length
-	}
-
-	// finish handshake process
-	if !pro.IsEstablished() {
-		_, err := pro.HandleHandshake(ctx, payload)
-		if err != nil {
-			return err
-		}
-		if err = pro.Authenticate(ctx); err != nil {
-			return err
-		}
-		pro.SetEstablished()
-		return nil
-	}
-
-	var req *Request
-	var resp *Response
-	req = pro.GetRequest(payload)
-	switch req.GetCmd() {
-	case COM_QUIT:
-		resp = &Response{
-			category: OkResponse,
-			status:   0,
-			data:     nil,
-		}
-		if err := pro.SendResponse(ctx, resp); err != nil {
-			fmt.Printf("send response failed. error:%v", err)
-			break
-		}
-	case COM_QUERY:
-		var query = string(req.GetData().([]byte))
-
-		switch query {
-		case "tiny":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				cmd:      0,
-				data:     makeMysqlTinyResult(false),
-			}
-		case "tinyu":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlTinyResult(true),
-			}
-		case "short":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlShortResult(false),
-			}
-		case "shortu":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlShortResult(true),
-			}
-		case "long":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlLongResult(false),
-			}
-		case "longu":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlLongResult(true),
-			}
-		case "longlong":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlLongLongResult(false),
-			}
-		case "longlongu":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlLongLongResult(true),
-			}
-		case "int24":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlInt24Result(false),
-			}
-		case "int24u":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlInt24Result(true),
-			}
-		case "year":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlYearResult(false),
-			}
-		case "yearu":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlYearResult(true),
-			}
-		case "varchar":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlVarcharResult(),
-			}
-		case "varstring":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlVarStringResult(),
-			}
-		case "string":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlStringResult(),
-			}
-		case "float":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlFloatResult(),
-			}
-		case "double":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlDoubleResult(),
-			}
-		case "date":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlDateResult(),
-			}
-		case "time":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlTimeResult(),
-			}
-		case "datetime":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysqlDatetimeResult(),
-			}
-		case "9columns":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMysql9ColumnsResult(),
-			}
-		case "16mb":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     makeMoreThan16MBResult(),
-			}
-		case "16mbrow":
-			resp = &Response{
-				category: ResultResponse,
-				status:   0,
-				data:     make16MBRowResult(),
-			}
-		default:
-			resp = &Response{
-				category: OkResponse,
-				status:   0,
-				data:     nil,
-			}
-		}
-
-		if err := pro.SendResponse(ctx, resp); err != nil {
-			fmt.Printf("send response failed. error:%v", err)
-			break
-		}
-	case COM_PING:
-		resp = NewResponse(
-			OkResponse,
-			0, 0, 0,
-			0,
-			int(COM_PING),
-			nil,
-		)
-		if err := pro.SendResponse(ctx, resp); err != nil {
-			fmt.Printf("send response failed. error:%v", err)
-			break
-		}
-
-	default:
-		fmt.Printf("unsupported command. 0x%x \n", req.cmd)
-	}
-	if req.cmd == COM_QUIT {
-		return nil
-	}
-	return nil
-}
+//func makeMoreThan16MBResultSet() *MysqlResultSet {
+//	var rs = &MysqlResultSet{}
+//
+//	var columnTypes = []defines.MysqlType{
+//		defines.MYSQL_TYPE_LONGLONG,
+//		defines.MYSQL_TYPE_DOUBLE,
+//		defines.MYSQL_TYPE_VARCHAR,
+//	}
+//
+//	var names = []string{
+//		"Longlong",
+//		"Double",
+//		"Varchar",
+//	}
+//
+//	var rowCase = []interface{}{int64(9223372036854775807), math.MaxFloat64, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+//
+//	for i, ct := range columnTypes {
+//		name := names[i]
+//		mysqlCol := new(MysqlColumn)
+//		mysqlCol.SetName(name)
+//		mysqlCol.SetOrgName(name + "OrgName")
+//		mysqlCol.SetColumnType(ct)
+//		mysqlCol.SetSchema(name + "Schema")
+//		mysqlCol.SetTable(name + "Table")
+//		mysqlCol.SetOrgTable(name + "Table")
+//		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//
+//		rs.AddColumn(mysqlCol)
+//	}
+//
+//	//the size of the total result set will be more than 16MB
+//	for i := 0; i < 40000; i++ {
+//		rs.AddRow(rowCase)
+//	}
+//
+//	return rs
+//}
+//
+//// the size of resultset will be morethan 16MB
+//func makeMoreThan16MBResult() *MysqlExecutionResult {
+//	return NewMysqlExecutionResult(0, 0, 0, 0, makeMoreThan16MBResultSet())
+//}
+//
+//func make16MBRowResultSet() *MysqlResultSet {
+//	var rs = &MysqlResultSet{}
+//
+//	name := "Varstring"
+//
+//	mysqlCol := new(MysqlColumn)
+//	mysqlCol.SetName(name)
+//	mysqlCol.SetOrgName(name + "OrgName")
+//	mysqlCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+//	mysqlCol.SetSchema(name + "Schema")
+//	mysqlCol.SetTable(name + "Table")
+//	mysqlCol.SetOrgTable(name + "Table")
+//	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+//
+//	rs.AddColumn(mysqlCol)
+//
+//	/*
+//		How to test the max size of the data in one packet that the client can received ?
+//		Environment: Mysql Version 8.0.23
+//		1. shell: mysql --help | grep allowed-packet
+//			something like:
+//			"
+//			  --max-allowed-packet=#
+//			max-allowed-packet                16777216
+//			"
+//			so, we get:
+//				max-allowed-packet means : The maximum packet length to send to or receive from server.
+//				default value : 16777216 (16MB)
+//		2. shell execution: mysql -uroot -e "select repeat('a',16*1024*1024-4);" > 16MB-mysql.txt
+//			we get: ERROR 2020 (HY000) at line 1: Got packet bigger than 'max_allowed_packet' bytes
+//		3. shell execution: mysql -uroot -e "select repeat('a',16*1024*1024-5);" > 16MB-mysql.txt
+//			execution succeeded
+//		4. so, the max size of the data in one packet is (max-allowed-packet - 5).
+//		5. To change max-allowed-packet.
+//			shell execution: mysql max-allowed-packet=xxxxx ....
+//	*/
+//
+//	//test in shell : mysql -h 127.0.0.1 -P 6001 -udump -p111 -e "16mbrow" > 16mbrow.txt
+//	//max data size : 16 * 1024 * 1024 - 5
+//	var stuff = make([]byte, 16*1024*1024-5)
+//	for i := range stuff {
+//		stuff[i] = 'a'
+//	}
+//
+//	var rowCase = []interface{}{string(stuff)}
+//	for i := 0; i < 1; i++ {
+//		rs.AddRow(rowCase)
+//	}
+//
+//	return rs
+//}
+//
+//// the size of resultset row will be more than 16MB
+//func make16MBRowResult() *MysqlExecutionResult {
+//	return NewMysqlExecutionResult(0, 0, 0, 0, make16MBRowResultSet())
+//}
+//
+//func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interface{}, _ uint64) error {
+//	tRM.rwlock.Lock()
+//	routine := tRM.clients[rs]
+//	tRM.rwlock.Unlock()
+//	ctx := context.TODO()
+//
+//	pu, err := getParameterUnit("test/system_vars_config.toml", nil, nil)
+//	if err != nil {
+//		return err
+//	}
+//	pu.SV.SkipCheckUser = true
+//	pro := routine.getProtocol().(*MysqlProtocolImpl)
+//	packet, ok := msg.(*Packet)
+//	pro.SetSequenceID(uint8(packet.SequenceID + 1))
+//	if !ok {
+//		return moerr.NewInternalError(ctx, "message is not Packet")
+//	}
+//	setGlobalPu(pu)
+//	ses := NewSession(pro, nil, nil, false, nil)
+//	ses.SetRequestContext(ctx)
+//	pro.SetSession(ses)
+//
+//	length := packet.Length
+//	payload := packet.Payload
+//	for uint32(length) == MaxPayloadSize {
+//		var err error
+//		msg, err = pro.GetTcpConnection().Read(goetty.ReadOptions{})
+//		if err != nil {
+//			return moerr.NewInternalError(ctx, "read msg error")
+//		}
+//
+//		packet, ok = msg.(*Packet)
+//		if !ok {
+//			return moerr.NewInternalError(ctx, "message is not Packet")
+//		}
+//
+//		pro.SetSequenceID(uint8(packet.SequenceID + 1))
+//		payload = append(payload, packet.Payload...)
+//		length = packet.Length
+//	}
+//
+//	// finish handshake process
+//	if !pro.IsEstablished() {
+//		_, err := pro.HandleHandshake(ctx, payload)
+//		if err != nil {
+//			return err
+//		}
+//		if err = pro.Authenticate(ctx); err != nil {
+//			return err
+//		}
+//		pro.SetEstablished()
+//		return nil
+//	}
+//
+//	var req *Request
+//	var resp *Response
+//	req = pro.GetRequest(payload)
+//	switch req.GetCmd() {
+//	case COM_QUIT:
+//		resp = &Response{
+//			category: OkResponse,
+//			status:   0,
+//			data:     nil,
+//		}
+//		if err := pro.SendResponse(ctx, resp); err != nil {
+//			fmt.Printf("send response failed. error:%v", err)
+//			break
+//		}
+//	case COM_QUERY:
+//		var query = string(req.GetData().([]byte))
+//
+//		switch query {
+//		case "tiny":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				cmd:      0,
+//				data:     makeMysqlTinyResult(false),
+//			}
+//		case "tinyu":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlTinyResult(true),
+//			}
+//		case "short":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlShortResult(false),
+//			}
+//		case "shortu":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlShortResult(true),
+//			}
+//		case "long":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlLongResult(false),
+//			}
+//		case "longu":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlLongResult(true),
+//			}
+//		case "longlong":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlLongLongResult(false),
+//			}
+//		case "longlongu":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlLongLongResult(true),
+//			}
+//		case "int24":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlInt24Result(false),
+//			}
+//		case "int24u":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlInt24Result(true),
+//			}
+//		case "year":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlYearResult(false),
+//			}
+//		case "yearu":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlYearResult(true),
+//			}
+//		case "varchar":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlVarcharResult(),
+//			}
+//		case "varstring":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlVarStringResult(),
+//			}
+//		case "string":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlStringResult(),
+//			}
+//		case "float":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlFloatResult(),
+//			}
+//		case "double":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlDoubleResult(),
+//			}
+//		case "date":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlDateResult(),
+//			}
+//		case "time":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlTimeResult(),
+//			}
+//		case "datetime":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysqlDatetimeResult(),
+//			}
+//		case "9columns":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMysql9ColumnsResult(),
+//			}
+//		case "16mb":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     makeMoreThan16MBResult(),
+//			}
+//		case "16mbrow":
+//			resp = &Response{
+//				category: ResultResponse,
+//				status:   0,
+//				data:     make16MBRowResult(),
+//			}
+//		default:
+//			resp = &Response{
+//				category: OkResponse,
+//				status:   0,
+//				data:     nil,
+//			}
+//		}
+//
+//		if err := pro.SendResponse(ctx, resp); err != nil {
+//			fmt.Printf("send response failed. error:%v", err)
+//			break
+//		}
+//	case COM_PING:
+//		resp = NewResponse(
+//			OkResponse,
+//			0, 0, 0,
+//			0,
+//			int(COM_PING),
+//			nil,
+//		)
+//		if err := pro.SendResponse(ctx, resp); err != nil {
+//			fmt.Printf("send response failed. error:%v", err)
+//			break
+//		}
+//
+//	default:
+//		fmt.Printf("unsupported command. 0x%x \n", req.cmd)
+//	}
+//	if req.cmd == COM_QUIT {
+//		return nil
+//	}
+//	return nil
+//}
 
 //TODO:replace by the dedicated table functions.
 //func TestMysqlResultSet(t *testing.T) {
@@ -1695,155 +1692,155 @@ func closeDbConn(t *testing.T, db *sql.DB) {
 	assert.NoError(t, err)
 }
 
-func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResultsetCheck bool, query string, mrs *MysqlResultSet) {
-	logutil.Infof("query: %v", query)
-	rows, err := db.Query(query)
-	if wantErr {
-		require.Error(t, err)
-		require.True(t, rows == nil)
-		return
-	}
-	require.NoError(t, err)
-	defer func() {
-		err = rows.Close()
-		require.NoError(t, err)
-		err = rows.Err()
-		require.NoError(t, err)
-	}()
-
-	//column check
-	columns, err := rows.Columns()
-	require.NoError(t, err)
-	require.True(t, len(columns) == len(mrs.Columns))
-
-	//colType, err := rows.ColumnTypes()
-	//require.NoError(t, err)
-	//for i, ct := range colType {
-	//	fmt.Printf("column %d\n",i)
-	//	fmt.Printf("name %v \n",ct.Name())
-	//	l,o := ct.RowCount()
-	//	fmt.Printf("length %v %v \n",l,o)
-	//	p,s,o := ct.DecimalSize()
-	//	fmt.Printf("decimalsize %v %v %v \n",p,s,o)
-	//	fmt.Printf("scantype %v \n",ct.ScanType())
-	//	n,o := ct.Nullable()
-	//	fmt.Printf("nullable %v %v \n",n,o)
-	//	fmt.Printf("databaseTypeName %s \n",ct.DatabaseTypeName())
-	//}
-
-	values := make([][]byte, len(columns))
-
-	// rows.Scan wants '[]interface{}' as an argument, so we must copy the
-	// references into such a slice
-	// See http://code.google.com/p/go-wiki/wiki/InterfaceSlice for details
-	scanArgs := make([]interface{}, len(columns))
-	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
-		scanArgs[i] = &values[i]
-	}
-
-	rowIdx := uint64(0)
-	for rows.Next() {
-		err = rows.Scan(scanArgs...)
-		require.NoError(t, err)
-
-		//fmt.Println(rowIdx)
-		//fmt.Println(mrs.GetRow(rowIdx))
-		//
-		//for i := uint64(0); i < mrs.GetColumnCount(); i++ {
-		//	arg := scanArgs[i]
-		//	val := *(arg.(*[]byte))
-		//	fmt.Printf("%v ",val)
-		//}
-		//fmt.Println()
-
-		if !skipResultsetCheck {
-			for i := uint64(0); i < mrs.GetColumnCount(); i++ {
-				arg := scanArgs[i]
-				val := *(arg.(*[]byte))
-
-				column, err := mrs.GetColumn(context.TODO(), i)
-				require.NoError(t, err)
-
-				col, ok := column.(*MysqlColumn)
-				require.True(t, ok)
-
-				isNUll, err := mrs.ColumnIsNull(context.TODO(), rowIdx, i)
-				require.NoError(t, err)
-
-				if isNUll {
-					require.True(t, val == nil)
-				} else {
-					var data []byte = nil
-					switch col.ColumnType() {
-					case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
-						value, err := mrs.GetInt64(context.TODO(), rowIdx, i)
-						require.NoError(t, err)
-						if col.ColumnType() == defines.MYSQL_TYPE_YEAR {
-							if value == 0 {
-								data = append(data, []byte("0000")...)
-							} else {
-								data = strconv.AppendInt(data, value, 10)
-							}
-						} else {
-							data = strconv.AppendInt(data, value, 10)
-						}
-
-					case defines.MYSQL_TYPE_LONGLONG:
-						if uint32(col.Flag())&defines.UNSIGNED_FLAG != 0 {
-							value, err := mrs.GetUint64(context.TODO(), rowIdx, i)
-							require.NoError(t, err)
-							data = strconv.AppendUint(data, value, 10)
-						} else {
-							value, err := mrs.GetInt64(context.TODO(), rowIdx, i)
-							require.NoError(t, err)
-							data = strconv.AppendInt(data, value, 10)
-						}
-					case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING:
-						value, err := mrs.GetString(context.TODO(), rowIdx, i)
-						require.NoError(t, err)
-						data = []byte(value)
-					case defines.MYSQL_TYPE_FLOAT:
-						value, err := mrs.GetFloat64(context.TODO(), rowIdx, i)
-						require.NoError(t, err)
-						data = strconv.AppendFloat(data, value, 'f', -1, 32)
-					case defines.MYSQL_TYPE_DOUBLE:
-						value, err := mrs.GetFloat64(context.TODO(), rowIdx, i)
-						require.NoError(t, err)
-						data = strconv.AppendFloat(data, value, 'f', -1, 64)
-					case defines.MYSQL_TYPE_DATE:
-						value, err := mrs.GetValue(context.TODO(), rowIdx, i)
-						require.NoError(t, err)
-						x := value.(types.Date).String()
-						data = []byte(x)
-					case defines.MYSQL_TYPE_TIME:
-						value, err := mrs.GetValue(context.TODO(), rowIdx, i)
-						require.NoError(t, err)
-						x := value.(types.Time).String()
-						data = []byte(x)
-					case defines.MYSQL_TYPE_DATETIME:
-						value, err := mrs.GetValue(context.TODO(), rowIdx, i)
-						require.NoError(t, err)
-						x := value.(types.Datetime).String()
-						data = []byte(x)
-					default:
-						require.NoError(t, moerr.NewInternalError(context.TODO(), "unsupported type %v", col.ColumnType()))
-					}
-					//check
-					ret := reflect.DeepEqual(data, val)
-					//fmt.Println(i)
-					//fmt.Println(data)
-					//fmt.Println(val)
-					require.True(t, ret)
-				}
-			}
-		}
-
-		rowIdx++
-	}
-
-	require.True(t, rowIdx == mrs.GetRowCount())
-
-}
+//func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResultsetCheck bool, query string, mrs *MysqlResultSet) {
+//	logutil.Infof("query: %v", query)
+//	rows, err := db.Query(query)
+//	if wantErr {
+//		require.Error(t, err)
+//		require.True(t, rows == nil)
+//		return
+//	}
+//	require.NoError(t, err)
+//	defer func() {
+//		err = rows.Close()
+//		require.NoError(t, err)
+//		err = rows.Err()
+//		require.NoError(t, err)
+//	}()
+//
+//	//column check
+//	columns, err := rows.Columns()
+//	require.NoError(t, err)
+//	require.True(t, len(columns) == len(mrs.Columns))
+//
+//	//colType, err := rows.ColumnTypes()
+//	//require.NoError(t, err)
+//	//for i, ct := range colType {
+//	//	fmt.Printf("column %d\n",i)
+//	//	fmt.Printf("name %v \n",ct.Name())
+//	//	l,o := ct.RowCount()
+//	//	fmt.Printf("length %v %v \n",l,o)
+//	//	p,s,o := ct.DecimalSize()
+//	//	fmt.Printf("decimalsize %v %v %v \n",p,s,o)
+//	//	fmt.Printf("scantype %v \n",ct.ScanType())
+//	//	n,o := ct.Nullable()
+//	//	fmt.Printf("nullable %v %v \n",n,o)
+//	//	fmt.Printf("databaseTypeName %s \n",ct.DatabaseTypeName())
+//	//}
+//
+//	values := make([][]byte, len(columns))
+//
+//	// rows.Scan wants '[]interface{}' as an argument, so we must copy the
+//	// references into such a slice
+//	// See http://code.google.com/p/go-wiki/wiki/InterfaceSlice for details
+//	scanArgs := make([]interface{}, len(columns))
+//	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
+//		scanArgs[i] = &values[i]
+//	}
+//
+//	rowIdx := uint64(0)
+//	for rows.Next() {
+//		err = rows.Scan(scanArgs...)
+//		require.NoError(t, err)
+//
+//		//fmt.Println(rowIdx)
+//		//fmt.Println(mrs.GetRow(rowIdx))
+//		//
+//		//for i := uint64(0); i < mrs.GetColumnCount(); i++ {
+//		//	arg := scanArgs[i]
+//		//	val := *(arg.(*[]byte))
+//		//	fmt.Printf("%v ",val)
+//		//}
+//		//fmt.Println()
+//
+//		if !skipResultsetCheck {
+//			for i := uint64(0); i < mrs.GetColumnCount(); i++ {
+//				arg := scanArgs[i]
+//				val := *(arg.(*[]byte))
+//
+//				column, err := mrs.GetColumn(context.TODO(), i)
+//				require.NoError(t, err)
+//
+//				col, ok := column.(*MysqlColumn)
+//				require.True(t, ok)
+//
+//				isNUll, err := mrs.ColumnIsNull(context.TODO(), rowIdx, i)
+//				require.NoError(t, err)
+//
+//				if isNUll {
+//					require.True(t, val == nil)
+//				} else {
+//					var data []byte = nil
+//					switch col.ColumnType() {
+//					case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
+//						value, err := mrs.GetInt64(context.TODO(), rowIdx, i)
+//						require.NoError(t, err)
+//						if col.ColumnType() == defines.MYSQL_TYPE_YEAR {
+//							if value == 0 {
+//								data = append(data, []byte("0000")...)
+//							} else {
+//								data = strconv.AppendInt(data, value, 10)
+//							}
+//						} else {
+//							data = strconv.AppendInt(data, value, 10)
+//						}
+//
+//					case defines.MYSQL_TYPE_LONGLONG:
+//						if uint32(col.Flag())&defines.UNSIGNED_FLAG != 0 {
+//							value, err := mrs.GetUint64(context.TODO(), rowIdx, i)
+//							require.NoError(t, err)
+//							data = strconv.AppendUint(data, value, 10)
+//						} else {
+//							value, err := mrs.GetInt64(context.TODO(), rowIdx, i)
+//							require.NoError(t, err)
+//							data = strconv.AppendInt(data, value, 10)
+//						}
+//					case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING:
+//						value, err := mrs.GetString(context.TODO(), rowIdx, i)
+//						require.NoError(t, err)
+//						data = []byte(value)
+//					case defines.MYSQL_TYPE_FLOAT:
+//						value, err := mrs.GetFloat64(context.TODO(), rowIdx, i)
+//						require.NoError(t, err)
+//						data = strconv.AppendFloat(data, value, 'f', -1, 32)
+//					case defines.MYSQL_TYPE_DOUBLE:
+//						value, err := mrs.GetFloat64(context.TODO(), rowIdx, i)
+//						require.NoError(t, err)
+//						data = strconv.AppendFloat(data, value, 'f', -1, 64)
+//					case defines.MYSQL_TYPE_DATE:
+//						value, err := mrs.GetValue(context.TODO(), rowIdx, i)
+//						require.NoError(t, err)
+//						x := value.(types.Date).String()
+//						data = []byte(x)
+//					case defines.MYSQL_TYPE_TIME:
+//						value, err := mrs.GetValue(context.TODO(), rowIdx, i)
+//						require.NoError(t, err)
+//						x := value.(types.Time).String()
+//						data = []byte(x)
+//					case defines.MYSQL_TYPE_DATETIME:
+//						value, err := mrs.GetValue(context.TODO(), rowIdx, i)
+//						require.NoError(t, err)
+//						x := value.(types.Datetime).String()
+//						data = []byte(x)
+//					default:
+//						require.NoError(t, moerr.NewInternalError(context.TODO(), "unsupported type %v", col.ColumnType()))
+//					}
+//					//check
+//					ret := reflect.DeepEqual(data, val)
+//					//fmt.Println(i)
+//					//fmt.Println(data)
+//					//fmt.Println(val)
+//					require.True(t, ret)
+//				}
+//			}
+//		}
+//
+//		rowIdx++
+//	}
+//
+//	require.True(t, rowIdx == mrs.GetRowCount())
+//
+//}
 
 func Test_writePackets(t *testing.T) {
 	ctx := context.TODO()
