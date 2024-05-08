@@ -11,6 +11,9 @@ SELECT from_base64('invalid');
 SELECT TO_BASE64('abc'), FROM_BASE64(TO_BASE64('abc'));
 SELECT HEX('abc'),UNHEX(HEX('abc'));
 
+select from_base64('@#%#$^jfe12');
+select from_base64(-123);
+
 -- test serial() and serial_full()
 CREATE TABLE t1 (name varchar(255), age int);
 INSERT INTO t1 (name, age) VALUES ('Abby', 24);
