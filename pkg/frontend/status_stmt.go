@@ -230,7 +230,6 @@ func respStatus(requestCtx context.Context,
 		if len(execCtx.proc.SessionInfo.SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
 		}
-		_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
 		if err2 := ses.GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
 			err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(requestCtx, ses, execCtx.stmt, fail, err)
@@ -249,18 +248,13 @@ func respStatus(requestCtx context.Context,
 			if execCtx.proc.GetLastInsertID() != 0 {
 				ses.SetLastInsertID(execCtx.proc.GetLastInsertID())
 			}
-		case *tree.CreateTable:
-			_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
 		case *tree.DropTable:
 			// handle dynamic table drop, cancel all the running daemon task
 			_ = handleDropDynamicTable(requestCtx, ses, st)
-			_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
 		case *tree.CreateDatabase:
 			_ = insertRecordToMoMysqlCompatibilityMode(requestCtx, ses, execCtx.stmt)
-			_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
 		case *tree.DropDatabase:
 			_ = deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, execCtx.stmt)
-			_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
 			err = doDropFunctionWithDB(requestCtx, ses, execCtx.stmt, func(path string) error {
 				return execCtx.proc.FileService.Delete(requestCtx, path)
 			})
