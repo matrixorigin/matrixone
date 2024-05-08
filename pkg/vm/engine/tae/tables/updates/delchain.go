@@ -288,7 +288,6 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 	return merged
 }
 
-// PXU-1 TODO
 // CollectDeletesInRange collects [startTs, endTs)
 func (chain *DeleteChain) CollectDeletesInRangeWithLock(
 	startTs, endTs types.TS,
