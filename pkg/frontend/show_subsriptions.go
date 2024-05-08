@@ -288,7 +288,7 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 
 	// step 3. get current account's subscriptions
 	allSubscribedMap := make(map[string]map[string]*subscribed)
-	subs, err := getSubs(ctx, ses, bh, ses.GetTenantInfo().TenantID)
+	subs, err := getSubs(ctx, ses, bh, ses.GetTenantInfo().GetTenantID())
 	if err != nil {
 		return err
 	}

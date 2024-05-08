@@ -910,7 +910,7 @@ func TestSession_Migrate(t *testing.T) {
 		{"1"},
 	})
 
-	err := s.Migrate(&query.MigrateConnToRequest{
+	err := Migrate(s, &query.MigrateConnToRequest{
 		DB: "d1",
 		PrepareStmts: []*query.PrepareStmt{
 			{Name: "p1", SQL: `select ?`},

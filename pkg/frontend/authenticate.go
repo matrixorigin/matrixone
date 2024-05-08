@@ -35,6 +35,8 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -58,10 +60,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-	"github.com/tidwall/btree"
 )
 
 type TenantInfo struct {
+	mu          sync.Mutex
 	Tenant      string
 	User        string
 	DefaultRole string
@@ -80,6 +82,8 @@ type TenantInfo struct {
 }
 
 func (ti *TenantInfo) String() string {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	delimiter := ti.delimiter
 	if !strconv.IsPrint(rune(delimiter)) {
 		delimiter = ':'
@@ -90,79 +94,138 @@ func (ti *TenantInfo) String() string {
 }
 
 func (ti *TenantInfo) GetTenant() string {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return ti.getTenantUnsafe()
+}
+
+func (ti *TenantInfo) getTenantUnsafe() string {
 	return ti.Tenant
 }
 
 func (ti *TenantInfo) GetTenantID() uint32 {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	return ti.TenantID
 }
 
 func (ti *TenantInfo) SetTenantID(id uint32) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.TenantID = id
 }
 
 func (ti *TenantInfo) GetUser() string {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	return ti.User
 }
 
 func (ti *TenantInfo) SetUser(user string) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.User = user
 }
 
 func (ti *TenantInfo) GetUserID() uint32 {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	return ti.UserID
 }
 
 func (ti *TenantInfo) SetUserID(id uint32) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.UserID = id
 }
 
 func (ti *TenantInfo) GetDefaultRole() string {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return ti.getDefaultRoleUnsafe()
+}
+
+func (ti *TenantInfo) getDefaultRoleUnsafe() string {
 	return ti.DefaultRole
 }
 
 func (ti *TenantInfo) SetDefaultRole(r string) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.DefaultRole = r
 }
 
 func (ti *TenantInfo) HasDefaultRole() bool {
-	return len(ti.GetDefaultRole()) != 0
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return len(ti.getDefaultRoleUnsafe()) != 0
 }
 
 func (ti *TenantInfo) GetDefaultRoleID() uint32 {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	return ti.DefaultRoleID
 }
 
 func (ti *TenantInfo) SetDefaultRoleID(id uint32) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.DefaultRoleID = id
 }
 
 func (ti *TenantInfo) IsSysTenant() bool {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return ti.isSysTenantUnsafe()
+}
+
+func (ti *TenantInfo) isSysTenantUnsafe() bool {
 	if ti != nil {
-		return strings.ToLower(ti.GetTenant()) == GetDefaultTenant()
+		return strings.ToLower(ti.getTenantUnsafe()) == GetDefaultTenant()
 	}
 	return false
 }
 
 func (ti *TenantInfo) IsDefaultRole() bool {
-	return ti.GetDefaultRole() == GetDefaultRole()
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return ti.getDefaultRoleUnsafe() == GetDefaultRole()
 }
 
 func (ti *TenantInfo) IsMoAdminRole() bool {
-	return ti.IsSysTenant() && strings.ToLower(ti.GetDefaultRole()) == moAdminRoleName
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return ti.isMoAdminRoleUnsafe()
+}
+
+func (ti *TenantInfo) isMoAdminRoleUnsafe() bool {
+	return ti.isSysTenantUnsafe() && strings.ToLower(ti.getDefaultRoleUnsafe()) == moAdminRoleName
 }
 
 func (ti *TenantInfo) IsAccountAdminRole() bool {
-	return !ti.IsSysTenant() && strings.ToLower(ti.GetDefaultRole()) == accountAdminRoleName
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return ti.isAccountAdminRoleUnsafe()
+}
+
+func (ti *TenantInfo) isAccountAdminRoleUnsafe() bool {
+	return !ti.isSysTenantUnsafe() && strings.ToLower(ti.getDefaultRoleUnsafe()) == accountAdminRoleName
 }
 
 func (ti *TenantInfo) IsAdminRole() bool {
-	return ti.IsMoAdminRole() || ti.IsAccountAdminRole()
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return ti.isMoAdminRoleUnsafe() || ti.isAccountAdminRoleUnsafe()
 }
 
 func (ti *TenantInfo) IsNameOfAdminRoles(name string) bool {
+	if ti == nil {
+		return false
+	}
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	n := strings.ToLower(name)
-	if ti.IsSysTenant() {
+	if ti.isSysTenantUnsafe() {
 		return n == moAdminRoleName
 	} else {
 		return n == accountAdminRoleName
@@ -170,18 +233,26 @@ func (ti *TenantInfo) IsNameOfAdminRoles(name string) bool {
 }
 
 func (ti *TenantInfo) SetUseSecondaryRole(v bool) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.useAllSecondaryRole = v
 }
 
 func (ti *TenantInfo) GetUseSecondaryRole() bool {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	return ti.useAllSecondaryRole
 }
 
 func (ti *TenantInfo) GetVersion() string {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	return ti.version
 }
 
 func (ti *TenantInfo) SetVersion(version string) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.version = version
 }
 
@@ -219,6 +290,17 @@ func GetAccountAdminRoleId() uint32 {
 
 func GetAdminUserId() uint32 {
 	return dumpID + 1
+}
+
+func GetBackgroundTenant() *TenantInfo {
+	return &TenantInfo{
+		Tenant:        GetDefaultTenant(),
+		User:          GetUserRoot(),
+		DefaultRole:   GetDefaultRole(),
+		TenantID:      GetSysTenantId(),
+		UserID:        GetUserRootId(),
+		DefaultRoleID: GetDefaultRoleId(),
+	}
 }
 
 func isCaseInsensitiveEqual(n string, role string) bool {
@@ -2821,7 +2903,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	var erArray []ExecResult
 	var encryption string
 	account := ses.GetTenantInfo()
-	currentUser := account.User
+	currentUser := account.GetUser()
 
 	//1.authenticate the actions
 	if au.Role != nil {
@@ -4419,7 +4501,7 @@ func postDropSuspendAccount(
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
 	var nodes []string
-	currTenant := ses.GetTenantInfo().Tenant
+	currTenant := ses.GetTenantInfo().GetTenant()
 	currUser := ses.GetTenantInfo().User
 	labels := clusterservice.NewSelector().SelectByLabel(
 		map[string]string{"account": accountName}, clusterservice.Contain)
@@ -7056,7 +7138,7 @@ func checkRoleWhetherTableOwner(ctx context.Context, ses *Session, dbName, tbNam
 	}
 
 	// check role
-	if tenantInfo.useAllSecondaryRole {
+	if tenantInfo.GetUseSecondaryRole() {
 		sql = getSqlForGetRolesOfCurrentUser(int64(currentUser))
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
@@ -7132,7 +7214,7 @@ func checkRoleWhetherDatabaseOwner(ctx context.Context, ses *Session, dbName str
 	}
 
 	// check role
-	if tenantInfo.useAllSecondaryRole {
+	if tenantInfo.GetUseSecondaryRole() {
 		sql = getSqlForGetRolesOfCurrentUser(int64(currentUser))
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
@@ -8893,7 +8975,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 			ses.GetTenantInfo().GetDefaultRoleID(),
 			string(argsJson),
 			retTypeStr, body, cf.Language,
-			tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
+			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
 			int32(id))
 	} else { // create
 		initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
@@ -8901,7 +8983,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 			ses.GetTenantInfo().GetDefaultRoleID(),
 			string(argsJson),
 			retTypeStr, body, cf.Language, dbName,
-			tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
 
 	err = bh.Exec(ctx, initMoUdf)
@@ -8981,7 +9063,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		string(cp.Name.Name.ObjectName),
 		string(argsJson),
 		cp.Body, dbName,
-		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+		tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	err = bh.Exec(ctx, initMoProcedure)
 	if err != nil {
 		return err
@@ -9650,8 +9732,8 @@ func postAlterSessionStatus(
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
-	currTenant := ses.GetTenantInfo().Tenant
-	currUser := ses.GetTenantInfo().User
+	currTenant := ses.GetTenantInfo().GetTenant()
+	currUser := ses.GetTenantInfo().GetUser()
 	var nodes []string
 	labels := clusterservice.NewSelector().SelectByLabel(
 		map[string]string{"account": accountName}, clusterservice.Contain)
@@ -9722,7 +9804,7 @@ func checkTimeStampValid(ctx context.Context, ses FeSession, snapshotTs int64) (
 }
 
 func getDbIdAndType(ctx context.Context, bh BackgroundExec, tenantInfo *TenantInfo, dbName string) (dbId uint64, dbType string, err error) {
-	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(tenantInfo.TenantID))
+	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(tenantInfo.GetTenantID()))
 	if err != nil {
 		return
 	}

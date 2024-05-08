@@ -61,7 +61,7 @@ func TestIe(t *testing.T) {
 func TestIeProto(t *testing.T) {
 	setGlobalPu(config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 	// Mock autoIncrCaches
-	globalAicm = &defines.AutoIncrCacheManager{}
+	setGlobalAicm(&defines.AutoIncrCacheManager{})
 
 	executor := NewInternalExecutor()
 	p := executor.proto
