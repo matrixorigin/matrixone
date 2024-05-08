@@ -111,7 +111,7 @@ func CalculateCUMemDecimal(memByte, durationNS int64, memPrice, cuUnit float64) 
 	val2 := types.Decimal256{B0_63: uint64(durationNS), B64_127: 0, B128_191: 0, B192_255: 0}
 	val3 := types.Decimal256{B0_63: price.B0_63, B64_127: price.B64_127, B128_191: 0, B192_255: 0}
 	val4 := types.Decimal256{B0_63: unit.B0_63, B64_127: unit.B64_127, B128_191: 0, B192_255: 0}
-	cuScale := int32(26)
+	cuScale := int32(Decimal128ScalePrice)
 	var err error
 	val1, err = val1.Mul256(val2)
 	if err != nil {
@@ -121,7 +121,7 @@ func CalculateCUMemDecimal(memByte, durationNS int64, memPrice, cuUnit float64) 
 	if err != nil {
 		return 0, err
 	}
-	val1, err = val1.Scale(26)
+	val1, err = val1.Scale(cuScale)
 	if err != nil {
 		return 0, err
 	}
