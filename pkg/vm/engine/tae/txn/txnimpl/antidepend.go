@@ -40,7 +40,7 @@ func readWriteConfilictCheck[T catalog.BaseNode[T]](entry *catalog.BaseEntryImpl
 		txnToWait.GetTxnState(true)
 		entry.RLock()
 	}
-	if entry.DeleteBefore(ts) {
+	if entry.DeleteBeforeLocked(ts) {
 		err = ErrRWConflict
 	}
 	return

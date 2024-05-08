@@ -16,7 +16,7 @@ package malloc
 
 /*
 #include "mimalloc/static.c"
-#cgo CFLAGS: -Imimalloc -Wstringop-overflow=0
+#cgo CFLAGS: -Imimalloc
 */
 import "C"
 import "unsafe"

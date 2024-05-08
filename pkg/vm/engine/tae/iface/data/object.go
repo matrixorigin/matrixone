@@ -140,7 +140,7 @@ type Object interface {
 
 	Init() error
 	TryUpgrade() error
-	GCInMemeoryDeletesByTS(types.TS)
+	GCInMemeoryDeletesByTSForTest(types.TS)
 	UpgradeAllDeleteChain()
 	CollectAppendInRange(start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.BatchWithVersion, error)
 	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, *bitmap.Bitmap, error)
@@ -179,7 +179,7 @@ type Tombstone interface {
 	// TryGetDeleteChain(blkID uint16) *updates.MVCCHandle
 	UpgradeAllDeleteChain()
 	UpgradeDeleteChain(blkID uint16)
-	UpgradeDeleteChainByTS(ts types.TS)
+	UpgradeDeleteChainByTSLocked(ts types.TS)
 	ReplayDeltaLoc(any, uint16)
 	VisitDeletes(ctx context.Context, start, end types.TS, bat, tnBatch *containers.Batch, skipMemory bool) (*containers.Batch, int, int, error)
 	GetObject() any
