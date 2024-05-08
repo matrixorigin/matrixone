@@ -178,7 +178,7 @@ func (obj *txnSysObject) getColumnTableVec(
 	colData = containers.MakeVector(col.Type, mp)
 	tableFn := func(table *catalog.TableEntry) error {
 		table.RLock()
-		node := table.GetVisibleNode(obj.Txn)
+		node := table.GetVisibleNodeLocked(obj.Txn)
 		table.RUnlock()
 		FillColumnRow(table, node, col.Name, colData)
 		return nil
@@ -258,7 +258,7 @@ func (obj *txnSysObject) getRelTableVec(ts types.TS, colIdx int, mp *mpool.MPool
 	colData = containers.MakeVector(colDef.Type, mp)
 	tableFn := func(table *catalog.TableEntry) error {
 		table.RLock()
-		node := table.GetVisibleNode(obj.Txn)
+		node := table.GetVisibleNodeLocked(obj.Txn)
 		table.RUnlock()
 		FillTableRow(table, node, colDef.Name, colData)
 		return nil

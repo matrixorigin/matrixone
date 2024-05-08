@@ -2781,14 +2781,16 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 			}
 			objInfos = append(objInfos, obj)
 		}
-		if strings.HasPrefix(policyName, "small") {
-			objInfos = logtailreplay.NewSmall(110 * common.Const1MBytes).Filter(objInfos)
-		} else if strings.HasPrefix(policyName, "overlap") {
-			if sortkeyPos != -1 {
-				objInfos = logtailreplay.NewOverlap(100).Filter(objInfos)
+		if len(policyName) != 0 {
+			if strings.HasPrefix(policyName, "small") {
+				objInfos = logtailreplay.NewSmall(110 * common.Const1MBytes).Filter(objInfos)
+			} else if strings.HasPrefix(policyName, "overlap") {
+				if sortkeyPos != -1 {
+					objInfos = logtailreplay.NewOverlap(100).Filter(objInfos)
+				}
+			} else {
+				return nil, moerr.NewInvalidInput(ctx, "invalid merge policy name")
 			}
-		} else {
-			return nil, moerr.NewInvalidInput(ctx, "invalid merge policy name")
 		}
 	}
 

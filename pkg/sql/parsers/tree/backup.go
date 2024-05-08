@@ -32,6 +32,10 @@ type BackupStart struct {
 	Parallelism string
 	// s3 option
 	Option []string
+
+	// incremental backup
+	BackupType string
+	BackupTs   string
 }
 
 func (node *BackupStart) Format(ctx *FmtCtx) {
@@ -47,15 +51,27 @@ func (node *BackupStart) Format(ctx *FmtCtx) {
 		ctx.WriteString(" parallelism ")
 		ctx.WriteString(node.Parallelism)
 	}
+
+	if node.BackupType != "" {
+		ctx.WriteString(" backuptype ")
+		ctx.WriteString(node.BackupType)
+	}
+
+	if node.BackupTs != "" {
+		ctx.WriteString(" backupts ")
+		ctx.WriteString(node.BackupTs)
+	}
 }
 
-func NewBackupStart(timestamp string, isS3 bool, dir string, parallelism string, option []string) *BackupStart {
+func NewBackupStart(timestamp string, isS3 bool, dir string, parallelism string, option []string, backupType, backupTs string) *BackupStart {
 	backup := reuse.Alloc[BackupStart](nil)
 	backup.Timestamp = timestamp
 	backup.IsS3 = isS3
 	backup.Dir = dir
 	backup.Parallelism = parallelism
 	backup.Option = option
+	backup.BackupType = backupType
+	backup.BackupTs = backupTs
 	return backup
 }
 

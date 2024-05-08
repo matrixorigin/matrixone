@@ -41,6 +41,15 @@ type Partition struct {
 		start types.TS
 		end   types.TS
 	}
+
+	TableInfo   TableInfo
+	TableInfoOK bool
+}
+
+type TableInfo struct {
+	ID            uint64
+	Name          string
+	PrimarySeqnum int
 }
 
 func (p *Partition) CanServe(ts types.TS) bool {
