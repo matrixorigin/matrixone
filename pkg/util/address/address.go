@@ -165,7 +165,7 @@ func (m *addressManager) portAdvanceLocked() int {
 // localPortCheck checks if the local port is available to use. If the port is not used, return
 // true; otherwise, return false.
 func localPortCheck(port int) bool {
-	return !RemoteAddressAvail(fmt.Sprintf(":%d", port), time.Millisecond*200)
+	return !RemoteAddressAvail(fmt.Sprintf(":%d", port), 0)
 }
 
 // RemoteAddressAvail checks if remote address can be connected.
