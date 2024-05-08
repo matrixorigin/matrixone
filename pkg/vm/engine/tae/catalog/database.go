@@ -231,7 +231,7 @@ func (e *DBEntry) StringWithLevel(level common.PPLevel) string {
 func (e *DBEntry) StringWithlevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
 		return fmt.Sprintf("DB[%d][name=%s][C@%s,D@%s]",
-			e.ID, e.GetFullName(), e.GetCreatedAtLocked().ToString(), e.GetDeleteAt().ToString())
+			e.ID, e.GetFullName(), e.GetCreatedAtLocked().ToString(), e.GetDeleteAtLocked().ToString())
 	}
 	return fmt.Sprintf("DB%s[name=%s, id=%d]", e.BaseEntryImpl.StringLocked(), e.GetFullName(), e.ID)
 }
@@ -486,7 +486,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 		defer table.RUnlock()
 		prevname := ""
 		// clean all name because RemoveEntry can be called by GC、
-		table.LoopChain(func(m *MVCCNode[*TableMVCCNode]) bool {
+		table.LoopChainLocked(func(m *MVCCNode[*TableMVCCNode]) bool {
 			if prevname == m.BaseNode.Schema.Name {
 				return true
 			}

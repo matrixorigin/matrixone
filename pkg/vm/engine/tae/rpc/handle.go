@@ -1288,7 +1288,8 @@ func traverseCatalogForNewAccounts(c *catalog2.Catalog, memo *logtail.TNUsageMem
 			objIt := tblEntry.MakeObjectIt(true)
 			for objIt.Valid() {
 				objEntry := objIt.Get().GetPayload()
-				if !objEntry.IsAppendable() && !objEntry.HasDropCommitted() && objEntry.IsCommitted() {
+				// PXU TODO
+				if !objEntry.IsAppendable() && !objEntry.HasDropCommitted() && objEntry.IsCommittedLocked() {
 					insUsage.Size += uint64(objEntry.GetCompSize())
 				}
 				objIt.Next()

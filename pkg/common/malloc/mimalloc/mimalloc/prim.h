@@ -203,14 +203,13 @@ static inline void mi_prim_tls_slot_set(size_t slot, void* value) mi_attr_noexce
 
 #endif
 
-// Do we have __builtin_thread_pointer? This would be the preferred way to get a unique thread id
-// but unfortunately, it seems we cannot test for this reliably at this time (see issue #883)
-// Nevertheless, it seems needed on older graviton platforms (see issue #851).
-// For now, we only enable this for specific platforms.
-#if defined(__GNUC__) && (__GNUC__ >= 7) && defined(__aarch64__) /* special case aarch64 for older gcc versions (issue #851) */ \
-    && !defined(__APPLE__)  /* on apple (M1) the wrong register is read (tpidr_el0 instead of tpidrro_el0) so fall back to TLS slot assembly (<https://github.com/microsoft/mimalloc/issues/343#issuecomment-763272369>)*/ \
-    && (!defined(__clang_major__) || __clang_major__ >= 14)  /* older clang versions emit bad code; fall back to using the TLS slot (<https://lore.kernel.org/linux-arm-kernel/202110280952.352F66D8@keescook/T/>) */
-#define MI_USE_BUILTIN_THREAD_POINTER  1
+// Do we have __builtin_thread_pointer? (do not make this a compound test as it fails on older gcc's, see issue #851)
+#if defined(__has_builtin)
+#if __has_builtin(__builtin_thread_pointer)
+#define MI_HAS_BUILTIN_THREAD_POINTER  1
+#endif
+#elif defined(__GNUC__) && (__GNUC__ >= 7) && defined(__aarch64__)  // special case aarch64 for older gcc versions (issue #851)
+#define MI_HAS_BUILTIN_THREAD_POINTER  1
 #endif
 
 
@@ -232,10 +231,12 @@ static inline mi_threadid_t _mi_prim_thread_id(void) mi_attr_noexcept {
   return (uintptr_t)NtCurrentTeb();
 }
 
-#elif MI_USE_BUILTIN_THREAD_POINTER 
+#elif MI_HAS_BUILTIN_THREAD_POINTER && \
+      (!defined(__APPLE__)) && /* on apple (M1) the wrong register is read (tpidr_el0 instead of tpidrro_el0) so fall back to TLS slot assembly (<https://github.com/microsoft/mimalloc/issues/343#issuecomment-763272369>)*/ \
+      (!defined(__clang_major__) || __clang_major__ >= 14)  // older clang versions emit bad code; fall back to using the TLS slot (<https://lore.kernel.org/linux-arm-kernel/202110280952.352F66D8@keescook/T/>)
 
 static inline mi_threadid_t _mi_prim_thread_id(void) mi_attr_noexcept {
-  // Works on most Unix based platforms with recent compilers
+  // Works on most Unix based platforms
   return (uintptr_t)__builtin_thread_pointer();  
 }
 
