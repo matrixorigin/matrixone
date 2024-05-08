@@ -136,7 +136,7 @@ func (mixin *withFilterMixin) getReadFilter(proc *process.Process, blkCnt int) (
 		return
 	}
 	pk := mixin.tableDef.Pkey
-	if pk == nil {
+	if mixin.filterState.expr == nil || pk == nil {
 		mixin.filterState.evaluated = true
 		mixin.filterState.filter = nil
 		return
