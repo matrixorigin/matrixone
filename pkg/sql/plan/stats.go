@@ -799,8 +799,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	case plan.Node_VALUE_SCAN:
 		if node.RowsetData != nil {
-			colsData := node.RowsetData.Cols
-			rowCount := float64(len(colsData[0].Data))
+			rowCount := float64(node.RowsetData.RowCount)
 			node.Stats.TableCnt = rowCount
 			node.Stats.BlockNum = int32(rowCount/float64(options.DefaultBlockMaxRows) + 1)
 			node.Stats.Cost = rowCount
