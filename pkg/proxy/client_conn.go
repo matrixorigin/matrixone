@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 // clientBaseConnID is the base connection ID for client.
@@ -57,7 +58,7 @@ func (c *clientInfo) parse(full string) error {
 	if err != nil {
 		return err
 	}
-	c.labelInfo.Tenant = Tenant(tenant.Tenant)
+	c.labelInfo.Tenant = Tenant(tenant.GetTenant())
 	c.username = tenant.GetUser()
 
 	// For label part.
@@ -356,7 +357,7 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 	// Before connect to backend server, update the salt.
 	cn.salt = c.mysqlProto.GetSalt()
 
-	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", cn.backendConnID), resp)
+	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", cn.connID), resp)
 }
 
 // handleSetVar handles the set variable event.
@@ -406,8 +407,8 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 			v2.ProxyConnectRouteFailCounter.Inc()
 			return nil, err
 		}
-		// We have to set proxy connection ID after cn is returned.
-		cn.proxyConnID = c.connID
+		// We have to set connection ID after cn is returned.
+		cn.connID = c.connID
 
 		// Set the salt value of cn server.
 		cn.salt = c.mysqlProto.GetSalt()
@@ -473,6 +474,13 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		break
 	}
 	if !isOKPacket(r) {
+		// If we do not close here, there will be a lot of unused connections
+		// in connManager.
+		if sc != nil {
+			if closeErr := sc.Close(); closeErr != nil {
+				c.log.Error("failed to close server connection", zap.Error(closeErr))
+			}
+		}
 		v2.ProxyConnectCommonFailCounter.Inc()
 		return nil, withCode(moerr.NewInternalErrorNoCtx("access error"),
 			codeAuthFailed)

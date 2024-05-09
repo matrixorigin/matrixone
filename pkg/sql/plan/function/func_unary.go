@@ -858,15 +858,26 @@ func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	})
 }
 
-func FromBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
+func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		data, null := source.GetStrValue(i)
+		if null {
+			return rs.AppendMustNullForBytesResult()
+		}
+
 		buf := make([]byte, base64.StdEncoding.DecodedLen(len(functionUtil.QuickBytesToStr(data))))
 		_, err := base64.StdEncoding.Decode(buf, data)
 		if err != nil {
-			return nil, err
+			return rs.AppendMustNullForBytesResult()
 		}
-		return buf, nil
-	})
+		_ = rs.AppendMustBytesValue(buf)
+	}
+
+	return nil
 }
 
 func Length(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {

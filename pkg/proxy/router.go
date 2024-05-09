@@ -69,11 +69,9 @@ type RefreshableRouter interface {
 // CNServer represents the backend CN server, including salt, tenant, uuid and address.
 // When there is a new client connection, a new CNServer will be created.
 type CNServer struct {
-	// backendConnID is the backend CN server's connection ID, which is global unique
+	// connID is the backend CN server's connection ID, which is global unique
 	// and is tracked in connManager.
-	backendConnID uint32
-	// clientConnID is the connection ID in proxy side.
-	proxyConnID uint32
+	connID uint32
 	// salt is generated in proxy module and will be sent to backend
 	// server when build connection.
 	salt []byte
@@ -103,7 +101,7 @@ func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IO
 	err := c.Connect(s.addr, timeout)
 	if err != nil {
 		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, error: %v",
-			timeout, s.backendConnID, s.addr, err)
+			timeout, s.connID, s.addr, err)
 		return nil, newConnectErr(err)
 	}
 	if len(s.salt) != 20 {
@@ -112,7 +110,7 @@ func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IO
 	info := pb.ExtraInfo{
 		Salt:         s.salt,
 		InternalConn: s.internalConn,
-		ConnectionID: s.proxyConnID,
+		ConnectionID: s.connID,
 		Label:        s.reqLabel.allLabels(),
 		ClientAddr:   s.clientAddr,
 	}
@@ -186,10 +184,10 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 	}
 	// Return a new CNServer instance for temporary connection.
 	return &CNServer{
-		backendConnID: cn.backendConnID,
-		salt:          cn.salt,
-		uuid:          cn.uuid,
-		addr:          cn.addr,
+		connID: cn.connID,
+		salt:   cn.salt,
+		uuid:   cn.uuid,
+		addr:   cn.addr,
 	}, nil
 }
 
@@ -288,7 +286,7 @@ func (r *router) Connect(
 		return nil, nil, err
 	}
 	// After handshake with backend CN server, set the connID of serverConn.
-	cn.backendConnID = sc.ConnID()
+	cn.connID = sc.ConnID()
 
 	// After connect succeed, track the connection.
 	r.rebalancer.connManager.connect(cn, t)

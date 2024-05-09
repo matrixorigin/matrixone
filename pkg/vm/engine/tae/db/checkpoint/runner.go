@@ -925,6 +925,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 	if pressure > 1.0 {
 		pressure = 1.0
 	}
+	count := 0
 
 	logutil.Infof("[flushtabletail] scan result: pressure %v, totalsize %v", pressure, common.HumanReadableBytes(totalSize))
 
@@ -953,6 +954,13 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		}
 
 		flushReady := func() bool {
+			if !table.IsActive() {
+				count++
+				if pressure < 0.5 || count < 200 {
+					return true
+				}
+				return false
+			}
 			if stats.FlushDeadline.Before(time.Now()) {
 				return true
 			}

@@ -100,7 +100,7 @@ func (th *TxnHandler) createTxnCtx() (context.Context, error) {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.NodeIDKey{}, v)
 	}
 	retTxnCtx = trace.ContextWithSpan(retTxnCtx, trace.SpanFromContext(reqCtx))
-	if th.ses != nil && th.ses.GetTenantInfo() != nil && th.ses.GetTenantInfo().User == db_holder.MOLoggerUser {
+	if th.ses != nil && th.ses.GetTenantInfo() != nil && th.ses.GetTenantInfo().GetUser() == db_holder.MOLoggerUser {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.IsMoLogger{}, true)
 	}
 
@@ -169,8 +169,8 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 		connectionID = th.ses.GetMysqlProtocol().ConnectionID()
 	}
 	if th.ses.GetTenantInfo() != nil {
-		accountID = th.ses.GetTenantInfo().TenantID
-		userName = th.ses.GetTenantInfo().User
+		accountID = th.ses.GetTenantInfo().GetTenantID()
+		userName = th.ses.GetTenantInfo().GetUser()
 	}
 	sessionInfo := th.ses.GetDebugString()
 	opts = append(opts,

@@ -16,6 +16,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync/atomic"
 	"time"
@@ -106,16 +107,21 @@ func (db *DB) ForceCheckpoint(
 		return err
 	}
 
-	timeout := time.After(flushDuration - time.Since(t0))
+	wait := flushDuration - time.Since(t0)
+	if wait < time.Minute {
+		wait = time.Minute
+	}
+
+	timeout := time.After(wait)
 	for {
 		select {
 		case <-timeout:
-			return moerr.NewInternalError(ctx, "timeout")
+			return moerr.NewInternalError(ctx, fmt.Sprintf("timeout for: %v", err))
 		default:
 			err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, true)
 			if dbutils.IsRetrieableCheckpoint(err) {
-				interval := flushDuration * time.Millisecond / 400
-				time.Sleep(interval)
+				interval := flushDuration.Milliseconds() / 400
+				time.Sleep(time.Duration(interval))
 				break
 			}
 			logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
