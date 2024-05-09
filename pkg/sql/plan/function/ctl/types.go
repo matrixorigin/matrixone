@@ -38,12 +38,14 @@ var (
 	ForceGCMethod          = "FORCEGC"
 	InspectMethod          = "INSPECT"
 	LabelMethod            = "LABEL"
+	WorkStateMethod        = "WORKSTATE"
 	SyncCommitMethod       = "SYNCCOMMIT"
 	AddFaultPointMethod    = "ADDFAULTPOINT"
 	BackupMethod           = "BACKUP"
 	TraceSpanMethod        = "TRACESPAN"
 	CoreDumpMethod         = "COREDUMP"
 	InterceptCommitMethod  = "INTERCEPTCOMMIT"
+	MergeObjectsMethod     = "MERGEOBJECTS"
 
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
@@ -75,12 +77,14 @@ var (
 		ForceGCMethod:          handleCNGC,
 		InspectMethod:          handleInspectTN(),
 		LabelMethod:            handleSetLabel,
+		WorkStateMethod:        handleSetWorkState,
 		SyncCommitMethod:       handleSyncCommit,
 		AddFaultPointMethod:    handleAddFaultPoint(),
 		BackupMethod:           handleBackup(),
 		TraceSpanMethod:        handleTraceSpan,
 		CoreDumpMethod:         handleCoreDump,
 		InterceptCommitMethod:  handleInterceptCommit(),
+		MergeObjectsMethod:     handleMerge(),
 
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,

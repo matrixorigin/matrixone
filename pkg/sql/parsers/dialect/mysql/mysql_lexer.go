@@ -25,8 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql, lower)
+func Parse(ctx context.Context, sql string, lower int64, useOrigin int64) ([]tree.Statement, error) {
+	lexer := NewLexer(dialect.MYSQL, sql, lower, useOrigin)
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
@@ -49,8 +49,8 @@ func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, erro
 	return lexer.stmts, nil
 }
 
-func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql, lower)
+func ParseOne(ctx context.Context, sql string, lower int64, useOrigin int64) (tree.Statement, error) {
+	lexer := NewLexer(dialect.MYSQL, sql, lower, useOrigin)
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
@@ -69,13 +69,15 @@ type Lexer struct {
 	stmts      []tree.Statement
 	paramIndex int
 	lower      int64
+	useOrigin  int64
 }
 
-func NewLexer(dialectType dialect.DialectType, sql string, lower int64) *Lexer {
+func NewLexer(dialectType dialect.DialectType, sql string, lower int64, useOrigin int64) *Lexer {
 	return &Lexer{
 		scanner:    NewScanner(dialectType, sql),
 		paramIndex: 0,
 		lower:      lower,
+		useOrigin:  useOrigin,
 	}
 }
 

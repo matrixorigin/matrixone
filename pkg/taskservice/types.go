@@ -44,14 +44,17 @@ var (
 	LE = Op(5)
 	// IN record in condition
 	IN = Op(6)
+	// LIKE record LIKE condition
+	LIKE = Op(7)
 
 	OpName = map[Op]string{
-		EQ: "=",
-		GT: ">",
-		GE: ">=",
-		LT: "<",
-		LE: "<=",
-		IN: "IN",
+		EQ:   "=",
+		GT:   ">",
+		GE:   ">=",
+		LT:   "<",
+		LE:   "<=",
+		IN:   "IN",
+		LIKE: "LIKE",
 	}
 )
 
@@ -287,6 +290,19 @@ func (c *cronTaskIDCond) sql() string {
 	return fmt.Sprintf("cron_task_id%s%d", OpName[c.op], c.cronTaskID)
 }
 
+type taskMetadataIDCond struct {
+	op             Op
+	taskMetadataID string
+}
+
+func (c *taskMetadataIDCond) eval(v any) bool {
+	return false
+}
+
+func (c *taskMetadataIDCond) sql() string {
+	return fmt.Sprintf("task_metadata_id %s '%s'", OpName[c.op], c.taskMetadataID)
+}
+
 func compare[T constraints.Ordered](op Op, a T, b T) bool {
 	switch op {
 	case EQ:
@@ -320,6 +336,7 @@ const (
 	CondAccount
 	CondLastHeartbeat
 	CondCronTaskId
+	CondTaskMetadataId
 )
 
 var (
@@ -331,6 +348,7 @@ var (
 		CondTaskParentTaskID: {},
 		CondTaskExecutor:     {},
 		CondCronTaskId:       {},
+		CondTaskMetadataId:   {},
 	}
 	daemonWhereConditionCodes = map[condCode]struct{}{
 		CondTaskID:        {},
@@ -441,6 +459,12 @@ func WithLastHeartbeat(op Op, value int64) Condition {
 func WithCronTaskId(op Op, value uint64) Condition {
 	return func(c *conditions) {
 		(*c)[CondCronTaskId] = &cronTaskIDCond{op: op, cronTaskID: value}
+	}
+}
+
+func WithTaskMetadataId(op Op, value string) Condition {
+	return func(c *conditions) {
+		(*c)[CondTaskMetadataId] = &taskMetadataIDCond{op: op, taskMetadataID: value}
 	}
 }
 
@@ -568,3 +592,5 @@ type TaskServiceHolder interface {
 type TaskStorageFactory interface {
 	Create(address string) (TaskStorage, error)
 }
+
+type Getter func() (TaskService, bool)

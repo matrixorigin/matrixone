@@ -28,7 +28,8 @@ func (s *showImpl) Free() {
 // SHOW CREATE TABLE statement
 type ShowCreateTable struct {
 	showImpl
-	Name *UnresolvedObjectName
+	Name         *UnresolvedObjectName
+	SnapshotName string
 }
 
 func (node *ShowCreateTable) Format(ctx *FmtCtx) {
@@ -46,7 +47,8 @@ func NewShowCreate(n *UnresolvedObjectName) *ShowCreateTable {
 // SHOW CREATE VIEW statement
 type ShowCreateView struct {
 	showImpl
-	Name *UnresolvedObjectName
+	Name         *UnresolvedObjectName
+	SnapshotName string
 }
 
 func (node *ShowCreateView) Format(ctx *FmtCtx) {
@@ -138,8 +140,9 @@ func NewShowColumns(e bool, f bool, t *UnresolvedObjectName, d string, l *Compar
 // the SHOW DATABASES statement.
 type ShowDatabases struct {
 	showImpl
-	Like  *ComparisonExpr
-	Where *Where
+	Like         *ComparisonExpr
+	Where        *Where
+	SnapshotName string
 }
 
 func (node *ShowDatabases) Format(ctx *FmtCtx) {
@@ -331,12 +334,13 @@ func (node *ShowSequences) GetQueryType() string     { return QueryTypeOth }
 // SHOW TABLES statement.
 type ShowTables struct {
 	showImpl
-	Ext    bool
-	Open   bool
-	Full   bool
-	DBName string
-	Like   *ComparisonExpr
-	Where  *Where
+	Ext          bool
+	Open         bool
+	Full         bool
+	DBName       string
+	Like         *ComparisonExpr
+	Where        *Where
+	SnapshotName string
 }
 
 func (node *ShowTables) Format(ctx *FmtCtx) {
@@ -708,6 +712,17 @@ func (node *ShowAccounts) Format(ctx *FmtCtx) {
 
 func (node *ShowAccounts) GetStatementType() string { return "Show Accounts" }
 func (node *ShowAccounts) GetQueryType() string     { return QueryTypeOth }
+
+type ShowAccountUpgrade struct {
+	statementImpl
+}
+
+func (node *ShowAccountUpgrade) Format(ctx *FmtCtx) {
+	ctx.WriteString("show upgrade")
+}
+
+func (node *ShowAccountUpgrade) GetStatementType() string { return "show upgrade" }
+func (node *ShowAccountUpgrade) GetQueryType() string     { return QueryTypeOth }
 
 type ShowPublications struct {
 	showImpl

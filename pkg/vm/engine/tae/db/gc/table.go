@@ -108,39 +108,50 @@ func (t *GCTable) getObjects() map[string]*ObjectEntry {
 }
 
 // SoftGC is to remove objectentry that can be deleted from GCTable
-func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList []types.TS) []string {
+func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]containers.Vector, meta *logtail.SnapshotMeta) ([]string, map[uint32][]types.TS) {
 	gc := make([]string, 0)
+	snapList := make(map[uint32][]types.TS)
 	objects := t.getObjects()
-	for _, snap := range snapShotList {
-		logutil.Infof("SoftGC: snap %v", snap.ToString())
+	for acct, snap := range snapShotList {
+		snapList[acct] = vector.MustFixedCol[types.TS](snap.GetDownstreamVector())
 	}
 	for name, entry := range objects {
 		objectEntry := table.objects[name]
-		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, snapShotList) {
+		tsList := meta.GetSnapshotList(snapList, entry.table)
+		if tsList == nil {
+			if objectEntry == nil && entry.commitTS.Less(&ts) {
+				gc = append(gc, name)
+				t.deleteObject(name)
+			}
+			continue
+		}
+		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, tsList, name) {
 			gc = append(gc, name)
 			t.deleteObject(name)
 		}
 	}
-	return gc
+	return gc, snapList
 }
 
-func isSnapshotRefers(obj *ObjectEntry, snapShotList []types.TS) bool {
-	if len(snapShotList) == 0 {
+func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, name string) bool {
+	if len(snapVec) == 0 {
 		return false
 	}
-	left, right := 0, len(snapShotList)-1
+	left, right := 0, len(snapVec)-1
 	for left <= right {
 		mid := left + (right-left)/2
-		if snapShotList[mid].GreaterEq(&obj.createTS) && snapShotList[mid].Less(&obj.dropTS) {
-			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v", snapShotList[mid].ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
-			return false
-		} else if snapShotList[mid].Less(&obj.createTS) {
+		snapTS := snapVec[mid]
+		if snapTS.GreaterEq(&obj.createTS) && (obj.dropTS.IsEmpty() || snapTS.Less(&obj.dropTS)) {
+			logutil.Infof("name: %v, isSnapshotRefers: %s, create %v, drop %v",
+				name, snapTS.ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
+			return true
+		} else if snapTS.Less(&obj.createTS) {
 			left = mid + 1
 		} else {
 			right = mid - 1
 		}
 	}
-	return true
+	return false
 }
 
 func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
@@ -226,6 +237,7 @@ func (t *GCTable) collectData(files []string) []*containers.Batch {
 		bats[CreateBlock].GetVectorByName(GCCreateTS).Append(entry.createTS, false)
 		bats[CreateBlock].GetVectorByName(GCDeleteTS).Append(entry.dropTS, false)
 		bats[CreateBlock].GetVectorByName(GCAttrCommitTS).Append(entry.commitTS, false)
+		bats[CreateBlock].GetVectorByName(GCAttrTableId).Append(entry.table, false)
 	}
 	return bats
 }
@@ -274,6 +286,7 @@ func (t *GCTable) rebuildTableV2(bats []*containers.Batch) {
 		creatTS := bats[CreateBlock].GetVectorByName(GCCreateTS).Get(i).(types.TS)
 		deleteTS := bats[CreateBlock].GetVectorByName(GCDeleteTS).Get(i).(types.TS)
 		commitTS := bats[CreateBlock].GetVectorByName(GCAttrCommitTS).Get(i).(types.TS)
+		tid := bats[CreateBlock].GetVectorByName(GCAttrTableId).Get(i).(uint64)
 		if t.objects[name] != nil {
 			continue
 		}
@@ -281,6 +294,7 @@ func (t *GCTable) rebuildTableV2(bats []*containers.Batch) {
 			createTS: creatTS,
 			dropTS:   deleteTS,
 			commitTS: commitTS,
+			table:    tid,
 		}
 		t.addObject(name, object, commitTS)
 	}
@@ -317,16 +331,15 @@ func (t *GCTable) replayData(ctx context.Context,
 	types []types.Type,
 	bats []*containers.Batch,
 	bs []objectio.BlockObject,
-	reader *blockio.BlockReader) error {
+	reader *blockio.BlockReader) (func(), error) {
 	idxes := make([]uint16, len(attrs))
 	for i := range attrs {
 		idxes[i] = uint16(i)
 	}
 	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[typ].GetID(), common.DefaultAllocator)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer release()
 	for i := range attrs {
 		pkgVec := mobat.Vecs[i]
 		var vec containers.Vector
@@ -337,11 +350,23 @@ func (t *GCTable) replayData(ctx context.Context,
 		}
 		bats[typ].AddVector(attrs[i], vec)
 	}
-	return nil
+	return release, nil
 }
 
 // ReadTable reads an s3 file and replays a GCTable in memory
 func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS, ts types.TS) error {
+	var release, releaseCreateBlock, releaseDeleteBlock func()
+	defer func() {
+		if release != nil {
+			release()
+		}
+		if releaseCreateBlock != nil {
+			releaseCreateBlock()
+		}
+		if releaseDeleteBlock != nil {
+			releaseDeleteBlock()
+		}
+	}()
 	reader, err := blockio.NewFileReaderNoCache(fs.Service, name)
 	if err != nil {
 		return err
@@ -353,7 +378,7 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	if len(bs) == 1 {
 		bats := t.makeBatchWithGCTable()
 		defer t.closeBatch(bats)
-		err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
+		release, err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
 		if err != nil {
 			return err
 		}
@@ -362,11 +387,11 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	}
 	bats := t.makeBatchWithGCTableV1()
 	defer t.closeBatch(bats)
-	err = t.replayData(ctx, CreateBlock, BlockSchemaAttrV1, BlockSchemaTypesV1, bats, bs, reader)
+	releaseCreateBlock, err = t.replayData(ctx, CreateBlock, BlockSchemaAttrV1, BlockSchemaTypesV1, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DeleteBlock, BlockSchemaAttrV1, BlockSchemaTypesV1, bats, bs, reader)
+	releaseDeleteBlock, err = t.replayData(ctx, DeleteBlock, BlockSchemaAttrV1, BlockSchemaTypesV1, bats, bs, reader)
 	if err != nil {
 		return err
 	}
@@ -376,19 +401,19 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 
 // For test
 func (t *GCTable) Compare(table *GCTable) bool {
-	if len(t.objects) != len(table.objects) {
-		return false
-	}
-	for name, entry := range t.objects {
-		object := table.objects[name]
+	for name, entry := range table.objects {
+		object := t.objects[name]
 		if object == nil {
+			logutil.Infof("object %s is nil, create %v, drop %v", name, entry.createTS.ToString(), entry.dropTS.ToString())
 			return false
 		}
 		if !entry.commitTS.Equal(&object.commitTS) {
+			logutil.Infof("object %s commitTS is not equal", name)
 			return false
 		}
 	}
-	return true
+
+	return len(t.objects) == len(table.objects)
 }
 
 func (t *GCTable) String() string {

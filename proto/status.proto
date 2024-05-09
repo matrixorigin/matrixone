@@ -40,6 +40,7 @@ enum SessionField {
 	QUERY_START = 15;
 	CLIENT_HOST = 16;
 	ROLE = 17;
+	PROXY_HOST = 18;
 }
 
 // Session is the information of a session.
@@ -84,4 +85,6 @@ message Session {
 	string Role = 18;
 	// FromProxy denotes whether the session is dispatched from proxy
 	bool FromProxy = 19;
+	// ProxyHost is the host address of proxy connection.
+	string ProxyHost = 20;
 }

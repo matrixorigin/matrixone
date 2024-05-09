@@ -280,13 +280,11 @@ load data infile '$resources/load_data/test_starting_by01.csv' into table test03
 select * from test03;
 drop table test03;
 
--- @bvt:issue#15084
 drop table if exists test04;
 create table test04 (col1 varchar(20), col2 varchar(60));
 load data infile '$resources/load_data/test_escaped_by01.csv' into table test04 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from test04;
 drop table test04;
--- @bvt:issue
 
 drop table if exists test05;
 create table test05 (col1 varchar(20), col2 varchar(60));
@@ -321,3 +319,12 @@ create table test09(col1 varchar(20), col2 varchar(20));
 load data infile '$resources/load_data/test_starting_by04.csv' into table test09 CHARACTER SET "utf_8" fields terminated by ',' lines starting by ' ';
 select * from test09;
 drop table test09;
+
+drop table if exists test10;
+create table test10(col1 text, col2 text);
+load data infile {'filepath'='$resources/load_data/text.csv.tar.gz', 'compression'='tar.gz'} into table test10 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
+select * from test10;
+
+load data infile {'filepath'='$resources/load_data/text.csv.tar.bz2', 'compression'='tar.bz2'} into table test10 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
+select * from test10;
+drop table test10;

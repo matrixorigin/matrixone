@@ -57,7 +57,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	bat := result.Batch
 
-	if err := ap.Func(ap.Data, bat); err != nil {
+	if err := ap.Func(bat); err != nil {
 		result.Status = vm.ExecStop
 		return result, err
 	}

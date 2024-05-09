@@ -1229,7 +1229,8 @@ func EliminateErrorsOnCache(c *catalog.Catalog, end types.TS) int {
 			return nil
 		}
 
-		if entry.IsAppendable() || !entry.IsCommitted() {
+		// PXU TODO
+		if entry.IsAppendable() || !entry.IsCommittedLocked() {
 			return nil
 		}
 

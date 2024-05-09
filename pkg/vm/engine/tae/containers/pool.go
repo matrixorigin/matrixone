@@ -208,7 +208,7 @@ func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
 	return NewVector(*t, Options{Allocator: p.mp})
 }
 
-func (p *VectorPool) MPool() *mpool.MPool {
+func (p *VectorPool) GetMPool() *mpool.MPool {
 	return p.mp
 }
 
@@ -263,10 +263,6 @@ func (p *VectorPool) VarlenUsed(isUnsafe bool) (int, int) {
 		cnt++
 	}
 	return cnt, size
-}
-
-func (p *VectorPool) GetAllocator() *mpool.MPool {
-	return p.mp
 }
 
 func (p *VectorPool) Used(isUnsafe bool) (int, int) {

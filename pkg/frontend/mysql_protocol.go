@@ -33,6 +33,9 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	goetty_buf "github.com/fagongzi/goetty/v2/buf"
+	"go.uber.org/zap"
+	"golang.org/x/exp/slices"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -45,8 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"golang.org/x/exp/slices"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -210,15 +211,6 @@ type MysqlProtocol interface {
 }
 
 var _ MysqlProtocol = &MysqlProtocolImpl{}
-
-func (ses *Session) GetMysqlProtocol() MysqlProtocol {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	if ses.protocol != nil {
-		return ses.protocol.(MysqlProtocol)
-	}
-	return nil
-}
 
 type debugStats struct {
 	writeCount uint64
@@ -535,7 +527,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numParams > 0 {
-		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetServerStatus()); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
 			return err
 		}
 	}
@@ -555,7 +547,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numColumns > 0 {
-		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetServerStatus()); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
 			return err
 		}
 	}
@@ -1736,7 +1728,6 @@ func (mp *MysqlProtocolImpl) makeOKPayloadWithEof(affectedRows, lastInsertId uin
 	pos = mp.io.WriteUint8(data, pos, defines.EOFHeader)
 	pos = mp.writeIntLenEnc(data, pos, affectedRows)
 	pos = mp.writeIntLenEnc(data, pos, lastInsertId)
-	statusFlags = extendStatus(statusFlags)
 	if (mp.capability & CLIENT_PROTOCOL_41) != 0 {
 		pos = mp.io.WriteUint16(data, pos, statusFlags)
 		pos = mp.io.WriteUint16(data, pos, warnings)
@@ -1823,7 +1814,7 @@ func (mp *MysqlProtocolImpl) makeEOFPayload(warnings, status uint16) []byte {
 	pos = mp.io.WriteUint8(data, pos, defines.EOFHeader)
 	if mp.capability&CLIENT_PROTOCOL_41 != 0 {
 		pos = mp.io.WriteUint16(data, pos, warnings)
-		pos = mp.io.WriteUint16(data, pos, extendStatus(status))
+		pos = mp.io.WriteUint16(data, pos, status)
 	}
 	return data[:pos]
 }
@@ -2670,12 +2661,12 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is set, OK_Packet; else EOF_Packet.
 	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
-		err := mp.sendOKPacketWithEof(0, 0, status, 0, "")
+		err := mp.sendOKPacketWithEof(0, 0, extendStatus(status), 0, "")
 		if err != nil {
 			return err
 		}
 	} else {
-		err := mp.sendEOFPacket(warnings, status)
+		err := mp.sendEOFPacket(warnings, extendStatus(status))
 		if err != nil {
 			return err
 		}
@@ -2686,9 +2677,6 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 
 // the server sends the payload to the client
 func (mp *MysqlProtocolImpl) writePackets(payload []byte, flush bool) error {
-	if flush {
-		flush = !mp.disableAutoFlush
-	}
 
 	//protocol header length
 	var headerLen = HeaderOffset
@@ -2714,7 +2702,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte, flush bool) error {
 		var packet = append(header[:], payload[i:i+curLen]...)
 
 		mp.incDebugCount(4)
-		err := mp.tcpConn.Write(packet, goetty.WriteOptions{Flush: false})
+		err := mp.tcpConn.Write(packet, goetty.WriteOptions{Flush: true})
 		mp.incDebugCount(5)
 		if err != nil {
 			return err
@@ -2741,9 +2729,6 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte, flush bool) error {
 		}
 	}
 
-	if flush {
-		return mp.tcpConn.Flush(0)
-	}
 	return nil
 }
 
@@ -2779,9 +2764,9 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 		logDebugf(mp.GetDebugString(), "failed to set deadline for salt updating: %v", err)
 		return
 	}
-	ve := proxy.NewVersionedExtraInfo(proxy.Version0, nil)
+	var i proxy.ExtraInfo
 	reader := bufio.NewReader(rs.RawConn())
-	if err := ve.Decode(reader); err != nil {
+	if err := i.Decode(reader); err != nil {
 		// If the error is timeout, we treat it as normal case and do not update extra info.
 		if err, ok := err.(net.Error); ok && err.Timeout() {
 			logInfo(mp.ses, mp.GetDebugString(), "cannot get salt, maybe not use proxy",
@@ -2795,32 +2780,17 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 
 	// must from proxy if extraInfo is received
 	mp.GetSession().fromProxy = true
-	salt, ok := ve.ExtraInfo.GetSalt()
-	if ok {
-		mp.SetSalt(salt)
+	mp.SetSalt(i.Salt)
+	mp.connectionID = i.ConnectionID
+	ses := mp.GetSession()
+	ses.requestLabel = i.Label
+	if i.InternalConn {
+		ses.connType = ConnTypeInternal
 	} else {
-		logError(mp.ses, mp.GetDebugString(), "cannot get salt")
+		ses.connType = ConnTypeExternal
 	}
-	label, ok := ve.ExtraInfo.GetLabel()
-	if ok {
-		mp.GetSession().requestLabel = label.Labels
-	} else {
-		logError(mp.ses, mp.GetDebugString(), "cannot get label")
-	}
-	connID, ok := ve.ExtraInfo.GetConnectionID()
-	if ok {
-		if connID > 0 {
-			mp.connectionID = connID
-		}
-	}
-	internalConn, ok := ve.ExtraInfo.GetInternalConn()
-	if ok {
-		if internalConn {
-			mp.GetSession().connType = ConnTypeInternal
-		} else {
-			mp.GetSession().connType = ConnTypeExternal
-		}
-	}
+	ses.clientAddr = i.ClientAddr
+	ses.proxyAddr = mp.Peer()
 }
 
 /*

@@ -100,6 +100,13 @@ func (s *taskScheduler) ScheduleMultiScopedTxnTask(
 	return
 }
 
+func (s *taskScheduler) CheckAsyncScopes(scopes []common.ID) (err error) {
+	dispatcher := s.Dispatchers[tasks.DataCompactionTask].(*asyncJobDispatcher)
+	dispatcher.Lock()
+	defer dispatcher.Unlock()
+	return dispatcher.checkConflictLocked(scopes)
+}
+
 func (s *taskScheduler) ScheduleMultiScopedFn(
 	ctx *tasks.Context,
 	taskType tasks.TaskType,

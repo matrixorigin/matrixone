@@ -182,13 +182,13 @@ func NewService(
 		s.options.adjustConfigFunc(s.cfg)
 	}
 
-	if err := s.initLockTableAllocator(); err != nil {
-		return nil, err
-	}
 	if err := s.initClocker(); err != nil {
 		return nil, err
 	}
 	if err := s.initHAKeeperClient(); err != nil {
+		return nil, err
+	}
+	if err := s.initLockTableAllocator(); err != nil {
 		return nil, err
 	}
 	if err := s.initTxnSender(); err != nil {

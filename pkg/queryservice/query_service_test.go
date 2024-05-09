@@ -246,9 +246,15 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice
 
 	qs.AddHandleFunc(pb.CmdMethod_GetCacheData,
 		func(ctx context.Context, req *pb.Request, resp *pb.Response) error {
-			return fileservice.HandleRemoteRead(ctx, fs, req, &pb.WrappedResponse{
+			wr := &pb.WrappedResponse{
 				Response: resp,
-			})
+			}
+			err := fileservice.HandleRemoteRead(ctx, fs, req, wr)
+			if err != nil {
+				return err
+			}
+			qs.SetReleaseFunc(resp, wr.ReleaseFunc)
+			return nil
 		},
 		false,
 	)
@@ -482,6 +488,7 @@ func TestQueryService_RemoteCache(t *testing.T) {
 			QueryClient:        qt,
 		}, nil)
 	assert.Nil(t, err)
+	defer func() { fs.Close() }()
 
 	t.Run("main", func(t *testing.T) {
 		runTestWithQueryService(t, cn, fs, func(cli client.QueryClient, addr string) {
@@ -507,10 +514,12 @@ func TestQueryService_RemoteCache(t *testing.T) {
 				Entries:  []fileservice.IOEntry{writeEntry0, writeEntry1},
 			})
 			assert.NoError(t, err)
-			err = fs.Read(ctx, &fileservice.IOVector{
+			iov := &fileservice.IOVector{
 				FilePath: "foo",
 				Entries:  []fileservice.IOEntry{readEntry0, readEntry1},
-			})
+			}
+			defer iov.Release()
+			err = fs.Read(ctx, iov)
 			assert.NoError(t, err)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()

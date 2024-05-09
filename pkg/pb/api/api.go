@@ -28,22 +28,9 @@ var (
 		OpCode_OpTraceSpan:        "TraceSpan",
 		OpCode_OpGlobalCheckpoint: "GlobalCheckpoint",
 		OpCode_OpInterceptCommit:  "InterceptCommit",
+		OpCode_OpCommitMerge:      "CommitMerge",
 	}
 )
-
-func NewUpdatePolicyReq(minRowQ, maxObjOnerune, maxRowsMerged int, hints ...MergeHint) *AlterTableReq {
-	return &AlterTableReq{
-		Kind: AlterKind_UpdatePolicy,
-		Operation: &AlterTableReq_UpdatePolicy{
-			&AlterTablePolicy{
-				MinRowsQuailifed: uint32(minRowQ),
-				MaxObjOnerun:     uint32(maxObjOnerune),
-				MaxRowsMergedObj: uint32(maxRowsMerged),
-				Hints:            hints,
-			},
-		},
-	}
-}
 
 func NewUpdateConstraintReq(did, tid uint64, cstr string) *AlterTableReq {
 	return &AlterTableReq{
@@ -162,5 +149,13 @@ func (m *PrecommitWriteCmd) MarshalBinary() ([]byte, error) {
 }
 
 func (m *PrecommitWriteCmd) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
+func (m *MergeCommitEntry) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *MergeCommitEntry) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }

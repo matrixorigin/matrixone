@@ -593,12 +593,17 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		s.ResultCount = sentRows
 		s.AggrCount = 0
 		s.MarkResponseAt()
+		// --- Start of metric part
 		// duration is filled in s.MarkResponseAt()
+		incStatementCounter(s.Account, s.QueryType)
 		addStatementDurationCounter(s.Account, s.QueryType, s.Duration)
+		// --- END of metric part
 		if err != nil {
 			outBytes += ResponseErrPacketSize + int64(len(err.Error()))
 		}
-		outBytes += TcpIpv4HeaderSize * outPacket
+		if GetTracerProvider().tcpPacket {
+			outBytes += TcpIpv4HeaderSize * outPacket
+		}
 		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
 		s.ExecPlan2Stats(ctx)
 		if s.statsArray.GetCU() < 0 {
@@ -619,8 +624,11 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 	}
 }
 
-func addStatementDurationCounter(tenant, querytype string, duration time.Duration) {
-	metric.StatementDuration(tenant, querytype).Add(float64(duration))
+func addStatementDurationCounter(tenant, queryType string, duration time.Duration) {
+	metric.StatementDuration(tenant, queryType).Add(float64(duration))
+}
+func incStatementCounter(tenant, queryType string) {
+	metric.StatementCounter(tenant, queryType).Inc()
 }
 
 type StatementInfoStatus int

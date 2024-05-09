@@ -66,7 +66,9 @@ Project
         ->  Join
               Join Type: RIGHT
               Join Cond: (t2.c1 = t1.c1)
+              Runtime Filter Build: #[-1,0]
               ->  Table Scan on d1.t2
+                    Runtime Filter Probe: t2.c1
               ->  Sort
                     Sort Key: t1.c1 INTERNAL
                     Limit: 10
@@ -92,7 +94,9 @@ Project
         ->  Join
               Join Type: RIGHT
               Join Cond: (t2.c1 = t1.c1)
+              Runtime Filter Build: #[-1,0]
               ->  Table Scan on d1.t2
+                    Runtime Filter Probe: t2.c1
               ->  Sort
                     Sort Key: t1.c1 INTERNAL
                     Limit: 30

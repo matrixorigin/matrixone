@@ -82,7 +82,11 @@ func SetSQLWriterDBAddressFunc(f func(context.Context, bool) (string, error)) {
 }
 
 func GetSQLWriterDBAddressFunc() func(context.Context, bool) (string, error) {
-	return dbAddressFunc.Load().(func(context.Context, bool) (string, error))
+	if f := dbAddressFunc.Load(); f == nil {
+		return nil
+	} else {
+		return f.(func(context.Context, bool) (string, error))
+	}
 }
 
 func SetDBConn(conn *sql.DB) {
@@ -311,8 +315,11 @@ func SetLabelSelector(labels map[string]string) {
 	if len(labels) == 0 {
 		return
 	}
-	labels["account"] = "sys"
-	gLabels = labels
+	gLabels = make(map[string]string, len(labels)+1)
+	gLabels["account"] = "sys"
+	for k, v := range labels {
+		gLabels[k] = v
+	}
 }
 
 // GetLabelSelector

@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -128,7 +128,7 @@ func (d *DiskCache) Read(
 
 	var numHit, numRead, numOpenIOEntry, numOpenFull, numError int64
 	defer func() {
-		v2.FSReadHitDiskCounter.Add(float64(numHit))
+		metric.FSReadHitDiskCounter.Add(float64(numHit))
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 			c.FileService.Cache.Read.Add(numRead)
 			c.FileService.Cache.Hit.Add(numHit)

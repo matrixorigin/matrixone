@@ -188,8 +188,11 @@ func NewNoAvailableBackendNoCtx() *Error {
 	return newError(Context(), ErrNoAvailableBackend)
 }
 
-func NewBackendCannotConnectNoCtx() *Error {
-	return newError(Context(), ErrBackendCannotConnect)
+func NewBackendCannotConnectNoCtx(args ...any) *Error {
+	if len(args) == 0 {
+		return newError(Context(), ErrBackendCannotConnect, "none")
+	}
+	return newError(Context(), ErrBackendCannotConnect, args...)
 }
 
 func NewTxnClosedNoCtx(txnID []byte) *Error {
@@ -279,6 +282,10 @@ func NewNewTxnInCNRollingRestart() *Error {
 	return newError(Context(), ErrNewTxnInCNRollingRestart)
 }
 
+func NewPrevCheckpointNotFinished() *Error {
+	return newError(Context(), ErrPrevCheckpointNotFinished)
+}
+
 func NewNotFoundNoCtx() *Error {
 	return newError(Context(), ErrNotFound)
 }
@@ -316,6 +323,10 @@ func NewDeadlockCheckBusyNoCtx() *Error {
 	return newError(Context(), ErrDeadlockCheckBusy)
 }
 
+func NewCannotCommitOrphanNoCtx() *Error {
+	return NewCannotCommitOrphan(Context())
+}
+
 func NewLockTableBindChangedNoCtx() *Error {
 	return newError(Context(), ErrLockTableBindChanged)
 }
@@ -350,4 +361,16 @@ func NewTxnNeedRetryWithDefChangedNoCtx() *Error {
 
 func NewTxnCannotRetryNoCtx() *Error {
 	return newError(Context(), ErrTxnCannotRetry)
+}
+
+func NewRPCTimeoutNoCtx() *Error {
+	return NewRPCTimeout(Context())
+}
+
+func NewKeyAlreadyExistsNoCtx() *Error {
+	return newError(Context(), ErrKeyAlreadyExists)
+}
+
+func NewArenaFullNoCtx() *Error {
+	return newError(Context(), ErrArenaFull)
 }

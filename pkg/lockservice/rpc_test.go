@@ -151,6 +151,34 @@ func TestRemainTxnServiceRPCSend(t *testing.T) {
 	)
 }
 
+func TestRPCSendErrBackendCannotConnect(t *testing.T) {
+	runRPCServerNoCloseTests(
+		t,
+		func(c Client, s Server) {
+			s.RegisterMethodHandler(
+				lock.Method_Lock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *lock.Request,
+					resp *lock.Response,
+					cs morpc.ClientSession) {
+					writeResponse(ctx, cancel, resp, nil, cs)
+				})
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			defer cancel()
+			err := s.Close()
+			require.NoError(t, err)
+			_, err = c.Send(ctx,
+				&lock.Request{
+					LockTable: lock.LockTable{ServiceID: "s1"},
+					Method:    lock.Method_Lock})
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+		},
+	)
+}
+
 func TestRPCSendWithNotSupport(t *testing.T) {
 	runRPCTests(
 		t,
@@ -251,6 +279,48 @@ func TestLockTableBindChanged(t *testing.T) {
 	)
 }
 
+func TestNewClientWithMOCluster(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
+	assert.NoError(t, os.RemoveAll(testSockets[7:]))
+
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	cluster := clusterservice.NewMOCluster(
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(
+			[]metadata.CNService{
+				{
+					ServiceID:          "mock",
+					LockServiceAddress: testSockets,
+				},
+			},
+			[]metadata.TNService{
+				{
+					LockServiceAddress: testSockets,
+				},
+			}))
+	var newClientFailed bool
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				newClientFailed = true
+			}
+		}()
+		_, err := NewClient(morpc.Config{})
+		if err != nil {
+			newClientFailed = true
+		}
+	}()
+	require.True(t, newClientFailed, "new LockService Client without a process-level cluster nor a custom cluster should fail")
+	c, err := NewClient(morpc.Config{}, WithMOCluster(cluster))
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+}
+
 func runRPCTests(
 	t *testing.T,
 	fn func(Client, Server),
@@ -298,4 +368,48 @@ func runRPCTests(
 
 		fn(c, s)
 	})
+}
+
+func runRPCServerNoCloseTests(
+	t *testing.T,
+	fn func(Client, Server),
+	opts ...ServerOption) {
+	defer leaktest.AfterTest(t)()
+	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
+	assert.NoError(t, os.RemoveAll(testSockets[7:]))
+
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	cluster := clusterservice.NewMOCluster(
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(
+			[]metadata.CNService{
+				{
+					ServiceID:          "s1",
+					LockServiceAddress: testSockets,
+				},
+				{
+					ServiceID:          "s2",
+					LockServiceAddress: testSockets,
+				},
+			},
+			[]metadata.TNService{
+				{
+					LockServiceAddress: testSockets,
+				},
+			}))
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
+
+	s, err := NewServer(testSockets, morpc.Config{}, opts...)
+	require.NoError(t, err)
+	require.NoError(t, s.Start())
+
+	c, err := NewClient(morpc.Config{})
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+
+	fn(c, s)
 }

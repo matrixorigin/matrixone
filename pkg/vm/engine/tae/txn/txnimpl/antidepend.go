@@ -40,15 +40,16 @@ func readWriteConfilictCheck[T catalog.BaseNode[T]](entry *catalog.BaseEntryImpl
 		txnToWait.GetTxnState(true)
 		entry.RLock()
 	}
-	if entry.DeleteBefore(ts) {
+	if entry.DeleteBeforeLocked(ts) {
 		err = ErrRWConflict
 	}
 	return
 }
 
 type warChecker struct {
-	txn         txnif.AsyncTxn
-	catalog     *catalog.Catalog
+	txn     txnif.AsyncTxn
+	catalog *catalog.Catalog
+	//conflictSet is a set of objs which had been deleted and committed.
 	conflictSet map[types.Objectid]bool
 	readSet     map[types.Objectid]*catalog.ObjectEntry
 	cache       map[types.Objectid]*catalog.ObjectEntry

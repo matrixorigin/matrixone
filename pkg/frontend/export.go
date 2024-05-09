@@ -26,6 +26,9 @@ import (
 	"strings"
 	"sync"
 
+	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -35,8 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 type ExportConfig struct {
@@ -66,7 +67,6 @@ type ExportConfig struct {
 	AsyncReader *io.PipeReader
 	AsyncWriter *io.PipeWriter
 	AsyncGroup  *errgroup.Group
-	RowCount    uint64
 }
 
 type writeParam struct {
@@ -110,12 +110,6 @@ func (cld *CloseExportData) Close() {
 // needExportToFile checks needing to export into file or not
 func (ec *ExportConfig) needExportToFile() bool {
 	return ec != nil && ec.userConfig != nil && ec.userConfig.Outfile
-}
-
-func (ec *ExportConfig) addRowCount(n uint64) {
-	if ec != nil {
-		ec.RowCount += n
-	}
 }
 
 func initExportFileParam(ep *ExportConfig, mrs *MysqlResultSet) {

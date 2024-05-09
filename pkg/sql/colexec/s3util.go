@@ -697,9 +697,6 @@ func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]objectio.BlockInfo, 
 			blocks[j].GetID(),
 		)
 
-		if err != nil {
-			return nil, nil, err
-		}
 		sid := location.Name().SegmentId()
 		blkInfo := objectio.BlockInfo{
 			BlockID: *objectio.NewBlockid(

@@ -22,10 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+	"go.uber.org/zap"
 )
 
 const (
@@ -67,11 +69,9 @@ type RefreshableRouter interface {
 // CNServer represents the backend CN server, including salt, tenant, uuid and address.
 // When there is a new client connection, a new CNServer will be created.
 type CNServer struct {
-	// backendConnID is the backend CN server's connection ID, which is global unique
+	// connID is the backend CN server's connection ID, which is global unique
 	// and is tracked in connManager.
-	backendConnID uint32
-	// clientConnID is the connection ID in proxy side.
-	proxyConnID uint32
+	connID uint32
 	// salt is generated in proxy module and will be sent to backend
 	// server when build connection.
 	salt []byte
@@ -87,28 +87,33 @@ type CNServer struct {
 	addr string
 	// internalConn indicates the connection is from internal network. Default is false,
 	internalConn bool
+
+	// clientAddr is the real client address.
+	clientAddr string
 }
 
 // Connect connects to backend server and returns IOSession.
-func (s *CNServer) Connect(timeout time.Duration) (goetty.IOSession, error) {
-	c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()))
+func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IOSession, error) {
+	c := goetty.NewIOSession(
+		goetty.WithSessionCodec(frontend.NewSqlCodec()),
+		goetty.WithSessionLogger(logger),
+	)
 	err := c.Connect(s.addr, timeout)
 	if err != nil {
+		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, error: %v",
+			timeout, s.connID, s.addr, err)
 		return nil, newConnectErr(err)
 	}
 	if len(s.salt) != 20 {
 		return nil, moerr.NewInternalErrorNoCtx("salt is empty")
 	}
-	info := pb.NewVersionedExtraInfo(pb.Version0,
-		&pb.ExtraInfoV0{
-			Salt: s.salt,
-			Label: pb.RequestLabel{
-				Labels: s.reqLabel.allLabels(),
-			},
-			ConnectionID: s.proxyConnID,
-			InternalConn: s.internalConn,
-		},
-	)
+	info := pb.ExtraInfo{
+		Salt:         s.salt,
+		InternalConn: s.internalConn,
+		ConnectionID: s.connID,
+		Label:        s.reqLabel.allLabels(),
+		ClientAddr:   s.clientAddr,
+	}
 	data, err := info.Encode()
 	if err != nil {
 		return nil, err
@@ -179,10 +184,10 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 	}
 	// Return a new CNServer instance for temporary connection.
 	return &CNServer{
-		backendConnID: cn.backendConnID,
-		salt:          cn.salt,
-		uuid:          cn.uuid,
-		addr:          cn.addr,
+		connID: cn.connID,
+		salt:   cn.salt,
+		uuid:   cn.uuid,
+		addr:   cn.addr,
 	}, nil
 }
 
@@ -281,7 +286,7 @@ func (r *router) Connect(
 		return nil, nil, err
 	}
 	// After handshake with backend CN server, set the connID of serverConn.
-	cn.backendConnID = sc.ConnID()
+	cn.connID = sc.ConnID()
 
 	// After connect succeed, track the connection.
 	r.rebalancer.connManager.connect(cn, t)

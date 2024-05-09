@@ -71,7 +71,7 @@ func TestConnector(t *testing.T) {
 		require.NoError(t, err)
 
 		bats := []*batch.Batch{
-			newBatch(t, tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
 			batch.EmptyBatch,
 		}
 		resetChildren(tc.arg, bats)
@@ -126,7 +126,7 @@ func newTestCase() connectorTestCase {
 }
 
 // create a new block based on the type information
-func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 

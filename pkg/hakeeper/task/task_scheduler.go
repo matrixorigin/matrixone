@@ -19,6 +19,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -52,14 +53,6 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	runningTasks := s.queryTasks(task.TaskStatus_Running)
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
 	tasks := append(runningTasks, createdTasks...)
-	for _, t := range tasks {
-		if t.IsInitTask() {
-			runtime.ProcessLevelRuntime().
-				SubLogger(runtime.SystemInit).Debug(
-				"task schedule query init task",
-				zap.String("task", t.Metadata.String()))
-		}
-	}
 
 	runtime.ProcessLevelRuntime().Logger().Debug("task schedule query tasks",
 		zap.Int("created", len(createdTasks)),
@@ -137,7 +130,10 @@ func allocateTask(ts taskservice.TaskService, t task.AsyncTask, cnPool *cnPool) 
 	cnPool = cnPool.selectCNs(rules...)
 	runner := cnPool.min()
 	if runner.uuid == "" {
-		runtime.ProcessLevelRuntime().Logger().Warn("no CN available")
+		runtime.ProcessLevelRuntime().Logger().Error("failed to allocate task",
+			zap.Uint64("task-id", t.ID),
+			zap.String("task-metadata-id", t.Metadata.ID),
+			zap.Error(moerr.NewInternalErrorNoCtx("no CN available")))
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), taskSchedulerDefaultTimeout)

@@ -150,18 +150,14 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	logutil.Infof("GC Catalog %v", ts.ToString())
 	processor := LoopProcessor{}
 	processor.DatabaseFn = func(d *DBEntry) error {
-		d.RLock()
 		needGC := d.DeleteBefore(ts)
-		d.RUnlock()
 		if needGC {
 			catalog.RemoveEntry(d)
 		}
 		return nil
 	}
 	processor.TableFn = func(te *TableEntry) error {
-		te.RLock()
 		needGC := te.DeleteBefore(ts)
-		te.RUnlock()
 		if needGC {
 			db := te.db
 			db.RemoveEntry(te)
@@ -170,11 +166,22 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	}
 	processor.ObjectFn = func(se *ObjectEntry) error {
 		se.RLock()
-		needGC := se.DeleteBefore(ts)
+		needGC := se.DeleteBeforeLocked(ts) && !se.InMemoryDeletesExisted()
 		se.RUnlock()
 		if needGC {
 			tbl := se.table
 			tbl.RemoveEntry(se)
+		}
+		return nil
+	}
+	processor.TombstoneFn = func(t data.Tombstone) error {
+		obj := t.GetObject().(*ObjectEntry)
+		obj.RLock()
+		needGC := obj.DeleteBeforeLocked(ts) && !obj.InMemoryDeletesExisted()
+		obj.RUnlock()
+		if needGC {
+			tbl := obj.table
+			tbl.GCTombstone(obj.ID)
 		}
 		return nil
 	}
@@ -237,7 +244,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 		return
 	}
 
-	dbun := db.SearchNode(un)
+	dbun := db.SearchNodeLocked(un)
 	if dbun == nil {
 		db.Insert(un)
 	} else {
@@ -309,7 +316,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 		logutil.Info("delete %d", zap.Uint64("dbid", dbid), zap.String("catalog pp", catalog.SimplePPString(common.PPL3)))
 		panic(err)
 	}
-	dbDeleteAt := db.GetDeleteAt()
+	dbDeleteAt := db.GetDeleteAtLocked()
 	if !dbDeleteAt.IsEmpty() {
 		if !dbDeleteAt.Equal(&txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), dbDeleteAt.ToString()))
@@ -364,7 +371,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		}
 		return
 	}
-	tblun := tbl.SearchNode(un)
+	tblun := tbl.SearchNodeLocked(un)
 	if tblun == nil {
 		tbl.Insert(un) //TODO isvalid
 		if tbl.isColumnChangedInSchema() {
@@ -491,14 +498,14 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	tableDeleteAt := tbl.GetDeleteAt()
+	tableDeleteAt := tbl.GetDeleteAtLocked()
 	if !tableDeleteAt.IsEmpty() {
 		if !tableDeleteAt.Equal(&txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tableDeleteAt.ToString()))
 		}
 		return
 	}
-	prev := tbl.MVCCChain.GetLatestCommittedNode()
+	prev := tbl.MVCCChain.GetLatestCommittedNodeLocked()
 	un := &MVCCNode[*TableMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: prev.CreatedAt,
@@ -541,7 +548,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 		obj.ObjectNode = cmd.node
 		tbl.AddEntryLocked(obj)
 	} else {
-		node := obj.SearchNode(un)
+		node := obj.SearchNodeLocked(un)
 		if node == nil {
 			obj.Insert(un)
 		} else {
@@ -551,7 +558,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {
-		deleteAt := obj.GetDeleteAt()
+		deleteAt := obj.GetDeleteAtLocked()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
 			obj.objData.UpgradeAllDeleteChain()
@@ -613,7 +620,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		BaseNode:      objNode,
 		TxnMVCCNode:   txnNode,
 	}
-	node := obj.SearchNode(un)
+	node := obj.SearchNodeLocked(un)
 	if node == nil {
 		obj.Insert(un)
 	} else {
@@ -622,7 +629,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {
-		deleteAt := obj.GetDeleteAt()
+		deleteAt := obj.GetDeleteAtLocked()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
 			obj.objData.UpgradeAllDeleteChain()
@@ -657,7 +664,7 @@ func (catalog *Catalog) replayObjectByBlock(
 	}
 	// delete
 	if delete {
-		node := obj.SearchNode(
+		node := obj.SearchNodeLocked(
 			&MVCCNode[*ObjectMVCCNode]{
 				TxnMVCCNode: &txnbase.TxnMVCCNode{
 					Start: start,
@@ -681,7 +688,7 @@ func (catalog *Catalog) replayObjectByBlock(
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {
-		deleteAt := obj.GetDeleteAt()
+		deleteAt := obj.GetDeleteAtLocked()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
 			obj.objData.UpgradeAllDeleteChain()

@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -66,6 +67,7 @@ const (
 	TTimestamp
 	TBit
 	TBlob
+	TEnum
 )
 
 func (c *ColType) ToType() types.Type {
@@ -106,6 +108,8 @@ func (c *ColType) ToType() types.Type {
 		return types.T_bit.ToType()
 	case TBlob:
 		return types.T_blob.ToType()
+	case TEnum:
+		return types.T_enum.ToType()
 	default:
 		panic("not support ColType")
 	}
@@ -145,6 +149,8 @@ func (c *ColType) String(scale int) string {
 		return fmt.Sprintf("CHAR(%d)", scale)
 	case TBlob:
 		return "BLOB"
+	case TEnum:
+		return "ENUM"
 	case TSkip:
 		panic("not support SkipType")
 	default:
@@ -440,6 +446,10 @@ func (tbl *Table) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 		sb.WriteString(`)`)
 	}
 	sb.WriteString("\n)")
+
+	if len(tbl.Comment) > 0 && slices.Contains([]string{"statement_info", "rawlog"}, tbl.Table) {
+		sb.WriteString(fmt.Sprintf(" COMMENT %q ", tbl.Comment))
+	}
 	// cluster by
 	if len(tbl.ClusterBy) > 0 && tbl.Engine != ExternalTableEngine {
 		sb.WriteString(" cluster by (")

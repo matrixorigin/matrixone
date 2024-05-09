@@ -22,8 +22,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -85,11 +83,6 @@ type ReceiverOperator struct {
 	aliveMergeReceiver int
 	chs                []chan *batch.Batch
 	receiverListener   []reflect.SelectCase
-}
-
-type RuntimeFilterChan struct {
-	Spec *plan.RuntimeFilterSpec
-	Chan chan *pipeline.RuntimeFilter
 }
 
 const (

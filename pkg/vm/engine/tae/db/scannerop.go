@@ -16,7 +16,6 @@ package db
 
 import (
 	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -31,44 +30,6 @@ type ScannerOp interface {
 	PostExecute() error
 }
 
-// objHelper holds some temp statistics and founds deletable objects of a table.
-// If a Object has no any non-dropped blocks, it can be deleted. Except the
-// Object has the max Object id, appender may creates block in it.
-type objHelper struct {
-	// Statistics
-	objHasNonDropBlk     bool
-	objRowCnt, objRowDel int
-	objNonAppend         bool
-	isCreating           bool
-
-	// Found deletable Objects
-	maxObjId    uint64
-	objCandids  []*catalog.ObjectEntry // appendable
-	nobjCandids []*catalog.ObjectEntry // non-appendable
-}
-
-func newObjHelper() *objHelper {
-	return &objHelper{
-		objCandids:  make([]*catalog.ObjectEntry, 0),
-		nobjCandids: make([]*catalog.ObjectEntry, 0),
-	}
-}
-
-func (d *objHelper) reset() {
-	d.resetForNewObj()
-	d.maxObjId = 0
-	d.objCandids = d.objCandids[:0]
-	d.nobjCandids = d.nobjCandids[:0]
-}
-
-func (d *objHelper) resetForNewObj() {
-	d.objHasNonDropBlk = false
-	d.objNonAppend = false
-	d.isCreating = false
-	d.objRowCnt = 0
-	d.objRowDel = 0
-}
-
 type MergeTaskBuilder struct {
 	db *DB
 	*catalog.LoopProcessor
@@ -76,24 +37,22 @@ type MergeTaskBuilder struct {
 	name string
 	tbl  *catalog.TableEntry
 
-	ObjectHelper *objHelper
-	objPolicy    merge.Policy
-	executor     *merge.MergeExecutor
-	tableRowCnt  int
-	tableRowDel  int
+	objPolicy   merge.Policy
+	executor    *merge.MergeExecutor
+	tableRowCnt int
+	tableRowDel int
 
 	// concurrecy control
 	suspend    atomic.Bool
 	suspendCnt atomic.Int32
 }
 
-func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
+func newMergeTaskBuilder(db *DB) *MergeTaskBuilder {
 	op := &MergeTaskBuilder{
 		db:            db,
 		LoopProcessor: new(catalog.LoopProcessor),
-		ObjectHelper:  newObjHelper(),
 		objPolicy:     merge.NewBasicPolicy(),
-		executor:      merge.NewMergeExecutor(db.Runtime),
+		executor:      merge.NewMergeExecutor(db.Runtime, db.CNMergeSched),
 	}
 
 	op.DatabaseFn = op.onDataBase
@@ -102,25 +61,6 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 	op.PostObjectFn = op.onPostObject
 	op.PostTableFn = op.onPostTable
 	return op
-}
-
-func (s *MergeTaskBuilder) ManuallyMerge(entry *catalog.TableEntry, objs []*catalog.ObjectEntry) error {
-	// stop new merge task
-	s.suspend.Store(true)
-	defer s.suspend.Store(false)
-	// waiting the runing merge sched task to finish
-	for s.suspendCnt.Load() < 2 {
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	// all status are safe in the TaskBuilder
-	for _, obj := range objs {
-		// TODO(_), delete this if every object has objectStat in memory
-		if err := obj.CheckAndLoad(); err != nil {
-			return err
-		}
-	}
-	return s.executor.ManuallyExecute(entry, objs)
 }
 
 func (s *MergeTaskBuilder) ConfigPolicy(tbl *catalog.TableEntry, c any) {
@@ -153,7 +93,6 @@ func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 		s.tableRowCnt = 0
 		s.tableRowDel = 0
 	}
-	s.ObjectHelper.reset()
 	s.objPolicy.ResetForTable(entry)
 }
 
@@ -188,6 +127,13 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	if !tableEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
+	tableEntry.RLock()
+	// this table is creating or altering
+	if !tableEntry.IsCommittedLocked() {
+		tableEntry.RUnlock()
+		return moerr.GetOkStopCurrRecur()
+	}
+	tableEntry.RUnlock()
 	s.resetForTable(tableEntry)
 	return
 }
@@ -209,15 +155,13 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 
 	// Skip uncommitted entries
 	// TODO: consider the case: add metaloc, is it possible to see a constructing object?
-	if !objectEntry.IsCommitted() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
+	if !objectEntry.IsCommittedLocked() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
 		return moerr.GetOkStopCurrRecur()
 	}
 
 	if objectEntry.IsAppendable() {
 		return moerr.GetOkStopCurrRecur()
 	}
-
-	s.ObjectHelper.resetForNewObj()
 
 	objectEntry.RUnlock()
 	// Rows will check objectStat, and if not loaded, it will load it.

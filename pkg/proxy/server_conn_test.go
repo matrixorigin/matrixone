@@ -51,12 +51,12 @@ func testMakeCNServer(
 		addr = "unix://" + addr
 	}
 	return &CNServer{
-		backendConnID: connID,
-		addr:          addr,
-		uuid:          uuid,
-		salt:          testSlat,
-		hash:          hash,
-		reqLabel:      reqLabel,
+		connID:   connID,
+		addr:     addr,
+		uuid:     uuid,
+		salt:     testSlat,
+		hash:     hash,
+		reqLabel: reqLabel,
 	}
 }
 
@@ -250,7 +250,7 @@ func (s *testCNServer) Start() error {
 
 func testHandle(h *testHandler) {
 	// read extra info from proxy.
-	extraInfo := proxy.NewVersionedExtraInfo(proxy.Version0, nil)
+	extraInfo := proxy.ExtraInfo{}
 	reader := bufio.NewReader(h.conn.RawConn())
 	_ = extraInfo.Decode(reader)
 	// server writes init handshake.

@@ -1,3 +1,5 @@
+SET GLOBAL experimental_ivf_index = 1;
+
 -- create vector index: create->create index->insert
 create table vector_index_01(a int primary key, b vecf32(128),c int,key c_k(c));
 create index idx01 using ivfflat on vector_index_01(b) lists=5 op_type "vector_l2_ops";
@@ -98,22 +100,21 @@ select * from  vector_index_08;
 
 -- vector index: alter add/drop/rename column;
 insert into vector_index_08 values(9774 ,"[1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8]",3),(9775,"[0, 1, 1, 3, 0, 3, 46, 20, 1, 4, 17, 9, 1, 17, 108, 15, 0, 3, 37, 17, 6, 15, 116, 16, 6, 1, 4, 7, 7, 7, 9, 6, 0, 8, 10, 4, 26, 129, 27, 9, 0, 0, 5, 2, 11, 129, 129, 12, 103, 4, 0, 0, 2, 31, 129, 129, 94, 4, 0, 0, 0, 3, 13, 42, 0, 15, 38, 2, 70, 129, 1, 0, 5, 10, 40, 12, 74, 129, 6, 1, 129, 39, 6, 1, 2, 22, 9, 33, 122, 13, 0, 0, 0, 0, 5, 23, 4, 11, 9, 12, 45, 38, 1, 0, 0, 4, 36, 38, 57, 32, 0, 0, 82, 22, 9, 5, 13, 11, 3, 94, 35, 3, 0, 0, 0, 1, 16, 97]",5),(9776,"[10, 3, 8, 5, 48, 26, 5, 16, 17, 0, 0, 2, 132, 53, 1, 16, 112, 6, 0, 0, 7, 2, 1, 48, 48, 15, 18, 31, 3, 0, 0, 9, 6, 10, 19, 27, 50, 46, 17, 9, 18, 1, 4, 48, 132, 23, 3, 5, 132, 9, 4, 3, 11, 0, 2, 46, 84, 12, 10, 10, 1, 0, 12, 76, 26, 22, 16, 26, 35, 15, 3, 16, 15, 1, 51, 132, 125, 8, 1, 2, 132, 51, 67, 91, 8, 0, 0, 30, 126, 39, 32, 38, 4, 0, 1, 12, 24, 2, 2, 2, 4, 7, 2, 19, 93, 19, 70, 92, 2, 3, 1, 21, 36, 58, 132, 94, 0, 0, 0, 0, 21, 25, 57, 48, 1, 0, 0, 1]",3);
--- @bvt:issue#15071
 alter table vector_index_08 add column d vecf32(3) not null after c;
 create index idx02 using ivfflat on vector_index_08(d) lists=3 op_type "vector_l2_ops";
 show create table vector_index_08;
 insert into vector_index_08(d) values ("[2.36,5.021,9.222]");
 insert into vector_index_08(d) values ("[8.555,2.11,7.22]");
-select * from vector_index_08 where a>9774 order by  L2_DISTANCE(c,"[1.02,0.2,3.2]") desc limit 3;
+select * from vector_index_08 where a>9774 order by  L2_DISTANCE(d,"[1.02,0.2,3.2]") desc limit 2;
 --explain select * from vector_index_08 where a>1 order by  L2_DISTANCE(c,"[1.02,0.2,3.2]") desc;
 
 alter table vector_index_08 rename column d to e;
-select * from vector_index_08 where a>9775 order by  L2_DISTANCE(c,"[1.02,0.2,3.2]") desc limit 2;
+select * from vector_index_08 where a>9775 order by  L2_DISTANCE(e,"[1.02,0.2,3.2]") desc limit 2;
 --explain select * from vector_index_08 where a>1 order by  L2_DISTANCE(c,"[1.02,0.2,3.2]") desc;
 
-alter table vector_index_08 drop column d;
+alter table vector_index_08 drop column e;
 select * from vector_index_08;
--- @bvt:issue
+
 -- create vector index on NULL values
 create table vector_index_09(a int primary key, b vecf32(128),c int,key c_k(c));
 create index idx01 using ivfflat on vector_index_09(b) lists=3 op_type "vector_l2_ops";
@@ -167,3 +168,5 @@ show create table vector_index_10;
 commit;
 show create table vector_index_10;
 drop table vector_index_10;
+
+SET GLOBAL experimental_ivf_index = 0;

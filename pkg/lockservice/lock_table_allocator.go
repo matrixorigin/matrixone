@@ -16,14 +16,16 @@ package lockservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"go.uber.org/zap"
 )
@@ -34,21 +36,37 @@ type lockTableAllocator struct {
 	keepBindTimeout time.Duration
 	address         string
 	server          Server
-
-	mu struct {
+	client          Client
+	ctl             sync.Map // lock service id -> *commitCtl
+	mu              struct {
 		sync.RWMutex
 		services   map[string]*serviceBinds
 		lockTables map[uint32]map[uint64]pb.LockTable
 	}
+
+	// for test
+	options struct {
+		getActiveTxnFunc         func(sid string) (bool, [][]byte, error)
+		removeDisconnectDuration time.Duration
+	}
 }
+
+type AllocatorOption func(*lockTableAllocator)
 
 // NewLockTableAllocator create a memory based lock table allocator.
 func NewLockTableAllocator(
 	address string,
 	keepBindTimeout time.Duration,
-	cfg morpc.Config) LockTableAllocator {
+	cfg morpc.Config,
+	opts ...AllocatorOption,
+) LockTableAllocator {
 	if keepBindTimeout == 0 {
 		panic("invalid lock table bind timeout")
+	}
+
+	rpcClient, err := NewClient(cfg)
+	if err != nil {
+		panic(err)
 	}
 
 	logger := runtime.ProcessLevelRuntime().Logger()
@@ -59,14 +77,25 @@ func NewLockTableAllocator(
 		stopper: stopper.NewStopper(tag,
 			stopper.WithLogger(logger.RawLogger().Named(tag))),
 		keepBindTimeout: keepBindTimeout,
+		client:          rpcClient,
 	}
 	la.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
 	la.mu.services = make(map[string]*serviceBinds)
+
+	for _, opt := range opts {
+		opt(la)
+	}
+
 	if err := la.stopper.RunTask(la.checkInvalidBinds); err != nil {
+		panic(err)
+	}
+	if err := la.stopper.RunTask(la.cleanCommitState); err != nil {
 		panic(err)
 	}
 
 	la.initServer(cfg)
+	logLockAllocatorStartSucc()
+
 	return la
 }
 
@@ -91,10 +120,29 @@ func (l *lockTableAllocator) KeepLockTableBind(serviceID string) bool {
 	return b.active()
 }
 
-func (l *lockTableAllocator) Valid(binds []pb.LockTable) []uint64 {
+func (l *lockTableAllocator) AddCannotCommit(values []pb.OrphanTxn) [][]byte {
+	var committing [][]byte
+	for _, v := range values {
+		c := l.getCtl(v.Service)
+		for _, txn := range v.Txn {
+			state := c.add(util.UnsafeBytesToString(txn), cannotCommitState)
+			if state == committingState {
+				committing = append(committing, txn)
+			}
+		}
+	}
+	return committing
+}
+
+func (l *lockTableAllocator) Valid(
+	serviceID string,
+	txnID []byte,
+	binds []pb.LockTable,
+) ([]uint64, error) {
 	var invalid []uint64
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+
 	for _, b := range binds {
 		if !b.Valid {
 			panic("BUG")
@@ -109,14 +157,34 @@ func (l *lockTableAllocator) Valid(binds []pb.LockTable) []uint64 {
 			invalid = append(invalid, b.Table)
 		}
 	}
-	return invalid
+
+	if len(invalid) > 0 {
+		return invalid, nil
+	}
+
+	c := l.getCtl(serviceID)
+	state := c.add(util.UnsafeBytesToString(txnID), committingState)
+	if state == cannotCommitState {
+		return nil, moerr.NewCannotCommitOrphanNoCtx()
+	}
+	return nil, nil
 }
 
 func (l *lockTableAllocator) Close() error {
 	l.stopper.Stop()
-	err := l.server.Close()
-	l.logger.Debug("lock service allocator closed",
+	var err error
+	err1 := l.server.Close()
+	l.logger.Debug("lock service allocator server closed",
 		zap.Error(err))
+	if err1 != nil {
+		err = err1
+	}
+	err2 := l.client.Close()
+	l.logger.Debug("lock service allocator client closed",
+		zap.Error(err))
+	if err2 != nil {
+		err = err2
+	}
 	return err
 }
 
@@ -210,14 +278,33 @@ func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
 		zap.String("service", b.serviceID))
 }
 
+func (l *lockTableAllocator) disableTableBindsWithoutDelete(b *serviceBinds) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// we can't just delete the LockTable's effectiveness binding directly, we
+	// need to keep the binding version.
+	for g, tables := range b.groupTables {
+		for table := range tables {
+			if old, ok := l.getLockTablesLocked(g)[table]; ok &&
+				old.ServiceID == b.serviceID {
+				old.Valid = false
+				l.getLockTablesLocked(g)[table] = old
+			}
+		}
+	}
+}
+
 func (l *lockTableAllocator) disableGroupTables(groupTables []pb.LockTable, b *serviceBinds) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	b.Lock()
+	defer b.Unlock()
 	for _, t := range groupTables {
 		if old, ok := l.getLockTablesLocked(t.Group)[t.Table]; ok &&
 			old.ServiceID == b.serviceID {
 			old.Valid = false
 			l.getLockTablesLocked(t.Group)[t.Table] = old
+			delete(b.groupTables[t.Group], t.Table)
 		}
 	}
 }
@@ -364,10 +451,114 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 					zap.Int("count", len(timeoutBinds)))
 			}
 			for _, b := range timeoutBinds {
-				b.disable()
-				l.disableTableBinds(b)
+				valid, err := validateService(
+					l.keepBindTimeout,
+					b.getServiceID(),
+					l.client,
+				)
+				if !valid || !isRetryError(err) {
+					b.disable()
+					l.disableTableBinds(b)
+				}
 			}
 			timer.Reset(l.keepBindTimeout)
+		}
+	}
+}
+
+func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
+	defer l.logger.InfoAction("clean cannot commit task")()
+
+	timer := time.NewTimer(l.keepBindTimeout * 2)
+	defer timer.Stop()
+
+	getActiveTxnFunc := l.options.getActiveTxnFunc
+	if getActiveTxnFunc == nil {
+		getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+			defer cancel()
+
+			req := acquireRequest()
+			defer releaseRequest(req)
+
+			req.Method = pb.Method_GetActiveTxn
+			req.GetActiveTxn.ServiceID = sid
+
+			resp, err := l.client.Send(ctx, req)
+			if err != nil {
+				return false, nil, err
+			}
+			defer releaseResponse(resp)
+
+			if !resp.GetActiveTxn.Valid {
+				return false, nil, nil
+			}
+
+			return true, resp.GetActiveTxn.Txn, nil
+		}
+	}
+
+	removeDisconnectDuration := l.options.removeDisconnectDuration
+	if removeDisconnectDuration == 0 {
+		removeDisconnectDuration = time.Hour * 24
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			var services []string
+			var invalidServices []string
+			activeTxnMap := make(map[string]map[string]struct{})
+
+			l.ctl.Range(func(key, value any) bool {
+				c := value.(*commitCtl)
+				ok, at := c.disconnected()
+				if !ok {
+					services = append(services, key.(string))
+				} else if time.Since(at) > removeDisconnectDuration {
+					l.ctl.Delete(key)
+				}
+				return true
+			})
+
+			for _, sid := range services {
+				valid, actives, err := getActiveTxnFunc(sid)
+				if err == nil {
+					if !valid {
+						invalidServices = append(invalidServices, sid)
+					} else {
+						m := make(map[string]struct{}, len(actives))
+						for _, txn := range actives {
+							m[util.UnsafeBytesToString(txn)] = struct{}{}
+						}
+						activeTxnMap[sid] = m
+					}
+				} else if !isRetryError(err) {
+					l.getCtl(sid).disconnect()
+				}
+			}
+
+			for _, sid := range invalidServices {
+				l.ctl.Delete(sid)
+			}
+
+			l.ctl.Range(func(key, value any) bool {
+				sid := key.(string)
+				if m, ok := activeTxnMap[sid]; ok {
+					c := value.(*commitCtl)
+					c.states.Range(func(key, value any) bool {
+						if _, ok := m[key.(string)]; !ok {
+							c.states.Delete(key)
+						}
+						return true
+					})
+				}
+				return true
+			})
+
+			timer.Reset(l.keepBindTimeout * 2)
 		}
 	}
 }
@@ -443,6 +634,12 @@ func (b *serviceBinds) bind(
 	return true
 }
 
+func (b *serviceBinds) getServiceID() string {
+	b.RLock()
+	defer b.RUnlock()
+	return b.serviceID
+}
+
 func (b *serviceBinds) timeout(
 	now time.Time,
 	timeout time.Duration) bool {
@@ -507,6 +704,10 @@ func (l *lockTableAllocator) initHandler() {
 		pb.Method_RemainTxnInService,
 		l.handleRemainTxnInService,
 	)
+
+	l.server.RegisterMethodHandler(
+		pb.Method_CannotCommit,
+		l.handleCannotCommit)
 }
 
 func (l *lockTableAllocator) handleGetBind(
@@ -515,7 +716,7 @@ func (l *lockTableAllocator) handleGetBind(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	if !l.canGetBind(req.GetBind.Group, req.GetBind.Table) {
+	if !l.canGetBind(req.GetBind.ServiceID) {
 		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
 		return
 	}
@@ -536,6 +737,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	cs morpc.ClientSession) {
 	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
 	if !resp.KeepLockTableBind.OK {
+		// resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
 		writeResponse(ctx, cancel, resp, nil, cs)
 		return
 	}
@@ -552,7 +754,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 		}
 	case pb.Status_ServiceUnLockSucc:
 		b.disable()
-		l.disableTableBinds(b)
+		l.disableTableBindsWithoutDelete(b)
 		b.setStatus(pb.Status_ServiceCanRestart)
 		resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
 	default:
@@ -604,19 +806,102 @@ func (l *lockTableAllocator) getLockTablesLocked(group uint32) map[uint64]pb.Loc
 	return m
 }
 
-func (l *lockTableAllocator) canGetBind(group uint32, tableID uint64) bool {
+func (l *lockTableAllocator) handleCannotCommit(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	committingTxn := l.AddCannotCommit(req.CannotCommit.OrphanTxnList)
+	resp.CannotCommit.CommittingTxn = committingTxn
+	writeResponse(ctx, cancel, resp, nil, cs)
+}
+
+func (l *lockTableAllocator) getCtl(serviceID string) *commitCtl {
+	if v, ok := l.ctl.Load(serviceID); ok {
+		return v.(*commitCtl)
+	}
+
+	v := &commitCtl{}
+	old, loaded := l.ctl.LoadOrStore(serviceID, v)
+	if loaded {
+		return old.(*commitCtl)
+	}
+	return v
+}
+
+func validateService(
+	timeout time.Duration,
+	serviceID string,
+	client Client,
+) (bool, error) {
+	if timeout < defaultRPCTimeout {
+		timeout = defaultRPCTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.Method = pb.Method_ValidateService
+	req.ValidateService.ServiceID = serviceID
+
+	resp, err := client.Send(ctx, req)
+	if err != nil {
+		logPingFailed(serviceID, err)
+		return false, err
+	}
+	defer releaseResponse(resp)
+
+	return resp.ValidateService.OK, nil
+}
+
+type ctlState int
+
+var (
+	committingState   = ctlState(0)
+	cannotCommitState = ctlState(1)
+)
+
+type commitCtl struct {
+	// disconnectAt indicates whether the service is disconnected, never connect
+	// to the service again.
+	disconnectAt atomic.Pointer[time.Time]
+	// txn id -> state, 0: cannot commit, 1: committed
+	states sync.Map
+}
+
+func (c *commitCtl) add(txnID string, state ctlState) ctlState {
+	old, loaded := c.states.LoadOrStore(txnID, state)
+	if loaded {
+		return old.(ctlState)
+	}
+	return state
+}
+
+func (c *commitCtl) disconnect() {
+	at := time.Now()
+	c.disconnectAt.Store(&at)
+}
+
+func (c *commitCtl) disconnected() (bool, time.Time) {
+	v := c.disconnectAt.Load()
+	if v == nil {
+		return false, time.Time{}
+	}
+	return true, *v
+}
+
+func (l *lockTableAllocator) canGetBind(serviceID string) bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	t, ok := l.mu.lockTables[group][tableID]
-	if !ok || !t.Valid {
-		return true
-	}
-	b := l.mu.services[t.ServiceID]
+	b := l.mu.services[serviceID]
 	if b != nil &&
-		!b.disabled &&
 		!b.isStatus(pb.Status_ServiceLockEnable) {
 		return false
 	}
+
 	return true
 }

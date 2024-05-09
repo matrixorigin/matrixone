@@ -137,7 +137,7 @@ func TestFuzzyFilter(t *testing.T) {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 
-			bat := newBatch(t, tc.types, tc.proc, int64(r))
+			bat := newBatch(tc.types, tc.proc, int64(r))
 			tc.proc.Reg.MergeReceivers[0].Ch <- bat
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
@@ -158,7 +158,7 @@ func TestFuzzyFilter(t *testing.T) {
 }
 
 // create a new block based on the type information
-func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	// not random
 	bat := testutil.NewBatch(ts, false, int(rows), proc.Mp())
 	pkAttr := make([]string, 1)

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -463,8 +464,353 @@ func getPkExpr(
 	return nil
 }
 
+func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []int32 {
+	mp := make(map[any]bool)
+	switch pk.GetType().Oid {
+	case types.T_bool:
+		vs := vector.MustFixedCol[bool](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_bit:
+		vs := vector.MustFixedCol[uint64](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_int8:
+		vs := vector.MustFixedCol[int8](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_int16:
+		vs := vector.MustFixedCol[int16](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_int32:
+		vs := vector.MustFixedCol[int32](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_int64:
+		vs := vector.MustFixedCol[int64](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_uint8:
+		vs := vector.MustFixedCol[uint8](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_uint16:
+		vs := vector.MustFixedCol[uint16](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_uint32:
+		vs := vector.MustFixedCol[uint32](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_uint64:
+		vs := vector.MustFixedCol[uint64](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_decimal64:
+		vs := vector.MustFixedCol[types.Decimal64](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_decimal128:
+		vs := vector.MustFixedCol[types.Decimal128](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_uuid:
+		vs := vector.MustFixedCol[types.Uuid](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_float32:
+		vs := vector.MustFixedCol[float32](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_float64:
+		vs := vector.MustFixedCol[float64](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_date:
+		vs := vector.MustFixedCol[types.Date](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_timestamp:
+		vs := vector.MustFixedCol[types.Timestamp](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_time:
+		vs := vector.MustFixedCol[types.Time](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_datetime:
+		vs := vector.MustFixedCol[types.Datetime](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_enum:
+		vs := vector.MustFixedCol[types.Enum](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_TS:
+		vs := vector.MustFixedCol[types.TS](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_Rowid:
+		vs := vector.MustFixedCol[types.Rowid](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_Blockid:
+		vs := vector.MustFixedCol[types.Blockid](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		for i := 0; i < pk.Length(); i++ {
+			v := pk.GetStringAt(i)
+			mp[v] = true
+		}
+	case types.T_array_float32:
+		for i := 0; i < pk.Length(); i++ {
+			v := types.ArrayToString[float32](vector.GetArrayAt[float32](pk, i))
+			mp[v] = true
+		}
+	case types.T_array_float64:
+		for i := 0; i < pk.Length(); i++ {
+			v := types.ArrayToString[float64](vector.GetArrayAt[float64](pk, i))
+			mp[v] = true
+		}
+	default:
+		panic(moerr.NewInternalErrorNoCtx("%s not supported", pk.GetType().String()))
+	}
+
+	return func(vec *vector.Vector) []int32 {
+		var sels []int32
+		switch vec.GetType().Oid {
+		case types.T_bool:
+			vs := vector.MustFixedCol[bool](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_bit:
+			vs := vector.MustFixedCol[uint64](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_int8:
+			vs := vector.MustFixedCol[int8](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_int16:
+			vs := vector.MustFixedCol[int16](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_int32:
+			vs := vector.MustFixedCol[int32](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_int64:
+			vs := vector.MustFixedCol[int64](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_uint8:
+			vs := vector.MustFixedCol[uint8](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_uint16:
+			vs := vector.MustFixedCol[uint16](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_uint32:
+			vs := vector.MustFixedCol[uint32](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_uint64:
+			vs := vector.MustFixedCol[uint64](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_decimal64:
+			vs := vector.MustFixedCol[types.Decimal64](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_decimal128:
+			vs := vector.MustFixedCol[types.Decimal128](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_uuid:
+			vs := vector.MustFixedCol[types.Uuid](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_float32:
+			vs := vector.MustFixedCol[float32](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_float64:
+			vs := vector.MustFixedCol[float64](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_date:
+			vs := vector.MustFixedCol[types.Date](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_timestamp:
+			vs := vector.MustFixedCol[types.Timestamp](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_time:
+			vs := vector.MustFixedCol[types.Time](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_datetime:
+			vs := vector.MustFixedCol[types.Datetime](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_enum:
+			vs := vector.MustFixedCol[types.Enum](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_TS:
+			vs := vector.MustFixedCol[types.TS](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_Rowid:
+			vs := vector.MustFixedCol[types.Rowid](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_Blockid:
+			vs := vector.MustFixedCol[types.Blockid](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_char, types.T_varchar, types.T_json,
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			for i := 0; i < vec.Length(); i++ {
+				v := vec.GetStringAt(i)
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_array_float32:
+			for i := 0; i < vec.Length(); i++ {
+				v := types.ArrayToString[float32](vector.GetArrayAt[float32](vec, i))
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		case types.T_array_float64:
+			for i := 0; i < vec.Length(); i++ {
+				v := types.ArrayToString[float64](vector.GetArrayAt[float64](vec, i))
+				if mp[v] {
+					sels = append(sels, int32(i))
+				}
+			}
+		default:
+			panic(moerr.NewInternalErrorNoCtx("%s not supported", vec.GetType().String()))
+		}
+		return sels
+	}
+}
+
+func getNonSortedPKSearchFuncByPKVec(
+	vec *vector.Vector,
+) blockio.ReadFilter {
+
+	searchPKFunc := LinearSearchOffsetByValFactory(vec)
+
+	if searchPKFunc != nil {
+		return func(vecs []*vector.Vector) []int32 {
+			return searchPKFunc(vecs[0])
+		}
+	}
+	return nil
+}
+
 func getNonCompositePKSearchFuncByExpr(
-	expr *plan.Expr, pkName string, oid types.T, proc *process.Process,
+	expr *plan.Expr, pkName string, proc *process.Process,
 ) (bool, bool, blockio.ReadFilter) {
 	valExpr := getPkExpr(expr, pkName, proc)
 	if valExpr == nil {

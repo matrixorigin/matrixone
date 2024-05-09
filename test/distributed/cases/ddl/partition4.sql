@@ -56,3 +56,32 @@ select * from `%!%p0%!%t1`;
 select * from `%!%p1%!%t1`;
 select * from `%!%p2%!%t1`;
 select * from `%!%p3%!%t1`;
+
+-- Partition table fault tolerance test
+create table insert_ignore_06 (
+    sale_id INT AUTO_INCREMENT,
+    product_id INT,
+    sale_amount DECIMAL(10, 2),
+    sale_date DATE,
+    PRIMARY KEY (sale_id, sale_date)
+) PARTITION BY RANGE (year(sale_date)) (
+PARTITION p0 VALUES LESS THAN (1991),
+PARTITION p1 VALUES LESS THAN (1992),
+PARTITION p2 VALUES LESS THAN (1993),
+PARTITION p3 VALUES LESS THAN (1994));
+
+-- should report error
+insert into insert_ignore_06 (product_id, sale_amount, sale_date) VALUES
+(1, 1000.00, '1990-04-01'),
+(2, 1500.00, '1992-05-01'),
+(3, 500.00, '1995-06-01'),
+(1, 2000.00, '1991-07-01');
+
+select * from insert_ignore_06 order by sale_id;
+-- should success
+insert into insert_ignore_06 (product_id, sale_amount, sale_date) VALUES
+(1, 1000.00, '1990-04-01'),
+(2, 1500.00, '1992-05-01'),
+(1, 2000.00, '1991-07-01');
+select * from insert_ignore_06 order by sale_id;
+drop table insert_ignore_06;

@@ -98,6 +98,7 @@ type Object interface {
 
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) (bool, bool)
+	HasDeleteIntentsPreparedInByBlock(blockID uint16, from, to types.TS) (bool, bool)
 
 	// check if all rows are committed before ts
 	// NOTE: here we assume that the object is visible to the ts
@@ -133,16 +134,17 @@ type Object interface {
 		sels []uint32,
 		mp *mpool.MPool,
 	) error
-	PPString(level common.PPLevel, depth int, prefix string) string
+	PPString(level common.PPLevel, depth int, prefix string, blkid int) string
 	EstimateMemSize() (int, int)
 	GetRuntime() *dbutils.Runtime
 
 	Init() error
 	TryUpgrade() error
-	GCInMemeoryDeletesByTS(types.TS)
+	GCInMemeoryDeletesByTSForTest(types.TS)
 	UpgradeAllDeleteChain()
 	CollectAppendInRange(start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.BatchWithVersion, error)
 	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, *bitmap.Bitmap, error)
+	CollectDeleteInRangeByBlock(ctx context.Context, blkID uint16, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, error)
 	PersistedCollectDeleteInRange(
 		ctx context.Context,
 		b *containers.Batch,
@@ -166,17 +168,18 @@ type Tombstone interface {
 	GetDeleteCnt() uint32
 	GetDeletesListener() func(uint64, types.TS) error
 	GetDeltaLocAndCommitTSByTxn(blkID uint16, txn txnif.TxnReader) (objectio.Location, types.TS)
-	GetDeltaLocAndCommitTS(blkID uint16) (objectio.Location, types.TS)
+	GetDeltaLocAndCommitTS(blkID uint16) (objectio.Location, types.TS, types.TS)
 	GetDeltaPersistedTS() types.TS
 	// GetOrCreateDeleteChain(blkID uint16) *updates.MVCCHandle
 	HasDeleteIntentsPreparedIn(from types.TS, to types.TS) (found bool, isPersist bool)
+	HasInMemoryDeleteIntentsPreparedInByBlock(blockID uint16, from, to types.TS) (bool, bool)
 	IsDeletedLocked(row uint32, txn txnif.TxnReader, blkID uint16) (bool, error)
 	SetDeletesListener(l func(uint64, types.TS) error)
 	StringLocked(level common.PPLevel, depth int, prefix string) string
 	// TryGetDeleteChain(blkID uint16) *updates.MVCCHandle
 	UpgradeAllDeleteChain()
 	UpgradeDeleteChain(blkID uint16)
-	UpgradeDeleteChainByTS(ts types.TS)
+	UpgradeDeleteChainByTSLocked(ts types.TS)
 	ReplayDeltaLoc(any, uint16)
 	VisitDeletes(ctx context.Context, start, end types.TS, bat, tnBatch *containers.Batch, skipMemory bool) (*containers.Batch, int, int, error)
 	GetObject() any

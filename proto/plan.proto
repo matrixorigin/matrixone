@@ -19,6 +19,7 @@ package plan;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "lock.proto";
+import "timestamp.proto";
 
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 option (gogoproto.sizer_all) = false;
@@ -512,8 +513,9 @@ message Stats {
 	double table_cnt = 5;
 	//for scan, selectivity means outcnt divide total count
 	double selectivity = 6;
+	bool forceOneCN = 7;
 
-	HashMapStats hashmapStats = 7;
+	HashMapStats hashmapStats = 8;
 }
 
 message RowsetExpr {
@@ -834,7 +836,24 @@ message Node {
 	//for message
 	repeated msgHeader send_msg_list = 55;
 	repeated msgHeader recv_msg_list = 56;
+
+	Snapshot scan_snapshot = 57;
 }
+
+// Snapshot Represents a snapshot of the database
+message Snapshot {
+	// The timestamp of the snapshot
+	timestamp.Timestamp TS = 1;
+	// Tenant information for creating snapshots
+	SnapshotTenant createdByTenant = 2;
+}
+
+// Tenant information for creating snapshots
+message SnapshotTenant {
+	string tenantName = 1;
+	uint32 tenantID = 2;
+}
+
 
 message ExternScan {
     int32 type = 1;
@@ -849,7 +868,7 @@ message ExternScan {
 message LockTarget {
 	uint64 table_id           	= 1;
 	int32 primary_col_idx_in_bat  = 2;
-	Type primary_col_typ          = 3;
+	Type primary_col_typ          = 3 [(gogoproto.nullable) = false];
 	int32 refresh_ts_idx_in_bat   = 4;
 	int32 filter_col_idx_in_bat   = 5;
 	bool lock_table 				= 6;
@@ -863,8 +882,8 @@ message PreInsertUkCtx {
 	// index of columns(parts of unique key) in pre batch
 	repeated int32 columns 	= 1;
 	int32 pk_column 		= 2;
-	Type pk_type 			= 3;
-	Type uk_type			= 4;
+	Type pk_type 			= 3 [(gogoproto.nullable) = false];
+	Type uk_type			= 4 [(gogoproto.nullable) = false];
 }
 
 message PreDeleteCtx {
@@ -884,6 +903,7 @@ message RuntimeFilterSpec {
 	bool match_prefix = 2;
 	int32 upper_limit = 3;
 	Expr expr = 4;
+	bool handled = 5;
 }
 
 message IdList {
@@ -1009,6 +1029,9 @@ message DataControl {
 		PREPARE			= 4;
 		EXECUTE			= 5;
 		DEALLOCATE		= 6;
+		CREATE_ACCOUNT  = 7;
+		ALTER_ACCOUNT   = 8;
+		DROP_ACCOUNT    = 9;
 	}
 	//DataDefinition type
 	DclType dcl_type = 1;
@@ -1017,6 +1040,7 @@ message DataControl {
 		Prepare prepare 			= 3;
 		Execute execute				= 4;
 		Deallocate deallocate 		= 5;
+		OtherDCL other = 6;
 	}
 }
 
@@ -1056,7 +1080,7 @@ message DataDefinition {
 		DROP_SEQUENCE		= 31;
 		SHOW_SEQUENCES      = 32;
 		SHOW_CONNECTORS = 33;
-
+		SHOW_UPGRADE = 34;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -1234,7 +1258,7 @@ message AlterTableName {
 message AlterAddColumn {
 	string name = 1;
 	string pre_name = 2;
-	Type type = 3;
+	Type type = 3 [(gogoproto.nullable) = false];
 	int32 pos = 4;
 }
 
@@ -1393,6 +1417,10 @@ message Execute {
 
 message Deallocate {
 	string name			= 1;
+}
+
+message OtherDCL {
+	repeated int32 paramTypes = 1;
 }
 
 enum TableLockType {

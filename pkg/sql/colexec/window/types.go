@@ -19,20 +19,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ vm.Operator = new(Argument)
-
-type evalVector struct {
-	vec      *vector.Vector
-	executor colexec.ExpressionExecutor
-}
 
 const (
 	receive = iota
@@ -49,12 +44,12 @@ type container struct {
 
 	desc      []bool
 	nullsLast []bool
-	orderVecs []evalVector
+	orderVecs []group.ExprEvalVector
 	sels      []int64
 
 	ps      []int64 // index of partition by
 	os      []int64 // Sorted partitions
-	aggVecs []evalVector
+	aggVecs []group.ExprEvalVector
 }
 
 type Argument struct {
@@ -64,7 +59,7 @@ type Argument struct {
 	Fs []*plan.OrderBySpec
 	// agg func
 	Types []types.Type
-	Aggs  []agg.Aggregate
+	Aggs  []aggexec.AggFuncExecExpression
 
 	vm.OperatorBase
 }
@@ -120,20 +115,14 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 
 func (ctr *container) cleanOrderVectors() {
 	for i := range ctr.orderVecs {
-		if ctr.orderVecs[i].executor != nil {
-			ctr.orderVecs[i].executor.Free()
-		}
-		ctr.orderVecs[i].vec = nil
+		ctr.orderVecs[i].Free()
 	}
 	ctr.orderVecs = nil
 }
 
 func (ctr *container) cleanAggVectors() {
 	for i := range ctr.aggVecs {
-		if ctr.aggVecs[i].executor != nil {
-			ctr.aggVecs[i].executor.Free()
-		}
-		ctr.aggVecs[i].vec = nil
+		ctr.aggVecs[i].Free()
 	}
 	ctr.aggVecs = nil
 }

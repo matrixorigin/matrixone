@@ -40,7 +40,7 @@ func BenchmarkInsert(b *testing.B) {
 	originStr := "0123456789"
 	testExpr := tree.NewNumValWithType(constant.MakeString(originStr), originStr, false, tree.P_char)
 	targetT := &plan.Expr{
-		Typ: *targetType,
+		Typ: targetType,
 		Expr: &plan.Expr_T{
 			T: &plan.TargetType{},
 		},
@@ -1114,7 +1114,7 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 }
 
 func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

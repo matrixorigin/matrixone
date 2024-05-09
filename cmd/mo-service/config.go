@@ -164,6 +164,9 @@ func NewConfig() *Config {
 		},
 		Observability: *config.NewObservabilityParameters(),
 		LogService:    logservice.DefaultConfig(),
+		CN: cnservice.Config{
+			AutomaticUpgrade: true,
+		},
 	}
 }
 

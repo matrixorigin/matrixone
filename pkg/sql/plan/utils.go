@@ -67,6 +67,32 @@ func doGetBindings(expr *plan.Expr) map[int32]bool {
 	return res
 }
 
+func hasParam(expr *plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P:
+		return true
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if hasParam(arg) {
+				return true
+			}
+		}
+		return false
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if hasParam(arg) {
+				return true
+			}
+		}
+		return false
+
+	default:
+		return false
+	}
+}
+
 func hasCorrCol(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Corr:
@@ -284,7 +310,7 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		// expr must be bool type, if not, try to do type convert
 		// but just ignore the subQuery. It will be solved at optimizer.
 		if expr.GetSub() == nil {
-			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, &plan.Type{Id: int32(types.T_bool)})
+			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, plan.Type{Id: int32(types.T_bool)})
 			if err != nil {
 				return nil, err
 			}
@@ -1329,7 +1355,7 @@ func InitInfileParam(param *tree.ExternParam) error {
 			param.CompressType = param.Option[i+1]
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE {
+			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
 				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
@@ -1752,7 +1778,7 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 }
 
 // databaseIsValid checks whether the database exists or not.
-func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
+func databaseIsValid(dbName string, ctx CompilerContext, snapshot Snapshot) (string, error) {
 	connectDBFirst := false
 	if len(dbName) == 0 {
 		connectDBFirst = true
@@ -1761,7 +1787,7 @@ func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
 		dbName = ctx.DefaultDatabase()
 	}
 
-	if len(dbName) == 0 || !ctx.DatabaseExists(dbName) {
+	if len(dbName) == 0 || !ctx.DatabaseExists(dbName, snapshot) {
 		if connectDBFirst {
 			return "", moerr.NewNoDB(ctx.GetContext())
 		} else {
@@ -1822,9 +1848,17 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 	var paramTypes []int32
 
 	switch pp := preparePlan.Plan.(type) {
-	case *plan.Plan_Tcl, *plan.Plan_Dcl:
+	case *plan.Plan_Tcl:
 		return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
-
+	case *plan.Plan_Dcl:
+		switch pp.Dcl.GetDclType() {
+		case plan.DataControl_CREATE_ACCOUNT,
+			plan.DataControl_ALTER_ACCOUNT,
+			plan.DataControl_DROP_ACCOUNT:
+			return nil, pp.Dcl.GetOther().GetParamTypes(), nil
+		default:
+			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
+		}
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
 			getParamRule := NewGetParamRule()
@@ -1863,6 +1897,29 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 		}
 	}
 	return schemas, paramTypes, nil
+}
+
+func getParamTypes(params []tree.Expr, ctx CompilerContext, isPrepareStmt bool) ([]int32, error) {
+	paramTypes := make([]int32, 0, len(params))
+	for _, p := range params {
+		switch ast := p.(type) {
+		case *tree.NumVal:
+			if ast.ValType != tree.P_char {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
+			}
+		case *tree.ParamExpr:
+			if !isPrepareStmt {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "only prepare statement can use ? expr")
+			}
+			paramTypes = append(paramTypes, int32(types.T_varchar))
+			if ast.Offset != len(paramTypes) {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "offset not match")
+			}
+		default:
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
+		}
+	}
+	return paramTypes, nil
 }
 
 // HasMoCtrl checks whether the expression has mo_ctrl(..,..,..)
@@ -1927,6 +1984,30 @@ func MakeFalseExpr() *Expr {
 			Lit: &plan.Literal{
 				Isnull: false,
 				Value:  &plan.Literal_Bval{Bval: false},
+			},
+		},
+	}
+}
+
+func MakeRuntimeFilter(tag int32, matchPrefix bool, upperlimit int32, expr *Expr) *plan.RuntimeFilterSpec {
+	return &plan.RuntimeFilterSpec{
+		Tag:         tag,
+		UpperLimit:  upperlimit,
+		Expr:        expr,
+		MatchPrefix: matchPrefix,
+	}
+}
+
+func MakeIntervalExpr(num int64, str string) *Expr {
+	arg0 := makePlan2Int64ConstExprWithType(num)
+	arg1 := makePlan2StringConstExprWithType(str, false)
+	return &plan.Expr{
+		Typ: plan.Type{
+			Id: int32(types.T_interval),
+		},
+		Expr: &plan.Expr_List{
+			List: &plan.ExprList{
+				List: []*Expr{arg0, arg1},
 			},
 		},
 	}
@@ -2020,4 +2101,31 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 		return err
 	}
 	return nil
+}
+
+// XXX: Any code relying on Name in ColRef, except for "explain", is bad design and practically buggy.
+func (builder *QueryBuilder) addNameByColRef(tag int32, tableDef *plan.TableDef) {
+	for i, col := range tableDef.Cols {
+		builder.nameByColRef[[2]int32{tag, int32(i)}] = tableDef.Name + "." + col.Name
+	}
+}
+
+func GetRowSizeFromTableDef(tableDef *TableDef, ignoreHiddenKey bool) float64 {
+	size := int32(0)
+	for _, col := range tableDef.Cols {
+		if col.Hidden && ignoreHiddenKey {
+			continue
+		}
+		if col.Typ.Width > 0 {
+			size += col.Typ.Width
+			continue
+		}
+		typ := types.T(col.Typ.Id).ToType()
+		if typ.Width > 0 {
+			size += typ.Width
+		} else {
+			size += typ.Size
+		}
+	}
+	return float64(size)
 }

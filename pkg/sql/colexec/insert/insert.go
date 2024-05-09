@@ -79,10 +79,6 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 	}()
 
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Start()
-	defer func() {
-		anal.Stop()
-	}()
 
 	if arg.ctr.state == vm.Build {
 		for {
@@ -183,10 +179,9 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) {
 
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
 
-	result, err := arg.GetChildren(0).Call(proc)
+	result, err := vm.ChildrenCall(arg.GetChildren(0), proc, anal)
+
 	if err != nil {
 		return result, err
 	}

@@ -80,7 +80,7 @@ func newObjectItOnSnap(table *txnTable) handle.ObjectIt {
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload()
 		curr.RLock()
-		ok, err = curr.IsVisible(it.table.store.txn, curr.RWMutex)
+		ok, err = curr.IsVisibleWithLock(it.table.store.txn, curr.RWMutex)
 		if err != nil {
 			curr.RUnlock()
 			it.err = err
@@ -107,7 +107,7 @@ func newObjectIt(table *txnTable) handle.ObjectIt {
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload()
 		curr.RLock()
-		ok, err = curr.IsVisible(it.table.store.txn, curr.RWMutex)
+		ok, err = curr.IsVisibleWithLock(it.table.store.txn, curr.RWMutex)
 		if err != nil {
 			curr.RUnlock()
 			it.err = err
@@ -153,7 +153,7 @@ func (it *ObjectIt) Next() {
 		}
 		entry := node.GetPayload()
 		entry.RLock()
-		valid, err = entry.IsVisible(it.table.store.txn, entry.RWMutex)
+		valid, err = entry.IsVisibleWithLock(it.table.store.txn, entry.RWMutex)
 		entry.RUnlock()
 		if err != nil {
 			it.err = err

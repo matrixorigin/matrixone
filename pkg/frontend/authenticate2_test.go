@@ -18,9 +18,10 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
+
 	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/stretchr/testify/assert"
 )
 
 func Test_verifyAccountCanOperateClusterTable(t *testing.T) {

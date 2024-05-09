@@ -213,8 +213,15 @@ func performLock(
 			zap.Int32("primary-index", target.primaryColumnIndexInBatch))
 		var filterCols []int32
 		priVec := bat.GetVector(target.primaryColumnIndexInBatch)
+		// For partitioned tables, filter is not nil
 		if target.filter != nil {
 			filterCols = vector.MustFixedCol[int32](bat.GetVector(target.filterColIndexInBatch))
+			for _, value := range filterCols {
+				// has Illegal Partition index
+				if value == -1 {
+					return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
+				}
+			}
 		}
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,

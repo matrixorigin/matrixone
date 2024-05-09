@@ -42,7 +42,7 @@ type Argument struct {
 	// Estimates of the number of data items obtained from statistical information
 	N      float64
 	PkName string
-	PkTyp  *plan.Type
+	PkTyp  plan.Type
 
 	bloomFilter   *bloomfilter.BloomFilter
 	roaringFilter *roaringFilter
@@ -53,9 +53,8 @@ type Argument struct {
 	rbat         *batch.Batch
 
 	// about runtime filter
-	pass2RuntimeFilter   *vector.Vector
-	RuntimeFilterSenders []*colexec.RuntimeFilterChan
-
+	pass2RuntimeFilter *vector.Vector
+	RuntimeFilterSpec  *plan.RuntimeFilterSpec
 	vm.OperatorBase
 }
 
@@ -90,11 +89,8 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetRuntimeFilterSenders(rfs []*colexec.RuntimeFilterChan) {
-	arg.RuntimeFilterSenders = rfs
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
 	if arg.bloomFilter != nil {
 		arg.bloomFilter.Clean()
 		arg.bloomFilter = nil
@@ -107,7 +103,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		arg.rbat = nil
 	}
 	if arg.pass2RuntimeFilter != nil {
-		proc.PutVector(arg.pass2RuntimeFilter)
+		arg.pass2RuntimeFilter.Free(proc.GetMPool())
+		arg.pass2RuntimeFilter = nil
 	}
 
 	arg.FreeAllReg()
