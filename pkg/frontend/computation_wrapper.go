@@ -389,8 +389,9 @@ func updateTempStorageInCtx(execCtx *ExecCtx, proc *process.Process, tempStorage
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 	if stm := motrace.StatementFromContext(ctx); stm != nil {
 		waitActiveCost := time.Duration(0)
-		if handler := cwft.ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-			if _, txn, err := handler.GetTxnOperator(); err == nil {
+		if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
+			txn := handler.GetTxn()
+			if txn != nil {
 				waitActiveCost = txn.GetWaitActiveCost()
 			}
 		}
