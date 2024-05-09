@@ -1457,6 +1457,35 @@ func Decimal128FromFloat64(x float64, width, scale int32) (y Decimal128, err err
 	return
 }
 
+func Decimal256FromInt64(x int64) Decimal256 {
+	return Decimal256{uint64(x), 0, 0, 0}
+}
+
+func Decimal256FromDecimal128(x Decimal128) Decimal256 {
+	y := Decimal256{x.B0_63, x.B64_127, 0, 0}
+	if x.Sign() {
+		y.B128_191 = ^y.B128_191
+		y.B192_255 = ^y.B192_255
+	}
+	return y
+}
+
+func Decimal256ToFloat64(x Decimal256, scale int32) float64 {
+	sign := x.Sign()
+	if sign {
+		x = x.Minus()
+	}
+	for x.B128_191 != 0 || x.B192_255 != 0 {
+		x, _ = x.Scale(-1)
+		scale--
+	}
+	y := Decimal128ToFloat64(Decimal128{x.B0_63, x.B64_127}, scale)
+	if sign {
+		y = -y
+	}
+	return y
+}
+
 func Parse64(x string) (y Decimal64, scale int32, err error) {
 	y = Decimal64(0)
 	z := Decimal64(0)
