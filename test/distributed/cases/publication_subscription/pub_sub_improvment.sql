@@ -1,4 +1,3 @@
--- @bvt:issue#3140
 drop database if exists database01;
 drop database if exists test02;
 drop database if exists test03;
@@ -56,7 +55,7 @@ drop account if exists test_tenant_2;
 create account test_tenant_1 admin_name 'test_account' identified by '111';
 create account test_tenant_2 admin_name 'test_account' identified by '111';
 
--- @session:id=3&user=test_tenant_1:test_account&password=111
+-- @session:id=4&user=test_tenant_1:test_account&password=111
 drop database if exists sub_database01;
 create database sub_database01 from sys publication publication01;
 -- @ignore:3,5
@@ -76,7 +75,7 @@ show tables;
 select * from t2;
 -- @session
 
--- @session:id=5&user=test_tenant_2:test_account&password=111
+-- @session:id=4&user=test_tenant_2:test_account&password=111
 drop database if exists sub01;
 create database sub_database01 from sys publication publication01;
 -- @ignore:3,5
@@ -98,7 +97,7 @@ create publication publication02 database database02;
 -- @ignore:2,3
 show publications;
 
--- @session:id=6&user=test_tenant_1:test_account&password=111
+-- @session:id=4&user=test_tenant_1:test_account&password=111
 drop database if exists sub_database02;
 create database sub_database02 from sys publication publication02;
 -- @ignore:3,5
@@ -108,7 +107,7 @@ show tables;
 select * from table03;
 -- @session
 
--- @session:id=7&user=test_tenant_2:test_account&password=111
+-- @session:id=4&user=test_tenant_2:test_account&password=111
 drop database if exists sub01;
 create database sub_database02 from sys publication publication02;
 -- @ignore:3,5
@@ -131,7 +130,7 @@ create publication publication03 database database03 account test_tenant_1;
 -- @ignore:2,3
 show publications;
 
--- @session:id=8&user=test_tenant_1:test_account&password=111
+-- @session:id=4&user=test_tenant_1:test_account&password=111
 drop database if exists sub_database03;
 create database sub_database03 from sys publication publication03;
 -- @ignore:3,5
@@ -144,7 +143,7 @@ desc table01;
 show table status;
 -- @session
 
--- @session:id=9&user=test_tenant_2:test_account&password=111
+-- @session:id=4&user=test_tenant_2:test_account&password=111
 -- @ignore:3,5
 show subscriptions all;
 -- @session
@@ -154,7 +153,7 @@ alter publication publication03 account all;
 -- @ignore:2,3
 show publications;
 
--- @session:id=10&user=test_tenant_2:test_account&password=111
+-- @session:id=4&user=test_tenant_2:test_account&password=111
 -- @ignore:3,5
 show subscriptions all;
 create database sub_database03 from sys publication publication03;
@@ -169,7 +168,7 @@ drop publication publication03;
 -- @ignore:2,3
 show publications;
 
--- @session:id=11&user=test_tenant_1:test_account&password=111
+-- @session:id=4&user=test_tenant_1:test_account&password=111
 use sub_database01;
 -- @session
 
@@ -180,7 +179,7 @@ create publication publication01 database republication01 account test_tenant_1 
 create table repub01(col1 int);
 insert into repub01 values (1);
 
--- @session:id=12&user=test_tenant_1:test_account&password=111
+-- @session:id=4&user=test_tenant_1:test_account&password=111
 drop database if exists resub01;
 create database resub01 from sys publication publication01;
 -- @ignore:3,5
@@ -190,7 +189,7 @@ use sub_database01;
 
 alter publication publication01 database database03;
 
--- @session:id=13&user=test_tenant_1:test_account&password=111
+-- @session:id=4&user=test_tenant_1:test_account&password=111
 use resub01;
 show tables;
 select * from table01;
@@ -204,7 +203,7 @@ alter publication publication01 database republication01;
 -- @ignore:2,3
 show publications;
 
--- @session:id=14&user=test_tenant_1:test_account&password=111
+-- @session:id=4&user=test_tenant_1:test_account&password=111
 -- @ignore:3,5
 show subscriptions all;
 use resub01;
@@ -221,13 +220,13 @@ drop database database02;
 drop database database03;
 drop database republication01;
 
--- @session:id=15&user=test_tenant_1:test_account&password=111
+-- @session:id=5&user=test_tenant_1:test_account&password=111
 drop database sub_database01;
 drop database sub_database02;
 drop database sub_database03;
 -- @session
 
--- @session:id=16&user=test_tenant_2:test_account&password=111
+-- @session:id=6&user=test_tenant_2:test_account&password=111
 drop database sub_database01;
 drop database sub_database01;
 drop database sub_database01;
@@ -235,4 +234,3 @@ drop database sub_database01;
 
 drop account test_tenant_1;
 drop account test_tenant_2;
--- @bvt:issue
