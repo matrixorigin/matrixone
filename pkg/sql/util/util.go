@@ -217,9 +217,8 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	mo_variables := tree.NewNumValWithType(constant.MakeString("mo_variables"), "mo_variables", false, tree.P_char)
 	mo_transactions := tree.NewNumValWithType(constant.MakeString("mo_transactions"), "mo_transactions", false, tree.P_char)
 	mo_cache := tree.NewNumValWithType(constant.MakeString("mo_cache"), "mo_cache", false, tree.P_char)
-
-	//`CREATE VIEW IF NOT EXISTS mo_sessions AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;`,
-	//`CREATE VIEW IF NOT EXISTS mo_configurations AS SELECT * FROM mo_configurations() AS mo_configurations_tmp;`,
+	mo_sessions := tree.NewNumValWithType(constant.MakeString("mo_sessions"), "mo_sessions", false, tree.P_char)
+	mo_configurations := tree.NewNumValWithType(constant.MakeString("mo_configurations"), "mo_configurations", false, tree.P_char)
 
 	notInValues := tree.NewTuple(tree.Exprs{
 		mo_userConst,
@@ -238,6 +237,8 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 		mo_variables,
 		mo_transactions,
 		mo_cache,
+		mo_sessions,
+		mo_configurations,
 	})
 
 	notInexpr := tree.NewComparisonExpr(tree.NOT_IN, att_relnameColName, notInValues)
