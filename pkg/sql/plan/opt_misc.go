@@ -780,6 +780,11 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		node.Stats.ForceOneCN = force
 	} else if node.NodeType == plan.Node_JOIN {
+		if len(node.RuntimeFilterBuildList) == 0 {
+			for _, childID := range node.Children {
+				builder.forceJoinOnOneCN(childID, force)
+			}
+		}
 		switch node.JoinType {
 		case plan.Node_RIGHT:
 			if !node.Stats.HashmapStats.Shuffle {
