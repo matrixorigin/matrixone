@@ -46,9 +46,6 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_information_schema_columns,
 	upg_information_schema_views,
 	upg_information_schema_partitions,
-	upg_mo_mysql_compatibility_mode1,
-	upg_mo_mysql_compatibility_mode2,
-	upg_mo_mysql_compatibility_mode3,
 	upg_mo_catalog_mo_sessions,
 	upg_mo_catalog_mo_configurations,
 	upg_mo_catalog_mo_locks,
@@ -386,39 +383,6 @@ var upg_information_schema_partitions = versions.UpgradeEntry{
 		return false, nil
 	},
 	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "PARTITIONS"),
-}
-
-var upg_mo_mysql_compatibility_mode1 = versions.UpgradeEntry{
-	Schema:    catalog.MO_CATALOG,
-	TableName: "mo_mysql_compatibility_mode",
-	UpgType:   versions.MODIFY_METADATA,
-	UpgSql:    "insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (current_account_id(), current_account_name(), 'experimental_ivf_index', '0',  true)",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		sql := "select * from mo_catalog.mo_mysql_compatibility_mode where variable_name = 'experimental_ivf_index'"
-		return versions.CheckTableDataExist(txn, accountId, sql)
-	},
-}
-
-var upg_mo_mysql_compatibility_mode2 = versions.UpgradeEntry{
-	Schema:    catalog.MO_CATALOG,
-	TableName: "mo_mysql_compatibility_mode",
-	UpgType:   versions.MODIFY_METADATA,
-	UpgSql:    "insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (current_account_id(), current_account_name(), 'experimental_master_index', '0',  true)",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		sql := "select * from mo_catalog.mo_mysql_compatibility_mode where variable_name = 'experimental_master_index'"
-		return versions.CheckTableDataExist(txn, accountId, sql)
-	},
-}
-
-var upg_mo_mysql_compatibility_mode3 = versions.UpgradeEntry{
-	Schema:    catalog.MO_CATALOG,
-	TableName: "mo_mysql_compatibility_mode",
-	UpgType:   versions.MODIFY_METADATA,
-	UpgSql:    "insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (current_account_id(), current_account_name(), 'keep_user_target_list_in_result', '1',  true)",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		sql := "select * from mo_catalog.mo_mysql_compatibility_mode where variable_name = 'keep_user_target_list_in_result'"
-		return versions.CheckTableDataExist(txn, accountId, sql)
-	},
 }
 
 // ----------------------------------------------------------------------------------------------------------------------

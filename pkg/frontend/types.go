@@ -283,7 +283,7 @@ type FeSession interface {
 	GetStorage() engine.Engine
 	GetBackgroundExec(ctx context.Context) BackgroundExec
 	GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec
-	GetGlobalSystemVariableValue(name string) (interface{}, error)
+	getGlobalSystemVariableValue(name string) (interface{}, error)
 	GetSessionVar(name string) (interface{}, error)
 	GetUserDefinedVar(name string) (SystemVariableType, *UserDefinedVar, error)
 	GetConnectContext() context.Context
