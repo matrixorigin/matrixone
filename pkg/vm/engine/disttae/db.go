@@ -16,14 +16,16 @@ package disttae
 
 import (
 	"context"
+	"strconv"
+	"strings"
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"strconv"
-	"strings"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -314,6 +316,9 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 	//TODO:: insert mo_tables, or mo_colunms, or mo_database, mo_catalog into snapCata.
 	//       ref to engine.init.
 	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, 0, nil)
+	if ckps == nil {
+		return nil, moerr.NewInternalErrorNoCtx("No checkpoints for snapshot read")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -378,6 +383,9 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 		//only on global checkpoint.
 		end = start
 	}
+	if ts.Greater(&end) || ts.Less(&start) {
+		return nil, moerr.NewInternalErrorNoCtx("Invalid checkpoints for snapshot read")
+	}
 	snapCata.UpdateDuration(start, end)
 	e.snapCatalog.snaps = append(e.snapCatalog.snaps, snapCata)
 	return snapCata, nil
@@ -424,6 +432,9 @@ func (e *Engine) getOrCreateSnapPart(
 	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
 	//      we should init the partition,ref to engine.init
 	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, tableId, nil)
+	if ckps == nil {
+		return nil, moerr.NewInternalErrorNoCtx("No checkpoints for snapshot read")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -458,6 +469,14 @@ func (e *Engine) getOrCreateSnapPart(
 		}
 		return nil
 	})
+	start, end := snap.GetDuration()
+	if ts.Greater(&end) || ts.Less(&start) {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"Invalid checkpoints for snapshot read,snapshot:%s, start:%s, end:%s",
+			ts.ToTimestamp().DebugString(),
+			start.ToTimestamp().DebugString(),
+			end.ToTimestamp().DebugString())
+	}
 	snaps.snaps = append(snaps.snaps, snap)
 
 	return snap, nil

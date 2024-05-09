@@ -165,6 +165,8 @@ type TxnOperator interface {
 	// LockSkipped return true if lock need skipped.
 	LockSkipped(tableID uint64, mode lock.LockMode) bool
 
+	GetWaitActiveCost() time.Duration
+
 	// AddWorkspace for the transaction
 	AddWorkspace(workspace Workspace)
 	// GetWorkspace from the transaction
