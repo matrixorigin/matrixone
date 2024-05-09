@@ -3179,8 +3179,8 @@ type jsonPlanHandler struct {
 	buffer     *bytes.Buffer
 }
 
-func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *jsonPlanHandler {
-	h := NewMarshalPlanHandler(ctx, stmt, plan)
+func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, opts ...marshalPlanOptions) *jsonPlanHandler {
+	h := NewMarshalPlanHandler(ctx, stmt, plan, opts...)
 	jsonBytes := h.Marshal(ctx)
 	statsBytes, stats := h.Stats(ctx)
 	return &jsonPlanHandler{
@@ -3207,15 +3207,29 @@ func (h *jsonPlanHandler) Free() {
 	}
 }
 
+type marshalPlanConfig struct {
+	waitActiveCost time.Duration
+}
+
+type marshalPlanOptions func(*marshalPlanConfig)
+
+func WithWaitActiveCost(cost time.Duration) marshalPlanOptions {
+	return func(h *marshalPlanConfig) {
+		h.waitActiveCost = cost
+	}
+}
+
 type marshalPlanHandler struct {
 	query       *plan.Query
 	marshalPlan *explain.ExplainData
 	stmt        *motrace.StatementInfo
 	uuid        uuid.UUID
 	buffer      *bytes.Buffer
+
+	marshalPlanConfig
 }
 
-func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *marshalPlanHandler {
+func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, opts ...marshalPlanOptions) *marshalPlanHandler {
 	// TODO: need mem improvement
 	uuid := uuid.UUID(stmt.StatementID)
 	stmt.MarkResponseAt()
@@ -3235,12 +3249,26 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		uuid:   uuid,
 		buffer: nil,
 	}
-	// check longQueryTime, need after StatementInfo.MarkResponseAt
-	// MoLogger NOT record ExecPlan
-	if stmt.Duration > motrace.GetLongQueryTime() && !stmt.IsMoLogger() {
+	// END> new marshalPlanHandler
+
+	// SET options
+	for _, opt := range opts {
+		opt(&h.marshalPlanConfig)
+	}
+
+	if h.needMarshalPlan() {
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
+		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
 	}
 	return h
+}
+
+// needMarshalPlan return true if statement.duration - waitActive > longQueryTime && NOT mo_logger query
+// check longQueryTime, need after StatementInfo.MarkResponseAt
+// MoLogger NOT record ExecPlan
+func (h *marshalPlanHandler) needMarshalPlan() bool {
+	return (h.stmt.Duration-h.waitActiveCost) > motrace.GetLongQueryTime() &&
+		!h.stmt.IsMoLogger()
 }
 
 func (h *marshalPlanHandler) Free() {
@@ -3312,8 +3340,8 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 	return
 }
 
-var sqlQueryIgnoreExecPlan = []byte(`{"code":200,"message":"sql query ignore execution plan","steps":null}`)
-var sqlQueryNoRecordExecPlan = []byte(`{"code":200,"message":"sql query no record execution plan","steps":null}`)
+var sqlQueryIgnoreExecPlan = []byte(`{"code":200,"message":"sql query ignore execution plan"}`)
+var sqlQueryNoRecordExecPlan = []byte(`{"code":200,"message":"sql query no record execution plan"}`)
 
 func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.StatsArray, stats motrace.Statistic) {
 	if h.query != nil {

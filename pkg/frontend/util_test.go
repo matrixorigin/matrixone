@@ -630,6 +630,7 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
@@ -738,6 +739,7 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
