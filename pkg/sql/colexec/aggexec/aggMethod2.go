@@ -19,22 +19,17 @@ import (
 )
 
 type (
-	SingleAggInitCommonContext[from, to types.FixedSizeTExceptStrType] func(
-		resultType types.Type, parameters ...types.Type) AggCommonExecContext
+	SingleAggInitResult1[to types.FixedSizeTExceptStrType] func(
+		resultType types.Type, parameters ...types.Type) to
 
 	SingleAggFill1NewVersion[from, to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		value from,
 		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
 
-	SingleAggFillNull1NewVersion[from, to types.FixedSizeTExceptStrType] func(
-		execContext AggGroupExecContext, commonContext AggCommonExecContext,
-		value from,
-		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
-
 	SingleAggFills1NewVersion[from, to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
-		values from, isNull bool, count int,
+		values from, count int,
 		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
 
 	SingleAggMerge1NewVersion[from, to types.FixedSizeTExceptStrType] func(

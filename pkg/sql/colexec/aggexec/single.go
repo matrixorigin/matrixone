@@ -96,8 +96,6 @@ type singleAggFuncExec1[from, to types.FixedSizeTExceptStrType] struct {
 	ret    aggFuncResult[to]
 	groups []SingleAggFromFixedRetFixed[from, to]
 
-	execContext AggContext
-
 	initGroup SingleAggInit1[from, to]
 	fill      SingleAggFill1[from, to]
 	fillNull  SingleAggFillNull1[from, to]

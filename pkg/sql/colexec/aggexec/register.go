@@ -154,6 +154,26 @@ type aggImplementation struct {
 	fills    any
 	merge    any
 	flush    any
+
+	// optimized.
+	ctx   aggContextImplementation
+	logic aggLogicImplementation
+}
+
+type aggContextImplementation struct {
+	hasCommonContext      bool
+	generateCommonContext AggCommonContextInit
+
+	hasGroupContext      bool
+	generateGroupContext AggGroupContextInit
+}
+
+type aggLogicImplementation struct {
+	init  any // func(result type, parameter types) result
+	fill  any // func(commonContext, groupContext, value, getter, setter) error
+	fills any // func(commonContext, groupContext, value, count, getter, setter) error
+	merge any // func(commonContext, groupContext1, groupContext2, getter1, getter2, setter) error
+	flush any // func(commonContext, groupContext, getter, setter) error
 }
 
 type multiColumnAggImplementation struct {
