@@ -21,9 +21,8 @@ import (
 )
 
 var (
-	//the sqls creating many tables for the tenant.
-	//Wrap them in a transaction
-	//createSqls = []string{
+	// the sqls creating many tables for the tenant.
+	// Wrap them in a transaction
 	MoCatalogMoUser = `create table mo_catalog.mo_user (
 				user_id int signed auto_increment primary key,
 				user_host varchar(100),
@@ -269,6 +268,8 @@ var (
 
 // ----------------------------------------------------------------------------------------------------------------------
 // step2InitSQLs
+// `mo_task` database system tables
+// They are all Cluster level system tables
 var (
 	MoTaskSysAsyncTask = fmt.Sprintf(`create table %s.sys_async_task (
 			task_id                     bigint primary key auto_increment,
@@ -284,8 +285,12 @@ var (
 			result_code                 int null,
 			error_msg                   varchar(1000) null,
 			create_at                   bigint,
-			end_at                      bigint)`,
-		catalog.MOTaskDB)
+			end_at                      bigint,
+			KEY    idx_task_status (task_status),
+			KEY    idx_task_runner (task_runner),
+			KEY    idx_task_executor (task_metadata_executor),
+			KEY    idx_task_epoch (task_epoch)
+    		)`, catalog.MOTaskDB)
 
 	MoTaskSysCronTask = fmt.Sprintf(`create table %s.sys_cron_task (
 			cron_task_id				bigint primary key auto_increment,
@@ -316,11 +321,16 @@ var (
 			update_at                   timestamp not null,
 			end_at                      timestamp,
 			last_run                    timestamp,
-			details                     blob)`,
+			details                     blob,
+			KEY    idx_account_id (account_id),
+			KEY    idx_last_heartbeat (last_heartbeat)
+			)`,
 		catalog.MOTaskDB)
 )
 
 // step3InitSQLs
+// `mo_task` database system tables
+// They are all Cluster level system tables for system upgrades
 var (
 	MoCatalogMoVersion = fmt.Sprintf(`create table %s.%s (
 			version             varchar(50) not null,

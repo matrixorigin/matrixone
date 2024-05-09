@@ -20,15 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
-// 1. 系统表和系统视图定义 不能包含  IF NOT EXISTS
-// 2. 系统表和系统视图定义 必须包含schema名
-// 3. 系统表和系统视图定义 不能尾随分号
-
-//Cluster level system tables/system views
-//Tenant level system tables/system views
-
-// `mysql` database
-// InitMysqlSysTables
+// `mysql` database system tables
+// They are all Tenant level system tables
 var (
 	MysqlUser = `CREATE TABLE mysql.user (
 			Host char(255)  NOT NULL DEFAULT '',
@@ -160,6 +153,7 @@ var (
 )
 
 // `information_schema` database
+// They are all Tenant level system tables/system views
 var (
 	InformationSchemaKeyColumnUsage = "CREATE TABLE information_schema.KEY_COLUMN_USAGE (" +
 		"CONSTRAINT_CATALOG varchar(64)," +
