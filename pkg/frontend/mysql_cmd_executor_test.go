@@ -764,39 +764,16 @@ func Test_GetColumns(t *testing.T) {
 
 func Test_GetComputationWrapper(t *testing.T) {
 	convey.Convey("GetComputationWrapper succ", t, func() {
+		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
 		proc := &process.Process{}
+		InitGlobalSystemVariables(GSysVariables)
+		ses := &Session{planCache: newPlanCache(1),
+			feSessionImpl: feSessionImpl{
+				gSysVars: GSysVariables,
+			},
+		}
 		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		var err error
-		//prepare session
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-
-		sql := getSqlForGetSystemVariableValueWithAccount(uint64(ses.accountId), "lower_case_table_names")
-		mrs := newMrsForSqlForGetVariableValue([][]interface{}{
-			{"1"},
-		})
-		bh.sql2result[sql] = mrs
-
-		sql1 := getSqlForGetSystemVariableValueWithAccount(uint64(ses.accountId), "keep_user_target_list_in_result")
-		mrs1 := newMrsForSqlForGetVariableValue([][]interface{}{
-			{"0"},
-		})
-		bh.sql2result[sql1] = mrs1
-
-		db, sql, user := "T", "SHOW TABLES", "root"
-
 		ec := newTestExecCtx(context.Background(), ctrl)
 		ec.ses = ses
 		ec.input = &UserInput{sql: sql}

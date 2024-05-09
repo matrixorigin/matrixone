@@ -622,6 +622,10 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				if err != nil {
 					return err
 				}
+				err = ses.SetGlobalVar(execCtx.reqCtx, name, value)
+				if err != nil {
+					return err
+				}
 				err = doSetGlobalSystemVariable(execCtx.reqCtx, ses, name, value)
 				if err != nil {
 					return err

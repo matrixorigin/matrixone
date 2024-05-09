@@ -20,8 +20,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
@@ -296,263 +297,270 @@ func TestSession_TxnBegin(t *testing.T) {
 	})
 }
 
-// func TestVariables(t *testing.T) {
-// 	genSession := func(ctrl *gomock.Controller, gSysVars *GlobalSystemVariables) *Session {
-// 		ioses := mock_frontend.NewMockIOSession(ctrl)
-// 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-// 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-// 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-// 		ioses.EXPECT().Ref().AnyTimes()
-// 		sv, err := getSystemVariables("test/system_vars_config.toml")
-// 		if err != nil {
-// 			t.Error(err)
-// 		}
-// 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-// 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-// 		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).AnyTimes()
-// 		session := NewSession(proto, nil, gSysVars, true, nil)
-// 		session.SetRequestContext(context.Background())
-// 		return session
-// 	}
+func TestVariables(t *testing.T) {
+	genSession := func(ctrl *gomock.Controller, gSysVars *GlobalSystemVariables) *Session {
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
 
-// 	checkWant := func(ses, existSes, newSesAfterSession *Session,
-// 		v string,
-// 		sameSesWant1, existSesWant2, newSesAfterSesWant3,
-// 		saneSesGlobalWant4, existSesGlobalWant5, newSesAfterSesGlobalWant6 interface{}) {
+		setGlobalPu(&config.ParameterUnit{SV: sv})
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).AnyTimes()
+		session := NewSession(context.Background(), proto, nil, gSysVars, true, nil)
+		session.txnCompileCtx = &TxnCompilerContext{
+			execCtx: &ExecCtx{
+				reqCtx: context.Background(),
+				ses:    session,
+			},
+		}
+		return session
+	}
 
-// 		//same session
-// 		v1_val, err := ses.GetSessionVar(v)
-// 		convey.So(err, convey.ShouldBeNil)
-// 		convey.So(sameSesWant1, convey.ShouldEqual, v1_val)
-// 		v1_ctx_val, err := ses.GetTxnCompileCtx().ResolveVariable(v, true, false)
-// 		convey.So(err, convey.ShouldBeNil)
-// 		convey.So(v1_ctx_val, convey.ShouldEqual, v1_val)
+	checkWant := func(ses, existSes, newSesAfterSession *Session,
+		v string,
+		sameSesWant1, existSesWant2, newSesAfterSesWant3,
+		saneSesGlobalWant4, existSesGlobalWant5, newSesAfterSesGlobalWant6 interface{}) {
 
-// 		//exist session
-// 		v2_val, err := existSes.GetSessionVar(v)
-// 		convey.So(err, convey.ShouldBeNil)
-// 		convey.So(existSesWant2, convey.ShouldEqual, v2_val)
-// 		v2_ctx_val, err := existSes.GetTxnCompileCtx().ResolveVariable(v, true, false)
-// 		convey.So(err, convey.ShouldBeNil)
-// 		convey.So(v2_ctx_val, convey.ShouldEqual, v2_val)
+		//same session
+		v1_val, err := ses.GetSessionVar(context.Background(), v)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(sameSesWant1, convey.ShouldEqual, v1_val)
+		v1_ctx_val, err := ses.GetTxnCompileCtx().ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v1_ctx_val, convey.ShouldEqual, v1_val)
 
-// 		//new session after session
-// 		v3_val, err := newSesAfterSession.GetSessionVar(v)
-// 		convey.So(err, convey.ShouldBeNil)
-// 		convey.So(newSesAfterSesWant3, convey.ShouldEqual, v3_val)
-// 		v3_ctx_val, err := newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, false)
-// 		convey.So(err, convey.ShouldBeNil)
-// 		convey.So(v3_ctx_val, convey.ShouldEqual, v3_val)
+		//exist session
+		v2_val, err := existSes.GetSessionVar(context.Background(), v)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(existSesWant2, convey.ShouldEqual, v2_val)
+		v2_ctx_val, err := existSes.GetTxnCompileCtx().ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v2_ctx_val, convey.ShouldEqual, v2_val)
 
-// 		//new session after session global
-// 		v6_val, err := newSesAfterSession.GetGlobalVar(v)
-// 		convey.So(err, convey.ShouldBeNil)
-// 		convey.So(newSesAfterSesGlobalWant6, convey.ShouldEqual, v6_val)
-// 		v6_ctx_val, err := newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, false)
-// 		convey.So(err, convey.ShouldBeNil)
-// 		convey.So(v6_ctx_val, convey.ShouldEqual, v6_val)
-// 	}
+		//new session after session
+		v3_val, err := newSesAfterSession.GetSessionVar(context.Background(), v)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(newSesAfterSesWant3, convey.ShouldEqual, v3_val)
+		v3_ctx_val, err := newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v3_ctx_val, convey.ShouldEqual, v3_val)
 
-// 	checkWant2 := func(ses, existSes, newSesAfterSession *Session,
-// 		v string,
-// 		sameSesWant1, existSesWant2, newSesAfterSesWant3 interface{}) {
+		//new session after session global
+		v6_val, err := newSesAfterSession.GetGlobalVar(context.Background(), v)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(newSesAfterSesGlobalWant6, convey.ShouldEqual, v6_val)
+		v6_ctx_val, err := newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v6_ctx_val, convey.ShouldEqual, v6_val)
+	}
 
-// 		//same session
-// 		v1_val, err := ses.GetSessionVar(v)
-// 		convey.So(err, convey.ShouldBeNil)
-// 		convey.So(sameSesWant1, convey.ShouldEqual, v1_val)
-// 		v1_ctx_val, err := ses.GetTxnCompileCtx().ResolveVariable(v, true, false)
-// 		convey.So(err, convey.ShouldBeNil)
-// 		convey.So(v1_ctx_val, convey.ShouldEqual, v1_val)
+	checkWant2 := func(ses, existSes, newSesAfterSession *Session,
+		v string,
+		sameSesWant1, existSesWant2, newSesAfterSesWant3 interface{}) {
 
-// 		//exist session
-// 		v2_val, err := existSes.GetSessionVar(v)
-// 		convey.So(err, convey.ShouldBeNil)
-// 		convey.So(existSesWant2, convey.ShouldEqual, v2_val)
-// 		v2_ctx_val, err := existSes.GetTxnCompileCtx().ResolveVariable(v, true, false)
-// 		convey.So(err, convey.ShouldBeNil)
-// 		convey.So(v2_ctx_val, convey.ShouldEqual, v2_val)
+		//same session
+		v1_val, err := ses.GetSessionVar(context.Background(), v)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(sameSesWant1, convey.ShouldEqual, v1_val)
+		v1_ctx_val, err := ses.GetTxnCompileCtx().ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v1_ctx_val, convey.ShouldEqual, v1_val)
 
-// 		//new session after session
-// 		v3_val, err := newSesAfterSession.GetSessionVar(v)
-// 		convey.So(err, convey.ShouldBeNil)
-// 		convey.So(newSesAfterSesWant3, convey.ShouldEqual, v3_val)
-// 		v3_ctx_val, err := newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, false)
-// 		convey.So(err, convey.ShouldBeNil)
-// 		convey.So(v3_ctx_val, convey.ShouldEqual, v3_val)
+		//exist session
+		v2_val, err := existSes.GetSessionVar(context.Background(), v)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(existSesWant2, convey.ShouldEqual, v2_val)
+		v2_ctx_val, err := existSes.GetTxnCompileCtx().ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v2_ctx_val, convey.ShouldEqual, v2_val)
 
-// 		//same session global
-// 		_, err = ses.GetGlobalVar(v)
-// 		convey.So(err, convey.ShouldNotBeNil)
-// 		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
-// 		_, err = ses.GetTxnCompileCtx().ResolveVariable(v, true, false)
-// 		convey.So(err, convey.ShouldBeNil)
+		//new session after session
+		v3_val, err := newSesAfterSession.GetSessionVar(context.Background(), v)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(newSesAfterSesWant3, convey.ShouldEqual, v3_val)
+		v3_ctx_val, err := newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v3_ctx_val, convey.ShouldEqual, v3_val)
 
-// 		//exist session global
-// 		_, err = existSes.GetGlobalVar(v)
-// 		convey.So(err, convey.ShouldNotBeNil)
-// 		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
-// 		_, err = existSes.GetTxnCompileCtx().ResolveVariable(v, true, false)
-// 		convey.So(err, convey.ShouldBeNil)
+		//same session global
+		_, err = ses.GetGlobalVar(context.Background(), v)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
+		_, err = ses.GetTxnCompileCtx().ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
 
-// 		//new session after session global
-// 		_, err = newSesAfterSession.GetGlobalVar(v)
-// 		convey.So(err, convey.ShouldNotBeNil)
-// 		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
-// 		_, err = newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, false)
-// 		convey.So(err, convey.ShouldBeNil)
-// 	}
+		//exist session global
+		_, err = existSes.GetGlobalVar(context.Background(), v)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
+		_, err = existSes.GetTxnCompileCtx().ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
 
-// 	convey.Convey("scope global", t, func() {
-// 		ctrl := gomock.NewController(t)
-// 		defer ctrl.Finish()
+		//new session after session global
+		_, err = newSesAfterSession.GetGlobalVar(context.Background(), v)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
+		_, err = newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
+	}
 
-// 		gSysVars := &GlobalSystemVariables{}
-// 		InitGlobalSystemVariables(gSysVars)
+	convey.Convey("scope global", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
 
-// 		ses := genSession(ctrl, gSysVars)
-// 		existSes := genSession(ctrl, gSysVars)
+		gSysVars := &GlobalSystemVariables{}
+		InitGlobalSystemVariables(gSysVars)
 
-// 		v1 := "testglobalvar_dyn"
-// 		_, v1_default, _ := gSysVars.GetGlobalSysVar(v1)
-// 		v1_want := 10
-// 		err := ses.SetSessionVar(v1, v1_want)
-// 		convey.So(err, convey.ShouldNotBeNil)
+		ses := genSession(ctrl, gSysVars)
+		existSes := genSession(ctrl, gSysVars)
 
-// 		// no check after fail set
-// 		newSes2 := genSession(ctrl, gSysVars)
-// 		checkWant(ses, existSes, newSes2, v1, v1_default, v1_default, v1_default, v1_default, v1_default, v1_default)
+		v1 := "testglobalvar_dyn"
+		_, v1_default, _ := gSysVars.GetGlobalSysVar(v1)
+		v1_want := 10
+		err := ses.SetSessionVar(context.Background(), v1, v1_want)
+		convey.So(err, convey.ShouldNotBeNil)
 
-// 		err = ses.SetGlobalVar(v1, v1_want)
-// 		convey.So(err, convey.ShouldBeNil)
+		// no check after fail set
+		newSes2 := genSession(ctrl, gSysVars)
+		checkWant(ses, existSes, newSes2, v1, v1_default, v1_default, v1_default, v1_default, v1_default, v1_default)
 
-// 		newSes3 := genSession(ctrl, gSysVars)
-// 		checkWant(ses, existSes, newSes3, v1, v1_want, v1_want, v1_want, v1_want, v1_want, v1_want)
+		err = ses.SetGlobalVar(context.Background(), v1, v1_want)
+		convey.So(err, convey.ShouldBeNil)
 
-// 		v2 := "testglobalvar_nodyn"
-// 		_, v2_default, _ := gSysVars.GetGlobalSysVar(v2)
-// 		v2_want := 10
-// 		err = ses.SetSessionVar(v2, v2_want)
-// 		convey.So(err, convey.ShouldNotBeNil)
+		newSes3 := genSession(ctrl, gSysVars)
+		checkWant(ses, existSes, newSes3, v1, v1_want, v1_want, v1_want, v1_want, v1_want, v1_want)
 
-// 		newSes4 := genSession(ctrl, gSysVars)
-// 		checkWant(ses, existSes, newSes4, v2, v2_default, v2_default, v2_default, v2_default, v2_default, v2_default)
+		v2 := "testglobalvar_nodyn"
+		_, v2_default, _ := gSysVars.GetGlobalSysVar(v2)
+		v2_want := 10
+		err = ses.SetSessionVar(context.Background(), v2, v2_want)
+		convey.So(err, convey.ShouldNotBeNil)
 
-// 		err = ses.SetGlobalVar(v2, v2_want)
-// 		convey.So(err, convey.ShouldNotBeNil)
+		newSes4 := genSession(ctrl, gSysVars)
+		checkWant(ses, existSes, newSes4, v2, v2_default, v2_default, v2_default, v2_default, v2_default, v2_default)
 
-// 		newSes5 := genSession(ctrl, gSysVars)
-// 		checkWant(ses, existSes, newSes5, v2, v2_default, v2_default, v2_default, v2_default, v2_default, v2_default)
-// 	})
+		err = ses.SetGlobalVar(context.Background(), v2, v2_want)
+		convey.So(err, convey.ShouldNotBeNil)
 
-// 	convey.Convey("scope session", t, func() {
-// 		ctrl := gomock.NewController(t)
-// 		defer ctrl.Finish()
+		newSes5 := genSession(ctrl, gSysVars)
+		checkWant(ses, existSes, newSes5, v2, v2_default, v2_default, v2_default, v2_default, v2_default, v2_default)
+	})
 
-// 		gSysVars := &GlobalSystemVariables{}
-// 		InitGlobalSystemVariables(gSysVars)
+	convey.Convey("scope session", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
 
-// 		ses := genSession(ctrl, gSysVars)
-// 		existSes := genSession(ctrl, gSysVars)
+		gSysVars := &GlobalSystemVariables{}
+		InitGlobalSystemVariables(gSysVars)
 
-// 		v1 := "testsessionvar_dyn"
-// 		_, v1_default, _ := gSysVars.GetGlobalSysVar(v1)
-// 		v1_want := 10
-// 		err := ses.SetSessionVar(v1, v1_want)
-// 		convey.So(err, convey.ShouldBeNil)
+		ses := genSession(ctrl, gSysVars)
+		existSes := genSession(ctrl, gSysVars)
 
-// 		newSes1 := genSession(ctrl, gSysVars)
-// 		checkWant2(ses, existSes, newSes1, v1, v1_want, v1_default, v1_default)
+		v1 := "testsessionvar_dyn"
+		_, v1_default, _ := gSysVars.GetGlobalSysVar(v1)
+		v1_want := 10
+		err := ses.SetSessionVar(context.Background(), v1, v1_want)
+		convey.So(err, convey.ShouldBeNil)
 
-// 		err = ses.SetGlobalVar(v1, v1_want)
-// 		convey.So(err, convey.ShouldNotBeNil)
+		newSes1 := genSession(ctrl, gSysVars)
+		checkWant2(ses, existSes, newSes1, v1, v1_want, v1_default, v1_default)
 
-// 		newSes2 := genSession(ctrl, gSysVars)
-// 		checkWant2(ses, existSes, newSes2, v1, v1_want, v1_default, v1_default)
+		err = ses.SetGlobalVar(context.Background(), v1, v1_want)
+		convey.So(err, convey.ShouldNotBeNil)
 
-// 		v2 := "testsessionvar_nodyn"
-// 		_, v2_default, _ := gSysVars.GetGlobalSysVar(v2)
-// 		v2_want := 10
-// 		err = ses.SetSessionVar(v2, v2_want)
-// 		convey.So(err, convey.ShouldNotBeNil)
+		newSes2 := genSession(ctrl, gSysVars)
+		checkWant2(ses, existSes, newSes2, v1, v1_want, v1_default, v1_default)
 
-// 		newSes3 := genSession(ctrl, gSysVars)
-// 		checkWant2(ses, existSes, newSes3, v2, v2_default, v2_default, v2_default)
+		v2 := "testsessionvar_nodyn"
+		_, v2_default, _ := gSysVars.GetGlobalSysVar(v2)
+		v2_want := 10
+		err = ses.SetSessionVar(context.Background(), v2, v2_want)
+		convey.So(err, convey.ShouldNotBeNil)
 
-// 		err = ses.SetGlobalVar(v2, v2_want)
-// 		convey.So(err, convey.ShouldNotBeNil)
-// 		newSes4 := genSession(ctrl, gSysVars)
-// 		checkWant2(ses, existSes, newSes4, v2, v2_default, v2_default, v2_default)
+		newSes3 := genSession(ctrl, gSysVars)
+		checkWant2(ses, existSes, newSes3, v2, v2_default, v2_default, v2_default)
 
-// 	})
+		err = ses.SetGlobalVar(context.Background(), v2, v2_want)
+		convey.So(err, convey.ShouldNotBeNil)
+		newSes4 := genSession(ctrl, gSysVars)
+		checkWant2(ses, existSes, newSes4, v2, v2_default, v2_default, v2_default)
 
-// 	convey.Convey("scope both - set session", t, func() {
-// 		ctrl := gomock.NewController(t)
-// 		defer ctrl.Finish()
+	})
 
-// 		gSysVars := &GlobalSystemVariables{}
-// 		InitGlobalSystemVariables(gSysVars)
+	convey.Convey("scope both - set session", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
 
-// 		ses := genSession(ctrl, gSysVars)
-// 		existSes := genSession(ctrl, gSysVars)
+		gSysVars := &GlobalSystemVariables{}
+		InitGlobalSystemVariables(gSysVars)
 
-// 		v1 := "testbothvar_dyn"
-// 		_, v1_default, _ := gSysVars.GetGlobalSysVar(v1)
-// 		v1_want := 10
-// 		err := ses.SetSessionVar(v1, v1_want)
-// 		convey.So(err, convey.ShouldBeNil)
+		ses := genSession(ctrl, gSysVars)
+		existSes := genSession(ctrl, gSysVars)
 
-// 		newSes2 := genSession(ctrl, gSysVars)
-// 		checkWant(ses, existSes, newSes2, v1, v1_want, v1_default, v1_default, v1_default, v1_default, v1_default)
+		v1 := "testbothvar_dyn"
+		_, v1_default, _ := gSysVars.GetGlobalSysVar(v1)
+		v1_want := 10
+		err := ses.SetSessionVar(context.Background(), v1, v1_want)
+		convey.So(err, convey.ShouldBeNil)
 
-// 		v2 := "testbotchvar_nodyn"
-// 		err = ses.SetSessionVar(v2, 10)
-// 		convey.So(err, convey.ShouldNotBeNil)
+		newSes2 := genSession(ctrl, gSysVars)
+		checkWant(ses, existSes, newSes2, v1, v1_want, v1_default, v1_default, v1_default, v1_default, v1_default)
 
-// 		err = ses.SetGlobalVar(v2, 10)
-// 		convey.So(err, convey.ShouldNotBeNil)
-// 	})
+		v2 := "testbotchvar_nodyn"
+		err = ses.SetSessionVar(context.Background(), v2, 10)
+		convey.So(err, convey.ShouldNotBeNil)
 
-// 	convey.Convey("scope both", t, func() {
-// 		ctrl := gomock.NewController(t)
-// 		defer ctrl.Finish()
+		err = ses.SetGlobalVar(context.Background(), v2, 10)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
 
-// 		gSysVars := &GlobalSystemVariables{}
-// 		InitGlobalSystemVariables(gSysVars)
+	convey.Convey("scope both", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
 
-// 		ses := genSession(ctrl, gSysVars)
-// 		existSes := genSession(ctrl, gSysVars)
+		gSysVars := &GlobalSystemVariables{}
+		InitGlobalSystemVariables(gSysVars)
 
-// 		v1 := "testbothvar_dyn"
-// 		_, v1_default, _ := gSysVars.GetGlobalSysVar(v1)
-// 		v1_want := 10
+		ses := genSession(ctrl, gSysVars)
+		existSes := genSession(ctrl, gSysVars)
 
-// 		err := ses.SetGlobalVar(v1, v1_want)
-// 		convey.So(err, convey.ShouldBeNil)
+		v1 := "testbothvar_dyn"
+		_, v1_default, _ := gSysVars.GetGlobalSysVar(v1)
+		v1_want := 10
 
-// 		newSes2 := genSession(ctrl, gSysVars)
-// 		checkWant(ses, existSes, newSes2, v1, v1_default, v1_default, v1_want, v1_want, v1_want, v1_want)
-// 	})
+		err := ses.SetGlobalVar(context.Background(), v1, v1_want)
+		convey.So(err, convey.ShouldBeNil)
 
-// 	convey.Convey("user variables", t, func() {
-// 		ctrl := gomock.NewController(t)
-// 		defer ctrl.Finish()
+		newSes2 := genSession(ctrl, gSysVars)
+		checkWant(ses, existSes, newSes2, v1, v1_default, v1_default, v1_want, v1_want, v1_want, v1_want)
+	})
 
-// 		gSysVars := &GlobalSystemVariables{}
-// 		InitGlobalSystemVariables(gSysVars)
+	convey.Convey("user variables", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
 
-// 		ses := genSession(ctrl, gSysVars)
+		gSysVars := &GlobalSystemVariables{}
+		InitGlobalSystemVariables(gSysVars)
 
-// 		vars := ses.CopyAllSessionVars()
-// 		convey.So(len(vars), convey.ShouldNotBeZeroValue)
+		ses := genSession(ctrl, gSysVars)
 
-// 		err := ses.SetUserDefinedVar("abc", 1, "")
-// 		convey.So(err, convey.ShouldBeNil)
+		vars := ses.CopyAllSessionVars()
+		convey.So(len(vars), convey.ShouldNotBeZeroValue)
 
-// 		_, _, err = ses.GetUserDefinedVar("abc")
-// 		convey.So(err, convey.ShouldBeNil)
-// 	})
-// }
+		err := ses.SetUserDefinedVar("abc", 1, "")
+		convey.So(err, convey.ShouldBeNil)
+
+		_, _, err = ses.GetUserDefinedVar("abc")
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
 
 func TestSession_TxnCompilerContext(t *testing.T) {
 	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -840,7 +848,6 @@ func TestSession_Migrate(t *testing.T) {
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
-		txnOperator.EXPECT().GetWorkspace().Return(nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(any, any, ...any) (TxnOperator, error) {
 			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
@@ -890,33 +897,6 @@ func TestSession_Migrate(t *testing.T) {
 	gSysVars := &GlobalSystemVariables{}
 	InitGlobalSystemVariables(gSysVars)
 	s := genSession(ctrl, gSysVars)
-
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-	pu.SV.SetDefaultValues()
-	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-	rm, _ := NewRoutineManager(ctx)
-	s.rm = rm
-
-	tenant := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          rootName,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        rootID,
-		DefaultRoleID: moAdminRoleID,
-	}
-	s.SetTenantInfo(tenant)
-
-	bh.sql2result["begin;"] = nil
-	bh.sql2result["commit;"] = nil
-	bh.sql2result["rollback;"] = nil
-
-	sql := getSqlForGetSystemVariableValueWithAccount(uint64(s.GetTenantInfo().GetTenantID()), "lower_case_table_names")
-	bh.sql2result[sql] = newMrsForSqlForGetVariableValue([][]interface{}{
-		{"1"},
-	})
-
 	err := Migrate(s, &query.MigrateConnToRequest{
 		DB: "d1",
 		PrepareStmts: []*query.PrepareStmt{

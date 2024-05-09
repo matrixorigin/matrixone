@@ -20,10 +20,11 @@ import (
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+
 	"github.com/BurntSushi/toml"
-	"github.com/gofrs/uuid"
 	"github.com/golang/mock/gomock"
-	"github.com/prashantv/gostub"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -122,31 +122,13 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	_ = ses.SetGlobalVar(context.TODO(), "save_query_result", int8(1))
 	defer ses.Close()
 
-	bh := &backgroundExecTest{}
-	bh.init()
-
-	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-	defer bhStub.Reset()
-
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-	pu.SV.SetDefaultValues()
-	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-	rm, _ := NewRoutineManager(ctx)
-	ses.rm = rm
-
-	tenant := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          rootName,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        rootID,
-		DefaultRoleID: moAdminRoleID,
-	}
-	ses.SetTenantInfo(tenant)
-
 	const blockCnt int = 3
 
+	tenant := &TenantInfo{
+		Tenant:   sysAccountName,
+		TenantID: sysAccountID,
+	}
+	ses.SetTenantInfo(tenant)
 	proc := testutil.NewProcess()
 	proc.FileService = getGlobalPu().FileService
 
@@ -155,26 +137,6 @@ func Test_saveQueryResultMeta(t *testing.T) {
 		reqCtx: context.TODO(),
 		proc:   proc,
 	}
-
-	//no result set
-	bh.sql2result["begin;"] = nil
-	bh.sql2result["commit;"] = nil
-	bh.sql2result["rollback;"] = nil
-
-	sql := getSqlForGetSystemVariableValueWithAccount(uint64(ses.GetTenantInfo().GetTenantID()), "save_query_result")
-	bh.sql2result[sql] = newMrsForSqlForGetVariableValue([][]interface{}{
-		{"1"},
-	})
-
-	sql = getSqlForGetSystemVariableValueWithAccount(uint64(ses.GetTenantInfo().GetTenantID()), "query_result_maxsize")
-	bh.sql2result[sql] = newMrsForSqlForGetVariableValue([][]interface{}{
-		{"100"},
-	})
-
-	sql = getSqlForGetSystemVariableValueWithAccount(uint64(ses.GetTenantInfo().GetTenantID()), "query_result_timeout")
-	bh.sql2result[sql] = newMrsForSqlForGetVariableValue([][]interface{}{
-		{"24"},
-	})
 
 	//three columns
 	typs := []types.Type{
@@ -204,6 +166,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 		StatementID: testUUID,
 	}
 
+	ctx := context.Background()
 	asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from t", 1, 0)
 	assert.Nil(t, err)
 
