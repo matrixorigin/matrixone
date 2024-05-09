@@ -24,30 +24,39 @@ type AggContext struct {
 	initGroup        AggGroupContextInit
 }
 
-func newAggContext(
-	hasCommonContext bool, hasGroupContext bool,
-	initGroup AggGroupContextInit) *AggContext {
-	return &AggContext{
-		hasCommonContext: hasCommonContext,
-		hasGroupContext:  hasGroupContext,
-		initGroup:        initGroup,
+func newAggContextFromImpl(
+	ctxImpl aggContextImplementation,
+	result types.Type,
+	args ...types.Type) *AggContext {
+
+	ctx := &AggContext{
+		hasCommonContext: ctxImpl.hasCommonContext,
+		hasGroupContext:  ctxImpl.hasGroupContext,
 	}
+	if ctx.hasGroupContext {
+		ctx.initGroup = ctxImpl.generateGroupContext
+	}
+	if ctxImpl.hasCommonContext {
+		ctx.setCommonContext(ctxImpl.generateCommonContext(result, args...))
+	}
+	return ctx
 }
 
 type AggGroupContextInit func(resultType types.Type, parameters ...types.Type) AggGroupExecContext
+type AggCommonContextInit func(resultType types.Type, parameters ...types.Type) AggCommonExecContext
 
 func (a *AggContext) setCommonContext(c AggCommonExecContext) {
-	if c == nil {
-		return
+	if !a.hasCommonContext {
+		a.commonContext = c
 	}
-	a.hasCommonContext = true
-	a.commonContext = c
 }
 
-func (a *AggContext) preAllocate(n int) {
+func (a *AggContext) preAllocate(more int) {
 	if !a.hasGroupContext {
 		return
 	}
+
+	n := len(a.groupContext) + more
 	if n <= cap(a.groupContext) {
 		return
 	}
