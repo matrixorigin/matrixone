@@ -56,7 +56,7 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 		rwlocker = new(sync.RWMutex)
 	}
 	chain := &DeleteChain{
-		MVCCChain:     txnbase.NewMVCCChain((*DeleteNode).Less, NewEmptyDeleteNode),
+		MVCCChain:     txnbase.NewMVCCChain((*DeleteNode).Less, NewEmptyDeleteNode, rwlocker),
 		links:         make(map[uint32]*DeleteNode),
 		mvcc:          mvcc,
 		mask:          &nulls.Bitmap{},

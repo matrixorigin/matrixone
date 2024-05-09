@@ -31,10 +31,13 @@ type MVCCChain[T txnif.MVCCNode[T]] struct {
 	zero      T
 }
 
-func NewMVCCChain[T txnif.MVCCNode[T]](comparefn func(T, T) int, newnodefn func() T) *MVCCChain[T] {
+func NewMVCCChain[T txnif.MVCCNode[T]](comparefn func(T, T) int, newnodefn func() T, rwlocker *sync.RWMutex) *MVCCChain[T] {
+	if rwlocker == nil {
+		rwlocker = new(sync.RWMutex)
+	}
 	return &MVCCChain[T]{
 		MVCC:      common.NewGenericSortedDList(comparefn),
-		RWMutex:   &sync.RWMutex{},
+		RWMutex:   rwlocker,
 		comparefn: comparefn,
 		newnodefn: newnodefn,
 	}
