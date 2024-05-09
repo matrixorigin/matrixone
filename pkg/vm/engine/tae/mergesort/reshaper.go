@@ -39,6 +39,8 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 	totalRowCnt := host.GetTotalRowCnt()
 	rowSize := host.GetTotalSize() / totalRowCnt
 	maxRowCnt := host.GetBlockMaxRows()
+	accObjBlkCnts := host.GetAccBlkCnts()
+	commitEntry := host.GetCommitEntry()
 
 	var writer *blockio.BlockWriter
 	var buffer *batch.Batch
@@ -76,7 +78,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 				}
 
 				if host.DoTransfer() {
-					host.GetCommitEntry().Booking.Mappings[host.GetAccBlkCnts()[i]+loadedBlkCnt-1].M[int32(j)] = api.TransDestPos{
+					commitEntry.Booking.Mappings[accObjBlkCnts[i]+loadedBlkCnt-1].M[int32(j)] = api.TransDestPos{
 						ObjIdx: int32(objCnt),
 						BlkIdx: int32(uint32(objBlkCnt)),
 						RowIdx: int32(blkRowCnt),
@@ -88,9 +90,6 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 				mergedRowCnt++
 
 				if blkRowCnt == int(maxRowCnt) {
-					blkRowCnt = 0
-					objBlkCnt++
-
 					if writer == nil {
 						writer = host.PrepareNewWriter()
 					}
@@ -98,16 +97,20 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 					if _, err := writer.WriteBatch(buffer); err != nil {
 						return err
 					}
+
+					blkRowCnt = 0
+					objBlkCnt++
+
 					buffer.CleanOnlyData()
 
 					if needNewObject(objBlkCnt, objRowCnt, totalRowCnt, uint32(mergedRowCnt), rowSize, host.GetTargetObjSize()) {
-						if err := syncObject(ctx, writer, host.GetCommitEntry()); err != nil {
+						if err := syncObject(ctx, writer, commitEntry); err != nil {
 							return err
 						}
 						writer = nil
 
-						objBlkCnt = 0
 						objRowCnt = 0
+						objBlkCnt = 0
 						objCnt++
 					}
 				}
@@ -133,7 +136,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		buffer.CleanOnlyData()
 	}
 	if objBlkCnt > 0 {
-		if err := syncObject(ctx, writer, host.GetCommitEntry()); err != nil {
+		if err := syncObject(ctx, writer, commitEntry); err != nil {
 			return err
 		}
 		writer = nil
