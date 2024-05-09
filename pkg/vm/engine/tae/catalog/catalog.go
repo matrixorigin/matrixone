@@ -194,7 +194,6 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		panic(err)
 	}
 }
-
 func (catalog *Catalog) ReplayCmd(
 	txncmd txnif.TxnCmd,
 	dataFactory DataFactory,
