@@ -479,6 +479,10 @@ func (e *Engine) getOrCreateSnapPart(
 	})
 	start, end := snap.GetDuration()
 	if ts.Greater(&end) || ts.Less(&start) {
+		logutil.Infof("xxxx Invalid checkpoints for snapshot read,snapshot:%s, start:%s, end:%s",
+			ts.ToTimestamp().DebugString(),
+			start.ToTimestamp().DebugString(),
+			end.ToTimestamp().DebugString())
 		return nil, moerr.NewInternalErrorNoCtx(
 			"Invalid checkpoints for snapshot read,snapshot:%s, start:%s, end:%s",
 			ts.ToTimestamp().DebugString(),
