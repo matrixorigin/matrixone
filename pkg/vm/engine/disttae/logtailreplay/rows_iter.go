@@ -190,23 +190,22 @@ const (
 
 func ExactIn(vec *vector.Vector, debug bool, packerPool *fileservice.Pool[*types.Packer]) PrimaryKeyMatchSpec {
 	var packer *types.Packer
+	//var buf *bytes.Buffer
 	var encoded []byte
-	var put fileservice.PutBack[*types.Packer]
+
+	put := packerPool.Get(&packer)
+	encodes := EncodePrimaryKeyVector(vec, packer)
+	put.Put()
 
 	idx := 0
 	currentPhase := seek
-	vecLen := vec.Length()
+	vecLen := len(encodes)
 
 	updateEncoded := func() bool {
 		if idx >= vecLen {
 			return false
 		}
-		vecItem := vec.GetRawBytesAt(idx)
-		put = packerPool.Get(&packer)
-		encoded = EncodePrimaryKey(vecItem, packer)
-		packer.Reset()
-		put.Put()
-		//encoded = vecItem
+		encoded = encodes[idx]
 		idx++
 		return true
 	}
@@ -218,15 +217,21 @@ func ExactIn(vec *vector.Vector, debug bool, packerPool *fileservice.Pool[*types
 	return PrimaryKeyMatchSpec{
 		Name: "ExactIn",
 		Move: func(p *primaryKeyIter) bool {
-			//var buf *bytes.Buffer
-			//if debug {
+
+			//if debug && first {
 			//	fmt.Println(vec.GetRawBytesAt(0), fmt.Sprintf("%s", string(vec.GetRawBytesAt(0))))
 			//	p.primaryIndex.Scan(func(item *PrimaryIndexEntry) bool {
-			//		fmt.Printf("%v-%s", item.Bytes, string(item.Bytes))
+			//		t, _ := types.Unpack(item.Bytes)
+			//		fmt.Printf("%v-%s-%v ", item.Bytes, string(item.Bytes), t)
 			//		return true
 			//	})
 			//	fmt.Println()
 			//	fmt.Println()
+			//	first = false
+			//}
+			//
+			//if debug {
+			//
 			//	buf = &bytes.Buffer{}
 			//	defer func() {
 			//		fmt.Println("buffer: ", buf.String())
@@ -244,6 +249,9 @@ func ExactIn(vec *vector.Vector, debug bool, packerPool *fileservice.Pool[*types
 						return false
 					}
 					if match(p.iter.Item().Bytes) {
+						//if buf != nil {
+						//	buf.WriteString(fmt.Sprintf("seek matched, encoded: %v", encoded))
+						//}
 						currentPhase = scan
 						return true
 					}
@@ -254,6 +262,9 @@ func ExactIn(vec *vector.Vector, debug bool, packerPool *fileservice.Pool[*types
 						return false
 					}
 					if match(p.iter.Item().Bytes) {
+						//if buf != nil {
+						//	buf.WriteString(fmt.Sprintf("scan matched, encoded: %v", encoded))
+						//}
 						return true
 					}
 					// seek next vec item
