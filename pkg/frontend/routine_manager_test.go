@@ -67,10 +67,11 @@ func Test_Closed(t *testing.T) {
 	db, err := openDbConn(t, 6001)
 	require.NoError(t, err)
 	time.Sleep(100 * time.Millisecond)
-	closeDbConn(t, db)
 	cf.Close()
 
 	err = mo.Stop()
 	require.NoError(t, err)
 	wg.Wait()
+
+	closeDbConn(t, db)
 }
