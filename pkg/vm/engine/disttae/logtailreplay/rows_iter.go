@@ -16,8 +16,8 @@ package logtailreplay
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/tidwall/btree"
 )
 
@@ -110,43 +110,101 @@ func (p *rowsIter) Close() error {
 }
 
 type primaryKeyIter struct {
-	ts          types.TS
-	spec        PrimaryKeyMatchSpec
-	iter        btree.IterG[*PrimaryIndexEntry]
-	firstCalled bool
-	rows        *btree.BTreeG[RowEntry]
-	curRow      RowEntry
+	ts           types.TS
+	spec         PrimaryKeyMatchSpec
+	iter         btree.IterG[*PrimaryIndexEntry]
+	firstCalled  bool
+	rows         *btree.BTreeG[RowEntry]
+	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
+	curRow       RowEntry
 }
 
 type PrimaryKeyMatchSpec struct {
-	Seek  []byte
-	Match func(key []byte) bool
+	Move func(p *primaryKeyIter) bool
+	Name string
 }
 
 func Exact(key []byte) PrimaryKeyMatchSpec {
+	first := true
 	return PrimaryKeyMatchSpec{
-		Seek: key,
-		Match: func(k []byte) bool {
-			return bytes.Equal(k, key)
+		Name: "Exact",
+		Move: func(p *primaryKeyIter) bool {
+			if first {
+				first = false
+				if !p.iter.Seek(&PrimaryIndexEntry{
+					Bytes: key,
+				}) {
+					return false
+				}
+			} else {
+				if p.iter.Next() {
+					return false
+				}
+			}
+
+			item := p.iter.Item()
+			return bytes.Equal(item.Bytes, key)
 		},
 	}
 }
 
 func Prefix(prefix []byte) PrimaryKeyMatchSpec {
+	first := true
 	return PrimaryKeyMatchSpec{
-		Seek: prefix,
-		Match: func(k []byte) bool {
-			return bytes.HasPrefix(k, prefix)
+		Name: "Prefix",
+		Move: func(p *primaryKeyIter) bool {
+			if first {
+				first = false
+				if !p.iter.Seek(&PrimaryIndexEntry{
+					Bytes: prefix,
+				}) {
+					return false
+				}
+			} else {
+				if !p.iter.Next() {
+					return false
+				}
+			}
+
+			item := p.iter.Item()
+			return bytes.HasPrefix(item.Bytes, prefix)
 		},
 	}
 }
 
 func MinMax(min []byte, max []byte) PrimaryKeyMatchSpec {
+	return PrimaryKeyMatchSpec{}
+}
+
+func ExactIn(vec *vector.Vector) PrimaryKeyMatchSpec {
+	idx := 0
+	vecLen := vec.Length()
+	iterateAll, first := true, true
+	//vector.MustBytesCol()
 	return PrimaryKeyMatchSpec{
-		Seek: min,
-		Match: func(k []byte) bool {
-			return bytes.Compare(min, k) <= 0 &&
-				bytes.Compare(k, max) <= 0
+		Name: "ExactIn",
+		Move: func(p *primaryKeyIter) bool {
+			// each seeking need to visit Height items
+			if first && vecLen*p.primaryIndex.Height() < p.primaryIndex.Len() {
+				iterateAll = false
+			}
+
+			first = false
+			if iterateAll {
+				ok := p.iter.Next()
+				return ok
+			}
+
+			if idx >= vecLen {
+				return false
+			}
+
+			ok := p.iter.Seek(&PrimaryIndexEntry{
+				Bytes: vec.GetRawBytesAt(idx),
+			})
+
+			idx++
+			return ok
 		},
 	}
 }
@@ -155,12 +213,13 @@ func (p *PartitionState) NewPrimaryKeyIter(
 	ts types.TS,
 	spec PrimaryKeyMatchSpec,
 ) *primaryKeyIter {
-	iter := p.primaryIndex.Copy().Iter()
+	index := p.primaryIndex.Copy()
 	return &primaryKeyIter{
-		ts:   ts,
-		spec: spec,
-		iter: iter,
-		rows: p.rows.Copy(),
+		ts:           ts,
+		spec:         spec,
+		iter:         index.Iter(),
+		primaryIndex: index,
+		rows:         p.rows.Copy(),
 	}
 }
 
@@ -168,26 +227,11 @@ var _ RowsIter = new(primaryKeyIter)
 
 func (p *primaryKeyIter) Next() bool {
 	for {
-
-		if !p.firstCalled {
-			if !p.iter.Seek(&PrimaryIndexEntry{
-				Bytes: p.spec.Seek,
-			}) {
-				return false
-			}
-			p.firstCalled = true
-		} else {
-			if !p.iter.Next() {
-				return false
-			}
+		if !p.spec.Move(p) {
+			return false
 		}
 
 		entry := p.iter.Item()
-
-		if !p.spec.Match(entry.Bytes) {
-			// no more
-			return false
-		}
 
 		// validate
 		valid := false
@@ -265,26 +309,11 @@ var _ RowsIter = new(primaryKeyDelIter)
 
 func (p *primaryKeyDelIter) Next() bool {
 	for {
-
-		if !p.firstCalled {
-			if !p.iter.Seek(&PrimaryIndexEntry{
-				Bytes: p.spec.Seek,
-			}) {
-				return false
-			}
-			p.firstCalled = true
-		} else {
-			if !p.iter.Next() {
-				return false
-			}
+		if !p.spec.Move(&p.primaryKeyIter) {
+			return false
 		}
 
 		entry := p.iter.Item()
-
-		if !p.spec.Match(entry.Bytes) {
-			// no more
-			return false
-		}
 
 		if entry.BlockID.Compare(p.bid) != 0 {
 			continue
