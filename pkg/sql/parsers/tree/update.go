@@ -296,6 +296,12 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" set ")
 		node.Param.Tail.Assignments.Format(ctx)
 	}
+	if node.Param.Parallel == true {
+		ctx.WriteString(" parallel true ")
+		if node.Param.Strict == true {
+			ctx.WriteString("strict true ")
+		}
+	}
 }
 
 func formatS3option(ctx *FmtCtx, option []string) {
