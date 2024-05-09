@@ -552,6 +552,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		logutil.Infof("%s %s: abort all running transactions finished", logTag, c.serviceID)
 
 		// clean memory table.
+		logutil.Infof("xxxx reconect, init engine's latest partitions")
 		err := e.init(ctx)
 		if err != nil {
 			logutil.Errorf("%s rebuild memory-table failed, err: %s", logTag, err)
