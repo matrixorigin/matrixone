@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -407,6 +408,13 @@ func (e *Engine) getOrCreateSnapPart(
 	if ok && partition.CanServe(ts) {
 		return partition, nil
 	}
+
+	pstart, pend := partition.GetDuration()
+	logutil.Infof("xxxx getOrCreateSnapPart, dbName:%s, tbName:%s, ts:%s, pstart:%s, pend:%s, ismax:%v",
+		dbName, tblName, ts.ToTimestamp().DebugString(),
+		pstart.ToTimestamp().DebugString(),
+		pend.ToTimestamp().DebugString(),
+		pstart == types.MaxTs())
 
 	//Then, check whether the snapshot partitions is available.
 	e.mu.Lock()
