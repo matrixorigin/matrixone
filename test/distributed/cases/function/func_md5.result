@@ -5,8 +5,8 @@ SELECT md5('');
 md5()
 d41d8cd98f00b204e9800998ecf8427e
 SELECT md5(NULL);
-md5(NULL)
-NULL
+md5(null)
+null
 SELECT md5('abc');
 md5(abc)
 900150983cd24fb0d6963f7d28e17f72
@@ -22,3 +22,35 @@ md5(0.000000)
 SELECT md5(0.134564621);
 md5(0.134564621)
 af5b1408280c209261fca320c246746f
+select md5('kfieli3453l5lj');
+md5(kfieli3453l5lj)
+05fb943825ddb699623d2e775de926bd
+select md5('  ');
+md5(  )
+23b58def11b45727d3351702515f86af
+select md5('中文');
+md5(中文)
+a7bac2239fcdcb3a067903d8077c4a07
+select md5('0x45df');
+md5(0x45df)
+a9c1027a22460c65f55b8e9f9783ca0e
+select md5('#$%^&*()!++={}|\~');
+md5(#$%^&*()!++={}|~)
+f71510a000e9f8ec1aa7dd10e2fc61cf
+select md5('flijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsfflijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsf');
+md5(flijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsfflijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsf)
+630b86b6f72337e121f64962284b8510
+select md5(concat('aife',' 883fdg'));
+md5(concat(aife,  883fdg))
+34b22bd4f84cbbd547f5d0a03f6805cd
+select md5(4336);
+md5(4336)
+672d30ab508237ac28b92c3472c56688
+select md5(2008-09-09);
+md5(2008 - 9 - 9)
+dc513ea4fbdaa7a14786ffdebc4ef64e
+select md5('2008-09-09');
+md5(2008-09-09)
+185e43039cc36b4fa960427d7c693b6c
+select md5(fsfsf);
+invalid input: column fsfsf does not exist
