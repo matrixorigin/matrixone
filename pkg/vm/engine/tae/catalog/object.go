@@ -570,7 +570,6 @@ func (entry *ObjectEntry) GetSchemaLocked() *Schema {
 // a block can be compacted:
 // 1. no uncommited node
 // 2. at least one committed node
-// 3. not compacted
 func (entry *ObjectEntry) PrepareCompact() bool {
 	entry.RLock()
 	defer entry.RUnlock()
@@ -578,9 +577,6 @@ func (entry *ObjectEntry) PrepareCompact() bool {
 		return false
 	}
 	if !entry.HasCommittedNode() {
-		return false
-	}
-	if entry.HasDropCommittedLocked() {
 		return false
 	}
 	return true
