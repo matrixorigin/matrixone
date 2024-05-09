@@ -16,19 +16,21 @@ package motrace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 func TestReportZap(t *testing.T) {
@@ -163,9 +165,10 @@ func TestReportZap_Discardable(t *testing.T) {
 
 	collector := newDummyCollectorCounter()
 	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true), WithBatchProcessor(collector))
-	oldP := GetTracerProvider()
-	defer SetTracerProvider(oldP)
-	SetTracerProvider(p)
+	stubs := gostub.Stub(&GetTracerProvider, func() *MOTracerProvider {
+		return p
+	})
+	defer stubs.Reset()
 
 	logutil.Info("normal log 1")
 	require.Equal(t, int64(1), collector.collectCnt.Load())
