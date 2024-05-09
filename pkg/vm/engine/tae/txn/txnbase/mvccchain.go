@@ -283,6 +283,16 @@ func (be *MVCCChain[T]) IsCommittedLocked() bool {
 	return un.IsCommitted()
 }
 
+func (be *MVCCChain[T]) IsCommitted() bool {
+	be.RLock()
+	defer be.RUnlock()
+	un := be.GetLatestNodeLocked()
+	if un.IsNil() {
+		return false
+	}
+	return un.IsCommitted()
+}
+
 func (be *MVCCChain[T]) ClonePreparedInRange(start, end types.TS) (ret []T) {
 	be.RLock()
 	defer be.RUnlock()
