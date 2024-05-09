@@ -1414,6 +1414,8 @@ func updatePartitionOfPush(
 	//After consume checkpoints finished ,then update the start and end of
 	//the mo system table's partition and catalog.
 	if !lazyLoad && len(tl.CkpLocation) != 0 {
+		logutil.Infof("xxxx start to update latest catalog cache, ckpStart: %s, ckpEnd: %s, loc:%s",
+			ckpStart.ToTimestamp().DebugString(), ckpEnd.ToTimestamp().DebugString(), tl.CkpLocation)
 		if !ckpStart.IsEmpty() && !ckpEnd.IsEmpty() {
 			t0 = time.Now()
 			partition.UpdateDuration(ckpStart, types.MaxTs())
