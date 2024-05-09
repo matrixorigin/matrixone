@@ -16,13 +16,12 @@ package v1_2_0
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
-
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 var tenantUpgEntries = []versions.UpgradeEntry{
