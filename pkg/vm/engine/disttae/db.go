@@ -408,13 +408,16 @@ func (e *Engine) getOrCreateSnapPart(
 	if ok && partition.CanServe(ts) {
 		return partition, nil
 	}
-
-	pstart, pend := partition.GetDuration()
-	logutil.Infof("xxxx getOrCreateSnapPart, dbName:%s, tbName:%s, ts:%s, pstart:%s, pend:%s, ismax:%v",
-		dbName, tblName, ts.ToTimestamp().DebugString(),
-		pstart.ToTimestamp().DebugString(),
-		pend.ToTimestamp().DebugString(),
-		pstart == types.MaxTs())
+	if !ok {
+		logutil.Infof("xxxx getOrCreateSnapPart, dbName:%s, tbName:%s, ts:%s, partition is null")
+	} else {
+		pstart, pend := partition.GetDuration()
+		logutil.Infof("xxxx getOrCreateSnapPart, dbName:%s, tbName:%s, ts:%s, pstart:%s, pend:%s, ismax:%v",
+			dbName, tblName, ts.ToTimestamp().DebugString(),
+			pstart.ToTimestamp().DebugString(),
+			pend.ToTimestamp().DebugString(),
+			pstart == types.MaxTs())
+	}
 
 	//Then, check whether the snapshot partitions is available.
 	e.mu.Lock()
