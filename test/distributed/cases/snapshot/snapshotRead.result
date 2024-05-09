@@ -1035,9 +1035,9 @@ __mo_rowid
 maxvalue
 drop publication publication01;
 drop table normal_table01;
+use mo_catalog;
 drop table cluster02;
-no such table test04.cluster02
-drop table t3;
+use test04;
 drop database test04;
 drop database if exists test05;
 create database test05;

@@ -420,7 +420,9 @@ select * from mo_catalog.mo_database{snapshot = 'sp08'} where datname = 'test04'
 select attname from mo_catalog.mo_columns{snapshot = 'sp08'} where att_database = 'test04';
 drop publication publication01;
 drop table normal_table01;
+use mo_catalog;
 drop table cluster02;
+use test04;
 drop table t3;
 drop database test04;
 
