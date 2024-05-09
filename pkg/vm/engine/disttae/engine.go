@@ -279,21 +279,32 @@ func (e *Engine) Database(ctx context.Context, name string,
 		if name == "snapshot_read_2024" {
 			latest := e.getLatestCatalogCache()
 			lstart, lend := latest.GetDuration()
-			sstart, send := catalog.GetDuration()
-			logutil.Infof("xxxx getOrCreateSnapCatalogCache: err:%v, txn:%s, parent:%s"+
-				"latestCatalog:%p-[%s_%s], lstart is maxTS:%v, catalog:%p-[%s_%s]",
-				err,
-				txn.op.Txn().DebugString(),
-				txn.op.Parent().Txn().DebugString(),
-				latest,
-				lstart.ToTimestamp().DebugString(),
-				lend.ToTimestamp().DebugString(),
-				lstart == types.MaxTs(),
-				catalog,
-				sstart.ToTimestamp().DebugString(),
-				send.ToTimestamp().DebugString(),
-			)
-
+			if catalog != nil {
+				sstart, send := catalog.GetDuration()
+				logutil.Infof("xxxx getOrCreateSnapCatalogCache success,txn:%s, parent:%s"+
+					"latestCatalog:%p-[%s_%s], lstart is maxTS:%v, catalog:%p-[%s_%s]",
+					txn.op.Txn().DebugString(),
+					txn.op.Parent().Txn().DebugString(),
+					latest,
+					lstart.ToTimestamp().DebugString(),
+					lend.ToTimestamp().DebugString(),
+					lstart == types.MaxTs(),
+					catalog,
+					sstart.ToTimestamp().DebugString(),
+					send.ToTimestamp().DebugString(),
+				)
+			} else {
+				logutil.Infof("xxxx getOrCreateSnapCatalogCache fail, "+
+					"err:%v,  txn:%s, parent:%s, latestCatalog:%p-[%s_%s], lstart is maxTS:%v",
+					err,
+					txn.op.Txn().DebugString(),
+					txn.op.Parent().Txn().DebugString(),
+					latest,
+					lstart.ToTimestamp().DebugString(),
+					lend.ToTimestamp().DebugString(),
+					lstart == types.MaxTs(),
+				)
+			}
 		}
 		if err != nil {
 			return nil, err
