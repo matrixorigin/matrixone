@@ -6260,12 +6260,12 @@ func getSqlForPrivilege(ctx context.Context, roleId int64, entry privilegeEntry,
 }
 
 // getSqlForPrivilege2 complements the database name and calls getSqlForPrivilege
-func getSqlForPrivilege2(ses *Session, roleId int64, entry privilegeEntry, pl privilegeLevelType) (string, error) {
+func getSqlForPrivilege2(ctx context.Context, ses *Session, roleId int64, entry privilegeEntry, pl privilegeLevelType) (string, error) {
 	//handle the empty database
 	if len(entry.databaseName) == 0 {
 		entry.databaseName = ses.GetDatabaseName()
 	}
-	return getSqlForPrivilege(ses.GetRequestContext(), roleId, entry, pl)
+	return getSqlForPrivilege(ctx, roleId, entry, pl)
 }
 
 // verifyPrivilegeEntryInMultiPrivilegeLevels checks the privilege
@@ -6294,7 +6294,7 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 				return true, nil
 			}
 		}
-		sql, err = getSqlForPrivilege2(ses, roleId, entry, pl)
+		sql, err = getSqlForPrivilege2(ctx, ses, roleId, entry, pl)
 		if err != nil {
 			return false, err
 		}
@@ -6443,7 +6443,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		return false, nil
 	}
 
-	enableCache, err = privilegeCacheIsEnabled(ses)
+	enableCache, err = privilegeCacheIsEnabled(ctx, ses)
 	if err != nil {
 		return false, err
 	}
@@ -7622,7 +7622,6 @@ func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, f
 		feSessionImpl: feSessionImpl{
 			proto: &FakeProtocol{},
 		},
-		connectCtx: ctx,
 
 		seqCurValues: make(map[uint64]string),
 		seqLastValue: new(string),
@@ -8228,7 +8227,11 @@ func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenan
 	var err error
 	subscriptions := make([]string, 0)
 	//process the syspublications
-	_, syspublications_value, _ := ses.GetGlobalSysVars().GetGlobalSysVar("syspublications")
+	syspublications_value, err := ses.GetGlobalVar(ctx, "syspublications")
+	if err != nil {
+		return err
+	}
+
 	if syspublications, ok := syspublications_value.(string); ok {
 		if len(syspublications) == 0 {
 			return err
@@ -8578,12 +8581,12 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	return err
 }
 
-func Upload(ctx context.Context, ses FeSession, localPath string, storageDir string) (string, error) {
+func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string) (string, error) {
 	loadLocalReader, loadLocalWriter := io.Pipe()
 
 	// watch and cancel
 	// TODO use context.AfterFunc in go1.21
-	funcCtx, cancel := context.WithCancel(ctx)
+	funcCtx, cancel := context.WithCancel(execCtx.reqCtx)
 	defer cancel()
 	go func() {
 		defer loadLocalReader.Close()
@@ -8599,7 +8602,7 @@ func Upload(ctx context.Context, ses FeSession, localPath string, storageDir str
 				Filepath: localPath,
 			},
 		}
-		return processLoadLocal(ctx, ses, param, loadLocalWriter)
+		return processLoadLocal(ses, execCtx, param, loadLocalWriter)
 	})
 
 	// read from pipe and upload
@@ -8614,8 +8617,8 @@ func Upload(ctx context.Context, ses FeSession, localPath string, storageDir str
 	}
 
 	fileService := getGlobalPu().FileService
-	_ = fileService.Delete(ctx, ioVector.FilePath)
-	err := fileService.Write(ctx, ioVector)
+	_ = fileService.Delete(execCtx.reqCtx, ioVector.FilePath)
+	err := fileService.Write(execCtx.reqCtx, ioVector)
 	err = errors.Join(err, loadLocalErrGroup.Wait())
 	if err != nil {
 		return "", err
@@ -8624,7 +8627,7 @@ func Upload(ctx context.Context, ses FeSession, localPath string, storageDir str
 	return ioVector.FilePath, nil
 }
 
-func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
+func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
 	var initMoUdf string
 	var retTypeStr string
 	var dbName string
@@ -8648,15 +8651,15 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	}
 
 	// authticate db exists
-	dbExists, err = checkDatabaseExistsOrNot(ctx, ses.GetBackgroundExec(ctx), dbName)
+	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, ses.GetBackgroundExec(execCtx.reqCtx), dbName)
 	if err != nil {
 		return err
 	}
 	if !dbExists {
-		return moerr.NewBadDB(ctx, dbName)
+		return moerr.NewBadDB(execCtx.reqCtx, dbName)
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(execCtx.reqCtx)
 	defer bh.Close()
 
 	// format return type
@@ -8697,12 +8700,12 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	// validate duplicate function declaration
 	bh.ClearExecResultSet()
 	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, argsCondition)
-	err = bh.Exec(ctx, checkExistence)
+	err = bh.Exec(execCtx.reqCtx, checkExistence)
 	if err != nil {
 		return err
 	}
 
-	erArray, err = getResultSet(ctx, bh)
+	erArray, err = getResultSet(execCtx.reqCtx, bh)
 	if err != nil {
 		return err
 	}
@@ -8711,9 +8714,9 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
 	}
 
-	err = bh.Exec(ctx, "begin;")
+	err = bh.Exec(execCtx.reqCtx, "begin;")
 	defer func() {
-		err = finishTxn(ctx, bh, err)
+		err = finishTxn(execCtx.reqCtx, bh, err)
 	}()
 	if err != nil {
 		return err
@@ -8728,18 +8731,18 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 			if cf.Language == string(tree.PYTHON) {
 				if !strings.HasSuffix(cf.Body, ".py") &&
 					!strings.HasSuffix(cf.Body, ".whl") {
-					return moerr.NewInvalidInput(ctx, "file '"+cf.Body+"', only support '*.py', '*.whl'")
+					return moerr.NewInvalidInput(execCtx.reqCtx, "file '"+cf.Body+"', only support '*.py', '*.whl'")
 				}
 				if strings.HasSuffix(cf.Body, ".whl") {
 					dotIdx := strings.LastIndex(cf.Handler, ".")
 					if dotIdx < 1 {
-						return moerr.NewInvalidInput(ctx, "handler '"+cf.Handler+"', when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
+						return moerr.NewInvalidInput(execCtx.reqCtx, "handler '"+cf.Handler+"', when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
 					}
 				}
 			}
 			// upload
 			storageDir := string(cf.Name.Name.ObjectName) + "_" + strings.Join(typeList, "-") + "_"
-			cf.Body, err = Upload(ctx, ses, cf.Body, storageDir)
+			cf.Body, err = Upload(ses, execCtx, cf.Body, storageDir)
 			if err != nil {
 				return err
 			}
@@ -8761,7 +8764,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 
 	if execResultArrayHasData(erArray) { // replace
 		var id int64
-		id, err = erArray[0].GetInt64(ctx, 0, 0)
+		id, err = erArray[0].GetInt64(execCtx.reqCtx, 0, 0)
 		if err != nil {
 			return err
 		}
@@ -8780,7 +8783,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
 
-	err = bh.Exec(ctx, initMoUdf)
+	err = bh.Exec(execCtx.reqCtx, initMoUdf)
 	if err != nil {
 		return err
 	}
@@ -9261,7 +9264,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	return interpreter.GetResult(), nil
 }
 
-func doGrantPrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Statement) error {
+func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
 	var sql string
 	tenantInfo := ses.GetTenantInfo()
@@ -9278,9 +9281,9 @@ func doGrantPrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.State
 	tenantInfo = ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+		tenantCtx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 	} else {
-		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
+		tenantCtx = defines.AttachAccount(ctx, tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 	}
 
 	// 2.grant database privilege
@@ -9311,7 +9314,7 @@ func doGrantPrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.State
 	return err
 }
 
-func doRevokePrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Statement) error {
+func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
 	var sql string
 	tenantInfo := ses.GetTenantInfo()
@@ -9328,9 +9331,9 @@ func doRevokePrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Stat
 	tenantInfo = ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+		tenantCtx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 	} else {
-		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
+		tenantCtx = defines.AttachAccount(ctx, tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 	}
 
 	// 2.grant database privilege
