@@ -37,6 +37,17 @@ sha1(flijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio793472974926358
 select sha1(concat('oewo#$%',' 2335325'));
 sha1(concat(oewo#$%,  2335325))
 4cf95feb95b625915aa4b235938ae719c68ea579
+select sha1(4336);
+sha1(4336)
+2a4bd0cf67355067881ba559d5b304a7ad090ed3
+select sha1(2008-09-09);
+sha1(2008 - 9 - 9)
+bb3acf149db4936fbaca693a61d56be89205d997
+select sha1('2008-09-09');
+sha1(2008-09-09)
+e4b2f57a23d6ab4ef103a8bbcd4efc82355d287f
+select sha1(fsfsf);
+invalid input: column fsfsf does not exist
 select sha('kfieli3453l5lj');
 sha(kfieli3453l5lj)
 b68bbc108ce71dea691d6c3c5a4a6873b0bafa06
@@ -55,6 +66,17 @@ sha(#$%^&*()!++={}|~)
 select sha('flijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsfflijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsf');
 sha(flijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsfflijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsf)
 6127353ba6e4c964bbd29b41f2a887a98c320b0d
-select sha1(concat('oewo#$%',' 2335325'));
-sha1(concat(oewo#$%,  2335325))
+select sha(4336);
+sha(4336)
+2a4bd0cf67355067881ba559d5b304a7ad090ed3
+select sha(concat('oewo#$%',' 2335325'));
+sha(concat(oewo#$%,  2335325))
 4cf95feb95b625915aa4b235938ae719c68ea579
+select sha(2008-09-09);
+sha(2008 - 9 - 9)
+bb3acf149db4936fbaca693a61d56be89205d997
+select sha('2008-09-09');
+sha(2008-09-09)
+e4b2f57a23d6ab4ef103a8bbcd4efc82355d287f
+select sha(fsfsf);
+invalid input: column fsfsf does not exist
