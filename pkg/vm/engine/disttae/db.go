@@ -410,8 +410,8 @@ func (e *Engine) getOrCreateSnapPart(
 	}
 	if !ok {
 		logutil.Infof("xxxx getOrCreateSnapPart, "+
-			"dbName:%s, tbName:%s, dbid:%d, tid:%d, ts:%s, partition is %p",
-			dbName, tblName, databaseId, tableId, ts.ToTimestamp().DebugString(), partition)
+			"dbName:%s, tbName:%s, dbid:%d, tid:%d, ts:%s, partition:%p, engine:%p",
+			dbName, tblName, databaseId, tableId, ts.ToTimestamp().DebugString(), partition, e)
 	} else {
 		pstart, pend := partition.GetDuration()
 		logutil.Infof("xxxx getOrCreateSnapPart, "+
@@ -513,11 +513,14 @@ func (e *Engine) getOrCreateLatestPart(databaseId, tableId uint64) *logtailrepla
 }
 
 func (e *Engine) lazyLoadLatestCkp(ctx context.Context, tbl *txnTable) (*logtailreplay.Partition, error) {
-	logutil.Infof("xxxx lazyLoadLatestCkp, txn:%s, dbName:%s, tbName:%s, dbid:%d, tid:%d",
-		tbl.db.op.Txn().DebugString(),
-		tbl.db.databaseName, tbl.tableName, tbl.db.databaseId, tbl.tableId)
 	part := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
 	cache := e.getLatestCatalogCache()
+	logutil.Infof("xxxx start to lazyLoadLatestCkp, "+
+		"txn:%s, dbName:%s, tbName:%s, dbid:%d, tid:%d, engine:%p, partition:%p",
+		tbl.db.op.Txn().DebugString(),
+		tbl.db.databaseName, tbl.tableName,
+		tbl.db.databaseId, tbl.tableId,
+		e, part)
 
 	if err := part.ConsumeCheckpoints(
 		ctx,
