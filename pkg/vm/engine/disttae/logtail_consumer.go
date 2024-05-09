@@ -1341,6 +1341,7 @@ func updatePartitionOfPush(
 
 	t0 := time.Now()
 	partition := e.getOrCreateLatestPart(dbId, tblId)
+	logutil.Infof("xxxx consume log tail for tbl[dbId: %d, tblId: %d]", dbId, tblId)
 	v2.LogtailUpdatePartitonGetPartitionDurationHistogram.Observe(time.Since(t0).Seconds())
 
 	t0 = time.Now()

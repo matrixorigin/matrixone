@@ -409,12 +409,14 @@ func (e *Engine) getOrCreateSnapPart(
 		return partition, nil
 	}
 	if !ok {
-		logutil.Infof("xxxx getOrCreateSnapPart, dbName:%s, tbName:%s, ts:%s, partition is null",
-			dbName, tblName, ts.ToTimestamp().DebugString())
+		logutil.Infof("xxxx getOrCreateSnapPart, "+
+			"dbName:%s, tbName:%s, dbid:%d, tid:%d, ts:%s, partition is null",
+			dbName, tblName, databaseId, tableId, ts.ToTimestamp().DebugString())
 	} else {
 		pstart, pend := partition.GetDuration()
-		logutil.Infof("xxxx getOrCreateSnapPart, dbName:%s, tbName:%s, ts:%s, pstart:%s, pend:%s, ismax:%v",
-			dbName, tblName, ts.ToTimestamp().DebugString(),
+		logutil.Infof("xxxx getOrCreateSnapPart, "+
+			"dbName:%s, tbName:%s, dbid:%d, tid:%d, ts:%s, pstart:%s, pend:%s, ismax:%v",
+			dbName, tblName, databaseId, tableId, ts.ToTimestamp().DebugString(),
 			pstart.ToTimestamp().DebugString(),
 			pend.ToTimestamp().DebugString(),
 			pstart == types.MaxTs())
@@ -483,10 +485,11 @@ func (e *Engine) getOrCreateSnapPart(
 	})
 	start, end := snap.GetDuration()
 	if ts.Greater(&end) || ts.Less(&start) {
-		logutil.Infof("xxxx Invalid checkpoints for snapshot read,snapshot:%s, start:%s, end:%s",
+		logutil.Infof("xxxx Invalid checkpoints for snapshot read,snapshot:%s, start:%s, end:%s, tableId:%d",
 			ts.ToTimestamp().DebugString(),
 			start.ToTimestamp().DebugString(),
-			end.ToTimestamp().DebugString())
+			end.ToTimestamp().DebugString(),
+			tableId)
 		return nil, moerr.NewInternalErrorNoCtx(
 			"Invalid checkpoints for snapshot read,snapshot:%s, start:%s, end:%s",
 			ts.ToTimestamp().DebugString(),
