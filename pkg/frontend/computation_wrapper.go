@@ -419,7 +419,13 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, fill func
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 	if stm := motrace.StatementFromContext(ctx); stm != nil {
-		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.plan))
+		waitActiveCost := time.Duration(0)
+		if handler := cwft.ses.GetTxnHandler(); handler.IsValidTxnOperator() {
+			if _, txn, err := handler.GetTxnOperator(); err == nil {
+				waitActiveCost = txn.GetWaitActiveCost()
+			}
+		}
+		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.plan, WithWaitActiveCost(waitActiveCost)))
 	}
 	return nil
 }
