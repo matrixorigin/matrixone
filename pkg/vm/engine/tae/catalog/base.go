@@ -244,7 +244,6 @@ func (be *BaseEntryImpl[T]) GetVisibilityLocked(txn txnif.TxnReader) (visible, d
 	return
 }
 
-// PXU-1 TODO
 func (be *BaseEntryImpl[T]) IsVisibleWithLock(txn txnif.TxnReader, mu *sync.RWMutex) (ok bool, err error) {
 	needWait, txnToWait := be.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {

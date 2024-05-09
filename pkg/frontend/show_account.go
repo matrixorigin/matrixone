@@ -440,7 +440,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		}
 
 		if len(allAccountInfo) != 1 {
-			return moerr.NewInternalError(ctx, "no such account %v", account.TenantID)
+			return moerr.NewInternalError(ctx, "no such account %v", account.GetTenantID())
 		}
 	}
 

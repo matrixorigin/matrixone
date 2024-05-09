@@ -274,6 +274,8 @@ type StatsInfo struct {
 	CompileStartTime   time.Time `json:"CompileStartTime"`
 	ExecutionStartTime time.Time `json:"ExecutionStartTime"`
 	ExecutionEndTime   time.Time `json:"ExecutionEndTime"`
+
+	WaitActiveCost time.Duration `json:"WaitActive"`
 }
 
 func (stats *StatsInfo) CompileStart() {
@@ -369,6 +371,13 @@ func (stats *StatsInfo) IOMergerTimeConsumption() int64 {
 		stats.S3FSPrefetchFileIOMergerTimeConsumption +
 		stats.S3FSReadCacheIOMergerTimeConsumption +
 		stats.S3FSReadIOMergerTimeConsumption
+}
+
+func (stats *StatsInfo) SetWaitActiveCost(cost time.Duration) {
+	if stats == nil {
+		return
+	}
+	stats.WaitActiveCost = cost
 }
 
 // reset StatsInfo into zero state
