@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -1061,6 +1062,7 @@ func dispatchSubscribeResponse(
 			p := e.getOrCreateLatestPart(tbl.DbId, tbl.TbId)
 			p.UpdateDuration(types.TS{}, types.MaxTs())
 			c := e.getLatestCatalogCache()
+			logutil.Infof("xxxx update latest catalog duration, start=zeros, end=max")
 			c.UpdateDuration(types.TS{}, types.MaxTs())
 		}
 		e.pClient.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
@@ -1417,6 +1419,8 @@ func updatePartitionOfPush(
 			partition.UpdateDuration(ckpStart, types.MaxTs())
 			//Notice that the checkpoint duration is same among all mo system tables,
 			//such as mo_databases, mo_tables, mo_columns.
+			logutil.Infof("xxxx update latest catalog cache, ckpStart: %s",
+				ckpStart.ToTimestamp().DebugString())
 			catalogCache.UpdateDuration(ckpStart, types.MaxTs())
 			v2.LogtailUpdatePartitonUpdateTimestampsDurationHistogram.Observe(time.Since(t0).Seconds())
 		}

@@ -383,6 +383,9 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 		//only on global checkpoint.
 		end = start
 	}
+	if ts.Greater(&end) || ts.Less(&start) {
+		return nil, moerr.NewInternalErrorNoCtx("Invalid checkpoints for snapshot read")
+	}
 	snapCata.UpdateDuration(start, end)
 	e.snapCatalog.snaps = append(e.snapCatalog.snaps, snapCata)
 	return snapCata, nil
