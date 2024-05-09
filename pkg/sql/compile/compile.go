@@ -1968,16 +1968,39 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 	t = time.Now()
 	var fileOffset [][]int64
-	for i := 0; i < len(fileList); i++ {
-		param.Filepath = fileList[i]
-		if param.Parallel {
-			arr, err := external.ReadFileOffset(param, mcpu, fileSize[i], n.TableDef.Cols)
-			fileOffset = append(fileOffset, arr)
-			if err != nil {
-				return nil, err
+	if param.Parallel {
+		if param.Strict {
+			visibleCols := make([]*plan.ColDef, 0)
+			for _, col := range n.TableDef.Cols {
+				if !col.Hidden {
+					visibleCols = append(visibleCols, col)
+				}
+			}
+			for i := 0; i < len(fileList); i++ {
+				param.Filepath = fileList[i]
+				arr, err := external.ReadFileOffsetStrict(param, mcpu, fileSize[i], visibleCols)
+				fileOffset = append(fileOffset, arr)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			for i := 0; i < len(fileList); i++ {
+				param.Filepath = fileList[i]
+				arr, err := external.ReadFileOffsetNoStrict(param, mcpu, fileSize[i])
+				fileOffset = append(fileOffset, arr)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
+
+	} else {
+		for i := 0; i < len(fileList); i++ {
+			param.Filepath = fileList[i]
+		}
 	}
+
 	if time.Since(t) > time.Second {
 		logutil.Infof("read file offset cost %v", time.Since(t))
 	}
@@ -1996,12 +2019,16 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			fileOffsetTmp[j] = &pipeline.FileOffset{}
 			fileOffsetTmp[j].Offset = make([]int64, 0)
 			if param.Parallel {
-				if 2*preIndex+2*count < len(fileOffset[j]) {
-					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
-				} else if 2*preIndex < len(fileOffset[j]) {
-					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
+				if param.Strict {
+					if 2*preIndex+2*count < len(fileOffset[j]) {
+						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+					} else if 2*preIndex < len(fileOffset[j]) {
+						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
+					} else {
+						continue
+					}
 				} else {
-					continue
+					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
 				}
 			} else {
 				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{0, -1}...)
