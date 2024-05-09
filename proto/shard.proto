@@ -52,7 +52,7 @@ message TableShards {
     Policy Policy      = 1;
     uint32 ShardsCount = 2;
     uint32 Version     = 3;
-    uint32 TentandID   = 4;
+    uint32 TenantID    = 4;
 }
 
 // TableShardBind when TableShards are created, the Shards corresponding to a table 

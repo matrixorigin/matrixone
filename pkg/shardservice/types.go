@@ -67,9 +67,7 @@ type ShardService interface {
 type Env interface {
 	GetTableShards(table uint64) (pb.TableShards, error)
 	GetPartitionIDs(table uint64) ([]uint64, error)
-	GetAvailableCNs(table uint64) ([]metadata.CNService, error)
-	AddAvailableCN(cn metadata.CNService) error
-	DeleteAvailableCN(cn metadata.CNService) error
+	HasCN(serviceID string) bool
 }
 
 // Operator is a description of a command that needs to be sent down to CN for execution.
@@ -106,6 +104,15 @@ var (
 
 type cn struct {
 	state    state
+	last     time.Time
 	metadata metadata.CNService
 	binds    []pb.TableShardBind
+}
+
+func (c *cn) available(tenantID uint32) bool {
+	if c.state == down {
+		return false
+	}
+	// TODO: check tenantID
+	return true
 }
