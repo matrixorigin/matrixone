@@ -782,6 +782,12 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 	} else if node.NodeType == plan.Node_JOIN {
 		switch node.JoinType {
 		case plan.Node_RIGHT:
+			if !node.Stats.HashmapStats.Shuffle {
+				for _, childID := range node.Children {
+					builder.forceJoinOnOneCN(childID, true)
+				}
+			}
+		case plan.Node_SEMI, plan.Node_ANTI:
 			if node.BuildOnLeft && !node.Stats.HashmapStats.Shuffle {
 				for _, childID := range node.Children {
 					builder.forceJoinOnOneCN(childID, true)
