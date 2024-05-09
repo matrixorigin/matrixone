@@ -49,6 +49,9 @@ LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
 BUILD_TIME=$(shell date +%s)
 MO_VERSION=$(shell git describe --always --contains $(shell git rev-parse HEAD))
 GO_MODULE=$(shell go list -m)
+MUSL_DIR=$(ROOT_DIR)/musl
+MUSL_CC=$(MUSL_DIR)/bin/musl-gcc
+MUSL_VERSION:=1.2.5
 
 # cross compilation has been disabled for now
 ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
@@ -97,6 +100,7 @@ DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo " CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lm -lmo"
 GOLDFLAGS=-ldflags="-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
+TAGS :=
 
 .PHONY: cgo
 cgo:
@@ -106,7 +110,32 @@ cgo:
 .PHONY: build
 build: config cgo
 	$(info [Build binary])
-	$(CGO_OPTS) go build  $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
+
+.PHONY: musl-install
+musl-install:
+ifeq ("$(UNAME_S)","Linux")
+ ifeq ("$(wildcard $(MUSL_CC))","")
+	@rm -rf /tmp/musl-$(MUSL_VERSION) musl-$(MUSL_VERSION).tar.gz
+	@curl -SfL "https://musl.libc.org/releases/musl-$(MUSL_VERSION).tar.gz" -o /tmp/musl-$(MUSL_VERSION).tar.gz
+	@tar -zxf /tmp/musl-$(MUSL_VERSION).tar.gz -C $(ROOT_DIR)
+	@cd musl-$(MUSL_VERSION) && ./configure --prefix=$(MUSL_DIR) --syslibdir=$(MUSL_DIR)/syslib && $(MAKE) && $(MAKE) install
+	@rm -rf musl-$(MUSL_VERSION) /tmp/musl-$(MUSL_VERSION).tar.gz
+ endif
+endif
+
+.PHONY: musl-cgo
+musl-cgo: musl-install
+	@(cd $(ROOT_DIR)/cgo; CC=$(MUSL_CC) ${MAKE} ${CGO_DEBUG_OPT})
+
+.PHONY: musl
+musl: override CGO_OPTS += CC=$(MUSL_CC)
+musl: override GOLDFLAGS:=-ldflags="--linkmode 'external' --extldflags '-static' -X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
+musl: override TAGS := -tags musl
+musl: musl-install musl-cgo config
+musl:
+	$(info [Build binary(musl)])
+	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # build mo-debug tool
 .PHONY: mo-debug
@@ -189,6 +218,8 @@ clean:
 	@go clean -testcache
 	rm -f $(BIN_NAME)
 	rm -rf $(ROOT_DIR)/vendor
+	rm -rf $(MUSL_DIR)
+	rm -rf /tmp/musl-$(MUSL_VERSION).tar.gz
 	$(MAKE) -C cgo clean
 
 ###############################################################################
