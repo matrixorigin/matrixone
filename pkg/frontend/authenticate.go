@@ -8071,7 +8071,7 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 	//create tables for the tenant
 	for _, sql := range createSqls {
 		//only the SYS tenant has the table mo_account
-		if strings.HasPrefix(sql, "create table mo_account") {
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_account") {
 			continue
 		}
 		err = bh.Exec(newTenantCtx, sql)
