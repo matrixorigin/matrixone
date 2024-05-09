@@ -483,6 +483,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Attrs = t.Attrs
 		arg.IsUpdate = t.IsUpdate
 		arg.HasAutoCol = t.HasAutoCol
+		arg.EstimatedRowCount = t.EstimatedRowCount
 		res.Arg = arg
 	case vm.Deletion:
 		t := sourceIns.Arg.(*deletion.Argument)
