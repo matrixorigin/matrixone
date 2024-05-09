@@ -2169,14 +2169,11 @@ func (tbl *txnTable) newReader(
 				logtailreplay.Prefix(pkVal),
 			)
 		case function.IN:
-			// TODO:
-			// 1. Unmarshal pkVal to vector
-			// 2. Create a new vec with the encoded pkVal
-			// 3. Get the min and max of the vec
-			var minV, maxV []byte
+			vec := vector.NewVec(types.T_any.ToType())
+			_ = vec.UnmarshalBinary(pkVal)
 			iter = state.NewPrimaryKeyIter(
 				types.TimestampToTS(ts),
-				logtailreplay.MinMax(minV, maxV),
+				logtailreplay.ExactIn(vec),
 			)
 		}
 	}
