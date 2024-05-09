@@ -1130,12 +1130,12 @@ func (ses *Session) SetGlobalVar(name string, value interface{}) error {
 // GetGlobalVar gets this value of the system variable in global
 func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 	gSysVars := ses.GetGlobalSysVars()
-	if def, _, ok := gSysVars.GetGlobalSysVar(name); ok {
+	if def, val, ok := gSysVars.GetGlobalSysVar(name); ok {
 		if def.GetScope() == ScopeSession {
 			//empty
 			return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableSessionEmpty())
 		}
-		return ses.GetGlobalSystemVariableValue(name)
+		return val, nil
 	}
 	return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 }
@@ -1175,10 +1175,14 @@ func (ses *Session) InitSetSessionVar(name string, value interface{}) error {
 	if def, _, ok := gSysVars.GetGlobalSysVar(name); ok {
 		cv, err := def.GetType().Convert(value)
 		if err != nil {
-			panic(err)
+			errutil.ReportError(ses.GetRequestContext(), moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert to the system variable type %s failed, bad value %v", name, def.GetType().String(), value))
 		}
 
-		ses.SetSysVar(def.GetName(), cv)
+		if def.UpdateSessVar == nil {
+			ses.SetSysVar(def.GetName(), cv)
+		} else {
+			return def.UpdateSessVar(ses, ses.GetSysVars(), def.GetName(), cv)
+		}
 	}
 	return nil
 }
@@ -1595,11 +1599,12 @@ func (ses *Session) InitGlobalSystemVariables() error {
 					}
 					val, err := sv.GetType().ConvertFromString(variable_value)
 					if err != nil {
-						panic(err)
+						errutil.ReportError(ses.GetRequestContext(), moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert from string value to the system variable type %s failed, bad value %s", variable_name, sv.Type.String(), variable_value))
+						return err
 					}
 					err = ses.InitSetSessionVar(variable_name, val)
 					if err != nil {
-						panic(err)
+						errutil.ReportError(ses.GetRequestContext(), moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert from string value to the system variable type %s failed, bad value %s", variable_name, sv.Type.String(), variable_value))
 					}
 				}
 			}
@@ -1638,11 +1643,11 @@ func (ses *Session) InitGlobalSystemVariables() error {
 					}
 					val, err := sv.GetType().ConvertFromString(variable_value)
 					if err != nil {
-						panic(err)
+						return err
 					}
 					err = ses.InitSetSessionVar(variable_name, val)
 					if err != nil {
-						panic(err)
+						return err
 					}
 				}
 			}
@@ -1695,7 +1700,7 @@ func (ses *Session) getCNLabels() map[string]string {
 }
 
 // getSystemVariableValue get the system vaiables value from the mo_mysql_compatibility_mode table
-func (ses *Session) GetGlobalSystemVariableValue(varName string) (val interface{}, err error) {
+func (ses *Session) getGlobalSystemVariableValue(varName string) (val interface{}, err error) {
 	var sql string
 	//var err error
 	var erArray []ExecResult
@@ -1703,6 +1708,13 @@ func (ses *Session) GetGlobalSystemVariableValue(varName string) (val interface{
 	var variableValue string
 	//var val interface{}
 	ctx := ses.GetRequestContext()
+
+	// check the variable name isValid or not
+	_, err = ses.GetGlobalVar(varName)
+	if err != nil {
+		return nil, err
+	}
+
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
