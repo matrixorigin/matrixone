@@ -2172,10 +2172,10 @@ func (tbl *txnTable) newReader(
 			vec := vector.NewVec(types.T_any.ToType())
 			_ = vec.UnmarshalBinary(pkVal)
 			debug := false
-			if tbl.db.databaseName == "tpcc" {
-				fmt.Println(tbl.db.databaseName, tbl.tableName, vec, plan2.FormatExpr(expr))
-				debug = true
-			}
+			//if tbl.db.databaseName == "tpcc" {
+			//	fmt.Println(tbl.db.databaseName, tbl.tableName, vec, plan2.FormatExpr(expr))
+			//	debug = true
+			//}
 
 			iter = state.NewPrimaryKeyIter(
 				types.TimestampToTS(ts),
