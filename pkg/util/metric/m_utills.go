@@ -17,7 +17,7 @@ package metric
 import "github.com/shirou/gopsutil/v3/cpu"
 
 // CPUTotalTime is used to workaround sca issues from gopsutil version upgrades
-func CPUTotalTime(c *cpu.TimesStat) float64 {
+func CPUTotalTime(c cpu.TimesStat) float64 {
 	return c.User + c.System + c.Idle + c.Nice + c.Iowait + c.Irq +
 		c.Softirq + c.Steal + c.Guest + c.GuestNice
 }
