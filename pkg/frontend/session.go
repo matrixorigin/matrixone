@@ -24,9 +24,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+
+	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -224,6 +224,18 @@ type Session struct {
 	proxyAddr  string
 
 	disableTrace bool
+}
+
+func (ses *Session) GetTxnHandler() *TxnHandler {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.txnHandler
+}
+
+func (ses *Session) GetTenantInfo() *TenantInfo {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.tenant
 }
 
 func (ses *Session) SendRows() int64 {
@@ -513,7 +525,7 @@ func NewSession(connCtx context.Context, proto MysqlProtocol, mp *mpool.MPool, g
 		getGlobalPu().QueryClient,
 		getGlobalPu().HAKeeperClient,
 		getGlobalPu().UdfService,
-		globalAicm)
+		getGlobalAic())
 
 	ses.proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
 	ses.proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
@@ -530,6 +542,8 @@ func NewSession(connCtx context.Context, proto MysqlProtocol, mp *mpool.MPool, g
 }
 
 func (ses *Session) Close() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.feSessionImpl.Close()
 	ses.feSessionImpl.Clear()
 	ses.proto = nil
@@ -991,12 +1005,12 @@ func (ses *Session) SetGlobalVar(ctx context.Context, name string, value interfa
 // GetGlobalVar gets this value of the system variable in global
 func (ses *Session) GetGlobalVar(ctx context.Context, name string) (interface{}, error) {
 	gSysVars := ses.GetGlobalSysVars()
-	if def, val, ok := gSysVars.GetGlobalSysVar(name); ok {
+	if def, _, ok := gSysVars.GetGlobalSysVar(name); ok {
 		if def.GetScope() == ScopeSession {
 			//empty
 			return nil, moerr.NewInternalError(ctx, errorSystemVariableSessionEmpty())
 		}
-		return val, nil
+		return ses.GetGlobalSystemVariableValue(ctx, name)
 	}
 	return nil, moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
 }
@@ -1036,14 +1050,10 @@ func (ses *Session) InitSetSessionVar(ctx context.Context, name string, value in
 	if def, _, ok := gSysVars.GetGlobalSysVar(name); ok {
 		cv, err := def.GetType().Convert(value)
 		if err != nil {
-			errutil.ReportError(ctx, moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert to the system variable type %s failed, bad value %v", name, def.GetType().String(), value))
+			panic(err)
 		}
 
-		if def.UpdateSessVar == nil {
-			ses.SetSysVar(def.GetName(), cv)
-		} else {
-			return def.UpdateSessVar(ctx, ses, ses.GetSysVars(), def.GetName(), cv)
-		}
+		ses.SetSysVar(def.GetName(), cv)
 	}
 	return nil
 }
@@ -1139,11 +1149,6 @@ func (ses *Session) SetDatabaseName(db string) {
 
 func (ses *Session) DatabaseNameIsEmpty() bool {
 	return len(ses.GetDatabaseName()) == 0
-}
-
-// GetUserName returns the user_ame and the account_name
-func (ses *Session) GetUserName() string {
-	return ses.GetMysqlProtocol().GetUserName()
 }
 
 func (ses *Session) SetUserName(uname string) {
@@ -1457,12 +1462,11 @@ func (ses *Session) InitGlobalSystemVariables(ctx context.Context) error {
 					}
 					val, err := sv.GetType().ConvertFromString(variable_value)
 					if err != nil {
-						errutil.ReportError(sysTenantCtx, moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert from string value to the system variable type %s failed, bad value %s", variable_name, sv.Type.String(), variable_value))
-						return err
+						panic(err)
 					}
 					err = ses.InitSetSessionVar(sysTenantCtx, variable_name, val)
 					if err != nil {
-						errutil.ReportError(sysTenantCtx, moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert from string value to the system variable type %s failed, bad value %s", variable_name, sv.Type.String(), variable_value))
+						panic(err)
 					}
 				}
 			}
@@ -1501,11 +1505,11 @@ func (ses *Session) InitGlobalSystemVariables(ctx context.Context) error {
 					}
 					val, err := sv.GetType().ConvertFromString(variable_value)
 					if err != nil {
-						return err
+						panic(err)
 					}
 					err = ses.InitSetSessionVar(tenantCtx, variable_name, val)
 					if err != nil {
-						return err
+						panic(err)
 					}
 				}
 			}
@@ -1558,19 +1562,12 @@ func (ses *Session) getCNLabels() map[string]string {
 }
 
 // getSystemVariableValue get the system vaiables value from the mo_mysql_compatibility_mode table
-func (ses *Session) getGlobalSystemVariableValue(ctx context.Context, varName string) (val interface{}, err error) {
+func (ses *Session) GetGlobalSystemVariableValue(ctx context.Context, varName string) (val interface{}, err error) {
 	var sql string
 	//var err error
 	var erArray []ExecResult
 	var accountId uint32
 	var variableValue string
-	//var val interface{}
-
-	// check the variable name isValid or not
-	_, err = ses.GetGlobalVar(ctx, varName)
-	if err != nil {
-		return nil, err
-	}
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -1821,6 +1818,7 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
 		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
 	}
+
 	tempExecCtx := &ExecCtx{
 		reqCtx:            ctx,
 		skipRespClient:    true,
@@ -1830,7 +1828,7 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: p.sql})
 }
 
-func (ses *Session) Migrate(_ context.Context, req *query.MigrateConnToRequest) error {
+func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	parameters := getGlobalPu().SV
 
 	//all offspring related to the request inherit the txnCtx
@@ -1845,6 +1843,7 @@ func (ses *Session) Migrate(_ context.Context, req *query.MigrateConnToRequest) 
 	ctx := defines.AttachAccount(nodeCtx, tenant.GetTenantID(), tenant.GetUserID(), tenant.GetDefaultRoleID())
 
 	accountID, err := defines.GetAccountId(ctx)
+
 	if err != nil {
 		logutil.Errorf("failed to get account ID: %v", err)
 		return err

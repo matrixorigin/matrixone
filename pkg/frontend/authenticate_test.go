@@ -7848,6 +7848,22 @@ func newMrsForSqlForCheckUserHasRole(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+func newMrsForSqlForGetVariableValue(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("value")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func newMrsForRoleIdOfRole(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
@@ -8755,9 +8771,22 @@ func TestCheckSubscriptionValid(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
+	_ = ses.SetGlobalVar(context.TODO(), "lower_case_table_names", int64(1))
 	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+	rm, _ := NewRoutineManager(ctx)
+	ses.rm = rm
 
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
@@ -8767,8 +8796,14 @@ func TestCheckSubscriptionValid(t *testing.T) {
 		UserID:        rootID,
 		DefaultRoleID: moAdminRoleID,
 	}
-
 	ses.SetTenantInfo(tenant)
+
+	proc := testutil.NewProcess()
+	proc.FileService = getGlobalPu().FileService
+	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+		proc: proc,
+	}
+	ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
 
 	columns := [][]Column{
 		{
@@ -8957,6 +8992,11 @@ func TestCheckSubscriptionValid(t *testing.T) {
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForGetSystemVariableValueWithAccount(uint64(ses.GetTenantInfo().GetTenantID()), "lower_case_table_names")
+		bh.sql2result[sql] = newMrsForSqlForGetVariableValue([][]interface{}{
+			{int64(1)},
+		})
 		for i := range kases[idx].sqls {
 			bh.sql2result[kases[idx].sqls[i]] = &MysqlResultSet{
 				Data:    kases[idx].datas[i],

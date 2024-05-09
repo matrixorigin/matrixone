@@ -531,7 +531,7 @@ func LoadCheckpointEntriesFromKey(
 	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
 		metaLoc := objectio.Location(
 			data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte))
-		commitTS := data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_CommitTs).Get(i).(types.TS)
+		commitTS := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_CommitTs).Get(i).(types.TS)
 		if !metaLoc.IsEmpty() {
 			if softDeletes != nil {
 				if !(*softDeletes)[metaLoc.Name().String()] {

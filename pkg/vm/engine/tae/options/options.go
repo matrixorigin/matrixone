@@ -204,7 +204,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		if ioworkers < runtime.NumCPU() {
 			ioworkers = min(runtime.NumCPU(), 100)
 		}
-		workers := min(runtime.NumCPU()/4, 100)
+		workers := min(runtime.NumCPU()/2, 100)
 		if workers < 1 {
 			workers = 1
 		}

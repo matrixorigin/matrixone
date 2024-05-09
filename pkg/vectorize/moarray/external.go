@@ -196,19 +196,27 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
 func NormalizeL2[T types.RealNumbers](v1 []T) ([]T, error) {
 
-	vec := ToGonumVector[T](v1)
+	if len(v1) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
+	}
 
-	norm := mat.Norm(vec, 2)
+	// Compute the norm of the vector
+	var sumSquares float64
+	for _, val := range v1 {
+		sumSquares += float64(val) * float64(val)
+	}
+	norm := math.Sqrt(sumSquares)
 	if norm == 0 {
-		// NOTE: don't throw error here. If you throw error, then when a zero vector comes in the Vector Index
-		// Mapping Query, the query will fail. Instead, return the same zero vector.
-		// This is consistent with FAISS:https://github.com/facebookresearch/faiss/blob/0716bde2500edb2e18509bf05f5dfa37bd698082/faiss/utils/distances.cpp#L97
 		return v1, nil
 	}
 
-	vec.ScaleVec(1/norm, vec)
+	// Divide each element by the norm
+	normalized := make([]T, len(v1))
+	for i, val := range v1 {
+		normalized[i] = T(float64(val) / norm)
+	}
 
-	return ToMoArray[T](vec)
+	return normalized, nil
 }
 
 // L1Norm returns l1 distance to origin.

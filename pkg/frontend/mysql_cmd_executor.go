@@ -622,10 +622,6 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				if err != nil {
 					return err
 				}
-				err = ses.SetGlobalVar(execCtx.reqCtx, name, value)
-				if err != nil {
-					return err
-				}
 				err = doSetGlobalSystemVariable(execCtx.reqCtx, ses, name, value)
 				if err != nil {
 					return err
@@ -1508,9 +1504,9 @@ func doKill(ses *Session, execCtx *ExecCtx, k *tree.Kill) error {
 	//false: kill a query in a connection
 	idThatKill := uint64(ses.GetConnectionID())
 	if !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection {
-		err = globalRtMgr.kill(execCtx.reqCtx, true, idThatKill, k.ConnectionId, "")
+		err = getGlobalRtMgr().kill(execCtx.reqCtx, true, idThatKill, k.ConnectionId, "")
 	} else {
-		err = globalRtMgr.kill(execCtx.reqCtx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
+		err = getGlobalRtMgr().kill(execCtx.reqCtx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
 	}
 	return err
 }

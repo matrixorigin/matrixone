@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 
 	"github.com/google/uuid"
@@ -31,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -203,7 +203,7 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 		getGlobalPu().QueryClient,
 		getGlobalPu().HAKeeperClient,
 		getGlobalPu().UdfService,
-		globalAicm)
+		getGlobalAic())
 	proc.Id = backSes.getNextProcessId()
 	proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
 	proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
@@ -678,14 +678,6 @@ func (backSes *backSession) getNextProcessId() string {
 	return fmt.Sprintf("%d%d", routineId, backSes.GetSqlCount())
 }
 
-func (backSes *backSession) GetSqlCount() uint64 {
-	return backSes.sqlCount
-}
-
-func (backSes *backSession) addSqlCount(a uint64) {
-	backSes.sqlCount += a
-}
-
 func (backSes *backSession) cleanCache() {
 }
 
@@ -706,10 +698,6 @@ func (backSes *backSession) GetIsInternal() bool {
 }
 
 func (backSes *backSession) SetPlan(plan *plan.Plan) {
-}
-
-func (backSes *backSession) SetAccountId(u uint32) {
-	backSes.accountId = u
 }
 
 func (backSes *backSession) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec {
@@ -741,10 +729,6 @@ func (backSes *backSession) GetLastInsertID() uint64 {
 	return 0
 }
 
-func (backSes *backSession) SetSql(sql string) {
-	backSes.sql = sql
-}
-
 func (backSes *backSession) SetShowStmtType(statement ShowStatementType) {
 }
 
@@ -772,17 +756,12 @@ func (backSes *backSession) SetNewResponse(category int, affectedRows uint64, cm
 	return nil
 }
 
-func (backSes *backSession) GetMysqlResultSet() *MysqlResultSet {
-	return backSes.mrs
+func (backSes *backSession) GetSqlOfStmt() string {
+	return ""
 }
 
-func (backSes *backSession) updateLastCommitTS(lastCommitTS timestamp.Timestamp) {
-	if lastCommitTS.Greater(backSes.lastCommitTS) {
-		backSes.lastCommitTS = lastCommitTS
-	}
-	if backSes.upstream != nil {
-		backSes.upstream.updateLastCommitTS(lastCommitTS)
-	}
+func (backSes *backSession) GetStmtId() uuid.UUID {
+	return [16]byte{}
 }
 
 // GetTenantName return tenant name according to GetTenantInfo and stmt.
@@ -798,17 +777,6 @@ func (backSes *backSession) GetTenantNameWithStmt(stmt tree.Statement) string {
 
 func (backSes *backSession) GetTenantName() string {
 	return backSes.GetTenantNameWithStmt(nil)
-}
-
-func (backSes *backSession) getLastCommitTS() timestamp.Timestamp {
-	minTS := backSes.lastCommitTS
-	if backSes.upstream != nil {
-		v := backSes.upstream.getLastCommitTS()
-		if v.Greater(minTS) {
-			minTS = v
-		}
-	}
-	return minTS
 }
 
 func (backSes *backSession) GetFromRealUser() bool {
@@ -831,7 +799,7 @@ func (backSes *backSession) GetSessionVar(ctx context.Context, name string) (int
 	return nil, nil
 }
 
-func (backSes *backSession) getGlobalSystemVariableValue(ctx context.Context, name string) (interface{}, error) {
+func (backSes *backSession) GetGlobalSystemVariableValue(ctx context.Context, name string) (interface{}, error) {
 	return nil, moerr.NewInternalError(ctx, "do not support system variable in background exec")
 }
 
@@ -842,33 +810,12 @@ func (backSes *backSession) GetBackgroundExec(ctx context.Context) BackgroundExe
 		backSes.GetMemPool())
 }
 
-func (backSes *backSession) GetAccountId() uint32 {
-	return backSes.accountId
-}
-
-func (backSes *backSession) GetSql() string {
-	return backSes.sql
-}
-
-func (backSes *backSession) GetUserName() string {
-	return backSes.proto.GetUserName()
+func (backSes *backSession) GetStorage() engine.Engine {
+	return getGlobalPu().StorageEngine
 }
 
 func (backSes *backSession) GetStatsCache() *plan2.StatsCache {
 	return nil
-}
-
-func (backSes *backSession) GetTimeZone() *time.Location {
-	return backSes.timeZone
-}
-
-func (backSes *backSession) GetDatabaseName() string {
-	return backSes.proto.GetDatabaseName()
-}
-
-func (backSes *backSession) SetDatabaseName(s string) {
-	backSes.proto.SetDatabaseName(s)
-	backSes.GetTxnCompileCtx().SetDatabase(s)
 }
 
 func (backSes *backSession) GetGlobalVar(ctx context.Context, name string) (interface{}, error) {
@@ -880,33 +827,6 @@ func (backSes *backSession) GetGlobalVar(ctx context.Context, name string) (inte
 		return val, nil
 	}
 	return nil, moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
-}
-
-func (backSes *backSession) SetMysqlResultSetOfBackgroundTask(mrs *MysqlResultSet) {
-	if len(backSes.allResultSet) == 0 {
-		backSes.allResultSet = append(backSes.allResultSet, mrs)
-	}
-}
-
-func (backSes *backSession) SaveResultSet() {
-	if len(backSes.allResultSet) == 0 && backSes.mrs != nil {
-		backSes.allResultSet = []*MysqlResultSet{backSes.mrs}
-	}
-}
-
-func (backSes *backSession) AppendResultBatch(bat *batch.Batch) error {
-	copied, err := bat.Dup(backSes.pool)
-	if err != nil {
-		return err
-	}
-	backSes.resultBatches = append(backSes.resultBatches, copied)
-	return nil
-}
-
-func (backSes *backSession) ReplaceDerivedStmt(b bool) bool {
-	prev := backSes.derivedStmt
-	backSes.derivedStmt = b
-	return prev
 }
 
 type SqlHelper struct {

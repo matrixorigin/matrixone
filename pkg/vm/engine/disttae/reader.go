@@ -475,7 +475,8 @@ func (r *blockReader) Read(
 	if !r.dontPrefetch {
 		//prefetch some objects
 		for len(r.steps) > 0 && r.steps[0] == r.currentStep {
-			prefetchFile := r.scanType == SMALL || r.scanType == LARGE
+			// always true for now, will optimize this in the future
+			prefetchFile := r.scanType == SMALL || r.scanType == LARGE || r.scanType == NORMAL
 			if filter != nil && blockInfo.Sorted {
 				err = blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 			} else {

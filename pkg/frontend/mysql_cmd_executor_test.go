@@ -239,6 +239,7 @@ func Test_mce(t *testing.T) {
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
 		setGlobalPu(pu)
+		pu.SV.SkipCheckPrivilege = true
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
@@ -683,40 +684,6 @@ func Test_mysqlerror(t *testing.T) {
 	})
 }
 
-func Test_handleSelectVariables(t *testing.T) {
-	ctx := context.TODO()
-	convey.Convey("handleSelectVariables succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-		ioses.EXPECT().Ref().AnyTimes()
-		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		if err != nil {
-			t.Error(err)
-		}
-		setGlobalPu(pu)
-
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(ctx, proto, nil, &gSys, true, nil)
-
-		ses.mrs = &MysqlResultSet{}
-
-		proto.SetSession(ses)
-	})
-}
-
 func Test_handleShowVariables(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), 0)
 	convey.Convey("handleShowVariables succ", t, func() {
@@ -797,17 +764,39 @@ func Test_GetColumns(t *testing.T) {
 
 func Test_GetComputationWrapper(t *testing.T) {
 	convey.Convey("GetComputationWrapper succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
 		proc := &process.Process{}
-		InitGlobalSystemVariables(GSysVariables)
-		ses := &Session{planCache: newPlanCache(1),
-			feSessionImpl: feSessionImpl{
-				gSysVars: GSysVariables,
-			},
-		}
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		var err error
+		//prepare session
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+
+		sql := getSqlForGetSystemVariableValueWithAccount(uint64(ses.accountId), "lower_case_table_names")
+		mrs := newMrsForSqlForGetVariableValue([][]interface{}{
+			{"1"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql1 := getSqlForGetSystemVariableValueWithAccount(uint64(ses.accountId), "keep_user_target_list_in_result")
+		mrs1 := newMrsForSqlForGetVariableValue([][]interface{}{
+			{"0"},
+		})
+		bh.sql2result[sql1] = mrs1
+
+		db, sql, user := "T", "SHOW TABLES", "root"
+
 		ec := newTestExecCtx(context.Background(), ctrl)
 		ec.ses = ses
 		ec.input = &UserInput{sql: sql}

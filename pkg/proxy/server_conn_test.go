@@ -52,12 +52,12 @@ func testMakeCNServer(
 		addr = "unix://" + addr
 	}
 	return &CNServer{
-		backendConnID: connID,
-		addr:          addr,
-		uuid:          uuid,
-		salt:          testSlat,
-		hash:          hash,
-		reqLabel:      reqLabel,
+		connID:   connID,
+		addr:     addr,
+		uuid:     uuid,
+		salt:     testSlat,
+		hash:     hash,
+		reqLabel: reqLabel,
 	}
 }
 

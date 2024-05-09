@@ -444,7 +444,7 @@ func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateCo
 		}
 		defer rt.mc.endMigrate()
 		ses := rt.getSession()
-		err = ses.Migrate(ctx, req)
+		err = Migrate(ses, req)
 	})
 	return err
 }
