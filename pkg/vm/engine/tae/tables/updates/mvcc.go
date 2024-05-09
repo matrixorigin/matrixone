@@ -281,6 +281,10 @@ func (n *AppendMVCCHandle) allAppendsCommitted() bool {
 	return n.appends.IsCommitted()
 }
 
+func (n *AppendMVCCHandle) GetLastAppendNodeLocked()*AppendNode{
+	return n.appends.GetLastNonAbortedNode()
+}
+
 // DeleteAppendNodeLocked deletes the appendnode from the append list.
 // it is called when txn of the appendnode is aborted.
 func (n *AppendMVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {

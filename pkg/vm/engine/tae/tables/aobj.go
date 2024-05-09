@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -108,7 +109,14 @@ func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
 }
 
 func (obj *aobject) PrepareCompact() bool {
+	obj.meta.RLock()
+	createTS := obj.meta.GetCreatedAtLocked()
+	obj.meta.RUnlock()
+	checkPrintTime := createTS.Physical() <= time.Now().UTC().UnixNano()-(time.Minute*30).Nanoseconds()
 	if obj.RefCount() > 0 {
+		if checkPrintTime {
+			logutil.Infof("[PrepareCompact] waiting for obj %v, ref count %d", obj.meta.ID.String(), obj.RefCount())
+		}
 		return false
 	}
 
@@ -117,8 +125,22 @@ func (obj *aobject) PrepareCompact() bool {
 	obj.FreezeAppend()
 	obj.freezelock.Unlock()
 
-	if !obj.meta.PrepareCompact() ||
-		!obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
+	if !obj.meta.PrepareCompact() {
+		if checkPrintTime {
+			obj.meta.RLock()
+			node := obj.meta.GetLatestNodeLocked()
+			logutil.Infof("[PrepareCompact] waiting for obj %v, latest node %v", obj.meta.ID.String(), node.String())
+			obj.meta.RUnlock()
+		}
+		return false
+	}
+	if !obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
+		if checkPrintTime {
+			obj.appendMVCC.RLock()
+			node := obj.appendMVCC.GetLastAppendNodeLocked()
+			logutil.Infof("[PrepareCompact] waiting for obj %v, latest node %v", obj.meta.ID.String(), node.String())
+			obj.appendMVCC.RUnlock()
+		}
 		return false
 	}
 	return obj.RefCount() == 0
