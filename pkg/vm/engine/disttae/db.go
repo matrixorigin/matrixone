@@ -409,7 +409,8 @@ func (e *Engine) getOrCreateSnapPart(
 		return partition, nil
 	}
 	if !ok {
-		logutil.Infof("xxxx getOrCreateSnapPart, dbName:%s, tbName:%s, ts:%s, partition is null")
+		logutil.Infof("xxxx getOrCreateSnapPart, dbName:%s, tbName:%s, ts:%s, partition is null",
+			dbName, tblName, ts.ToTimestamp().DebugString())
 	} else {
 		pstart, pend := partition.GetDuration()
 		logutil.Infof("xxxx getOrCreateSnapPart, dbName:%s, tbName:%s, ts:%s, pstart:%s, pend:%s, ismax:%v",
