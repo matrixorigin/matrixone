@@ -575,7 +575,7 @@ func (e *DBEntry) PrepareRollback() (err error) {
 		return
 	}
 	if isEmpty {
-		if err = e.catalog.RemoveEntry(e); err != nil {
+		if err = e.catalog.RemoveDBEntry(e); err != nil {
 			return
 		}
 	}
