@@ -24,7 +24,7 @@ var (
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	//createSqls = []string{
-	MoCatalogMoUser = `create table mo_catalog.mo_user(
+	MoCatalogMoUser = `create table mo_catalog.mo_user (
 				user_id int signed auto_increment primary key,
 				user_host varchar(100),
 				user_name varchar(300) unique key,
@@ -36,9 +36,9 @@ var (
 				creator int signed,
 				owner int signed,
 				default_role int signed
-    		);`
+    		)`
 
-	MoCatalogMoAccount = `create table mo_catalog.mo_account(
+	MoCatalogMoAccount = `create table mo_catalog.mo_account (
 				account_id int signed auto_increment primary key,
 				account_name varchar(300) unique key,
 				admin_name varchar(300),
@@ -48,26 +48,26 @@ var (
 				version bigint unsigned auto_increment,
 				suspended_time timestamp default NULL,
 				create_version varchar(50) default '1.2.0'
-			);`
+			)`
 
-	MoCatalogMoRole = `create table mo_catalog.mo_role(
+	MoCatalogMoRole = `create table mo_catalog.mo_role (
 				role_id int signed auto_increment primary key,
 				role_name varchar(300) unique key,
 				creator int signed,
 				owner int signed,
 				created_time timestamp,
 				comments text
-			);`
+			)`
 
-	MoCatalogMoUserGrant = `create table mo_catalog.mo_user_grant(
+	MoCatalogMoUserGrant = `create table mo_catalog.mo_user_grant (
 				role_id int signed,
 				user_id int signed,
 				granted_time timestamp,
 				with_grant_option bool,
 				primary key(role_id, user_id)
-			);`
+			)`
 
-	MoCatalogMoRoleGrant = `create table mo_catalog.mo_role_grant(
+	MoCatalogMoRoleGrant = `create table mo_catalog.mo_role_grant (
 				granted_id int signed,
 				grantee_id int signed,
 				operation_role_id int signed,
@@ -75,9 +75,9 @@ var (
 				granted_time timestamp,
 				with_grant_option bool,
 				primary key(granted_id, grantee_id)
-			);`
+			)`
 
-	MoCatalogMoRolePrivs = `create table mo_catalog.mo_role_privs(
+	MoCatalogMoRolePrivs = `create table mo_catalog.mo_role_privs (
 				role_id int signed,
 				role_name  varchar(100),
 				obj_type  varchar(16),
@@ -89,9 +89,9 @@ var (
 				granted_time timestamp,
 				with_grant_option bool,
 				primary key(role_id, obj_type, obj_id, privilege_id, privilege_level)
-			);`
+			)`
 
-	MoCatalogMoUserDefinedFunction = `create table mo_catalog.mo_user_defined_function(
+	MoCatalogMoUserDefinedFunction = `create table mo_catalog.mo_user_defined_function (
 				function_id int auto_increment,
 				name     varchar(100) unique key,
 				owner  int unsigned,
@@ -110,9 +110,9 @@ var (
 				collation_connection varchar(64),
 				database_collation varchar(64),
 				primary key(function_id)
-			);`
+			)`
 
-	MoCatalogMoMysqlCompatibilityMode = `create table mo_catalog.mo_mysql_compatibility_mode(
+	MoCatalogMoMysqlCompatibilityMode = `create table mo_catalog.mo_mysql_compatibility_mode (
 				configuration_id int auto_increment,
 				account_id int,
 				account_name varchar(300),
@@ -121,7 +121,7 @@ var (
 				variable_value varchar(5000),
 				system_variables bool,
 				primary key(configuration_id)
-			);`
+			)`
 
 	MoCatalogMoSnapshots = fmt.Sprintf(`CREATE TABLE %s.%s (
 			snapshot_id uuid unique key,
@@ -132,9 +132,9 @@ var (
 			database_name varchar(5000),
 			table_name  varchar(5000),
 			obj_id bigint unsigned
-			);`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS)
+			)`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS)
 
-	MoCatalogMoPubs = `create table mo_catalog.mo_pubs(
+	MoCatalogMoPubs = `create table mo_catalog.mo_pubs (
     		pub_name varchar(64) primary key,
     		database_name varchar(5000),
     		database_id bigint unsigned,
@@ -146,9 +146,9 @@ var (
     		owner int unsigned,
     		creator int unsigned,
     		comment text
-    		);`
+    		)`
 
-	MoCatalogMoStoredProcedure = `create table mo_catalog.mo_stored_procedure(
+	MoCatalogMoStoredProcedure = `create table mo_catalog.mo_stored_procedure (
 				proc_id int auto_increment,
 				name     varchar(100) unique key,
 				creator  int unsigned,
@@ -165,9 +165,9 @@ var (
 				collation_connection varchar(64),
 				database_collation varchar(64),
 				primary key(proc_id)
-			);`
+			)`
 
-	MoCatalogMoStages = `create table mo_catalog.mo_stages(
+	MoCatalogMoStages = `create table mo_catalog.mo_stages (
 				stage_id int unsigned auto_increment,
 				stage_name varchar(64) unique key,
 				url text,
@@ -176,14 +176,14 @@ var (
 				created_time timestamp,
 				comment text,
 				primary key(stage_id)
-			);`
+			)`
 
-	MoCatalogMoSessions       = `CREATE VIEW IF NOT EXISTS mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`
-	MoCatalogMoConfigurations = `CREATE VIEW IF NOT EXISTS mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`
-	MoCatalogMoLocks          = `CREATE VIEW IF NOT EXISTS mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp`
-	MoCatalogMoVariables      = `CREATE VIEW IF NOT EXISTS mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode`
-	MoCatalogMoTransactions   = `CREATE VIEW IF NOT EXISTS mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp`
-	MoCatalogMoCache          = `CREATE VIEW IF NOT EXISTS mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp`
+	MoCatalogMoSessions       = `CREATE VIEW mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`
+	MoCatalogMoConfigurations = `CREATE VIEW mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`
+	MoCatalogMoLocks          = `CREATE VIEW mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp`
+	MoCatalogMoVariables      = `CREATE VIEW mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode`
+	MoCatalogMoTransactions   = `CREATE VIEW mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp`
+	MoCatalogMoCache          = `CREATE VIEW mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp`
 )
 
 var (
@@ -194,11 +194,11 @@ var (
 			offset     bigint unsigned, 
 			step       bigint unsigned,  
 			primary key(table_id, col_name)
-		);`, catalog.MO_CATALOG, catalog.MOAutoIncrTable)
+		)`, catalog.MO_CATALOG, catalog.MOAutoIncrTable)
 
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
 	// mo_indexes table does not have `auto_increment` column,
-	MoCatalogMoIndexes = fmt.Sprintf(`create table %s.%s(
+	MoCatalogMoIndexes = fmt.Sprintf(`create table %s.%s (
 			id 			bigint unsigned not null,
 			table_id 	bigint unsigned not null,
 			database_id bigint unsigned not null,
@@ -215,9 +215,9 @@ var (
 			options     text,
 			index_table_name varchar(5000),
 			primary key(id, column_name)
-		);`, catalog.MO_CATALOG, catalog.MO_INDEXES)
+		)`, catalog.MO_CATALOG, catalog.MO_INDEXES)
 
-	MoCatalogMoForeignKeys = fmt.Sprintf(`create table %s.%s(
+	MoCatalogMoForeignKeys = fmt.Sprintf(`create table %s.%s (
 			constraint_name varchar(5000) not null,
 			constraint_id BIGINT UNSIGNED not null default 0,
 			db_name varchar(5000) not null,
@@ -250,7 +250,7 @@ var (
 				refer_table_id,
 				refer_column_name,
 				refer_column_id)
-		);`, catalog.MO_CATALOG, catalog.MOForeignKeys)
+		)`, catalog.MO_CATALOG, catalog.MOForeignKeys)
 
 	MoCatalogMoTablePartitions = fmt.Sprintf(`CREATE TABLE %s.%s (
 			  table_id bigint unsigned NOT NULL,
@@ -264,7 +264,7 @@ var (
 			  options text,
 			  partition_table_name varchar(1024) NOT NULL,
     		  PRIMARY KEY table_id (table_id, name)
-			);`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
+			)`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 )
 
 // ----------------------------------------------------------------------------------------------------------------------

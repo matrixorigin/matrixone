@@ -16,6 +16,7 @@ package sysview
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
@@ -23,10 +24,13 @@ import (
 // 2. 系统表和系统视图定义 必须包含schema名
 // 3. 系统表和系统视图定义 不能尾随分号
 
+//Cluster level system tables/system views
+//Tenant level system tables/system views
+
 // `mysql` database
 // InitMysqlSysTables
 var (
-	MysqlUser = `CREATE TABLE IF NOT EXISTS mysql.user (
+	MysqlUser = `CREATE TABLE mysql.user (
 			Host char(255)  NOT NULL DEFAULT '',
 			User char(32)  NOT NULL DEFAULT '',
 			Select_priv varchar(10) NOT NULL DEFAULT 'N',
@@ -79,9 +83,9 @@ var (
 			Password_require_current varchar(10)  DEFAULT NULL,
 			User_attributes json DEFAULT NULL,
 			PRIMARY KEY (Host,User)
-		  );`
+		  )`
 
-	MysqlDb = `CREATE TABLE IF NOT EXISTS mysql.db (
+	MysqlDb = `CREATE TABLE mysql.db (
 			Host char(255) NOT NULL DEFAULT '',
 			Db char(64)  NOT NULL DEFAULT '',
 			User char(32)  NOT NULL DEFAULT '',
@@ -106,9 +110,9 @@ var (
 			Trigger_priv varchar(10)  NOT NULL DEFAULT 'N',
 			PRIMARY KEY (Host,Db,User),
 			KEY User (User)
-		  );`
+		  )`
 
-	MysqlProcsPriv = `CREATE TABLE IF NOT EXISTS mysql.procs_priv (
+	MysqlProcsPriv = `CREATE TABLE mysql.procs_priv (
 			Host char(255)  NOT NULL DEFAULT '',
 			Db char(64)  NOT NULL DEFAULT '',
 			User char(32)  NOT NULL DEFAULT '',
@@ -119,9 +123,9 @@ var (
 			Timestamp timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			PRIMARY KEY (Host,Db,User,Routine_name,Routine_type),
 			KEY Grantor (Grantor)
-		  );`
+		  )`
 
-	MysqlColumnsPriv = `CREATE TABLE IF NOT EXISTS mysql.columns_priv (
+	MysqlColumnsPriv = `CREATE TABLE mysql.columns_priv (
 			Host char(255)  NOT NULL DEFAULT '',
 			Db char(64)  NOT NULL DEFAULT '',
 			User char(32)  NOT NULL DEFAULT '',
@@ -130,9 +134,9 @@ var (
 			Timestamp timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			Column_priv varchar(10) NOT NULL DEFAULT '',
 			PRIMARY KEY (Host,Db,User,Table_name,Column_name)
-		  );`
+		  )`
 
-	MysqlTablesPriv = `CREATE TABLE IF NOT EXISTS mysql.tables_priv (
+	MysqlTablesPriv = `CREATE TABLE mysql.tables_priv (
 			Host char(255)  NOT NULL DEFAULT '',
 			Db char(64)  NOT NULL DEFAULT '',
 			User char(32)  NOT NULL DEFAULT '',
@@ -143,21 +147,21 @@ var (
 			Column_priv varchar(10) NOT NULL DEFAULT '',
 			PRIMARY KEY (Host,Db,User,Table_name),
 			KEY Grantor (Grantor)
-		  );`
+		  )`
 
-	MysqlRoleEdges = `CREATE TABLE IF NOT EXISTS mysql.role_edges (
+	MysqlRoleEdges = `CREATE TABLE mysql.role_edges (
 			FROM_HOST char(255) NOT NULL DEFAULT '',
 			FROM_USER char(32) NOT NULL DEFAULT '',
 			TO_HOST char(255) NOT NULL DEFAULT '',
 			TO_USER char(32) NOT NULL DEFAULT '',
 			WITH_ADMIN_OPTION enum('N','Y') NOT NULL DEFAULT 'N',
 			PRIMARY KEY (FROM_HOST,FROM_USER,TO_HOST,TO_USER)
-		);`
+		)`
 )
 
 // `information_schema` database
 var (
-	InformationSchemaKeyColumnUsage = "CREATE TABLE IF NOT EXISTS information_schema.KEY_COLUMN_USAGE (" +
+	InformationSchemaKeyColumnUsage = "CREATE TABLE information_schema.KEY_COLUMN_USAGE (" +
 		"CONSTRAINT_CATALOG varchar(64)," +
 		"CONSTRAINT_SCHEMA varchar(64)," +
 		"CONSTRAINT_NAME varchar(64)," +
@@ -170,9 +174,9 @@ var (
 		"REFERENCED_TABLE_SCHEMA varchar(64)," +
 		"REFERENCED_TABLE_NAME varchar(64)," +
 		"REFERENCED_COLUMN_NAME varchar(64)" +
-		");"
+		")"
 
-	InformationSchemaColumns = fmt.Sprintf("CREATE VIEW IF NOT EXISTS information_schema.COLUMNS AS select "+
+	InformationSchemaColumns = fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS select "+
 		"'def' as TABLE_CATALOG,"+
 		"att_database as TABLE_SCHEMA,"+
 		"att_relname AS TABLE_NAME,"+
@@ -200,7 +204,7 @@ var (
 		"and att_relname!='%s' and att_relname not like '%s' and attname != '%s' and att_relname not like '%s'",
 		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard)
 
-	InformationSchemaProfiling = "CREATE TABLE IF NOT EXISTS information_schema.PROFILING (" +
+	InformationSchemaProfiling = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +
 		"SEQ int NOT NULL DEFAULT '0'," +
 		"STATE varchar(30) NOT NULL DEFAULT ''," +
@@ -219,22 +223,22 @@ var (
 		"SOURCE_FUNCTION varchar(30) DEFAULT NULL," +
 		"SOURCE_FILE varchar(20) DEFAULT NULL," +
 		"SOURCE_LINE int DEFAULT NULL" +
-		");"
+		")"
 
-	InformationSchemaProcesslist = fmt.Sprintf("CREATE VIEW IF NOT EXISTS %s.PROCESSLIST AS "+
+	InformationSchemaProcesslist = fmt.Sprintf("CREATE VIEW %s.PROCESSLIST AS "+
 		"select node_id, conn_id, session_id, account, user, host, db, "+
 		"session_start, command, info, txn_id, statement_id, statement_type, "+
 		"query_type, sql_source_type, query_start, client_host, role, proxy_host "+
 		"from PROCESSLIST() A", InformationDBConst)
 
-	InformationSchemaUserPrivileges = "CREATE TABLE IF NOT EXISTS information_schema.USER_PRIVILEGES (" +
+	InformationSchemaUserPrivileges = "CREATE TABLE information_schema.USER_PRIVILEGES (" +
 		"GRANTEE varchar(292) NOT NULL DEFAULT ''," +
 		"TABLE_CATALOG varchar(512) NOT NULL DEFAULT ''," +
 		"PRIVILEGE_TYPE varchar(64) NOT NULL DEFAULT ''," +
 		"IS_GRANTABLE varchar(3) NOT NULL DEFAULT ''" +
-		");"
+		")"
 
-	InformationSchemaSchemata = "CREATE VIEW IF NOT EXISTS information_schema.SCHEMATA AS SELECT " +
+	InformationSchemaSchemata = "CREATE VIEW information_schema.SCHEMATA AS SELECT " +
 		"dat_catalog_name AS CATALOG_NAME," +
 		"datname AS SCHEMA_NAME," +
 		"'utf8mb4' AS DEFAULT_CHARACTER_SET_NAME," +
@@ -243,14 +247,14 @@ var (
 		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
 		"FROM mo_catalog.mo_database where account_id = current_account_id() or (account_id = 0 and datname in ('mo_catalog'))"
 
-	InformationSchemaCharacterSets = "CREATE TABLE IF NOT EXISTS information_schema.CHARACTER_SETS (" +
+	InformationSchemaCharacterSets = "CREATE TABLE information_schema.CHARACTER_SETS (" +
 		"CHARACTER_SET_NAME varchar(64)," +
 		"DEFAULT_COLLATE_NAME varchar(64)," +
 		"DESCRIPTION varchar(2048)," +
 		"MAXLEN int unsigned" +
-		");"
+		")"
 
-	InformationSchemaTriggers = "CREATE TABLE IF NOT EXISTS information_schema.TRIGGERS (" +
+	InformationSchemaTriggers = "CREATE TABLE information_schema.TRIGGERS (" +
 		"TRIGGER_CATALOG varchar(64)," +
 		"TRIGGER_SCHEMA varchar(64)," +
 		"TRIGGER_NAME varchar(64)," +
@@ -273,9 +277,9 @@ var (
 		"CHARACTER_SET_CLIENT varchar(64)," +
 		"COLLATION_CONNECTION varchar(64)," +
 		"DATABASE_COLLATION varchar(64)" +
-		");"
+		")"
 
-	InformationSchemaTables = fmt.Sprintf("CREATE VIEW IF NOT EXISTS information_schema.TABLES AS "+
+	InformationSchemaTables = fmt.Sprintf("CREATE VIEW information_schema.TABLES AS "+
 		"SELECT 'def' AS TABLE_CATALOG,"+
 		"reldatabase AS TABLE_SCHEMA,"+
 		"relname AS TABLE_NAME,"+
@@ -302,9 +306,9 @@ var (
 		"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
 		"cast(rel_comment as text) AS TABLE_COMMENT "+
 		"FROM mo_catalog.mo_tables tbl "+
-		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relkind != '%s';", catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel)
+		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relkind != '%s'", catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel)
 
-	InformationSchemaPartitions = "CREATE VIEW IF NOT EXISTS information_schema.`PARTITIONS` AS " +
+	InformationSchemaPartitions = "CREATE VIEW information_schema.`PARTITIONS` AS " +
 		"SELECT " +
 		"'def' AS `TABLE_CATALOG`," +
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
@@ -343,9 +347,9 @@ var (
 		"NULL AS `TABLESPACE_NAME` " +
 		"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` " +
 		"ON `part`.`table_id` = `tbl`.`rel_id` " +
-		"WHERE `tbl`.`account_id` = current_account_id() and `tbl`.`partitioned` = 1;"
+		"WHERE `tbl`.`account_id` = current_account_id() and `tbl`.`partitioned` = 1"
 
-	InformationSchemaViews = "CREATE VIEW IF NOT EXISTS information_schema.VIEWS AS " +
+	InformationSchemaViews = "CREATE VIEW information_schema.VIEWS AS " +
 		"SELECT 'def' AS `TABLE_CATALOG`," +
 		"tbl.reldatabase AS `TABLE_SCHEMA`," +
 		"tbl.relname AS `TABLE_NAME`," +
@@ -359,7 +363,7 @@ var (
 		"FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
 		"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'"
 
-	InformationSchemaStatistics = "CREATE VIEW IF NOT EXISTS information_schema.`STATISTICS` AS " +
+	InformationSchemaStatistics = "CREATE VIEW information_schema.`STATISTICS` AS " +
 		"select 'def' AS `TABLE_CATALOG`," +
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
 		"`tbl`.`relname` AS `TABLE_NAME`," +
@@ -382,7 +386,7 @@ var (
 		"join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`))" +
 		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`)"
 
-	InformationSchemaReferentialConstraints = "CREATE VIEW IF NOT EXISTS information_schema.REFERENTIAL_CONSTRAINTS AS " +
+	InformationSchemaReferentialConstraints = "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS AS " +
 		"SELECT DISTINCT " +
 		"'def' AS CONSTRAINT_CATALOG, " +
 		"fk.db_name AS CONSTRAINT_SCHEMA, " +
@@ -398,16 +402,16 @@ var (
 		"FROM mo_catalog.mo_foreign_keys fk " +
 		"JOIN mo_catalog.mo_indexes idx ON (fk.refer_column_name = idx.column_name)"
 
-	InformationSchemaEngines = "CREATE TABLE IF NOT EXISTS information_schema.ENGINES (" +
+	InformationSchemaEngines = "CREATE TABLE information_schema.ENGINES (" +
 		"ENGINE varchar(64)," +
 		"SUPPORT varchar(8)," +
 		"COMMENT varchar(160)," +
 		"TRANSACTIONS varchar(3)," +
 		"XA varchar(3)," +
 		"SAVEPOINTS varchar(3)" +
-		");"
+		")"
 
-	InformationSchemaRoutines = "CREATE TABLE IF NOT EXISTS information_schema.ROUTINES (" +
+	InformationSchemaRoutines = "CREATE TABLE information_schema.ROUTINES (" +
 		"SPECIFIC_NAME varchar(64)," +
 		"ROUTINE_CATALOG varchar(64)," +
 		"ROUTINE_SCHEMA varchar(64)," +
@@ -439,9 +443,9 @@ var (
 		"CHARACTER_SET_CLIENT varchar(64)," +
 		"COLLATION_CONNECTION varchar(64)," +
 		"DATABASE_COLLATION  varchar(64)" +
-		");"
+		")"
 
-	InformationSchemaParameters = "CREATE TABLE IF NOT EXISTS information_schema.PARAMETERS (" +
+	InformationSchemaParameters = "CREATE TABLE information_schema.PARAMETERS (" +
 		"SPECIFIC_CATALOG varchar(64)," +
 		"SPECIFIC_SCHEMA varchar(64)," +
 		"SPECIFIC_NAME varchar(64)," +
@@ -458,31 +462,31 @@ var (
 		"COLLATION_NAME varchar(64)," +
 		"DTD_IDENTIFIER mediumtext," +
 		"ROUTINE_TYPE  varchar(64)" +
-		");"
+		")"
 
-	InformationSchemaKeywords = "CREATE TABLE IF NOT EXISTS information_schema.KEYWORDS (" +
+	InformationSchemaKeywords = "CREATE TABLE information_schema.KEYWORDS (" +
 		"WORD varchar(64)," +
 		"RESERVED int unsigned" +
-		");"
+		")"
 
-	InformationSchemaSchemaPrivileges = "CREATE TABLE IF NOT EXISTS information_schema.`SCHEMA_PRIVILEGES` (" +
+	InformationSchemaSchemaPrivileges = "CREATE TABLE information_schema.`SCHEMA_PRIVILEGES` (" +
 		"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
 		"`TABLE_CATALOG` varchar(512) NOT NULL DEFAULT ''," +
 		"`TABLE_SCHEMA` varchar(64) NOT NULL DEFAULT ''," +
 		"`PRIVILEGE_TYPE` varchar(64) NOT NULL DEFAULT ''," +
 		"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
-		");"
+		")"
 
-	InformationSchemaTablePrivileges = "CREATE TABLE IF NOT EXISTS information_schema.`TABLE_PRIVILEGES` (" +
+	InformationSchemaTablePrivileges = "CREATE TABLE information_schema.`TABLE_PRIVILEGES` (" +
 		"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
 		"`TABLE_CATALOG` varchar(512) NOT NULL DEFAULT ''," +
 		"`TABLE_SCHEMA` varchar(64) NOT NULL DEFAULT ''," +
 		"`TABLE_NAME` varchar(64) NOT NULL DEFAULT ''," +
 		"`PRIVILEGE_TYPE` varchar(64) NOT NULL DEFAULT ''," +
 		"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
-		");"
+		")"
 
-	InformationSchemaColumnPrivileges = "CREATE TABLE IF NOT EXISTS information_schema.`COLUMN_PRIVILEGES` (" +
+	InformationSchemaColumnPrivileges = "CREATE TABLE information_schema.`COLUMN_PRIVILEGES` (" +
 		"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
 		"`TABLE_CATALOG` varchar(512) NOT NULL DEFAULT ''," +
 		"`TABLE_SCHEMA` varchar(64) NOT NULL DEFAULT ''," +
@@ -490,9 +494,9 @@ var (
 		"`COLUMN_NAME` varchar(64) NOT NULL DEFAULT ''," +
 		"`PRIVILEGE_TYPE` varchar(64) NOT NULL DEFAULT ''," +
 		"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
-		");"
+		")"
 
-	InformationSchemaCollations = "CREATE TABLE IF NOT EXISTS information_schema.COLLATIONS (" +
+	InformationSchemaCollations = "CREATE TABLE information_schema.COLLATIONS (" +
 		"COLLATION_NAME varchar(64) NOT NULL," +
 		"CHARACTER_SET_NAME varchar(64) NOT NULL," +
 		"ID bigint unsigned NOT NULL DEFAULT 0," +
@@ -500,9 +504,9 @@ var (
 		"IS_COMPILED varchar(3) NOT NULL DEFAULT ''," +
 		"SORTLEN int unsigned NOT NULL," +
 		"PAD_ATTRIBUTE enum('PAD SPACE','NO PAD') NOT NULL" +
-		");"
+		")"
 
-	InformationSchemaTableConstraints = "CREATE TABLE IF NOT EXISTS information_schema.TABLE_CONSTRAINTS (" +
+	InformationSchemaTableConstraints = "CREATE TABLE information_schema.TABLE_CONSTRAINTS (" +
 		"CONSTRAINT_CATALOG varchar(64)," +
 		"CONSTRAINT_SCHEMA varchar(64)," +
 		"CONSTRAINT_NAME varchar(64)," +
@@ -510,9 +514,9 @@ var (
 		"TABLE_NAME varchar(64)," +
 		"CONSTRAINT_TYPE varchar(11) NOT NULL DEFAULT ''," +
 		"ENFORCED varchar(3) NOT NULL DEFAULT ''" +
-		");"
+		")"
 
-	InformationSchemaEvents = "CREATE TABLE IF NOT EXISTS information_schema.EVENTS (" +
+	InformationSchemaEvents = "CREATE TABLE information_schema.EVENTS (" +
 		"EVENT_CATALOG varchar(64)," +
 		"EVENT_SCHEMA varchar(64)," +
 		"EVENT_NAME varchar(64) NOT NULL," +
@@ -537,5 +541,5 @@ var (
 		"CHARACTER_SET_CLIENT varchar(64) NOT NULL," +
 		"COLLATION_CONNECTION varchar(64) NOT NULL," +
 		"DATABASE_COLLATION varchar(64) NOT NULL" +
-		");"
+		")"
 )
