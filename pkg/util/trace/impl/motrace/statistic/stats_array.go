@@ -275,7 +275,7 @@ type StatsInfo struct {
 	ExecutionStartTime time.Time `json:"ExecutionStartTime"`
 	ExecutionEndTime   time.Time `json:"ExecutionEndTime"`
 
-	WaitActiveCost time.Duration `json:"WaitActive,omitempty"`
+	WaitActiveCost time.Duration `json:"WaitActive"`
 }
 
 func (stats *StatsInfo) CompileStart() {
