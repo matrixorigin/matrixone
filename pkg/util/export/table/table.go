@@ -68,7 +68,6 @@ const (
 	TBit
 	TBlob
 	TEnum
-	TNil
 )
 
 func (c *ColType) ToType() types.Type {
@@ -646,10 +645,6 @@ func BytesField(val []byte) ColumnField {
 
 func UuidField(val []byte) ColumnField {
 	return ColumnField{Type: TUuid, Bytes: val}
-}
-
-func NilField() ColumnField {
-	return ColumnField{Type: TNil}
 }
 
 type Row struct {

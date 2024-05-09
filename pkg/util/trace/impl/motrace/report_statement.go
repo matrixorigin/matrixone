@@ -423,18 +423,10 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	stats := s.GetStatsArrayBytes()
 	if GetTracerProvider().disableSqlWriter {
 		// Be careful, this two string is unsafe, will be free after Free
-		if execPlan == nil {
-			row.SetColumnVal(execPlanCol, table.NilField())
-		} else {
-			row.SetColumnVal(execPlanCol, table.StringField(util.UnsafeBytesToString(execPlan)))
-		}
+		row.SetColumnVal(execPlanCol, table.StringField(util.UnsafeBytesToString(execPlan)))
 		row.SetColumnVal(statsCol, table.StringField(util.UnsafeBytesToString(stats)))
 	} else {
-		if execPlan == nil {
-			row.SetColumnVal(execPlanCol, table.NilField())
-		} else {
-			row.SetColumnVal(execPlanCol, table.BytesField(execPlan))
-		}
+		row.SetColumnVal(execPlanCol, table.BytesField(execPlan))
 		row.SetColumnVal(statsCol, table.BytesField(stats))
 	}
 	row.SetColumnVal(rowsReadCol, table.Int64Field(s.RowsRead))
@@ -472,7 +464,7 @@ func mergeStats(e, n *StatementInfo) error {
 	return nil
 }
 
-var noExecPlan = []byte(`{"code":200,"message":"NO ExecPlan Serialize function"}`)
+var noExecPlan = []byte(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null}`)
 
 // ExecPlan2Json return ExecPlan Serialized json-str //
 // please used in s.mux.Lock()
@@ -480,7 +472,7 @@ func (s *StatementInfo) ExecPlan2Json(ctx context.Context) []byte {
 	if s.jsonByte != nil {
 		goto endL
 	} else if s.ExecPlan == nil {
-		return nil
+		return noExecPlan
 	} else {
 		s.jsonByte = s.ExecPlan.Marshal(ctx)
 		//if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
