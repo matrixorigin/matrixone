@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -29,7 +28,7 @@ import (
 )
 
 // executeStatusStmt run the statement that responses status t
-func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCtx) (err error) {
+func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var loadLocalErrGroup *errgroup.Group
 	var columns []interface{}
 
@@ -39,7 +38,7 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 	case *tree.Select:
 		if ep.needExportToFile() {
 
-			columns, err = execCtx.cw.GetColumns()
+			columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 			if err != nil {
 				logError(ses, ses.GetDebugString(),
 					"Failed to get columns from computation handler",
@@ -54,7 +53,7 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 			// open new file
 			ep.DefaultBufSize = getGlobalPu().SV.ExportDataDefaultFlushSize
 			initExportFileParam(ep, mrs)
-			if err = openNewFile(requestCtx, ep, mrs); err != nil {
+			if err = openNewFile(execCtx.reqCtx, ep, mrs); err != nil {
 				return
 			}
 
@@ -73,7 +72,7 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 				logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 			}
 
-			oq := NewOutputQueue(ses.GetRequestContext(), ses, 0, nil, nil)
+			oq := NewOutputQueue(execCtx.reqCtx, ses, 0, nil, nil)
 			if err = exportAllData(oq); err != nil {
 				return
 			}
@@ -85,7 +84,7 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 			}
 
 		} else {
-			return moerr.NewInternalError(requestCtx, "select without it generates the result rows")
+			return moerr.NewInternalError(execCtx.reqCtx, "select without it generates the result rows")
 		}
 	case *tree.CreateTable:
 		runBegin := time.Now()
@@ -108,7 +107,7 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 
 		// Start the dynamic table daemon task
 		if st.IsDynamicTable {
-			if err = handleCreateDynamicTable(requestCtx, ses, st); err != nil {
+			if err = handleCreateDynamicTable(execCtx.reqCtx, ses, st); err != nil {
 				return
 			}
 		}
@@ -131,7 +130,7 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 			if st.Local {
 				loadLocalErrGroup = new(errgroup.Group)
 				loadLocalErrGroup.Go(func() error {
-					return processLoadLocal(execCtx.proc.Ctx, ses, st.Param, execCtx.loadLocalWriter)
+					return processLoadLocal(ses, execCtx, st.Param, execCtx.loadLocalWriter)
 				})
 			}
 		}
@@ -173,9 +172,11 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 	return
 }
 
-func respStatus(requestCtx context.Context,
-	ses *Session,
+func respStatus(ses *Session,
 	execCtx *ExecCtx) (err error) {
+	if execCtx.skipRespClient {
+		return nil
+	}
 	var rspLen uint64
 	if execCtx.runResult != nil {
 		rspLen = execCtx.runResult.AffectRows
@@ -190,23 +191,23 @@ func respStatus(requestCtx context.Context,
 		ses.SetSeqLastValue(execCtx.proc)
 
 		resp := setResponse(ses, execCtx.isLastStmt, rspLen)
-		if err2 := ses.GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
-			err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-			logStatementStatus(requestCtx, ses, execCtx.stmt, fail, err)
+		if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err
 		}
 	case *tree.PrepareStmt, *tree.PrepareString:
 		if ses.GetCmd() == COM_STMT_PREPARE {
-			if err2 := ses.GetMysqlProtocol().SendPrepareResponse(requestCtx, execCtx.prepareStmt); err2 != nil {
-				err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-				logStatementStatus(requestCtx, ses, execCtx.stmt, fail, err)
+			if err2 := ses.GetMysqlProtocol().SendPrepareResponse(execCtx.reqCtx, execCtx.prepareStmt); err2 != nil {
+				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 				return err
 			}
 		} else {
 			resp := setResponse(ses, execCtx.isLastStmt, rspLen)
-			if err2 := ses.GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
-				err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-				logStatementStatus(requestCtx, ses, execCtx.stmt, fail, err)
+			if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 				return err
 			}
 		}
@@ -215,9 +216,9 @@ func respStatus(requestCtx context.Context,
 		//we will not send response in COM_STMT_CLOSE command
 		if ses.GetCmd() != COM_STMT_CLOSE {
 			resp := setResponse(ses, execCtx.isLastStmt, rspLen)
-			if err2 := ses.GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
-				err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-				logStatementStatus(requestCtx, ses, execCtx.stmt, fail, err)
+			if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 				return err
 			}
 		}
@@ -230,10 +231,10 @@ func respStatus(requestCtx context.Context,
 		if len(execCtx.proc.SessionInfo.SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
 		}
-		_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
-		if err2 := ses.GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
-			err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-			logStatementStatus(requestCtx, ses, execCtx.stmt, fail, err)
+		_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
+		if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err
 		}
 	default:
@@ -250,25 +251,25 @@ func respStatus(requestCtx context.Context,
 				ses.SetLastInsertID(execCtx.proc.GetLastInsertID())
 			}
 		case *tree.CreateTable:
-			_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
+			_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
 		case *tree.DropTable:
 			// handle dynamic table drop, cancel all the running daemon task
-			_ = handleDropDynamicTable(requestCtx, ses, st)
-			_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
+			_ = handleDropDynamicTable(execCtx.reqCtx, ses, st)
+			_ = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
 		case *tree.CreateDatabase:
-			_ = insertRecordToMoMysqlCompatibilityMode(requestCtx, ses, execCtx.stmt)
-			_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
+			_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
+			_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
 		case *tree.DropDatabase:
-			_ = deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, execCtx.stmt)
-			_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
-			err = doDropFunctionWithDB(requestCtx, ses, execCtx.stmt, func(path string) error {
-				return execCtx.proc.FileService.Delete(requestCtx, path)
+			_ = deleteRecordToMoMysqlCompatbilityMode(execCtx.reqCtx, ses, execCtx.stmt)
+			_ = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
+			err = doDropFunctionWithDB(execCtx.reqCtx, ses, execCtx.stmt, func(path string) error {
+				return execCtx.proc.FileService.Delete(execCtx.reqCtx, path)
 			})
 		}
 
-		if err2 := ses.GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
-			err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-			logStatementStatus(requestCtx, ses, execCtx.stmt, fail, err)
+		if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err
 		}
 	}

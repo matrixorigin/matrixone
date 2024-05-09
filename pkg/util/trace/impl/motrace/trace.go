@@ -249,7 +249,10 @@ func GetNodeResource() *trace.MONodeResource {
 func SetTracerProvider(p *MOTracerProvider) {
 	gTracerProvider.Store(p)
 }
-func GetTracerProvider() *MOTracerProvider {
+
+// GetTracerProvider returns the global TracerProvider.
+// It will be initialized at startup.
+var GetTracerProvider = func() *MOTracerProvider {
 	return gTracerProvider.Load().(*MOTracerProvider)
 }
 

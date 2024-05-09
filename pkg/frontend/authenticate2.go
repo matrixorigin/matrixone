@@ -209,11 +209,11 @@ func checkPrivilegeInCache(ctx context.Context, ses *Session, priv *privilege, e
 }
 
 // privilegeCacheIsEnabled checks if the privilege cache is enabled.
-func privilegeCacheIsEnabled(ses *Session) (bool, error) {
+func privilegeCacheIsEnabled(ctx context.Context, ses *Session) (bool, error) {
 	var err error
 	var value interface{}
 	var newValue bool
-	value, err = ses.GetSessionVar("enable_privilege_cache")
+	value, err = ses.GetSessionVar(ctx, "enable_privilege_cache")
 	if err != nil {
 		return false, err
 	}
