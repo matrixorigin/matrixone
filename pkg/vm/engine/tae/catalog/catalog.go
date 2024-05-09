@@ -96,16 +96,6 @@ func MockCatalog() *Catalog {
 	return catalog
 }
 
-func NewEmptyCatalog() *Catalog {
-	return &Catalog{
-		RWMutex:    new(sync.RWMutex),
-		IDAlloctor: NewIDAllocator(),
-		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
-		nameNodes:  make(map[string]*nodeList[*DBEntry]),
-		link:       common.NewGenericSortedDList((*DBEntry).Less),
-	}
-}
-
 func OpenCatalog(usageMemo any) (*Catalog, error) {
 	catalog := &Catalog{
 		RWMutex:    new(sync.RWMutex),
@@ -190,6 +180,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		panic(err)
 	}
 }
+
 func (catalog *Catalog) ReplayCmd(
 	txncmd txnif.TxnCmd,
 	dataFactory DataFactory,
