@@ -64,7 +64,7 @@ var (
 		InformationSchemaColumnPrivileges,
 		InformationSchemaCollations,
 		InformationSchemaTableConstraints,
-		InformationSchemaTableEvents,
+		InformationSchemaEvents,
 		informationSchemaKeywordsData,
 	}
 )

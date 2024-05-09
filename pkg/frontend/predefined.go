@@ -24,7 +24,7 @@ var (
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	//createSqls = []string{
-	MoCatalogMoUser = `create table mo_user(
+	MoCatalogMoUser = `create table mo_catalog.mo_user(
 				user_id int signed auto_increment primary key,
 				user_host varchar(100),
 				user_name varchar(300) unique key,
@@ -38,7 +38,7 @@ var (
 				default_role int signed
     		);`
 
-	MoCatalogMoAccount = `create table mo_account(
+	MoCatalogMoAccount = `create table mo_catalog.mo_account(
 				account_id int signed auto_increment primary key,
 				account_name varchar(300) unique key,
 				admin_name varchar(300),
@@ -50,7 +50,7 @@ var (
 				create_version varchar(50) default '1.2.0'
 			);`
 
-	MoCatalogMoRole = `create table mo_role(
+	MoCatalogMoRole = `create table mo_catalog.mo_role(
 				role_id int signed auto_increment primary key,
 				role_name varchar(300) unique key,
 				creator int signed,
@@ -59,7 +59,7 @@ var (
 				comments text
 			);`
 
-	MoCatalogMoUserGrant = `create table mo_user_grant(
+	MoCatalogMoUserGrant = `create table mo_catalog.mo_user_grant(
 				role_id int signed,
 				user_id int signed,
 				granted_time timestamp,
@@ -67,7 +67,7 @@ var (
 				primary key(role_id, user_id)
 			);`
 
-	MoCatalogMoRoleGrant = `create table mo_role_grant(
+	MoCatalogMoRoleGrant = `create table mo_catalog.mo_role_grant(
 				granted_id int signed,
 				grantee_id int signed,
 				operation_role_id int signed,
@@ -77,7 +77,7 @@ var (
 				primary key(granted_id, grantee_id)
 			);`
 
-	MoCatalogMoRolePrivs = `create table mo_role_privs(
+	MoCatalogMoRolePrivs = `create table mo_catalog.mo_role_privs(
 				role_id int signed,
 				role_name  varchar(100),
 				obj_type  varchar(16),
@@ -91,7 +91,7 @@ var (
 				primary key(role_id, obj_type, obj_id, privilege_id, privilege_level)
 			);`
 
-	MoCatalogMoUserDefinedFunction = `create table mo_user_defined_function(
+	MoCatalogMoUserDefinedFunction = `create table mo_catalog.mo_user_defined_function(
 				function_id int auto_increment,
 				name     varchar(100) unique key,
 				owner  int unsigned,
@@ -112,7 +112,7 @@ var (
 				primary key(function_id)
 			);`
 
-	MoCatalogMoMysqlCompatibilityMode = `create table mo_mysql_compatibility_mode(
+	MoCatalogMoMysqlCompatibilityMode = `create table mo_catalog.mo_mysql_compatibility_mode(
 				configuration_id int auto_increment,
 				account_id int,
 				account_name varchar(300),
@@ -123,7 +123,7 @@ var (
 				primary key(configuration_id)
 			);`
 
-	MoCatalogMoSnapshots = `create table mo_snapshots(
+	MoCatalogMoSnapshots = fmt.Sprintf(`CREATE TABLE %s.%s (
 			snapshot_id uuid unique key,
 			sname varchar(64) primary key,
 			ts bigint,
@@ -132,9 +132,9 @@ var (
 			database_name varchar(5000),
 			table_name  varchar(5000),
 			obj_id bigint unsigned
-			);`
+			);`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS)
 
-	MoCatalogMoPubs = `create table mo_pubs(
+	MoCatalogMoPubs = `create table mo_catalog.mo_pubs(
     		pub_name varchar(64) primary key,
     		database_name varchar(5000),
     		database_id bigint unsigned,
@@ -148,7 +148,7 @@ var (
     		comment text
     		);`
 
-	MoCatalogMoStoredProcedure = `create table mo_stored_procedure(
+	MoCatalogMoStoredProcedure = `create table mo_catalog.mo_stored_procedure(
 				proc_id int auto_increment,
 				name     varchar(100) unique key,
 				creator  int unsigned,
@@ -167,7 +167,7 @@ var (
 				primary key(proc_id)
 			);`
 
-	MoCatalogMoStages = `create table mo_stages(
+	MoCatalogMoStages = `create table mo_catalog.mo_stages(
 				stage_id int unsigned auto_increment,
 				stage_name varchar(64) unique key,
 				url text,

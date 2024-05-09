@@ -26,7 +26,7 @@ import (
 // `mysql` database
 // InitMysqlSysTables
 var (
-	MysqlUser = `CREATE TABLE IF NOT EXISTS user (
+	MysqlUser = `CREATE TABLE IF NOT EXISTS mysql.user (
 			Host char(255)  NOT NULL DEFAULT '',
 			User char(32)  NOT NULL DEFAULT '',
 			Select_priv varchar(10) NOT NULL DEFAULT 'N',
@@ -81,7 +81,7 @@ var (
 			PRIMARY KEY (Host,User)
 		  );`
 
-	MysqlDb = `CREATE TABLE IF NOT EXISTS db (
+	MysqlDb = `CREATE TABLE IF NOT EXISTS mysql.db (
 			Host char(255) NOT NULL DEFAULT '',
 			Db char(64)  NOT NULL DEFAULT '',
 			User char(32)  NOT NULL DEFAULT '',
@@ -108,7 +108,7 @@ var (
 			KEY User (User)
 		  );`
 
-	MysqlProcsPriv = `CREATE TABLE IF NOT EXISTS procs_priv (
+	MysqlProcsPriv = `CREATE TABLE IF NOT EXISTS mysql.procs_priv (
 			Host char(255)  NOT NULL DEFAULT '',
 			Db char(64)  NOT NULL DEFAULT '',
 			User char(32)  NOT NULL DEFAULT '',
@@ -121,7 +121,7 @@ var (
 			KEY Grantor (Grantor)
 		  );`
 
-	MysqlColumnsPriv = `CREATE TABLE IF NOT EXISTS columns_priv (
+	MysqlColumnsPriv = `CREATE TABLE IF NOT EXISTS mysql.columns_priv (
 			Host char(255)  NOT NULL DEFAULT '',
 			Db char(64)  NOT NULL DEFAULT '',
 			User char(32)  NOT NULL DEFAULT '',
@@ -132,7 +132,7 @@ var (
 			PRIMARY KEY (Host,Db,User,Table_name,Column_name)
 		  );`
 
-	MysqlTablesPriv = `CREATE TABLE IF NOT EXISTS tables_priv (
+	MysqlTablesPriv = `CREATE TABLE IF NOT EXISTS mysql.tables_priv (
 			Host char(255)  NOT NULL DEFAULT '',
 			Db char(64)  NOT NULL DEFAULT '',
 			User char(32)  NOT NULL DEFAULT '',
@@ -145,7 +145,7 @@ var (
 			KEY Grantor (Grantor)
 		  );`
 
-	MysqlRoleEdges = `CREATE TABLE IF NOT EXISTS role_edges (
+	MysqlRoleEdges = `CREATE TABLE IF NOT EXISTS mysql.role_edges (
 			FROM_HOST char(255) NOT NULL DEFAULT '',
 			FROM_USER char(32) NOT NULL DEFAULT '',
 			TO_HOST char(255) NOT NULL DEFAULT '',
@@ -221,11 +221,11 @@ var (
 		"SOURCE_LINE int DEFAULT NULL" +
 		");"
 
-	InformationSchemaProcesslist = "CREATE VIEW IF NOT EXISTS information_schema.`PROCESSLIST` AS " +
-		"select node_id, conn_id, session_id, account, user, host, db, " +
-		"session_start, command, info, txn_id, statement_id, statement_type, " +
-		"query_type, sql_source_type, query_start, client_host, role, proxy_host " +
-		"from PROCESSLIST() A"
+	InformationSchemaProcesslist = fmt.Sprintf("CREATE VIEW IF NOT EXISTS %s.PROCESSLIST AS "+
+		"select node_id, conn_id, session_id, account, user, host, db, "+
+		"session_start, command, info, txn_id, statement_id, statement_type, "+
+		"query_type, sql_source_type, query_start, client_host, role, proxy_host "+
+		"from PROCESSLIST() A", InformationDBConst)
 
 	InformationSchemaUserPrivileges = "CREATE TABLE IF NOT EXISTS information_schema.USER_PRIVILEGES (" +
 		"GRANTEE varchar(292) NOT NULL DEFAULT ''," +
@@ -512,7 +512,7 @@ var (
 		"ENFORCED varchar(3) NOT NULL DEFAULT ''" +
 		");"
 
-	InformationSchemaTableEvents = "CREATE TABLE IF NOT EXISTS information_schema.EVENTS (" +
+	InformationSchemaEvents = "CREATE TABLE IF NOT EXISTS information_schema.EVENTS (" +
 		"EVENT_CATALOG varchar(64)," +
 		"EVENT_SCHEMA varchar(64)," +
 		"EVENT_NAME varchar(64) NOT NULL," +
