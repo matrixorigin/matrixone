@@ -11,6 +11,28 @@ SELECT from_base64('invalid');
 SELECT TO_BASE64('abc'), FROM_BASE64(TO_BASE64('abc'));
 SELECT HEX('abc'),UNHEX(HEX('abc'));
 
+select to_base64(''),to_base64(NULL);
+select to_base64('@#%#$^jfe12');
+select to_base64(123dokgr);
+select to_base64(-123);
+select to_base64(2003-09-06);
+select to_base64('2003-09-06');
+select to_base64('数据库');
+
+select from_base64(''),from_base64(NULL);
+select from_base64('@#%#$^jfe12');
+
+select from_base64(123dokgr);
+
+select from_base64(-123);
+
+select from_base64(2003-09-06);
+select from_base64('5pWw5o2u5bqT');
+select from_base64('MjAwMy0wOS0wNg==');
+create table test_base(c1 varchar(25));
+insert into test_base values(to_base64('blue')),(to_base64('232525')),(to_base64('lijfe23253'));
+select from_base64(c1) from test_base;
+
 -- test serial() and serial_full()
 CREATE TABLE t1 (name varchar(255), age int);
 INSERT INTO t1 (name, age) VALUES ('Abby', 24);

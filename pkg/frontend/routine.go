@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -31,7 +33,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 // Routine handles requests.
@@ -433,7 +434,7 @@ func (rt *Routine) migrateConnectionTo(req *query.MigrateConnToRequest) error {
 		}
 		defer rt.mc.endMigrate()
 		ses := rt.getSession()
-		err = ses.Migrate(req)
+		err = Migrate(ses, req)
 	})
 	return err
 }

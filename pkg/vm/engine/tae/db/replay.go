@@ -70,7 +70,7 @@ func (replayer *Replayer) PreReplayWal() {
 			return moerr.GetOkStopCurrRecur()
 		}
 		dropCommit := entry.TreeMaxDropCommitEntry()
-		if dropCommit != nil && dropCommit.DeleteBefore(replayer.ckpedTS) {
+		if dropCommit != nil && dropCommit.DeleteBeforeLocked(replayer.ckpedTS) {
 			return moerr.GetOkStopCurrRecur()
 		}
 		entry.InitData(replayer.DataFactory)

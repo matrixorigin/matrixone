@@ -130,7 +130,8 @@ func (e *TestEngine) Close() error {
 }
 
 func (e *TestEngine) CreateRelAndAppend(bat *containers.Batch, createDB bool) (handle.Database, handle.Relation) {
-	return CreateRelationAndAppend(e.t, e.tenantID, e.DB, DefaultTestDB, e.schema, bat, createDB)
+	clonedSchema := e.schema.Clone()
+	return CreateRelationAndAppend(e.t, e.tenantID, e.DB, DefaultTestDB, clonedSchema, bat, createDB)
 }
 
 func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
@@ -781,7 +782,7 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 func (e *TestEngine) CheckObjectInfo(onlyCheckName bool) {
 	p := &catalog.LoopProcessor{}
 	p.ObjectFn = func(se *catalog.ObjectEntry) error {
-		se.LoopChain(func(node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
+		se.LoopChainLocked(func(node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
 			if se.GetTable().GetDB().ID == pkgcatalog.MO_CATALOG_ID {
 				return true
 			}

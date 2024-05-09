@@ -202,7 +202,6 @@ func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient)
 	if err != nil {
 		return nil, err
 	}
-	logutil.Info("Using Dump Storage Engine and Cluster Nodes.")
 	pu := mo_config.NewParameterUnit(sv, eng, txnClient, engine.Nodes{})
 
 	return pu, nil
@@ -866,12 +865,12 @@ func (ui *UserInput) genSqlSourceType(ses FeSession) {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
-	flag, _, _ := isSpecialUser(tenant.User)
+	flag, _, _ := isSpecialUser(tenant.GetUser())
 	if flag {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
-	if tenant.Tenant == sysAccountName && tenant.User == "internal" {
+	if tenant.GetTenant() == sysAccountName && tenant.GetUser() == "internal" {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
