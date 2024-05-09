@@ -107,7 +107,7 @@ func (l *localLockTable) doLock(
 				logLocalLockFailed(c.txn, table, c.rows, c.opts, err)
 				if c.w != nil {
 					c.w.disableNotify()
-					c.w.close()
+					c.w.close(fmt.Sprintf("err in doLock, txn: %x", c.txn.txnID))
 				}
 				c.done(err)
 				return
@@ -117,7 +117,7 @@ func (l *localLockTable) doLock(
 				v2.TxnAcquireLockWaitDurationHistogram.Observe(time.Since(c.createAt).Seconds())
 				if old != nil {
 					old.disableNotify()
-					old.close()
+					old.close(fmt.Sprintf("add lock in doLock, txn: %x", c.txn.txnID))
 				}
 				c.txn.clearBlocked(old)
 				logLocalLockAdded(c.txn, l.bind.Table, c.rows, c.opts)
@@ -176,7 +176,7 @@ func (l *localLockTable) doLock(
 				l.mu.Unlock()
 			}
 
-			c.w.close()
+			c.w.close(fmt.Sprintf("err wait in doLock, txn: %x", c.txn.txnID))
 			c.done(e)
 			return
 		}
@@ -734,7 +734,7 @@ func (c *mergeContext) commit(
 	for _, q := range c.mergedWaiters {
 		// release ref in merged waiters. The ref is moved to c.to.
 		q.iter(func(w *waiter) bool {
-			w.close()
+			w.close(fmt.Sprintf("commit, txn: %x", w.txn.TxnID))
 			return true
 		})
 		q.reset()

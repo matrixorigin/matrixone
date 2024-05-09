@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -227,7 +228,7 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 		for _, v := range resp.GetTxnLock.WaitingList {
 			w := acquireWaiter(v)
 			lock.addWaiter(w)
-			w.close()
+			w.close(fmt.Sprintf("doGetLock, txn: %x", w.txn.TxnID))
 		}
 		return lock, true, nil
 	}

@@ -230,7 +230,7 @@ func (txn *activeTxn) abort(
 func (txn *activeTxn) cancelBlocks() {
 	for _, w := range txn.blockedWaiters {
 		w.notify(notifyValue{err: ErrTxnNotFound})
-		w.close()
+		w.close(fmt.Sprintf("cancelBlocks, txn: %x", w.txn.TxnID))
 	}
 }
 
@@ -240,7 +240,7 @@ func (txn *activeTxn) clearBlocked(w *waiter) {
 		if v != w {
 			newBlockedWaiters = append(newBlockedWaiters, v)
 		} else {
-			w.close()
+			w.close(fmt.Sprintf("clearBlocked, txn: %x", w.txn.TxnID))
 		}
 	}
 	txn.blockedWaiters = newBlockedWaiters
@@ -248,7 +248,7 @@ func (txn *activeTxn) clearBlocked(w *waiter) {
 
 func (txn *activeTxn) closeBlockWaiters() {
 	for _, w := range txn.blockedWaiters {
-		w.close()
+		w.close(fmt.Sprintf("closeBlockWaiters, txn: %x", w.txn.TxnID))
 	}
 	txn.blockedWaiters = txn.blockedWaiters[:0]
 }
@@ -260,7 +260,7 @@ func (txn *activeTxn) setBlocked(w *waiter) {
 	if !w.casStatus(ready, blocking) {
 		panic(fmt.Sprintf("invalid waiter status %d, %s", w.getStatus(), w))
 	}
-	w.ref()
+	w.ref(fmt.Sprintf("setBlocked, txn: %x", w.txn.TxnID))
 	txn.blockedWaiters = append(txn.blockedWaiters, w)
 }
 

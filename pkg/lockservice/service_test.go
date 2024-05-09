@@ -2981,7 +2981,7 @@ func runLockServiceTests(
 ) {
 	runLockServiceTestsWithLevel(
 		t,
-		zapcore.DebugLevel,
+		zapcore.ErrorLevel,
 		serviceIDs,
 		time.Second*10,
 		fn,

@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -41,7 +42,7 @@ func acquireWaiter(txn pb.WaitTxn) *waiter {
 	w := reuse.Alloc[waiter](nil)
 	logWaiterContactPool(w, "get")
 	w.txn = txn
-	if w.ref() != 1 {
+	if w.ref(fmt.Sprintf("acquireWaiter txn: %x", txn.TxnID)) != 1 {
 		panic("BUG: invalid ref count")
 	}
 	w.beforeSwapStatusAdjustFunc = func() {}
@@ -75,7 +76,11 @@ type waiter struct {
 	c           chan notifyValue
 	event       event
 	waitAt      atomic.Value
-
+	mu          struct {
+		sync.Mutex
+		ref   []string
+		unRef []string
+	}
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
 }
@@ -98,11 +103,19 @@ func (w *waiter) isTxn(txnID []byte) bool {
 	return bytes.Equal(w.txn.TxnID, txnID)
 }
 
-func (w *waiter) ref() int32 {
+func (w *waiter) ref(name string) int32 {
+	w.mu.Lock()
+	w.mu.ref = append(w.mu.ref, name)
+	w.mu.Unlock()
+
 	return w.refCount.Add(1)
 }
 
-func (w *waiter) close() {
+func (w *waiter) close(name string) {
+	w.mu.Lock()
+	w.mu.unRef = append(w.mu.unRef, name)
+	w.mu.Unlock()
+
 	n := w.refCount.Add(-1)
 	if n < 0 {
 		panic("BUG: invalid ref count, " + w.String())
@@ -235,7 +248,29 @@ func (w *waiter) startWait() {
 	w.waitAt.Store(time.Now())
 }
 
+func logStr(strs []string, name string) {
+	var buffer bytes.Buffer
+
+	for _, str := range strs {
+		buffer.WriteString(str)
+		buffer.WriteString(", ")
+	}
+
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.FatalLevel) {
+		logger.Error(name,
+			zap.String(name, buffer.String()))
+	}
+}
+
 func (w *waiter) reset() {
+	w.mu.Lock()
+	logStr(w.mu.ref, "ref")
+	logStr(w.mu.unRef, "unRef")
+	w.mu.ref = nil
+	w.mu.unRef = nil
+	w.mu.Unlock()
+
 	notifies := len(w.c)
 	if notifies > 0 {
 		panic(fmt.Sprintf("BUG: waiter should be empty. %s, notifies %d",

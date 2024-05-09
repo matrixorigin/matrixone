@@ -163,7 +163,7 @@ func (l Lock) closeWaiter(w *waiter) bool {
 	if canRemove {
 		// close all ref in waiter queue
 		l.waiters.iter(func(w *waiter) bool {
-			w.close()
+			w.close(fmt.Sprintf("closeWaiter, txn: %x", w.txn.TxnID))
 			return true
 		})
 	}

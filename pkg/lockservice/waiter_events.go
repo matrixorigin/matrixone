@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -151,7 +152,7 @@ func (mw *waiterEvents) close() {
 	close(mw.eventC)
 	mw.mu.Lock()
 	for _, w := range mw.mu.blockedWaiters {
-		w.close()
+		w.close(fmt.Sprintf("waiterEvents close, txn: %x", w.txn.TxnID))
 	}
 	mw.mu.Unlock()
 }
@@ -168,7 +169,7 @@ func (mw *waiterEvents) add(c *lockContext) {
 }
 
 func (mw *waiterEvents) addToLazyCheckDeadlockC(w *waiter) {
-	w.ref()
+	w.ref(fmt.Sprintf("addToLazyCheckDeadlockC, txn: %x", w.txn.TxnID))
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 	mw.mu.blockedWaiters = append(mw.mu.blockedWaiters, w)
@@ -209,7 +210,7 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 	for i, w := range mw.mu.blockedWaiters {
 		// remove if not in blocking state
 		if w.getStatus() != blocking {
-			w.close()
+			w.close(fmt.Sprintf("waiterEvents check, txn: %x", w.txn.TxnID))
 			mw.mu.blockedWaiters[i] = nil
 			continue
 		}

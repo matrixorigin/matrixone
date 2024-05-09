@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -64,7 +65,7 @@ func (q *sliceBasedWaiterQueue) put(ws ...*waiter) {
 	q.Lock()
 	defer q.Unlock()
 	for _, w := range ws {
-		w.ref()
+		w.ref(fmt.Sprintf("put txn: %x", w.txn.TxnID))
 	}
 	q.waiters = append(q.waiters, ws...)
 	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
@@ -91,7 +92,7 @@ func (q *sliceBasedWaiterQueue) notifyAll(value notifyValue) {
 
 	for _, w := range q.waiters {
 		w.notify(value)
-		w.close()
+		w.close(fmt.Sprintf("notifyAll, txn: %x", w.txn.TxnID))
 	}
 	q.resetWaitersLocked()
 	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
@@ -122,7 +123,7 @@ func (q *sliceBasedWaiterQueue) notify(value notifyValue) {
 			break
 		}
 		// already completed
-		w.close()
+		w.close(fmt.Sprintf("notify, txn: %x", w.txn.TxnID))
 		skipAt = i
 		q.waiters[i] = nil
 	}
@@ -148,7 +149,7 @@ func (q *sliceBasedWaiterQueue) removeByTxnID(txnID []byte) {
 	for _, w := range q.waiters {
 		if w.isTxn(txnID) {
 			w.notify(notifyValue{})
-			w.close()
+			w.close(fmt.Sprintf("removeByTxnID, txn: %x", w.txn.TxnID))
 			continue
 		}
 		newWaiters = append(newWaiters, w)
@@ -199,7 +200,7 @@ func (q *sliceBasedWaiterQueue) rollbackChange() {
 
 	n := len(q.waiters)
 	for i := q.beginChangeIdx; i < n; i++ {
-		q.waiters[i].close()
+		q.waiters[i].close("rollbackChange")
 		q.waiters[i] = nil
 	}
 	q.waiters = q.waiters[:q.beginChangeIdx]
@@ -246,7 +247,7 @@ func (q *sliceBasedWaiterQueue) close(value notifyValue) {
 	for i := 0; i < idx; i++ {
 		w := q.waiters[i]
 		w.notify(value)
-		w.close()
+		w.close(fmt.Sprintf("close in sliceBasedWaiterQueue, txn: %x", w.txn.TxnID))
 	}
 	q.doResetLocked()
 }

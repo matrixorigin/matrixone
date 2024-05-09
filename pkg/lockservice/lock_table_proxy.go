@@ -81,7 +81,7 @@ func (lp *localLockTableProxy) lock(
 		cb,
 		lp.hasRemoteHolderLocked(key))
 	if w != nil {
-		defer w.close()
+		defer w.close("proxy in lock")
 	}
 	lp.mu.Unlock()
 
