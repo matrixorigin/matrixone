@@ -176,6 +176,7 @@ func execResultArrayHasData(arr []ExecResult) bool {
 type BackgroundExec interface {
 	Close()
 	Exec(context.Context, string) error
+	ExecRestore(context.Context, string, uint32, uint32) error
 	ExecStmt(context.Context, tree.Statement) error
 	GetExecResultSet() []interface{}
 	ClearExecResultSet()
@@ -282,7 +283,7 @@ type FeSession interface {
 	GetStorage() engine.Engine
 	GetBackgroundExec(ctx context.Context) BackgroundExec
 	GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec
-	getGlobalSystemVariableValue(name string) (interface{}, error)
+	GetGlobalSystemVariableValue(name string) (interface{}, error)
 	GetSessionVar(name string) (interface{}, error)
 	GetUserDefinedVar(name string) (SystemVariableType, *UserDefinedVar, error)
 	GetConnectContext() context.Context
@@ -450,6 +451,19 @@ func (ses *feSessionImpl) Clear() {
 	}
 	ses.ClearAllMysqlResultSet()
 	ses.ClearResultBatches()
+}
+
+func (ses *feSessionImpl) SetDatabaseName(db string) {
+	ses.proto.SetDatabaseName(db)
+	ses.txnCompileCtx.SetDatabase(db)
+}
+
+func (ses *feSessionImpl) GetDatabaseName() string {
+	return ses.proto.GetDatabaseName()
+}
+
+func (ses *feSessionImpl) GetUserName() string {
+	return ses.proto.GetUserName()
 }
 
 func (ses *feSessionImpl) DisableTrace() bool {

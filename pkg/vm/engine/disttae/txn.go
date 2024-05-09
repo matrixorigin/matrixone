@@ -294,10 +294,16 @@ func (txn *Transaction) checkDup() error {
 			continue
 		}
 		if (e.typ == DELETE || e.typ == DELETE_TXN || e.typ == UPDATE) &&
-			e.databaseId == catalog.MO_DATABASE_ID &&
+			e.databaseId == catalog.MO_CATALOG_ID &&
 			e.tableId == catalog.MO_COLUMNS_ID {
 			continue
 		}
+
+		dbkey := genDatabaseKey(e.accountId, e.databaseName)
+		if _, ok := txn.deletedDatabaseMap.Load(dbkey); ok {
+			continue
+		}
+
 		tableKey := genTableKey(e.accountId, e.tableName, e.databaseId)
 		if _, ok := txn.deletedTableMap.Load(tableKey); ok {
 			continue
@@ -1065,6 +1071,7 @@ func (txn *Transaction) delTransaction() {
 	txn.tableCache.tableMap = nil
 	txn.createMap = nil
 	txn.databaseMap = nil
+	txn.deletedDatabaseMap = nil
 	txn.deletedTableMap = nil
 	txn.blockId_tn_delete_metaLoc_batch.data = nil
 	txn.deletedBlocks = nil
@@ -1167,9 +1174,10 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 			cachedIndex int
 			tableMap    *sync.Map
 		}{tableMap: new(sync.Map)},
-		databaseMap:     new(sync.Map),
-		createMap:       new(sync.Map),
-		deletedTableMap: new(sync.Map),
+		databaseMap:        new(sync.Map),
+		deletedDatabaseMap: new(sync.Map),
+		createMap:          new(sync.Map),
+		deletedTableMap:    new(sync.Map),
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},

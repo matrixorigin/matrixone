@@ -16,7 +16,6 @@ package txnbase
 
 import (
 	"bytes"
-	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -131,7 +130,7 @@ func (be *MVCCChain[T]) GetLatestNodeLocked() T {
 
 // GetLatestCommittedNode gets the latest committed mvcc node.
 // It's useful when check whether the catalog/metadata entry is deleted.
-func (be *MVCCChain[T]) GetLatestCommittedNode() (node T) {
+func (be *MVCCChain[T]) GetLatestCommittedNodeLocked() (node T) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[T]) bool {
 		un := n.GetPayload()
 		if !un.IsActive() && !un.IsCommitting() {
@@ -146,7 +145,7 @@ func (be *MVCCChain[T]) GetLatestCommittedNode() (node T) {
 // GetVisibleNode gets mvcc node according to the txnReader.
 // It returns the mvcc node in the same txn as the read txn
 // or returns the latest mvcc node with commitTS less than the timestamp.
-func (be *MVCCChain[T]) GetVisibleNode(txn txnif.TxnReader) (node T) {
+func (be *MVCCChain[T]) GetVisibleNodeLocked(txn txnif.TxnReader) (node T) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[T]) (goNext bool) {
 		un := n.GetPayload()
 		var visible bool
@@ -159,23 +158,8 @@ func (be *MVCCChain[T]) GetVisibleNode(txn txnif.TxnReader) (node T) {
 	return
 }
 
-// GetVisibleNode gets mvcc node according to the timestamp.
-// It returns the latest mvcc node with commitTS less than the timestamp.
-func (be *MVCCChain[T]) GetVisibleNodeByTS(ts types.TS) (node T) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[T]) (goNext bool) {
-		un := n.GetPayload()
-		var visible bool
-		if visible = un.IsVisibleByTS(ts); visible {
-			node = un
-		}
-		goNext = !visible
-		return
-	}, false)
-	return
-}
-
 // It's only used in replay
-func (be *MVCCChain[T]) SearchNode(o T) (node T) {
+func (be *MVCCChain[T]) SearchNodeLocked(o T) (node T) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[T]) bool {
 		un := n.GetPayload()
 		compare := be.comparefn(un, o)
@@ -189,14 +173,14 @@ func (be *MVCCChain[T]) SearchNode(o T) (node T) {
 	return
 }
 
-func (be *MVCCChain[T]) LoopChain(fn func(T) bool) {
+func (be *MVCCChain[T]) LoopChainLocked(fn func(T) bool) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[T]) bool {
 		un := n.GetPayload()
 		return fn(un)
 	}, false)
 }
 
-func (be *MVCCChain[T]) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
+func (be *MVCCChain[T]) NeedWaitCommittingLocked(ts types.TS) (bool, txnif.TxnReader) {
 	un := be.GetLatestNodeLocked()
 	if un.IsNil() {
 		return false, nil
@@ -204,9 +188,9 @@ func (be *MVCCChain[T]) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) 
 	return un.NeedWaitCommitting(ts)
 }
 
-func (be *MVCCChain[T]) HasUncommittedNode() bool {
+func (be *MVCCChain[T]) HasUncommittedNodeLocked() bool {
 	var found bool
-	be.LoopChain(func(n T) bool {
+	be.LoopChainLocked(func(n T) bool {
 		if n.IsCommitted() {
 			return false
 		} else {
@@ -219,9 +203,9 @@ func (be *MVCCChain[T]) HasUncommittedNode() bool {
 	return found
 }
 
-func (be *MVCCChain[T]) HasCommittedNode() bool {
+func (be *MVCCChain[T]) HasCommittedNodeLocked() bool {
 	var found bool
-	be.LoopChain(func(n T) bool {
+	be.LoopChainLocked(func(n T) bool {
 		if n.IsCommitted() {
 			found = true
 			return false
@@ -242,8 +226,8 @@ func (be *MVCCChain[T]) IsCreatingOrAborted() bool {
 	return un.IsActive() || un.IsAborted()
 }
 
-func (be *MVCCChain[T]) CheckConflict(txn txnif.TxnReader) (err error) {
-	if be.IsEmpty() {
+func (be *MVCCChain[T]) CheckConflictLocked(txn txnif.TxnReader) (err error) {
+	if be.IsEmptyLocked() {
 		return
 	}
 	node := be.GetLatestNodeLocked()
@@ -251,36 +235,7 @@ func (be *MVCCChain[T]) CheckConflict(txn txnif.TxnReader) (err error) {
 	return
 }
 
-func (be *MVCCChain[T]) WriteOneNodeTo(w io.Writer) (n int64, err error) {
-	var n2 int64
-	n2, err = be.GetLatestNodeLocked().WriteTo(w)
-	if err != nil {
-		return
-	}
-	n += n2
-	return
-}
-
-func (be *MVCCChain[T]) WriteAllTo(w io.Writer) (n int64, err error) {
-	depth := uint64(be.MVCC.Depth())
-	var sn int
-	if sn, err = w.Write(types.EncodeUint64(&depth)); err != nil {
-		return
-	}
-	n += int64(sn)
-	be.MVCC.Loop(func(node *common.GenericDLNode[T]) bool {
-		var n2 int64
-		n2, err = node.GetPayload().WriteTo(w)
-		if err != nil {
-			return false
-		}
-		n += n2
-		return true
-	}, true)
-	return
-}
-
-func (be *MVCCChain[T]) IsEmpty() bool {
+func (be *MVCCChain[T]) IsEmptyLocked() bool {
 	head := be.MVCC.GetHead()
 	return head == nil
 }
@@ -304,29 +259,6 @@ func (be *MVCCChain[T]) Apply1PCCommit() error {
 	return be.GetLatestNodeLocked().ApplyCommit()
 }
 
-func (be *MVCCChain[T]) CloneLatestNode() (*MVCCChain[T], T) {
-	cloned := &MVCCChain[T]{
-		MVCC:    common.NewGenericSortedDList(be.comparefn),
-		RWMutex: &sync.RWMutex{},
-	}
-	un := be.GetLatestNodeLocked()
-	uncloned := un.CloneData()
-	cloned.Insert(uncloned)
-	return cloned, uncloned
-}
-
-// In /Catalog, there're three states: Active, Committing and Committed.
-// A txn is Active before its CommitTs is allocated.
-// It's Committed when its state will never change, i.e. TxnStateCommitted and  TxnStateRollbacked.
-// It's Committing when it's in any other state, including TxnStateCommitting, TxnStateRollbacking, TxnStatePrepared and so on. When read or write an entry, if the last txn of the entry is Committing, we wait for it. When write on an Entry, if there's an Active txn, we report w-w conflict.
-func (be *MVCCChain[T]) IsCommitting() bool {
-	node := be.GetLatestNodeLocked()
-	if node.IsNil() {
-		return false
-	}
-	return node.IsCommitting()
-}
-
 func (be *MVCCChain[T]) PrepareCommit() error {
 	be.Lock()
 	defer be.Unlock()
@@ -339,11 +271,11 @@ func (be *MVCCChain[T]) PrepareRollback() (bool, error) {
 	node := be.MVCC.GetHead()
 	_ = node.GetPayload().PrepareRollback()
 	be.MVCC.Delete(node)
-	isEmpty := be.IsEmpty()
+	isEmpty := be.IsEmptyLocked()
 	return isEmpty, nil
 }
 
-func (be *MVCCChain[T]) IsCommitted() bool {
+func (be *MVCCChain[T]) IsCommittedLocked() bool {
 	un := be.GetLatestNodeLocked()
 	if un.IsNil() {
 		return false
@@ -351,33 +283,16 @@ func (be *MVCCChain[T]) IsCommitted() bool {
 	return un.IsCommitted()
 }
 
-func (be *MVCCChain[T]) CloneCommittedInRange(start, end types.TS) (ret *MVCCChain[T]) {
-	needWait, txn := be.NeedWaitCommitting(end.Next())
-	if needWait {
-		be.RUnlock()
-		txn.GetTxnState(true)
-		be.RLock()
-	}
-	be.MVCC.Loop(func(n *common.GenericDLNode[T]) bool {
-		un := n.GetPayload()
-		in, before := un.CommittedIn(start, end)
-		if in {
-			if ret == nil {
-				ret = NewMVCCChain(be.comparefn, be.newnodefn)
-			}
-			ret.Insert(un.CloneAll())
-		} else if !before {
-			return false
-		}
-		return true
-	}, true)
-	return
+func (be *MVCCChain[T]) ClonePreparedInRange(start, end types.TS) (ret []T) {
+	be.RLock()
+	defer be.RUnlock()
+	return be.ClonePreparedInRangeLocked(start, end)
 }
 
 // ClonePreparedInRange will collect all txn node prepared in the time window.
 // Wait txn to complete committing if it didn't.
-func (be *MVCCChain[T]) ClonePreparedInRange(start, end types.TS) (ret []T) {
-	needWait, txn := be.NeedWaitCommitting(end.Next())
+func (be *MVCCChain[T]) ClonePreparedInRangeLocked(start, end types.TS) (ret []T) {
+	needWait, txn := be.NeedWaitCommittingLocked(end.Next())
 	if needWait {
 		be.RUnlock()
 		txn.GetTxnState(true)

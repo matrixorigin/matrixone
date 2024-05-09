@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -2781,18 +2782,21 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 			}
 			objInfos = append(objInfos, obj)
 		}
-		switch policyName {
-		case "small":
-			objInfos = logtailreplay.NewSmall(110 * common.Const1MBytes).Filter(objInfos)
-		case "overlap":
-			if sortkeyPos != -1 {
-				objInfos = logtailreplay.NewOverlap(100).Filter(objInfos)
+		if len(policyName) != 0 {
+			if strings.HasPrefix(policyName, "small") {
+				objInfos = logtailreplay.NewSmall(110 * common.Const1MBytes).Filter(objInfos)
+			} else if strings.HasPrefix(policyName, "overlap") {
+				if sortkeyPos != -1 {
+					objInfos = logtailreplay.NewOverlap(100).Filter(objInfos)
+				}
+			} else {
+				return nil, moerr.NewInvalidInput(ctx, "invalid merge policy name")
 			}
 		}
 	}
 
 	if len(objInfos) < 2 {
-		return nil, moerr.NewInternalErrorNoCtx("no object match")
+		return nil, moerr.NewInternalErrorNoCtx("no matching objects")
 	}
 
 	tbl.ensureSeqnumsAndTypesExpectRowid()

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"os"
 	"path"
 	"strconv"
@@ -76,6 +77,13 @@ func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
 		cfg.Parallelism = s3Conf.parallelism
 	}
 
+	if bs.BackupTs == "" {
+		cfg.BackupTs = types.TS{}
+	} else {
+		cfg.BackupTs = types.StringToTS(bs.BackupTs)
+	}
+	cfg.BackupType = bs.BackupType
+
 	// step 2 : backup mo
 	if err = backupBuildInfo(ctx, cfg); err != nil {
 		return err
@@ -125,7 +133,7 @@ func backupConfigs(ctx context.Context, cfg *Config) error {
 
 var backupTae = func(ctx context.Context, config *Config) error {
 	fs := fileservice.SubPath(config.TaeDir, taeDir)
-	return BackupData(ctx, config.SharedFs, fs, "", int(config.Parallelism))
+	return BackupData(ctx, config.SharedFs, fs, "", config)
 }
 
 func backupHakeeper(ctx context.Context, config *Config) error {
@@ -192,7 +200,7 @@ func ToCsvLine2(s [][]string) (string, error) {
 	return ss.String(), nil
 }
 
-func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles []*taeFile, backupTime string) error {
+func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles []*taeFile, backupTime, backupTS, typ string) error {
 	var err error
 	if Fs == nil {
 		return moerr.NewInternalError(ctx, "fileservice is nil")
@@ -213,7 +221,7 @@ func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles 
 	}
 
 	//save tae files size
-	lines = [][]string{taeBackupTimeAndSizeToCsv(backupTime, size)}
+	lines = [][]string{taeBackupTimeAndSizeToCsv(backupTime, backupTS, typ, size)}
 	metas, err = ToCsvLine2(lines)
 	if err != nil {
 		return err

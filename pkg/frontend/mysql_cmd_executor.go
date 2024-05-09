@@ -29,43 +29,42 @@ import (
 	"sync"
 	"time"
 
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -513,50 +512,6 @@ func handleDump(requestCtx context.Context, ses FeSession, dump *tree.MoDump) er
 	return doDumpQueryResult(requestCtx, ses.(*Session), dump.ExportParams)
 }
 
-/*
-handle "SELECT @@xxx.yyyy"
-*/
-func handleSelectVariables(ses FeSession, ve *tree.VarExpr, isLastStmt bool) error {
-	var err error = nil
-	mrs := ses.GetMysqlResultSet()
-
-	col := new(MysqlColumn)
-	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col.SetName("@@" + ve.Name)
-	mrs.AddColumn(col)
-
-	row := make([]interface{}, 1)
-	if ve.System {
-		if ve.Global {
-			val, err := ses.GetGlobalVar(ve.Name)
-			if err != nil {
-				return err
-			}
-			row[0] = val
-		} else {
-			val, err := ses.GetSessionVar(ve.Name)
-			if err != nil {
-				return err
-			}
-			row[0] = val
-		}
-	} else {
-		//user defined variable
-		_, val, err := ses.GetUserDefinedVar(ve.Name)
-		if err != nil {
-			return err
-		}
-		if val != nil {
-			row[0] = val.Value
-		} else {
-			row[0] = nil
-		}
-	}
-
-	mrs.AddRow(row)
-	return err
-}
-
 func doCmdFieldList(requestCtx context.Context, ses *Session, _ *InternalCmdFieldList) error {
 	dbName := ses.GetDatabaseName()
 	if dbName == "" {
@@ -668,10 +623,6 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar, sql string) er
 		if system {
 			if global {
 				err = doCheckRole(ctx, ses)
-				if err != nil {
-					return err
-				}
-				err = ses.SetGlobalVar(name, value)
 				if err != nil {
 					return err
 				}
@@ -1305,6 +1256,10 @@ func handleDropSnapshot(ctx context.Context, ses *Session, ct *tree.DropSnapShot
 	return doDropSnapshot(ctx, ses, ct)
 }
 
+func handleRestoreSnapshot(ctx context.Context, ses *Session, rs *tree.RestoreSnapShot) error {
+	return doRestoreSnapshot(ctx, ses, rs)
+}
+
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
 func handleCreateAccount(ctx context.Context, ses FeSession, ca *tree.CreateAccount, proc *process.Process) error {
@@ -1551,9 +1506,9 @@ func doKill(ctx context.Context, ses *Session, k *tree.Kill) error {
 	//false: kill a query in a connection
 	idThatKill := uint64(ses.GetConnectionID())
 	if !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection {
-		err = globalRtMgr.kill(ctx, true, idThatKill, k.ConnectionId, "")
+		err = getGlobalRtMgr().kill(ctx, true, idThatKill, k.ConnectionId, "")
 	} else {
-		err = globalRtMgr.kill(ctx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
+		err = getGlobalRtMgr().kill(ctx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
 	}
 	return err
 }
@@ -2027,12 +1982,12 @@ func buildPlan(requestCtx context.Context, ses FeSession, ctx plan2.CompilerCont
 	return ret, err
 }
 
-func checkModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool {
-	if plan2 == nil {
+func checkModify(execPlan *plan.Plan, proc *process.Process, ses *Session) bool {
+	if execPlan == nil {
 		return true
 	}
 	checkFn := func(db string, tableName string, tableId uint64, version uint32) bool {
-		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, tableName)
+		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, tableName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
 		if tableDef == nil {
 			return true
 		}
@@ -2041,7 +1996,7 @@ func checkModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool {
 		}
 		return false
 	}
-	switch p := plan2.Plan.(type) {
+	switch p := execPlan.Plan.(type) {
 	case *plan.Plan_Query:
 		for i := range p.Query.Nodes {
 			if def := p.Query.Nodes[i].TableDef; def != nil {
@@ -2405,7 +2360,7 @@ func executeStmtWithResponse(requestCtx context.Context,
 	}
 
 	// TODO put in one txn
-	// insert data after create table in create table ... as select ... stmt
+	// insert data after create table in "create table ... as select ..." stmt
 	if ses.createAsSelectSql != "" {
 		sql := ses.createAsSelectSql
 		ses.createAsSelectSql = ""
@@ -2605,12 +2560,7 @@ func executeStmt(requestCtx context.Context,
 			return err
 		}
 	case tree.OUTPUT_UNDEFINED:
-		isExecute := false
-		switch execCtx.stmt.(type) {
-		case *tree.Execute:
-			isExecute = true
-		}
-		if !isExecute {
+		if _, ok := execCtx.stmt.(*tree.Execute); !ok {
 			return moerr.NewInternalError(requestCtx, "need set result type for %s", execCtx.sqlOfStmt)
 		}
 	}
