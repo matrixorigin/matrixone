@@ -18,14 +18,14 @@ select to_base64(-123);
 select to_base64(2003-09-06);
 select to_base64('2003-09-06');
 select to_base64('数据库');
--- @bvt:issue#15904
+
 select from_base64(''),from_base64(NULL);
 select from_base64('@#%#$^jfe12');
--- @bvt:issue
+
 select from_base64(123dokgr);
--- @bvt:issue#15904
+
 select from_base64(-123);
--- @bvt:issue
+
 select from_base64(2003-09-06);
 select from_base64('5pWw5o2u5bqT');
 select from_base64('MjAwMy0wOS0wNg==');
