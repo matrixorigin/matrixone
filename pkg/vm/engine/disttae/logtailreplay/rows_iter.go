@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/tidwall/btree"
 )
 
@@ -120,8 +121,10 @@ type primaryKeyIter struct {
 }
 
 type PrimaryKeyMatchSpec struct {
-	Move func(p *primaryKeyIter) bool
-	Name string
+	// Move moves to the target
+	Move  func(p *primaryKeyIter) bool
+	Name  string
+	Debug bool
 }
 
 func Exact(key []byte) PrimaryKeyMatchSpec {
@@ -129,17 +132,18 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 	return PrimaryKeyMatchSpec{
 		Name: "Exact",
 		Move: func(p *primaryKeyIter) bool {
+			var ok bool
 			if first {
 				first = false
-				if !p.iter.Seek(&PrimaryIndexEntry{
+				ok = p.iter.Seek(&PrimaryIndexEntry{
 					Bytes: key,
-				}) {
-					return false
-				}
+				})
 			} else {
-				if p.iter.Next() {
-					return false
-				}
+				ok = p.iter.Next()
+			}
+
+			if !ok {
+				return false
 			}
 
 			item := p.iter.Item()
@@ -153,17 +157,18 @@ func Prefix(prefix []byte) PrimaryKeyMatchSpec {
 	return PrimaryKeyMatchSpec{
 		Name: "Prefix",
 		Move: func(p *primaryKeyIter) bool {
+			var ok bool
 			if first {
 				first = false
-				if !p.iter.Seek(&PrimaryIndexEntry{
+				ok = p.iter.Seek(&PrimaryIndexEntry{
 					Bytes: prefix,
-				}) {
-					return false
-				}
+				})
 			} else {
-				if !p.iter.Next() {
-					return false
-				}
+				ok = p.iter.Next()
+			}
+
+			if !ok {
+				return false
 			}
 
 			item := p.iter.Item()
@@ -176,35 +181,85 @@ func MinMax(min []byte, max []byte) PrimaryKeyMatchSpec {
 	return PrimaryKeyMatchSpec{}
 }
 
-func ExactIn(vec *vector.Vector) PrimaryKeyMatchSpec {
+type phase int
+
+const (
+	scan phase = 0
+	seek phase = 1
+)
+
+func ExactIn(vec *vector.Vector, debug bool, packerPool *fileservice.Pool[*types.Packer]) PrimaryKeyMatchSpec {
+	var packer *types.Packer
+	var encoded []byte
+	var put fileservice.PutBack[*types.Packer]
+
 	idx := 0
+	currentPhase := seek
 	vecLen := vec.Length()
-	iterateAll, first := true, true
-	//vector.MustBytesCol()
+
+	updateEncoded := func() bool {
+		if idx >= vecLen {
+			return false
+		}
+		vecItem := vec.GetRawBytesAt(idx)
+		put = packerPool.Get(&packer)
+		encoded = EncodePrimaryKey(vecItem, packer)
+		packer.Reset()
+		put.Put()
+		//encoded = vecItem
+		idx++
+		return true
+	}
+
+	match := func(key []byte) bool {
+		return bytes.Equal(key, encoded)
+	}
+
 	return PrimaryKeyMatchSpec{
 		Name: "ExactIn",
 		Move: func(p *primaryKeyIter) bool {
-			// each seeking need to visit Height items
-			if first && vecLen*p.primaryIndex.Height() < p.primaryIndex.Len() {
-				iterateAll = false
+			//var buf *bytes.Buffer
+			//if debug {
+			//	fmt.Println(vec.GetRawBytesAt(0), fmt.Sprintf("%s", string(vec.GetRawBytesAt(0))))
+			//	p.primaryIndex.Scan(func(item *PrimaryIndexEntry) bool {
+			//		fmt.Printf("%v-%s", item.Bytes, string(item.Bytes))
+			//		return true
+			//	})
+			//	fmt.Println()
+			//	fmt.Println()
+			//	buf = &bytes.Buffer{}
+			//	defer func() {
+			//		fmt.Println("buffer: ", buf.String())
+			//	}()
+			//}
+
+			for {
+				switch currentPhase {
+				case seek:
+					if !updateEncoded() {
+						// out of vec
+						return false
+					}
+					if !p.iter.Seek(&PrimaryIndexEntry{Bytes: encoded}) {
+						return false
+					}
+					if match(p.iter.Item().Bytes) {
+						currentPhase = scan
+						return true
+					}
+					continue
+
+				case scan:
+					if !p.iter.Next() {
+						return false
+					}
+					if match(p.iter.Item().Bytes) {
+						return true
+					}
+					// seek next vec item
+					currentPhase = seek
+				}
 			}
-
-			first = false
-			if iterateAll {
-				ok := p.iter.Next()
-				return ok
-			}
-
-			if idx >= vecLen {
-				return false
-			}
-
-			ok := p.iter.Seek(&PrimaryIndexEntry{
-				Bytes: vec.GetRawBytesAt(idx),
-			})
-
-			idx++
-			return ok
 		},
 	}
 }
