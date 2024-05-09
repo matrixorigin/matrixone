@@ -50,7 +50,7 @@ count(*)
 10
 show snapshots where SNAPSHOT_NAME = 'sp01';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp01    2024-05-09 09:47:55.30609    account    sys        
+sp01    2024-05-09 11:05:45.14446    account    sys        
 insert into snapshot01 values(11, 100.00, 8899001122, 101.24, 156.79);
 select count(*) from snapshot01;
 count(*)
@@ -181,7 +181,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-291064    test    def    create database test    0    1    2024-05-09 17:47:55    0    
+293225    test    def    create database test    0    1    2024-05-09 19:05:44    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test';
 attname
 __mo_rowid
@@ -242,15 +242,15 @@ drop snapshot if exists sp03;
 create snapshot sp03 for account sys;
 show snapshots where account_name = 'sys';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp03    2024-05-09 09:47:56.194344    account    sys        
+sp03    2024-05-09 11:05:46.174932    account    sys        
 insert into snapshot03 values(3,'sfhuwe',1,1);
 insert into snapshot03 values(4,'37829901k3d',2,2);
 drop snapshot if exists sp04;
 create snapshot sp04 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp04    2024-05-09 09:47:56.284999    account    sys        
-sp03    2024-05-09 09:47:56.194344    account    sys        
+sp04    2024-05-09 11:05:46.266161    account    sys        
+sp03    2024-05-09 11:05:46.174932    account    sys        
 select * from snapshot03;
 col1    col2    col3    col4
 1    sfhuwe    1    1
@@ -296,9 +296,9 @@ drop snapshot if exists sp05;
 create snapshot sp05 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp05    2024-05-09 09:47:56.478061    account    sys        
-sp04    2024-05-09 09:47:56.284999    account    sys        
-sp03    2024-05-09 09:47:56.194344    account    sys        
+sp05    2024-05-09 11:05:46.471724    account    sys        
+sp04    2024-05-09 11:05:46.266161    account    sys        
+sp03    2024-05-09 11:05:46.174932    account    sys        
 select count(*) from snapshot03 {snapshot = 'sp05'};
 count(*)
 5
@@ -314,7 +314,7 @@ count(*)
 3
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-291064    test    def    create database test    0    1    2024-05-09 17:47:55    0    
+293225    test    def    create database test    0    1    2024-05-09 19:05:44    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp05'} where att_database = 'test';
 attname
 __mo_rowid
@@ -354,7 +354,7 @@ drop snapshot if exists snap01;
 create snapshot snap01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snap01    2024-05-09 09:47:58.200974    account    acc01        
+snap01    2024-05-09 11:05:48.139141    account    acc01        
 use test01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
@@ -365,7 +365,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'snap01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-291150    test01    def    create database test01    2    2    2024-05-09 17:47:58    226    
+293311    test01    def    create database test01    2    2    2024-05-09 19:05:47    251    
 select attname from mo_catalog.mo_columns{snapshot = 'snap01'} where att_database = 'test01';
 attname
 __mo_cpkey_col
@@ -379,7 +379,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'snap01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-291150    test01    def    create database test01    2    2    2024-05-09 17:47:58    226    
+293311    test01    def    create database test01    2    2    2024-05-09 19:05:47    251    
 select attname from mo_catalog.mo_columns{snapshot = 'snap01'} where att_database = 'test01';
 attname
 __mo_cpkey_col
@@ -392,67 +392,79 @@ drop account acc01;
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 drop database if exists test02;
-SQL parser error: table "mo_role_privs" does not exist
 create database test02;
-SQL parser error: table "mo_role_privs" does not exist
 use test02;
-SQL parser error: table "mo_role_privs" does not exist
 drop table if exists acc02_test01;
-SQL parser error: table "mo_role_privs" does not exist
 create table acc02_test01 (col1 decimal, col2 char, col3 varchar(30), col4 float);
-SQL parser error: table "mo_role_privs" does not exist
 insert into acc02_test01 values (3242.234234, '1', 'weawf3redwe', 38293.3232);
-no such table .acc02_test01
 insert into acc02_test01 values (323.32411, 'a', '3233234213', 323231221);
-no such table .acc02_test01
 insert into acc02_test01 values (-32323, 'v', 'wqd3wq', -323232);
-no such table .acc02_test01
 select count(*) from acc02_test01;
-not connect to a database
+count(*)
+3
 drop snapshot if exists snap02;
-SQL parser error: table "mo_role_privs" does not exist
 create snapshot snap02 for account acc02;
-SQL parser error: table "mo_role_privs" does not exist
 show snapshots;
-SQL parser error: table "mo_role_privs" does not exist
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+snap02    2024-05-09 11:05:50.616978    account    acc02        
 show snapshots where account_name = 'acc02';
-SQL parser error: table "mo_role_privs" does not exist
+snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
+snap02    2024-05-09 11:05:50.616978    account    acc02        
 select count(*) from acc02_test01 {snapshot = 'snap02'};
-SQL parser error: table "mo_snapshots" does not exist
+count(*)
+3
 select * from acc02_test01 {snapshot = 'snap02'};
-SQL parser error: table "mo_snapshots" does not exist
+col1    col2    col3    col4
+3242    1    weawf3redwe    38293.324
+323    a    3233234213    3.2323123E8
+-32323    v    wqd3wq    -323232.0
 alter table acc02_test01 add column new int first;
-SQL parser error: table "mo_role_privs" does not exist
 show create table acc02_test01;
-SQL parser error: table "mo_role_privs" does not exist
+Table    Create Table
+acc02_test01    CREATE TABLE `acc02_test01` (\n`new` INT DEFAULT NULL,\n`col1` DECIMAL(38,0) DEFAULT NULL,\n`col2` CHAR(1) DEFAULT NULL,\n`col3` VARCHAR(30) DEFAULT NULL,\n`col4` FLOAT DEFAULT NULL\n)
 select count(*) from acc02_test01 {snapshot = 'snap02'};
-SQL parser error: table "mo_snapshots" does not exist
+count(*)
+3
 select * from acc02_test01 {snapshot = 'snap02'};
-SQL parser error: table "mo_snapshots" does not exist
+col1    col2    col3    col4
+3242    1    weawf3redwe    38293.324
+323    a    3233234213    3.2323123E8
+-32323    v    wqd3wq    -323232.0
 truncate acc02_test01;
-no such table .acc02_test01
 select count(*) from acc02_test01 {snapshot = 'snap02'};
-SQL parser error: table "mo_snapshots" does not exist
+count(*)
+3
 select * from acc02_test01 {snapshot = 'snap02'};
-SQL parser error: table "mo_snapshots" does not exist
+col1    col2    col3    col4
+3242    1    weawf3redwe    38293.324
+323    a    3233234213    3.2323123E8
+-32323    v    wqd3wq    -323232.0
 insert into acc02_test01 values(1,1,2,3,4);
-no such table .acc02_test01
 select count(*) from acc02_test01 {snapshot = 'snap02'};
-SQL parser error: table "mo_snapshots" does not exist
+count(*)
+3
 select * from acc02_test01 {snapshot = 'snap02'};
-SQL parser error: table "mo_snapshots" does not exist
+col1    col2    col3    col4
+3242    1    weawf3redwe    38293.324
+323    a    3233234213    3.2323123E8
+-32323    v    wqd3wq    -323232.0
 select count(*) from mo_catalog.mo_tables{snapshot = 'snap02'} where reldatabase = 'test02';
-SQL parser error: table "mo_snapshots" does not exist
+count(*)
+1
 select * from mo_catalog.mo_database{snapshot = 'snap02'} where datname = 'test02';
-SQL parser error: table "mo_snapshots" does not exist
+dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
+293387    test02    def    create database test02    2    2    2024-05-09 19:05:50    252    
 select attname from mo_catalog.mo_columns{snapshot = 'snap02'} where att_database = 'test02';
-SQL parser error: table "mo_snapshots" does not exist
+attname
+__mo_fake_pk_col
+__mo_rowid
+col1
+col2
+col3
+col4
 drop snapshot snap02;
-SQL parser error: table "mo_role_privs" does not exist
 drop table acc02_test01;
-SQL parser error: table "mo_role_privs" does not exist
 drop database test02;
-SQL parser error: table "mo_role_privs" does not exist
 drop account acc02;
 drop database if exists test03;
 create database test03;
@@ -561,7 +573,7 @@ count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-291226    test03    def    create database test03    0    1    2024-05-09 17:47:59    0    
+293392    test03    def    create database test03    0    1    2024-05-09 19:05:51    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
 attname
 __mo_fake_pk_col
@@ -575,8 +587,8 @@ lastname
 officecode
 reportsto
 __mo_rowid
-__mo_index_idx_col
 __mo_index_pri_col
+__mo_index_idx_col
 drop table testsnap_03;
 drop table testsnap_04;
 drop snapshot sp04;
@@ -641,7 +653,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp06'} where datname = 'test03';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-291231    test03    def    create database test03    0    1    2024-05-09 17:48:00    0    
+293397    test03    def    create database test03    0    1    2024-05-09 19:05:52    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp06'} where att_database = 'test03';
 attname
 __mo_rowid
@@ -671,7 +683,7 @@ drop snapshot if exists sp07;
 create snapshot sp07 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp07    2024-05-09 09:48:02.162183    account    sys        
+sp07    2024-05-09 11:05:54.166571    account    sys        
 select count(*) from pt_table{snapshot = 'sp07'};
 count(*)
 11
@@ -683,7 +695,7 @@ count(*)
 11
 select * from mo_catalog.mo_database{snapshot = 'sp07'} where datname = 'test03';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-291231    test03    def    create database test03    0    1    2024-05-09 17:48:00    0    
+293397    test03    def    create database test03    0    1    2024-05-09 19:05:52    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp07'} where att_database = 'test03';
 attname
 __mo_fake_pk_col
@@ -1000,7 +1012,7 @@ count(*)
 drop account test_tenant_1;
 select * from mo_catalog.mo_database{snapshot = 'sp08'} where datname = 'test04';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-291319    test04    def    create database test04    0    1    2024-05-09 17:48:02    0    
+293485    test04    def    create database test04    0    1    2024-05-09 19:05:54    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp08'} where att_database = 'test04';
 attname
 __mo_fake_pk_col
@@ -1019,7 +1031,7 @@ count(*)
 3
 select * from mo_catalog.mo_database{snapshot = 'sp08'} where datname = 'test04';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-291319    test04    def    create database test04    0    1    2024-05-09 17:48:02    0    
+293485    test04    def    create database test04    0    1    2024-05-09 19:05:54    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp08'} where att_database = 'test04';
 attname
 __mo_fake_pk_col
@@ -1038,6 +1050,7 @@ drop table normal_table01;
 use mo_catalog;
 drop table cluster02;
 use test04;
+drop table t3;
 drop database test04;
 drop database if exists test05;
 create database test05;
@@ -1099,8 +1112,8 @@ drop snapshot if exists sp09;
 create snapshot sp09 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp09    2024-05-09 09:48:06.038426    account    sys        
-sp08    2024-05-09 09:48:04.737612    account    sys        
+sp09    2024-05-09 11:05:57.341226    account    sys        
+sp08    2024-05-09 11:05:55.929275    account    sys        
 select count(*) from tran01{snapshot = 'sp09'};
 
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp09'} where reldatabase = 'test06';
@@ -1108,7 +1121,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp09'} where datname = 'test06';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-291402    test06    def    create database test06    0    1    2024-05-09 17:48:05    0    
+293567    test06    def    create database test06    0    1    2024-05-09 19:05:57    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp09'} where att_database = 'test06';
 attname
 __mo_fake_pk_col

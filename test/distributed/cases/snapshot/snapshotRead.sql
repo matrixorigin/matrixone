@@ -157,7 +157,7 @@ drop snapshot if exists snap01;
 create snapshot snap01 for account acc01;
 -- @ignore:1
 show snapshots;
--- @session:id=3&user=acc01:test_account&password=111
+-- @session:id=4&user=acc01:test_account&password=111
 use test01;
 show snapshots;
 -- @session
@@ -166,7 +166,7 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'snap01'} where reldatabase
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = 'snap01'} where datname = 'test01';
 select attname from mo_catalog.mo_columns{snapshot = 'snap01'} where att_database = 'test01';
--- @session:id=3&user=acc01:test_account&password=111
+-- @session:id=5&user=acc01:test_account&password=111
 drop database test01;
 -- @session
 select count(*) from mo_catalog.mo_tables{snapshot = 'snap01'} where reldatabase = 'test01';
@@ -179,7 +179,7 @@ drop account acc01;
 -- non-sys account create snapshot for non-sys account
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
--- @session:id=3&user=acc02:test_account&password=111
+-- @session:id=6&user=acc02:test_account&password=111
 drop database if exists test02;
 create database test02;
 use test02;
@@ -311,7 +311,7 @@ insert into pub01 values (1, 10.50, 1234567890, 123.45, 678.90),
 drop account if exists test_tenant_1;
 create account test_tenant_1 admin_name 'test_account' identified by '111';
 create publication publication01 database test03 account test_tenant_1 comment 'publish database to account01';
--- @session:id=2&user=test_tenant_1:test_account&password=111
+-- @session:id=7&user=test_tenant_1:test_account&password=111
 create database sub_database01 from sys publication publication01;
 show databases;
 use sub_database01;
@@ -383,7 +383,7 @@ insert into t3 values(-1000);
 drop account if exists test_tenant_1;
 create account test_tenant_1 admin_name 'test_account' identified by '111';
 create publication publication01 database test04 account test_tenant_1 comment 'publish database';
--- @session:id=2&user=test_tenant_1:test_account&password=111
+-- @session:id=12&user=test_tenant_1:test_account&password=111
 create database sub_database02 from sys publication publication01;
 use sub_database02;
 -- @session
