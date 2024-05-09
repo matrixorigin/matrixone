@@ -1416,7 +1416,7 @@ func updatePartitionOfPush(
 	if !lazyLoad && len(tl.CkpLocation) != 0 {
 		logutil.Infof("xxxx start to update latest catalog cache, ckpStart: %s, ckpEnd: %s, loc:%s",
 			ckpStart.ToTimestamp().DebugString(), ckpEnd.ToTimestamp().DebugString(), tl.CkpLocation)
-		if !ckpStart.IsEmpty() && !ckpEnd.IsEmpty() {
+		if !ckpStart.IsEmpty() || !ckpEnd.IsEmpty() {
 			t0 = time.Now()
 			partition.UpdateDuration(ckpStart, types.MaxTs())
 			//Notice that the checkpoint duration is same among all mo system tables,
