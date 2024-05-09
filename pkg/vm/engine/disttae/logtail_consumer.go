@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -1412,7 +1413,7 @@ func updatePartitionOfPush(
 	//After consume checkpoints finished ,then update the start and end of
 	//the mo system table's partition and catalog.
 	if !lazyLoad && len(tl.CkpLocation) != 0 {
-		if !ckpStart.IsEmpty() && !ckpEnd.IsEmpty() {
+		if !ckpStart.IsEmpty() || !ckpEnd.IsEmpty() {
 			t0 = time.Now()
 			partition.UpdateDuration(ckpStart, types.MaxTs())
 			//Notice that the checkpoint duration is same among all mo system tables,
