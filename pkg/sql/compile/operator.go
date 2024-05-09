@@ -596,7 +596,7 @@ func constructFuzzyFilter(c *Compile, n, right *plan.Node) *fuzzyfilter.Argument
 	return arg
 }
 
-func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
+func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
 	preCtx := n.PreInsertCtx
 	schemaName := preCtx.Ref.SchemaName
 
@@ -626,6 +626,7 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 	arg.TableDef = preCtx.TableDef
 	arg.Attrs = attrs
 	arg.IsUpdate = preCtx.IsUpdate
+	arg.EstimatedRowCount = int(ns[n.Children[0]].Stats.Outcnt)
 
 	return arg, nil
 }

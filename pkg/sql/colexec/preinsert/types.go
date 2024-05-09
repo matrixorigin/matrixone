@@ -38,6 +38,8 @@ type Argument struct {
 	Attrs      []string
 	IsUpdate   bool
 
+	EstimatedRowCount int
+
 	buf *batch.Batch
 
 	vm.OperatorBase
