@@ -104,25 +104,33 @@ func convertFloat64ToDecimal128Price(val float64) (types.Decimal128, error) {
 }
 
 func CalculateCUMemDecimal(memByte, durationNS int64, memPrice, cuUnit float64) (float64, error) {
-	bytes := mustDecimal128(convertFloat64ToDecimal128(float64(memByte)))
-	ns := mustDecimal128(convertFloat64ToDecimal128(float64(durationNS)))
 	price := mustDecimal128(convertFloat64ToDecimal128Price(memPrice))
 	unit := mustDecimal128(convertFloat64ToDecimal128Price(cuUnit))
 
-	val1, valScale1, err := bytes.Mul(ns, Decimal128Scale, Decimal128Scale)
+	val1 := types.Decimal256FromInt64(memByte)
+	val2 := types.Decimal256FromInt64(durationNS)
+	val3 := types.Decimal256FromDecimal128(price)
+	val4 := types.Decimal256FromDecimal128(unit)
+	cuScale := int32(Decimal128ScalePrice)
+	var err error
+	val1, err = val1.Mul256(val2)
 	if err != nil {
 		return 0, err
 	}
-	val2, valScale2, err := val1.Mul(price, valScale1, Decimal128ScalePrice)
+	val1, err = val1.Mul256(val3)
 	if err != nil {
 		return 0, err
 	}
-	cuVal, cuScale, err := val2.Div(unit, valScale2, Decimal128ScalePrice)
+	val1, err = val1.Scale(cuScale)
+	if err != nil {
+		return 0, err
+	}
+	val1, err = val1.Div256(val4)
 	if err != nil {
 		return 0, err
 	}
 
-	return types.Decimal128ToFloat64(cuVal, cuScale), nil
+	return types.Decimal256ToFloat64(val1, cuScale), nil
 }
 
 func CalculateCUIOIn(ioCnt int64, cfg *config.OBCUConfig) float64 {
