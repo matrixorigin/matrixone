@@ -18,8 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -39,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 func compPkCol(colName string, pkName string) bool {
@@ -1862,4 +1865,50 @@ func ConstructObjStatsByLoadObjMeta(
 	objectio.SetObjectStatsRowCnt(&stats, totalRows)
 
 	return
+}
+
+// getDatabasesExceptDeleted remove databases delete in the txn from the CatalogCache
+func getDatabasesExceptDeleted(accountId uint32, cache *cache.CatalogCache, txn *Transaction) []string {
+	//first get all delete tables
+	deleteDatabases := make(map[string]any)
+	txn.deletedDatabaseMap.Range(func(k, _ any) bool {
+		key := k.(databaseKey)
+		if key.accountId == accountId {
+			deleteDatabases[key.name] = nil
+		}
+		return true
+	})
+
+	dbs := cache.Databases(accountId, txn.op.SnapshotTS())
+	dbs = removeIf[string](dbs, func(t string) bool {
+		return find[string](deleteDatabases, t)
+	})
+	return dbs
+}
+
+// removeIf removes the elements that pred is true.
+func removeIf[T any](data []T, pred func(t T) bool) []T {
+	if len(data) == 0 {
+		return data
+	}
+	res := 0
+	for i := 0; i < len(data); i++ {
+		if !pred(data[i]) {
+			if res != i {
+				data[res] = data[i]
+			}
+			res++
+		}
+	}
+	return data[:res]
+}
+
+func find[T ~string | ~int, S any](data map[T]S, val T) bool {
+	if len(data) == 0 {
+		return false
+	}
+	if _, exists := data[val]; exists {
+		return true
+	}
+	return false
 }
