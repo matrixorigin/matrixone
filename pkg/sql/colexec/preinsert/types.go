@@ -38,7 +38,7 @@ type Argument struct {
 	Attrs      []string
 	IsUpdate   bool
 
-	EstimatedRowCount int
+	EstimatedRowCount int64
 
 	buf *batch.Batch
 

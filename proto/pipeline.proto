@@ -161,7 +161,7 @@ message PreInsert {
   repeated string attrs      = 4;
   bool has_auto_col          = 5;
   bool is_update             = 6;
-  int32 estimated_row_count  = 7;
+  int64 estimated_row_count  = 7;
 }
 
 message LockTarget {

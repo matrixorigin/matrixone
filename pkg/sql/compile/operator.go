@@ -627,7 +627,7 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	arg.TableDef = preCtx.TableDef
 	arg.Attrs = attrs
 	arg.IsUpdate = preCtx.IsUpdate
-	arg.EstimatedRowCount = int(ns[n.Children[0]].Stats.Outcnt)
+	arg.EstimatedRowCount = int64(ns[n.Children[0]].Stats.Outcnt)
 
 	return arg, nil
 }

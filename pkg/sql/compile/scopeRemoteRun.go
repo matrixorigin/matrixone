@@ -759,7 +759,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			HasAutoCol:        t.HasAutoCol,
 			IsUpdate:          t.IsUpdate,
 			Attrs:             t.Attrs,
-			EstimatedRowCount: int32(t.EstimatedRowCount),
+			EstimatedRowCount: int64(t.EstimatedRowCount),
 		}
 	case *lockop.Argument:
 		in.LockOp = &pipeline.LockOp{
@@ -1136,7 +1136,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Attrs = t.GetAttrs()
 		arg.HasAutoCol = t.GetHasAutoCol()
 		arg.IsUpdate = t.GetIsUpdate()
-		arg.EstimatedRowCount = int(t.GetEstimatedRowCount())
+		arg.EstimatedRowCount = int64(t.GetEstimatedRowCount())
 		v.Arg = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()
