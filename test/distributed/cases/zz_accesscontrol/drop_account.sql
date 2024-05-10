@@ -52,4 +52,19 @@ drop account if exists drop_account_03;
 drop account if exists drop_account_04;
 drop account if exists drop_account_05;
 drop database if exists drop_acc_db_1;
+
+create account `ce46ba96_6c2f_4344_9b80_a1e9f03c600b` admin_name = 'root' identified by '111';
+-- @session:id=3&user="ce46ba96_6c2f_4344_9b80_a1e9f03c600b:admin"&password=111
+CREATE DATABASE IF NOT EXISTS `sctc-ls`; 
+CREATE DATABASE `emis_etao_006`;
+CREATE DATABASE `iot_etao_006`;
+CREATE DATABASE `xxl_job`;
+CREATE DATABASE `ucl360_bi`;
+CREATE DATABASE `ucl360_v3_20220823_unre_003`;
+CREATE DATABASE `ucl360_v210`;
+create database `111`;
+create database if not exists ucl360_v3_20220823;
+-- @session
+DROP ACCOUNT IF EXISTS `ce46ba96_6c2f_4344_9b80_a1e9f03c600b`;
+
 set global enable_privilege_cache = on;
