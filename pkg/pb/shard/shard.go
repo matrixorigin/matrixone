@@ -38,6 +38,16 @@ func (m *Request) GetID() uint64 {
 	return m.RequestID
 }
 
+// Method implement morpc Message
+func (m *Request) Method() uint32 {
+	return uint32(m.RPCMethod)
+}
+
+// SetMethod implement morpc Message
+func (m *Request) SetMethod(v uint32) {
+	m.RPCMethod = Method(v)
+}
+
 // DebugString returns the debug string
 func (m *Request) DebugString() string {
 	return ""
@@ -61,6 +71,16 @@ func (m *Response) SetID(id uint64) {
 // GetID implement morpc Message
 func (m *Response) GetID() uint64 {
 	return m.RequestID
+}
+
+// Method implement morpc Message
+func (m *Response) Method() uint32 {
+	return uint32(m.RPCMethod)
+}
+
+// SetMethod implement morpc Message
+func (m *Response) SetMethod(v uint32) {
+	m.RPCMethod = Method(v)
 }
 
 // DebugString returns the debug string

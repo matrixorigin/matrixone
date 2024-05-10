@@ -31,7 +31,8 @@ type pool[REQ, RESP MethodBasedMessage] struct {
 // NewMessagePool create message pool
 func NewMessagePool[REQ, RESP MethodBasedMessage](
 	requestFactory func() REQ,
-	responseFactory func() RESP) MessagePool[REQ, RESP] {
+	responseFactory func() RESP,
+) MessagePool[REQ, RESP] {
 	return &pool[REQ, RESP]{
 		request:  sync.Pool{New: func() any { return requestFactory() }},
 		response: sync.Pool{New: func() any { return responseFactory() }},

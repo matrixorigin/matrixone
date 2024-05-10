@@ -127,7 +127,7 @@ func runRPCTests(
 	require.NoError(t, s.Start())
 
 	cfg := Config{}
-	c, err := cfg.NewClient("ctlservice",
+	c, err := cfg.NewClient("ctl-service",
 		getLogger().RawLogger(),
 		func() Message { return &testMethodBasedMessage{} })
 	require.NoError(t, err)

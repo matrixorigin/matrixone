@@ -14,19 +14,42 @@
 
 package shardservice
 
-type excludesFilter struct {
-	excludes map[string]struct{}
+import (
+	"time"
+)
+
+type freezeFilter struct {
+	freeze        map[string]time.Time
+	maxFreezeTime time.Duration
 }
 
-func (f *excludesFilter) Source(cns []cn) []cn {
-	if len(f.excludes) == 0 {
+func (f *freezeFilter) filter(r *rt, cns []*cn) []*cn {
+	if len(f.freeze) == 0 {
 		return cns
 	}
-	sources := cns[:0]
+	values := cns[:0]
 	for _, c := range cns {
-		if _, ok := f.excludes[c.metadata.ServiceID]; !ok {
-			sources = append(sources, c)
+		if t, ok := f.freeze[c.metadata.ServiceID]; !ok ||
+			time.Since(t) > f.maxFreezeTime {
+			values = append(values, c)
+			delete(f.freeze, c.metadata.ServiceID)
 		}
 	}
-	return sources
+	return values
+}
+
+type stateFilter struct {
+}
+
+func (f *stateFilter) filter(r *rt, cns []*cn) []*cn {
+	if len(cns) == 0 {
+		return cns
+	}
+	values := cns[:0]
+	for _, c := range cns {
+		if !r.hasNotRunningShardLocked(c.metadata.ServiceID) {
+			values = append(values, c)
+		}
+	}
+	return values
 }

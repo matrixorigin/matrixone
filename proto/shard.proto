@@ -41,10 +41,24 @@ enum Policy {
     Hash      = 2;
 }
 
+// CmdType cmd type. Add or remove shard
 enum CmdType {
     AddShard    = 0;
     DeleteShard = 1;
 }
+
+enum CNState {
+    Up      = 0;
+    Down    = 1;
+}
+
+enum ShardState {
+    Allocating = 0;
+    Allocated  = 1;
+    Running    = 2;
+    Tombstone  = 3;
+}
+
 
 // TableShards table shards metadata. When a Table is created, metadata for the 
 // corresponding shards is created and serialized and stored in MO_TABLES. 
@@ -55,7 +69,7 @@ message TableShards {
     uint32 TenantID    = 4;
 }
 
-// TableShardBind when TableShards are created, the Shards corresponding to a table 
+// TableShard when TableShards are created, the Shards corresponding to a table 
 // are determined, and each Shard is assigned a corresponding CN node to handle requests
 // for that Shard.
 //
@@ -65,39 +79,67 @@ message TableShards {
 //
 // When the Table's shards count changed, the corresponding Version field increments itself. 
 // This makes it easy to found expired information.
-message TableShardBind {
-    uint64 ShardID       = 1;
-    string CN            = 2;
+message TableShard {
+    uint64     ShardID       = 1;
+    string     CN            = 2;
     // Version icrements when shards count changed
-    uint32 ShardsVersion = 3;
+    uint32     ShardsVersion = 3;
     // BindVersion icrements when the cn changed
-    uint32 BindVersion   = 4;
+    uint32     BindVersion   = 4;
+    ShardState State         = 5; 
 }
 
 
 // Method sharding operations
 enum Method {
-    // Heartbeat heartbeat method
     Heartbeat     = 0;
-    // GetShardBinds get table bind shards
-    GetShardBinds = 1;
+    CreateShards  = 1;
+    DeleteShards  = 2;
 }
 
 message Request {
   uint64                     RequestID           = 1;
-  Method                     Method              = 3;
+  Method                     RPCMethod           = 2;
+  CreateShardsRequest        CreateShards        = 3 [(gogoproto.nullable) = false];
+  DeleteShardsRequest        DeleteShards        = 4 [(gogoproto.nullable) = false];
 }
 
 message Response {
     uint64                     RequestID            = 1;
-    Method                     Method               = 2;
+    Method                     RPCMethod            = 2;
     // Error we use this field to send moerr from service to another cn. Set with 
     // moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore moerr.
     bytes                      Error                = 3;
+    CreateShardsResponse       CreateShards         = 4 [(gogoproto.nullable) = false];
+    DeleteShardsResponse       DeleteShards         = 5 [(gogoproto.nullable) = false];
 }
 
 message Cmd {
     CmdType        Type           = 1;
-    TableShardBind TableShardBind = 2 [(gogoproto.nullable) = false];
+    TableShard     TableShard     = 2 [(gogoproto.nullable) = false];
 }
 
+message CreateShardsRequest {
+    uint64          ID               = 1;
+    TableShards     TableShards      = 2 [(gogoproto.nullable) = false];
+    repeated uint64 PhysicalShardIDs = 3;
+}
+
+message CreateShardsResponse {
+}
+
+message DeleteShardsRequest {
+    uint64          ID               = 1;
+}
+
+message DeleteShardsResponse {
+}
+
+message HeartbeatRequest {
+    string              CN     = 1;
+    repeated TableShard Shards = 2 [(gogoproto.nullable) = false];
+}
+
+message HeartbeatResponse {
+    repeated Cmd        Cmds   = 1 [(gogoproto.nullable) = false];
+}

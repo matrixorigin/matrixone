@@ -26,9 +26,8 @@ import (
 )
 
 var (
-	logger         *log.MOLogger
-	loggerWithSkip *log.MOLogger
-	once           sync.Once
+	logger *log.MOLogger
+	once   sync.Once
 )
 
 func getLogger() *log.MOLogger {
@@ -36,18 +35,12 @@ func getLogger() *log.MOLogger {
 	return logger
 }
 
-func getWithSkipLogger() *log.MOLogger {
-	once.Do(initLoggers)
-	return loggerWithSkip
-}
-
 func initLoggers() {
 	rt := runtime.ProcessLevelRuntime()
 	if rt == nil {
 		rt = runtime.DefaultRuntime()
 	}
-	logger = rt.Logger().Named("lockservice")
-	loggerWithSkip = logger.WithOptions(zap.AddCallerSkip(1))
+	logger = rt.Logger().Named("shard-service")
 }
 
 func tableShardsField(
@@ -62,17 +55,17 @@ func tableShardsField(
 		))
 }
 
-func tableShardBindsField(
+func tableShardSliceField(
 	name string,
-	binds []pb.TableShardBind,
+	shards []pb.TableShard,
 ) zap.Field {
-	values := make([]string, 0, len(binds))
-	for _, bind := range binds {
+	values := make([]string, 0, len(shards))
+	for _, s := range shards {
 		values = append(values,
 			fmt.Sprintf("shard: %d, cn: %s, bind-version: %d",
-				bind.ShardID,
-				bind.CN,
-				bind.BindVersion,
+				s.ShardID,
+				s.CN,
+				s.BindVersion,
 			))
 	}
 
