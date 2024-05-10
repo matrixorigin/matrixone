@@ -1474,7 +1474,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			var preInsertArg *preinsert.Argument
-			preInsertArg, err = constructPreInsert(n, c.e, c.proc)
+			preInsertArg, err = constructPreInsert(ns, n, c.e, c.proc)
 			if err != nil {
 				return nil, err
 			}
