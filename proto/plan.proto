@@ -530,6 +530,7 @@ message ColData {
 
 message RowsetData {
 	repeated ColData cols	= 1;
+	int32 row_count = 2;
 }
 
 message OrderBySpec {
