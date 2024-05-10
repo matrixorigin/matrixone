@@ -68,7 +68,7 @@ create database if not exists ucl360_v3_20220823;
 DROP ACCOUNT IF EXISTS drop_account_test;
 
 create account `ce46ba96_6c2f_4344_9b80_a1e9f03c600b` admin_name = 'root' identified by '111';
--- @session:id=3&user="ce46ba96_6c2f_4344_9b80_a1e9f03c600b:root"&password=111
+-- @session:id=4&user="ce46ba96_6c2f_4344_9b80_a1e9f03c600b:root"&password=111
 CREATE DATABASE IF NOT EXISTS `sctc-ls`; 
 CREATE DATABASE `emis_etao_006`;
 CREATE DATABASE `iot_etao_006`;
