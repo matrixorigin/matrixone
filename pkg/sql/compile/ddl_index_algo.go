@@ -505,7 +505,7 @@ func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics
 
 func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
 
-	val, err := c.proc.GetResolveVariableFunc()(flag, true, true)
+	val, err := c.proc.GetResolveVariableFunc()(flag, true, false)
 	if err != nil {
 		return false, err
 	}
