@@ -821,8 +821,8 @@ func (c *Compile) lockMetaTables() error {
 
 func (c *Compile) lockTable() error {
 	for _, tbl := range c.lockTables {
+		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
 		if len(tbl.PartitionTableIds) == 0 {
-			typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
 			return lockop.LockTable(
 				c.e,
 				c.proc,
@@ -832,7 +832,6 @@ func (c *Compile) lockTable() error {
 		}
 
 		for _, tblId := range tbl.PartitionTableIds {
-			typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
 			err := lockop.LockTable(
 				c.e,
 				c.proc,
