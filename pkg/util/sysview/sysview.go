@@ -26,10 +26,9 @@ import (
 )
 
 const (
-	MysqlDBConst       = "mysql"
-	InformationDBConst = "information_schema"
-	sqlCreateDBConst   = "create database if not exists "
-	sqlUseDbConst      = "use "
+	MysqlDBConst         = "mysql"
+	InformationDBConst   = "information_schema"
+	CreateDatabaseFormat = "create database if not exists "
 )
 
 var (
@@ -69,8 +68,6 @@ var (
 	}
 )
 
-//---------------------------------------------------------------------------------------------
-
 func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
 	if err := initMysqlTables(ctx, txn); err != nil {
 		return err
@@ -83,16 +80,12 @@ func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
 
 // Initialize system tables under the `mysql` database for compatibility with MySQL
 func initMysqlTables(ctx context.Context, txn executor.TxnExecutor) error {
-	_, err := txn.Exec(sqlCreateDBConst+MysqlDBConst, executor.StatementOption{})
+	_, err := txn.Exec(CreateDatabaseFormat+MysqlDBConst, executor.StatementOption{})
 	if err != nil {
 		return err
 	}
 
 	txn.Use(MysqlDBConst)
-	//_, err = txn.Exec(sqlUseDbConst+MysqlDBConst, executor.StatementOption{})
-	//if err != nil {
-	//	return err
-	//}
 
 	var timeCost time.Duration
 	defer func() {
@@ -102,7 +95,6 @@ func initMysqlTables(ctx context.Context, txn executor.TxnExecutor) error {
 	begin := time.Now()
 	for _, sql := range InitMysqlSysTables {
 		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
-			// panic(fmt.Sprintf("[Mysql] init mysql tables error: %v, sql: %s", err, sql))
 			return moerr.NewInternalError(ctx, "[Mysql] init mysql tables error: %v, sql: %s", err, sql)
 		}
 	}
@@ -112,16 +104,12 @@ func initMysqlTables(ctx context.Context, txn executor.TxnExecutor) error {
 
 // Initialize the system view under the `information_schema` database for compatibility with MySQL
 func initInformationSchemaTables(ctx context.Context, txn executor.TxnExecutor) error {
-	_, err := txn.Exec(sqlCreateDBConst+InformationDBConst, executor.StatementOption{})
+	_, err := txn.Exec(CreateDatabaseFormat+InformationDBConst, executor.StatementOption{})
 	if err != nil {
 		return err
 	}
 
 	txn.Use(InformationDBConst)
-	//_, err = txn.Exec(sqlUseDbConst+InformationDBConst, executor.StatementOption{})
-	//if err != nil {
-	//	return err
-	//}
 
 	var timeCost time.Duration
 	defer func() {
@@ -131,7 +119,6 @@ func initInformationSchemaTables(ctx context.Context, txn executor.TxnExecutor) 
 	begin := time.Now()
 	for _, sql := range InitInformationSchemaSysTables {
 		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
-			//panic(fmt.Sprintf("[information_schema] init information_schema tables error: %v, sql: %s", err, sql))
 			return moerr.NewInternalError(ctx, fmt.Sprintf("[information_schema] init information_schema tables error: %v, sql: %s", err, sql))
 		}
 	}
