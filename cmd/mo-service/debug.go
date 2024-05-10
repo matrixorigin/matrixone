@@ -23,15 +23,21 @@ import (
 	"os"
 	"path"
 	"runtime"
+	"runtime/metrics"
 	"runtime/pprof"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/felixge/fgprof"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -41,6 +47,68 @@ var (
 	httpListenAddr        = flag.String("debug-http", "", "http server listen address")
 	statusServer          = status.NewServer()
 )
+
+func init() {
+	// periodic memory metrics
+	go func() {
+		descriptions := metrics.All()
+		var samples []metrics.Sample
+		for _, desc := range descriptions {
+			if (strings.HasPrefix(desc.Name, "/gc/") ||
+				strings.HasPrefix(desc.Name, "/memory/")) &&
+				// exclude histograms for brevity
+				desc.Kind != metrics.KindFloat64Histogram {
+				samples = append(samples, metrics.Sample{
+					Name: desc.Name,
+				})
+			}
+		}
+
+		var fields []zapcore.Field
+		for range time.NewTicker(time.Second).C {
+			metrics.Read(samples)
+			fields = fields[:0]
+			for _, sample := range samples {
+				fields = append(fields, zap.Any(sample.Name, formatMetricsValue(sample.Value)))
+			}
+			logutil.Info("memory metrics", fields...)
+		}
+	}()
+}
+
+func formatMetricsValue(value metrics.Value) string {
+	switch value.Kind() {
+	case metrics.KindUint64:
+		return strconv.FormatUint(value.Uint64(), 10)
+	case metrics.KindFloat64:
+		return strconv.FormatFloat(value.Float64(), 'g', -1, 64)
+	case metrics.KindFloat64Histogram:
+		buf := bufPool.Get().(*strings.Builder)
+		defer bufPool.Put(buf)
+		histogram := value.Float64Histogram()
+		for i, bucket := range histogram.Buckets[1:] {
+			count := histogram.Counts[i]
+			if count == 0 {
+				continue
+			}
+			if i > 0 {
+				buf.WriteString(", ")
+			}
+			buf.WriteString("<")
+			buf.WriteString(strconv.FormatFloat(bucket, 'g', -1, 64))
+			buf.WriteString(": ")
+			buf.WriteString(strconv.FormatUint(count, 10))
+		}
+		return buf.String()
+	}
+	return ""
+}
+
+var bufPool = sync.Pool{
+	New: func() any {
+		return new(strings.Builder)
+	},
+}
 
 func startCPUProfile() func() {
 	cpuProfilePath := *cpuProfilePathFlag
