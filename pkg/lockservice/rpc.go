@@ -58,10 +58,23 @@ type client struct {
 	client  morpc.RPCClient
 }
 
-func NewClient(cfg morpc.Config) (Client, error) {
+type ClientOption func(c *client)
+
+func WithMOCluster(cluster clusterservice.MOCluster) ClientOption {
+	return func(c *client) {
+		c.cluster = cluster
+	}
+}
+
+func NewClient(cfg morpc.Config, opts ...ClientOption) (Client, error) {
 	c := &client{
-		cfg:     &cfg,
-		cluster: clusterservice.GetMOCluster(),
+		cfg: &cfg,
+	}
+	for _, applyFn := range opts {
+		applyFn(c)
+	}
+	if c.cluster == nil {
+		c.cluster = clusterservice.GetMOCluster()
 	}
 	c.cfg.Adjust()
 	// add read timeout for lockservice client, to avoid remote lock hung and cannot read the lock response
@@ -139,8 +152,24 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 					address = s.LockServiceAddress
 					return false
 				})
+		case pb.Method_ValidateService:
+			sid := getUUIDFromServiceIdentifier(request.ValidateService.ServiceID)
+			c.cluster.GetCNServiceWithoutWorkingState(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
 		case pb.Method_GetWaitingList:
 			sid = getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
+			c.cluster.GetCNServiceWithoutWorkingState(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
+		case pb.Method_GetActiveTxn:
+			sid := getUUIDFromServiceIdentifier(request.GetActiveTxn.ServiceID)
 			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
@@ -179,31 +208,6 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 
 func (c *client) Close() error {
 	return c.client.Close()
-}
-
-func (c *client) Ping(ctx context.Context, serviceID string) error {
-	var address string
-	for i := 0; i < 2; i++ {
-		sid := getUUIDFromServiceIdentifier(serviceID)
-		c.cluster.GetCNServiceWithoutWorkingState(
-			clusterservice.NewServiceIDSelector(sid),
-			func(s metadata.CNService) bool {
-				address = s.LockServiceAddress
-				return false
-			})
-		if address != "" {
-			break
-		}
-		if i == 0 {
-			c.cluster.ForceRefresh(true)
-		}
-	}
-	if address == "" {
-		getLogger().Error("cannot ping lockservice address",
-			zap.String("serviceID", serviceID))
-
-	}
-	return c.client.Ping(ctx, address)
 }
 
 // WithServerMessageFilter set filter func. Requests can be modified or filtered out by the filter

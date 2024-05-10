@@ -1,0 +1,58 @@
+// Copyright 2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+package aggexec;
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+
+option (gogoproto.sizer_all)      = false;
+option (gogoproto.protosizer_all) = true;
+
+message EncodedBasicInfo {
+    int64 id = 1;
+    bool is_distinct = 2;
+    bool null_empty = 3;
+    repeated bytes args = 4 [
+        (gogoproto.customtype) = "github.com/matrixorigin/matrixone/pkg/container/types.Type",
+        (gogoproto.nullable) = false
+    ];
+    bytes ret = 5 [
+        (gogoproto.customtype) = "github.com/matrixorigin/matrixone/pkg/container/types.Type",
+        (gogoproto.nullable) = false
+    ];
+}
+
+enum EncodedAggExecType {
+    single_fixed_fixed = 0;
+    single_fixed_var = 1;
+    single_var_fixed = 2;
+    single_var_var = 3;
+    multi_return_fixed = 4;
+    multi_return_var = 5;
+    special_group_concat = 6;
+    special_count_column = 7;
+    special_count_star = 8;
+    special_approx_count = 9;
+    special_median = 10;
+    special_cluster_center = 11;
+    single_window = 12;
+}
+
+message EncodedAgg {
+    EncodedAggExecType exec_type = 1;
+    EncodedBasicInfo info = 2;
+    bytes  result = 3;
+    repeated bytes groups = 4;
+}

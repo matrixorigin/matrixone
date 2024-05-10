@@ -115,7 +115,7 @@ func (appender *objectAppender) ApplyAppend(
 		if colDef.IsPhyAddr() {
 			continue
 		}
-		if colDef.IsRealPrimary() {
+		if colDef.IsRealPrimary() && !schema.IsSecondaryIndexTable() {
 			if err = node.pkIndex.BatchUpsert(bat.Vecs[colDef.Idx].GetDownstreamVector(), from); err != nil {
 				panic(err)
 			}

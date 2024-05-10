@@ -204,6 +204,10 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildShowSnapShots(stmt, ctx)
 	case *tree.CreateAccount:
 		return buildCreateAccount(stmt, ctx, isPrepareStmt)
+	case *tree.AlterAccount:
+		return buildAlterAccount(stmt, ctx, isPrepareStmt)
+	case *tree.DropAccount:
+		return buildDropAccount(stmt, ctx, isPrepareStmt)
 	case *tree.ShowAccountUpgrade:
 		return buildShowAccountUpgrade(stmt, ctx)
 	default:

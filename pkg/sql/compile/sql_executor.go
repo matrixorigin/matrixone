@@ -16,9 +16,11 @@ package compile
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,6 +41,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"go.uber.org/zap"
 )
 
 type sqlExecutor struct {
@@ -293,6 +297,7 @@ func (exec *txnExecutor) Exec(
 	proc.SetVectorPoolSize(0)
 	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.SessionInfo.Buf = exec.s.buf
+	proc.SessionInfo.StorageEngine = exec.s.eng
 	defer func() {
 		proc.CleanValueScanBatchs()
 		proc.FreeVectors()
@@ -320,8 +325,7 @@ func (exec *txnExecutor) Exec(
 	err = c.Compile(
 		exec.ctx,
 		pn,
-		nil,
-		func(a any, bat *batch.Batch) error {
+		func(bat *batch.Batch) error {
 			if bat != nil {
 				// the bat is valid only in current method. So we need copy data.
 				// FIXME: add a custom streaming apply handler to consume readed data. Now
@@ -348,6 +352,12 @@ func (exec *txnExecutor) Exec(
 		return executor.Result{}, err
 	}
 
+	logutil.Info("sql_executor exec",
+		zap.String("sql", sql),
+		zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
+		zap.Duration("duration", time.Since(receiveAt)),
+		zap.Uint64("AffectedRows", runResult.AffectRows),
+	)
 	result.LastInsertID = proc.GetLastInsertID()
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows

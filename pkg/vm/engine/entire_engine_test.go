@@ -17,6 +17,7 @@ package engine
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -351,6 +353,14 @@ func (o *testOperator) Txn() txn.TxnMeta {
 	return txn.TxnMeta{}
 }
 
+func (o *testOperator) IsSnapOp() bool {
+	panic("should not call")
+}
+
+func (o *testOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) client.TxnOperator {
+	panic("should not call")
+}
+
 func (o *testOperator) PKDedupCount() int {
 	panic("should not call")
 }
@@ -434,3 +444,7 @@ func (o *testOperator) NextSequence() uint64 {
 func (o *testOperator) EnterRunSql() {}
 
 func (o *testOperator) ExitRunSql() {}
+
+func (o *testOperator) GetWaitActiveCost() time.Duration {
+	return time.Duration(0)
+}

@@ -24,6 +24,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -79,6 +80,37 @@ func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
 
+var globalRtMgr atomic.Value
+var globalPu atomic.Value
+var globalAicm atomic.Value
+
+func setGlobalRtMgr(rtMgr *RoutineManager) {
+	globalRtMgr.Store(rtMgr)
+}
+
+func getGlobalRtMgr() *RoutineManager {
+	return globalRtMgr.Load().(*RoutineManager)
+}
+
+func setGlobalPu(pu *config.ParameterUnit) {
+	globalPu.Store(pu)
+}
+
+func getGlobalPu() *config.ParameterUnit {
+	return globalPu.Load().(*config.ParameterUnit)
+}
+
+func setGlobalAicm(aicm *defines.AutoIncrCacheManager) {
+	globalAicm.Store(aicm)
+}
+
+func getGlobalAic() *defines.AutoIncrCacheManager {
+	if globalAicm.Load() != nil {
+		return globalAicm.Load().(*defines.AutoIncrCacheManager)
+	}
+	return nil
+}
+
 func NewMOServer(
 	ctx context.Context,
 	addr string,
@@ -86,11 +118,14 @@ func NewMOServer(
 	aicm *defines.AutoIncrCacheManager,
 	baseService BaseService,
 ) *MOServer {
+	setGlobalPu(pu)
+	setGlobalAicm(aicm)
 	codec := NewSqlCodec()
-	rm, err := NewRoutineManager(ctx, pu, aicm)
+	rm, err := NewRoutineManager(ctx)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
+	setGlobalRtMgr(rm)
 	rm.setBaseService(baseService)
 	if baseService != nil {
 		rm.setSessionMgr(baseService.SessionMgr())
@@ -151,7 +186,7 @@ func (mo *MOServer) handleMessage(rs goetty.IOSession) error {
 
 		err = mo.rm.Handler(rs, msg, received)
 		if err != nil {
-			if strings.Contains(err.Error(), quitStr) {
+			if skipClientQuit(err.Error()) {
 				return nil
 			} else {
 				logutil.Error("session handle failed, close this session", zap.Error(err))

@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -170,6 +169,7 @@ func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 	case val, ok := <-sender.receiveCh:
 		if !ok || val == nil {
 			// ch close
+			logutil.Errorf("the stream is closed, ok: %v, val: %v", ok, val)
 			return nil, moerr.NewStreamClosed(sender.ctx)
 		}
 		return val, nil
@@ -219,12 +219,8 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			return nil, false, moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
 		}
 
-		bat, err = decodeBatch(sender.c.proc.Mp(), sender.c.proc, dataBuffer)
-		if err != nil {
-			return nil, false, err
-		}
-
-		return bat, false, nil
+		bat, err = decodeBatch(sender.c.proc.Mp(), dataBuffer)
+		return bat, false, err
 	}
 }
 
@@ -396,12 +392,9 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 	c.ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
 
-	c.fill = func(_ any, b *batch.Batch) error {
+	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)
 	}
-
-	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
-
 	return c
 }
 
@@ -426,10 +419,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return nil
 	}
 
-	// There is still a memory problem here. If row count is very small, but the cap of batch's vectors is very large,
-	// to encode will allocate a large memory.
-	// but I'm not sure how string type store data in vector, so I can't do a simple optimization like vec.col = vec.col[:len].
-	data, err := types.Encode(b)
+	data, err := b.MarshalBinary()
 	if err != nil {
 		return err
 	}

@@ -42,6 +42,16 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_information_schema_tables,
 	upg_information_schema_processlist,
 	upg_information_schema_referenctial_constraints,
+	upg_information_schema_columns,
+	upg_information_schema_views,
+	upg_information_schema_partitions,
+	upg_mo_catalog_mo_sessions,
+	upg_mo_catalog_mo_configurations,
+	upg_mo_catalog_mo_locks,
+	upg_mo_catalog_mo_variables,
+	upg_mo_catalog_mo_transactions,
+	upg_mo_catalog_mo_cache,
+	upg_mo_pub,
 }
 
 var UpgPrepareEntres = []versions.UpgradeEntry{
@@ -184,7 +194,7 @@ var upg_mo_snapshots = versions.UpgradeEntry{
 	UpgSql: fmt.Sprintf(`CREATE TABLE %s.%s (
 			snapshot_id uuid unique key,
 			sname varchar(64) primary key,
-			ts timestamp,
+			ts bigint,
 			level enum('cluster','account','database','table'),
 	        account_name varchar(300),
 			database_name varchar(5000),
@@ -514,4 +524,348 @@ var upg_information_schema_referenctial_constraints = versions.UpgradeEntry{
 		return false, nil
 	},
 	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "REFERENTIAL_CONSTRAINTS"),
+}
+
+var upg_information_schema_columns = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "COLUMNS",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql: fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS select "+
+		"'def' as TABLE_CATALOG,"+
+		"att_database as TABLE_SCHEMA,"+
+		"att_relname AS TABLE_NAME,"+
+		"attname AS COLUMN_NAME,"+
+		"attnum AS ORDINAL_POSITION,"+
+		"mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,"+
+		"(case when attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,"+
+		"mo_show_visible_bin(atttyp,2) as DATA_TYPE,"+
+		"internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,"+
+		"internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,"+
+		"internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,"+
+		"internal_numeric_scale(atttyp) AS NUMERIC_SCALE,"+
+		"internal_datetime_scale(atttyp) AS DATETIME_PRECISION,"+
+		"(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,"+
+		"(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,"+
+		"mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,"+
+		"case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,"+
+		"case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,"+
+		"'select,insert,update,references' as `PRIVILEGES`,"+
+		"att_comment as COLUMN_COMMENT,"+
+		"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
+		"if(true, NULL, 0) as SRS_ID "+
+		"from mo_catalog.mo_columns "+
+		"where account_id = current_account_id() "+
+		"and att_relname!='%s' and att_relname not like '%s' and attname != '%s' and att_relname not like '%s'",
+		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS select "+
+			"'def' as TABLE_CATALOG,"+
+			"att_database as TABLE_SCHEMA,"+
+			"att_relname AS TABLE_NAME,"+
+			"attname AS COLUMN_NAME,"+
+			"attnum AS ORDINAL_POSITION,"+
+			"mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,"+
+			"(case when attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,"+
+			"mo_show_visible_bin(atttyp,2) as DATA_TYPE,"+
+			"internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,"+
+			"internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,"+
+			"internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,"+
+			"internal_numeric_scale(atttyp) AS NUMERIC_SCALE,"+
+			"internal_datetime_scale(atttyp) AS DATETIME_PRECISION,"+
+			"(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,"+
+			"(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,"+
+			"mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,"+
+			"case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,"+
+			"case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,"+
+			"'select,insert,update,references' as `PRIVILEGES`,"+
+			"att_comment as COLUMN_COMMENT,"+
+			"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
+			"if(true, NULL, 0) as SRS_ID "+
+			"from mo_catalog.mo_columns "+
+			"where account_id = current_account_id() "+
+			"and att_relname!='%s' and att_relname not like '%s' and attname != '%s' and att_relname not like '%s'",
+			catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard) {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "COLUMNS"),
+}
+
+var upg_information_schema_views = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "VIEWS",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql: "CREATE VIEW IF NOT EXISTS information_schema.VIEWS AS " +
+		"SELECT 'def' AS `TABLE_CATALOG`," +
+		"tbl.reldatabase AS `TABLE_SCHEMA`," +
+		"tbl.relname AS `TABLE_NAME`," +
+		"tbl.rel_createsql AS `VIEW_DEFINITION`," +
+		"'NONE' AS `CHECK_OPTION`," +
+		"'YES' AS `IS_UPDATABLE`," +
+		"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
+		"'DEFINER' AS `SECURITY_TYPE`," +
+		"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
+		"'utf8mb4_0900_ai_ci' AS `COLLATION_CONNECTION` " +
+		"FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
+		"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "VIEWS")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == "CREATE VIEW IF NOT EXISTS information_schema.VIEWS AS "+
+			"SELECT 'def' AS `TABLE_CATALOG`,"+
+			"tbl.reldatabase AS `TABLE_SCHEMA`,"+
+			"tbl.relname AS `TABLE_NAME`,"+
+			"tbl.rel_createsql AS `VIEW_DEFINITION`,"+
+			"'NONE' AS `CHECK_OPTION`,"+
+			"'YES' AS `IS_UPDATABLE`,"+
+			"usr.user_name + '@' + usr.user_host AS `DEFINER`,"+
+			"'DEFINER' AS `SECURITY_TYPE`,"+
+			"'utf8mb4' AS `CHARACTER_SET_CLIENT`,"+
+			"'utf8mb4_0900_ai_ci' AS `COLLATION_CONNECTION` "+
+			"FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id "+
+			"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'" {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "VIEWS"),
+}
+
+var upg_information_schema_partitions = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "PARTITIONS",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql: "CREATE VIEW IF NOT EXISTS information_schema.`PARTITIONS` AS " +
+		"SELECT " +
+		"'def' AS `TABLE_CATALOG`," +
+		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
+		"`tbl`.`relname` AS `TABLE_NAME`," +
+		"`part`.`name` AS `PARTITION_NAME`," +
+		"NULL AS `SUBPARTITION_NAME`," +
+		"`part`.`number` AS `PARTITION_ORDINAL_POSITION`," +
+		"NULL AS `SUBPARTITION_ORDINAL_POSITION`," +
+		"(case `part`.`partition_type` when 'HASH' then 'HASH' " +
+		"when 'RANGE' then 'RANGE' " +
+		"when 'LIST' then 'LIST' " +
+		"when 'AUTO' then 'AUTO' " +
+		"when 'KEY_51' then 'KEY' " +
+		"when 'KEY_55' then 'KEY' " +
+		"when 'LINEAR_KEY_51' then 'LINEAR KEY' " +
+		"when 'LINEAR_KEY_55' then 'LINEAR KEY' " +
+		"when 'LINEAR_HASH' then 'LINEAR HASH' " +
+		"when 'RANGE_COLUMNS' then 'RANGE COLUMNS' " +
+		"when 'LIST_COLUMNS' then 'LIST COLUMNS' else NULL end) AS `PARTITION_METHOD`," +
+		"NULL AS `SUBPARTITION_METHOD`," +
+		"`part`.`partition_expression` AS `PARTITION_EXPRESSION`," +
+		"NULL AS `SUBPARTITION_EXPRESSION`," +
+		"`part`.`description_utf8` AS `PARTITION_DESCRIPTION`," +
+		"mo_table_rows(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `TABLE_ROWS`," +
+		"0 AS `AVG_ROW_LENGTH`," +
+		"mo_table_size(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `DATA_LENGTH`," +
+		"0 AS `MAX_DATA_LENGTH`," +
+		"0 AS `INDEX_LENGTH`," +
+		"0 AS `DATA_FREE`," +
+		"`tbl`.`created_time` AS `CREATE_TIME`," +
+		"NULL AS `UPDATE_TIME`," +
+		"NULL AS `CHECK_TIME`," +
+		"NULL AS `CHECKSUM`," +
+		"ifnull(`part`.`comment`,'')  AS `PARTITION_COMMENT`," +
+		"'default' AS `NODEGROUP`," +
+		"NULL AS `TABLESPACE_NAME` " +
+		"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` " +
+		"ON `part`.`table_id` = `tbl`.`rel_id` " +
+		"WHERE `tbl`.`account_id` = current_account_id() and `tbl`.`partitioned` = 1;",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "PARTITIONS")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == "CREATE VIEW IF NOT EXISTS information_schema.`PARTITIONS` AS "+
+			"SELECT "+
+			"'def' AS `TABLE_CATALOG`,"+
+			"`tbl`.`reldatabase` AS `TABLE_SCHEMA`,"+
+			"`tbl`.`relname` AS `TABLE_NAME`,"+
+			"`part`.`name` AS `PARTITION_NAME`,"+
+			"NULL AS `SUBPARTITION_NAME`,"+
+			"`part`.`number` AS `PARTITION_ORDINAL_POSITION`,"+
+			"NULL AS `SUBPARTITION_ORDINAL_POSITION`,"+
+			"(case `part`.`partition_type` when 'HASH' then 'HASH' "+
+			"when 'RANGE' then 'RANGE' "+
+			"when 'LIST' then 'LIST' "+
+			"when 'AUTO' then 'AUTO' "+
+			"when 'KEY_51' then 'KEY' "+
+			"when 'KEY_55' then 'KEY' "+
+			"when 'LINEAR_KEY_51' then 'LINEAR KEY' "+
+			"when 'LINEAR_KEY_55' then 'LINEAR KEY' "+
+			"when 'LINEAR_HASH' then 'LINEAR HASH' "+
+			"when 'RANGE_COLUMNS' then 'RANGE COLUMNS' "+
+			"when 'LIST_COLUMNS' then 'LIST COLUMNS' else NULL end) AS `PARTITION_METHOD`,"+
+			"NULL AS `SUBPARTITION_METHOD`,"+
+			"`part`.`partition_expression` AS `PARTITION_EXPRESSION`,"+
+			"NULL AS `SUBPARTITION_EXPRESSION`,"+
+			"`part`.`description_utf8` AS `PARTITION_DESCRIPTION`,"+
+			"mo_table_rows(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `TABLE_ROWS`,"+
+			"0 AS `AVG_ROW_LENGTH`,"+
+			"mo_table_size(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `DATA_LENGTH`,"+
+			"0 AS `MAX_DATA_LENGTH`,"+
+			"0 AS `INDEX_LENGTH`,"+
+			"0 AS `DATA_FREE`,"+
+			"`tbl`.`created_time` AS `CREATE_TIME`,"+
+			"NULL AS `UPDATE_TIME`,"+
+			"NULL AS `CHECK_TIME`,"+
+			"NULL AS `CHECKSUM`,"+
+			"ifnull(`part`.`comment`,'')  AS `PARTITION_COMMENT`,"+
+			"'default' AS `NODEGROUP`,"+
+			"NULL AS `TABLESPACE_NAME` "+
+			"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` "+
+			"ON `part`.`table_id` = `tbl`.`rel_id` "+
+			"WHERE `tbl`.`account_id` = current_account_id() and `tbl`.`partitioned` = 1;" {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "PARTITIONS"),
+}
+
+// ----------------------------------------------------------------------------------------------------------------------
+var upg_mo_catalog_mo_sessions = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_sessions",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_sessions")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_sessions"),
+}
+
+var upg_mo_catalog_mo_configurations = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_configurations",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_configurations")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_configurations"),
+}
+
+var upg_mo_catalog_mo_locks = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_locks",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_locks")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_locks"),
+}
+
+var upg_mo_catalog_mo_variables = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_variables",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_variables")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_variables"),
+}
+
+var upg_mo_catalog_mo_transactions = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_transactions",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_transactions")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_transactions"),
+}
+
+var upg_mo_catalog_mo_cache = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_cache",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    `CREATE VIEW IF NOT EXISTS mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_cache")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == `CREATE VIEW IF NOT EXISTS mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp` {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_CATALOG, "mo_cache"),
+}
+
+var upg_mo_pub = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_PUBS,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    "alter table `mo_catalog`.`mo_pubs` add column `update_time` timestamp",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, "mo_catalog", catalog.MO_PUBS, "update_time")
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.IsExits {
+			return true, nil
+		}
+		return false, nil
+	},
 }

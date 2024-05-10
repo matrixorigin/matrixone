@@ -67,6 +67,7 @@ func newLock(c *lockContext) Lock {
 	if c.opts.TableDefChanged {
 		l.value |= flagLockTableDefChanged
 	}
+	logHolderAdded(c, l)
 	return l
 }
 
@@ -78,6 +79,7 @@ func (l Lock) addWaiter(w *waiter) {
 func (l Lock) addHolder(c *lockContext) {
 	l.holders.add(c.waitTxn)
 	l.waiters.removeByTxnID(c.waitTxn.TxnID)
+	logHolderAdded(c, l)
 }
 
 func (l Lock) isEmpty() bool {
@@ -105,6 +107,10 @@ func (l Lock) tryHold(c *lockContext) (bool, bool) {
 
 // (no holders && is first waiter txn) || (both shared lock) can hold lock
 func (l Lock) canHold(c *lockContext) bool {
+	if c.closed {
+		panic("BUG: closed context should not call canHold")
+	}
+
 	return (l.holders.size() == 0 && l.waiters.first().isTxn(c.txn.txnID)) ||
 		l.isLockModeAllowed(c)
 }
@@ -126,6 +132,42 @@ func (l Lock) release() {
 	l.waiters.reset()
 	waitQueuePool.Put(l.waiters)
 	holdersPool.Put(l.holders)
+}
+
+func (l Lock) closeWaiter(w *waiter) bool {
+	canRemove := func() bool {
+		if !l.isLockRow() {
+			panic("BUG: range lock cannot call closeWaiter")
+		}
+
+		if l.holders.size() > 0 {
+			return false
+		}
+
+		if l.waiters.size() == 0 {
+			return true
+		}
+
+		if l.waiters.first() != w {
+			return false
+		}
+
+		if l.waiters.size() == 1 {
+			return true
+		}
+
+		l.waiters.notify(notifyValue{defChanged: l.isLockTableDefChanged()})
+		return l.isEmpty()
+	}()
+
+	if canRemove {
+		// close all ref in waiter queue
+		l.waiters.iter(func(w *waiter) bool {
+			w.close()
+			return true
+		})
+	}
+	return canRemove
 }
 
 func (l Lock) closeTxn(

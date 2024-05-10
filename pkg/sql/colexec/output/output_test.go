@@ -43,7 +43,7 @@ var (
 	tcs []outputTestCase
 )
 
-func sqlOutput(_ interface{}, _ *batch.Batch) error {
+func sqlOutput(_ *batch.Batch) error {
 	return nil
 }
 

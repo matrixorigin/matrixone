@@ -101,20 +101,22 @@ func NewFlushTableTailEntry(
 		dirtyEndTs:         dirtyEndTs,
 	}
 
-	if entry.createdBlkHandles != nil {
-		entry.delTbls = make([]*model.TransDels, entry.createdBlkHandles.GetMeta().(*catalog.ObjectEntry).BlockCnt())
-		entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
-		// collect deletes phase 1
-		entry.collectTs = rt.Now()
-		var err error
-		entry.transCntBeforeCommit, err = entry.collectDelsAndTransfer(entry.txn.GetStartTS(), entry.collectTs)
-		if err != nil {
-			return nil, err
+	if entry.transMappings != nil {
+		if entry.createdBlkHandles != nil {
+			entry.delTbls = make([]*model.TransDels, entry.createdBlkHandles.GetMeta().(*catalog.ObjectEntry).BlockCnt())
+			entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
+			// collect deletes phase 1
+			entry.collectTs = rt.Now()
+			var err error
+			entry.transCntBeforeCommit, err = entry.collectDelsAndTransfer(entry.txn.GetStartTS(), entry.collectTs)
+			if err != nil {
+				return nil, err
+			}
 		}
+		// prepare transfer pages
+		entry.addTransferPages()
 	}
 
-	// prepare transfer pages
-	entry.addTransferPages()
 	return entry, nil
 }
 
@@ -130,8 +132,8 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		entry.pageIds = append(entry.pageIds, id)
 		page := model.NewTransferHashPage(id, time.Now(), isTransient)
 		for srcRow, dst := range m {
-			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.Idx))
-			page.Train(uint32(srcRow), *objectio.NewRowid(blkid, uint32(dst.Row)))
+			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.BlkIdx))
+			page.Train(uint32(srcRow), *objectio.NewRowid(blkid, uint32(dst.RowIdx)))
 		}
 		entry.rt.TransferTable.AddPage(page)
 	}
@@ -148,6 +150,8 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(from, to types.TS) (tra
 		return
 	}
 	for i, blk := range entry.ablksMetas {
+		// For ablock, there is only one block in it.
+		// Checking the block mapping once is enough
 		mapping := entry.transMappings.Mappings[i].M
 		if len(mapping) == 0 {
 			// empty frozen aobjects, it can not has any more deletes
@@ -179,12 +183,12 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(from, to types.TS) (tra
 			if !ok {
 				panic(fmt.Sprintf("%s find no transfer mapping for row %d", blk.ID.String(), row))
 			}
-			if entry.delTbls[destpos.Idx] == nil {
-				entry.delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
+			if entry.delTbls[destpos.BlkIdx] == nil {
+				entry.delTbls[destpos.BlkIdx] = model.NewTransDels(entry.txn.GetPrepareTS())
 			}
-			entry.delTbls[destpos.Idx].Mapping[int(destpos.Row)] = ts[i]
+			entry.delTbls[destpos.BlkIdx].Mapping[int(destpos.RowIdx)] = ts[i]
 			if err = entry.createdBlkHandles.RangeDelete(
-				uint16(destpos.Idx), uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
+				uint16(destpos.BlkIdx), uint32(destpos.RowIdx), uint32(destpos.RowIdx), handle.DT_MergeCompact, common.MergeAllocator,
 			); err != nil {
 				bat.Close()
 				return
@@ -202,6 +206,10 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 	defer func() {
 		v2.TaskCommitTableTailDurationHistogram.Observe(time.Since(inst).Seconds())
 	}()
+	if entry.transMappings == nil {
+		// no del table, no transfer
+		return nil
+	}
 	trans, err := entry.collectDelsAndTransfer(entry.collectTs, entry.txn.GetPrepareTS())
 	if err != nil {
 		return err

@@ -17,6 +17,7 @@ package compile
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -48,8 +49,8 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	}
 
 	f := reuse.Alloc[fuzzyCheck](nil)
-	f.tbl = f.wrapup(tblName)
-	f.db = f.wrapup(dbName)
+	f.tbl = tblName
+	f.db = dbName
 	f.attr = n.TableDef.Pkey.PkeyColName
 
 	for _, c := range n.TableDef.Cols {
@@ -63,6 +64,14 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	if n.TableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		f.isCompound = true
 		f.compoundCols = f.sortColDef(n.TableDef.Pkey.Names, n.TableDef.Cols)
+	}
+
+	// for the case like create unique index for existed table,
+	// We can only get the table definition of the hidden table.
+	// How the original table defines this unique index (for example, which columns are used and whether it is composite) can NOT be confirmed,
+	// that introduces some strange logic, and obscures the meaning of some fields, such as fuzzyCheck.isCompound
+	if catalog.IsHiddenTable(tblName) && n.Fuzzymessage == nil {
+		f.onlyInsertHidden = true
 	}
 
 	if n.Fuzzymessage != nil {
@@ -88,6 +97,7 @@ func (f *fuzzyCheck) reset() {
 	f.attr = ""
 	f.condition = ""
 	f.isCompound = false
+	f.onlyInsertHidden = false
 	f.col = nil
 	f.compoundCols = nil
 	f.cnt = 0
@@ -106,73 +116,91 @@ func (f *fuzzyCheck) release() {
 //
 // for more info, refer func backgroundSQLCheck
 func (f *fuzzyCheck) fill(ctx context.Context, bat *batch.Batch) error {
+	var collision [][]string
+	var err error
+
 	toCheck := bat.GetVector(0)
 	f.cnt = bat.RowCount()
 
-	if err := f.firstlyCheck(ctx, toCheck); err != nil {
-		return err // fail to pass duplicate constraint
+	f.isCompound, err = f.recheckIfCompound(toCheck)
+	if err != nil {
+		return err
 	}
 
-	pkeys, err := f.genCollsionKeys(toCheck)
+	if !f.onlyInsertHidden {
+		if err := f.firstlyCheck(ctx, toCheck); err != nil {
+			return err // fail to pass duplicate constraint
+		}
+	}
+
+	collision, err = f.genCollsionKeys(toCheck)
 	if err != nil {
 		return err
 	}
 
 	// generate codition used in background SQL
-	if !f.isCompound {
-		f.condition = strings.Join(pkeys[0], ", ")
-	} else {
-		// not using __mo_cpkey_col search directly because efficiency considerations,
-		// HOWEVER This part of the code is still redundant, because currently plan can not support sql like
-		//
-		// SELECT pk1, pk2, COUNT(*) AS cnt
-		// FROM tbl
-		// WHERE (pk1, pk2) IN ((1, 1), (2, 1))
-		// GROUP BY pk1, pk2
-		// HAVING cnt > 1;
-		//
-		// otherwise, the code will be much more cleaner
-		var all bytes.Buffer
-		var one bytes.Buffer
-		var i int
-		var j int
+	if !f.onlyInsertHidden {
+		if !f.isCompound {
+			f.condition = strings.Join(collision[0], ", ")
+		} else {
+			// not using __mo_cpkey_col search directly because efficiency considerations,
+			// HOWEVER This part of the code is still redundant, because currently plan can not support sql like
+			//
+			// SELECT pk1, pk2, COUNT(*) AS cnt
+			// FROM tbl
+			// WHERE (pk1, pk2) IN ((1, 1), (2, 1))
+			// GROUP BY pk1, pk2
+			// HAVING cnt > 1;
+			//
+			// otherwise, the code will be much more cleaner
+			var all bytes.Buffer
+			var one bytes.Buffer
+			var i int
+			var j int
 
-		lastRow := len(pkeys[0]) - 1
+			lastRow := len(collision[0]) - 1
 
-		cAttrs := make([]string, len(f.compoundCols))
-		for k, c := range f.compoundCols {
-			cAttrs[k] = c.Name
-		}
-
-		for i = 0; i < lastRow; i++ {
-			one.Reset()
-			one.WriteByte('(')
-			// one compound primary key has multiple conditions, use "and" to join them
-			for j = 0; j < len(cAttrs)-1; j++ {
-				one.WriteString(fmt.Sprintf("%s = %s and ", cAttrs[j], pkeys[j][i]))
+			cAttrs := make([]string, len(f.compoundCols))
+			for k, c := range f.compoundCols {
+				if c == nil {
+					panic("compoundCols should not have nil element")
+				}
+				cAttrs[k] = c.Name
 			}
 
-			// the last condition does not need to be followed by "and"
-			one.WriteString(fmt.Sprintf("%s = %s", cAttrs[j], pkeys[j][i]))
-			one.WriteByte(')')
+			for i = 0; i < lastRow; i++ {
+				one.Reset()
+				one.WriteByte('(')
+				// one compound primary key has multiple conditions, use "and" to join them
+				for j = 0; j < len(cAttrs)-1; j++ {
+					one.WriteString(fmt.Sprintf("%s = %s and ", cAttrs[j], collision[j][i]))
+				}
+
+				// the last condition does not need to be followed by "and"
+				one.WriteString(fmt.Sprintf("%s = %s", cAttrs[j], collision[j][i]))
+				one.WriteByte(')')
+				if _, err = one.WriteTo(&all); err != nil {
+					return err
+				}
+
+				// use or join each compound primary keys
+				all.WriteString(" or ")
+			}
+
+			// if only have one collision key, there will no "or", same as the last collision key
+			for j = 0; j < len(cAttrs)-1; j++ {
+				one.WriteString(fmt.Sprintf("%s = %s and ", cAttrs[j], collision[j][lastRow]))
+			}
+
+			one.WriteString(fmt.Sprintf("%s = %s", cAttrs[j], collision[j][lastRow]))
 			if _, err = one.WriteTo(&all); err != nil {
 				return err
 			}
-
-			// use or join each compound primary keys
-			all.WriteString(" or ")
+			f.condition = all.String()
 		}
-
-		// if only have one collision key, there will no "or", same as the last collision key
-		for j = 0; j < len(cAttrs)-1; j++ {
-			one.WriteString(fmt.Sprintf("%s = %s and ", cAttrs[j], pkeys[j][lastRow]))
-		}
-
-		one.WriteString(fmt.Sprintf("%s = %s", cAttrs[j], pkeys[j][lastRow]))
-		if _, err = one.WriteTo(&all); err != nil {
-			return err
-		}
-		f.condition = all.String()
+	} else {
+		keys := collision[0]
+		f.condition = strings.Join(keys, ", ")
 	}
 
 	return nil
@@ -198,6 +226,9 @@ func (f *fuzzyCheck) firstlyCheck(ctx context.Context, toCheck *vector.Vector) e
 			}
 			scales := make([]int32, len(f.compoundCols))
 			for i, c := range f.compoundCols {
+				if c == nil {
+					panic("compoundCols should not have nil element")
+				}
 				scales[i] = c.Typ.Scale
 			}
 			es := t.ErrString(scales)
@@ -229,28 +260,36 @@ func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error)
 		keys = make([][]string, len(f.compoundCols))
 	}
 
-	if !f.isCompound {
+	if !f.onlyInsertHidden {
+		if !f.isCompound {
+			pkey, err := f.format(toCheck)
+			if err != nil {
+				return nil, err
+			}
+			keys[0] = pkey
+		} else {
+			scales := make([]int32, len(f.compoundCols))
+			for i, c := range f.compoundCols {
+				scales[i] = c.Typ.Scale
+			}
+			for i := 0; i < toCheck.Length(); i++ {
+				b := toCheck.GetRawBytesAt(i)
+				t, err := types.Unpack(b)
+				if err != nil {
+					return nil, err
+				}
+				s := t.SQLStrings(scales)
+				for j := 0; j < len(s); j++ {
+					keys[j] = append(keys[j], s[j])
+				}
+			}
+		}
+	} else {
 		pkey, err := f.format(toCheck)
 		if err != nil {
 			return nil, err
 		}
 		keys[0] = pkey
-	} else {
-		scales := make([]int32, len(f.compoundCols))
-		for i, c := range f.compoundCols {
-			scales[i] = c.Typ.Scale
-		}
-		for i := 0; i < toCheck.Length(); i++ {
-			b := toCheck.GetRawBytesAt(i)
-			t, err := types.Unpack(b)
-			if err != nil {
-				return nil, err
-			}
-			s := t.SQLStrings(scales)
-			for j := 0; j < len(s); j++ {
-				keys[j] = append(keys[j], s[j])
-			}
-		}
 	}
 
 	return keys, nil
@@ -259,15 +298,20 @@ func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error)
 // backgroundSQLCheck launches a background SQL to check if there are any duplicates
 func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 	var duplicateCheckSql string
-	if !f.isCompound {
-		duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, f.attr, f.db, f.tbl, f.attr, f.condition, f.attr)
-	} else {
-		cAttrs := make([]string, len(f.compoundCols))
-		for k, c := range f.compoundCols {
-			cAttrs[k] = c.Name
+
+	if !f.onlyInsertHidden {
+		if !f.isCompound {
+			duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, f.attr, f.db, f.tbl, f.attr, f.condition, f.attr)
+		} else {
+			cAttrs := make([]string, len(f.compoundCols))
+			for k, c := range f.compoundCols {
+				cAttrs[k] = c.Name
+			}
+			attrs := strings.Join(cAttrs, ", ")
+			duplicateCheckSql = fmt.Sprintf(fuzzyCompoundCheck, attrs, f.db, f.tbl, f.condition, attrs)
 		}
-		attrs := strings.Join(cAttrs, ", ")
-		duplicateCheckSql = fmt.Sprintf(fuzzyCompoundCheck, attrs, f.db, f.tbl, f.condition, attrs)
+	} else {
+		duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, f.attr, f.db, f.tbl, f.attr, f.condition, f.attr)
 	}
 
 	res, err := c.runSqlWithResult(duplicateCheckSql)
@@ -298,8 +342,12 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 					err = e
 				} else {
 					scales := make([]int32, len(f.compoundCols))
-					for i, c := range f.compoundCols {
-						scales[i] = c.Typ.Scale
+					for i, col := range f.compoundCols {
+						if col != nil {
+							scales[i] = col.Typ.Scale
+						} else {
+							scales[i] = 0
+						}
 					}
 					err = moerr.NewDuplicateEntry(c.ctx, t.ErrString(scales), f.attr)
 				}
@@ -327,10 +375,6 @@ func (f *fuzzyCheck) sortColDef(toSelect []string, cols []*plan.ColDef) []*plan.
 	return ccols
 }
 
-func (f *fuzzyCheck) wrapup(name string) string {
-	return "`" + name + "`"
-}
-
 // format format strings from vector
 func (f *fuzzyCheck) format(toCheck *vector.Vector) ([]string, error) {
 	var ss []string
@@ -342,6 +386,13 @@ func (f *fuzzyCheck) format(toCheck *vector.Vector) ([]string, error) {
 			return nil, err
 		}
 		ss = append(ss, s)
+	}
+
+	if f.isCompound {
+		for i, s := range ss {
+			ss[i] = "unhex('" + hex.EncodeToString([]byte(s)) + "')"
+		}
+		return ss, nil
 	}
 
 	// for table that like CREATE TABLE t1( b CHAR(10), PRIMARY KEY);
@@ -449,4 +500,24 @@ func (f *fuzzyCheck) adjustDecimalScale(toCheck *vector.Vector) {
 		}
 	default:
 	}
+}
+
+func (f *fuzzyCheck) recheckIfCompound(toCheck *vector.Vector) (bool, error) {
+
+	if f.onlyInsertHidden {
+		// for the case that create compound unique index for existed table
+		// can only detact if it is compound by the schema of the vector
+
+		foo, err := vectorToString(toCheck, 0)
+		if err != nil {
+			return false, err
+		}
+
+		if _, _, schema, err := types.DecodeTuple([]byte(foo)); err == nil {
+			f.compoundCols = make([]*plan.ColDef, len(schema))
+			return len(schema) > 1, nil
+		}
+	}
+
+	return f.isCompound, nil
 }

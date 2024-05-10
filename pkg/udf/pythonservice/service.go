@@ -15,6 +15,8 @@
 package pythonservice
 
 import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 	"os"
 	"os/exec"
@@ -76,14 +78,22 @@ func (s *service) Start() error {
 				s.log.Close()
 			}
 		}()
+		executable := s.cfg.Python
+		if executable == "" {
+			executable = "python"
+		}
 
-		cmd := exec.Command("python", "-u", file, "--address="+s.cfg.Address)
+		cmd := exec.Command(executable, "-u", file, "--address="+s.cfg.Address)
 		cmd.Stdout = s.log
 		cmd.Stderr = s.log
-		err = cmd.Start()
-		if err != nil {
-			return err
-		}
+		go func(cmd *exec.Cmd) {
+			logutil.Infof("start python server process, command: %s", cmd.String())
+			err := cmd.Run()
+			// panic the launch process if python server exit with an error
+			if err != nil {
+				panic(fmt.Sprintf("python server exit with error: %v", err))
+			}
+		}(cmd)
 
 		s.process = cmd.Process
 	}

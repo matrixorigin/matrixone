@@ -16,8 +16,14 @@ package frontend
 
 import (
 	"context"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
+	"github.com/smartystreets/goconvey/convey"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -25,11 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/smartystreets/goconvey/convey"
-	"sync"
-	"testing"
-	"time"
 )
 
 var _ client.Workspace = (*testWorkspace)(nil)
@@ -140,6 +143,16 @@ func (t *testWorkspace) GetSQLCount() uint64 {
 	panic("implement me")
 }
 
+func (t *testWorkspace) CloneSnapshotWS() client.Workspace {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (t *testWorkspace) BindTxnOp(op client.TxnOperator) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func TestWorkspace(t *testing.T) {
 	convey.Convey("no panic", t, func() {
 		convey.So(
@@ -245,10 +258,11 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 	InitGlobalSystemVariables(&gSys)
 
 	ses := newTestSession(t, ctrl)
-	ses.txnHandler.txnClient = txnClient
+	getGlobalPu().TxnClient = txnClient
+	getGlobalPu().StorageEngine = eng
 	ses.txnHandler.storage = eng
-	ses.connectCtx = ctx
-	ses.requestCtx = ctx
+	var c clock.Clock
+	_ = ses.GetTxnHandler().CreateTempStorage(c)
 	return ses
 }
 
@@ -273,12 +287,13 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 
 	var gSys GlobalSystemVariables
 	InitGlobalSystemVariables(&gSys)
-
 	ses := newTestSession(t, ctrl)
-	ses.txnHandler.txnClient = txnClient
+	getGlobalPu().TxnClient = txnClient
+	getGlobalPu().StorageEngine = eng
 	ses.txnHandler.storage = eng
-	ses.connectCtx = ctx
-	ses.requestCtx = ctx
+
+	var c clock.Clock
+	_ = ses.GetTxnHandler().CreateTempStorage(c)
 	return ses
 }
 
@@ -315,103 +330,120 @@ func Test_rollbackStatement(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 
 		ses := newTestSession(t, ctrl)
-		ses.txnHandler.txnClient = txnClient
+		getGlobalPu().TxnClient = txnClient
 		ses.txnHandler.storage = eng
-		ses.connectCtx = ctx
-		ses.requestCtx = ctx
 
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
 		//case1. autocommit && not_begin. Insert Stmt (need not to be committed in the active txn)
-		_, _, err := ses.TxnCreate()
+		ec.txnOpt = FeTxnOption{
+			autoCommit: true,
+		}
+
+		err := ses.GetTxnHandler().Create(ec)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(ses.OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
-		convey.So(ses.OptionBitsIsSet(OPTION_AUTOCOMMIT), convey.ShouldBeTrue)
-		convey.So(!ses.InMultiStmtTransactionMode(), convey.ShouldBeTrue)
-		err = ses.TxnRollbackSingleStatement(&tree.Insert{}, nil)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT), convey.ShouldBeTrue)
+		convey.So(!ses.GetTxnHandler().InMultiStmtTransactionMode(), convey.ShouldBeTrue)
+		ec.stmt = &tree.Insert{}
+		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldBeNil)
-		ctx2, t2, err := ses.txnHandler.GetTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(ctx2, convey.ShouldNotBeNil)
+		t2 := ses.txnHandler.GetTxn()
 		convey.So(t2, convey.ShouldBeNil)
 
 		//case2.1 autocommit && begin && CreateSequence (need to be committed in the active txn)
-		err = ses.TxnBegin()
+		ec.txnOpt = FeTxnOption{
+			autoCommit: true,
+			byBegin:    true,
+		}
+		err = ses.GetTxnHandler().Create(ec)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(ses.OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeTrue)
-		convey.So(ses.OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeFalse)
-		convey.So(!ses.InMultiStmtTransactionMode(), convey.ShouldBeFalse)
-		convey.So(ses.InActiveTransaction() &&
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeTrue)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeFalse)
+		convey.So(!ses.GetTxnHandler().InMultiStmtTransactionMode(), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().InActiveTxn() &&
 			NeedToBeCommittedInActiveTransaction(&tree.CreateSequence{}), convey.ShouldBeTrue)
-		err = ses.TxnRollbackSingleStatement(&tree.CreateSequence{}, nil)
+		ec.stmt = &tree.CreateSequence{}
+		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldBeNil)
-		ctx2, t2, err = ses.txnHandler.GetTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(ctx2, convey.ShouldNotBeNil)
+		t2 = ses.txnHandler.GetTxn()
 		convey.So(t2, convey.ShouldBeNil)
 
 		//case2.2 not_autocommit && not_begin && CreateSequence (need to be committed in the active txn)
-		err = ses.SetAutocommit(true, false)
+		ec.txnOpt = FeTxnOption{
+			autoCommit: false,
+		}
+		err = ses.txnHandler.Create(ec)
 		convey.So(err, convey.ShouldBeNil)
-		_, _, err = ses.txnHandler.GetTxn()
+		err = ses.GetTxnHandler().SetAutocommit(ec, true, false)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(ses.OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
-		convey.So(ses.OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
-		convey.So(!ses.InMultiStmtTransactionMode(), convey.ShouldBeFalse)
-		convey.So(ses.InActiveTransaction() &&
+		_ = ses.txnHandler.GetTxn()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
+		convey.So(!ses.GetTxnHandler().InMultiStmtTransactionMode(), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().InActiveTxn() &&
 			NeedToBeCommittedInActiveTransaction(&tree.CreateSequence{}), convey.ShouldBeTrue)
-		err = ses.TxnRollbackSingleStatement(&tree.CreateSequence{}, nil)
+		ec.stmt = &tree.CreateSequence{}
+		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldBeNil)
-		ctx2, t2, err = ses.txnHandler.GetTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(ctx2, convey.ShouldNotBeNil)
+		t2 = ses.txnHandler.GetTxn()
 		convey.So(t2, convey.ShouldBeNil)
 
 		//case3.1 not_autocommit && not_begin && Insert Stmt (need not to be committed in the active txn)
-		err = ses.SetAutocommit(true, false)
+		ec.txnOpt = FeTxnOption{
+			autoCommit: false,
+		}
+		err = ses.txnHandler.Create(ec)
+		convey.So(err, convey.ShouldBeNil)
+		err = ses.GetTxnHandler().SetAutocommit(ec, true, false)
 		var txnOp TxnOperator
 		convey.So(err, convey.ShouldBeNil)
-		_, txnOp, err = ses.txnHandler.GetTxn()
+		txnOp = ses.txnHandler.GetTxn()
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(ses.OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
-		convey.So(ses.OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
-		convey.So(!ses.InMultiStmtTransactionMode(), convey.ShouldBeFalse)
-		convey.So(ses.InActiveTransaction() &&
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
+		convey.So(!ses.GetTxnHandler().InMultiStmtTransactionMode(), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().InActiveTxn() &&
 			NeedToBeCommittedInActiveTransaction(&tree.Insert{}), convey.ShouldBeFalse)
 		convey.So(txnOp != nil && !ses.IsDerivedStmt(), convey.ShouldBeTrue)
 		//called incrStatement
 		txnOp.GetWorkspace().StartStatement()
 		err = txnOp.GetWorkspace().IncrStatementID(ctx, false)
 		convey.So(err, convey.ShouldBeNil)
-		ses.GetTxnHandler().enableIncrStmt(txnOp.Txn().ID)
-		err = ses.TxnRollbackSingleStatement(&tree.Insert{}, nil)
+		ec.stmt = &tree.Insert{}
+		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldBeNil)
-		ctx2, t2, err = ses.txnHandler.GetTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(ctx2, convey.ShouldNotBeNil)
+		t2 = ses.txnHandler.GetTxn()
 		convey.So(t2, convey.ShouldNotBeNil)
 
 		//case3.2 not_autocommit && begin && Insert Stmt (need not to be committed in the active txn)
-		err = ses.SetAutocommit(true, false)
+		ec.txnOpt = FeTxnOption{
+			autoCommit: false,
+			byBegin:    true,
+		}
+		err = ses.txnHandler.Create(ec)
 		convey.So(err, convey.ShouldBeNil)
-		err = ses.TxnBegin()
+		err = ses.GetTxnHandler().SetAutocommit(ec, true, false)
 		convey.So(err, convey.ShouldBeNil)
-		_, txnOp, err = ses.GetTxnHandler().GetTxnOperator()
+		err = ses.GetTxnHandler().Create(ec)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(ses.OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeTrue)
-		convey.So(ses.OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
-		convey.So(!ses.InMultiStmtTransactionMode(), convey.ShouldBeFalse)
-		convey.So(ses.InActiveTransaction() &&
+		txnOp = ses.GetTxnHandler().GetTxn()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeTrue)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
+		convey.So(!ses.GetTxnHandler().InMultiStmtTransactionMode(), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().InActiveTxn() &&
 			NeedToBeCommittedInActiveTransaction(&tree.Insert{}), convey.ShouldBeFalse)
 		convey.So(txnOp != nil && !ses.IsDerivedStmt(), convey.ShouldBeTrue)
 		//called incrStatement
 		txnOp.GetWorkspace().StartStatement()
 		err = txnOp.GetWorkspace().IncrStatementID(ctx, false)
 		convey.So(err, convey.ShouldBeNil)
-		ses.GetTxnHandler().enableIncrStmt(txnOp.Txn().ID)
-		err = ses.TxnRollbackSingleStatement(&tree.Insert{}, nil)
+		ec.stmt = &tree.Insert{}
+		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldBeNil)
-		ctx2, t2, err = ses.txnHandler.GetTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(ctx2, convey.ShouldNotBeNil)
+		t2 = ses.txnHandler.GetTxn()
 		convey.So(t2, convey.ShouldNotBeNil)
 
 	})
@@ -422,18 +454,21 @@ func Test_rollbackStatement(t *testing.T) {
 
 		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 		ses := newMockErrSession(t, ctx, ctrl)
-
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
 		//case1. autocommit && not_begin. Insert Stmt (need not to be committed in the active txn)
-		_, _, err := ses.TxnCreate()
+		ec.txnOpt = FeTxnOption{
+			autoCommit: true,
+		}
+		err := ses.GetTxnHandler().Create(ec)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(ses.OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
-		convey.So(ses.OptionBitsIsSet(OPTION_AUTOCOMMIT), convey.ShouldBeTrue)
-		convey.So(!ses.InMultiStmtTransactionMode(), convey.ShouldBeTrue)
-		err = ses.TxnRollbackSingleStatement(&tree.Insert{}, nil)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT), convey.ShouldBeTrue)
+		convey.So(!ses.GetTxnHandler().InMultiStmtTransactionMode(), convey.ShouldBeTrue)
+		ec.stmt = &tree.Insert{}
+		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldNotBeNil)
-		ctx2, t2, err := ses.txnHandler.GetTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(ctx2, convey.ShouldNotBeNil)
+		t2 := ses.txnHandler.GetTxn()
 		convey.So(t2, convey.ShouldBeNil)
 	})
 }
@@ -445,18 +480,22 @@ func Test_rollbackStatement2(t *testing.T) {
 
 		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 		ses := newMockErrSession(t, ctx, ctrl)
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
 
 		//case1. autocommit && not_begin. Insert Stmt (need not to be committed in the active txn)
-		_, _, err := ses.TxnCreate()
+		ec.txnOpt = FeTxnOption{
+			autoCommit: true,
+		}
+		err := ses.GetTxnHandler().Create(ec)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(ses.OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
-		convey.So(ses.OptionBitsIsSet(OPTION_AUTOCOMMIT), convey.ShouldBeTrue)
-		convey.So(!ses.InMultiStmtTransactionMode(), convey.ShouldBeTrue)
-		err = ses.TxnRollbackSingleStatement(&tree.Insert{}, nil)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT), convey.ShouldBeTrue)
+		convey.So(!ses.GetTxnHandler().InMultiStmtTransactionMode(), convey.ShouldBeTrue)
+		ec.stmt = &tree.Insert{}
+		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldNotBeNil)
-		ctx2, t2, err := ses.txnHandler.GetTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(ctx2, convey.ShouldNotBeNil)
+		t2 := ses.txnHandler.GetTxn()
 		convey.So(t2, convey.ShouldBeNil)
 	})
 }
@@ -468,20 +507,25 @@ func Test_rollbackStatement3(t *testing.T) {
 
 		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 		ses := newMockErrSession(t, ctx, ctrl)
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
 
 		//case2.1 autocommit && begin && CreateSequence (need to be committed in the active txn)
-		err := ses.TxnBegin()
+		ec.txnOpt = FeTxnOption{
+			autoCommit: true,
+			byBegin:    true,
+		}
+		err := ses.GetTxnHandler().Create(ec)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(ses.OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeTrue)
-		convey.So(ses.OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeFalse)
-		convey.So(!ses.InMultiStmtTransactionMode(), convey.ShouldBeFalse)
-		convey.So(ses.InActiveTransaction() &&
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeTrue)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeFalse)
+		convey.So(!ses.GetTxnHandler().InMultiStmtTransactionMode(), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().InActiveTxn() &&
 			NeedToBeCommittedInActiveTransaction(&tree.CreateSequence{}), convey.ShouldBeTrue)
-		err = ses.TxnRollbackSingleStatement(&tree.CreateSequence{}, nil)
+		ec.stmt = &tree.CreateSequence{}
+		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldNotBeNil)
-		ctx2, t2, err := ses.txnHandler.GetTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(ctx2, convey.ShouldNotBeNil)
+		t2 := ses.txnHandler.GetTxn()
 		convey.So(t2, convey.ShouldBeNil)
 	})
 }
@@ -493,22 +537,24 @@ func Test_rollbackStatement4(t *testing.T) {
 
 		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 		ses := newMockErrSession(t, ctx, ctrl)
-
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
 		//case2.2 not_autocommit && not_begin && CreateSequence (need to be committed in the active txn)
-		err := ses.SetAutocommit(true, false)
+		err := ses.GetTxnHandler().Create(ec)
 		convey.So(err, convey.ShouldBeNil)
-		_, _, err = ses.txnHandler.GetTxn()
+		err = ses.GetTxnHandler().SetAutocommit(ec, true, false)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(ses.OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
-		convey.So(ses.OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
-		convey.So(!ses.InMultiStmtTransactionMode(), convey.ShouldBeFalse)
-		convey.So(ses.InActiveTransaction() &&
+		_ = ses.txnHandler.GetTxn()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
+		convey.So(!ses.GetTxnHandler().InMultiStmtTransactionMode(), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().InActiveTxn() &&
 			NeedToBeCommittedInActiveTransaction(&tree.CreateSequence{}), convey.ShouldBeTrue)
-		err = ses.TxnRollbackSingleStatement(&tree.CreateSequence{}, nil)
+		ec.stmt = &tree.CreateSequence{}
+		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldNotBeNil)
-		ctx2, t2, err := ses.txnHandler.GetTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(ctx2, convey.ShouldNotBeNil)
+		t2 := ses.txnHandler.GetTxn()
 		convey.So(t2, convey.ShouldBeNil)
 	})
 }
@@ -521,28 +567,29 @@ func Test_rollbackStatement5(t *testing.T) {
 		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 		ses := newMockErrSession2(t, ctx, ctrl)
 		var txnOp TxnOperator
-
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
 		//case3.1 not_autocommit && not_begin && Insert Stmt (need not to be committed in the active txn)
-		err := ses.SetAutocommit(true, false)
+		err := ses.GetTxnHandler().Create(ec)
 		convey.So(err, convey.ShouldBeNil)
-		_, txnOp, err = ses.txnHandler.GetTxn()
+		err = ses.GetTxnHandler().SetAutocommit(ec, true, false)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(ses.OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
-		convey.So(ses.OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
-		convey.So(!ses.InMultiStmtTransactionMode(), convey.ShouldBeFalse)
-		convey.So(ses.InActiveTransaction() &&
+		txnOp = ses.txnHandler.GetTxn()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
+		convey.So(!ses.GetTxnHandler().InMultiStmtTransactionMode(), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().InActiveTxn() &&
 			NeedToBeCommittedInActiveTransaction(&tree.Insert{}), convey.ShouldBeFalse)
 		convey.So(txnOp != nil && !ses.IsDerivedStmt(), convey.ShouldBeTrue)
 		//called incrStatement
 		txnOp.GetWorkspace().StartStatement()
 		err = txnOp.GetWorkspace().IncrStatementID(ctx, false)
 		convey.So(err, convey.ShouldBeNil)
-		ses.GetTxnHandler().enableIncrStmt(txnOp.Txn().ID)
-		err = ses.TxnRollbackSingleStatement(&tree.Insert{}, nil)
+		ec.stmt = &tree.Insert{}
+		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldNotBeNil)
-		ctx2, t2, err := ses.txnHandler.GetTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(ctx2, convey.ShouldNotBeNil)
+		t2 := ses.txnHandler.GetTxn()
 		convey.So(t2, convey.ShouldBeNil)
 	})
 }
@@ -555,30 +602,32 @@ func Test_rollbackStatement6(t *testing.T) {
 		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 		ses := newMockErrSession2(t, ctx, ctrl)
 		var txnOp TxnOperator
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
 
 		//case3.2 not_autocommit && begin && Insert Stmt (need not to be committed in the active txn)
-		err := ses.SetAutocommit(true, false)
+		err := ses.GetTxnHandler().SetAutocommit(ec, true, false)
 		convey.So(err, convey.ShouldBeNil)
-		err = ses.TxnBegin()
+		ec.txnOpt = FeTxnOption{
+			byBegin: true,
+		}
+		err = ses.GetTxnHandler().Create(ec)
 		convey.So(err, convey.ShouldBeNil)
-		_, txnOp, err = ses.GetTxnHandler().GetTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(ses.OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeTrue)
-		convey.So(ses.OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
-		convey.So(!ses.InMultiStmtTransactionMode(), convey.ShouldBeFalse)
-		convey.So(ses.InActiveTransaction() &&
+		txnOp = ses.GetTxnHandler().GetTxn()
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeTrue)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
+		convey.So(!ses.GetTxnHandler().InMultiStmtTransactionMode(), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().InActiveTxn() &&
 			NeedToBeCommittedInActiveTransaction(&tree.Insert{}), convey.ShouldBeFalse)
 		convey.So(txnOp != nil && !ses.IsDerivedStmt(), convey.ShouldBeTrue)
 		//called incrStatement
 		txnOp.GetWorkspace().StartStatement()
 		err = txnOp.GetWorkspace().IncrStatementID(ctx, false)
 		convey.So(err, convey.ShouldBeNil)
-		ses.GetTxnHandler().enableIncrStmt(txnOp.Txn().ID)
-		err = ses.TxnRollbackSingleStatement(&tree.Insert{}, nil)
+		ec.stmt = &tree.Insert{}
+		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldNotBeNil)
-		ctx2, t2, err := ses.txnHandler.GetTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(ctx2, convey.ShouldNotBeNil)
+		t2 := ses.txnHandler.GetTxn()
 		convey.So(t2, convey.ShouldBeNil)
 	})
 	convey.Convey("abnormal rollback -- rollback whole txn", t, func() {
@@ -588,30 +637,32 @@ func Test_rollbackStatement6(t *testing.T) {
 		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 		ses := newMockErrSession(t, ctx, ctrl)
 		var txnOp TxnOperator
-
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
 		//case3.2 not_autocommit && begin && Insert Stmt (need not to be committed in the active txn)
-		err := ses.SetAutocommit(true, false)
+		err := ses.GetTxnHandler().SetAutocommit(ec, true, false)
 		convey.So(err, convey.ShouldBeNil)
-		err = ses.TxnBegin()
+		ec.txnOpt = FeTxnOption{
+			byBegin: true,
+		}
+		err = ses.GetTxnHandler().Create(ec)
 		convey.So(err, convey.ShouldBeNil)
-		_, txnOp, err = ses.GetTxnHandler().GetTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(ses.OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeTrue)
-		convey.So(ses.OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
-		convey.So(!ses.InMultiStmtTransactionMode(), convey.ShouldBeFalse)
-		convey.So(ses.InActiveTransaction() &&
+		txnOp = ses.GetTxnHandler().GetTxn()
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeTrue)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
+		convey.So(!ses.GetTxnHandler().InMultiStmtTransactionMode(), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().InActiveTxn() &&
 			NeedToBeCommittedInActiveTransaction(&tree.Insert{}), convey.ShouldBeFalse)
 		convey.So(txnOp != nil && !ses.IsDerivedStmt(), convey.ShouldBeTrue)
 		//called incrStatement
 		txnOp.GetWorkspace().StartStatement()
 		err = txnOp.GetWorkspace().IncrStatementID(ctx, false)
 		convey.So(err, convey.ShouldBeNil)
-		ses.GetTxnHandler().enableIncrStmt(txnOp.Txn().ID)
-		err = ses.TxnRollbackSingleStatement(&tree.Insert{}, getRandomErrorRollbackWholeTxn())
+		ec.stmt = &tree.Insert{}
+		ec.txnOpt.byRollback = isErrorRollbackWholeTxn(getRandomErrorRollbackWholeTxn())
+		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldNotBeNil)
-		ctx2, t2, err := ses.txnHandler.GetTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(ctx2, convey.ShouldNotBeNil)
+		t2 := ses.txnHandler.GetTxn()
 		convey.So(t2, convey.ShouldBeNil)
 	})
 }

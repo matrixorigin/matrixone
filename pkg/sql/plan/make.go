@@ -69,16 +69,16 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 	if err != nil {
 		return nil, err
 	}
-	var typ *plan.Type
+	var typ plan.Type
 	if scale < 18 && len(v) < 18 {
-		typ = &plan.Type{
+		typ = plan.Type{
 			Id:          int32(types.T_decimal64),
 			Width:       18,
 			Scale:       scale,
 			NotNullable: true,
 		}
 	} else {
-		typ = &plan.Type{
+		typ = plan.Type{
 			Id:          int32(types.T_decimal128),
 			Width:       38,
 			Scale:       scale,
@@ -170,6 +170,30 @@ func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 			NotNullable: true,
 		},
 	}
+}
+
+var MakePlan2Vecf32ConstExprWithType = makePlan2Vecf32ConstExprWithType
+
+// makePlan2Vecf32ConstExprWithType makes a vecf32 const expr.
+// usage: makePlan2Vecf32ConstExprWithType("[1,2,3]", 3)
+func makePlan2Vecf32ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_float32),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
+func makePlan2Vecf32ConstExpr(v string) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
+		Isnull: false,
+		Value: &plan.Literal_Sval{
+			Sval: v,
+		},
+	}}
 }
 
 var MakePlan2StringVecExprWithType = makePlan2StringVecExprWithType
@@ -305,18 +329,18 @@ func MakePlan2NullTextConstExprWithType(v string) *plan.Expr {
 	}
 }
 
-func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
+func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	var err error
-	if isSameColumnType(&expr.Typ, targetType) {
+	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
 	targetType.NotNullable = expr.Typ.NotNullable
 	if types.T(expr.Typ.Id) == types.T_any {
-		expr.Typ = *targetType
+		expr.Typ = targetType
 		return expr, nil
 	}
 
-	if targetType != nil && targetType.Id == int32(types.T_enum) {
+	if targetType.Id == int32(types.T_enum) {
 		expr, err = funcCastForEnumType(ctx, expr, targetType)
 		if err != nil {
 			return nil, err
@@ -329,7 +353,7 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr
 		return nil, err
 	}
 	t := &plan.Expr{
-		Typ: *targetType,
+		Typ: targetType,
 		Expr: &plan.Expr_T{
 			T: &plan.TargetType{},
 		},
@@ -341,13 +365,13 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr
 				Args: []*Expr{expr, t},
 			},
 		},
-		Typ: *targetType,
+		Typ: targetType,
 	}, nil
 }
 
-func funcCastForEnumType(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
+func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	var err error
-	if targetType != nil && targetType.Id != int32(types.T_enum) {
+	if targetType.Id != int32(types.T_enum) {
 		return expr, nil
 	}
 
@@ -399,8 +423,8 @@ func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
 
 var MakePlan2Type = makePlan2Type
 
-func makePlan2Type(typ *types.Type) *plan.Type {
-	return &plan.Type{
+func makePlan2Type(typ *types.Type) plan.Type {
+	return plan.Type{
 		Id:    int32(typ.Oid),
 		Width: typ.Width,
 		Scale: typ.Scale,
@@ -416,7 +440,7 @@ func makePlan2TypeValue(typ *types.Type) plan.Type {
 
 var MakeTypeByPlan2Type = makeTypeByPlan2Type
 
-func makeTypeByPlan2Type(typ *plan.Type) types.Type {
+func makeTypeByPlan2Type(typ plan.Type) types.Type {
 	oid := types.T(typ.Id)
 	return types.New(oid, typ.Width, typ.Scale)
 }
@@ -464,7 +488,7 @@ func MakeRowIdColDef() *ColDef {
 	}
 }
 
-func isSameColumnType(t1 *Type, t2 *Type) bool {
+func isSameColumnType(t1 Type, t2 Type) bool {
 	if t1.Id != t2.Id {
 		return false
 	}

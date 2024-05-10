@@ -43,6 +43,8 @@ const (
 	// OkExpectedNotSafeToStartTransfer is not an error, but is expected
 	// phenomenon that the connection is not safe to transfer to other nodes.
 	OkExpectedNotSafeToStartTransfer uint16 = 6
+	//mysql client sends the COM_QUIT to the server before closing the connection.
+	MysqlClientQuit uint16 = 7
 
 	OkMax uint16 = 99
 
@@ -216,6 +218,7 @@ const (
 	ErrWaiterPaused               uint16 = 20633
 	ErrRetryForCNRollingRestart   uint16 = 20634
 	ErrNewTxnInCNRollingRestart   uint16 = 20635
+	ErrPrevCheckpointNotFinished  uint16 = 20636
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -226,8 +229,10 @@ const (
 	ErrLockTableNotFound uint16 = 20703
 	// ErrDeadlockCheckBusy deadlock busy error, cannot check deadlock.
 	ErrDeadlockCheckBusy uint16 = 20704
+	// ErrCannotCommitOrphan cannot commit orphan transaction
+	ErrCannotCommitOrphan uint16 = 20705
 	// ErrLockConflict lock operation conflict
-	ErrLockConflict uint16 = 20705
+	ErrLockConflict uint16 = 20706
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -262,6 +267,10 @@ const (
 	ErrDuplicateConnector  uint16 = 20904
 	ErrUnsupportedDataType uint16 = 20905
 	ErrTaskNotFound        uint16 = 20906
+
+	// Group 10: skip list
+	ErrKeyAlreadyExists uint16 = 21001
+	ErrArenaFull        uint16 = 21002
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -432,12 +441,14 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWaiterPaused:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "waiter is paused"},
 	ErrRetryForCNRollingRestart:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "retry for CN rolling restart"},
 	ErrNewTxnInCNRollingRestart:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "new txn in CN rolling restart"},
+	ErrPrevCheckpointNotFinished:  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "prev checkpoint not finished"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
 	ErrLockTableBindChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
 	ErrLockTableNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
 	ErrDeadlockCheckBusy:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
+	ErrCannotCommitOrphan:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction"},
 	ErrLockConflict:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock options conflict, wait policy is fast fail"},
 
 	// Group 8: partition
@@ -473,6 +484,10 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDuplicateConnector:  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the connector for table %s already exists"},
 	ErrUnsupportedDataType: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported data type %T"},
 	ErrTaskNotFound:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "task with ID %d not found"},
+
+	// Group 10: skip list
+	ErrKeyAlreadyExists: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "record with this key already exists"},
+	ErrArenaFull:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "allocation failed because arena is full"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -517,6 +532,13 @@ func (e *Error) Error() string {
 
 func (e *Error) Detail() string {
 	return e.detail
+}
+
+func (e *Error) Display() string {
+	if len(e.detail) == 0 {
+		return e.message
+	}
+	return fmt.Sprintf("%s: %s", e.message, e.detail)
 }
 
 func (e *Error) ErrorCode() uint16 {
@@ -572,6 +594,14 @@ func IsMoErrCode(e error, rc uint16) bool {
 		return false
 	}
 	return me.code == rc
+}
+
+func DowncastError(e error) *Error {
+	if err, ok := e.(*Error); ok {
+		return err
+	}
+	return newError(Context(), ErrInternal, "downcast error failed: %v", e)
+
 }
 
 // ConvertPanicError converts a runtime panic to internal error.
@@ -631,6 +661,7 @@ var errOkExpectedEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000", ""}
 var errOkExpectedDup = Error{OkExpectedDup, 0, "ExpectedDup", "00000", ""}
 var errOkExpectedPossibleDup = Error{OkExpectedPossibleDup, 0, "OkExpectedPossibleDup", "00000", ""}
 var errOkExpectedNotSafeToStartTransfer = Error{OkExpectedNotSafeToStartTransfer, 0, "OkExpectedNotSafeToStartTransfer", "00000", ""}
+var errMysqlClientQuit = Error{MysqlClientQuit, 0, "MysqlClientQuit", "00000", ""}
 
 /*
 GetOk is useless in general, should just use nil.
@@ -663,6 +694,10 @@ func GetOkExpectedPossibleDup() *Error {
 
 func GetOkExpectedNotSafeToStartTransfer() *Error {
 	return &errOkExpectedNotSafeToStartTransfer
+}
+
+func GetMysqlClientQuit() *Error {
+	return &errMysqlClientQuit
 }
 
 func NewInfo(ctx context.Context, msg string) *Error {
@@ -1112,6 +1147,10 @@ func NewDeadLockDetected(ctx context.Context) *Error {
 
 func NewDeadlockCheckBusy(ctx context.Context) *Error {
 	return newError(ctx, ErrDeadlockCheckBusy)
+}
+
+func NewCannotCommitOrphan(ctx context.Context) *Error {
+	return newError(ctx, ErrCannotCommitOrphan)
 }
 
 func NewLockTableBindChanged(ctx context.Context) *Error {

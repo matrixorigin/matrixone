@@ -106,7 +106,7 @@ func LoadColumnsData2(
 		if needCopy {
 			if vec, err = containers.CloneVector(
 				obj.(*vector.Vector),
-				vPool.GetAllocator(),
+				vPool.GetMPool(),
 				vPool,
 			); err != nil {
 				return

@@ -25,7 +25,7 @@ var _ vm.Operator = new(Argument)
 
 type Argument struct {
 	Data interface{}
-	Func func(interface{}, *batch.Batch) error
+	Func func(*batch.Batch) error
 
 	vm.OperatorBase
 }
@@ -60,7 +60,7 @@ func (arg *Argument) WithData(data interface{}) *Argument {
 	return arg
 }
 
-func (arg *Argument) WithFunc(Func func(interface{}, *batch.Batch) error) *Argument {
+func (arg *Argument) WithFunc(Func func(*batch.Batch) error) *Argument {
 	arg.Func = Func
 	return arg
 }
@@ -73,6 +73,6 @@ func (arg *Argument) Release() {
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if !pipelineFailed {
-		_ = arg.Func(arg.Data, nil)
+		_ = arg.Func(nil)
 	}
 }

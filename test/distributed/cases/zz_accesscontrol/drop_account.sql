@@ -20,6 +20,14 @@ select account_name from mo_catalog.mo_account where account_name='drop_account_
 create account drop_account_04 ADMIN_NAME 'root' IDENTIFIED BY '1234567890';
 drop account `drop_account_04`;
 
+--prepared
+create account if not exists drop_account_01 ADMIN_NAME 'root' IDENTIFIED BY '1234567890';
+PREPARE s1 FROM "drop account ?";
+set @a_var = 'drop_account_01';
+EXECUTE s1 USING @a_var;
+DEALLOCATE PREPARE s1;
+select account_name from mo_catalog.mo_account where account_name='drop_account_01';
+
 --异常：drop sys，语法错误
 drop account sys;
 drop accout abc;

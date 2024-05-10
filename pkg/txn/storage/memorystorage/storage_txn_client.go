@@ -17,8 +17,10 @@ package memorystorage
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -103,6 +105,14 @@ func (*StorageTxnClient) CNBasedConsistencyEnabled() bool        { panic("unimpl
 type StorageTxnOperator struct {
 	storages map[string]*Storage
 	meta     txn.TxnMeta
+}
+
+func (s *StorageTxnOperator) IsSnapOp() bool {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) client.TxnOperator {
+	panic("unimplemented")
 }
 
 func (s *StorageTxnOperator) EnterRunSql() {
@@ -333,4 +343,8 @@ func (s *StorageTxnOperator) TxnOptions() txn.TxnOptions {
 
 func (s *StorageTxnOperator) NextSequence() uint64 {
 	panic("should not call")
+}
+
+func (s *StorageTxnOperator) GetWaitActiveCost() time.Duration {
+	return time.Duration(0)
 }

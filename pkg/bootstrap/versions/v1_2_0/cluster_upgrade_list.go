@@ -26,7 +26,6 @@ import (
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{
-	upg_mo_pub,
 	upg_sys_modify_async_task,
 	upg_create_index1_async_task,
 	upg_create_index2_async_task,
@@ -44,42 +43,7 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_debug_traceStatementTable,
 	upg_mo_debug_eventTxnActionTable,
 	upg_mo_debug_featuresTables,
-}
-
-//var upg_mo_account = versions.UpgradeEntry{
-//	Schema:    catalog.MO_CATALOG,
-//	TableName: catalog.MOAccountTable,
-//	UpgType:   versions.ADD_COLUMN,
-//	UpgSql:    "alter table `mo_account` add column `create_version` varchar(50) default '1.2.0' after suspended_time",
-//	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-//		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOAccountTable, "create_version")
-//		if err != nil {
-//			return false, err
-//		}
-//
-//		if colInfo.IsExits {
-//			return true, nil
-//		}
-//		return false, nil
-//	},
-//}
-
-var upg_mo_pub = versions.UpgradeEntry{
-	Schema:    catalog.MO_CATALOG,
-	TableName: catalog.MO_PUBS,
-	UpgType:   versions.ADD_COLUMN,
-	UpgSql:    "alter table `mo_catalog`.`mo_pubs` add column `update_time` timestamp",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		colInfo, err := versions.CheckTableColumn(txn, accountId, "mo_catalog", catalog.MO_PUBS, "update_time")
-		if err != nil {
-			return false, err
-		}
-
-		if colInfo.IsExits {
-			return true, nil
-		}
-		return false, nil
-	},
+	upg_mo_account,
 }
 
 var upg_sys_modify_async_task = versions.UpgradeEntry{
@@ -333,4 +297,19 @@ var upg_mo_debug_featuresTables = versions.UpgradeEntry{
 		trace.FeatureTraceData, trace.StateDisable,
 		trace.FeatureTraceStatement, trace.StateDisable,
 		trace.FeatureTraceTxnWorkspace, trace.StateDisable),
+}
+
+var upg_mo_account = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MOAccountTable,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    "alter table mo_account add column admin_name varchar(300) after account_name",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOAccountTable, "admin_name")
+		if err != nil {
+			return false, err
+		}
+		return colInfo.IsExits, nil
+	},
+	PostSql: "update mo_account set admin_name = mo_admin_name(account_id)",
 }

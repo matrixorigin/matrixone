@@ -118,3 +118,28 @@ var (
 	LocalWriteIODurationHistogram = localIODurationHistogram.WithLabelValues("write")
 	LocalReadIODurationHistogram  = localIODurationHistogram.WithLabelValues("read")
 )
+
+var (
+	ioMergerCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "io_merger_counter",
+			Help:      "io merger counter",
+		},
+		[]string{"type"},
+	)
+	IOMergerCounterInitiate = ioMergerCounter.WithLabelValues("initiate")
+	IOMergerCounterWait     = ioMergerCounter.WithLabelValues("wait")
+
+	ioMergerDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "io_merger_duration_seconds",
+			Help:      "io merger duration seconds",
+			Buckets:   getDurationBuckets(),
+		}, []string{"type"})
+	IOMergerDurationInitiate = ioMergerDuration.WithLabelValues("initiate")
+	IOMergerDurationWait     = ioMergerDuration.WithLabelValues("wait")
+)

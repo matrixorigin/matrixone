@@ -18,16 +18,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 func New(ro bool, attrs []string) *Batch {
@@ -55,42 +54,16 @@ func SetLength(bat *Batch, n int) {
 	bat.rowCount = n
 }
 
-func (info *aggInfo) MarshalBinary() ([]byte, error) {
-	var buf bytes.Buffer
-	buf.Write(types.EncodeInt64(&info.Op))
-	buf.Write(types.EncodeBool(&info.Dist))
-	buf.Write(types.EncodeType(&info.inputTypes))
-	data, err := types.Encode(info.Agg)
-	if err != nil {
-		return nil, err
-	}
-	buf.Write(data)
-	return buf.Bytes(), nil
-}
-
-func (info *aggInfo) UnmarshalBinary(data []byte) error {
-	info.Op = types.DecodeInt64(data[:8])
-	data = data[8:]
-	info.Dist = types.DecodeBool(data[:1])
-	data = data[1:]
-	info.inputTypes = types.DecodeType(data[:types.TSize])
-	data = data[types.TSize:]
-	aggregate, err := agg.NewAgg(info.Op, info.Dist, []types.Type{info.inputTypes})
-	if err != nil {
-		return err
-	}
-	info.Agg = aggregate
-	return types.Decode(data, info.Agg)
-}
-
 func (bat *Batch) MarshalBinary() ([]byte, error) {
-	aggInfos := make([]aggInfo, len(bat.Aggs))
-	for i := range aggInfos {
-		aggInfos[i].Op = bat.Aggs[i].GetOperatorId()
-		aggInfos[i].inputTypes = bat.Aggs[i].InputTypes()[0]
-		aggInfos[i].Dist = bat.Aggs[i].IsDistinct()
-		aggInfos[i].Agg = bat.Aggs[i]
+	aggInfos := make([][]byte, len(bat.Aggs))
+	for i, exec := range bat.Aggs {
+		data, err := aggexec.MarshalAggFuncExec(exec)
+		if err != nil {
+			return nil, err
+		}
+		aggInfos[i] = data
 	}
+
 	return types.Encode(&EncodeBatch{
 		rowCount:  int64(bat.rowCount),
 		Vecs:      bat.Vecs,
@@ -100,22 +73,37 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 	})
 }
 
-func (bat *Batch) UnmarshalBinary(data []byte) error {
-	rbat := new(EncodeBatch)
+func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
+	return bat.unmarshalBinaryWithAnyMp(data, nil)
+}
 
-	if err := types.Decode(data, rbat); err != nil {
+func (bat *Batch) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
+	return bat.unmarshalBinaryWithAnyMp(data, mp)
+}
+
+func (bat *Batch) unmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
+	rbat := new(EncodeBatch)
+	if err = rbat.UnmarshalBinaryWithCopy(data, mp); err != nil {
 		return err
 	}
+
 	bat.Recursive = rbat.Recursive
 	bat.Cnt = 1
 	bat.rowCount = int(rbat.rowCount)
 	bat.Vecs = rbat.Vecs
 	bat.Attrs = append(bat.Attrs, rbat.Attrs...)
-	// initialize bat.Aggs only if necessary
+
 	if len(rbat.AggInfos) > 0 {
-		bat.Aggs = make([]agg.Agg[any], len(rbat.AggInfos))
+		bat.Aggs = make([]aggexec.AggFuncExec, len(rbat.AggInfos))
+		var aggMemoryManager aggexec.AggMemoryManager = nil
+		if mp != nil {
+			aggMemoryManager = aggexec.NewSimpleAggMemoryManager(mp)
+		}
+
 		for i, info := range rbat.AggInfos {
-			bat.Aggs[i] = info.Agg
+			if bat.Aggs[i], err = aggexec.UnmarshalAggFuncExec(aggMemoryManager, info); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -220,7 +208,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	}
 	for _, agg := range bat.Aggs {
 		if agg != nil {
-			agg.Free(m)
+			agg.Free()
 		}
 	}
 	bat.Attrs = nil
@@ -270,13 +258,15 @@ func (bat *Batch) Log(tag string) {
 }
 
 func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
+	var err error
+
 	rbat := NewWithSize(len(bat.Vecs))
 	rbat.SetAttributes(bat.Attrs)
 	rbat.Recursive = bat.Recursive
 	for j, vec := range bat.Vecs {
 		typ := *bat.GetVector(int32(j)).GetType()
 		rvec := vector.NewVec(typ)
-		if err := vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
+		if err = vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
 			rbat.Clean(mp)
 			return nil, err
 		}
@@ -284,12 +274,18 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	}
 	rbat.rowCount = bat.rowCount
 
-	// if len(bat.Aggs) > 0 {
-	// 	rbat.Aggs = make([]agg.Agg[any], len(bat.Aggs))
-	// 	for i, agg := range bat.Aggs {
-	// 		rbat.Aggs[i] = agg.Dup(mp)
-	// 	}
-	// }
+	//if len(bat.Aggs) > 0 {
+	//	rbat.Aggs = make([]aggexec.AggFuncExec, len(bat.Aggs))
+	//	aggMemoryManager := aggexec.NewSimpleAggMemoryManager(mp)
+	//
+	//	for i, agg := range bat.Aggs {
+	//		rbat.Aggs[i], err = aggexec.CopyAggFuncExec(aggMemoryManager, agg)
+	//		if err != nil {
+	//			rbat.Clean(mp)
+	//			return nil, err
+	//		}
+	//	}
+	//}
 	// if bat.AuxData != nil {
 	// 	if m, ok := bat.AuxData.(*hashmap.JoinMap); ok {
 	// rbat.AuxData = &hashmap.JoinMap{
@@ -384,7 +380,7 @@ func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
 }
 
 func (bat *Batch) IsEmpty() bool {
-	return bat.rowCount == 0 && bat.AuxData == nil
+	return bat.rowCount == 0 && bat.AuxData == nil && len(bat.Aggs) == 0
 }
 
 func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {

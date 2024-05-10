@@ -80,8 +80,6 @@ func (entry *TableEntry) Less(b *TableEntry) int {
 }
 
 func NewDBEntryWithID(catalog *Catalog, name string, createSql, datTyp string, id uint64, txn txnif.AsyncTxn) *DBEntry {
-	//id := catalog.NextDB()
-
 	e := &DBEntry{
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
@@ -102,53 +100,6 @@ func NewDBEntryWithID(catalog *Catalog, name string, createSql, datTyp string, i
 		e.acInfo.UserID, e.acInfo.RoleID = txn.GetUserAndRoleID()
 	}
 	e.CreateWithTxn(txn, &EmptyMVCCNode{})
-	e.acInfo.CreateAt = types.CurrentTimestamp()
-	return e
-}
-
-func NewDBEntry(catalog *Catalog, name, createSql, datTyp string, txn txnif.AsyncTxn) *DBEntry {
-	id := catalog.NextDB()
-
-	e := &DBEntry{
-		ID: id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
-		catalog: catalog,
-		DBNode: &DBNode{
-			name:      name,
-			createSql: createSql,
-			datType:   datTyp,
-		},
-		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes: make(map[string]*nodeList[*TableEntry]),
-		link:      common.NewGenericSortedDList((*TableEntry).Less),
-	}
-	if txn != nil {
-		// Only in unit test, txn can be nil
-		e.acInfo.TenantID = txn.GetTenantID()
-		e.acInfo.UserID, e.acInfo.RoleID = txn.GetUserAndRoleID()
-	}
-	e.CreateWithTxn(txn, &EmptyMVCCNode{})
-	e.acInfo.CreateAt = types.CurrentTimestamp()
-	return e
-}
-
-func NewDBEntryByTS(catalog *Catalog, name string, ts types.TS) *DBEntry {
-	id := catalog.NextDB()
-
-	e := &DBEntry{
-		ID: id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
-		catalog: catalog,
-		DBNode: &DBNode{
-			name: name,
-		},
-		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes: make(map[string]*nodeList[*TableEntry]),
-		link:      common.NewGenericSortedDList((*TableEntry).Less),
-	}
-	e.CreateWithTS(ts, &EmptyMVCCNode{})
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
@@ -231,7 +182,7 @@ func (e *DBEntry) StringWithLevel(level common.PPLevel) string {
 func (e *DBEntry) StringWithlevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
 		return fmt.Sprintf("DB[%d][name=%s][C@%s,D@%s]",
-			e.ID, e.GetFullName(), e.GetCreatedAtLocked().ToString(), e.GetDeleteAt().ToString())
+			e.ID, e.GetFullName(), e.GetCreatedAtLocked().ToString(), e.GetDeleteAtLocked().ToString())
 	}
 	return fmt.Sprintf("DB%s[name=%s, id=%d]", e.BaseEntryImpl.StringLocked(), e.GetFullName(), e.ID)
 }
@@ -486,7 +437,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 		defer table.RUnlock()
 		prevname := ""
 		// clean all name because RemoveEntry can be called by GC、
-		table.LoopChain(func(m *MVCCNode[*TableMVCCNode]) bool {
+		table.LoopChainLocked(func(m *MVCCNode[*TableMVCCNode]) bool {
 			if prevname == m.BaseNode.Schema.Name {
 				return true
 			}
@@ -624,7 +575,7 @@ func (e *DBEntry) PrepareRollback() (err error) {
 		return
 	}
 	if isEmpty {
-		if err = e.catalog.RemoveEntry(e); err != nil {
+		if err = e.catalog.RemoveDBEntry(e); err != nil {
 			return
 		}
 	}

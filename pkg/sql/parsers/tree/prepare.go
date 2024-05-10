@@ -39,7 +39,7 @@ type prepareImpl struct {
 	Format string
 }
 
-func (e *prepareImpl) Free() {
+func (node *prepareImpl) Free() {
 }
 
 type PrepareStmt struct {

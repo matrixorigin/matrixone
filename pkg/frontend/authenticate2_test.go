@@ -15,12 +15,14 @@
 package frontend
 
 import (
+	"context"
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
+
 	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/stretchr/testify/assert"
 )
 
 func Test_verifyAccountCanOperateClusterTable(t *testing.T) {
@@ -221,4 +223,11 @@ func Test_hasMoCtrl(t *testing.T) {
 		},
 	})
 	assert.True(t, ret)
+}
+
+func newTestExecCtx(ctx context.Context, ctrl *gomock.Controller) *ExecCtx {
+	ret := &ExecCtx{
+		reqCtx: ctx,
+	}
+	return ret
 }

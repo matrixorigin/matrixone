@@ -23,6 +23,7 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	gotrace "runtime/trace"
 	"sort"
 	"strings"
 	"sync"
@@ -33,7 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"go.uber.org/zap"
@@ -55,7 +56,7 @@ type LocalFS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 
-	ioLocks IOLocks
+	ioMerger *IOMerger
 }
 
 var _ FileService = new(LocalFS)
@@ -101,6 +102,7 @@ func NewLocalFS(
 		dirFiles:        make(map[string]*os.File),
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
+		ioMerger:        NewIOMerger(),
 	}
 
 	if err := fs.initCaches(ctx, cacheConfig); err != nil {
@@ -171,7 +173,7 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 
-	v2.FSWriteLocalCounter.Add(float64(len(vector.Entries)))
+	metric.FSWriteLocalCounter.Add(float64(len(vector.Entries)))
 
 	var err error
 	var bytesWritten int
@@ -180,8 +182,8 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 	defer func() {
 		// cover another func to catch the err when process Write
 		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, int64(bytesWritten)))
-		v2.LocalWriteIODurationHistogram.Observe(time.Since(start).Seconds())
-		v2.LocalWriteIOBytesHistogram.Observe(float64(bytesWritten))
+		metric.LocalWriteIODurationHistogram.Observe(time.Since(start).Seconds())
+		metric.LocalWriteIOBytesHistogram.Observe(float64(bytesWritten))
 	}()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
@@ -294,25 +296,26 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	defer func() {
 		LocalReadIODuration := time.Since(start)
 
-		v2.LocalReadIODurationHistogram.Observe(LocalReadIODuration.Seconds())
-		v2.LocalReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
+		metric.LocalReadIODurationHistogram.Observe(LocalReadIODuration.Seconds())
+		metric.LocalReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
 	}()
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
+
+	stats := statistic.StatsInfoFromContext(ctx)
+
 	startLock := time.Now()
-	unlock, wait := l.ioLocks.Lock(IOLockKey{
-		File: vector.FilePath,
-	})
-	if unlock != nil {
-		defer unlock()
+	_, task := gotrace.NewTask(ctx, "LocalFS.Read: wait io")
+	done, wait := l.ioMerger.Merge(vector.ioMergeKey())
+	if done != nil {
+		defer done()
 	} else {
 		wait()
 	}
-
-	stats := statistic.StatsInfoFromContext(ctx)
-	stats.AddLockTimeConsumption(time.Since(startLock))
+	task.End()
+	stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
 
 	allocator := l.allocator
 	if vector.Policy.Any(SkipMemoryCache) {
@@ -391,16 +394,13 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	startLock := time.Now()
-	unlock, wait := l.ioLocks.Lock(IOLockKey{
-		File: vector.FilePath,
-	})
-
-	if unlock != nil {
-		defer unlock()
+	done, wait := l.ioMerger.Merge(vector.ioMergeKey())
+	if done != nil {
+		defer done()
 	} else {
 		wait()
 	}
-	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
+	statistic.StatsInfoFromContext(ctx).AddLocalFSReadCacheIOMergerTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -752,7 +752,7 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 	)
 }
 
-func (l *LocalFS) deleteSingle(ctx context.Context, filePath string) error {
+func (l *LocalFS) deleteSingle(_ context.Context, filePath string) error {
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return err

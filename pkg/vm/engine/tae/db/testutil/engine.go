@@ -105,6 +105,22 @@ func (e *TestEngine) Restart(ctx context.Context) {
 		})
 	assert.NoError(e.t, err)
 }
+func (e *TestEngine) RestartDisableGC(ctx context.Context) {
+	_ = e.DB.Close()
+	var err error
+	e.Opts.GCCfg.GCTTL = 100 * time.Second
+	e.DB, err = db.Open(ctx, e.Dir, e.Opts)
+	// only ut executes this checker
+	e.DB.DiskCleaner.GetCleaner().AddChecker(
+		func(item any) bool {
+			min := e.DB.TxnMgr.MinTSForTest()
+			ckp := item.(*checkpoint.CheckpointEntry)
+			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
+			end := ckp.GetEnd()
+			return !end.GreaterEq(&min)
+		})
+	assert.NoError(e.t, err)
+}
 
 func (e *TestEngine) Close() error {
 	err := e.DB.Close()
@@ -114,7 +130,8 @@ func (e *TestEngine) Close() error {
 }
 
 func (e *TestEngine) CreateRelAndAppend(bat *containers.Batch, createDB bool) (handle.Database, handle.Relation) {
-	return CreateRelationAndAppend(e.t, e.tenantID, e.DB, DefaultTestDB, e.schema, bat, createDB)
+	clonedSchema := e.schema.Clone()
+	return CreateRelationAndAppend(e.t, e.tenantID, e.DB, DefaultTestDB, clonedSchema, bat, createDB)
 }
 
 func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
@@ -765,7 +782,7 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 func (e *TestEngine) CheckObjectInfo(onlyCheckName bool) {
 	p := &catalog.LoopProcessor{}
 	p.ObjectFn = func(se *catalog.ObjectEntry) error {
-		se.LoopChain(func(node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
+		se.LoopChainLocked(func(node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
 			if se.GetTable().GetDB().ID == pkgcatalog.MO_CATALOG_ID {
 				return true
 			}

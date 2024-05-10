@@ -19,15 +19,12 @@ import (
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -45,29 +42,12 @@ var _ storage.TxnStorage = (*taeStorage)(nil)
 func NewTAEStorage(
 	ctx context.Context,
 	dataDir string,
+	opt *options.Options,
 	shard metadata.TNShard,
-	factory logservice.ClientFactory,
-	fs fileservice.FileService,
 	rt runtime.Runtime,
-	ckpCfg *options.CheckpointCfg,
-	gcCfg *options.GCCfg,
 	logtailServerAddr string,
 	logtailServerCfg *options.LogtailServerCfg,
-	incrementalDedup bool,
-	maxMessageSize uint64,
 ) (storage.TxnStorage, error) {
-	opt := &options.Options{
-		Clock:            rt.Clock(),
-		Fs:               fs,
-		Lc:               logservicedriver.LogServiceClientFactory(factory),
-		Shard:            shard,
-		CheckpointCfg:    ckpCfg,
-		GCCfg:            gcCfg,
-		LogStoreT:        options.LogstoreLogservice,
-		IncrementalDedup: incrementalDedup,
-		Ctx:              ctx,
-		MaxMessageSize:   maxMessageSize,
-	}
 
 	taeHandler := rpc.NewTAEHandle(ctx, dataDir, opt)
 	tae := taeHandler.GetDB()

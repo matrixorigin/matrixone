@@ -81,9 +81,10 @@ var (
 			Subsystem: "task",
 			Name:      "scheduled_by_total",
 			Help:      "Total number of task have been scheduled.",
-		}, []string{"type"})
+		}, []string{"type", "nodetype"})
 
-	TaskMergeScheduledByCounter = taskScheduledByCounter.WithLabelValues("merge")
+	TaskDNMergeScheduledByCounter = taskScheduledByCounter.WithLabelValues("merge", "dn")
+	TaskCNMergeScheduledByCounter = taskScheduledByCounter.WithLabelValues("merge", "cn")
 
 	taskGeneratedStuffCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -91,10 +92,10 @@ var (
 			Subsystem: "task",
 			Name:      "execute_results_total",
 			Help:      "Total number of stuff a task have generated",
-		}, []string{"type"})
+		}, []string{"type", "nodetype"})
 
-	TaskMergedBlocksCounter = taskGeneratedStuffCounter.WithLabelValues("merged_block")
-	TasKMergedSizeCounter   = taskGeneratedStuffCounter.WithLabelValues("merged_size")
+	TaskDNMergedSizeCounter = taskGeneratedStuffCounter.WithLabelValues("merged_size", "dn")
+	TaskCNMergedSizeCounter = taskGeneratedStuffCounter.WithLabelValues("merged_size", "cn")
 
 	taskSelectivityCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -35,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 var (
@@ -60,6 +61,7 @@ var (
 		moerr.ErrTxnNotFound:          {},
 		moerr.ErrTxnNotActive:         {},
 		moerr.ErrLockTableBindChanged: {},
+		moerr.ErrCannotCommitOrphan:   {},
 	}
 	rollbackTxnErrors = map[uint16]struct{}{
 		moerr.ErrTAERollback:  {},
@@ -207,6 +209,9 @@ type txnOperator struct {
 	lockService          lockservice.LockService
 	sequence             atomic.Uint64
 	createTs             timestamp.Timestamp
+	//read-only txn operators for supporting snapshot read feature.
+	children []*txnOperator
+	parent   atomic.Pointer[txnOperator]
 
 	mu struct {
 		sync.RWMutex
@@ -224,6 +229,8 @@ type txnOperator struct {
 	commitCounter   counter
 	rollbackCounter counter
 	runSqlCounter   counter
+
+	waitActiveCost time.Duration
 }
 
 func newTxnOperator(
@@ -249,6 +256,27 @@ func newTxnOperator(
 		v2.TxnInternalCounter.Inc()
 	}
 	return tc
+}
+
+func (tc *txnOperator) IsSnapOp() bool {
+	return tc.parent.Load() != nil
+}
+
+func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator {
+	op := &txnOperator{}
+	op.mu.txn = txn.TxnMeta{
+		SnapshotTS: snapshot,
+		ID:         tc.mu.txn.ID,
+		TNShards:   tc.mu.txn.TNShards,
+	}
+	op.txnID = op.mu.txn.ID
+
+	op.workspace = tc.workspace.CloneSnapshotWS()
+	op.workspace.BindTxnOp(op)
+
+	tc.children = append(tc.children, op)
+	op.parent.Store(tc)
+	return op
 }
 
 func newTxnOperatorWithSnapshot(
@@ -295,8 +323,13 @@ func (tc *txnOperator) waitActive(ctx context.Context) error {
 			return tc.waiter.wait(ctx)
 		},
 		false)
+	tc.waitActiveCost = cost
 	v2.TxnWaitActiveDurationHistogram.Observe(cost.Seconds())
 	return err
+}
+
+func (tc *txnOperator) GetWaitActiveCost() time.Duration {
+	return tc.waitActiveCost
 }
 
 func (tc *txnOperator) notifyActive() {

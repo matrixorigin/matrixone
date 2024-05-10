@@ -1,3 +1,5 @@
+SET GLOBAL experimental_ivf_index = 1;
+
 -- create vector index: create->create index->insert
 create table vector_index_01(a int primary key, b vecf32(128),c int,key c_k(c));
 create index idx01 using ivfflat on vector_index_01(b) lists=5 op_type "vector_l2_ops";
@@ -166,3 +168,5 @@ show create table vector_index_10;
 commit;
 show create table vector_index_10;
 drop table vector_index_10;
+
+SET GLOBAL experimental_ivf_index = 0;

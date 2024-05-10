@@ -599,7 +599,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			col := &plan.ColDef{
 				Name: act.AddColumn.Name,
 				Alg:  plan.CompressType_Lz4,
-				Typ:  *act.AddColumn.Type,
+				Typ:  act.AddColumn.Type,
 			}
 			var pos int32
 			cols, pos, err = getAddColPos(cols, col, act.AddColumn.PreName, act.AddColumn.Pos)
@@ -709,7 +709,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			req = api.NewRenameTableReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), oldName, newName)
 		case api.AlterKind_AddColumn:
 			name := addCol[addColIdx].Name
-			typ := addCol[addColIdx].Type
+			typ := &addCol[addColIdx].Type
 			pos := addCol[addColIdx].Pos
 			addColIdx++
 			req = api.NewAddColumnReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), name, typ, pos)
@@ -1630,6 +1630,12 @@ func (s *Scope) CreateIndex(c *Compile) error {
 }
 
 func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+	if ok, err := s.isExperimentalEnabled(c, ivfFlatIndexFlag); err != nil {
+		return err
+	} else if !ok {
+		return moerr.NewInternalErrorNoCtx("IVF index is not enabled")
+	}
+
 	// 1. static check
 	if len(indexDefs) != 3 {
 		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
@@ -1677,6 +1683,16 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 	err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
+	if err != nil {
+		return err
+	}
+
+	// 4.d delete older entries in index table.
+	err = s.handleIvfIndexDeleteOldEntries(c,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName,
+		qryDatabase)
 	if err != nil {
 		return err
 	}
@@ -2573,7 +2589,7 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 	bat.Attrs = attrs
 
 	// typ is sequenece's type now
-	typ := plan2.MakeTypeByPlan2Type(&tableDef.Cols[0].Typ)
+	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
 	vecs := make([]*vector.Vector, len(plan2.Sequence_cols_name))
 
 	switch typ.Oid {
@@ -2682,7 +2698,7 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 	}
 	bat.Attrs = attrs
 
-	typ := plan2.MakeTypeByPlan2Type(&tableDef.Cols[0].Typ)
+	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
 	sequence_cols_num := 7
 	vecs := make([]*vector.Vector, sequence_cols_num)
 

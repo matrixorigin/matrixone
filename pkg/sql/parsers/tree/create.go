@@ -921,21 +921,22 @@ type CreateTable struct {
 		it is impossible to be the temporary table, the cluster table,
 		the normal table and the external table at the same time.
 	*/
-	Temporary       bool
-	IsClusterTable  bool
-	IfNotExists     bool
-	Table           TableName
-	Defs            TableDefs
-	Options         []TableOption
-	PartitionOption *PartitionOption
-	ClusterByOption *ClusterByOption
-	Param           *ExternParam
-	AsSource        *Select
-	IsDynamicTable  bool
-	DTOptions       []TableOption
-	IsAsSelect      bool
-	IsAsLike        bool
-	LikeTableName   TableName
+	Temporary          bool
+	IsClusterTable     bool
+	IfNotExists        bool
+	Table              TableName
+	Defs               TableDefs
+	Options            []TableOption
+	PartitionOption    *PartitionOption
+	ClusterByOption    *ClusterByOption
+	Param              *ExternParam
+	AsSource           *Select
+	IsDynamicTable     bool
+	DTOptions          []TableOption
+	IsAsSelect         bool
+	IsAsLike           bool
+	LikeTableName      TableName
+	SubscriptionOption *SubscriptionOption
 }
 
 func NewCreateTable() *CreateTable {
@@ -972,7 +973,9 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		return
 	}
 
-	if node.IsDynamicTable {
+	if node.SubscriptionOption != nil {
+		node.SubscriptionOption.Format(ctx)
+	} else if node.IsDynamicTable {
 		ctx.WriteString(" as ")
 		node.AsSource.Format(ctx)
 
@@ -1440,7 +1443,9 @@ type AttributeDefault struct {
 
 func (node *AttributeDefault) Format(ctx *FmtCtx) {
 	ctx.WriteString("default ")
-	node.Expr.Format(ctx)
+	if node.Expr != nil {
+		node.Expr.Format(ctx)
+	}
 }
 
 func (node AttributeDefault) TypeName() string { return "tree.AttributeDefault" }
@@ -5102,11 +5107,11 @@ func (node *CreateAccount) Free() {
 
 type AccountAuthOption struct {
 	Equal          string
-	AdminName      string
+	AdminName      Expr
 	IdentifiedType AccountIdentified
 }
 
-func NewAccountAuthOption(e string, an string, it AccountIdentified) *AccountAuthOption {
+func NewAccountAuthOption(e string, an Expr, it AccountIdentified) *AccountAuthOption {
 	ao := reuse.Alloc[AccountAuthOption](nil)
 	ao.Equal = e
 	ao.AdminName = an
@@ -5121,7 +5126,10 @@ func (node *AccountAuthOption) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.Equal)
 	}
 
-	ctx.WriteString(fmt.Sprintf(" '%s'", node.AdminName))
+	ctx.WriteString(" ")
+	quoteCtx := *ctx
+	quoteCtx.singleQuoteString = true
+	node.AdminName.Format(&quoteCtx)
 	node.IdentifiedType.Format(ctx)
 }
 
@@ -5145,10 +5153,10 @@ const (
 
 type AccountIdentified struct {
 	Typ AccountIdentifiedOption
-	Str string
+	Str Expr
 }
 
-func NewAccountIdentified(t AccountIdentifiedOption, s string) *AccountIdentified {
+func NewAccountIdentified(t AccountIdentifiedOption, s Expr) *AccountIdentified {
 	// ai := reuse.Alloc[AccountIdentified](nil)
 	ai := new(AccountIdentified)
 	ai.Typ = t
@@ -5157,13 +5165,23 @@ func NewAccountIdentified(t AccountIdentifiedOption, s string) *AccountIdentifie
 }
 
 func (node *AccountIdentified) Format(ctx *FmtCtx) {
+	_, isParam := node.Str.(*ParamExpr)
+
 	switch node.Typ {
 	case AccountIdentifiedByPassword:
-		ctx.WriteString(" identified by '******'")
+		if isParam {
+			ctx.WriteString(" identified by ?")
+		} else {
+			ctx.WriteString(" identified by '******'")
+		}
 	case AccountIdentifiedByRandomPassword:
 		ctx.WriteString(" identified by random password")
 	case AccountIdentifiedWithSSL:
-		ctx.WriteString(" identified with '******'")
+		if isParam {
+			ctx.WriteString(" identified with ?")
+		} else {
+			ctx.WriteString(" identified with '******'")
+		}
 	}
 }
 
@@ -5299,15 +5317,17 @@ type CreatePublication struct {
 	IfNotExists bool
 	Name        Identifier
 	Database    Identifier
+	Table       Identifier
 	AccountsSet *AccountsSetOption
 	Comment     string
 }
 
-func NewCreatePublication(ife bool, n Identifier, db Identifier, as *AccountsSetOption, c string) *CreatePublication {
+func NewCreatePublication(ife bool, n Identifier, db Identifier, table Identifier, as *AccountsSetOption, c string) *CreatePublication {
 	cp := reuse.Alloc[CreatePublication](nil)
 	cp.IfNotExists = ife
 	cp.Name = n
 	cp.Database = db
+	cp.Table = table
 	cp.AccountsSet = as
 	cp.Comment = c
 	return cp
@@ -5319,8 +5339,13 @@ func (node *CreatePublication) Format(ctx *FmtCtx) {
 		ctx.WriteString(" if not exists")
 	}
 	node.Name.Format(ctx)
-	ctx.WriteString(" database ")
-	node.Database.Format(ctx)
+	if node.Database != "" {
+		ctx.WriteString(" database ")
+		node.Database.Format(ctx)
+	} else {
+		ctx.WriteString(" table ")
+		node.Table.Format(ctx)
+	}
 	if node.AccountsSet != nil && len(node.AccountsSet.SetAccounts) > 0 {
 		ctx.WriteString(" account ")
 		prefix := ""

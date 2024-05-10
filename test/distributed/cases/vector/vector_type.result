@@ -338,11 +338,26 @@ c2 / c1
 [29.27353, 0.00014705882, 0, 2.5105882, 0.15058823]
 [0.4902941, 0.043303918, 9.119706, 0.19745098, 0.1472549]
 select c2+c3 from vector_exp_01;
-invalid argument operator +, bad value [VECF32 TINYINT UNSIGNED]
+c2 + c3
+[4, 3, 4, 9, 9]
+[8, 2, 10, 12, 131]
+[15, 24, 7, 10, 138]
+[1025.3, 30.005, 30, 115.36, 35.12]
+[140.01, 94.417, 1020.21, 110.14, 105.020004]
 select c2-c3 from vector_exp_01;
-invalid argument operator -, bad value [VECF32 TINYINT UNSIGNED]
+c2 - c3
+[-2, -3, -2, 3, 3]
+[4, -2, 6, 8, 127]
+[3, 12, -5, -2, 126]
+[965.3, -29.995, -30, 55.36, -24.880001]
+[-39.99, -85.583, 840.21, -69.86, -74.979996]
 select c2*c3 from vector_exp_01;
-invalid argument operator *, bad value [VECF32 TINYINT UNSIGNED]
+c2 * c3
+[3, 0, 3, 18, 18]
+[12, 0, 16, 20, 258]
+[54, 108, 6, 24, 792]
+[29859, 0.14999999, 0, 2560.8, 153.59999]
+[4500.9, 397.52997, 83718.9, 1812.6, 1351.8]
 select c2/c3 from vector_exp_01;
 invalid argument operator /, bad value [VECF32 TINYINT UNSIGNED]
 select c2+c4 from vector_exp_01;

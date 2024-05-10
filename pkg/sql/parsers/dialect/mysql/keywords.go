@@ -100,6 +100,7 @@ func init() {
 		"chain":                      CHAIN,
 		"client":                     CLIENT,
 		"san":                        SAN,
+		"strict":                     STRICT,
 		"substr":                     SUBSTR,
 		"substring":                  SUBSTRING,
 		"subject":                    SUBJECT,
@@ -625,5 +626,7 @@ func init() {
 		"bitmap_count":               BITMAP_COUNT,
 		"upgrade":                    UPGRADE,
 		"retry":                      RETRY,
+		"mo_ts":                      MO_TS,
+		"restore":                    RESTORE,
 	}
 }

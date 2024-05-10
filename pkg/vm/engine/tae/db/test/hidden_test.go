@@ -162,8 +162,10 @@ func TestHiddenWithPK1(t *testing.T) {
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeObjectIt()
+		objIdx := -1
 		for it.Valid() {
 			blk := it.GetObject()
+			objIdx++
 			for j := 0; j < blk.BlkCnt(); j++ {
 				view, err := blk.GetColumnDataByName(context.Background(), uint16(j), catalog.PhyAddrColumnName, common.DefaultAllocator)
 				assert.NoError(t, err)

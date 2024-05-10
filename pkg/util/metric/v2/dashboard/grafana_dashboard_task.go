@@ -130,16 +130,16 @@ func (c *DashboardCreator) initTaskMergeRow() dashboard.Option {
 				fmt.Sprintf(
 					"sum by (%s) (increase(%s[$interval]))",
 					c.by,
-					c.getMetricWithFilter(`mo_task_execute_results_total`, `type="merged_block"`)),
+					c.getMetricWithFilter(`mo_task_scheduled_by_total`, `type="merge"`)),
 
 				fmt.Sprintf(
 					"sum by (%s) (increase(%s[$interval]))",
 					c.by,
-					c.getMetricWithFilter(`mo_task_scheduled_by_total`, `type="merge"`)),
+					c.getMetricWithFilter(`mo_task_scheduled_by_total`, `type="merge",nodetype="cn"`)),
 			},
 			[]string{
-				"Block Count",
 				"Schedule Count",
+				"CN Schedule Count",
 			},
 		),
 		c.getTimeSeries(

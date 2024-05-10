@@ -17,11 +17,13 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -190,6 +192,7 @@ func (c *PushClient) init(
 	// lock all.
 	// release subscribed lock when init finished.
 	// release subscriber lock when we received enough response from service.
+	c.receivedLogTailTime.e = e
 	c.receivedLogTailTime.ready.Store(false)
 	c.subscriber.setNotReady()
 	c.subscribed.mutex.Lock()
@@ -692,6 +695,7 @@ func (c *PushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
 			logutil.Infof("%s GC partition_state %v", logTag, ts.ToString())
 			for ids, part := range parts {
 				part.Truncate(ctx, ids, ts)
+				part.UpdateStart(ts)
 			}
 		}
 	}()
@@ -757,6 +761,7 @@ type syncLogTailTimestamp struct {
 	ready                  atomic.Bool
 	tList                  []atomic.Pointer[timestamp.Timestamp]
 	latestAppliedLogTailTS atomic.Pointer[timestamp.Timestamp]
+	e                      *Engine
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
@@ -1053,6 +1058,12 @@ func dispatchSubscribeResponse(
 		if err := e.consumeSubscribeResponse(ctx, response, false, receiveAt); err != nil {
 			return err
 		}
+		if len(lt.CkpLocation) == 0 {
+			p := e.getOrCreateLatestPart(tbl.DbId, tbl.TbId)
+			p.UpdateDuration(types.TS{}, types.MaxTs())
+			c := e.getLatestCatalogCache()
+			c.UpdateDuration(types.TS{}, types.MaxTs())
+		}
 		e.pClient.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
 	} else {
 		routineIndex := tbl.TbId % consumerNumber
@@ -1319,52 +1330,105 @@ func updatePartitionOfPush(
 	}()
 
 	// after consume the logtail, enqueue it to global stats.
-	defer func() { e.globalStats.enqueue(tl) }()
+	defer func() {
+		t0 := time.Now()
+		e.globalStats.enqueue(tl)
+		v2.LogtailUpdatePartitonEnqueueGlobalStatsDurationHistogram.Observe(time.Since(t0).Seconds())
+	}()
 
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
-	partition := e.getPartition(dbId, tblId)
+	t0 := time.Now()
+	partition := e.getOrCreateLatestPart(dbId, tblId)
+	v2.LogtailUpdatePartitonGetPartitionDurationHistogram.Observe(time.Since(t0).Seconds())
 
+	t0 = time.Now()
 	lockErr := partition.Lock(ctx)
 	if lockErr != nil {
+		v2.LogtailUpdatePartitonGetLockDurationHistogram.Observe(time.Since(t0).Seconds())
 		return lockErr
 	}
 	defer partition.Unlock()
+	v2.LogtailUpdatePartitonGetLockDurationHistogram.Observe(time.Since(t0).Seconds())
+
+	catalogCache := e.getLatestCatalogCache()
+
+	if !partition.TableInfoOK {
+		t0 = time.Now()
+		tableInfo := catalogCache.GetTableById(dbId, tblId)
+		partition.TableInfo.ID = tblId
+		partition.TableInfo.Name = tableInfo.Name
+		partition.TableInfo.PrimarySeqnum = tableInfo.PrimarySeqnum
+		partition.TableInfoOK = true
+		v2.LogtailUpdatePartitonGetCatalogDurationHistogram.Observe(time.Since(t0).Seconds())
+	}
 
 	state, doneMutate := partition.MutateState()
 
-	key := e.catalog.GetTableById(dbId, tblId)
+	var (
+		ckpStart types.TS
+		ckpEnd   types.TS
+	)
 
 	if lazyLoad {
 		if len(tl.CkpLocation) > 0 {
+			t0 = time.Now()
+			//TODO::
+			ckpStart, ckpEnd = parseCkpDuration(tl)
+			if !ckpStart.IsEmpty() && !ckpEnd.IsEmpty() {
+				state.CacheCkpDuration(ckpStart, ckpEnd, partition)
+			}
 			state.AppendCheckpoint(tl.CkpLocation, partition)
+			v2.LogtailUpdatePartitonHandleCheckpointDurationHistogram.Observe(time.Since(t0).Seconds())
 		}
 
-		err = consumeLogTailOfPushWithLazyLoad(
+		t0 = time.Now()
+		err = consumeLogTail(
 			ctx,
-			key.PrimarySeqnum,
+			partition.TableInfo.PrimarySeqnum,
 			e,
 			state,
 			tl,
 		)
+		v2.LogtailUpdatePartitonConsumeLogtailDurationHistogram.Observe(time.Since(t0).Seconds())
+
 	} else {
-		err = consumeLogTailOfPushWithoutLazyLoad(ctx, key.PrimarySeqnum, e, state, tl, dbId, key.Id, key.Name)
+		if len(tl.CkpLocation) > 0 {
+			t0 = time.Now()
+			//TODO::
+			ckpStart, ckpEnd = parseCkpDuration(tl)
+			v2.LogtailUpdatePartitonHandleCheckpointDurationHistogram.Observe(time.Since(t0).Seconds())
+		}
+		t0 = time.Now()
+		err = consumeCkpsAndLogTail(ctx, partition.TableInfo.PrimarySeqnum, e, state, tl, dbId, tblId, partition.TableInfo.Name)
+		v2.LogtailUpdatePartitonConsumeLogtailDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
 	if err != nil {
-		logutil.Errorf("%s consume %d-%s log tail error: %v\n", logTag, key.Id, key.Name, err)
+		logutil.Errorf("%s consume %d-%s log tail error: %v\n", logTag, tblId, partition.TableInfo.Name, err)
 		return err
 	}
 
-	partition.TS = *tl.Ts
+	//After consume checkpoints finished ,then update the start and end of
+	//the mo system table's partition and catalog.
+	if !lazyLoad && len(tl.CkpLocation) != 0 {
+		if !ckpStart.IsEmpty() || !ckpEnd.IsEmpty() {
+			t0 = time.Now()
+			partition.UpdateDuration(ckpStart, types.MaxTs())
+			//Notice that the checkpoint duration is same among all mo system tables,
+			//such as mo_databases, mo_tables, mo_columns.
+			catalogCache.UpdateDuration(ckpStart, types.MaxTs())
+			v2.LogtailUpdatePartitonUpdateTimestampsDurationHistogram.Observe(time.Since(t0).Seconds())
+		}
+	}
 
 	doneMutate()
 
 	return nil
 }
 
-func consumeLogTailOfPushWithLazyLoad(
+func consumeLogTail(
 	ctx context.Context,
 	primarySeqnum int,
 	engine *Engine,
@@ -1374,7 +1438,25 @@ func consumeLogTailOfPushWithLazyLoad(
 	return hackConsumeLogtail(ctx, primarySeqnum, engine, state, lt)
 }
 
-func consumeLogTailOfPushWithoutLazyLoad(
+func parseCkpDuration(lt *logtail.TableLogtail) (start types.TS, end types.TS) {
+	locationsAndVersions := strings.Split(lt.CkpLocation, ";")
+	//check whether metLoc contains duration: [start, end]
+	if !strings.Contains(locationsAndVersions[len(locationsAndVersions)-1], "[") {
+		return
+	}
+
+	newlocs := locationsAndVersions[:len(locationsAndVersions)-1]
+	lt.CkpLocation = strings.Join(newlocs, ";")
+
+	duration := locationsAndVersions[len(locationsAndVersions)-1]
+	pos1 := strings.Index(duration, "[")
+	pos2 := strings.Index(duration, "]")
+	sub := duration[pos1+1 : pos2]
+	ds := strings.Split(sub, "_")
+	return types.StringToTS(ds[0]), types.StringToTS(ds[1])
+}
+
+func consumeCkpsAndLogTail(
 	ctx context.Context,
 	primarySeqnum int,
 	engine *Engine,
@@ -1400,7 +1482,7 @@ func consumeLogTailOfPushWithoutLazyLoad(
 	}()
 	for _, entry := range entries {
 		if err = consumeEntry(ctx, primarySeqnum,
-			engine, state, entry); err != nil {
+			engine, engine.getLatestCatalogCache(), state, entry); err != nil {
 			return
 		}
 	}
@@ -1413,11 +1495,14 @@ func hackConsumeLogtail(
 	engine *Engine,
 	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail) error {
+
 	var packer *types.Packer
 	put := engine.packerPool.Get(&packer)
 	defer put.Put()
 
+	t0 := time.Now()
 	switch lt.Table.TbId {
+
 	case catalog.MO_TABLES_ID:
 		primarySeqnum = catalog.MO_TABLES_CATALOG_VERSION_IDX + 1
 		for i := 0; i < len(lt.Commands); i++ {
@@ -1447,11 +1532,13 @@ func hackConsumeLogtail(
 				lt.Commands[i].EntryType = api.Entry_Delete
 			}
 			if err := consumeEntry(ctx, primarySeqnum,
-				engine, state, &lt.Commands[i]); err != nil {
+				engine, engine.getLatestCatalogCache(), state, &lt.Commands[i]); err != nil {
 				return err
 			}
 		}
+		v2.LogtailUpdatePartitonConsumeLogtailCatalogTableDurationHistogram.Observe(time.Since(t0).Seconds())
 		return nil
+
 	case catalog.MO_DATABASE_ID:
 		primarySeqnum = catalog.MO_DATABASE_DAT_TYPE_IDX + 1
 		for i := 0; i < len(lt.Commands); i++ {
@@ -1479,17 +1566,23 @@ func hackConsumeLogtail(
 				lt.Commands[i].EntryType = api.Entry_Delete
 			}
 			if err := consumeEntry(ctx, primarySeqnum,
-				engine, state, &lt.Commands[i]); err != nil {
+				engine, engine.getLatestCatalogCache(), state, &lt.Commands[i]); err != nil {
 				return err
 			}
 		}
+		v2.LogtailUpdatePartitonConsumeLogtailCatalogTableDurationHistogram.Observe(time.Since(t0).Seconds())
 		return nil
+
 	}
+
+	t0 = time.Now()
 	for i := 0; i < len(lt.Commands); i++ {
 		if err := consumeEntry(ctx, primarySeqnum,
-			engine, state, &lt.Commands[i]); err != nil {
+			engine, engine.getLatestCatalogCache(), state, &lt.Commands[i]); err != nil {
 			return err
 		}
 	}
+	v2.LogtailUpdatePartitonConsumeLogtailCommandsDurationHistogram.Observe(time.Since(t0).Seconds())
+
 	return nil
 }

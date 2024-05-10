@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -247,7 +248,7 @@ func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, err
 		createStream.Database = string(stmt.SourceName.SchemaName)
 	}
 
-	if sub, err := ctx.GetSubscriptionMeta(createStream.Database); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(createStream.Database, Snapshot{TS: &timestamp.Timestamp{}}); err != nil {
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create stream in subscription database")
@@ -319,7 +320,7 @@ func buildSourceDefs(stmt *tree.CreateSource, ctx CompilerContext, createStream 
 			col := &ColDef{
 				Name: colName,
 				Alg:  plan.CompressType_Lz4,
-				Typ:  *colType,
+				Typ:  colType,
 			}
 			colMap[colName] = col
 			for _, attr := range def.Attributes {
@@ -361,7 +362,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	if len(createView.Database) == 0 {
 		createView.Database = ctx.DefaultDatabase()
 	}
-	if sub, err := ctx.GetSubscriptionMeta(createView.Database); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(createView.Database, Snapshot{TS: &timestamp.Timestamp{}}); err != nil {
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
@@ -404,7 +405,7 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 		cols[i] = &plan.ColDef{
 			Name: Sequence_cols_name[i],
 			Alg:  plan.CompressType_Lz4,
-			Typ:  *typ,
+			Typ:  typ,
 			Default: &plan.Default{
 				NullAbility:  true,
 				Expr:         nil,
@@ -476,14 +477,14 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 	// sequence_value, maxvalue,minvalue,startvalue,increment,cycleornot,iscalled.
 	cols := make([]*plan.ColDef, len(Sequence_cols_name))
 
-	var typ *plan.Type
+	var typ plan.Type
 	var err error
 	if stmt.Type == nil {
-		_, tableDef := ctx.Resolve(as.GetDatabase(), as.TableDef.Name)
+		_, tableDef := ctx.Resolve(as.GetDatabase(), as.TableDef.Name, Snapshot{TS: &timestamp.Timestamp{}})
 		if tableDef == nil {
 			return moerr.NewInvalidInput(ctx.GetContext(), "no such sequence %s", as.TableDef.Name)
 		} else {
-			typ = &tableDef.Cols[0].Typ
+			typ = tableDef.Cols[0].Typ
 		}
 	} else {
 		typ, err = getTypeFromAst(ctx.GetContext(), stmt.Type.Type)
@@ -499,7 +500,7 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 		cols[i] = &plan.ColDef{
 			Name: Sequence_cols_name[i],
 			Alg:  plan.CompressType_Lz4,
-			Typ:  *typ,
+			Typ:  typ,
 			Default: &plan.Default{
 				NullAbility:  true,
 				Expr:         nil,
@@ -580,7 +581,7 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 	}
 	dropSequence.Table = string(stmt.Names[0].ObjectName)
 
-	obj, tableDef := ctx.Resolve(dropSequence.Database, dropSequence.Table)
+	obj, tableDef := ctx.Resolve(dropSequence.Database, dropSequence.Table, Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil || tableDef.TableType != catalog.SystemSequenceRel {
 		if !dropSequence.IfExists {
 			return nil, moerr.NewNoSuchSequence(ctx.GetContext(), dropSequence.Database, dropSequence.Table)
@@ -621,7 +622,7 @@ func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, e
 		alterSequence.Database = string(stmt.Name.SchemaName)
 	}
 
-	if sub, err := ctx.GetSubscriptionMeta(alterSequence.Database); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(alterSequence.Database, Snapshot{TS: &timestamp.Timestamp{}}); err != nil {
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter sequence in subscription database")
@@ -658,7 +659,7 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 		createSequence.Database = string(stmt.Name.SchemaName)
 	}
 
-	if sub, err := ctx.GetSubscriptionMeta(createSequence.Database); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(createSequence.Database, Snapshot{TS: &timestamp.Timestamp{}}); err != nil {
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create sequence in subscription database")
@@ -712,7 +713,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewPartitionNoTemporary(ctx.GetContext())
 	}
 
-	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(createTable.Database, Snapshot{TS: &timestamp.Timestamp{}}); err != nil {
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create table in subscription database")
@@ -1101,7 +1102,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			col := &ColDef{
 				Name:     def.Name.Parts[0],
 				Alg:      plan.CompressType_Lz4,
-				Typ:      *colType,
+				Typ:      colType,
 				Default:  defaultValue,
 				OnUpdate: onUpdateExpr,
 				Comment:  comment,
@@ -1213,7 +1214,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
 		var insertSqlBuilder strings.Builder
-		insertSqlBuilder.WriteString(fmt.Sprintf("insert into %s select ", createTable.TableDef.Name))
+		insertSqlBuilder.WriteString(fmt.Sprintf("insert into `%s` select ", createTable.TableDef.Name))
 
 		cols := createTable.TableDef.Cols
 		firstCol := true
@@ -1253,7 +1254,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		colDef := &ColDef{
 			Name:    util.GetClusterTableAttributeName(),
 			Alg:     plan.CompressType_Lz4,
-			Typ:     *colType,
+			Typ:     colType,
 			NotNull: true,
 			Default: &plan.Default{
 				Expr: &Expr{
@@ -1662,6 +1663,8 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	}
 
 	nameCount := make(map[string]int)
+	// Note: Index Parts will store the ColName, as Parts is used to populate mo_index_table.
+	// However, when inserting Index, we convert Parts (ie ColName) to ColIdx.
 	indexParts := make([]string, 0)
 
 	for _, keyPart := range indexInfo.KeyParts {
@@ -2038,8 +2041,10 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 
 		// 2.d PK def
 		tableDefs[1].Pkey = &PrimaryKeyDef{
-			Names: []string{catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-				catalog.SystemSI_IVFFLAT_TblCol_Centroids_id},
+			Names: []string{
+				catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+				catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+			},
 			PkeyColName: catalog.CPrimaryKeyColName,
 			CompPkeyCol: tableDefs[1].Cols[3],
 		}
@@ -2055,7 +2060,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDefs[2] = &TableDef{
 			Name:      indexTableName,
 			TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-			Cols:      make([]*ColDef, 4),
+			Cols:      make([]*ColDef, 5),
 		}
 
 		// 3.b indexDefs[2] init
@@ -2111,16 +2116,33 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 				OriginString: "",
 			},
 		}
-		tableDefs[2].Cols[3] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
-		tableDefs[2].Cols[3].Alg = plan.CompressType_Lz4
-		tableDefs[2].Cols[3].Primary = true
+		tableDefs[2].Cols[3] = &ColDef{
+			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
+				Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
+			},
+			Default: &plan.Default{
+				NullAbility:  true,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		tableDefs[2].Cols[4] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+		tableDefs[2].Cols[4].Alg = plan.CompressType_Lz4
+		tableDefs[2].Cols[4].Primary = true
 
 		// 3.d PK def
 		tableDefs[2].Pkey = &PrimaryKeyDef{
-			Names: []string{catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-				catalog.SystemSI_IVFFLAT_TblCol_Entries_pk},
+			Names: []string{
+				catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+				catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+				catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, // added to make this unique
+			},
 			PkeyColName: catalog.CPrimaryKeyColName,
-			CompPkeyCol: tableDefs[2].Cols[3],
+			CompPkeyCol: tableDefs[2].Cols[4],
 		}
 	}
 
@@ -2198,7 +2220,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		truncateTable.Database = ctx.DefaultDatabase()
 	}
 	truncateTable.Table = string(stmt.Name.ObjectName)
-	obj, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table)
+	obj, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table, Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 	} else {
@@ -2285,13 +2307,22 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	if len(stmt.Names) != 1 {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "drop multiple (%d) tables in one statement", len(stmt.Names))
 	}
+
 	dropTable.Database = string(stmt.Names[0].SchemaName)
+
+	// If the database name is empty, attempt to get default database name
 	if dropTable.Database == "" {
 		dropTable.Database = ctx.DefaultDatabase()
 	}
+
+	// If the final database name is still empty, return an error
+	if dropTable.Database == "" {
+		return nil, moerr.NewNoDB(ctx.GetContext())
+	}
+
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
-	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
+	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table, Snapshot{TS: &timestamp.Timestamp{}})
 
 	if tableDef == nil {
 		if !dropTable.IfExists {
@@ -2401,13 +2432,21 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 	if len(stmt.Names) != 1 {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "drop multiple (%d) view", len(stmt.Names))
 	}
+
 	dropTable.Database = string(stmt.Names[0].SchemaName)
+
+	// If the database name is empty, attempt to get default database name
 	if dropTable.Database == "" {
 		dropTable.Database = ctx.DefaultDatabase()
 	}
+	// If the final database name is still empty, return an error
+	if dropTable.Database == "" {
+		return nil, moerr.NewNoDB(ctx.GetContext())
+	}
+
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
-	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
+	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table, Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil {
 		if !dropTable.IfExists {
 			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
@@ -2480,8 +2519,8 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 		return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop database '%v' which is publishing", dropDB.Database)
 	}
 
-	if ctx.DatabaseExists(string(stmt.Name)) {
-		databaseId, err := ctx.GetDatabaseId(string(stmt.Name))
+	if ctx.DatabaseExists(string(stmt.Name), Snapshot{TS: &timestamp.Timestamp{}}) {
+		databaseId, err := ctx.GetDatabaseId(string(stmt.Name), Snapshot{TS: &timestamp.Timestamp{}})
 		if err != nil {
 			return nil, err
 		}
@@ -2520,7 +2559,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	// check table
 	tableName := string(stmt.Table.ObjectName)
-	obj, tableDef := ctx.Resolve(createIndex.Database, tableName)
+	obj, tableDef := ctx.Resolve(createIndex.Database, tableName, Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
 	}
@@ -2606,9 +2645,14 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		dropIndex.Database = string(stmt.TableName.SchemaName)
 	}
 
+	// If the final database name is still empty, return an error
+	if dropIndex.Database == "" {
+		return nil, moerr.NewNoDB(ctx.GetContext())
+	}
+
 	// check table
 	dropIndex.Table = string(stmt.TableName.ObjectName)
-	obj, tableDef := ctx.Resolve(dropIndex.Database, dropIndex.Table)
+	obj, tableDef := ctx.Resolve(dropIndex.Database, dropIndex.Table, Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropIndex.Database, dropIndex.Table)
 	}
@@ -2665,7 +2709,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	}
 
 	//step 1: check the view exists or not
-	obj, oldViewDef := ctx.Resolve(alterView.Database, viewName)
+	obj, oldViewDef := ctx.Resolve(alterView.Database, viewName, Snapshot{TS: &timestamp.Timestamp{}})
 	if oldViewDef == nil {
 		if !alterView.IfExists {
 			return nil, moerr.NewBadView(ctx.GetContext(),
@@ -2731,7 +2775,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		databaseName = ctx.DefaultDatabase()
 	}
 
-	_, tableDef := ctx.Resolve(databaseName, tableName)
+	_, tableDef := ctx.Resolve(databaseName, tableName, Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
 	}
@@ -2864,7 +2908,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					detectSqls = append(detectSqls, sqls...)
 				} else {
 					//get table def of parent table
-					_, parentTableDef := ctx.Resolve(fkData.ParentDbName, fkData.ParentTableName)
+					_, parentTableDef := ctx.Resolve(fkData.ParentDbName, fkData.ParentTableName, Snapshot{TS: &timestamp.Timestamp{}})
 					if parentTableDef == nil {
 						return nil, moerr.NewNoSuchTable(ctx.GetContext(), fkData.ParentDbName, fkData.ParentTableName)
 					}
@@ -3143,7 +3187,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			col := &ColDef{
 				Name:     opt.Column.Name.Parts[0],
 				Alg:      plan.CompressType_Lz4,
-				Typ:      *colType,
+				Typ:      colType,
 				Default:  defaultValue,
 				OnUpdate: onUpdateExpr,
 				Comment:  comment,
@@ -3153,7 +3197,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			if opt.Position.RelativeColumn != nil {
 				preName = opt.Position.RelativeColumn.Parts[0]
 			}
-			err = checkIsAddableColumn(tableDef, opt.Column.Name.Parts[0], colType, ctx)
+			err = checkIsAddableColumn(tableDef, opt.Column.Name.Parts[0], &colType, ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -3259,7 +3303,7 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 		}
 
 		//check table whether exist
-		obj, tableDef := ctx.Resolve(schemaName, tblName)
+		obj, tableDef := ctx.Resolve(schemaName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tblName)
 		}
@@ -3421,7 +3465,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	//make insert mo_foreign_keys
 	fkData.UpdateSql = getSqlForAddFk(dbName, tableDef.Name, &fkData)
 
-	_, parentTableDef := ctx.Resolve(parentDbName, parentTableName)
+	_, parentTableDef := ctx.Resolve(parentDbName, parentTableName, Snapshot{TS: &timestamp.Timestamp{}})
 	if parentTableDef == nil {
 		enabled, err := IsForeignKeyChecksEnabled(ctx)
 		if err != nil {
@@ -3575,7 +3619,7 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 		},
 	}
 	//1. get tableDef of the child table
-	_, childTableDef := ctx.Resolve(fkDefs[0].Db, fkDefs[0].Tbl)
+	_, childTableDef := ctx.Resolve(fkDefs[0].Db, fkDefs[0].Tbl, Snapshot{TS: &timestamp.Timestamp{}})
 	if childTableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), fkDefs[0].Db, fkDefs[0].Tbl)
 	}

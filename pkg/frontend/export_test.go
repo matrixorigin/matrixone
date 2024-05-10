@@ -20,12 +20,13 @@ import (
 	"os"
 	"testing"
 
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
 )
 
 var colName1, colName2 = "DATABASE()", "VARIABLE_VALUE"

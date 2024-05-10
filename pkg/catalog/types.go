@@ -29,6 +29,9 @@ const (
 	PrefixPriColName = "__mo_cpkey_"
 	PrefixCBColName  = "__mo_cbkey_"
 
+	// Wildcard characters for partition subtable name
+	PartitionSubTableWildcard = "\\%!\\%%\\%!\\%%"
+
 	ExternalFilePath = "__mo_filepath"
 
 	// MOAutoIncrTable mo auto increment table name
@@ -75,6 +78,7 @@ var InternalColumns = map[string]int8{
 	SystemSI_IVFFLAT_TblCol_Centroids_centroid: 0,
 	SystemSI_IVFFLAT_TblCol_Entries_version:    0,
 	SystemSI_IVFFLAT_TblCol_Entries_id:         0,
+	SystemSI_IVFFLAT_TblCol_Entries_entry:      0,
 }
 
 var InternalTableNames = map[string]int8{
@@ -101,6 +105,10 @@ const (
 	System_User    = uint32(0)
 	System_Role    = uint32(0)
 	System_Account = uint32(0)
+)
+
+const (
+	MO_COMMENT_NO_DEL_HINT = "[mo_no_del_hint]"
 )
 
 const (
@@ -298,6 +306,7 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_version = "__mo_index_centroid_fk_version"
 	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
+	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
 )
 
 const (

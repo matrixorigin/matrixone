@@ -18,9 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
@@ -31,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -42,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -73,7 +73,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -724,7 +723,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *deletion.Argument:
 		in.Delete = &pipeline.Deletion{
-			Ts:           t.Ts,
 			AffectedRows: t.AffectedRows(),
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
@@ -752,7 +750,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.FuzzyFilter = &pipeline.FuzzyFilter{
 			N:      float32(t.N),
 			PkName: t.PkName,
-			PkTyp:  plan2.DeepCopyType(t.PkTyp),
+			PkTyp:  t.PkTyp,
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
@@ -777,8 +775,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
-			Ibucket:   t.Ibucket,
-			Nbucket:   t.Nbucket,
 			Expr:      t.Cond,
 			Types:     convertToPlanTypes(t.Typs),
 			LeftCond:  t.Conditions[0],
@@ -836,7 +832,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Exprs:        t.Exprs,
 			Types:        convertToPlanTypes(t.Types),
 			Aggs:         convertToPipelineAggregates(t.Aggs),
-			MultiAggs:    convertPipelineMultiAggs(t.MultiAggs),
 		}
 	case *sample.Argument:
 		t.ConvertToPipelineOperator(in)
@@ -844,8 +839,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *join.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.Join = &pipeline.Join{
-			Ibucket:                t.Ibucket,
-			Nbucket:                t.Nbucket,
 			RelList:                relList,
 			ColList:                colList,
 			Expr:                   t.Cond,
@@ -859,8 +852,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *left.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.LeftJoin = &pipeline.LeftJoin{
-			Ibucket:                t.Ibucket,
-			Nbucket:                t.Nbucket,
 			RelList:                relList,
 			ColList:                colList,
 			Expr:                   t.Cond,
@@ -874,8 +865,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *right.Argument:
 		rels, poses := getRelColList(t.Result)
 		in.RightJoin = &pipeline.RightJoin{
-			Ibucket:                t.Ibucket,
-			Nbucket:                t.Nbucket,
 			RelList:                rels,
 			ColList:                poses,
 			Expr:                   t.Cond,
@@ -889,8 +878,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *rightsemi.Argument:
 		in.RightSemiJoin = &pipeline.RightSemiJoin{
-			Ibucket:                t.Ibucket,
-			Nbucket:                t.Nbucket,
 			Result:                 t.Result,
 			Expr:                   t.Cond,
 			RightTypes:             convertToPlanTypes(t.RightTypes),
@@ -902,8 +889,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *rightanti.Argument:
 		in.RightAntiJoin = &pipeline.RightAntiJoin{
-			Ibucket:                t.Ibucket,
-			Nbucket:                t.Nbucket,
 			Result:                 t.Result,
 			Expr:                   t.Cond,
 			RightTypes:             convertToPlanTypes(t.RightTypes),
@@ -975,8 +960,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Filter = t.E
 	case *semi.Argument:
 		in.SemiJoin = &pipeline.SemiJoin{
-			Ibucket:                t.Ibucket,
-			Nbucket:                t.Nbucket,
 			Result:                 t.Result,
 			Expr:                   t.Cond,
 			Types:                  convertToPlanTypes(t.Typs),
@@ -995,8 +978,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *single.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.SingleJoin = &pipeline.SingleJoin{
-			Ibucket:                t.Ibucket,
-			Nbucket:                t.Nbucket,
 			RelList:                relList,
 			ColList:                colList,
 			Expr:                   t.Cond,
@@ -1011,20 +992,11 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.OrderBy = t.Fs
 	// we reused ANTI to store the information here because of the lack of related structure.
 	case *intersect.Argument: // 1
-		in.Anti = &pipeline.AntiJoin{
-			Ibucket: t.IBucket,
-			Nbucket: t.NBucket,
-		}
+		in.Anti = &pipeline.AntiJoin{}
 	case *minus.Argument: // 2
-		in.Anti = &pipeline.AntiJoin{
-			Ibucket: t.IBucket,
-			Nbucket: t.NBucket,
-		}
+		in.Anti = &pipeline.AntiJoin{}
 	case *intersectall.Argument:
-		in.Anti = &pipeline.AntiJoin{
-			Ibucket: t.IBucket,
-			Nbucket: t.NBucket,
-		}
+		in.Anti = &pipeline.AntiJoin{}
 	case *merge.Argument:
 		in.Merge = &pipeline.Merge{
 			SinkScan: t.SinkScan,
@@ -1052,8 +1024,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *mark.Argument:
 		in.MarkJoin = &pipeline.MarkJoin{
-			Ibucket:   t.Ibucket,
-			Nbucket:   t.Nbucket,
 			Result:    t.Result,
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
@@ -1128,7 +1098,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Deletion:
 		t := opr.GetDelete()
 		arg := deletion.NewArgument()
-		arg.Ts = t.Ts
 		arg.RemoteDelete = t.RemoteDelete
 		arg.SegmentMap = t.SegmentMap
 		arg.IBucket = t.IBucket
@@ -1172,7 +1141,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		lockArg := lockop.NewArgumentByEngine(eng)
 		lockArg.SetBlock(t.Block)
 		for _, target := range t.Targets {
-			typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
+			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
 			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
 		}
 		for _, target := range t.Targets {
@@ -1212,8 +1181,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Anti:
 		t := opr.GetAnti()
 		arg := anti.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
 		arg.Conditions = [][]*plan.Expr{
@@ -1284,7 +1251,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Exprs = t.Exprs
 		arg.Types = convertToTypes(t.Types)
 		arg.Aggs = convertToAggregates(t.Aggs)
-		arg.MultiAggs = convertToMultiAggs(t.MultiAggs)
 		v.Arg = arg
 	case vm.Sample:
 		v.Arg = sample.GenerateFromPipelineOperator(opr)
@@ -1292,8 +1258,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Join:
 		t := opr.GetJoin()
 		arg := join.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
@@ -1305,8 +1269,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Left:
 		t := opr.GetLeftJoin()
 		arg := left.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
@@ -1318,8 +1280,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Right:
 		t := opr.GetRightJoin()
 		arg := right.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.LeftTypes = convertToTypes(t.LeftTypes)
 		arg.RightTypes = convertToTypes(t.RightTypes)
@@ -1332,8 +1292,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.RightSemi:
 		t := opr.GetRightSemiJoin()
 		arg := rightsemi.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = t.Result
 		arg.RightTypes = convertToTypes(t.RightTypes)
 		arg.Cond = t.Expr
@@ -1345,8 +1303,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.RightAnti:
 		t := opr.GetRightAntiJoin()
 		arg := rightanti.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = t.Result
 		arg.RightTypes = convertToTypes(t.RightTypes)
 		arg.Cond = t.Expr
@@ -1430,8 +1386,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Semi:
 		t := opr.GetSemiJoin()
 		arg := semi.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
@@ -1443,8 +1397,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Single:
 		t := opr.GetSingleJoin()
 		arg := single.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
@@ -1455,8 +1407,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Mark:
 		t := opr.GetMarkJoin()
 		arg := mark.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Result = t.Result
 		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
 		arg.Typs = convertToTypes(t.Types)
@@ -1470,22 +1420,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			WithFs(opr.OrderBy)
 	// should change next day?
 	case vm.Intersect:
-		t := opr.GetAnti()
 		arg := intersect.NewArgument()
-		arg.IBucket = t.Ibucket
-		arg.NBucket = t.Nbucket
 		v.Arg = arg
 	case vm.IntersectAll:
-		t := opr.GetAnti()
 		arg := intersect.NewArgument()
-		arg.IBucket = t.Ibucket
-		arg.NBucket = t.Nbucket
 		v.Arg = arg
 	case vm.Minus:
-		t := opr.GetAnti()
 		arg := minus.NewArgument()
-		arg.IBucket = t.Ibucket
-		arg.NBucket = t.Nbucket
 		v.Arg = arg
 	case vm.Connector:
 		t := opr.GetConnect()
@@ -1572,10 +1513,10 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 }
 
 // convert []types.Type to []*plan.Type
-func convertToPlanTypes(ts []types.Type) []*plan.Type {
-	result := make([]*plan.Type, len(ts))
+func convertToPlanTypes(ts []types.Type) []plan.Type {
+	result := make([]plan.Type, len(ts))
 	for i, t := range ts {
-		result[i] = &plan.Type{
+		result[i] = plan.Type{
 			Id:    int32(t.Oid),
 			Width: t.Width,
 			Scale: t.Scale,
@@ -1585,7 +1526,7 @@ func convertToPlanTypes(ts []types.Type) []*plan.Type {
 }
 
 // convert []*plan.Type to []types.Type
-func convertToTypes(ts []*plan.Type) []types.Type {
+func convertToTypes(ts []plan.Type) []types.Type {
 	result := make([]types.Type, len(ts))
 	for i, t := range ts {
 		result[i] = types.New(types.T(t.Id), t.Width, t.Scale)
@@ -1593,60 +1534,25 @@ func convertToTypes(ts []*plan.Type) []types.Type {
 	return result
 }
 
-// convert []agg.Aggregate to []*pipeline.Aggregate
-func convertToPipelineAggregates(ags []agg.Aggregate) []*pipeline.Aggregate {
+// convert []aggexec.AggFuncExecExpression to []*pipeline.Aggregate
+func convertToPipelineAggregates(ags []aggexec.AggFuncExecExpression) []*pipeline.Aggregate {
 	result := make([]*pipeline.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = &pipeline.Aggregate{
-			Op:     a.Op,
-			Dist:   a.Dist,
-			Expr:   a.E,
-			Config: a.Config,
+			Op:     a.GetAggID(),
+			Dist:   a.IsDistinct(),
+			Expr:   a.GetArgExpressions(),
+			Config: a.GetExtraConfig(),
 		}
 	}
 	return result
 }
 
-// convert []*pipeline.Aggregate to []agg.Aggregate
-func convertToAggregates(ags []*pipeline.Aggregate) []agg.Aggregate {
-	result := make([]agg.Aggregate, len(ags))
+// convert []*pipeline.Aggregate to []aggexec.AggFuncExecExpression
+func convertToAggregates(ags []*pipeline.Aggregate) []aggexec.AggFuncExecExpression {
+	result := make([]aggexec.AggFuncExecExpression, len(ags))
 	for i, a := range ags {
-		result[i] = agg.Aggregate{
-			Op:     a.Op,
-			Dist:   a.Dist,
-			E:      a.Expr,
-			Config: a.Config,
-		}
-	}
-	return result
-}
-
-// for now, it's group_concat
-func convertPipelineMultiAggs(multiAggs []group_concat.Argument) []*pipeline.MultiArguemnt {
-	result := make([]*pipeline.MultiArguemnt, len(multiAggs))
-	for i, a := range multiAggs {
-		result[i] = &pipeline.MultiArguemnt{
-			Dist:        a.Dist,
-			GroupExpr:   a.GroupExpr,
-			OrderByExpr: a.OrderByExpr,
-			Separator:   a.Separator,
-			OrderId:     a.OrderId,
-		}
-	}
-	return result
-}
-
-func convertToMultiAggs(multiAggs []*pipeline.MultiArguemnt) []group_concat.Argument {
-	result := make([]group_concat.Argument, len(multiAggs))
-	for i, a := range multiAggs {
-		// can not reuse
-		result[i] = group_concat.Argument{
-			Dist:        a.Dist,
-			GroupExpr:   a.GroupExpr,
-			OrderByExpr: a.OrderByExpr,
-			Separator:   a.Separator,
-			OrderId:     a.OrderId,
-		}
+		result[i] = aggexec.MakeAggFunctionExpression(a.Op, a.Dist, a.Expr, a.Config)
 	}
 	return result
 }
@@ -1741,44 +1647,13 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 }
 
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
-func decodeBatch(mp *mpool.MPool, vp engine.VectorPool, data []byte) (*batch.Batch, error) {
+func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	bat := new(batch.Batch)
-	err := types.Decode(data, bat)
-	if err != nil {
+	if err := bat.UnmarshalBinaryWithCopy(data, mp); err != nil {
+		bat.Clean(mp)
 		return nil, err
 	}
-	if bat.IsEmpty() {
-		return batch.EmptyBatch, nil
-	}
-
-	// allocated memory of vec from mPool.
-	for i, vec := range bat.Vecs {
-		typ := *vec.GetType()
-		rvec := vector.NewVec(typ)
-		if vp != nil {
-			rvec = vp.GetVector(typ)
-		}
-		if err := vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
-			bat.Clean(mp)
-			return nil, err
-		}
-		bat.Vecs[i] = rvec
-	}
-	bat.SetCnt(1)
-	// allocated memory of aggVec from mPool.
-	for i, ag := range bat.Aggs {
-		err = ag.WildAggReAlloc(mp)
-		if err != nil {
-			for j := 0; j < i; j++ {
-				bat.Aggs[j].Free(mp)
-			}
-			for j := range bat.Vecs {
-				bat.Vecs[j].Free(mp)
-			}
-			return nil, err
-		}
-	}
-	return bat, err
+	return bat, nil
 }
 
 func (ctx *scopeContext) getRegister(id, idx int32) *process.WaitRegister {
