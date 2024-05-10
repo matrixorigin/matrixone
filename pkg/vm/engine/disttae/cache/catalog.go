@@ -196,11 +196,6 @@ func (cc *CatalogCache) GetTableByName(databaseID uint64, tableName string) *Tab
 func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []string {
 	var rs []string
 
-	//cc.databases.data.Scan(func(item *DatabaseItem) bool {
-	//	fmt.Fprintln(os.Stderr, "databases ", item.Rowid, item.Id, item.Name, item.AccountId, item.Ts, item.Typ, item.CreateSql)
-	//	return true
-	//})
-
 	key := &DatabaseItem{
 		AccountId: accountId,
 	}
@@ -335,13 +330,6 @@ func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 	inserted := make(map[uint64]*DatabaseItem)
 	db.Id = math.MaxUint64
 
-	//cc.databases.data.Scan(func(item *DatabaseItem) bool {
-	//	if item.AccountId == catalog.System_Account && item.Name == "master_oneiov_cmcciot_001" {
-	//		fmt.Fprintln(os.Stderr, "get database ", item.Rowid, item.Id, item.Name, item.AccountId, item.Ts, item.Typ, item.CreateSql)
-	//	}
-	//	return true
-	//})
-
 	cc.databases.data.Ascend(db, func(item *DatabaseItem) bool {
 		if item.deleted && item.AccountId == db.AccountId && item.Name == db.Name {
 			if !ts.IsEmpty() {
@@ -452,7 +440,6 @@ func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
 				Ts:        timestamps[i].ToTimestamp(),
 			}
 			cc.databases.data.Set(newItem)
-			//fmt.Fprintln(os.Stderr, "delete database ", newItem.Rowid, newItem.Id, newItem.Name, newItem.AccountId, newItem.Ts, newItem.Typ, newItem.CreateSql)
 		}
 	}
 }
