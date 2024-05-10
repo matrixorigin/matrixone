@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
-	"go.uber.org/zap"
 )
 
 const (
@@ -60,9 +59,6 @@ func fillRuntimeOptions(opts *options.Options) {
 	if opts.MergeCfg.CNStandaloneTake {
 		common.ShouldStandaloneCNTakeOver.Store(true)
 	}
-	w := &bytes.Buffer{}
-	toml.NewEncoder(w).Encode(opts.MergeCfg)
-	logutil.Info("mergeblocks options", zap.String("toml", w.String()), zap.Bool("standalone", opts.IsStandalone))
 }
 
 func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
@@ -88,6 +84,10 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	opts = opts.FillDefaults(dirname)
 	fillRuntimeOptions(opts)
 
+	wbuf := &bytes.Buffer{}
+	werr := toml.NewEncoder(wbuf).Encode(opts)
+	logutil.Info("open-tae", common.OperationField("Config"),
+		common.AnyField("toml", wbuf.String()), common.ErrorField(werr))
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
 		// TODO:fileservice needs to be passed in as a parameter

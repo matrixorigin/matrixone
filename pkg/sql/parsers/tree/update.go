@@ -85,6 +85,9 @@ type UpdateExpr struct {
 }
 
 func (node *UpdateExpr) Format(ctx *FmtCtx) {
+	if node == nil {
+		return
+	}
 	prefix := ""
 	for _, n := range node.Names {
 		ctx.WriteString(prefix)
@@ -169,6 +172,7 @@ type ExParam struct {
 	QueryResult bool
 	SysTable    bool
 	Parallel    bool
+	Strict      bool
 }
 
 type S3Parameter struct {
@@ -294,6 +298,12 @@ func (node *Load) Format(ctx *FmtCtx) {
 	if node.Param.Tail.Assignments != nil {
 		ctx.WriteString(" set ")
 		node.Param.Tail.Assignments.Format(ctx)
+	}
+	if node.Param.Parallel {
+		ctx.WriteString(" parallel true ")
+		if node.Param.Strict {
+			ctx.WriteString("strict true ")
+		}
 	}
 }
 

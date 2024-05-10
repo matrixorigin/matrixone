@@ -1,0 +1,6 @@
+select statement, sql_source_type from system.statement_info where account="bvt_sql_source_type" and status != 'Running' and statement not like '%mo_ctl%' order by request_at desc limit 4;
+statement    sql_source_type
+show tables    cloud_user_sql
+use system    cloud_nonuser_sql
+select * from __mo_t1    cloud_user_sql
+insert into __mo_t1 values(1)    cloud_user_sql

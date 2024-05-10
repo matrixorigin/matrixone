@@ -14,24 +14,18 @@
 
 package malloc
 
-import "testing"
+import (
+	"testing"
+	"unsafe"
+)
 
 func TestAllocFree(t *testing.T) {
-	// Test that Alloc and Free work.
-	for i := 0; i < 100; i++ {
-		b := Alloc(1024)
-		if len(b) != 1024 {
-			t.Errorf("Alloc returned slice of length %d, want 1024", len(b))
+	for i := 0; i < 1<<19; i++ {
+		ptr, handle := Alloc(i)
+		bs := unsafe.Slice((*byte)(ptr), i)
+		if len(bs) != i {
+			t.Fatal()
 		}
-		Free(b)
+		handle.Free()
 	}
-}
-
-func TestAllocZero(t *testing.T) {
-	// Test that Alloc(0) returns a non-nil slice.
-	b := Alloc(0)
-	if b == nil {
-		t.Errorf("Alloc(0) returned nil slice")
-	}
-	Free(b)
 }
