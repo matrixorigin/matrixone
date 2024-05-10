@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -45,11 +46,20 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	ap := arg
 	ap.ctr = new(container)
+	arg.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, arg.Limit)
+	if err != nil {
+		return err
+	}
+	vec, err := arg.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	if err != nil {
+		return err
+	}
+	arg.ctr.limit = vector.MustFixedCol[int64](vec)[0]
 	ap.ctr.InitReceiver(proc, true)
-	if ap.Limit > 1024 {
+	if arg.ctr.limit > 1024 {
 		ap.ctr.sels = make([]int64, 0, 1024)
 	} else {
-		ap.ctr.sels = make([]int64, 0, ap.Limit)
+		ap.ctr.sels = make([]int64, 0, arg.ctr.limit)
 	}
 	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
 
@@ -75,7 +85,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	ctr := ap.ctr
 	result := vm.NewCallResult()
-	if ap.Limit == 0 {
+	if ap.ctr.limit == 0 {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
@@ -93,7 +103,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	err := ctr.eval(ap.Limit, proc, anal, arg.GetIsLast(), &result)
+	err := ctr.eval(ap.ctr.limit, proc, anal, arg.GetIsLast(), &result)
 	if err == nil {
 		result.Status = vm.ExecStop
 		return result, nil
@@ -156,7 +166,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			}
 		}
 
-		if err := ctr.processBatch(ap.Limit, bat, proc); err != nil {
+		if err := ctr.processBatch(ap.ctr.limit, bat, proc); err != nil {
 			bat.Clean(proc.Mp())
 			return false, err
 		}
