@@ -183,6 +183,9 @@ func (c *Compile) reset() {
 	for k := range c.metaTables {
 		delete(c.metaTables, k)
 	}
+	for k := range c.lockTables {
+		delete(c.lockTables, k)
+	}
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
 	}
@@ -578,6 +581,10 @@ func (c *Compile) runOnce() error {
 	if err != nil {
 		return err
 	}
+	err = c.lockTable()
+	if err != nil {
+		return err
+	}
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
@@ -808,6 +815,35 @@ func (c *Compile) lockMetaTables() error {
 			// other errors, just throw  out
 			return err
 		}
+	}
+	return nil
+}
+
+func (c *Compile) lockTable() error {
+	for _, tbl := range c.lockTables {
+		if len(tbl.PartitionTableIds) == 0 {
+			typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
+			return lockop.LockTable(
+				c.e,
+				c.proc,
+				tbl.TableId,
+				typ,
+				false)
+		}
+
+		for _, tblId := range tbl.PartitionTableIds {
+			typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
+			err := lockop.LockTable(
+				c.e,
+				c.proc,
+				tblId,
+				typ,
+				false)
+			if err != nil {
+				return err
+			}
+		}
+
 	}
 	return nil
 }
@@ -1609,6 +1645,21 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
+		}
+
+		lockRows := make([]*plan.LockTarget, 0, len(n.LockTargets))
+		for _, tbl := range n.LockTargets {
+			if tbl.LockTable {
+				c.lockTables[tbl.TableId] = tbl
+			} else {
+				if _, ok := c.lockTables[tbl.TableId]; !ok {
+					lockRows = append(lockRows, tbl)
+				}
+			}
+		}
+		n.LockTargets = lockRows
+		if len(n.LockTargets) == 0 {
+			return ss, nil
 		}
 
 		block := false
