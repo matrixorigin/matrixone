@@ -201,10 +201,11 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.SchedulerCfg == nil {
 		ioworkers := DefaultIOWorkers
-		if ioworkers < runtime.NumCPU() {
-			ioworkers = min(runtime.NumCPU(), 100)
+		procs := runtime.GOMAXPROCS(0)
+		if ioworkers < procs {
+			ioworkers = min(procs, 100)
 		}
-		workers := min(runtime.NumCPU()/2, 100)
+		workers := min(procs/2, 100)
 		if workers < 1 {
 			workers = 1
 		}
