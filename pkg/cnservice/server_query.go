@@ -416,7 +416,7 @@ func (s *service) handleMigrateConnTo(
 		return moerr.NewInternalError(ctx, "bad request")
 	}
 	rm := s.mo.GetRoutineManager()
-	if err := rm.MigrateConnectionTo(req.MigrateConnToRequest); err != nil {
+	if err := rm.MigrateConnectionTo(ctx, req.MigrateConnToRequest); err != nil {
 		logutil.Errorf("failed to migrate conn to: %v", err)
 		return err
 	}

@@ -29,12 +29,13 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/goutils/leaktest"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/stretchr/testify/require"
 )
 
 var testSlat = []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0}
@@ -51,12 +52,12 @@ func testMakeCNServer(
 		addr = "unix://" + addr
 	}
 	return &CNServer{
-		backendConnID: connID,
-		addr:          addr,
-		uuid:          uuid,
-		salt:          testSlat,
-		hash:          hash,
-		reqLabel:      reqLabel,
+		connID:   connID,
+		addr:     addr,
+		uuid:     uuid,
+		salt:     testSlat,
+		hash:     hash,
+		reqLabel: reqLabel,
 	}
 }
 
@@ -349,7 +350,6 @@ func (h *testHandler) handleShowVar() {
 		res.AddRow(row)
 	}
 	ses := &frontend.Session{}
-	ses.SetRequestContext(context.Background())
 	h.mysqlProto.SetSession(ses)
 	if err := h.mysqlProto.SendResultSetTextBatchRow(res, res.GetRowCount()); err != nil {
 		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
@@ -397,7 +397,6 @@ func (h *testHandler) handleShowGlobalVar() {
 		res.AddRow(row)
 	}
 	ses := &frontend.Session{}
-	ses.SetRequestContext(context.Background())
 	h.mysqlProto.SetSession(ses)
 	if err := h.mysqlProto.SendResultSetTextBatchRow(res, res.GetRowCount()); err != nil {
 		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))

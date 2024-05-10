@@ -59,9 +59,6 @@ type serverConn struct {
 	conn goetty.IOSession
 	// connID is the proxy connection ID, which is not useful in most case.
 	connID uint32
-	// backendConnID is the connection generated be backend CN
-	// server. It is tracked by connManager.
-	backendConnID uint32
 	// mysqlProto is used to build handshake info.
 	mysqlProto *frontend.MysqlProtocolImpl
 	// rebalancer is used to track connections between proxy and server.
@@ -113,7 +110,7 @@ func (w *wrappedConn) Close() error {
 
 // ConnID implements the ServerConn interface.
 func (s *serverConn) ConnID() uint32 {
-	return s.backendConnID
+	return s.connID
 }
 
 // RawConn implements the ServerConn interface.

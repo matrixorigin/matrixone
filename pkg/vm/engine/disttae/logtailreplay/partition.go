@@ -17,10 +17,11 @@ package logtailreplay
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -41,6 +42,15 @@ type Partition struct {
 		start types.TS
 		end   types.TS
 	}
+
+	TableInfo   TableInfo
+	TableInfoOK bool
+}
+
+type TableInfo struct {
+	ID            uint64
+	Name          string
+	PrimarySeqnum int
 }
 
 func (p *Partition) CanServe(ts types.TS) bool {
@@ -117,6 +127,12 @@ func (p *Partition) UpdateDuration(start types.TS, end types.TS) {
 	defer p.mu.Unlock()
 	p.mu.start = start
 	p.mu.end = end
+}
+
+func (p *Partition) GetDuration() (types.TS, types.TS) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.mu.start, p.mu.end
 }
 
 func (p *Partition) ConsumeSnapCkps(
