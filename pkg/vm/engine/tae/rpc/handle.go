@@ -121,7 +121,7 @@ func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handl
 	h := &Handle{
 		db: tae,
 	}
-	h.txnCtxs = common.NewMap[string, *txnContext](runtime.NumCPU())
+	h.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
 
 	h.GCManager = gc.NewManager(
 		gc.WithCronJob(

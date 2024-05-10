@@ -74,19 +74,17 @@ type Options struct {
 	MergeCfg      *MergeConfig
 	CatalogCfg    *CatalogCfg
 
+	// MaxMessageSize is the size of max message which is sent to log-service.
+	MaxMessageSize   uint64
 	TransferTableTTL time.Duration
-
 	IncrementalDedup bool
 	IsStandalone     bool
+	LogStoreT        LogstoreType
 
-	Clock     clock.Clock
-	Fs        fileservice.FileService
-	Lc        logservicedriver.LogServiceClientFactory
-	Shard     metadata.TNShard
-	LogStoreT LogstoreType
-	Ctx       context.Context
-	// MaxMessageSize is the size of max message which is sent to log-service.
-	MaxMessageSize uint64
-
-	TaskServiceGetter taskservice.Getter
+	Fs                fileservice.FileService                  `toml:"-"`
+	Lc                logservicedriver.LogServiceClientFactory `toml:"-"`
+	Ctx               context.Context                          `toml:"-"`
+	Shard             metadata.TNShard                         `toml:"-"`
+	Clock             clock.Clock                              `toml:"-"`
+	TaskServiceGetter taskservice.Getter                       `toml:"-"`
 }
