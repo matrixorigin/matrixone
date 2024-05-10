@@ -121,7 +121,7 @@ func NewCompile(
 	c.uid = uid
 	c.sql = sql
 	c.proc = proc
-	c.proc.MessageBoard = c.MessageBoard
+	c.proc.MessageBoard = process.NewMessageBoard()
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
@@ -156,7 +156,6 @@ func (c *Compile) reset() {
 		c.fuzzys[i].release()
 	}
 
-	c.MessageBoard.Messages = c.MessageBoard.Messages[:0]
 	c.fuzzys = c.fuzzys[:0]
 	c.scope = c.scope[:0]
 	c.pn = nil
@@ -572,7 +571,6 @@ func (c *Compile) canRetry(err error) bool {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
-	c.MessageBoard.Reset()
 	err := c.lockMetaTables()
 	if err != nil {
 		return err

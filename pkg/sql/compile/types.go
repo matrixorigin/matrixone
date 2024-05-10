@@ -250,8 +250,6 @@ type Compile struct {
 	// proc stores the execution context.
 	proc *process.Process
 
-	MessageBoard *process.MessageBoard
-
 	cnList engine.Nodes
 	// ast
 	stmt tree.Statement
