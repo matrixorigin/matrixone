@@ -36,6 +36,7 @@ import (
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 
@@ -209,7 +210,6 @@ func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient)
 	if err != nil {
 		return nil, err
 	}
-	logutil.Info("Using Dump Storage Engine and Cluster Nodes.")
 	pu := mo_config.NewParameterUnit(sv, eng, txnClient, engine.Nodes{})
 
 	return pu, nil
@@ -262,7 +262,7 @@ func WildcardMatch(pattern, target string) bool {
 }
 
 // getExprValue executes the expression and returns the value.
-func getExprValue(e tree.Expr, ses *Session) (interface{}, error) {
+func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -302,22 +302,26 @@ func getExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 	}
 
 	//2.run the select
-	ctx := ses.GetRequestContext()
 
 	//run the statement in the same session
 	ses.ClearResultBatches()
-	err = executeStmtInSameSession(ctx, ses, compositedSelect)
+	//!!!different ExecCtx
+	tempExecCtx := ExecCtx{
+		reqCtx: execCtx.reqCtx,
+		ses:    ses,
+	}
+	err = executeStmtInSameSession(tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect)
 	if err != nil {
 		return nil, err
 	}
 
 	batches := ses.GetResultBatches()
 	if len(batches) == 0 {
-		return nil, moerr.NewInternalError(ctx, "the expr %s does not generate a value", e.String())
+		return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	if batches[0].VectorCount() > 1 {
-		return nil, moerr.NewInternalError(ctx, "the expr %s generates multi columns value", e.String())
+		return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
 	}
 
 	//evaluate the count of rows, the count of columns
@@ -329,7 +333,7 @@ func getExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		}
 		count += b.RowCount()
 		if count > 1 {
-			return nil, moerr.NewInternalError(ctx, "the expr %s generates multi rows value", e.String())
+			return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
 		}
 		if resultVec == nil && b.GetVector(0).Length() != 0 {
 			resultVec = b.GetVector(0)
@@ -337,7 +341,7 @@ func getExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 	}
 
 	if resultVec == nil {
-		return nil, moerr.NewInternalError(ctx, "the expr %s does not generate a value", e.String())
+		return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	// for the decimal type, we need the type of expr
@@ -354,11 +358,11 @@ func getExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		}
 	}
 
-	return getValueFromVector(resultVec, ses, planExpr)
+	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
 }
 
 // only support single value and unary minus
-func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
+func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interface{}, error) {
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
@@ -373,20 +377,22 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		}
 		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
 		// Here the evalExpr may execute some function that needs engine.Engine.
-		ses.txnCompileCtx.GetProcess().Ctx = context.WithValue(ses.txnCompileCtx.GetProcess().Ctx, defines.EngineKey{}, ses.storage)
+		ses.txnCompileCtx.GetProcess().Ctx = attachValue(ses.txnCompileCtx.GetProcess().Ctx,
+			defines.EngineKey{},
+			ses.GetTxnHandler().GetStorage())
 
 		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 		if err != nil {
 			return nil, err
 		}
 
-		value, err := getValueFromVector(vec, ses, planExpr)
+		value, err := getValueFromVector(ctx, vec, ses, planExpr)
 		vec.Free(ses.txnCompileCtx.GetProcess().Mp())
 		return value, err
 	}
 }
 
-func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (interface{}, error) {
+func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, expr *plan2.Expr) (interface{}, error) {
 	if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 		return nil, nil
 	}
@@ -449,7 +455,7 @@ func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (int
 	case types.T_enum:
 		return vector.MustFixedCol[types.Enum](vec)[0], nil
 	default:
-		return nil, moerr.NewInvalidArg(ses.GetRequestContext(), "variable type", vec.GetType().Oid.String())
+		return nil, moerr.NewInvalidArg(ctx, "variable type", vec.GetType().Oid.String())
 	}
 }
 
@@ -540,7 +546,7 @@ func appendSessionField(fields []zap.Field, ses FeSession) []zap.Field {
 }
 
 func logInfo(ses FeSession, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().User == db_holder.MOLoggerUser {
+	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().GetUser() == db_holder.MOLoggerUser {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
@@ -556,7 +562,7 @@ func logInfof(info string, msg string, fields ...zap.Field) {
 }
 
 func logDebug(ses FeSession, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().User == db_holder.MOLoggerUser {
+	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().GetUser() == db_holder.MOLoggerUser {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
@@ -565,7 +571,7 @@ func logDebug(ses FeSession, info string, msg string, fields ...zap.Field) {
 }
 
 func logError(ses FeSession, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().User == db_holder.MOLoggerUser {
+	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().GetUser() == db_holder.MOLoggerUser {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
@@ -733,7 +739,7 @@ const (
 // execute.... // prepare stmt1 from .... ; set var1 = val1 ; set var2 = val2 ;
 // Format 2: COM_STMT_EXECUTE
 // execute.... // prepare stmt1 from .... ; param0 ; param1 ...
-func makeExecuteSql(ses *Session, stmt tree.Statement) string {
+func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement) string {
 	if ses == nil || stmt == nil {
 		return ""
 	}
@@ -743,7 +749,7 @@ func makeExecuteSql(ses *Session, stmt tree.Statement) string {
 	switch t := stmt.(type) {
 	case *tree.Execute:
 		name := string(t.Name)
-		prepareStmt, err := ses.GetPrepareStmt(name)
+		prepareStmt, err := ses.GetPrepareStmt(ctx, name)
 		if err != nil || prepareStmt == nil {
 			break
 		}
@@ -936,12 +942,12 @@ func (ui *UserInput) genSqlSourceType(ses FeSession) {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
-	flag, _, _ := isSpecialUser(tenant.User)
+	flag, _, _ := isSpecialUser(tenant.GetUser())
 	if flag {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
-	if tenant.Tenant == sysAccountName && tenant.User == "internal" {
+	if tenant.GetTenant() == sysAccountName && tenant.GetUser() == "internal" {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
@@ -1014,5 +1020,44 @@ func (b *strParamBinder) bindIdentStr(ident *tree.AccountIdentified) string {
 		return b.bind(ident.Str)
 	default:
 		return ""
+	}
+}
+
+func resetBits(t *uint32, val uint32) {
+	if t == nil {
+		return
+	}
+	*t = val
+}
+
+func setBits(t *uint32, bit uint32) {
+	if t == nil {
+		return
+	}
+	*t |= bit
+}
+
+func clearBits(t *uint32, bit uint32) {
+	if t == nil {
+		return
+	}
+	*t &= ^bit
+}
+
+func bitsIsSet(t uint32, bit uint32) bool {
+	return t&bit != 0
+}
+
+func attachValue(ctx context.Context, key, val any) context.Context {
+	if ctx == nil {
+		panic("context is nil")
+	}
+
+	return context.WithValue(ctx, key, val)
+}
+
+func updateTempEngine(storage engine.Engine, te *memoryengine.Engine) {
+	if ee, ok := storage.(*engine.EntireEngine); ok && ee != nil {
+		ee.TempEngine = te
 	}
 }

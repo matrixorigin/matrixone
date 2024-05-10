@@ -12,40 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memorycache
+package metric
 
-import (
-	"fmt"
-	"sync/atomic"
-)
+import "github.com/shirou/gopsutil/v3/cpu"
 
-// refcnt is an atomic reference counter
-type refcnt struct {
-	val atomic.Int32
-}
-
-func (r *refcnt) init(val int32) {
-	r.val.Store(val)
-}
-
-func (r *refcnt) refs() int32 {
-	return r.val.Load()
-}
-
-func (r *refcnt) acquire() {
-	switch v := r.val.Add(1); {
-	case v <= 1:
-		panic(fmt.Sprintf("inconsistent refcnt count: %d", v))
-	}
-}
-
-func (r *refcnt) release() bool {
-	switch v := r.val.Add(-1); {
-	case v < 0:
-		panic(fmt.Sprintf("inconsistent refcnt count: %d", v))
-	case v == 0:
-		return true
-	default:
-		return false
-	}
+// CPUTotalTime is used to workaround sca issues from gopsutil version upgrades
+func CPUTotalTime(c cpu.TimesStat) float64 {
+	return c.User + c.System + c.Idle + c.Nice + c.Iowait + c.Irq +
+		c.Softirq + c.Steal + c.Guest + c.GuestNice
 }

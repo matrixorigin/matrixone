@@ -15,13 +15,11 @@
 package frontend
 
 import (
-	"context"
 	"fmt"
 	"time"
 )
 
-func executeStatusStmtInBack(requestCtx context.Context,
-	backSes *backSession,
+func executeStatusStmtInBack(backSes *backSession,
 	execCtx *ExecCtx) (err error) {
 	runBegin := time.Now()
 	if _, err = execCtx.runner.Run(0); err != nil {
