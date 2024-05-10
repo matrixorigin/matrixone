@@ -121,7 +121,7 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
 		proc.Ctx,
 		arg.TableDef.TblId,
 		bat,
-		uint64(arg.EstimatedRowCount),
+		arg.EstimatedRowCount,
 	)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {

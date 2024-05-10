@@ -94,7 +94,7 @@ func (c *tableCache) insertAutoValues(
 	ctx context.Context,
 	tableID uint64,
 	bat *batch.Batch,
-	estimate int,
+	estimate int64,
 ) (uint64, error) {
 	lastInsert := uint64(0)
 	txnOp := c.getTxn()
@@ -104,8 +104,8 @@ func (c *tableCache) insertAutoValues(
 			panic("column cache should not be nil, " + col.ColName)
 		}
 
-		if estimate > cc.cfg.CountPerAllocate {
-			cc.preAllocate(ctx, tableID, estimate, txnOp)
+		if estimate > int64(cc.cfg.CountPerAllocate) {
+			cc.preAllocate(ctx, tableID, int(estimate), txnOp)
 		}
 
 		rows := bat.RowCount()
