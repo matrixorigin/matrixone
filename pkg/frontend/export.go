@@ -415,7 +415,7 @@ func formatJsonString(str string, flag bool, terminatedBy string) string {
 	return tmp
 }
 
-func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan *BatchByte, oq *outputQueue) {
+func constructByte(ctx context.Context, obj interface{}, bat *batch.Batch, index int32, ByteChan chan *BatchByte, oq *outputQueue) {
 	ses := obj.(*Session)
 	symbol := oq.ep.Symbol
 	closeby := oq.ep.userConfig.Fields.EnclosedBy.Value
@@ -536,7 +536,7 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 					"Failed to construct byte due to unsupported type",
 					zap.Int("typeOid", int(vec.GetType().Oid)))
 				ByteChan <- &BatchByte{
-					err: moerr.NewInternalError(ses.requestCtx, "constructByte : unsupported type %d", vec.GetType().Oid),
+					err: moerr.NewInternalError(ctx, "constructByte : unsupported type %d", vec.GetType().Oid),
 				}
 				bat.Clean(ses.GetMemPool())
 				return

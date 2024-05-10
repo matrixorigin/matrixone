@@ -114,7 +114,7 @@ func (t StmtKind) RespType() RespType {
 	return RespType((int(t) >> 2) & 0x7)
 }
 
-func (t StmtKind) HandleType() ExecLocation {
+func (t StmtKind) ExecLocation() ExecLocation {
 	return ExecLocation((int(t) >> 5) & 0x1)
 }
 
