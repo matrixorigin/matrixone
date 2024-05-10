@@ -15,12 +15,57 @@
 package aggexec
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 var _ AggFuncExec = &singleAggFuncExecNew1[int64, int64]{}
+
+func RegisterAggFromFixedRetFixed[from, to types.FixedSizeTExceptStrType](
+	basicInformation SingleColumnAggInformation,
+	initCommonContext AggCommonContextInit,
+	initGroupContext AggGroupContextInit,
+	initResult SingleAggInitResult1[to],
+	fill SingleAggFill1NewVersion[from, to],
+	fills SingleAggFills1NewVersion[from, to],
+	merge SingleAggMerge1NewVersion[from, to],
+	flush SingleAggFlush1NewVersion[from, to]) {
+
+	key := generateKeyOfSingleColumnAgg(
+		basicInformation.id, basicInformation.arg)
+	if _, ok := registeredAggFunctions[key]; ok {
+		panic(fmt.Sprintf("agg function with id %d and arg %s has been registered", basicInformation.id, basicInformation.arg))
+	}
+
+	registeredAggFunctions[key] = aggImplementation{
+		registeredAggInfo: registeredAggInfo{
+			isSingleAgg:          true,
+			acceptNull:           false,
+			setNullForEmptyGroup: basicInformation.setNullForEmptyGroup,
+		},
+
+		ctx: aggContextImplementation{
+			hasCommonContext:      initCommonContext != nil,
+			hasGroupContext:       initGroupContext != nil,
+			generateCommonContext: initCommonContext,
+			generateGroupContext:  initGroupContext,
+		},
+
+		logic: aggLogicImplementation{
+			init:  initResult,
+			fill:  fill,
+			fills: fills,
+			merge: merge,
+			flush: flush,
+		},
+	}
+
+	singleAgg[basicInformation.id] = true
+	singleAggNewVersion[basicInformation.id] = true
+	return
+}
 
 type singleAggFuncExecNew1[from, to types.FixedSizeTExceptStrType] struct {
 	singleAggInfo

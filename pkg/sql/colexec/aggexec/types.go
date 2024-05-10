@@ -212,6 +212,12 @@ func makeSingleAgg(
 	if pIsVarLen {
 		return newSingleAggFuncExec3(mg, info, opt, agg)
 	}
+
+	// todo: my testing.
+	if singleAggNewVersion[aggID] {
+		return newSingleAggFuncExec1NewVersion(mg, info, opt, agg)
+	}
+
 	return newSingleAggFuncExec1(mg, info, opt, agg)
 }
 
