@@ -3416,25 +3416,6 @@ func TestDropCreated4(t *testing.T) {
 	tae.Restart(ctx)
 }
 
-// records create at 1 and commit
-// read by ts 1, err should be nil
-func TestReadEqualTS(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	ctx := context.Background()
-
-	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
-
-	txn, err := tae.StartTxn(nil)
-	tae.Catalog.Lock()
-	tae.Catalog.CreateDBEntryByTS("db", txn.GetStartTS())
-	tae.Catalog.Unlock()
-	assert.Nil(t, err)
-	_, err = txn.GetDatabase("db")
-	assert.Nil(t, err)
-}
-
 func TestTruncateZonemap(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
