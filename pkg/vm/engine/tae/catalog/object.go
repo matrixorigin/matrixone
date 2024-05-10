@@ -600,18 +600,16 @@ func (entry *ObjectEntry) ObjectPersisted() bool {
 }
 
 // PXU TODO: I can't understand this code
-// for old flushed objects, stats may be empty
+// aobj has persisted data after it is dropped
+// obj always has persisted data
 func (entry *ObjectEntry) HasCommittedPersistedData() bool {
 	entry.RLock()
 	defer entry.RUnlock()
-	if entry.IsEmptyLocked() {
-		return false
-	}
 	if entry.IsAppendable() {
 		lastNode := entry.GetLatestNodeLocked()
 		return lastNode.HasDropCommitted()
 	} else {
-		return true
+		return entry.HasCommittedNodeLocked()
 	}
 }
 func (entry *ObjectEntry) MustGetObjectStats() (objectio.ObjectStats, error) {
