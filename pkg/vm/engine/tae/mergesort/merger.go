@@ -18,10 +18,11 @@ import (
 	"context"
 	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -29,7 +30,7 @@ import (
 )
 
 type Merger interface {
-	Merge(context.Context)
+	merge(context.Context) error
 }
 
 type releasableBatch struct {
@@ -103,10 +104,10 @@ func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, 
 	return m
 }
 
-func (m *merger[T]) Merge(ctx context.Context) {
+func (m *merger[T]) merge(ctx context.Context) error {
 	for i := 0; i < m.objCnt; i++ {
-		if ok := m.loadBlk(uint32(i)); !ok {
-			return
+		if ok, err := m.loadBlk(ctx, uint32(i)); !ok {
+			return errors.Join(moerr.NewInternalError(ctx, "failed to load first blk"), err)
 		}
 
 		heapPush(m.heap, heapElem[T]{
@@ -129,21 +130,22 @@ func (m *merger[T]) Merge(ctx context.Context) {
 	for m.heap.Len() != 0 {
 		select {
 		case <-ctx.Done():
-			logutil.Errorf("merge task canceled")
-			return
+			return ctx.Err()
 		default:
 		}
 		objIdx := m.nextPos()
 		if m.deletes[objIdx].Contains(uint64(m.rowIdx[objIdx])) {
 			// row is deleted
-			m.pushNewElem(objIdx)
+			if err := m.pushNewElem(ctx, objIdx); err != nil {
+				return err
+			}
 			continue
 		}
 		rowIdx := m.rowIdx[objIdx]
 		for i := range m.buffer.Vecs {
 			err := m.buffer.Vecs[i].UnionOne(m.bats[objIdx].bat.Vecs[i], rowIdx, m.host.GetMPool())
 			if err != nil {
-				panic(err)
+				return err
 			}
 		}
 
@@ -168,7 +170,7 @@ func (m *merger[T]) Merge(ctx context.Context) {
 			}
 
 			if _, err := m.writer.WriteBatch(m.buffer); err != nil {
-				panic(err)
+				return err
 			}
 			// force clean
 			m.buffer.CleanOnlyData()
@@ -176,7 +178,9 @@ func (m *merger[T]) Merge(ctx context.Context) {
 			// write new object
 			if m.needNewObject(objBlkCnt, objRowCnt, mergedRowCnt) {
 				// write object and reset writer
-				m.syncObject(ctx)
+				if err := m.syncObject(ctx); err != nil {
+					return err
+				}
 				// reset writer after sync
 				objBlkCnt = 0
 				objRowCnt = 0
@@ -184,7 +188,9 @@ func (m *merger[T]) Merge(ctx context.Context) {
 			}
 		}
 
-		m.pushNewElem(objIdx)
+		if err := m.pushNewElem(ctx, objIdx); err != nil {
+			return err
+		}
 	}
 
 	// write remain data
@@ -195,13 +201,16 @@ func (m *merger[T]) Merge(ctx context.Context) {
 			m.writer = m.host.PrepareNewWriter()
 		}
 		if _, err := m.writer.WriteBatch(m.buffer); err != nil {
-			panic(err)
+			return err
 		}
 		m.buffer.CleanOnlyData()
 	}
 	if objBlkCnt > 0 {
-		m.syncObject(ctx)
+		if err := m.syncObject(ctx); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (m *merger[T]) needNewObject(objBlkCnt int, objRowCnt, mergedRowCnt uint32) bool {
@@ -219,19 +228,16 @@ func (m *merger[T]) nextPos() uint32 {
 	return heapPop[T](m.heap).src
 }
 
-func (m *merger[T]) loadBlk(objIdx uint32) bool {
-	nextBatch, del, releaseF, err := m.host.LoadNextBatch(objIdx)
+func (m *merger[T]) loadBlk(ctx context.Context, objIdx uint32) (bool, error) {
+	nextBatch, del, releaseF, err := m.host.LoadNextBatch(ctx, objIdx)
 	if m.bats[objIdx].bat != nil {
 		m.bats[objIdx].releaseF()
 	}
 	if err != nil {
 		if errors.Is(err, ErrNoMoreBlocks) {
-			return false
+			return false, nil
 		}
-		if m.loadedObjBlkCnts[objIdx] != m.objBlkCnts[objIdx] {
-			panic("channel closed unexpectedly")
-		}
-		return false
+		return false, err
 	}
 
 	m.bats[objIdx] = releasableBatch{bat: nextBatch, releaseF: releaseF}
@@ -242,14 +248,14 @@ func (m *merger[T]) loadBlk(objIdx uint32) bool {
 	m.nulls[objIdx] = vec.GetNulls()
 	m.deletes[objIdx] = del
 	m.rowIdx[objIdx] = 0
-	return true
+	return true, nil
 }
 
-func (m *merger[T]) pushNewElem(objIdx uint32) bool {
+func (m *merger[T]) pushNewElem(ctx context.Context, objIdx uint32) error {
 	m.rowIdx[objIdx]++
 	if m.rowIdx[objIdx] >= int64(len(m.cols[objIdx])) {
-		if ok := m.loadBlk(objIdx); !ok {
-			return false
+		if ok, err := m.loadBlk(ctx, objIdx); !ok {
+			return err
 		}
 	}
 	nextRow := m.rowIdx[objIdx]
@@ -258,12 +264,12 @@ func (m *merger[T]) pushNewElem(objIdx uint32) bool {
 		isNull: m.nulls[objIdx].Contains(uint64(nextRow)),
 		src:    objIdx,
 	})
-	return true
+	return nil
 }
 
-func (m *merger[T]) syncObject(ctx context.Context) {
+func (m *merger[T]) syncObject(ctx context.Context) error {
 	if _, _, err := m.writer.Sync(ctx); err != nil {
-		panic(err)
+		return err
 	}
 	cobjstats := m.writer.GetObjectStats()[:objectio.SchemaTombstone]
 	commitEntry := m.host.GetCommitEntry()
@@ -271,4 +277,65 @@ func (m *merger[T]) syncObject(ctx context.Context) {
 		commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobj.Clone().Marshal())
 	}
 	m.writer = nil
+	return nil
+}
+
+func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) error {
+	var merger Merger
+	typ := mergeHost.GetSortKeyType()
+	if typ.IsVarlen() {
+		merger = newMerger(mergeHost, NumericLess[string], sortKeyPos, vector.MustStrCol)
+	} else {
+		switch typ.Oid {
+		case types.T_bool:
+			merger = newMerger(mergeHost, BoolLess, sortKeyPos, vector.MustFixedCol[bool])
+		case types.T_bit:
+			merger = newMerger(mergeHost, NumericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64])
+		case types.T_int8:
+			merger = newMerger(mergeHost, NumericLess[int8], sortKeyPos, vector.MustFixedCol[int8])
+		case types.T_int16:
+			merger = newMerger(mergeHost, NumericLess[int16], sortKeyPos, vector.MustFixedCol[int16])
+		case types.T_int32:
+			merger = newMerger(mergeHost, NumericLess[int32], sortKeyPos, vector.MustFixedCol[int32])
+		case types.T_int64:
+			merger = newMerger(mergeHost, NumericLess[int64], sortKeyPos, vector.MustFixedCol[int64])
+		case types.T_float32:
+			merger = newMerger(mergeHost, NumericLess[float32], sortKeyPos, vector.MustFixedCol[float32])
+		case types.T_float64:
+			merger = newMerger(mergeHost, NumericLess[float64], sortKeyPos, vector.MustFixedCol[float64])
+		case types.T_uint8:
+			merger = newMerger(mergeHost, NumericLess[uint8], sortKeyPos, vector.MustFixedCol[uint8])
+		case types.T_uint16:
+			merger = newMerger(mergeHost, NumericLess[uint16], sortKeyPos, vector.MustFixedCol[uint16])
+		case types.T_uint32:
+			merger = newMerger(mergeHost, NumericLess[uint32], sortKeyPos, vector.MustFixedCol[uint32])
+		case types.T_uint64:
+			merger = newMerger(mergeHost, NumericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64])
+		case types.T_date:
+			merger = newMerger(mergeHost, NumericLess[types.Date], sortKeyPos, vector.MustFixedCol[types.Date])
+		case types.T_timestamp:
+			merger = newMerger(mergeHost, NumericLess[types.Timestamp], sortKeyPos, vector.MustFixedCol[types.Timestamp])
+		case types.T_datetime:
+			merger = newMerger(mergeHost, NumericLess[types.Datetime], sortKeyPos, vector.MustFixedCol[types.Datetime])
+		case types.T_time:
+			merger = newMerger(mergeHost, NumericLess[types.Time], sortKeyPos, vector.MustFixedCol[types.Time])
+		case types.T_enum:
+			merger = newMerger(mergeHost, NumericLess[types.Enum], sortKeyPos, vector.MustFixedCol[types.Enum])
+		case types.T_decimal64:
+			merger = newMerger(mergeHost, LtTypeLess[types.Decimal64], sortKeyPos, vector.MustFixedCol[types.Decimal64])
+		case types.T_decimal128:
+			merger = newMerger(mergeHost, LtTypeLess[types.Decimal128], sortKeyPos, vector.MustFixedCol[types.Decimal128])
+		case types.T_uuid:
+			merger = newMerger(mergeHost, LtTypeLess[types.Uuid], sortKeyPos, vector.MustFixedCol[types.Uuid])
+		case types.T_TS:
+			merger = newMerger(mergeHost, TsLess, sortKeyPos, vector.MustFixedCol[types.TS])
+		case types.T_Rowid:
+			merger = newMerger(mergeHost, RowidLess, sortKeyPos, vector.MustFixedCol[types.Rowid])
+		case types.T_Blockid:
+			merger = newMerger(mergeHost, BlockidLess, sortKeyPos, vector.MustFixedCol[types.Blockid])
+		default:
+			return moerr.NewErrUnsupportedDataType(ctx, typ)
+		}
+	}
+	return merger.merge(ctx)
 }

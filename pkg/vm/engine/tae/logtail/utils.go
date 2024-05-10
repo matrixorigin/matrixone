@@ -2786,9 +2786,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 	if shouldIgnoreDBInLogtail(entry.ID) {
 		return nil
 	}
-	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
-	entry.RUnlock()
 	delStart := collector.data.bats[DBDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
 	insStart := collector.data.bats[DBInsertIDX].GetVectorByName(catalog.AttrRowID).Length()
 	for _, node := range mvccNodes {
@@ -2838,7 +2836,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 func (collector *GlobalCollector) isEntryDeletedBeforeThreshold(entry catalog.BaseEntry) bool {
 	entry.RLock()
 	defer entry.RUnlock()
-	return entry.DeleteBefore(collector.versionThershold)
+	return entry.DeleteBeforeLocked(collector.versionThershold)
 }
 func (collector *GlobalCollector) VisitDB(entry *catalog.DBEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
@@ -2857,9 +2855,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 	if shouldIgnoreTblInLogtail(entry.ID) {
 		return nil
 	}
-	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
-	entry.RUnlock()
 	tableColDelBat := collector.data.bats[TBLColDeleteIDX]
 	tableDelTxnBat := collector.data.bats[TBLDeleteTxnIDX]
 	tableDelBat := collector.data.bats[TBLDeleteIDX]
@@ -2974,9 +2970,7 @@ func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 }
 
 func (collector *BaseCollector) visitObjectEntry(entry *catalog.ObjectEntry) error {
-	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
-	entry.RUnlock()
 	if len(mvccNodes) == 0 {
 		return nil
 	}
@@ -3034,9 +3028,7 @@ func (collector *BaseCollector) loadObjectInfo() error {
 
 		for idx%batchCnt == 0 && i < idx {
 			obj := collector.Objects[i]
-			obj.RLock()
 			mvccNodes := obj.ClonePreparedInRange(collector.start, collector.end)
-			obj.RUnlock()
 			for _, node := range mvccNodes {
 				if node.BaseNode.IsEmpty() {
 					stats, err := obj.LoadObjectInfoWithTxnTS(node.Start)
@@ -3044,7 +3036,7 @@ func (collector *BaseCollector) loadObjectInfo() error {
 						return err
 					}
 					obj.Lock()
-					obj.SearchNode(node).BaseNode.ObjectStats = stats
+					obj.SearchNodeLocked(node).BaseNode.ObjectStats = stats
 					obj.Unlock()
 				}
 
@@ -3054,9 +3046,7 @@ func (collector *BaseCollector) loadObjectInfo() error {
 	}
 	for ; i < len(collector.Objects); i++ {
 		obj := collector.Objects[i]
-		obj.RLock()
 		mvccNodes := obj.ClonePreparedInRange(collector.start, collector.end)
-		obj.RUnlock()
 		for _, node := range mvccNodes {
 			if node.BaseNode.IsEmpty() {
 				stats, err := obj.LoadObjectInfoWithTxnTS(node.Start)
@@ -3064,7 +3054,7 @@ func (collector *BaseCollector) loadObjectInfo() error {
 					return err
 				}
 				obj.Lock()
-				obj.SearchNode(node).BaseNode.ObjectStats = stats
+				obj.SearchNodeLocked(node).BaseNode.ObjectStats = stats
 				obj.Unlock()
 			}
 		}

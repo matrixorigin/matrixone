@@ -884,6 +884,12 @@ var (
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
 			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
 		}, {
+			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '' parallel 'true';",
+			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true ",
+		}, {
+			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '' parallel 'true' strict 'true';",
+			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true strict true ",
+		}, {
 			input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
 		}, {
 			input: "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
@@ -2487,6 +2493,22 @@ var (
 			input: "alter publication pub1 account add acc0",
 		},
 		{
+			input: "restore cluster from snapshot snapshot_01",
+		},
+		{
+			input: "restore account account_01 from snapshot snapshot_01",
+		},
+		{
+			input: "restore account account_01 database db1 from snapshot snapshot_01",
+		},
+		{
+			input: "restore account account_01 database db1 table t1 from snapshot snapshot_01",
+		},
+		{
+			input:  "restore account account_01 from snapshot snapshot_01 to account account_02",
+			output: "restore account account_01 from snapshot snapshot_01 to account account_02",
+		},
+		{
 			input: "alter publication pub1 account add acc0, acc1",
 		},
 		{
@@ -2765,6 +2787,25 @@ var (
 		}, {
 			input:  `backup '123' s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'}`,
 			output: `backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'}`,
+		},
+		{
+			input:  "backup '123' filesystem '/home/abc' parallelism '1' type 'incremental' timestamp 'xxxxx-xxxxx'",
+			output: "backup 123 filesystem /home/abc parallelism 1 backuptype incremental backupts xxxxx-xxxxx",
+		}, {
+			input:  "backup '125' filesystem '/tmp/backup' parallelism '1' type 'incremental' timestamp 'xxxxx-xxxxx';",
+			output: "backup 125 filesystem /tmp/backup parallelism 1 backuptype incremental backupts xxxxx-xxxxx",
+		}, {
+			input:  "backup '123' s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} type 'incremental' timestamp 'xxxxx-xxxxx'",
+			output: "backup 123 s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} backuptype incremental backupts xxxxx-xxxxx",
+		}, {
+			input:  "backup '123' s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} type 'incremental' timestamp 'xxxxx-xxxxx'",
+			output: "backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} backuptype incremental backupts xxxxx-xxxxx",
+		}, {
+			input:  "backup '123' s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} type 'incremental' timestamp 'xxxxx-xxxxx'",
+			output: "backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} backuptype incremental backupts xxxxx-xxxxx",
+		}, {
+			input:  `backup '123' s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} type 'incremental' timestamp 'xxxxx-xxxxx'`,
+			output: `backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} backuptype incremental backupts xxxxx-xxxxx`,
 		}, {
 			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `pga0010` AS select distinct `a`.`FACDIV` AS `FACDIV`,`a`.`BLDCD` AS `BLDCD`,`a`.`PRDCD` AS `PRDCD`,`a`.`PRDNAM` AS `PRDNAM`,`a`.`PRDLNG` AS `PRDLNG`,`a`.`PRDWID` AS `PRDWID`,`a`.`PRDGAG` AS `PRDGAG`,`a`.`AREA` AS `AREA`,`a`.`GLZTYP` AS `GLZTYP`,`a`.`TECTYP` AS `TECTYP`,`a`.`PRDCATE` AS `PRDCATE`,`a`.`PRCCD` AS `PRCCD`,`a`.`PRCDSC` AS `PRCDSC`,`a`.`GLSSTR` AS `GLSSTR`,`a`.`REMARK` AS `REMARK`,`a`.`USEYN` AS `USEYN`,`a`.`ISMES` AS `ISMES` from (select 'N' AS `ISMES`,`skim`.`bga0010`.`USEYN` AS `USEYN`,`skim`.`bga0010`.`FACDIV` AS `FACDIV`,`skim`.`bga0010`.`BLDCDFATHER` AS `BLDCD`,substring_index(`skim`.`bga0010`.`PRDCD`,'-',1) AS `PRDCD`,`skim`.`bga0010`.`PRDNAM` AS `PRDNAM`,`skim`.`bga0010`.`PRDLNG` AS `PRDLNG`,`skim`.`bga0010`.`PRDWID` AS `PRDWID`,`skim`.`bga0010`.`PRDGAG` AS `PRDGAG`,`skim`.`bga0010`.`AREA` AS `AREA`,`skim`.`bga0010`.`GLZTYP` AS `GLZTYP`,`skim`.`bga0010`.`TECTYP` AS `TECTYP`,`skim`.`bga0010`.`PRDCATE` AS `PRDCATE`,`skim`.`bga0010`.`MATCST` AS `MATCST`,`skim`.`bga0010`.`PRCCD` AS `PRCCD`,`skim`.`bga0010`.`PRCDSC` AS `PRCDSC`,`skim`.`bga0010`.`GLSSTR` AS `GLSSTR`,`skim`.`bga0010`.`REMARK` AS `REMARK` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'Y') and (`skim`.`bga0010`.`USEYN` = 'Y') and (not(substring_index(`skim`.`bga0010`.`PRDCD`,'-',1) in (select `skim`.`bga0010`.`PRDCD` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'N') and (`skim`.`bga0010`.`USEYN` = 'Y')))))) union all select `skim`.`bga0010`.`ISMES` AS `ISMES`,`skim`.`bga0010`.`USEYN` AS `USEYN`,`skim`.`bga0010`.`FACDIV` AS `FACDIV`,`skim`.`bga0010`.`BLDCD` AS `BLDCD`,`skim`.`bga0010`.`PRDCD` AS `PRDCD`,`skim`.`bga0010`.`PRDNAM` AS `PRDNAM`,`skim`.`bga0010`.`PRDLNG` AS `PRDLNG`,`skim`.`bga0010`.`PRDWID` AS `PRDWID`,`skim`.`bga0010`.`PRDGAG` AS `PRDGAG`,`skim`.`bga0010`.`AREA` AS `AREA`,`skim`.`bga0010`.`GLZTYP` AS `GLZTYP`,`skim`.`bga0010`.`TECTYP` AS `TECTYP`,`skim`.`bga0010`.`PRDCATE` AS `PRDCATE`,`skim`.`bga0010`.`MATCST` AS `MATCST`,`skim`.`bga0010`.`PRCCD` AS `PRCCD`,`skim`.`bga0010`.`PRCDSC` AS `PRCDSC`,`skim`.`bga0010`.`GLSSTR` AS `GLSSTR`,`skim`.`bga0010`.`REMARK` AS `REMARK` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'N') and (`skim`.`bga0010`.`USEYN` = 'Y'))) `a` order by `a`.`BLDCD` */;",
 			output: "create view pga0010 as select distinct a.facdiv as FACDIV, a.bldcd as BLDCD, a.prdcd as PRDCD, a.prdnam as PRDNAM, a.prdlng as PRDLNG, a.prdwid as PRDWID, a.prdgag as PRDGAG, a.area as AREA, a.glztyp as GLZTYP, a.tectyp as TECTYP, a.prdcate as PRDCATE, a.prccd as PRCCD, a.prcdsc as PRCDSC, a.glsstr as GLSSTR, a.remark as REMARK, a.useyn as USEYN, a.ismes as ISMES from (select N as ISMES, skim.bga0010.useyn as USEYN, skim.bga0010.facdiv as FACDIV, skim.bga0010.bldcdfather as BLDCD, substring_index(skim.bga0010.prdcd, -, 1) as PRDCD, skim.bga0010.prdnam as PRDNAM, skim.bga0010.prdlng as PRDLNG, skim.bga0010.prdwid as PRDWID, skim.bga0010.prdgag as PRDGAG, skim.bga0010.area as AREA, skim.bga0010.glztyp as GLZTYP, skim.bga0010.tectyp as TECTYP, skim.bga0010.prdcate as PRDCATE, skim.bga0010.matcst as MATCST, skim.bga0010.prccd as PRCCD, skim.bga0010.prcdsc as PRCDSC, skim.bga0010.glsstr as GLSSTR, skim.bga0010.remark as REMARK from skim.bga0010 where ((skim.bga0010.ismes = Y) and (skim.bga0010.useyn = Y) and (not (substring_index(skim.bga0010.prdcd, -, 1) in (select skim.bga0010.prdcd from skim.bga0010 where ((skim.bga0010.ismes = N) and (skim.bga0010.useyn = Y)))))) union all select skim.bga0010.ismes as ISMES, skim.bga0010.useyn as USEYN, skim.bga0010.facdiv as FACDIV, skim.bga0010.bldcd as BLDCD, skim.bga0010.prdcd as PRDCD, skim.bga0010.prdnam as PRDNAM, skim.bga0010.prdlng as PRDLNG, skim.bga0010.prdwid as PRDWID, skim.bga0010.prdgag as PRDGAG, skim.bga0010.area as AREA, skim.bga0010.glztyp as GLZTYP, skim.bga0010.tectyp as TECTYP, skim.bga0010.prdcate as PRDCATE, skim.bga0010.matcst as MATCST, skim.bga0010.prccd as PRCCD, skim.bga0010.prcdsc as PRCDSC, skim.bga0010.glsstr as GLSSTR, skim.bga0010.remark as REMARK from skim.bga0010 where ((skim.bga0010.ismes = N) and (skim.bga0010.useyn = Y))) as a order by a.bldcd",

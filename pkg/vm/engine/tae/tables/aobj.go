@@ -356,7 +356,7 @@ func (obj *aobject) estimateRawScore() (score int, dropped bool, err error) {
 		return
 	}
 	obj.meta.RLock()
-	atLeastOneCommitted := obj.meta.HasCommittedNode()
+	atLeastOneCommitted := obj.meta.HasCommittedNodeLocked()
 	obj.meta.RUnlock()
 	if !atLeastOneCommitted {
 		score = 1
@@ -438,7 +438,7 @@ func (obj *aobject) EstimateMemSize() (int, int) {
 
 func (obj *aobject) GetRowsOnReplay() uint64 {
 	rows := uint64(obj.appendMVCC.GetTotalRow())
-	fileRows := uint64(obj.meta.GetLatestCommittedNode().
+	fileRows := uint64(obj.meta.GetLatestCommittedNodeLocked().
 		BaseNode.ObjectStats.Rows())
 	if rows > fileRows {
 		return rows

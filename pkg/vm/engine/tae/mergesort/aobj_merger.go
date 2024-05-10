@@ -16,18 +16,17 @@ package mergesort
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type AObjMerger interface {
-	Merge(context.Context) ([]*batch.Batch, func(), []uint32)
+	Merge(context.Context) ([]*batch.Batch, func(), []uint32, error)
 }
 
 type aObjMerger[T any] struct {
@@ -48,11 +47,13 @@ type aObjMerger[T any] struct {
 	vpool     DisposableVecPool
 }
 
-func MergeAObj(vpool DisposableVecPool,
+func MergeAObj(
+	ctx context.Context,
+	vpool DisposableVecPool,
 	batches []*containers.Batch,
 	sortKeyPos int,
 	rowPerBlk uint32,
-	resultBlkCnt int) ([]*batch.Batch, func(), []uint32) {
+	resultBlkCnt int) ([]*batch.Batch, func(), []uint32, error) {
 	var merger AObjMerger
 	typ := batches[0].Vecs[sortKeyPos].GetType()
 	if typ.IsVarlen() {
@@ -106,10 +107,10 @@ func MergeAObj(vpool DisposableVecPool,
 		case types.T_Blockid:
 			merger = newAObjMerger(vpool, batches, BlockidLess, sortKeyPos, vector.MustFixedCol[types.Blockid], rowPerBlk, resultBlkCnt)
 		default:
-			panic(fmt.Sprintf("unsupported type %s", typ.String()))
+			return nil, nil, nil, moerr.NewErrUnsupportedDataType(ctx, typ)
 		}
 	}
-	return merger.Merge(context.Background())
+	return merger.Merge(ctx)
 }
 
 func newAObjMerger[T any](
@@ -148,7 +149,7 @@ func newAObjMerger[T any](
 	return m
 }
 
-func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []uint32) {
+func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []uint32, error) {
 	for i := 0; i < len(am.bats); i++ {
 		heapPush(am.heap, heapElem[T]{
 			data:   am.cols[i][0],
@@ -167,8 +168,7 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []u
 	for am.heap.Len() != 0 {
 		select {
 		case <-ctx.Done():
-			logutil.Errorf("merge task canceled")
-			return nil, nil, nil
+			return nil, nil, nil, ctx.Err()
 		default:
 		}
 		blkIdx := am.nextPos()
@@ -179,7 +179,7 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []u
 		for i := range batches[blkCnt].Vecs {
 			err := batches[blkCnt].Vecs[i].UnionOne(am.bats[blkIdx].Vecs[i].GetDownstreamVector(), rowIdx, am.vpool.GetMPool())
 			if err != nil {
-				panic(err)
+				return nil, nil, nil, err
 			}
 		}
 
@@ -198,7 +198,7 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []u
 		for _, f := range releaseFs {
 			f()
 		}
-	}, am.mapping
+	}, am.mapping, nil
 }
 
 func (am *aObjMerger[T]) nextPos() uint32 {

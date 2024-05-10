@@ -149,3 +149,10 @@ func (s *BlockInfoSlice) String() string {
 	}
 	return buf.String()
 }
+
+type BackupObject struct {
+	Location Location
+	CrateTS  types.TS
+	DropTS   types.TS
+	NeedCopy bool
+}

@@ -774,6 +774,42 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 	}
 }
 
+func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
+	node := builder.qry.Nodes[nodeID]
+
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		node.Stats.ForceOneCN = force
+	} else if node.NodeType == plan.Node_JOIN {
+		if len(node.RuntimeFilterBuildList) == 0 {
+			for _, childID := range node.Children {
+				builder.forceJoinOnOneCN(childID, force)
+			}
+		}
+		switch node.JoinType {
+		case plan.Node_RIGHT:
+			if !node.Stats.HashmapStats.Shuffle {
+				for _, childID := range node.Children {
+					builder.forceJoinOnOneCN(childID, true)
+				}
+			}
+		case plan.Node_SEMI, plan.Node_ANTI:
+			if node.BuildOnLeft && !node.Stats.HashmapStats.Shuffle {
+				for _, childID := range node.Children {
+					builder.forceJoinOnOneCN(childID, true)
+				}
+			}
+		case plan.Node_INDEX:
+			for _, childID := range node.Children {
+				builder.forceJoinOnOneCN(childID, true)
+			}
+		}
+	} else {
+		for _, childID := range node.Children {
+			builder.forceJoinOnOneCN(childID, force)
+		}
+	}
+}
+
 func handleOptimizerHints(str string, builder *QueryBuilder) {
 	strs := strings.Split(str, "=")
 	if len(strs) != 2 {

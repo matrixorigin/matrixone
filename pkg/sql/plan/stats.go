@@ -1001,11 +1001,6 @@ func recalcStatsByRuntimeFilter(node *plan.Node, joinNode *plan.Node, runtimeFil
 		node.Stats.Cost = 1
 	}
 	node.Stats.BlockNum = int32(node.Stats.Outcnt/2) + 1
-	if joinNode.JoinType == plan.Node_RIGHT || joinNode.BuildOnLeft {
-		if !joinNode.Stats.HashmapStats.Shuffle {
-			node.Stats.ForceOneCN = true
-		}
-	}
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
@@ -1018,7 +1013,18 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if shouldReturnMinimalStats(node) {
 		return DefaultMinimalStats()
 	}
-	s, err := builder.compCtx.Stats(node.ObjRef)
+
+	//ts := timestamp.Timestamp{}
+	//if node.ScanTS != nil {
+	//	ts = *node.ScanTS
+	//}
+
+	scanSnapshot := node.ScanSnapshot
+	if scanSnapshot == nil {
+		scanSnapshot = &Snapshot{}
+	}
+
+	s, err := builder.compCtx.Stats(node.ObjRef, *scanSnapshot)
 	if err != nil || s == nil {
 		return DefaultStats()
 	}

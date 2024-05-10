@@ -82,7 +82,7 @@ Number of columns in mo_user
 11
 show column_number from mo_account;
 Number of columns in mo_account
-8
+9
 show column_number from mo_role;
 Number of columns in mo_role
 6
