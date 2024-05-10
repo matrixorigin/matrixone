@@ -23,8 +23,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
-	"github.com/tidwall/btree"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -34,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/tidwall/btree"
 )
 
 func NewCatalog() *CatalogCache {
@@ -635,7 +634,6 @@ func (cc *CatalogCache) InsertDatabase(bat *batch.Batch) {
 		copy(item.Rowid[:], rowids[i][:])
 		cc.databases.data.Set(item)
 		cc.databases.rowidIndex.Set(item)
-		//fmt.Fprintln(os.Stderr, "insert database ", item.Rowid, item.Id, item.Name, item.AccountId, item.Ts, item.Typ, item.CreateSql)
 	}
 }
 
