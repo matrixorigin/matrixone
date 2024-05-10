@@ -200,7 +200,7 @@ func (s *service) InsertValues(
 	ctx context.Context,
 	tableID uint64,
 	bat *batch.Batch,
-	estimate int,
+	estimate int64,
 ) (uint64, error) {
 	ts, err := s.getCommittedTableCache(
 		ctx,
