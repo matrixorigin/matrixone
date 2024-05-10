@@ -161,7 +161,7 @@ func mockTAEHandle(ctx context.Context, t *testing.T, opts *options.Options) *mo
 	mh.Handle = &Handle{
 		db: tae,
 	}
-	mh.Handle.txnCtxs = common.NewMap[string, *txnContext](runtime.NumCPU())
+	mh.Handle.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
 	return mh
 }
 
