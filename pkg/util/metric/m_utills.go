@@ -1,4 +1,4 @@
-// Copyright 2024 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,24 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package frontend
+package metric
 
-import (
-	"fmt"
-	"time"
-)
+import "github.com/shirou/gopsutil/v3/cpu"
 
-func executeStatusStmtInBack(backSes *backSession,
-	execCtx *ExecCtx) (err error) {
-	runBegin := time.Now()
-	if _, err = execCtx.runner.Run(0); err != nil {
-		return
-	}
-
-	// only log if run time is longer than 1s
-	if time.Since(runBegin) > time.Second {
-		logInfo(backSes, backSes.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
-	}
-
-	return
+// CPUTotalTime is used to workaround sca issues from gopsutil version upgrades
+func CPUTotalTime(c cpu.TimesStat) float64 {
+	return c.User + c.System + c.Idle + c.Nice + c.Iowait + c.Irq +
+		c.Softirq + c.Steal + c.Guest + c.GuestNice
 }
