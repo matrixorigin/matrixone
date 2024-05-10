@@ -2169,17 +2169,37 @@ func (tbl *txnTable) newReader(
 				logtailreplay.Prefix(pkVal),
 			)
 		case function.IN:
+			var encodes [][]byte
 			vec := vector.NewVec(types.T_any.ToType())
-			_ = vec.UnmarshalBinary(pkVal)
-			debug := false
-			//if tbl.db.databaseName == "tpcc" {
-			//	fmt.Println(tbl.db.databaseName, tbl.tableName, vec, plan2.FormatExpr(expr))
-			//	debug = true
-			//}
+			vec.UnmarshalBinary(pkVal)
 
+			var packer *types.Packer
+			put := tbl.getTxn().engine.packerPool.Get(&packer)
+
+			processed := false
+			if vec.Length() == 1 {
+				exprLit := rule.GetConstantValue(vec, true, 0)
+				if exprLit != nil && !exprLit.Isnull {
+					canEval, val := evalLiteralExpr(exprLit, vec.GetType().Oid)
+					if canEval {
+						logtailreplay.EncodePrimaryKey(val, packer)
+						pkVal = packer.Bytes()
+						encodes = append(encodes, pkVal)
+						processed = true
+					}
+				}
+			}
+
+			if !processed {
+				encodes = logtailreplay.EncodePrimaryKeyVector(vec, packer)
+			}
+
+			put.Put()
+
+			debug := false
 			iter = state.NewPrimaryKeyIter(
 				types.TimestampToTS(ts),
-				logtailreplay.ExactIn(vec, debug, tbl.getTxn().engine.packerPool),
+				logtailreplay.ExactIn(encodes, debug),
 			)
 		}
 	}

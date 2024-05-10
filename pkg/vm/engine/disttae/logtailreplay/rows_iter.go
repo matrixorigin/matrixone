@@ -17,8 +17,6 @@ package logtailreplay
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/tidwall/btree"
 )
 
@@ -188,14 +186,10 @@ const (
 	seek phase = 1
 )
 
-func ExactIn(vec *vector.Vector, debug bool, packerPool *fileservice.Pool[*types.Packer]) PrimaryKeyMatchSpec {
-	var packer *types.Packer
+func ExactIn(encodes [][]byte, debug bool) PrimaryKeyMatchSpec {
 	//var buf *bytes.Buffer
 	var encoded []byte
-
-	put := packerPool.Get(&packer)
-	encodes := EncodePrimaryKeyVector(vec, packer)
-	put.Put()
+	//first := true
 
 	idx := 0
 	currentPhase := seek
@@ -217,9 +211,9 @@ func ExactIn(vec *vector.Vector, debug bool, packerPool *fileservice.Pool[*types
 	return PrimaryKeyMatchSpec{
 		Name: "ExactIn",
 		Move: func(p *primaryKeyIter) bool {
-
+			//
 			//if debug && first {
-			//	fmt.Println(vec.GetRawBytesAt(0), fmt.Sprintf("%s", string(vec.GetRawBytesAt(0))))
+			//	fmt.Println("encodes: ", encodes)
 			//	p.primaryIndex.Scan(func(item *PrimaryIndexEntry) bool {
 			//		t, _ := types.Unpack(item.Bytes)
 			//		fmt.Printf("%v-%s-%v ", item.Bytes, string(item.Bytes), t)
@@ -237,7 +231,6 @@ func ExactIn(vec *vector.Vector, debug bool, packerPool *fileservice.Pool[*types
 			//		fmt.Println("buffer: ", buf.String())
 			//	}()
 			//}
-
 			for {
 				switch currentPhase {
 				case seek:
