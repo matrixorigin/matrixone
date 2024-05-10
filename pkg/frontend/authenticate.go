@@ -953,36 +953,36 @@ var (
 		"mo_snapshots":                0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
-	createAutoTableSql           = MoCatalogMoAutoIncrTable
+	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
 	// mo_indexes table does not have `auto_increment` column,
-	createMoIndexesSql = MoCatalogMoIndexes
+	createMoIndexesSql = MoCatalogMoIndexesDDL
 
-	createMoForeignKeysSql = MoCatalogMoForeignKeys
+	createMoForeignKeysSql = MoCatalogMoForeignKeysDDL
 
-	createMoTablePartitionsSql = MoCatalogMoTablePartitions
+	createMoTablePartitionsSql = MoCatalogMoTablePartitionsDDL
 
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
-		MoCatalogMoUser,
-		MoCatalogMoAccount,
-		MoCatalogMoRole,
-		MoCatalogMoUserGrant,
-		MoCatalogMoRoleGrant,
-		MoCatalogMoRolePrivs,
-		MoCatalogMoUserDefinedFunction,
-		MoCatalogMoMysqlCompatibilityMode,
-		MoCatalogMoSnapshots,
-		MoCatalogMoPubs,
-		MoCatalogMoStoredProcedure,
-		MoCatalogMoStages,
-		MoCatalogMoSessions,
-		MoCatalogMoConfigurations,
-		MoCatalogMoLocks,
-		MoCatalogMoVariables,
-		MoCatalogMoTransactions,
-		MoCatalogMoCache,
+		MoCatalogMoUserDDL,
+		MoCatalogMoAccountDDL,
+		MoCatalogMoRoleDDL,
+		MoCatalogMoUserGrantDDL,
+		MoCatalogMoRoleGrantDDL,
+		MoCatalogMoRolePrivsDDL,
+		MoCatalogMoUserDefinedFunctionDDL,
+		MoCatalogMoMysqlCompatibilityModeDDL,
+		MoCatalogMoSnapshotsDDL,
+		MoCatalogMoPubsDDL,
+		MoCatalogMoStoredProcedureDDL,
+		MoCatalogMoStagesDDL,
+		MoCatalogMoSessionsDDL,
+		MoCatalogMoConfigurationsDDL,
+		MoCatalogMoLocksDDL,
+		MoCatalogMoVariablesDDL,
+		MoCatalogMoTransactionsDDL,
+		MoCatalogMoCacheDDL,
 	}
 
 	//drop tables for the tenant

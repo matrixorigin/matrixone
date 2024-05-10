@@ -54,23 +54,23 @@ var (
 	// Note: The following tables belong to data dictionary table, and system tables's creation will depend on
 	// the following system tables. Therefore, when creating tenants, they must be created first
 	step1InitSQLs = []string{
-		frontend.MoCatalogMoIndexes,
-		frontend.MoCatalogMoTablePartitions,
-		frontend.MoCatalogMoAutoIncrTable,
-		frontend.MoCatalogMoForeignKeys,
+		frontend.MoCatalogMoIndexesDDL,
+		frontend.MoCatalogMoTablePartitionsDDL,
+		frontend.MoCatalogMoAutoIncrTableDDL,
+		frontend.MoCatalogMoForeignKeysDDL,
 	}
 
 	step2InitSQLs = []string{
 		fmt.Sprintf(`create database %s`, catalog.MOTaskDB),
-		frontend.MoTaskSysAsyncTask,
-		frontend.MoTaskSysCronTask,
-		frontend.MoTaskSysDaemonTask,
+		frontend.MoTaskSysAsyncTaskDDL,
+		frontend.MoTaskSysCronTaskDDL,
+		frontend.MoTaskSysDaemonTaskDDL,
 	}
 
 	step3InitSQLs = []string{
-		frontend.MoCatalogMoVersion,
-		frontend.MoCatalogMoUpgrade,
-		frontend.MoCatalogMoUpgradeTenant,
+		frontend.MoCatalogMoVersionDDL,
+		frontend.MoCatalogMoUpgradeDDL,
+		frontend.MoCatalogMoUpgradeTenantDDL,
 	}
 
 	initMoVersionFormat = `insert into %s.%s values ('%s', %d, %d, current_timestamp(), current_timestamp())`
