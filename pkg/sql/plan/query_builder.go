@@ -1492,6 +1492,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.generateRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
+		builder.forceJoinOnOneCN(rootID, false)
+		// after this ,never call ReCalcNodeStats again !!!
 
 		if builder.isForUpdate {
 			reCheckifNeedLockWholeTable(builder)
