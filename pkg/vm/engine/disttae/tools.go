@@ -836,7 +836,7 @@ func genWriteReqs(ctx context.Context, writes []Entry, op client.TxnOperator) ([
 		//there is none update/delete entries on mo_columns just after one on mo_tables.
 		//case 2: (DELETE,MO_TABLES),...
 		if (e.typ == DELETE || e.typ == UPDATE) &&
-			e.databaseId == catalog.MO_DATABASE_ID &&
+			e.databaseId == catalog.MO_CATALOG_ID &&
 			e.tableId == catalog.MO_COLUMNS_ID {
 			continue
 		}

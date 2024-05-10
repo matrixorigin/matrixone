@@ -127,12 +127,14 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	mcw := mock_frontend.NewMockComputationWrapper(ctrl)
 	mcw.EXPECT().GetAst().Return(stmt).AnyTimes()
 	mcw.EXPECT().GetProcess().Return(proc).AnyTimes()
-	mcw.EXPECT().GetColumns().Return(columns, nil).AnyTimes()
+	mcw.EXPECT().GetColumns(gomock.Any()).Return(columns, nil).AnyTimes()
 	mcw.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 	mcw.EXPECT().GetUUID().Return(uuid[:]).AnyTimes()
 	mcw.EXPECT().RecordExecPlan(gomock.Any()).Return(nil).AnyTimes()
 	mcw.EXPECT().GetLoadTag().Return(false).AnyTimes()
 	mcw.EXPECT().Clear().AnyTimes()
+	mcw.EXPECT().Free().AnyTimes()
+	mcw.EXPECT().Plan().Return(nil).AnyTimes()
 	return mcw
 }
 
@@ -157,26 +159,26 @@ func Test_ConnectionCount(t *testing.T) {
 	noResultSet := make(map[string]bool)
 	resultSet := make(map[string]*result)
 
-	var wrapperStubFunc = func(db string, input *UserInput, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+	var wrapperStubFunc = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 		var cw []ComputationWrapper = nil
 		var stmts []tree.Statement = nil
 		var cmdFieldStmt *InternalCmdFieldList
 		var err error
-		if isCmdFieldListSql(input.getSql()) {
-			cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, input.getSql())
+		if isCmdFieldListSql(execCtx.input.getSql()) {
+			cmdFieldStmt, err = parseCmdFieldList(execCtx.reqCtx, execCtx.input.getSql())
 			if err != nil {
 				return nil, err
 			}
 			stmts = append(stmts, cmdFieldStmt)
 		} else {
-			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), 1, 0)
+			stmts, err = parsers.Parse(execCtx.reqCtx, dialect.MYSQL, execCtx.input.getSql(), 1, 0)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 		for _, stmt := range stmts {
-			cw = append(cw, newMockWrapper(ctrl, ses, resultSet, noResultSet, input.getSql(), stmt, proc))
+			cw = append(cw, newMockWrapper(ctrl, ses, resultSet, noResultSet, execCtx.input.getSql(), stmt, proc))
 		}
 		return cw, nil
 	}
@@ -187,8 +189,9 @@ func Test_ConnectionCount(t *testing.T) {
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	// A mock autoincrcache manager.
-	globalAicm = &defines.AutoIncrCacheManager{}
+	setGlobalAicm(&defines.AutoIncrCacheManager{})
 	rm, _ := NewRoutineManager(ctx)
+	setGlobalRtMgr(rm)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -196,7 +199,7 @@ func Test_ConnectionCount(t *testing.T) {
 	//running server
 	go func() {
 		defer wg.Done()
-		echoServer(rm.Handler, rm, NewSqlCodec())
+		echoServer(getGlobalRtMgr().Handler, getGlobalRtMgr(), NewSqlCodec())
 	}()
 
 	cCounter := metric.ConnectionCounter(sysAccountName)
@@ -220,10 +223,6 @@ func Test_ConnectionCount(t *testing.T) {
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, x.Gauge.GetValue(), float64(2))
 
-	//close the connection
-	closeDbConn(t, conn1)
-	closeDbConn(t, conn2)
-
 	time.Sleep(time.Second * 2)
 
 	cc = rm.clientCount()
@@ -237,4 +236,8 @@ func Test_ConnectionCount(t *testing.T) {
 	//close server
 	setServer(1)
 	wg.Wait()
+
+	//close the connection
+	closeDbConn(t, conn1)
+	closeDbConn(t, conn2)
 }

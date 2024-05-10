@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -1351,12 +1352,19 @@ func updatePartitionOfPush(
 	defer partition.Unlock()
 	v2.LogtailUpdatePartitonGetLockDurationHistogram.Observe(time.Since(t0).Seconds())
 
-	state, doneMutate := partition.MutateState()
+	catalogCache := e.getLatestCatalogCache()
 
-	t0 = time.Now()
-	catache := e.getLatestCatalogCache()
-	key := catache.GetTableById(dbId, tblId)
-	v2.LogtailUpdatePartitonGetCatalogDurationHistogram.Observe(time.Since(t0).Seconds())
+	if !partition.TableInfoOK {
+		t0 = time.Now()
+		tableInfo := catalogCache.GetTableById(dbId, tblId)
+		partition.TableInfo.ID = tblId
+		partition.TableInfo.Name = tableInfo.Name
+		partition.TableInfo.PrimarySeqnum = tableInfo.PrimarySeqnum
+		partition.TableInfoOK = true
+		v2.LogtailUpdatePartitonGetCatalogDurationHistogram.Observe(time.Since(t0).Seconds())
+	}
+
+	state, doneMutate := partition.MutateState()
 
 	var (
 		ckpStart types.TS
@@ -1378,7 +1386,7 @@ func updatePartitionOfPush(
 		t0 = time.Now()
 		err = consumeLogTail(
 			ctx,
-			key.PrimarySeqnum,
+			partition.TableInfo.PrimarySeqnum,
 			e,
 			state,
 			tl,
@@ -1393,24 +1401,24 @@ func updatePartitionOfPush(
 			v2.LogtailUpdatePartitonHandleCheckpointDurationHistogram.Observe(time.Since(t0).Seconds())
 		}
 		t0 = time.Now()
-		err = consumeCkpsAndLogTail(ctx, key.PrimarySeqnum, e, state, tl, dbId, key.Id, key.Name)
+		err = consumeCkpsAndLogTail(ctx, partition.TableInfo.PrimarySeqnum, e, state, tl, dbId, tblId, partition.TableInfo.Name)
 		v2.LogtailUpdatePartitonConsumeLogtailDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
 	if err != nil {
-		logutil.Errorf("%s consume %d-%s log tail error: %v\n", logTag, key.Id, key.Name, err)
+		logutil.Errorf("%s consume %d-%s log tail error: %v\n", logTag, tblId, partition.TableInfo.Name, err)
 		return err
 	}
 
 	//After consume checkpoints finished ,then update the start and end of
 	//the mo system table's partition and catalog.
 	if !lazyLoad && len(tl.CkpLocation) != 0 {
-		if !ckpStart.IsEmpty() && !ckpEnd.IsEmpty() {
+		if !ckpStart.IsEmpty() || !ckpEnd.IsEmpty() {
 			t0 = time.Now()
 			partition.UpdateDuration(ckpStart, types.MaxTs())
 			//Notice that the checkpoint duration is same among all mo system tables,
 			//such as mo_databases, mo_tables, mo_columns.
-			catache.UpdateDuration(ckpStart, types.MaxTs())
+			catalogCache.UpdateDuration(ckpStart, types.MaxTs())
 			v2.LogtailUpdatePartitonUpdateTimestampsDurationHistogram.Observe(time.Since(t0).Seconds())
 		}
 	}
