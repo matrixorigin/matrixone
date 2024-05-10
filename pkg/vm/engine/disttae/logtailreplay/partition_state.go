@@ -741,7 +741,7 @@ func (p *PartitionState) HandleMetadataInsert(
 			numInserted++
 		} else if blockEntry.CommitTs.GreaterEq(&commitTimeVector[i]) {
 			// it possible to get an older version blk from lazy loaded checkpoint
-			return
+			continue
 		}
 
 		// the following codes handle block which be inserted or updated by a newer delta location.
