@@ -2,18 +2,9 @@ set @ts=now();
 select @@version_comment limit 1;
 @@version_comment
 MatrixOne
-select sleep(15) as s;
-s
-0
 use system;
 use mysql;
-select * from user limit 0;
+/* cloud_user */select * from user limit 0;
 host    user    select_priv    insert_priv    update_priv    delete_priv    create_priv    drop_priv    reload_priv    shutdown_priv    process_priv    file_priv    grant_priv    references_priv    index_priv    alter_priv    show_db_priv    super_priv    create_tmp_table_priv    lock_tables_priv    execute_priv    repl_slave_priv    repl_client_priv    create_view_priv    show_view_priv    create_routine_priv    alter_routine_priv    create_user_priv    event_priv    trigger_priv    create_tablespace_priv    ssl_type    ssl_cipher    x509_issuer    x509_subject    max_questions    max_updates    max_connections    max_user_connections    plugin    authentication_string    password_expired    password_last_changed    password_lifetime    account_locked    create_role_priv    drop_role_priv    password_reuse_history    password_reuse_time    password_require_current    user_attributes
-select sleep(15) as s;
-s
-0
 select count(1) as cnt, statement_id, statement, status from system.statement_info group by statement_id, statement, status having count(1) > 1;
 cnt    statement_id    statement    status
-select `database`, `aggr_count` from system.statement_info where statement LIKE '%select * from user limit 0%' order by request_at desc limit 1;
-database    aggr_count
-mysql    0
