@@ -23,8 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func handleStartBackup(ctx context.Context, ses *Session, sb *tree.BackupStart) error {
-	return doBackup(ctx, ses, sb)
+func handleStartBackup(ses *Session, execCtx *ExecCtx, sb *tree.BackupStart) error {
+	return doBackup(execCtx.reqCtx, ses, sb)
 }
 
 func doBackup(ctx context.Context, ses FeSession, bs *tree.BackupStart) error {

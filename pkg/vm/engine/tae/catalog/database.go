@@ -80,8 +80,6 @@ func (entry *TableEntry) Less(b *TableEntry) int {
 }
 
 func NewDBEntryWithID(catalog *Catalog, name string, createSql, datTyp string, id uint64, txn txnif.AsyncTxn) *DBEntry {
-	//id := catalog.NextDB()
-
 	e := &DBEntry{
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
@@ -102,53 +100,6 @@ func NewDBEntryWithID(catalog *Catalog, name string, createSql, datTyp string, i
 		e.acInfo.UserID, e.acInfo.RoleID = txn.GetUserAndRoleID()
 	}
 	e.CreateWithTxn(txn, &EmptyMVCCNode{})
-	e.acInfo.CreateAt = types.CurrentTimestamp()
-	return e
-}
-
-func NewDBEntry(catalog *Catalog, name, createSql, datTyp string, txn txnif.AsyncTxn) *DBEntry {
-	id := catalog.NextDB()
-
-	e := &DBEntry{
-		ID: id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
-		catalog: catalog,
-		DBNode: &DBNode{
-			name:      name,
-			createSql: createSql,
-			datType:   datTyp,
-		},
-		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes: make(map[string]*nodeList[*TableEntry]),
-		link:      common.NewGenericSortedDList((*TableEntry).Less),
-	}
-	if txn != nil {
-		// Only in unit test, txn can be nil
-		e.acInfo.TenantID = txn.GetTenantID()
-		e.acInfo.UserID, e.acInfo.RoleID = txn.GetUserAndRoleID()
-	}
-	e.CreateWithTxn(txn, &EmptyMVCCNode{})
-	e.acInfo.CreateAt = types.CurrentTimestamp()
-	return e
-}
-
-func NewDBEntryByTS(catalog *Catalog, name string, ts types.TS) *DBEntry {
-	id := catalog.NextDB()
-
-	e := &DBEntry{
-		ID: id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
-		catalog: catalog,
-		DBNode: &DBNode{
-			name: name,
-		},
-		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes: make(map[string]*nodeList[*TableEntry]),
-		link:      common.NewGenericSortedDList((*TableEntry).Less),
-	}
-	e.CreateWithTS(ts, &EmptyMVCCNode{})
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
@@ -624,7 +575,7 @@ func (e *DBEntry) PrepareRollback() (err error) {
 		return
 	}
 	if isEmpty {
-		if err = e.catalog.RemoveEntry(e); err != nil {
+		if err = e.catalog.RemoveDBEntry(e); err != nil {
 			return
 		}
 	}

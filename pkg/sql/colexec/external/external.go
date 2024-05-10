@@ -362,7 +362,8 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 	return r, nil
 }
 
-func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, cols []*plan.ColDef) ([]int64, error) {
+// TODO : merge below two functions
+func ReadFileOffsetNoStrict(param *tree.ExternParam, mcpu int, fileSize int64) ([]int64, error) {
 	arr := make([]int64, 0)
 
 	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
@@ -380,12 +381,50 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, cols []*p
 			},
 		},
 	}
-
-	visibleCols := make([]*plan.ColDef, 0)
-	for _, col := range cols {
-		if !col.Hidden {
-			visibleCols = append(visibleCols, col)
+	var tailSize []int64
+	var offset []int64
+	for i := 0; i < mcpu; i++ {
+		vec.Entries[0].Offset = int64(i) * (fileSize / int64(mcpu))
+		if err = fs.Read(param.Ctx, &vec); err != nil {
+			return nil, err
 		}
+		r2 := bufio.NewReader(r)
+		line, _ := r2.ReadString('\n')
+		tailSize = append(tailSize, int64(len(line)))
+		offset = append(offset, vec.Entries[0].Offset)
+	}
+
+	start := int64(0)
+	for i := 0; i < mcpu; i++ {
+		if i+1 < mcpu {
+			arr = append(arr, start)
+			arr = append(arr, offset[i+1]+tailSize[i+1])
+			start = offset[i+1] + tailSize[i+1]
+		} else {
+			arr = append(arr, start)
+			arr = append(arr, -1)
+		}
+	}
+	return arr, nil
+}
+
+func ReadFileOffsetStrict(param *tree.ExternParam, mcpu int, fileSize int64, visibleCols []*plan.ColDef) ([]int64, error) {
+	arr := make([]int64, 0)
+
+	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
+	if err != nil {
+		return nil, err
+	}
+	var r io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            0,
+				Size:              -1,
+				ReadCloserForRead: &r,
+			},
+		},
 	}
 
 	var offset []int64

@@ -35,6 +35,8 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -58,10 +60,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-	"github.com/tidwall/btree"
 )
 
 type TenantInfo struct {
+	mu          sync.Mutex
 	Tenant      string
 	User        string
 	DefaultRole string
@@ -80,6 +82,8 @@ type TenantInfo struct {
 }
 
 func (ti *TenantInfo) String() string {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	delimiter := ti.delimiter
 	if !strconv.IsPrint(rune(delimiter)) {
 		delimiter = ':'
@@ -90,79 +94,138 @@ func (ti *TenantInfo) String() string {
 }
 
 func (ti *TenantInfo) GetTenant() string {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return ti.getTenantUnsafe()
+}
+
+func (ti *TenantInfo) getTenantUnsafe() string {
 	return ti.Tenant
 }
 
 func (ti *TenantInfo) GetTenantID() uint32 {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	return ti.TenantID
 }
 
 func (ti *TenantInfo) SetTenantID(id uint32) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.TenantID = id
 }
 
 func (ti *TenantInfo) GetUser() string {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	return ti.User
 }
 
 func (ti *TenantInfo) SetUser(user string) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.User = user
 }
 
 func (ti *TenantInfo) GetUserID() uint32 {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	return ti.UserID
 }
 
 func (ti *TenantInfo) SetUserID(id uint32) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.UserID = id
 }
 
 func (ti *TenantInfo) GetDefaultRole() string {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return ti.getDefaultRoleUnsafe()
+}
+
+func (ti *TenantInfo) getDefaultRoleUnsafe() string {
 	return ti.DefaultRole
 }
 
 func (ti *TenantInfo) SetDefaultRole(r string) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.DefaultRole = r
 }
 
 func (ti *TenantInfo) HasDefaultRole() bool {
-	return len(ti.GetDefaultRole()) != 0
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return len(ti.getDefaultRoleUnsafe()) != 0
 }
 
 func (ti *TenantInfo) GetDefaultRoleID() uint32 {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	return ti.DefaultRoleID
 }
 
 func (ti *TenantInfo) SetDefaultRoleID(id uint32) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.DefaultRoleID = id
 }
 
 func (ti *TenantInfo) IsSysTenant() bool {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return ti.isSysTenantUnsafe()
+}
+
+func (ti *TenantInfo) isSysTenantUnsafe() bool {
 	if ti != nil {
-		return strings.ToLower(ti.GetTenant()) == GetDefaultTenant()
+		return strings.ToLower(ti.getTenantUnsafe()) == GetDefaultTenant()
 	}
 	return false
 }
 
 func (ti *TenantInfo) IsDefaultRole() bool {
-	return ti.GetDefaultRole() == GetDefaultRole()
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return ti.getDefaultRoleUnsafe() == GetDefaultRole()
 }
 
 func (ti *TenantInfo) IsMoAdminRole() bool {
-	return ti.IsSysTenant() && strings.ToLower(ti.GetDefaultRole()) == moAdminRoleName
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return ti.isMoAdminRoleUnsafe()
+}
+
+func (ti *TenantInfo) isMoAdminRoleUnsafe() bool {
+	return ti.isSysTenantUnsafe() && strings.ToLower(ti.getDefaultRoleUnsafe()) == moAdminRoleName
 }
 
 func (ti *TenantInfo) IsAccountAdminRole() bool {
-	return !ti.IsSysTenant() && strings.ToLower(ti.GetDefaultRole()) == accountAdminRoleName
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return ti.isAccountAdminRoleUnsafe()
+}
+
+func (ti *TenantInfo) isAccountAdminRoleUnsafe() bool {
+	return !ti.isSysTenantUnsafe() && strings.ToLower(ti.getDefaultRoleUnsafe()) == accountAdminRoleName
 }
 
 func (ti *TenantInfo) IsAdminRole() bool {
-	return ti.IsMoAdminRole() || ti.IsAccountAdminRole()
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return ti.isMoAdminRoleUnsafe() || ti.isAccountAdminRoleUnsafe()
 }
 
 func (ti *TenantInfo) IsNameOfAdminRoles(name string) bool {
+	if ti == nil {
+		return false
+	}
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	n := strings.ToLower(name)
-	if ti.IsSysTenant() {
+	if ti.isSysTenantUnsafe() {
 		return n == moAdminRoleName
 	} else {
 		return n == accountAdminRoleName
@@ -170,18 +233,26 @@ func (ti *TenantInfo) IsNameOfAdminRoles(name string) bool {
 }
 
 func (ti *TenantInfo) SetUseSecondaryRole(v bool) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.useAllSecondaryRole = v
 }
 
 func (ti *TenantInfo) GetUseSecondaryRole() bool {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	return ti.useAllSecondaryRole
 }
 
 func (ti *TenantInfo) GetVersion() string {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	return ti.version
 }
 
 func (ti *TenantInfo) SetVersion(version string) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.version = version
 }
 
@@ -219,6 +290,17 @@ func GetAccountAdminRoleId() uint32 {
 
 func GetAdminUserId() uint32 {
 	return dumpID + 1
+}
+
+func GetBackgroundTenant() *TenantInfo {
+	return &TenantInfo{
+		Tenant:        GetDefaultTenant(),
+		User:          GetUserRoot(),
+		DefaultRole:   GetDefaultRole(),
+		TenantID:      GetSysTenantId(),
+		UserID:        GetUserRootId(),
+		DefaultRoleID: GetDefaultRoleId(),
+	}
 }
 
 func isCaseInsensitiveEqual(n string, role string) bool {
@@ -2821,7 +2903,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	var erArray []ExecResult
 	var encryption string
 	account := ses.GetTenantInfo()
-	currentUser := account.User
+	currentUser := account.GetUser()
 
 	//1.authenticate the actions
 	if au.Role != nil {
@@ -4419,7 +4501,7 @@ func postDropSuspendAccount(
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
 	var nodes []string
-	currTenant := ses.GetTenantInfo().Tenant
+	currTenant := ses.GetTenantInfo().GetTenant()
 	currUser := ses.GetTenantInfo().User
 	labels := clusterservice.NewSelector().SelectByLabel(
 		map[string]string{"account": accountName}, clusterservice.Contain)
@@ -6380,12 +6462,12 @@ func getSqlForPrivilege(ctx context.Context, roleId int64, entry privilegeEntry,
 }
 
 // getSqlForPrivilege2 complements the database name and calls getSqlForPrivilege
-func getSqlForPrivilege2(ses *Session, roleId int64, entry privilegeEntry, pl privilegeLevelType) (string, error) {
+func getSqlForPrivilege2(ctx context.Context, ses *Session, roleId int64, entry privilegeEntry, pl privilegeLevelType) (string, error) {
 	//handle the empty database
 	if len(entry.databaseName) == 0 {
 		entry.databaseName = ses.GetDatabaseName()
 	}
-	return getSqlForPrivilege(ses.GetRequestContext(), roleId, entry, pl)
+	return getSqlForPrivilege(ctx, roleId, entry, pl)
 }
 
 // verifyPrivilegeEntryInMultiPrivilegeLevels checks the privilege
@@ -6414,7 +6496,7 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 				return true, nil
 			}
 		}
-		sql, err = getSqlForPrivilege2(ses, roleId, entry, pl)
+		sql, err = getSqlForPrivilege2(ctx, ses, roleId, entry, pl)
 		if err != nil {
 			return false, err
 		}
@@ -6563,7 +6645,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		return false, nil
 	}
 
-	enableCache, err = privilegeCacheIsEnabled(ses)
+	enableCache, err = privilegeCacheIsEnabled(ctx, ses)
 	if err != nil {
 		return false, err
 	}
@@ -7056,7 +7138,7 @@ func checkRoleWhetherTableOwner(ctx context.Context, ses *Session, dbName, tbNam
 	}
 
 	// check role
-	if tenantInfo.useAllSecondaryRole {
+	if tenantInfo.GetUseSecondaryRole() {
 		sql = getSqlForGetRolesOfCurrentUser(int64(currentUser))
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
@@ -7132,7 +7214,7 @@ func checkRoleWhetherDatabaseOwner(ctx context.Context, ses *Session, dbName str
 	}
 
 	// check role
-	if tenantInfo.useAllSecondaryRole {
+	if tenantInfo.GetUseSecondaryRole() {
 		sql = getSqlForGetRolesOfCurrentUser(int64(currentUser))
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
@@ -7742,7 +7824,6 @@ func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, f
 		feSessionImpl: feSessionImpl{
 			proto: &FakeProtocol{},
 		},
-		connectCtx: ctx,
 
 		seqCurValues: make(map[uint64]string),
 		seqLastValue: new(string),
@@ -8348,7 +8429,11 @@ func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenan
 	var err error
 	subscriptions := make([]string, 0)
 	//process the syspublications
-	_, syspublications_value, _ := ses.GetGlobalSysVars().GetGlobalSysVar("syspublications")
+	syspublications_value, err := ses.GetGlobalVar(ctx, "syspublications")
+	if err != nil {
+		return err
+	}
+
 	if syspublications, ok := syspublications_value.(string); ok {
 		if len(syspublications) == 0 {
 			return err
@@ -8698,12 +8783,12 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	return err
 }
 
-func Upload(ctx context.Context, ses FeSession, localPath string, storageDir string) (string, error) {
+func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string) (string, error) {
 	loadLocalReader, loadLocalWriter := io.Pipe()
 
 	// watch and cancel
 	// TODO use context.AfterFunc in go1.21
-	funcCtx, cancel := context.WithCancel(ctx)
+	funcCtx, cancel := context.WithCancel(execCtx.reqCtx)
 	defer cancel()
 	go func() {
 		defer loadLocalReader.Close()
@@ -8719,7 +8804,7 @@ func Upload(ctx context.Context, ses FeSession, localPath string, storageDir str
 				Filepath: localPath,
 			},
 		}
-		return processLoadLocal(ctx, ses, param, loadLocalWriter)
+		return processLoadLocal(ses, execCtx, param, loadLocalWriter)
 	})
 
 	// read from pipe and upload
@@ -8734,8 +8819,8 @@ func Upload(ctx context.Context, ses FeSession, localPath string, storageDir str
 	}
 
 	fileService := getGlobalPu().FileService
-	_ = fileService.Delete(ctx, ioVector.FilePath)
-	err := fileService.Write(ctx, ioVector)
+	_ = fileService.Delete(execCtx.reqCtx, ioVector.FilePath)
+	err := fileService.Write(execCtx.reqCtx, ioVector)
 	err = errors.Join(err, loadLocalErrGroup.Wait())
 	if err != nil {
 		return "", err
@@ -8744,7 +8829,7 @@ func Upload(ctx context.Context, ses FeSession, localPath string, storageDir str
 	return ioVector.FilePath, nil
 }
 
-func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
+func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
 	var initMoUdf string
 	var retTypeStr string
 	var dbName string
@@ -8768,15 +8853,15 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	}
 
 	// authticate db exists
-	dbExists, err = checkDatabaseExistsOrNot(ctx, ses.GetBackgroundExec(ctx), dbName)
+	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, ses.GetBackgroundExec(execCtx.reqCtx), dbName)
 	if err != nil {
 		return err
 	}
 	if !dbExists {
-		return moerr.NewBadDB(ctx, dbName)
+		return moerr.NewBadDB(execCtx.reqCtx, dbName)
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(execCtx.reqCtx)
 	defer bh.Close()
 
 	// format return type
@@ -8817,12 +8902,12 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	// validate duplicate function declaration
 	bh.ClearExecResultSet()
 	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, argsCondition)
-	err = bh.Exec(ctx, checkExistence)
+	err = bh.Exec(execCtx.reqCtx, checkExistence)
 	if err != nil {
 		return err
 	}
 
-	erArray, err = getResultSet(ctx, bh)
+	erArray, err = getResultSet(execCtx.reqCtx, bh)
 	if err != nil {
 		return err
 	}
@@ -8831,9 +8916,9 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
 	}
 
-	err = bh.Exec(ctx, "begin;")
+	err = bh.Exec(execCtx.reqCtx, "begin;")
 	defer func() {
-		err = finishTxn(ctx, bh, err)
+		err = finishTxn(execCtx.reqCtx, bh, err)
 	}()
 	if err != nil {
 		return err
@@ -8848,18 +8933,18 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 			if cf.Language == string(tree.PYTHON) {
 				if !strings.HasSuffix(cf.Body, ".py") &&
 					!strings.HasSuffix(cf.Body, ".whl") {
-					return moerr.NewInvalidInput(ctx, "file '"+cf.Body+"', only support '*.py', '*.whl'")
+					return moerr.NewInvalidInput(execCtx.reqCtx, "file '"+cf.Body+"', only support '*.py', '*.whl'")
 				}
 				if strings.HasSuffix(cf.Body, ".whl") {
 					dotIdx := strings.LastIndex(cf.Handler, ".")
 					if dotIdx < 1 {
-						return moerr.NewInvalidInput(ctx, "handler '"+cf.Handler+"', when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
+						return moerr.NewInvalidInput(execCtx.reqCtx, "handler '"+cf.Handler+"', when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
 					}
 				}
 			}
 			// upload
 			storageDir := string(cf.Name.Name.ObjectName) + "_" + strings.Join(typeList, "-") + "_"
-			cf.Body, err = Upload(ctx, ses, cf.Body, storageDir)
+			cf.Body, err = Upload(ses, execCtx, cf.Body, storageDir)
 			if err != nil {
 				return err
 			}
@@ -8881,7 +8966,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 
 	if execResultArrayHasData(erArray) { // replace
 		var id int64
-		id, err = erArray[0].GetInt64(ctx, 0, 0)
+		id, err = erArray[0].GetInt64(execCtx.reqCtx, 0, 0)
 		if err != nil {
 			return err
 		}
@@ -8889,7 +8974,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 			ses.GetTenantInfo().GetDefaultRoleID(),
 			string(argsJson),
 			retTypeStr, body, cf.Language,
-			tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
+			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
 			int32(id))
 	} else { // create
 		initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
@@ -8897,10 +8982,10 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 			ses.GetTenantInfo().GetDefaultRoleID(),
 			string(argsJson),
 			retTypeStr, body, cf.Language, dbName,
-			tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
 
-	err = bh.Exec(ctx, initMoUdf)
+	err = bh.Exec(execCtx.reqCtx, initMoUdf)
 	if err != nil {
 		return err
 	}
@@ -8977,7 +9062,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		string(cp.Name.Name.ObjectName),
 		string(argsJson),
 		cp.Body, dbName,
-		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+		tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	err = bh.Exec(ctx, initMoProcedure)
 	if err != nil {
 		return err
@@ -9381,7 +9466,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	return interpreter.GetResult(), nil
 }
 
-func doGrantPrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Statement) error {
+func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
 	var sql string
 	tenantInfo := ses.GetTenantInfo()
@@ -9398,9 +9483,9 @@ func doGrantPrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.State
 	tenantInfo = ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+		tenantCtx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 	} else {
-		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
+		tenantCtx = defines.AttachAccount(ctx, tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 	}
 
 	// 2.grant database privilege
@@ -9431,7 +9516,7 @@ func doGrantPrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.State
 	return err
 }
 
-func doRevokePrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Statement) error {
+func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
 	var sql string
 	tenantInfo := ses.GetTenantInfo()
@@ -9448,9 +9533,9 @@ func doRevokePrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Stat
 	tenantInfo = ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+		tenantCtx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 	} else {
-		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
+		tenantCtx = defines.AttachAccount(ctx, tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 	}
 
 	// 2.grant database privilege
@@ -9646,8 +9731,8 @@ func postAlterSessionStatus(
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
-	currTenant := ses.GetTenantInfo().Tenant
-	currUser := ses.GetTenantInfo().User
+	currTenant := ses.GetTenantInfo().GetTenant()
+	currUser := ses.GetTenantInfo().GetUser()
 	var nodes []string
 	labels := clusterservice.NewSelector().SelectByLabel(
 		map[string]string{"account": accountName}, clusterservice.Contain)
@@ -9718,7 +9803,7 @@ func checkTimeStampValid(ctx context.Context, ses FeSession, snapshotTs int64) (
 }
 
 func getDbIdAndType(ctx context.Context, bh BackgroundExec, tenantInfo *TenantInfo, dbName string) (dbId uint64, dbType string, err error) {
-	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(tenantInfo.TenantID))
+	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(tenantInfo.GetTenantID()))
 	if err != nil {
 		return
 	}
