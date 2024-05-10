@@ -29,7 +29,7 @@ type (
 
 	SingleAggFills1NewVersion[from, to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
-		values from, count int,
+		value from, count int,
 		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
 
 	SingleAggMerge1NewVersion[from, to types.FixedSizeTExceptStrType] func(

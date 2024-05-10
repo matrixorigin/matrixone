@@ -140,6 +140,27 @@ var supportedAggInNewFramework = []FuncNew{
 	},
 
 	{
+		functionId: SUM2,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, agg.SumSupportedTypes)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    agg.SumReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "sum2",
+					aggRegister: agg.RegisterSum2,
+				},
+			},
+		},
+	},
+
+	{
 		functionId: AVG,
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,

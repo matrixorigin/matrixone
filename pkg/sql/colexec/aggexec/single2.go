@@ -46,6 +46,8 @@ func RegisterAggFromFixedRetFixed[from, to types.FixedSizeTExceptStrType](
 			setNullForEmptyGroup: basicInformation.setNullForEmptyGroup,
 		},
 
+		ret: basicInformation.ret,
+
 		ctx: aggContextImplementation{
 			hasCommonContext:      initCommonContext != nil,
 			hasGroupContext:       initGroupContext != nil,
