@@ -483,6 +483,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Attrs = t.Attrs
 		arg.IsUpdate = t.IsUpdate
 		arg.HasAutoCol = t.HasAutoCol
+		arg.EstimatedRowCount = t.EstimatedRowCount
 		res.Arg = arg
 	case vm.Deletion:
 		t := sourceIns.Arg.(*deletion.Argument)
@@ -596,7 +597,7 @@ func constructFuzzyFilter(c *Compile, n, right *plan.Node) *fuzzyfilter.Argument
 	return arg
 }
 
-func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
+func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
 	preCtx := n.PreInsertCtx
 	schemaName := preCtx.Ref.SchemaName
 
@@ -626,6 +627,7 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 	arg.TableDef = preCtx.TableDef
 	arg.Attrs = attrs
 	arg.IsUpdate = preCtx.IsUpdate
+	arg.EstimatedRowCount = int64(ns[n.Children[0]].Stats.Outcnt)
 
 	return arg, nil
 }
