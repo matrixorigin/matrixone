@@ -136,8 +136,8 @@ UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 use system;
 /* cloud_user */create account test_tenant_1 admin_name 'test_account' identified by '111';
 /* cloud_user */drop account test_tenant_1;
-select sleep(16);
-sleep(16)
+select sleep(18) s;
+s
 0
 use system;
 select statement, result_count from statement_info where account="bvt_result_count" and statement not like '%mo_ctl%' and length(statement) > 0 and status != 'Running' and aggr_count < 1 order by request_at desc limit 50;
