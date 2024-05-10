@@ -99,18 +99,18 @@ func (s *balanceScheduler) doBalance(
 	sort.Slice(
 		cns,
 		func(i, j int) bool {
-			return t.getShardsCount(cns[i].metadata.ServiceID) < t.getShardsCount(cns[j].metadata.ServiceID)
+			return t.getShardsCount(cns[i].id) < t.getShardsCount(cns[j].id)
 		},
 	)
 
-	min := t.getShardsCount(cns[0].metadata.ServiceID)
-	max := t.getShardsCount(cns[len(cns)-1].metadata.ServiceID)
+	min := t.getShardsCount(cns[0].id)
+	max := t.getShardsCount(cns[len(cns)-1].id)
 	if max-min <= 1 {
 		return false, nil
 	}
 
-	from := cns[len(cns)-1].metadata.ServiceID
-	to := cns[0].metadata.ServiceID
+	from := cns[len(cns)-1].id
+	to := cns[0].id
 
 	old, new := t.moveLocked(from, to)
 	r.addOpLocked(from, newDeleteOp(old))

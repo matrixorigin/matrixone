@@ -20,6 +20,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
+func (m TableShard) Same(m2 TableShard) bool {
+	return m.TableID == m2.TableID &&
+		m.ShardID == m2.ShardID &&
+		m.ShardsVersion == m2.ShardsVersion &&
+		m.BindVersion == m2.BindVersion &&
+		m.CN == m2.CN
+}
+
 func (m Request) TypeName() string {
 	return "pb.shard.Request"
 }

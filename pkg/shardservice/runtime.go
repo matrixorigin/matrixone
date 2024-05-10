@@ -18,7 +18,6 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"go.uber.org/zap"
 )
@@ -40,6 +39,33 @@ func newRuntime(env Env) *rt {
 		tables: make(map[uint64]*table, 256),
 		cns:    make(map[string]*cn, 256),
 	}
+}
+
+func (r *rt) heartbeat(
+	cn string,
+	shards []pb.TableShard,
+) []pb.Cmd {
+	r.Lock()
+	defer r.Unlock()
+
+	c, ok := r.cns[cn]
+	if !ok {
+		c = r.newCN(cn)
+		r.cns[cn] = c
+	}
+	if c.isDown() {
+		return []pb.Cmd{newDeleteAllOp().cmd}
+	}
+
+	c.updateOps(
+		shards,
+		func(s pb.TableShard) {
+			if t, ok := r.tables[s.TableID]; ok {
+				t.allocateCompleted(s)
+			}
+		},
+	)
+	return nil
 }
 
 func (r *rt) add(t *table) {
@@ -84,6 +110,13 @@ func (r *rt) deleteTableLocked(t *table) {
 	}
 }
 
+func (r *rt) newCN(id string) *cn {
+	return &cn{
+		id:    id,
+		state: pb.CNState_Up,
+	}
+}
+
 func (r *rt) getAvailableCNsLocked(
 	t *table,
 	filters ...filter,
@@ -95,7 +128,7 @@ func (r *rt) getAvailableCNsLocked(
 		}
 	}
 	sort.Slice(cns, func(i, j int) bool {
-		return cns[i].metadata.ServiceID < cns[j].metadata.ServiceID
+		return cns[i].id < cns[j].id
 	})
 	for _, f := range filters {
 		cns = f.filter(r, cns)
@@ -119,21 +152,21 @@ func (r *rt) hasNotRunningShardLocked(cn string) bool {
 
 func (r *rt) addOpLocked(
 	cn string,
-	op ...operator,
+	ops ...operator,
 ) {
 	if c, ok := r.cns[cn]; ok {
-		c.ops = append(c.ops, op...)
+		c.addOps(ops...)
 	}
 }
 
 func (r *rt) getDownCNsLocked(downCNs map[string]struct{}) map[string]struct{} {
 	for _, cn := range r.cns {
-		if !cn.isDown() && r.env.HasCN(cn.metadata.ServiceID) {
+		if !cn.isDown() && r.env.HasCN(cn.id) {
 			continue
 		}
 
 		cn.down()
-		downCNs[cn.metadata.ServiceID] = struct{}{}
+		downCNs[cn.id] = struct{}{}
 	}
 	return downCNs
 }
@@ -183,10 +216,20 @@ func (t *table) moveLocked(from, to string) (pb.TableShard, pb.TableShard) {
 	panic("cannot find running shard")
 }
 
+func (t *table) allocateCompleted(s pb.TableShard) {
+	for i := range t.shards {
+		if t.shards[i].Same(s) &&
+			t.shards[i].State == pb.ShardState_Allocated {
+			t.shards[i].State = pb.ShardState_Running
+		}
+	}
+}
+
 type cn struct {
-	state    pb.CNState
-	metadata metadata.CNService
-	ops      []operator
+	id    string
+	state pb.CNState
+	ops   []operator
+	cmd   []pb.Cmd
 }
 
 func (c *cn) available(
@@ -196,7 +239,7 @@ func (c *cn) available(
 	if c.state == pb.CNState_Down {
 		return false
 	}
-	return env.Available(tenantID, c.metadata.ServiceID)
+	return env.Available(tenantID, c.id)
 }
 
 func (c *cn) isDown() bool {
@@ -205,4 +248,45 @@ func (c *cn) isDown() bool {
 
 func (c *cn) down() {
 	c.state = pb.CNState_Down
+	c.ops = c.ops[:0]
+}
+
+func (c *cn) addOps(ops ...operator) {
+	c.ops = append(c.ops, ops...)
+}
+
+func (c *cn) updateOps(
+	shards []pb.TableShard,
+	apply func(pb.TableShard),
+) []pb.Cmd {
+	has := func(s pb.TableShard) bool {
+		for _, shard := range shards {
+			if s.Same(shard) {
+				return true
+			}
+		}
+		return false
+	}
+
+	ops := c.ops[:0]
+	c.cmd = c.cmd[:0]
+	for _, op := range c.ops {
+		switch op.cmd.Type {
+		case pb.CmdType_DeleteShard:
+			if !has(op.cmd.TableShard) {
+				continue
+			}
+			ops = append(ops, op)
+			c.cmd = append(c.cmd, op.cmd)
+		case pb.CmdType_AddShard:
+			if has(op.cmd.TableShard) {
+				apply(op.cmd.TableShard)
+				continue
+			}
+			ops = append(ops, op)
+			c.cmd = append(c.cmd, op.cmd)
+		}
+	}
+	c.ops = ops
+	return c.cmd
 }

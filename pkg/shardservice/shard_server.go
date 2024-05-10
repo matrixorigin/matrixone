@@ -109,8 +109,21 @@ func (s *server) initRPC() {
 }
 
 func (s *server) initHandlers() {
+	s.rpc.RegisterMethod(uint32(pb.Method_Heartbeat), s.handleHeartbeat, true)
 	s.rpc.RegisterMethod(uint32(pb.Method_CreateShards), s.handleCreateShards, true)
 	s.rpc.RegisterMethod(uint32(pb.Method_DeleteShards), s.handleDeleteShards, true)
+}
+
+func (s *server) handleHeartbeat(
+	ctx context.Context,
+	req *pb.Request,
+	resp *pb.Response,
+) error {
+	resp.Heartbeat.CMDs = s.r.heartbeat(
+		req.Heartbeat.CN,
+		req.Heartbeat.Shards,
+	)
+	return nil
 }
 
 func (s *server) handleCreateShards(
@@ -137,6 +150,7 @@ func (s *server) handleCreateShards(
 	for i := uint32(0); i < v.ShardsCount; i++ {
 		table.shards = append(table.shards,
 			pb.TableShard{
+				TableID:       id,
 				State:         pb.ShardState_Allocating,
 				BindVersion:   0,
 				ShardsVersion: v.Version,

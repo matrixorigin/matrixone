@@ -45,6 +45,7 @@ enum Policy {
 enum CmdType {
     AddShard    = 0;
     DeleteShard = 1;
+    DeleteALL   = 2;
 }
 
 enum CNState {
@@ -80,13 +81,14 @@ message TableShards {
 // When the Table's shards count changed, the corresponding Version field increments itself. 
 // This makes it easy to found expired information.
 message TableShard {
-    uint64     ShardID       = 1;
-    string     CN            = 2;
-    // Version icrements when shards count changed
-    uint32     ShardsVersion = 3;
-    // BindVersion icrements when the cn changed
-    uint32     BindVersion   = 4;
-    ShardState State         = 5; 
+    uint64     TableID       = 1;
+    uint64     ShardID       = 2;
+    string     CN            = 3;
+    // Version incrments when shards count changed
+    uint32     ShardsVersion = 4;
+    // BindVersion incrments when the cn changed
+    uint32     BindVersion   = 5;
+    ShardState State         = 6; 
 }
 
 
@@ -102,6 +104,7 @@ message Request {
   Method                     RPCMethod           = 2;
   CreateShardsRequest        CreateShards        = 3 [(gogoproto.nullable) = false];
   DeleteShardsRequest        DeleteShards        = 4 [(gogoproto.nullable) = false];
+  HeartbeatRequest           Heartbeat           = 5 [(gogoproto.nullable) = false];
 }
 
 message Response {
@@ -112,6 +115,7 @@ message Response {
     bytes                      Error                = 3;
     CreateShardsResponse       CreateShards         = 4 [(gogoproto.nullable) = false];
     DeleteShardsResponse       DeleteShards         = 5 [(gogoproto.nullable) = false];
+    HeartbeatResponse          Heartbeat            = 6 [(gogoproto.nullable) = false];
 }
 
 message Cmd {
@@ -141,5 +145,5 @@ message HeartbeatRequest {
 }
 
 message HeartbeatResponse {
-    repeated Cmd        Cmds   = 1 [(gogoproto.nullable) = false];
+    repeated Cmd        CMDs   = 1 [(gogoproto.nullable) = false];
 }

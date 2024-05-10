@@ -61,7 +61,7 @@ func (s *allocateScheduler) doAllocate(
 		defer func() {
 			seq++
 		}()
-		return cns[seq%len(cns)].metadata.ServiceID
+		return cns[seq%len(cns)].id
 	}
 	for i := range t.shards {
 		if t.shards[i].CN == "" ||

@@ -29,6 +29,7 @@ var (
 	defaultMaxScheduleTables = 1
 	defaultMaxFreezeTime     = time.Minute
 	defaultScheduleDuration  = time.Second
+	defaultOperatorTimeout   = time.Second * 10
 )
 
 // Shard config
@@ -48,10 +49,12 @@ type Config struct {
 	MaxDownTime toml.Duration `toml:"max-down-time"`
 	// MaxScheduleTables how many tables's shards can be scheduled by balancer at once.
 	MaxScheduleTablesOnce int `toml:"max-schedule-tables-once"`
-	// MaxCNFreezeTime max freeze time for CN can be scheduled by balancer again.
-	MaxCNFreezeTime toml.Duration `toml:"max-cn-freeze-time"`
+	// CNFreezeTimeout max freeze time for CN can be scheduled by balancer again.
+	CNFreezeTimeout toml.Duration `toml:"max-cn-freeze-time"`
 	// ScheduleDuration how often to schedule shards on CNs.
 	ScheduleDuration toml.Duration `toml:"schedule-duration"`
+	// OperatorTimeout operator timeout
+	OperatorTimeout toml.Duration `toml:"operator-timeout"`
 }
 
 // ShardServer used for balance and allocate shards on their cns.

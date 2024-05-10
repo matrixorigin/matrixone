@@ -20,6 +20,15 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 )
 
+func newDeleteAllOp() operator {
+	return operator{
+		createAt: time.Now(),
+		cmd: pb.Cmd{
+			Type: pb.CmdType_DeleteALL,
+		},
+	}
+}
+
 func newDeleteOp(shard pb.TableShard) operator {
 	return operator{
 		createAt: time.Now(),

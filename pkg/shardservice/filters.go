@@ -23,16 +23,19 @@ type freezeFilter struct {
 	maxFreezeTime time.Duration
 }
 
-func (f *freezeFilter) filter(r *rt, cns []*cn) []*cn {
+func (f *freezeFilter) filter(
+	r *rt,
+	cns []*cn,
+) []*cn {
 	if len(f.freeze) == 0 {
 		return cns
 	}
 	values := cns[:0]
 	for _, c := range cns {
-		if t, ok := f.freeze[c.metadata.ServiceID]; !ok ||
+		if t, ok := f.freeze[c.id]; !ok ||
 			time.Since(t) > f.maxFreezeTime {
 			values = append(values, c)
-			delete(f.freeze, c.metadata.ServiceID)
+			delete(f.freeze, c.id)
 		}
 	}
 	return values
@@ -47,7 +50,7 @@ func (f *stateFilter) filter(r *rt, cns []*cn) []*cn {
 	}
 	values := cns[:0]
 	for _, c := range cns {
-		if !r.hasNotRunningShardLocked(c.metadata.ServiceID) {
+		if !r.hasNotRunningShardLocked(c.id) {
 			values = append(values, c)
 		}
 	}
