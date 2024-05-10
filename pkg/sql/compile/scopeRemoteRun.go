@@ -754,11 +754,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
-			SchemaName: t.SchemaName,
-			TableDef:   t.TableDef,
-			HasAutoCol: t.HasAutoCol,
-			IsUpdate:   t.IsUpdate,
-			Attrs:      t.Attrs,
+			SchemaName:        t.SchemaName,
+			TableDef:          t.TableDef,
+			HasAutoCol:        t.HasAutoCol,
+			IsUpdate:          t.IsUpdate,
+			Attrs:             t.Attrs,
+			EstimatedRowCount: int64(t.EstimatedRowCount),
 		}
 	case *lockop.Argument:
 		in.LockOp = &pipeline.LockOp{
@@ -1135,6 +1136,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Attrs = t.GetAttrs()
 		arg.HasAutoCol = t.GetHasAutoCol()
 		arg.IsUpdate = t.GetIsUpdate()
+		arg.EstimatedRowCount = int64(t.GetEstimatedRowCount())
 		v.Arg = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()
