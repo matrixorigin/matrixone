@@ -1896,22 +1896,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 	t := time.Now()
 
-	// // lock table, for tables with no primary key, there is no need to lock the data
-	// if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() && n.TableDef != nil &&
-	// 	n.TableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
-	// 	db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// 	rel, err := db.Relation(ctx, n.ObjRef.ObjName, c.proc)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	err = lockTable(c.ctx, c.e, c.proc, rel, n.ObjRef.SchemaName, nil, false)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// }
 	if time.Since(t) > time.Second {
 		logutil.Infof("lock table %s.%s cost %v", n.ObjRef.SchemaName, n.ObjRef.ObjName, time.Since(t))
 	}
@@ -2911,7 +2895,7 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOffset,
 		Idx: c.anal.curr,
-		Arg: constructMergeOffset(n, c.proc),
+		Arg: constructMergeOffset(n),
 	}
 	return []*Scope{rs}
 }
@@ -2928,7 +2912,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 			Op:      vm.Limit,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     constructLimit(n, c.proc),
+			Arg:     constructLimit(n),
 		})
 	}
 	c.anal.isFirst = false
@@ -2938,7 +2922,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeLimit,
 		Idx: c.anal.curr,
-		Arg: constructMergeLimit(n, c.proc),
+		Arg: constructMergeLimit(n),
 	}
 	return []*Scope{rs}
 }

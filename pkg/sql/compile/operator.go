@@ -1102,16 +1102,7 @@ func constructOffset(n *plan.Node, proc *process.Process) *offset.Argument {
 }
 */
 
-func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
-	// executor, err := colexec.NewExpressionExecutor(proc, n.Limit)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// defer executor.Free()
-	// vec, err := executor.Eval(proc, []*batch.Batch{constBat})
-	// if err != nil {
-	// 	panic(err)
-	// }
+func constructLimit(n *plan.Node) *limit.Argument {
 	arg := limit.NewArgument()
 	arg.LimitExpr = plan2.DeepCopyExpr(n.Limit)
 	return arg
@@ -1424,35 +1415,13 @@ func constructMergeTop(n *plan.Node, topN *plan.Expr) *mergetop.Argument {
 	return arg
 }
 
-func constructMergeOffset(n *plan.Node, proc *process.Process) *mergeoffset.Argument {
-	// executor, err := colexec.NewExpressionExecutor(proc, n.Offset)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// defer executor.Free()
-	// vec, err := executor.Eval(proc, []*batch.Batch{constBat})
-	// if err != nil {
-	// 	panic(err)
-	// }
-
+func constructMergeOffset(n *plan.Node) *mergeoffset.Argument {
 	arg := mergeoffset.NewArgument().WithOffset(n.Offset)
-	// arg.Offset = uint64(vector.MustFixedCol[int64](vec)[0])
 	return arg
 }
 
-func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argument {
-	// executor, err := colexec.NewExpressionExecutor(proc, n.Limit)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// defer executor.Free()
-	// vec, err := executor.Eval(proc, []*batch.Batch{constBat})
-	// if err != nil {
-	// 	panic(err)
-	// }
-
+func constructMergeLimit(n *plan.Node) *mergelimit.Argument {
 	arg := mergelimit.NewArgument().WithLimit(n.Limit)
-	// arg.Limit = uint64(vector.MustFixedCol[int64](vec)[0])
 	return arg
 }
 
