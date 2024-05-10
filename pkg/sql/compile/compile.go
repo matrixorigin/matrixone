@@ -2704,16 +2704,7 @@ func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
-		if rule.IsConstant(n.Limit, false) {
-			vec, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
-			if err != nil {
-				panic(err)
-			}
-			defer vec.Free(c.proc.Mp())
-			return c.compileTop(n, vector.MustFixedCol[int64](vec)[0], ss)
-		} else {
-			return c.compileLimit(n, c.compileOrder(n, ss))
-		}
+		return c.compileTop(n, n.Limit, ss)
 
 	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileOrder(n, ss)
@@ -2738,7 +2729,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			topN := limit + offset
 			if topN <= 8192*2 {
 				// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
-				return c.compileOffset(n, c.compileTop(n, topN, ss))
+				return c.compileOffset(n, c.compileTop(n, plan2.MakePlan2Int64ConstExprWithType(topN), ss))
 			}
 		}
 		return c.compileLimit(n, c.compileOffset(n, c.compileOrder(n, ss)))
@@ -2769,7 +2760,7 @@ func containBrokenNode(s *Scope) bool {
 	return false
 }
 
-func (c *Compile) compileTop(n *plan.Node, topN int64, ss []*Scope) []*Scope {
+func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
 	// use topN TO make scope.
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
