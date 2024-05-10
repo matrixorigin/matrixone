@@ -157,6 +157,9 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 			} else if ndesc.Node.TableDef != nil {
 				buf.WriteString(ndesc.Node.TableDef.GetName())
 			}
+			if ndesc.Node.Stats.ForceOneCN {
+				buf.WriteString(" [ForceOneCN]")
+			}
 		case plan.Node_FUNCTION_SCAN:
 			buf.WriteString(" on ")
 			if ndesc.Node.TableDef != nil && ndesc.Node.TableDef.TblFunc != nil {
