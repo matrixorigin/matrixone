@@ -30,6 +30,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
+
+	_ "go.uber.org/automaxprocs"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -72,6 +77,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -81,9 +87,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
-	_ "go.uber.org/automaxprocs"
-	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -191,10 +194,7 @@ func (c *Compile) reset() {
 }
 
 // helper function to judge if init temporary engine is needed
-func (c *Compile) NeedInitTempEngine(InitTempEngine bool) bool {
-	if InitTempEngine {
-		return false
-	}
+func (c *Compile) NeedInitTempEngine() bool {
 	for _, s := range c.scope {
 		ddl := s.Plan.GetDdl()
 		if ddl == nil {
@@ -209,10 +209,12 @@ func (c *Compile) NeedInitTempEngine(InitTempEngine bool) bool {
 	return false
 }
 
-func (c *Compile) SetTempEngine(ctx context.Context, te engine.Engine) {
+func (c *Compile) SetTempEngine(tempEngine engine.Engine, tempStorage *memorystorage.Storage) {
 	e := c.e.(*engine.EntireEngine)
-	e.TempEngine = te
-	c.ctx = ctx
+	e.TempEngine = tempEngine
+	if c.ctx != nil && c.ctx.Value(defines.TemporaryTN{}) == nil {
+		c.ctx = context.WithValue(c.ctx, defines.TemporaryTN{}, tempStorage)
+	}
 }
 
 // Compile is the entrance of the compute-execute-layer.
@@ -1968,16 +1970,39 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 	t = time.Now()
 	var fileOffset [][]int64
-	for i := 0; i < len(fileList); i++ {
-		param.Filepath = fileList[i]
-		if param.Parallel {
-			arr, err := external.ReadFileOffset(param, mcpu, fileSize[i], n.TableDef.Cols)
-			fileOffset = append(fileOffset, arr)
-			if err != nil {
-				return nil, err
+	if param.Parallel {
+		if param.Strict {
+			visibleCols := make([]*plan.ColDef, 0)
+			for _, col := range n.TableDef.Cols {
+				if !col.Hidden {
+					visibleCols = append(visibleCols, col)
+				}
+			}
+			for i := 0; i < len(fileList); i++ {
+				param.Filepath = fileList[i]
+				arr, err := external.ReadFileOffsetStrict(param, mcpu, fileSize[i], visibleCols)
+				fileOffset = append(fileOffset, arr)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			for i := 0; i < len(fileList); i++ {
+				param.Filepath = fileList[i]
+				arr, err := external.ReadFileOffsetNoStrict(param, mcpu, fileSize[i])
+				fileOffset = append(fileOffset, arr)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
+
+	} else {
+		for i := 0; i < len(fileList); i++ {
+			param.Filepath = fileList[i]
+		}
 	}
+
 	if time.Since(t) > time.Second {
 		logutil.Infof("read file offset cost %v", time.Since(t))
 	}
@@ -1996,12 +2021,16 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			fileOffsetTmp[j] = &pipeline.FileOffset{}
 			fileOffsetTmp[j].Offset = make([]int64, 0)
 			if param.Parallel {
-				if 2*preIndex+2*count < len(fileOffset[j]) {
-					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
-				} else if 2*preIndex < len(fileOffset[j]) {
-					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
+				if param.Strict {
+					if 2*preIndex+2*count < len(fileOffset[j]) {
+						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+					} else if 2*preIndex < len(fileOffset[j]) {
+						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
+					} else {
+						continue
+					}
 				} else {
-					continue
+					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
 				}
 			} else {
 				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{0, -1}...)

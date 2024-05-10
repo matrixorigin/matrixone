@@ -1443,7 +1443,9 @@ type AttributeDefault struct {
 
 func (node *AttributeDefault) Format(ctx *FmtCtx) {
 	ctx.WriteString("default ")
-	node.Expr.Format(ctx)
+	if node.Expr != nil {
+		node.Expr.Format(ctx)
+	}
 }
 
 func (node AttributeDefault) TypeName() string { return "tree.AttributeDefault" }
