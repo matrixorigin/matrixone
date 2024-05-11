@@ -259,7 +259,8 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 	// Write each record of the chunk to the CSVWriter
 	for _, record := range records {
 		for i, col := range record {
-			record[i] = strings.ReplaceAll(strings.ReplaceAll(col, "\\", "\\\\"), "'", "''")
+			// record[i] = strings.ReplaceAll(strings.ReplaceAll(col, "\\", "\\\\"), "'", "''")
+			record[i] = strings.ReplaceAll(col, "'", "''")
 		}
 		if err := csvWriter.WriteStrings(record); err != nil {
 			return err
@@ -268,7 +269,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 
 	csvData := csvWriter.GetContent()
 
-	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s FIELDS TERMINATED BY ',' ESCAPED BY '\"'", csvData, tbl.Database, tbl.Table)
+	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s FIELDS TERMINATED BY ','", csvData, tbl.Database, tbl.Table)
 
 	// Use the transaction to execute the SQL command
 
