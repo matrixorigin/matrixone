@@ -171,7 +171,7 @@ func respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx, columns []any) (
 		mysql COM_QUERY response: End after the column has been sent.
 		send EOF packet
 	*/
-	err = execCtx.proto.SendEOFPacketIf(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
+	err = execCtx.proto.SendEOFPacketIf(0, ses.GetTxnHandler().GetServerStatus())
 	if err != nil {
 		return
 	}
@@ -189,7 +189,7 @@ func respStreamResultRow(ses *Session,
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
-		err2 := execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
+		err2 := execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 		if err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -229,13 +229,13 @@ func respStreamResultRow(ses *Session,
 				return
 			}
 
-			err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
+			err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 			if err != nil {
 				return
 			}
 		}
 	default:
-		err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
+		err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 		if err != nil {
 			return
 		}
@@ -269,7 +269,7 @@ func respMixedResultRow(ses *Session,
 			zap.Error(err))
 		return err
 	}
-	err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
+	err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 	if err != nil {
 		return
 	}
