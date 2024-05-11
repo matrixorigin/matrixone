@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -783,71 +782,47 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			colPos = int32(len(tableDef.Pkey.Names))
 		}
 
-		names := make([]string, len(lmap.m))
-		for n, p := range lmap.m {
-			names[p.order] = n
-		}
-		toSerialBatch := bat.GetSubBatch(names)
-		// serialize
-		//  __cpkey__ in (serial(a1,b1,c1,d1),serial(a2,b2,c2,d2),xxx)
-		// processing composite primary key
-		vec, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID,
-			toSerialBatch.Vecs,
-			toSerialBatch.RowCount())
-		if err != nil {
-			return nil, err
-		}
-		vec.InplaceSort()
-		data, err := vec.MarshalBinary()
-		if err != nil {
-			return nil, err
-		}
-		var inExpr *Expr
+		serialArgs := make([]*plan.Expr, len(colExprs))
+		funcName := "="
 		if rowsCount == 1 {
-			inExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-				{
-					Typ: makeHiddenColTyp(),
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							ColPos: colPos,
-							Name:   colName,
-						},
-					},
-				},
-				{
-					Typ:  makePlan2Type(vec.GetType()),
-					Expr: &plan.Expr_Lit{Lit: rule.GetConstantValue(vec, false, 0)},
-				},
-			})
-			if err != nil {
-				return nil, err
+			for i := range colExprs {
+				serialArgs[i] = colExprs[i][0]
 			}
 		} else {
-			inExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
-				{
-					Typ: makeHiddenColTyp(),
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							ColPos: colPos,
-							Name:   colName,
-						},
-					},
-				},
-				{
+			funcName = "in"
+			for i := range colExprs {
+				serialArgs[i] = &plan.Expr{
 					Typ: plan.Type{
 						Id: int32(types.T_tuple),
 					},
-					Expr: &plan.Expr_Vec{
-						Vec: &plan.LiteralVec{
-							Len:  int32(vec.Length()),
-							Data: data,
+					Expr: &plan.Expr_List{
+						List: &plan.ExprList{
+							List: colExprs[i],
 						},
 					},
-				},
-			})
-			if err != nil {
-				return nil, err
+				}
 			}
+		}
+
+		pkExpr := &plan.Expr{
+			Typ: makeHiddenColTyp(),
+			Expr: &plan.Expr_Col{
+				Col: &ColRef{
+					ColPos: colPos,
+					Name:   colName,
+				},
+			},
+		}
+		serialExpr, _ := bindFuncExprAndConstFold(builder.GetContext(), proc, "serial", serialArgs)
+		if rowsCount > 1 {
+			serialExpr.Typ = plan.Type{Id: int32(types.T_tuple)}
+		}
+		inExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*Expr{
+			pkExpr,
+			serialExpr,
+		})
+		if err != nil {
+			return nil, err
 		}
 
 		filterExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, inExpr, proc, false)
