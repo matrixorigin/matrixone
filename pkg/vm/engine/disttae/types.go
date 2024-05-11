@@ -192,7 +192,6 @@ type Transaction struct {
 	rowId [6]uint32
 	segId types.Uuid
 	// use to cache opened snapshot tables by current txn.
-	//TODO::cache snapshot tables for snapshot read.
 	tableCache struct {
 		cachedIndex int
 		tableMap    *sync.Map
