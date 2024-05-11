@@ -275,6 +275,7 @@ type Compile struct {
 
 	needLockMeta bool
 	metaTables   map[string]struct{}
+	lockTables   map[uint64]*plan.LockTarget
 	disableRetry bool
 
 	lastAllocID int32
