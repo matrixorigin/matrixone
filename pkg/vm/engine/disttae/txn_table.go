@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"sort"
 	"strconv"
 	"strings"
@@ -2127,6 +2128,68 @@ func (tbl *txnTable) newBlockReader(
 	return rds, nil
 }
 
+func (tbl *txnTable) tryConstructPrimaryKeyIndexIter(
+	ts timestamp.Timestamp,
+	pkVal []byte,
+	fnType uint8,
+	expr *plan.Expr,
+	state *logtailreplay.PartitionState) (iter logtailreplay.RowsIter, newPkVal []byte) {
+	if len(pkVal) == 0 {
+		return nil, pkVal
+	}
+
+	newPkVal = pkVal
+
+	switch fnType {
+	case function.EQUAL:
+		iter = state.NewPrimaryKeyIter(
+			types.TimestampToTS(ts),
+			logtailreplay.Prefix(pkVal),
+		)
+	case function.IN:
+		var encodes [][]byte
+		vec := vector.NewVec(types.T_any.ToType())
+		vec.UnmarshalBinary(pkVal)
+
+		// may be it's better to iterate rows instead.
+		if vec.Length() > 128 {
+			return nil, pkVal
+		}
+
+		var packer *types.Packer
+		put := tbl.getTxn().engine.packerPool.Get(&packer)
+
+		processed := false
+		// case 1: serial_full(secondary_index, primary_key) ==> val, a in (val)
+		if vec.Length() == 1 {
+			exprLit := rule.GetConstantValue(vec, true, 0)
+			if exprLit != nil && !exprLit.Isnull {
+				canEval, val := evalLiteralExpr(exprLit, vec.GetType().Oid)
+				if canEval {
+					logtailreplay.EncodePrimaryKey(val, packer)
+					newPkVal = packer.Bytes()
+					encodes = append(encodes, newPkVal)
+					processed = true
+				}
+			}
+		}
+
+		if !processed {
+			encodes = logtailreplay.EncodePrimaryKeyVector(vec, packer)
+		}
+
+		put.Put()
+
+		debug := false
+		iter = state.NewPrimaryKeyIter(
+			types.TimestampToTS(ts),
+			logtailreplay.ExactIn(encodes, debug),
+		)
+	}
+
+	return iter, newPkVal
+}
+
 func (tbl *txnTable) newReader(
 	ctx context.Context,
 	readerNumber int,
@@ -2161,48 +2224,7 @@ func (tbl *txnTable) newReader(
 	}
 
 	var iter logtailreplay.RowsIter
-	if len(pkVal) > 0 {
-		switch fnType {
-		case function.EQUAL:
-			iter = state.NewPrimaryKeyIter(
-				types.TimestampToTS(ts),
-				logtailreplay.Prefix(pkVal),
-			)
-		case function.IN:
-			var encodes [][]byte
-			vec := vector.NewVec(types.T_any.ToType())
-			vec.UnmarshalBinary(pkVal)
-
-			var packer *types.Packer
-			put := tbl.getTxn().engine.packerPool.Get(&packer)
-
-			processed := false
-			if vec.Length() == 1 {
-				exprLit := rule.GetConstantValue(vec, true, 0)
-				if exprLit != nil && !exprLit.Isnull {
-					canEval, val := evalLiteralExpr(exprLit, vec.GetType().Oid)
-					if canEval {
-						logtailreplay.EncodePrimaryKey(val, packer)
-						pkVal = packer.Bytes()
-						encodes = append(encodes, pkVal)
-						processed = true
-					}
-				}
-			}
-
-			if !processed {
-				encodes = logtailreplay.EncodePrimaryKeyVector(vec, packer)
-			}
-
-			put.Put()
-
-			debug := false
-			iter = state.NewPrimaryKeyIter(
-				types.TimestampToTS(ts),
-				logtailreplay.ExactIn(encodes, debug),
-			)
-		}
-	}
+	iter, pkVal = tbl.tryConstructPrimaryKeyIndexIter(ts, pkVal, fnType, expr, state)
 	if iter == nil {
 		iter = state.NewRowsIter(
 			types.TimestampToTS(ts),
