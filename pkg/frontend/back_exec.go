@@ -386,7 +386,7 @@ func executeStmtInBack(backSes *backSession,
 
 	// only log if build time is longer than 1s
 	if time.Since(cmpBegin) > time.Second {
-		backSes.Infof(requestCtx, "time of Exec.Build : %s", time.Since(cmpBegin).String())
+		backSes.Infof(execCtx.reqCtx, "time of Exec.Build : %s", time.Since(cmpBegin).String())
 	}
 
 	StmtKind := execCtx.stmt.StmtKind().OutputType()
