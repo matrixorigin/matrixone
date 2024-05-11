@@ -69,6 +69,8 @@ func RegisterAggFromFixedRetFixed[from, to types.FixedSizeTExceptStrType](
 	return
 }
 
+// singleAggFuncExecNew1[from, to] is the agg executor for single-column aggregation
+// which accept a fixed-length type as input, and return a fixed-length type as output.
 type singleAggFuncExecNew1[from, to types.FixedSizeTExceptStrType] struct {
 	singleAggInfo
 	singleAggExecExtraInformation
