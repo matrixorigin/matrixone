@@ -2162,6 +2162,7 @@ func (tbl *txnTable) tryConstructPrimaryKeyIndexIter(
 
 		if !processed {
 			encodes = logtailreplay.EncodePrimaryKeyVector(vec, packer)
+			newPkVal = nil
 		}
 
 		put.Put()
