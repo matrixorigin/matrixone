@@ -4178,13 +4178,10 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			bb := &bytes.Buffer{}
 			bb.WriteString(prefix)
 			//handle the database annotated by '`'
-			if db != strings.ToLower(db) {
-				bb.WriteString("`")
-				bb.WriteString(db)
-				bb.WriteString("`")
-			} else {
-				bb.WriteString(db)
-			}
+			bb.WriteString("`")
+			bb.WriteString(db)
+			bb.WriteString("`")
+
 			bb.WriteString(";")
 			sqlsForDropDatabases = append(sqlsForDropDatabases, bb.String())
 		}

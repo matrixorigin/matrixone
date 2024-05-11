@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -55,11 +56,10 @@ func (s *taskService) CreateAsyncTask(ctx context.Context, value task.TaskMetada
 	for {
 		select {
 		case <-ctx.Done():
-			s.rt.Logger().Error("create task timeout")
-			return ErrNotReady
+			return errors.Join(ctx.Err(), ErrNotReady)
 		default:
 			if _, err := s.store.AddAsyncTask(ctx, newTaskFromMetadata(value)); err != nil {
-				if err == ErrNotReady {
+				if errors.Is(err, ErrNotReady) {
 					time.Sleep(300 * time.Millisecond)
 					continue
 				}
@@ -79,11 +79,10 @@ func (s *taskService) CreateBatch(ctx context.Context, tasks []task.TaskMetadata
 	for {
 		select {
 		case <-ctx.Done():
-			s.rt.Logger().Error("create task timeout")
-			return ErrNotReady
+			return errors.Join(ctx.Err(), ErrNotReady)
 		default:
 			if _, err := s.store.AddAsyncTask(ctx, values...); err != nil {
-				if err == ErrNotReady {
+				if errors.Is(err, ErrNotReady) {
 					time.Sleep(300 * time.Millisecond)
 					continue
 				}
