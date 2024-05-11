@@ -1891,6 +1891,9 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			EnclosedBy: &tree.EnclosedBy{
 				Value: n.ExternScan.EnclosedBy[0],
 			},
+			EscapedBy: &tree.EscapedBy{
+				Value: n.ExternScan.EscapedBy[0],
+			},
 		}
 		param.JsonData = n.ExternScan.JsonType
 	}
