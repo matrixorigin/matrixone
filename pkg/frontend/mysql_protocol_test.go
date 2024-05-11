@@ -1659,7 +1659,7 @@ func openDbConn(t *testing.T, port int) (db *sql.DB, err error) {
 	for i := 0; i < 3; i++ {
 		db, err = tryConn(dsn)
 		if err != nil {
-			logger.Error("open conn failed.", zap.Error(err))
+			logutil.Error("open conn failed.", zap.Error(err))
 			time.Sleep(time.Second)
 			continue
 		}
