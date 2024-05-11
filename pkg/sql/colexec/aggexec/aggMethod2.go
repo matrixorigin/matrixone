@@ -71,3 +71,49 @@ type (
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
 )
+
+// single aggregation function, input is variable size, output is fixed size.
+type (
+	SingleAggFill3NewVersion[to types.FixedSizeTExceptStrType] func(
+		execContext AggGroupExecContext, commonContext AggCommonExecContext,
+		value []byte,
+		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
+
+	SingleAggFills3NewVersion[to types.FixedSizeTExceptStrType] func(
+		execContext AggGroupExecContext, commonContext AggCommonExecContext,
+		value []byte, count int,
+		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
+
+	SingleAggMerge3NewVersion[to types.FixedSizeTExceptStrType] func(
+		ctx1, ctx2 AggGroupExecContext,
+		commonContext AggCommonExecContext,
+		resultGetter1, resultGetter2 AggGetter[to],
+		resultSetter AggSetter[to]) error
+
+	SingleAggFlush3NewVersion[to types.FixedSizeTExceptStrType] func(
+		execContext AggGroupExecContext, commonContext AggCommonExecContext,
+		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
+)
+
+// single aggregation function, input and output are both variable size.
+type (
+	SingleAggFill4NewVersion func(
+		execContext AggGroupExecContext, commonContext AggCommonExecContext,
+		value []byte,
+		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
+
+	SingleAggFills4NewVersion func(
+		execContext AggGroupExecContext, commonContext AggCommonExecContext,
+		value []byte, count int,
+		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
+
+	SingleAggMerge4NewVersion func(
+		ctx1, ctx2 AggGroupExecContext,
+		commonContext AggCommonExecContext,
+		resultGetter1, resultGetter2 AggBytesGetter,
+		resultSetter AggBytesSetter) error
+
+	SingleAggFlush4NewVersion func(
+		execContext AggGroupExecContext, commonContext AggCommonExecContext,
+		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
+)
