@@ -327,12 +327,8 @@ var (
 			result_code                 int null,
 			error_msg                   varchar(1000) null,
 			create_at                   bigint,
-			end_at                      bigint,
-			KEY    idx_task_status (task_status),
-			KEY    idx_task_runner (task_runner),
-			KEY    idx_task_executor (task_metadata_executor),
-			KEY    idx_task_epoch (task_epoch)
-    		)`, catalog.MOTaskDB)
+			end_at                      bigint)`,
+		catalog.MOTaskDB)
 
 	MoTaskSysCronTaskDDL = fmt.Sprintf(`create table %s.sys_cron_task (
 			cron_task_id				bigint primary key auto_increment,
@@ -363,9 +359,6 @@ var (
 			update_at                   timestamp not null,
 			end_at                      timestamp,
 			last_run                    timestamp,
-			details                     blob,
-			KEY    idx_account_id (account_id),
-			KEY    idx_last_heartbeat (last_heartbeat)
-			)`,
+			details                     blob)`,
 		catalog.MOTaskDB)
 )
