@@ -130,7 +130,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, prepareWALQueue)
 
 	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
-	mgr.workers, _ = ants.NewPool(runtime.NumCPU())
+	mgr.workers, _ = ants.NewPool(runtime.GOMAXPROCS(0))
 	return mgr
 }
 

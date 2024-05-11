@@ -8,7 +8,6 @@ import (
 	context "context"
 	reflect "reflect"
 
-
 	gomock "github.com/golang/mock/gomock"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	types "github.com/matrixorigin/matrixone/pkg/container/types"

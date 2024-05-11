@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -198,7 +197,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Limit:
 		t := sourceIns.Arg.(*limit.Argument)
 		arg := limit.NewArgument()
-		arg.Limit = t.Limit
+		arg.LimitExpr = t.LimitExpr
 		res.Arg = arg
 	case vm.LoopAnti:
 		t := sourceIns.Arg.(*loopanti.Argument)
@@ -252,7 +251,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Offset:
 		t := sourceIns.Arg.(*offset.Argument)
 		arg := offset.NewArgument()
-		arg.Offset = t.Offset
+		arg.OffsetExpr = t.OffsetExpr
 		res.Arg = arg
 	case vm.Order:
 		t := sourceIns.Arg.(*order.Argument)
@@ -483,6 +482,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Attrs = t.Attrs
 		arg.IsUpdate = t.IsUpdate
 		arg.HasAutoCol = t.HasAutoCol
+		arg.EstimatedRowCount = t.EstimatedRowCount
 		res.Arg = arg
 	case vm.Deletion:
 		t := sourceIns.Arg.(*deletion.Argument)
@@ -596,7 +596,7 @@ func constructFuzzyFilter(c *Compile, n, right *plan.Node) *fuzzyfilter.Argument
 	return arg
 }
 
-func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
+func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
 	preCtx := n.PreInsertCtx
 	schemaName := preCtx.Ref.SchemaName
 
@@ -626,6 +626,7 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 	arg.TableDef = preCtx.TableDef
 	arg.Attrs = attrs
 	arg.IsUpdate = preCtx.IsUpdate
+	arg.EstimatedRowCount = int64(ns[n.Children[0]].Stats.Outcnt)
 
 	return arg, nil
 }
@@ -773,7 +774,7 @@ func constructTableFunction(n *plan.Node) *table_function.Argument {
 	return arg
 }
 
-func constructTop(n *plan.Node, topN int64) *top.Argument {
+func constructTop(n *plan.Node, topN *plan.Expr) *top.Argument {
 	arg := top.NewArgument()
 	arg.Fs = n.OrderBy
 	arg.Limit = topN
@@ -1101,19 +1102,9 @@ func constructOffset(n *plan.Node, proc *process.Process) *offset.Argument {
 }
 */
 
-func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
-	executor, err := colexec.NewExpressionExecutor(proc, n.Limit)
-	if err != nil {
-		panic(err)
-	}
-	defer executor.Free()
-	vec, err := executor.Eval(proc, []*batch.Batch{constBat})
-	if err != nil {
-		panic(err)
-	}
-
+func constructLimit(n *plan.Node) *limit.Argument {
 	arg := limit.NewArgument()
-	arg.Limit = uint64(vector.MustFixedCol[int64](vec)[0])
+	arg.LimitExpr = plan2.DeepCopyExpr(n.Limit)
 	return arg
 }
 
@@ -1417,42 +1408,20 @@ func constructMergeGroup(needEval bool) *mergegroup.Argument {
 	return arg
 }
 
-func constructMergeTop(n *plan.Node, topN int64) *mergetop.Argument {
+func constructMergeTop(n *plan.Node, topN *plan.Expr) *mergetop.Argument {
 	arg := mergetop.NewArgument()
 	arg.Fs = n.OrderBy
 	arg.Limit = topN
 	return arg
 }
 
-func constructMergeOffset(n *plan.Node, proc *process.Process) *mergeoffset.Argument {
-	executor, err := colexec.NewExpressionExecutor(proc, n.Offset)
-	if err != nil {
-		panic(err)
-	}
-	defer executor.Free()
-	vec, err := executor.Eval(proc, []*batch.Batch{constBat})
-	if err != nil {
-		panic(err)
-	}
-
-	arg := mergeoffset.NewArgument()
-	arg.Offset = uint64(vector.MustFixedCol[int64](vec)[0])
+func constructMergeOffset(n *plan.Node) *mergeoffset.Argument {
+	arg := mergeoffset.NewArgument().WithOffset(n.Offset)
 	return arg
 }
 
-func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argument {
-	executor, err := colexec.NewExpressionExecutor(proc, n.Limit)
-	if err != nil {
-		panic(err)
-	}
-	defer executor.Free()
-	vec, err := executor.Eval(proc, []*batch.Batch{constBat})
-	if err != nil {
-		panic(err)
-	}
-
-	arg := mergelimit.NewArgument()
-	arg.Limit = uint64(vector.MustFixedCol[int64](vec)[0])
+func constructMergeLimit(n *plan.Node) *mergelimit.Argument {
+	arg := mergelimit.NewArgument().WithLimit(n.Limit)
 	return arg
 }
 

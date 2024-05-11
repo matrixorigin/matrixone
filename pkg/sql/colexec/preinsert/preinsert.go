@@ -16,7 +16,6 @@ package preinsert
 
 import (
 	"bytes"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"go.uber.org/zap"
 )
 
 const argName = "preinsert"
@@ -120,7 +120,9 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
 	lastInsertValue, err := proc.IncrService.InsertValues(
 		proc.Ctx,
 		arg.TableDef.TblId,
-		bat)
+		bat,
+		arg.EstimatedRowCount,
+	)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 			logutil.Error("insert auto increment column failed", zap.Error(err))
