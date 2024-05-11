@@ -224,11 +224,16 @@ func (rt *Routine) reportSystemStatus() (r bool) {
 }
 
 func (rt *Routine) handleRequest(req *Request) error {
-	var ses *Session
 	var routineCtx context.Context
 	var err error
 	var resp *Response
 	var quit bool
+
+	ses := rt.getSession()
+
+	execCtx := ExecCtx{
+		ses: ses,
+	}
 
 	v2.StartHandleRequestCounter.Inc()
 	defer func() {
@@ -255,13 +260,13 @@ func (rt *Routine) handleRequest(req *Request) error {
 	defer span.End()
 
 	parameters := rt.getParameters()
-	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, parameters.SessionTimeout.Duration)
+	//all offspring related to the request inherit the txnCtx
+	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration)
 	rt.setCancelRequestFunc(cancelRequestFunc)
-	ses = rt.getSession()
 	ses.UpdateDebugString()
 
 	if rt.needPrintSessionInfo() {
-		ses.Info(ses.requestCtx, "mo received first request")
+		ses.Info(routineCtx, "mo received first request")
 	}
 
 	tenant := ses.GetTenantInfo()
@@ -270,13 +275,13 @@ func (rt *Routine) handleRequest(req *Request) error {
 		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, ses.getRoutineManager().baseService.ID())
 	}
 	tenantCtx := defines.AttachAccount(nodeCtx, tenant.GetTenantID(), tenant.GetUserID(), tenant.GetDefaultRoleID())
-	ses.SetRequestContext(tenantCtx)
 
 	rt.increaseCount(func() {
 		metric.ConnectionCounter(ses.GetTenantInfo().GetTenant()).Inc()
 	})
 
-	if resp, err = ExecRequest(tenantCtx, ses, req); err != nil {
+	execCtx.reqCtx = tenantCtx
+	if resp, err = ExecRequest(ses, &execCtx, req); err != nil {
 		if !skipClientQuit(err.Error()) {
 			ses.Error(tenantCtx,
 				"Failed to execute request",
@@ -313,7 +318,11 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 		//ensure cleaning the transaction
 		ses.Error(tenantCtx, "rollback the txn.")
-		err = ses.GetTxnHandler().TxnRollback()
+		tempExecCtx := ExecCtx{
+			ses:    ses,
+			txnOpt: FeTxnOption{byRollback: true},
+		}
+		err = ses.GetTxnHandler().Rollback(&tempExecCtx)
 		if err != nil {
 			ses.Error(tenantCtx,
 				"Failed to rollback txn",
@@ -335,15 +344,12 @@ func (rt *Routine) killQuery(killMyself bool, statementId string) {
 	if !killMyself {
 		//1,cancel request ctx
 		rt.cancelRequestCtx()
-		//2.cancel txn ctx
+		//2.update execute state
 		ses := rt.getSession()
 		if ses != nil {
 			ses.SetQueryInExecute(false)
-			ses.Infof(ses.GetRequestContext(), "set query status on the connection %d", rt.getConnectionID())
-			txnHandler := ses.GetTxnHandler()
-			if txnHandler != nil {
-				txnHandler.cancelTxnCtx()
-			}
+			rt.getCancelRoutineCtx()
+			ses.Infof(rt.getCancelRoutineCtx(), "set query status on the connection %d", rt.getConnectionID())
 		}
 	}
 }
@@ -397,9 +403,13 @@ func (rt *Routine) cleanup() {
 		ses := rt.getSession()
 		//step A: rollback the txn
 		if ses != nil {
-			err := ses.GetTxnHandler().TxnRollback()
+			tempExecCtx := ExecCtx{
+				ses:    ses,
+				txnOpt: FeTxnOption{byRollback: true},
+			}
+			err := ses.GetTxnHandler().Rollback(&tempExecCtx)
 			if err != nil {
-				ses.Error(ses.requestCtx,
+				ses.Error(tempExecCtx.reqCtx,
 					"Failed to rollback txn",
 					zap.Error(err))
 			}
@@ -425,7 +435,7 @@ func (rt *Routine) cleanup() {
 	})
 }
 
-func (rt *Routine) migrateConnectionTo(req *query.MigrateConnToRequest) error {
+func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateConnToRequest) error {
 	var err error
 	rt.mc.migrateOnce.Do(func() {
 		if !rt.mc.beginMigrate() {
@@ -463,6 +473,7 @@ func NewRoutine(ctx context.Context, protocol MysqlProtocol, parameters *config.
 		printInfoOnce:     true,
 		mc:                newMigrateController(),
 	}
+	protocol.UpdateCtx(cancelRoutineCtx)
 
 	return ri
 }

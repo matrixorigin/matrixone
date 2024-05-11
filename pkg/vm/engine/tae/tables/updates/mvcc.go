@@ -533,6 +533,7 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 	skipInMemory bool) (delBatch *containers.Batch, deltalocStart, deltalocEnd int, err error) {
 	deltalocStart = deltalocBat.Length()
 	for blkOffset, mvcc := range n.deletes {
+		newStart := start
 		nodes := mvcc.deltaloc.ClonePreparedInRange(start, end)
 		var skipData bool
 		if len(nodes) != 0 {
@@ -544,11 +545,11 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 			// block has newer delta data on s3, no need to collect data
 			startTS := newest.GetStart()
 			skipData = startTS.GreaterEq(&end)
-			start = newest.GetStart()
+			newStart = newest.GetStart()
 		}
 		if !skipData && !skipInMemory {
 			deletes := n.deletes[blkOffset]
-			delBat, err := deletes.CollectDeleteInRangeAfterDeltalocation(ctx, start, end, false, common.LogtailAllocator)
+			delBat, err := deletes.CollectDeleteInRangeAfterDeltalocation(ctx, newStart, end, false, common.LogtailAllocator)
 			if err != nil {
 				if delBatch != nil {
 					delBatch.Close()

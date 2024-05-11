@@ -15,12 +15,10 @@
 package frontend
 
 import (
-	"context"
 	"time"
 )
 
-func executeStatusStmtInBack(requestCtx context.Context,
-	backSes *backSession,
+func executeStatusStmtInBack(backSes *backSession,
 	execCtx *ExecCtx) (err error) {
 	runBegin := time.Now()
 	if _, err = execCtx.runner.Run(0); err != nil {
@@ -29,7 +27,7 @@ func executeStatusStmtInBack(requestCtx context.Context,
 
 	// only log if run time is longer than 1s
 	if time.Since(runBegin) > time.Second {
-		backSes.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
+		backSes.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 	}
 
 	return

@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"context"
 	"time"
 
 	"go.uber.org/zap"
@@ -28,15 +27,15 @@ import (
 )
 
 // executeResultRowStmt run the statemet that responses result rows
-func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *ExecCtx) (err error) {
+func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
 
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 
-		columns, err = execCtx.cw.GetColumns()
+		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 		if err != nil {
-			ses.Error(requestCtx,
+			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from computation handler",
 				zap.Error(err))
 			return
@@ -45,7 +44,7 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 			ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
 		}
 
-		err = respColumnDefsWithoutFlush(requestCtx, ses, execCtx, columns)
+		err = respColumnDefsWithoutFlush(ses, execCtx, columns)
 		if err != nil {
 			return
 		}
@@ -62,20 +61,20 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			ses.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
+			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 	case *tree.ExplainAnalyze:
 		explainColName := "QUERY PLAN"
-		columns, err = GetExplainColumns(requestCtx, explainColName)
+		columns, err = GetExplainColumns(execCtx.reqCtx, explainColName)
 		if err != nil {
-			ses.Error(requestCtx,
+			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from ExplainColumns handler",
 				zap.Error(err))
 			return
 		}
 
-		err = respColumnDefsWithoutFlush(requestCtx, ses, execCtx, columns)
+		err = respColumnDefsWithoutFlush(ses, execCtx, columns)
 		if err != nil {
 			return
 		}
@@ -90,13 +89,13 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			ses.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
+			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 	default:
-		columns, err = execCtx.cw.GetColumns()
+		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 		if err != nil {
-			ses.Error(requestCtx,
+			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from computation handler",
 				zap.Error(err))
 			return
@@ -104,8 +103,7 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 		if c, ok := execCtx.cw.(*TxnComputationWrapper); ok {
 			ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
 		}
-
-		err = respColumnDefsWithoutFlush(requestCtx, ses, execCtx, columns)
+		err = respColumnDefsWithoutFlush(ses, execCtx, columns)
 		if err != nil {
 			return
 		}
@@ -122,20 +120,23 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 
 		switch ses.GetShowStmtType() {
 		case ShowTableStatus:
-			if err = handleShowTableStatus(ses, statement.(*tree.ShowTableStatus), execCtx.proc); err != nil {
+			if err = handleShowTableStatus(ses, execCtx, statement.(*tree.ShowTableStatus)); err != nil {
 				return
 			}
 		}
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			ses.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
+			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 	}
 	return
 }
 
-func respColumnDefsWithoutFlush(requestCtx context.Context, ses *Session, execCtx *ExecCtx, columns []any) (err error) {
+func respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx, columns []any) (err error) {
+	if execCtx.skipRespClient {
+		return nil
+	}
 	//!!!carefully to use
 	execCtx.proto.DisableAutoFlush()
 	defer execCtx.proto.EnableAutoFlush()
@@ -159,7 +160,7 @@ func respColumnDefsWithoutFlush(requestCtx context.Context, ses *Session, execCt
 		/*
 			mysql COM_QUERY response: send the column definition per column
 		*/
-		err = execCtx.proto.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
+		err = execCtx.proto.SendColumnDefinitionPacket(execCtx.reqCtx, mysqlc, int(cmd))
 		if err != nil {
 			return
 		}
@@ -169,26 +170,28 @@ func respColumnDefsWithoutFlush(requestCtx context.Context, ses *Session, execCt
 		mysql COM_QUERY response: End after the column has been sent.
 		send EOF packet
 	*/
-	err = execCtx.proto.SendEOFPacketIf(0, ses.GetTxnHandler().GetServerStatus())
+	err = execCtx.proto.SendEOFPacketIf(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
 	if err != nil {
 		return
 	}
 	return
 }
 
-func respStreamResultRow(requestCtx context.Context,
-	ses *Session,
+func respStreamResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
+	if execCtx.skipRespClient {
+		return nil
+	}
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 		if len(execCtx.proc.SessionInfo.SeqAddValues) != 0 {
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
-		err2 := execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd())
+		err2 := execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
 		if err2 != nil {
-			err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-			logStatementStatus(requestCtx, ses, execCtx.stmt, fail, err)
+			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return
 		}
 
@@ -199,7 +202,7 @@ func respStreamResultRow(requestCtx context.Context,
 			//if it is the plan from the EXECUTE,
 			// replace the plan by the plan generated by the PREPARE
 			if len(cwft.paramVals) != 0 {
-				queryPlan, err = plan2.FillValuesOfParamsInPlan(requestCtx, queryPlan, cwft.paramVals)
+				queryPlan, err = plan2.FillValuesOfParamsInPlan(execCtx.reqCtx, queryPlan, cwft.paramVals)
 				if err != nil {
 					return
 				}
@@ -210,28 +213,28 @@ func respStreamResultRow(requestCtx context.Context,
 			// build explain data buffer
 			buffer := explain.NewExplainDataBuffer()
 			var option *explain.ExplainOptions
-			option, err = getExplainOption(requestCtx, statement.Options)
+			option, err = getExplainOption(execCtx.reqCtx, statement.Options)
 			if err != nil {
 				return
 			}
 
-			err = explainQuery.ExplainPlan(requestCtx, buffer, option)
+			err = explainQuery.ExplainPlan(execCtx.reqCtx, buffer, option)
 			if err != nil {
 				return
 			}
 
-			err = buildMoExplainQuery(explainColName, buffer, ses, getDataFromPipeline)
+			err = buildMoExplainQuery(execCtx, explainColName, buffer, ses, getDataFromPipeline)
 			if err != nil {
 				return
 			}
 
-			err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd())
+			err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
 			if err != nil {
 				return
 			}
 		}
 	default:
-		err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd())
+		err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
 		if err != nil {
 			return
 		}
@@ -240,28 +243,32 @@ func respStreamResultRow(requestCtx context.Context,
 	return
 }
 
-func respPrebuildResultRow(requestCtx context.Context,
-	ses *Session,
+func respPrebuildResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
+	if execCtx.skipRespClient {
+		return nil
+	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
 	resp := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, execCtx.isLastStmt)
-	if err := execCtx.proto.SendResponse(ses.GetRequestContext(), resp); err != nil {
-		return moerr.NewInternalError(ses.GetRequestContext(), "routine send response failed, error: %v ", err)
+	if err := execCtx.proto.SendResponse(execCtx.reqCtx, resp); err != nil {
+		return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed, error: %v ", err)
 	}
 	return err
 }
 
-func respMixedResultRow(requestCtx context.Context,
-	ses *Session,
+func respMixedResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
+	if execCtx.skipRespClient {
+		return nil
+	}
 	mrs := ses.GetMysqlResultSet()
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
-		ses.Error(requestCtx,
+		ses.Error(execCtx.reqCtx,
 			"Failed to handle 'SHOW TABLE STATUS'",
 			zap.Error(err))
 		return err
 	}
-	err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd())
+	err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
 	if err != nil {
 		return
 	}

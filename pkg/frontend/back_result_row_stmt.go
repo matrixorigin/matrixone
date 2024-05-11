@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"context"
 	"time"
 
 	"go.uber.org/zap"
@@ -24,15 +23,14 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
-func executeResultRowStmtInBack(requestCtx context.Context,
-	backSes *backSession,
+func executeResultRowStmtInBack(backSes *backSession,
 	execCtx *ExecCtx) (err error) {
 	var columns []interface{}
 	mrs := backSes.GetMysqlResultSet()
 	// cw.Compile might rewrite sql, here we fetch the latest version
-	columns, err = execCtx.cw.GetColumns()
+	columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 	if err != nil {
-		backSes.Error(requestCtx,
+		backSes.Error(execCtx.reqCtx,
 			"Failed to get columns from computation handler",
 			zap.Error(err))
 		return
@@ -51,7 +49,7 @@ func executeResultRowStmtInBack(requestCtx context.Context,
 
 	// only log if run time is longer than 1s
 	if time.Since(runBegin) > time.Second {
-		backSes.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
+		backSes.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 	}
 	return
 }
