@@ -342,7 +342,11 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 			return nil, err
 		}
 	}
-	dbs = append(dbs, catalog.Databases(accountId, txn.op.SnapshotTS())...)
+	dbsInCatalog := catalog.Databases(accountId, txn.op.SnapshotTS())
+	dbsExceptDelete := removeIf[string](dbsInCatalog, func(t string) bool {
+		return find[string](deleteDatabases, t)
+	})
+	dbs = append(dbs, dbsExceptDelete...)
 	return dbs, nil
 }
 
@@ -388,7 +392,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 		}
 	}
 	if tblName == "" {
-		dbNames := catalog.Databases(accountId, txn.op.SnapshotTS())
+		dbNames := getDatabasesExceptDeleted(accountId, catalog, txn)
 		for _, databaseName := range dbNames {
 			db, err = e.Database(noRepCtx, databaseName, op)
 			if err != nil {
@@ -486,7 +490,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		}
 	}
 	if rel == nil {
-		dbNames := catache.Databases(accountId, txn.op.SnapshotTS())
+		dbNames := getDatabasesExceptDeleted(accountId, catache, txn)
 		fn := func(dbName string) error {
 			db, err = e.Database(noRepCtx, dbName, op)
 			if err != nil {
