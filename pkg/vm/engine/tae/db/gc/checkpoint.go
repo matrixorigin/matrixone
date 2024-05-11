@@ -533,7 +533,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		end := files[i].GetEnd()
 		if end.Less(&stage) {
 			if isSnapshotCKPRefers(files[i].GetStart(), end, ckpSnapList) {
-				logutil.Infof("isSnapshotCKPRefers2 GC checkpoint: %v, %v", files[i].GetStart().ToString(), files[i].ToString())
+				logutil.Infof("isSnapshotCKPRefers2 GC checkpoint: %v, %v", files[i].GetStart().ToString(), files[i].GetEnd().ToString())
 				break
 			}
 			deleteFiles = append(deleteFiles, CKPMetaDir+files[i].GetName())
