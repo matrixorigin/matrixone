@@ -2017,10 +2017,12 @@ func MakeIntervalExpr(num int64, str string) *Expr {
 }
 
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
+	rightType := plan.Type{Id: int32(types.T_tuple)}
+	if matchPrefix {
+		rightType = left.Typ
+	}
 	rightArg := &plan.Expr{
-		Typ: plan.Type{
-			Id: int32(types.T_tuple),
-		},
+		Typ: rightType,
 		Expr: &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
 				Len:  length,
