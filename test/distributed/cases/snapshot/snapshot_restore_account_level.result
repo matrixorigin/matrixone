@@ -573,6 +573,27 @@ count(*)
 create snapshot snapshot_01 for account test_account;
 drop database test_snapshot_restore;
 drop database snapshot_read;
+restore account test_account from snapshot snapshot_01 to account test_account;
+use test_snapshot_restore;
+select count(*) from test_snapshot_restore.test_restore;
+count(*)
+100
+select count(*) from test_snapshot_restore.test_restore_2;
+count(*)
+50
+select count(*) from test_snapshot_restore.factories;
+count(*)
+100
+use snapshot_read;
+select count(*) from snapshot_read.test_snapshot_read;
+count(*)
+100
+select count(*) from snapshot_read.users;
+count(*)
+11
+select count(*) from snapshot_read.students;
+count(*)
+50
 create account test_account_01 admin_name = 'test_user' identified by '111';
 restore account test_account from snapshot snapshot_01 to account test_account_01 ;
 use test_snapshot_restore;

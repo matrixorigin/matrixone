@@ -1,4 +1,3 @@
--- @bvt:issue#14784
 -- account level
 create database if not exists snapshot_read;
 use snapshot_read;
@@ -449,10 +448,8 @@ drop snapshot snapshot_01;
 
 
 -- sys account restore normal account to newAccount
-
 create account test_account admin_name = 'test_user' identified by '111';
 -- @session:id=6&user=test_account:test_user&password=111
-
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
@@ -574,7 +571,6 @@ INSERT INTO factories (factory_name, address) VALUES ('Factory UUUU', '1991 Oak 
 INSERT INTO factories (factory_name, address) VALUES ('Factory WWWW', '2031 Birch St, Springfield, IL 62801'), ('Factory XXXX', '2051 Cedar St, Springfield, IL 62802');
 
 select count(*) from test_snapshot_restore.factories;
-
 -- @session
 
 create snapshot snapshot_01 for account test_account;
@@ -584,10 +580,24 @@ drop database test_snapshot_restore;
 drop database snapshot_read;
 -- @session
 
+
+restore account test_account from snapshot snapshot_01 to account test_account;
+-- @session:id=8&user=test_account:test_user&password=111
+use test_snapshot_restore;
+select count(*) from test_snapshot_restore.test_restore;
+select count(*) from test_snapshot_restore.test_restore_2;
+select count(*) from test_snapshot_restore.factories;
+
+use snapshot_read;
+select count(*) from snapshot_read.test_snapshot_read;
+select count(*) from snapshot_read.users;
+select count(*) from snapshot_read.students;
+-- @session
+
 create account test_account_01 admin_name = 'test_user' identified by '111';
 restore account test_account from snapshot snapshot_01 to account test_account_01 ;
 
--- @session:id=8&user=test_account_01:test_user&password=111
+-- @session:id=9&user=test_account_01:test_user&password=111
 use test_snapshot_restore;
 select count(*) from test_snapshot_restore.test_restore;
 select count(*) from test_snapshot_restore.test_restore_2;
@@ -602,4 +612,3 @@ select count(*) from snapshot_read.students;
 drop account test_account;
 drop account test_account_01;
 drop snapshot snapshot_01;
--- @bvt:issue
