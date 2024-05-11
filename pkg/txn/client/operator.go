@@ -1139,6 +1139,15 @@ func (tc *txnOperator) RemoveWaitLock(key uint64) {
 	delete(tc.mu.waitLocks, key)
 }
 
+func (tc *txnOperator) LockTableCount() int32 {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	if tc.mu.txn.Mode != txn.TxnMode_Pessimistic {
+		panic("lock in optimistic mode")
+	}
+	return int32(len(tc.mu.lockTables))
+}
+
 func (tc *txnOperator) GetOverview() TxnOverview {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
