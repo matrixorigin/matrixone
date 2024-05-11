@@ -16,6 +16,7 @@ package shardservice
 
 import (
 	"testing"
+	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/stretchr/testify/require"
@@ -409,6 +410,86 @@ func TestHeartbeatWithTableNotExists(t *testing.T) {
 			require.Equal(t, 1, len(ops))
 			require.Equal(t, pb.Operator{Type: pb.OpType_CreateTable, TableID: 1}, ops[0])
 			require.Equal(t, 0, len(r.cns["cn1"].incompleteOps))
+		},
+	)
+}
+
+func TestGetAvailableCNsLocked(t *testing.T) {
+	runRuntimeTest(
+		"cn1,cn2,cn3",
+		func(r *rt) {
+			t1 := newTestTable(1, 1, 1)
+
+			values := r.getAvailableCNsLocked(t1)
+			require.Equal(t, 0, len(values))
+
+			r.heartbeat("cn1", nil)
+			values = r.getAvailableCNsLocked(t1)
+			require.Equal(t, 1, len(values))
+
+			r.heartbeat("cn2", nil)
+			values = r.getAvailableCNsLocked(t1)
+			require.Equal(t, 2, len(values))
+			require.Equal(t, "cn1", values[0].id)
+			require.Equal(t, "cn2", values[1].id)
+
+			r.heartbeat("cn3", nil)
+			values = r.getAvailableCNsLocked(t1)
+			require.Equal(t, 3, len(values))
+			require.Equal(t, "cn1", values[0].id)
+			require.Equal(t, "cn2", values[1].id)
+			require.Equal(t, "cn3", values[2].id)
+		},
+	)
+}
+
+func TestGetAvailableCNsLockedWithFilters(t *testing.T) {
+	runRuntimeTest(
+		"cn1,cn2,cn3",
+		func(r *rt) {
+			r.heartbeat("cn1", nil)
+			r.heartbeat("cn2", nil)
+			r.heartbeat("cn3", nil)
+
+			t1 := newTestTable(1, 1, 3)
+			r.add(t1)
+
+			t1.allocate(0, "cn1")
+			t1.allocate(1, "cn2")
+			t1.allocate(2, "cn3")
+
+			t1.shards[1].State = pb.ShardState_Running
+			t1.shards[2].State = pb.ShardState_Running
+
+			f2 := newFreezeFilter(time.Minute)
+			f2.freeze["cn3"] = time.Now()
+
+			values := r.getAvailableCNsLocked(t1, newStateFilter(), f2)
+			require.Equal(t, 1, len(values))
+			require.Equal(t, "cn2", values[0].id)
+		},
+	)
+}
+
+func TestGetDownCNsLocked(t *testing.T) {
+	runRuntimeTest(
+		"cn1,cn2,cn3",
+		func(r *rt) {
+			r.heartbeat("cn1", nil)
+			r.heartbeat("cn2", nil)
+
+			r.env.(*env).cluster.RemoveCN("cn2")
+
+			m := make(map[string]struct{})
+			r.getDownCNsLocked(m)
+			require.Equal(t, 1, len(m))
+			require.Contains(t, m, "cn2")
+
+			for k := range m {
+				delete(m, k)
+			}
+			r.getDownCNsLocked(m)
+			require.Equal(t, 0, len(m))
 		},
 	)
 }

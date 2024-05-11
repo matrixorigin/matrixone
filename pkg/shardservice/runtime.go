@@ -188,7 +188,7 @@ func (r *rt) addOpLocked(
 	}
 }
 
-func (r *rt) getDownCNsLocked(downCNs map[string]struct{}) map[string]struct{} {
+func (r *rt) getDownCNsLocked(downCNs map[string]struct{}) {
 	for _, cn := range r.cns {
 		if !cn.isDown() && r.env.HasCN(cn.id) {
 			continue
@@ -198,7 +198,6 @@ func (r *rt) getDownCNsLocked(downCNs map[string]struct{}) map[string]struct{} {
 		delete(r.cns, cn.id)
 		downCNs[cn.id] = struct{}{}
 	}
-	return downCNs
 }
 
 type table struct {

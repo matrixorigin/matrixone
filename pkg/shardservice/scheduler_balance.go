@@ -19,6 +19,28 @@ import (
 	"time"
 )
 
+type balanceOption func(*balanceScheduler)
+
+func withBalanceOrder(tables []uint64) balanceOption {
+	return func(s *balanceScheduler) {
+		s.option.orderFunc = func(
+			r *rt,
+			apply func(*table) (bool, error),
+		) error {
+			for _, id := range tables {
+				ok, err := apply(r.tables[id])
+				if err != nil {
+					return err
+				}
+				if !ok {
+					return nil
+				}
+			}
+			return nil
+		}
+	}
+}
+
 // balanceScheduler balance the number of shards between CNs, with the goal of
 // ensuring that for each Table, shards are distributed evenly across available
 // CNs.
@@ -28,34 +50,68 @@ import (
 // time has an upper limit to ensure that the system can not fluctuate too much.
 //
 // The balancing algorithm is as follows:
-//  1. Iterate over each table and perform the equalization logic. Adjust up to N Tables
-//  2. Adjust only for tables where all shards are Running state
-//  3. Select a list of available CNs based on the table, selecting the CN with the fewest
-//     shards and the most CNs that contain that table
-//  4. If the difference in the number of shards between min_cn and max_cn is <=1 then skip
-//  5. Select a shard from max_cn, migrate to min_cn, only one shards can be moved at a time
-//  6. min_cn and max_cn are added to the list of freeze CNs and wait until the scheduling is
-//     successful before replying. Avoid frequent scheduling on the same CN
+//  1. iterate over each table and perform the balance logic. Adjust up to N tables
+//  2. adjust only for tables where all shards are Running state
+//  3. select a list of available CNs based on the table, selecting the CN with the
+//     fewest shards and the most CNs that contain that table
+//  4. if the difference in the number of shards between min_cn and max_cn is <=1
+//     then skip
+//  5. select a shard from max_cn, migrate to min_cn, only one shards can be moved
+//     at a time
+//  6. min_cn and max_cn are added to the list of freeze CNs and wait until the
+//     scheduling is successful before freeze timed out. Avoid frequent scheduling
+//     on the same CN
 type balanceScheduler struct {
 	freezeFilter         *freezeFilter
 	stateFilter          *stateFilter
 	filters              []filter
 	filterCount          int
 	maxTablesPerSchedule int
+
+	// fot testing
+	option struct {
+		orderFunc func(r *rt, apply func(*table) (bool, error)) error
+	}
 }
 
 func newBalanceScheduler(
 	maxTablesPerSchedule int,
 	maxFreezeCNTimeout time.Duration,
+	opts ...balanceOption,
 ) scheduler {
 	s := &balanceScheduler{
 		freezeFilter:         newFreezeFilter(maxFreezeCNTimeout),
-		stateFilter:          &stateFilter{},
+		stateFilter:          newStateFilter(),
 		maxTablesPerSchedule: maxTablesPerSchedule,
 	}
 	s.filters = append(s.filters, s.freezeFilter, s.stateFilter)
 	s.filterCount = len(s.filters)
+
+	for _, opt := range opts {
+		opt(s)
+	}
+	s.adjust()
 	return s
+}
+
+func (s *balanceScheduler) adjust() {
+	if s.option.orderFunc == nil {
+		s.option.orderFunc = func(
+			r *rt,
+			apply func(*table) (bool, error),
+		) error {
+			for _, id := range r.tables {
+				ok, err := apply(id)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					return nil
+				}
+			}
+			return nil
+		}
+	}
 }
 
 func (s *balanceScheduler) schedule(
@@ -65,20 +121,20 @@ func (s *balanceScheduler) schedule(
 	scheduledTables := 0
 	r.Lock()
 	defer r.Unlock()
-	for _, t := range r.tables {
-		ok, err := s.doBalance(r, t, filters...)
-		if err != nil {
-			return err
-		}
-		if ok {
-			scheduledTables++
-		}
 
-		if scheduledTables >= s.maxTablesPerSchedule {
-			break
-		}
-	}
-	return nil
+	return s.option.orderFunc(
+		r,
+		func(t *table) (bool, error) {
+			ok, err := s.doBalance(r, t, filters...)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				scheduledTables++
+			}
+			return scheduledTables < s.maxTablesPerSchedule, nil
+		},
+	)
 }
 
 func (s *balanceScheduler) doBalance(

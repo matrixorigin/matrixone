@@ -33,3 +33,35 @@ func TestFreezeFilter(t *testing.T) {
 	require.Equal(t, 1, len(cns))
 	require.Equal(t, "cn1", cns[0].id)
 }
+
+func TestStateFilter(t *testing.T) {
+	runRuntimeTest(
+		"cn1,cn2,cn3",
+		func(r *rt) {
+			r.heartbeat("cn1", nil)
+			r.heartbeat("cn2", nil)
+			r.heartbeat("cn3", nil)
+			t1 := newTestTable(1, 1, 3)
+			r.add(t1)
+
+			f := newStateFilter()
+			ops := f.filter(r, []*cn{r.newCN("cn1"), r.newCN("cn2"), r.newCN("cn3")})
+			require.Equal(t, 3, len(ops))
+
+			t1.allocate(0, "cn1")
+			ops = f.filter(r, []*cn{r.newCN("cn1"), r.newCN("cn2"), r.newCN("cn3")})
+			require.Equal(t, 2, len(ops))
+			require.Equal(t, "cn2", ops[0].id)
+			require.Equal(t, "cn3", ops[1].id)
+
+			t1.allocate(1, "cn2")
+			ops = f.filter(r, []*cn{r.newCN("cn1"), r.newCN("cn2"), r.newCN("cn3")})
+			require.Equal(t, 1, len(ops))
+			require.Equal(t, "cn3", ops[0].id)
+
+			t1.allocate(2, "cn3")
+			ops = f.filter(r, []*cn{r.newCN("cn1"), r.newCN("cn2"), r.newCN("cn3")})
+			require.Equal(t, 0, len(ops))
+		},
+	)
+}

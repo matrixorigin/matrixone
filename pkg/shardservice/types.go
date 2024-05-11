@@ -40,13 +40,6 @@ type ShardServer interface {
 	Start()
 	// Stop stop the server
 	Stop()
-	// // Add add a table shards to the balancer.
-	// Add(table uint64) error
-	// // Delete remove a table shards from the balancer.
-	// Delete(table uint64) error
-	// // GetBinds returns all table shard binds of the specified table. It will
-	// // create table shard binds if not exists.
-	// GetShards(table uint64) ([]pb.TableShard, error)
 }
 
 // ShardService is sharding service. Each CN node holds an instance of the
