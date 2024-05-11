@@ -18,6 +18,7 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -145,6 +146,7 @@ func ListSnapshotCheckpointWithMeta(
 	for i := range entries {
 		if !gcStage.IsEmpty() {
 			if entries[i].end.Less(&gcStage) {
+				logutil.Infof("gcStage: %v, entries[%d].end: %v", gcStage.ToString(), i, entries[i].String())
 				continue
 			}
 			return entries[i:], nil

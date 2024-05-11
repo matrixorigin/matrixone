@@ -418,6 +418,7 @@ func replayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entr
 				maxGlobalEnd = end
 			}
 		}
+		logutil.Infof("replay checkpoint entry: %s", checkpointEntry.String())
 	}
 	return
 }

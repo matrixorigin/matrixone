@@ -477,7 +477,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 	}
 	if !ok {
 		c.updateCkpStage(&stage)
-		c.updateCkpGC(&stage)
 		return nil
 	}
 	ckpGC := c.GeteCkpGC()
@@ -508,7 +507,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 				logutil.Infof("mergeCheckpointFiles GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
 				continue
 			}
-			if isSnapshotCKPRefers(ckp, ckpSnapList) {
+			if isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) {
 				logutil.Infof("isSnapshotCKPRefers GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
 				break
 			}
@@ -520,15 +519,23 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 				}
 				return err
 			}
+			if i == len(ckps)-1 {
+				c.updateCkpGC(&end)
+			}
 			for name := range locations {
 				deleteFiles = append(deleteFiles, name)
 			}
 			deleteFiles = append(deleteFiles, ckp.GetTNLocation().Name().String())
 		}
 	}
-	for i := 0; i < idx+1; i++ {
+
+	for i := idx; i >= 0; i-- {
 		end := files[i].GetEnd()
 		if end.Less(&stage) {
+			if isSnapshotCKPRefers(files[i].GetStart(), end, ckpSnapList) {
+				logutil.Infof("isSnapshotCKPRefers2 GC checkpoint: %v, %v", files[i].GetStart().ToString(), files[i].ToString())
+				break
+			}
 			deleteFiles = append(deleteFiles, CKPMetaDir+files[i].GetName())
 		}
 	}
@@ -541,7 +548,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		}
 	}
 	c.updateCkpStage(&stage)
-	c.updateCkpGC(&stage)
 	return nil
 }
 
@@ -871,7 +877,7 @@ func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error)
 	return c.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, c.mPool)
 }
 
-func isSnapshotCKPRefers(ckp *checkpoint.CheckpointEntry, snapVec []types.TS) bool {
+func isSnapshotCKPRefers(start, end types.TS, snapVec []types.TS) bool {
 	if len(snapVec) == 0 {
 		return false
 	}
@@ -879,8 +885,6 @@ func isSnapshotCKPRefers(ckp *checkpoint.CheckpointEntry, snapVec []types.TS) bo
 	for left <= right {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
-		start := ckp.GetStart()
-		end := ckp.GetEnd()
 		if snapTS.GreaterEq(&start) && snapTS.Less(&end) {
 			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v",
 				snapTS.ToString(), start.ToString(), end.ToString())
