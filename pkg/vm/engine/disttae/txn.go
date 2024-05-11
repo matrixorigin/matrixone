@@ -980,7 +980,6 @@ func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, of
 // getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
 // Before it gets the cached table, it checks whether the table is deleted by another
 // transaction by go through the delete tables slice, and advance its cachedIndex.
-// TODO::get snapshot table from cache for snapshot read
 func (txn *Transaction) getCachedTable(
 	ctx context.Context,
 	k tableKey,
