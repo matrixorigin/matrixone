@@ -199,14 +199,21 @@ func (s *service) Delete(
 func (s *service) InsertValues(
 	ctx context.Context,
 	tableID uint64,
-	bat *batch.Batch) (uint64, error) {
+	bat *batch.Batch,
+	estimate int64,
+) (uint64, error) {
 	ts, err := s.getCommittedTableCache(
 		ctx,
 		tableID)
 	if err != nil {
 		return 0, err
 	}
-	return ts.insertAutoValues(ctx, tableID, bat)
+	return ts.insertAutoValues(
+		ctx,
+		tableID,
+		bat,
+		estimate,
+	)
 }
 
 func (s *service) CurrentValue(
