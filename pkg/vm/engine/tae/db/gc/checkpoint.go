@@ -457,6 +457,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 	}
 	deleteFiles := make([]string, 0)
 	ckpSnapList := make([]types.TS, 0)
+	logutil.Infof("mergeCheckpointFiles snapshotList: %v", len(snapshotList))
 	for _, ts := range snapshotList {
 		ckpSnapList = append(ckpSnapList, ts...)
 	}
@@ -467,6 +468,10 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		ckp := ckps[i]
 		end := ckp.GetEnd()
 		if end.Less(&stage) {
+			if c.GeteCkpStage() != nil && c.GeteCkpStage().Less(&end) {
+				logutil.Infof("mergeCheckpointFiles GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
+				continue
+			}
 			if isSnapshotCKPRefers(ckp, ckpSnapList) {
 				logutil.Infof("isSnapshotCKPRefers GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
 				break
