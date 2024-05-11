@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -430,7 +431,7 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	return nil
 }
 
-func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
+func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList map[uint32][]types.TS) error {
 	if stage.IsEmpty() ||
 		(c.GeteCkpStage() != nil && c.GeteCkpStage().GreaterEq(&stage)) {
 		return nil
@@ -455,9 +456,24 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 		return nil
 	}
 	deleteFiles := make([]string, 0)
+	ckpSnapList := make([]types.TS, 0)
+	for _, ts := range snapshotList {
+		ckpSnapList = append(ckpSnapList, ts...)
+	}
+	sort.Slice(ckpSnapList, func(i, j int) bool {
+		return ckpSnapList[i].Less(&ckpSnapList[j])
+	})
+	isRefers := false
 	for _, ckp := range ckps {
 		end := ckp.GetEnd()
 		if end.Less(&stage) {
+			if isSnapshotCKPRefers(ckp, ckpSnapList) {
+				isRefers = true
+				continue
+			}
+			if isRefers && ckp.GetType() == checkpoint.ET_Global {
+				continue
+			}
 			logutil.Infof("GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
 			locations, err := logtail.LoadCheckpointLocations(c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
 			if err != nil {
@@ -536,21 +552,32 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 		return nil
 	}
 	defer logtail.CloseSnapshotList(snapshots)
-	gc := c.softGC(gcTable, gckp, snapshots)
+	gc, snapshotList := c.softGC(gcTable, gckp, snapshots)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
 	err = c.delWorker.ExecDelete(c.ctx, gc, c.disableGC)
 	if err != nil {
 		return err
 	}
+	err = c.mergeCheckpointFiles(c.ckpClient.GetStage(), snapshotList)
+
+	if err != nil {
+		// TODO: Error handle
+		logutil.Errorf("[DiskCleaner] mergeCheckpointFiles failed: %v", err.Error())
+		return err
+	}
 	return nil
 }
 
-func (c *checkpointCleaner) softGC(t *GCTable, gckp *checkpoint.CheckpointEntry, snapshots map[uint32]containers.Vector) []string {
+func (c *checkpointCleaner) softGC(
+	t *GCTable,
+	gckp *checkpoint.CheckpointEntry,
+	snapshots map[uint32]containers.Vector,
+) ([]string, map[uint32][]types.TS) {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
 	if len(c.inputs.tables) == 0 {
-		return nil
+		return nil, nil
 	}
 	mergeTable := NewGCTable()
 	for _, table := range c.inputs.tables {
@@ -562,7 +589,7 @@ func (c *checkpointCleaner) softGC(t *GCTable, gckp *checkpoint.CheckpointEntry,
 	c.updateMaxCompared(gckp)
 	c.snapshotMeta.MergeTableInfo(snapList)
 	//logutil.Infof("SoftGC is %v, merge table: %v", gc, mergeTable.String())
-	return gc
+	return gc, snapList
 }
 
 func (c *checkpointCleaner) createDebugInput(
@@ -725,13 +752,6 @@ func (c *checkpointCleaner) Process() {
 		// TODO: Error handle
 		return
 	}
-
-	err = c.mergeCheckpointFiles(c.ckpClient.GetStage())
-
-	if err != nil {
-		// TODO: Error handle
-		return
-	}
 }
 
 func (c *checkpointCleaner) checkExtras(item any) bool {
@@ -812,4 +832,27 @@ func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
 
 func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {
 	return c.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, c.mPool)
+}
+
+func isSnapshotCKPRefers(ckp *checkpoint.CheckpointEntry, snapVec []types.TS) bool {
+	if len(snapVec) == 0 {
+		return false
+	}
+	left, right := 0, len(snapVec)-1
+	for left <= right {
+		mid := left + (right-left)/2
+		snapTS := snapVec[mid]
+		start := ckp.GetStart()
+		end := ckp.GetEnd()
+		if snapTS.GreaterEq(&start) && snapTS.Less(&end) {
+			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v",
+				snapTS.ToString(), start.ToString(), end.ToString())
+			return true
+		} else if snapTS.Less(&start) {
+			left = mid + 1
+		} else {
+			right = mid - 1
+		}
+	}
+	return false
 }
