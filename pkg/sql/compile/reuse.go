@@ -15,9 +15,11 @@
 package compile
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
@@ -34,6 +36,7 @@ func init() {
 				nodeRegs:     make(map[[2]int32]*process.WaitRegister),
 				stepRegs:     make(map[int32][][2]int32),
 				metaTables:   make(map[string]struct{}),
+				lockTables:   make(map[uint64]*plan.LockTarget),
 				MessageBoard: process.NewMessageBoard(),
 			}
 		},

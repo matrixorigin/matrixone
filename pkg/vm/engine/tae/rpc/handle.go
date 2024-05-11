@@ -121,7 +121,7 @@ func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handl
 	h := &Handle{
 		db: tae,
 	}
-	h.txnCtxs = common.NewMap[string, *txnContext](runtime.NumCPU())
+	h.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
 
 	h.GCManager = gc.NewManager(
 		gc.WithCronJob(
@@ -1289,7 +1289,7 @@ func traverseCatalogForNewAccounts(c *catalog2.Catalog, memo *logtail.TNUsageMem
 			for objIt.Valid() {
 				objEntry := objIt.Get().GetPayload()
 				// PXU TODO
-				if !objEntry.IsAppendable() && !objEntry.HasDropCommitted() && objEntry.IsCommittedLocked() {
+				if !objEntry.IsAppendable() && !objEntry.HasDropCommitted() && objEntry.IsCommitted() {
 					insUsage.Size += uint64(objEntry.GetCompSize())
 				}
 				objIt.Next()

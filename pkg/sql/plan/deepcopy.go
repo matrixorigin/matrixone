@@ -275,7 +275,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 	if node.RowsetData != nil {
 		newNode.RowsetData = &plan.RowsetData{
-			Cols: make([]*plan.ColData, len(node.RowsetData.Cols)),
+			Cols:     make([]*plan.ColData, len(node.RowsetData.Cols)),
+			RowCount: node.RowsetData.RowCount,
 		}
 
 		for idx, col := range node.RowsetData.Cols {

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -50,10 +51,19 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	ap := arg
 	ap.ctr = new(container)
-	if ap.Limit > 1024 {
+	arg.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, arg.Limit)
+	if err != nil {
+		return err
+	}
+	vec, err := arg.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	if err != nil {
+		return err
+	}
+	arg.ctr.limit = vector.MustFixedCol[int64](vec)[0]
+	if arg.ctr.limit > 1024 {
 		ap.ctr.sels = make([]int64, 0, 1024)
 	} else {
-		ap.ctr.sels = make([]int64, 0, ap.Limit)
+		ap.ctr.sels = make([]int64, 0, arg.ctr.limit)
 	}
 	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
 
@@ -87,7 +97,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		anal.Stop()
 	}()
 
-	if ap.Limit == 0 {
+	if arg.ctr.limit == 0 {
 		result := vm.NewCallResult()
 		result.Status = vm.ExecStop
 		return result, nil
@@ -121,7 +131,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if ctr.state == vm.Eval {
 		ctr.state = vm.End
 		if ctr.bat != nil {
-			err := ctr.eval(ap.Limit, proc, &result)
+			err := ctr.eval(ctr.limit, proc, &result)
 			if err != nil {
 				return result, err
 			}
@@ -187,7 +197,7 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 			ctr.cmps[i] = compare.New(*bat.Vecs[i].GetType(), desc, nullsLast)
 		}
 	}
-	err := ctr.processBatch(ap.Limit, bat, proc)
+	err := ctr.processBatch(ap.ctr.limit, bat, proc)
 	return err
 }
 
@@ -292,7 +302,7 @@ func (arg *Argument) updateTopValueZM() bool {
 func (arg *Argument) getTopValue() ([]byte, bool) {
 	ctr := arg.ctr
 	// not enough items in the heap.
-	if int64(len(ctr.sels)) < arg.Limit {
+	if int64(len(ctr.sels)) < arg.ctr.limit {
 		return nil, false
 	}
 	x := int(ctr.sels[0])
