@@ -18,10 +18,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+// set origin result to a new group.
 type (
-	SingleAggInitResult1[to types.FixedSizeTExceptStrType] func(
+	SingleAggInitResultFixed[to types.FixedSizeTExceptStrType] func(
 		resultType types.Type, parameters ...types.Type) to
+	SingleAggInitResultVar func(
+		resultType types.Type, parameters ...types.Type) []byte
+)
 
+// single aggregation function, input is fixed size, output is fixed size.
+type (
 	SingleAggFill1NewVersion[from, to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		value from,
@@ -41,4 +47,27 @@ type (
 	SingleAggFlush1NewVersion[from, to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
+)
+
+// single aggregation function, input is fixed size, output is variable size.
+type (
+	SingleAggFill2NewVersion[from types.FixedSizeTExceptStrType] func(
+		execContext AggGroupExecContext, commonContext AggCommonExecContext,
+		value from,
+		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
+
+	SingleAggFills2NewVersion[from types.FixedSizeTExceptStrType] func(
+		execContext AggGroupExecContext, commonContext AggCommonExecContext,
+		value from, count int,
+		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
+
+	SingleAggMerge2NewVersion[from types.FixedSizeTExceptStrType] func(
+		ctx1, ctx2 AggGroupExecContext,
+		commonContext AggCommonExecContext,
+		resultGetter1, resultGetter2 AggBytesGetter,
+		resultSetter AggBytesSetter) error
+
+	SingleAggFlush2NewVersion[from types.FixedSizeTExceptStrType] func(
+		execContext AggGroupExecContext, commonContext AggCommonExecContext,
+		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
 )

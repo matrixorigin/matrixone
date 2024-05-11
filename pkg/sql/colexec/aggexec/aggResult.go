@@ -320,13 +320,20 @@ func (r *aggFuncBytesResult) grows(more int) error {
 		return err
 	}
 
-	var v = []byte("")
 	if r.requireInit {
-		v = r.requiredResult
-	}
-	for i, j := oldLen, newLen; i < j; i++ {
-		// this will never cause error.
-		_ = vector.SetBytesAt(r.res, i, v, r.mp)
+		v := r.requiredResult
+		for i, j := oldLen, newLen; i < j; i++ {
+			if err = vector.SetBytesAt(r.res, i, v, r.mp); err != nil {
+				return err
+			}
+		}
+
+	} else {
+		v := []byte("")
+		for i, j := oldLen, newLen; i < j; i++ {
+			// this will never cause error.
+			_ = vector.SetBytesAt(r.res, i, v, r.mp)
+		}
 	}
 	return nil
 }

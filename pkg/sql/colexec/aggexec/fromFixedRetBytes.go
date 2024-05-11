@@ -21,17 +21,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-var _ AggFuncExec = &singleAggFuncExecNew1[int64, int64]{}
+var _ AggFuncExec = &singleAggFuncExecNew2[int64]{}
 
-func RegisterAggFromFixedRetFixed[from, to types.FixedSizeTExceptStrType](
+func RegisterAggFromFixedRetBytes[from types.FixedSizeTExceptStrType](
 	basicInformation SingleColumnAggInformation,
 	initCommonContext AggCommonContextInit,
 	initGroupContext AggGroupContextInit,
-	initResult SingleAggInitResultFixed[to],
-	fill SingleAggFill1NewVersion[from, to],
-	fills SingleAggFills1NewVersion[from, to],
-	merge SingleAggMerge1NewVersion[from, to],
-	flush SingleAggFlush1NewVersion[from, to]) {
+	initResult SingleAggInitResultVar,
+	fill SingleAggFill2NewVersion[from],
+	fills SingleAggFills2NewVersion[from],
+	merge SingleAggMerge2NewVersion[from],
+	flush SingleAggFlush2NewVersion[from]) {
 
 	key := generateKeyOfSingleColumnAgg(
 		basicInformation.id, basicInformation.arg)
@@ -65,29 +65,28 @@ func RegisterAggFromFixedRetFixed[from, to types.FixedSizeTExceptStrType](
 	}
 
 	singleAgg[basicInformation.id] = true
-	singleAggNewVersion[basicInformation.id] = true
 	return
 }
 
-// singleAggFuncExecNew1[from, to] is the agg executor for single-column aggregation
-// which accept a fixed-length type as input, and return a fixed-length type as output.
-type singleAggFuncExecNew1[from, to types.FixedSizeTExceptStrType] struct {
+// singleAggFuncExecNew2[from] is the agg executor for single-column aggregation function
+// which input is fixed size and output is variable size.
+type singleAggFuncExecNew2[from types.FixedSizeTExceptStrType] struct {
 	singleAggInfo
 	singleAggExecExtraInformation
 	distinctHash
 
 	arg sFixedArg[from]
-	ret aggFuncResult[to]
+	ret aggFuncBytesResult
 
 	execContext *AggContext
 
-	fill  SingleAggFill1NewVersion[from, to]
-	fills SingleAggFills1NewVersion[from, to]
-	merge SingleAggMerge1NewVersion[from, to]
-	flush SingleAggFlush1NewVersion[from, to]
+	fill  SingleAggFill2NewVersion[from]
+	fills SingleAggFills2NewVersion[from]
+	merge SingleAggMerge2NewVersion[from]
+	flush SingleAggFlush2NewVersion[from]
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) marshal() ([]byte, error) {
+func (exec *singleAggFuncExecNew2[from]) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, err := exec.ret.marshal()
 	if err != nil {
@@ -101,12 +100,12 @@ func (exec *singleAggFuncExecNew1[from, to]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+func (exec *singleAggFuncExecNew2[from]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	exec.execContext.decodeGroupContexts(groups, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
 	return exec.ret.unmarshal(result)
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) init(
+func (exec *singleAggFuncExecNew2[from]) init(
 	mg AggMemoryManager,
 	info singleAggInfo,
 	impl aggImplementation) {
@@ -116,10 +115,10 @@ func (exec *singleAggFuncExecNew1[from, to]) init(
 	}
 
 	if resultInitMethod := impl.logic.init; resultInitMethod != nil {
-		v := resultInitMethod.(SingleAggInitResultFixed[to])(info.retType, info.argType)
-		exec.ret = initFixedAggFuncResult2[to](mg, info.retType, info.emptyNull, v)
+		v := resultInitMethod.(SingleAggInitResultVar)(info.retType, info.argType)
+		exec.ret = initBytesAggFuncResult2(mg, info.retType, info.emptyNull, v)
 	} else {
-		exec.ret = initFixedAggFuncResult[to](mg, info.retType, info.emptyNull)
+		exec.ret = initBytesAggFuncResult(mg, info.retType, info.emptyNull)
 	}
 
 	exec.singleAggInfo = info
@@ -127,15 +126,15 @@ func (exec *singleAggFuncExecNew1[from, to]) init(
 	exec.execContext = newAggContextFromImpl(impl.ctx, info.retType, info.argType)
 
 	if flushMethod := impl.logic.flush; flushMethod != nil {
-		exec.flush = flushMethod.(SingleAggFlush1NewVersion[from, to])
+		exec.flush = flushMethod.(SingleAggFlush2NewVersion[from])
 	}
 
-	exec.fill = impl.logic.fill.(SingleAggFill1NewVersion[from, to])
-	exec.fills = impl.logic.fills.(SingleAggFills1NewVersion[from, to])
-	exec.merge = impl.logic.merge.(SingleAggMerge1NewVersion[from, to])
+	exec.fill = impl.logic.fill.(SingleAggFill2NewVersion[from])
+	exec.fills = impl.logic.fills.(SingleAggFills2NewVersion[from])
+	exec.merge = impl.logic.merge.(SingleAggMerge2NewVersion[from])
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) GroupGrow(more int) error {
+func (exec *singleAggFuncExecNew2[from]) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
@@ -150,12 +149,12 @@ func (exec *singleAggFuncExecNew1[from, to]) GroupGrow(more int) error {
 	return nil
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) PreAllocateGroups(more int) error {
+func (exec *singleAggFuncExecNew2[from]) PreAllocateGroups(more int) error {
 	exec.execContext.preAllocate(more)
 	return exec.ret.preAllocate(more)
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) Fill(
+func (exec *singleAggFuncExecNew2[from]) Fill(
 	group int, row int, vectors []*vector.Vector) error {
 	if vectors[0].IsNull(uint64(row)) {
 		return nil
@@ -181,7 +180,7 @@ func (exec *singleAggFuncExecNew1[from, to]) Fill(
 		exec.ret.aggGet, exec.ret.aggSet)
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) BulkFill(
+func (exec *singleAggFuncExecNew2[from]) BulkFill(
 	group int, vectors []*vector.Vector) error {
 	length := vectors[0].Length()
 	if length == 0 || vectors[0].IsConstNull() {
@@ -235,7 +234,7 @@ func (exec *singleAggFuncExecNew1[from, to]) BulkFill(
 	return nil
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) distinctBulkFill(
+func (exec *singleAggFuncExecNew2[from]) distinctBulkFill(
 	group int, vectors []*vector.Vector, length int) error {
 	exec.ret.groupToSet = group
 	getter := exec.ret.aggGet
@@ -288,7 +287,7 @@ func (exec *singleAggFuncExecNew1[from, to]) distinctBulkFill(
 	return nil
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) BatchFill(
+func (exec *singleAggFuncExecNew2[from]) BatchFill(
 	offset int, groups []uint64, vectors []*vector.Vector) error {
 	if len(groups) == 0 || vectors[0].IsConstNull() {
 		return nil
@@ -355,7 +354,7 @@ func (exec *singleAggFuncExecNew1[from, to]) BatchFill(
 	return nil
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) distinctBatchFill(
+func (exec *singleAggFuncExecNew2[from]) distinctBatchFill(
 	offset int, groups []uint64, vectors []*vector.Vector) error {
 	getter := exec.ret.aggGet
 	setter := exec.ret.aggSet
@@ -417,7 +416,7 @@ func (exec *singleAggFuncExecNew1[from, to]) distinctBatchFill(
 	return nil
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) Flush() (*vector.Vector, error) {
+func (exec *singleAggFuncExecNew2[from]) Flush() (*vector.Vector, error) {
 	getter := exec.ret.aggGet
 	setter := exec.ret.aggSet
 	commonContext := exec.execContext.getCommonContext()
@@ -458,8 +457,8 @@ func (exec *singleAggFuncExecNew1[from, to]) Flush() (*vector.Vector, error) {
 	return exec.ret.flush(), nil
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
-	other := next.(*singleAggFuncExecNew1[from, to])
+func (exec *singleAggFuncExecNew2[from]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*singleAggFuncExecNew2[from])
 	getter1 := exec.ret.aggGet
 	getter2 := other.ret.aggGet
 	setter := exec.ret.aggSet
@@ -476,8 +475,8 @@ func (exec *singleAggFuncExecNew1[from, to]) Merge(next AggFuncExec, groupIdx1, 
 	return exec.distinctHash.merge(&other.distinctHash)
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
-	other := next.(*singleAggFuncExecNew1[from, to])
+func (exec *singleAggFuncExecNew2[from]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*singleAggFuncExecNew2[from])
 	getter1 := exec.ret.aggGet
 	getter2 := other.ret.aggGet
 	setter := exec.ret.aggSet
@@ -505,7 +504,7 @@ func (exec *singleAggFuncExecNew1[from, to]) BatchMerge(next AggFuncExec, offset
 	return exec.distinctHash.merge(&other.distinctHash)
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) Free() {
+func (exec *singleAggFuncExecNew2[from]) Free() {
 	exec.ret.free()
 	exec.distinctHash.free()
 }
