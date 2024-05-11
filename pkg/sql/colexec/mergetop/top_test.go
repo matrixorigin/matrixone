@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -69,6 +70,7 @@ func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
+		tc.arg.Free(tc.proc, false, nil)
 	}
 }
 
@@ -98,6 +100,7 @@ func TestTop(t *testing.T) {
 				}
 			}
 		}
+		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, tc.proc.Mp().CurrNB(), int64(0))
 	}
@@ -135,6 +138,8 @@ func BenchmarkTop(b *testing.B) {
 					}
 				}
 			}
+			tc.arg.Free(tc.proc, false, nil)
+			tc.proc.FreeVectors()
 		}
 	}
 }
@@ -157,7 +162,7 @@ func newTestCase(ds []bool, ts []types.Type, limit int64, fs []*plan.OrderBySpec
 		proc:  proc,
 		arg: &Argument{
 			Fs:    fs,
-			Limit: limit,
+			Limit: plan2.MakePlan2Int64ConstExprWithType(limit),
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
