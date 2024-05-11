@@ -926,7 +926,7 @@ func (backSes *backSession) GetLogger() SessionLogger {
 
 func (backSes *backSession) getMOLogger() *log.MOLogger {
 	if backSes.upstream == nil {
-		return getRuntime().Logger()
+		return getLogger()
 	} else {
 		return backSes.upstream.logger
 	}

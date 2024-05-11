@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -2048,7 +2047,7 @@ func (ses *Session) GetLogLevel() zapcore.Level {
 func (ses *Session) initLogger() {
 	ses.loggerOnce.Do(func() {
 		if ses.logger == nil {
-			ses.logger = getRuntime().Logger().Named("frontend")
+			ses.logger = getLogger()
 		}
 		config := logutil.GetDefaultConfig()
 		ses.logLevel = config.GetLevel().Level()
@@ -2126,19 +2125,4 @@ func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
 		fields = append(fields, trace.ContextField(ctx))
 	}
 	return fields
-}
-
-var rt moruntime.Runtime
-var rtOnce sync.Once
-
-func getRuntime() moruntime.Runtime {
-	rtOnce.Do(initRuntime)
-	return rt
-}
-
-func initRuntime() {
-	rt = moruntime.ProcessLevelRuntime()
-	if rt == nil {
-		rt = moruntime.DefaultRuntime()
-	}
 }

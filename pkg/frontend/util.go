@@ -23,28 +23,27 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
-	"github.com/BurntSushi/toml"
-
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -493,6 +492,22 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	}
 	// need just below EndStatement
 	ses.SetTStmt(nil)
+}
+
+var logger *log.MOLogger
+var loggerOnce sync.Once
+
+func getLogger() *log.MOLogger {
+	loggerOnce.Do(initLogger)
+	return logger
+}
+
+func initLogger() {
+	rt := moruntime.ProcessLevelRuntime()
+	if rt == nil {
+		rt = moruntime.DefaultRuntime()
+	}
+	logger = rt.Logger().Named("frontend")
 }
 
 // appendSessionField append session id, transaction id and statement id to the fields
