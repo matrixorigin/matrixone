@@ -52,14 +52,14 @@ type BaseEntryImpl[T BaseNode[T]] struct {
 
 func NewReplayBaseEntry[T BaseNode[T]](factory func() T) *BaseEntryImpl[T] {
 	be := &BaseEntryImpl[T]{
-		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory)),
+		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory), nil),
 	}
 	return be
 }
 
 func NewBaseEntry[T BaseNode[T]](factory func() T) *BaseEntryImpl[T] {
 	return &BaseEntryImpl[T]{
-		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory)),
+		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory), nil),
 	}
 }
 
@@ -244,7 +244,6 @@ func (be *BaseEntryImpl[T]) GetVisibilityLocked(txn txnif.TxnReader) (visible, d
 	return
 }
 
-// PXU-1 TODO
 func (be *BaseEntryImpl[T]) IsVisibleWithLock(txn txnif.TxnReader, mu *sync.RWMutex) (ok bool, err error) {
 	needWait, txnToWait := be.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {

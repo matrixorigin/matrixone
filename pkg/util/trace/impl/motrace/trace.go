@@ -23,18 +23,17 @@ package motrace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -63,6 +62,7 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithLongQueryTime(SV.LongQueryTime),
 		WithLongSpanTime(SV.LongSpanTime.Duration),
 		WithSpanDisable(SV.DisableSpan),
+		WithErrorDisable(SV.DisableError),
 		WithSkipRunningStmt(SV.SkipRunningStmt),
 		WithSQLWriterDisable(SV.DisableSqlWriter),
 		WithAggregatorDisable(SV.DisableStmtAggregation),
@@ -99,6 +99,9 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 		_, span := gTracer.Start(ctx, "TraceInit")
 		defer span.End()
 		defer trace.SetDefaultTracer(gTracer)
+	}
+	if config.disableError {
+		DisableLogErrorReport(true)
 	}
 
 	// init DefaultContext / DefaultSpanContext
@@ -246,7 +249,10 @@ func GetNodeResource() *trace.MONodeResource {
 func SetTracerProvider(p *MOTracerProvider) {
 	gTracerProvider.Store(p)
 }
-func GetTracerProvider() *MOTracerProvider {
+
+// GetTracerProvider returns the global TracerProvider.
+// It will be initialized at startup.
+var GetTracerProvider = func() *MOTracerProvider {
 	return gTracerProvider.Load().(*MOTracerProvider)
 }
 

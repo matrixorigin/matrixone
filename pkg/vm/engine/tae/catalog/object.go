@@ -587,33 +587,29 @@ func (entry *ObjectEntry) PrepareCompact() bool {
 // for old flushed objects, stats may be empty
 func (entry *ObjectEntry) ObjectPersisted() bool {
 	entry.RLock()
+	defer entry.RUnlock()
 	if entry.IsEmptyLocked() {
-		entry.RUnlock()
 		return false
 	}
-	lastNode := entry.GetLatestNodeLocked()
-	entry.RUnlock()
 	if entry.IsAppendable() {
-		// PXU TODO
+		lastNode := entry.GetLatestNodeLocked()
 		return lastNode.HasDropIntent()
 	} else {
 		return true
 	}
 }
 
-// for old flushed objects, stats may be empty
+// PXU TODO: I can't understand this code
+// aobj has persisted data after it is dropped
+// obj always has persisted data
 func (entry *ObjectEntry) HasCommittedPersistedData() bool {
 	entry.RLock()
-	if entry.IsEmptyLocked() {
-		entry.RUnlock()
-		return false
-	}
-	lastNode := entry.GetLatestNodeLocked()
-	entry.RUnlock()
+	defer entry.RUnlock()
 	if entry.IsAppendable() {
+		lastNode := entry.GetLatestNodeLocked()
 		return lastNode.HasDropCommitted()
 	} else {
-		return true
+		return entry.HasCommittedNodeLocked()
 	}
 }
 func (entry *ObjectEntry) MustGetObjectStats() (objectio.ObjectStats, error) {
