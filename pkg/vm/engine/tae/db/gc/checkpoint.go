@@ -431,6 +431,33 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	return nil
 }
 
+func getAllowedMergeFiles(
+	ctx context.Context,
+	fs fileservice.FileService,
+	snapshot types.TS,
+	listFunc checkpoint.GetCheckpointRange) (ok bool, files []*checkpoint.MetaFile, idx int, err error) {
+	files, idx, err = checkpoint.ListSnapshotMeta(ctx, fs, snapshot, listFunc)
+	if err != nil {
+		return
+	}
+	if len(files) == 0 {
+		return
+	}
+	stage := 0
+	for i := 0; i <= idx; i++ {
+		start := files[i].GetStart()
+		if start.IsEmpty() {
+			stage = i
+		}
+	}
+	if stage == 0 {
+		return
+	}
+	ok = true
+	idx = stage - 1
+	return
+}
+
 func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList map[uint32][]types.TS) error {
 	if stage.IsEmpty() ||
 		(c.GeteCkpStage() != nil && c.GeteCkpStage().GreaterEq(&stage)) {
@@ -442,6 +469,15 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		return err
 	}
 	if len(files) == 0 {
+		return nil
+	}
+	ok, files, idx, err := getAllowedMergeFiles(c.ctx, c.fs.Service, stage, nil)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		c.updateCkpStage(&stage)
+		c.updateCkpGC(&stage)
 		return nil
 	}
 	ckpGC := c.GeteCkpGC()
