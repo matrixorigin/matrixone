@@ -88,11 +88,22 @@ type singleAggFuncExecNew1[from, to types.FixedSizeTExceptStrType] struct {
 }
 
 func (exec *singleAggFuncExecNew1[from, to]) marshal() ([]byte, error) {
-	return nil, nil
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		Info: d,
+		Result: r,
+		Groups: exec.execContext.getGroupContextEncodings(),
+	}
+	return encoded.Marshal()
 }
 
 func (exec *singleAggFuncExecNew1[from, to]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
-	return nil
+	exec.execContext.decodeGroupContexts(groups, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
+	return exec.ret.unmarshal(result)
 }
 
 func (exec *singleAggFuncExecNew1[from, to]) init(

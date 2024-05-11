@@ -98,42 +98,26 @@ func (a *AggContext) getGroupContext(i int) AggGroupExecContext {
 	return nil
 }
 
-func (a *AggContext) Marshal() ([]byte, error) {
-	encoded := &EncodedAggContext{
-		HasCommonContext: a.hasCommonContext,
-		HasGroupContext:  a.hasGroupContext,
+func (a *AggContext) getGroupContextEncodings() [][]byte {
+	if !a.hasGroupContext {
+		return nil
 	}
-	if a.hasCommonContext {
-		encoded.CommonContext = a.commonContext.Marshal()
+	encodings := make([][]byte, len(a.groupContext))
+	for i := range a.groupContext {
+		encodings[i] = a.groupContext[i].Marshal()
 	}
-	if a.hasGroupContext {
-		encoded.GroupContext = make([][]byte, len(a.groupContext))
-		for i := range a.groupContext {
-			encoded.GroupContext[i] = a.groupContext[i].Marshal()
-		}
-	}
-	return encoded.Marshal()
+	return encodings
 }
 
-func (a *AggContext) Unmarshal(bs []byte, resultType types.Type, parameters ...types.Type) error {
-	encoded := &EncodedAggContext{}
-	if err := encoded.Unmarshal(bs); err != nil {
-		return err
+func (a *AggContext) decodeGroupContexts(encodings [][]byte, resultType types.Type, parameters ...types.Type) {
+	if !a.hasGroupContext {
+		return
 	}
-	a.hasCommonContext = encoded.HasCommonContext
-	a.hasGroupContext = encoded.HasGroupContext
-	if a.hasCommonContext {
-		a.commonContext.Unmarshal(encoded.CommonContext)
+	a.groupContext = make([]AggGroupExecContext, len(encodings))
+	for i := range encodings {
+		a.groupContext[i] = a.initGroup(resultType, parameters...)
+		a.groupContext[i].Unmarshal(encodings[i])
 	}
-	if a.hasGroupContext {
-		a.groupContext = make([]AggGroupExecContext, len(encoded.GroupContext))
-
-		for i := range encoded.GroupContext {
-			a.groupContext[i] = a.initGroup(resultType, parameters...)
-			a.groupContext[i].Unmarshal(encoded.GroupContext[i])
-		}
-	}
-	return nil
 }
 
 // AggCommonExecContext stores the common context for all the groups.
