@@ -51,6 +51,8 @@ type TxnCompilerContext struct {
 	dbOfView, nameOfView string
 	sub                  *plan.SubscriptionMeta
 	restoreInfo          *plan2.RestoreInfo
+	snapshot             *plan2.Snapshot
+	views                []string
 	//for support explain analyze
 	tcw     *TxnComputationWrapper
 	execCtx *ExecCtx
@@ -63,6 +65,30 @@ func (tcc *TxnCompilerContext) SetExecCtx(execCtx *ExecCtx) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	tcc.execCtx = execCtx
+}
+
+func (tcc *TxnCompilerContext) GetViews() []string {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.views
+}
+
+func (tcc *TxnCompilerContext) SetViews(views []string) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tcc.views = views
+}
+
+func (tcc *TxnCompilerContext) GetSnapshot() *plan2.Snapshot {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.snapshot
+}
+
+func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tcc.snapshot = snapshot
 }
 
 func (tcc *TxnCompilerContext) GetRestoreInfo() *plan2.RestoreInfo {
@@ -875,20 +901,12 @@ func makeResultMetaPath(accountName string, statementId string) string {
 	return fmt.Sprintf("query_result_meta/%s_%s.blk", accountName, statementId)
 }
 
-func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (plan2.Snapshot, error) {
+func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan2.Snapshot, error) {
 	tenantCtx := tcc.GetContext()
 	if tcc.restoreInfo != nil {
-		tenantInfo := TenantInfo{
-			Tenant:        "xxx",
-			TenantID:      tcc.restoreInfo.TenantID,
-			User:          "internal",
-			UserID:        GetAdminUserId(),
-			DefaultRoleID: GetAccountAdminRoleId(),
-			DefaultRole:   GetAccountAdminRole(),
-		}
-		tenantCtx = defines.AttachAccount(tcc.GetContext(), tenantInfo.TenantID, tenantInfo.UserID, uint32(accountAdminRoleID))
+		tenantCtx = defines.AttachAccount(tenantCtx, tcc.restoreInfo.TenantID, GetAdminUserId(), GetAccountAdminRoleId())
 	}
-	return doResolveSnapshotTsWithSnapShotName(tenantCtx, tcc.GetSession(), snapshotName)
+	return doResolveSnapshotWithSnapshotName(tenantCtx, tcc.GetSession(), snapshotName)
 }
 
 func (tcc *TxnCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {

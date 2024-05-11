@@ -40,6 +40,26 @@ type CompilerContext struct {
 	txnOp     client.TxnOperator
 }
 
+func (c *CompilerContext) GetViews() []string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) SetViews(views []string) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) GetSnapshot() *plan.Snapshot {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) SetSnapshot(snapshot *plan.Snapshot) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (c *CompilerContext) ReplacePlan(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
 	//TODO implement me
 	panic("implement me")
@@ -60,7 +80,7 @@ func (c *CompilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("implement me")
 }
 
-func (c *CompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (plan.Snapshot, error) {
+func (c *CompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
 	//TODO implement me
 	panic("implement me")
 }

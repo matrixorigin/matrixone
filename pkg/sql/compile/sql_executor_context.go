@@ -48,6 +48,19 @@ type compilerContext struct {
 	mu                   sync.Mutex
 }
 
+func (c *compilerContext) GetViews() []string {
+	return nil
+}
+
+func (c *compilerContext) SetViews(views []string) {}
+
+func (c *compilerContext) GetSnapshot() *plan.Snapshot {
+	return nil
+}
+
+func (c *compilerContext) SetSnapshot(snapshot *plan.Snapshot) {
+}
+
 func (c *compilerContext) ReplacePlan(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
 	//TODO implement me
 	panic("implement me")
@@ -65,7 +78,7 @@ func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (plan.Snapshot, error) {
+func (c *compilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
 	panic("not supported in internal sql executor")
 }
 
