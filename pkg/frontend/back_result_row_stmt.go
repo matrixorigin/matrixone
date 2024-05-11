@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -24,12 +25,13 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
-func executeResultRowStmtInBack(backSes *backSession,
+func executeResultRowStmtInBack(requestCtx context.Context,
+	backSes *backSession,
 	execCtx *ExecCtx) (err error) {
 	var columns []interface{}
 	mrs := backSes.GetMysqlResultSet()
 	// cw.Compile might rewrite sql, here we fetch the latest version
-	columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
+	columns, err = execCtx.cw.GetColumns()
 	if err != nil {
 		logError(backSes, backSes.GetDebugString(),
 			"Failed to get columns from computation handler",

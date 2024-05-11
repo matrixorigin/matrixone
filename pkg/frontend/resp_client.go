@@ -15,6 +15,8 @@
 package frontend
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -24,12 +26,11 @@ func setResponse(ses *Session, isLastStmt bool, rspLen uint64) *Response {
 }
 
 // response the client
-func respClientWhenSuccess(ses *Session,
+func respClientWhenSuccess(requestCtx context.Context,
+	ses *Session,
 	execCtx *ExecCtx) (err error) {
-	if execCtx.skipRespClient {
-		return nil
-	}
-	err = respClientWithoutFlush(ses, execCtx)
+
+	err = respClientWithoutFlush(requestCtx, ses, execCtx)
 	if err != nil {
 		return err
 	}
@@ -40,29 +41,27 @@ func respClientWhenSuccess(ses *Session,
 	}
 
 	if ses.GetQueryInExecute() {
-		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, success, nil)
+		logStatementStatus(requestCtx, ses, execCtx.stmt, success, nil)
 	} else {
-		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, moerr.NewInternalError(execCtx.reqCtx, "query is killed"))
+		logStatementStatus(requestCtx, ses, execCtx.stmt, fail, moerr.NewInternalError(requestCtx, "query is killed"))
 	}
 	return err
 }
 
-func respClientWithoutFlush(ses *Session,
+func respClientWithoutFlush(requestCtx context.Context,
+	ses *Session,
 	execCtx *ExecCtx) (err error) {
-	if execCtx.skipRespClient {
-		return nil
-	}
 	switch execCtx.stmt.StmtKind().RespType() {
 	case tree.RESP_STREAM_RESULT_ROW:
-		err = respStreamResultRow(ses, execCtx)
+		err = respStreamResultRow(requestCtx, ses, execCtx)
 	case tree.RESP_PREBUILD_RESULT_ROW:
-		err = respPrebuildResultRow(ses, execCtx)
+		err = respPrebuildResultRow(requestCtx, ses, execCtx)
 	case tree.RESP_MIXED_RESULT_ROW:
-		err = respMixedResultRow(ses, execCtx)
+		err = respMixedResultRow(requestCtx, ses, execCtx)
 	case tree.RESP_NOTHING:
 	case tree.RESP_BY_SITUATION:
 	case tree.RESP_STATUS:
-		err = respStatus(ses, execCtx)
+		err = respStatus(requestCtx, ses, execCtx)
 	}
 	return err
 }

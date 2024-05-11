@@ -141,9 +141,6 @@ func (res *internalExecResult) Float64ValueByName(ctx context.Context, ridx uint
 func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
 	ie.Lock()
 	defer ie.Unlock()
-	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
-	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer func() {
 		sess.Close()
@@ -152,28 +149,17 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	if sql == "" {
 		return
 	}
-	tempExecCtx := ExecCtx{
-		reqCtx: ctx,
-		ses:    sess,
-	}
-	return doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	return doComQuery(ctx, sess, &UserInput{sql: sql})
 }
 
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 	ie.Lock()
 	defer ie.Unlock()
-	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
-	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
 	ie.proto.stashResult = true
 	logutil.Info("internalExecutor new session", trace.ContextField(ctx), zap.String("session uuid", sess.uuid.String()))
-	tempExecCtx := ExecCtx{
-		reqCtx: ctx,
-		ses:    sess,
-	}
-	err := doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	err := doComQuery(ctx, sess, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
 	res.err = err
 	return res
@@ -194,7 +180,9 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		logutil.Fatalf("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
-	sess := NewSession(ctx, ie.proto, mp, GSysVariables, true, nil)
+	sess := NewSession(ie.proto, mp, GSysVariables, true, nil)
+	sess.SetRequestContext(ctx)
+	sess.SetConnectContext(ctx)
 	sess.disableTrace = true
 
 	var t *TenantInfo
@@ -241,10 +229,6 @@ type internalProtocol struct {
 	result      *internalExecResult
 	database    string
 	username    string
-}
-
-func (ip *internalProtocol) UpdateCtx(ctx context.Context) {
-
 }
 
 func (ip *internalProtocol) GetCapability() uint32 {

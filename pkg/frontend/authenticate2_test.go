@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"context"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -223,11 +222,4 @@ func Test_hasMoCtrl(t *testing.T) {
 		},
 	})
 	assert.True(t, ret)
-}
-
-func newTestExecCtx(ctx context.Context, ctrl *gomock.Controller) *ExecCtx {
-	ret := &ExecCtx{
-		reqCtx: ctx,
-	}
-	return ret
 }

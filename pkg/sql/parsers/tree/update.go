@@ -85,9 +85,6 @@ type UpdateExpr struct {
 }
 
 func (node *UpdateExpr) Format(ctx *FmtCtx) {
-	if node == nil {
-		return
-	}
 	prefix := ""
 	for _, n := range node.Names {
 		ctx.WriteString(prefix)

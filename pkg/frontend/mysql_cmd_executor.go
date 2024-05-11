@@ -141,7 +141,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 
 		ses.ast = statement
 
-		execSql := makeExecuteSql(ctx, ses, statement)
+		execSql := makeExecuteSql(ses, statement)
 		if len(execSql) != 0 {
 			bb := strings.Builder{}
 			bb.WriteString(envStmt)
@@ -177,8 +177,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	// set TransactionID
 	var txn TxnOperator
 	var err error
-	if handler := ses.GetTxnHandler(); handler.InActiveTxn() {
-		txn = handler.GetTxn()
+	if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
+		_, txn, err = handler.GetTxnOperator()
 		if err != nil {
 			return nil, err
 		}
@@ -273,9 +273,9 @@ var RecordStatementTxnID = func(ctx context.Context, fses FeSession) error {
 	var txn TxnOperator
 	var err error
 	if stm := motrace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
-		if handler := ses.GetTxnHandler(); handler.InActiveTxn() {
+		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
 			// simplify the logic of TxnOperator. refer to https://github.com/matrixorigin/matrixone/pull/13436#pullrequestreview-1779063200
-			txn = handler.GetTxn()
+			_, txn, err = handler.GetTxnOperator()
 			if err != nil {
 				return err
 			}
@@ -288,8 +288,8 @@ var RecordStatementTxnID = func(ctx context.Context, fses FeSession) error {
 	// set frontend statement's txn-id
 	if upSes := ses.upstream; upSes != nil && upSes.tStmt != nil && upSes.tStmt.IsZeroTxnID() /* not record txn-id */ {
 		// background session has valid txn
-		if handler := ses.GetTxnHandler(); handler.InActiveTxn() {
-			txn = handler.GetTxn()
+		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
+			_, txn, err = handler.GetTxnOperator()
 			if err != nil {
 				return err
 			}
@@ -307,14 +307,13 @@ var RecordStatementTxnID = func(ctx context.Context, fses FeSession) error {
 	return nil
 }
 
-func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableStatus) error {
+func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *process.Process) error {
 	var db engine.Database
 	var err error
 
-	txnOp := ses.GetTxnHandler().GetTxn()
-	ctx := execCtx.reqCtx
+	ctx := ses.requestCtx
 	// get db info as current account
-	if db, err = ses.GetTxnHandler().GetStorage().Database(ctx, stmt.DbName, txnOp); err != nil {
+	if db, err = ses.GetStorage().Database(ctx, stmt.DbName, proc.TxnOperator); err != nil {
 		return err
 	}
 
@@ -344,7 +343,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		// as pub account
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(pubAccountId))
 		// get db as pub account
-		if db, err = ses.GetTxnHandler().GetStorage().Database(ctx, pubs[0].pubDatabase, txnOp); err != nil {
+		if db, err = ses.GetStorage().Database(ctx, pubs[0].pubDatabase, proc.TxnOperator); err != nil {
 			return err
 		}
 	}
@@ -392,17 +391,17 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 
 // getDataFromPipeline: extract the data from the pipeline.
 // obj: session
-func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) error {
+func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	_, task := gotrace.NewTask(context.TODO(), "frontend.WriteDataToClient")
 	defer task.End()
 	ses := obj.(*Session)
-	if openSaveQueryResult(execCtx.reqCtx, ses) {
+	if openSaveQueryResult(ses) {
 		if bat == nil {
-			if err := saveQueryResultMeta(execCtx.reqCtx, ses); err != nil {
+			if err := saveQueryResultMeta(ses); err != nil {
 				return err
 			}
 		} else {
-			if err := saveQueryResult(execCtx.reqCtx, ses, bat); err != nil {
+			if err := saveQueryResult(ses, bat); err != nil {
 				return err
 			}
 		}
@@ -415,10 +414,11 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) erro
 	proto := ses.GetMysqlProtocol()
 
 	ec := ses.GetExportConfig()
-	oq := NewOutputQueue(execCtx.reqCtx, ses, len(bat.Vecs), nil, nil)
+	oq := NewOutputQueue(ses.GetRequestContext(), ses, len(bat.Vecs), nil, nil)
 	row2colTime := time.Duration(0)
 	procBatchBegin := time.Now()
 	n := bat.Vecs[0].Length()
+	requestCtx := ses.GetRequestContext()
 
 	if ec.needExportToFile() {
 		initExportFirst(oq)
@@ -427,14 +427,14 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) erro
 	for j := 0; j < n; j++ { //row index
 		if ec.needExportToFile() {
 			select {
-			case <-execCtx.reqCtx.Done():
+			case <-requestCtx.Done():
 				return nil
 			default:
 			}
 			continue
 		}
 
-		row, err := extractRowFromEveryVector(execCtx.reqCtx, ses, bat, j, oq, true)
+		row, err := extractRowFromEveryVector(ses, bat, j, oq, true)
 		if err != nil {
 			return err
 		}
@@ -448,7 +448,7 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) erro
 	if ec.needExportToFile() {
 		oq.rowIdx = uint64(n)
 		bat2 := preCopyBat(obj, bat)
-		go constructByte(execCtx.reqCtx, obj, bat2, oq.ep.Index, oq.ep.ByteChan, oq)
+		go constructByte(obj, bat2, oq.ep.Index, oq.ep.ByteChan, oq)
 	}
 	err := oq.flush()
 	if err != nil {
@@ -477,12 +477,16 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) erro
 func doUse(ctx context.Context, ses FeSession, db string) error {
 	defer RecordStatementTxnID(ctx, ses)
 	txnHandler := ses.GetTxnHandler()
+	var txnCtx context.Context
 	var txn TxnOperator
 	var err error
 	var dbMeta engine.Database
-	txn = txnHandler.GetTxn()
+	txnCtx, txn, err = txnHandler.GetTxn()
+	if err != nil {
+		return err
+	}
 	//TODO: check meta data
-	if dbMeta, err = getGlobalPu().StorageEngine.Database(ctx, db, txn); err != nil {
+	if dbMeta, err = getGlobalPu().StorageEngine.Database(txnCtx, db, txn); err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(ctx, db)
 	}
@@ -500,18 +504,62 @@ func doUse(ctx context.Context, ses FeSession, db string) error {
 	return nil
 }
 
-func handleChangeDB(ses FeSession, execCtx *ExecCtx, db string) error {
-	return doUse(execCtx.reqCtx, ses, db)
+func handleChangeDB(requestCtx context.Context, ses FeSession, db string) error {
+	return doUse(requestCtx, ses, db)
 }
 
-func handleDump(ses FeSession, execCtx *ExecCtx, dump *tree.MoDump) error {
-	return doDumpQueryResult(execCtx.reqCtx, ses.(*Session), dump.ExportParams)
+func handleDump(requestCtx context.Context, ses FeSession, dump *tree.MoDump) error {
+	return doDumpQueryResult(requestCtx, ses.(*Session), dump.ExportParams)
 }
 
-func doCmdFieldList(reqCtx context.Context, ses *Session, _ *InternalCmdFieldList) error {
+/*
+handle "SELECT @@xxx.yyyy"
+*/
+func handleSelectVariables(ses FeSession, ve *tree.VarExpr, isLastStmt bool) error {
+	var err error = nil
+	mrs := ses.GetMysqlResultSet()
+
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col.SetName("@@" + ve.Name)
+	mrs.AddColumn(col)
+
+	row := make([]interface{}, 1)
+	if ve.System {
+		if ve.Global {
+			val, err := ses.GetGlobalVar(ve.Name)
+			if err != nil {
+				return err
+			}
+			row[0] = val
+		} else {
+			val, err := ses.GetSessionVar(ve.Name)
+			if err != nil {
+				return err
+			}
+			row[0] = val
+		}
+	} else {
+		//user defined variable
+		_, val, err := ses.GetUserDefinedVar(ve.Name)
+		if err != nil {
+			return err
+		}
+		if val != nil {
+			row[0] = val.Value
+		} else {
+			row[0] = nil
+		}
+	}
+
+	mrs.AddRow(row)
+	return err
+}
+
+func doCmdFieldList(requestCtx context.Context, ses *Session, _ *InternalCmdFieldList) error {
 	dbName := ses.GetDatabaseName()
 	if dbName == "" {
-		return moerr.NewNoDB(reqCtx)
+		return moerr.NewNoDB(requestCtx)
 	}
 
 	//Get table infos for the database from the cube
@@ -524,22 +572,22 @@ func doCmdFieldList(reqCtx context.Context, ses *Session, _ *InternalCmdFieldLis
 	//if tableInfos == nil || db != dbName {
 	//	txnHandler := ses.GetTxnHandler()
 	//	eng := ses.GetStorage()
-	//	db, err := eng.Database(reqCtx, dbName, txnHandler.GetTxn())
+	//	db, err := eng.Database(requestCtx, dbName, txnHandler.GetTxn())
 	//	if err != nil {
 	//		return err
 	//	}
 	//
-	//	names, err := db.Relations(reqCtx)
+	//	names, err := db.Relations(requestCtx)
 	//	if err != nil {
 	//		return err
 	//	}
 	//	for _, name := range names {
-	//		table, err := db.Relation(reqCtx, name)
+	//		table, err := db.Relation(requestCtx, name)
 	//		if err != nil {
 	//			return err
 	//		}
 	//
-	//		defs, err := table.TableDefs(reqCtx)
+	//		defs, err := table.TableDefs(requestCtx)
 	//		if err != nil {
 	//			return err
 	//		}
@@ -589,12 +637,12 @@ func doCmdFieldList(reqCtx context.Context, ses *Session, _ *InternalCmdFieldLis
 /*
 handle cmd CMD_FIELD_LIST
 */
-func handleCmdFieldList(ses FeSession, execCtx *ExecCtx, icfl *InternalCmdFieldList) error {
+func handleCmdFieldList(requestCtx context.Context, ses FeSession, icfl *InternalCmdFieldList) error {
 	var err error
 	proto := ses.GetMysqlProtocol()
 
 	ses.SetMysqlResultSet(nil)
-	err = doCmdFieldList(execCtx.reqCtx, ses.(*Session), icfl)
+	err = doCmdFieldList(requestCtx, ses.(*Session), icfl)
 	if err != nil {
 		return err
 	}
@@ -611,33 +659,33 @@ func handleCmdFieldList(ses FeSession, execCtx *ExecCtx, icfl *InternalCmdFieldL
 	return err
 }
 
-func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error {
+func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar, sql string) error {
 	var err error = nil
 	var ok bool
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
 			if global {
-				err = doCheckRole(execCtx.reqCtx, ses)
+				err = doCheckRole(ctx, ses)
 				if err != nil {
 					return err
 				}
-				err = ses.SetGlobalVar(execCtx.reqCtx, name, value)
+				err = ses.SetGlobalVar(name, value)
 				if err != nil {
 					return err
 				}
-				err = doSetGlobalSystemVariable(execCtx.reqCtx, ses, name, value)
+				err = doSetGlobalSystemVariable(ctx, ses, name, value)
 				if err != nil {
 					return err
 				}
 			} else {
 				if strings.ToLower(name) == "autocommit" {
-					oldValueRaw, err = ses.GetSessionVar(execCtx.reqCtx, "autocommit")
+					oldValueRaw, err = ses.GetSessionVar("autocommit")
 					if err != nil {
 						return err
 					}
 				}
-				err = ses.SetSessionVar(execCtx.reqCtx, name, value)
+				err = ses.SetSessionVar(name, value)
 				if err != nil {
 					return err
 				}
@@ -652,7 +700,7 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				if err != nil {
 					return err
 				}
-				err = ses.GetTxnHandler().SetAutocommit(execCtx, oldValue, newValue)
+				err = ses.GetTxnHandler().SetAutocommit(oldValue, newValue)
 				if err != nil {
 					return err
 				}
@@ -669,7 +717,7 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 		name := assign.Name
 		var value interface{}
 
-		value, err = getExprValue(assign.Value, ses, execCtx)
+		value, err = getExprValue(assign.Value, ses)
 		if err != nil {
 			return err
 		}
@@ -695,7 +743,7 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 			}
 		} else if name == "syspublications" {
 			if !ses.GetTenantInfo().IsSysTenant() {
-				return moerr.NewInternalError(execCtx.reqCtx, "only system account can set system variable syspublications")
+				return moerr.NewInternalError(ses.GetRequestContext(), "only system account can set system variable syspublications")
 			}
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
@@ -769,8 +817,8 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 /*
 handle setvar
 */
-func handleSetVar(ses FeSession, execCtx *ExecCtx, sv *tree.SetVar, sql string) error {
-	err := doSetVar(ses.(*Session), execCtx, sv, sql)
+func handleSetVar(ctx context.Context, ses FeSession, sv *tree.SetVar, sql string) error {
+	err := doSetVar(ctx, ses.(*Session), sv, sql)
 	if err != nil {
 		return err
 	}
@@ -812,7 +860,7 @@ func doShowErrors(ses *Session) error {
 	return err
 }
 
-func handleShowErrors(ses FeSession) error {
+func handleShowErrors(ses FeSession, isLastStmt bool) error {
 	err := doShowErrors(ses.(*Session))
 	if err != nil {
 		return err
@@ -820,9 +868,9 @@ func handleShowErrors(ses FeSession) error {
 	return err
 }
 
-func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) error {
+func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables) error {
 	if sv.Like != nil && sv.Where != nil {
-		return moerr.NewSyntaxError(execCtx.reqCtx, "like clause and where clause cannot exist at the same time")
+		return moerr.NewSyntaxError(ses.GetRequestContext(), "like clause and where clause cannot exist at the same time")
 	}
 
 	var err error = nil
@@ -852,7 +900,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 
 	var sysVars map[string]interface{}
 	if sv.Global {
-		sysVars, err = doGetGlobalSystemVariable(execCtx.reqCtx, ses)
+		sysVars, err = doGetGlobalSystemVariable(ses.GetRequestContext(), ses)
 		if err != nil {
 			return err
 		}
@@ -875,7 +923,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		row[0] = name
 		gsv, ok := GSysVariables.GetDefinitionOfSysVar(name)
 		if !ok {
-			return moerr.NewInternalError(execCtx.reqCtx, errorSystemVariableDoesNotExist())
+			return moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 		}
 		row[1] = value
 		if svbt, ok2 := gsv.GetType().(SystemVariableBoolType); ok2 {
@@ -893,24 +941,24 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		if err != nil {
 			return err
 		}
-		binder := plan2.NewDefaultBinder(execCtx.reqCtx, nil, nil, plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
+		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
 		planExpr, err := binder.BindExpr(sv.Where.Expr, 0, false)
 		if err != nil {
 			return err
 		}
 
-		executor, err := colexec.NewExpressionExecutor(execCtx.proc, planExpr)
+		executor, err := colexec.NewExpressionExecutor(proc, planExpr)
 		if err != nil {
 			return err
 		}
-		vec, err := executor.Eval(execCtx.proc, []*batch.Batch{bat})
+		vec, err := executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			executor.Free()
 			return err
 		}
 
 		bs := vector.MustFixedCol[bool](vec)
-		sels := execCtx.proc.Mp().GetSels()
+		sels := proc.Mp().GetSels()
 		for i, b := range bs {
 			if b {
 				sels = append(sels, int64(i))
@@ -919,7 +967,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		executor.Free()
 
 		bat.Shrink(sels, false)
-		execCtx.proc.Mp().PutSels(sels)
+		proc.Mp().PutSels(sels)
 		v0 := vector.MustStrCol(bat.Vecs[0])
 		v1 := vector.MustStrCol(bat.Vecs[1])
 		rows = rows[:len(v0)]
@@ -927,7 +975,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			rows[i][0] = v0[i]
 			rows[i][1] = v1[i]
 		}
-		bat.Clean(execCtx.proc.Mp())
+		bat.Clean(proc.Mp())
 	}
 
 	//sort by name
@@ -945,8 +993,8 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 /*
 handle show variables
 */
-func handleShowVariables(ses FeSession, execCtx *ExecCtx, sv *tree.ShowVariables) error {
-	err := doShowVariables(ses.(*Session), execCtx, sv)
+func handleShowVariables(ses FeSession, sv *tree.ShowVariables, proc *process.Process, isLastStmt bool) error {
+	err := doShowVariables(ses.(*Session), proc, sv)
 	if err != nil {
 		return err
 	}
@@ -1011,7 +1059,7 @@ func constructCollationBatch(ses *Session, rows [][]interface{}) (*batch.Batch, 
 	return bat, nil
 }
 
-func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) error {
+func handleAnalyzeStmt(requestCtx context.Context, ses *Session, stmt *tree.AnalyzeStmt) error {
 	// rewrite analyzeStmt to `select approx_count_distinct(col), .. from tbl`
 	// IMO, this approach is simple and future-proof
 	// Although this rewriting processing could have been handled in rewrite module,
@@ -1035,23 +1083,20 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 		//restore the inside statement
 		ses.ReplaceDerivedStmt(prevInsideStmt)
 	}()
-	tempExecCtx := ExecCtx{
-		ses:    ses,
-		reqCtx: execCtx.reqCtx,
-	}
-	return doComQuery(ses, &tempExecCtx, &UserInput{sql: sql})
+	return doComQuery(requestCtx, ses, &UserInput{sql: sql})
 }
 
-func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt) error {
+func doExplainStmt(ses *Session, stmt *tree.ExplainStmt) error {
+	requestCtx := ses.GetRequestContext()
 
 	//1. generate the plan
-	es, err := getExplainOption(reqCtx, stmt.Options)
+	es, err := getExplainOption(requestCtx, stmt.Options)
 	if err != nil {
 		return err
 	}
 
 	//get query optimizer and execute Optimize
-	exPlan, err := buildPlan(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
+	exPlan, err := buildPlan(requestCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
 	if err != nil {
 		return err
 	}
@@ -1067,24 +1112,24 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 		paramVals := ses.GetTxnCompileCtx().tcw.paramVals
 		if len(paramVals) > 0 {
 			//replace the param var in the plan by the param value
-			exPlan, err = plan2.FillValuesOfParamsInPlan(reqCtx, exPlan, paramVals)
+			exPlan, err = plan2.FillValuesOfParamsInPlan(requestCtx, exPlan, paramVals)
 			if err != nil {
 				return err
 			}
 			if exPlan == nil {
-				return moerr.NewInternalError(reqCtx, "failed to copy exPlan")
+				return moerr.NewInternalError(requestCtx, "failed to copy exPlan")
 			}
 		}
 	}
 	if exPlan.GetQuery() == nil {
-		return moerr.NewNotSupported(reqCtx, "the sql query plan does not support explain.")
+		return moerr.NewNotSupported(requestCtx, "the sql query plan does not support explain.")
 	}
 	// generator query explain
 	explainQuery := explain.NewExplainQueryImpl(exPlan.GetQuery())
 
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
-	err = explainQuery.ExplainPlan(reqCtx, buffer, es)
+	err = explainQuery.ExplainPlan(requestCtx, buffer, es)
 	if err != nil {
 		return err
 	}
@@ -1104,7 +1149,7 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	}
 	ses.rs = mysqlColDef2PlanResultColDef(mrs)
 
-	if openSaveQueryResult(reqCtx, ses) {
+	if openSaveQueryResult(ses) {
 		//3. fill the batch for saving the query result
 		bat, err := fillQueryBatch(ses, explainColName, buffer.Lines)
 		defer bat.Clean(ses.GetMemPool())
@@ -1113,7 +1158,7 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 		}
 
 		// save query result
-		err = maySaveQueryResult(reqCtx, ses, bat)
+		err = maySaveQueryResult(ses, bat)
 		if err != nil {
 
 			return err
@@ -1137,8 +1182,8 @@ func fillQueryBatch(ses *Session, explainColName string, lines []string) (*batch
 }
 
 // Note: for pass the compile quickly. We will remove the comments in the future.
-func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) error {
-	return doExplainStmt(execCtx.reqCtx, ses.(*Session), stmt)
+func handleExplainStmt(_ context.Context, ses FeSession, stmt *tree.ExplainStmt) error {
+	return doExplainStmt(ses.(*Session), stmt)
 }
 
 func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
@@ -1158,33 +1203,33 @@ func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql 
 		prepareStmt.ParamTypes = paramTypes
 	}
 	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
-	err = ses.SetPrepareStmt(ctx, preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
+	err = ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 
 	return prepareStmt, err
 }
 
 // handlePrepareStmt
-func handlePrepareStmt(ses FeSession, execCtx *ExecCtx, st *tree.PrepareStmt) (*PrepareStmt, error) {
-	return doPrepareStmt(execCtx.reqCtx, ses.(*Session), st, execCtx.sqlOfStmt, execCtx.executeParamTypes)
+func handlePrepareStmt(ctx context.Context, ses FeSession, st *tree.PrepareStmt, sql string) (*PrepareStmt, error) {
+	return doPrepareStmt(ctx, ses.(*Session), st, sql, nil)
 }
 
-func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
-	v, err := ses.GetGlobalVar(execCtx.reqCtx, "lower_case_table_names")
+func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) (*PrepareStmt, error) {
+	v, err := ses.GetGlobalVar("lower_case_table_names")
 	if err != nil {
 		return nil, err
 	}
 
-	origin, err := ses.GetGlobalVar(execCtx.reqCtx, "keep_user_target_list_in_result")
+	origin, err := ses.GetGlobalVar("keep_user_target_list_in_result")
 	if err != nil {
 		return nil, err
 	}
 
-	stmts, err := mysql.Parse(execCtx.reqCtx, st.Sql, v.(int64), origin.(int64))
+	stmts, err := mysql.Parse(ctx, st.Sql, v.(int64), origin.(int64))
 	if err != nil {
 		return nil, err
 	}
 
-	preparePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), st)
+	preparePlan, err := buildPlan(ses.GetRequestContext(), ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return nil, err
 	}
@@ -1195,17 +1240,17 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 		PrepareStmt: stmts[0],
 	}
 	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
-	err = ses.SetPrepareStmt(execCtx.reqCtx, preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
+	err = ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 	return prepareStmt, err
 }
 
 // handlePrepareString
-func handlePrepareString(ses FeSession, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
-	return doPrepareString(ses.(*Session), execCtx, st)
+func handlePrepareString(ctx context.Context, ses FeSession, st *tree.PrepareString) (*PrepareStmt, error) {
+	return doPrepareString(ctx, ses.(*Session), st)
 }
 
-func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
-	deallocatePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), st)
+func doDeallocate(ctx context.Context, ses *Session, st *tree.Deallocate) error {
+	deallocatePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return err
 	}
@@ -1218,54 +1263,54 @@ func doReset(_ context.Context, _ *Session, _ *tree.Reset) error {
 }
 
 // handleDeallocate
-func handleDeallocate(ses FeSession, execCtx *ExecCtx, st *tree.Deallocate) error {
-	return doDeallocate(ses.(*Session), execCtx, st)
+func handleDeallocate(ctx context.Context, ses FeSession, st *tree.Deallocate) error {
+	return doDeallocate(ctx, ses.(*Session), st)
 }
 
 // handleReset
-func handleReset(ses FeSession, execCtx *ExecCtx, st *tree.Reset) error {
-	return doReset(execCtx.reqCtx, ses.(*Session), st)
+func handleReset(ctx context.Context, ses FeSession, st *tree.Reset) error {
+	return doReset(ctx, ses.(*Session), st)
 }
 
-func handleCreatePublication(ses FeSession, execCtx *ExecCtx, cp *tree.CreatePublication) error {
-	return doCreatePublication(execCtx.reqCtx, ses.(*Session), cp)
+func handleCreatePublication(ctx context.Context, ses FeSession, cp *tree.CreatePublication) error {
+	return doCreatePublication(ctx, ses.(*Session), cp)
 }
 
-func handleAlterPublication(ses FeSession, execCtx *ExecCtx, ap *tree.AlterPublication) error {
-	return doAlterPublication(execCtx.reqCtx, ses.(*Session), ap)
+func handleAlterPublication(ctx context.Context, ses FeSession, ap *tree.AlterPublication) error {
+	return doAlterPublication(ctx, ses.(*Session), ap)
 }
 
-func handleDropPublication(ses FeSession, execCtx *ExecCtx, dp *tree.DropPublication) error {
-	return doDropPublication(execCtx.reqCtx, ses.(*Session), dp)
+func handleDropPublication(ctx context.Context, ses FeSession, dp *tree.DropPublication) error {
+	return doDropPublication(ctx, ses.(*Session), dp)
 }
 
-func handleCreateStage(ses FeSession, execCtx *ExecCtx, cs *tree.CreateStage) error {
-	return doCreateStage(execCtx.reqCtx, ses.(*Session), cs)
+func handleCreateStage(ctx context.Context, ses FeSession, cs *tree.CreateStage) error {
+	return doCreateStage(ctx, ses.(*Session), cs)
 }
 
-func handleAlterStage(ses FeSession, execCtx *ExecCtx, as *tree.AlterStage) error {
-	return doAlterStage(execCtx.reqCtx, ses.(*Session), as)
+func handleAlterStage(ctx context.Context, ses FeSession, as *tree.AlterStage) error {
+	return doAlterStage(ctx, ses.(*Session), as)
 }
 
-func handleDropStage(ses FeSession, execCtx *ExecCtx, ds *tree.DropStage) error {
-	return doDropStage(execCtx.reqCtx, ses.(*Session), ds)
+func handleDropStage(ctx context.Context, ses FeSession, ds *tree.DropStage) error {
+	return doDropStage(ctx, ses.(*Session), ds)
 }
 
-func handleCreateSnapshot(ses *Session, execCtx *ExecCtx, ct *tree.CreateSnapShot) error {
-	return doCreateSnapshot(execCtx.reqCtx, ses, ct)
+func handleCreateSnapshot(ctx context.Context, ses *Session, ct *tree.CreateSnapShot) error {
+	return doCreateSnapshot(ctx, ses, ct)
 }
 
-func handleDropSnapshot(ses *Session, execCtx *ExecCtx, ct *tree.DropSnapShot) error {
-	return doDropSnapshot(execCtx.reqCtx, ses, ct)
+func handleDropSnapshot(ctx context.Context, ses *Session, ct *tree.DropSnapShot) error {
+	return doDropSnapshot(ctx, ses, ct)
 }
 
-func handleRestoreSnapshot(ses *Session, execCtx *ExecCtx, rs *tree.RestoreSnapShot) error {
-	return doRestoreSnapshot(execCtx.reqCtx, ses, rs)
+func handleRestoreSnapshot(ctx context.Context, ses *Session, rs *tree.RestoreSnapShot) error {
+	return doRestoreSnapshot(ctx, ses, rs)
 }
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
-func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount, proc *process.Process) error {
+func handleCreateAccount(ctx context.Context, ses FeSession, ca *tree.CreateAccount, proc *process.Process) error {
 	//step1 : create new account.
 	create := &createAccount{
 		IfNotExists:  ca.IfNotExists,
@@ -1275,7 +1320,7 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 	}
 
 	b := strParamBinder{
-		ctx:    execCtx.reqCtx,
+		ctx:    ctx,
 		params: proc.GetPrepareParams(),
 	}
 	create.Name = b.bind(ca.Name)
@@ -1285,16 +1330,16 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 		return b.err
 	}
 
-	return InitGeneralTenant(execCtx.reqCtx, ses.(*Session), create)
+	return InitGeneralTenant(ctx, ses.(*Session), create)
 }
 
-func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, proc *process.Process) error {
+func handleDropAccount(ctx context.Context, ses FeSession, da *tree.DropAccount, proc *process.Process) error {
 	drop := &dropAccount{
 		IfExists: da.IfExists,
 	}
 
 	b := strParamBinder{
-		ctx:    execCtx.reqCtx,
+		ctx:    ctx,
 		params: proc.GetPrepareParams(),
 	}
 	drop.Name = b.bind(da.Name)
@@ -1302,11 +1347,11 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 		return b.err
 	}
 
-	return doDropAccount(execCtx.reqCtx, ses.(*Session), drop)
+	return doDropAccount(ctx, ses.(*Session), drop)
 }
 
 // handleDropAccount drops a new user-level tenant
-func handleAlterAccount(ses FeSession, execCtx *ExecCtx, st *tree.AlterAccount, proc *process.Process) error {
+func handleAlterAccount(ctx context.Context, ses FeSession, st *tree.AlterAccount, proc *process.Process) error {
 	aa := &alterAccount{
 		IfExists:     st.IfExists,
 		StatusOption: st.StatusOption,
@@ -1314,7 +1359,7 @@ func handleAlterAccount(ses FeSession, execCtx *ExecCtx, st *tree.AlterAccount, 
 	}
 
 	b := strParamBinder{
-		ctx:    execCtx.reqCtx,
+		ctx:    ctx,
 		params: proc.GetPrepareParams(),
 	}
 
@@ -1329,21 +1374,21 @@ func handleAlterAccount(ses FeSession, execCtx *ExecCtx, st *tree.AlterAccount, 
 		return b.err
 	}
 
-	return doAlterAccount(execCtx.reqCtx, ses.(*Session), aa)
+	return doAlterAccount(ctx, ses.(*Session), aa)
 }
 
 // handleAlterDatabaseConfig alter a database's mysql_compatibility_mode
-func handleAlterDataBaseConfig(ses FeSession, execCtx *ExecCtx, ad *tree.AlterDataBaseConfig) error {
-	return doAlterDatabaseConfig(execCtx.reqCtx, ses.(*Session), ad)
+func handleAlterDataBaseConfig(ctx context.Context, ses FeSession, ad *tree.AlterDataBaseConfig) error {
+	return doAlterDatabaseConfig(ctx, ses.(*Session), ad)
 }
 
 // handleAlterAccountConfig alter a account's mysql_compatibility_mode
-func handleAlterAccountConfig(ses FeSession, execCtx *ExecCtx, st *tree.AlterDataBaseConfig) error {
-	return doAlterAccountConfig(execCtx.reqCtx, ses.(*Session), st)
+func handleAlterAccountConfig(ctx context.Context, ses FeSession, st *tree.AlterDataBaseConfig) error {
+	return doAlterAccountConfig(ctx, ses.(*Session), st)
 }
 
 // handleCreateUser creates the user for the tenant
-func handleCreateUser(ses FeSession, execCtx *ExecCtx, st *tree.CreateUser) error {
+func handleCreateUser(ctx context.Context, ses FeSession, st *tree.CreateUser) error {
 	tenant := ses.GetTenantInfo()
 
 	cu := &createUser{
@@ -1366,7 +1411,7 @@ func handleCreateUser(ses FeSession, execCtx *ExecCtx, st *tree.CreateUser) erro
 			case tree.AccountIdentifiedByPassword,
 				tree.AccountIdentifiedWithSSL:
 				var err error
-				v.IdentStr, err = unboxExprStr(execCtx.reqCtx, u.AuthOption.Str)
+				v.IdentStr, err = unboxExprStr(ctx, u.AuthOption.Str)
 				if err != nil {
 					return err
 				}
@@ -1376,15 +1421,15 @@ func handleCreateUser(ses FeSession, execCtx *ExecCtx, st *tree.CreateUser) erro
 	}
 
 	//step1 : create the user
-	return InitUser(execCtx.reqCtx, ses.(*Session), tenant, cu)
+	return InitUser(ctx, ses.(*Session), tenant, cu)
 }
 
 // handleDropUser drops the user for the tenant
-func handleDropUser(ses FeSession, execCtx *ExecCtx, du *tree.DropUser) error {
-	return doDropUser(execCtx.reqCtx, ses.(*Session), du)
+func handleDropUser(ctx context.Context, ses FeSession, du *tree.DropUser) error {
+	return doDropUser(ctx, ses.(*Session), du)
 }
 
-func handleAlterUser(ses FeSession, execCtx *ExecCtx, st *tree.AlterUser) error {
+func handleAlterUser(ctx context.Context, ses FeSession, st *tree.AlterUser) error {
 	au := &alterUser{
 		IfExists: st.IfExists,
 		Users:    make([]*user, 0, len(st.Users)),
@@ -1406,7 +1451,7 @@ func handleAlterUser(ses FeSession, execCtx *ExecCtx, st *tree.AlterUser) error 
 			case tree.AccountIdentifiedByPassword,
 				tree.AccountIdentifiedWithSSL:
 				var err error
-				u.IdentStr, err = unboxExprStr(execCtx.reqCtx, su.AuthOption.Str)
+				u.IdentStr, err = unboxExprStr(ctx, su.AuthOption.Str)
 				if err != nil {
 					return err
 				}
@@ -1414,45 +1459,46 @@ func handleAlterUser(ses FeSession, execCtx *ExecCtx, st *tree.AlterUser) error 
 		}
 		au.Users = append(au.Users, u)
 	}
-	return doAlterUser(execCtx.reqCtx, ses.(*Session), au)
+
+	return doAlterUser(ctx, ses.(*Session), au)
 }
 
 // handleCreateRole creates the new role
-func handleCreateRole(ses FeSession, execCtx *ExecCtx, cr *tree.CreateRole) error {
+func handleCreateRole(ctx context.Context, ses FeSession, cr *tree.CreateRole) error {
 	tenant := ses.GetTenantInfo()
 
 	//step1 : create the role
-	return InitRole(execCtx.reqCtx, ses.(*Session), tenant, cr)
+	return InitRole(ctx, ses.(*Session), tenant, cr)
 }
 
 // handleDropRole drops the role
-func handleDropRole(ses FeSession, execCtx *ExecCtx, dr *tree.DropRole) error {
-	return doDropRole(execCtx.reqCtx, ses.(*Session), dr)
+func handleDropRole(ctx context.Context, ses FeSession, dr *tree.DropRole) error {
+	return doDropRole(ctx, ses.(*Session), dr)
 }
 
-func handleCreateFunction(ses FeSession, execCtx *ExecCtx, cf *tree.CreateFunction) error {
+func handleCreateFunction(ctx context.Context, ses FeSession, cf *tree.CreateFunction) error {
 	tenant := ses.GetTenantInfo()
-	return InitFunction(ses.(*Session), execCtx, tenant, cf)
+	return InitFunction(ctx, ses.(*Session), tenant, cf)
 }
 
-func handleDropFunction(ses FeSession, execCtx *ExecCtx, df *tree.DropFunction, proc *process.Process) error {
-	return doDropFunction(execCtx.reqCtx, ses.(*Session), df, func(path string) error {
-		return proc.FileService.Delete(execCtx.reqCtx, path)
+func handleDropFunction(ctx context.Context, ses FeSession, df *tree.DropFunction, proc *process.Process) error {
+	return doDropFunction(ctx, ses.(*Session), df, func(path string) error {
+		return proc.FileService.Delete(ctx, path)
 	})
 }
-func handleCreateProcedure(ses FeSession, execCtx *ExecCtx, cp *tree.CreateProcedure) error {
+func handleCreateProcedure(ctx context.Context, ses FeSession, cp *tree.CreateProcedure) error {
 	tenant := ses.GetTenantInfo()
 
-	return InitProcedure(execCtx.reqCtx, ses.(*Session), tenant, cp)
+	return InitProcedure(ctx, ses.(*Session), tenant, cp)
 }
 
-func handleDropProcedure(ses FeSession, execCtx *ExecCtx, dp *tree.DropProcedure) error {
-	return doDropProcedure(execCtx.reqCtx, ses.(*Session), dp)
+func handleDropProcedure(ctx context.Context, ses FeSession, dp *tree.DropProcedure) error {
+	return doDropProcedure(ctx, ses.(*Session), dp)
 }
 
-func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt, proc *process.Process) error {
+func handleCallProcedure(ctx context.Context, ses FeSession, call *tree.CallStmt, proc *process.Process) error {
 	proto := ses.GetMysqlProtocol()
-	results, err := doInterpretCall(execCtx.reqCtx, ses.(*Session), call)
+	results, err := doInterpretCall(ctx, ses.(*Session), call)
 	if err != nil {
 		return err
 	}
@@ -1462,15 +1508,15 @@ func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt, p
 	resp := NewGeneralOkResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus())
 
 	if len(results) == 0 {
-		if err := proto.SendResponse(execCtx.reqCtx, resp); err != nil {
-			return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err)
+		if err := proto.SendResponse(ses.GetRequestContext(), resp); err != nil {
+			return moerr.NewInternalError(ses.GetRequestContext(), "routine send response failed. error:%v ", err)
 		}
 	} else {
 		for i, result := range results {
 			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
 			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i == len(results)-1)
-			if err := proto.SendResponse(execCtx.reqCtx, resp); err != nil {
-				return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err)
+			if err := proto.SendResponse(ses.GetRequestContext(), resp); err != nil {
+				return moerr.NewInternalError(ses.GetRequestContext(), "routine send response failed. error:%v ", err)
 			}
 		}
 	}
@@ -1478,46 +1524,46 @@ func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt, p
 }
 
 // handleGrantRole grants the role
-func handleGrantRole(ses FeSession, execCtx *ExecCtx, gr *tree.GrantRole) error {
-	return doGrantRole(execCtx.reqCtx, ses.(*Session), gr)
+func handleGrantRole(ctx context.Context, ses FeSession, gr *tree.GrantRole) error {
+	return doGrantRole(ctx, ses.(*Session), gr)
 }
 
 // handleRevokeRole revokes the role
-func handleRevokeRole(ses FeSession, execCtx *ExecCtx, rr *tree.RevokeRole) error {
-	return doRevokeRole(execCtx.reqCtx, ses.(*Session), rr)
+func handleRevokeRole(ctx context.Context, ses FeSession, rr *tree.RevokeRole) error {
+	return doRevokeRole(ctx, ses.(*Session), rr)
 }
 
 // handleGrantRole grants the privilege to the role
-func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivilege) error {
-	return doGrantPrivilege(execCtx.reqCtx, ses, gp)
+func handleGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivilege) error {
+	return doGrantPrivilege(ctx, ses, gp)
 }
 
 // handleRevokePrivilege revokes the privilege from the user or role
-func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) error {
-	return doRevokePrivilege(execCtx.reqCtx, ses, rp)
+func handleRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivilege) error {
+	return doRevokePrivilege(ctx, ses, rp)
 }
 
 // handleSwitchRole switches the role to another role
-func handleSwitchRole(ses FeSession, execCtx *ExecCtx, sr *tree.SetRole) error {
-	return doSwitchRole(execCtx.reqCtx, ses.(*Session), sr)
+func handleSwitchRole(ctx context.Context, ses FeSession, sr *tree.SetRole) error {
+	return doSwitchRole(ctx, ses.(*Session), sr)
 }
 
-func doKill(ses *Session, execCtx *ExecCtx, k *tree.Kill) error {
+func doKill(ctx context.Context, ses *Session, k *tree.Kill) error {
 	var err error
 	//true: kill a connection
 	//false: kill a query in a connection
 	idThatKill := uint64(ses.GetConnectionID())
 	if !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection {
-		err = getGlobalRtMgr().kill(execCtx.reqCtx, true, idThatKill, k.ConnectionId, "")
+		err = getGlobalRtMgr().kill(ctx, true, idThatKill, k.ConnectionId, "")
 	} else {
-		err = getGlobalRtMgr().kill(execCtx.reqCtx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
+		err = getGlobalRtMgr().kill(ctx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
 	}
 	return err
 }
 
 // handleKill kill a connection or query
-func handleKill(ses *Session, execCtx *ExecCtx, k *tree.Kill) error {
-	err := doKill(ses, execCtx, k)
+func handleKill(ctx context.Context, ses *Session, k *tree.Kill) error {
+	err := doKill(ctx, ses, k)
 	if err != nil {
 		return err
 	}
@@ -1525,8 +1571,8 @@ func handleKill(ses *Session, execCtx *ExecCtx, k *tree.Kill) error {
 }
 
 // handleShowAccounts lists the info of accounts
-func handleShowAccounts(ses FeSession, execCtx *ExecCtx, sa *tree.ShowAccounts) error {
-	err := doShowAccounts(execCtx.reqCtx, ses.(*Session), sa)
+func handleShowAccounts(ctx context.Context, ses FeSession, sa *tree.ShowAccounts, isLastStmt bool) error {
+	err := doShowAccounts(ctx, ses.(*Session), sa)
 	if err != nil {
 		return err
 	}
@@ -1534,15 +1580,15 @@ func handleShowAccounts(ses FeSession, execCtx *ExecCtx, sa *tree.ShowAccounts) 
 }
 
 // handleShowCollation lists the info of collation
-func handleShowCollation(ses FeSession, execCtx *ExecCtx, sc *tree.ShowCollation) error {
-	err := doShowCollation(ses.(*Session), execCtx, execCtx.proc, sc)
+func handleShowCollation(ses FeSession, sc *tree.ShowCollation, proc *process.Process, isLastStmt bool) error {
+	err := doShowCollation(ses.(*Session), proc, sc)
 	if err != nil {
 		return err
 	}
 	return err
 }
 
-func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *tree.ShowCollation) error {
+func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation) error {
 	var err error
 	var bat *batch.Batch
 	// var outputBatches []*batch.Batch
@@ -1626,7 +1672,7 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 	}
 
 	if sc.Where != nil {
-		binder := plan2.NewDefaultBinder(execCtx.reqCtx, nil, nil, plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"collation", "charset", "id", "default", "compiled", "sortlen", "pad_attribute"})
+		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"collation", "charset", "id", "default", "compiled", "sortlen", "pad_attribute"})
 		planExpr, err := binder.BindExpr(sc.Where.Expr, 0, false)
 		if err != nil {
 			return err
@@ -1690,11 +1736,11 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 	ses.rs = mysqlColDef2PlanResultColDef(mrs)
 
 	// save query result
-	if openSaveQueryResult(execCtx.reqCtx, ses) {
-		if err := saveQueryResult(execCtx.reqCtx, ses, bat); err != nil {
+	if openSaveQueryResult(ses) {
+		if err := saveQueryResult(ses, bat); err != nil {
 			return err
 		}
-		if err := saveQueryResultMeta(execCtx.reqCtx, ses); err != nil {
+		if err := saveQueryResultMeta(ses); err != nil {
 			return err
 		}
 	}
@@ -1702,8 +1748,8 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 	return err
 }
 
-func handleShowSubscriptions(ses FeSession, execCtx *ExecCtx, ss *tree.ShowSubscriptions) error {
-	err := doShowSubscriptions(execCtx.reqCtx, ses.(*Session), ss)
+func handleShowSubscriptions(ctx context.Context, ses FeSession, ss *tree.ShowSubscriptions, isLastStmt bool) error {
+	err := doShowSubscriptions(ctx, ses.(*Session), ss)
 	if err != nil {
 		return err
 	}
@@ -1788,7 +1834,7 @@ func doShowBackendServers(ses *Session) error {
 	return nil
 }
 
-func handleShowBackendServers(ses FeSession, execCtx *ExecCtx) error {
+func handleShowBackendServers(ctx context.Context, ses FeSession, isLastStmt bool) error {
 	var err error
 	if err := doShowBackendServers(ses.(*Session)); err != nil {
 		return err
@@ -1796,7 +1842,7 @@ func handleShowBackendServers(ses FeSession, execCtx *ExecCtx) error {
 	return err
 }
 
-func handleEmptyStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.EmptyStmt) error {
+func handleEmptyStmt(ctx context.Context, ses FeSession, stmt *tree.EmptyStmt) error {
 	var err error
 	return err
 }
@@ -1819,7 +1865,7 @@ func GetExplainColumns(ctx context.Context, explainColName string) ([]interface{
 	return columns, err
 }
 
-func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*explain.ExplainOptions, error) {
+func getExplainOption(requestCtx context.Context, options []tree.OptionElem) (*explain.ExplainOptions, error) {
 	es := explain.NewExplainDefaultOptions()
 	if options == nil {
 		return es, nil
@@ -1831,7 +1877,7 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 				} else if strings.EqualFold(v.Value, "FALSE") {
 					es.Verbose = false
 				} else {
-					return nil, moerr.NewInvalidInput(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+					return nil, moerr.NewInvalidInput(requestCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 				}
 			} else if strings.EqualFold(v.Name, "ANALYZE") {
 				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
@@ -1839,27 +1885,27 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 				} else if strings.EqualFold(v.Value, "FALSE") {
 					es.Analyze = false
 				} else {
-					return nil, moerr.NewInvalidInput(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+					return nil, moerr.NewInvalidInput(requestCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 				}
 			} else if strings.EqualFold(v.Name, "FORMAT") {
 				if strings.EqualFold(v.Value, "TEXT") {
 					es.Format = explain.EXPLAIN_FORMAT_TEXT
 				} else if strings.EqualFold(v.Value, "JSON") {
-					return nil, moerr.NewNotSupported(reqCtx, "Unsupport explain format '%s'", v.Value)
+					return nil, moerr.NewNotSupported(requestCtx, "Unsupport explain format '%s'", v.Value)
 				} else if strings.EqualFold(v.Value, "DOT") {
-					return nil, moerr.NewNotSupported(reqCtx, "Unsupport explain format '%s'", v.Value)
+					return nil, moerr.NewNotSupported(requestCtx, "Unsupport explain format '%s'", v.Value)
 				} else {
-					return nil, moerr.NewInvalidInput(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+					return nil, moerr.NewInvalidInput(requestCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 				}
 			} else {
-				return nil, moerr.NewInvalidInput(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+				return nil, moerr.NewInvalidInput(requestCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 			}
 		}
 		return es, nil
 	}
 }
 
-func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explain.ExplainDataBuffer, session *Session, fill outputCallBackFunc) error {
+func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffer, session *Session, fill func(interface{}, *batch.Batch) error) error {
 	bat := batch.New(true, []string{explainColName})
 	rs := buffer.Lines
 	vs := make([][]byte, len(rs))
@@ -1877,16 +1923,16 @@ func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explai
 	bat.Vecs[0] = vec
 	bat.SetRowCount(count)
 
-	err := fill(session, execCtx, bat)
+	err := fill(session, bat)
 	if err != nil {
 		return err
 	}
 	// to trigger save result meta
-	err = fill(session, execCtx, nil)
+	err = fill(session, nil)
 	return err
 }
 
-func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+func buildPlan(requestCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 	var ret *plan2.Plan
 	var err error
 
@@ -1919,14 +1965,14 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 		v2.TxnStatementBuildPlanDurationHistogram.Observe(cost.Seconds())
 	}()
 
-	stats := statistic.StatsInfoFromContext(reqCtx)
+	stats := statistic.StatsInfoFromContext(requestCtx)
 	stats.PlanStart()
 	defer stats.PlanEnd()
 
 	isPrepareStmt := false
 	if ses != nil {
 		var accId uint32
-		accId, err = defines.GetAccountId(reqCtx)
+		accId, err = defines.GetAccountId(requestCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -1946,7 +1992,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	}
 	if ret != nil {
 		if ses != nil && ses.GetTenantInfo() != nil && !ses.IsBackgroundSession() {
-			err = authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, ret)
+			err = authenticateCanExecuteStatementAndPlan(requestCtx, ses.(*Session), stmt, ret)
 			if err != nil {
 				return nil, err
 			}
@@ -1975,7 +2021,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	if ret != nil {
 		ret.IsPrepare = isPrepareStmt
 		if ses != nil && ses.GetTenantInfo() != nil && !ses.IsBackgroundSession() {
-			err = authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, ret)
+			err = authenticateCanExecuteStatementAndPlan(requestCtx, ses.(*Session), stmt, ret)
 			if err != nil {
 				return nil, err
 			}
@@ -1984,12 +2030,12 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	return ret, err
 }
 
-func checkModify(plan0 *plan.Plan, ses FeSession) bool {
-	if plan0 == nil {
+func checkModify(execPlan *plan.Plan, proc *process.Process, ses *Session) bool {
+	if execPlan == nil {
 		return true
 	}
 	checkFn := func(db string, tableName string, tableId uint64, version uint32) bool {
-		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, tableName, plan.Snapshot{TS: &timestamp.Timestamp{}})
+		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, tableName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
 		if tableDef == nil {
 			return true
 		}
@@ -1998,7 +2044,7 @@ func checkModify(plan0 *plan.Plan, ses FeSession) bool {
 		}
 		return false
 	}
-	switch p := plan0.Plan.(type) {
+	switch p := execPlan.Plan.(type) {
 	case *plan.Plan_Query:
 		for i := range p.Query.Nodes {
 			if def := p.Query.Nodes[i].TableDef; def != nil {
@@ -2042,59 +2088,66 @@ func checkModify(plan0 *plan.Plan, ses FeSession) bool {
 	return false
 }
 
-var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
-	var cws []ComputationWrapper = nil
-	if cached := ses.getCachedPlan(execCtx.input.getSql()); cached != nil {
+/*
+GetComputationWrapper gets the execs from the computation engine
+*/
+var GetComputationWrapper = func(db string, input *UserInput, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+	var cw []ComputationWrapper = nil
+	if cached := ses.getCachedPlan(input.getSql()); cached != nil {
+		modify := false
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
-			cws = append(cws, tcw)
+			if tcw.plan == nil {
+				modify = true
+				break
+			}
+			if checkModify(tcw.plan, proc, ses) {
+				modify = true
+				break
+			}
+			cw = append(cw, tcw)
 		}
-
-		return cws, nil
+		if modify {
+			cw = nil
+		} else {
+			return cw, nil
+		}
 	}
 
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList
 	var err error
 	// if the input is an option ast, we should use it directly
-	if execCtx.input.getStmt() != nil {
-		stmts = append(stmts, execCtx.input.getStmt())
-	} else if isCmdFieldListSql(execCtx.input.getSql()) {
-		cmdFieldStmt, err = parseCmdFieldList(execCtx.reqCtx, execCtx.input.getSql())
+	if input.getStmt() != nil {
+		stmts = append(stmts, input.getStmt())
+	} else if isCmdFieldListSql(input.getSql()) {
+		cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, input.getSql())
 		if err != nil {
 			return nil, err
 		}
 		stmts = append(stmts, cmdFieldStmt)
 	} else {
-		stmts, err = parseSql(execCtx)
+		var v interface{}
+		var origin interface{}
+		v, err = ses.GetGlobalVar("lower_case_table_names")
+		if err != nil {
+			v = int64(1)
+		}
+		origin, err = ses.GetGlobalVar("keep_user_target_list_in_result")
+		if err != nil {
+			origin = int64(0)
+		}
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), v.(int64), origin.(int64))
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	for _, stmt := range stmts {
-		cws = append(cws, InitTxnComputationWrapper(ses, stmt, proc))
+		cw = append(cw, InitTxnComputationWrapper(ses, stmt, proc))
 	}
-	return cws, nil
-}
-
-func parseSql(execCtx *ExecCtx) (stmts []tree.Statement, err error) {
-	var v interface{}
-	var origin interface{}
-	v, err = execCtx.ses.GetGlobalVar(execCtx.reqCtx, "lower_case_table_names")
-	if err != nil {
-		v = int64(1)
-	}
-	origin, err = execCtx.ses.GetGlobalVar(execCtx.reqCtx, "keep_user_target_list_in_result")
-	if err != nil {
-		origin = int64(0)
-	}
-	stmts, err = parsers.Parse(execCtx.reqCtx, dialect.MYSQL, execCtx.input.getSql(), v.(int64), origin.(int64))
-	if err != nil {
-		return nil, err
-	}
-	return
+	return cw, nil
 }
 
 func incTransactionCounter(tenant string) {
@@ -2113,8 +2166,8 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 }
 
 // authenticateUserCanExecuteStatement checks the user can execute the statement
-func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, stmt tree.Statement) error {
-	reqCtx, span := trace.Debug(reqCtx, "authenticateUserCanExecuteStatement")
+func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
+	requestCtx, span := trace.Debug(requestCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
 	if getGlobalPu().SV.SkipCheckPrivilege {
 		return nil
@@ -2130,26 +2183,26 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 
 		// can or not execute in retricted status
 		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !ses.GetPrivilege().canExecInRestricted {
-			return moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+			return moerr.NewInternalError(requestCtx, "do not have privilege to execute the statement")
 		}
 
-		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(reqCtx, ses, stmt)
+		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
 		if err != nil {
 			return err
 		}
 
 		if !havePrivilege {
-			err = moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+			err = moerr.NewInternalError(requestCtx, "do not have privilege to execute the statement")
 			return err
 		}
 
-		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeNone(reqCtx, ses, stmt)
+		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeNone(requestCtx, ses, stmt)
 		if err != nil {
 			return err
 		}
 
 		if !havePrivilege {
-			err = moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+			err = moerr.NewInternalError(requestCtx, "do not have privilege to execute the statement")
 			return err
 		}
 	}
@@ -2157,8 +2210,8 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 }
 
 // authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan
-func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
-	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateCanExecuteStatementAndPlan")
+func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	_, task := gotrace.NewTask(context.TODO(), "frontend.authenticateCanExecuteStatementAndPlan")
 	defer task.End()
 	if getGlobalPu().SV.SkipCheckPrivilege {
 		return nil
@@ -2167,28 +2220,28 @@ func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
-	yes, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(reqCtx, ses, stmt, p)
+	yes, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(requestCtx, ses, stmt, p)
 	if err != nil {
 		return err
 	}
 	if !yes {
-		return moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+		return moerr.NewInternalError(requestCtx, "do not have privilege to execute the statement")
 	}
 	return nil
 }
 
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
-func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
-	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateUserCanExecutePrepareOrExecute")
+func authenticateUserCanExecutePrepareOrExecute(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	_, task := gotrace.NewTask(context.TODO(), "frontend.authenticateUserCanExecutePrepareOrExecute")
 	defer task.End()
 	if getGlobalPu().SV.SkipCheckPrivilege {
 		return nil
 	}
-	err := authenticateUserCanExecuteStatement(reqCtx, ses, stmt)
+	err := authenticateUserCanExecuteStatement(requestCtx, ses, stmt)
 	if err != nil {
 		return err
 	}
-	err = authenticateCanExecuteStatementAndPlan(reqCtx, ses, stmt, p)
+	err = authenticateCanExecuteStatementAndPlan(requestCtx, ses, stmt, p)
 	if err != nil {
 		return err
 	}
@@ -2196,27 +2249,27 @@ func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Ses
 }
 
 // canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
-func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeSession, stmt tree.Statement) error {
-	can, err := statementCanBeExecutedInUncommittedTransaction(reqCtx, ses, stmt)
+func canExecuteStatementInUncommittedTransaction(requestCtx context.Context, ses FeSession, stmt tree.Statement) error {
+	can, err := statementCanBeExecutedInUncommittedTransaction(ses, stmt)
 	if err != nil {
 		return err
 	}
 	if !can {
 		//is ddl statement
 		if IsCreateDropDatabase(stmt) {
-			return moerr.NewInternalError(reqCtx, createDropDatabaseErrorInfo())
+			return moerr.NewInternalError(requestCtx, createDropDatabaseErrorInfo())
 		} else if IsDDL(stmt) {
-			return moerr.NewInternalError(reqCtx, onlyCreateStatementErrorInfo())
+			return moerr.NewInternalError(requestCtx, onlyCreateStatementErrorInfo())
 		} else if IsAdministrativeStatement(stmt) {
-			return moerr.NewInternalError(reqCtx, administrativeCommandIsUnsupportedInTxnErrorInfo())
+			return moerr.NewInternalError(requestCtx, administrativeCommandIsUnsupportedInTxnErrorInfo())
 		} else {
-			return moerr.NewInternalError(reqCtx, unclassifiedStatementInUncommittedTxnErrorInfo())
+			return moerr.NewInternalError(requestCtx, unclassifiedStatementInUncommittedTxnErrorInfo())
 		}
 	}
 	return nil
 }
 
-func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
+func processLoadLocal(ctx context.Context, ses FeSession, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
 	proto := ses.GetMysqlProtocol()
 	defer func() {
 		err2 := writer.Close()
@@ -2241,7 +2294,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 			return nil
 		}
 		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-			err = moerr.NewInvalidInput(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
+			err = moerr.NewInvalidInput(ctx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
 		}
 		return
 	}
@@ -2249,7 +2302,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	packet, ok := msg.(*Packet)
 	if !ok {
 		proto.SetSequenceID(proto.GetSequenceId() + 1)
-		err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
+		err = moerr.NewInvalidInput(ctx, "invalid packet")
 		return
 	}
 
@@ -2296,7 +2349,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		}
 		packet, ok = msg.(*Packet)
 		if !ok {
-			err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
+			err = moerr.NewInvalidInput(ctx, "invalid packet")
 			seq += 1
 			proto.SetSequenceID(seq)
 			break
@@ -2334,11 +2387,12 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	return
 }
 
-func executeStmtWithResponse(ses *Session,
+func executeStmtWithResponse(requestCtx context.Context,
+	ses *Session,
 	execCtx *ExecCtx,
 ) (err error) {
 	var span trace.Span
-	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "executeStmtWithResponse",
+	requestCtx, span = trace.Start(requestCtx, "executeStmtWithResponse",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
 
@@ -2348,7 +2402,7 @@ func executeStmtWithResponse(ses *Session,
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
 
-	err = executeStmtWithTxn(ses, execCtx)
+	err = executeStmtWithTxn(requestCtx, ses, execCtx)
 	if err != nil {
 		return err
 	}
@@ -2358,181 +2412,70 @@ func executeStmtWithResponse(ses *Session,
 	if ses.createAsSelectSql != "" {
 		sql := ses.createAsSelectSql
 		ses.createAsSelectSql = ""
-		tempExecCtx := ExecCtx{
-			ses:    ses,
-			reqCtx: execCtx.reqCtx,
-		}
-		if err = doComQuery(ses, &tempExecCtx, &UserInput{sql: sql}); err != nil {
+		if err = doComQuery(requestCtx, ses, &UserInput{sql: sql}); err != nil {
 			return err
 		}
 	}
 
-	err = respClientWhenSuccess(ses, execCtx)
+	err = respClientWhenSuccess(requestCtx, ses, execCtx)
 	if err != nil {
 		return err
 	}
 
+	err = execCtx.proto.Flush()
 	return
 }
 
-func executeStmtWithTxn(ses FeSession,
+func executeStmtWithTxn(requestCtx context.Context,
+	ses *Session,
 	execCtx *ExecCtx,
 ) (err error) {
-	if !ses.IsDerivedStmt() {
-		err = executeStmtWithWorkspace(ses, execCtx)
-	} else {
-
-		txnOp := ses.GetTxnHandler().GetTxn()
-		//refresh proc txnOp
-		execCtx.proc.TxnOperator = txnOp
-
-		err = dispatchStmt(ses, execCtx)
-	}
-	return
-}
-
-func executeStmtWithWorkspace(ses FeSession,
-	execCtx *ExecCtx,
-) (err error) {
-	if ses.IsDerivedStmt() {
-		return
-	}
-	var autocommit bool
-	//derived stmt shares the same txn with ancestor.
-	//it only executes select statements.
-
-	//7. pass or commit or rollback txn
 	// defer transaction state management.
 	defer func() {
-		err = finishTxnFunc(ses, err, execCtx)
+		err = finishTxnFunc(requestCtx, ses, err, execCtx)
 	}()
 
-	//1. start txn
-	//special BEGIN,COMMIT,ROLLBACK
-	beginStmt := false
-	switch execCtx.stmt.(type) {
-	case *tree.BeginTransaction:
-		execCtx.txnOpt.byBegin = true
-		beginStmt = true
-	case *tree.CommitTransaction:
-		execCtx.txnOpt.byCommit = true
-		return nil
-	case *tree.RollbackTransaction:
-		execCtx.txnOpt.byRollback = true
-		return nil
-	}
-
-	autocommit, err = autocommitValue(execCtx.reqCtx, ses)
+	// statement management
+	_, txnOp, err := ses.GetTxnHandler().GetTxnOperator()
 	if err != nil {
 		return err
 	}
 
-	execCtx.txnOpt.autoCommit = autocommit
-	err = ses.GetTxnHandler().Create(execCtx)
-	if err != nil {
-		return err
+	//non derived statement
+	if txnOp != nil && !ses.IsDerivedStmt() {
+		//startStatement has been called
+		ok, _ := ses.GetTxnHandler().calledStartStmt()
+		if !ok {
+			txnOp.GetWorkspace().StartStatement()
+			ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
+		}
 	}
 
-	//skip BEGIN stmt
-	if beginStmt {
-		return err
-	}
-
-	if ses.GetTxnHandler() == nil {
-		panic("need txn handler")
-	}
-
-	txnOp := ses.GetTxnHandler().GetTxn()
-
-	//refresh proc txnOp
-	execCtx.proc.TxnOperator = txnOp
-
-	//!!!NOTE!!!: statement management
-	//2. start statement on workspace
-	txnOp.GetWorkspace().StartStatement()
-	//3. end statement on workspace
 	// defer Start/End Statement management, called after finishTxnFunc()
 	defer func() {
-		if ses.GetTxnHandler() == nil {
-			panic("need txn handler 2")
+		// move finishTxnFunc() out to another defer so that if finishTxnFunc
+		// paniced, the following is still called.
+		var err3 error
+		_, txnOp, err3 = ses.GetTxnHandler().GetTxnOperator()
+		if err3 != nil {
+			logError(ses, ses.GetDebugString(), err3.Error())
+			return
 		}
-
-		txnOp = ses.GetTxnHandler().GetTxn()
-		if txnOp != nil {
-			//most of the cases, txnOp will not nil except that "set autocommit = 1"
-			//commit the txn immediately then the txnOp is nil.
-			txnOp.GetWorkspace().EndStatement()
+		//non derived statement
+		if txnOp != nil && !ses.IsDerivedStmt() {
+			//startStatement has been called
+			ok, id := ses.GetTxnHandler().calledStartStmt()
+			if ok && bytes.Equal(txnOp.Txn().ID, id) {
+				txnOp.GetWorkspace().EndStatement()
+			}
 		}
+		ses.GetTxnHandler().disableStartStmt()
 	}()
-
-	err = executeStmtWithIncrStmt(ses, execCtx, txnOp)
-
-	return
+	return executeStmt(requestCtx, ses, execCtx)
 }
 
-func executeStmtWithIncrStmt(ses FeSession,
-	execCtx *ExecCtx,
-	txnOp TxnOperator,
-) (err error) {
-	if ses.IsDerivedStmt() {
-		return
-	}
-	//3. increase statement id
-	err = txnOp.GetWorkspace().IncrStatementID(execCtx.reqCtx, false)
-	if err != nil {
-		return err
-	}
-
-	defer func() {
-		if ses.GetTxnHandler() == nil {
-			panic("need txn handler 3")
-		}
-
-		//!!!NOTE!!!: it does not work
-		//_, txnOp = ses.GetTxnHandler().GetTxn()
-		//if txnOp != nil {
-		//	err = rollbackLastStmt(execCtx, txnOp, err)
-		//}
-	}()
-
-	err = dispatchStmt(ses, execCtx)
-	return
-}
-
-func dispatchStmt(ses FeSession,
-	execCtx *ExecCtx) (err error) {
-	//5. check plan within txn
-	if execCtx.cw.Plan() != nil {
-		if checkModify(execCtx.cw.Plan(), ses) {
-
-			//plan changed
-			//clear all cached plan and parse sql again
-			var stmts []tree.Statement
-			stmts, err = parseSql(execCtx)
-			if err != nil {
-				return err
-			}
-			if len(stmts) != len(execCtx.cws) {
-				return moerr.NewInternalError(execCtx.reqCtx, "the count of stmts parsed from cached sql is not equal to cws length")
-			}
-			for i, cw := range execCtx.cws {
-				cw.ResetPlanAndStmt(stmts[i])
-			}
-		}
-	}
-
-	//6. execute stmt within txn
-	switch sesImpl := ses.(type) {
-	case *Session:
-		return executeStmt(sesImpl, execCtx)
-	case *backSession:
-		return executeStmtInBack(sesImpl, execCtx)
-	default:
-		return moerr.NewInternalError(execCtx.reqCtx, "no such session implementation")
-	}
-}
-
-func executeStmt(ses *Session,
+func executeStmt(requestCtx context.Context,
+	ses *Session,
 	execCtx *ExecCtx,
 ) (err error) {
 	if txw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
@@ -2542,7 +2485,7 @@ func executeStmt(ses *Session,
 	// record goroutine info when ddl stmt run timeout
 	switch execCtx.stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase:
-		_, span := trace.Start(execCtx.reqCtx, "executeStmtHung",
+		_, span := trace.Start(requestCtx, "executeStmtHung",
 			trace.WithHungThreshold(time.Minute), // be careful with this options
 			trace.WithProfileGoroutine(),
 			trace.WithProfileTraceSecs(10*time.Second),
@@ -2554,9 +2497,9 @@ func executeStmt(ses *Session,
 	var cmpBegin time.Time
 	var ret interface{}
 
-	switch execCtx.stmt.StmtKind().ExecLocation() {
+	switch execCtx.stmt.StmtKind().HandleType() {
 	case tree.EXEC_IN_FRONTEND:
-		return execInFrontend(ses, execCtx)
+		return execInFrontend(requestCtx, ses, execCtx)
 	case tree.EXEC_IN_ENGINE:
 		//in the computation engine
 	}
@@ -2565,30 +2508,30 @@ func executeStmt(ses *Session,
 	case *tree.Select:
 		if st.Ep != nil {
 			if getGlobalPu().SV.DisableSelectInto {
-				err = moerr.NewSyntaxError(execCtx.reqCtx, "Unsupport select statement")
+				err = moerr.NewSyntaxError(requestCtx, "Unsupport select statement")
 				return
 			}
 			ses.InitExportConfig(st.Ep)
 			defer func() {
 				ses.ClearExportParam()
 			}()
-			err = doCheckFilePath(execCtx.reqCtx, ses, st.Ep)
+			err = doCheckFilePath(requestCtx, ses, st.Ep)
 			if err != nil {
 				return
 			}
 		}
 	case *tree.CreateDatabase:
-		err = inputNameIsInvalid(execCtx.reqCtx, string(st.Name))
+		err = inputNameIsInvalid(execCtx.proc.Ctx, string(st.Name))
 		if err != nil {
 			return
 		}
 		if st.SubscriptionOption != nil && ses.GetTenantInfo() != nil && !ses.GetTenantInfo().IsAdminRole() {
-			err = moerr.NewInternalError(execCtx.reqCtx, "only admin can create subscription")
+			err = moerr.NewInternalError(execCtx.proc.Ctx, "only admin can create subscription")
 			return
 		}
 		st.Sql = execCtx.sqlOfStmt
 	case *tree.DropDatabase:
-		err = inputNameIsInvalid(execCtx.reqCtx, string(st.Name))
+		err = inputNameIsInvalid(execCtx.proc.Ctx, string(st.Name))
 		if err != nil {
 			return
 		}
@@ -2618,13 +2561,13 @@ func executeStmt(ses *Session,
 	defer func() {
 		// Serialize the execution plan as json
 		if cwft, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(execCtx.reqCtx)
+			_ = cwft.RecordExecPlan(requestCtx)
 		}
 	}()
 
 	cmpBegin = time.Now()
 
-	if ret, err = execCtx.cw.Compile(execCtx, ses.GetOutputCallback(execCtx)); err != nil {
+	if ret, err = execCtx.cw.Compile(requestCtx, ses.GetOutputCallback()); err != nil {
 		return
 	}
 
@@ -2637,9 +2580,9 @@ func executeStmt(ses *Session,
 	// cw.Compile may rewrite the stmt in the EXECUTE statement, we fetch the latest version
 	//need to check again.
 	execCtx.stmt = execCtx.cw.GetAst()
-	switch execCtx.stmt.StmtKind().ExecLocation() {
+	switch execCtx.stmt.StmtKind().HandleType() {
 	case tree.EXEC_IN_FRONTEND:
-		return execInFrontend(ses, execCtx)
+		return execInFrontend(requestCtx, ses, execCtx)
 	case tree.EXEC_IN_ENGINE:
 
 	}
@@ -2655,18 +2598,18 @@ func executeStmt(ses *Session,
 	StmtKind := execCtx.stmt.StmtKind().OutputType()
 	switch StmtKind {
 	case tree.OUTPUT_RESULT_ROW:
-		err = executeResultRowStmt(ses, execCtx)
+		err = executeResultRowStmt(requestCtx, ses, execCtx)
 		if err != nil {
 			return err
 		}
 	case tree.OUTPUT_STATUS:
-		err = executeStatusStmt(ses, execCtx)
+		err = executeStatusStmt(requestCtx, ses, execCtx)
 		if err != nil {
 			return err
 		}
 	case tree.OUTPUT_UNDEFINED:
 		if _, ok := execCtx.stmt.(*tree.Execute); !ok {
-			return moerr.NewInternalError(execCtx.reqCtx, "need set result type for %s", execCtx.sqlOfStmt)
+			return moerr.NewInternalError(requestCtx, "need set result type for %s", execCtx.sqlOfStmt)
 		}
 	}
 
@@ -2674,23 +2617,16 @@ func executeStmt(ses *Session,
 }
 
 // execute query
-func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
-	//fmt.Fprintln(os.Stderr, "doComQuery", input.getSql())
-	//defer func() {
-	//	if retErr != nil {
-	//		fmt.Fprintln(os.Stderr, "doComQuery", retErr)
-	//	}
-	//}()
-	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (retErr error) {
 	// set the batch buf for stream scan
 	var inMemStreamScan []*kafka.Message
 
-	if batchValue, ok := execCtx.reqCtx.Value(defines.SourceScanResKey{}).([]*kafka.Message); ok {
+	if batchValue, ok := requestCtx.Value(defines.SourceScanResKey{}).([]*kafka.Message); ok {
 		inMemStreamScan = batchValue
 	}
 
 	beginInstant := time.Now()
-	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
+	requestCtx = appendStatementAt(requestCtx, beginInstant)
 	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
@@ -2712,7 +2648,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// 	getGlobalPu().UdfService,
 	// 	globalAicm)
 	proc := ses.proc
-	proc.Ctx = execCtx.reqCtx
+	proc.Ctx = requestCtx
 
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
@@ -2753,16 +2689,16 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		userNameOnly = ses.GetTenantInfo().GetUser()
 	} else {
 		var accountId uint32
-		accountId, retErr = defines.GetAccountId(execCtx.reqCtx)
+		accountId, retErr = defines.GetAccountId(requestCtx)
 		if retErr != nil {
 			return retErr
 		}
 		proc.SessionInfo.AccountId = accountId
-		proc.SessionInfo.UserId = defines.GetUserId(execCtx.reqCtx)
-		proc.SessionInfo.RoleId = defines.GetRoleId(execCtx.reqCtx)
+		proc.SessionInfo.UserId = defines.GetUserId(requestCtx)
+		proc.SessionInfo.RoleId = defines.GetRoleId(requestCtx)
 	}
 	var span trace.Span
-	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "doComQuery",
+	requestCtx, span = trace.Start(requestCtx, "doComQuery",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
@@ -2772,10 +2708,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// ses.proc.SessionInfo = proc.SessionInfo
 
 	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
-	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, &statsInfo)
-	execCtx.input = input
+	requestCtx = statistic.ContextWithStatsInfo(requestCtx, &statsInfo)
 
-	cws, err := GetComputationWrapper(execCtx, ses.GetDatabaseName(),
+	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
+		input,
 		ses.GetUserName(),
 		getGlobalPu().StorageEngine,
 		proc, ses)
@@ -2785,21 +2721,21 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	if err != nil {
 		statsInfo.ParseDuration = ParseDuration
 		var err2 error
-		execCtx.reqCtx, err2 = RecordParseErrorStatement(execCtx.reqCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
+		requestCtx, err2 = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
 		if err2 != nil {
 			return err2
 		}
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
-			retErr = moerr.NewParseError(execCtx.reqCtx, err.Error())
+			retErr = moerr.NewParseError(requestCtx, err.Error())
 		}
-		logStatementStringStatus(execCtx.reqCtx, ses, input.getSql(), fail, retErr)
+		logStatementStringStatus(requestCtx, ses, input.getSql(), fail, retErr)
 		return retErr
 	}
 
 	singleStatement := len(cws) == 1
 	if ses.GetCmd() == COM_STMT_PREPARE && !singleStatement {
-		return moerr.NewNotSupported(execCtx.reqCtx, "prepare multi statements")
+		return moerr.NewNotSupported(requestCtx, "prepare multi statements")
 	}
 
 	defer func() {
@@ -2811,7 +2747,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	defer func() {
 		if !Cached {
 			for i := 0; i < len(cws); i++ {
-				cws[i].Free()
+				if cwft, ok := cws[i].(*TxnComputationWrapper); ok {
+					cwft.Free()
+				}
+				cws[i].Clear()
 			}
 		}
 	}()
@@ -2836,7 +2775,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
 		var err2 error
-		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
+		requestCtx, err2 = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
 		if err2 != nil {
 			return err2
 		}
@@ -2848,9 +2787,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
-			err = authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
+			err = authenticateUserCanExecuteStatement(requestCtx, ses, stmt)
 			if err != nil {
-				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
+				logStatementStatus(requestCtx, ses, stmt, fail, err)
 				return err
 			}
 		}
@@ -2868,10 +2807,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			drop table test1;    <- has active transaction, error
 			                     <- has active transaction
 		*/
-		if ses.GetTxnHandler().InActiveTxn() {
-			err = canExecuteStatementInUncommittedTransaction(execCtx.reqCtx, ses, stmt)
+		if ses.GetTxnHandler().InActiveTransaction() {
+			err = canExecuteStatementInUncommittedTransaction(requestCtx, ses, stmt)
 			if err != nil {
-				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
+				logStatementStatus(requestCtx, ses, stmt, fail, err)
 				return err
 			}
 		}
@@ -2881,19 +2820,17 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if ses.proc != nil {
 			ses.proc.UnixTime = proc.UnixTime
 		}
-		execCtx.stmt = stmt
-		execCtx.isLastStmt = i >= len(cws)-1
-		execCtx.tenant = tenant
-		execCtx.userName = userNameOnly
-		execCtx.sqlOfStmt = sqlRecord[i]
-		execCtx.cw = cw
-		execCtx.proc = proc
-		execCtx.proto = proto
-		execCtx.ses = ses
-		execCtx.cws = cws
-		execCtx.input = input
-
-		err = executeStmtWithResponse(ses, execCtx)
+		execCtx := ExecCtx{
+			stmt:       stmt,
+			isLastStmt: i >= len(cws)-1,
+			tenant:     tenant,
+			userName:   userNameOnly,
+			sqlOfStmt:  sqlRecord[i],
+			cw:         cw,
+			proc:       proc,
+			proto:      proto,
+		}
+		err = executeStmtWithResponse(requestCtx, ses, &execCtx)
 		if err != nil {
 			return err
 		}
@@ -2939,12 +2876,12 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
-func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
+func ExecRequest(requestCtx context.Context, ses *Session, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			moe, ok := e.(*moerr.Error)
 			if !ok {
-				err = moerr.ConvertPanicError(execCtx.reqCtx, e)
+				err = moerr.ConvertPanicError(requestCtx, e)
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), err)
 			} else {
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), moe)
@@ -2953,7 +2890,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	}()
 
 	var span trace.Span
-	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "ExecRequest",
+	requestCtx, span = trace.Start(requestCtx, "ExecRequest",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
@@ -2967,7 +2904,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var query = string(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(getGlobalPu().SV.LengthOfQueryPrinted))))
-		err = doComQuery(ses, execCtx, &UserInput{sql: query})
+		err = doComQuery(requestCtx, ses, &UserInput{sql: query})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
 		}
@@ -2976,7 +2913,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var dbname = string(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		query := "use `" + dbname + "`"
-		err = doComQuery(ses, execCtx, &UserInput{sql: query})
+		err = doComQuery(requestCtx, ses, &UserInput{sql: query})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, ses.GetTxnHandler().GetServerStatus(), err)
 		}
@@ -2986,7 +2923,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var payload = string(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		query := makeCmdFieldListSql(payload)
-		err = doComQuery(ses, execCtx, &UserInput{sql: query})
+		err = doComQuery(requestCtx, ses, &UserInput{sql: query})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_FIELD_LIST, ses.GetTxnHandler().GetServerStatus(), err)
 		}
@@ -3008,7 +2945,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
 		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
+		err = doComQuery(requestCtx, ses, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
@@ -3018,11 +2955,11 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		ses.SetCmd(COM_STMT_EXECUTE)
 		data := req.GetData().([]byte)
 		var prepareStmt *PrepareStmt
-		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, data)
+		sql, prepareStmt, err = parseStmtExecute(requestCtx, ses, data)
 		if err != nil {
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
+		err = doComQuery(requestCtx, ses, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
@@ -3037,7 +2974,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_STMT_SEND_LONG_DATA:
 		ses.SetCmd(COM_STMT_SEND_LONG_DATA)
 		data := req.GetData().([]byte)
-		err = parseStmtSendLongData(execCtx.reqCtx, ses, data)
+		err = parseStmtSendLongData(requestCtx, ses, data)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_SEND_LONG_DATA, ses.GetTxnHandler().GetServerStatus(), err)
 			return resp, nil
@@ -3053,7 +2990,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = fmt.Sprintf("deallocate prepare %s", stmtName)
 		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
+		err = doComQuery(requestCtx, ses, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
@@ -3067,7 +3004,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		stmtName := getPrepareStmtName(stmtID)
 		sql = fmt.Sprintf("reset prepare %s", stmtName)
 		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
+		err = doComQuery(requestCtx, ses, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err)
 		}
@@ -3075,53 +3012,53 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_SET_OPTION:
 		data := req.GetData().([]byte)
-		err := handleSetOption(ses, execCtx, data)
+		err := handleSetOption(requestCtx, ses, data)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus(), err)
 		}
 		return NewGeneralOkResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus()), nil
 
 	default:
-		resp = NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), moerr.NewInternalError(execCtx.reqCtx, "unsupported command. 0x%x", req.GetCmd()))
+		resp = NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), moerr.NewInternalError(requestCtx, "unsupported command. 0x%x", req.GetCmd()))
 	}
 	return resp, nil
 }
 
-func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string, *PrepareStmt, error) {
+func parseStmtExecute(requestCtx context.Context, ses *Session, data []byte) (string, *PrepareStmt, error) {
 	// see https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_execute.html
 	pos := 0
 	if len(data) < 4 {
-		return "", nil, moerr.NewInvalidInput(reqCtx, "sql command contains malformed packet")
+		return "", nil, moerr.NewInvalidInput(requestCtx, "sql command contains malformed packet")
 	}
 	stmtID := binary.LittleEndian.Uint32(data[0:4])
 	pos += 4
 
 	stmtName := fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
-	preStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
+	preStmt, err := ses.GetPrepareStmt(stmtName)
 	if err != nil {
 		return "", nil, err
 	}
 
 	sql := fmt.Sprintf("execute %s", stmtName)
 	logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
-	err = ses.GetMysqlProtocol().ParseExecuteData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	err = ses.GetMysqlProtocol().ParseExecuteData(requestCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
 		return "", nil, err
 	}
 	return sql, preStmt, nil
 }
 
-func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) error {
+func parseStmtSendLongData(requestCtx context.Context, ses *Session, data []byte) error {
 	// see https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_send_long_data.html
 	pos := 0
 	if len(data) < 4 {
-		return moerr.NewInvalidInput(reqCtx, "sql command contains malformed packet")
+		return moerr.NewInvalidInput(requestCtx, "sql command contains malformed packet")
 	}
 	stmtID := binary.LittleEndian.Uint32(data[0:4])
 	pos += 4
 
 	stmtName := fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
-	preStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
+	preStmt, err := ses.GetPrepareStmt(stmtName)
 	if err != nil {
 		return err
 	}
@@ -3129,7 +3066,7 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 	sql := fmt.Sprintf("send long data for stmt %s", stmtName)
 	logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-	err = ses.GetMysqlProtocol().ParseSendLongData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	err = ses.GetMysqlProtocol().ParseSendLongData(requestCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
 		return err
 	}
@@ -3448,9 +3385,9 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 	return
 }
 
-func handleSetOption(ses *Session, execCtx *ExecCtx, data []byte) (err error) {
+func handleSetOption(ctx context.Context, ses *Session, data []byte) (err error) {
 	if len(data) < 2 {
-		return moerr.NewInternalError(execCtx.reqCtx, "invalid cmd_set_option data length")
+		return moerr.NewInternalError(ctx, "invalid cmd_set_option data length")
 	}
 	cap := ses.GetMysqlProtocol().GetCapability()
 	switch binary.LittleEndian.Uint16(data[:2]) {
@@ -3464,18 +3401,18 @@ func handleSetOption(ses *Session, execCtx *ExecCtx, data []byte) (err error) {
 		ses.GetMysqlProtocol().SetCapability(cap)
 
 	default:
-		return moerr.NewInternalError(execCtx.reqCtx, "invalid cmd_set_option data")
+		return moerr.NewInternalError(ctx, "invalid cmd_set_option data")
 	}
 
 	return nil
 }
 
-func handleExecUpgrade(ses *Session, execCtx *ExecCtx, st *tree.UpgradeStatement) error {
+func handleExecUpgrade(ctx context.Context, ses *Session, st *tree.UpgradeStatement) error {
 	retryCount := st.Retry
 	if st.Retry <= 0 {
 		retryCount = 1
 	}
-	err := ses.UpgradeTenant(execCtx.reqCtx, st.Target.AccountName, uint32(retryCount), st.Target.IsALLAccount)
+	err := ses.UpgradeTenant(ctx, st.Target.AccountName, uint32(retryCount), st.Target.IsALLAccount)
 	if err != nil {
 		return err
 	}

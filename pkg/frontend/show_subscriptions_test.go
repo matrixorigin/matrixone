@@ -201,6 +201,7 @@ func TestDoShowSubscriptions(t *testing.T) {
 	ses.SetTimeZone(time.UTC)
 	ses.SetTenantInfo(tenant)
 	ses.SetMysqlResultSet(&MysqlResultSet{})
+	ses.connectCtx = ctx
 	defer ses.Close()
 
 	mp := ses.GetMemPool()

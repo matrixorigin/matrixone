@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -139,7 +140,7 @@ func getSqlForTableStats(accountId int32) string {
 	return fmt.Sprintf(getTableStatsFormatV2, accountId, sysAccountID)
 }
 
-func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int32) (resp any, tried bool, err error) {
+func requestStorageUsage(ses *Session, accIds [][]int32) (resp any, tried bool, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 		req := db.StorageUsageReq{}
@@ -158,7 +159,11 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int32) (r
 		return usage, nil
 	}
 
-	txnOperator := ses.txnHandler.GetTxn()
+	var ctx context.Context
+	var txnOperator client.TxnOperator
+	if ctx, txnOperator, err = ses.txnHandler.GetTxn(); err != nil {
+		return nil, false, err
+	}
 
 	// create a new proc for `handler`
 	proc := process.New(ctx, ses.proc.GetMPool(),
@@ -317,7 +322,7 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 	}
 
 	// step 2: query to tn
-	response, tried, err := requestStorageUsage(ctx, ses, accIds)
+	response, tried, err := requestStorageUsage(ses, accIds)
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +502,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 
 	oq := newFakeOutputQueue(outputRS)
 	for _, b := range outputBatches {
-		if err = fillResultSet(ctx, oq, b, ses); err != nil {
+		if err = fillResultSet(oq, b, ses); err != nil {
 			return err
 		}
 	}
@@ -505,8 +510,8 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	ses.SetMysqlResultSet(outputRS)
 
 	ses.rs = mergeRsColumns(MoAccountColumns, EachAccountColumns)
-	if openSaveQueryResult(ctx, ses) {
-		err = saveResult(ctx, ses, outputBatches)
+	if openSaveQueryResult(ses) {
+		err = saveResult(ses, outputBatches)
 	}
 
 	return err
@@ -528,13 +533,13 @@ func mergeRsColumns(rsOfMoAccountColumns *plan.ResultColDef, rsOfEachAccountColu
 	return def
 }
 
-func saveResult(ctx context.Context, ses *Session, outputBatch []*batch.Batch) error {
+func saveResult(ses *Session, outputBatch []*batch.Batch) error {
 	for _, b := range outputBatch {
-		if err := saveQueryResult(ctx, ses, b); err != nil {
+		if err := saveQueryResult(ses, b); err != nil {
 			return err
 		}
 	}
-	if err := saveQueryResultMeta(ctx, ses); err != nil {
+	if err := saveQueryResultMeta(ses); err != nil {
 		return err
 	}
 	return nil

@@ -249,15 +249,16 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	routine := NewRoutine(rm.getCtx(), pro, getGlobalPu().SV, rs)
 	v2.CreatedRoutineCounter.Inc()
 
+	// XXX MPOOL pass in a nil mpool.
+	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
+	// this mpool will be deleted.  Maybe in the following Closed method.
+	ses := NewSession(routine.getProtocol(), nil, GSysVariables, true, nil)
 	cancelCtx := routine.getCancelRoutineCtx()
 	if rm.baseService != nil {
 		cancelCtx = context.WithValue(cancelCtx, defines.NodeIDKey{}, rm.baseService.ID())
 	}
-
-	// XXX MPOOL pass in a nil mpool.
-	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
-	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(cancelCtx, routine.getProtocol(), nil, GSysVariables, true, nil)
+	ses.SetRequestContext(cancelCtx)
+	ses.SetConnectContext(cancelCtx)
 	ses.SetFromRealUser(true)
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
@@ -420,8 +421,6 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 	// finish handshake process
 	if !protocol.IsEstablished() {
-		tempCtx, tempCancel := context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
-		defer tempCancel()
 		ts[TSEstablishStart] = time.Now()
 		logDebugf(protoInfo, "HANDLE HANDSHAKE")
 
@@ -431,7 +430,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		*/
 		if protocol.GetCapability()&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
 			logDebugf(protoInfo, "setup ssl")
-			isTlsHeader, err = protocol.HandleHandshake(tempCtx, payload)
+			isTlsHeader, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
 				logError(routine.ses, routine.ses.GetDebugString(),
 					"An error occurred",
@@ -444,8 +443,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				// do upgradeTls
 				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
 				logDebugf(protoInfo, "get TLS conn ok")
-				tlsCtx, cancelFun := context.WithTimeout(tempCtx, 20*time.Second)
-				if err = tlsConn.HandshakeContext(tlsCtx); err != nil {
+				newCtx, cancelFun := context.WithTimeout(ctx, 20*time.Second)
+				if err = tlsConn.HandshakeContext(newCtx); err != nil {
 					logError(routine.ses, routine.ses.GetDebugString(),
 						"Error occurred before cancel()",
 						zap.Error(err))
@@ -466,7 +465,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				v2.UpgradeTLSDurationHistogram.Observe(ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).Seconds())
 			} else {
 				// client don't ask server to upgrade TLS
-				if err := protocol.Authenticate(tempCtx); err != nil {
+				if err := protocol.Authenticate(ctx); err != nil {
 					return err
 				}
 				protocol.SetTlsEstablished()
@@ -474,14 +473,14 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			}
 		} else {
 			logDebugf(protoInfo, "handleHandshake")
-			_, err = protocol.HandleHandshake(tempCtx, payload)
+			_, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
 				logError(routine.ses, routine.ses.GetDebugString(),
 					"Error occurred",
 					zap.Error(err))
 				return err
 			}
-			if err = protocol.Authenticate(tempCtx); err != nil {
+			if err = protocol.Authenticate(ctx); err != nil {
 				return err
 			}
 			protocol.SetEstablished()
@@ -566,12 +565,12 @@ func (rm *RoutineManager) KillRoutineConnections() {
 	rm.cleanKillQueue()
 }
 
-func (rm *RoutineManager) MigrateConnectionTo(ctx context.Context, req *query.MigrateConnToRequest) error {
+func (rm *RoutineManager) MigrateConnectionTo(req *query.MigrateConnToRequest) error {
 	routine := rm.getRoutineByConnID(req.ConnID)
 	if routine == nil {
-		return moerr.NewInternalError(ctx, "cannot get routine to migrate connection %d", req.ConnID)
+		return moerr.NewInternalError(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
-	return routine.migrateConnectionTo(ctx, req)
+	return routine.migrateConnectionTo(req)
 }
 
 func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromRequest, resp *query.MigrateConnFromResponse) error {
