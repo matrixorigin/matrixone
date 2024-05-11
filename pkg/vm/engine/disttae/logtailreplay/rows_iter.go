@@ -182,18 +182,20 @@ func MinMax(min []byte, max []byte) PrimaryKeyMatchSpec {
 type phase int
 
 const (
-	scan phase = 0
-	seek phase = 1
+	scan  phase = 0
+	seek  phase = 1
+	judge phase = 2
 )
 
 func ExactIn(encodes [][]byte, debug bool) PrimaryKeyMatchSpec {
-	//var buf *bytes.Buffer
 	var encoded []byte
-	//first := true
+
+	first := true
+	iterateAll := false
 
 	idx := 0
-	currentPhase := seek
 	vecLen := len(encodes)
+	currentPhase := seek
 
 	updateEncoded := func() bool {
 		if idx >= vecLen {
@@ -211,28 +213,27 @@ func ExactIn(encodes [][]byte, debug bool) PrimaryKeyMatchSpec {
 	return PrimaryKeyMatchSpec{
 		Name: "ExactIn",
 		Move: func(p *primaryKeyIter) bool {
-			//
-			//if debug && first {
-			//	fmt.Println("encodes: ", encodes)
-			//	p.primaryIndex.Scan(func(item *PrimaryIndexEntry) bool {
-			//		t, _ := types.Unpack(item.Bytes)
-			//		fmt.Printf("%v-%s-%v ", item.Bytes, string(item.Bytes), t)
-			//		return true
-			//	})
-			//	fmt.Println()
-			//	fmt.Println()
-			//	first = false
-			//}
-			//
-			//if debug {
-			//
-			//	buf = &bytes.Buffer{}
-			//	defer func() {
-			//		fmt.Println("buffer: ", buf.String())
-			//	}()
-			//}
+			if first {
+				first = false
+				// each seek may visit height items
+				// we choose to scan all if the seek is more expensive
+				if len(encodes)*p.primaryIndex.Height() > p.primaryIndex.Len() {
+					iterateAll = true
+				}
+			}
+
 			for {
 				switch currentPhase {
+				case judge:
+					if iterateAll {
+						if !updateEncoded() {
+							return false
+						}
+						currentPhase = scan
+					} else {
+						currentPhase = seek
+					}
+
 				case seek:
 					if !updateEncoded() {
 						// out of vec
@@ -242,26 +243,19 @@ func ExactIn(encodes [][]byte, debug bool) PrimaryKeyMatchSpec {
 						return false
 					}
 					if match(p.iter.Item().Bytes) {
-						//if buf != nil {
-						//	buf.WriteString(fmt.Sprintf("seek matched, encoded: %v", encoded))
-						//}
 						currentPhase = scan
 						return true
 					}
-					continue
 
 				case scan:
 					if !p.iter.Next() {
 						return false
 					}
 					if match(p.iter.Item().Bytes) {
-						//if buf != nil {
-						//	buf.WriteString(fmt.Sprintf("scan matched, encoded: %v", encoded))
-						//}
 						return true
 					}
-					// seek next vec item
-					currentPhase = seek
+					p.iter.Prev()
+					currentPhase = judge
 				}
 			}
 		},
