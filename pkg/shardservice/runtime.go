@@ -41,10 +41,27 @@ func newRuntime(env Env) *rt {
 	}
 }
 
+// heartbeat each cn node periodically reports the table shards it manages
+// to the shard server.
+//
+// Based on the reported information, the shard server will determine whether
+// the operator sent to the corresponding cn is complete or not.
+//
+// When shard server restarts, all table shards information is lost. The table
+// shard metadata is persistent data, and the shard and CN binding metadata is
+// dynamically changing data from runtime.
+//
+// When the shard server discovers that the table's shards metadata is missing
+// from memory, it returns a CreateTable operator that allows the corresponding
+// CN.
 func (r *rt) heartbeat(
 	cn string,
 	shards []pb.TableShard,
-) []pb.Cmd {
+) []pb.Operator {
+	if !r.env.HasCN(cn) {
+		return []pb.Operator{newDeleteAllOp()}
+	}
+
 	r.Lock()
 	defer r.Unlock()
 
@@ -54,10 +71,10 @@ func (r *rt) heartbeat(
 		r.cns[cn] = c
 	}
 	if c.isDown() {
-		return []pb.Cmd{newDeleteAllOp().cmd}
+		return []pb.Operator{newDeleteAllOp()}
 	}
 
-	c.updateOps(
+	ops := c.closeCompletedOp(
 		shards,
 		func(s pb.TableShard) {
 			if t, ok := r.tables[s.TableID]; ok {
@@ -65,7 +82,17 @@ func (r *rt) heartbeat(
 			}
 		},
 	)
-	return nil
+
+	for _, s := range shards {
+		if t, ok := r.tables[s.TableID]; ok {
+			if !t.valid(s) {
+				ops = append(ops, newDeleteOp(s))
+			}
+		} else {
+			ops = append(ops, newCreateTableOp(s.TableID))
+		}
+	}
+	return ops
 }
 
 func (r *rt) add(t *table) {
@@ -74,6 +101,7 @@ func (r *rt) add(t *table) {
 	old, ok := r.tables[t.id]
 	if !ok {
 		r.tables[t.id] = t
+		return
 	}
 
 	// shards not changed
@@ -94,6 +122,7 @@ func (r *rt) delete(id uint64) {
 		return
 	}
 	r.deleteTableLocked(table)
+	delete(r.tables, id)
 }
 
 func (r *rt) deleteTableLocked(t *table) {
@@ -152,7 +181,7 @@ func (r *rt) hasNotRunningShardLocked(cn string) bool {
 
 func (r *rt) addOpLocked(
 	cn string,
-	ops ...operator,
+	ops ...pb.Operator,
 ) {
 	if c, ok := r.cns[cn]; ok {
 		c.addOps(ops...)
@@ -166,6 +195,7 @@ func (r *rt) getDownCNsLocked(downCNs map[string]struct{}) map[string]struct{} {
 		}
 
 		cn.down()
+		delete(r.cns, cn.id)
 		downCNs[cn.id] = struct{}{}
 	}
 	return downCNs
@@ -176,6 +206,15 @@ type table struct {
 	metadata  pb.TableShards
 	shards    []pb.TableShard
 	allocated bool
+}
+
+func (t *table) allocate(
+	i int,
+	cn string,
+) {
+	t.shards[i].CN = cn
+	t.shards[i].State = pb.ShardState_Allocated
+	t.shards[i].BindVersion++
 }
 
 func (t *table) needAllocate() bool {
@@ -200,7 +239,29 @@ func (t *table) getShardsCount(cn string) int {
 	return count
 }
 
-func (t *table) moveLocked(from, to string) (pb.TableShard, pb.TableShard) {
+func (t *table) valid(target pb.TableShard) bool {
+	for _, current := range t.shards {
+		if current.ShardID != target.ShardID {
+			continue
+		}
+		if current.ShardsVersion > target.ShardsVersion ||
+			current.BindVersion > target.BindVersion {
+			return false
+		}
+
+		if target.ShardsVersion > current.ShardsVersion ||
+			target.BindVersion > current.BindVersion {
+			panic("BUG: receive newer shard version than current")
+		}
+		return true
+	}
+	return false
+}
+
+func (t *table) moveLocked(
+	from,
+	to string,
+) (pb.TableShard, pb.TableShard) {
 	for i := range t.shards {
 		if t.shards[i].CN == from &&
 			t.shards[i].State == pb.ShardState_Running {
@@ -226,10 +287,10 @@ func (t *table) allocateCompleted(s pb.TableShard) {
 }
 
 type cn struct {
-	id    string
-	state pb.CNState
-	ops   []operator
-	cmd   []pb.Cmd
+	id            string
+	state         pb.CNState
+	incompleteOps []pb.Operator
+	notifyOps     []pb.Operator
 }
 
 func (c *cn) available(
@@ -248,17 +309,17 @@ func (c *cn) isDown() bool {
 
 func (c *cn) down() {
 	c.state = pb.CNState_Down
-	c.ops = c.ops[:0]
+	c.incompleteOps = c.incompleteOps[:0]
 }
 
-func (c *cn) addOps(ops ...operator) {
-	c.ops = append(c.ops, ops...)
+func (c *cn) addOps(ops ...pb.Operator) {
+	c.incompleteOps = append(c.incompleteOps, ops...)
 }
 
-func (c *cn) updateOps(
+func (c *cn) closeCompletedOp(
 	shards []pb.TableShard,
 	apply func(pb.TableShard),
-) []pb.Cmd {
+) []pb.Operator {
 	has := func(s pb.TableShard) bool {
 		for _, shard := range shards {
 			if s.Same(shard) {
@@ -268,25 +329,25 @@ func (c *cn) updateOps(
 		return false
 	}
 
-	ops := c.ops[:0]
-	c.cmd = c.cmd[:0]
-	for _, op := range c.ops {
-		switch op.cmd.Type {
-		case pb.CmdType_DeleteShard:
-			if !has(op.cmd.TableShard) {
+	ops := c.incompleteOps[:0]
+	c.notifyOps = c.notifyOps[:0]
+	for _, op := range c.incompleteOps {
+		switch op.Type {
+		case pb.OpType_DeleteShard:
+			if !has(op.TableShard) {
 				continue
 			}
 			ops = append(ops, op)
-			c.cmd = append(c.cmd, op.cmd)
-		case pb.CmdType_AddShard:
-			if has(op.cmd.TableShard) {
-				apply(op.cmd.TableShard)
+			c.notifyOps = append(c.notifyOps, op)
+		case pb.OpType_AddShard:
+			if has(op.TableShard) {
+				apply(op.TableShard)
 				continue
 			}
 			ops = append(ops, op)
-			c.cmd = append(c.cmd, op.cmd)
+			c.notifyOps = append(c.notifyOps, op)
 		}
 	}
-	c.ops = ops
-	return c.cmd
+	c.incompleteOps = ops
+	return c.notifyOps
 }

@@ -15,36 +15,33 @@
 package shardservice
 
 import (
-	"time"
-
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 )
 
-func newDeleteAllOp() operator {
-	return operator{
-		createAt: time.Now(),
-		cmd: pb.Cmd{
-			Type: pb.CmdType_DeleteALL,
-		},
+func newDeleteAllOp() pb.Operator {
+	return pb.Operator{
+		Type: pb.OpType_DeleteALL,
 	}
 }
 
-func newDeleteOp(shard pb.TableShard) operator {
-	return operator{
-		createAt: time.Now(),
-		cmd: pb.Cmd{
-			Type:       pb.CmdType_DeleteShard,
-			TableShard: shard,
-		},
+func newDeleteOp(shard pb.TableShard) pb.Operator {
+	return pb.Operator{
+		Type:       pb.OpType_DeleteShard,
+		TableShard: shard,
 	}
 }
 
-func newAddOp(shard pb.TableShard) operator {
-	return operator{
-		createAt: time.Now(),
-		cmd: pb.Cmd{
-			Type:       pb.CmdType_AddShard,
-			TableShard: shard,
-		},
+func newCreateTableOp(tableID uint64) pb.Operator {
+	return pb.Operator{
+		Type:    pb.OpType_CreateTable,
+		TableID: tableID,
+	}
+
+}
+
+func newAddOp(shard pb.TableShard) pb.Operator {
+	return pb.Operator{
+		Type:       pb.OpType_AddShard,
+		TableShard: shard,
 	}
 }

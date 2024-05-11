@@ -13,3 +13,23 @@
 // limitations under the License.
 
 package shardservice
+
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestFreezeFilter(t *testing.T) {
+	cns := make([]*cn, 0, 2)
+	cns = append(cns, &cn{id: "cn1"}, &cn{id: "cn2"})
+
+	timeout := time.Minute
+	f := newFreezeFilter(timeout)
+	f.freeze["cn2"] = time.Now()
+	f.freeze["cn1"] = time.Now().Add(-timeout)
+	cns = f.filter(nil, cns)
+	require.Equal(t, 1, len(cns))
+	require.Equal(t, "cn1", cns[0].id)
+}

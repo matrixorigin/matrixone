@@ -41,11 +41,12 @@ enum Policy {
     Hash      = 2;
 }
 
-// CmdType cmd type. Add or remove shard
-enum CmdType {
+// OpType operator type.
+enum OpType {
     AddShard    = 0;
     DeleteShard = 1;
     DeleteALL   = 2;
+    CreateTable = 3;
 }
 
 enum CNState {
@@ -87,7 +88,7 @@ message TableShard {
     // Version incrments when shards count changed
     uint32     ShardsVersion = 4;
     // BindVersion incrments when the cn changed
-    uint32     BindVersion   = 5;
+    uint64     BindVersion   = 5;
     ShardState State         = 6; 
 }
 
@@ -118,9 +119,14 @@ message Response {
     HeartbeatResponse          Heartbeat            = 6 [(gogoproto.nullable) = false];
 }
 
-message Cmd {
-    CmdType        Type           = 1;
+// Operator is a description of a command that needs to be sent down to CN for execution.
+// The command needs to be executed within a specified time frame. If the timeout is
+// exceeded, the command is automatically terminated and the ShardBalancer recalculates
+// to use the another CN to execute the command.
+message Operator {
+    OpType         Type           = 1;
     TableShard     TableShard     = 2 [(gogoproto.nullable) = false];
+    uint64         TableID        = 3;
 }
 
 message CreateShardsRequest {
@@ -145,5 +151,5 @@ message HeartbeatRequest {
 }
 
 message HeartbeatResponse {
-    repeated Cmd        CMDs   = 1 [(gogoproto.nullable) = false];
+    repeated Operator Operators = 1 [(gogoproto.nullable) = false];
 }

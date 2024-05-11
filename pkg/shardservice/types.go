@@ -15,47 +15,9 @@
 package shardservice
 
 import (
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
-
-var (
-	defaultLockListenAddress = "127.0.0.1:6004"
-	defaultMaxDownTime       = time.Minute
-	defaultMaxScheduleTables = 1
-	defaultMaxFreezeTime     = time.Minute
-	defaultScheduleDuration  = time.Second
-	defaultOperatorTimeout   = time.Second * 10
-)
-
-// Shard config
-type Config struct {
-	// ServiceID service id
-	ServiceID string `toml:"-"`
-	// RPC rpc config
-	RPC morpc.Config `toml:"-"`
-
-	// ListenAddress shard service listen address for receiving lock requests
-	ListenAddress string `toml:"listen-address"`
-	// ServiceAddress service address for communication, if this address is not set, use
-	// ListenAddress as the communication address.
-	ServiceAddress string `toml:"service-address"`
-	// MaxDownTime max down time for CN, if this value exceeded, the CN will be considered
-	// as down. And all shards on this CN will be migrated to other CNs.
-	MaxDownTime toml.Duration `toml:"max-down-time"`
-	// MaxScheduleTables how many tables's shards can be scheduled by balancer at once.
-	MaxScheduleTablesOnce int `toml:"max-schedule-tables-once"`
-	// CNFreezeTimeout max freeze time for CN can be scheduled by balancer again.
-	CNFreezeTimeout toml.Duration `toml:"max-cn-freeze-time"`
-	// ScheduleDuration how often to schedule shards on CNs.
-	ScheduleDuration toml.Duration `toml:"schedule-duration"`
-	// OperatorTimeout operator timeout
-	OperatorTimeout toml.Duration `toml:"operator-timeout"`
-}
 
 // ShardServer used for balance and allocate shards on their cns.
 // ShardServer adheres to the following principles:
@@ -113,15 +75,6 @@ type scheduler interface {
 type Env interface {
 	HasCN(serviceID string) bool
 	Available(tenantID uint32, cn string) bool
-}
-
-// operator is a description of a command that needs to be sent down to CN for execution.
-// The command needs to be executed within a specified time frame. If the timeout is
-// exceeded, the command is automatically terminated and the ShardBalancer recalculates
-// to use the another CN to execute the command.
-type operator struct {
-	createAt time.Time
-	cmd      pb.Cmd
 }
 
 // filter is used to filter out or select certain CNs when selecting CNs for ShardBalance.

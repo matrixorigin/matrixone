@@ -44,11 +44,12 @@ type balanceScheduler struct {
 	maxTablesPerSchedule int
 }
 
-func newBalanceScheduler(maxTablesPerSchedule int) scheduler {
+func newBalanceScheduler(
+	maxTablesPerSchedule int,
+	maxFreezeCNTimeout time.Duration,
+) scheduler {
 	s := &balanceScheduler{
-		freezeFilter: &freezeFilter{
-			freeze: make(map[string]time.Time),
-		},
+		freezeFilter:         newFreezeFilter(maxFreezeCNTimeout),
 		stateFilter:          &stateFilter{},
 		maxTablesPerSchedule: maxTablesPerSchedule,
 	}

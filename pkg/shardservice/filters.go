@@ -23,6 +23,13 @@ type freezeFilter struct {
 	maxFreezeTime time.Duration
 }
 
+func newFreezeFilter(maxFreezeTime time.Duration) *freezeFilter {
+	return &freezeFilter{
+		freeze:        make(map[string]time.Time),
+		maxFreezeTime: maxFreezeTime,
+	}
+}
+
 func (f *freezeFilter) filter(
 	r *rt,
 	cns []*cn,

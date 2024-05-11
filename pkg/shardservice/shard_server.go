@@ -27,20 +27,22 @@ import (
 type ServerOption func(*server)
 
 type server struct {
-	cfg        Config
-	r          *rt
-	env        Env
-	schedulers []scheduler
-	filters    []filter
-	stopper    *stopper.Stopper
-	rpc        morpc.MethodBasedServer[*pb.Request, *pb.Response]
+	cfg             Config
+	initBindVersion uint64
+	r               *rt
+	env             Env
+	schedulers      []scheduler
+	filters         []filter
+	stopper         *stopper.Stopper
+	rpc             morpc.MethodBasedServer[*pb.Request, *pb.Response]
 }
 
 func NewShardServer(
 	cfg Config,
-	env Env,
 	opts ...ServerOption,
 ) ShardServer {
+	cfg.Validate()
+	env := NewEnv(cfg.SelectCNLabel)
 	s := &server{
 		cfg: cfg,
 		env: env,
@@ -49,6 +51,7 @@ func NewShardServer(
 			"shard-server",
 			stopper.WithLogger(getLogger().RawLogger()),
 		),
+		initBindVersion: uint64(time.Now().UnixNano()),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -81,7 +84,10 @@ func (s *server) initSchedulers() {
 		s.schedulers,
 		newDownScheduler(),
 		newAllocateScheduler(),
-		newBalanceScheduler(s.cfg.MaxScheduleTablesOnce))
+		newBalanceScheduler(
+			s.cfg.MaxScheduleTables,
+			s.cfg.FreezeCNTimeout.Duration,
+		))
 }
 
 func (s *server) initRPC() {
@@ -119,7 +125,7 @@ func (s *server) handleHeartbeat(
 	req *pb.Request,
 	resp *pb.Response,
 ) error {
-	resp.Heartbeat.CMDs = s.r.heartbeat(
+	resp.Heartbeat.Operators = s.r.heartbeat(
 		req.Heartbeat.CN,
 		req.Heartbeat.Shards,
 	)
@@ -152,7 +158,7 @@ func (s *server) handleCreateShards(
 			pb.TableShard{
 				TableID:       id,
 				State:         pb.ShardState_Allocating,
-				BindVersion:   0,
+				BindVersion:   s.initBindVersion,
 				ShardsVersion: v.Version,
 				ShardID:       uint64(i),
 			})

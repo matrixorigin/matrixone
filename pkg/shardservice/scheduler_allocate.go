@@ -67,9 +67,7 @@ func (s *allocateScheduler) doAllocate(
 		if t.shards[i].CN == "" ||
 			t.shards[i].State == pb.ShardState_Tombstone {
 			cn := getCN()
-			t.shards[i].CN = cn
-			t.shards[i].State = pb.ShardState_Allocated
-			t.shards[i].BindVersion++
+			t.allocate(i, cn)
 			r.addOpLocked(cn, newAddOp(t.shards[i]))
 		}
 	}
