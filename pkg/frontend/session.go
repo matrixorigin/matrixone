@@ -1699,7 +1699,9 @@ func (ses *Session) StatusSession() *status.Session {
 	}
 }
 
-func (ses *Session) getStatusWithTxnEnd(ctx context.Context) uint16 {
+// getStatusAfterTxnIsEnded
+// !!! only used after the txn is ended.
+func (ses *Session) getStatusAfterTxnIsEnded(ctx context.Context) uint16 {
 	ses.maybeUnsetTxnStatus(ctx)
 	return extendStatus(ses.GetTxnHandler().GetServerStatus())
 }
