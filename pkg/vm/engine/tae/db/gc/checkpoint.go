@@ -463,16 +463,13 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 	sort.Slice(ckpSnapList, func(i, j int) bool {
 		return ckpSnapList[i].Less(&ckpSnapList[j])
 	})
-	isRefers := false
-	for _, ckp := range ckps {
+	for i := len(ckps) - 1; i >= 0; i-- {
+		ckp := ckps[i]
 		end := ckp.GetEnd()
 		if end.Less(&stage) {
 			if isSnapshotCKPRefers(ckp, ckpSnapList) {
-				isRefers = true
-				continue
-			}
-			if isRefers && ckp.GetType() == checkpoint.ET_Global {
-				continue
+				logutil.Infof("isSnapshotCKPRefers GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
+				break
 			}
 			logutil.Infof("GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
 			locations, err := logtail.LoadCheckpointLocations(c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
@@ -487,7 +484,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 			}
 			deleteFiles = append(deleteFiles, ckp.GetTNLocation().Name().String())
 		}
-
 	}
 	for i := 0; i < idx+1; i++ {
 		end := files[i].GetEnd()
