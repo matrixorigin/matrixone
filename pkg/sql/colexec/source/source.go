@@ -36,23 +36,22 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "SourcePrepare")
 	defer span.End()
 
-	p := arg
-	p.attrs = make([]string, len(p.TblDef.Cols))
-	p.types = make([]types.Type, len(p.TblDef.Cols))
-	p.Configs = make(map[string]interface{})
-	for i, col := range p.TblDef.Cols {
-		p.attrs[i] = col.Name
-		p.types[i] = types.Type{
+	arg.attrs = make([]string, len(arg.TblDef.Cols))
+	arg.types = make([]types.Type, len(arg.TblDef.Cols))
+	arg.Configs = make(map[string]interface{})
+	for i, col := range arg.TblDef.Cols {
+		arg.attrs[i] = col.Name
+		arg.types[i] = types.Type{
 			Oid:   types.T(col.Typ.Id),
 			Scale: col.Typ.Scale,
 			Width: col.Typ.Width,
 		}
 	}
-	for _, def := range p.TblDef.Defs {
+	for _, def := range arg.TblDef.Defs {
 		switch v := def.Def.(type) {
 		case *plan.TableDef_DefType_Properties:
 			for _, x := range v.Properties.Properties {
-				p.Configs[x.Key] = x.Value
+				arg.Configs[x.Key] = x.Value
 			}
 		}
 	}
