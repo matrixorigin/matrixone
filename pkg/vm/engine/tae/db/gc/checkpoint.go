@@ -463,15 +463,8 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		(c.GeteCkpStage() != nil && c.GeteCkpStage().GreaterEq(&stage)) {
 		return nil
 	}
-	logutil.Infof("mergeCheckpointFiles stage: %v", stage.ToString())
-	files, idx, err := checkpoint.ListSnapshotMeta(c.ctx, c.fs.Service, stage, nil)
-	if err != nil {
-		return err
-	}
-	if len(files) == 0 {
-		return nil
-	}
 	ok, files, idx, err := getAllowedMergeFiles(c.ctx, c.fs.Service, stage, nil)
+	logutil.Infof("mergeCheckpointFiles stage: %v, idx : %d ", stage.ToString(), idx)
 	if err != nil {
 		return err
 	}

@@ -93,6 +93,11 @@ func ListSnapshotMeta(
 		return metaFiles[i].end.Less(&metaFiles[j].end)
 	})
 
+	for i, file := range metaFiles {
+		logutil.Infof("metaFiles[%d]: %v", i, file.String())
+
+	}
+
 	if listFunc == nil {
 		listFunc = AllAfterAndGCheckpoint
 	}
