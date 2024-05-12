@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -512,6 +513,10 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 				}
 				return err
 			}
+			nameMeta := fmt.Sprintf("%s_%s_%s.%s",
+				checkpoint.PrefixMetadata, ckp.GetStart().ToString(),
+				ckp.GetEnd().ToString(), blockio.CheckpointExt)
+			deleteFiles = append(deleteFiles, nameMeta)
 			if i == len(ckps)-1 {
 				c.updateCkpGC(&end)
 			}
@@ -522,16 +527,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		}
 	}
 
-	for i := idx; i >= 0; i-- {
-		end := files[i].GetEnd()
-		if end.Less(&stage) {
-			if isSnapshotCKPRefers(files[i].GetStart(), end, ckpSnapList) {
-				logutil.Infof("isSnapshotCKPRefers2 GC checkpoint: %v, %v", files[i].GetStart().ToString(), files[i].GetEnd().ToString())
-				break
-			}
-			deleteFiles = append(deleteFiles, CKPMetaDir+files[i].GetName())
-		}
-	}
 	logutil.Infof("CKP GC: %v", deleteFiles)
 	if !c.disableGC {
 		err = c.fs.DelFiles(c.ctx, deleteFiles)
