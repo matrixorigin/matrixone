@@ -431,6 +431,10 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	return nil
 }
 
+// getAllowedMergeFiles returns the files that can be merged.
+// files: all checkpoint meta files before snapshot.
+// idxes: idxes is the index of the global checkpoint in files,
+// and the merge file will only process the files in one global checkpoint interval each time.
 func getAllowedMergeFiles(
 	ctx context.Context,
 	fs fileservice.FileService,
@@ -518,6 +522,15 @@ func (c *checkpointCleaner) getDeleteFile(
 				deleteFiles = append(deleteFiles, name)
 			}
 			deleteFiles = append(deleteFiles, ckp.GetTNLocation().Name().String())
+
+			if ckp.GetType() == checkpoint.ET_Global {
+				// After the global checkpoint is processed,
+				// subsequent checkpoints need to be processed in the next getDeleteFile
+				logutil.Info("[MergeCheckpoint]",
+					common.OperationField("GC Global checkpoint"),
+					common.OperandField(ckp.String()))
+				break
+			}
 		}
 	}
 	return deleteFiles, nil

@@ -212,7 +212,6 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		var objectStats objectio.ObjectStats
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
-		logutil.Infof("objectStats: %v", objectStats.String())
 		deleteTS := insDeleteTSs[i]
 		createTS := insCreateTSs[i]
 		if sm.objects[objectStats.ObjectName().SegmentId()] == nil {
