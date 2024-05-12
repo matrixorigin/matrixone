@@ -151,7 +151,6 @@ func ListSnapshotCheckpointWithMeta(
 	for i := range entries {
 		if !gcStage.IsEmpty() {
 			if entries[i].end.Less(&gcStage) {
-				logutil.Infof("gcStage: %v, entries[%d].end: %v", gcStage.ToString(), i, entries[i].String())
 				continue
 			}
 			return entries[i:], nil
