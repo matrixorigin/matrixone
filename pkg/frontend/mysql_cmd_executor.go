@@ -2811,7 +2811,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	defer func() {
 		execCtx.stmt = nil
 		execCtx.cw = nil
-		execCtx.proc = nil
 		execCtx.cws = nil
 		if !Cached {
 			for i := 0; i < len(cws); i++ {
