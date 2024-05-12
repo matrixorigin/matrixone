@@ -1059,7 +1059,7 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 					closeWithError(errStream, s.Proc.Reg.MergeReceivers[receiverIdx])
 					return
 				}
-				defer streamSender.Close(true)
+				defer streamSender.Close(false)
 
 				message := cnclient.AcquireMessage()
 				message.Id = streamSender.ID()
