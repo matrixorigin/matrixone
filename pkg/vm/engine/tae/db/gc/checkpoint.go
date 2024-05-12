@@ -910,7 +910,7 @@ func isSnapshotCKPRefers(start, end types.TS, snapVec []types.TS) bool {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
 		if snapTS.GreaterEq(&start) && snapTS.Less(&end) {
-			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v",
+			logutil.Debugf("isSnapshotRefers: %s, create %v, drop %v",
 				snapTS.ToString(), start.ToString(), end.ToString())
 			return true
 		} else if snapTS.Less(&start) {

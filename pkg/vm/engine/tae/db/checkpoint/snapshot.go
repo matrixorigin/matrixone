@@ -94,8 +94,8 @@ func ListSnapshotMeta(
 	})
 
 	for i, file := range metaFiles {
+		// TODO: remove log
 		logutil.Infof("metaFiles[%d]: %v", i, file.String())
-
 	}
 
 	if listFunc == nil {
