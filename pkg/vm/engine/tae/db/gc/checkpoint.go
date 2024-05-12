@@ -476,19 +476,29 @@ func (c *checkpointCleaner) getDeleteFile(
 		return nil, nil
 	}
 	deleteFiles := make([]string, 0)
+
+	for i := len(ckps) - 1; i >= 0; i-- {
+		// TODO: remove this log
+		logutil.Info("[MergeCheckpoint]",
+			common.OperationField("List Checkpoint"),
+			common.OperandField(ckps[i].String()))
+	}
+
 	for i := len(ckps) - 1; i >= 0; i-- {
 		ckp := ckps[i]
 		end := ckp.GetEnd()
 		if end.Less(&stage) {
-			if c.GeteCkpStage() != nil && c.GeteCkpStage().Less(&end) {
-				logutil.Infof("mergeCheckpointFiles GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
-				//continue
-			}
-			if isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) && ckp.GetType() != checkpoint.ET_Global {
-				logutil.Infof("isSnapshotCKPRefers GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
+			if isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) &&
+				ckp.GetType() != checkpoint.ET_Global {
+				// TODO: remove this log
+				logutil.Info("[MergeCheckpoint]",
+					common.OperationField("isSnapshotCKPRefers"),
+					common.OperandField(ckp.String()))
 				break
 			}
-			logutil.Infof("GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
+			logutil.Info("[MergeCheckpoint]",
+				common.OperationField("GC checkpoint"),
+				common.OperandField(ckp.String()))
 			locations, err := logtail.LoadCheckpointLocations(
 				c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
 			if err != nil {
@@ -532,7 +542,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 	}
 	deleteFiles := make([]string, 0)
 	ckpSnapList := make([]types.TS, 0)
-	logutil.Infof("mergeCheckpointFiles snapshotList: %v", len(snapshotList))
 	for _, ts := range snapshotList {
 		ckpSnapList = append(ckpSnapList, ts...)
 	}
@@ -540,7 +549,10 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		return ckpSnapList[i].Less(&ckpSnapList[j])
 	})
 	for _, idx := range idxes {
-		logutil.Infof("mergeCheckpointFiles stage: %v, idx : %d ", stage.ToString(), idx)
+		logutil.Info("[MergeCheckpoint]",
+			common.OperationField("MergeCheckpointFiles"),
+			common.OperandField(stage.ToString()),
+			common.OperandField(idx))
 		delFiles, err := c.getDeleteFile(c.ctx, c.fs.Service, files, idx, *ckpGC, stage, ckpSnapList)
 		if err != nil {
 			return err
@@ -549,7 +561,9 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		deleteFiles = append(deleteFiles, delFiles...)
 	}
 
-	logutil.Infof("CKP GC: %v", deleteFiles)
+	logutil.Info("[MergeCheckpoint]",
+		common.OperationField("CKP GC"),
+		common.OperandField(deleteFiles))
 	if !c.disableGC {
 		err = c.fs.DelFiles(c.ctx, deleteFiles)
 		if err != nil {
