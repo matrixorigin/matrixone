@@ -500,7 +500,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 				logutil.Infof("mergeCheckpointFiles GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
 				//continue
 			}
-			if isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) {
+			if isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) && ckp.GetType() != checkpoint.ET_Global {
 				logutil.Infof("isSnapshotCKPRefers GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
 				break
 			}
