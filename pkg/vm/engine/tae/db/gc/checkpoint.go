@@ -435,7 +435,8 @@ func getAllowedMergeFiles(
 	ctx context.Context,
 	fs fileservice.FileService,
 	snapshot types.TS,
-	listFunc checkpoint.GetCheckpointRange) (ok bool, files []*checkpoint.MetaFile, idx int, err error) {
+	listFunc checkpoint.GetCheckpointRange) (ok bool, files []*checkpoint.MetaFile, idxes []int, err error) {
+	var idx int
 	files, idx, err = checkpoint.ListSnapshotMeta(ctx, fs, snapshot, listFunc)
 	if err != nil {
 		return
@@ -443,55 +444,38 @@ func getAllowedMergeFiles(
 	if len(files) == 0 {
 		return
 	}
-	stage := 0
+	idxes = make([]int, 0)
 	for i := 0; i <= idx; i++ {
 		start := files[i].GetStart()
 		if start.IsEmpty() {
-			stage = i
+			if i != 0 {
+				idxes = append(idxes, i-1)
+			}
 		}
 	}
-	if stage == 0 {
+	if len(idxes) == 0 {
 		return
 	}
 	ok = true
-	idx = stage - 1
 	return
 }
 
-func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList map[uint32][]types.TS) error {
-	if stage.IsEmpty() ||
-		(c.GeteCkpStage() != nil && c.GeteCkpStage().GreaterEq(&stage)) {
-		return nil
-	}
-	ok, files, idx, err := getAllowedMergeFiles(c.ctx, c.fs.Service, stage, nil)
-	logutil.Infof("mergeCheckpointFiles stage: %v, idx : %d ", stage.ToString(), idx)
+func (c *checkpointCleaner) getDeleteFile(
+	ctx context.Context,
+	fs fileservice.FileService,
+	files []*checkpoint.MetaFile,
+	idx int,
+	ts, stage types.TS,
+	ckpSnapList []types.TS,
+) ([]string, error) {
+	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(ctx, fs, files, idx, ts, true)
 	if err != nil {
-		return err
-	}
-	if !ok {
-		c.updateCkpStage(&stage)
-		return nil
-	}
-	ckpGC := c.GeteCkpGC()
-	if ckpGC == nil {
-		ckpGC = new(types.TS)
-	}
-	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(c.ctx, c.fs.Service, files, idx, *ckpGC, true)
-	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(ckps) == 0 {
-		return nil
+		return nil, nil
 	}
 	deleteFiles := make([]string, 0)
-	ckpSnapList := make([]types.TS, 0)
-	logutil.Infof("mergeCheckpointFiles snapshotList: %v", len(snapshotList))
-	for _, ts := range snapshotList {
-		ckpSnapList = append(ckpSnapList, ts...)
-	}
-	sort.Slice(ckpSnapList, func(i, j int) bool {
-		return ckpSnapList[i].Less(&ckpSnapList[j])
-	})
 	for i := len(ckps) - 1; i >= 0; i-- {
 		ckp := ckps[i]
 		end := ckp.GetEnd()
@@ -505,14 +489,17 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 				break
 			}
 			logutil.Infof("GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
-			locations, err := logtail.LoadCheckpointLocations(c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
+			locations, err := logtail.LoadCheckpointLocations(
+				c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 					continue
 				}
-				return err
+				return nil, err
 			}
-			nameMeta := blockio.EncodeCheckpointMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, ckp.GetStart(), ckp.GetEnd())
+			nameMeta := blockio.EncodeCheckpointMetadataFileName(
+				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
+				ckp.GetStart(), ckp.GetEnd())
 			deleteFiles = append(deleteFiles, nameMeta)
 			if i == len(ckps)-1 {
 				c.updateCkpGC(&end)
@@ -522,6 +509,44 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 			}
 			deleteFiles = append(deleteFiles, ckp.GetTNLocation().Name().String())
 		}
+	}
+	return deleteFiles, nil
+}
+
+func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList map[uint32][]types.TS) error {
+	if stage.IsEmpty() ||
+		(c.GeteCkpStage() != nil && c.GeteCkpStage().GreaterEq(&stage)) {
+		return nil
+	}
+	ok, files, idxes, err := getAllowedMergeFiles(c.ctx, c.fs.Service, stage, nil)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		c.updateCkpStage(&stage)
+		return nil
+	}
+	ckpGC := c.GeteCkpGC()
+	if ckpGC == nil {
+		ckpGC = new(types.TS)
+	}
+	deleteFiles := make([]string, 0)
+	ckpSnapList := make([]types.TS, 0)
+	logutil.Infof("mergeCheckpointFiles snapshotList: %v", len(snapshotList))
+	for _, ts := range snapshotList {
+		ckpSnapList = append(ckpSnapList, ts...)
+	}
+	sort.Slice(ckpSnapList, func(i, j int) bool {
+		return ckpSnapList[i].Less(&ckpSnapList[j])
+	})
+	for _, idx := range idxes {
+		logutil.Infof("mergeCheckpointFiles stage: %v, idx : %d ", stage.ToString(), idx)
+		delFiles, err := c.getDeleteFile(c.ctx, c.fs.Service, files, idx, *ckpGC, stage, ckpSnapList)
+		if err != nil {
+			return err
+		}
+		ckpGC = new(types.TS)
+		deleteFiles = append(deleteFiles, delFiles...)
 	}
 
 	logutil.Infof("CKP GC: %v", deleteFiles)
