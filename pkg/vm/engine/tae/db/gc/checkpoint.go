@@ -513,9 +513,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 				}
 				return err
 			}
-			nameMeta := fmt.Sprintf("%s_%s_%s.%s",
-				checkpoint.PrefixMetadata, ckp.GetStart().ToString(),
-				ckp.GetEnd().ToString(), blockio.CheckpointExt)
+			nameMeta := blockio.EncodeCheckpointMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, ckp.GetStart(), ckp.GetEnd())
 			deleteFiles = append(deleteFiles, nameMeta)
 			if i == len(ckps)-1 {
 				c.updateCkpGC(&end)
