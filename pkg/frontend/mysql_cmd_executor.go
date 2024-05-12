@@ -2809,6 +2809,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	canCache := true
 	Cached := false
 	defer func() {
+		execCtx.stmt = nil
+		execCtx.cw = nil
+		execCtx.proc = nil
+		execCtx.cws = nil
 		if !Cached {
 			for i := 0; i < len(cws); i++ {
 				cws[i].Free()
