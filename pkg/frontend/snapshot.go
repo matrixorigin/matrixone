@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"

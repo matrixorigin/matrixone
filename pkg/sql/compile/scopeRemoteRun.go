@@ -754,11 +754,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
-			SchemaName: t.SchemaName,
-			TableDef:   t.TableDef,
-			HasAutoCol: t.HasAutoCol,
-			IsUpdate:   t.IsUpdate,
-			Attrs:      t.Attrs,
+			SchemaName:        t.SchemaName,
+			TableDef:          t.TableDef,
+			HasAutoCol:        t.HasAutoCol,
+			IsUpdate:          t.IsUpdate,
+			Attrs:             t.Attrs,
+			EstimatedRowCount: int64(t.EstimatedRowCount),
 		}
 	case *lockop.Argument:
 		in.LockOp = &pipeline.LockOp{
@@ -899,7 +900,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			IsShuffle:              t.IsShuffle,
 		}
 	case *limit.Argument:
-		in.Limit = t.Limit
+		in.Limit = t.LimitExpr
 	case *loopanti.Argument:
 		in.Anti = &pipeline.AntiJoin{
 			Result: t.Result,
@@ -943,7 +944,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Result: t.Result,
 		}
 	case *offset.Argument:
-		in.Offset = t.Offset
+		in.Offset = t.OffsetExpr
 	case *order.Argument:
 		in.OrderBy = t.OrderBySpec
 	case *product.Argument:
@@ -988,7 +989,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			HashOnPk:               t.HashOnPK,
 		}
 	case *top.Argument:
-		in.Limit = uint64(t.Limit)
+		in.Limit = t.Limit
 		in.OrderBy = t.Fs
 	// we reused ANTI to store the information here because of the lack of related structure.
 	case *intersect.Argument: // 1
@@ -1012,7 +1013,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *mergeoffset.Argument:
 		in.Offset = t.Offset
 	case *mergetop.Argument:
-		in.Limit = uint64(t.Limit)
+		in.Limit = t.Limit
 		in.OrderBy = t.Fs
 	case *mergeorder.Argument:
 		in.OrderBy = t.OrderBySpecs
@@ -1135,6 +1136,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Attrs = t.GetAttrs()
 		arg.HasAutoCol = t.GetHasAutoCol()
 		arg.IsUpdate = t.GetIsUpdate()
+		arg.EstimatedRowCount = int64(t.GetEstimatedRowCount())
 		v.Arg = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()
@@ -1416,7 +1418,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		v.Arg = arg
 	case vm.Top:
 		v.Arg = top.NewArgument().
-			WithLimit(int64(opr.Limit)).
+			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
 	// should change next day?
 	case vm.Intersect:
@@ -1447,7 +1449,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		v.Arg = mergeoffset.NewArgument().WithOffset(opr.Offset)
 	case vm.MergeTop:
 		v.Arg = mergetop.NewArgument().
-			WithLimit(int64(opr.Limit)).
+			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
 	case vm.MergeOrder:
 		arg := mergeorder.NewArgument()

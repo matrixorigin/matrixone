@@ -100,6 +100,7 @@ func init() {
 		"chain":                      CHAIN,
 		"client":                     CLIENT,
 		"san":                        SAN,
+		"strict":                     STRICT,
 		"substr":                     SUBSTR,
 		"substring":                  SUBSTRING,
 		"subject":                    SUBJECT,
