@@ -15,6 +15,7 @@
 package process
 
 import (
+	"context"
 	"sync"
 )
 
@@ -46,9 +47,9 @@ func NewMessageBoard() *MessageBoard {
 	m := &MessageBoard{
 		Messages: make([]*Message, 0, 1024),
 		RwMutex:  &sync.RWMutex{},
-		Mutex:    &sync.Mutex{},
 	}
-	m.Cond = sync.NewCond(m.Mutex)
+	m.Cond = make(chan chan bool, 1)
+	m.Cond <- nil
 	return m
 }
 
@@ -69,8 +70,7 @@ type Message interface {
 type MessageBoard struct {
 	Messages []*Message
 	RwMutex  *sync.RWMutex // for nonblock message
-	Mutex    *sync.Mutex   // for block message
-	Cond     *sync.Cond    //for block message
+	Cond     chan chan bool
 }
 
 func (m *MessageBoard) Reset() {
@@ -90,19 +90,17 @@ type MessageReceiver struct {
 func (proc *Process) SendMessage(m Message) {
 	mb := proc.MessageBoard
 	if m.GetReceiverAddr().CnAddr == CURRENTCN { // message for current CN
+		mb.RwMutex.Lock()
+		mb.Messages = append(mb.Messages, &m)
 		if m.NeedBlock() {
 			// broadcast for block message
-			mb.Cond.L.Lock()
-			mb.RwMutex.Lock()
-			mb.Messages = append(mb.Messages, &m)
-			mb.RwMutex.Unlock()
-			mb.Cond.Broadcast()
-			mb.Cond.L.Unlock()
-		} else {
-			mb.RwMutex.Lock()
-			mb.Messages = append(mb.Messages, &m)
-			mb.RwMutex.Unlock()
+			ch := <-mb.Cond
+			mb.Cond <- nil
+			if ch != nil {
+				close(ch)
+			}
 		}
+		mb.RwMutex.Unlock()
 	} else {
 		//todo: send message to other CN, need to lookup cnlist
 		panic("unsupported message yet!")
@@ -153,23 +151,35 @@ func (mr *MessageReceiver) Free() {
 	mr.received = nil
 }
 
-func (mr *MessageReceiver) ReceiveMessage(needBlock bool) []Message {
+func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) ([]Message, bool) {
 	var result = mr.receiveMessageNonBlock()
 	if !needBlock || len(result) > 0 {
-		return result
+		return result, false
 	}
 	for len(result) == 0 {
-		mr.mb.Cond.L.Lock()
+		mr.mb.RwMutex.RLock()
+		defer mr.mb.RwMutex.RUnlock()
 		result = mr.receiveMessageNonBlock()
 		if len(result) > 0 {
-			mr.mb.Cond.L.Unlock()
-			return result
+			return result, false
 		}
-		mr.mb.Cond.Wait()
-		mr.mb.Cond.L.Unlock()
-		result = mr.receiveMessageNonBlock()
+
+		wait := func() chan bool {
+			ch := <-mr.mb.Cond
+			if ch == nil {
+				ch = make(chan bool)
+			}
+			mr.mb.Cond <- ch
+			return ch
+		}
+		select {
+		case <-wait():
+			result = mr.receiveMessageNonBlock()
+		case <-ctx.Done():
+			return result, true
+		}
 	}
-	return result
+	return result, false
 }
 
 func MatchAddress(m Message, raddr *MessageAddress) bool {
