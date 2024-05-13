@@ -43,7 +43,6 @@ func MockTxnWithStartTS(ts types.TS) *txnbase.Txn {
 }
 
 type DeleteChain struct {
-	*sync.RWMutex
 	*txnbase.MVCCChain[*DeleteNode]
 	mvcc          *MVCCHandle
 	links         map[uint32]*DeleteNode
@@ -57,8 +56,7 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 		rwlocker = new(sync.RWMutex)
 	}
 	chain := &DeleteChain{
-		RWMutex:       rwlocker,
-		MVCCChain:     txnbase.NewMVCCChain((*DeleteNode).Less, NewEmptyDeleteNode),
+		MVCCChain:     txnbase.NewMVCCChain((*DeleteNode).Less, NewEmptyDeleteNode, rwlocker),
 		links:         make(map[uint32]*DeleteNode),
 		mvcc:          mvcc,
 		mask:          &nulls.Bitmap{},

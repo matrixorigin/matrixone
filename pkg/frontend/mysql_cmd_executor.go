@@ -2809,6 +2809,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	canCache := true
 	Cached := false
 	defer func() {
+		execCtx.stmt = nil
+		execCtx.cw = nil
+		execCtx.cws = nil
 		if !Cached {
 			for i := 0; i < len(cws); i++ {
 				cws[i].Free()
@@ -3403,7 +3406,7 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 	return
 }
 
-var sqlQueryIgnoreExecPlan = []byte(`{"code":200,"message":"sql query ignore execution plan"}`)
+var sqlQueryIgnoreExecPlan = []byte(`{}`)
 var sqlQueryNoRecordExecPlan = []byte(`{"code":200,"message":"sql query no record execution plan"}`)
 
 func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.StatsArray, stats motrace.Statistic) {
