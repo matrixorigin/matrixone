@@ -202,7 +202,6 @@ const (
 	STDDEV_SAMPLE
 	SUBSTR
 	SUM
-	SUM2
 	SYSDATE
 	GROUP_CONCAT
 	TAN
@@ -439,7 +438,6 @@ var functionIdRegister = map[string]int32{
 	"max":                   MAX,
 	"min":                   MIN,
 	"sum":                   SUM,
-	"sum2":                  SUM2,
 	"group_concat":          GROUP_CONCAT,
 	"avg":                   AVG,
 	"count":                 COUNT,

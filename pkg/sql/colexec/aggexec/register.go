@@ -97,8 +97,6 @@ var (
 	multiAgg   = make(map[int64]bool)
 	specialAgg = make(map[int64]bool)
 
-	singleAggNewVersion = make(map[int64]bool)
-
 	// agg implementation map.
 	registeredAggFunctions            = make(map[aggKey]aggImplementation)
 	registeredMultiColumnAggFunctions = make(map[aggKey]multiColumnAggImplementation)

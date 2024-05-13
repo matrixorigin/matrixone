@@ -65,7 +65,6 @@ func RegisterAggFromFixedRetFixed[from, to types.FixedSizeTExceptStrType](
 	}
 
 	singleAgg[basicInformation.id] = true
-	singleAggNewVersion[basicInformation.id] = true
 	return
 }
 
