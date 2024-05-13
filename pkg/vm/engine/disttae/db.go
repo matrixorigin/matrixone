@@ -393,48 +393,33 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 
 func (e *Engine) getOrCreateSnapPart(
 	ctx context.Context,
-	databaseId uint64,
-	dbName string,
-	tableId uint64,
-	tblName string,
-	primaySeqnum int,
+	tbl *txnTable,
 	ts types.TS) (*logtailreplay.Partition, error) {
-
-	//First, check whether the latest partition is available.
-	e.Lock()
-	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
-	e.Unlock()
-	if ok && partition.CanServe(ts) {
-		return partition, nil
-	}
-
-	//Then, check whether the snapshot partitions is available.
+	//check whether the snapshot partitions are available for reuse.
 	e.mu.Lock()
-	snaps, ok := e.mu.snapParts[[2]uint64{databaseId, tableId}]
+	tblSnaps, ok := e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}]
 	if !ok {
-		e.mu.snapParts[[2]uint64{databaseId, tableId}] = &struct {
+		e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}] = &struct {
 			sync.Mutex
 			snaps []*logtailreplay.Partition
 		}{}
-		snaps = e.mu.snapParts[[2]uint64{databaseId, tableId}]
+		tblSnaps = e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}]
 	}
 	e.mu.Unlock()
 
-	snaps.Lock()
-	defer snaps.Unlock()
-	for _, snap := range snaps.snaps {
+	tblSnaps.Lock()
+	defer tblSnaps.Unlock()
+	for _, snap := range tblSnaps.snaps {
 		if snap.CanServe(ts) {
 			return snap, nil
 		}
 	}
+
 	//new snapshot partition and apply checkpoints into it.
 	snap := logtailreplay.NewPartition()
 	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
 	//      we should init the partition,ref to engine.init
-	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, tableId, nil)
-	if ckps == nil {
-		return nil, moerr.NewInternalErrorNoCtx("No checkpoints for snapshot read")
-	}
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, tbl.tableId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -448,10 +433,10 @@ func (e *Engine) getOrCreateSnapPart(
 		entries, closeCBs, err := logtail.LoadCheckpointEntries(
 			ctx,
 			locations,
-			tableId,
-			tblName,
-			databaseId,
-			dbName,
+			tbl.tableId,
+			tbl.tableName,
+			tbl.db.databaseId,
+			tbl.db.databaseName,
 			e.mp,
 			e.fs)
 		if err != nil {
@@ -463,26 +448,46 @@ func (e *Engine) getOrCreateSnapPart(
 			}
 		}()
 		for _, entry := range entries {
-			if err = consumeEntry(ctx, primaySeqnum, e, nil, state, entry); err != nil {
+			if err = consumeEntry(
+				ctx,
+				tbl.primarySeqnum,
+				e,
+				nil,
+				state,
+				entry); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+	if snap.CanServe(ts) {
+		tblSnaps.snaps = append(tblSnaps.snaps, snap)
+		return snap, nil
+	}
+
 	start, end := snap.GetDuration()
-	if ts.Greater(&end) || ts.Less(&start) {
+	//if has no checkpoints or ts > snap.end, use latest partition.
+	if snap.IsEmpty() || ts.Greater(&end) {
+		err := tbl.updateLogtail(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId), nil
+	}
+	if ts.Less(&start) {
 		return nil, moerr.NewInternalErrorNoCtx(
-			"Invalid checkpoints for snapshot read,snapshot:%s, start:%s, end:%s",
+			"No valid checkpoints for snapshot read,maybe snapshot is too old, "+
+				"snapshot:%s, start:%s, end:%s",
 			ts.ToTimestamp().DebugString(),
 			start.ToTimestamp().DebugString(),
 			end.ToTimestamp().DebugString())
 	}
-	snaps.snaps = append(snaps.snaps, snap)
-
-	return snap, nil
+	panic("impossible path")
 }
 
-func (e *Engine) getOrCreateLatestPart(databaseId, tableId uint64) *logtailreplay.Partition {
+func (e *Engine) getOrCreateLatestPart(
+	databaseId,
+	tableId uint64) *logtailreplay.Partition {
 	e.Lock()
 	defer e.Unlock()
 	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
@@ -493,7 +498,9 @@ func (e *Engine) getOrCreateLatestPart(databaseId, tableId uint64) *logtailrepla
 	return partition
 }
 
-func (e *Engine) lazyLoadLatestCkp(ctx context.Context, tbl *txnTable) (*logtailreplay.Partition, error) {
+func (e *Engine) lazyLoadLatestCkp(
+	ctx context.Context,
+	tbl *txnTable) (*logtailreplay.Partition, error) {
 	part := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
 	cache := e.getLatestCatalogCache()
 
@@ -531,6 +538,9 @@ func (e *Engine) lazyLoadLatestCkp(ctx context.Context, tbl *txnTable) (*logtail
 	return part, nil
 }
 
-func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {
+func (e *Engine) UpdateOfPush(
+	ctx context.Context,
+	databaseId,
+	tableId uint64, ts timestamp.Timestamp) error {
 	return e.pClient.TryToSubscribeTable(ctx, databaseId, tableId)
 }
