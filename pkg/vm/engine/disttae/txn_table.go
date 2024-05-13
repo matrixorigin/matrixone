@@ -2167,10 +2167,9 @@ func (tbl *txnTable) tryConstructPrimaryKeyIndexIter(
 
 		put.Put()
 
-		debug := false
 		iter = state.NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
-			logtailreplay.ExactIn(encodes, debug),
+			logtailreplay.ExactIn(encodes),
 		)
 	}
 
