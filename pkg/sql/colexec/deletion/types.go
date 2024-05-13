@@ -155,6 +155,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			arg.ctr.partitionId_blockId_deltaLoc = nil
 			arg.ctr.blockId_type = nil
 			arg.ctr.pool = nil
+
+			arg.ctr = nil
 		}
 	}
 	if arg.resBat != nil {
