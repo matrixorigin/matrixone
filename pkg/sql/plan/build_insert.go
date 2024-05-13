@@ -721,48 +721,56 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			colName = catalog.IndexTableIndexColName
 		}
 
-		if rowsCount == 1 {
+		if rowsCount <= 3 {
 			// pk = a1 or pk = a2 or pk = a3
-			expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-				{
+			var orExpr *Expr
+			for i := 0; i < rowsCount; i++ {
+				expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
 					Typ: colTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
+							// ColPos: int32(pkOrderInTableDef),
 							ColPos: 0,
 							Name:   colName,
 						},
 					},
-				},
-				colExprs[0][0],
-			})
-			if err != nil {
-				return nil, err
+				}, colExprs[0][i]})
+				if err != nil {
+					return nil, err
+				}
+
+				if i == 0 {
+					orExpr = expr
+				} else {
+					orExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, expr})
+					if err != nil {
+						return nil, err
+					}
+				}
 			}
-			return []*Expr{expr}, err
+			return []*Expr{orExpr}, err
 		} else {
 			// pk in (a1, a2, a3)
 			// args in list must be constant
-			expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
-				{
-					Typ: colTyp,
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							ColPos: 0,
-							Name:   colName,
-						},
+			expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
+				Typ: colTyp,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						// ColPos: int32(pkOrderInTableDef),
+						ColPos: 0,
+						Name:   colName,
 					},
 				},
-				{
-					Typ: plan.Type{
-						Id: int32(types.T_tuple),
-					},
-					Expr: &plan.Expr_List{
-						List: &plan.ExprList{
-							List: colExprs[0],
-						},
+			}, {
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{
+						List: colExprs[0],
 					},
 				},
-			})
+				Typ: plan.Type{
+					Id: int32(types.T_tuple),
+				},
+			}})
 			if err != nil {
 				return nil, err
 			}
@@ -773,57 +781,81 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			return []*Expr{expr}, err
 		}
 	} else {
-		var colName string
-		var colPos int32
-		if forUniqueHiddenTable {
-			colName = catalog.IndexTableIndexColName
-			colPos = 0
-		} else {
-			colName = catalog.CPrimaryKeyColName
-			colPos = int32(len(tableDef.Pkey.Names))
-		}
-
-		names := make([]string, len(lmap.m))
-		for n, p := range lmap.m {
-			names[p.order] = n
-		}
-		toSerialBatch := bat.GetSubBatch(names)
-		// serialize
-		//  __cpkey__ in (serial(a1,b1,c1,d1),serial(a2,b2,c2,d2),xxx)
-		// processing composite primary key
-		vec, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID,
-			toSerialBatch.Vecs,
-			toSerialBatch.RowCount())
-		if err != nil {
-			return nil, err
-		}
-		vec.InplaceSort()
-		data, err := vec.MarshalBinary()
-		if err != nil {
-			return nil, err
-		}
-		var inExpr *Expr
-		if rowsCount == 1 {
-			inExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-				{
-					Typ: makeHiddenColTyp(),
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							ColPos: colPos,
-							Name:   colName,
+		if rowsCount <= 3 && !forUniqueHiddenTable {
+			// ppk1 = a1 and ppk2 = a2 or ppk1 = b1 and ppk2 = b2 or ppk1 = c1 and ppk2 = c2
+			var orExpr *Expr
+			var andExpr *Expr
+			for i := 0; i < rowsCount; i++ {
+				for _, pkLocationInfo = range lmap.m {
+					pkOrder := pkLocationInfo.order
+					pkColIdx := pkLocationInfo.index
+					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+						{
+							Typ: tableDef.Cols[pkColIdx].Typ,
+							Expr: &plan.Expr_Col{
+								Col: &ColRef{
+									ColPos: int32(pkOrder),
+									Name:   tableDef.Cols[pkColIdx].Name,
+								},
+							},
 						},
+						colExprs[pkOrder][i],
 					},
-				},
-				{
-					Typ:  makePlan2Type(vec.GetType()),
-					Expr: &plan.Expr_Lit{Lit: rule.GetConstantValue(vec, false, 0)},
-				},
-			})
+					)
+					if err != nil {
+						return nil, err
+					}
+					if andExpr == nil {
+						andExpr = eqExpr
+					} else {
+						andExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{andExpr, eqExpr})
+						if err != nil {
+							return nil, err
+						}
+					}
+				}
+				if i == 0 {
+					orExpr = andExpr
+				} else {
+					orExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, andExpr})
+					if err != nil {
+						return nil, err
+					}
+				}
+				andExpr = nil
+			}
+			return []*Expr{orExpr}, nil
+		} else {
+			var colName string
+			var colPos int32
+			if forUniqueHiddenTable {
+				colName = catalog.IndexTableIndexColName
+				colPos = 0
+			} else {
+				colName = catalog.CPrimaryKeyColName
+				colPos = int32(len(tableDef.Pkey.Names))
+			}
+
+			names := make([]string, len(lmap.m))
+			for n, p := range lmap.m {
+				names[p.order] = n
+			}
+			toSerialBatch := bat.GetSubBatch(names)
+			// serialize
+			//  __cpkey__ in (serial(a1,b1,c1,d1),serial(a2,b2,c2,d2),xxx)
+			// processing composite primary key
+			vec, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID,
+				toSerialBatch.Vecs,
+				toSerialBatch.RowCount())
 			if err != nil {
 				return nil, err
 			}
-		} else {
-			inExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
+			vec.InplaceSort()
+			data, err := vec.MarshalBinary()
+			if err != nil {
+				return nil, err
+			}
+			inExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
 				{
 					Typ: makeHiddenColTyp(),
 					Expr: &plan.Expr_Col{
@@ -848,14 +880,14 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			if err != nil {
 				return nil, err
 			}
-		}
 
-		filterExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, inExpr, proc, false)
-		if err != nil {
-			return nil, nil
-		}
+			filterExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, inExpr, proc, false)
+			if err != nil {
+				return nil, nil
+			}
 
-		return []*Expr{filterExpr}, nil
+			return []*Expr{filterExpr}, nil
+		}
 	}
 }
 
