@@ -92,7 +92,7 @@ func (replayer *Replayer) postReplayWal() {
 		}
 		return
 	}
-	processor.TombstoneFn=func(t data.Tombstone) error {
+	processor.TombstoneFn = func(t data.Tombstone) error {
 		t.UpgradeAllDeleteChain()
 		return nil
 	}

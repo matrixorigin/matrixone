@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
-
 func (catalog *Catalog) CheckMetadata() {
 	logutil.Infof("[MetadataCheck] Start")
 	p := &LoopProcessor{}
