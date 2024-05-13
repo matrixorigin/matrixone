@@ -5,6 +5,7 @@ create database if not exists db1;
 create table db1.t1 (a int);
 insert into db1.t1 values (1), (2), (3);
 create snapshot sn1 for account acc1;
+-- @ignore:1
 show snapshots;
 drop database db1;
 
@@ -63,6 +64,12 @@ select * from view_test2.v3;
 select * from view_test2.v4;
 select * from view_test3.v5;
 select * from view_test3.v6;
+
+drop database view_test1;
+drop database view_test2;
+drop database view_test3;
+drop snapshot sn1;
 -- @session
 
-# drop account acc1;
+drop snapshot syssn1;
+drop account acc1;
