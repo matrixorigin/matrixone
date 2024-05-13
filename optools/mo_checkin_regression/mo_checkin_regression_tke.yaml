@@ -132,6 +132,9 @@ spec:
       metricUpdateStorageUsageInterval = "15m"
       enableStmtMerge = true
       enableMetricToProm = true
+      [cn.txn]
+      enable-leak-check = 1
+      max-active-ages = "20m"
       [cn.txn.trace]
       buffer-size = 100000
       flush-bytes = "64M"
