@@ -104,33 +104,19 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 			logutil.Errorf("failed to unmarshal partition table: %v", err)
 			return nil, err
 		}
-		var cataChe *cache.CatalogCache
-		if !tbl.db.op.IsSnapOp() {
-			cataChe = e.getLatestCatalogCache()
-		} else {
-			cataChe, err = e.getOrCreateSnapCatalogCache(
-				ctx,
-				types.TimestampToTS(tbl.db.op.SnapshotTS()))
+		for _, partitionTableName := range partitionInfo.PartitionTableNames {
+			partitionTable, err := tbl.db.Relation(ctx, partitionTableName, nil)
 			if err != nil {
 				return nil, err
 			}
-		}
-		for _, partitionTableName := range partitionInfo.PartitionTableNames {
-			partitionTable := cataChe.GetTableByName(
-				tbl.db.databaseId, partitionTableName)
-			partitionsTableDef = append(partitionsTableDef, partitionTable.TableDef)
-
+			partitionsTableDef = append(partitionsTableDef, partitionTable.(*txnTable).tableDef)
 			var ps *logtailreplay.PartitionState
 			if !tbl.db.op.IsSnapOp() {
-				ps = e.getOrCreateLatestPart(tbl.db.databaseId, partitionTable.Id).Snapshot()
+				ps = e.getOrCreateLatestPart(tbl.db.databaseId, partitionTable.(*txnTable).tableId).Snapshot()
 			} else {
 				p, err := e.getOrCreateSnapPart(
 					ctx,
-					tbl.db.databaseId,
-					partitionTable.TableDef.GetDbName(),
-					partitionTable.Id,
-					partitionTable.TableDef.GetName(),
-					partitionTable.PrimarySeqnum,
+					partitionTable.(*txnTable),
 					types.TimestampToTS(tbl.db.op.SnapshotTS()),
 				)
 				if err != nil {
@@ -2253,12 +2239,9 @@ func (tbl *txnTable) getPartitionState(
 
 	// for snapshot txnOp
 	if tbl._partState.Load() == nil {
-		p, err := tbl.getTxn().engine.getOrCreateSnapPart(ctx,
-			tbl.db.databaseId,
-			tbl.db.databaseName,
-			tbl.tableId,
-			tbl.tableName,
-			tbl.primarySeqnum,
+		p, err := tbl.getTxn().engine.getOrCreateSnapPart(
+			ctx,
+			tbl,
 			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
 		if err != nil {
 			return nil, err
