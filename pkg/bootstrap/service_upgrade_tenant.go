@@ -19,20 +19,21 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"go.uber.org/zap"
 )
 
 // MaybeUpgradeTenant used to check the tenant need upgrade or not. If need upgrade, it will
 // upgrade the tenant immediately in current txn.
 func (s *service) MaybeUpgradeTenant(
 	ctx context.Context,
-	tenantFetchFunc func() (int32, string, error),
+	tenantFetchFunc func() (int64, string, error),
 	txnOp client.TxnOperator) (bool, error) {
 	tenantID, version, err := tenantFetchFunc()
 	if err != nil {
@@ -189,7 +190,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 					createVersion := createVersions[i]
 
 					getUpgradeLogger().Info("upgrade tenant",
-						zap.Int32("tenant", id),
+						zap.Int64("tenant", id),
 						zap.String("tenant-version", createVersion),
 						zap.String("upgrade", upgrade.String()))
 
@@ -199,13 +200,13 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 					}
 
 					getUpgradeLogger().Info("execute upgrade tenant",
-						zap.Int32("tenant", id),
+						zap.Int64("tenant", id),
 						zap.String("tenant-version", createVersion),
 						zap.String("upgrade", upgrade.String()))
 
 					if err := h.HandleTenantUpgrade(ctx, id, txn); err != nil {
 						getUpgradeLogger().Error("failed to execute upgrade tenant",
-							zap.Int32("tenant", id),
+							zap.Int64("tenant", id),
 							zap.String("tenant-version", createVersion),
 							zap.String("upgrade", upgrade.String()),
 							zap.Error(err))
@@ -214,14 +215,14 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 
 					if err := versions.UpgradeTenantVersion(id, h.Metadata().Version, txn); err != nil {
 						getUpgradeLogger().Error("failed to update upgrade tenant create version",
-							zap.Int32("tenant", id),
+							zap.Int64("tenant", id),
 							zap.String("upgrade", upgrade.String()),
 							zap.Error(err))
 						return err
 					}
 
 					getUpgradeLogger().Info("execute upgrade tenant completed",
-						zap.Int32("tenant", id),
+						zap.Int64("tenant", id),
 						zap.String("tenant-version", createVersion),
 						zap.String("upgrade", upgrade.String()))
 					updated++
@@ -233,8 +234,8 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 					return err
 				}
 				getUpgradeLogger().Info("tenant state updated",
-					zap.Int32("from", tenants[0]),
-					zap.Int32("to", tenants[len(tenants)-1]),
+					zap.Int64("from", tenants[0]),
+					zap.Int64("to", tenants[len(tenants)-1]),
 					zap.String("upgrade", upgrade.String()))
 
 				// update count, we need using select for update to avoid concurrent update
@@ -292,13 +293,13 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 
 func fetchTenants(
 	batch int,
-	fn func([]int32) error,
+	fn func([]int64) error,
 	txn executor.TxnExecutor) error {
-	last := int32(-1)
-	var ids []int32
+	last := int64(-1)
+	var ids []int64
 	for {
 		ids = ids[:0]
-		sql := fmt.Sprintf("select account_id from mo_account where account_id > %d order by account_id limit %d",
+		sql := fmt.Sprintf("select cast(account_id as bigint) from mo_account where account_id > %d order by account_id limit %d",
 			last,
 			batch)
 		res, err := txn.Exec(sql, executor.StatementOption{})
@@ -308,7 +309,7 @@ func fetchTenants(
 		n := 0
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
-				last = vector.GetFixedAt[int32](cols[0], i)
+				last = vector.GetFixedAt[int64](cols[0], i)
 				ids = append(ids, last)
 				n++
 			}

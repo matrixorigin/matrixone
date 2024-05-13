@@ -176,7 +176,7 @@ func (s *Stopper) RunNamedTask(name string, task func(context.Context)) error {
 	return nil
 }
 
-func (s *Stopper) RunNamedRetryTask(name string, accountId int32, retryLimit uint32, task func(context.Context, int32) error) error {
+func (s *Stopper) RunNamedRetryTask(name string, accountId int64, retryLimit uint32, task func(context.Context, int64) error) error {
 	// we use read lock here for avoid race
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -282,9 +282,9 @@ func (s *Stopper) doRunCancelableTask(ctx context.Context, taskID uint64, name s
 func (s *Stopper) doRunCancelableRetryTask(ctx context.Context,
 	taskID uint64,
 	name string,
-	accountId int32,
+	accountId int64,
 	retryLimit uint32,
-	task func(context.Context, int32) error) {
+	task func(context.Context, int64) error) {
 	s.setupTask(taskID, name)
 	go func() {
 		defer func() {

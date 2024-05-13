@@ -307,8 +307,8 @@ func (s *service) SessionMgr() *queryservice.SessionManager {
 
 func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
 	finalVersion := s.GetFinalVersion()
-	tenantFetchFunc := func() (int32, string, error) {
-		return int32(tenantID), finalVersion, nil
+	tenantFetchFunc := func() (int64, string, error) {
+		return tenantID, finalVersion, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()

@@ -249,7 +249,7 @@ var upg_mo_account = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: catalog.MOAccountTable,
 	UpgType:   versions.ADD_COLUMN,
-	UpgSql:    "alter table mo_account add column admin_name varchar(300) after account_name",
+	UpgSql:    "alter table mo_catalog.mo_account add column admin_name varchar(300) after account_name",
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOAccountTable, "admin_name")
 		if err != nil {
@@ -258,4 +258,24 @@ var upg_mo_account = versions.UpgradeEntry{
 		return colInfo.IsExits, nil
 	},
 	PostSql: "update mo_account set admin_name = mo_admin_name(account_id)",
+}
+
+var upg_mo_account2 = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MOAccountTable,
+	UpgType:   versions.MODIFY_COLUMN,
+	UpgSql:    "alter table mo_catalog.mo_account modify account_id bigint NOT NULL AUTO_INCREMENT",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOAccountTable, "account_id")
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.IsExits {
+			if strings.EqualFold(colInfo.ColType, versions.T_int64) {
+				return true, nil
+			}
+		}
+		return false, nil
+	},
 }

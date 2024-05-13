@@ -74,7 +74,7 @@ func (s *service) CheckAndUpgradeCluster(ctx context.Context) error {
 }
 
 // UpgradeOneTenant Perform metadata upgrade for individual tenants
-func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
+func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int64) error {
 	s.mu.RLock()
 	checked := s.mu.tenants[tenantID]
 	s.mu.RUnlock()
@@ -170,8 +170,8 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 }
 
 // CheckUpgradeAccount Custom upgrade account Check if the tenant name exists and is legal
-func (s *service) CheckUpgradeAccount(ctx context.Context, accountName string) (int32, error) {
-	var accountId int32
+func (s *service) CheckUpgradeAccount(ctx context.Context, accountName string) (int64, error) {
+	var accountId int64
 
 	opts := executor.Options{}.
 		WithDatabase(catalog.MO_CATALOG).
@@ -195,8 +195,8 @@ func (s *service) CheckUpgradeAccount(ctx context.Context, accountName string) (
 }
 
 // GetAccountIdByName get accountId by accountName when upgrade account
-func GetAccountIdByName(accountName string, txn executor.TxnExecutor) (int32, error) {
-	sql := fmt.Sprintf("select account_id, account_name from %s.%s where account_name = '%s'",
+func GetAccountIdByName(accountName string, txn executor.TxnExecutor) (int64, error) {
+	sql := fmt.Sprintf("select cast(account_id as bigint), account_name from %s.%s where account_name = '%s'",
 		catalog.MO_CATALOG, catalog.MOAccountTable, accountName)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
@@ -204,9 +204,9 @@ func GetAccountIdByName(accountName string, txn executor.TxnExecutor) (int32, er
 	}
 
 	// Check if the group account name exists
-	var accountId int32 = -1
+	var accountId int64 = -1
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		accountId = vector.GetFixedAt[int32](cols[0], 0)
+		accountId = vector.GetFixedAt[int64](cols[0], 0)
 		return true
 	})
 

@@ -19,10 +19,11 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"go.uber.org/zap"
 )
 
 var (
@@ -426,12 +427,12 @@ func (s *service) doUpgrade(
 		state = versions.StateUpgradingTenant
 		err := fetchTenants(
 			s.upgrade.upgradeTenantBatch,
-			func(ids []int32) error {
+			func(ids []int64) error {
 				upgrade.TotalTenant += int32(len(ids))
 				getUpgradeLogger().Info("add tenants to upgrade",
 					zap.String("upgrade", upgrade.String()),
-					zap.Int32("from", ids[0]),
-					zap.Int32("to", ids[len(ids)-1]))
+					zap.Int64("from", ids[0]),
+					zap.Int64("to", ids[len(ids)-1]))
 				return versions.AddUpgradeTenantTask(upgrade.ID, upgrade.ToVersion, ids[0], ids[len(ids)-1], txn)
 			},
 			txn)

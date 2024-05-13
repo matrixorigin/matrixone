@@ -61,13 +61,13 @@ func (v *versionHandle) Prepare(
 
 func (v *versionHandle) HandleTenantUpgrade(
 	ctx context.Context,
-	tenantID int32,
+	tenantID int64,
 	txn executor.TxnExecutor) error {
 
 	for _, upgEntry := range tenantUpgEntries {
 		err := upgEntry.Upgrade(txn, uint32(tenantID))
 		if err != nil {
-			getLogger().Error("tenant upgrade entry execute error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("upgrade entry", upgEntry.String()))
+			getLogger().Error("tenant upgrade entry execute error", zap.Error(err), zap.Int64("tenantId", tenantID), zap.String("upgrade entry", upgEntry.String()))
 			return err
 		}
 	}

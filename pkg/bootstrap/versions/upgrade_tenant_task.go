@@ -27,8 +27,8 @@ import (
 func AddUpgradeTenantTask(
 	upgradeID uint64,
 	version string,
-	fromAccountID int32,
-	toAccountID int32,
+	fromAccountID int64,
+	toAccountID int64,
 	txn executor.TxnExecutor) error {
 	sql := fmt.Sprintf(`insert into %s (
 			upgrade_id, 
@@ -70,13 +70,13 @@ func UpdateUpgradeTenantTaskState(
 
 func GetUpgradeTenantTasks(
 	upgradeID uint64,
-	txn executor.TxnExecutor) (uint64, []int32, []string, error) {
+	txn executor.TxnExecutor) (uint64, []int64, []string, error) {
 	taskID := uint64(0)
-	tenants := make([]int32, 0)
+	tenants := make([]int64, 0)
 	versions := make([]string, 0)
-	after := int32(0)
+	after := int64(0)
 	for {
-		sql := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
+		sql := fmt.Sprintf("select id, cast(from_account_id as bigint), cast(to_account_id as bigint) from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
 			catalog.MOUpgradeTenantTable,
 			after,
 			upgradeID,
@@ -85,12 +85,12 @@ func GetUpgradeTenantTasks(
 		if err != nil {
 			return 0, nil, nil, err
 		}
-		from := int32(-1)
-		to := int32(-1)
+		from := int64(-1)
+		to := int64(-1)
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			taskID = vector.GetFixedAt[uint64](cols[0], 0)
-			from = vector.GetFixedAt[int32](cols[1], 0)
-			to = vector.GetFixedAt[int32](cols[2], 0)
+			from = vector.GetFixedAt[int64](cols[1], 0)
+			to = vector.GetFixedAt[int64](cols[2], 0)
 			return true
 		})
 		res.Close()
@@ -98,7 +98,7 @@ func GetUpgradeTenantTasks(
 			return 0, nil, nil, nil
 		}
 
-		sql = fmt.Sprintf("select account_id, create_version from mo_account where account_id >= %d and account_id <= %d for update",
+		sql = fmt.Sprintf("select cast(account_id as bigint), create_version from mo_account where account_id >= %d and account_id <= %d for update",
 			from, to)
 		res, err = txn.Exec(sql, executor.StatementOption{}.WithWaitPolicy(lock.WaitPolicy_FastFail))
 		if err != nil {
@@ -110,7 +110,7 @@ func GetUpgradeTenantTasks(
 		}
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
-				tenants = append(tenants, vector.GetFixedAt[int32](cols[0], i))
+				tenants = append(tenants, vector.GetFixedAt[int64](cols[0], i))
 				versions = append(versions, cols[1].GetStringAt(i))
 			}
 			return true
@@ -121,7 +121,7 @@ func GetUpgradeTenantTasks(
 }
 
 func GetTenantCreateVersionForUpdate(
-	tenantID int32,
+	tenantID int64,
 	txn executor.TxnExecutor) (string, error) {
 	sql := fmt.Sprintf("select create_version from mo_account where account_id = %d for update", tenantID)
 	res, err := txn.Exec(sql, executor.StatementOption{})
@@ -141,7 +141,7 @@ func GetTenantCreateVersionForUpdate(
 }
 
 func UpgradeTenantVersion(
-	tenantID int32,
+	tenantID int64,
 	version string,
 	txn executor.TxnExecutor) error {
 	sql := fmt.Sprintf("update mo_account set create_version = '%s' where account_id = %d",
@@ -164,7 +164,7 @@ func isConflictError(err error) bool {
 }
 
 func GetTenantVersion(
-	tenantID int32,
+	tenantID int64,
 	txn executor.TxnExecutor) (string, error) {
 	sql := fmt.Sprintf("select create_version from mo_account where account_id = %d", tenantID)
 	res, err := txn.Exec(sql, executor.StatementOption{})

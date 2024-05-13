@@ -48,7 +48,7 @@ type Service interface {
 	// latest tenant info.
 	MaybeUpgradeTenant(
 		ctx context.Context,
-		tenantFetchFunc func() (int32, string, error),
+		tenantFetchFunc func() (int64, string, error),
 		txnOp client.TxnOperator) (bool, error)
 	// UpgradeTenant used to manual upgrade tenant metadata
 	UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) (bool, error)
@@ -78,7 +78,7 @@ type VersionHandle interface {
 	// tenant upgrade.
 	HandleClusterUpgrade(ctx context.Context, txn executor.TxnExecutor) error
 	// HandleTenantUpgrade handle upgrade a special tenant.
-	HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error
+	HandleTenantUpgrade(ctx context.Context, tenantID int64, txn executor.TxnExecutor) error
 	// HandleCreateFrameworkDeps Used to execute pre dependencies when creating a new upgrade framework
 	// based on the current version for the first time.
 	HandleCreateFrameworkDeps(txn executor.TxnExecutor) error

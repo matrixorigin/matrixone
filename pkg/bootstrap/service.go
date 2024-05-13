@@ -120,7 +120,7 @@ type service struct {
 
 	mu struct {
 		sync.RWMutex
-		tenants map[int32]bool
+		tenants map[int64]bool
 	}
 
 	upgrade struct {
@@ -146,7 +146,7 @@ func NewService(
 		client:  client,
 		stopper: stopper.NewStopper("upgrade", stopper.WithLogger(getLogger().RawLogger())),
 	}
-	s.mu.tenants = make(map[int32]bool)
+	s.mu.tenants = make(map[int64]bool)
 	s.initUpgrade()
 
 	for _, opt := range opts {

@@ -284,7 +284,7 @@ func (h *testVersionHandle) HandleClusterUpgrade(ctx context.Context, txn execut
 	h.callHandleClusterUpgrade.Add(1)
 	return nil
 }
-func (h *testVersionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
+func (h *testVersionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int64, txn executor.TxnExecutor) error {
 	h.callHandleTenantUpgrade.Add(1)
 	return nil
 }
