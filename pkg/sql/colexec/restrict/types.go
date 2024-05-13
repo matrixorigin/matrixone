@@ -72,6 +72,7 @@ type container struct {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		arg.ctr.cleanExecutor()
+		arg.ctr = nil
 	}
 }
 
