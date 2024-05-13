@@ -1,4 +1,3 @@
--- @bvt:issue#14784
 -- table level noraml
 create database if not exists snapshot_read;
 use snapshot_read;
@@ -343,4 +342,3 @@ select count(*) from snapshot_read.users;
 drop snapshot sp_01;
 drop account test_account;
 drop account test_account_2;
--- @bvt:issue
