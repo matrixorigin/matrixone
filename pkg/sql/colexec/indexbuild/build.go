@@ -30,17 +30,16 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	if ap.RuntimeFilterSpec == nil {
+	if arg.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in index build!")
 	}
 
-	ap.ctr = new(container)
+	arg.ctr = new(container)
 	if len(proc.Reg.MergeReceivers) > 1 {
-		ap.ctr.InitReceiver(proc, true)
-		ap.ctr.isMerge = true
+		arg.ctr.InitReceiver(proc, true)
+		arg.ctr.isMerge = true
 	} else {
-		ap.ctr.InitReceiver(proc, false)
+		arg.ctr.InitReceiver(proc, false)
 	}
 
 	return nil
@@ -55,18 +54,17 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
-	ap := arg
-	ctr := ap.ctr
+	ctr := arg.ctr
 	for {
 		switch ctr.state {
 		case ReceiveBatch:
-			if err := ctr.build(ap, proc, anal, arg.GetIsFirst()); err != nil {
+			if err := ctr.build(arg, proc, anal, arg.GetIsFirst()); err != nil {
 				return result, err
 			}
 			ctr.state = HandleRuntimeFilter
 
 		case HandleRuntimeFilter:
-			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
+			if err := ctr.handleRuntimeFilter(arg, proc); err != nil {
 				return result, err
 			}
 			ctr.state = End

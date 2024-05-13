@@ -84,5 +84,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			}
 		}
 		arg.ctr.sels = nil
+		arg.ctr = nil
 	}
 }

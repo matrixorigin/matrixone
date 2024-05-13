@@ -128,6 +128,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			}
 			colexec.Get().DeleteUuids(uuids)
 		}
+
+		arg.ctr = nil
 	}
 
 	// told the local receiver to stop if it is still running.

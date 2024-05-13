@@ -16,9 +16,10 @@ package window
 
 import (
 	"bytes"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -40,19 +41,18 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, true)
 
-	ctr := ap.ctr
-	ctr.aggVecs = make([]group.ExprEvalVector, len(ap.Aggs))
-	for i, ag := range ap.Aggs {
+	ctr := arg.ctr
+	ctr.aggVecs = make([]group.ExprEvalVector, len(arg.Aggs))
+	for i, ag := range arg.Aggs {
 		expressions := ag.GetArgExpressions()
 		if ctr.aggVecs[i], err = group.MakeEvalVector(proc, expressions); err != nil {
 			return err
 		}
 	}
-	w := ap.WinSpecList[0].Expr.(*plan.Expr_W).W
+	w := arg.WinSpecList[0].Expr.(*plan.Expr_W).W
 	if len(w.PartitionBy) == 0 {
 		ctr.status = receiveAll
 	}
@@ -67,8 +67,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	var err error
 	var end bool
-	ap := arg
-	ctr := ap.ctr
+	ctr := arg.ctr
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
@@ -117,9 +116,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
-			for i, ag := range ap.Aggs {
-				ctr.bat.Aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
+			ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(arg.Aggs))
+			for i, ag := range arg.Aggs {
+				ctr.bat.Aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), arg.Types[i])
 				if config := ag.GetExtraConfig(); config != nil {
 					if err = ctr.bat.Aggs[i].SetExtraInformation(config, 0); err != nil {
 						return result, err
@@ -130,23 +129,23 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 			// calculate
-			for i, w := range ap.WinSpecList {
+			for i, w := range arg.WinSpecList {
 				// sort and partitions
-				if ap.Fs = makeOrderBy(w); ap.Fs != nil {
-					ctr.orderVecs = make([]group.ExprEvalVector, len(ap.Fs))
+				if arg.Fs = makeOrderBy(w); arg.Fs != nil {
+					ctr.orderVecs = make([]group.ExprEvalVector, len(arg.Fs))
 					for j := range ctr.orderVecs {
-						ctr.orderVecs[j], err = group.MakeEvalVector(proc, []*plan.Expr{ap.Fs[j].Expr})
+						ctr.orderVecs[j], err = group.MakeEvalVector(proc, []*plan.Expr{arg.Fs[j].Expr})
 						if err != nil {
 							return result, err
 						}
 					}
-					_, err = ctr.processOrder(i, ap, ctr.bat, proc)
+					_, err = ctr.processOrder(i, arg, ctr.bat, proc)
 					if err != nil {
 						return result, err
 					}
 				}
 				// evaluate func
-				if err = ctr.processFunc(i, ap, proc, anal); err != nil {
+				if err = ctr.processFunc(i, arg, proc, anal); err != nil {
 					return result, err
 				}
 
@@ -155,7 +154,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			anal.Output(ctr.bat, arg.GetIsLast())
-			if len(ap.WinSpecList[0].Expr.(*plan.Expr_W).W.PartitionBy) == 0 {
+			if len(arg.WinSpecList[0].Expr.(*plan.Expr_W).W.PartitionBy) == 0 {
 				ctr.status = done
 			} else {
 				ctr.status = receive
