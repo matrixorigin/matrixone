@@ -41,7 +41,7 @@ import (
 
 const (
 	getAllAccountInfoFormat = "select " +
-		"account_id as `account_id`, " +
+		"cast(account_id as bigint) as `account_id`, " +
 		"account_name as `account_name`, " +
 		"created_time as `created`, " +
 		"status as `status`, " +
@@ -53,7 +53,7 @@ const (
 		";"
 
 	getAccountInfoFormat = "select " +
-		"account_id as `account_id`, " +
+		"cast(account_id as bigint) as `account_id`, " +
 		"account_name as `account_name`, " +
 		"created_time as `created`, " +
 		"status as `status`, " +
@@ -134,12 +134,12 @@ func getSqlForAccountInfo(accountId uint64) string {
 	return fmt.Sprintf(getAccountInfoFormat, accountId)
 }
 
-func getSqlForTableStats(accountId int32) string {
+func getSqlForTableStats(accountId int64) string {
 	//return fmt.Sprintf(getTableStatsFormatV2, catalog.SystemPartitionRel, accountId)
 	return fmt.Sprintf(getTableStatsFormatV2, accountId, sysAccountID)
 }
 
-func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int32) (resp any, tried bool, err error) {
+func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (resp any, tried bool, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 		req := db.StorageUsageReq{}
@@ -199,8 +199,8 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int32) (r
 }
 
 func handleStorageUsageResponse_V0(ctx context.Context, fs fileservice.FileService,
-	usage *db.StorageUsageResp_V0) (map[int32]uint64, error) {
-	result := make(map[int32]uint64, 0)
+	usage *db.StorageUsageResp_V0) (map[int64]uint64, error) {
+	result := make(map[int64]uint64, 0)
 	for idx := range usage.CkpEntries {
 		version := usage.CkpEntries[idx].Version
 		location := usage.CkpEntries[idx].Location
@@ -210,7 +210,7 @@ func handleStorageUsageResponse_V0(ctx context.Context, fs fileservice.FileServi
 			// exist old version checkpoint which hasn't storage usage data in it,
 			// to avoid inaccurate info leading misunderstand, we chose to return empty result
 			logutil.Info("[storage usage]: found older ckp when handle storage usage response")
-			return map[int32]uint64{}, nil
+			return map[int64]uint64{}, nil
 		}
 
 		ckpData, err := logtail.LoadSpecifiedCkpBatch(ctx, location, version, logtail.StorageUsageInsIDX, fs)
@@ -229,7 +229,7 @@ func handleStorageUsageResponse_V0(ctx context.Context, fs fileservice.FileServi
 		size := uint64(0)
 		length := len(accIDVec)
 		for i := 0; i < length; i++ {
-			result[int32(accIDVec[i])] += sizeVec[i]
+			result[int64(accIDVec[i])] += sizeVec[i]
 			size += sizeVec[i]
 		}
 
@@ -238,7 +238,7 @@ func handleStorageUsageResponse_V0(ctx context.Context, fs fileservice.FileServi
 
 	// [account_id, db_id, table_id, obj_id, table_total_size]
 	for _, info := range usage.BlockEntries {
-		result[int32(info.Info[0])] += info.Info[3]
+		result[int64(info.Info[0])] += info.Info[3]
 	}
 
 	return result, nil
@@ -247,8 +247,8 @@ func handleStorageUsageResponse_V0(ctx context.Context, fs fileservice.FileServi
 func handleStorageUsageResponse(
 	ctx context.Context,
 	usage *db.StorageUsageResp,
-) (map[int32]uint64, error) {
-	result := make(map[int32]uint64, 0)
+) (map[int64]uint64, error) {
+	result := make(map[int64]uint64, 0)
 
 	for x := range usage.AccIds {
 		result[usage.AccIds[x]] += usage.Sizes[x]
@@ -257,7 +257,7 @@ func handleStorageUsageResponse(
 	return result, nil
 }
 
-func checkStorageUsageCache(accIds [][]int32) (result map[int32]uint64, succeed bool) {
+func checkStorageUsageCache(accIds [][]int64) (result map[int64]uint64, succeed bool) {
 	cnUsageCache.Lock()
 	defer cnUsageCache.Unlock()
 
@@ -265,7 +265,7 @@ func checkStorageUsageCache(accIds [][]int32) (result map[int32]uint64, succeed 
 		return nil, false
 	}
 
-	result = make(map[int32]uint64)
+	result = make(map[int64]uint64)
 	for x := range accIds {
 		for y := range accIds[x] {
 			size, exist := cnUsageCache.GatherAccountSize(uint64(accIds[x][y]))
@@ -281,7 +281,7 @@ func checkStorageUsageCache(accIds [][]int32) (result map[int32]uint64, succeed 
 	return result, true
 }
 
-func updateStorageUsageCache(accIds []int32, sizes []uint64) {
+func updateStorageUsageCache(accIds []int64, sizes []uint64) {
 
 	if len(accIds) == 0 {
 		return
@@ -306,7 +306,7 @@ func updateStorageUsageCache(accIds []int32, sizes []uint64) {
 
 // getAccountStorageUsage calculates the storage usage of all accounts
 // by handling checkpoint
-func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32) (map[int32]uint64, error) {
+func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (map[int64]uint64, error) {
 	if len(accIds) == 0 {
 		return nil, nil
 	}
@@ -355,7 +355,7 @@ func embeddingSizeToBatch(ori *batch.Batch, size uint64, mp *mpool.MPool) {
 
 func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (err error) {
 	var sql string
-	var accountIds [][]int32
+	var accountIds [][]int64
 	var allAccountInfo []*batch.Batch
 	var eachAccountInfo []*batch.Batch
 	var tempBatch *batch.Batch
@@ -589,9 +589,9 @@ func initOutputRs(rs *MysqlResultSet, rsOfMoAccount *MysqlResultSet, rsOfEachAcc
 func getAccountInfo(ctx context.Context,
 	bh BackgroundExec,
 	sql string,
-	returnAccountIds bool) ([]*batch.Batch, [][]int32, error) {
+	returnAccountIds bool) ([]*batch.Batch, [][]int64, error) {
 	var err error
-	var batchIndex2AccounsIds [][]int32
+	var batchIndex2AccounsIds [][]int64
 	var rsOfMoAccount []*batch.Batch
 
 	bh.ClearExecResultBatches()
@@ -606,11 +606,11 @@ func getAccountInfo(ctx context.Context,
 	}
 	if returnAccountIds {
 		batchCount := len(rsOfMoAccount)
-		batchIndex2AccounsIds = make([][]int32, batchCount)
+		batchIndex2AccounsIds = make([][]int64, batchCount)
 		for i := 0; i < batchCount; i++ {
 			vecLen := rsOfMoAccount[i].Vecs[0].Length()
 			for row := 0; row < vecLen; row++ {
-				batchIndex2AccounsIds[i] = append(batchIndex2AccounsIds[i], vector.GetFixedAt[int32](rsOfMoAccount[i].Vecs[0], row))
+				batchIndex2AccounsIds[i] = append(batchIndex2AccounsIds[i], vector.GetFixedAt[int64](rsOfMoAccount[i].Vecs[0], row))
 			}
 		}
 	}
@@ -618,7 +618,7 @@ func getAccountInfo(ctx context.Context,
 }
 
 // getTableStats gets the table statistics for the account
-func getTableStats(ctx context.Context, bh BackgroundExec, accountId int32) (*batch.Batch, error) {
+func getTableStats(ctx context.Context, bh BackgroundExec, accountId int64) (*batch.Batch, error) {
 	var sql string
 	var err error
 	var rs []*batch.Batch

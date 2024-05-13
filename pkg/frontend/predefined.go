@@ -38,7 +38,7 @@ var (
     		)`
 
 	MoCatalogMoAccountDDL = `create table mo_catalog.mo_account (
-				account_id int signed auto_increment primary key,
+				account_id bigint auto_increment primary key,
 				account_name varchar(300) unique key,
 				admin_name varchar(300),
 				status varchar(300),

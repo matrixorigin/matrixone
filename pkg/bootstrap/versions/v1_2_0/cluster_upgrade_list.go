@@ -44,6 +44,7 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_debug_eventTxnActionTable,
 	upg_mo_debug_featuresTables,
 	upg_mo_account,
+	upg_mo_account2,
 }
 
 var upg_sys_modify_async_task = versions.UpgradeEntry{
@@ -278,4 +279,23 @@ var upg_mo_account2 = versions.UpgradeEntry{
 		}
 		return false, nil
 	},
+}
+
+var upg_system_logInfo = versions.UpgradeEntry{
+	Schema:    catalog.MO_SYSTEM,
+	TableName: "log_info",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    "CREATE VIEW IF NOT EXISTS `system`.`log_info` as select `trace_id`, `span_id`, `span_kind`, `node_uuid`, `node_type`, `timestamp`, `logger_name`, `level`, `caller`, `message`, `extra`, `stack` from `system`.`rawlog` where `raw_item` = \"log_info\"",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_SYSTEM, "log_info")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == "CREATE VIEW IF NOT EXISTS `system`.`log_info` as select `trace_id`, `span_id`, `span_kind`, `node_uuid`, `node_type`, `timestamp`, `logger_name`, `level`, `caller`, `message`, `extra`, `stack` from `system`.`rawlog` where `raw_item` = \"log_info\"" {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_SYSTEM, "log_info"),
 }
