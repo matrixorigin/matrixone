@@ -43,13 +43,11 @@ select c from t3 where a in (1,2,3);
 
 drop table t3;
 
-drop database testdb;
-
 
 -- case 4: prepare for insert
 create table t4(a int, b int, c int, d int, primary key (a,b,c));
 insert into t4 select *,*,*,* from generate_series(1, 1000000)g;
-select d from t4 where a in (1,2,3)
+select d from t4 where a in (1,2,3);
 prepare s1 from insert into t1(a, b, c, d) values(?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?),(?, ?, ?, ?);
 set @a = -1;
 set @b = -2;
@@ -57,4 +55,6 @@ set @c = -3;
 set @d = -4;
 set @e =-5;
 execute s1 using @a,@a,@a,@a, @b,@b,@b,@b, @c,@c,@c,@c, @d,@d,@d,@d, @e,@e,@e,@e;
-select * from t4 where a in (-1,-2,-3,-4,-5)
+select * from t4 where a in (-1,-2,-3,-4,-5);
+drop table t4;
+drop database testdb;
