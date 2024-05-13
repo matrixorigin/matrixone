@@ -112,7 +112,6 @@ type primaryKeyIter struct {
 	ts           types.TS
 	spec         PrimaryKeyMatchSpec
 	iter         btree.IterG[*PrimaryIndexEntry]
-	firstCalled  bool
 	rows         *btree.BTreeG[RowEntry]
 	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 	curRow       RowEntry
@@ -120,9 +119,8 @@ type primaryKeyIter struct {
 
 type PrimaryKeyMatchSpec struct {
 	// Move moves to the target
-	Move  func(p *primaryKeyIter) bool
-	Name  string
-	Debug bool
+	Move func(p *primaryKeyIter) bool
+	Name string
 }
 
 func Exact(key []byte) PrimaryKeyMatchSpec {
@@ -187,7 +185,7 @@ const (
 	judge phase = 2
 )
 
-func ExactIn(encodes [][]byte, debug bool) PrimaryKeyMatchSpec {
+func ExactIn(encodes [][]byte) PrimaryKeyMatchSpec {
 	var encoded []byte
 
 	first := true
