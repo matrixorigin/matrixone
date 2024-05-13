@@ -33,6 +33,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -56,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
@@ -66,6 +68,7 @@ var (
 	daemon       = flag.Bool("daemon", false, "run mo-service in daemon mode")
 	withProxy    = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
 	maxProcessor = flag.Int("max-processor", 0, "set max processor for go runtime")
+	globalEtlFS  fileservice.FileService
 )
 
 func main() {
@@ -127,6 +130,14 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) {
 	select {
 	case sig := <-sigchan:
 		detail += "signal: " + sig.String()
+		//dump heap profile before stopping services
+		heapName, _ := uuid.NewV7()
+		heapProfilePath := catalog.BuildProfilePath("heap", heapName.String())
+		cnservice.SaveProfile(heapProfilePath, profile.HEAP, globalEtlFS)
+		//dump goroutine before stopping services
+		routineName, _ := uuid.NewV7()
+		routineProfilePath := catalog.BuildProfilePath("routine", routineName.String())
+		cnservice.SaveProfile(routineProfilePath, profile.GOROUTINE, globalEtlFS)
 	case <-shutdownC:
 		// waiting, give a chance let all log stores and tn stores to get
 		// shutdown cmd from ha keeper
@@ -201,6 +212,10 @@ func startService(
 	}
 	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, uuid); err != nil {
 		return err
+	}
+
+	if globalEtlFS == nil {
+		globalEtlFS = etlFS
 	}
 
 	switch st {
