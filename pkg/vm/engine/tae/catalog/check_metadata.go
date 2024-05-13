@@ -30,12 +30,13 @@ func (catalog *Catalog) CheckMetadata() {
 	p.ObjectFn = catalog.checkObject
 	p.TombstoneFn = catalog.checkTombstone
 	catalog.RecurLoop(p)
+	logutil.Infof("[MetadataCheck] End")
 }
 func (catalog *Catalog) checkTombstone(t data.Tombstone) error {
 	obj := t.GetObject().(*ObjectEntry)
 	_, err := obj.GetTable().GetObjectByID(&obj.ID)
 	if err != nil {
-		logutil.Infof("[MetadataCheck] tombstone and object doesn't match, err %v, obj %v, tombstone %v",
+		logutil.Warnf("[MetadataCheck] tombstone and object doesn't match, err %v, obj %v, tombstone %v",
 			err,
 			obj.PPString(3, 0, ""),
 			t.String(3, 0, ""))
@@ -47,26 +48,26 @@ func (catalog *Catalog) checkObject(o *ObjectEntry) error {
 	o.RLock()
 	defer o.RUnlock()
 	if o.Depth() > 2 {
-		logutil.Infof("[MetadataCheck] object mvcc link is too long, depth %d, obj %v", o.Depth(), o.PPStringLocked(3, 0, ""))
+		logutil.Warnf("[MetadataCheck] object mvcc link is too long, depth %d, obj %v", o.Depth(), o.PPStringLocked(3, 0, ""))
 	}
 	if o.IsAppendable() && o.HasDropCommittedLocked() {
 		if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
-			logutil.Infof("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
+			logutil.Warnf("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
 		}
 	}
 	if !o.IsAppendable() && !o.IsCreatingOrAborted() {
 		if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
-			logutil.Infof("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
+			logutil.Warnf("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
 		}
 	}
 	if !o.IsAppendable() && !o.IsCreatingOrAborted() {
 		if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
-			logutil.Infof("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
+			logutil.Warnf("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
 		}
 	}
 	if !catalog.gcTS.IsEmpty() {
 		if o.HasDropCommittedLocked() && o.DeleteBeforeLocked(catalog.gcTS) && !o.InMemoryDeletesExistedLocked() {
-			logutil.Infof("[MetadataCheck] object should not exist, gcTS %v, obj %v", catalog.gcTS.ToString(), o.PPStringLocked(3, 0, ""))
+			logutil.Warnf("[MetadataCheck] object should not exist, gcTS %v, obj %v", catalog.gcTS.ToString(), o.PPStringLocked(3, 0, ""))
 		}
 	}
 
@@ -74,7 +75,7 @@ func (catalog *Catalog) checkObject(o *ObjectEntry) error {
 	ts := types.BuildTS(time.Now().UTC().UnixNano()-duration.Nanoseconds(), 0)
 	if o.HasDropCommittedLocked() && o.DeleteBeforeLocked(ts) {
 		if o.InMemoryDeletesExistedLocked() {
-			logutil.Infof("[MetadataCheck] object has in memory deletes %v after deleted, obj %v, tombstone %v",
+			logutil.Warnf("[MetadataCheck] object has in memory deletes %v after deleted, obj %v, tombstone %v",
 				duration,
 				o.PPStringLocked(3, 0, ""),
 				o.GetTable().TryGetTombstone(o.ID).StringLocked(3, 0, ""))
@@ -83,19 +84,19 @@ func (catalog *Catalog) checkObject(o *ObjectEntry) error {
 
 	lastNode := o.GetLatestNodeLocked()
 	if lastNode == nil {
-		logutil.Infof("[MetadataCheck] object MVCC Chain is empty, obj %v", o.ID.String())
+		logutil.Warnf("[MetadataCheck] object MVCC Chain is empty, obj %v", o.ID.String())
 	} else {
 		duration := time.Minute * 10
 		ts := types.BuildTS(time.Now().UTC().UnixNano()-duration.Nanoseconds(), 0)
 		if !lastNode.IsCommitted() {
 			if lastNode.Start.Less(&ts) {
-				logutil.Infof("[MetadataCheck] object MVCC Node hasn't committed %v after it starts, obj %v",
+				logutil.Warnf("[MetadataCheck] object MVCC Node hasn't committed %v after it starts, obj %v",
 					duration,
 					o.PPStringLocked(3, 0, ""))
 			}
 		} else {
 			if lastNode.End.Equal(&txnif.UncommitTS) || lastNode.Prepare.Equal(&txnif.UncommitTS) {
-				logutil.Infof("[MetadataCheck] object MVCC Node hasn't committed but node.Txn is nil, obj %v",
+				logutil.Warnf("[MetadataCheck] object MVCC Node hasn't committed but node.Txn is nil, obj %v",
 					o.PPStringLocked(3, 0, ""))
 			}
 		}

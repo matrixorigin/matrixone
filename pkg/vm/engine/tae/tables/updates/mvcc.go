@@ -611,7 +611,7 @@ func (n *ObjectMVCCHandle) CheckTombstone() {
 				return true
 			}
 			if node.End.Less(&persistedTS) {
-				logutil.Infof("[MetadataCheck] in memory deletes should be flushed node %v, tombstone %v",
+				logutil.Warnf("[MetadataCheck] in memory deletes should be flushed node %v, tombstone %v",
 					node.StringLocked(),
 					n.StringLocked(3, 0, ""))
 				return false
