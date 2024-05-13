@@ -425,6 +425,10 @@ func (o *testOperator) RemoveWaitLock(key uint64) {
 	panic("should not call")
 }
 
+func (o *testOperator) LockTableCount() int32 {
+	panic("should not call")
+}
+
 func (o *testOperator) GetOverview() client.TxnOverview {
 	panic("should not call")
 }
