@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -1064,6 +1065,62 @@ func evalLiteralExpr(expr *plan.Literal, oid types.T) (canEval bool, val any) {
 		return transferUval(val.EnumVal, oid)
 	}
 	return
+}
+
+type PKFilter struct {
+	op      uint8
+	val     []byte
+	isVec   bool
+	isValid bool
+	isNull  bool
+}
+
+func (f *PKFilter) MustGetVector() *vector.Vector {
+	if !f.isVec || !f.isValid || f.isNull {
+		panic(moerr.NewInternalErrorNoCtx("MustGetVector failed"))
+	}
+	vec := vector.NewVec(types.T_any.ToType())
+	err := vec.UnmarshalBinary(f.val)
+	if err != nil {
+		panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("MustGetVector failed: %v", err)))
+	}
+
+	return vec
+}
+
+func getPKFilterByExpr(
+	expr *plan.Expr,
+	pkName string,
+	oid types.T,
+	proc *process.Process,
+) PKFilter {
+	valExpr := getPkExpr(expr, pkName, proc)
+	if valExpr == nil {
+		return PKFilter{}
+	}
+	switch exprImpl := valExpr.Expr.(type) {
+	case *plan.Expr_Lit:
+		if exprImpl.Lit.Isnull {
+			return PKFilter{isNull: true}
+		}
+
+		val, canEval := evalLiteralExpr2(exprImpl.Lit, oid)
+		if !canEval {
+			return PKFilter{}
+		}
+		return PKFilter{op: function.EQUAL, val: val, isValid: true}
+	case *plan.Expr_Vec:
+		return PKFilter{isVec: true, val: exprImpl.Vec.Data, isValid: true}
+	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "prefix_eq":
+			val := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
+			return PKFilter{op: function.PREFIX_EQ, val: val, isValid: true}
+			// case "prefix_between":
+			// case "prefix_in":
+		}
+	}
+	return PKFilter{}
 }
 
 // return canEval, isNull, isVec, evaledVal
