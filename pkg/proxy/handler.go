@@ -176,6 +176,8 @@ func (h *handler) handle(c goetty.IOSession) error {
 	h.logger.Info("build connection",
 		zap.String("client->proxy", fmt.Sprintf("%s -> %s", cc.RawConn().RemoteAddr(), cc.RawConn().LocalAddr())),
 		zap.String("proxy->server", fmt.Sprintf("%s -> %s", sc.RawConn().LocalAddr(), sc.RawConn().RemoteAddr())),
+		zap.Uint32("conn ID", cc.ConnID()),
+		zap.Uint64("session ID", c.ID()),
 	)
 
 	st := stopper.NewStopper("proxy-conn-handle", stopper.WithLogger(h.logger.RawLogger()))

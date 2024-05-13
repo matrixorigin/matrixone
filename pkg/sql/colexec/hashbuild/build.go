@@ -35,21 +35,20 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
+	arg.ctr = new(container)
 	if len(proc.Reg.MergeReceivers) > 1 {
-		ap.ctr.InitReceiver(proc, true)
-		ap.ctr.isMerge = true
+		arg.ctr.InitReceiver(proc, true)
+		arg.ctr.isMerge = true
 	} else {
-		ap.ctr.InitReceiver(proc, false)
+		arg.ctr.InitReceiver(proc, false)
 	}
 
-	if ap.NeedHashMap {
-		ap.ctr.vecs = make([][]*vector.Vector, 0)
-		ctr := ap.ctr
-		ctr.executor = make([]colexec.ExpressionExecutor, len(ap.Conditions))
+	if arg.NeedHashMap {
+		arg.ctr.vecs = make([][]*vector.Vector, 0)
+		ctr := arg.ctr
+		ctr.executor = make([]colexec.ExpressionExecutor, len(arg.Conditions))
 		ctr.keyWidth = 0
-		for i, expr := range ap.Conditions {
+		for i, expr := range arg.Conditions {
 			typ := expr.Typ
 			width := types.T(typ.Id).TypeLen()
 			// todo : for varlena type, always go strhashmap
@@ -57,25 +56,25 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 				width = 128
 			}
 			ctr.keyWidth += width
-			ctr.executor[i], err = colexec.NewExpressionExecutor(proc, ap.Conditions[i])
+			ctr.executor[i], err = colexec.NewExpressionExecutor(proc, arg.Conditions[i])
 			if err != nil {
 				return err
 			}
 		}
 
 		if ctr.keyWidth <= 8 {
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(false, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(false, arg.Ibucket, arg.Nbucket, proc.Mp()); err != nil {
 				return err
 			}
 		} else {
-			if ctr.strHashMap, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
+			if ctr.strHashMap, err = hashmap.NewStrMap(false, arg.Ibucket, arg.Nbucket, proc.Mp()); err != nil {
 				return err
 			}
 		}
 
 	}
 
-	ap.ctr.batches = make([]*batch.Batch, 0)
+	arg.ctr.batches = make([]*batch.Batch, 0)
 
 	return nil
 }
