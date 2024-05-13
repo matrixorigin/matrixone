@@ -88,5 +88,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		} else {
 			ctr.FreeAllReg()
 		}
+
+		arg.ctr = nil
 	}
 }
