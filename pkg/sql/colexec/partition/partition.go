@@ -32,9 +32,8 @@ const argName = "partition"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(argName)
-	ap := arg
 	buf.WriteString(": partition([")
-	for i, f := range ap.OrderBySpecs {
+	for i, f := range arg.OrderBySpecs {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
@@ -44,23 +43,22 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ctr := ap.ctr
-	ap.ctr.InitReceiver(proc, true)
+	arg.ctr = new(container)
+	ctr := arg.ctr
+	arg.ctr.InitReceiver(proc, true)
 
 	length := 2 * len(proc.Reg.MergeReceivers)
 	ctr.batchList = make([]*batch.Batch, 0, length)
 	ctr.orderCols = make([][]*vector.Vector, 0, length)
 
-	ap.ctr.executors = make([]colexec.ExpressionExecutor, len(ap.OrderBySpecs))
-	for i := range ap.ctr.executors {
-		ap.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, ap.OrderBySpecs[i].Expr)
+	arg.ctr.executors = make([]colexec.ExpressionExecutor, len(arg.OrderBySpecs))
+	for i := range arg.ctr.executors {
+		arg.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, arg.OrderBySpecs[i].Expr)
 		if err != nil {
 			return err
 		}
 	}
-	ctr.generateCompares(ap.OrderBySpecs)
+	ctr.generateCompares(arg.OrderBySpecs)
 	return nil
 }
 
@@ -69,9 +67,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	ap := arg
-	ctr := ap.ctr
-
+	ctr := arg.ctr
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
