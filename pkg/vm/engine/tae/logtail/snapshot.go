@@ -257,7 +257,6 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 	}
 	for _, object := range objects {
 		location := object.stats.ObjectLocation()
-		logutil.Infof("object: %v", location.String())
 		name := object.stats.ObjectName()
 		for i := uint32(0); i < object.stats.BlkCnt(); i++ {
 			loc := objectio.BuildLocation(name, location.Extent(), 0, uint16(i))
