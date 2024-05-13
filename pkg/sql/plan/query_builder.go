@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -1253,7 +1254,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_LOCK_OP:
 		preNode := builder.qry.Nodes[node.Children[0]]
 		pkexpr := &plan.Expr{
-			Typ: *node.LockTargets[0].GetPrimaryColTyp(),
+			Typ: node.LockTargets[0].GetPrimaryColTyp(),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: node.BindingTags[1],
@@ -1426,6 +1427,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
 
+	builder.parseOptimizeHints()
 	for i, rootID := range builder.qry.Steps {
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
@@ -1435,6 +1437,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
+		builder.optimizeDateFormatExpr(rootID)
 
 		builder.pushdownLimitToTableScan(rootID)
 
@@ -1488,6 +1491,12 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.generateRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
+		builder.forceJoinOnOneCN(rootID, false)
+		// after this ,never call ReCalcNodeStats again !!!
+
+		if builder.isForUpdate {
+			reCheckifNeedLockWholeTable(builder)
+		}
 
 		builder.handleMessgaes(rootID)
 
@@ -1643,7 +1652,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 					argsCastType[i].Scale = 0
 				}
 			}
-			var targetType *plan.Type
+			var targetType plan.Type
 			var targetArgType types.Type
 			if len(argsCastType) == 0 {
 				targetArgType = tmpArgsType[0]
@@ -1668,7 +1677,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 				if !argsType[idx].Eq(targetArgType) {
 					node := builder.qry.Nodes[tmpID]
 					if argsType[idx].Oid == types.T_any {
-						node.ProjectList[columnIdx].Typ = *targetType
+						node.ProjectList[columnIdx].Typ = targetType
 					} else {
 						node.ProjectList[columnIdx], err = appendCastBeforeExpr(builder.GetContext(), node.ProjectList[columnIdx], targetType)
 						if err != nil {
@@ -2089,13 +2098,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
 		}
 		bat := batch.NewWithSize(len(valuesClause.Rows[0]))
-		strTyp := &plan.Type{
+		strTyp := plan.Type{
 			Id:          int32(types.T_text),
 			NotNullable: false,
 		}
 		strColTyp := makeTypeByPlan2Type(strTyp)
 		strColTargetTyp := &plan.Expr{
-			Typ: *strTyp,
+			Typ: strTyp,
 			Expr: &plan.Expr_T{
 				T: &plan.TargetType{},
 			},
@@ -2155,7 +2164,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			tableDef.Cols[i] = &plan.ColDef{
 				ColId: 0,
 				Name:  colName,
-				Typ:   *strTyp,
+				Typ:   strTyp,
 			}
 		}
 		bat.SetRowCount(rowCount)
@@ -2211,13 +2220,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if builder.isForUpdate {
 			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
 			pkPos, pkTyp := getPkPos(tableDef, false)
-			ifLockTable := ifNeedLockWholeTable(builder, nodeID)
 			lockTarget := &plan.LockTarget{
 				TableId:            tableDef.TblId,
 				PrimaryColIdxInBat: int32(pkPos),
 				PrimaryColTyp:      pkTyp,
 				Block:              true,
-				LockTable:          ifLockTable,
 				RefreshTsIdxInBat:  -1, //unsupport now
 				FilterColIdxInBat:  -1, //unsupport now
 			}
@@ -2387,7 +2394,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if len(r.Parts[2]) > 0 {
 			schema = r.Parts[2]
 		}
-		pk := builder.compCtx.GetPrimaryKeyDef(schema, table)
+
+		// snapshot to fix
+		pk := builder.compCtx.GetPrimaryKeyDef(schema, table, Snapshot{TS: &timestamp.Timestamp{}})
 		if len(pk) > 1 || pk[0].Name != r.Parts[0] {
 			return 0, moerr.NewNotSupported(builder.GetContext(), "%s is not primary key in time window", tree.String(col, dialect.MYSQL))
 		}
@@ -2454,7 +2463,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					}
 				}
 				if astTimeWindow.Fill.Val != nil {
-					e, err := appendCastBeforeExpr(builder.GetContext(), v, &t.Typ)
+					e, err := appendCastBeforeExpr(builder.GetContext(), v, t.Typ)
 					if err != nil {
 						return 0, err
 					}
@@ -2479,7 +2488,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					if err != nil {
 						return 0, err
 					}
-					col, err := appendCastBeforeExpr(builder.GetContext(), v, &fillCols[i].Typ)
+					col, err := appendCastBeforeExpr(builder.GetContext(), v, fillCols[i].Typ)
 					if err != nil {
 						return 0, err
 					}
@@ -3240,7 +3249,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 	case *tree.TableName:
-		var ts timestamp.Timestamp
+		var snapshot Snapshot
+
 		schema := string(tbl.SchemaName)
 		table := string(tbl.ObjectName)
 		if len(table) == 0 || table == "dual" { //special table name
@@ -3364,7 +3374,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						}
 						for i := range n.ProjectList {
 							projTyp := projects[i].GetTyp()
-							n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], &projTyp)
+							n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
 							if err != nil {
 								return
 							}
@@ -3454,19 +3464,20 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			schema = ctx.defaultDatabase
 		}
 
-		schema, err = databaseIsValid(schema, builder.compCtx)
-		if err != nil {
-			return 0, err
-		}
-
 		if tbl.AtTsExpr != nil {
-			ts, err = builder.resolveTsHint(tbl.AtTsExpr)
+			snapshot, err = builder.resolveTsHint(tbl.AtTsExpr)
 			if err != nil {
 				return 0, err
 			}
 		}
+		// TODO
+		schema, err = databaseIsValid(schema, builder.compCtx, snapshot)
+		if err != nil {
+			return 0, err
+		}
 
-		obj, tableDef := builder.compCtx.Resolve(schema, table)
+		// TODO
+		obj, tableDef := builder.compCtx.Resolve(schema, table, snapshot)
 		if tableDef == nil {
 			return 0, moerr.NewParseError(builder.GetContext(), "table %q does not exist", table)
 		}
@@ -3576,7 +3587,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			ObjRef:      obj,
 			TableDef:    tableDef,
 			BindingTags: []int32{builder.genNewTag()},
-			ScanTS:      &ts,
+			//ScanTS:       &snapshot.Ts,
+			ScanSnapshot: &snapshot,
 		}, ctx)
 
 	case *tree.JoinTableExpr:
@@ -4038,76 +4050,101 @@ func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
 	}
 }
 
-func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.Timestamp, error) {
+func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (Snapshot, error) {
 	if tsExpr == nil {
-		return timestamp.Timestamp{}, nil
+		return Snapshot{TS: &timestamp.Timestamp{}}, nil
 	}
 
 	conds := splitAstConjunction(tsExpr.Expr)
 	if len(conds) != 1 {
-		return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
+		return Snapshot{TS: &timestamp.Timestamp{}}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
 	}
 
-	binder := NewDefaultBinder(builder.GetContext(), nil, nil, nil, nil)
+	binder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
 	binder.builder = builder
 	defExpr, err := binder.BindExpr(conds[0], 0, false)
 	if err != nil {
-		return timestamp.Timestamp{}, err
+		return Snapshot{TS: &timestamp.Timestamp{}}, err
 	}
 	if exprLit, ok := defExpr.Expr.(*plan.Expr_Lit); !ok {
-		return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
+		return Snapshot{TS: &timestamp.Timestamp{}}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
 	} else {
+		var tenant *SnapshotTenant
+		if restoreInfo := builder.compCtx.GetRestoreInfo(); restoreInfo != nil {
+			tenant = &SnapshotTenant{
+				TenantName: restoreInfo.Tenant,
+				TenantID:   restoreInfo.TenantID,
+			}
+		}
+
 		if lit, ok := exprLit.Lit.Value.(*plan.Literal_Sval); ok {
 			if tsExpr.Type == tree.ATTIMESTAMPTIME {
 				ts, err := time.Parse("2006-01-02 15:04:05.999999999", lit.Sval)
 				if err != nil {
-					return timestamp.Timestamp{}, err
+					return Snapshot{TS: &timestamp.Timestamp{}}, err
 				}
 				tsNano := ts.UTC().UnixNano()
 				if tsNano <= 0 {
-					return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
+					return Snapshot{TS: &timestamp.Timestamp{}}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
 				}
 				if time.Now().UTC().UnixNano()-tsNano <= options.DefaultGCTTL.Nanoseconds() && 0 <= time.Now().UTC().UnixNano()-tsNano {
-					return timestamp.Timestamp{PhysicalTime: tsNano}, nil
+					return Snapshot{
+						TS: &timestamp.Timestamp{
+							PhysicalTime: tsNano,
+						},
+						CreatedByTenant: tenant,
+					}, nil
 				} else {
 					valid, err := builder.compCtx.CheckTimeStampValid(tsNano)
 					if err != nil {
-						return timestamp.Timestamp{}, err
+						return Snapshot{TS: &timestamp.Timestamp{}}, err
 					}
+
 					if valid {
-						return timestamp.Timestamp{PhysicalTime: tsNano}, nil
+						return Snapshot{
+							TS: &timestamp.Timestamp{
+								PhysicalTime: tsNano,
+							},
+							CreatedByTenant: tenant,
+						}, nil
 					} else {
-						return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value, no corresponding snapshot ", lit.Sval)
+						return Snapshot{TS: &timestamp.Timestamp{}}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value, no corresponding snapshot ", lit.Sval)
 					}
 				}
 
 			} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
-				tsValue, err := builder.compCtx.ResolveSnapshotTsWithSnapShotName(lit.Sval)
-				if err != nil {
-					return timestamp.Timestamp{}, err
-				}
-				return timestamp.Timestamp{PhysicalTime: tsValue}, nil
+				return builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
 			} else if tsExpr.Type == tree.ATMOTIMESTAMP {
 				ts, err := timestamp.ParseTimestamp(lit.Sval)
 				if err != nil {
-					return timestamp.Timestamp{}, err
+					return Snapshot{TS: &timestamp.Timestamp{}}, err
 				}
-				return ts, nil
+
+				return Snapshot{
+					TS:              &ts,
+					CreatedByTenant: tenant,
+				}, nil
 			} else {
-				return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint type", tsExpr.Type.String())
+				return Snapshot{TS: &timestamp.Timestamp{}}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint type", tsExpr.Type.String())
 			}
 		} else if lit, ok := exprLit.Lit.Value.(*plan.Literal_I64Val); ok {
 			if tsExpr.Type == tree.ATTIMESTAMPTIME {
 				if lit.I64Val <= 0 {
-					return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
+					return Snapshot{TS: &timestamp.Timestamp{}}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
 				}
-				return timestamp.Timestamp{PhysicalTime: lit.I64Val}, nil
+
+				return Snapshot{
+					TS: &timestamp.Timestamp{
+						PhysicalTime: lit.I64Val,
+					},
+					CreatedByTenant: tenant,
+				}, nil
 			} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
-				return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint for snapshot hint", lit.I64Val)
+				return Snapshot{TS: &timestamp.Timestamp{}}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint for snapshot hint", lit.I64Val)
 			}
 		} else {
-			return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid input expr ", tsExpr.Expr.String())
+			return Snapshot{TS: &timestamp.Timestamp{}}, moerr.NewInvalidArg(builder.GetContext(), "invalid input expr ", tsExpr.Expr.String())
 		}
 	}
-	return timestamp.Timestamp{}, nil
+	return Snapshot{TS: &timestamp.Timestamp{}}, nil
 }

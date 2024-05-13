@@ -165,9 +165,6 @@ var (
 	// default lower_case_table_names
 	defaultLowerCaseTableNames = "1"
 
-	// default sql_mode
-	dafaultSqlMode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES"
-
 	CNPrimaryCheck = false
 )
 
@@ -292,9 +289,6 @@ type FrontendParameters struct {
 
 	// disable select into
 	DisableSelectInto bool `toml:"disable-select-into"`
-
-	// default sql_mode default value
-	SqlMode string `toml:"sql-mode"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -410,10 +404,6 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	if fp.CleanKillQueueInterval == 0 {
 		fp.CleanKillQueueInterval = defaultCleanKillQueueInterval
 	}
-
-	if fp.SqlMode == "" {
-		fp.SqlMode = dafaultSqlMode
-	}
 }
 
 func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {
@@ -527,6 +517,9 @@ type ObservabilityParameters struct {
 	// DisableSpan default: false. Disable span collection
 	DisableSpan bool `toml:"disableSpan"`
 
+	// DisableError default: false. Disable error collection
+	DisableError bool `toml:"disableError"`
+
 	// LongSpanTime default: 500 ms. Only record span, which duration >= LongSpanTime
 	LongSpanTime toml.Duration `toml:"longSpanTime"`
 
@@ -580,6 +573,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		MetricStorageUsageCheckNewInterval: toml.Duration{},
 		MergeCycle:                         toml.Duration{},
 		DisableSpan:                        false,
+		DisableError:                       false,
 		LongSpanTime:                       toml.Duration{},
 		SkipRunningStmt:                    defaultSkipRunningStmt,
 		DisableSqlWriter:                   false,

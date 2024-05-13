@@ -19,11 +19,13 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -102,33 +104,19 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 			logutil.Errorf("failed to unmarshal partition table: %v", err)
 			return nil, err
 		}
-		var cataChe *cache.CatalogCache
-		if !tbl.db.op.IsSnapOp() {
-			cataChe = e.getLatestCatalogCache()
-		} else {
-			cataChe, err = e.getOrCreateSnapCatalogCache(
-				ctx,
-				types.TimestampToTS(tbl.db.op.SnapshotTS()))
+		for _, partitionTableName := range partitionInfo.PartitionTableNames {
+			partitionTable, err := tbl.db.Relation(ctx, partitionTableName, nil)
 			if err != nil {
 				return nil, err
 			}
-		}
-		for _, partitionTableName := range partitionInfo.PartitionTableNames {
-			partitionTable := cataChe.GetTableByName(
-				tbl.db.databaseId, partitionTableName)
-			partitionsTableDef = append(partitionsTableDef, partitionTable.TableDef)
-
+			partitionsTableDef = append(partitionsTableDef, partitionTable.(*txnTable).tableDef)
 			var ps *logtailreplay.PartitionState
 			if !tbl.db.op.IsSnapOp() {
-				ps = e.getOrCreateLatestPart(tbl.db.databaseId, partitionTable.Id).Snapshot()
+				ps = e.getOrCreateLatestPart(tbl.db.databaseId, partitionTable.(*txnTable).tableId).Snapshot()
 			} else {
 				p, err := e.getOrCreateSnapPart(
 					ctx,
-					tbl.db.databaseId,
-					partitionTable.TableDef.GetDbName(),
-					partitionTable.Id,
-					partitionTable.TableDef.GetName(),
-					partitionTable.PrimarySeqnum,
+					partitionTable.(*txnTable),
 					types.TimestampToTS(tbl.db.op.SnapshotTS()),
 				)
 				if err != nil {
@@ -2251,12 +2239,9 @@ func (tbl *txnTable) getPartitionState(
 
 	// for snapshot txnOp
 	if tbl._partState.Load() == nil {
-		p, err := tbl.getTxn().engine.getOrCreateSnapPart(ctx,
-			tbl.db.databaseId,
-			tbl.db.databaseName,
-			tbl.tableId,
-			tbl.tableName,
-			tbl.primarySeqnum,
+		p, err := tbl.getTxn().engine.getOrCreateSnapPart(
+			ctx,
+			tbl,
 			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
 		if err != nil {
 			return nil, err
@@ -2647,7 +2632,7 @@ func (tbl *txnTable) transferDeletes(
 func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	blks []objectio.BlockInfo) (types.Rowid, bool, error) {
 	var auxIdCnt int32
-	var typ *plan.Type
+	var typ plan.Type
 	var rowid types.Rowid
 	var objMeta objectio.ObjectMeta
 
@@ -2656,7 +2641,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	tableDef := tbl.GetTableDef(context.TODO())
 	for _, col := range tableDef.Cols {
 		if col.Name == tableDef.Pkey.PkeyColName {
-			typ = &col.Typ
+			typ = col.Typ
 			columns = append(columns, uint16(col.Seqnum))
 			colTypes = append(colTypes, types.T(col.Typ.Id).ToType())
 		}
@@ -2729,20 +2714,11 @@ func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, erro
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
 }
 
-func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats) (*api.MergeCommitEntry, error) {
+func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error) {
 	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
-	}
-	objInfos := make([]logtailreplay.ObjectInfo, 0, len(objstats))
-	for _, objstat := range objstats {
-		info, exist := state.GetObject(*objstat.ObjectShortName())
-		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
-			logutil.Errorf("object not visible: %s", info.String())
-			return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
-		}
-		objInfos = append(objInfos, info)
 	}
 
 	sortkeyPos := -1
@@ -2759,13 +2735,60 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		sortkeyIsPK = false
 	}
 
+	var objInfos []logtailreplay.ObjectInfo
+	if len(objstats) != 0 {
+		objInfos = make([]logtailreplay.ObjectInfo, 0, len(objstats))
+		for _, objstat := range objstats {
+			info, exist := state.GetObject(*objstat.ObjectShortName())
+			if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
+				logutil.Errorf("object not visible: %s", info.String())
+				return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
+			}
+			objInfos = append(objInfos, info)
+		}
+	} else {
+		objInfos = make([]logtailreplay.ObjectInfo, 0)
+		iter, err := state.NewObjectsIter(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		for iter.Next() {
+			obj := iter.Entry().ObjectInfo
+			if obj.EntryState {
+				continue
+			}
+			if sortkeyPos != -1 {
+				sortKeyZM := obj.SortKeyZoneMap()
+				if !sortKeyZM.IsInited() {
+					continue
+				}
+			}
+			objInfos = append(objInfos, obj)
+		}
+		if len(policyName) != 0 {
+			if strings.HasPrefix(policyName, "small") {
+				objInfos = logtailreplay.NewSmall(110 * common.Const1MBytes).Filter(objInfos)
+			} else if strings.HasPrefix(policyName, "overlap") {
+				if sortkeyPos != -1 {
+					objInfos = logtailreplay.NewOverlap(100).Filter(objInfos)
+				}
+			} else {
+				return nil, moerr.NewInvalidInput(ctx, "invalid merge policy name")
+			}
+		}
+	}
+
+	if len(objInfos) < 2 {
+		return nil, moerr.NewInternalErrorNoCtx("no matching objects")
+	}
+
 	tbl.ensureSeqnumsAndTypesExpectRowid()
 
-	taskHost, err := NewCNMergeTask(
+	taskHost, err := newCNMergeTask(
 		ctx, tbl, snapshot, state, // context
 		sortkeyPos, sortkeyIsPK, // schema
 		objInfos, // targets
-	)
+		targetObjSize)
 	if err != nil {
 		return nil, err
 	}
@@ -2775,23 +2798,67 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		return nil, err
 	}
 
+	if taskHost.DoTransfer() {
+		return taskHost.commitEntry, nil
+	}
+
 	// if transfer info is too large, write it down to s3
-	if size := taskHost.commitEntry.Booking.ProtoSize(); size > 60*common.Const1MBytes {
-		logutil.Infof("mergeblocks on cn: write s3 transfer info %v", common.HumanReadableBytes(size))
-		t := types.T_varchar.ToType()
-		v, releasev := taskHost.GetVector(&t)
-		defer releasev()
-		vectorRowCnt := 1
-		data, err := taskHost.commitEntry.Booking.Marshal()
-		if err != nil {
+	if size := taskHost.commitEntry.Booking.ProtoSize(); size > 80*common.Const1MBytes {
+		if err := dumpTransferInfo(ctx, taskHost); err != nil {
 			return taskHost.commitEntry, err
 		}
-		vector.AppendBytes(v, data, false, taskHost.GetMPool())
-		taskHost.commitEntry.Booking.Marshal()
-		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-		writer, err := blockio.NewBlockWriterNew(taskHost.fs, name, 0, nil)
+		idx := 0
+		locstr := ""
+		locations := taskHost.commitEntry.BookingLoc
+		for ; idx < len(locations); idx += objectio.LocationLen {
+			loc := objectio.Location(locations[idx : idx+objectio.LocationLen])
+			locstr += loc.String() + ","
+		}
+		logutil.Infof("mergeblocks %v-%v on cn: write s3 transfer info (%v) %v",
+			tbl.tableId, tbl.tableName, common.HumanReadableBytes(size), locstr)
+	}
+
+	// commit this to tn
+	return taskHost.commitEntry, nil
+}
+
+func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
+	defer func() {
 		if err != nil {
-			return taskHost.commitEntry, err
+			idx := 0
+			locations := taskHost.commitEntry.BookingLoc
+			for ; idx < len(locations); idx += objectio.LocationLen {
+				loc := objectio.Location(locations[idx : idx+objectio.LocationLen])
+				taskHost.fs.Delete(ctx, loc.Name().String())
+			}
+		}
+	}()
+	data, err := taskHost.commitEntry.Booking.Marshal()
+	if err != nil {
+		return
+	}
+	taskHost.commitEntry.BookingLoc = make([]byte, 0, objectio.LocationLen)
+	chunkSize := 1000 * mpool.MB
+	for len(data) > 0 {
+		var chunck []byte
+		if len(data) > chunkSize {
+			chunck = data[:chunkSize]
+			data = data[chunkSize:]
+		} else {
+			chunck = data
+			data = nil
+		}
+
+		t := types.T_varchar.ToType()
+		v, releasev := taskHost.GetVector(&t)
+		vectorRowCnt := 1
+		vector.AppendBytes(v, chunck, false, taskHost.GetMPool())
+		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+		var writer *blockio.BlockWriter
+		writer, err = blockio.NewBlockWriterNew(taskHost.fs, name, 0, nil)
+		if err != nil {
+			releasev()
+			return
 		}
 
 		batch := batch.New(true, []string{"payload"})
@@ -2799,22 +2866,23 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		batch.Vecs[0] = v
 		_, err = writer.WriteTombstoneBatch(batch)
 		if err != nil {
-			return taskHost.commitEntry, err
+			releasev()
+			return
 		}
-		blocks, _, err := writer.Sync(ctx)
+		var blocks []objectio.BlockObject
+		blocks, _, err = writer.Sync(ctx)
+		releasev()
 		if err != nil {
-			return taskHost.commitEntry, err
+			return
 		}
 		location := blockio.EncodeLocation(
 			name,
 			blocks[0].GetExtent(),
 			uint32(vectorRowCnt),
 			blocks[0].GetID())
-		taskHost.commitEntry.BookingLoc = make([]byte, len(location))
-		copy(taskHost.commitEntry.BookingLoc[:], location[:])
-		taskHost.commitEntry.Booking = nil
+		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, location...)
 	}
 
-	// commit this to tn
-	return taskHost.commitEntry, nil
+	taskHost.commitEntry.Booking = nil
+	return
 }

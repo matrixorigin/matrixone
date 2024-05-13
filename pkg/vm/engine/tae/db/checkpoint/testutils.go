@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -85,23 +86,41 @@ func (r *runner) CleanPenddingCheckpoint() {
 }
 
 func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error {
-	if r.GetPenddingIncrementalCount() == 0 {
-		err := r.ForceIncrementalCheckpoint(end, false)
-		if err != nil {
-			return err
-		}
-	} else {
-		end = r.MaxCheckpoint().GetEnd()
-	}
 	if versionInterval == 0 {
 		versionInterval = r.options.globalVersionInterval
 	}
-	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
-		force:    true,
-		end:      end,
-		interval: versionInterval,
-	})
-	return nil
+	if r.GetPenddingIncrementalCount() != 0 {
+		end = r.MaxCheckpoint().GetEnd()
+		r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
+			force:    true,
+			end:      end,
+			interval: versionInterval,
+		})
+		return nil
+	}
+	timeout := time.After(versionInterval)
+	for {
+		select {
+		case <-timeout:
+			return moerr.NewInternalError(r.ctx, "timeout")
+		default:
+			err := r.ForceIncrementalCheckpoint(end, false)
+			if err != nil {
+				if dbutils.IsRetrieableCheckpoint(err) {
+					interval := versionInterval.Milliseconds() / 400
+					time.Sleep(time.Duration(interval))
+					break
+				}
+				return err
+			}
+			r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
+				force:    true,
+				end:      end,
+				interval: versionInterval,
+			})
+			return nil
+		}
+	}
 }
 
 func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error {
@@ -180,9 +199,12 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 	now := time.Now()
 	prev := r.MaxCheckpoint()
 	if prev != nil && !prev.IsFinished() {
-		return moerr.NewInternalError(r.ctx, "prev checkpoint not finished")
+		return moerr.NewPrevCheckpointNotFinished()
 	}
 
+	if prev != nil && end.LessEq(&prev.end) {
+		return nil
+	}
 	var (
 		err      error
 		errPhase string

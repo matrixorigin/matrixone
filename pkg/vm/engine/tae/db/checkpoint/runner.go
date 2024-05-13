@@ -194,8 +194,6 @@ type runner struct {
 		checkpointSize      int
 
 		reservedWALEntryCount uint64
-
-		disableGC bool
 	}
 
 	ctx context.Context
@@ -359,37 +357,12 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 	incrementals := r.GetAllIncrementalCheckpoints()
 	for _, incremental := range incrementals {
 		if incremental.LessEq(ts) {
-			if r.options.disableGC {
-				r.DeleteIncrementalEntry(incremental)
-				continue
-			}
-			err := incremental.GCEntry(r.rt.Fs)
-			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				logutil.Warnf("gc %v failed: %v", incremental.String(), err)
-				panic(err)
-			}
-			err = incremental.GCMetadata(r.rt.Fs)
-			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				panic(err)
-			}
 			r.DeleteIncrementalEntry(incremental)
 		}
 	}
 	globals := r.GetAllGlobalCheckpoints()
 	for _, global := range globals {
 		if global.LessEq(ts) {
-			if r.options.disableGC {
-				r.DeleteGlobalEntry(global)
-				continue
-			}
-			err := global.GCEntry(r.rt.Fs)
-			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				panic(err)
-			}
-			err = global.GCMetadata(r.rt.Fs)
-			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				panic(err)
-			}
 			r.DeleteGlobalEntry(global)
 		}
 	}
@@ -948,10 +921,11 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		}
 	})
 
-	pressure := float64(totalSize) / float64(common.RuntimeCNMergeMemControl.Load())
+	pressure := float64(totalSize) / float64(common.RuntimeOverallFlushMemCap.Load())
 	if pressure > 1.0 {
 		pressure = 1.0
 	}
+	count := 0
 
 	logutil.Infof("[flushtabletail] scan result: pressure %v, totalsize %v", pressure, common.HumanReadableBytes(totalSize))
 
@@ -980,6 +954,13 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		}
 
 		flushReady := func() bool {
+			if !table.IsActive() {
+				count++
+				if pressure < 0.5 || count < 200 {
+					return true
+				}
+				return false
+			}
 			if stats.FlushDeadline.Before(time.Now()) {
 				return true
 			}

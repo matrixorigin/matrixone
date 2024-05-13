@@ -807,9 +807,9 @@ func newStringConstVal(v string) *plan.Expr {
 }
 */
 
-func newColumnExpr(pos int, typ *plan.Type, name string) *plan.Expr {
+func newColumnExpr(pos int, typ plan.Type, name string) *plan.Expr {
 	return &plan.Expr{
-		Typ: *typ,
+		Typ: typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				Name:   name,
@@ -836,7 +836,7 @@ func genWriteReqs(ctx context.Context, writes []Entry, op client.TxnOperator) ([
 		//there is none update/delete entries on mo_columns just after one on mo_tables.
 		//case 2: (DELETE,MO_TABLES),...
 		if (e.typ == DELETE || e.typ == UPDATE) &&
-			e.databaseId == catalog.MO_DATABASE_ID &&
+			e.databaseId == catalog.MO_CATALOG_ID &&
 			e.tableId == catalog.MO_COLUMNS_ID {
 			continue
 		}

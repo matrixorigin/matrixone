@@ -528,9 +528,9 @@ func TestTransaction2(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(db.String())
 	assert.Equal(t, txn1.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAtLocked())
-	assert.True(t, db.GetMeta().(*catalog.DBEntry).IsCommitted())
+	assert.True(t, db.GetMeta().(*catalog.DBEntry).IsCommittedLocked())
 	assert.Equal(t, txn1.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAtLocked())
-	assert.True(t, rel.GetMeta().(*catalog.TableEntry).IsCommitted())
+	assert.True(t, rel.GetMeta().(*catalog.TableEntry).IsCommittedLocked())
 
 	txn2, _ := mgr.StartTxn(nil)
 	get, err := txn2.GetDatabase(name)

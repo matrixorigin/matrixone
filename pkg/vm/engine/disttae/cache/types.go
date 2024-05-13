@@ -187,6 +187,16 @@ func databaseItemLess(a, b *DatabaseItem) bool {
 	if a.Name > b.Name {
 		return false
 	}
+	if a.Ts.Equal(b.Ts) {
+		if a.Id > b.Id {
+			return true
+		}
+		if a.Id < b.Id {
+			return false
+		}
+		// for the same database id, the delete item is head.
+		return a.deleted
+	}
 	return a.Ts.Greater(b.Ts)
 }
 
@@ -275,4 +285,15 @@ func copyTableItem(dst, src *TableItem) {
 	for i, rowid := range src.Rowids {
 		copy(dst.Rowids[i][:], rowid[:])
 	}
+}
+
+func copyDatabaseItem(dest, src *DatabaseItem) {
+	dest.AccountId = src.AccountId
+	dest.Name = src.Name
+	dest.Ts = src.Ts
+	dest.Id = src.Id
+	copy(dest.Rowid[:], src.Rowid[:])
+	dest.Typ = src.Typ
+	dest.CreateSql = src.CreateSql
+	//deleted bool
 }

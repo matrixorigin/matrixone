@@ -72,9 +72,19 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, p
 	idxTags["meta.scan"] = builder.genNewTag()
 	idxTags["centroids.scan"] = builder.genNewTag()
 	idxTags["entries.scan"] = builder.genNewTag()
-	idxObjRefs[0], idxTableDefs[0] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
-	idxObjRefs[1], idxTableDefs[1] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
-	idxObjRefs[2], idxTableDefs[2] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
+	// TODO: plan node should hold snapshot info and account info
+	//idxObjRefs[0], idxTableDefs[0] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, *scanNode.ScanTS)
+	//idxObjRefs[1], idxTableDefs[1] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, *scanNode.ScanTS)
+	//idxObjRefs[2], idxTableDefs[2] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, *scanNode.ScanTS)
+
+	scanSnapshot := scanNode.ScanSnapshot
+	if scanSnapshot == nil {
+		scanSnapshot = &Snapshot{}
+	}
+
+	idxObjRefs[0], idxTableDefs[0] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, *scanSnapshot)
+	idxObjRefs[1], idxTableDefs[1] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, *scanSnapshot)
+	idxObjRefs[2], idxTableDefs[2] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndexWithSortDistFn.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, *scanSnapshot)
 
 	builder.addNameByColRef(idxTags["meta.scan"], idxTableDefs[0])
 	builder.addNameByColRef(idxTags["centroids.scan"], idxTableDefs[1])
@@ -251,7 +261,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 	// 4. Sort by l2_distance(centroid, normalize_l2(literal)) limit @probe_limit
 	// 4.1 @probe_limit is a system variable
 	probeLimitValueExpr := &plan.Expr{
-		Typ: *makePlan2Type(&textType), // T_text
+		Typ: makePlan2Type(&textType), // T_text
 		Expr: &plan.Expr_V{
 			V: &plan.VarRef{
 				Name:   "probe_limit",

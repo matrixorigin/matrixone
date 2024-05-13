@@ -2,7 +2,7 @@ queue_rules:
   - name: main
     merge_conditions: []
     checks_timeout: 4h
-  - name: release-1.0
+  - name: release-1.2
     merge_conditions: []
     checks_timeout: 4h
   - name: release-1.1
@@ -26,15 +26,15 @@ pull_request_rules:
 
           Approved by: @{{ approved_reviews_by | join(', @') }}
 
-  - name: Automatic queue on approval for release-1.0
+  - name: Automatic queue on approval for release-1.2
     conditions:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
-      - base=1.0-dev
+      - base=1.2-dev
       - approved-reviews-by=sukki37
     actions:
       queue:
-        name: release-1.0
+        name: release-1.2
         method: squash
         commit_message_template: |
           {{ title }} (#{{ number }})

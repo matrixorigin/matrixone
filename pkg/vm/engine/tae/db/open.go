@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
-	"go.uber.org/zap"
 )
 
 const (
@@ -53,16 +52,13 @@ func fillRuntimeOptions(opts *options.Options) {
 	common.RuntimeCNMergeMemControl.Store(opts.MergeCfg.CNMergeMemControlHint)
 	common.RuntimeMinCNMergeSize.Store(opts.MergeCfg.CNTakeOverExceed)
 	common.RuntimeCNTakeOverAll.Store(opts.MergeCfg.CNTakeOverAll)
-	common.RuntimeCNMergeMemControl.Store(opts.CheckpointCfg.OverallFlushMemControl)
+	common.RuntimeOverallFlushMemCap.Store(opts.CheckpointCfg.OverallFlushMemControl)
 	if opts.IsStandalone {
 		common.IsStandaloneBoost.Store(true)
 	}
 	if opts.MergeCfg.CNStandaloneTake {
 		common.ShouldStandaloneCNTakeOver.Store(true)
 	}
-	w := &bytes.Buffer{}
-	toml.NewEncoder(w).Encode(opts.MergeCfg)
-	logutil.Info("mergeblocks options", zap.String("toml", w.String()), zap.Bool("standalone", opts.IsStandalone))
 }
 
 func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
@@ -88,6 +84,10 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	opts = opts.FillDefaults(dirname)
 	fillRuntimeOptions(opts)
 
+	wbuf := &bytes.Buffer{}
+	werr := toml.NewEncoder(wbuf).Encode(opts)
+	logutil.Info("open-tae", common.OperationField("Config"),
+		common.AnyField("toml", wbuf.String()), common.ErrorField(werr))
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
 		// TODO:fileservice needs to be passed in as a parameter
@@ -161,8 +161,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
 		checkpoint.WithGlobalMinCount(int(opts.CheckpointCfg.GlobalMinCount)),
 		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval),
-		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount),
-		checkpoint.WithDisableGC(opts.GCCfg.DisableGC))
+		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
 
 	now := time.Now()
 	checkpointed, ckpLSN, valid, err := db.BGCheckpointRunner.Replay(dataFactory)
@@ -187,7 +186,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
-	db.MergeHandle = newMergeTaskBuiler(db)
+	db.MergeHandle = newMergeTaskBuilder(db)
 	scanner.RegisterOp(db.MergeHandle)
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()

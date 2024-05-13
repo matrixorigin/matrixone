@@ -29,30 +29,33 @@ import (
 )
 
 var (
-	_                  Policy = (*Basic)(nil)
+	_                  Policy = (*basic)(nil)
 	defaultBasicConfig        = &BasicPolicyConfig{
-		MergeMaxOneRun:   common.DefaultMaxMergeObjN,
-		MaxRowsMergedObj: common.DefaultMaxRowsObj,
-		MinCNMergeSize:   common.DefaultMinCNMergeSize * common.Const1MBytes,
+		MergeMaxOneRun:    common.DefaultMaxMergeObjN,
+		MaxOsizeMergedObj: common.DefaultMaxOsizeObjMB * common.Const1MBytes,
+		ObjectMinOsize:    common.DefaultMinOsizeQualifiedMB * common.Const1MBytes,
+		MinCNMergeSize:    common.DefaultMinCNMergeSize * common.Const1MBytes,
 	}
 )
 
 /// TODO(aptend): codes related storing and fetching configs are too annoying!
 
 type BasicPolicyConfig struct {
-	name             string
-	ObjectMinRows    int
-	MergeMaxOneRun   int
-	MaxRowsMergedObj int
-	MinCNMergeSize   uint64
-	FromUser         bool
-	MergeHints       []api.MergeHint
+	name              string
+	MergeMaxOneRun    int
+	ObjectMinOsize    uint32
+	MaxOsizeMergedObj uint32
+	MinCNMergeSize    uint64
+	FromUser          bool
+	MergeHints        []api.MergeHint
 }
 
 func (c *BasicPolicyConfig) String() string {
 	return fmt.Sprintf(
-		"minRowsObj:%d, maxOneRun:%d, cnSize:%v, hints: %v",
-		c.ObjectMinRows, c.MergeMaxOneRun,
+		"minOsizeObj:%v, maxOneRun:%v, maxOsizeMergedObj: %v, offloadToCNSize:%v, hints: %v",
+		common.HumanReadableBytes(int(c.ObjectMinOsize)),
+		c.MergeMaxOneRun,
+		common.HumanReadableBytes(int(c.MaxOsizeMergedObj)),
 		common.HumanReadableBytes(int(c.MinCNMergeSize)),
 		c.MergeHints,
 	)
@@ -63,7 +66,7 @@ type customConfigProvider struct {
 	configs map[uint64]*BasicPolicyConfig // works like a cache
 }
 
-func NewCustomConfigProvider() *customConfigProvider {
+func newCustomConfigProvider() *customConfigProvider {
 	return &customConfigProvider{
 		configs: make(map[uint64]*BasicPolicyConfig),
 	}
@@ -74,20 +77,35 @@ func (o *customConfigProvider) GetConfig(tbl *catalog.TableEntry) *BasicPolicyCo
 	defer o.Unlock()
 	p, ok := o.configs[tbl.ID]
 	if !ok {
+		// load from an atomic value
 		extra := tbl.GetLastestSchemaLocked().Extra
-		if extra.MaxObjOnerun != 0 || extra.MinRowsQuailifed != 0 {
+		if extra.MaxObjOnerun != 0 || extra.MinOsizeQuailifed != 0 {
+			// compatible with old version
 			cnSize := extra.MinCnMergeSize
 			if cnSize == 0 {
 				cnSize = common.DefaultMinCNMergeSize * common.Const1MBytes
 			}
-			p = &BasicPolicyConfig{
-				ObjectMinRows:    int(extra.MinRowsQuailifed),
-				MergeMaxOneRun:   int(extra.MaxObjOnerun),
-				MaxRowsMergedObj: int(extra.MaxRowsMergedObj),
-				MinCNMergeSize:   cnSize,
-				FromUser:         true,
-				MergeHints:       extra.Hints,
+			// if the values are smaller than default, it map old rows -> bytes size
+			minOsize := extra.MinOsizeQuailifed
+			if v := uint32(80 * 8192); minOsize < v {
+				minOsize = v
 			}
+			maxOsize := extra.MaxOsizeMergedObj
+			if v := uint32(500 * 8192); maxOsize < v {
+				maxOsize = v
+			}
+
+			p = &BasicPolicyConfig{
+				ObjectMinOsize:    minOsize,
+				MergeMaxOneRun:    int(extra.MaxObjOnerun),
+				MaxOsizeMergedObj: maxOsize,
+				MinCNMergeSize:    cnSize,
+				FromUser:          true,
+				MergeHints:        extra.Hints,
+			}
+			o.configs[tbl.ID] = p
+		} else {
+			p = defaultBasicConfig
 			o.configs[tbl.ID] = p
 		}
 	}
@@ -120,7 +138,7 @@ func (o *customConfigProvider) String() string {
 	buf.WriteString("customConfigProvider: ")
 	for _, k := range keys {
 		c := o.configs[k]
-		buf.WriteString(fmt.Sprintf("%d-%v:%v,%v | ", k, c.name, c.ObjectMinRows, c.MergeMaxOneRun))
+		buf.WriteString(fmt.Sprintf("%d-%v:%v,%v | ", k, c.name, c.ObjectMinOsize, c.MergeMaxOneRun))
 	}
 	return buf.String()
 }
@@ -131,41 +149,46 @@ func (o *customConfigProvider) ResetConfig() {
 	o.configs = make(map[uint64]*BasicPolicyConfig)
 }
 
-type Basic struct {
-	id      uint64
-	schema  *catalog.Schema
-	hist    *common.MergeHistory
-	objHeap *heapBuilder[*catalog.ObjectEntry]
-	accBuf  []int
+type basic struct {
+	id        uint64
+	schema    *catalog.Schema
+	hist      *common.MergeHistory
+	objHeap   *heapBuilder[*catalog.ObjectEntry]
+	guessType common.WorkloadKind
+	accBuf    []int
 
 	config         *BasicPolicyConfig
 	configProvider *customConfigProvider
 }
 
-func NewBasicPolicy() *Basic {
-	return &Basic{
+func NewBasicPolicy() Policy {
+	return &basic{
 		objHeap: &heapBuilder[*catalog.ObjectEntry]{
 			items: make(itemSet[*catalog.ObjectEntry], 0, 32),
 		},
 		accBuf:         make([]int, 1, 32),
-		configProvider: NewCustomConfigProvider(),
+		configProvider: newCustomConfigProvider(),
 	}
 }
 
 // impl Policy for Basic
-func (o *Basic) OnObject(obj *catalog.ObjectEntry) {
+func (o *basic) OnObject(obj *catalog.ObjectEntry) {
 	rowsLeftOnObj := obj.GetRemainingRows()
-	// it has too few rows, merge it
+	osize := obj.GetOriginSize()
+
 	iscandidate := func() bool {
+		// objext with a lot of holes
 		if rowsLeftOnObj < obj.GetRows()/2 {
 			return true
 		}
-		if obj.GetOriginSize() > 110*common.Const1MBytes {
-			return false
-		}
-		if rowsLeftOnObj < o.config.ObjectMinRows {
+		if osize < int(o.config.ObjectMinOsize) {
 			return true
 		}
+		// skip big object as an insurance
+		if osize > 110*common.Const1MBytes {
+			return false
+		}
+
 		return false
 	}
 
@@ -177,7 +200,7 @@ func (o *Basic) OnObject(obj *catalog.ObjectEntry) {
 	}
 }
 
-func (o *Basic) SetConfig(tbl *catalog.TableEntry, f func() txnif.AsyncTxn, c any) {
+func (o *basic) SetConfig(tbl *catalog.TableEntry, f func() txnif.AsyncTxn, c any) {
 	txn := f()
 	if tbl == nil || txn == nil {
 		return
@@ -201,19 +224,20 @@ func (o *Basic) SetConfig(tbl *catalog.TableEntry, f func() txnif.AsyncTxn, c an
 	o.configProvider.InvalidCache(tbl)
 }
 
-func (o *Basic) GetConfig(tbl *catalog.TableEntry) any {
+func (o *basic) GetConfig(tbl *catalog.TableEntry) any {
 	r := o.configProvider.GetConfig(tbl)
 	if r == nil {
 		r = &BasicPolicyConfig{
-			ObjectMinRows:  int(common.RuntimeMinRowsQualified.Load()),
-			MergeMaxOneRun: int(common.RuntimeMaxMergeObjN.Load()),
-			MinCNMergeSize: common.RuntimeMinCNMergeSize.Load(),
+			ObjectMinOsize:    common.RuntimeOsizeRowsQualified.Load(),
+			MaxOsizeMergedObj: common.RuntimeMaxObjOsize.Load(),
+			MergeMaxOneRun:    int(common.RuntimeMaxMergeObjN.Load()),
+			MinCNMergeSize:    common.RuntimeMinCNMergeSize.Load(),
 		}
 	}
 	return r
 }
 
-func (o *Basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (o *basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	objs := o.objHeap.finish()
 	sort.Slice(objs, func(i, j int) bool {
 		return objs[i].GetRemainingRows() < objs[j].GetRemainingRows()
@@ -258,12 +282,12 @@ func (o *Basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	return schedDN()
 }
 
-func (o *Basic) ConfigString() string {
+func (o *basic) ConfigString() string {
 	r := o.configProvider.String()
 	return r
 }
 
-func (o *Basic) optimize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
+func (o *basic) optimize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 	// objs are sorted by remaining rows
 	o.accBuf = o.accBuf[:1]
 	for i, obj := range objs {
@@ -283,9 +307,6 @@ func (o *Basic) optimize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 	for i = len(acc) - 1; i > 1 && isBigGap(acc[i-1], acc[i]); i-- {
 	}
 
-	// for ; i > 1 && acc[i] > o.config.MaxRowsMergedObj; i-- {
-	// }
-
 	readyToMergeRows := acc[i]
 
 	// avoid frequent small object merge
@@ -300,7 +321,7 @@ func (o *Basic) optimize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 	return objs
 }
 
-func (o *Basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
+func (o *basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
@@ -315,70 +336,21 @@ func (o *Basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.Ob
 			return false
 		}
 		// make object averaged size
-		return osize > 120*common.Const1MBytes
+		return osize > int(o.config.MaxOsizeMergedObj)
 	}
 	for needPopout(objs) {
 		objs = objs[:len(objs)-1]
 	}
-	// if popCnt > 0 && memPop {
-	// 	logutil.Infof(
-	// 		"mergeblocks skip %d-%s pop %d out of %d objects due to %s mem cap",
-	// 		o.id, o.schema.Name, popCnt, len(objs)+popCnt, common.HumanReadableBytes(int(mem)),
-	// 	)
-	// }
+
 	return objs
 }
 
-func (o *Basic) ResetForTable(entry *catalog.TableEntry) {
+func (o *basic) ResetForTable(entry *catalog.TableEntry) {
 	o.id = entry.ID
 	o.schema = entry.GetLastestSchemaLocked()
 	o.hist = entry.Stats.GetLastMerge()
+	o.guessType = entry.Stats.GetWorkloadGuess()
 	o.objHeap.reset()
 
 	o.config = o.configProvider.GetConfig(entry)
-
-	updateConfig := func(min, max, run int) {
-		if o.config == nil {
-			o.config = &BasicPolicyConfig{
-				name:           o.schema.Name,
-				MinCNMergeSize: common.RuntimeMinCNMergeSize.Load(),
-			}
-		}
-		o.config.ObjectMinRows = min
-		o.config.MaxRowsMergedObj = max
-		o.config.MergeMaxOneRun = run
-		o.configProvider.SetCache(entry, o.config)
-	}
-
-	if o.config == nil || !o.config.FromUser {
-		guessWorkload := entry.Stats.GetWorkloadGuess()
-		switch guessWorkload {
-		case common.WorkApInsert:
-			updateConfig(20*8192, common.DefaultMaxRowsObj, 50)
-		case common.WorkApQuiet:
-			updateConfig(80*8192, common.DefaultMaxRowsObj, 30)
-		default:
-			o.config = defaultBasicConfig
-			o.config.ObjectMinRows = determineObjectMinRows(o.schema)
-			o.config.MaxRowsMergedObj = int(common.RuntimeMaxRowsObj.Load())
-			o.config.MergeMaxOneRun = int(common.RuntimeMaxMergeObjN.Load())
-			o.config.MinCNMergeSize = common.RuntimeMinCNMergeSize.Load()
-			o.configProvider.InvalidCache(entry)
-		}
-	}
-}
-
-func determineObjectMinRows(schema *catalog.Schema) int {
-	runtimeMinRows := int(common.RuntimeMinRowsQualified.Load())
-	if runtimeMinRows > common.DefaultMinRowsQualified {
-		return runtimeMinRows
-	}
-	// the max rows of a full object
-	objectFullRows := int(schema.ObjectMaxBlocks) * int(schema.BlockMaxRows)
-	// we want every object has at least 5 blks rows
-	objectMinRows := constMergeMinBlks * int(schema.BlockMaxRows)
-	if objectFullRows < objectMinRows { // for small config in unit test
-		return objectFullRows
-	}
-	return objectMinRows
 }

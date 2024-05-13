@@ -310,7 +310,7 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		// expr must be bool type, if not, try to do type convert
 		// but just ignore the subQuery. It will be solved at optimizer.
 		if expr.GetSub() == nil {
-			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, &plan.Type{Id: int32(types.T_bool)})
+			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, plan.Type{Id: int32(types.T_bool)})
 			if err != nil {
 				return nil, err
 			}
@@ -1778,7 +1778,7 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 }
 
 // databaseIsValid checks whether the database exists or not.
-func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
+func databaseIsValid(dbName string, ctx CompilerContext, snapshot Snapshot) (string, error) {
 	connectDBFirst := false
 	if len(dbName) == 0 {
 		connectDBFirst = true
@@ -1787,7 +1787,7 @@ func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
 		dbName = ctx.DefaultDatabase()
 	}
 
-	if len(dbName) == 0 || !ctx.DatabaseExists(dbName) {
+	if len(dbName) == 0 || !ctx.DatabaseExists(dbName, snapshot) {
 		if connectDBFirst {
 			return "", moerr.NewNoDB(ctx.GetContext())
 		} else {
@@ -1998,11 +1998,28 @@ func MakeRuntimeFilter(tag int32, matchPrefix bool, upperlimit int32, expr *Expr
 	}
 }
 
-func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
-	rightArg := &plan.Expr{
+func MakeIntervalExpr(num int64, str string) *Expr {
+	arg0 := makePlan2Int64ConstExprWithType(num)
+	arg1 := makePlan2StringConstExprWithType(str, false)
+	return &plan.Expr{
 		Typ: plan.Type{
-			Id: int32(types.T_tuple),
+			Id: int32(types.T_interval),
 		},
+		Expr: &plan.Expr_List{
+			List: &plan.ExprList{
+				List: []*Expr{arg0, arg1},
+			},
+		},
+	}
+}
+
+func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
+	rightType := plan.Type{Id: int32(types.T_tuple)}
+	if matchPrefix {
+		rightType = left.Typ
+	}
+	rightArg := &plan.Expr{
+		Typ: rightType,
 		Expr: &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
 				Len:  length,
@@ -2093,4 +2110,24 @@ func (builder *QueryBuilder) addNameByColRef(tag int32, tableDef *plan.TableDef)
 	for i, col := range tableDef.Cols {
 		builder.nameByColRef[[2]int32{tag, int32(i)}] = tableDef.Name + "." + col.Name
 	}
+}
+
+func GetRowSizeFromTableDef(tableDef *TableDef, ignoreHiddenKey bool) float64 {
+	size := int32(0)
+	for _, col := range tableDef.Cols {
+		if col.Hidden && ignoreHiddenKey {
+			continue
+		}
+		if col.Typ.Width > 0 {
+			size += col.Typ.Width
+			continue
+		}
+		typ := types.T(col.Typ.Id).ToType()
+		if typ.Width > 0 {
+			size += typ.Width
+		} else {
+			size += typ.Size
+		}
+	}
+	return float64(size)
 }

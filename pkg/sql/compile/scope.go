@@ -236,14 +236,15 @@ func (s *Scope) MergeRun(c *Compile) error {
 			wg.Done()
 		}
 	}
-	defer wg.Wait()
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	var errReceiveChan chan error
 	if len(s.RemoteReceivRegInfos) > 0 {
 		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
-		s.notifyAndReceiveFromRemote(errReceiveChan)
+		s.notifyAndReceiveFromRemote(&wg, errReceiveChan)
 	}
+	defer wg.Wait()
+
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		select {
@@ -791,7 +792,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 				Op:  vm.MergeLimit,
 				Idx: in.Idx,
 				Arg: mergelimit.NewArgument().
-					WithLimit(arg.Limit),
+					WithLimit(arg.LimitExpr),
 
 				CnAddr:      in.CnAddr,
 				OperatorID:  c.allocOperatorID(),
@@ -804,7 +805,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: limit.NewArgument().
-						WithLimit(arg.Limit),
+						WithLimit(arg.LimitExpr),
 
 					CnAddr:      in.CnAddr,
 					OperatorID:  in.OperatorID,
@@ -906,7 +907,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 				Op:  vm.MergeOffset,
 				Idx: in.Idx,
 				Arg: mergeoffset.NewArgument().
-					WithOffset(arg.Offset),
+					WithOffset(arg.OffsetExpr),
 
 				CnAddr:      in.CnAddr,
 				OperatorID:  c.allocOperatorID(),
@@ -919,7 +920,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: offset.NewArgument().
-						WithOffset(arg.Offset),
+						WithOffset(arg.OffsetExpr),
 
 					CnAddr:      in.CnAddr,
 					OperatorID:  in.OperatorID,
@@ -1017,62 +1018,75 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 	}
 }
 
-func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
+func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan error) {
+	// if context has done, it means the user or other part of the pipeline stops this query.
+	closeWithError := func(err error, reg *process.WaitRegister) {
+		if reg != nil {
+			select {
+			case <-s.Proc.Ctx.Done():
+			case reg.Ch <- nil:
+			}
+		}
+
+		select {
+		case <-s.Proc.Ctx.Done():
+			errChan <- nil
+		default:
+			errChan <- err
+		}
+		wg.Done()
+	}
+
+	// start N goroutines to send notifications to remote nodes.
+	// to notify the remote dispatch executor where its remote receivers are.
+	// dispatch operator will use this stream connection to send data back.
+	//
+	// function `cnMessageHandle` at file `scopeRemoteRun.go` will handle the notification.
 	for i := range s.RemoteReceivRegInfos {
+		wg.Add(1)
+
 		op := &s.RemoteReceivRegInfos[i]
+		fromAddr := op.FromAddr
+		receiverIdx := op.Idx
+		uuid := op.Uuid[:]
 
-		go func(info *RemoteReceivRegInfo, reg *process.WaitRegister) {
-			// if context has done, it means other pipeline stop the query normally.
-			closeWithError := func(err error) {
-				if reg != nil {
-					select {
-					case <-s.Proc.Ctx.Done():
-					case reg.Ch <- nil:
-					}
-					close(reg.Ch)
+		errSubmit := ants.Submit(
+			func() {
+				streamSender, errStream := cnclient.GetStreamSender(fromAddr)
+				if errStream != nil {
+					logutil.Errorf("Failed to get stream sender txnID=%s, err=%v",
+						s.Proc.TxnOperator.Txn().DebugString(), errStream)
+					closeWithError(errStream, s.Proc.Reg.MergeReceivers[receiverIdx])
+					return
 				}
+				defer streamSender.Close(true)
 
-				select {
-				case <-s.Proc.Ctx.Done():
-					errChan <- nil
-				default:
-					errChan <- err
-				}
-			}
-
-			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
-			if errStream != nil {
-				logutil.Errorf("Failed to get stream sender txnID=%s, err=%v",
-					s.Proc.TxnOperator.Txn().DebugString(), errStream)
-				closeWithError(errStream)
-				return
-			}
-			defer streamSender.Close(true)
-
-			message := cnclient.AcquireMessage()
-			{
+				message := cnclient.AcquireMessage()
 				message.Id = streamSender.ID()
 				message.Cmd = pbpipeline.Method_PrepareDoneNotifyMessage
 				message.Sid = pbpipeline.Status_Last
-				message.Uuid = info.Uuid[:]
-			}
-			if errSend := streamSender.Send(s.Proc.Ctx, message); errSend != nil {
-				closeWithError(errSend)
-				return
-			}
+				message.Uuid = uuid
 
-			messagesReceive, errReceive := streamSender.Receive()
-			if errReceive != nil {
-				closeWithError(errReceive)
-				return
-			}
-			var ch chan *batch.Batch
-			if reg != nil {
-				ch = reg.Ch
-			}
-			err := receiveMsgAndForward(s.Proc, messagesReceive, ch)
-			closeWithError(err)
-		}(op, s.Proc.Reg.MergeReceivers[op.Idx])
+				if errSend := streamSender.Send(s.Proc.Ctx, message); errSend != nil {
+					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx])
+					return
+				}
+
+				messagesReceive, errReceive := streamSender.Receive()
+				if errReceive != nil {
+					closeWithError(errReceive, s.Proc.Reg.MergeReceivers[receiverIdx])
+					return
+				}
+
+				err := receiveMsgAndForward(s.Proc, messagesReceive, s.Proc.Reg.MergeReceivers[receiverIdx].Ch)
+				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx])
+			},
+		)
+
+		if errSubmit != nil {
+			errChan <- errSubmit
+			wg.Done()
+		}
 	}
 }
 
@@ -1085,8 +1099,8 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 	for {
 		select {
 		case <-proc.Ctx.Done():
-			logutil.Warnf("proc ctx done during forward")
 			return nil
+
 		case val, ok = <-receiveCh:
 			if val == nil || !ok {
 				return moerr.NewStreamClosedNoCtx()
@@ -1132,8 +1146,9 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			} else {
 				select {
 				case <-proc.Ctx.Done():
-					logutil.Warnf("proc ctx done during forward")
+					bat.Clean(proc.Mp())
 					return nil
+
 				case forwardCh <- bat:
 				}
 			}

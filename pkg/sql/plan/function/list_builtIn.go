@@ -3330,6 +3330,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			if len(inputs) == 0 {
 				return newCheckResultWithSuccess(0)
 			}
+			if len(inputs) == 1 && inputs[0].Oid == types.T_int64 {
+				return newCheckResultWithSuccess(0)
+			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
 
@@ -3839,7 +3842,29 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return types.T_uint8.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return buildInPurgeLog
+					return builtInPurgeLog
+				},
+			},
+		},
+	},
+
+	// function `mo_admin_name`
+	{
+		functionId: MO_ADMIN_NAME,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInternalGetAdminName
 				},
 			},
 		},
@@ -6179,6 +6204,27 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return BitmapCount
+				},
+			},
+		},
+	},
+
+	// function `SHA1`
+	{
+		functionId: SHA1,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SHA1Func
 				},
 			},
 		},

@@ -122,7 +122,22 @@ func LoadPersistedDeletes(
 	location objectio.Location,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, isPersistedByCN bool, release func(), err error) {
-	movbat, isPersistedByCN, release, err := blockio.ReadBlockDelete(ctx, location, fs.Service)
+	if isPersistedByCN, err = blockio.IsPersistedByCN(ctx, location, fs.Service); err != nil {
+		return
+	}
+	bat, release, err = LoadPersistedDeletesBySchema(ctx, pkName, fs, location, isPersistedByCN, mp)
+	return
+}
+
+func LoadPersistedDeletesBySchema(
+	ctx context.Context,
+	pkName string,
+	fs *objectio.ObjectFS,
+	location objectio.Location,
+	isPersistedByCN bool,
+	mp *mpool.MPool,
+) (bat *containers.Batch, release func(), err error) {
+	movbat, release, err := blockio.ReadBlockDeleteBySchema(ctx, location, fs.Service, isPersistedByCN)
 	if err != nil {
 		return
 	}

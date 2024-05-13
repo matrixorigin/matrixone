@@ -76,6 +76,8 @@ type AggFuncExec interface {
 
 	// GroupGrow is used to increase the aggregation's group size.
 	GroupGrow(more int) error
+	// PreAllocateGroups is used to pre-extend the agg memory to reduce gc cost.
+	PreAllocateGroups(more int) error
 
 	// Fill BulkFill and BatchFill add the value to the aggregation.
 	Fill(groupIndex int, row int, vectors []*vector.Vector) error
@@ -85,8 +87,8 @@ type AggFuncExec interface {
 	// Merge merges the aggregation result of two groups.
 	Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error
 	// BatchMerge merges the aggregation result of multiple groups.
-	// merge work starts from the offset group of the next agg,
-	// and merges the (offset + i)th group with the (groups[i]-1) group of the current agg.
+	// merge work starts from the offset group of the next agg, end at the (offset + len(groups) - 1) group.
+	// merges the (offset + i)th group with the (groups[i]-1) group of the current agg.
 	BatchMerge(next AggFuncExec, offset int, groups []uint64) error
 
 	// SetExtraInformation add an additional information to agg executor.

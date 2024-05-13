@@ -137,18 +137,19 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	builder.qry.LoadTag = true
 
 	//append lock node
-	// if lockNodeId, ok := appendLockNode(
-	// 	builder,
-	// 	bindCtx,
-	// 	lastNodeId,
-	// 	tableDef,
-	// 	true,
-	// 	true,
-	// 	-1,
-	// 	nil,
-	// ); ok {
-	// 	lastNodeId = lockNodeId
-	// }
+	if lockNodeId, ok := appendLockNode(
+		builder,
+		bindCtx,
+		lastNodeId,
+		tableDef,
+		true,
+		false,
+		-1,
+		nil,
+		false,
+	); ok {
+		lastNodeId = lockNodeId
+	}
 
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(tableDef, true)
@@ -381,7 +382,7 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef) []*plan.
 			},
 		}
 
-		expr, _ = makePlan2CastExpr(stmt.Param.Ctx, expr, &typ)
+		expr, _ = makePlan2CastExpr(stmt.Param.Ctx, expr, typ)
 		ret = append(ret, expr)
 	}
 	return ret

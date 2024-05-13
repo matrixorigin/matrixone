@@ -16,6 +16,8 @@ package offset
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -23,8 +25,10 @@ import (
 var _ vm.Operator = new(Argument)
 
 type Argument struct {
-	Seen   uint64 // seen is the number of tuples seen so far
-	Offset uint64
+	Seen           uint64 // seen is the number of tuples seen so far
+	OffsetExpr     *plan.Expr
+	offset         uint64
+	offsetExecutor colexec.ExpressionExecutor
 
 	vm.OperatorBase
 }
@@ -54,8 +58,8 @@ func NewArgument() *Argument {
 	return reuse.Alloc[Argument](nil)
 }
 
-func (arg *Argument) WithOffset(offset uint64) *Argument {
-	arg.Offset = offset
+func (arg *Argument) WithOffset(offset *plan.Expr) *Argument {
+	arg.OffsetExpr = offset
 	return arg
 }
 
@@ -66,4 +70,8 @@ func (arg *Argument) Release() {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if arg.offsetExecutor != nil {
+		arg.offsetExecutor.Free()
+		arg.offsetExecutor = nil
+	}
 }

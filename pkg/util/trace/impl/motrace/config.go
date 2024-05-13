@@ -53,6 +53,8 @@ type tracerProviderConfig struct {
 
 	// disableSpan
 	disableSpan bool
+	// disableError
+	disableError bool
 	// debugMode used in Tracer.Debug
 	debugMode bool // DebugMode
 
@@ -181,6 +183,12 @@ func WithLongSpanTime(d time.Duration) tracerProviderOption {
 func WithSpanDisable(disable bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.disableSpan = disable
+	}
+}
+
+func WithErrorDisable(disable bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.disableError = disable
 	}
 }
 

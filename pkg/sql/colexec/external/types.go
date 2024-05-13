@@ -161,7 +161,7 @@ type ParseLineHandler struct {
 	moCsvLineArray [][]csvparser.Field
 }
 
-func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
+func newReaderWithParam(param *ExternalParam, reuseRow bool) (*csvparser.CSVParser, error) {
 	fieldsTerminatedBy := "\t"
 	fieldsEnclosedBy := "\""
 	fieldsEscapedBy := "\\"
@@ -211,7 +211,7 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 		Comment:            '#',
 	}
 
-	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false, false)
+	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false, reuseRow)
 }
 
 type ParquetHandler struct {
@@ -219,7 +219,12 @@ type ParquetHandler struct {
 	offset   int64
 	batchCnt int64
 	cols     []*parquet.Column
-	dataFn   []dataFn
+	mappers  []*columnMapper
 }
 
-type dataFn = func(page parquet.Page, proc *process.Process, vec *vector.Vector) error
+type columnMapper struct {
+	srcNull, dstNull   bool
+	maxDefinitionLevel byte
+
+	mapper func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
+}

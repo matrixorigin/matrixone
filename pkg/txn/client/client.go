@@ -104,7 +104,7 @@ func WithEnableRefreshExpression() TxnClientCreateOption {
 // WithEnableLeakCheck enable txn leak check. Used to found any txn is not committed or rolled back.
 func WithEnableLeakCheck(
 	maxActiveAges time.Duration,
-	leakHandleFunc func(txnID []byte, createAt time.Time, options txn.TxnOptions)) TxnClientCreateOption {
+	leakHandleFunc func([]ActiveTxn)) TxnClientCreateOption {
 	return func(tc *txnClient) {
 		tc.leakChecker = newLeakCheck(maxActiveAges, leakHandleFunc)
 	}
@@ -427,7 +427,7 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
 	client.updateLastCommitTS(TxnEvent{Txn: txn.TxnMeta{CommitTS: ts}})
 	if client.timestampWaiter != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 		defer cancel()
 		_, err := client.timestampWaiter.GetTimestamp(ctx, ts)
 		if err != nil {

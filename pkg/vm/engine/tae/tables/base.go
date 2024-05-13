@@ -112,12 +112,13 @@ func (blk *baseObject) tryGetMVCC() *updates.ObjectMVCCHandle {
 func (blk *baseObject) getOrCreateMVCC() *updates.ObjectMVCCHandle {
 	return blk.meta.GetTable().GetOrCreateTombstone(blk.meta, DefaultTOmbstoneFactory).(*updates.ObjectMVCCHandle)
 }
-func (blk *baseObject) GCInMemeoryDeletesByTS(ts types.TS) {
+
+func (blk *baseObject) GCInMemeoryDeletesByTSForTest(ts types.TS) {
 	mvcc := blk.tryGetMVCC()
 	if mvcc == nil {
 		return
 	}
-	mvcc.UpgradeDeleteChainByTS(ts)
+	mvcc.UpgradeDeleteChainByTSLocked(ts)
 }
 
 func (blk *baseObject) UpgradeAllDeleteChain() {
@@ -288,29 +289,6 @@ func (blk *baseObject) LoadPersistedColumnData(
 	)
 }
 
-func (blk *baseObject) loadPersistedDeletes(
-	ctx context.Context,
-	blkID uint16,
-	mp *mpool.MPool,
-) (bat *containers.Batch, persistedByCN bool, deltalocCommitTS types.TS, release func(), err error) {
-	mvcc := blk.tryGetMVCC()
-	if mvcc == nil {
-		return
-	}
-	location, deltalocCommitTS := mvcc.GetDeltaLocAndCommitTS(blkID)
-	if location.IsEmpty() {
-		return
-	}
-	pkName := blk.meta.GetSchema().GetPrimaryKey().Name
-	bat, persistedByCN, release, err = LoadPersistedDeletes(
-		ctx,
-		pkName,
-		blk.rt.Fs,
-		location,
-		mp,
-	)
-	return
-}
 func (blk *baseObject) loadLatestPersistedDeletes(
 	ctx context.Context,
 	blkID uint16,
@@ -434,10 +412,20 @@ func (blk *baseObject) foreachPersistedDeletesCommittedInRange(
 	postOp func(*containers.Batch),
 	mp *mpool.MPool,
 ) (err error) {
-	loadFn := func() (bat *containers.Batch, persistedByCN bool, commitTS types.TS, _ bool, release func(), err error) {
+	loadFn := func() (bat *containers.Batch, persistedByCN bool, commitTS types.TS, visible bool, release func(), err error) {
+		mvcc := blk.tryGetMVCC()
+		if mvcc == nil {
+			return
+		}
 		// commitTS of deltalocation is the commitTS of deletes persisted by CN batches
-		deletes, persistedByCN, deltalocCommitTS, release, err := blk.loadPersistedDeletes(ctx, blkID, mp)
-		if deletes == nil || err != nil {
+		location, deltalocCommitTS, deltalocStartTS := mvcc.GetDeltaLocAndCommitTS(blkID)
+		if location.IsEmpty() {
+			return
+		}
+
+		// quick check for early return.
+		persistedByCN, err = blockio.IsPersistedByCN(ctx, location, blk.rt.Fs.Service)
+		if err != nil {
 			return
 		}
 		if persistedByCN {
@@ -447,8 +435,22 @@ func (blk *baseObject) foreachPersistedDeletesCommittedInRange(
 			if deltalocCommitTS.Less(&start) || deltalocCommitTS.Greater(&end) {
 				return
 			}
+		} else if deltalocStartTS.Less(&start) {
+			return
 		}
-		return deletes, persistedByCN, deltalocCommitTS, true, release, err
+
+		// IO
+		visible = true
+		pkName := blk.meta.GetSchema().GetPrimaryKey().Name
+		bat, release, err = LoadPersistedDeletesBySchema(
+			ctx,
+			pkName,
+			blk.rt.Fs,
+			location,
+			persistedByCN,
+			mp,
+		)
+		return
 	}
 	return blk.foreachPersistedDeletes(ctx, start, end, blkID, skipAbort, loadFn, loopOp, postOp, mp)
 }
@@ -775,7 +777,7 @@ func (blk *baseObject) TryDeleteByDeltaloc(
 	blk.Lock()
 	defer blk.Unlock()
 	blkMVCC := blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID)
-	return blkMVCC.TryDeleteByDeltaloc(txn, deltaLoc, true)
+	return blkMVCC.TryDeleteByDeltalocLocked(txn, deltaLoc, true)
 }
 
 func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {
@@ -851,7 +853,7 @@ func (blk *baseObject) inMemoryCollectDeletesInRange(blkID uint16, start, end ty
 	}
 	deleteChain := blkMvcc.GetDeleteChain()
 	deletes, err =
-		deleteChain.CollectDeletesInRange(start, end, blk.RWMutex)
+		deleteChain.CollectDeletesInRangeWithLock(start, end, blk.RWMutex)
 	return
 }
 
@@ -1065,7 +1067,7 @@ func (blk *baseObject) UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLo
 	blk.Lock()
 	defer blk.Unlock()
 	mvcc := blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID)
-	return mvcc.UpdateDeltaLoc(txn, deltaLoc, false)
+	return mvcc.UpdateDeltaLocLocked(txn, deltaLoc, false)
 }
 
 func (blk *baseObject) GetDeltaPersistedTS() types.TS {

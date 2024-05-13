@@ -435,15 +435,17 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		ses := newTestSession(t, ctrl)
 		//ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
-		ses.txnCompileCtx.SetProcess(testutil.NewProc())
-		ses.requestCtx = ctx
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.proc = testutil.NewProc()
+		ec.ses = ses
+		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
 			cvey.So(ok, cvey.ShouldBeTrue)
-			value, err := GetSimpleExprValue(sv.Assignments[0].Value, ses)
+			value, err := GetSimpleExprValue(ctx, sv.Assignments[0].Value, ses)
 			if kase.wantErr {
 				cvey.So(err, cvey.ShouldNotBeNil)
 			} else {
@@ -473,15 +475,17 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		ses := newTestSession(t, ctrl)
 		//ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
-		ses.txnCompileCtx.SetProcess(testutil.NewProc())
-		ses.requestCtx = ctx
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.proc = testutil.NewProc()
+		ec.ses = ses
+		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
 			cvey.So(ok, cvey.ShouldBeTrue)
-			value, err := GetSimpleExprValue(sv.Assignments[0].Value, ses)
+			value, err := GetSimpleExprValue(ctx, sv.Assignments[0].Value, ses)
 			if kase.wantErr {
 				cvey.So(err, cvey.ShouldNotBeNil)
 			} else {
@@ -630,6 +634,7 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
@@ -639,14 +644,15 @@ func TestGetExprValue(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setGlobalPu(pu)
-		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
-		ses.txnCompileCtx.SetProcess(testutil.NewProc())
-		ses.requestCtx = ctx
-		ses.connectCtx = ctx
+		ses := NewSession(ctx, &FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
 		ses.SetDatabaseName("db")
 		var c clock.Clock
-		_, err := ses.SetTempTableStorage(c)
+		err := ses.GetTxnHandler().CreateTempStorage(c)
 		assert.Nil(t, err)
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.proc = testutil.NewProc()
+		ec.ses = ses
+		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
 			fmt.Println("++++>", kase.sql)
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
@@ -654,7 +660,7 @@ func TestGetExprValue(t *testing.T) {
 
 			sv, ok := stmt.(*tree.SetVar)
 			cvey.So(ok, cvey.ShouldBeTrue)
-			value, err := getExprValue(sv.Assignments[0].Value, ses)
+			value, err := getExprValue(sv.Assignments[0].Value, ses, ec)
 			if kase.wantErr {
 				cvey.So(err, cvey.ShouldNotBeNil)
 			} else {
@@ -738,6 +744,7 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
@@ -747,20 +754,20 @@ func TestGetExprValue(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setGlobalPu(pu)
-		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
-		ses.txnCompileCtx.SetProcess(testutil.NewProc())
-		ses.requestCtx = ctx
-		ses.connectCtx = ctx
+		ses := NewSession(ctx, &FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
 		var c clock.Clock
-		_, err := ses.SetTempTableStorage(c)
+		err := ses.GetTxnHandler().CreateTempStorage(c)
 		assert.Nil(t, err)
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.reqCtx = ctx
+		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
 			cvey.So(ok, cvey.ShouldBeTrue)
-			value, err := getExprValue(sv.Assignments[0].Value, ses)
+			value, err := getExprValue(sv.Assignments[0].Value, ses, ec)
 			if kase.wantErr {
 				cvey.So(err, cvey.ShouldNotBeNil)
 			} else {
@@ -899,19 +906,19 @@ func Test_makeExecuteSql(t *testing.T) {
 	sv := &config.FrontendParameters{
 		SessionTimeout: toml.Duration{Duration: 5 * time.Minute},
 	}
-
+	ctx := context.TODO()
 	pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 	setGlobalPu(pu)
-	ses1 := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true,
+	ses1 := NewSession(ctx, &FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true,
 		nil)
 
 	ses1.SetUserDefinedVar("var2", "val2", "set var2 = val2")
 	ses1.SetUserDefinedVar("var3", "val3", "set var3 = val3")
-	ses1.SetPrepareStmt("st2", &PrepareStmt{
+	ses1.SetPrepareStmt(ctx, "st2", &PrepareStmt{
 		Name: "st2",
 		Sql:  "prepare st2 select * from t where a = ?",
 	})
-	ses1.SetPrepareStmt("st3", &PrepareStmt{
+	ses1.SetPrepareStmt(ctx, "st3", &PrepareStmt{
 		Name: "st3",
 		Sql:  "prepare st3 select * from t where a = ? and b = ?",
 	})
@@ -934,13 +941,13 @@ func Test_makeExecuteSql(t *testing.T) {
 	util.SetAnyToStringVector(testProc, "NULL", params1, 1)
 	util.SetAnyToStringVector(testProc, "bVal", params1, 2)
 
-	ses1.SetPrepareStmt("st4", &PrepareStmt{
+	ses1.SetPrepareStmt(ctx, "st4", &PrepareStmt{
 		Name:   "st4",
 		Sql:    "prepare st4 select * from t where a = ? and b = ?",
 		params: params1,
 	})
 
-	ses1.SetPrepareStmt("st5", nil)
+	ses1.SetPrepareStmt(ctx, "st5", nil)
 
 	tests := []struct {
 		name string
@@ -1024,7 +1031,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := makeExecuteSql(tt.args.ses, tt.args.stmt); strings.TrimSpace(got) != strings.TrimSpace(tt.want) {
+			if got := makeExecuteSql(ctx, tt.args.ses, tt.args.stmt); strings.TrimSpace(got) != strings.TrimSpace(tt.want) {
 				t.Errorf("makeExecuteSql() = %v, want %v", got, tt.want)
 			}
 		})

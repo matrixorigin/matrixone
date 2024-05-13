@@ -109,7 +109,7 @@ use system;
 -- case 2: END
 
 -- result check
-select sleep(16);
+select sleep(18) s;
 use system;
 -- check case 1
 -- Reason for changing the sql.

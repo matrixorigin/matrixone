@@ -19,10 +19,10 @@ import (
 	"testing"
 )
 
-func TestIOLock(t *testing.T) {
-	locks := NewIOLocks()
+func TestIOMerger(t *testing.T) {
+	merger := NewIOMerger()
 	n := 1024
-	key := IOLockKey{
+	key := IOMergeKey{
 		Path: "foo",
 	}
 
@@ -34,11 +34,11 @@ func TestIOLock(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for {
-				unlock, wait := locks.Lock(key)
-				if unlock != nil {
+				done, wait := merger.Merge(key)
+				if done != nil {
 					cs = append(cs, c)
 					c++
-					unlock()
+					done()
 					return
 				} else {
 					wait()
@@ -60,33 +60,33 @@ func TestIOLock(t *testing.T) {
 	}
 }
 
-func BenchmarkIOLockNoContention(b *testing.B) {
-	locks := NewIOLocks()
-	key := IOLockKey{
+func BenchmarkIOMergerNoContention(b *testing.B) {
+	merger := NewIOMerger()
+	key := IOMergeKey{
 		Path: "foo",
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		unlock, wait := locks.Lock(key)
-		if unlock != nil {
-			unlock()
+		done, wait := merger.Merge(key)
+		if done != nil {
+			done()
 		} else {
 			wait()
 		}
 	}
 }
 
-func BenchmarkIOLockParallel(b *testing.B) {
-	locks := NewIOLocks()
-	key := IOLockKey{
+func BenchmarkIOMergerParallel(b *testing.B) {
+	merger := NewIOMerger()
+	key := IOMergeKey{
 		Path: "foo",
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			unlock, wait := locks.Lock(key)
-			if unlock != nil {
-				unlock()
+			done, wait := merger.Merge(key)
+			if done != nil {
+				done()
 			} else {
 				wait()
 			}

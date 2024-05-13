@@ -262,18 +262,20 @@ type StatsInfo struct {
 	//S3ReadBytes             uint
 	//S3WriteBytes            uint
 
-	LocalFSReadIOLockTimeConsumption      int64
-	LocalFSReadCacheIOLockTimeConsumption int64
+	LocalFSReadIOMergerTimeConsumption      int64
+	LocalFSReadCacheIOMergerTimeConsumption int64
 
-	S3FSPrefetchFileIOLockTimeConsumption int64
-	S3FSReadIOLockTimeConsumption         int64
-	S3FSReadCacheIOLockTimeConsumption    int64
+	S3FSPrefetchFileIOMergerTimeConsumption int64
+	S3FSReadIOMergerTimeConsumption         int64
+	S3FSReadCacheIOMergerTimeConsumption    int64
 
 	ParseStartTime     time.Time `json:"ParseStartTime"`
 	PlanStartTime      time.Time `json:"PlanStartTime"`
 	CompileStartTime   time.Time `json:"CompileStartTime"`
 	ExecutionStartTime time.Time `json:"ExecutionStartTime"`
 	ExecutionEndTime   time.Time `json:"ExecutionEndTime"`
+
+	WaitActiveCost time.Duration `json:"WaitActive"`
 }
 
 func (stats *StatsInfo) CompileStart() {
@@ -329,46 +331,53 @@ func (stats *StatsInfo) AddIOAccessTimeConsumption(d time.Duration) {
 	atomic.AddInt64(&stats.IOAccessTimeConsumption, int64(d))
 }
 
-func (stats *StatsInfo) AddLocalFSReadCacheIOLockTimeConsumption(d time.Duration) {
+func (stats *StatsInfo) AddLocalFSReadCacheIOMergerTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.LocalFSReadCacheIOLockTimeConsumption, int64(d))
+	atomic.AddInt64(&stats.LocalFSReadCacheIOMergerTimeConsumption, int64(d))
 }
-func (stats *StatsInfo) AddLocalFSReadIOLockTimeConsumption(d time.Duration) {
+func (stats *StatsInfo) AddLocalFSReadIOMergerTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.LocalFSReadIOLockTimeConsumption, int64(d))
+	atomic.AddInt64(&stats.LocalFSReadIOMergerTimeConsumption, int64(d))
 }
-func (stats *StatsInfo) AddS3FSPrefetchFileIOLockTimeConsumption(d time.Duration) {
+func (stats *StatsInfo) AddS3FSPrefetchFileIOMergerTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.S3FSPrefetchFileIOLockTimeConsumption, int64(d))
+	atomic.AddInt64(&stats.S3FSPrefetchFileIOMergerTimeConsumption, int64(d))
 }
-func (stats *StatsInfo) AddS3FSReadIOLockTimeConsumption(d time.Duration) {
+func (stats *StatsInfo) AddS3FSReadIOMergerTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.S3FSReadIOLockTimeConsumption, int64(d))
+	atomic.AddInt64(&stats.S3FSReadIOMergerTimeConsumption, int64(d))
 }
-func (stats *StatsInfo) AddS3FSReadCacheIOLockTimeConsumption(d time.Duration) {
+func (stats *StatsInfo) AddS3FSReadCacheIOMergerTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.S3FSReadCacheIOLockTimeConsumption, int64(d))
+	atomic.AddInt64(&stats.S3FSReadCacheIOMergerTimeConsumption, int64(d))
 }
 
-func (stats *StatsInfo) IOLockTimeConsumption() int64 {
+func (stats *StatsInfo) IOMergerTimeConsumption() int64 {
 	if stats == nil {
 		return 0
 	}
-	return stats.LocalFSReadCacheIOLockTimeConsumption +
-		stats.LocalFSReadIOLockTimeConsumption +
-		stats.S3FSPrefetchFileIOLockTimeConsumption +
-		stats.S3FSReadCacheIOLockTimeConsumption +
-		stats.S3FSReadIOLockTimeConsumption
+	return stats.LocalFSReadCacheIOMergerTimeConsumption +
+		stats.LocalFSReadIOMergerTimeConsumption +
+		stats.S3FSPrefetchFileIOMergerTimeConsumption +
+		stats.S3FSReadCacheIOMergerTimeConsumption +
+		stats.S3FSReadIOMergerTimeConsumption
+}
+
+func (stats *StatsInfo) SetWaitActiveCost(cost time.Duration) {
+	if stats == nil {
+		return
+	}
+	stats.WaitActiveCost = cost
 }
 
 // reset StatsInfo into zero state

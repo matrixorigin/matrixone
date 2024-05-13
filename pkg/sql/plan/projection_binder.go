@@ -270,7 +270,7 @@ func (b *ProjectionBinder) makeFrameConstValue(expr tree.Expr, typ *plan.Type) (
 	if typ == nil {
 		return e, nil
 	}
-	e, err = appendCastBeforeExpr(b.GetContext(), e, typ)
+	e, err = appendCastBeforeExpr(b.GetContext(), e, *typ)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +315,7 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 	}
 
 	typ := &plan.Type{Id: int32(types.T_int64)}
-	numberExpr, err := appendCastBeforeExpr(b.GetContext(), e1, typ)
+	numberExpr, err := appendCastBeforeExpr(b.GetContext(), e1, *typ)
 	if err != nil {
 		return nil, err
 	}

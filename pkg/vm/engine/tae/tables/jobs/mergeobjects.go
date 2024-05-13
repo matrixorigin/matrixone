@@ -17,7 +17,9 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -52,18 +54,23 @@ type mergeObjectsTask struct {
 	rel               handle.Relation
 	did, tid          uint64
 
+	doTransfer bool
+
 	blkCnt     []int
 	nMergedBlk []int
 	schema     *catalog.Schema
 	idxs       []int
 	attrs      []string
+
+	targetObjSize uint32
 }
 
 func NewMergeObjectsTask(
-	ctx *tasks.Context, txn txnif.AsyncTxn,
+	ctx *tasks.Context,
+	txn txnif.AsyncTxn,
 	mergedObjs []*catalog.ObjectEntry,
 	rt *dbutils.Runtime,
-) (task *mergeObjectsTask, err error) {
+	targetObjSize uint32) (task *mergeObjectsTask, err error) {
 	if len(mergedObjs) == 0 {
 		panic("empty mergedObjs")
 	}
@@ -75,6 +82,8 @@ func NewMergeObjectsTask(
 		mergedBlkCnt: make([]int, len(mergedObjs)),
 		nMergedBlk:   make([]int, len(mergedObjs)),
 		blkCnt:       make([]int, len(mergedObjs)),
+
+		targetObjSize: targetObjSize,
 	}
 	for i, obj := range mergedObjs {
 		task.mergedBlkCnt[i] = task.totalMergedBlkCnt
@@ -100,6 +109,7 @@ func NewMergeObjectsTask(
 		task.mergedObjsHandle = append(task.mergedObjsHandle, obj)
 	}
 	task.schema = task.rel.Schema().(*catalog.Schema)
+	task.doTransfer = !strings.Contains(task.schema.Comment, pkgcatalog.MO_COMMENT_NO_DEL_HINT)
 	task.idxs = make([]int, 0, len(task.schema.ColDefs)-1)
 	task.attrs = make([]string, 0, len(task.schema.ColDefs)-1)
 	for _, def := range task.schema.ColDefs {
@@ -125,8 +135,12 @@ func (task *mergeObjectsTask) GetAccBlkCnts() []int {
 	return task.mergedBlkCnt
 }
 
-func (task *mergeObjectsTask) GetObjLayout() (uint32, uint16) {
-	return task.schema.BlockMaxRows, task.schema.ObjectMaxBlocks
+func (task *mergeObjectsTask) GetBlockMaxRows() uint32 {
+	return task.schema.BlockMaxRows
+}
+
+func (task *mergeObjectsTask) GetTargetObjSize() uint32 {
+	return task.targetObjSize
 }
 
 func (task *mergeObjectsTask) GetSortKeyPos() int {
@@ -151,12 +165,12 @@ func (task *mergeObjectsTask) GetVector(typ *types.Type) (*vector.Vector, func()
 }
 
 func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
-	return task.rt.VectorPool.Transient.MPool()
+	return task.rt.VectorPool.Transient.GetMPool()
 }
 
 func (task *mergeObjectsTask) HostHintName() string { return "DN" }
 
-func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error) {
+func (task *mergeObjectsTask) PrepareData(ctx context.Context) ([]*batch.Batch, []*nulls.Nulls, func(), error) {
 	var err error
 	views := make([]*containers.BlockView, task.totalMergedBlkCnt)
 	releaseF := func() {
@@ -190,7 +204,7 @@ func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, fun
 		minBlockOffset := task.mergedBlkCnt[i]
 
 		for j := 0; j < maxBlockOffset-minBlockOffset; j++ {
-			if views[minBlockOffset+j], err = obj.GetColumnDataByIds(context.Background(), uint16(j), idxs, common.MergeAllocator); err != nil {
+			if views[minBlockOffset+j], err = obj.GetColumnDataByIds(ctx, uint16(j), idxs, common.MergeAllocator); err != nil {
 				return nil, nil, nil, err
 			}
 		}
@@ -214,7 +228,7 @@ func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, fun
 	return batches, dels, releaseF, nil
 }
 
-func (task *mergeObjectsTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
+func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
 	if objIdx >= uint32(len(task.mergedObjs)) {
 		panic("invalid objIdx")
 	}
@@ -235,7 +249,7 @@ func (task *mergeObjectsTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls
 	}()
 
 	obj := task.mergedObjsHandle[objIdx]
-	view, err = obj.GetColumnDataByIds(context.Background(), uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
+	view, err = obj.GetColumnDataByIds(ctx, uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -254,12 +268,12 @@ func (task *mergeObjectsTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls
 
 func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {
 	if task.commitEntry == nil {
-		return task.PrepareCommitEntry()
+		return task.prepareCommitEntry()
 	}
 	return task.commitEntry
 }
 
-func (task *mergeObjectsTask) PrepareCommitEntry() *api.MergeCommitEntry {
+func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
 	schema := task.rel.Schema().(*catalog.Schema)
 	commitEntry := &api.MergeCommitEntry{}
 	commitEntry.DbId = task.did
@@ -295,6 +309,10 @@ func (task *mergeObjectsTask) PrepareNewWriter() *blockio.BlockWriter {
 	}
 
 	return mergesort.GetNewWriter(task.rt.Fs.Service, schema.Version, seqnums, sortkeyPos, sortkeyIsPK)
+}
+
+func (task *mergeObjectsTask) DoTransfer() bool {
+	return task.doTransfer
 }
 
 func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
@@ -391,6 +409,22 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *
 	}
 
 	return createdObjs, nil
+}
+
+func (task *mergeObjectsTask) GetTotalSize() uint32 {
+	totalSize := uint32(0)
+	for _, obj := range task.mergedObjs {
+		totalSize += uint32(obj.GetOriginSize())
+	}
+	return totalSize
+}
+
+func (task *mergeObjectsTask) GetTotalRowCnt() uint32 {
+	totalRowCnt := 0
+	for _, obj := range task.mergedObjs {
+		totalRowCnt += obj.GetRows()
+	}
+	return uint32(totalRowCnt)
 }
 
 // for UT

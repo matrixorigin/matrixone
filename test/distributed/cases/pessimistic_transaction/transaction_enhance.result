@@ -267,11 +267,9 @@ select * from atomic_table_17;
 SQL parser error: table "atomic_table_17" does not exist
 start transaction ;
 create database tdb;
-internal error: CREATE/DROP of database is not supported in transactions
 use tdb;
 invalid database tdb
 drop database tdb;
-internal error: CREATE/DROP of database is not supported in transactions
 commit;
 begin;
 create sequence seq_01 as int start 30;

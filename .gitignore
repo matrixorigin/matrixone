@@ -31,6 +31,7 @@ pkg/udf/pythonservice/pyserver/udf/
 pkg/udf/pythonservice/pyserver/__pycache__/
 path_to_file
 tester-log/
+pkg/util/trace/impl/motrace/pprof/
 
 # bvt generate files
 test/distributed/resources/into_outfile/outfile_*.csv
