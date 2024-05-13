@@ -35,10 +35,8 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
-	ctr := new(container)
-	ap.ctr = ctr
-	ap.initShuffle()
+	arg.ctr = new(container)
+	arg.initShuffle()
 	return nil
 }
 
@@ -51,27 +49,26 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
-	ap := arg
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
 	}()
 
-	if ap.ctr.lastSentBatch != nil {
-		proc.PutBatch(ap.ctr.lastSentBatch)
-		ap.ctr.lastSentBatch = nil
+	if arg.ctr.lastSentBatch != nil {
+		proc.PutBatch(arg.ctr.lastSentBatch)
+		arg.ctr.lastSentBatch = nil
 	}
 
 SENDLAST:
-	if ap.ctr.ending {
+	if arg.ctr.ending {
 		result := vm.NewCallResult()
 		//send shuffle pool
-		for i, bat := range ap.ctr.shufflePool {
+		for i, bat := range arg.ctr.shufflePool {
 			if bat != nil {
 				result.Batch = bat
-				ap.ctr.lastSentBatch = result.Batch
-				ap.ctr.shufflePool[i] = nil
+				arg.ctr.lastSentBatch = result.Batch
+				arg.ctr.shufflePool[i] = nil
 				return result, nil
 			}
 		}
@@ -80,7 +77,7 @@ SENDLAST:
 		return result, nil
 	}
 
-	for len(ap.ctr.sendPool) == 0 {
+	for len(arg.ctr.sendPool) == 0 {
 		// do input
 		result, err := vm.ChildrenCall(arg.GetChildren(0), proc, anal)
 		if err != nil {
@@ -88,13 +85,13 @@ SENDLAST:
 		}
 		bat := result.Batch
 		if bat == nil {
-			ap.ctr.ending = true
+			arg.ctr.ending = true
 			goto SENDLAST
 		} else if !bat.IsEmpty() {
-			if ap.ShuffleType == int32(plan.ShuffleType_Hash) {
-				bat, err = hashShuffle(ap, bat, proc)
-			} else if ap.ShuffleType == int32(plan.ShuffleType_Range) {
-				bat, err = rangeShuffle(ap, bat, proc)
+			if arg.ShuffleType == int32(plan.ShuffleType_Hash) {
+				bat, err = hashShuffle(arg, bat, proc)
+			} else if arg.ShuffleType == int32(plan.ShuffleType_Range) {
+				bat, err = rangeShuffle(arg, bat, proc)
 			}
 			if err != nil {
 				return result, err
@@ -108,10 +105,10 @@ SENDLAST:
 
 	// send batch in send pool
 	result := vm.NewCallResult()
-	length := len(ap.ctr.sendPool)
-	result.Batch = ap.ctr.sendPool[length-1]
-	ap.ctr.lastSentBatch = result.Batch
-	ap.ctr.sendPool = ap.ctr.sendPool[:length-1]
+	length := len(arg.ctr.sendPool)
+	result.Batch = arg.ctr.sendPool[length-1]
+	arg.ctr.lastSentBatch = result.Batch
+	arg.ctr.sendPool = arg.ctr.sendPool[:length-1]
 	return result, nil
 }
 
