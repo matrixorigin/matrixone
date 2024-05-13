@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -1199,13 +1198,12 @@ func appendForeignConstrantPlan(
 //
 //	case 1: For SQL that contains on duplicate update
 //	case 2: the only primary key is auto increment type
-func appendPrimaryConstrantPlan(
+func appendPrimaryConstraintPlan(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
 	tableDef *TableDef,
 	objRef *ObjectRef,
 	partitionExpr *Expr,
-	pkFilterExprs []*Expr,
 	indexSourceColTypes []*plan.Type,
 	sourceStep int32,
 	isUpdate bool,
@@ -1359,25 +1357,11 @@ func appendPrimaryConstrantPlan(
 				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
 			}
 
-			var tableScanId int32
-
-			if len(pkFilterExprs) > 0 {
-				var blockFilterList []*Expr
-				scanNode.FilterList = pkFilterExprs
-				blockFilterList = make([]*Expr, len(pkFilterExprs))
-				for i, e := range pkFilterExprs {
-					blockFilterList[i] = DeepCopyExpr(e)
-				}
-				tableScanId = builder.appendNode(scanNode, bindCtx)
-				scanNode.BlockFilterList = blockFilterList
-				scanNode.RuntimeFilterProbeList = nil // can not use both
-			} else {
-				tableScanId = builder.appendNode(scanNode, bindCtx)
-				// temporary solution for the plan of dml go without optimizer
-				// prevent table scan from running on multiple CNs.
-				// because the runtime filter can only run on one now.
-				scanNode.Stats = DefaultMinimalStats()
-			}
+			tableScanId := builder.appendNode(scanNode, bindCtx)
+			// temporary solution for the plan of dml go without optimizer
+			// prevent table scan from running on multiple CNs.
+			// because the runtime filter can only run on one now.
+			scanNode.Stats = DefaultMinimalStats()
 
 			// Perform partition pruning on the full table scan of the partitioned table in the insert statement
 			if scanTableDef.Partition != nil && partitionExpr != nil {
@@ -1399,18 +1383,16 @@ func appendPrimaryConstrantPlan(
 				}
 			}
 
-			if len(pkFilterExprs) == 0 {
-				buildExpr := &plan.Expr{
-					Typ: pkTyp,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: 0,
-							ColPos: 0,
-						},
+			buildExpr := &plan.Expr{
+				Typ: pkTyp,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
 					},
-				}
-				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt), buildExpr)}
+				},
 			}
+			fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt), buildExpr)}
 
 			lastNodeId = builder.appendNode(fuzzyFilterNode, bindCtx)
 			builder.appendStep(lastNodeId)

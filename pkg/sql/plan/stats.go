@@ -507,7 +507,14 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			}
 			return 0.5
 		case "in":
-			card := float64(exprImpl.F.Args[1].GetVec().Len)
+			var card float64
+			switch arg := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_Vec:
+				card = float64(arg.Vec.Len)
+
+			case *plan.Expr_List:
+				card = float64(len(arg.List.List))
+			}
 			ndv := getExprNdv(expr, builder)
 			if ndv > card {
 				return card / ndv
