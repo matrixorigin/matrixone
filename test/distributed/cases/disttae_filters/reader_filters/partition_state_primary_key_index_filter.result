@@ -15,7 +15,7 @@ delete from t1 where a = 3;
 insert into t1 values(3,3,3);
 select mo_ctl('dn','checkpoint','');
 mo_ctl(dn, checkpoint, )
-{\n  "method": "Checkpoint",\n  "result": [\n
+{\n  "method": "Checkpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 delete from t1 where a = 3;
 insert into t1 values(3,3,3);
 delete from t1 where a = 3;
