@@ -90,10 +90,28 @@ func (w *waiter) String() string {
 	if w == nil {
 		return "nil"
 	}
-	return fmt.Sprintf("%s-%p(%d)",
+	w.mu.Lock()
+	str1 := w.mu.ref
+	str2 := w.mu.unRef
+	w.mu.Unlock()
+	var buffer bytes.Buffer
+	buffer.WriteString("\n")
+	buffer.WriteString("ref: ")
+	for _, str := range str1 {
+		buffer.WriteString(str)
+		buffer.WriteString(", ")
+	}
+	buffer.WriteString("\n")
+	buffer.WriteString("unRef: ")
+	for _, str := range str2 {
+		buffer.WriteString(str)
+		buffer.WriteString(", ")
+	}
+	return fmt.Sprintf("%s-%p(%d), %s",
 		hex.EncodeToString(w.txn.TxnID),
 		w,
-		w.refCount.Load())
+		w.refCount.Load(),
+		buffer.String())
 }
 
 func (w *waiter) isTxn(txnID []byte) bool {
