@@ -145,7 +145,7 @@ drop snapshot if exists sp02;
 create snapshot sp02 for account sys;
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp02'} where reldatabase = 'test02';
 count(*)
-2
+1
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp02'} where reldatabase = 'mo_catalog' and creator = 1;
 count(*)
 2

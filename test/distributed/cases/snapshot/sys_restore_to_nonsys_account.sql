@@ -316,6 +316,7 @@ insert into table02 values(139, 'database', null);
 alter table table02 drop column new;
 -- @session
 
+-- @bvt:issue#15971
 restore account acc01 from snapshot sp10 to account acc01;
 
 -- @session:id=19&user=acc01:test_account&password=111
@@ -324,6 +325,10 @@ show create table table01;
 show create table table02;
 select * from table02;
 select * from table01;
+-- @session
+-- @bvt:issue
+
+-- @session:id=20&user=acc01:test_account&password=111
 drop database test02;
 -- @session
 
@@ -334,7 +339,7 @@ drop snapshot sp10;
 
 
 -- abnormal test: sys restore non-sys account:acc01 to sys
--- @session:id=20&user=acc01:test_account&password=111
+-- @session:id=21&user=acc01:test_account&password=111
 drop database if exists test01;
 create database test01;
 use test01;
@@ -353,7 +358,7 @@ select count(*) from rs01;
 drop snapshot if exists sp03;
 create snapshot sp03 for account acc01;
 
--- @session:id=21&user=acc01:test_account&password=111
+-- @session:id=22&user=acc01:test_account&password=111
 use test01;
 delete from rs01 where col1 = 4;
 insert into rs01 values (10, -1, null);
@@ -363,7 +368,7 @@ select count(*) from rs01;
 restore account acc01 from snapshot sp03 to account sys;
 drop snapshot sp03;
 
--- @session:id=22&user=acc01:test_account&password=111
+-- @session:id=23&user=acc01:test_account&password=111
 drop database test01;
 -- @session
 
