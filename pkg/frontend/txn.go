@@ -665,18 +665,6 @@ func (th *TxnHandler) GetServerStatus() uint16 {
 	return uint16(th.serverStatus)
 }
 
-func (th *TxnHandler) unsetTxnStatus(autocommit bool) {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-	if bitsIsSet(th.serverStatus, uint32(SERVER_STATUS_AUTOCOMMIT)) {
-		clearBits(&th.serverStatus, uint32(SERVER_STATUS_IN_TRANS))
-	} else {
-		if autocommit {
-			clearBits(&th.serverStatus, uint32(SERVER_STATUS_IN_TRANS))
-		}
-	}
-}
-
 func (th *TxnHandler) InMultiStmtTransactionMode() bool {
 	th.mu.Lock()
 	defer th.mu.Unlock()

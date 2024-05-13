@@ -1076,18 +1076,6 @@ func (ses *Session) GetSessionVar(ctx context.Context, name string) (interface{}
 	}
 }
 
-func (ses *Session) getSessionVarUnsafe(ctx context.Context, name string) (interface{}, error) {
-	if def, gVal, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
-		ciname := strings.ToLower(name)
-		if def.GetScope() == ScopeGlobal {
-			return gVal, nil
-		}
-		return ses.sysVars[ciname], nil
-	} else {
-		return nil, moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
-	}
-}
-
 func (ses *Session) CopyAllSessionVars() map[string]interface{} {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
