@@ -178,7 +178,7 @@ func (obj *object) RunCalibration() (score int, err error) {
 }
 
 func (obj *object) estimateRawScore() (score int, dropped bool) {
-	if obj.meta.HasDropCommitted() {
+	if obj.meta.HasDropCommitted() && !obj.meta.InMemoryDeletesExisted() {
 		dropped = true
 		return
 	}

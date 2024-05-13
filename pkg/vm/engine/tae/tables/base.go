@@ -184,6 +184,12 @@ func (blk *baseObject) TryUpgrade() (err error) {
 
 func (blk *baseObject) GetMeta() any { return blk.meta }
 func (blk *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
+	if !blk.meta.IsAppendable() {
+		panic("not support")
+	}
+	if blk.meta.HasDropCommitted() {
+		panic("not support")
+	}
 	blk.RLock()
 	defer blk.RUnlock()
 	x := blk.appendMVCC.GetLatestAppendPrepareTSLocked()
