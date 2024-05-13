@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -146,14 +145,11 @@ func (c *compilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bo
 	ctx := c.GetContext()
 	txnOpt := c.proc.TxnOperator
 
-	if snapshot.TS != nil {
-		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
-			snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-			txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
 
-			if snapshot.CreatedByTenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
-			}
+		if snapshot.Tenant != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -169,14 +165,11 @@ func (c *compilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (
 	ctx := c.GetContext()
 	txnOpt := c.proc.TxnOperator
 
-	if snapshot.TS != nil {
-		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
-			snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-			txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
 
-			if snapshot.CreatedByTenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
-			}
+		if snapshot.Tenant != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -258,14 +251,11 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (o
 	ctx := c.GetContext()
 	txnOpt := c.proc.TxnOperator
 
-	if snapshot.TS != nil {
-		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
-			snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-			txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
 
-			if snapshot.CreatedByTenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
-			}
+		if snapshot.Tenant != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -329,14 +319,11 @@ func (c *compilerContext) getRelation(
 	ctx := c.GetContext()
 	txnOpt := c.proc.TxnOperator
 
-	if snapshot.TS != nil {
-		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
-			snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-			txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
 
-			if snapshot.CreatedByTenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
-			}
+		if snapshot.Tenant != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -506,12 +493,4 @@ func (c *compilerContext) getTableDef(
 		DbName:       dbName,
 	}
 	return obj, tableDef
-}
-
-func (c *compilerContext) GetRestoreInfo() *plan.RestoreInfo {
-	panic("unimplement")
-}
-
-func (c *compilerContext) SetRestoreInfo(restoreInfo *plan.RestoreInfo) {
-	panic("unimplement")
 }

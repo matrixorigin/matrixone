@@ -228,20 +228,6 @@ func (mr *MockCompilerContext2MockRecorder) GetQueryingSubscription() *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetQueryingSubscription", reflect.TypeOf((*MockCompilerContext2)(nil).GetQueryingSubscription))
 }
 
-// GetRestoreInfo mocks base method.
-func (m *MockCompilerContext2) GetRestoreInfo() *RestoreInfo {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetRestoreInfo")
-	ret0, _ := ret[0].(*RestoreInfo)
-	return ret0
-}
-
-// GetRestoreInfo indicates an expected call of GetRestoreInfo.
-func (mr *MockCompilerContext2MockRecorder) GetRestoreInfo() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRestoreInfo", reflect.TypeOf((*MockCompilerContext2)(nil).GetRestoreInfo))
-}
-
 // GetRootSql mocks base method.
 func (m *MockCompilerContext2) GetRootSql() string {
 	m.ctrl.T.Helper()
@@ -485,18 +471,6 @@ func (m *MockCompilerContext2) SetQueryingSubscription(meta *SubscriptionMeta) {
 func (mr *MockCompilerContext2MockRecorder) SetQueryingSubscription(meta interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetQueryingSubscription", reflect.TypeOf((*MockCompilerContext2)(nil).SetQueryingSubscription), meta)
-}
-
-// SetRestoreInfo mocks base method.
-func (m *MockCompilerContext2) SetRestoreInfo(restoreInfo *RestoreInfo) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetRestoreInfo", restoreInfo)
-}
-
-// SetRestoreInfo indicates an expected call of SetRestoreInfo.
-func (mr *MockCompilerContext2MockRecorder) SetRestoreInfo(restoreInfo interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetRestoreInfo", reflect.TypeOf((*MockCompilerContext2)(nil).SetRestoreInfo), restoreInfo)
 }
 
 // SetSnapshot mocks base method.

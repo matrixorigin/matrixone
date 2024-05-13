@@ -388,9 +388,10 @@ func restoreToDatabaseOrTable(
 	}
 
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
+	restoreToTbl := tblName != ""
 
 	// if restore to db, delete the same name db first
-	if tblName == "" {
+	if !restoreToTbl {
 		if err = bh.Exec(toCtx, "drop database if exists "+dbName); err != nil {
 			return
 		}
@@ -404,20 +405,13 @@ func restoreToDatabaseOrTable(
 		return
 	}
 
-	// if restore to table, delete the same name table first
-	if tblName != "" {
-		if err = bh.Exec(toCtx, "drop table if exists "+dbName+"."+tblName); err != nil {
-			return
-		}
-	}
-
 	tableInfos, err := getTableInfos(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
 		return
 	}
 
 	// if restore to table, expect only one table here
-	if tblName != "" && len(tableInfos) != 1 {
+	if restoreToTbl && len(tableInfos) != 1 {
 		return moerr.NewInternalError(ctx, "find %v tableInfos by name, expect 1", len(tableInfos))
 	}
 
@@ -430,6 +424,13 @@ func restoreToDatabaseOrTable(
 		if tblInfo.typ == view {
 			*views = append(*views, tblInfo)
 			continue
+		}
+
+		// if restore to table, delete the same name table first
+		if restoreToTbl {
+			if err = bh.Exec(toCtx, "drop table if exists "+dbName+"."+tblName); err != nil {
+				return
+			}
 		}
 
 		// create table
@@ -465,8 +466,13 @@ func restoreViews(
 	if err != nil {
 		return err
 	}
+
 	compCtx := ses.GetTxnCompileCtx()
+	oldSnapshot := compCtx.GetSnapshot()
 	compCtx.SetSnapshot(snapshot)
+	defer func() {
+		compCtx.SetSnapshot(oldSnapshot)
+	}()
 
 	keyTableInfoMap := make(map[string]*tableInfo)
 	g := topsort{next: make(map[string][]string)}
@@ -479,11 +485,13 @@ func restoreViews(
 			return err
 		}
 
+		// build create sql to find dependent views
 		if _, err = plan.BuildPlan(compCtx, stmts[0], false); err != nil {
 			return err
 		}
 
-		for _, depView := range compCtx.views {
+		g.addVertex(key)
+		for _, depView := range compCtx.GetViews() {
 			g.addEdge(depView, key)
 		}
 	}
@@ -494,11 +502,15 @@ func restoreViews(
 		return moerr.NewInternalError(ctx, "There is a cycle in dependency graph")
 	}
 
-	// create table
+	// create views
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 	for _, key := range sortedViews {
 		if tblInfo, ok := keyTableInfoMap[key]; ok {
 			if err = bh.Exec(toCtx, "use "+tblInfo.dbName); err != nil {
+				return err
+			}
+
+			if err = bh.Exec(toCtx, "drop view if exists "+tblInfo.tblName); err != nil {
 				return err
 			}
 
@@ -611,7 +623,7 @@ func getSnapshotByName(ctx context.Context, bh BackgroundExec, snapshotName stri
 	if records, err := getSnapshotRecords(ctx, bh, sql); err != nil {
 		return nil, err
 	} else if len(records) != 1 {
-		return nil, moerr.NewInternalError(ctx, "find %v snapshotRecords by name, expect only 1", len(records))
+		return nil, moerr.NewInternalError(ctx, "find %v snapshot records by name(%v), expect only 1", len(records), snapshotName)
 	} else {
 		return records[0], nil
 	}
@@ -638,7 +650,7 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 
 	return &pbplan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: record.ts},
-		CreatedByTenant: &pbplan.SnapshotTenant{
+		Tenant: &pbplan.SnapshotTenant{
 			TenantName: record.accountName,
 			TenantID:   accountId,
 		},

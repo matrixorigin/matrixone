@@ -324,7 +324,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			if ctx.GetQueryingSubscription() != nil {
 				_, fkTableDef = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
 			} else {
-				_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
+				_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, *snapshot)
 			}
 		}
 
@@ -530,7 +530,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 		if err != nil {
 			return nil, err
 		}
-		accountId = snapshot.CreatedByTenant.TenantID
+		accountId = snapshot.Tenant.TenantID
 		snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.SnapshotName)
 	}
 	// Any account should show database MO_CATALOG_DB_NAME
@@ -590,7 +590,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		if snapshot, err = ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName); err != nil {
 			return nil, err
 		}
-		accountId = snapshot.CreatedByTenant.TenantID
+		accountId = snapshot.Tenant.TenantID
 		snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.SnapshotName)
 	}
 

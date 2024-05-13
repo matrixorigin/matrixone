@@ -1147,6 +1147,12 @@ func TestUserInput_getSqlSourceType(t *testing.T) {
 func TestTopsort(t *testing.T) {
 	cvey.Convey("create graph", t, func() {
 		g := topsort{next: make(map[string][]string)}
+		g.addVertex("0")
+		g.addVertex("1")
+		g.addVertex("2")
+		g.addVertex("3")
+		g.addVertex("4")
+		g.addVertex("5")
 		g.addEdge("0", "2")
 		g.addEdge("1", "2")
 		g.addEdge("2", "3")
@@ -1166,10 +1172,25 @@ func TestTopsort(t *testing.T) {
 
 	cvey.Convey("create graph", t, func() {
 		g := topsort{next: make(map[string][]string)}
+		g.addVertex("0")
+		g.addVertex("1")
+		g.addVertex("2")
+
+		// can be in any order
+		_, ok := g.sort()
+		cvey.So(ok, cvey.ShouldBeTrue)
+	})
+
+	cvey.Convey("create graph", t, func() {
+		g := topsort{next: make(map[string][]string)}
+		g.addVertex("0")
+		g.addVertex("1")
+		g.addVertex("2")
 		g.addEdge("0", "1")
 		g.addEdge("1", "2")
 		g.addEdge("2", "0")
 
+		// has a cycle
 		_, ok := g.sort()
 		cvey.So(ok, cvey.ShouldBeFalse)
 	})

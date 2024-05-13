@@ -900,14 +900,6 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot 
 	return m.objects[name], tableDef
 }
 
-func (m *MockCompilerContext) GetRestoreInfo() *RestoreInfo {
-	panic("unimplement")
-}
-
-func (m *MockCompilerContext) SetRestoreInfo(restoreInfo *RestoreInfo) {
-	panic("unimplement")
-}
-
 func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot Snapshot) (*ObjectRef, *TableDef) {
 	name := m.id2name[tableId]
 	tableDef := DeepCopyTableDef(m.tables[name], true)

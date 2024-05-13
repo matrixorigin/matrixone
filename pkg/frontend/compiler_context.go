@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -50,7 +49,6 @@ type TxnCompilerContext struct {
 	buildAlterView       bool
 	dbOfView, nameOfView string
 	sub                  *plan.SubscriptionMeta
-	restoreInfo          *plan2.RestoreInfo
 	snapshot             *plan2.Snapshot
 	views                []string
 	//for support explain analyze
@@ -89,18 +87,6 @@ func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	tcc.snapshot = snapshot
-}
-
-func (tcc *TxnCompilerContext) GetRestoreInfo() *plan2.RestoreInfo {
-	tcc.mu.Lock()
-	defer tcc.mu.Unlock()
-	return tcc.restoreInfo
-}
-
-func (tcc *TxnCompilerContext) SetRestoreInfo(restoreInfo *plan2.RestoreInfo) {
-	tcc.mu.Lock()
-	defer tcc.mu.Unlock()
-	tcc.restoreInfo = restoreInfo
 }
 
 func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
@@ -180,14 +166,11 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot plan2.Snapsh
 	txn := tcc.GetTxnHandler().GetTxn()
 
 	// change txn to snapshot txn
-	if snapshot.TS != nil {
-		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
-			snapshot.TS.Less(txn.Txn().SnapshotTS) {
-			txn = txn.CloneSnapshotOp(*snapshot.TS)
+	if plan2.IsSnapshotValid(&snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
-			if snapshot.CreatedByTenant != nil {
-				tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
-			}
+		if snapshot.Tenant != nil {
+			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -213,14 +196,12 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot plan2.Snaps
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()
 	// change txn to snapshot txn
-	if snapshot.TS != nil {
-		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
-			snapshot.TS.Less(txn.Txn().SnapshotTS) {
-			txn = txn.CloneSnapshotOp(*snapshot.TS)
 
-			if snapshot.CreatedByTenant != nil {
-				tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
-			}
+	if plan2.IsSnapshotValid(&snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+		txn = txn.CloneSnapshotOp(*snapshot.TS)
+
+		if snapshot.Tenant != nil {
+			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -246,14 +227,11 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	txn := tcc.GetTxnHandler().GetTxn()
 	tempCtx := tcc.execCtx.reqCtx
 
-	if snapshot.TS != nil {
-		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
-			snapshot.TS.Less(txn.Txn().SnapshotTS) {
-			txn = txn.CloneSnapshotOp(*snapshot.TS)
+	if plan2.IsSnapshotValid(&snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
-			if snapshot.CreatedByTenant != nil {
-				tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
-			}
+		if snapshot.Tenant != nil {
+			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -278,10 +256,6 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
 		tempCtx = defines.AttachAccountId(tempCtx, uint32(sysAccountID))
 	}
-
-	//if restoreInfo := tcc.GetRestoreInfo(); restoreInfo != nil {
-	//	txnCtx = defines.AttachAccountId(txnCtx, restoreInfo.TenantID)
-	//}
 
 	//open database
 	db, err := tcc.GetTxnHandler().GetStorage().Database(tempCtx, dbName, txn)
@@ -352,14 +326,11 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot plan2.Snapsh
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()
 
-	if snapshot.TS != nil {
-		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
-			snapshot.TS.Less(txn.Txn().SnapshotTS) {
-			txn = txn.CloneSnapshotOp(*snapshot.TS)
+	if plan2.IsSnapshotValid(&snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
-			if snapshot.CreatedByTenant != nil {
-				tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
-			}
+		if snapshot.Tenant != nil {
+			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -857,14 +828,11 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot plan2
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()
 
-	if snapshot.TS != nil {
-		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
-			snapshot.TS.Less(txn.Txn().SnapshotTS) {
-			txn = txn.CloneSnapshotOp(*snapshot.TS)
+	if plan2.IsSnapshotValid(&snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
-			if snapshot.CreatedByTenant != nil {
-				tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
-			}
+		if snapshot.Tenant != nil {
+			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -903,8 +871,8 @@ func makeResultMetaPath(accountName string, statementId string) string {
 
 func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan2.Snapshot, error) {
 	tenantCtx := tcc.GetContext()
-	if tcc.restoreInfo != nil {
-		tenantCtx = defines.AttachAccount(tenantCtx, tcc.restoreInfo.TenantID, GetAdminUserId(), GetAccountAdminRoleId())
+	if snapshot := tcc.GetSnapshot(); snapshot != nil && snapshot.GetTenant() != nil {
+		tenantCtx = defines.AttachAccount(tenantCtx, snapshot.Tenant.TenantID, GetAdminUserId(), GetAccountAdminRoleId())
 	}
 	return doResolveSnapshotWithSnapshotName(tenantCtx, tcc.GetSession(), snapshotName)
 }

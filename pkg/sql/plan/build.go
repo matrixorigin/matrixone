@@ -35,7 +35,7 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt)
 	bindCtx := NewBindContext(builder, nil)
-	if ctx.GetSnapshot() != nil {
+	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
 

@@ -363,7 +363,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}
 
 	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
-	if ctx.GetSnapshot() != nil {
+	if IsSnapshotValid(ctx.GetSnapshot()) {
 		snapshot = ctx.GetSnapshot()
 	}
 

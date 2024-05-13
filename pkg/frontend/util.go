@@ -1072,6 +1072,10 @@ type topsort struct {
 	next map[string][]string
 }
 
+func (g *topsort) addVertex(v string) {
+	g.next[v] = make([]string, 0)
+}
+
 func (g *topsort) addEdge(from, to string) {
 	g.next[from] = append(g.next[from], to)
 }

@@ -1986,7 +1986,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				subCtx.cteName = table
 				subCtx.maskedCTEs = cteRef.maskedCTEs
 				cteRef.isRecursive = false
+
+				oldSnapshot := builder.compCtx.GetSnapshot()
+				builder.compCtx.SetSnapshot(subCtx.snapshot)
 				nodeID, err := builder.buildSelect(s, subCtx, false)
+				builder.compCtx.SetSnapshot(oldSnapshot)
 				if err != nil {
 					return 0, err
 				}
@@ -3307,7 +3311,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						subCtx.defaultDatabase = cteRef.defaultDatabase
 					}
 					cteRef.isRecursive = false
+
+					oldSnapshot := builder.compCtx.GetSnapshot()
+					builder.compCtx.SetSnapshot(subCtx.snapshot)
 					nodeID, err = builder.buildSelect(s, subCtx, false)
+					builder.compCtx.SetSnapshot(oldSnapshot)
 					if err != nil {
 						return
 					}
@@ -4087,11 +4095,12 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 		err = moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
 		return
 	}
+
 	var tenant *SnapshotTenant
-	if restoreInfo := builder.compCtx.GetRestoreInfo(); restoreInfo != nil {
+	if bgSnapshot := builder.compCtx.GetSnapshot(); IsSnapshotValid(bgSnapshot) {
 		tenant = &SnapshotTenant{
-			TenantName: restoreInfo.Tenant,
-			TenantID:   restoreInfo.TenantID,
+			TenantName: bgSnapshot.Tenant.TenantName,
+			TenantID:   bgSnapshot.Tenant.TenantID,
 		}
 	}
 
@@ -4110,12 +4119,7 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 			}
 
 			if time.Now().UTC().UnixNano()-tsNano <= options.DefaultGCTTL.Nanoseconds() && 0 <= time.Now().UTC().UnixNano()-tsNano {
-				snapshot = &Snapshot{
-					TS: &timestamp.Timestamp{
-						PhysicalTime: tsNano,
-					},
-					CreatedByTenant: tenant,
-				}
+				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
 			} else {
 				var valid bool
 				if valid, err = builder.compCtx.CheckTimeStampValid(tsNano); err != nil {
@@ -4127,12 +4131,7 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 					return
 				}
 
-				snapshot = &Snapshot{
-					TS: &timestamp.Timestamp{
-						PhysicalTime: tsNano,
-					},
-					CreatedByTenant: tenant,
-				}
+				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
 			}
 		} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 			return builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
@@ -4142,10 +4141,7 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 				return
 			}
 
-			snapshot = &Snapshot{
-				TS:              &ts,
-				CreatedByTenant: tenant,
-			}
+			snapshot = &Snapshot{TS: &ts, Tenant: tenant}
 		} else {
 			err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint type", tsExpr.Type.String())
 			return
@@ -4157,12 +4153,7 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 				return
 			}
 
-			snapshot = &Snapshot{
-				TS: &timestamp.Timestamp{
-					PhysicalTime: lit.I64Val,
-				},
-				CreatedByTenant: tenant,
-			}
+			snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: lit.I64Val}, Tenant: tenant}
 		} else {
 			err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint for snapshot hint", lit.I64Val)
 			return
@@ -4172,4 +4163,16 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 	}
 
 	return
+}
+
+func IsSnapshotValid(snapshot *Snapshot) bool {
+	if snapshot == nil {
+		return false
+	}
+
+	if snapshot.TS == nil || snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) {
+		return false
+	}
+
+	return true
 }
