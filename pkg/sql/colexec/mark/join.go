@@ -37,22 +37,21 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) error {
 	var err error
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
-	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
-	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
-	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
-	for i, typ := range ap.Typs {
-		ap.ctr.bat.Vecs[i] = proc.GetVector(typ)
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, false)
+	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	arg.ctr.evecs = make([]evalVector, len(arg.Conditions[0]))
+	arg.ctr.vecs = make([]*vector.Vector, len(arg.Conditions[0]))
+	arg.ctr.bat = batch.NewWithSize(len(arg.Typs))
+	for i, typ := range arg.Typs {
+		arg.ctr.bat.Vecs[i] = proc.GetVector(typ)
 	}
 
-	ap.ctr.buildEqVec = make([]*vector.Vector, len(ap.Conditions[1]))
-	ap.ctr.buildEqEvecs = make([]evalVector, len(ap.Conditions[1]))
+	arg.ctr.buildEqVec = make([]*vector.Vector, len(arg.Conditions[1]))
+	arg.ctr.buildEqEvecs = make([]evalVector, len(arg.Conditions[1]))
 
-	if ap.Cond != nil {
-		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	if arg.Cond != nil {
+		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
 	}
 	return err
 }
@@ -88,13 +87,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ap := arg
-	ctr := ap.ctr
+	ctr := arg.ctr
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc, anal); err != nil {
+			if err := ctr.build(arg, proc, anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
@@ -114,13 +112,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-				if err = ctr.emptyProbe(bat, ap, proc, anal, ap.GetIsFirst(), ap.GetIsLast(), &result); err != nil {
+				if err = ctr.emptyProbe(bat, arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
 					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			} else {
-				if err = ctr.probe(bat, ap, proc, anal, ap.GetIsFirst(), ap.GetIsLast(), &result); err != nil {
+				if err = ctr.probe(bat, arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
 					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err

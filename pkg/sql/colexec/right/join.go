@@ -36,23 +36,22 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
-	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, false)
+	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	arg.ctr.vecs = make([]*vector.Vector, len(arg.Conditions[0]))
 
-	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
-	for i := range ap.Conditions[0] {
-		ap.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, ap.Conditions[0][i])
+	arg.ctr.evecs = make([]evalVector, len(arg.Conditions[0]))
+	for i := range arg.Conditions[0] {
+		arg.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, arg.Conditions[0][i])
 		if err != nil {
 			return err
 		}
 	}
-	if ap.Cond != nil {
-		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	if arg.Cond != nil {
+		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
 	}
-	ap.ctr.handledLast = false
+	arg.ctr.handledLast = false
 	return err
 }
 
@@ -64,8 +63,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	analyze := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	analyze.Start()
 	defer analyze.Stop()
-	ap := arg
-	ctr := ap.ctr
+	ctr := arg.ctr
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
@@ -82,7 +80,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			if ap.bat == nil {
+			if arg.bat == nil {
 				bat, _, err := ctr.ReceiveFromSingleReg(0, analyze)
 				if err != nil {
 					return result, err
@@ -90,7 +88,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 				if bat == nil {
 					ctr.state = SendLast
-					ap.rbat = nil
+					arg.rbat = nil
 					continue
 				}
 				if bat.IsEmpty() {
@@ -101,24 +99,24 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					proc.PutBatch(bat)
 					continue
 				}
-				ap.bat = bat
-				ap.lastpos = 0
+				arg.bat = bat
+				arg.lastpos = 0
 			}
 
-			startrow := ap.lastpos
-			if err := ctr.probe(ap, proc, analyze, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
+			startrow := arg.lastpos
+			if err := ctr.probe(arg, proc, analyze, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
 				return result, err
 			}
-			if ap.lastpos == 0 {
-				proc.PutBatch(ap.bat)
-				ap.bat = nil
-			} else if ap.lastpos == startrow {
+			if arg.lastpos == 0 {
+				proc.PutBatch(arg.bat)
+				arg.bat = nil
+			} else if arg.lastpos == startrow {
 				return result, moerr.NewInternalErrorNoCtx("right join hanging")
 			}
 			return result, nil
 
 		case SendLast:
-			setNil, err := ctr.sendLast(ap, proc, analyze, arg.GetIsFirst(), arg.GetIsLast(), &result)
+			setNil, err := ctr.sendLast(arg, proc, analyze, arg.GetIsFirst(), arg.GetIsLast(), &result)
 			if err != nil {
 				return result, err
 			}
