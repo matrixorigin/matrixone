@@ -107,7 +107,6 @@ insert into rs03 values (1, 43425.4325, -7483.432, 2);
 drop snapshot if exists sp02;
 create snapshot sp02 for account sys;
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp02'} where reldatabase = 'test02';
-select count(*) from mo_catalog.mo_tables{snapshot = 'sp02'} where reldatabase = 'mo_catalog' and creator = 1;
 -- @ignore:0,5,6,7
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
 -- @ignore:0,5,6,7

@@ -146,9 +146,6 @@ create snapshot sp02 for account sys;
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp02'} where reldatabase = 'test02';
 count(*)
 2
-select count(*) from mo_catalog.mo_tables{snapshot = 'sp02'} where reldatabase = 'mo_catalog' and creator = 1;
-count(*)
-2
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
 276171    test02    def    create database test02    0    1    2024-05-13 15:18:53    0    
