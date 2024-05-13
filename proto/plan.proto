@@ -862,9 +862,9 @@ message ExternScan {
     string format = 3;
     uint64 ignored_lines = 4;
     bytes  enclosed_by = 5;
-    bytes  escaped_by = 6;
-    string terminated = 7;
-	string json_type = 8;
+    string terminated = 6;
+	string json_type = 7;
+    bytes  escaped_by = 8;
 }
 
 message LockTarget {
