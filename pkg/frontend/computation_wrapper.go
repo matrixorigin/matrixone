@@ -129,6 +129,7 @@ func (cwft *TxnComputationWrapper) Plan() *plan.Plan {
 
 func (cwft *TxnComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
 	cwft.plan = nil
+	cwft.freeStmt()
 	cwft.stmt = stmt
 }
 
@@ -137,13 +138,17 @@ func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
 }
 
 func (cwft *TxnComputationWrapper) Free() {
+	cwft.freeStmt()
+	cwft.Clear()
+}
+
+func (cwft *TxnComputationWrapper) freeStmt() {
 	if cwft.stmt != nil {
 		if !cwft.ifIsExeccute {
 			cwft.stmt.Free()
 			cwft.stmt = nil
 		}
 	}
-	cwft.Clear()
 }
 
 func (cwft *TxnComputationWrapper) Clear() {
