@@ -114,6 +114,8 @@ func (blk *baseObject) getOrCreateMVCC() *updates.ObjectMVCCHandle {
 }
 
 func (blk *baseObject) GCInMemeoryDeletesByTSForTest(ts types.TS) {
+	blk.Lock()
+	defer blk.Unlock()
 	mvcc := blk.tryGetMVCC()
 	if mvcc == nil {
 		return
@@ -184,6 +186,12 @@ func (blk *baseObject) TryUpgrade() (err error) {
 
 func (blk *baseObject) GetMeta() any { return blk.meta }
 func (blk *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
+	if !blk.meta.IsAppendable() {
+		panic("not support")
+	}
+	if blk.meta.HasDropCommitted() {
+		panic("not support")
+	}
 	blk.RLock()
 	defer blk.RUnlock()
 	x := blk.appendMVCC.GetLatestAppendPrepareTSLocked()
@@ -758,7 +766,7 @@ func (blk *baseObject) RangeDelete(
 	dt handle.DeleteType) (node txnif.DeleteNode, err error) {
 	blk.Lock()
 	defer blk.Unlock()
-	blkMVCC := blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID)
+	blkMVCC := blk.getOrCreateMVCC().GetOrCreateDeleteChainLocked(blkID)
 	if err = blkMVCC.CheckNotDeleted(start, end, txn.GetStartTS()); err != nil {
 		return
 	}
@@ -776,7 +784,7 @@ func (blk *baseObject) TryDeleteByDeltaloc(
 	}
 	blk.Lock()
 	defer blk.Unlock()
-	blkMVCC := blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID)
+	blkMVCC := blk.getOrCreateMVCC().GetOrCreateDeleteChainLocked(blkID)
 	return blkMVCC.TryDeleteByDeltalocLocked(txn, deltaLoc, true)
 }
 
@@ -1009,7 +1017,7 @@ func (blk *baseObject) PersistedCollectDeleteInRange(
 }
 
 func (blk *baseObject) OnReplayDelete(blkID uint16, node txnif.DeleteNode) (err error) {
-	blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID).OnReplayDeleteNode(node)
+	blk.getOrCreateMVCC().GetOrCreateDeleteChainLocked(blkID).OnReplayDeleteNode(node)
 	err = node.OnApply()
 	return
 }
@@ -1066,7 +1074,7 @@ func (blk *baseObject) CollectAppendInRange(
 func (blk *baseObject) UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLoc objectio.Location) (bool, txnif.TxnEntry, error) {
 	blk.Lock()
 	defer blk.Unlock()
-	mvcc := blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID)
+	mvcc := blk.getOrCreateMVCC().GetOrCreateDeleteChainLocked(blkID)
 	return mvcc.UpdateDeltaLocLocked(txn, deltaLoc, false)
 }
 

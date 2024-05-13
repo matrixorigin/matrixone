@@ -37,20 +37,18 @@ const argName = "top"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(argName)
-	ap := arg
 	buf.WriteString(": top([")
-	for i, f := range ap.Fs {
+	for i, f := range arg.Fs {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
 		buf.WriteString(f.String())
 	}
-	buf.WriteString(fmt.Sprintf("], %v)", ap.Limit))
+	buf.WriteString(fmt.Sprintf("], %v)", arg.Limit))
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
+	arg.ctr = new(container)
 	arg.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, arg.Limit)
 	if err != nil {
 		return err
@@ -61,21 +59,21 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	}
 	arg.ctr.limit = vector.MustFixedCol[int64](vec)[0]
 	if arg.ctr.limit > 1024 {
-		ap.ctr.sels = make([]int64, 0, 1024)
+		arg.ctr.sels = make([]int64, 0, 1024)
 	} else {
-		ap.ctr.sels = make([]int64, 0, arg.ctr.limit)
+		arg.ctr.sels = make([]int64, 0, arg.ctr.limit)
 	}
-	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
+	arg.ctr.poses = make([]int32, 0, len(arg.Fs))
 
-	ctr := ap.ctr
-	ctr.executorsForOrderColumn = make([]colexec.ExpressionExecutor, len(ap.Fs))
+	ctr := arg.ctr
+	ctr.executorsForOrderColumn = make([]colexec.ExpressionExecutor, len(arg.Fs))
 	for i := range ctr.executorsForOrderColumn {
-		ctr.executorsForOrderColumn[i], err = colexec.NewExpressionExecutor(proc, ap.Fs[i].Expr)
+		ctr.executorsForOrderColumn[i], err = colexec.NewExpressionExecutor(proc, arg.Fs[i].Expr)
 		if err != nil {
 			return err
 		}
 	}
-	typ := ap.Fs[0].Expr.Typ
+	typ := arg.Fs[0].Expr.Typ
 	if arg.TopValueTag > 0 {
 		ctr.desc = arg.Fs[0].Flag&plan.OrderBySpec_DESC != 0
 		ctr.topValueZM = objectio.NewZM(types.T(typ.Id), typ.Scale)

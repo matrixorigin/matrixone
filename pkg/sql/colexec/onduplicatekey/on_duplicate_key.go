@@ -17,6 +17,7 @@ package onduplicatekey
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,9 +37,8 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(p *process.Process) error {
-	ap := arg
-	ap.ctr = &container{}
-	ap.ctr.InitReceiver(p, true)
+	arg.ctr = &container{}
+	arg.ctr.InitReceiver(p, true)
 	return nil
 }
 
