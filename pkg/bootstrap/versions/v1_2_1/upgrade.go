@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v1_2_0
+package v1_2_1
 
 import (
 	"context"
@@ -21,14 +21,15 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 var (
 	Handler = &versionHandle{
 		metadata: versions.Version{
-			Version:           "1.2.0",
-			MinUpgradeVersion: "1.1.0",
+			Version:           "1.2.1",
+			MinUpgradeVersion: "1.2.0",
 			UpgradeCluster:    versions.Yes,
 			UpgradeTenant:     versions.Yes,
 			VersionOffset:     uint32(len(clusterUpgEntries) + len(tenantUpgEntries)),
@@ -48,15 +49,7 @@ func (v *versionHandle) Prepare(
 	ctx context.Context,
 	txn executor.TxnExecutor,
 	final bool) error {
-
-	for _, upgEntry := range UpgPrepareEntres {
-		err := upgEntry.Upgrade(txn, catalog.System_Account)
-		if err != nil {
-			getLogger().Error("prepare upgrade entry execute error", zap.Error(err), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
-			return err
-		}
-	}
-
+	txn.Use(catalog.MO_CATALOG)
 	return nil
 }
 
@@ -79,7 +72,6 @@ func (v *versionHandle) HandleTenantUpgrade(
 func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
-	txn.Use(catalog.MO_CATALOG)
 	for _, upgEntry := range clusterUpgEntries {
 		err := upgEntry.Upgrade(txn, catalog.System_Account)
 		if err != nil {
@@ -91,16 +83,11 @@ func (v *versionHandle) HandleClusterUpgrade(
 }
 
 func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
-	// create new upgrade framework tables for the first time,
-	// which means using v1.2.0 for the first time
-	// NOTE: The `alter table` statements used for upgrading system table rely on `mo_foreign_keys` and `mo_indexes`,
-	// so preprocessing is performed first
-	for _, upgEntry := range createFrameworkDepsEntres {
-		err := upgEntry.Upgrade(txn, catalog.System_Account)
-		if err != nil {
-			getLogger().Error("Handle create framework dependencies upgrade entry execute error", zap.Error(err), zap.String("upgrade entry", upgEntry.String()))
-			return err
-		}
-	}
-	return nil
+	return moerr.NewInternalErrorNoCtx("Only v1.2.0 can initialize upgrade framework, current version is:%s", Handler.metadata.Version)
+}
+
+func (v *versionHandle) createFrameworkTables(
+	txn executor.TxnExecutor,
+	final bool) error {
+	return moerr.NewInternalErrorNoCtx("Only v1.2.0 can initialize upgrade framework, current version is:%s", Handler.metadata.Version)
 }
