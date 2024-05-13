@@ -208,5 +208,3 @@ count(*)
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 count(*)
 10
-drop snapshot tpch_snapshot;
-drop snapshot tpch_cluster;

@@ -8,4 +8,3 @@ drop table if exists orders;
 drop table if exists part;
 drop table if exists partsupp;
 drop table if exists supplier;
-drop database if exists TPCH;

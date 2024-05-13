@@ -83,7 +83,3 @@ select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
-
--- drop snapshot
-drop snapshot tpch_snapshot;
-drop snapshot tpch_cluster;
