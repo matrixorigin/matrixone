@@ -266,7 +266,7 @@ func (w *waiter) startWait() {
 	w.waitAt.Store(time.Now())
 }
 
-func logStr(strs []string, name string, w *waiter) {
+func logStr(strs []string, name string, address string) {
 	var buffer bytes.Buffer
 
 	for _, str := range strs {
@@ -274,7 +274,7 @@ func logStr(strs []string, name string, w *waiter) {
 		buffer.WriteString(", ")
 	}
 
-	buffer.WriteString(fmt.Sprintf("%+v", w))
+	buffer.WriteString(address)
 
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.FatalLevel) {
@@ -284,9 +284,10 @@ func logStr(strs []string, name string, w *waiter) {
 }
 
 func (w *waiter) reset() {
+	str := fmt.Sprintf("%+v", w)
 	w.mu.Lock()
-	logStr(w.mu.ref, "ref", w)
-	logStr(w.mu.unRef, "unRef", w)
+	logStr(w.mu.ref, "ref", str)
+	logStr(w.mu.unRef, "unRef", str)
 	w.mu.ref = nil
 	w.mu.unRef = nil
 	w.mu.Unlock()
