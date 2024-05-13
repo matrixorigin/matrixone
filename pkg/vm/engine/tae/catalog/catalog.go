@@ -153,7 +153,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	}
 	processor.ObjectFn = func(se *ObjectEntry) error {
 		se.RLock()
-		needGC := se.DeleteBeforeLocked(ts) && !se.InMemoryDeletesExisted()
+		needGC := se.DeleteBeforeLocked(ts) && !se.InMemoryDeletesExistedLocked()
 		se.RUnlock()
 		if needGC {
 			tbl := se.table
@@ -164,7 +164,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	processor.TombstoneFn = func(t data.Tombstone) error {
 		obj := t.GetObject().(*ObjectEntry)
 		obj.RLock()
-		needGC := obj.DeleteBeforeLocked(ts) && !obj.InMemoryDeletesExisted()
+		needGC := obj.DeleteBeforeLocked(ts) && !obj.InMemoryDeletesExistedLocked()
 		obj.RUnlock()
 		if needGC {
 			tbl := obj.table
@@ -179,6 +179,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	catalog.gcTS = ts
 }
 func (catalog *Catalog) CheckMetadata() {
+	logutil.Infof("[MetadataCheck] Start")
 	p := &LoopProcessor{}
 	p.ObjectFn = catalog.checkObject
 	p.TombstoneFn = catalog.checkTombstone
@@ -196,40 +197,39 @@ func (catalog *Catalog) checkTombstone(t data.Tombstone) error {
 	return nil
 }
 func (catalog *Catalog) checkObject(o *ObjectEntry) error {
-	str := o.PPString(3, 0, "")
 	o.RLock()
 	defer o.RUnlock()
 	if o.Depth() > 2 {
-		logutil.Infof("[MetadataCheck] object mvcc link is too long, depth %d, obj %v", o.Depth(), str)
+		logutil.Infof("[MetadataCheck] object mvcc link is too long, depth %d, obj %v", o.Depth(), o.PPStringLocked(3, 0, ""))
 	}
 	if o.IsAppendable() && o.HasDropCommittedLocked() {
 		if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
-			logutil.Infof("[MetadataCheck] object should have stats, obj %v", str)
+			logutil.Infof("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
 		}
 	}
 	if !o.IsAppendable() && !o.IsCreatingOrAborted() {
 		if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
-			logutil.Infof("[MetadataCheck] object should have stats, obj %v", str)
+			logutil.Infof("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
 		}
 	}
 	if !o.IsAppendable() && !o.IsCreatingOrAborted() {
 		if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
-			logutil.Infof("[MetadataCheck] object should have stats, obj %v", str)
+			logutil.Infof("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
 		}
 	}
 	if !catalog.gcTS.IsEmpty() {
-		if o.HasDropCommittedLocked() && o.DeleteBefore(catalog.gcTS) && !o.InMemoryDeletesExisted() {
-			logutil.Infof("[MetadataCheck] object should not exist, gcTS %v, obj %v", catalog.gcTS.ToString(), str)
+		if o.HasDropCommittedLocked() && o.DeleteBeforeLocked(catalog.gcTS) && !o.InMemoryDeletesExistedLocked() {
+			logutil.Infof("[MetadataCheck] object should not exist, gcTS %v, obj %v", catalog.gcTS.ToString(), o.PPStringLocked(3, 0, ""))
 		}
 	}
 
 	duration := time.Minute * 10
 	ts := types.BuildTS(time.Now().UTC().UnixNano()-duration.Nanoseconds(), 0)
-	if o.HasDropCommittedLocked() && o.DeleteBefore(ts) {
-		if o.InMemoryDeletesExisted() {
+	if o.HasDropCommittedLocked() && o.DeleteBeforeLocked(ts) {
+		if o.InMemoryDeletesExistedLocked() {
 			logutil.Infof("[MetadataCheck] object has in memory deletes %v after deleted, obj %v, tombstone %v",
 				duration,
-				str,
+				o.PPStringLocked(3, 0, ""),
 				o.GetTable().TryGetTombstone(o.ID).StringLocked(3, 0, ""))
 		}
 	}

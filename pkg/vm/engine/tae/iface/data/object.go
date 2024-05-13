@@ -183,7 +183,7 @@ type Tombstone interface {
 	ReplayDeltaLoc(any, uint16)
 	VisitDeletes(ctx context.Context, start, end types.TS, bat, tnBatch *containers.Batch, skipMemory bool) (*containers.Batch, int, int, error)
 	GetObject() any
-	InMemoryDeletesExisted() bool
+	InMemoryDeletesExistedLocked() bool
 	// for test
 	GetLatestDeltaloc(uint16) objectio.Location
 }

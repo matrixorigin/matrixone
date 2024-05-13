@@ -500,7 +500,7 @@ func (n *ObjectMVCCHandle) ReplayDeltaLoc(vMVCCNode any, blkID uint16) {
 	mvcc := n.GetOrCreateDeleteChain(blkID)
 	mvcc.ReplayDeltaLoc(mvccNode)
 }
-func (n *ObjectMVCCHandle) InMemoryDeletesExisted() bool {
+func (n *ObjectMVCCHandle) InMemoryDeletesExistedLocked() bool {
 	for _, deletes := range n.deletes {
 		if !deletes.deletes.mask.IsEmpty() {
 			return true
