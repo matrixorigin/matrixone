@@ -36,30 +36,29 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ctr := ap.ctr
+	arg.ctr = new(container)
+	ctr := arg.ctr
 	ctr.InitReceiver(proc, true)
 
 	f := true
-	for i := len(ap.AggIds) - 1; i >= 0; i-- {
-		if ap.AggIds[i] == function.MAX || ap.AggIds[i] == function.MIN || ap.AggIds[i] == function.SUM || ap.AggIds[i] == function.AVG {
+	for i := len(arg.AggIds) - 1; i >= 0; i-- {
+		if arg.AggIds[i] == function.MAX || arg.AggIds[i] == function.MIN || arg.AggIds[i] == function.SUM || arg.AggIds[i] == function.AVG {
 			ctr.colIdx = i
 			f = false
 			break
 		}
 	}
 	if f {
-		ap.FillType = plan.Node_NONE
+		arg.FillType = plan.Node_NONE
 	}
 
-	switch ap.FillType {
+	switch arg.FillType {
 	case plan.Node_VALUE:
 		b := batch.NewWithSize(1)
 		b.SetVector(0, proc.GetVector(types.T_varchar.ToType()))
 		batch.SetLength(b, 1)
-		ctr.valVecs = make([]*vector.Vector, len(ap.FillVal))
-		for i, val := range ap.FillVal {
+		ctr.valVecs = make([]*vector.Vector, len(arg.FillVal))
+		for i, val := range arg.FillVal {
 			exe, err := colexec.NewExpressionExecutor(proc, val)
 			if err != nil {
 				return err
@@ -73,21 +72,21 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		}
 		ctr.process = processValue
 	case plan.Node_PREV:
-		ctr.prevVecs = make([]*vector.Vector, ap.ColLen)
+		ctr.prevVecs = make([]*vector.Vector, arg.ColLen)
 		ctr.process = processPrev
 	case plan.Node_NEXT:
 		ctr.status = receiveBat
 		ctr.subStatus = findNull
 		ctr.process = processNext
 	case plan.Node_LINEAR:
-		for _, v := range ap.FillVal {
+		for _, v := range arg.FillVal {
 			resetColRef(v, 0)
 			exe, err := colexec.NewExpressionExecutor(proc, v)
 			if err != nil {
 				return err
 			}
 			ctr.exes = append(ctr.exes, exe)
-			ctr.valVecs = make([]*vector.Vector, len(ap.FillVal))
+			ctr.valVecs = make([]*vector.Vector, len(arg.FillVal))
 		}
 		ctr.process = processLinear
 	default:

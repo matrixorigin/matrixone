@@ -103,6 +103,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanBatch(mp)
 		ctr.cleanAggVectors()
 		ctr.cleanOrderVectors()
+		arg.ctr = nil
 	}
 }
 
