@@ -370,10 +370,12 @@ func (obj *aobject) estimateRawScore() (score int, dropped bool, err error) {
 	}
 
 	changesCnt := uint32(0)
+	obj.meta.RLock()
 	objectMVCC := obj.tryGetMVCC()
 	if objectMVCC != nil {
-		changesCnt = objectMVCC.GetChangeIntentionCnt()
+		changesCnt = objectMVCC.GetChangeIntentionCntLocked()
 	}
+	obj.meta.RUnlock()
 	if changesCnt == 0 && rows == 0 {
 		score = 0
 	} else {

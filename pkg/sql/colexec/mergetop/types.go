@@ -99,6 +99,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanBatch(mp)
 		ctr.cleanExecutors()
 		ctr.FreeMergeTypeOperator(pipelineFailed)
+		arg.ctr = nil
 	}
 }
 

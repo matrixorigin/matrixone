@@ -51,18 +51,17 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
-	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
+	arg.ctr = new(container)
+	arg.ctr.inserted = make([]uint8, hashmap.UnitLimit)
+	arg.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 
-	ctr := ap.ctr
+	ctr := arg.ctr
 	ctr.state = vm.Build
 
 	// create executors for aggregation functions.
-	if len(ap.Aggs) > 0 {
-		ctr.aggVecs = make([]ExprEvalVector, len(ap.Aggs))
-		for i, ag := range ap.Aggs {
+	if len(arg.Aggs) > 0 {
+		ctr.aggVecs = make([]ExprEvalVector, len(arg.Aggs))
+		for i, ag := range arg.Aggs {
 			expressions := ag.GetArgExpressions()
 			if ctr.aggVecs[i], err = MakeEvalVector(proc, expressions); err != nil {
 				return err
@@ -72,17 +71,17 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 
 	// create executors for group by columns.
 	ctr.keyWidth = 0
-	if ap.Exprs != nil {
+	if arg.Exprs != nil {
 		ctr.groupVecsNullable = false
-		ctr.groupVecs, err = MakeEvalVector(proc, ap.Exprs)
+		ctr.groupVecs, err = MakeEvalVector(proc, arg.Exprs)
 		if err != nil {
 			return err
 		}
-		for _, gv := range ap.Exprs {
+		for _, gv := range arg.Exprs {
 			ctr.groupVecsNullable = ctr.groupVecsNullable || (!gv.Typ.NotNullable)
 		}
 
-		for _, expr := range ap.Exprs {
+		for _, expr := range arg.Exprs {
 			typ := expr.Typ
 			width := types.T(typ.Id).TypeLen()
 			if types.T(typ.Id).FixedLength() < 0 {
