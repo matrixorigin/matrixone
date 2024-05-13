@@ -155,12 +155,13 @@ message Deletion{
 }
 
 message PreInsert {
-  string schema_name      = 1;
-  plan.TableDef table_def = 2;
-  repeated int32 idx      = 3;
-  repeated string attrs   = 4;
-  bool has_auto_col       = 5;
-  bool is_update          = 6;
+  string schema_name         = 1;
+  plan.TableDef table_def    = 2;
+  repeated int32 idx         = 3;
+  repeated string attrs      = 4;
+  bool has_auto_col          = 5;
+  bool is_update             = 6;
+  int64 estimated_row_count  = 7;
 }
 
 message LockTarget {
@@ -403,8 +404,8 @@ message Instruction{
   repeated plan.OrderBySpec order_by = 21;
   repeated plan.Expr    project_list = 22;
   plan.Expr    filter = 23;
-  uint64    limit = 24;
-  uint64    offset = 25;
+  plan.Expr    limit = 24;
+  plan.Expr    offset = 25;
   // isFirst identifies whether it is the first instruction of analyzeInfo corresponding to idx
   bool isFirst = 26;
   // isLast identifies whether it is the last instruction of analyzeInfo corresponding to idx
