@@ -108,6 +108,8 @@ func TestBuildAlterView(t *testing.T) {
 		}).AnyTimes()
 	ctx.EXPECT().SetBuildingAlterView(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	ctx.EXPECT().GetSnapshot().Return(nil).AnyTimes()
+	ctx.EXPECT().SetViews(gomock.Any()).AnyTimes()
 	ctx.EXPECT().GetAccountId().Return(catalog.System_Account, nil).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()

@@ -43,24 +43,17 @@ type MockCompilerContext struct {
 }
 
 func (m *MockCompilerContext) GetViews() []string {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (m *MockCompilerContext) SetViews(views []string) {
-	//TODO implement me
-	panic("implement me")
 }
 
 func (m *MockCompilerContext) GetSnapshot() *Snapshot {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
-func (m *MockCompilerContext) SetSnapshot(snapshot *Snapshot) {
-	//TODO implement me
-	panic("implement me")
-}
+func (m *MockCompilerContext) SetSnapshot(snapshot *Snapshot) {}
 
 func (m *MockCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
 	//TODO implement me
