@@ -85,6 +85,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			arg.ctr.offsetExecutor.Free()
 			arg.ctr.offsetExecutor = nil
 		}
+		arg.ctr = nil
 	}
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())

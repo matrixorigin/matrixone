@@ -23,12 +23,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
-	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -677,7 +679,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 						}
 					}
 
-					s.saveProfile(profPath)
+					SaveProfile(profPath, profile.GOROUTINE, s.etlFS)
 				}))
 		}
 		if s.cfg.Txn.Limit > 0 {
@@ -860,11 +862,16 @@ func (s *service) initTxnTraceService() {
 	rt.SetGlobalVariables(runtime.TxnTraceService, ts)
 }
 
-func (s *service) saveProfile(profilePath string) {
+// SaveProfile saves profile into etl fs
+// profileType defined in pkg/util/profile/profile.go
+func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileService) {
+	if len(profilePath) == 0 || len(profileType) == 0 || etlFS == nil {
+		return
+	}
 	reader, writer := io.Pipe()
 	go func() {
 		// dump all goroutines
-		_ = profile.ProfileGoroutine(writer, 2)
+		_ = profile.ProfileRuntime(profileType, writer, 2)
 		_ = writer.Close()
 	}()
 	writeVec := fileservice.IOVector{
@@ -879,7 +886,7 @@ func (s *service) saveProfile(profilePath string) {
 	}
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*3)
 	defer cancel()
-	err := s.etlFS.Write(ctx, writeVec)
+	err := etlFS.Write(ctx, writeVec)
 	if err != nil {
 		logutil.Errorf("save profile %s failed. err:%v", profilePath, err)
 		return

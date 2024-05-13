@@ -2472,7 +2472,7 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 				children[i].appendInstruction(vm.Instruction{
 					Op:  vm.RightAnti,
 					Idx: c.anal.curr,
-					Arg: constructRightAnti(node, rightTyps, 0, 0, c.proc),
+					Arg: constructRightAnti(node, rightTyps, c.proc),
 				})
 			}
 		} else {
@@ -2491,7 +2491,7 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 				children[i].appendInstruction(vm.Instruction{
 					Op:  vm.RightSemi,
 					Idx: c.anal.curr,
-					Arg: constructRightSemi(node, rightTyps, 0, 0, c.proc),
+					Arg: constructRightSemi(node, rightTyps, c.proc),
 				})
 			}
 		} else {
@@ -2518,7 +2518,7 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 			children[i].appendInstruction(vm.Instruction{
 				Op:  vm.Right,
 				Idx: c.anal.curr,
-				Arg: constructRight(node, leftTyps, rightTyps, 0, 0, c.proc),
+				Arg: constructRight(node, leftTyps, rightTyps, c.proc),
 			})
 		}
 	default:
@@ -2592,7 +2592,7 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.RightSemi,
 						Idx: c.anal.curr,
-						Arg: constructRightSemi(node, rightTyps, uint64(i), uint64(len(rs)), c.proc),
+						Arg: constructRightSemi(node, rightTyps, c.proc),
 					})
 				}
 			} else {
@@ -2639,7 +2639,7 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Right,
 					Idx: c.anal.curr,
-					Arg: constructRight(node, leftTyps, rightTyps, uint64(i), uint64(len(rs)), c.proc),
+					Arg: constructRight(node, leftTyps, rightTyps, c.proc),
 				})
 			}
 		} else {
@@ -2670,7 +2670,7 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.RightAnti,
 						Idx: c.anal.curr,
-						Arg: constructRightAnti(node, rightTyps, uint64(i), uint64(len(rs)), c.proc),
+						Arg: constructRightAnti(node, rightTyps, c.proc),
 					})
 				}
 			} else {
@@ -2941,7 +2941,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 
 	rs.Instructions[0].Idx = c.anal.curr
 
-	arg := constructFuzzyFilter(c, n, ns[n.Children[1]])
+	arg := constructFuzzyFilter(n, ns[n.Children[1]])
 
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.FuzzyFilter,
@@ -3608,7 +3608,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
 
-	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], s.ShuffleCnt, ss != nil))
+	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], ss != nil))
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
@@ -3715,7 +3715,7 @@ func (c *Compile) fillAnalyzeInfo() {
 	}
 }
 
-func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
+func (c *Compile) determinExpandRanges(n *plan.Node) bool {
 	if n.TableDef.Partition != nil {
 		return true
 	}
@@ -3901,7 +3901,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		}
 	}
 
-	if c.determinExpandRanges(n, rel) {
+	if c.determinExpandRanges(n) {
 		ranges, err = c.expandRanges(n, rel, n.BlockFilterList)
 		if err != nil {
 			return nil, nil, nil, err
