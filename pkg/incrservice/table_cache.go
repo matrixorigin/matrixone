@@ -93,7 +93,9 @@ func (c *tableCache) getTxn() client.TxnOperator {
 func (c *tableCache) insertAutoValues(
 	ctx context.Context,
 	tableID uint64,
-	bat *batch.Batch) (uint64, error) {
+	bat *batch.Batch,
+	estimate int64,
+) (uint64, error) {
 	lastInsert := uint64(0)
 	txnOp := c.getTxn()
 	for _, col := range c.cols {
@@ -101,6 +103,11 @@ func (c *tableCache) insertAutoValues(
 		if cc == nil {
 			panic("column cache should not be nil, " + col.ColName)
 		}
+
+		if estimate > int64(cc.cfg.CountPerAllocate) {
+			cc.preAllocate(ctx, tableID, int(estimate), txnOp)
+		}
+
 		rows := bat.RowCount()
 		vec := bat.GetVector(int32(col.ColIndex))
 		if v, err := cc.insertAutoValues(ctx, tableID, vec, rows, txnOp); err != nil {

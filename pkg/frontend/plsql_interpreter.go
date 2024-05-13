@@ -134,7 +134,7 @@ func (interpreter *Interpreter) GetSimpleExprValueWithSpVar(e tree.Expr) (interf
 	if err != nil {
 		return nil, err
 	}
-	return GetSimpleExprValue(retExpr, interpreter.ses)
+	return GetSimpleExprValue(interpreter.ctx, retExpr, interpreter.ses)
 }
 
 // Currently we support only binary, unary and comparison expression.
@@ -501,7 +501,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		var value interface{}
 		// store variables into current scope
 		if st.DefaultVal != nil {
-			value, err = GetSimpleExprValue(st.DefaultVal, interpreter.ses)
+			value, err = GetSimpleExprValue(interpreter.ctx, st.DefaultVal, interpreter.ses)
 			if err != nil {
 				return SpNotOk, nil
 			}

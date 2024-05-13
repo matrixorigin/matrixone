@@ -30,6 +30,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
+
+	_ "go.uber.org/automaxprocs"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -69,9 +74,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -81,9 +88,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
-	_ "go.uber.org/automaxprocs"
-	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -179,6 +183,9 @@ func (c *Compile) reset() {
 	for k := range c.metaTables {
 		delete(c.metaTables, k)
 	}
+	for k := range c.lockTables {
+		delete(c.lockTables, k)
+	}
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
 	}
@@ -191,10 +198,7 @@ func (c *Compile) reset() {
 }
 
 // helper function to judge if init temporary engine is needed
-func (c *Compile) NeedInitTempEngine(InitTempEngine bool) bool {
-	if InitTempEngine {
-		return false
-	}
+func (c *Compile) NeedInitTempEngine() bool {
 	for _, s := range c.scope {
 		ddl := s.Plan.GetDdl()
 		if ddl == nil {
@@ -209,10 +213,12 @@ func (c *Compile) NeedInitTempEngine(InitTempEngine bool) bool {
 	return false
 }
 
-func (c *Compile) SetTempEngine(ctx context.Context, te engine.Engine) {
+func (c *Compile) SetTempEngine(tempEngine engine.Engine, tempStorage *memorystorage.Storage) {
 	e := c.e.(*engine.EntireEngine)
-	e.TempEngine = te
-	c.ctx = ctx
+	e.TempEngine = tempEngine
+	if c.ctx != nil && c.ctx.Value(defines.TemporaryTN{}) == nil {
+		c.ctx = context.WithValue(c.ctx, defines.TemporaryTN{}, tempStorage)
+	}
 }
 
 // Compile is the entrance of the compute-execute-layer.
@@ -575,6 +581,10 @@ func (c *Compile) runOnce() error {
 	if err != nil {
 		return err
 	}
+	err = c.lockTable()
+	if err != nil {
+		return err
+	}
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
@@ -805,6 +815,34 @@ func (c *Compile) lockMetaTables() error {
 			// other errors, just throw  out
 			return err
 		}
+	}
+	return nil
+}
+
+func (c *Compile) lockTable() error {
+	for _, tbl := range c.lockTables {
+		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
+		if len(tbl.PartitionTableIds) == 0 {
+			return lockop.LockTable(
+				c.e,
+				c.proc,
+				tbl.TableId,
+				typ,
+				false)
+		}
+
+		for _, tblId := range tbl.PartitionTableIds {
+			err := lockop.LockTable(
+				c.e,
+				c.proc,
+				tblId,
+				typ,
+				false)
+			if err != nil {
+				return err
+			}
+		}
+
 	}
 	return nil
 }
@@ -1146,6 +1184,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		ss = c.compileSort(n, c.compileProjection(n, []*Scope{ds}))
 		return ss, nil
 	case plan.Node_EXTERNAL_SCAN:
+		if n.ObjRef != nil {
+			c.appendMetaTables(n.ObjRef)
+		}
 		node := plan2.DeepCopyNode(n)
 		ss, err = c.compileExternScan(ctx, node)
 		if err != nil {
@@ -1465,7 +1506,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			var preInsertArg *preinsert.Argument
-			preInsertArg, err = constructPreInsert(n, c.e, c.proc)
+			preInsertArg, err = constructPreInsert(ns, n, c.e, c.proc)
 			if err != nil {
 				return nil, err
 			}
@@ -1603,6 +1644,21 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
+		}
+
+		lockRows := make([]*plan.LockTarget, 0, len(n.LockTargets))
+		for _, tbl := range n.LockTargets {
+			if tbl.LockTable {
+				c.lockTables[tbl.TableId] = tbl
+			} else {
+				if _, ok := c.lockTables[tbl.TableId]; !ok {
+					lockRows = append(lockRows, tbl)
+				}
+			}
+		}
+		n.LockTargets = lockRows
+		if len(n.LockTargets) == 0 {
+			return ss, nil
 		}
 
 		block := false
@@ -1838,28 +1894,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	}()
 
 	t := time.Now()
-	// lock table's meta
-	if n.ObjRef != nil && n.TableDef != nil {
-		if err := lockMoTable(c, n.ObjRef.SchemaName, n.TableDef.Name, lock.LockMode_Shared); err != nil {
-			return nil, err
-		}
-	}
-	// lock table, for tables with no primary key, there is no need to lock the data
-	if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() && n.TableDef != nil &&
-		n.TableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
-		db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
-		if err != nil {
-			panic(err)
-		}
-		rel, err := db.Relation(ctx, n.ObjRef.ObjName, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		err = lockTable(c.ctx, c.e, c.proc, rel, n.ObjRef.SchemaName, nil, false)
-		if err != nil {
-			return nil, err
-		}
-	}
+
 	if time.Since(t) > time.Second {
 		logutil.Infof("lock table %s.%s cost %v", n.ObjRef.SchemaName, n.ObjRef.ObjName, time.Since(t))
 	}
@@ -2703,36 +2738,33 @@ func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
-		vec, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
-		if err != nil {
-			panic(err)
-		}
-		defer vec.Free(c.proc.Mp())
-		return c.compileTop(n, vector.MustFixedCol[int64](vec)[0], ss)
+		return c.compileTop(n, n.Limit, ss)
 
 	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileOrder(n, ss)
 
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
-		// get limit
-		vec1, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
-		if err != nil {
-			panic(err)
-		}
-		defer vec1.Free(c.proc.Mp())
+		if rule.IsConstant(n.Limit, false) && rule.IsConstant(n.Offset, false) {
+			// get limit
+			vec1, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
+			if err != nil {
+				panic(err)
+			}
+			defer vec1.Free(c.proc.Mp())
 
-		// get offset
-		vec2, err := colexec.EvalExpressionOnce(c.proc, n.Offset, []*batch.Batch{constBat})
-		if err != nil {
-			panic(err)
-		}
-		defer vec2.Free(c.proc.Mp())
+			// get offset
+			vec2, err := colexec.EvalExpressionOnce(c.proc, n.Offset, []*batch.Batch{constBat})
+			if err != nil {
+				panic(err)
+			}
+			defer vec2.Free(c.proc.Mp())
 
-		limit, offset := vector.MustFixedCol[int64](vec1)[0], vector.MustFixedCol[int64](vec2)[0]
-		topN := limit + offset
-		if topN <= 8192*2 {
-			// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
-			return c.compileOffset(n, c.compileTop(n, topN, ss))
+			limit, offset := vector.MustFixedCol[int64](vec1)[0], vector.MustFixedCol[int64](vec2)[0]
+			topN := limit + offset
+			if topN <= 8192*2 {
+				// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
+				return c.compileOffset(n, c.compileTop(n, plan2.MakePlan2Int64ConstExprWithType(topN), ss))
+			}
 		}
 		return c.compileLimit(n, c.compileOffset(n, c.compileOrder(n, ss)))
 
@@ -2762,7 +2794,7 @@ func containBrokenNode(s *Scope) bool {
 	return false
 }
 
-func (c *Compile) compileTop(n *plan.Node, topN int64, ss []*Scope) []*Scope {
+func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
 	// use topN TO make scope.
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
@@ -2862,13 +2894,14 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOffset,
 		Idx: c.anal.curr,
-		Arg: constructMergeOffset(n, c.proc),
+		Arg: constructMergeOffset(n),
 	}
 	return []*Scope{rs}
 }
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
+
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
@@ -2878,7 +2911,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 			Op:      vm.Limit,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     constructLimit(n, c.proc),
+			Arg:     constructLimit(n),
 		})
 	}
 	c.anal.isFirst = false
@@ -2888,7 +2921,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeLimit,
 		Idx: c.anal.curr,
-		Arg: constructMergeLimit(n, c.proc),
+		Arg: constructMergeLimit(n),
 	}
 	return []*Scope{rs}
 }

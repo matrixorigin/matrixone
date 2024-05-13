@@ -273,6 +273,7 @@ type MOCollector struct {
 	stopOnce sync.Once
 	stopWait sync.WaitGroup
 	stopCh   chan struct{}
+	stopDrop atomic.Uint64
 }
 
 type MOCollectorOption func(*MOCollector)
@@ -401,6 +402,7 @@ func (c *MOCollector) Register(name batchpipe.HasName, impl motrace.PipeImpl) {
 func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error {
 	select {
 	case <-c.stopCh:
+		c.stopDrop.Add(1)
 		ctx = errutil.ContextWithNoReport(ctx, true)
 		return moerr.NewInternalError(ctx, "MOCollector stopped")
 	case c.awakeCollect <- item:
@@ -413,6 +415,7 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 func (c *MOCollector) DiscardableCollect(ctx context.Context, item batchpipe.HasName) error {
 	select {
 	case <-c.stopCh:
+		c.stopDrop.Add(1)
 		ctx = errutil.ContextWithNoReport(ctx, true)
 		return moerr.NewInternalError(ctx, "MOCollector stopped")
 	case c.awakeCollect <- item:
