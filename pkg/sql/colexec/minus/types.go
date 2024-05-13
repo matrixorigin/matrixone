@@ -91,6 +91,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		arg.ctr.cleanBatch(mp)
 		arg.ctr.cleanHashMap()
 		arg.ctr.FreeAllReg()
+		arg.ctr = nil
 	}
 }
 

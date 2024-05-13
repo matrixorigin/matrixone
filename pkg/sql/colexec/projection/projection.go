@@ -29,9 +29,8 @@ const argName = "projection"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(argName)
-	n := arg
 	buf.WriteString(": projection(")
-	for i, e := range n.Es {
+	for i, e := range arg.Es {
 		if i > 0 {
 			buf.WriteString(",")
 		}
@@ -41,13 +40,12 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, ap.Es)
-	ap.ctr.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(ap.Es))
-	for i, e := range ap.Es {
+	arg.ctr = new(container)
+	arg.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Es)
+	arg.ctr.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(arg.Es))
+	for i, e := range arg.Es {
 		if e.Typ.Id != 0 {
-			ap.ctr.uafs[i] = vector.GetUnionAllFunction(plan.MakeTypeByPlan2Expr(e), proc.Mp())
+			arg.ctr.uafs[i] = vector.GetUnionAllFunction(plan.MakeTypeByPlan2Expr(e), proc.Mp())
 		}
 	}
 	return err

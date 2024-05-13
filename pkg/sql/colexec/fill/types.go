@@ -110,8 +110,11 @@ func (arg *Argument) Release() {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
+		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExes()
+
+		arg.ctr = nil
 	}
 }
 
