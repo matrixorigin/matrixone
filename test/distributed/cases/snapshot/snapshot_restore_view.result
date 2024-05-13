@@ -5,7 +5,7 @@ insert into db1.t1 values (1), (2), (3);
 create snapshot sn1 for account acc1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn1    2024-05-13 10:09:22.60687    account    acc1        
+sn1    2024-05-13 10:13:59.897173    account    acc1        
 drop database db1;
 create database view_test1;
 create table view_test1.t1 (a int);
@@ -29,15 +29,26 @@ a
 2
 4
 select * from view_test1.v2;
-internal error: No checkpoints for snapshot read
+a
+1
+2
+3
 select * from view_test2.v3;
-internal error: No checkpoints for snapshot read
+v1a    v2a
+1    1
+2    2
 select * from view_test2.v4;
-internal error: No checkpoints for snapshot read
+v1a    v2a
+1    1
+2    2
 select * from view_test3.v5;
-internal error: No checkpoints for snapshot read
+v1a    v2a
+1    1
+2    2
 select * from view_test3.v6;
-internal error: No checkpoints for snapshot read
+v1a    v2a
+1    1
+2    2
 create snapshot syssn1 for account acc1;
 show databases {snapshot = 'syssn1'};
 Database
@@ -73,15 +84,26 @@ a
 2
 4
 select * from view_test1.v2 {snapshot = 'syssn1'};
-internal error: No checkpoints for snapshot read
+a
+1
+2
+3
 select * from view_test2.v3 {snapshot = 'syssn1'};
-internal error: No checkpoints for snapshot read
+v1a    v2a
+1    1
+2    2
 select * from view_test2.v4 {snapshot = 'syssn1'};
-internal error: No checkpoints for snapshot read
+v1a    v2a
+1    1
+2    2
 select * from view_test3.v5 {snapshot = 'syssn1'};
-internal error: No checkpoints for snapshot read
+v1a    v2a
+1    1
+2    2
 select * from view_test3.v6 {snapshot = 'syssn1'};
-internal error: No checkpoints for snapshot read
+v1a    v2a
+1    1
+2    2
 drop database view_test1;
 drop database view_test2;
 drop database view_test3;
@@ -102,12 +124,23 @@ a
 2
 4
 select * from view_test1.v2;
-internal error: No checkpoints for snapshot read
+a
+1
+2
+3
 select * from view_test2.v3;
-internal error: No checkpoints for snapshot read
+v1a    v2a
+1    1
+2    2
 select * from view_test2.v4;
-internal error: No checkpoints for snapshot read
+v1a    v2a
+1    1
+2    2
 select * from view_test3.v5;
-internal error: No checkpoints for snapshot read
+v1a    v2a
+1    1
+2    2
 select * from view_test3.v6;
-internal error: No checkpoints for snapshot read
+v1a    v2a
+1    1
+2    2

@@ -907,7 +907,7 @@ type UserInput struct {
 	sqlSourceType []string
 	isRestore     bool
 	// operator account, the account executes restoration
-	// sys make a snapshot sn1 for acc1, then restore acc1 from snapshot sn1. In this scenario, sys is the operator account
+	// e.g. sys takes a snapshot sn1 for acc1, then restores acc1 from snapshot sn1. In this scenario, sys is the operator account
 	opAccount uint32
 	toAccount uint32
 }
