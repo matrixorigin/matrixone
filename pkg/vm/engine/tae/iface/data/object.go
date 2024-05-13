@@ -176,6 +176,7 @@ type Tombstone interface {
 	IsDeletedLocked(row uint32, txn txnif.TxnReader, blkID uint16) (bool, error)
 	SetDeletesListener(l func(uint64, types.TS) error)
 	StringLocked(level common.PPLevel, depth int, prefix string) string
+	String(level common.PPLevel, depth int, prefix string) string
 	// TryGetDeleteChain(blkID uint16) *updates.MVCCHandle
 	UpgradeAllDeleteChain()
 	UpgradeDeleteChain(blkID uint16)
@@ -186,4 +187,5 @@ type Tombstone interface {
 	InMemoryDeletesExistedLocked() bool
 	// for test
 	GetLatestDeltaloc(uint16) objectio.Location
+	CheckTombstone()
 }

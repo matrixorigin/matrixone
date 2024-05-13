@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -458,6 +459,15 @@ func (n *ObjectMVCCHandle) StringLocked(level common.PPLevel, depth int, prefix 
 	}
 	return s
 }
+func (n *ObjectMVCCHandle) String(level common.PPLevel, depth int, prefix string) string {
+	n.RLock()
+	defer n.RUnlock()
+	s := ""
+	for _, deletes := range n.deletes {
+		s = fmt.Sprintf("%s%s", s, deletes.StringLocked(level, depth+1, prefix))
+	}
+	return s
+}
 
 func (n *ObjectMVCCHandle) StringBlkLocked(level common.PPLevel, depth int, prefix string, blkid int) string {
 	s := ""
@@ -582,7 +592,29 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 	deltalocEnd = deltalocBat.Length()
 	return
 }
+func (n *ObjectMVCCHandle) CheckTombstone() {
+	n.RLock()
+	defer n.RUnlock()
+	for _, deletes := range n.deletes {
+		persistedTS := deletes.getDeltaPersistedTSLocked()
+		deletes.deletes.LoopChainLocked(func(node *DeleteNode) bool {
+			if node.IsPersistedDeletedNode() {
+				return true
+			}
+			if !node.IsCommitted() {
+				return true
+			}
+			if node.End.Less(&persistedTS) {
+				logutil.Infof("[MetadataCheck] in memory deletes should be flushed node %v, tombstone %v",
+					node.StringLocked(),
+					n.StringLocked(3, 0, ""))
+				return false
+			}
+			return true
+		})
+	}
 
+}
 func VisitDeltaloc(bat, tnBatch *containers.Batch, object *catalog.ObjectEntry, blkID *objectio.Blockid, node *catalog.MVCCNode[*catalog.MetadataMVCCNode], commitTS, createTS types.TS) {
 	is_sorted := false
 	if !object.IsAppendable() && object.GetSchema().HasSortKey() {
@@ -691,7 +723,11 @@ func (n *MVCCHandle) GetID() *common.ID {
 	return id
 }
 func (n *MVCCHandle) GetEntry() *catalog.ObjectEntry { return n.meta }
-
+func (n *MVCCHandle) String(level common.PPLevel, depth int, prefix string) string {
+	n.RLock()
+	defer n.RUnlock()
+	return n.StringLocked(level, depth, prefix)
+}
 func (n *MVCCHandle) StringLocked(level common.PPLevel, depth int, prefix string) string {
 	inMemoryCount := 0
 	if n.deletes.DepthLocked() > 0 {
