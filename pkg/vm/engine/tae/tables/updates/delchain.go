@@ -43,7 +43,6 @@ func MockTxnWithStartTS(ts types.TS) *txnbase.Txn {
 }
 
 type DeleteChain struct {
-	*sync.RWMutex
 	*txnbase.MVCCChain[*DeleteNode]
 	mvcc          *MVCCHandle
 	links         map[uint32]*DeleteNode
@@ -57,8 +56,7 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 		rwlocker = new(sync.RWMutex)
 	}
 	chain := &DeleteChain{
-		RWMutex:       rwlocker,
-		MVCCChain:     txnbase.NewMVCCChain((*DeleteNode).Less, NewEmptyDeleteNode),
+		MVCCChain:     txnbase.NewMVCCChain((*DeleteNode).Less, NewEmptyDeleteNode, rwlocker),
 		links:         make(map[uint32]*DeleteNode),
 		mvcc:          mvcc,
 		mask:          &nulls.Bitmap{},
@@ -81,7 +79,7 @@ func (chain *DeleteChain) GetDeleteCnt() uint32 {
 func (chain *DeleteChain) StringLocked() string {
 	msg := "DeleteChain:"
 	line := 1
-	chain.LoopChain(func(n *DeleteNode) bool {
+	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		msg = fmt.Sprintf("%s\n%d. %s", msg, line, n.StringLocked())
 		line++
 		return true
@@ -211,11 +209,11 @@ func (chain *DeleteChain) DeleteInDeleteView(deleteNode *DeleteNode) {
 	}
 }
 
-func (chain *DeleteChain) shrinkDeleteChainByTS(flushed types.TS) *DeleteChain {
+func (chain *DeleteChain) shrinkDeleteChainByTSLocked(flushed types.TS) *DeleteChain {
 	new := NewDeleteChain(chain.RWMutex, chain.mvcc)
 	new.persistedMask = chain.persistedMask
 
-	chain.LoopChain(func(n *DeleteNode) bool {
+	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		if !n.IsVisibleByTS(flushed) {
 			if n.nt == NT_Persisted {
 				return false
@@ -262,8 +260,7 @@ func (chain *DeleteChain) OnReplayNode(deleteNode *DeleteNode) {
 func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 	var merged *DeleteNode
 	chain.mvcc.RLock()
-	// chain.RLock()
-	chain.LoopChain(func(n *DeleteNode) bool {
+	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		// Already have a latest merged node
 		if n.IsMerged() && merged == nil {
 			return false
@@ -290,13 +287,14 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 }
 
 // CollectDeletesInRange collects [startTs, endTs)
-func (chain *DeleteChain) CollectDeletesInRange(
+func (chain *DeleteChain) CollectDeletesInRangeWithLock(
 	startTs, endTs types.TS,
-	rwlocker *sync.RWMutex) (mask *nulls.Bitmap, err error) {
+	rwlocker *sync.RWMutex,
+) (mask *nulls.Bitmap, err error) {
 	for {
 		needWaitFound := false
 		mask = nil
-		chain.LoopChain(func(n *DeleteNode) bool {
+		chain.LoopChainLocked(func(n *DeleteNode) bool {
 			// Merged node is a loop breaker
 			if n.IsMerged() {
 				commitTS := n.GetCommitTSLocked()
@@ -335,7 +333,7 @@ func (chain *DeleteChain) CollectDeletesInRange(
 // any uncommited node, return true
 // any committed node with prepare ts within [from, to], return true
 func (chain *DeleteChain) HasDeleteIntentsPreparedInLocked(from, to types.TS) (found, isPersisted bool) {
-	chain.LoopChain(func(n *DeleteNode) bool {
+	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		if n.IsMerged() {
 			found, _ = n.PreparedIn(from, to)
 			return false
@@ -375,7 +373,7 @@ func (chain *DeleteChain) CollectDeletesLocked(
 	for {
 		needWaitFound := false
 		merged = chain.mask.Clone()
-		chain.LoopChain(func(n *DeleteNode) bool {
+		chain.LoopChainLocked(func(n *DeleteNode) bool {
 			needWait, txnToWait := n.NeedWaitCommitting(txn.GetStartTS())
 			if needWait {
 				rwlocker.RUnlock()

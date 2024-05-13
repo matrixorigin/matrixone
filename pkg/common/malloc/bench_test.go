@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !cgo
-// +build !cgo
-
 package malloc
 
-func Alloc(n int) []byte {
-	return make([]byte, n)
+import (
+	"testing"
+)
+
+func BenchmarkAllocFree(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, handle := Alloc(4096)
+		handle.Free()
+	}
 }
 
-func Free(b []byte) {
+func BenchmarkParallelAllocFree(b *testing.B) {
+	b.RunParallel(func(pb *testing.PB) {
+		for size := 1; pb.Next(); size++ {
+			_, handle := Alloc(size % 65536)
+			handle.Free()
+		}
+	})
 }

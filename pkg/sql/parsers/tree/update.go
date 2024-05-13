@@ -63,8 +63,7 @@ func (node *Update) Format(ctx *FmtCtx) {
 }
 
 func (node *Update) GetStatementType() string { return "Update" }
-
-func (node *Update) GetQueryType() string { return QueryTypeDML }
+func (node *Update) GetQueryType() string     { return QueryTypeDML }
 
 type UpdateExprs []*UpdateExpr
 
@@ -86,6 +85,9 @@ type UpdateExpr struct {
 }
 
 func (node *UpdateExpr) Format(ctx *FmtCtx) {
+	if node == nil {
+		return
+	}
 	prefix := ""
 	for _, n := range node.Names {
 		ctx.WriteString(prefix)
@@ -170,6 +172,7 @@ type ExParam struct {
 	QueryResult bool
 	SysTable    bool
 	Parallel    bool
+	Strict      bool
 }
 
 type S3Parameter struct {
@@ -296,6 +299,12 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" set ")
 		node.Param.Tail.Assignments.Format(ctx)
 	}
+	if node.Param.Parallel {
+		ctx.WriteString(" parallel true ")
+		if node.Param.Strict {
+			ctx.WriteString("strict true ")
+		}
+	}
 }
 
 func formatS3option(ctx *FmtCtx, option []string) {
@@ -333,8 +342,7 @@ func formatS3option(ctx *FmtCtx, option []string) {
 }
 
 func (node *Load) GetStatementType() string { return "Load" }
-
-func (node *Load) GetQueryType() string { return QueryTypeDML }
+func (node *Load) GetQueryType() string     { return QueryTypeDML }
 
 type DuplicateKey interface{}
 

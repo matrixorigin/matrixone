@@ -116,7 +116,7 @@ func getAccountIdNames(ctx context.Context, ses *Session, bh BackgroundExec, lik
 		}
 		oq := newFakeOutputQueue(mrs)
 		for i := 0; i < batch.RowCount(); i++ {
-			row, err := extractRowFromEveryVector(ses, batch, i, oq, true)
+			row, err := extractRowFromEveryVector(ctx, ses, batch, i, oq, true)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -161,7 +161,7 @@ func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int
 		}
 		oq := newFakeOutputQueue(mrs)
 		for i := 0; i < batch.RowCount(); i++ {
-			row, err := extractRowFromEveryVector(ses, batch, i, oq, true)
+			row, err := extractRowFromEveryVector(ctx, ses, batch, i, oq, true)
 			if err != nil {
 				return nil, err
 			}
@@ -188,7 +188,7 @@ func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int
 
 func getSubInfoFromSql(ctx context.Context, ses FeSession, sql string) (subName, pubAccountName, pubName string, err error) {
 	var lowerAny interface{}
-	if lowerAny, err = ses.GetGlobalVar("lower_case_table_names"); err != nil {
+	if lowerAny, err = ses.GetGlobalVar(ctx, "lower_case_table_names"); err != nil {
 		return
 	}
 
@@ -223,7 +223,7 @@ func getSubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId uin
 		}
 		oq := newFakeOutputQueue(mrs)
 		for i := 0; i < batch.RowCount(); i++ {
-			row, err := extractRowFromEveryVector(ses, batch, i, oq, true)
+			row, err := extractRowFromEveryVector(ctx, ses, batch, i, oq, true)
 			if err != nil {
 				return nil, err
 			}
@@ -288,7 +288,7 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 
 	// step 3. get current account's subscriptions
 	allSubscribedMap := make(map[string]map[string]*subscribed)
-	subs, err := getSubs(ctx, ses, bh, ses.GetTenantInfo().TenantID)
+	subs, err := getSubs(ctx, ses, bh, ses.GetTenantInfo().GetTenantID())
 	if err != nil {
 		return err
 	}

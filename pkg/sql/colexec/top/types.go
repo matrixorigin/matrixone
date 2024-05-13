@@ -35,6 +35,9 @@ type container struct {
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare
 
+	limit         int64
+	limitExecutor colexec.ExpressionExecutor
+
 	executorsForOrderColumn []colexec.ExpressionExecutor
 	desc                    bool
 	topValueZM              objectio.ZoneMap
@@ -42,7 +45,7 @@ type container struct {
 }
 
 type Argument struct {
-	Limit       int64
+	Limit       *plan.Expr
 	TopValueTag int32
 	ctr         *container
 	Fs          []*plan.OrderBySpec
@@ -75,7 +78,7 @@ func NewArgument() *Argument {
 	return reuse.Alloc[Argument](nil)
 }
 
-func (arg *Argument) WithLimit(limit int64) *Argument {
+func (arg *Argument) WithLimit(limit *plan.Expr) *Argument {
 	arg.Limit = limit
 	return arg
 }
@@ -91,21 +94,6 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-
-		ctr.n = 0
-		ctr.state = vm.Build
-		ctr.sels = ctr.sels[:0]
-		ctr.poses = ctr.poses[:0]
-		ctr.topValueZM.Reset()
-	}
-
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
@@ -118,6 +106,12 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			}
 		}
 		ctr.executorsForOrderColumn = nil
+
+		if ctr.limitExecutor != nil {
+			ctr.limitExecutor.Free()
+			ctr.limitExecutor = nil
+		}
+		arg.ctr = nil
 	}
 }
 

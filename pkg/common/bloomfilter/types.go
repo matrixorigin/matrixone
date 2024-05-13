@@ -23,7 +23,6 @@ import (
 
 type BloomFilter struct {
 	bitmap   *bitmap.Bitmap
-	bitSize  int64
 	hashSeed []uint64
 
 	keys      [][]byte
@@ -52,7 +51,6 @@ func New(rowCount int64, probability float64) *BloomFilter {
 
 	return &BloomFilter{
 		bitmap:   bits,
-		bitSize:  bitSize,
 		hashSeed: hashSeed,
 
 		keys:      keys,

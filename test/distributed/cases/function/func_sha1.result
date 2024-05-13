@@ -11,8 +11,72 @@ SELECT sha('');
 sha()
 da39a3ee5e6b4b0d3255bfef95601890afd80709
 SELECT sha1(NULL);
-sha1(NULL)
-NULL
+sha1(null)
+null
 SELECT sha(NULL);
-sha(NULL)
-NULL
+sha(null)
+null
+select sha1('kfieli3453l5lj');
+sha1(kfieli3453l5lj)
+b68bbc108ce71dea691d6c3c5a4a6873b0bafa06
+select sha1('  ');
+sha1(  )
+099600a10a944114aac406d136b625fb416dd779
+select sha1('中文');
+sha1(中文)
+7be2d2d20c106eee0836c9bc2b939890a78e8fb3
+select sha1('0x45df');
+sha1(0x45df)
+f9719cb48b21623c2817c6c4595df6a4b3f321db
+select sha1('#$%^&*()!++={}|\~');
+sha1(#$%^&*()!++={}|~)
+15483756ef9cc19bf3988143e7ebc193c8d8fbaa
+select sha1('flijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsfflijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsf');
+sha1(flijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsfflijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsf)
+6127353ba6e4c964bbd29b41f2a887a98c320b0d
+select sha1(concat('oewo#$%',' 2335325'));
+sha1(concat(oewo#$%,  2335325))
+4cf95feb95b625915aa4b235938ae719c68ea579
+select sha1(4336);
+sha1(4336)
+2a4bd0cf67355067881ba559d5b304a7ad090ed3
+select sha1(2008-09-09);
+sha1(2008 - 9 - 9)
+bb3acf149db4936fbaca693a61d56be89205d997
+select sha1('2008-09-09');
+sha1(2008-09-09)
+e4b2f57a23d6ab4ef103a8bbcd4efc82355d287f
+select sha1(fsfsf);
+invalid input: column fsfsf does not exist
+select sha('kfieli3453l5lj');
+sha(kfieli3453l5lj)
+b68bbc108ce71dea691d6c3c5a4a6873b0bafa06
+select sha('  ');
+sha(  )
+099600a10a944114aac406d136b625fb416dd779
+select sha('中文');
+sha(中文)
+7be2d2d20c106eee0836c9bc2b939890a78e8fb3
+select sha('0x45df');
+sha(0x45df)
+f9719cb48b21623c2817c6c4595df6a4b3f321db
+select sha('#$%^&*()!++={}|\~');
+sha(#$%^&*()!++={}|~)
+15483756ef9cc19bf3988143e7ebc193c8d8fbaa
+select sha('flijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsfflijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsf');
+sha(flijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsfflijeoijfoiejetjioejo349857789345789$%^&ljiofejiojaojfieoaio7934729749263589237592739284920983075jkncmnd,sfkjdsfsf)
+6127353ba6e4c964bbd29b41f2a887a98c320b0d
+select sha(4336);
+sha(4336)
+2a4bd0cf67355067881ba559d5b304a7ad090ed3
+select sha(concat('oewo#$%',' 2335325'));
+sha(concat(oewo#$%,  2335325))
+4cf95feb95b625915aa4b235938ae719c68ea579
+select sha(2008-09-09);
+sha(2008 - 9 - 9)
+bb3acf149db4936fbaca693a61d56be89205d997
+select sha('2008-09-09');
+sha(2008-09-09)
+e4b2f57a23d6ab4ef103a8bbcd4efc82355d287f
+select sha(fsfsf);
+invalid input: column fsfsf does not exist

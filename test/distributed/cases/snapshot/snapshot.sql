@@ -1,5 +1,4 @@
 -- create snapshot success
--- @bvt:issue#14784
 create snapshot snapshot_01 for cluster;
 create account default_1 ADMIN_NAME admin IDENTIFIED BY '111111';
 create snapshot snapshot_02 for account default_1;
@@ -65,4 +64,3 @@ drop snapshot if exists snapshot_09;
 drop snapshot if exists snapshot_10;
 drop account default_1;
 drop account default_2;
--- @bvt:issue

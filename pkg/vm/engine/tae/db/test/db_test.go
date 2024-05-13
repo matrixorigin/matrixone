@@ -3416,25 +3416,6 @@ func TestDropCreated4(t *testing.T) {
 	tae.Restart(ctx)
 }
 
-// records create at 1 and commit
-// read by ts 1, err should be nil
-func TestReadEqualTS(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	ctx := context.Background()
-
-	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
-
-	txn, err := tae.StartTxn(nil)
-	tae.Catalog.Lock()
-	tae.Catalog.CreateDBEntryByTS("db", txn.GetStartTS())
-	tae.Catalog.Unlock()
-	assert.Nil(t, err)
-	_, err = txn.GetDatabase("db")
-	assert.Nil(t, err)
-}
-
 func TestTruncateZonemap(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
@@ -4173,7 +4154,7 @@ func TestCollectDelete(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	blkdata.GCInMemeoryDeletesByTS(p3)
+	blkdata.GCInMemeoryDeletesByTSForTest(p3)
 
 	batch, _, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true, common.DefaultAllocator)
 	assert.NoError(t, err)
@@ -4421,7 +4402,7 @@ func TestBlockRead(t *testing.T) {
 
 	tae.CompactBlocks(false)
 
-	objStats := blkEntry.GetLatestCommittedNode().BaseNode
+	objStats := blkEntry.GetLatestCommittedNodeLocked().BaseNode
 	deltaloc := rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(blkEntry.ID).GetLatestDeltaloc(0)
 	assert.False(t, objStats.IsEmpty())
 	assert.NotEmpty(t, deltaloc)
@@ -4577,7 +4558,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
 		t.Log(tae.Catalog.SimplePPString(3))
-		assert.True(t, !meta.GetLatestCommittedNode().BaseNode.IsEmpty())
+		assert.True(t, !meta.GetLatestCommittedNodeLocked().BaseNode.IsEmpty())
 		assert.True(t, !rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(meta.ID).GetLatestDeltaloc(0).IsEmpty())
 		created := task.GetCreatedObjects()[0]
 		assert.False(t, created.GetLatestNodeLocked().BaseNode.IsEmpty())
@@ -5626,7 +5607,7 @@ func TestGCDropDB(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetDeleteAt())
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetDeleteAtLocked())
 	now := time.Now()
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
@@ -5713,7 +5694,7 @@ func TestGCDropTable(t *testing.T) {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
-	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetDeleteAt())
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetDeleteAtLocked())
 	t.Log(time.Since(now))
 	err = manager.GC(context.Background())
 	assert.Nil(t, err)
@@ -7778,7 +7759,7 @@ func TestGCInMemoryDeletesByTS(t *testing.T) {
 				assert.NoError(t, err)
 				assert.NoError(t, txn.Commit(context.Background()))
 
-				blkData.GCInMemeoryDeletesByTS(ts)
+				blkData.GCInMemeoryDeletesByTSForTest(ts)
 			}
 			i++
 		}

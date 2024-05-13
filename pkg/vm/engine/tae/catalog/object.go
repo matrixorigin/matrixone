@@ -225,7 +225,7 @@ func (entry *ObjectEntry) GetObjectData() data.Object { return entry.objData }
 func (entry *ObjectEntry) GetObjectStats() (stats objectio.ObjectStats) {
 	entry.RLock()
 	defer entry.RUnlock()
-	entry.LoopChain(func(node *MVCCNode[*ObjectMVCCNode]) bool {
+	entry.LoopChainLocked(func(node *MVCCNode[*ObjectMVCCNode]) bool {
 		if !node.BaseNode.IsEmpty() {
 			stats = node.BaseNode.ObjectStats
 			return false
@@ -295,7 +295,7 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 	stats := *objectio.NewObjectStats()
 
 	entry.RLock()
-	entry.LoopChain(func(n *MVCCNode[*ObjectMVCCNode]) bool {
+	entry.LoopChainLocked(func(n *MVCCNode[*ObjectMVCCNode]) bool {
 		if !n.BaseNode.IsEmpty() {
 			stats = *n.BaseNode.ObjectStats.Clone()
 			return false
@@ -306,7 +306,7 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 	if stats.Rows() != 0 {
 		return stats, nil
 	}
-	metaLoc := entry.GetLatestCommittedNode().BaseNode.ObjectStats.ObjectLocation()
+	metaLoc := entry.GetLatestCommittedNodeLocked().BaseNode.ObjectStats.ObjectLocation()
 
 	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, entry.objData.GetFs().Service)
 	if err != nil {
@@ -337,7 +337,7 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 
 func (entry *ObjectEntry) LoadObjectInfoForLastNode() (stats objectio.ObjectStats, err error) {
 	entry.RLock()
-	startTS := entry.GetLatestCommittedNode().Start
+	startTS := entry.GetLatestCommittedNodeLocked().Start
 	entry.RUnlock()
 
 	stats, err = entry.LoadObjectInfoWithTxnTS(startTS)
@@ -351,7 +351,7 @@ func (entry *ObjectEntry) LoadObjectInfoForLastNode() (stats objectio.ObjectStat
 
 // for test
 func (entry *ObjectEntry) GetInMemoryObjectInfo() *ObjectMVCCNode {
-	return entry.BaseEntryImpl.GetLatestCommittedNode().BaseNode
+	return entry.BaseEntryImpl.GetLatestCommittedNodeLocked().BaseNode
 }
 
 func (entry *ObjectEntry) Less(b *ObjectEntry) int {
@@ -366,19 +366,19 @@ func (entry *ObjectEntry) Less(b *ObjectEntry) int {
 func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.ObjectStats) (isNewNode bool, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
+	needWait, txnToWait := entry.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {
 		entry.Unlock()
 		txnToWait.GetTxnState(true)
 		entry.Lock()
 	}
-	err = entry.CheckConflict(txn)
+	err = entry.CheckConflictLocked(txn)
 	if err != nil {
 		return
 	}
 	baseNode := NewObjectInfoWithObjectStats(stats)
 	var node *MVCCNode[*ObjectMVCCNode]
-	isNewNode, node = entry.getOrSetUpdateNode(txn)
+	isNewNode, node = entry.getOrSetUpdateNodeLocked(txn)
 	node.BaseNode.Update(baseNode)
 	return
 }
@@ -429,7 +429,7 @@ func (entry *ObjectEntry) StringWithLevel(level common.PPLevel) string {
 func (entry *ObjectEntry) StringWithLevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
 		return fmt.Sprintf("[%s-%s]OBJ[%s][C@%s,D@%s]",
-			entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAt().ToString())
+			entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAtLocked().ToString())
 	}
 	return fmt.Sprintf("[%s-%s]OBJ[%s]%s", entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.BaseEntryImpl.StringLocked())
 }
@@ -546,16 +546,14 @@ func (entry *ObjectEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	dbEntry := tableEntry.GetDB()
 
 	dbEntry.RLock()
-	terminated, ts = dbEntry.TryGetTerminatedTS(true)
+	terminated, ts = dbEntry.TryGetTerminatedTSLocked(true)
 	if terminated {
 		dbEntry.RUnlock()
 		return
 	}
 	dbEntry.RUnlock()
 
-	tableEntry.RLock()
 	terminated, ts = tableEntry.TryGetTerminatedTS(true)
-	tableEntry.RUnlock()
 	return
 }
 
@@ -574,10 +572,10 @@ func (entry *ObjectEntry) GetSchemaLocked() *Schema {
 func (entry *ObjectEntry) PrepareCompact() bool {
 	entry.RLock()
 	defer entry.RUnlock()
-	if entry.HasUncommittedNode() {
+	if entry.HasUncommittedNodeLocked() {
 		return false
 	}
-	if !entry.HasCommittedNode() {
+	if !entry.HasCommittedNodeLocked() {
 		return false
 	}
 	if entry.HasDropCommittedLocked() {
@@ -589,32 +587,29 @@ func (entry *ObjectEntry) PrepareCompact() bool {
 // for old flushed objects, stats may be empty
 func (entry *ObjectEntry) ObjectPersisted() bool {
 	entry.RLock()
-	if entry.IsEmpty() {
-		entry.RUnlock()
+	defer entry.RUnlock()
+	if entry.IsEmptyLocked() {
 		return false
 	}
-	lastNode := entry.GetLatestNodeLocked()
-	entry.RUnlock()
 	if entry.IsAppendable() {
+		lastNode := entry.GetLatestNodeLocked()
 		return lastNode.HasDropIntent()
 	} else {
 		return true
 	}
 }
 
-// for old flushed objects, stats may be empty
+// PXU TODO: I can't understand this code
+// aobj has persisted data after it is dropped
+// obj always has persisted data
 func (entry *ObjectEntry) HasCommittedPersistedData() bool {
 	entry.RLock()
-	if entry.IsEmpty() {
-		entry.RUnlock()
-		return false
-	}
-	lastNode := entry.GetLatestNodeLocked()
-	entry.RUnlock()
+	defer entry.RUnlock()
 	if entry.IsAppendable() {
+		lastNode := entry.GetLatestNodeLocked()
 		return lastNode.HasDropCommitted()
 	} else {
-		return true
+		return entry.HasCommittedNodeLocked()
 	}
 }
 func (entry *ObjectEntry) MustGetObjectStats() (objectio.ObjectStats, error) {

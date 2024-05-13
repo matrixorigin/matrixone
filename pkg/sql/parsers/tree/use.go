@@ -71,8 +71,7 @@ func (node *Use) Format(ctx *FmtCtx) {
 }
 
 func (node *Use) GetStatementType() string { return "Use" }
-
-func (node *Use) GetQueryType() string { return QueryTypeOth }
+func (node *Use) GetQueryType() string     { return QueryTypeOth }
 
 // IsUseRole checks the statement is:
 //

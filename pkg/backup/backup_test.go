@@ -123,7 +123,7 @@ func TestBackupData(t *testing.T) {
 	for _, location := range files {
 		locations = append(locations, location)
 	}
-	err = execBackup(ctx, db.Opts.Fs, service, locations, 1)
+	err = execBackup(ctx, db.Opts.Fs, service, locations, 1, types.TS{}, "full")
 	assert.Nil(t, err)
 	db.Opts.Fs = service
 	db.Restart(ctx)
@@ -233,7 +233,7 @@ func Test_saveTaeFilesList(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.wantErr(t, saveTaeFilesList(tt.args.ctx, tt.args.Fs, tt.args.taeFiles, tt.args.backupTime), fmt.Sprintf("saveTaeFilesList(%v, %v, %v, %v)", tt.args.ctx, tt.args.Fs, tt.args.taeFiles, tt.args.backupTime))
+			tt.wantErr(t, saveTaeFilesList(tt.args.ctx, tt.args.Fs, tt.args.taeFiles, tt.args.backupTime, tt.args.backupTime, ""), fmt.Sprintf("saveTaeFilesList(%v, %v, %v, %v)", tt.args.ctx, tt.args.Fs, tt.args.taeFiles, tt.args.backupTime))
 		})
 	}
 }

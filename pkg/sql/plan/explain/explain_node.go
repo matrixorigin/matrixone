@@ -157,6 +157,9 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 			} else if ndesc.Node.TableDef != nil {
 				buf.WriteString(ndesc.Node.TableDef.GetName())
 			}
+			if ndesc.Node.Stats.ForceOneCN {
+				buf.WriteString(" [ForceOneCN]")
+			}
 		case plan.Node_FUNCTION_SCAN:
 			buf.WriteString(" on ")
 			if ndesc.Node.TableDef != nil && ndesc.Node.TableDef.TblFunc != nil {
@@ -500,7 +503,7 @@ func (ndesc *NodeDescribeImpl) GetPartitionPruneInfo(ctx context.Context, option
 }
 
 func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf := bytes.NewBuffer(make([]byte, 0, 512))
 	buf.WriteString("Filter Cond: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
