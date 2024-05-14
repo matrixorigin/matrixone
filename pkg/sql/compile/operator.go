@@ -559,7 +559,7 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 	return arg
 }
 
-func constructFuzzyFilter(c *Compile, n, right *plan.Node) *fuzzyfilter.Argument {
+func constructFuzzyFilter(n, right *plan.Node) *fuzzyfilter.Argument {
 	pkName := n.TableDef.Pkey.PkeyColName
 	var pkTyp plan.Type
 	if pkName == catalog.CPrimaryKeyColName {
@@ -827,7 +827,7 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 	return arg
 }
 
-func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *right.Argument {
+func constructRight(n *plan.Node, left_typs, right_typs []types.Type, proc *process.Process) *right.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
@@ -845,7 +845,7 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 	return arg
 }
 
-func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *rightsemi.Argument {
+func constructRightSemi(n *plan.Node, right_typs []types.Type, proc *process.Process) *rightsemi.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		_, result[i] = constructJoinResult(expr, proc)
@@ -863,7 +863,7 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 	return arg
 }
 
-func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *rightanti.Argument {
+func constructRightAnti(n *plan.Node, right_typs []types.Type, proc *process.Process) *rightanti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		_, result[i] = constructJoinResult(expr, proc)
@@ -1527,7 +1527,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	return arg
 }
 
-func constructJoinBuildInstruction(c *Compile, in vm.Instruction, shuffleCnt int, isDup bool) vm.Instruction {
+func constructJoinBuildInstruction(c *Compile, in vm.Instruction, isDup bool) vm.Instruction {
 	switch in.Op {
 	case vm.IndexJoin:
 		arg := in.Arg.(*indexjoin.Argument)
@@ -1546,12 +1546,12 @@ func constructJoinBuildInstruction(c *Compile, in vm.Instruction, shuffleCnt int
 			Op:      vm.HashBuild,
 			Idx:     in.Idx,
 			IsFirst: true,
-			Arg:     constructHashBuild(c, in, c.proc, shuffleCnt, isDup),
+			Arg:     constructHashBuild(in, c.proc, isDup),
 		}
 	}
 }
 
-func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, shuffleCnt int, isDup bool) *hashbuild.Argument {
+func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *hashbuild.Argument {
 	// XXX BUG
 	// relation index of arg.Conditions should be rewritten to 0 here.
 	ret := hashbuild.NewArgument()
