@@ -755,7 +755,7 @@ func getTableInfos(ctx context.Context, bh BackgroundExec, snapshotName string, 
 	}
 
 	// filter by tblName
-	var ans []*tableInfo
+	ans := make([]*tableInfo, 0, len(tableInfos))
 	for _, tblInfo := range tableInfos {
 		if tblName != "" && tblInfo.tblName != tblName {
 			continue
