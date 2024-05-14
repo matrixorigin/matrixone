@@ -1075,6 +1075,27 @@ type PKFilter struct {
 	isNull  bool
 }
 
+func (f *PKFilter) SetNull() {
+	f.isNull = true
+	f.isValid = false
+}
+
+func (f *PKFilter) SetVal(op uint8, val []byte) {
+	f.op = op
+	f.val = val
+	f.isValid = true
+	f.isVec = false
+	f.isNull = false
+}
+
+func (f *PKFilter) SetVec(op uint8, val []byte) {
+	f.op = op
+	f.val = val
+	f.isVec = true
+	f.isValid = true
+	f.isNull = false
+}
+
 func (f *PKFilter) MustGetVector() *vector.Vector {
 	if !f.isVec || !f.isValid || f.isNull {
 		panic(moerr.NewInternalErrorNoCtx("MustGetVector failed"))
