@@ -434,6 +434,8 @@ func (ses *feSessionImpl) Close() {
 	}
 	if ses.txnCompileCtx != nil {
 		ses.txnCompileCtx.execCtx = nil
+		ses.txnCompileCtx.snapshot = nil
+		ses.txnCompileCtx.views = nil
 		ses.txnCompileCtx = nil
 	}
 	ses.sql = ""
