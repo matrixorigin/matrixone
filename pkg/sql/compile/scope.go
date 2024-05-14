@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -59,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
 	"github.com/panjf2000/ants/v2"
 	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
@@ -123,7 +123,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
-			getLogger().Error("panic in scope run",
+			c.proc.Error(c.ctx, "panic in scope run",
 				zap.String("sql", c.sql),
 				zap.String("error", err.Error()))
 		}
@@ -213,7 +213,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 			defer func() {
 				if e := recover(); e != nil {
 					err := moerr.ConvertPanicError(c.ctx, e)
-					getLogger().Error("panic in merge run run",
+					c.proc.Error(c.ctx, "panic in merge run run",
 						zap.String("sql", c.sql),
 						zap.String("error", err.Error()))
 					errChan <- err
@@ -959,7 +959,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		// Add log for cn panic which reported on issue 10656
 		// If you find this log is printed, please report the repro details
 		if len(s.Instructions) < 2 {
-			logutil.Error("the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}),
+			c.proc.Error(c.proc.Ctx, "the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}),
 				zap.String("stack", string(debug.Stack())),
 			)
 			return nil, moerr.NewInternalErrorNoCtx("the length of s.Instructions is too short !")
@@ -1054,7 +1054,7 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 			func() {
 				streamSender, errStream := cnclient.GetStreamSender(fromAddr)
 				if errStream != nil {
-					logutil.Errorf("Failed to get stream sender txnID=%s, err=%v",
+					s.Proc.Errorf(s.Proc.Ctx, "Failed to get stream sender txnID=%s, err=%v",
 						s.Proc.TxnOperator.Txn().DebugString(), errStream)
 					closeWithError(errStream, s.Proc.Reg.MergeReceivers[receiverIdx])
 					return
