@@ -46,7 +46,7 @@ import (
 var checkPrimaryKeyOnly bool
 
 func init() {
-	checkPrimaryKeyOnly = false
+	checkPrimaryKeyOnly = true
 }
 
 // -----------------------------------------------------------------
