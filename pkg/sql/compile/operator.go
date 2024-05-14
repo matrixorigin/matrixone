@@ -710,19 +710,8 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		TableDef:              oldCtx.TableDef,
 	}
 
-	txnOp := proc.TxnOperator
-	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
-		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.LessEq(proc.TxnOperator.Txn().SnapshotTS) {
-			txnOp = proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
-
-			if n.ScanSnapshot.CreatedByTenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.CreatedByTenant.TenantID)
-			}
-		}
-	}
 	if len(oldCtx.PartitionTableNames) > 0 {
-		dbSource, err := eg.Database(ctx, oldCtx.Ref.SchemaName, txnOp)
+		dbSource, err := eg.Database(proc.Ctx, oldCtx.Ref.SchemaName, proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -730,7 +719,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		newCtx.PartitionSources = make([]engine.Relation, len(oldCtx.PartitionTableNames))
 		// get the relation instances for each partition sub table
 		for i, pTableName := range oldCtx.PartitionTableNames {
-			pRel, err := dbSource.Relation(ctx, pTableName, proc)
+			pRel, err := dbSource.Relation(proc.Ctx, pTableName, proc)
 			if err != nil {
 				return nil, err
 			}
