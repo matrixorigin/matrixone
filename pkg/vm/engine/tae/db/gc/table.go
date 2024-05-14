@@ -55,7 +55,8 @@ type GCTable struct {
 
 func NewGCTable() *GCTable {
 	table := GCTable{
-		objects: make(map[string]*ObjectEntry),
+		objects:    make(map[string]*ObjectEntry),
+		tombstones: make(map[string]*TombstoneEntry),
 	}
 	return &table
 }
