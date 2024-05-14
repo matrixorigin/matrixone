@@ -19,6 +19,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"math"
 	"net"
 	"runtime"
@@ -2378,7 +2381,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.Minus,
 				Idx: c.anal.curr,
-				Arg: constructMinus(i, len(rs)),
+				Arg: minus.NewArgument(),
 			}
 		}
 	case plan.Node_INTERSECT:
@@ -2387,7 +2390,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.Intersect,
 				Idx: c.anal.curr,
-				Arg: constructIntersect(i, len(rs)),
+				Arg: intersect.NewArgument(),
 			}
 		}
 	case plan.Node_INTERSECT_ALL:
@@ -2396,7 +2399,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.IntersectAll,
 				Idx: c.anal.curr,
-				Arg: constructIntersectAll(i, len(rs)),
+				Arg: intersectall.NewArgument(),
 			}
 		}
 	}

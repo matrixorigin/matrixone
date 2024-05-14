@@ -36,7 +36,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		arg.ctr = new(container)
 		arg.ctr.InitReceiver(proc, false)
 		arg.ctr.bat = nil
-		arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp())
+		arg.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
 		if err != nil {
 			return err
 		}

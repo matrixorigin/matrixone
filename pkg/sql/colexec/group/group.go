@@ -281,7 +281,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 				//	ctr.typ = HIndex
 				case ctr.keyWidth <= 8:
 					ctr.typ = H8
-					if ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVecsNullable, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
+					if ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVecsNullable, proc.Mp()); err != nil {
 						return result, err
 					}
 					if ap.PreAllocSize > 0 {
@@ -292,7 +292,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 					}
 				default:
 					ctr.typ = HStr
-					if ctr.strHashMap, err = hashmap.NewStrMap(ctr.groupVecsNullable, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
+					if ctr.strHashMap, err = hashmap.NewStrMap(ctr.groupVecsNullable, proc.Mp()); err != nil {
 						return result, err
 					}
 					if ap.PreAllocSize > 0 {
