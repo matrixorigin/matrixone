@@ -1993,9 +1993,9 @@ func (tbl *txnTable) tryExtractPKFilter(expr *plan.Expr) (retPKFilter PKFilter) 
 				pkValue = pkValue[0 : len(pkValue)-1]
 				put.Put()
 				if cnt == len(pk.Names) {
-					retPKFilter.SetVal(function.EQUAL, pkValue)
+					retPKFilter.SetFullData(function.EQUAL, false, pkValue)
 				} else {
-					retPKFilter.SetVal(function.PREFIX_EQ, pkValue)
+					retPKFilter.SetFullData(function.PREFIX_EQ, false, pkValue)
 				}
 			}
 		} else {
@@ -2007,7 +2007,7 @@ func (tbl *txnTable) tryExtractPKFilter(expr *plan.Expr) (retPKFilter PKFilter) 
 			if !retPKFilter.isVec {
 				var packer *types.Packer
 				put := tbl.getTxn().engine.packerPool.Get(&packer)
-				retPKFilter.val = logtailreplay.EncodePrimaryKey(retPKFilter.val, packer)
+				retPKFilter.SetFullData(function.EQUAL, false, logtailreplay.EncodePrimaryKey(retPKFilter.val, packer))
 				put.Put()
 			}
 		}
@@ -2116,15 +2116,15 @@ func (tbl *txnTable) tryConstructPrimaryKeyIndexIter(
 
 	switch pkFilter.op {
 	case function.EQUAL, function.PREFIX_EQ:
-		newPkVal = pkFilter.val
+		newPkVal = pkFilter.data
 		iter = state.NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
-			logtailreplay.Prefix(pkFilter.val),
+			logtailreplay.Prefix(pkFilter.data),
 		)
 	case function.IN:
 		var encodes [][]byte
 		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(pkFilter.val)
+		vec.UnmarshalBinary(pkFilter.data)
 
 		// may be it's better to iterate rows instead.
 		if vec.Length() > 128 {

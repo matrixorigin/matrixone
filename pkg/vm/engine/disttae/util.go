@@ -1069,10 +1069,20 @@ func evalLiteralExpr(expr *plan.Literal, oid types.T) (canEval bool, val any) {
 
 type PKFilter struct {
 	op      uint8
-	val     []byte
+	val     any
+	data    []byte
 	isVec   bool
 	isValid bool
 	isNull  bool
+}
+
+func (f *PKFilter) String() string {
+	var buf bytes.Buffer
+	buf.WriteString(
+		fmt.Sprintf("PKFilter{op: %d, isVec: %v, isValid: %v, isNull: %v, val: %v, data(len=%d)",
+			f.op, f.isVec, f.isValid, f.isNull, f.val, len(f.data),
+		))
+	return buf.String()
 }
 
 func (f *PKFilter) SetNull() {
@@ -1080,7 +1090,15 @@ func (f *PKFilter) SetNull() {
 	f.isValid = false
 }
 
-func (f *PKFilter) SetVal(op uint8, val []byte) {
+func (f *PKFilter) SetFullData(op uint8, isVec bool, val []byte) {
+	f.data = val
+	f.op = op
+	f.isVec = isVec
+	f.isValid = true
+	f.isNull = false
+}
+
+func (f *PKFilter) SetVal(op uint8, isVec bool, val any) {
 	f.op = op
 	f.val = val
 	f.isValid = true
@@ -1088,26 +1106,18 @@ func (f *PKFilter) SetVal(op uint8, val []byte) {
 	f.isNull = false
 }
 
-func (f *PKFilter) SetVec(op uint8, val []byte) {
-	f.op = op
-	f.val = val
-	f.isVec = true
-	f.isValid = true
-	f.isNull = false
-}
+// func (f *PKFilter) MustGetVector() *vector.Vector {
+// 	if !f.isVec || !f.isValid || f.isNull {
+// 		panic(moerr.NewInternalErrorNoCtx("MustGetVector failed"))
+// 	}
+// 	vec := vector.NewVec(types.T_any.ToType())
+// 	err := vec.UnmarshalBinary(f.data)
+// 	if err != nil {
+// 		panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("MustGetVector failed: %v", err)))
+// 	}
 
-func (f *PKFilter) MustGetVector() *vector.Vector {
-	if !f.isVec || !f.isValid || f.isNull {
-		panic(moerr.NewInternalErrorNoCtx("MustGetVector failed"))
-	}
-	vec := vector.NewVec(types.T_any.ToType())
-	err := vec.UnmarshalBinary(f.val)
-	if err != nil {
-		panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("MustGetVector failed: %v", err)))
-	}
-
-	return vec
-}
+// 	return vec
+// }
 
 func getPKFilterByExpr(
 	expr *plan.Expr,
@@ -1126,20 +1136,20 @@ func getPKFilterByExpr(
 			return
 		}
 
-		val, canEval := evalLiteralExpr2(exprImpl.Lit, oid)
+		canEval, val := evalLiteralExpr(exprImpl.Lit, oid)
 		if !canEval {
 			return
 		}
-		retFilter.SetVal(function.EQUAL, val)
+		retFilter.SetVal(function.EQUAL, false, val)
 		return
 	case *plan.Expr_Vec:
-		retFilter.SetVec(function.IN, exprImpl.Vec.Data)
+		retFilter.SetFullData(function.IN, true, exprImpl.Vec.Data)
 		return
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "prefix_eq":
 			val := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
-			retFilter.SetVal(function.PREFIX_EQ, val)
+			retFilter.SetVal(function.PREFIX_EQ, false, val)
 			return
 			// case "prefix_between":
 			// case "prefix_in":
