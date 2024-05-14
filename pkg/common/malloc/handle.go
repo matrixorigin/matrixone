@@ -33,8 +33,8 @@ func (h *Handle) Free() {
 	runtime_procUnpin()
 	shard := pid % numShards
 	select {
-	case shards[shard].pools[h.class] <- h:
-		shards[shard].numFree.Add(1)
+	case shards[shard].pools[h.class].ch <- h:
+		shards[shard].pools[h.class].numFree.Add(1)
 	default:
 	}
 }
