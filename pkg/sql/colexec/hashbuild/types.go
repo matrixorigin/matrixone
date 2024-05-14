@@ -67,8 +67,6 @@ type Argument struct {
 	NeedExpr    bool
 	NeedHashMap bool
 	IsDup       bool
-	Ibucket     uint64
-	Nbucket     uint64
 	Typs        []types.Type
 	Conditions  []*plan.Expr
 

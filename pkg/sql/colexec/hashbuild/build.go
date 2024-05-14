@@ -64,15 +64,14 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		}
 
 		if ctr.keyWidth <= 8 {
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(false, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(false, 0, 0, proc.Mp()); err != nil {
 				return err
 			}
 		} else {
-			if ctr.strHashMap, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
+			if ctr.strHashMap, err = hashmap.NewStrMap(false, 0, 0, proc.Mp()); err != nil {
 				return err
 			}
 		}
-
 	}
 
 	ap.ctr.batches = make([]*batch.Batch, 0)
