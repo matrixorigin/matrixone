@@ -33,10 +33,9 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
 	var err error
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, true)
 	if arg.ctr.offsetExecutor == nil {
 		arg.ctr.offsetExecutor, err = colexec.NewExpressionExecutor(proc, arg.Offset)
 		if err != nil {
@@ -49,7 +48,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	}
 	arg.ctr.offset = uint64(vector.MustFixedCol[int64](vec)[0])
 
-	ap.ctr.seen = 0
+	arg.ctr.seen = 0
 	return nil
 }
 

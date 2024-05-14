@@ -471,7 +471,7 @@ func doLock(
 			rows,
 			txn.ID,
 			options)
-		if !moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+		if !canRetryLock(txnOp, err) {
 			break
 		}
 	}
@@ -566,6 +566,20 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, err
 	}
 	return true, result.TableDefChanged, snapshotTS, nil
+}
+
+func canRetryLock(txn client.TxnOperator, err error) bool {
+	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+		return true
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		!moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
+		return false
+	}
+	if txn.LockTableCount() == 0 {
+		return true
+	}
+	return false
 }
 
 // DefaultLockOptions create a default lock operation. The parker is used to
