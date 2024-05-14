@@ -238,6 +238,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		if arg.ctr.samplePool != nil {
 			arg.ctr.samplePool.Free()
 		}
+
+		arg.ctr = nil
 	}
 }
 

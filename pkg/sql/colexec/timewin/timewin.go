@@ -17,8 +17,9 @@ package timewin
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,13 +39,12 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ctr := ap.ctr
+	arg.ctr = new(container)
+	ctr := arg.ctr
 	ctr.InitReceiver(proc, true)
 
-	ctr.aggExe = make([]colexec.ExpressionExecutor, len(ap.Aggs))
-	for i, ag := range ap.Aggs {
+	ctr.aggExe = make([]colexec.ExpressionExecutor, len(arg.Aggs))
+	for i, ag := range arg.Aggs {
 		if expressions := ag.GetArgExpressions(); len(expressions) > 0 {
 			ctr.aggExe[i], err = colexec.NewExpressionExecutor(proc, expressions[0])
 			if err != nil {
@@ -54,20 +54,20 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	}
 	// ctr.aggVec = make([][]*vector.Vector, len(ap.Aggs))
 
-	ctr.tsExe, err = colexec.NewExpressionExecutor(proc, ap.Ts)
+	ctr.tsExe, err = colexec.NewExpressionExecutor(proc, arg.Ts)
 	if err != nil {
 		return err
 	}
 
 	ctr.status = initTag
-	ctr.tsOid = types.T(ap.Ts.Typ.Id)
+	ctr.tsOid = types.T(arg.Ts.Typ.Id)
 	ctr.group = -1
 
-	ctr.colCnt = len(ap.Aggs)
-	if ap.WStart {
+	ctr.colCnt = len(arg.Aggs)
+	if arg.WStart {
 		ctr.colCnt++
 	}
-	if ap.WEnd {
+	if arg.WEnd {
 		ctr.colCnt++
 	}
 
@@ -97,8 +97,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ap := arg
-	ctr := ap.ctr
+	ctr := arg.ctr
 	var err error
 	var bat *batch.Batch
 
@@ -145,12 +144,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.evalVecs(proc); err != nil {
 				return result, err
 			}
-			if err = ctr.firstWindow(ap, proc); err != nil {
+			if err = ctr.firstWindow(arg, proc); err != nil {
 				return result, err
 			}
-			ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
-			for i, ag := range ap.Aggs {
-				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
+			ctr.aggs = make([]aggexec.AggFuncExec, len(arg.Aggs))
+			for i, ag := range arg.Aggs {
+				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), arg.Types[i])
 				if config := ag.GetExtraConfig(); config != nil {
 					if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
 						return result, err
@@ -159,13 +158,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.status = evalTag
 		case nextTag:
-			if err = ctr.nextWindow(ap, proc); err != nil {
+			if err = ctr.nextWindow(arg, proc); err != nil {
 				return result, err
 			}
 			ctr.status = evalTag
 		case evalTag:
 
-			if err = ctr.eval(ctr, ap, proc); err != nil {
+			if err = ctr.eval(ctr, arg, proc); err != nil {
 				return result, err
 			}
 
@@ -177,7 +176,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case evalLastCur:
 
-			if err = ctr.calRes(ctr, ap, proc); err != nil {
+			if err = ctr.calRes(ctr, arg, proc); err != nil {
 				return result, err
 			}
 			if ctr.pre == hasPre {
@@ -193,12 +192,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case evalLastPre:
 
-			if err = ctr.nextWindow(ap, proc); err != nil {
+			if err = ctr.nextWindow(arg, proc); err != nil {
 				return result, err
 			}
-			ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
-			for i, ag := range ap.Aggs {
-				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
+			ctr.aggs = make([]aggexec.AggFuncExec, len(arg.Aggs))
+			for i, ag := range arg.Aggs {
+				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), arg.Types[i])
 				if config := ag.GetExtraConfig(); config != nil {
 					if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
 						return result, err
@@ -224,7 +223,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.preRow = 0
 			}
 
-			if err = ctr.calRes(ctr, ap, proc); err != nil {
+			if err = ctr.calRes(ctr, arg, proc); err != nil {
 				return result, err
 			}
 
