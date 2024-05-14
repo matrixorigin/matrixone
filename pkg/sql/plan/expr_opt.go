@@ -57,28 +57,36 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 			col2filter[col.ColPos] = i
 		} else if fn.Func.ObjName == "or" {
-			for j, arg := range fn.Args {
-				subFn := arg.GetF()
+			var orArgs []*plan.Expr
+			flattenLogicalExpressions(expr, "or", &orArgs)
+
+			for j, subExpr := range orArgs {
+				subFn := subExpr.GetF()
 				if subFn == nil {
 					continue
 				}
 
 				if subFn.Func.ObjName == "=" {
-					newArgs, rewrite := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, arg)
+					newArgs, rewrite := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, subExpr)
 					if rewrite {
 						fn.Args[j] = newArgs[0]
 					}
-				} else {
-					newArgs, rewrite := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, subFn.Args...)
+				} else if subFn.Func.ObjName == "and" {
+					var andArgs []*plan.Expr
+					flattenLogicalExpressions(subExpr, "and", &andArgs)
+
+					newArgs, rewrite := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, andArgs...)
 					if rewrite {
 						if len(newArgs) == 1 {
-							fn.Args[j] = newArgs[0]
+							orArgs[j] = newArgs[0]
 						} else {
 							subFn.Args = newArgs
 						}
 					}
 				}
 			}
+
+			fn.Args = orArgs
 		}
 	}
 
@@ -138,4 +146,16 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	}
 
 	return newFilterList, true
+}
+
+func flattenLogicalExpressions(expr *plan.Expr, opName string, args *[]*plan.Expr) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func.ObjName != opName {
+		*args = append(*args, expr)
+		return
+	}
+
+	for _, arg := range fn.Args {
+		flattenLogicalExpressions(arg, opName, args)
+	}
 }
