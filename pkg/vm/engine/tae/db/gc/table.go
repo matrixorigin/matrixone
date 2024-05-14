@@ -159,14 +159,13 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]co
 	}
 
 	tombstones := t.getTombstones()
-	logutil.Infof("getTombstones: %v", len(tombstones))
 	for name, tombstone := range tombstones {
 		ok := true
 		logutil.Infof("soft GC tombstone: %v, object: %d", name, len(tombstone.objects))
 		for obj := range tombstone.objects {
 			objectEntry := table.objects[obj]
-			logutil.Infof("soft GC object: %v,  %v", obj, objectEntry != nil)
 			if objectEntry != nil {
+				logutil.Infof("soft GC object: %v,  %v", obj, objectEntry != nil)
 				ok = false
 				break
 			}
@@ -348,7 +347,6 @@ func (t *GCTable) rebuildTableV3(bats []*containers.Batch) {
 		t.tombstones[tombstone].objects[name] = struct{}{}
 		t.addTombstone(name, tombstone, commitTS)
 	}
-	logutil.Infof("rebuildTableV3 table %d", len(t.getTombstones()))
 }
 
 func (t *GCTable) rebuildTableV2(bats []*containers.Batch, idx BatchType) {
