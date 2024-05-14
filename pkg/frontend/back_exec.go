@@ -493,9 +493,9 @@ var NewBackgroundExec = func(
 func executeSQLInBackgroundSession(reqCtx context.Context, upstream *Session, mp *mpool.MPool, sql string) ([]ExecResult, error) {
 	bh := NewBackgroundExec(reqCtx, upstream, mp)
 	defer bh.Close()
-	logutil.Debugf("background exec sql:%v", sql)
+	upstream.Debugf(reqCtx, "background exec sql:%v", sql)
 	err := bh.Exec(reqCtx, sql)
-	logutil.Debugf("background exec sql done")
+	upstream.Debug(reqCtx, "background exec sql done")
 	if err != nil {
 		return nil, err
 	}

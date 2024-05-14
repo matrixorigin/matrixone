@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -189,7 +188,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	//
 	mp, err := mpool.NewMPool("internal_exec_cmd_session", getGlobalPu().SV.GuestMmuLimitation, mpool.NoFixed)
 	if err != nil {
-		logutil.Fatalf("internalExecutor cannot create mpool in newCmdSession")
+		getLogger().Fatal("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
 	sess := NewSession(ctx, ie.proto, mp, GSysVariables, true, nil)

@@ -22,7 +22,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/fagongzi/goetty/v2"
@@ -283,7 +282,7 @@ func (pi *ProtocolImpl) IsEstablished() bool {
 }
 
 func (pi *ProtocolImpl) SetEstablished() {
-	logutil.Debug("SWITCH ESTABLISHED to true", zap.String(ConnectionInfoKey, pi.GetDebugString()))
+	getLogger().Debug("SWITCH ESTABLISHED to true", zap.String(ConnectionInfoKey, pi.GetDebugString()))
 	pi.established.Store(true)
 }
 
@@ -292,7 +291,7 @@ func (pi *ProtocolImpl) IsTlsEstablished() bool {
 }
 
 func (pi *ProtocolImpl) SetTlsEstablished() {
-	logutil.Debug("SWITCH TLS_ESTABLISHED to true", zap.String(ConnectionInfoKey, pi.GetDebugString()))
+	getLogger().Debug("SWITCH TLS_ESTABLISHED to true", zap.String(ConnectionInfoKey, pi.GetDebugString()))
 	pi.tlsEstablished.Store(true)
 }
 

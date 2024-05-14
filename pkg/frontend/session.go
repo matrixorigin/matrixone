@@ -962,7 +962,7 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 	if ses.proto != nil {
 		connID = ses.proto.ConnectionID()
 	}
-	logutil.Errorf("prepared statement '%s' does not exist on connection %d", name, connID)
+	ses.Errorf(ctx, "prepared statement '%s' does not exist on connection %d", name, connID)
 	return nil, moerr.NewInvalidState(ctx, "prepared statement '%s' does not exist", name)
 }
 
@@ -1839,11 +1839,11 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	accountID, err := defines.GetAccountId(ctx)
 
 	if err != nil {
-		logutil.Errorf("failed to get account ID: %v", err)
+		ses.Errorf(ctx, "failed to get account ID: %v", err)
 		return err
 	}
 	userID := defines.GetUserId(ctx)
-	logutil.Infof("do migration on connection %d, db: %s, account id: %d, user id: %d",
+	ses.Infof(ctx, "do migration on connection %d, db: %s, account id: %d, user id: %d",
 		req.ConnID, req.DB, accountID, userID)
 
 	dbm := newDBMigration(req.DB)
