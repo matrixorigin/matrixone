@@ -7,7 +7,7 @@ package mock_frontend
 import (
 	context "context"
 	reflect "reflect"
-	"time"
+	time "time"
 
 	gomock "github.com/golang/mock/gomock"
 	lock "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -588,6 +588,20 @@ func (mr *MockTxnOperatorMockRecorder) GetOverview() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetOverview", reflect.TypeOf((*MockTxnOperator)(nil).GetOverview))
 }
 
+// GetWaitActiveCost mocks base method.
+func (m *MockTxnOperator) GetWaitActiveCost() time.Duration {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetWaitActiveCost")
+	ret0, _ := ret[0].(time.Duration)
+	return ret0
+}
+
+// GetWaitActiveCost indicates an expected call of GetWaitActiveCost.
+func (mr *MockTxnOperatorMockRecorder) GetWaitActiveCost() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWaitActiveCost", reflect.TypeOf((*MockTxnOperator)(nil).GetWaitActiveCost))
+}
+
 // GetWorkspace mocks base method.
 func (m *MockTxnOperator) GetWorkspace() client.Workspace {
 	m.ctrl.T.Helper()
@@ -644,18 +658,18 @@ func (mr *MockTxnOperatorMockRecorder) LockSkipped(tableID, mode interface{}) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LockSkipped", reflect.TypeOf((*MockTxnOperator)(nil).LockSkipped), tableID, mode)
 }
 
-// GetWaitActiveCost mocks base method.
-func (m *MockTxnOperator) GetWaitActiveCost() time.Duration {
+// LockTableCount mocks base method.
+func (m *MockTxnOperator) LockTableCount() int32 {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetWaitActiveCost")
-	ret0, _ := ret[0].(time.Duration)
+	ret := m.ctrl.Call(m, "LockTableCount")
+	ret0, _ := ret[0].(int32)
 	return ret0
 }
 
-// GetWaitActiveCost indicates an expected call of GetWaitActiveCost.
-func (mr *MockTxnOperatorMockRecorder) GetWaitActiveCost() *gomock.Call {
+// LockTableCount indicates an expected call of LockTableCount.
+func (mr *MockTxnOperatorMockRecorder) LockTableCount() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWaitActiveCost", reflect.TypeOf((*MockTxnOperator)(nil).GetWaitActiveCost))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LockTableCount", reflect.TypeOf((*MockTxnOperator)(nil).LockTableCount))
 }
 
 // NextSequence mocks base method.

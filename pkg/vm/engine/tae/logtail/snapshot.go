@@ -293,6 +293,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 						if err != nil {
 							return nil, err
 						}
+						logutil.Infof("GetSnapshot ts %v", snapTs.ToString())
 					}
 					continue
 				}
