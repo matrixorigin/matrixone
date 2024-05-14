@@ -79,6 +79,7 @@ func (t *GCTable) addTombstone(name, objectName string, commitTS types.TS) {
 	defer t.Unlock()
 	tombstone := t.tombstones[name]
 	if tombstone == nil {
+		logutil.Infof("add tombstone %s", name)
 		t.tombstones[name] = &TombstoneEntry{
 			objects:  make(map[string]struct{}),
 			commitTS: commitTS,
