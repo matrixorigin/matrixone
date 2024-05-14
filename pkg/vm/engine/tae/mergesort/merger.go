@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
@@ -70,7 +71,7 @@ type merger[T any] struct {
 	targetObjSize uint32
 }
 
-func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, mustColFunc func(*vector.Vector) []T) Merger {
+func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, mustColFunc func(*vector.Vector) []T) Merger {
 	size := host.GetObjectCnt()
 	m := &merger[T]{
 		host:       host,
@@ -284,55 +285,55 @@ func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) err
 	var merger Merger
 	typ := mergeHost.GetSortKeyType()
 	if typ.IsVarlen() {
-		merger = newMerger(mergeHost, NumericLess[string], sortKeyPos, vector.MustStrCol)
+		merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, vector.MustStrCol)
 	} else {
 		switch typ.Oid {
 		case types.T_bool:
-			merger = newMerger(mergeHost, BoolLess, sortKeyPos, vector.MustFixedCol[bool])
+			merger = newMerger(mergeHost, sort.BoolLess, sortKeyPos, vector.MustFixedCol[bool])
 		case types.T_bit:
-			merger = newMerger(mergeHost, NumericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64])
+			merger = newMerger(mergeHost, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64])
 		case types.T_int8:
-			merger = newMerger(mergeHost, NumericLess[int8], sortKeyPos, vector.MustFixedCol[int8])
+			merger = newMerger(mergeHost, sort.GenericLess[int8], sortKeyPos, vector.MustFixedCol[int8])
 		case types.T_int16:
-			merger = newMerger(mergeHost, NumericLess[int16], sortKeyPos, vector.MustFixedCol[int16])
+			merger = newMerger(mergeHost, sort.GenericLess[int16], sortKeyPos, vector.MustFixedCol[int16])
 		case types.T_int32:
-			merger = newMerger(mergeHost, NumericLess[int32], sortKeyPos, vector.MustFixedCol[int32])
+			merger = newMerger(mergeHost, sort.GenericLess[int32], sortKeyPos, vector.MustFixedCol[int32])
 		case types.T_int64:
-			merger = newMerger(mergeHost, NumericLess[int64], sortKeyPos, vector.MustFixedCol[int64])
+			merger = newMerger(mergeHost, sort.GenericLess[int64], sortKeyPos, vector.MustFixedCol[int64])
 		case types.T_float32:
-			merger = newMerger(mergeHost, NumericLess[float32], sortKeyPos, vector.MustFixedCol[float32])
+			merger = newMerger(mergeHost, sort.GenericLess[float32], sortKeyPos, vector.MustFixedCol[float32])
 		case types.T_float64:
-			merger = newMerger(mergeHost, NumericLess[float64], sortKeyPos, vector.MustFixedCol[float64])
+			merger = newMerger(mergeHost, sort.GenericLess[float64], sortKeyPos, vector.MustFixedCol[float64])
 		case types.T_uint8:
-			merger = newMerger(mergeHost, NumericLess[uint8], sortKeyPos, vector.MustFixedCol[uint8])
+			merger = newMerger(mergeHost, sort.GenericLess[uint8], sortKeyPos, vector.MustFixedCol[uint8])
 		case types.T_uint16:
-			merger = newMerger(mergeHost, NumericLess[uint16], sortKeyPos, vector.MustFixedCol[uint16])
+			merger = newMerger(mergeHost, sort.GenericLess[uint16], sortKeyPos, vector.MustFixedCol[uint16])
 		case types.T_uint32:
-			merger = newMerger(mergeHost, NumericLess[uint32], sortKeyPos, vector.MustFixedCol[uint32])
+			merger = newMerger(mergeHost, sort.GenericLess[uint32], sortKeyPos, vector.MustFixedCol[uint32])
 		case types.T_uint64:
-			merger = newMerger(mergeHost, NumericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64])
+			merger = newMerger(mergeHost, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64])
 		case types.T_date:
-			merger = newMerger(mergeHost, NumericLess[types.Date], sortKeyPos, vector.MustFixedCol[types.Date])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Date], sortKeyPos, vector.MustFixedCol[types.Date])
 		case types.T_timestamp:
-			merger = newMerger(mergeHost, NumericLess[types.Timestamp], sortKeyPos, vector.MustFixedCol[types.Timestamp])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Timestamp], sortKeyPos, vector.MustFixedCol[types.Timestamp])
 		case types.T_datetime:
-			merger = newMerger(mergeHost, NumericLess[types.Datetime], sortKeyPos, vector.MustFixedCol[types.Datetime])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Datetime], sortKeyPos, vector.MustFixedCol[types.Datetime])
 		case types.T_time:
-			merger = newMerger(mergeHost, NumericLess[types.Time], sortKeyPos, vector.MustFixedCol[types.Time])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Time], sortKeyPos, vector.MustFixedCol[types.Time])
 		case types.T_enum:
-			merger = newMerger(mergeHost, NumericLess[types.Enum], sortKeyPos, vector.MustFixedCol[types.Enum])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Enum], sortKeyPos, vector.MustFixedCol[types.Enum])
 		case types.T_decimal64:
-			merger = newMerger(mergeHost, LtTypeLess[types.Decimal64], sortKeyPos, vector.MustFixedCol[types.Decimal64])
+			merger = newMerger(mergeHost, sort.Decimal64Less, sortKeyPos, vector.MustFixedCol[types.Decimal64])
 		case types.T_decimal128:
-			merger = newMerger(mergeHost, LtTypeLess[types.Decimal128], sortKeyPos, vector.MustFixedCol[types.Decimal128])
+			merger = newMerger(mergeHost, sort.Decimal128Less, sortKeyPos, vector.MustFixedCol[types.Decimal128])
 		case types.T_uuid:
-			merger = newMerger(mergeHost, LtTypeLess[types.Uuid], sortKeyPos, vector.MustFixedCol[types.Uuid])
+			merger = newMerger(mergeHost, sort.UuidLess, sortKeyPos, vector.MustFixedCol[types.Uuid])
 		case types.T_TS:
-			merger = newMerger(mergeHost, TsLess, sortKeyPos, vector.MustFixedCol[types.TS])
+			merger = newMerger(mergeHost, sort.TsLess, sortKeyPos, vector.MustFixedCol[types.TS])
 		case types.T_Rowid:
-			merger = newMerger(mergeHost, RowidLess, sortKeyPos, vector.MustFixedCol[types.Rowid])
+			merger = newMerger(mergeHost, sort.RowidLess, sortKeyPos, vector.MustFixedCol[types.Rowid])
 		case types.T_Blockid:
-			merger = newMerger(mergeHost, BlockidLess, sortKeyPos, vector.MustFixedCol[types.Blockid])
+			merger = newMerger(mergeHost, sort.BlockidLess, sortKeyPos, vector.MustFixedCol[types.Blockid])
 		default:
 			return moerr.NewErrUnsupportedDataType(ctx, typ)
 		}
