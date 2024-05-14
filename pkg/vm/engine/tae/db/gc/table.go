@@ -92,6 +92,7 @@ func (t *GCTable) addTombstone(name, objectName string, commitTS types.TS) {
 	if _, ok := t.tombstones[name].objects[objectName]; !ok {
 		t.tombstones[name].objects[objectName] = struct{}{}
 	}
+	logutil.Infof("tombstone %d, object %d", len(t.tombstones), len(t.tombstones[name].objects))
 }
 
 func (t *GCTable) deleteObject(name string) {
