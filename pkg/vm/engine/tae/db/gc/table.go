@@ -484,8 +484,8 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	return nil
 }
 
-func getVersion(bat *containers.Batch) uint64 {
-	return vector.GetFixedAt[uint64](bat.GetVectorByName(GCAttrVersion).GetDownstreamVector(), 0)
+func getVersion(bat *containers.Batch) uint16 {
+	return vector.GetFixedAt[uint16](bat.GetVectorByName(GCAttrVersion).GetDownstreamVector(), 0)
 }
 
 // For test

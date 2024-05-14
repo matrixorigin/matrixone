@@ -31,7 +31,7 @@ const (
 type BatchType int8
 type CleanerState int8
 
-const CurrentVersion = 3
+const CurrentVersion = uint16(3)
 
 const (
 	Versions BatchType = iota
@@ -111,7 +111,7 @@ var (
 	}
 
 	VersionsSchemaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint16, 0, 0),
 	}
 
 	DropTableSchemaAttr = []string{
