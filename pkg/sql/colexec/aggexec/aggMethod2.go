@@ -30,17 +30,18 @@ type (
 type (
 	SingleAggFill1NewVersion[from, to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
-		value from,
+		value from, aggIsEmpty bool,
 		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
 
 	SingleAggFills1NewVersion[from, to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
-		value from, count int,
+		value from, count int, aggIsEmpty bool,
 		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
 
 	SingleAggMerge1NewVersion[from, to types.FixedSizeTExceptStrType] func(
 		ctx1, ctx2 AggGroupExecContext,
 		commonContext AggCommonExecContext,
+		aggIsEmpty1, aggIsEmpty2 bool,
 		resultGetter1, resultGetter2 AggGetter[to],
 		resultSetter AggSetter[to]) error
 
@@ -53,17 +54,18 @@ type (
 type (
 	SingleAggFill2NewVersion[from types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
-		value from,
+		value from, aggIsEmpty bool,
 		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
 
 	SingleAggFills2NewVersion[from types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
-		value from, count int,
+		value from, count int, aggIsEmpty bool,
 		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
 
 	SingleAggMerge2NewVersion[from types.FixedSizeTExceptStrType] func(
 		ctx1, ctx2 AggGroupExecContext,
 		commonContext AggCommonExecContext,
+		aggIsEmpty1, aggIsEmpty2 bool,
 		resultGetter1, resultGetter2 AggBytesGetter,
 		resultSetter AggBytesSetter) error
 
@@ -76,17 +78,18 @@ type (
 type (
 	SingleAggFill3NewVersion[to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
-		value []byte,
+		value []byte, aggIsEmpty bool,
 		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
 
 	SingleAggFills3NewVersion[to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
-		value []byte, count int,
+		value []byte, count int, aggIsEmpty bool,
 		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
 
 	SingleAggMerge3NewVersion[to types.FixedSizeTExceptStrType] func(
 		ctx1, ctx2 AggGroupExecContext,
 		commonContext AggCommonExecContext,
+		aggIsEmpty1, aggIsEmpty2 bool,
 		resultGetter1, resultGetter2 AggGetter[to],
 		resultSetter AggSetter[to]) error
 
@@ -99,17 +102,18 @@ type (
 type (
 	SingleAggFill4NewVersion func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
-		value []byte,
+		value []byte, aggIsEmpty bool,
 		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
 
 	SingleAggFills4NewVersion func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
-		value []byte, count int,
+		value []byte, count int, aggIsEmpty bool,
 		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
 
 	SingleAggMerge4NewVersion func(
 		ctx1, ctx2 AggGroupExecContext,
 		commonContext AggCommonExecContext,
+		aggIsEmpty1, aggIsEmpty2 bool,
 		resultGetter1, resultGetter2 AggBytesGetter,
 		resultSetter AggBytesSetter) error
 

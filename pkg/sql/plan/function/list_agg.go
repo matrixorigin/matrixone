@@ -112,7 +112,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.MaxReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "max",
-					aggRegister: agg.RegisterMax1,
+					aggRegister: agg.RegisterMax2,
 				},
 			},
 		},

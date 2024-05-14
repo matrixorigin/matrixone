@@ -143,6 +143,7 @@ var (
 type aggSumDecimal struct {
 	argScale int32
 }
+
 func (a *aggSumDecimal) Marshal() []byte     { return types.EncodeInt32(&a.argScale) }
 func (a *aggSumDecimal) Unmarshal(bs []byte) { a.argScale = types.DecodeInt32(bs) }
 func aggSumOfDecimalInitCommonContext(
@@ -157,7 +158,7 @@ func aggSumOfDecimalInitResult(
 
 func aggSumOfDecimal64Fill(
 	execContext aggexec.AggGroupExecContext, commonContext aggexec.AggCommonExecContext,
-	value types.Decimal64,
+	value types.Decimal64, isEmpty bool,
 	resultGetter aggexec.AggGetter[types.Decimal128], resultSetter aggexec.AggSetter[types.Decimal128]) error {
 	r, err := resultGetter().Add64(value)
 	resultSetter(r)
@@ -165,7 +166,7 @@ func aggSumOfDecimal64Fill(
 }
 func aggSumOfDecimal64Fills(
 	execContext aggexec.AggGroupExecContext, commonContext aggexec.AggCommonExecContext,
-	value types.Decimal64, count int,
+	value types.Decimal64, count int, isEmpty bool,
 	resultGetter aggexec.AggGetter[types.Decimal128], resultSetter aggexec.AggSetter[types.Decimal128]) error {
 	a := commonContext.(*aggSumDecimal)
 	v := types.Decimal128{B0_63: uint64(value), B64_127: 0}
@@ -183,6 +184,7 @@ func aggSumOfDecimal64Fills(
 func aggSumOfDecimal64Merge(
 	ctx1, ctx2 aggexec.AggGroupExecContext,
 	commonContext aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
 	resultGetter1, resultGetter2 aggexec.AggGetter[types.Decimal128],
 	resultSetter aggexec.AggSetter[types.Decimal128]) error {
 	r, err := resultGetter1().Add128(resultGetter2())
@@ -192,7 +194,7 @@ func aggSumOfDecimal64Merge(
 
 func aggSumOfDecimal128Fill(
 	execContext aggexec.AggGroupExecContext, commonContext aggexec.AggCommonExecContext,
-	value types.Decimal128,
+	value types.Decimal128, isEmpty bool,
 	resultGetter aggexec.AggGetter[types.Decimal128], resultSetter aggexec.AggSetter[types.Decimal128]) error {
 	r, err := resultGetter().Add128(value)
 	resultSetter(r)
@@ -200,7 +202,7 @@ func aggSumOfDecimal128Fill(
 }
 func aggSumOfDecimal128Fills(
 	execContext aggexec.AggGroupExecContext, commonContext aggexec.AggCommonExecContext,
-	value types.Decimal128, count int,
+	value types.Decimal128, count int, isEmpty bool,
 	resultGetter aggexec.AggGetter[types.Decimal128], resultSetter aggexec.AggSetter[types.Decimal128]) error {
 	a := commonContext.(*aggSumDecimal)
 	r, _, err := value.Mul(types.Decimal128{B0_63: uint64(count), B64_127: 0}, a.argScale, 0)
@@ -214,6 +216,7 @@ func aggSumOfDecimal128Fills(
 func aggSumOfDecimal128Merge(
 	ctx1, ctx2 aggexec.AggGroupExecContext,
 	commonContext aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
 	resultGetter1, resultGetter2 aggexec.AggGetter[types.Decimal128],
 	resultSetter aggexec.AggSetter[types.Decimal128]) error {
 	r, err := resultGetter1().Add128(resultGetter2())
@@ -227,14 +230,14 @@ func aggSumInitResult[to numericWithMaxScale](
 }
 func aggSumFill[from numeric, to numericWithMaxScale](
 	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
-	value from,
+	value from, isEmpty bool,
 	resultGetter aggexec.AggGetter[to], resultSetter aggexec.AggSetter[to]) error {
 	resultSetter(resultGetter() + to(value))
 	return nil
 }
 func aggSumFills[from numeric, to numericWithMaxScale](
 	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
-	value from, count int,
+	value from, count int, isEmpty bool,
 	resultGetter aggexec.AggGetter[to], resultSetter aggexec.AggSetter[to]) error {
 	resultSetter(resultGetter() + to(value)*to(count))
 	return nil
@@ -242,6 +245,7 @@ func aggSumFills[from numeric, to numericWithMaxScale](
 func aggSumMerge[from numeric, to numericWithMaxScale](
 	_, _ aggexec.AggGroupExecContext,
 	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
 	resultGetter1, resultGetter2 aggexec.AggGetter[to],
 	resultSetter aggexec.AggSetter[to]) error {
 	resultSetter(resultGetter1() + resultGetter2())
