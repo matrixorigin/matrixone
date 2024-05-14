@@ -62,16 +62,17 @@ enum ShardState {
 }
 
 
-// TableShards table shards metadata. When a Table is created, metadata for the 
+// ShardsMetadata table shards metadata. When a Table is created, metadata for the 
 // corresponding shards is created and serialized and stored in MO_TABLES. 
-message TableShards {
-    Policy Policy      = 1;
-    uint32 ShardsCount = 2;
-    uint32 Version     = 3;
-    uint32 TenantID    = 4;
+message ShardsMetadata {
+    Policy          Policy           = 1;
+    uint32          ShardsCount      = 2;
+    uint32          Version          = 3;
+    uint32          TenantID         = 4;
+    repeated uint64 PhysicalShardIDs = 5;
 }
 
-// TableShard when TableShards are created, the Shards corresponding to a table 
+// TableShard when ShardsMetadata are created, the Shards corresponding to a table 
 // are determined, and each Shard is assigned a corresponding CN node to handle requests
 // for that Shard.
 //
@@ -84,12 +85,14 @@ message TableShards {
 message TableShard {
     uint64     TableID       = 1;
     uint64     ShardID       = 2;
-    string     CN            = 3;
+    uint32     ReplicaID     = 3;
+    Policy     Policy        = 4;
+    string     CN            = 5;
     // Version incrments when shards count changed
-    uint32     ShardsVersion = 4;
+    uint32     ShardsVersion = 6;
     // BindVersion incrments when the cn changed
-    uint64     BindVersion   = 5;
-    ShardState State         = 6; 
+    uint64     BindVersion   = 7;
+    ShardState State         = 8; 
 }
 
 
@@ -98,6 +101,7 @@ enum Method {
     Heartbeat     = 0;
     CreateShards  = 1;
     DeleteShards  = 2;
+    GetShards     = 3;
 }
 
 message Request {
@@ -106,6 +110,7 @@ message Request {
   CreateShardsRequest        CreateShards        = 3 [(gogoproto.nullable) = false];
   DeleteShardsRequest        DeleteShards        = 4 [(gogoproto.nullable) = false];
   HeartbeatRequest           Heartbeat           = 5 [(gogoproto.nullable) = false];
+  GetShardsRequest           GetShards           = 6 [(gogoproto.nullable) = false];
 }
 
 message Response {
@@ -117,6 +122,7 @@ message Response {
     CreateShardsResponse       CreateShards         = 4 [(gogoproto.nullable) = false];
     DeleteShardsResponse       DeleteShards         = 5 [(gogoproto.nullable) = false];
     HeartbeatResponse          Heartbeat            = 6 [(gogoproto.nullable) = false];
+    GetShardsResponse          GetShards            = 7 [(gogoproto.nullable) = false];
 }
 
 // Operator is a description of a command that needs to be sent down to CN for execution.
@@ -131,8 +137,7 @@ message Operator {
 
 message CreateShardsRequest {
     uint64          ID               = 1;
-    TableShards     TableShards      = 2 [(gogoproto.nullable) = false];
-    repeated uint64 PhysicalShardIDs = 3;
+    ShardsMetadata  Metadata         = 2 [(gogoproto.nullable) = false];
 }
 
 message CreateShardsResponse {
@@ -152,4 +157,13 @@ message HeartbeatRequest {
 
 message HeartbeatResponse {
     repeated Operator Operators = 1 [(gogoproto.nullable) = false];
+}
+
+message GetShardsRequest {
+    uint64          ID               = 1;
+    ShardsMetadata  Metadata         = 2 [(gogoproto.nullable) = false];
+}
+
+message GetShardsResponse {
+    repeated TableShard Shards  = 1 [(gogoproto.nullable) = false];
 }

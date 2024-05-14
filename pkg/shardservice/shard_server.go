@@ -57,12 +57,9 @@ func NewShardServer(
 		opt(s)
 	}
 
-	s.initRPC()
+	s.initRemote()
 	s.initSchedulers()
-	return s
-}
 
-func (s *server) Start() {
 	if err := s.stopper.RunTask(s.schedule); err != nil {
 		panic(err)
 	}
@@ -70,13 +67,15 @@ func (s *server) Start() {
 	if err := s.rpc.Start(); err != nil {
 		panic(err)
 	}
+	return s
 }
 
-func (s *server) Stop() {
+func (s *server) Close() error {
 	if err := s.rpc.Close(); err != nil {
-		panic(err)
+		return err
 	}
 	s.stopper.Stop()
+	return nil
 }
 
 func (s *server) initSchedulers() {
@@ -90,8 +89,8 @@ func (s *server) initSchedulers() {
 		))
 }
 
-func (s *server) initRPC() {
-	pool := morpc.NewMessagePool[*pb.Request, *pb.Response](
+func (s *server) initRemote() {
+	pool := morpc.NewMessagePool(
 		func() *pb.Request {
 			return &pb.Request{}
 		},
@@ -100,7 +99,7 @@ func (s *server) initRPC() {
 		},
 	)
 
-	rpc, err := morpc.NewMessageHandler[*pb.Request, *pb.Response](
+	rpc, err := morpc.NewMessageHandler(
 		"shard-server",
 		s.cfg.ListenAddress,
 		s.cfg.RPC,
@@ -118,6 +117,7 @@ func (s *server) initHandlers() {
 	s.rpc.RegisterMethod(uint32(pb.Method_Heartbeat), s.handleHeartbeat, true)
 	s.rpc.RegisterMethod(uint32(pb.Method_CreateShards), s.handleCreateShards, true)
 	s.rpc.RegisterMethod(uint32(pb.Method_DeleteShards), s.handleDeleteShards, true)
+	s.rpc.RegisterMethod(uint32(pb.Method_GetShards), s.handleGetShards, true)
 }
 
 func (s *server) handleHeartbeat(
@@ -138,8 +138,7 @@ func (s *server) handleCreateShards(
 	resp *pb.Response,
 ) error {
 	id := req.CreateShards.ID
-	v := req.CreateShards.TableShards
-
+	v := req.CreateShards.Metadata
 	if v.Policy == pb.Policy_None {
 		return nil
 	}
@@ -147,33 +146,7 @@ func (s *server) handleCreateShards(
 		panic("shards count is 0")
 	}
 
-	table := &table{
-		metadata:  v,
-		id:        id,
-		allocated: false,
-	}
-	table.shards = make([]pb.TableShard, 0, v.ShardsCount)
-	for i := uint32(0); i < v.ShardsCount; i++ {
-		table.shards = append(table.shards,
-			pb.TableShard{
-				TableID:       id,
-				State:         pb.ShardState_Allocating,
-				BindVersion:   s.initBindVersion,
-				ShardsVersion: v.Version,
-				ShardID:       uint64(i),
-			})
-	}
-	if v.Policy == pb.Policy_Partition {
-		ids := req.CreateShards.PhysicalShardIDs
-		if len(ids) != len(table.shards) {
-			panic("partition and shard count not match")
-		}
-		for i, id := range ids {
-			table.shards[i].ShardID = id
-		}
-	}
-
-	s.r.add(table)
+	s.doCreate(id, v)
 	return nil
 }
 
@@ -185,6 +158,57 @@ func (s *server) handleDeleteShards(
 	id := req.DeleteShards.ID
 	s.r.delete(id)
 	return nil
+}
+
+func (s *server) handleGetShards(
+	ctx context.Context,
+	req *pb.Request,
+	resp *pb.Response,
+) error {
+	shards := s.r.get(req.GetShards.ID)
+	if len(shards) == 0 {
+		s.doCreate(
+			req.GetShards.ID,
+			req.GetShards.Metadata,
+		)
+		return nil
+	}
+	resp.GetShards.Shards = shards
+	return nil
+}
+
+func (s *server) doCreate(
+	id uint64,
+	metadata pb.ShardsMetadata,
+) {
+	table := &table{
+		metadata:  metadata,
+		id:        id,
+		allocated: false,
+	}
+	table.shards = make([]pb.TableShard, 0, metadata.ShardsCount)
+	for i := uint32(0); i < metadata.ShardsCount; i++ {
+		table.shards = append(table.shards,
+			pb.TableShard{
+				Policy:        metadata.Policy,
+				TableID:       id,
+				State:         pb.ShardState_Allocating,
+				BindVersion:   s.initBindVersion,
+				ShardsVersion: metadata.Version,
+				ShardID:       uint64(i + 1),
+			})
+	}
+	if metadata.Policy == pb.Policy_Partition {
+		ids := metadata.PhysicalShardIDs
+		if len(ids) != len(table.shards) {
+			panic("partition and shard count not match")
+		}
+		for i, id := range ids {
+			table.shards[i].ShardID = id
+		}
+	}
+
+	s.r.add(table)
 }
 
 func (s *server) schedule(ctx context.Context) {

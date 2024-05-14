@@ -28,6 +28,18 @@ func (m TableShard) Same(m2 TableShard) bool {
 		m.CN == m2.CN
 }
 
+func (m TableShard) GetPhysicalTableID() uint64 {
+	switch m.Policy {
+	case Policy_None:
+		return m.TableID
+	case Policy_Hash:
+		return m.TableID
+	case Policy_Partition:
+		return m.ShardID
+	}
+	return m.TableID
+}
+
 func (m Request) TypeName() string {
 	return "pb.shard.Request"
 }

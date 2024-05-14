@@ -267,6 +267,7 @@ func NewMethodBasedClient[REQ, RESP MethodBasedMessage](
 	c := &methodBasedClient[REQ, RESP]{
 		cfg:  &cfg,
 		pool: pool,
+		m:    make(map[uint32]func(REQ) (string, error)),
 	}
 	c.cfg.Adjust()
 	c.cfg.BackendOptions = append(
@@ -282,7 +283,7 @@ func NewMethodBasedClient[REQ, RESP MethodBasedMessage](
 	client, err := c.cfg.NewClient(
 		name,
 		getLogger().RawLogger(),
-		func() Message { return pool.AcquireRequest() },
+		func() Message { return pool.AcquireResponse() },
 	)
 	if err != nil {
 		return nil, err

@@ -74,7 +74,7 @@ func (r *rt) heartbeat(
 		return []pb.Operator{newDeleteAllOp()}
 	}
 
-	ops := c.closeCompletedOp(
+	c.closeCompletedOp(
 		shards,
 		func(s pb.TableShard) {
 			if t, ok := r.tables[s.TableID]; ok {
@@ -83,19 +83,27 @@ func (r *rt) heartbeat(
 		},
 	)
 
+	var ops []pb.Operator
 	for _, s := range shards {
 		if t, ok := r.tables[s.TableID]; ok {
 			if !t.valid(s) {
-				ops = append(ops, newDeleteOp(s))
+				c.addOps(newDeleteOp(s))
 			}
 		} else {
 			ops = append(ops, newCreateTableOp(s.TableID))
 		}
 	}
-	return ops
+	if len(ops) == 0 &&
+		len(c.incompleteOps) == 0 {
+		return nil
+	}
+
+	return append(ops, c.incompleteOps...)
 }
 
-func (r *rt) add(t *table) {
+func (r *rt) add(
+	t *table,
+) {
 	r.Lock()
 	defer r.Unlock()
 	old, ok := r.tables[t.id]
@@ -123,6 +131,22 @@ func (r *rt) delete(id uint64) {
 	}
 	r.deleteTableLocked(table)
 	delete(r.tables, id)
+}
+
+func (r *rt) get(
+	id uint64,
+) []pb.TableShard {
+	r.RLock()
+	defer r.RUnlock()
+
+	table, ok := r.tables[id]
+	if !ok || !table.allocated {
+		return nil
+	}
+
+	shards := make([]pb.TableShard, 0, len(table.shards))
+	shards = append(shards, table.shards...)
+	return shards
 }
 
 func (r *rt) deleteTableLocked(t *table) {
@@ -202,7 +226,7 @@ func (r *rt) getDownCNsLocked(downCNs map[string]struct{}) {
 
 type table struct {
 	id        uint64
-	metadata  pb.TableShards
+	metadata  pb.ShardsMetadata
 	shards    []pb.TableShard
 	allocated bool
 }
@@ -311,14 +335,39 @@ func (c *cn) down() {
 	c.incompleteOps = c.incompleteOps[:0]
 }
 
-func (c *cn) addOps(ops ...pb.Operator) {
-	c.incompleteOps = append(c.incompleteOps, ops...)
+func (c *cn) addOps(
+	ops ...pb.Operator,
+) {
+	for _, op := range ops {
+		if !c.hasSame(op) {
+			c.incompleteOps = append(c.incompleteOps, op)
+		}
+	}
+}
+
+func (c *cn) hasSame(
+	op pb.Operator,
+) bool {
+	for _, old := range c.incompleteOps {
+		if old.TableID == op.TableID &&
+			old.Type == op.Type {
+			switch op.Type {
+			case pb.OpType_DeleteShard, pb.OpType_AddShard:
+				if old.TableShard.Same(op.TableShard) {
+					return true
+				}
+			default:
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (c *cn) closeCompletedOp(
 	shards []pb.TableShard,
 	apply func(pb.TableShard),
-) []pb.Operator {
+) {
 	has := func(s pb.TableShard) bool {
 		for _, shard := range shards {
 			if s.Same(shard) {
@@ -348,5 +397,4 @@ func (c *cn) closeCompletedOp(
 		}
 	}
 	c.incompleteOps = ops
-	return c.notifyOps
 }

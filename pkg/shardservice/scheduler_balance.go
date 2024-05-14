@@ -17,6 +17,8 @@ package shardservice
 import (
 	"sort"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 type balanceOption func(*balanceScheduler)
@@ -172,6 +174,16 @@ func (s *balanceScheduler) doBalance(
 	old, new := t.moveLocked(from, to)
 	r.addOpLocked(from, newDeleteOp(old))
 	r.addOpLocked(to, newAddOp(new))
+
+	getLogger().Info(
+		"move shard",
+		zap.Uint64("table", t.id),
+		zap.String("from", from),
+		zap.Int("from-count", max),
+		zap.String("to", to),
+		zap.Int("to-count", min),
+		zap.String("shard", new.String()),
+	)
 
 	now := time.Now()
 	s.freezeFilter.freeze[from] = now

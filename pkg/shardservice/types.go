@@ -36,10 +36,8 @@ import (
 // cn, and one to add a new bind on the new cn). These CMDs are returned to the
 // corresponding CMD for execution in the heartbeat request of each CN.
 type ShardServer interface {
-	// Start start the server
-	Start()
-	// Stop stop the server
-	Stop()
+	// Close close the shard server
+	Close() error
 }
 
 // ShardService is sharding service. Each CN node holds an instance of the
@@ -53,7 +51,10 @@ type ShardService interface {
 	// Delete deletes table shards metadata in current txn. Table shards need
 	// to be deleted if table deleted. Nothing happened if txn aborted.
 	Delete(table uint64, txnOp client.TxnOperator) error
+	// GetShards returns table shards metadata.
 	GetShards(table uint64) ([]pb.TableShard, error)
+	// Close close the service
+	Close() error
 }
 
 // Scheduler is used to schedule shards on cn. Each scheduler is responsible for
@@ -73,4 +74,13 @@ type Env interface {
 // filter is used to filter out or select certain CNs when selecting CNs for ShardBalance.
 type filter interface {
 	filter(r *rt, cn []*cn) []*cn
+}
+
+type ShardStorage interface {
+	Get(table uint64) (pb.ShardsMetadata, error)
+	Create(table uint64, txnOp client.TxnOperator) (bool, error)
+	Delete(table uint64, txnOp client.TxnOperator) (bool, error)
+
+	Subscribe(tables ...uint64) error
+	Unsubscribe(tables ...uint64) error
 }

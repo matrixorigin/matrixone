@@ -45,9 +45,9 @@ func TestAvailable(t *testing.T) {
 // cn:label_name:label_value,cn2:label_name:label_value,cn3
 func initTestCluster(
 	services string,
-) {
+) ([]metadata.CNService, metadata.TNService) {
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntimeWithLevel(zapcore.InfoLevel))
-
+	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	cnInfo := strings.Split(services, ",")
 	cns := make([]metadata.CNService, 0, len(cnInfo))
 	for _, info := range cnInfo {
@@ -60,20 +60,25 @@ func initTestCluster(
 			cn.Labels = make(map[string]metadata.LabelList)
 			cn.Labels[values[1]] = metadata.LabelList{Labels: []string{values[2]}}
 		}
-		cn.LockServiceAddress = fmt.Sprintf("unix:///tmp/service-%d-%s.sock",
+		cn.ShardServiceAddress = fmt.Sprintf("unix:///tmp/service-%d-%s.sock",
 			time.Now().Nanosecond(), cn.ServiceID)
 
 		cns = append(cns, cn)
 	}
 
+	tn := metadata.TNService{
+		ServiceID:           "tn",
+		ShardServiceAddress: testSockets,
+	}
 	cluster := clusterservice.NewMOCluster(
 		nil,
 		0,
 		clusterservice.WithDisableRefresh(),
 		clusterservice.WithServices(
 			cns,
-			nil,
+			[]metadata.TNService{tn},
 		),
 	)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
+	return cns, tn
 }

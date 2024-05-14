@@ -59,7 +59,9 @@ const (
 	// MOForeignKeys saves the fk relationships
 	MOForeignKeys = "mo_foreign_keys"
 
-	// MoDataBaseConstrant =
+	// MOShardTable is used to store the sharding information of the table. See detail
+	// in shardservice.
+	MOShardTable = "mo_table_shard"
 )
 
 var InternalColumns = map[string]int8{

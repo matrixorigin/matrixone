@@ -392,7 +392,7 @@ func TestHeartbeatWithStaleShard(t *testing.T) {
 			ops := r.heartbeat("cn1", []pb.TableShard{s1, s2})
 			require.Equal(t, 1, len(ops))
 			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteShard, TableShard: s2}, ops[0])
-			require.Equal(t, 0, len(r.cns["cn1"].incompleteOps))
+			require.Equal(t, 1, len(r.cns["cn1"].incompleteOps))
 		},
 	)
 }
@@ -527,7 +527,7 @@ func newTestTableWithAll(
 	physicalShardIDs []uint64,
 ) *table {
 	table := &table{
-		metadata: pb.TableShards{
+		metadata: pb.ShardsMetadata{
 			TenantID:    tenantID,
 			ShardsCount: shardsCount,
 			Policy:      policy,
@@ -540,11 +540,12 @@ func newTestTableWithAll(
 	for i := uint32(0); i < shardsCount; i++ {
 		table.shards = append(table.shards,
 			pb.TableShard{
+				Policy:        policy,
 				TableID:       id,
 				State:         pb.ShardState_Allocating,
 				BindVersion:   1,
 				ShardsVersion: version,
-				ShardID:       uint64(i),
+				ShardID:       uint64(i + 1),
 			})
 	}
 	if policy == pb.Policy_Partition {

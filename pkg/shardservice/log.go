@@ -45,7 +45,7 @@ func initLoggers() {
 
 func tableShardsField(
 	name string,
-	shards pb.TableShards,
+	shards pb.ShardsMetadata,
 ) zap.Field {
 	return zap.String(name,
 		fmt.Sprintf("policy: %s, count: %d, version: %d",
