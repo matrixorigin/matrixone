@@ -344,6 +344,7 @@ func (t *GCTable) rebuildTableV3(bats []*containers.Batch) {
 		t.tombstones[tombstone].objects[name] = struct{}{}
 		t.addTombstone(name, tombstone, commitTS)
 	}
+	logutil.Infof("rebuildTableV3 table %d", len(t.getTombstones()))
 }
 
 func (t *GCTable) rebuildTableV2(bats []*containers.Batch, idx BatchType) {
