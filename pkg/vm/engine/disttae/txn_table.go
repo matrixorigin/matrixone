@@ -2004,12 +2004,26 @@ func (tbl *txnTable) tryExtractPKFilter(expr *plan.Expr) (retPKFilter PKFilter) 
 			if retPKFilter.isNull || !retPKFilter.isValid {
 				return
 			}
+
 			if !retPKFilter.isVec {
 				var packer *types.Packer
 				put := tbl.getTxn().engine.packerPool.Get(&packer)
-				retPKFilter.SetFullData(function.EQUAL, false, logtailreplay.EncodePrimaryKey(retPKFilter.val, packer))
+				val := logtailreplay.EncodePrimaryKey(retPKFilter.val, packer)
 				put.Put()
+				if retPKFilter.op == function.EQUAL {
+					retPKFilter.SetFullData(function.EQUAL, false, val)
+				} else {
+					// TODO: hack: remove the last comma, need to fix this in the future
+					// serial_full(secondary_index, primary_key|fake_pk) => varchar
+					// prefix_eq expression only has the prefix(secondary index) in it.
+					// there will have an extra zero after the `encodeStringType` done
+					// this will violate the rule of prefix_eq, so remove this redundant zero here.
+					//
+					val = val[0 : len(val)-1]
+					retPKFilter.SetFullData(function.PREFIX_EQ, false, val)
+				}
 			}
+
 		}
 		return
 	}
