@@ -1899,6 +1899,9 @@ func (ses *Session) initLogger() {
 	})
 }
 
+// log do logging.
+// Please keep it called by Session.Info/Error/Debug/Warn/Fatal/Panic.
+// PS: This func must be lock free. DO NOT use Session.mu.
 func (ses *Session) log(ctx context.Context, level zapcore.Level, msg string, fields ...zap.Field) {
 	if ses == nil {
 		return
@@ -1922,7 +1925,7 @@ func (ses *Session) logf(ctx context.Context, level zapcore.Level, format string
 		fields = append(fields, zap.String("session_info", ses.debugStr))
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(fmt.Sprintf(format, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(1), fields...)
+		ses.logger.Log(fmt.Sprintf(format, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
 	}
 }
 
