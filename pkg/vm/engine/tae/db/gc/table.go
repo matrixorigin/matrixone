@@ -333,7 +333,7 @@ func (t *GCTable) rebuildTableV3(bats []*containers.Batch) {
 	for i := 0; i < bats[TombstoneList].Length(); i++ {
 		name := string(bats[TombstoneList].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
 		tombstone := string(bats[TombstoneList].GetVectorByName(GCAttrTombstone).Get(i).([]byte))
-		commitTS := bats[CreateBlock].GetVectorByName(GCAttrCommitTS).Get(i).(types.TS)
+		commitTS := bats[TombstoneList].GetVectorByName(GCAttrCommitTS).Get(i).(types.TS)
 		if t.tombstones[tombstone] == nil {
 			t.tombstones[tombstone] = &TombstoneEntry{
 				commitTS: commitTS,
