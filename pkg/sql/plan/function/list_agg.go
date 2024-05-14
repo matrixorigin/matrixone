@@ -292,7 +292,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.BitAndReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_and",
-					aggRegister: agg.RegisterBitAnd1,
+					aggRegister: agg.RegisterBitAnd2,
 				},
 			},
 		},
