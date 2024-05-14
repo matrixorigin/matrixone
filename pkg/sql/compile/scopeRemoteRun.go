@@ -827,8 +827,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			IsShuffle:    t.IsShuffle,
 			PreAllocSize: t.PreAllocSize,
 			NeedEval:     t.NeedEval,
-			Ibucket:      t.Ibucket,
-			Nbucket:      t.Nbucket,
 			Exprs:        t.Exprs,
 			Types:        convertToPlanTypes(t.Types),
 			Aggs:         convertToPipelineAggregates(t.Aggs),
@@ -1236,8 +1234,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.IsShuffle = t.IsShuffle
 		arg.PreAllocSize = t.PreAllocSize
 		arg.NeedEval = t.NeedEval
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Exprs = t.Exprs
 		arg.Types = convertToTypes(t.Types)
 		arg.Aggs = convertToAggregates(t.Aggs)
