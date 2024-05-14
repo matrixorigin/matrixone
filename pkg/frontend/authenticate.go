@@ -32,10 +32,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-
-	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -954,237 +953,36 @@ var (
 		"mo_snapshots":                0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
-	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
-		table_id   bigint unsigned, 
-		col_name     varchar(770), 
-		col_index      int,
-		offset     bigint unsigned, 
-		step       bigint unsigned,  
-		primary key(table_id, col_name)
-	);`, catalog.MOAutoIncrTable)
+	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
 	// mo_indexes table does not have `auto_increment` column,
-	createMoIndexesSql = fmt.Sprintf(`create table %s(
-				id 			bigint unsigned not null,
-				table_id 	bigint unsigned not null,
-				database_id bigint unsigned not null,
-				name 		varchar(64) not null,
-				type        varchar(11) not null,
-				algo	varchar(11),
-    			algo_table_type varchar(11),
-    			algo_params varchar(2048),
-				is_visible  tinyint not null,
-				hidden      tinyint not null,
-				comment 	varchar(2048) not null,
-				column_name    varchar(256) not null,
-				ordinal_position  int unsigned  not null,
-				options     text,
-				index_table_name varchar(5000),
-				primary key(id, column_name)
-			);`, catalog.MO_INDEXES)
+	createMoIndexesSql = MoCatalogMoIndexesDDL
 
-	createMoForeignKeysSql = fmt.Sprintf(`create table %s(
-				constraint_name varchar(5000) not null,
-				constraint_id BIGINT UNSIGNED not null,
-				db_name varchar(5000) not null,
-				db_id BIGINT UNSIGNED not null,
-				table_name varchar(5000) not null,
-				table_id BIGINT UNSIGNED not null,
-				column_name varchar(256) not null,
-				column_id BIGINT UNSIGNED not null,
-				refer_db_name varchar(5000) not null,
-				refer_db_id BIGINT UNSIGNED not null,
-				refer_table_name varchar(5000) not null,
-				refer_table_id BIGINT UNSIGNED not null,
-				refer_column_name varchar(256) not null,
-				refer_column_id BIGINT UNSIGNED not null,
-				on_delete varchar(128) not null,
-				on_update varchar(128) not null,
-		
-				primary key(
-					constraint_name,
-					constraint_id,
-					db_name,
-					db_id,
-					table_name,
-					table_id,
-					column_name,
-					column_id,
-					refer_db_name,
-					refer_db_id,
-					refer_table_name,
-					refer_table_id,
-					refer_column_name,
-					refer_column_id)
-			);`, catalog.MOForeignKeys)
+	createMoForeignKeysSql = MoCatalogMoForeignKeysDDL
 
-	createMoTablePartitionsSql = fmt.Sprintf(`CREATE TABLE %s (
-			  table_id bigint unsigned NOT NULL,
-			  database_id bigint unsigned not null,
-			  number smallint unsigned NOT NULL,
-			  name varchar(64) NOT NULL,
-        	  partition_type varchar(50) NOT NULL,
-              partition_expression varchar(2048) NULL,
-			  description_utf8 text,
-			  comment varchar(2048) NOT NULL,
-			  options text,
-			  partition_table_name varchar(1024) NOT NULL,
-			  PRIMARY KEY table_id (table_id, name)
-			);`, catalog.MO_TABLE_PARTITIONS)
+	createMoTablePartitionsSql = MoCatalogMoTablePartitionsDDL
 
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
-		`create table mo_user(
-				user_id int signed auto_increment primary key,
-				user_host varchar(100),
-				user_name varchar(300) unique key,
-				authentication_string varchar(100),
-				status   varchar(8),
-				created_time  timestamp,
-				expired_time timestamp,
-				login_type  varchar(16),
-				creator int signed,
-				owner int signed,
-				default_role int signed
-    		);`,
-		`create table mo_account(
-				account_id int signed auto_increment primary key,
-				account_name varchar(300) unique key,
-				admin_name varchar(300),
-				status varchar(300),
-				created_time timestamp,
-				comments varchar(256),
-				version bigint unsigned auto_increment,
-				suspended_time timestamp default NULL,
-				create_version varchar(50) default '1.2.0'
-			);`,
-		`create table mo_role(
-				role_id int signed auto_increment primary key,
-				role_name varchar(300) unique key,
-				creator int signed,
-				owner int signed,
-				created_time timestamp,
-				comments text
-			);`,
-		`create table mo_user_grant(
-				role_id int signed,
-				user_id int signed,
-				granted_time timestamp,
-				with_grant_option bool,
-				primary key(role_id, user_id)
-			);`,
-		`create table mo_role_grant(
-				granted_id int signed,
-				grantee_id int signed,
-				operation_role_id int signed,
-				operation_user_id int signed,
-				granted_time timestamp,
-				with_grant_option bool,
-				primary key(granted_id, grantee_id)
-			);`,
-		`create table mo_role_privs(
-				role_id int signed,
-				role_name  varchar(100),
-				obj_type  varchar(16),
-				obj_id bigint unsigned,
-				privilege_id int,
-				privilege_name varchar(100),
-				privilege_level varchar(100),
-				operation_user_id int unsigned,
-				granted_time timestamp,
-				with_grant_option bool,
-				primary key(role_id, obj_type, obj_id, privilege_id, privilege_level)
-			);`,
-		`create table mo_user_defined_function(
-				function_id int auto_increment,
-				name     varchar(100) unique key,
-				owner  int unsigned,
-				args     json,
-				retType  varchar(20),
-				body     text,
-				language varchar(20),
-				db       varchar(100),
-				definer  varchar(50),
-				modified_time timestamp,
-				created_time  timestamp,
-				type    varchar(10),
-				security_type varchar(10), 
-				comment  varchar(5000),
-				character_set_client varchar(64),
-				collation_connection varchar(64),
-				database_collation varchar(64),
-				primary key(function_id)
-			);`,
-		`create table mo_mysql_compatibility_mode(
-				configuration_id int auto_increment,
-				account_id int,
-				account_name varchar(300),
-				dat_name     varchar(5000) default NULL,
-				variable_name  varchar(300),
-				variable_value varchar(5000),
-				system_variables bool,
-				primary key(configuration_id)
-			);`,
-
-		`create table mo_snapshots(
-			snapshot_id uuid unique key,
-			sname varchar(64) primary key,
-			ts bigint,
-			level enum('cluster','account','database','table'),
-	        account_name varchar(300),
-			database_name varchar(5000),
-			table_name  varchar(5000),
-			obj_id bigint unsigned
-			);`,
-		`create table mo_pubs(
-    		pub_name varchar(64) primary key,
-    		database_name varchar(5000),
-    		database_id bigint unsigned,
-    		all_table bool,
-    		table_list text,
-    		account_list text,
-    		created_time timestamp,
-    		update_time timestamp default NULL,
-    		owner int unsigned,
-    		creator int unsigned,
-    		comment text
-    		);`,
-		`create table mo_stored_procedure(
-				proc_id int auto_increment,
-				name     varchar(100) unique key,
-				creator  int unsigned,
-				args     text,
-				body     text,
-				db       varchar(100),
-				definer  varchar(50),
-				modified_time timestamp,
-				created_time  timestamp,
-				type    varchar(10),
-				security_type varchar(10), 
-				comment  varchar(5000),
-				character_set_client varchar(64),
-				collation_connection varchar(64),
-				database_collation varchar(64),
-				primary key(proc_id)
-			);`,
-		`create table mo_stages(
-				stage_id int unsigned auto_increment,
-				stage_name varchar(64) unique key,
-				url text,
-				stage_credentials text,
-				stage_status varchar(64),
-				created_time timestamp,
-				comment text,
-				primary key(stage_id)
-			);`,
-
-		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`,
-		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`,
-		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp`,
-		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode`,
-		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp`,
-		`CREATE VIEW IF NOT EXISTS mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp`,
+		MoCatalogMoUserDDL,
+		MoCatalogMoAccountDDL,
+		MoCatalogMoRoleDDL,
+		MoCatalogMoUserGrantDDL,
+		MoCatalogMoRoleGrantDDL,
+		MoCatalogMoRolePrivsDDL,
+		MoCatalogMoUserDefinedFunctionDDL,
+		MoCatalogMoMysqlCompatibilityModeDDL,
+		MoCatalogMoSnapshotsDDL,
+		MoCatalogMoPubsDDL,
+		MoCatalogMoStoredProcedureDDL,
+		MoCatalogMoStagesDDL,
+		MoCatalogMoSessionsDDL,
+		MoCatalogMoConfigurationsDDL,
+		MoCatalogMoLocksDDL,
+		MoCatalogMoVariablesDDL,
+		MoCatalogMoTransactionsDDL,
+		MoCatalogMoCacheDDL,
 	}
 
 	//drop tables for the tenant
@@ -4380,13 +4178,10 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			bb := &bytes.Buffer{}
 			bb.WriteString(prefix)
 			//handle the database annotated by '`'
-			if db != strings.ToLower(db) {
-				bb.WriteString("`")
-				bb.WriteString(db)
-				bb.WriteString("`")
-			} else {
-				bb.WriteString(db)
-			}
+			bb.WriteString("`")
+			bb.WriteString(db)
+			bb.WriteString("`")
+
 			bb.WriteString(";")
 			sqlsForDropDatabases = append(sqlsForDropDatabases, bb.String())
 		}
@@ -6462,12 +6257,12 @@ func getSqlForPrivilege(ctx context.Context, roleId int64, entry privilegeEntry,
 }
 
 // getSqlForPrivilege2 complements the database name and calls getSqlForPrivilege
-func getSqlForPrivilege2(ses *Session, roleId int64, entry privilegeEntry, pl privilegeLevelType) (string, error) {
+func getSqlForPrivilege2(ctx context.Context, ses *Session, roleId int64, entry privilegeEntry, pl privilegeLevelType) (string, error) {
 	//handle the empty database
 	if len(entry.databaseName) == 0 {
 		entry.databaseName = ses.GetDatabaseName()
 	}
-	return getSqlForPrivilege(ses.GetRequestContext(), roleId, entry, pl)
+	return getSqlForPrivilege(ctx, roleId, entry, pl)
 }
 
 // verifyPrivilegeEntryInMultiPrivilegeLevels checks the privilege
@@ -6496,7 +6291,7 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 				return true, nil
 			}
 		}
-		sql, err = getSqlForPrivilege2(ses, roleId, entry, pl)
+		sql, err = getSqlForPrivilege2(ctx, ses, roleId, entry, pl)
 		if err != nil {
 			return false, err
 		}
@@ -6645,7 +6440,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		return false, nil
 	}
 
-	enableCache, err = privilegeCacheIsEnabled(ses)
+	enableCache, err = privilegeCacheIsEnabled(ctx, ses)
 	if err != nil {
 		return false, err
 	}
@@ -7824,7 +7619,6 @@ func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, f
 		feSessionImpl: feSessionImpl{
 			proto: &FakeProtocol{},
 		},
-		connectCtx: ctx,
 
 		seqCurValues: make(map[uint64]string),
 		seqLastValue: new(string),
@@ -8273,7 +8067,7 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 	//create tables for the tenant
 	for _, sql := range createSqls {
 		//only the SYS tenant has the table mo_account
-		if strings.HasPrefix(sql, "create table mo_account") {
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_account") {
 			continue
 		}
 		err = bh.Exec(newTenantCtx, sql)
@@ -8430,7 +8224,7 @@ func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenan
 	var err error
 	subscriptions := make([]string, 0)
 	//process the syspublications
-	syspublications_value, err := ses.GetGlobalVar("syspublications")
+	syspublications_value, err := ses.GetGlobalVar(ctx, "syspublications")
 	if err != nil {
 		return err
 	}
@@ -8784,12 +8578,12 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	return err
 }
 
-func Upload(ctx context.Context, ses FeSession, localPath string, storageDir string) (string, error) {
+func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string) (string, error) {
 	loadLocalReader, loadLocalWriter := io.Pipe()
 
 	// watch and cancel
 	// TODO use context.AfterFunc in go1.21
-	funcCtx, cancel := context.WithCancel(ctx)
+	funcCtx, cancel := context.WithCancel(execCtx.reqCtx)
 	defer cancel()
 	go func() {
 		defer loadLocalReader.Close()
@@ -8805,7 +8599,7 @@ func Upload(ctx context.Context, ses FeSession, localPath string, storageDir str
 				Filepath: localPath,
 			},
 		}
-		return processLoadLocal(ctx, ses, param, loadLocalWriter)
+		return processLoadLocal(ses, execCtx, param, loadLocalWriter)
 	})
 
 	// read from pipe and upload
@@ -8820,8 +8614,8 @@ func Upload(ctx context.Context, ses FeSession, localPath string, storageDir str
 	}
 
 	fileService := getGlobalPu().FileService
-	_ = fileService.Delete(ctx, ioVector.FilePath)
-	err := fileService.Write(ctx, ioVector)
+	_ = fileService.Delete(execCtx.reqCtx, ioVector.FilePath)
+	err := fileService.Write(execCtx.reqCtx, ioVector)
 	err = errors.Join(err, loadLocalErrGroup.Wait())
 	if err != nil {
 		return "", err
@@ -8830,7 +8624,7 @@ func Upload(ctx context.Context, ses FeSession, localPath string, storageDir str
 	return ioVector.FilePath, nil
 }
 
-func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
+func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
 	var initMoUdf string
 	var retTypeStr string
 	var dbName string
@@ -8854,15 +8648,15 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	}
 
 	// authticate db exists
-	dbExists, err = checkDatabaseExistsOrNot(ctx, ses.GetBackgroundExec(ctx), dbName)
+	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, ses.GetBackgroundExec(execCtx.reqCtx), dbName)
 	if err != nil {
 		return err
 	}
 	if !dbExists {
-		return moerr.NewBadDB(ctx, dbName)
+		return moerr.NewBadDB(execCtx.reqCtx, dbName)
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(execCtx.reqCtx)
 	defer bh.Close()
 
 	// format return type
@@ -8903,12 +8697,12 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	// validate duplicate function declaration
 	bh.ClearExecResultSet()
 	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, argsCondition)
-	err = bh.Exec(ctx, checkExistence)
+	err = bh.Exec(execCtx.reqCtx, checkExistence)
 	if err != nil {
 		return err
 	}
 
-	erArray, err = getResultSet(ctx, bh)
+	erArray, err = getResultSet(execCtx.reqCtx, bh)
 	if err != nil {
 		return err
 	}
@@ -8917,9 +8711,9 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
 	}
 
-	err = bh.Exec(ctx, "begin;")
+	err = bh.Exec(execCtx.reqCtx, "begin;")
 	defer func() {
-		err = finishTxn(ctx, bh, err)
+		err = finishTxn(execCtx.reqCtx, bh, err)
 	}()
 	if err != nil {
 		return err
@@ -8934,18 +8728,18 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 			if cf.Language == string(tree.PYTHON) {
 				if !strings.HasSuffix(cf.Body, ".py") &&
 					!strings.HasSuffix(cf.Body, ".whl") {
-					return moerr.NewInvalidInput(ctx, "file '"+cf.Body+"', only support '*.py', '*.whl'")
+					return moerr.NewInvalidInput(execCtx.reqCtx, "file '"+cf.Body+"', only support '*.py', '*.whl'")
 				}
 				if strings.HasSuffix(cf.Body, ".whl") {
 					dotIdx := strings.LastIndex(cf.Handler, ".")
 					if dotIdx < 1 {
-						return moerr.NewInvalidInput(ctx, "handler '"+cf.Handler+"', when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
+						return moerr.NewInvalidInput(execCtx.reqCtx, "handler '"+cf.Handler+"', when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
 					}
 				}
 			}
 			// upload
 			storageDir := string(cf.Name.Name.ObjectName) + "_" + strings.Join(typeList, "-") + "_"
-			cf.Body, err = Upload(ctx, ses, cf.Body, storageDir)
+			cf.Body, err = Upload(ses, execCtx, cf.Body, storageDir)
 			if err != nil {
 				return err
 			}
@@ -8967,7 +8761,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 
 	if execResultArrayHasData(erArray) { // replace
 		var id int64
-		id, err = erArray[0].GetInt64(ctx, 0, 0)
+		id, err = erArray[0].GetInt64(execCtx.reqCtx, 0, 0)
 		if err != nil {
 			return err
 		}
@@ -8986,7 +8780,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
 
-	err = bh.Exec(ctx, initMoUdf)
+	err = bh.Exec(execCtx.reqCtx, initMoUdf)
 	if err != nil {
 		return err
 	}
@@ -9467,7 +9261,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	return interpreter.GetResult(), nil
 }
 
-func doGrantPrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Statement) error {
+func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
 	var sql string
 	tenantInfo := ses.GetTenantInfo()
@@ -9484,9 +9278,9 @@ func doGrantPrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.State
 	tenantInfo = ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+		tenantCtx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 	} else {
-		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
+		tenantCtx = defines.AttachAccount(ctx, tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 	}
 
 	// 2.grant database privilege
@@ -9517,7 +9311,7 @@ func doGrantPrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.State
 	return err
 }
 
-func doRevokePrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Statement) error {
+func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
 	var sql string
 	tenantInfo := ses.GetTenantInfo()
@@ -9534,9 +9328,9 @@ func doRevokePrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Stat
 	tenantInfo = ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+		tenantCtx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 	} else {
-		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
+		tenantCtx = defines.AttachAccount(ctx, tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 	}
 
 	// 2.grant database privilege

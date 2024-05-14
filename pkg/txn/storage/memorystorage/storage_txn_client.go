@@ -17,7 +17,10 @@ package memorystorage
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -326,6 +329,10 @@ func (s *StorageTxnOperator) RemoveWaitLock(key uint64) {
 	panic("should not call")
 }
 
+func (s *StorageTxnOperator) LockTableCount() int32 {
+	panic("should not call")
+}
+
 func (s *StorageTxnOperator) GetOverview() client.TxnOverview {
 	panic("should not call")
 }
@@ -340,4 +347,8 @@ func (s *StorageTxnOperator) TxnOptions() txn.TxnOptions {
 
 func (s *StorageTxnOperator) NextSequence() uint64 {
 	panic("should not call")
+}
+
+func (s *StorageTxnOperator) GetWaitActiveCost() time.Duration {
+	return time.Duration(0)
 }

@@ -15,6 +15,8 @@
 package frontend
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -127,7 +129,7 @@ If it is Case4, Then
 
 	Create/Drop database commits current txn. a new txn for the next statement if needed.
 */
-func statementCanBeExecutedInUncommittedTransaction(ses FeSession, stmt tree.Statement) (bool, error) {
+func statementCanBeExecutedInUncommittedTransaction(ctx context.Context, ses FeSession, stmt tree.Statement) (bool, error) {
 	switch st := stmt.(type) {
 	//ddl statement
 	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
@@ -181,27 +183,27 @@ func statementCanBeExecutedInUncommittedTransaction(ses FeSession, stmt tree.Sta
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
 		return true, nil
 	case *tree.PrepareStmt:
-		return statementCanBeExecutedInUncommittedTransaction(ses, st.Stmt)
+		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, st.Stmt)
 	case *tree.PrepareString:
-		v, err := ses.GetGlobalVar("lower_case_table_names")
+		v, err := ses.GetGlobalVar(ctx, "lower_case_table_names")
 		if err != nil {
 			return false, err
 		}
-		preStmt, err := mysql.ParseOne(ses.GetRequestContext(), st.Sql, v.(int64), 0)
+		preStmt, err := mysql.ParseOne(ctx, st.Sql, v.(int64), 0)
 		defer func() {
 			preStmt.Free()
 		}()
 		if err != nil {
 			return false, err
 		}
-		return statementCanBeExecutedInUncommittedTransaction(ses, preStmt)
+		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt)
 	case *tree.Execute:
 		preName := string(st.Name)
-		preStmt, err := ses.GetPrepareStmt(preName)
+		preStmt, err := ses.GetPrepareStmt(ctx, preName)
 		if err != nil {
 			return false, err
 		}
-		return statementCanBeExecutedInUncommittedTransaction(ses, preStmt.PrepareStmt)
+		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt.PrepareStmt)
 	case *tree.Deallocate, *tree.Reset:
 		return true, nil
 	case *tree.Use:
