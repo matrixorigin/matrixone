@@ -23,6 +23,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -33,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/tidwall/btree"
 )
 
 type PartitionState struct {
@@ -87,7 +88,7 @@ type ObjTombstoneRowEntry struct {
 	ShortObjName objectio.ObjectNameShort
 
 	//tombstones belong to this object.
-	Tombstones atomic.Pointer[btree.BTreeG[TombstoneRowEntry]]
+	Tombstones *atomic.Pointer[btree.BTreeG[TombstoneRowEntry]]
 }
 
 func (o ObjTombstoneRowEntry) Less(than ObjTombstoneRowEntry) bool {
@@ -97,7 +98,7 @@ func (o ObjTombstoneRowEntry) Less(than ObjTombstoneRowEntry) bool {
 type ObjDataRowEntry struct {
 	ShortObjName objectio.ObjectNameShort
 
-	DataRows atomic.Pointer[btree.BTreeG[DataRowEntry]]
+	DataRows *atomic.Pointer[btree.BTreeG[DataRowEntry]]
 }
 
 func (o ObjDataRowEntry) Less(than ObjDataRowEntry) bool {
