@@ -85,8 +85,7 @@ func (t *GCTable) addTombstone(name, objectName string, commitTS types.TS) {
 			commitTS: commitTS,
 		}
 	}
-	t.tombstones[name] = tombstone
-	if tombstone.commitTS.Less(&commitTS) {
+	if t.tombstones[name].commitTS.Less(&commitTS) {
 		t.tombstones[name].commitTS = commitTS
 	}
 	if _, ok := t.tombstones[name].objects[objectName]; !ok {
