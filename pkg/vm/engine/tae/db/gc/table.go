@@ -102,7 +102,7 @@ func (t *GCTable) deleteObject(name string) {
 func (t *GCTable) deleteTombstone(name string) {
 	t.Lock()
 	defer t.Unlock()
-	logutil.Infof("delete tombstone %s, tombstone %d, object %d", len(t.tombstones), len(t.tombstones[name].objects))
+	logutil.Infof("delete tombstone %s, tombstone %d, object %d", name, len(t.tombstones), len(t.tombstones[name].objects))
 	for obj := range t.tombstones[name].objects {
 		delete(t.tombstones[name].objects, obj)
 	}
