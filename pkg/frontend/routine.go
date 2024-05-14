@@ -266,7 +266,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	ses.UpdateDebugString()
 
 	if rt.needPrintSessionInfo() {
-		logInfof(ses.GetDebugString(), "mo received first request")
+		ses.Info(routineCtx, "mo received first request")
 	}
 
 	tenant := ses.GetTenantInfo()
@@ -283,7 +283,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	execCtx.reqCtx = tenantCtx
 	if resp, err = ExecRequest(ses, &execCtx, req); err != nil {
 		if !skipClientQuit(err.Error()) {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(tenantCtx,
 				"Failed to execute request",
 				zap.Error(err))
 		}
@@ -291,14 +291,14 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 	if resp != nil {
 		if err = rt.getProtocol().SendResponse(tenantCtx, resp); err != nil {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(tenantCtx,
 				"Failed to send response",
 				zap.String("response", fmt.Sprintf("%v", resp)),
 				zap.Error(err))
 		}
 	}
 
-	logDebugf(ses.GetDebugString(), "the time of handling the request %s", time.Since(reqBegin).String())
+	ses.Debugf(tenantCtx, "the time of handling the request %s", time.Since(reqBegin).String())
 
 	cancelRequestFunc()
 
@@ -317,14 +317,14 @@ func (rt *Routine) handleRequest(req *Request) error {
 		})
 
 		//ensure cleaning the transaction
-		logError(ses, ses.GetDebugString(), "rollback the txn.")
+		ses.Error(tenantCtx, "rollback the txn.")
 		tempExecCtx := ExecCtx{
 			ses:    ses,
 			txnOpt: FeTxnOption{byRollback: true},
 		}
 		err = ses.GetTxnHandler().Rollback(&tempExecCtx)
 		if err != nil {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(tenantCtx,
 				"Failed to rollback txn",
 				zap.Error(err))
 		}
@@ -407,7 +407,7 @@ func (rt *Routine) cleanup() {
 			}
 			err := ses.GetTxnHandler().Rollback(&tempExecCtx)
 			if err != nil {
-				logError(ses, ses.GetDebugString(),
+				ses.Error(tempExecCtx.reqCtx,
 					"Failed to rollback txn",
 					zap.Error(err))
 			}
