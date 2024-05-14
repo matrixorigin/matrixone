@@ -50,7 +50,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -1041,18 +1040,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Params: t.Params,
 			Name:   t.FuncName,
 		}
-	case *hashbuild.Argument:
-		in.HashBuild = &pipeline.HashBuild{
-			NeedExpr:         t.NeedExpr,
-			NeedHash:         t.NeedHashMap,
-			Ibucket:          t.Ibucket,
-			Nbucket:          t.Nbucket,
-			Types:            convertToPlanTypes(t.Typs),
-			Conds:            t.Conditions,
-			HashOnPk:         t.HashOnPK,
-			NeedMergedBatch:  t.NeedMergedBatch,
-			NeedAllocateSels: t.NeedAllocateSels,
-		}
+
 	case *external.Argument:
 		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
 		i := 0
@@ -1462,19 +1450,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Args = opr.TableFunction.Args
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
-		v.Arg = arg
-	case vm.HashBuild:
-		t := opr.GetHashBuild()
-		arg := hashbuild.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
-		arg.NeedHashMap = t.NeedHash
-		arg.NeedExpr = t.NeedExpr
-		arg.Typs = convertToTypes(t.Types)
-		arg.Conditions = t.Conds
-		arg.HashOnPK = t.HashOnPk
-		arg.NeedMergedBatch = t.NeedMergedBatch
-		arg.NeedAllocateSels = t.NeedAllocateSels
 		v.Arg = arg
 	case vm.External:
 		t := opr.GetExternalScan()
