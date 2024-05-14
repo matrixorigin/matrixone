@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"os"
@@ -523,9 +524,9 @@ func appendSessionField(fields []zap.Field, ses FeSession) []zap.Field {
 		fields = append(fields, logutil.SessionIdField(uuid.UUID(ses.GetUUID()).String()))
 		if ses.GetStmtInfo() != nil {
 			fields = append(fields, logutil.StatementIdField(uuid.UUID(ses.GetStmtInfo().StatementID).String()))
-			txnInfo := ses.GetTxnInfo()
-			if txnInfo != "" {
-				fields = append(fields, logutil.TxnIdField(txnInfo))
+			// discard ses.GetTxnInfo(), it need ses.Lock(). may cause deadlock: locked by itself.
+			if !ses.GetStmtInfo().IsZeroTxnID() {
+				fields = append(fields, logutil.TxnIdField(hex.EncodeToString(ses.GetStmtInfo().TransactionID[:])))
 			}
 		}
 	}
