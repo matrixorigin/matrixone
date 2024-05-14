@@ -102,8 +102,6 @@ func (t *GCTable) deleteObject(name string) {
 func (t *GCTable) deleteTombstone(name string) {
 	t.Lock()
 	defer t.Unlock()
-	// TODO: remove log
-	logutil.Infof("delete tombstone %s, tombstone %d, object %d", name, len(t.tombstones), len(t.tombstones[name].objects))
 	for obj := range t.tombstones[name].objects {
 		delete(t.tombstones[name].objects, obj)
 	}
@@ -164,7 +162,7 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]co
 		ok := true
 		sameName := false
 		// TODO: remove log
-		logutil.Infof("soft GC tombstone: %v, object: %d", name, len(tombstone.objects))
+		logutil.Infof("soft GC tombstone: %v, tombstone: %d, object: %d", name, len(t.tombstones), len(tombstone.objects))
 		for obj := range tombstone.objects {
 			if obj == name {
 				// tombstone for aObject is same as aObject, skip it
