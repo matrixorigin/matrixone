@@ -16,10 +16,10 @@ package logutil
 
 import (
 	"context"
-	"github.com/lni/goutils/leaktest"
 	"regexp"
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -78,7 +78,7 @@ func TestLogConfig_getter(t *testing.T) {
 
 				DisableStore: true,
 			}
-			require.Equal(t, tt.wantLevel, cfg.getLevel())
+			require.Equal(t, tt.wantLevel, cfg.GetLevel())
 			require.Equal(t, len(tt.wantOpts), len(cfg.getOptions()))
 			require.Equal(t, tt.wantSyncer, cfg.getSyncer())
 			wantMsg, _ := tt.wantEncoder.EncodeEntry(tt.fields.Entry, nil)
