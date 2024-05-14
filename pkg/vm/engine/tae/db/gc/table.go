@@ -271,11 +271,11 @@ func (t *GCTable) collectData(files []string) []*containers.Batch {
 	}
 	bats[Versions].GetVectorByName(GCAttrVersion).Append(CurrentVersion, false)
 	for name, entry := range t.objects {
-		bats[CreateBlock].GetVectorByName(GCAttrObjectName).Append([]byte(name), false)
-		bats[CreateBlock].GetVectorByName(GCCreateTS).Append(entry.createTS, false)
-		bats[CreateBlock].GetVectorByName(GCDeleteTS).Append(entry.dropTS, false)
-		bats[CreateBlock].GetVectorByName(GCAttrCommitTS).Append(entry.commitTS, false)
-		bats[CreateBlock].GetVectorByName(GCAttrTableId).Append(entry.table, false)
+		bats[ObjectList].GetVectorByName(GCAttrObjectName).Append([]byte(name), false)
+		bats[ObjectList].GetVectorByName(GCCreateTS).Append(entry.createTS, false)
+		bats[ObjectList].GetVectorByName(GCDeleteTS).Append(entry.dropTS, false)
+		bats[ObjectList].GetVectorByName(GCAttrCommitTS).Append(entry.commitTS, false)
+		bats[ObjectList].GetVectorByName(GCAttrTableId).Append(entry.table, false)
 	}
 
 	for name, entry := range t.tombstones {
@@ -328,7 +328,7 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 }
 
 func (t *GCTable) rebuildTableV3(bats []*containers.Batch) {
-	t.rebuildTableV2(bats)
+	t.rebuildTableV2(bats, ObjectList)
 	for i := 0; i < bats[TombstoneList].Length(); i++ {
 		name := string(bats[TombstoneList].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
 		tombstone := string(bats[TombstoneList].GetVectorByName(GCAttrTombstone).Get(i).([]byte))
@@ -344,13 +344,13 @@ func (t *GCTable) rebuildTableV3(bats []*containers.Batch) {
 	}
 }
 
-func (t *GCTable) rebuildTableV2(bats []*containers.Batch) {
-	for i := 0; i < bats[CreateBlock].Length(); i++ {
-		name := string(bats[CreateBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
-		creatTS := bats[CreateBlock].GetVectorByName(GCCreateTS).Get(i).(types.TS)
-		deleteTS := bats[CreateBlock].GetVectorByName(GCDeleteTS).Get(i).(types.TS)
-		commitTS := bats[CreateBlock].GetVectorByName(GCAttrCommitTS).Get(i).(types.TS)
-		tid := bats[CreateBlock].GetVectorByName(GCAttrTableId).Get(i).(uint64)
+func (t *GCTable) rebuildTableV2(bats []*containers.Batch, idx BatchType) {
+	for i := 0; i < bats[idx].Length(); i++ {
+		name := string(bats[idx].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
+		creatTS := bats[idx].GetVectorByName(GCCreateTS).Get(i).(types.TS)
+		deleteTS := bats[idx].GetVectorByName(GCDeleteTS).Get(i).(types.TS)
+		commitTS := bats[idx].GetVectorByName(GCAttrCommitTS).Get(i).(types.TS)
+		tid := bats[idx].GetVectorByName(GCAttrTableId).Get(i).(uint64)
 		if t.objects[name] != nil {
 			continue
 		}
@@ -468,7 +468,7 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 		if err != nil {
 			return err
 		}
-		t.rebuildTableV2(bats)
+		t.rebuildTableV2(bats, CreateBlock)
 		return nil
 	}
 	bats := t.makeBatchWithGCTableV1()
