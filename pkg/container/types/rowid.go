@@ -179,7 +179,7 @@ func (b *Blockid) String() string {
 }
 
 func (b *Blockid) ObjectNameString() string {
-	return fmt.Sprintf("%v-%05d", b.Segment().ToString(), b.Sequence())
+	return fmt.Sprintf("%v_%05d", b.Segment().ToString(), b.Sequence())
 }
 
 func (b *Blockid) ShortString() string {
