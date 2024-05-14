@@ -157,6 +157,7 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]co
 		}
 	}
 
+	objects = t.getObjects()
 	tombstones := t.getTombstones()
 	for name, tombstone := range tombstones {
 		ok := true
@@ -170,7 +171,7 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]co
 				logutil.Infof("soft GC same name: %v", obj)
 				sameName = true
 			}
-			objectEntry := table.objects[obj]
+			objectEntry := objects[obj]
 			if objectEntry != nil {
 				logutil.Infof("soft GC object: %v,  %v", obj, objectEntry != nil)
 				ok = false
