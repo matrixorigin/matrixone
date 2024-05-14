@@ -150,7 +150,7 @@ func TestConcurrentlyInsertInt16(t *testing.T) {
 	total := 1000
 	goroutines := 200
 
-	rowsPerGoroutine := int(math.Floor(float64(total / goroutines)))
+	rowsPerGoroutine := total / goroutines
 
 	inputs := make([]*vector.Vector, 0, goroutines)
 	for i := 0; i < goroutines; i++ {
@@ -196,7 +196,7 @@ func TestConcurrentlyInsertInt32(t *testing.T) {
 	total := 1000
 	goroutines := 200
 
-	rowsPerGoroutine := int(math.Floor(float64(total / goroutines)))
+	rowsPerGoroutine := total / goroutines
 
 	inputs := make([]*vector.Vector, 0, goroutines)
 	for i := 0; i < goroutines; i++ {
@@ -242,7 +242,7 @@ func TestConcurrentlyInsertInt64(t *testing.T) {
 	total := 10000
 	goroutines := 2000
 
-	rowsPerGoroutine := int(math.Floor(float64(total / goroutines)))
+	rowsPerGoroutine := total / goroutines
 
 	inputs := make([]*vector.Vector, 0, goroutines)
 	for i := 0; i < goroutines; i++ {
@@ -315,7 +315,7 @@ func TestConcurrentlyInsertUInt16(t *testing.T) {
 	total := 1000
 	goroutines := 200
 
-	rowsPerGoroutine := int(math.Floor(float64(total / goroutines)))
+	rowsPerGoroutine := total / goroutines
 
 	inputs := make([]*vector.Vector, 0, goroutines)
 	for i := 0; i < goroutines; i++ {
@@ -361,7 +361,7 @@ func TestConcurrentlyInsertUInt32(t *testing.T) {
 	total := 1000
 	goroutines := 200
 
-	rowsPerGoroutine := int(math.Floor(float64(total / goroutines)))
+	rowsPerGoroutine := total / goroutines
 
 	inputs := make([]*vector.Vector, 0, goroutines)
 	for i := 0; i < goroutines; i++ {
@@ -407,7 +407,7 @@ func TestConcurrentlyInsertUInt64(t *testing.T) {
 	total := 10000
 	goroutines := 2000
 
-	rowsPerGoroutine := int(math.Floor(float64(total / goroutines)))
+	rowsPerGoroutine := total / goroutines
 
 	inputs := make([]*vector.Vector, 0, goroutines)
 	for i := 0; i < goroutines; i++ {

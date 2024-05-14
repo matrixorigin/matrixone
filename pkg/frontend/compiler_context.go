@@ -216,6 +216,19 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot plan2.Snaps
 	return databaseId, nil
 }
 
+func (tcc *TxnCompilerContext) GetDbLevelConfig(dbName string, varName string) (string, error) {
+	switch varName {
+	case "unique_check_on_autoincr":
+		// check if the database is a system database
+		if _, ok := sysDatabases[dbName]; !ok {
+			return GetUniqueCheckOnAutoIncr(tcc.GetContext(), tcc.GetSession(), dbName)
+		}
+		return "None", nil
+	default:
+		return "", moerr.NewInternalError(tcc.GetContext(), "The variable '%s' is not a valid database level variable", varName)
+	}
+}
+
 // getRelation returns the context (maybe updated) and the relation
 func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub *plan.SubscriptionMeta, snapshot plan2.Snapshot) (context.Context, engine.Relation, error) {
 	dbName, _, err := tcc.ensureDatabaseIsNotEmpty(dbName, false, snapshot)

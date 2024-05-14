@@ -170,6 +170,10 @@ func (mr *MockCompilerContext2MockRecorder) GetDatabaseId(dbName, snapshot inter
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDatabaseId", reflect.TypeOf((*MockCompilerContext2)(nil).GetDatabaseId), dbName, snapshot)
 }
 
+func (m *MockCompilerContext2) GetDbLevelConfig(dbName string, varName string) (string, error) {
+	return "", nil
+}
+
 // GetPrimaryKeyDef mocks base method.
 func (m *MockCompilerContext2) GetPrimaryKeyDef(dbName, tableName string, snapshot Snapshot) []*ColDef {
 	m.ctrl.T.Helper()

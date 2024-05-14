@@ -376,7 +376,16 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	info.tblInfo.oldColPosMap = append(info.tblInfo.oldColPosMap, oldColPosMap)
 	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
 
-	ifExistAutoPkCol := false
+	dbName := string(stmt.Table.(*tree.TableName).SchemaName)
+	if dbName == "" {
+		dbName = builder.compCtx.DefaultDatabase()
+	}
+	uniqueCheckOnAutoIncr, err := builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
+	if err != nil {
+		return false, nil, err
+	}
+	existAutoPkCol := false
+
 	insertWithoutUniqueKeyMap := make(map[string]bool)
 
 	if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), stmt, tableDef); err != nil {
@@ -520,17 +529,50 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	for _, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
 			projectList = append(projectList, oldExpr)
+
+			if col.Typ.AutoIncr && uniqueCheckOnAutoIncr == "Error" {
+				if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+					for _, name := range tableDef.Pkey.Names {
+						if col.Name == name {
+							return false, nil, moerr.NewInvalidInput(builder.GetContext(), "When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.")
+						}
+					}
+				} else {
+					if col.Name == tableDef.Pkey.PkeyColName {
+						return false, nil, moerr.NewInvalidInput(builder.GetContext(), "When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.")
+					}
+				}
+			}
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
 				return false, nil, err
 			}
 
-			if col.Typ.AutoIncr && col.Name == tableDef.Pkey.PkeyColName {
-				ifExistAutoPkCol = true
+			if col.Typ.AutoIncr {
+				if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+					for _, name := range tableDef.Pkey.Names {
+						if col.Name == name {
+							existAutoPkCol = true
+							break
+						}
+					}
+				} else {
+					if col.Name == tableDef.Pkey.PkeyColName {
+						existAutoPkCol = true
+					}
+				}
 			}
-
 			projectList = append(projectList, defExpr)
+		}
+	}
+
+	if existAutoPkCol {
+		switch uniqueCheckOnAutoIncr {
+		case "None":
+			// do nothing
+		case "Check":
+			existAutoPkCol = false
 		}
 	}
 
@@ -727,7 +769,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		}
 	}
 
-	return ifExistAutoPkCol, insertWithoutUniqueKeyMap, nil
+	return existAutoPkCol, insertWithoutUniqueKeyMap, nil
 }
 
 func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, error) {

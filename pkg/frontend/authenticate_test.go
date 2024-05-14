@@ -9641,6 +9641,53 @@ func TestGetVersionCompatibility(t *testing.T) {
 	})
 }
 
+func TestGetUniqueCheckOnAutoIncr(t *testing.T) {
+	convey.Convey("getUniqueCheckOnAutoIncr success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+		rm, _ := NewRoutineManager(ctx)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForGetSystemVariableValueWithDatabase("db1", "unique_check_on_autoincr")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		_, err := GetVersionCompatibility(ctx, ses, "db1")
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
 func TestCheckStageExistOrNot(t *testing.T) {
 	convey.Convey("checkStageExistOrNot success", t, func() {
 		ctrl := gomock.NewController(t)
