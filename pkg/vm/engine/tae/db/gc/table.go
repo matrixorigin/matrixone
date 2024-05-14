@@ -80,7 +80,6 @@ func (t *GCTable) addTombstone(name, objectName string, commitTS types.TS) {
 	defer t.Unlock()
 	tombstone := t.tombstones[name]
 	if tombstone == nil {
-		logutil.Infof("add tombstone %s", name)
 		t.tombstones[name] = &TombstoneEntry{
 			objects:  make(map[string]struct{}),
 			commitTS: commitTS,
@@ -92,7 +91,6 @@ func (t *GCTable) addTombstone(name, objectName string, commitTS types.TS) {
 	if _, ok := t.tombstones[name].objects[objectName]; !ok {
 		t.tombstones[name].objects[objectName] = struct{}{}
 	}
-	logutil.Infof("tombstone %d, object %d", len(t.tombstones), len(t.tombstones[name].objects))
 }
 
 func (t *GCTable) deleteObject(name string) {
@@ -115,6 +113,12 @@ func (t *GCTable) deleteTombstone(name string) {
 func (t *GCTable) Merge(GCTable *GCTable) {
 	for name, entry := range GCTable.objects {
 		t.addObject(name, entry, entry.commitTS)
+	}
+
+	for name, entry := range GCTable.tombstones {
+		for obj := range entry.objects {
+			t.addTombstone(name, obj, entry.commitTS)
+		}
 	}
 }
 
