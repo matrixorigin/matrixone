@@ -170,19 +170,44 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			accountId != catalog.System_Account {
 			continue
 		}
-		nullOrNot := "NOT NULL"
-		// col.Default must be not nil
-		if len(col.Default.OriginString) > 0 {
-			if !col.Primary {
-				nullOrNot = "DEFAULT " + formatStr(col.Default.OriginString)
-			}
-		} else if col.Default.NullAbility {
-			nullOrNot = "DEFAULT NULL"
-		}
+		//nullOrNot := "NOT NULL"
+		//// col.Default must be not nil
+		//if len(col.Default.OriginString) > 0 {
+		//	if !col.Primary {
+		//		nullOrNot = "DEFAULT " + formatStr(col.Default.OriginString)
+		//	}
+		//} else if col.Default.NullAbility {
+		//	nullOrNot = "DEFAULT NULL"
+		//}
+		//
+		//if col.Typ.AutoIncr {
+		//	nullOrNot = "NOT NULL AUTO_INCREMENT"
+		//}
 
+		//-------------------------------------------------------------------------------------------------------------
+		buf := bytes.NewBuffer(make([]byte, 0))
 		if col.Typ.AutoIncr {
-			nullOrNot = "NOT NULL AUTO_INCREMENT"
+			buf.WriteString("NOT NULL AUTO_INCREMENT")
+		} else {
+			if !col.Default.NullAbility {
+				buf.WriteString("NOT NULL")
+			}
+
+			if strings.EqualFold(col.Default.OriginString, "null") {
+				if col.Default.NullAbility {
+					if col.Typ.Id == int32(types.T_timestamp) {
+						buf.WriteString(" NULL")
+					}
+					buf.WriteString(" DEFAULT NULL")
+				}
+			} else if len(col.Default.OriginString) > 0 {
+				if !col.Primary {
+					buf.WriteString(" DEFAULT " + formatStr(col.Default.OriginString))
+				}
+			}
 		}
+		nullOrNot := buf.String()
+		//-------------------------------------------------------------------------------------------------------------
 
 		var hasAttrComment string
 		if col.Comment != "" {

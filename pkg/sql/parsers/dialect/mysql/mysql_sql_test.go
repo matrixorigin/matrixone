@@ -35,8 +35,10 @@ var (
 		//output: "upgrade account acc1 with retry 5",
 		//input:  "upgrade account 'acc1'",
 		//output: "upgrade account acc1",
-		input:  "show upgrade",
-		output: "show upgrade",
+		//input:  "show upgrade",
+		//output: "show upgrade",
+		input:  "alter table t1 add column yy varchar(20) not null default 'foo'",
+		output: "alter table t1 add column yy varchar(20) not null default 'foo'",
 	}
 )
 
