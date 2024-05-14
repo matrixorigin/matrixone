@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -349,7 +348,6 @@ func (rt *Routine) killQuery(killMyself bool, statementId string) {
 		ses := rt.getSession()
 		if ses != nil {
 			ses.SetQueryInExecute(false)
-			logutil.Infof("set query status on the connection %d", rt.getConnectionID())
 		}
 	}
 }
