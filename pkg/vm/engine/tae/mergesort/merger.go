@@ -66,6 +66,7 @@ type merger[T any] struct {
 	totalRowCnt   uint32
 	totalSize     uint32
 	rowPerBlk     uint32
+	blkPerObj     uint16
 	rowSize       uint32
 	targetObjSize uint32
 }
@@ -86,6 +87,7 @@ func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, 
 		accObjBlkCnts:    host.GetAccBlkCnts(),
 		objBlkCnts:       host.GetBlkCnts(),
 		rowPerBlk:        host.GetBlockMaxRows(),
+		blkPerObj:        host.GetObjectMaxBlocks(),
 		targetObjSize:    host.GetTargetObjSize(),
 		totalSize:        host.GetTotalSize(),
 		totalRowCnt:      host.GetTotalRowCnt(),
@@ -215,7 +217,10 @@ func (m *merger[T]) merge(ctx context.Context) error {
 
 func (m *merger[T]) needNewObject(objBlkCnt int, objRowCnt, mergedRowCnt uint32) bool {
 	if m.targetObjSize == 0 {
-		return objBlkCnt == int(options.DefaultBlocksPerObject)
+		if m.blkPerObj == 0 {
+			return objBlkCnt == int(options.DefaultBlocksPerObject)
+		}
+		return objBlkCnt == int(m.blkPerObj)
 	}
 
 	if objRowCnt*m.rowSize > m.targetObjSize {
