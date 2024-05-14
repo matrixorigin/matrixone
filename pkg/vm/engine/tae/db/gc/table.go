@@ -162,6 +162,9 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]co
 	for name, tombstone := range tombstones {
 		ok := true
 		sameName := false
+		if tombstone.commitTS.GreaterEq(&ts) {
+			continue
+		}
 		for obj := range tombstone.objects {
 			if obj == name {
 				// tombstone for aObject is same as aObject, skip it
@@ -348,14 +351,7 @@ func (t *GCTable) rebuildTableV3(bats []*containers.Batch) {
 		name := string(bats[TombstoneList].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
 		tombstone := string(bats[TombstoneList].GetVectorByName(GCAttrTombstone).Get(i).([]byte))
 		commitTS := bats[TombstoneList].GetVectorByName(GCAttrCommitTS).Get(i).(types.TS)
-		if t.tombstones[tombstone] == nil {
-			t.tombstones[tombstone] = &TombstoneEntry{
-				commitTS: commitTS,
-				objects:  make(map[string]struct{}),
-			}
-		}
-		t.tombstones[tombstone].objects[name] = struct{}{}
-		t.addTombstone(name, tombstone, commitTS)
+		t.addTombstone(tombstone, name, commitTS)
 	}
 }
 
