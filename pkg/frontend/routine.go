@@ -348,8 +348,6 @@ func (rt *Routine) killQuery(killMyself bool, statementId string) {
 		ses := rt.getSession()
 		if ses != nil {
 			ses.SetQueryInExecute(false)
-			rt.getCancelRoutineCtx()
-			ses.Infof(rt.getCancelRoutineCtx(), "set query status on the connection %d", rt.getConnectionID())
 		}
 	}
 }

@@ -214,6 +214,7 @@ func (th *TxnHandler) GetTxnCtx() context.Context {
 	return th.txnCtx
 }
 
+// invalidateTxnUnsafe releases the txnOp and clears the server status bit SERVER_STATUS_IN_TRANS
 func (th *TxnHandler) invalidateTxnUnsafe() {
 	th.txnOp = nil
 	resetBits(&th.serverStatus, defaultServerStatus)
@@ -232,14 +233,7 @@ func (th *TxnHandler) inActiveTxnUnsafe() bool {
 	if th.txnOp != nil && th.txnCtx == nil {
 		panic("txnOp != nil and txnCtx == nil")
 	}
-	ret := th.txnOp != nil && th.txnCtx != nil
-	if ret {
-		setBits(&th.serverStatus, uint32(SERVER_STATUS_IN_TRANS))
-	} else {
-		resetBits(&th.serverStatus, defaultServerStatus)
-		resetBits(&th.optionBits, defaultOptionBits)
-	}
-	return ret
+	return th.txnOp != nil && th.txnCtx != nil
 }
 
 // Create starts a new txn.
@@ -663,18 +657,6 @@ func (th *TxnHandler) GetServerStatus() uint16 {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	return uint16(th.serverStatus)
-}
-
-func (th *TxnHandler) unsetTxnStatus(autocommit bool) {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-	if bitsIsSet(th.serverStatus, uint32(SERVER_STATUS_AUTOCOMMIT)) {
-		clearBits(&th.serverStatus, uint32(SERVER_STATUS_IN_TRANS))
-	} else {
-		if autocommit {
-			clearBits(&th.serverStatus, uint32(SERVER_STATUS_IN_TRANS))
-		}
-	}
 }
 
 func (th *TxnHandler) InMultiStmtTransactionMode() bool {

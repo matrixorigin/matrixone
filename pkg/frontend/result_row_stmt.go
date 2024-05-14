@@ -261,6 +261,8 @@ func respMixedResultRow(ses *Session,
 	if execCtx.skipRespClient {
 		return nil
 	}
+	//!!!the columnDef has been sent after the compiling ends. It should not be sent here again.
+	//only the result rows need to be sent.
 	mrs := ses.GetMysqlResultSet()
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
 		ses.Error(execCtx.reqCtx,
