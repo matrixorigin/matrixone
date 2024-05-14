@@ -46,10 +46,9 @@ func (m MsgType) MessageName() string {
 func NewMessageBoard() *MessageBoard {
 	m := &MessageBoard{
 		Messages: make([]*Message, 0, 1024),
+		Waiters:  make([]chan bool, 0, 16),
 		RwMutex:  &sync.RWMutex{},
 	}
-	m.Cond = make(chan chan bool, 1)
-	m.Cond <- nil
 	return m
 }
 
@@ -69,14 +68,15 @@ type Message interface {
 
 type MessageBoard struct {
 	Messages []*Message
+	Waiters  []chan bool
 	RwMutex  *sync.RWMutex // for nonblock message
-	Cond     chan chan bool
 }
 
 func (m *MessageBoard) Reset() {
 	m.RwMutex.Lock()
 	defer m.RwMutex.Unlock()
 	m.Messages = m.Messages[:0]
+	m.Waiters = m.Waiters[:0]
 }
 
 type MessageReceiver struct {
@@ -85,6 +85,7 @@ type MessageReceiver struct {
 	received []int32
 	addr     *MessageAddress
 	mb       *MessageBoard
+	waiter   chan bool
 }
 
 func (proc *Process) SendMessage(m Message) {
@@ -94,10 +95,10 @@ func (proc *Process) SendMessage(m Message) {
 		mb.Messages = append(mb.Messages, &m)
 		if m.NeedBlock() {
 			// broadcast for block message
-			ch := <-mb.Cond
-			mb.Cond <- nil
-			if ch != nil {
-				close(ch)
+			for _, ch := range mb.Waiters {
+				if ch != nil && len(ch) == 0 {
+					ch <- true
+				}
 			}
 		}
 		mb.RwMutex.Unlock()
@@ -149,6 +150,7 @@ func (mr *MessageReceiver) Free() {
 		mr.mb.Messages[mr.received[i]] = nil
 	}
 	mr.received = nil
+	mr.waiter = nil
 }
 
 func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) ([]Message, bool) {
@@ -156,25 +158,19 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 	if !needBlock || len(result) > 0 {
 		return result, false
 	}
-	for len(result) == 0 {
-		mr.mb.RwMutex.RLock()
-		defer mr.mb.RwMutex.RUnlock()
+	if mr.waiter == nil {
+		mr.waiter = make(chan bool, 1)
+		mr.mb.RwMutex.Lock()
+		mr.mb.Waiters = append(mr.mb.Waiters, mr.waiter)
+		mr.mb.RwMutex.Unlock()
+	}
+	for {
 		result = mr.receiveMessageNonBlock()
 		if len(result) > 0 {
-			return result, false
-		}
-
-		wait := func() chan bool {
-			ch := <-mr.mb.Cond
-			if ch == nil {
-				ch = make(chan bool)
-			}
-			mr.mb.Cond <- ch
-			return ch
+			break
 		}
 		select {
-		case <-wait():
-			result = mr.receiveMessageNonBlock()
+		case <-mr.waiter:
 		case <-ctx.Done():
 			return result, true
 		}
