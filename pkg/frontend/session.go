@@ -1076,30 +1076,6 @@ func (ses *Session) GetSessionVar(ctx context.Context, name string) (interface{}
 	}
 }
 
-func (ses *Session) maybeUnsetTxnStatus(ctx context.Context) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	autocommit := false
-	if v, err := ses.getSessionVarUnsafe(ctx, "autocommit"); err == nil {
-		if ac, vErr := valueIsBoolTrue(v); vErr == nil && ac {
-			autocommit = ac
-		}
-	}
-	ses.txnHandler.unsetTxnStatus(autocommit)
-}
-
-func (ses *Session) getSessionVarUnsafe(ctx context.Context, name string) (interface{}, error) {
-	if def, gVal, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
-		ciname := strings.ToLower(name)
-		if def.GetScope() == ScopeGlobal {
-			return gVal, nil
-		}
-		return ses.sysVars[ciname], nil
-	} else {
-		return nil, moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
-	}
-}
-
 func (ses *Session) CopyAllSessionVars() map[string]interface{} {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1701,8 +1677,8 @@ func (ses *Session) StatusSession() *status.Session {
 
 // getStatusAfterTxnIsEnded
 // !!! only used after the txn is ended.
+// it may be called in the active txn. so, we
 func (ses *Session) getStatusAfterTxnIsEnded(ctx context.Context) uint16 {
-	ses.maybeUnsetTxnStatus(ctx)
 	return extendStatus(ses.GetTxnHandler().GetServerStatus())
 }
 
