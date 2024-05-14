@@ -101,16 +101,14 @@ message Aggregate {
 
 message Group {
   bool need_eval = 1;
-  uint64 ibucket = 2;
-  uint64 nbucket = 3;
-  repeated plan.Expr  exprs = 4;
-  repeated plan.Type  types = 5 [(gogoproto.nullable) = false];
-  repeated Aggregate  aggs = 6;
-  repeated MultiArguemnt MultiAggs = 7;
-  bool isShuffle = 8;
-  uint64 preAllocSize = 9;
-  bytes PartialResults = 11;
-  repeated uint32 PartialResultTypes = 10;
+  repeated plan.Expr  exprs = 2;
+  repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
+  repeated Aggregate  aggs = 4;
+  repeated MultiArguemnt MultiAggs = 5;
+  bool isShuffle = 6;
+  uint64 preAllocSize = 7;
+  bytes PartialResults = 8;
+  repeated uint32 PartialResultTypes = 9;
 }
 
 message Insert{
@@ -138,20 +136,18 @@ message Map{
 message Deletion{
   uint64 AffectedRows = 1;
   bool RemoteDelete = 2;
-  uint32 IBucket = 3;
-  uint32 NBucket = 4;
   // DeleteCtx
 
-  int32 row_id_idx                      = 5;
-  repeated uint64 partition_table_ids   = 6;
-  repeated string partition_table_names = 7;
-  int32 partition_index_in_batch        = 8;
-  plan.ObjectRef ref                    = 9;
-  bool add_affected_rows                = 10;
-  map<string,int32> SegmentMap          = 11;
-  bool can_truncate                     = 12;
-  bool is_end                           = 13;
-  int32 primary_key_idx                 = 14;
+  int32 row_id_idx                      = 3;
+  repeated uint64 partition_table_ids   = 4;
+  repeated string partition_table_names = 5;
+  int32 partition_index_in_batch        = 6;
+  plan.ObjectRef ref                    = 7;
+  bool add_affected_rows                = 8;
+  map<string,int32> SegmentMap          = 9;
+  bool can_truncate                     = 10;
+  bool is_end                           = 11;
+  int32 primary_key_idx                 = 12;
 }
 
 message PreInsert {
@@ -328,18 +324,6 @@ message TableFunction {
   string name = 5;
 }
 
-message HashBuild {
-  bool need_expr = 1;
-  bool need_hash = 2;
-  uint64 ibucket = 3;
-  uint64 nbucket = 4;
-  repeated plan.Type types = 5 [(gogoproto.nullable) = false];
-  repeated plan.Expr conds = 6;
-  bool hash_on_pk = 7;
-  bool need_merged_batch = 8;
-  bool need_allocate_sels = 9;
-}
-
 message ExternalName2ColIndex {
   string name = 1;
   int32 index = 2;
@@ -395,7 +379,6 @@ message Instruction{
   Join    join = 12;
   Product    product = 13;
   TableFunction table_function = 14;
-  HashBuild hash_build = 15;
   ExternalScan external_scan = 16;
   Insert insert = 17;
   OnDuplicateKey on_duplicate_key = 18;
