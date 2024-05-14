@@ -154,7 +154,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.AvgReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "avg",
-					aggRegister: agg.RegisterAvg1,
+					aggRegister: agg.RegisterAvg2,
 				},
 			},
 		},
