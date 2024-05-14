@@ -1114,34 +1114,38 @@ func getPKFilterByExpr(
 	pkName string,
 	oid types.T,
 	proc *process.Process,
-) PKFilter {
+) (retFilter PKFilter) {
 	valExpr := getPkExpr(expr, pkName, proc)
 	if valExpr == nil {
-		return PKFilter{}
+		return
 	}
 	switch exprImpl := valExpr.Expr.(type) {
 	case *plan.Expr_Lit:
 		if exprImpl.Lit.Isnull {
-			return PKFilter{isNull: true}
+			retFilter.SetNull()
+			return
 		}
 
 		val, canEval := evalLiteralExpr2(exprImpl.Lit, oid)
 		if !canEval {
-			return PKFilter{}
+			return
 		}
-		return PKFilter{op: function.EQUAL, val: val, isValid: true}
+		retFilter.SetVal(function.EQUAL, val)
+		return
 	case *plan.Expr_Vec:
-		return PKFilter{isVec: true, val: exprImpl.Vec.Data, isValid: true}
+		retFilter.SetVec(function.IN, exprImpl.Vec.Data)
+		return
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "prefix_eq":
 			val := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
-			return PKFilter{op: function.PREFIX_EQ, val: val, isValid: true}
+			retFilter.SetVal(function.PREFIX_EQ, val)
+			return
 			// case "prefix_between":
 			// case "prefix_in":
 		}
 	}
-	return PKFilter{}
+	return
 }
 
 // return canEval, isNull, isVec, evaledVal
