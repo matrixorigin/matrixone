@@ -69,7 +69,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				if subFn.Func.ObjName == "=" {
 					newArgs, rewrite := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, subExpr)
 					if rewrite {
-						fn.Args[j] = newArgs[0]
+						orArgs[j] = newArgs[0]
 					}
 				} else if subFn.Func.ObjName == "and" {
 					var andArgs []*plan.Expr
