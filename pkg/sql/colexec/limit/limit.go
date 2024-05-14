@@ -55,9 +55,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	ap := arg
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	if ap.limit == 0 {
+	if arg.limit == 0 {
 		result := vm.NewCallResult()
 		result.Batch = nil
 		result.Status = vm.ExecStop
@@ -78,22 +77,22 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	bat := result.Batch
 	anal.Input(bat, arg.GetIsFirst())
 
-	if ap.Seen >= ap.limit {
+	if arg.Seen >= arg.limit {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 	length := bat.RowCount()
-	newSeen := ap.Seen + uint64(length)
-	if newSeen >= ap.limit { // limit - seen
-		batch.SetLength(bat, int(ap.limit-ap.Seen))
-		ap.Seen = newSeen
+	newSeen := arg.Seen + uint64(length)
+	if newSeen >= arg.limit { // limit - seen
+		batch.SetLength(bat, int(arg.limit-arg.Seen))
+		arg.Seen = newSeen
 		anal.Output(bat, arg.GetIsLast())
 
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 	anal.Output(bat, arg.GetIsLast())
-	ap.Seen = newSeen
+	arg.Seen = newSeen
 	return result, nil
 }

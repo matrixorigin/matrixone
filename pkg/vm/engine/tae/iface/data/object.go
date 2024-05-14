@@ -164,7 +164,7 @@ type Object interface {
 
 type Tombstone interface {
 	EstimateMemSizeLocked() (dsize int)
-	GetChangeIntentionCnt() uint32
+	GetChangeIntentionCntLocked() uint32
 	GetDeleteCnt() uint32
 	GetDeletesListener() func(uint64, types.TS) error
 	GetDeltaLocAndCommitTSByTxn(blkID uint16, txn txnif.TxnReader) (objectio.Location, types.TS)
