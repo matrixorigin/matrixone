@@ -271,7 +271,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.AnyValueReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "any_value",
-					aggRegister: agg.RegisterAnyValue1,
+					aggRegister: agg.RegisterAnyValue2,
 				},
 			},
 		},
