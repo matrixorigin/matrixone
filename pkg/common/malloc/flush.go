@@ -12,26 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package motrace
+package malloc
 
-import "context"
+import "time"
 
-type stmContextKeyType int
-
-const currentStmKey stmContextKeyType = iota
-
-func ContextWithStatement(parent context.Context, s *StatementInfo) context.Context {
-	return context.WithValue(parent, currentStmKey, s)
+func init() {
+	go func() {
+		lastNumAllocs := make([]int64, numShards)
+		for range time.NewTicker(time.Second * 37).C {
+			for i := 0; i < numShards; i++ {
+				numAllocs := shards[i].numAlloc.Load()
+				if numAllocs == lastNumAllocs[i] {
+					// not active, flush
+					shards[i].flush()
+				}
+				lastNumAllocs[i] = numAllocs
+			}
+		}
+	}()
 }
 
-func StatementFromContext(ctx context.Context) *StatementInfo {
-	if ctx == nil {
-		return nil
-	} else if val := ctx.Value(currentStmKey); val == nil {
-		return nil
-	} else if stm, ok := val.(*StatementInfo); !ok {
-		return nil
-	} else {
-		return stm
+func (s *Shard) flush() {
+	for _, ch := range s.pools {
+	loop:
+		for {
+			select {
+			case <-ch:
+			default:
+				break loop
+			}
+		}
 	}
 }

@@ -77,7 +77,7 @@ func (chain *DeleteChain) GetDeleteCnt() uint32 {
 }
 
 func (chain *DeleteChain) StringLocked() string {
-	msg := "DeleteChain:"
+	msg := fmt.Sprintf("DeleteChain:%v", chain.mvcc.persistedTS.ToString())
 	line := 1
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		msg = fmt.Sprintf("%s\n%d. %s", msg, line, n.StringLocked())

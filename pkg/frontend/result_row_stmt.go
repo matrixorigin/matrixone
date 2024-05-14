@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -36,7 +35,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 		if err != nil {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from computation handler",
 				zap.Error(err))
 			return
@@ -62,14 +61,14 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 	case *tree.ExplainAnalyze:
 		explainColName := "QUERY PLAN"
 		columns, err = GetExplainColumns(execCtx.reqCtx, explainColName)
 		if err != nil {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from ExplainColumns handler",
 				zap.Error(err))
 			return
@@ -90,13 +89,13 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 	default:
 		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 		if err != nil {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from computation handler",
 				zap.Error(err))
 			return
@@ -128,7 +127,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 	}
 	return
@@ -171,7 +170,7 @@ func respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx, columns []any) (
 		mysql COM_QUERY response: End after the column has been sent.
 		send EOF packet
 	*/
-	err = execCtx.proto.SendEOFPacketIf(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
+	err = execCtx.proto.SendEOFPacketIf(0, ses.GetTxnHandler().GetServerStatus())
 	if err != nil {
 		return
 	}
@@ -189,7 +188,7 @@ func respStreamResultRow(ses *Session,
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
-		err2 := execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
+		err2 := execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 		if err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -229,13 +228,13 @@ func respStreamResultRow(ses *Session,
 				return
 			}
 
-			err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
+			err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 			if err != nil {
 				return
 			}
 		}
 	default:
-		err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
+		err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 		if err != nil {
 			return
 		}
@@ -262,14 +261,16 @@ func respMixedResultRow(ses *Session,
 	if execCtx.skipRespClient {
 		return nil
 	}
+	//!!!the columnDef has been sent after the compiling ends. It should not be sent here again.
+	//only the result rows need to be sent.
 	mrs := ses.GetMysqlResultSet()
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
-		logError(ses, ses.GetDebugString(),
+		ses.Error(execCtx.reqCtx,
 			"Failed to handle 'SHOW TABLE STATUS'",
 			zap.Error(err))
 		return err
 	}
-	err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusWithTxnEnd(execCtx.reqCtx))
+	err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 	if err != nil {
 		return
 	}

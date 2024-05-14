@@ -25,4 +25,21 @@ id    name    sex    f32
 12    user12    false    null
 15    user15    false    null
 16    user16    true    null
+create table t3(c varchar);
+load data infile {'filepath'='$resources/load_data/indexed_str.parq', 'format'='parquet'} into table t3;
+select * from t3;
+c
+null
+aa
+null
+bb
+aa
+789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@
+789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@
+aa
+bb
+xyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABC
+null
+null
+xyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABC
 drop database parq;

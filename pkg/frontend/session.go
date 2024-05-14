@@ -24,16 +24,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
@@ -43,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -103,6 +106,10 @@ const (
 
 type Session struct {
 	feSessionImpl
+
+	logger     *log.MOLogger
+	logLevel   zapcore.Level
+	loggerOnce sync.Once
 
 	//cmd from the client
 	cmd CommandType
@@ -955,7 +962,7 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 	if ses.proto != nil {
 		connID = ses.proto.ConnectionID()
 	}
-	logutil.Errorf("prepared statement '%s' does not exist on connection %d", name, connID)
+	ses.Errorf(ctx, "prepared statement '%s' does not exist on connection %d", name, connID)
 	return nil, moerr.NewInvalidState(ctx, "prepared statement '%s' does not exist", name)
 }
 
@@ -1076,30 +1083,6 @@ func (ses *Session) GetSessionVar(ctx context.Context, name string) (interface{}
 	}
 }
 
-func (ses *Session) maybeUnsetTxnStatus(ctx context.Context) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	autocommit := false
-	if v, err := ses.getSessionVarUnsafe(ctx, "autocommit"); err == nil {
-		if ac, vErr := valueIsBoolTrue(v); vErr == nil && ac {
-			autocommit = ac
-		}
-	}
-	ses.txnHandler.unsetTxnStatus(autocommit)
-}
-
-func (ses *Session) getSessionVarUnsafe(ctx context.Context, name string) (interface{}, error) {
-	if def, gVal, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
-		ciname := strings.ToLower(name)
-		if def.GetScope() == ScopeGlobal {
-			return gVal, nil
-		}
-		return ses.sysVars[ciname], nil
-	} else {
-		return nil, moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
-	}
-}
-
 func (ses *Session) CopyAllSessionVars() map[string]interface{} {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1199,9 +1182,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 
 	ses.SetTenantInfo(tenant)
 	ses.UpdateDebugString()
-	sessionInfo := ses.GetDebugString()
 
-	logDebugf(sessionInfo, "check special user")
+	ses.Debugf(ctx, "check special user")
 	// check the special user for initilization
 	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
 	if isSpecial && specialAccount.IsMoAdminRole() {
@@ -1222,7 +1204,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	mp := ses.GetMemPool()
-	logDebugf(sessionInfo, "check tenant %s exists", tenant)
+	ses.Debugf(ctx, "check tenant %s exists", tenant)
 	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, ses, mp, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
@@ -1269,7 +1251,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.timestampMap[TSCheckUserStart] = time.Now()
 	tenantCtx := defines.AttachAccountId(ctx, uint32(tenantID))
 
-	logDebugf(sessionInfo, "check user of %s exists", tenant)
+	ses.Debugf(tenantCtx, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser, err := getSqlForPasswordOfUser(tenantCtx, tenant.GetUser())
 	if err != nil {
@@ -1317,7 +1299,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	*/
 	//it denotes that there is no default role in the input
 	if tenant.HasDefaultRole() {
-		logDebugf(sessionInfo, "check default role of user %s.", tenant)
+		ses.Debugf(tenantCtx, "check default role of user %s.", tenant)
 		//step4 : check role exists or not
 		ses.timestampMap[TSCheckRoleStart] = time.Now()
 		sqlForCheckRoleExists, err := getSqlForRoleIdOfRole(tenantCtx, tenant.GetDefaultRole())
@@ -1333,7 +1315,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			return nil, moerr.NewInternalError(tenantCtx, "there is no role %s", tenant.GetDefaultRole())
 		}
 
-		logDebugf(sessionInfo, "check granted role of user %s.", tenant)
+		ses.Debugf(tenantCtx, "check granted role of user %s.", tenant)
 		//step4.2 : check the role has been granted to the user or not
 		sqlForRoleOfUser, err := getSqlForRoleOfUser(tenantCtx, userID, tenant.GetDefaultRole())
 		if err != nil {
@@ -1357,7 +1339,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
 	} else {
 		ses.timestampMap[TSCheckRoleStart] = time.Now()
-		logDebugf(sessionInfo, "check designated role of user %s.", tenant)
+		ses.Debugf(tenantCtx, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, mp, sql)
@@ -1384,7 +1366,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 
 	// TO Check password
 	if checkPassword(psw, salt, authResponse) {
-		logDebugf(sessionInfo, "check password succeeded")
+		ses.Debug(tenantCtx, "check password succeeded")
 		ses.InitGlobalSystemVariables(tenantCtx)
 	} else {
 		return nil, moerr.NewInternalError(tenantCtx, "check password failed")
@@ -1397,14 +1379,14 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if err != nil {
 			return nil, err
 		}
-		logDebugf(sessionInfo, "check database name succeeded")
+		ses.Debug(tenantCtx, "check database name succeeded")
 		ses.timestampMap[TSCheckDbNameEnd] = time.Now()
 		v2.CheckDbNameDurationHistogram.Observe(ses.timestampMap[TSCheckDbNameEnd].Sub(ses.timestampMap[TSCheckDbNameStart]).Seconds())
 	}
 	//------------------------------------------------------------------------------------------------------------------
 	// record the id :routine pair in RoutineManager
 	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutine(), accountVersion)
-	logInfo(ses, sessionInfo, tenant.String())
+	ses.Info(ctx, tenant.String())
 
 	return GetPassWord(pwd)
 }
@@ -1699,8 +1681,10 @@ func (ses *Session) StatusSession() *status.Session {
 	}
 }
 
-func (ses *Session) getStatusWithTxnEnd(ctx context.Context) uint16 {
-	ses.maybeUnsetTxnStatus(ctx)
+// getStatusAfterTxnIsEnded
+// !!! only used after the txn is ended.
+// it may be called in the active txn. so, we
+func (ses *Session) getStatusAfterTxnIsEnded(ctx context.Context) uint16 {
 	return extendStatus(ses.GetTxnHandler().GetServerStatus())
 }
 
@@ -1855,11 +1839,11 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	accountID, err := defines.GetAccountId(ctx)
 
 	if err != nil {
-		logutil.Errorf("failed to get account ID: %v", err)
+		ses.Errorf(ctx, "failed to get account ID: %v", err)
 		return err
 	}
 	userID := defines.GetUserId(ctx)
-	logutil.Infof("do migration on connection %d, db: %s, account id: %d, user id: %d",
+	ses.Infof(ctx, "do migration on connection %d, db: %s, account id: %d, user id: %d",
 		req.ConnID, req.DB, accountID, userID)
 
 	dbm := newDBMigration(req.DB)
@@ -1885,4 +1869,108 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 		ses.SetLastStmtID(maxStmtID)
 	}
 	return nil
+}
+
+func (ses *Session) GetLogger() SessionLogger {
+	return ses
+}
+
+func (ses *Session) GetSessId() uuid.UUID {
+	if ses == nil {
+		return uuid.UUID{}
+	}
+	return uuid.UUID(ses.GetUUID())
+}
+
+func (ses *Session) GetLogLevel() zapcore.Level {
+	if ses == nil {
+		return zap.InfoLevel
+	}
+	return ses.logLevel
+}
+
+func (ses *Session) initLogger() {
+	ses.loggerOnce.Do(func() {
+		if ses.logger == nil {
+			ses.logger = getLogger()
+		}
+		config := logutil.GetDefaultConfig()
+		ses.logLevel = config.GetLevel().Level()
+	})
+}
+
+// log do logging.
+// Please keep it called by Session.Info/Error/Debug/Warn/Fatal/Panic.
+// PS: This func must be lock free. DO NOT use Session.mu.
+func (ses *Session) log(ctx context.Context, level zapcore.Level, msg string, fields ...zap.Field) {
+	if ses == nil {
+		return
+	}
+	ses.initLogger()
+	if ses.logLevel.Enabled(level) {
+		fields = append(fields, zap.String("session_info", ses.debugStr)) // not use ses.GetDebugStr() because this func may be locked.
+		fields = appendSessionField(fields, ses)
+		fields = appendTraceField(fields, ctx)
+		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
+	}
+}
+
+func (ses *Session) logf(ctx context.Context, level zapcore.Level, format string, args ...any) {
+	if ses == nil {
+		return
+	}
+	ses.initLogger()
+	if ses.logLevel.Enabled(level) {
+		fields := make([]zap.Field, 0, 5)
+		fields = append(fields, zap.String("session_info", ses.debugStr))
+		fields = appendSessionField(fields, ses)
+		fields = appendTraceField(fields, ctx)
+		ses.logger.Log(fmt.Sprintf(format, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
+	}
+}
+
+func (ses *Session) Info(ctx context.Context, msg string, fields ...zap.Field) {
+	ses.log(ctx, zap.InfoLevel, msg, fields...)
+}
+
+func (ses *Session) Error(ctx context.Context, msg string, fields ...zap.Field) {
+	ses.log(ctx, zap.ErrorLevel, msg, fields...)
+}
+
+func (ses *Session) Warn(ctx context.Context, msg string, fields ...zap.Field) {
+	ses.log(ctx, zap.WarnLevel, msg, fields...)
+}
+
+func (ses *Session) Fatal(ctx context.Context, msg string, fields ...zap.Field) {
+	ses.log(ctx, zap.FatalLevel, msg, fields...)
+}
+
+func (ses *Session) Debug(ctx context.Context, msg string, fields ...zap.Field) {
+	ses.log(ctx, zap.DebugLevel, msg, fields...)
+}
+
+func (ses *Session) Infof(ctx context.Context, format string, args ...any) {
+	ses.logf(ctx, zap.InfoLevel, format, args...)
+}
+func (ses *Session) Errorf(ctx context.Context, format string, args ...any) {
+	ses.logf(ctx, zap.ErrorLevel, format, args...)
+}
+
+func (ses *Session) Warnf(ctx context.Context, format string, args ...any) {
+	ses.logf(ctx, zap.WarnLevel, format, args...)
+}
+
+func (ses *Session) Fatalf(ctx context.Context, format string, args ...any) {
+	ses.logf(ctx, zap.FatalLevel, format, args...)
+}
+
+func (ses *Session) Debugf(ctx context.Context, format string, args ...any) {
+	ses.logf(ctx, zap.DebugLevel, format, args...)
+}
+
+func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
+	if sc := trace.SpanFromContext(ctx).SpanContext(); !sc.IsEmpty() {
+		fields = append(fields, trace.ContextField(ctx))
+	}
+	return fields
 }

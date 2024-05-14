@@ -33,16 +33,14 @@ const argName = "restrict"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(argName)
-	ap := arg
-	buf.WriteString(fmt.Sprintf("filter(%s)", ap.E))
+	buf.WriteString(fmt.Sprintf("filter(%s)", arg.E))
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
+	arg.ctr = new(container)
 
-	filterList := colexec.SplitAndExprs([]*plan.Expr{ap.E})
-	ap.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filterList)
+	filterList := colexec.SplitAndExprs([]*plan.Expr{arg.E})
+	arg.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filterList)
 	return err
 }
 
