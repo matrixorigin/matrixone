@@ -91,7 +91,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.MinReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "min",
-					aggRegister: agg.RegisterMin1,
+					aggRegister: agg.RegisterMin2,
 				},
 			},
 		},

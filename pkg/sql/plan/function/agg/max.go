@@ -371,9 +371,7 @@ func aggMaxOfBytesFill(
 	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
 	value []byte, isEmpty bool,
 	resultGetter aggexec.AggBytesGetter, resultSetter aggexec.AggBytesSetter) error {
-	if isEmpty {
-		return resultSetter(value)
-	} else if bytes.Compare(value, resultGetter()) > 0 {
+	if isEmpty || bytes.Compare(value, resultGetter()) > 0 {
 		return resultSetter(value)
 	}
 	return nil
