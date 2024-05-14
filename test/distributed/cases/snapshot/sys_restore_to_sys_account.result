@@ -1199,6 +1199,8 @@ index02    CREATE TABLE `index02` (\n`col1` CHAR(1) DEFAULT NULL,\n`col2` INT DE
 use db10;
 select * from index03;
 emp_no    birth_date    first_name    last_name    gender    hire_date
+9001    1980-12-17    SMITH    CLERK    F    2008-12-17
+9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 sp16    2024-05-13 07:19:01.560046    account    sys        
