@@ -494,8 +494,8 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 		txnOp := s.Proc.TxnOperator
-		if len(s.DataSource.PartitionRelationNames) == 0 && !s.DataSource.Timestamp.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			s.DataSource.Timestamp.LessEq(s.Proc.TxnOperator.Txn().SnapshotTS) {
+		if !s.DataSource.Timestamp.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+			s.DataSource.Timestamp.Less(s.Proc.TxnOperator.Txn().SnapshotTS) {
 			txnOp = s.Proc.TxnOperator.CloneSnapshotOp(s.DataSource.Timestamp)
 		}
 		db, err = c.e.Database(ctx, s.DataSource.SchemaName, txnOp)
