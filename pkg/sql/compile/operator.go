@@ -377,19 +377,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Attrs = t.Attrs
 		arg.Params = t.Params
 		res.Arg = arg
-	case vm.HashBuild:
-		t := sourceIns.Arg.(*hashbuild.Argument)
-		arg := hashbuild.NewArgument()
-		arg.NeedHashMap = t.NeedHashMap
-		arg.NeedExpr = t.NeedExpr
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
-		arg.Typs = t.Typs
-		arg.Conditions = t.Conditions
-		arg.HashOnPK = t.HashOnPK
-		arg.NeedMergedBatch = t.NeedMergedBatch
-		arg.NeedAllocateSels = t.NeedAllocateSels
-		res.Arg = arg
 	case vm.External:
 		t := sourceIns.Arg.(*external.Argument)
 		res.Arg = external.NewArgument().WithEs(
