@@ -165,13 +165,12 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]co
 		for obj := range tombstone.objects {
 			if obj == name {
 				// tombstone for aObject is same as aObject, skip it
-				// TODO: remove log
-				logutil.Infof("soft GC same name: %v", obj)
 				sameName = true
 			}
 			objectEntry := objects[obj]
 			if objectEntry != nil {
-				logutil.Infof("soft GC object: %v,  %v", obj, objectEntry != nil)
+				// TODO: remove log
+				logutil.Infof("[soft GC] Refers object: %v,  %v", obj, objectEntry != nil)
 				ok = false
 				break
 			}
@@ -181,7 +180,8 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]co
 				gc = append(gc, name)
 			}
 			// TODO: remove log
-			logutil.Infof("soft GC tombstone: %v, tombstone: %d, object: %d", name, len(t.tombstones), len(tombstone.objects))
+			logutil.Infof("[soft GC] tombstone: %v, tombstone: %d, object: %d, same: %v",
+				name, len(t.tombstones), len(tombstone.objects), sameName)
 			t.deleteTombstone(name)
 		}
 	}

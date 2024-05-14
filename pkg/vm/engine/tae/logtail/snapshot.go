@@ -198,6 +198,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 
 	sm.updateTableInfo(data)
 	if sm.tid == 0 {
+		logutil.Infof("[update snapshot]mo_snapshots not found")
 		return sm
 	}
 	ins := data.GetObjectBatchs()
@@ -218,6 +219,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 			if !deleteTS.IsEmpty() {
 				continue
 			}
+			logutil.Infof("[update snapshot]insert object %s", objectStats.ObjectName().String())
 			sm.objects[objectStats.ObjectName().SegmentId()] = &objectInfo{
 				stats:    objectStats,
 				createAt: createTS,
@@ -227,6 +229,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		if deleteTS.IsEmpty() {
 			panic(any("deleteTS is empty"))
 		}
+		logutil.Infof("[update snapshot]delete object %s", objectStats.ObjectName().String())
 		delete(sm.objects, objectStats.ObjectName().SegmentId())
 	}
 	del, _, _, _ := data.GetBlkBatchs()
