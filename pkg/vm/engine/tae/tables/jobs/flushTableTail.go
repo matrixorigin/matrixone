@@ -161,10 +161,11 @@ func NewFlushTableTailTask(
 		if err != nil {
 			return
 		}
-		if hdl.IsAppendable() {
+		if hdl.IsAppendable() && !obj.HasDropCommitted() {
 			task.aObjMetas = append(task.aObjMetas, obj)
 			task.aObjHandles = append(task.aObjHandles, hdl)
 			if obj.GetObjectData().CheckFlushTaskRetry(txn.GetStartTS()) {
+				logutil.Infof("[FlushTabletail] obj %v needs retry", obj.ID.String())
 				return nil, txnif.ErrTxnNeedRetry
 			}
 		} else {
@@ -335,18 +336,11 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	readset := make([]*common.ID, 0, len(task.aObjMetas)+len(task.delSrcMetas))
-	for _, obj := range task.aObjMetas {
-		readset = append(readset, obj.AsCommonID())
-	}
-	for _, obj := range task.delSrcMetas[:(len(task.delSrcMetas) - task.dirtyLen)] {
-		readset = append(readset, obj.AsCommonID())
-	}
 	if err = task.txn.LogTxnEntry(
 		task.dbid,
 		task.rel.ID(),
 		txnEntry,
-		readset,
+		nil,
 	); err != nil {
 		return
 	}

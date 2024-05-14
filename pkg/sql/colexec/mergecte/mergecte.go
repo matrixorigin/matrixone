@@ -32,12 +32,11 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
-	ap.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
-	ap.ctr.curNodeCnt = ap.ctr.nodeCnt
-	ap.ctr.status = sendInitial
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, true)
+	arg.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
+	arg.ctr.curNodeCnt = arg.ctr.nodeCnt
+	arg.ctr.status = sendInitial
 	return nil
 }
 
