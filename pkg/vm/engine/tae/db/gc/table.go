@@ -123,7 +123,7 @@ func (t *GCTable) getObjects() map[string]*ObjectEntry {
 	return t.objects
 }
 
-func (t *GCTable) getTombstone() map[string]*TombstoneEntry {
+func (t *GCTable) getTombstones() map[string]*TombstoneEntry {
 	t.Lock()
 	defer t.Unlock()
 	return t.tombstones
@@ -153,7 +153,8 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]co
 		}
 	}
 
-	tombstones := t.getTombstone()
+	tombstones := t.getTombstones()
+	logutil.Infof("getTombstones: %v", len(tombstones))
 	for name, tombstone := range tombstones {
 		ok := true
 		logutil.Infof("soft GC tombstone: %v, object: %d", name, len(tombstone.objects))
