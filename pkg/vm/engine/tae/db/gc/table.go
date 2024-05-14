@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"go.uber.org/zap"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -200,8 +201,8 @@ func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, name string) bool {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
 		if snapTS.GreaterEq(&obj.createTS) && (obj.dropTS.IsEmpty() || snapTS.Less(&obj.dropTS)) {
-			logutil.Infof("name: %v, isSnapshotRefers: %s, create %v, drop %v",
-				name, snapTS.ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
+			logutil.Debug("[soft GC]Snapshot Refers", zap.String("name", name), zap.String("snapTS", snapTS.ToString()),
+				zap.String("createTS", obj.createTS.ToString()), zap.String("dropTS", obj.dropTS.ToString()))
 			return true
 		} else if snapTS.Less(&obj.createTS) {
 			left = mid + 1
