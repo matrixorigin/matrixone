@@ -179,7 +179,8 @@ func (b *Blockid) String() string {
 }
 
 func (b *Blockid) ObjectNameString() string {
-	return fmt.Sprintf("%v_%05d", b.Segment().ToString(), b.Sequence())
+	fileNum, _ := b.Offsets()
+	return fmt.Sprintf("%v_%05d", b.Segment().ToString(), fileNum)
 }
 
 func (b *Blockid) ShortString() string {
