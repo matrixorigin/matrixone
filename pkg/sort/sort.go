@@ -15,6 +15,7 @@
 package sort
 
 import (
+	"bytes"
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -32,25 +33,26 @@ const (
 type xorshift uint64
 type sortedHint int // hint for pdqsort when choosing the pivot
 
-func NewBoolLess() func([]bool, int64, int64) bool {
-	return boolLess[bool]
+type LessFunc[T any] func(a, b T) bool
+
+func GenericLess[T types.OrderedT](a, b T) bool {
+	return a < b
 }
 
-func NewDecimal64Less() func(data []types.Decimal64, i, j int64) bool {
-	return decimal64Less
+func BoolLess(a, b bool) bool { return !a && b }
+
+func Decimal64Less(a, b types.Decimal64) bool { return a.Lt(b) }
+
+func Decimal128Less(a, b types.Decimal128) bool { return a.Lt(b) }
+
+func UuidLess(a, b types.Uuid) bool {
+	return a.Lt(b)
 }
 
-func NewDecimal128Less() func(data []types.Decimal128, i, j int64) bool {
-	return decimal128Less
-}
-
-func NewUuidCompLess() func(data []types.Uuid, i, j int64) bool {
-	return uuidLess
-}
-
-func NewGenericCompLess[T types.OrderedT]() func([]T, int64, int64) bool {
-	return genericLess[T]
-}
+// it seems that go has no const generic type, handle these types respectively
+func TsLess(a, b types.TS) bool           { return bytes.Compare(a[:], b[:]) < 0 }
+func RowidLess(a, b types.Rowid) bool     { return bytes.Compare(a[:], b[:]) < 0 }
+func BlockidLess(a, b types.Blockid) bool { return bytes.Compare(a[:], b[:]) < 0 }
 
 func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol []string) {
 	if hasNull {
