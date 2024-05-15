@@ -711,9 +711,7 @@ func (h *Handle) HandleAlterTable(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	req *api.AlterTableReq) (err error) {
-	common.DoIfInfoEnabled(func() {
-		logutil.Debugf("[precommit] alter table: %v txn: %s", req.String(), txn.String())
-	})
+	logutil.Infof("[precommit] alter table: %v txn: %s", req.String(), txn.String())
 
 	dbase, err := txn.GetDatabaseByID(req.DbId)
 	if err != nil {

@@ -241,11 +241,11 @@ func genCreateTables(rows [][]any) []CreateTable {
 
 func genUpdateConstraint(rows [][]any) []*api.AlterTableReq {
 	reqs := make([]*api.AlterTableReq, len(rows))
-	for _, row := range rows {
+	for i, row := range rows {
 		did := row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
 		tid := row[MO_TABLES_REL_ID_IDX].(uint64)
 		cstr := row[MO_TABLES_UPDATE_CONSTRAINT].([]byte)
-		reqs = append(reqs, api.NewUpdateConstraintReq(did, tid, string(cstr)))
+		reqs[i] = api.NewUpdateConstraintReq(did, tid, string(cstr))
 	}
 	return reqs
 }
