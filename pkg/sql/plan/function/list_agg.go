@@ -313,7 +313,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.BitAndReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_or",
-					aggRegister: agg.RegisterBitOr1,
+					aggRegister: agg.RegisterBitOr2,
 				},
 			},
 		},
