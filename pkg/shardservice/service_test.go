@@ -37,8 +37,8 @@ func TestCreateShards(t *testing.T) {
 		) {
 			table := uint64(1)
 			shards := uint32(1)
-			mustAddTestShards(t, ctx, services[0], table, shards)
-			waitShardCount(table, services[0], 1)
+			mustAddTestShards(t, ctx, services[0], table, shards, 1)
+			waitReplicaCount(table, services[0], 1)
 		},
 		nil,
 	)
@@ -60,7 +60,7 @@ func TestCreateShardsWithSkip(t *testing.T) {
 			defer close()
 
 			s1 := services[0]
-			addTestUncommittedTable(s1, table, shards, pb.Policy_None)
+			addTestUncommittedTable(s1, table, shards, pb.Policy_None, 1)
 
 			require.NoError(t, s1.Create(table, txnOp))
 			require.NoError(t, txnOp.Commit(ctx))
@@ -87,7 +87,7 @@ func TestCreateShardsWithTxnAborted(t *testing.T) {
 			defer close()
 
 			s1 := services[0]
-			addTestUncommittedTable(s1, table, shards, pb.Policy_Hash)
+			addTestUncommittedTable(s1, table, shards, pb.Policy_Hash, 1)
 
 			require.NoError(t, s1.Create(table, txnOp))
 			require.NoError(t, txnOp.Rollback(ctx))
@@ -109,8 +109,8 @@ func TestDeleteShards(t *testing.T) {
 			s1 := services[0]
 			table := uint64(1)
 			shards := uint32(1)
-			mustAddTestShards(t, ctx, s1, table, shards)
-			waitShardCount(table, s1, 1)
+			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			waitReplicaCount(table, s1, 1)
 
 			txnOp, close := client.NewTestTxnOperator(ctx)
 			defer close()
@@ -118,7 +118,7 @@ func TestDeleteShards(t *testing.T) {
 			require.NoError(t, s1.Delete(table, txnOp))
 			require.NoError(t, txnOp.Commit(ctx))
 
-			waitShardCount(table, s1, 0)
+			waitReplicaCount(table, s1, 0)
 		},
 		nil,
 	)
@@ -136,8 +136,8 @@ func TestDeleteShardsWithTxnAborted(t *testing.T) {
 			s1 := services[0]
 			table := uint64(1)
 			shards := uint32(1)
-			mustAddTestShards(t, ctx, s1, table, shards)
-			waitShardCount(table, s1, 1)
+			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			waitReplicaCount(table, s1, 1)
 
 			txnOp, close := client.NewTestTxnOperator(ctx)
 			defer close()
@@ -188,8 +188,8 @@ func TestGetShardsWithAllocated(t *testing.T) {
 			s1 := services[0]
 			table := uint64(1)
 			shards := uint32(1)
-			mustAddTestShards(t, ctx, s1, table, shards)
-			waitShardCount(table, s1, 1)
+			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			waitReplicaCount(table, s1, 1)
 
 			values, err := s1.GetShards(table)
 			require.NoError(t, err)
@@ -235,8 +235,8 @@ func TestShardCanBeAllocated(t *testing.T) {
 			s1 := services[0]
 			table := uint64(1)
 			shards := uint32(1)
-			mustAddTestShards(t, ctx, s1, table, shards)
-			waitShardCount(table, s1, 1)
+			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			waitReplicaCount(table, s1, 1)
 		},
 		nil,
 	)
@@ -255,10 +255,10 @@ func TestShardCanBeAllocatedToMultiCN(t *testing.T) {
 			s2 := services[1]
 			table := uint64(1)
 			shards := uint32(2)
-			mustAddTestShards(t, ctx, s1, table, shards)
+			mustAddTestShards(t, ctx, s1, table, shards, 1)
 
-			waitShardCount(table, s1, 1)
-			waitShardCount(table, s2, 1)
+			waitReplicaCount(table, s1, 1)
+			waitReplicaCount(table, s2, 1)
 		},
 		nil,
 	)
@@ -280,11 +280,11 @@ func TestShardCanBeAllocatedWithLabel(t *testing.T) {
 			txnOp, close := client.NewTestTxnOperator(ctx)
 			defer close()
 
-			addTestUncommittedTable(s2, table, shards, pb.Policy_Hash)
+			addTestUncommittedTable(s2, table, shards, pb.Policy_Hash, 1)
 			require.NoError(t, s2.Create(table, txnOp))
 			require.NoError(t, txnOp.Commit(ctx))
 
-			waitShardCount(table, s2, 2)
+			waitReplicaCount(table, s2, 2)
 		},
 		func(c *Config) []Option {
 			c.SelectCNLabel = "account"
@@ -307,14 +307,14 @@ func TestBalanceWithSingleTable(t *testing.T) {
 			s3 := services[2]
 			table := uint64(1)
 			shards := uint32(3)
-			mustAddTestShards(t, ctx, s1, table, shards)
-			waitShardCount(table, s1, 3)
+			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			waitReplicaCount(table, s1, 3)
 
 			s2.options.disableHeartbeat.Store(false)
 			s3.options.disableHeartbeat.Store(false)
-			waitShardCount(table, s1, 1)
-			waitShardCount(table, s2, 1)
-			waitShardCount(table, s3, 1)
+			waitReplicaCount(table, s1, 1)
+			waitReplicaCount(table, s2, 1)
+			waitReplicaCount(table, s3, 1)
 		},
 		func(c *Config) []Option {
 			c.FreezeCNTimeout.Duration = time.Millisecond * 10
@@ -348,16 +348,61 @@ func TestBalanceWithMultiTable(t *testing.T) {
 			shards := uint32(3)
 
 			for _, table := range tables {
-				mustAddTestShards(t, ctx, s1, table, shards)
-				waitShardCount(table, s1, 3)
+				mustAddTestShards(t, ctx, s1, table, shards, 1)
+				waitReplicaCount(table, s1, 3)
 			}
 
 			s2.options.disableHeartbeat.Store(false)
 			s3.options.disableHeartbeat.Store(false)
 			for _, table := range tables {
-				waitShardCount(table, s1, 1)
-				waitShardCount(table, s2, 1)
-				waitShardCount(table, s3, 1)
+				waitReplicaCount(table, s1, 1)
+				waitReplicaCount(table, s2, 1)
+				waitReplicaCount(table, s3, 1)
+			}
+		},
+		func(c *Config) []Option {
+			c.FreezeCNTimeout.Duration = time.Millisecond * 10
+
+			if c.ServiceID != "cn1" {
+				return []Option{withDisableHeartbeat()}
+			}
+			return nil
+		},
+	)
+}
+
+func TestBalanceWithMultiTableAndMultiShards(t *testing.T) {
+	runServicesTest(
+		t,
+		"cn1,cn2,cn3",
+		func(
+			ctx context.Context,
+			server *server,
+			services []*service,
+		) {
+			n := 10
+			tables := make([]uint64, 0, n)
+			for i := 0; i < n; i++ {
+				tables = append(tables, uint64(i+1))
+			}
+
+			s1 := services[0]
+			s2 := services[1]
+			s3 := services[2]
+			shards := uint32(3)
+			replicas := uint32(3)
+
+			for _, table := range tables {
+				mustAddTestShards(t, ctx, s1, table, shards, replicas)
+				waitReplicaCount(table, s1, int(shards*replicas))
+			}
+
+			s2.options.disableHeartbeat.Store(false)
+			s3.options.disableHeartbeat.Store(false)
+			for _, table := range tables {
+				waitReplicaCount(table, s1, int(shards*replicas)/3)
+				waitReplicaCount(table, s2, int(shards*replicas)/3)
+				waitReplicaCount(table, s3, int(shards*replicas)/3)
 			}
 		},
 		func(c *Config) []Option {
@@ -383,13 +428,13 @@ func TestForceUnsubscribe(t *testing.T) {
 			s1 := services[0]
 			table := uint64(1)
 			shards := uint32(4)
-			mustAddTestShards(t, ctx, s1, table, shards)
-			waitShardCount(table, s1, 4)
+			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			waitReplicaCount(table, s1, 4)
 
 			s2 := services[1]
 			s2.options.disableHeartbeat.Store(false)
-			waitShardCount(table, s1, 2)
-			waitShardCount(table, s2, 2)
+			waitReplicaCount(table, s1, 2)
+			waitReplicaCount(table, s2, 2)
 
 			require.Equal(t, 1, s2.storage.(*MemShardStorage).UnsubscribeCount(table))
 		},
@@ -408,15 +453,17 @@ func addTestUncommittedTable(
 	tableID uint64,
 	shardCount uint32,
 	policy pb.Policy,
+	replicas uint32,
 ) {
 	store := s.storage.(*MemShardStorage)
 	store.UncommittedAdd(
 		tableID,
 		pb.ShardsMetadata{
-			TenantID:    1,
-			ShardsCount: shardCount,
-			Policy:      policy,
-			Version:     1,
+			TenantID:        1,
+			ShardsCount:     shardCount,
+			Policy:          policy,
+			Version:         1,
+			MaxReplicaCount: replicas,
 		})
 }
 
@@ -443,16 +490,17 @@ func mustAddTestShards(
 	s *service,
 	table uint64,
 	shards uint32,
+	replicas uint32,
 ) {
 	txnOp, close := client.NewTestTxnOperator(ctx)
 	defer close()
 
-	addTestUncommittedTable(s, table, shards, pb.Policy_Hash)
+	addTestUncommittedTable(s, table, shards, pb.Policy_Hash, replicas)
 	require.NoError(t, s.Create(table, txnOp))
 	require.NoError(t, txnOp.Commit(ctx))
 }
 
-func waitShardCount(
+func waitReplicaCount(
 	table uint64,
 	s *service,
 	count int,
@@ -462,7 +510,7 @@ func waitShardCount(
 		n := 0
 		for _, s := range shards {
 			if s.TableID == table {
-				n++
+				n += len(s.Replicas)
 			}
 		}
 		if n == count {

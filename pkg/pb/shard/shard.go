@@ -23,9 +23,9 @@ import (
 func (m ShardReplica) Same(
 	m2 ShardReplica,
 ) bool {
-	return m.Version == m2.Version &&
-		m.CN == m2.CN &&
-		m.ReplicaID == m2.ReplicaID
+	return m.ReplicaID == m2.ReplicaID &&
+		m.Version == m2.Version &&
+		m.CN == m2.CN
 }
 
 func (m TableShard) Same(
@@ -55,10 +55,10 @@ func (m TableShard) Clone() TableShard {
 }
 
 func (m TableShard) GetReplica(
-	r ShardReplica,
+	target ShardReplica,
 ) int {
 	for i, r := range m.Replicas {
-		if r.Same(r) {
+		if r.Same(target) {
 			return i
 		}
 	}
