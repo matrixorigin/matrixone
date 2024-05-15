@@ -160,6 +160,19 @@ func logLocalLockWaitOn(
 	}
 }
 
+func logReturnInDoLock(
+	txn *activeTxn,
+	info string,
+	waiter *waiter) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Debug("lock wait on local result",
+			txnField(txn),
+			zap.String("return", info),
+			zap.Stringer("waiter", waiter))
+	}
+}
+
 func logLocalLockWaitOnResult(
 	txn *activeTxn,
 	tableID uint64,

@@ -93,6 +93,7 @@ func (l *localLockTable) doLock(
 	// deadlock detected, return
 	if c.txn.deadlockFound {
 		c.done(ErrDeadLockDetected)
+		logReturnInDoLock(c.txn, "return in deadlockFound", c.w)
 		return
 	}
 	var old *waiter
@@ -110,6 +111,7 @@ func (l *localLockTable) doLock(
 					c.w.close(fmt.Sprintf("err in doLock, txn: %x", c.txn.txnID))
 				}
 				c.done(err)
+				logReturnInDoLock(c.txn, "return in err doAcquireLock", c.w)
 				return
 			}
 			// no waiter, all locks are added
@@ -125,12 +127,14 @@ func (l *localLockTable) doLock(
 					c.result.Timestamp = c.lockedTS
 				}
 				c.done(nil)
+				logReturnInDoLock(c.txn, "return in c.w == nil", c.w)
 				return
 			}
 
 			// we handle remote lock on current rpc io read goroutine, so we can not wait here, otherwise
 			// the rpc will be blocked.
 			if c.opts.async {
+				logReturnInDoLock(c.txn, "return in c.opts.async", c.w)
 				return
 			}
 		}
@@ -178,6 +182,7 @@ func (l *localLockTable) doLock(
 
 			c.w.close(fmt.Sprintf("err wait in doLock, txn: %x", c.txn.txnID))
 			c.done(e)
+			logReturnInDoLock(c.txn, "return in v.err != nil", c.w)
 			return
 		}
 
