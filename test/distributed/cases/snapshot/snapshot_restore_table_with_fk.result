@@ -1,5 +1,4 @@
 create account acc1 ADMIN_NAME 'admin1' IDENTIFIED BY 'test123';
-internal error: the tenant acc1 exists
 show databases;
 Database
 information_schema
@@ -71,7 +70,7 @@ a
 create snapshot sn1 for account acc1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn1    2024-05-15 14:24:40.780678    account    acc1        
+sn1    2024-05-15 14:54:00.906635    account    acc1        
 drop database fk_test;
 restore account acc1 from snapshot sn1;
 show databases;
