@@ -150,9 +150,8 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 		proc:   proc,
 		cancel: cancel,
 		arg: &Argument{
-			Typs:        ts,
-			Conditions:  cs,
-			NeedHashMap: true,
+			Typs:       ts,
+			Conditions: cs,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
