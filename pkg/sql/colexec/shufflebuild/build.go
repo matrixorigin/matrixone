@@ -27,11 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "hash_build"
+const argName = "shuffle_build"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(argName)
-	buf.WriteString(": hash build ")
+	buf.WriteString(": shuffle build ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
