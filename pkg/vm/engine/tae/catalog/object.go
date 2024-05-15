@@ -76,7 +76,7 @@ func (entry *ObjectEntry) GetCompSize() int {
 }
 func (entry *ObjectEntry) IsDeletesFlushedBefore(ts types.TS) bool {
 	entry.RLock()
-	defer entry.LoadObjectInfoForLastNode()
+	defer entry.RUnlock()
 	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
 	if tombstone == nil {
 		return true

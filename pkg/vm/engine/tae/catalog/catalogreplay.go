@@ -549,20 +549,12 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	if err != nil {
 		panic(err)
 	}
-	catalog.replayObjectByBlock(
-		tbl,
-		cmd.ID.BlockID,
-		cmd.node.state,
-		cmd.mvccNode.Start,
-		cmd.mvccNode.Prepare,
-		cmd.mvccNode.BaseNode.MetaLoc,
-		true,
-		cmd.mvccNode.CreatedAt.Equal(&txnif.UncommitTS),
-		cmd.mvccNode.DeletedAt.Equal(&txnif.UncommitTS),
-		cmd.mvccNode.Txn,
-		dataFactory)
 	if !cmd.mvccNode.BaseNode.DeltaLoc.IsEmpty() {
 		obj, err := tbl.GetObjectByID(cmd.ID.ObjectID())
+		if obj == nil {
+			logutil.Warnf("obj %v not found, mvcc node: %v", cmd.ID.String(), cmd.mvccNode.String())
+			return
+		}
 		if err != nil {
 			panic(err)
 		}
@@ -622,7 +614,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 	if !deltaloc.IsEmpty() {
 		obj, err := rel.GetObjectByID(objid)
 		if obj == nil {
-			logutil.Warnf("obj %v not found", objid.String())
+			logutil.Warnf("obj %v not found, txnNode: %v", objid.String(), txnNode.String())
 			return
 		}
 		if err != nil {
