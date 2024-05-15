@@ -239,6 +239,7 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "backExec.doComQueryInBack",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
+	execCtx.input = input
 
 	proc.SessionInfo.User = userNameOnly
 	cws, err := GetComputationWrapperInBack(execCtx, backSes.proto.GetDatabaseName(),
