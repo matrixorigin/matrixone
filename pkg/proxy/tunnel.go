@@ -41,6 +41,9 @@ const (
 
 	pipeClientToServer = "c2s"
 	pipeServerToClient = "s2c"
+
+	minSequenceID = 0
+	maxSequenceID = 255
 )
 
 var (
@@ -518,6 +521,8 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		p.mu.started = false
 		p.mu.cond.Broadcast()
 	}
+	var lastSeq int16 = -1
+	var rotated bool
 	prepareNextMessage := func() (terminate bool, err error) {
 		if terminate := func() bool {
 			p.mu.Lock()
@@ -552,12 +557,35 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		// set txn status and cmd time within the mutex together.
 		// only server->client pipe need to set the txn status.
 		if p.name == pipeServerToClient {
-			p.mu.inTxn = checkTxnStatus(p.src.readAvailBuf())
-			if !p.mu.inTxn && p.tun.transferIntent.Load() {
+			var currSeq int16
+			buf := p.src.readAvailBuf()
+
+			// issue#16042
+			if len(buf) > 3 {
+				currSeq = int16(buf[3])
+			}
+
+			// last sequence id is 255 and current sequence id is 0, the
+			// sequence ID is rotated, in which case, we do NOT allow to
+			// do the migration.
+			if currSeq == minSequenceID && lastSeq == maxSequenceID {
+				rotated = true
+			}
+
+			// the server starts a new response, reset the rotated.
+			if rotated && currSeq != minSequenceID && currSeq < lastSeq {
+				rotated = false
+			}
+
+			p.mu.inTxn = checkTxnStatus(buf)
+			if !p.mu.inTxn && p.tun.transferIntent.Load() && !rotated {
 				peer.wg.Add(1)
 				p.transferred = true
 			} else {
 				p.transferred = false
+			}
+			if len(buf) > 3 {
+				lastSeq = int16(buf[3])
 			}
 		}
 		p.mu.lastCmdTime = time.Now()
