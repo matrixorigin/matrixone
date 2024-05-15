@@ -133,7 +133,7 @@ func (txn *activeTxn) close(
 	// cancel all blocked waiters
 	txn.cancelBlocks()
 
-	isRemoteTable := serviceID != txn.remoteService
+	isRemoteTable := txn.remoteService != ""
 	canSkipTable := func(isRemoteTable bool, l lockTable) bool {
 		if isRemoteTable {
 			if _, ok := l.(*remoteLockTable); ok {
