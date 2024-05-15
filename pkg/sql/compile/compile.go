@@ -3604,7 +3604,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
 
-	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], ss != nil))
+	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], ss != nil, s.ShuffleCnt > 0))
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
