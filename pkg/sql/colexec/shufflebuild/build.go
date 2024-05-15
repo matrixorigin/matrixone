@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"runtime"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,6 +38,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	arg.ctr = new(container)
+	arg.ctr.shuffleIdx = -1
 	if len(proc.Reg.MergeReceivers) > 1 {
 		arg.ctr.InitReceiver(proc, true)
 		arg.ctr.isMerge = true
@@ -194,6 +197,12 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 		if currentBatch.IsEmpty() {
 			proc.PutBatch(currentBatch)
 			continue
+		}
+		if ctr.shuffleIdx == -1 {
+			ctr.shuffleIdx = currentBatch.ShuffleIDX
+		} else if ctr.shuffleIdx != currentBatch.ShuffleIDX {
+			logutil.Errorf("wrong batch shuffleIDX in shuffleBuild! expect %v, receive %v", ctr.shuffleIdx, currentBatch.ShuffleIDX)
+			panic("wrong batch shuffleIDX in shuffleBuild!")
 		}
 		anal.Input(currentBatch, isFirst)
 		anal.Alloc(int64(currentBatch.Size()))

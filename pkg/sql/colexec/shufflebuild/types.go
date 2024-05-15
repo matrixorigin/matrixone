@@ -40,7 +40,8 @@ const (
 type container struct {
 	colexec.ReceiverOperator
 
-	state int
+	state      int
+	shuffleIdx int32
 
 	hasNull            bool
 	isMerge            bool
