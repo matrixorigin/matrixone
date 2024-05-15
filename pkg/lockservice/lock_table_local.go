@@ -92,8 +92,8 @@ func (l *localLockTable) doLock(
 	blocked bool) {
 	// deadlock detected, return
 	if c.txn.deadlockFound {
-		c.done(ErrDeadLockDetected)
 		logReturnInDoLock(c.txn, "return in deadlockFound", c.w)
+		c.done(ErrDeadLockDetected)
 		return
 	}
 	var old *waiter
@@ -110,8 +110,8 @@ func (l *localLockTable) doLock(
 					c.w.disableNotify()
 					c.w.close(fmt.Sprintf("err in doLock, txn: %x", c.txn.txnID))
 				}
-				c.done(err)
 				logReturnInDoLock(c.txn, "return in err doAcquireLock", c.w)
+				c.done(err)
 				return
 			}
 			// no waiter, all locks are added
@@ -126,8 +126,8 @@ func (l *localLockTable) doLock(
 				if c.result.Timestamp.IsEmpty() {
 					c.result.Timestamp = c.lockedTS
 				}
-				c.done(nil)
 				logReturnInDoLock(c.txn, "return in c.w == nil", c.w)
+				c.done(nil)
 				return
 			}
 
@@ -180,9 +180,9 @@ func (l *localLockTable) doLock(
 				l.mu.Unlock()
 			}
 
+			logReturnInDoLock(c.txn, "return in v.err != nil", c.w)
 			c.w.close(fmt.Sprintf("err wait in doLock, txn: %x", c.txn.txnID))
 			c.done(e)
-			logReturnInDoLock(c.txn, "return in v.err != nil", c.w)
 			return
 		}
 
