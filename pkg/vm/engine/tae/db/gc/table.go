@@ -135,7 +135,12 @@ func (t *GCTable) getTombstones() map[string]*TombstoneEntry {
 }
 
 // SoftGC is to remove objectentry that can be deleted from GCTable
-func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]containers.Vector, meta *logtail.SnapshotMeta) ([]string, map[uint32][]types.TS) {
+func (t *GCTable) SoftGC(
+	table *GCTable,
+	ts types.TS,
+	snapShotList map[uint32]containers.Vector,
+	meta *logtail.SnapshotMeta,
+) ([]string, map[uint32][]types.TS) {
 	gc := make([]string, 0)
 	snapList := make(map[uint32][]types.TS)
 	objects := t.getObjects()
@@ -174,7 +179,10 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]co
 			objectEntry := objects[obj]
 			if objectEntry != nil {
 				// TODO: remove log
-				logutil.Debug("[soft GC] Refers object", zap.String("obj", obj), zap.Bool("objectEntry", objectEntry != nil))
+				logutil.Debug("[soft GC] Refers object",
+					zap.String("tombstone", name),
+					zap.String("obj", obj),
+					zap.Bool("objectEntry", objectEntry != nil))
 				ok = false
 				break
 			}
@@ -184,8 +192,8 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]co
 				gc = append(gc, name)
 			}
 			// TODO: remove log
-			logutil.Infof("[soft GC] tombstone: %v, tombstone: %d, object: %d, same: %v",
-				name, len(t.tombstones), len(tombstone.objects), sameName)
+			logutil.Infof("[soft GC] tombstone: %v, tombstone: %d, object: %d, same: %v, data: %d",
+				name, len(t.tombstones), len(tombstone.objects), sameName, len(objects))
 			t.deleteTombstone(name)
 		}
 	}
