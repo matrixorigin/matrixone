@@ -985,6 +985,7 @@ select count(*) from normal_table01 {snapshot = 'sp08'};
 count(*)
 3
 select count(*) from t3 {snapshot = 'sp08'};
+count(*)
 4
 use mo_catalog;
 select count(*) from cluster02 {snapshot = 'sp08'};
@@ -1005,6 +1006,7 @@ count(*)
 2
 use test04;
 select count(*) from t3 {snapshot = 'sp08'};
+count(*)
 4
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp08'} where reldatabase = 'test04';
 count(*)
@@ -1115,6 +1117,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 sp09    2024-05-09 11:05:57.341226    account    sys        
 sp08    2024-05-09 11:05:55.929275    account    sys        
 select count(*) from tran01{snapshot = 'sp09'};
+count(*)
 3
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp09'} where reldatabase = 'test06';
 count(*)
