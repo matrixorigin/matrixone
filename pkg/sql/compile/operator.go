@@ -593,8 +593,8 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 			n.ScanSnapshot.TS.LessEq(proc.TxnOperator.Txn().SnapshotTS) {
 			txnOp = proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 
-			if n.ScanSnapshot.CreatedByTenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.CreatedByTenant.TenantID)
+			if n.ScanSnapshot.Tenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
 			}
 		}
 	}
