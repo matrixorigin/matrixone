@@ -68,4 +68,7 @@ func (proc *Process) FinalizeRuntimeFilter(m *plan.RuntimeFilterSpec) {
 		runtimeFilter.Typ = RuntimeFilter_DROP
 		proc.SendMessage(runtimeFilter)
 	}
+	if m != nil {
+		m.Handled = false
+	}
 }
