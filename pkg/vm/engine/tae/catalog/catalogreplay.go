@@ -619,20 +619,12 @@ func (catalog *Catalog) onReplayCreateBlock(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	catalog.replayObjectByBlock(
-		rel,
-		*blkid,
-		state,
-		txnNode.Start,
-		txnNode.End,
-		metaloc,
-		false,
-		true,
-		false,
-		nil,
-		dataFactory)
 	if !deltaloc.IsEmpty() {
 		obj, err := rel.GetObjectByID(objid)
+		if obj == nil {
+			logutil.Warnf("obj %v not found", objid.String())
+			return
+		}
 		if err != nil {
 			panic(err)
 		}
