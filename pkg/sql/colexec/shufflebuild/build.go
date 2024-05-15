@@ -43,33 +43,31 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		arg.ctr.InitReceiver(proc, false)
 	}
 
-	if arg.NeedHashMap {
-		arg.ctr.vecs = make([][]*vector.Vector, 0)
-		ctr := arg.ctr
-		ctr.executor = make([]colexec.ExpressionExecutor, len(arg.Conditions))
-		ctr.keyWidth = 0
-		for i, expr := range arg.Conditions {
-			typ := expr.Typ
-			width := types.T(typ.Id).TypeLen()
-			// todo : for varlena type, always go strhashmap
-			if types.T(typ.Id).FixedLength() < 0 {
-				width = 128
-			}
-			ctr.keyWidth += width
-			ctr.executor[i], err = colexec.NewExpressionExecutor(proc, arg.Conditions[i])
-			if err != nil {
-				return err
-			}
+	arg.ctr.vecs = make([][]*vector.Vector, 0)
+	ctr := arg.ctr
+	ctr.executor = make([]colexec.ExpressionExecutor, len(arg.Conditions))
+	ctr.keyWidth = 0
+	for i, expr := range arg.Conditions {
+		typ := expr.Typ
+		width := types.T(typ.Id).TypeLen()
+		// todo : for varlena type, always go strhashmap
+		if types.T(typ.Id).FixedLength() < 0 {
+			width = 128
 		}
+		ctr.keyWidth += width
+		ctr.executor[i], err = colexec.NewExpressionExecutor(proc, arg.Conditions[i])
+		if err != nil {
+			return err
+		}
+	}
 
-		if ctr.keyWidth <= 8 {
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
-				return err
-			}
-		} else {
-			if ctr.strHashMap, err = hashmap.NewStrMap(false, proc.Mp()); err != nil {
-				return err
-			}
+	if ctr.keyWidth <= 8 {
+		if ctr.intHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
+			return err
+		}
+	} else {
+		if ctr.strHashMap, err = hashmap.NewStrMap(false, proc.Mp()); err != nil {
+			return err
 		}
 	}
 
@@ -114,15 +112,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 			if ctr.inputBatchRowCount > 0 {
 				var jm *hashmap.JoinMap
-				if ap.NeedHashMap {
-					if ctr.keyWidth <= 8 {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
-					} else {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
-					}
-					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-					result.Batch.AuxData = jm
+				if ctr.keyWidth <= 8 {
+					jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
+				} else {
+					jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
 				}
+				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+				result.Batch.AuxData = jm
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil
 				ctr.multiSels = nil
@@ -132,7 +128,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 			// this is just a dummy batch to indicate that the batch is must not empty.
 			// we should make sure this batch can be sent to the next join operator in other pipelines.
-			if result.Batch.IsEmpty() && ap.NeedHashMap {
+			if result.Batch.IsEmpty() {
 				result.Batch.AddRowCount(1)
 			}
 
@@ -215,7 +211,7 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 }
 
 func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
-	if len(ctr.batches) == 0 || !ap.NeedHashMap {
+	if len(ctr.batches) == 0 {
 		return nil
 	}
 	var err error

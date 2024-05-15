@@ -64,11 +64,10 @@ type container struct {
 type Argument struct {
 	ctr *container
 	// need to generate a push-down filter expression
-	NeedExpr    bool
-	NeedHashMap bool
-	IsDup       bool
-	Typs        []types.Type
-	Conditions  []*plan.Expr
+	NeedExpr   bool
+	IsDup      bool
+	Typs       []types.Type
+	Conditions []*plan.Expr
 
 	HashOnPK          bool
 	NeedMergedBatch   bool
@@ -114,9 +113,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	if ctr != nil {
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors()
-		if !arg.NeedHashMap {
-			ctr.cleanHashMap()
-		}
+		ctr.cleanHashMap()
 		ctr.FreeMergeTypeOperator(pipelineFailed)
 		if ctr.isMerge {
 			ctr.FreeMergeTypeOperator(pipelineFailed)
