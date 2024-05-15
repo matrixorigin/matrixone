@@ -174,7 +174,7 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]co
 			objectEntry := objects[obj]
 			if objectEntry != nil {
 				// TODO: remove log
-				logutil.Infof("[soft GC] Refers object: %v,  %v", obj, objectEntry != nil)
+				logutil.Debug("[soft GC] Refers object", zap.String("obj", obj), zap.Bool("objectEntry", objectEntry != nil))
 				ok = false
 				break
 			}
