@@ -334,7 +334,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.BitAndReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_xor",
-					aggRegister: agg.RegisterBitXor1,
+					aggRegister: agg.RegisterBitXor2,
 				},
 			},
 		},
