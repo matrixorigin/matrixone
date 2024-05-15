@@ -2706,7 +2706,7 @@ func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
 	}
 
 	{
-		t.Log("************merge before delete************")
+		t.Log("************split one object into two objects************")
 
 		txn, rel = tae.GetRelation()
 		objIt := rel.MakeObjectIt()
