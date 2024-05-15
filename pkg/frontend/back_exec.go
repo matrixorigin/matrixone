@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -184,12 +183,6 @@ func (back *backExec) Clear() {
 // execute query
 func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	input *UserInput) (retErr error) {
-	//fmt.Fprintln(os.Stderr, "doComQueryInBack", input.getSql())
-	//defer func() {
-	//	if retErr != nil {
-	//		fmt.Fprintln(os.Stderr, "doComQueryInBack", retErr)
-	//	}
-	//}()
 	backSes.GetTxnCompileCtx().SetExecCtx(execCtx)
 	backSes.SetSql(input.getSql())
 	//the ses.GetUserName returns the user_name with the account_name.
@@ -269,6 +262,9 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	}()
 
 	defer func() {
+		execCtx.stmt = nil
+		execCtx.cw = nil
+		execCtx.cws = nil
 		for i := 0; i < len(cws); i++ {
 			cws[i].Free()
 		}
@@ -415,7 +411,7 @@ func executeStmtInBack(backSes *backSession,
 	return
 }
 
-var GetComputationWrapperInBack = func(exeCtx *ExecCtx, db string, input *UserInput, user string, eng engine.Engine, proc *process.Process, ses FeSession) ([]ComputationWrapper, error) {
+var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserInput, user string, eng engine.Engine, proc *process.Process, ses FeSession) ([]ComputationWrapper, error) {
 	var cw []ComputationWrapper = nil
 
 	var stmts []tree.Statement = nil
@@ -425,23 +421,13 @@ var GetComputationWrapperInBack = func(exeCtx *ExecCtx, db string, input *UserIn
 	if input.getStmt() != nil {
 		stmts = append(stmts, input.getStmt())
 	} else if isCmdFieldListSql(input.getSql()) {
-		cmdFieldStmt, err = parseCmdFieldList(exeCtx.reqCtx, input.getSql())
+		cmdFieldStmt, err = parseCmdFieldList(execCtx.reqCtx, input.getSql())
 		if err != nil {
 			return nil, err
 		}
 		stmts = append(stmts, cmdFieldStmt)
 	} else {
-		var v interface{}
-		var origin interface{}
-		v, err = ses.GetGlobalVar(exeCtx.reqCtx, "lower_case_table_names")
-		if err != nil {
-			v = int64(1)
-		}
-		origin, err = ses.GetGlobalVar(exeCtx.reqCtx, "keep_user_target_list_in_result")
-		if err != nil {
-			origin = int64(0)
-		}
-		stmts, err = parsers.Parse(exeCtx.reqCtx, dialect.MYSQL, input.getSql(), v.(int64), origin.(int64))
+		stmts, err = parseSql(execCtx)
 		if err != nil {
 			return nil, err
 		}
