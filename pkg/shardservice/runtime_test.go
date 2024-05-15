@@ -457,6 +457,35 @@ func TestHeartbeatWithStaleShard(t *testing.T) {
 	)
 }
 
+func TestHeartbeatWithStaleShardAndMultiReplicas(t *testing.T) {
+	runRuntimeTest(
+		"cn1,cn2",
+		func(r *rt) {
+			r.heartbeat("cn1", nil)
+
+			t1 := newTestTableWithReplicas(1, 1, 1, 2)
+			r.add(t1)
+			t1.allocate("cn1", 0, 0)
+			t1.allocate("cn1", 0, 1)
+
+			s1 := t1.shards[0].Clone()
+
+			t1.allocate("cn2", 0, 0)
+			t1.allocate("cn2", 0, 1)
+
+			ops := r.heartbeat("cn1", []pb.TableShard{s1})
+			require.Equal(t, 2, len(ops))
+
+			r1 := s1.Replicas[0]
+			r2 := s1.Replicas[1]
+			s1.Replicas = nil
+			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteReplica, TableShard: s1, Replica: r1}, ops[0])
+			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteReplica, TableShard: s1, Replica: r2}, ops[1])
+			require.Equal(t, 2, len(r.cns["cn1"].incompleteOps))
+		},
+	)
+}
+
 func TestHeartbeatWithTableNotExists(t *testing.T) {
 	runRuntimeTest(
 		"cn1",
