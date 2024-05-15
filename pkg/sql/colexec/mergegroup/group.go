@@ -156,12 +156,12 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 
 		case keyWidth <= 8:
 			ctr.typ = H8
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(groupVecsNullable, 0, 0, proc.Mp()); err != nil {
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(groupVecsNullable, proc.Mp()); err != nil {
 				return err
 			}
 		default:
 			ctr.typ = HStr
-			if ctr.strHashMap, err = hashmap.NewStrMap(groupVecsNullable, 0, 0, proc.Mp()); err != nil {
+			if ctr.strHashMap, err = hashmap.NewStrMap(groupVecsNullable, proc.Mp()); err != nil {
 				return err
 			}
 		}

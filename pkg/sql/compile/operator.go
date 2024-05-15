@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -129,8 +130,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.IsShuffle = t.IsShuffle
 		arg.PreAllocSize = t.PreAllocSize
 		arg.NeedEval = t.NeedEval
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Exprs = t.Exprs
 		arg.Types = t.Types
 		arg.Aggs = t.Aggs
@@ -304,22 +303,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Fs = t.Fs
 		res.Arg = arg
 	case vm.Intersect:
-		t := sourceIns.Arg.(*intersect.Argument)
 		arg := intersect.NewArgument()
-		arg.IBucket = t.IBucket
-		arg.NBucket = t.NBucket
 		res.Arg = arg
 	case vm.Minus: // 2
-		t := sourceIns.Arg.(*minus.Argument)
 		arg := minus.NewArgument()
-		arg.IBucket = t.IBucket
-		arg.NBucket = t.NBucket
 		res.Arg = arg
 	case vm.IntersectAll:
-		t := sourceIns.Arg.(*intersectall.Argument)
 		arg := intersectall.NewArgument()
-		arg.IBucket = t.IBucket
-		arg.NBucket = t.NBucket
 		res.Arg = arg
 	case vm.Merge:
 		t := sourceIns.Arg.(*merge.Argument)
@@ -376,19 +366,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Rets = t.Rets
 		arg.Attrs = t.Attrs
 		arg.Params = t.Params
-		res.Arg = arg
-	case vm.HashBuild:
-		t := sourceIns.Arg.(*hashbuild.Argument)
-		arg := hashbuild.NewArgument()
-		arg.NeedHashMap = t.NeedHashMap
-		arg.NeedExpr = t.NeedExpr
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
-		arg.Typs = t.Typs
-		arg.Conditions = t.Conditions
-		arg.HashOnPK = t.HashOnPK
-		arg.NeedMergedBatch = t.NeedMergedBatch
-		arg.NeedAllocateSels = t.NeedAllocateSels
 		res.Arg = arg
 	case vm.External:
 		t := sourceIns.Arg.(*external.Argument)
@@ -609,12 +586,25 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 		attrs = append(attrs, col.Name)
 	}
 
+	ctx := proc.Ctx
+	txnOp := proc.TxnOperator
+	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
+		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+			n.ScanSnapshot.TS.LessEq(proc.TxnOperator.Txn().SnapshotTS) {
+			txnOp = proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+
+			if n.ScanSnapshot.CreatedByTenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.CreatedByTenant.TenantID)
+			}
+		}
+	}
+
 	if preCtx.Ref.SchemaName != "" {
-		dbSource, err := eg.Database(proc.Ctx, preCtx.Ref.SchemaName, proc.TxnOperator)
+		dbSource, err := eg.Database(ctx, preCtx.Ref.SchemaName, txnOp)
 		if err != nil {
 			return nil, err
 		}
-		if _, err = dbSource.Relation(proc.Ctx, preCtx.Ref.ObjName, proc); err != nil {
+		if _, err = dbSource.Relation(ctx, preCtx.Ref.ObjName, proc); err != nil {
 			schemaName = defines.TEMPORARY_DBNAME
 		}
 	}
@@ -695,6 +685,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
 		TableDef:              oldCtx.TableDef,
 	}
+
 	if len(oldCtx.PartitionTableNames) > 0 {
 		dbSource, err := eg.Database(proc.Ctx, oldCtx.Ref.SchemaName, proc.TxnOperator)
 		if err != nil {
@@ -1170,34 +1161,8 @@ func constructGroup(_ context.Context, n, cn *plan.Node, ibucket, nbucket int, n
 	arg.Types = typs
 	arg.NeedEval = needEval
 	arg.Exprs = n.GroupBy
-	arg.Ibucket = uint64(ibucket)
-	arg.Nbucket = uint64(nbucket)
 	arg.IsShuffle = shuffle
 	arg.PreAllocSize = preAllocSize
-	return arg
-}
-
-// ibucket: bucket number
-// nbucket:
-// construct operator argument
-func constructIntersectAll(ibucket, nbucket int) *intersectall.Argument {
-	arg := intersectall.NewArgument()
-	arg.IBucket = uint64(ibucket)
-	arg.NBucket = uint64(nbucket)
-	return arg
-}
-
-func constructMinus(ibucket, nbucket int) *minus.Argument {
-	arg := minus.NewArgument()
-	arg.IBucket = uint64(ibucket)
-	arg.NBucket = uint64(nbucket)
-	return arg
-}
-
-func constructIntersect(ibucket, nbucket int) *intersect.Argument {
-	arg := intersect.NewArgument()
-	arg.IBucket = uint64(ibucket)
-	arg.NBucket = uint64(nbucket)
 	return arg
 }
 
