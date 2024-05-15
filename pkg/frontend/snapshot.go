@@ -353,6 +353,7 @@ func restoreToAccount(
 
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
+			logInfof("snapshot", fmt.Sprintf("skip db: %v", dbName))
 			continue
 		}
 
@@ -406,6 +407,7 @@ func restoreToDatabaseOrTable(
 	toAccountId uint32,
 	views *[]*tableInfo) (err error) {
 	if needSkipDb(dbName) {
+		logInfof("snapshot", fmt.Sprintf("skip db: %v", dbName))
 		return
 	}
 
@@ -445,6 +447,8 @@ func restoreToDatabaseOrTable(
 	for _, tblInfo := range tableInfos {
 		if needSkipTable(dbName, tblInfo.tblName) {
 			// TODO skip tables which should not to be restored
+			logInfof("snapshot", fmt.Sprintf("skip table: %v.%v", dbName, tblInfo.tblName))
+			continue
 		}
 
 		// TODO skip table which has foreign keys
@@ -553,12 +557,7 @@ func restoreViews(
 }
 
 func needSkipDb(dbName string) bool {
-	if slices.Contains(skipDbs, dbName) {
-		logInfof("snapshot", fmt.Sprintf("skip db: %v", dbName))
-		return true
-	}
-
-	return false
+	return slices.Contains(skipDbs, dbName)
 }
 
 func needSkipTable(dbName string, tblName string) bool {
