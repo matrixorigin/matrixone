@@ -180,7 +180,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	result.Batch = arg.buf
 	if result.Batch != nil {
-		result.Batch.ShuffleIDX = param.Idx
+		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
 	return result, nil
 }
