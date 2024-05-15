@@ -108,9 +108,14 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 }
 
 func (entry *ObjectEntry) InMemoryDeletesExisted() bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.InMemoryDeletesExistedLocked()
+}
+func (entry *ObjectEntry) InMemoryDeletesExistedLocked() bool {
 	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
 	if tombstone != nil {
-		return tombstone.InMemoryDeletesExisted()
+		return tombstone.InMemoryDeletesExistedLocked()
 	}
 	return false
 }
