@@ -1323,6 +1323,61 @@ func TestReLockSuccWithLockTableBindChanged(t *testing.T) {
 	)
 }
 
+func TestIssue16121(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			// change lock table to remote from local
+			b := l1.tableGroups.get(0, 0).getBind()
+			b.ServiceID = l2.serviceID
+			r := &remoteLockTable{
+				serviceID: l2.serviceID,
+				bind:      b,
+			}
+			l1.tableGroups.Lock()
+			l1.tableGroups.holders[0].tables[0] = r
+			l1.tableGroups.Unlock()
+
+			require.NoError(t, l2.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
+
+		},
+		nil,
+	)
+}
+
 func TestReLockSuccWithBindChanged(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
