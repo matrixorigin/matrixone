@@ -356,28 +356,43 @@ func (s *service) doHeartbeat(
 
 	newShards := s.cache.allocate.Load().clone()
 	for _, op := range ops {
-		getLogger().Info(
-			"handle heartbeat operator",
-			zap.String("op", op.String()),
-		)
 		switch op.Type {
 		case pb.OpType_AddReplica:
+			getLogger().Info(
+				"handle add replica",
+				zap.String("replica", op.Replica.String()),
+			)
+
 			s.handleAddReplica(
 				newShards,
 				op.TableShard,
 				op.Replica,
 			)
 		case pb.OpType_DeleteReplica:
+			getLogger().Info(
+				"handle delete replica",
+				zap.String("replica", op.Replica.String()),
+			)
+
 			s.handleDeleteReplica(
 				newShards,
 				op.TableShard,
 				op.Replica,
 			)
 		case pb.OpType_DeleteAll:
+			getLogger().Info(
+				"handle delete all replicas",
+			)
+
 			s.handleDeleteAll(
 				newShards,
 			)
 		case pb.OpType_CreateTable:
+			getLogger().Info(
+				"handle create shards",
+				zap.Uint64("table", op.TableID),
+			)
+
 			s.handleCreateTable(
 				op.TableID,
 			)
