@@ -1747,7 +1747,6 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 	switch in.Op {
 	case vm.Anti:
 		arg := in.Arg.(*anti.Argument)
-		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
@@ -1762,7 +1761,6 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
-		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
@@ -1787,7 +1785,6 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 
 	case vm.Left:
 		arg := in.Arg.(*left.Argument)
-		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
@@ -1800,7 +1797,6 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 
 	case vm.Right:
 		arg := in.Arg.(*right.Argument)
-		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
@@ -1813,7 +1809,6 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 
 	case vm.RightSemi:
 		arg := in.Arg.(*rightsemi.Argument)
-		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
@@ -1826,7 +1821,6 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 
 	case vm.RightAnti:
 		arg := in.Arg.(*rightanti.Argument)
-		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
@@ -1839,7 +1833,6 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 
 	case vm.Semi:
 		arg := in.Arg.(*semi.Argument)
-		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
