@@ -14,7 +14,10 @@
 
 package plan
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
@@ -30,15 +33,15 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 		return
 	}
 
-	newFilterList, rewrite := builder.doMergeFiltersOnCompositeKey(node.TableDef, node.BindingTags[0], node.FilterList...)
-	if rewrite {
-		node.FilterList = newFilterList
-		calcScanStats(node, builder)
-	}
+	newFilterList := builder.doMergeFiltersOnCompositeKey(node.TableDef, node.BindingTags[0], node.FilterList...)
+	node.FilterList = newFilterList
+	calcScanStats(node, builder)
 }
 
-func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDef, tableTag int32, filters ...*plan.Expr) ([]*plan.Expr, bool) {
+func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDef, tableTag int32, filters ...*plan.Expr) []*plan.Expr {
+	pkIdx := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
 	col2filter := make(map[int32]int)
+
 	for i, expr := range filters {
 		fn := expr.GetF()
 		if fn == nil {
@@ -60,33 +63,86 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			var orArgs []*plan.Expr
 			flattenLogicalExpressions(expr, "or", &orArgs)
 
-			for j, subExpr := range orArgs {
+			newOrArgs := make([]*plan.Expr, 0, len(orArgs))
+			var inArgs []*plan.Expr
+			var firstPkFilter *plan.Expr
+			pkFnName := "in"
+
+			for _, subExpr := range orArgs {
 				subFn := subExpr.GetF()
 				if subFn == nil {
+					newOrArgs = append(newOrArgs, subExpr)
 					continue
 				}
 
 				if subFn.Func.ObjName == "=" {
-					newArgs, rewrite := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, subExpr)
-					if rewrite {
-						orArgs[j] = newArgs[0]
-					}
+					newArgs := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, subExpr)
+					subExpr = newArgs[0]
 				} else if subFn.Func.ObjName == "and" {
 					var andArgs []*plan.Expr
 					flattenLogicalExpressions(subExpr, "and", &andArgs)
 
-					newArgs, rewrite := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, andArgs...)
-					if rewrite {
-						if len(newArgs) == 1 {
-							orArgs[j] = newArgs[0]
-						} else {
-							subFn.Args = newArgs
-						}
+					newArgs := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, andArgs...)
+					if len(newArgs) == 1 {
+						subExpr = newArgs[0]
+					} else {
+						subFn.Args = newArgs
 					}
+				}
+
+				mergedFn := subExpr.GetF()
+				if mergedFn == nil || mergedFn.GetArgs()[0].GetCol() == nil || mergedFn.GetArgs()[0].GetCol().ColPos != pkIdx ||
+					!isRuntimeConstExpr(mergedFn.GetArgs()[1]) {
+					newOrArgs = append(newOrArgs, subExpr)
+					continue
+				}
+
+				if len(inArgs) == 0 {
+					firstPkFilter = subExpr
+				}
+
+				switch mergedFn.Func.ObjName {
+				case "=":
+					inArgs = append(inArgs, mergedFn.GetArgs()[1])
+
+				case "prefix_eq":
+					inArgs = append(inArgs, mergedFn.GetArgs()[1])
+					pkFnName = "prefix_in"
+
+				default:
+					newOrArgs = append(newOrArgs, subExpr)
 				}
 			}
 
-			fn.Args = orArgs
+			if len(inArgs) == 1 {
+				newOrArgs = append(newOrArgs, firstPkFilter)
+			} else if len(inArgs) > 1 {
+				pkExpr := firstPkFilter.GetF().Args[0]
+				rightType := plan.Type{Id: int32(types.T_tuple)}
+				if pkFnName == "prefix_in" {
+					rightType = pkExpr.Typ
+				}
+
+				inExpr, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), pkFnName, []*plan.Expr{
+					pkExpr,
+					{
+						Typ: rightType,
+						Expr: &plan.Expr_List{
+							List: &plan.ExprList{
+								List: inArgs,
+							},
+						},
+					},
+				})
+
+				newOrArgs = append(newOrArgs, inExpr)
+			}
+
+			if len(newOrArgs) == 1 {
+				filters[i] = newOrArgs[0]
+			} else {
+				fn.Args = newOrArgs
+			}
 		}
 	}
 
@@ -103,7 +159,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	}
 
 	if len(filterIdx) == 0 {
-		return filters, false
+		return filters
 	}
 
 	serialArgs := make([]*plan.Expr, len(filterIdx))
@@ -112,7 +168,6 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	}
 	rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", serialArgs)
 
-	pkIdx := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
 	pkExpr := &plan.Expr{
 		Typ: tableDef.Cols[pkIdx].Typ,
 		Expr: &plan.Expr_Col{
@@ -145,7 +200,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 	}
 
-	return newFilterList, true
+	return newFilterList
 }
 
 func flattenLogicalExpressions(expr *plan.Expr, opName string, args *[]*plan.Expr) {
