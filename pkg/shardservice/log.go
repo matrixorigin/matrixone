@@ -61,13 +61,7 @@ func tableShardSliceField(
 ) zap.Field {
 	values := make([]string, 0, len(shards))
 	for _, s := range shards {
-		values = append(values,
-			fmt.Sprintf("shard: %d, cn: %s, bind-version: %d",
-				s.ShardID,
-				s.CN,
-				s.BindVersion,
-			))
+		values = append(values, s.String())
 	}
-
 	return zap.String(name, strings.Join(values, " "))
 }

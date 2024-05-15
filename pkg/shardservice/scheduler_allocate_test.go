@@ -33,17 +33,17 @@ func TestScheduleAllocate(t *testing.T) {
 			r.add(t1)
 
 			expectCNs := []string{"cn1", "cn2", "cn3"}
-			expectStates := []pb.ShardState{pb.ShardState_Allocated, pb.ShardState_Allocated, pb.ShardState_Allocated}
-			expectBindVersions := []uint64{t1.shards[0].BindVersion + 1, t1.shards[1].BindVersion + 1, t1.shards[2].BindVersion + 1}
+			expectStates := []pb.ReplicaState{pb.ReplicaState_Allocated, pb.ReplicaState_Allocated, pb.ReplicaState_Allocated}
+			expectBindVersions := []uint64{t1.shards[0].Replicas[0].Version + 1, t1.shards[1].Replicas[0].Version + 1, t1.shards[2].Replicas[0].Version + 1}
 
 			s := newAllocateScheduler()
 			require.NoError(t, s.schedule(r))
 			require.Equal(t, true, t1.allocated)
 
 			for i := 0; i < 3; i++ {
-				require.Equal(t, expectStates[i], t1.shards[i].State)
-				require.Equal(t, expectCNs[i], t1.shards[i].CN)
-				require.Equal(t, expectBindVersions[i], t1.shards[i].BindVersion)
+				require.Equal(t, expectStates[i], t1.shards[i].Replicas[0].State)
+				require.Equal(t, expectCNs[i], t1.shards[i].Replicas[0].CN)
+				require.Equal(t, expectBindVersions[i], t1.shards[i].Replicas[0].Version)
 			}
 
 			require.Equal(t, 1, len(r.cns["cn1"].incompleteOps))
@@ -63,16 +63,16 @@ func TestScheduleAllocateWithShardNotEnough(t *testing.T) {
 			r.add(t1)
 
 			expectCNs := []string{"cn1", "cn1", "cn1"}
-			expectStates := []pb.ShardState{pb.ShardState_Allocated, pb.ShardState_Allocated, pb.ShardState_Allocated}
-			expectBindVersions := []uint64{t1.shards[0].BindVersion + 1, t1.shards[1].BindVersion + 1, t1.shards[2].BindVersion + 1}
+			expectStates := []pb.ReplicaState{pb.ReplicaState_Allocated, pb.ReplicaState_Allocated, pb.ReplicaState_Allocated}
+			expectBindVersions := []uint64{t1.shards[0].Replicas[0].Version + 1, t1.shards[1].Replicas[0].Version + 1, t1.shards[2].Replicas[0].Version + 1}
 
 			s := newAllocateScheduler()
 			require.NoError(t, s.schedule(r))
 
 			for i := 0; i < 3; i++ {
-				require.Equal(t, expectStates[i], t1.shards[i].State)
-				require.Equal(t, expectCNs[i], t1.shards[i].CN)
-				require.Equal(t, expectBindVersions[i], t1.shards[i].BindVersion)
+				require.Equal(t, expectStates[i], t1.shards[i].Replicas[0].State)
+				require.Equal(t, expectCNs[i], t1.shards[i].Replicas[0].CN)
+				require.Equal(t, expectBindVersions[i], t1.shards[i].Replicas[0].Version)
 			}
 
 			require.Equal(t, 3, len(r.cns["cn1"].incompleteOps))

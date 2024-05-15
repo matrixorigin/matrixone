@@ -20,12 +20,47 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-func (m TableShard) Same(m2 TableShard) bool {
+func (m ShardReplica) Same(
+	m2 ShardReplica,
+) bool {
+	return m.Version == m2.Version &&
+		m.CN == m2.CN &&
+		m.ReplicaID == m2.ReplicaID
+}
+
+func (m TableShard) Same(
+	m2 TableShard,
+) bool {
 	return m.TableID == m2.TableID &&
 		m.ShardID == m2.ShardID &&
-		m.ShardsVersion == m2.ShardsVersion &&
-		m.BindVersion == m2.BindVersion &&
-		m.CN == m2.CN
+		m.Version == m2.Version
+}
+
+func (m TableShard) HasRunningReplica() bool {
+	for _, r := range m.Replicas {
+		if r.State == ReplicaState_Running {
+			return true
+		}
+	}
+	return false
+}
+
+func (m TableShard) Clone() TableShard {
+	v := m
+	v.Replicas = make([]ShardReplica, 0, len(m.Replicas))
+	v.Replicas = append(v.Replicas, m.Replicas...)
+	return v
+}
+
+func (m TableShard) GetReplica(
+	r ShardReplica,
+) int {
+	for i, r := range m.Replicas {
+		if r.Same(r) {
+			return i
+		}
+	}
+	return -1
 }
 
 func (m TableShard) GetPhysicalTableID() uint64 {

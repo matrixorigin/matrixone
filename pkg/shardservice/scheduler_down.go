@@ -50,11 +50,13 @@ func (s *downScheduler) schedule(
 		if !shards.allocated {
 			continue
 		}
-		for i, shard := range shards.shards {
-			if _, ok := s.downCNs[shard.CN]; !ok {
-				continue
+		for i := range shards.shards {
+			for j := range shards.shards[i].Replicas {
+				if _, ok := s.downCNs[shards.shards[i].Replicas[j].CN]; !ok {
+					continue
+				}
+				shards.shards[i].Replicas[j].State = pb.ReplicaState_Tombstone
 			}
-			shards.shards[i].State = pb.ShardState_Tombstone
 		}
 	}
 	for k := range s.downCNs {

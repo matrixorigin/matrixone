@@ -64,11 +64,16 @@ func (s *allocateScheduler) doAllocate(
 		return cns[seq%len(cns)].id
 	}
 	for i := range t.shards {
-		if t.shards[i].CN == "" ||
-			t.shards[i].State == pb.ShardState_Tombstone {
-			cn := getCN()
-			t.allocate(i, cn)
-			r.addOpLocked(cn, newAddOp(t.shards[i]))
+		for j := range t.shards[i].Replicas {
+			if t.shards[i].Replicas[j].CN == "" ||
+				t.shards[i].Replicas[j].State == pb.ReplicaState_Tombstone {
+				cn := getCN()
+				t.allocate(cn, i, j)
+				r.addOpLocked(
+					cn,
+					newAddReplicaOp(t.shards[i], t.shards[i].Replicas[j]),
+				)
+			}
 		}
 	}
 	t.allocated = true

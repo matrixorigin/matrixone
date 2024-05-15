@@ -39,10 +39,10 @@ func TestScheduleDown(t *testing.T) {
 
 			require.NoError(t, newDownScheduler().schedule(r))
 			require.Equal(t, 1, len(r.cns))
-			require.Equal(t, pb.ShardState_Tombstone, t1.shards[0].State)
-			require.Equal(t, pb.ShardState_Allocated, t1.shards[1].State)
+			require.Equal(t, pb.ReplicaState_Tombstone, t1.shards[0].Replicas[0].State)
+			require.Equal(t, pb.ReplicaState_Allocated, t1.shards[1].Replicas[0].State)
 
-			require.Equal(t, pb.ShardState_Allocating, t2.shards[0].State)
+			require.Equal(t, pb.ReplicaState_Allocating, t2.shards[0].Replicas[0].State)
 			require.Equal(t, false, t2.allocated)
 		},
 	)

@@ -25,7 +25,6 @@ import (
 type MemShardStorage struct {
 	sync.RWMutex
 	count struct {
-		subscribe   map[uint64]int
 		unsubscribe map[uint64]int
 	}
 	committed         map[uint64]pb.ShardsMetadata
@@ -42,20 +41,8 @@ func NewMemShardStorage() ShardStorage {
 		uncommittedDelete: make(map[uint64]struct{}),
 	}
 	s.id.Store(1000000000)
-	s.count.subscribe = make(map[uint64]int)
 	s.count.unsubscribe = make(map[uint64]int)
 	return s
-}
-
-func (s *MemShardStorage) Subscribe(
-	tables ...uint64,
-) error {
-	s.Lock()
-	defer s.Unlock()
-	for _, table := range tables {
-		s.count.subscribe[table]++
-	}
-	return nil
 }
 
 func (s *MemShardStorage) Unsubscribe(
@@ -126,14 +113,6 @@ func (s *MemShardStorage) Delete(
 		},
 	)
 	return true, nil
-}
-
-func (s *MemShardStorage) SubscribeCount(
-	table uint64,
-) int {
-	s.RLock()
-	defer s.RUnlock()
-	return s.count.subscribe[table]
 }
 
 func (s *MemShardStorage) UnsubscribeCount(

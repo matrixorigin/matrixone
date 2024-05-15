@@ -237,9 +237,6 @@ func TestShardCanBeAllocated(t *testing.T) {
 			shards := uint32(1)
 			mustAddTestShards(t, ctx, s1, table, shards)
 			waitShardCount(table, s1, 1)
-
-			store := s1.storage.(*MemShardStorage)
-			require.Equal(t, 1, store.SubscribeCount(table))
 		},
 		nil,
 	)
@@ -262,11 +259,6 @@ func TestShardCanBeAllocatedToMultiCN(t *testing.T) {
 
 			waitShardCount(table, s1, 1)
 			waitShardCount(table, s2, 1)
-
-			store := s1.storage.(*MemShardStorage)
-			require.Equal(t, 1, store.SubscribeCount(table))
-			store = s2.storage.(*MemShardStorage)
-			require.Equal(t, 1, store.SubscribeCount(table))
 		},
 		nil,
 	)
@@ -281,7 +273,6 @@ func TestShardCanBeAllocatedWithLabel(t *testing.T) {
 			server *server,
 			services []*service,
 		) {
-			s1 := services[0]
 			s2 := services[1]
 			table := uint64(1)
 			shards := uint32(2)
@@ -294,11 +285,6 @@ func TestShardCanBeAllocatedWithLabel(t *testing.T) {
 			require.NoError(t, txnOp.Commit(ctx))
 
 			waitShardCount(table, s2, 2)
-
-			store := s1.storage.(*MemShardStorage)
-			require.Equal(t, 0, store.SubscribeCount(table))
-			store = s2.storage.(*MemShardStorage)
-			require.Equal(t, 2, store.SubscribeCount(table))
 		},
 		func(c *Config) []Option {
 			c.SelectCNLabel = "account"
@@ -385,50 +371,6 @@ func TestBalanceWithMultiTable(t *testing.T) {
 	)
 }
 
-func TestCanSubscribeSameTableOnce(t *testing.T) {
-	runServicesTest(
-		t,
-		"cn1",
-		func(
-			ctx context.Context,
-			server *server,
-			services []*service,
-		) {
-			s1 := services[0]
-			table := uint64(1)
-			shards := uint32(3)
-			mustAddTestShards(t, ctx, s1, table, shards)
-			waitShardCount(table, s1, 3)
-			require.Equal(t, 1, s1.storage.(*MemShardStorage).SubscribeCount(table))
-		},
-		nil,
-	)
-}
-
-func TestSubscribeWithPartitionPolicy(t *testing.T) {
-	runServicesTest(
-		t,
-		"cn1",
-		func(
-			ctx context.Context,
-			server *server,
-			services []*service,
-		) {
-			s1 := services[0]
-			table := uint64(1)
-			shards := uint32(3)
-			mustAddTestPartitionShards(t, ctx, s1, table, shards)
-			waitShardCount(table, s1, 3)
-
-			values := s1.getAllocatedShards()
-			for _, s := range values {
-				require.Equal(t, 1, s1.storage.(*MemShardStorage).SubscribeCount(s.GetPhysicalTableID()))
-			}
-		},
-		nil,
-	)
-}
-
 func TestForceUnsubscribe(t *testing.T) {
 	runServicesTest(
 		t,
@@ -449,8 +391,6 @@ func TestForceUnsubscribe(t *testing.T) {
 			waitShardCount(table, s1, 2)
 			waitShardCount(table, s2, 2)
 
-			require.Equal(t, 1, s1.storage.(*MemShardStorage).SubscribeCount(table))
-			require.Equal(t, 2, s2.storage.(*MemShardStorage).SubscribeCount(table))
 			require.Equal(t, 1, s2.storage.(*MemShardStorage).UnsubscribeCount(table))
 		},
 		func(c *Config) []Option {
@@ -508,21 +448,6 @@ func mustAddTestShards(
 	defer close()
 
 	addTestUncommittedTable(s, table, shards, pb.Policy_Hash)
-	require.NoError(t, s.Create(table, txnOp))
-	require.NoError(t, txnOp.Commit(ctx))
-}
-
-func mustAddTestPartitionShards(
-	t *testing.T,
-	ctx context.Context,
-	s *service,
-	table uint64,
-	shards uint32,
-) {
-	txnOp, close := client.NewTestTxnOperator(ctx)
-	defer close()
-
-	addTestUncommittedTable(s, table, shards, pb.Policy_Partition)
 	require.NoError(t, s.Create(table, txnOp))
 	require.NoError(t, txnOp.Commit(ctx))
 }

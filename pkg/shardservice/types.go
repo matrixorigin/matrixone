@@ -80,7 +80,5 @@ type ShardStorage interface {
 	Get(table uint64) (pb.ShardsMetadata, error)
 	Create(table uint64, txnOp client.TxnOperator) (bool, error)
 	Delete(table uint64, txnOp client.TxnOperator) (bool, error)
-
-	Subscribe(tables ...uint64) error
 	Unsubscribe(tables ...uint64) error
 }

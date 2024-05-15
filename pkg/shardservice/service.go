@@ -216,7 +216,7 @@ OUT:
 			continue
 		}
 		for _, shard := range shards {
-			if shard.State != pb.ShardState_Running {
+			if !shard.HasRunningReplica() {
 				getLogger().Warn("shard is not running",
 					zap.String("shard", shard.String()))
 				time.Sleep(time.Second)
@@ -299,13 +299,13 @@ func (s *service) heartbeat(
 ) {
 	timer := time.NewTimer(s.cfg.CNHeartbeatDuration.Duration)
 	defer timer.Stop()
-
+	m := make(map[uint64]bool)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			if err := s.doHeartbeat(); err != nil {
+			if err := s.doHeartbeat(m); err != nil {
 				getLogger().Error("failed to heartbeat",
 					zap.Error(err))
 			}
@@ -326,7 +326,9 @@ func (s *service) heartbeat(
 	}
 }
 
-func (s *service) doHeartbeat() error {
+func (s *service) doHeartbeat(
+	m map[uint64]bool,
+) error {
 	if s.options.disableHeartbeat.Load() {
 		return nil
 	}
@@ -359,17 +361,19 @@ func (s *service) doHeartbeat() error {
 			zap.String("op", op.String()),
 		)
 		switch op.Type {
-		case pb.OpType_AddShard:
-			s.handleAddShard(
+		case pb.OpType_AddReplica:
+			s.handleAddReplica(
 				newShards,
 				op.TableShard,
+				op.Replica,
 			)
-		case pb.OpType_DeleteShard:
-			s.handleDeleteShard(
+		case pb.OpType_DeleteReplica:
+			s.handleDeleteReplica(
 				newShards,
 				op.TableShard,
+				op.Replica,
 			)
-		case pb.OpType_DeleteALL:
+		case pb.OpType_DeleteAll:
 			s.handleDeleteAll(
 				newShards,
 			)
@@ -380,21 +384,23 @@ func (s *service) doHeartbeat() error {
 		}
 	}
 
+	for k := range m {
+		delete(m, k)
+	}
 	for _, op := range newShards.ops {
 		for {
 			var err error
-			if op.isSubscribe() {
-				err = s.storage.Subscribe(op.tableID)
-			} else {
-				err = s.storage.Unsubscribe(op.tableID)
+			unsubscribed := m[op]
+			if !unsubscribed {
+				err = s.storage.Unsubscribe(op)
 			}
 			if err == nil {
+				m[op] = true
 				break
 			}
-			getLogger().Error("failed to subscribe/unsubscribe",
-				zap.Uint64("table", op.tableID),
+			getLogger().Error("failed to unsubscribe",
+				zap.Uint64("table", op),
 				zap.Error(err),
-				zap.Bool("subscribe", op.isSubscribe()),
 			)
 			time.Sleep(time.Second)
 		}
@@ -403,31 +409,32 @@ func (s *service) doHeartbeat() error {
 	return nil
 }
 
-func (s *service) handleAddShard(
+func (s *service) handleAddReplica(
 	newShards *allocatedCache,
 	shard pb.TableShard,
+	replica pb.ShardReplica,
 ) {
-	if !newShards.add(shard) {
+	if !newShards.add(shard, replica) {
 		return
 	}
 
 	if shard.Policy != pb.Policy_Partition &&
 		newShards.count(shard.TableID) > 1 {
-		newShards.addSubscribeOp(shard.GetPhysicalTableID(), forceUnsubscribe)
+		newShards.addUnsubscribe(shard.GetPhysicalTableID())
 	}
-	newShards.addSubscribeOp(shard.GetPhysicalTableID(), subscribe)
 }
 
-func (s *service) handleDeleteShard(
+func (s *service) handleDeleteReplica(
 	newShards *allocatedCache,
 	shard pb.TableShard,
+	replica pb.ShardReplica,
 ) {
-	if !newShards.delete(shard) {
+	if !newShards.delete(shard, replica) {
 		return
 	}
 	if shard.Policy == pb.Policy_Partition ||
 		newShards.count(shard.TableID) == 0 {
-		newShards.addSubscribeOp(shard.GetPhysicalTableID(), unsubscribe)
+		newShards.addUnsubscribe(shard.GetPhysicalTableID())
 	}
 }
 
@@ -435,7 +442,7 @@ func (s *service) handleDeleteAll(
 	newShards *allocatedCache,
 ) {
 	for _, shard := range newShards.values {
-		newShards.addSubscribeOp(shard.GetPhysicalTableID(), unsubscribe)
+		newShards.addUnsubscribe(shard.GetPhysicalTableID())
 	}
 	newShards.clean()
 }
@@ -516,28 +523,9 @@ func (s *service) send(
 	return resp, nil
 }
 
-var (
-	subscribe        = 0
-	unsubscribe      = 1
-	forceUnsubscribe = 2
-)
-
-type subscribeOp struct {
-	tableID uint64
-	flag    int
-}
-
-func (s subscribeOp) same(flag int) bool {
-	return s.flag == flag
-}
-
-func (s subscribeOp) isSubscribe() bool {
-	return s.flag == subscribe
-}
-
 type allocatedCache struct {
 	values []pb.TableShard
-	ops    []subscribeOp
+	ops    []uint64
 }
 
 func newAllocatedCache() *allocatedCache {
@@ -546,24 +534,44 @@ func newAllocatedCache() *allocatedCache {
 
 func (s *allocatedCache) add(
 	shard pb.TableShard,
+	replica pb.ShardReplica,
 ) bool {
-	for _, v := range s.values {
-		if v.Same(shard) {
+	for i, v := range s.values {
+		if !v.Same(shard) {
+			continue
+		}
+		if v.GetReplica(replica) != -1 {
 			return false
 		}
+		s.values[i].Replicas = append(s.values[i].Replicas, replica)
+		return true
 	}
+
+	shard.Replicas = []pb.ShardReplica{replica}
 	s.values = append(s.values, shard)
 	return true
 }
 
 func (s *allocatedCache) delete(
 	shard pb.TableShard,
+	replica pb.ShardReplica,
 ) bool {
 	for i, v := range s.values {
 		if !v.Same(shard) {
 			continue
 		}
-		s.values = append(s.values[:i], s.values[i+1:]...)
+
+		idx := v.GetReplica(replica)
+		if idx == -1 {
+			return false
+		}
+		// remove shard
+		if len(v.Replicas) == 1 {
+			s.values = append(s.values[:i], s.values[i+1:]...)
+			return true
+		}
+		// only remove replica
+		s.values[i].Replicas = append(v.Replicas[:idx], v.Replicas[idx+1:]...)
 		return true
 	}
 	return false
@@ -575,7 +583,7 @@ func (s *allocatedCache) count(
 	count := 0
 	for _, v := range s.values {
 		if v.TableID == tableID {
-			count++
+			count += len(v.Replicas)
 		}
 	}
 	return count
@@ -595,32 +603,10 @@ func (s *allocatedCache) clone() *allocatedCache {
 	return clone
 }
 
-func (s *allocatedCache) addSubscribeOp(
+func (s *allocatedCache) addUnsubscribe(
 	tableID uint64,
-	flag int,
 ) {
-	skip := -1
-	if flag != forceUnsubscribe {
-		for i, op := range s.ops {
-			if op.flag == forceUnsubscribe ||
-				op.tableID != tableID {
-				continue
-			}
-
-			if op.same(flag) {
-				return
-			} else {
-				// here, means conflict, need to skip
-				skip = i
-				break
-			}
-		}
-	}
-
-	s.ops = append(s.ops, subscribeOp{tableID: tableID, flag: flag})
-	if skip != -1 {
-		s.ops = append(s.ops[:skip], s.ops[skip+1:]...)
-	}
+	s.ops = append(s.ops, tableID)
 }
 
 type readCache struct {

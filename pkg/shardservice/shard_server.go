@@ -79,13 +79,14 @@ func (s *server) Close() error {
 }
 
 func (s *server) initSchedulers() {
+	freezeFilter := newFreezeFilter(s.cfg.FreezeCNTimeout.Duration)
 	s.schedulers = append(
 		s.schedulers,
 		newDownScheduler(),
 		newAllocateScheduler(),
 		newBalanceScheduler(
 			s.cfg.MaxScheduleTables,
-			s.cfg.FreezeCNTimeout.Duration,
+			freezeFilter,
 		))
 }
 
@@ -181,34 +182,11 @@ func (s *server) doCreate(
 	id uint64,
 	metadata pb.ShardsMetadata,
 ) {
-	table := &table{
-		metadata:  metadata,
-		id:        id,
-		allocated: false,
-	}
-	table.shards = make([]pb.TableShard, 0, metadata.ShardsCount)
-	for i := uint32(0); i < metadata.ShardsCount; i++ {
-		table.shards = append(table.shards,
-			pb.TableShard{
-				Policy:        metadata.Policy,
-				TableID:       id,
-				State:         pb.ShardState_Allocating,
-				BindVersion:   s.initBindVersion,
-				ShardsVersion: metadata.Version,
-				ShardID:       uint64(i + 1),
-			})
-	}
-	if metadata.Policy == pb.Policy_Partition {
-		ids := metadata.PhysicalShardIDs
-		if len(ids) != len(table.shards) {
-			panic("partition and shard count not match")
-		}
-		for i, id := range ids {
-			table.shards[i].ShardID = id
-		}
-	}
-
-	s.r.add(table)
+	s.r.add(newTable(
+		id,
+		metadata,
+		s.initBindVersion,
+	))
 }
 
 func (s *server) schedule(ctx context.Context) {

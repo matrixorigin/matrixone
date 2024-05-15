@@ -29,18 +29,21 @@ var (
 		op pb.OpType,
 	) func(t *table) pb.Operator {
 		return func(t *table) pb.Operator {
-			s := t.shards[id]
-			s.CN = cn
+			s := t.shards[id].Clone()
+			s.Replicas[0].CN = cn
 			switch op {
-			case pb.OpType_AddShard:
-				s.State = pb.ShardState_Allocated
-			case pb.OpType_DeleteShard:
-				s.State = pb.ShardState_Tombstone
-				s.BindVersion--
+			case pb.OpType_AddReplica:
+				s.Replicas[0].State = pb.ReplicaState_Allocated
+			case pb.OpType_DeleteReplica:
+				s.Replicas[0].State = pb.ReplicaState_Tombstone
+				s.Replicas[0].Version--
 			}
+			r := s.Replicas[0]
+			s.Replicas = nil
 			return pb.Operator{
 				Type:       op,
 				TableShard: s,
+				Replica:    r,
 			}
 		}
 	}
@@ -49,14 +52,14 @@ var (
 		id uint64,
 		cn string,
 	) func(t *table) pb.Operator {
-		return factory(id, cn, pb.OpType_AddShard)
+		return factory(id, cn, pb.OpType_AddReplica)
 	}
 
 	deleteOp = func(
 		id uint64,
 		cn string,
 	) func(t *table) pb.Operator {
-		return factory(id, cn, pb.OpType_DeleteShard)
+		return factory(id, cn, pb.OpType_DeleteReplica)
 	}
 )
 
@@ -242,7 +245,7 @@ func TestScheduleBalance(t *testing.T) {
 				}
 
 				s1 := newAllocateScheduler()
-				s2 := newBalanceScheduler(1, time.Second, withBalanceOrder(c.tables))
+				s2 := newBalanceScheduler(1, newFreezeFilter(time.Second), withBalanceOrder(c.tables))
 
 				check := func(m []map[string]int) {
 					for i, id := range c.tables {
@@ -251,7 +254,7 @@ func TestScheduleBalance(t *testing.T) {
 						for cn, count := range expectCNs {
 							actualCount := 0
 							for _, s := range table.shards {
-								if s.CN == cn {
+								if s.Replicas[0].CN == cn {
 									actualCount++
 								}
 							}
@@ -268,7 +271,7 @@ func TestScheduleBalance(t *testing.T) {
 				for _, id := range c.tables {
 					table := r.tables[id]
 					for i := range table.shards {
-						table.shards[i].State = pb.ShardState_Running
+						table.shards[i].Replicas[0].State = pb.ReplicaState_Running
 					}
 				}
 				for _, cn := range r.cns {

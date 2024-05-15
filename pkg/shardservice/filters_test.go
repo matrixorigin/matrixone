@@ -48,18 +48,18 @@ func TestStateFilter(t *testing.T) {
 			ops := f.filter(r, []*cn{r.newCN("cn1"), r.newCN("cn2"), r.newCN("cn3")})
 			require.Equal(t, 3, len(ops))
 
-			t1.allocate(0, "cn1")
+			t1.allocate("cn1", 0, 0)
 			ops = f.filter(r, []*cn{r.newCN("cn1"), r.newCN("cn2"), r.newCN("cn3")})
 			require.Equal(t, 2, len(ops))
 			require.Equal(t, "cn2", ops[0].id)
 			require.Equal(t, "cn3", ops[1].id)
 
-			t1.allocate(1, "cn2")
+			t1.allocate("cn2", 1, 0)
 			ops = f.filter(r, []*cn{r.newCN("cn1"), r.newCN("cn2"), r.newCN("cn3")})
 			require.Equal(t, 1, len(ops))
 			require.Equal(t, "cn3", ops[0].id)
 
-			t1.allocate(2, "cn3")
+			t1.allocate("cn3", 2, 0)
 			ops = f.filter(r, []*cn{r.newCN("cn1"), r.newCN("cn2"), r.newCN("cn3")})
 			require.Equal(t, 0, len(ops))
 		},

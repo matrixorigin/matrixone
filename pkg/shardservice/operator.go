@@ -18,16 +18,33 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 )
 
-func newDeleteAllOp() pb.Operator {
+func newAddReplicaOp(
+	shard pb.TableShard,
+	replica pb.ShardReplica,
+) pb.Operator {
+	shard.Replicas = nil
 	return pb.Operator{
-		Type: pb.OpType_DeleteALL,
+		Type:       pb.OpType_AddReplica,
+		TableShard: shard,
+		Replica:    replica,
 	}
 }
 
-func newDeleteOp(shard pb.TableShard) pb.Operator {
+func newDeleteReplicaOp(
+	shard pb.TableShard,
+	replica pb.ShardReplica,
+) pb.Operator {
+	shard.Replicas = nil
 	return pb.Operator{
-		Type:       pb.OpType_DeleteShard,
+		Type:       pb.OpType_DeleteReplica,
 		TableShard: shard,
+		Replica:    replica,
+	}
+}
+
+func newDeleteAllOp() pb.Operator {
+	return pb.Operator{
+		Type: pb.OpType_DeleteAll,
 	}
 }
 
@@ -35,13 +52,5 @@ func newCreateTableOp(tableID uint64) pb.Operator {
 	return pb.Operator{
 		Type:    pb.OpType_CreateTable,
 		TableID: tableID,
-	}
-
-}
-
-func newAddOp(shard pb.TableShard) pb.Operator {
-	return pb.Operator{
-		Type:       pb.OpType_AddShard,
-		TableShard: shard,
 	}
 }

@@ -78,11 +78,11 @@ type balanceScheduler struct {
 
 func newBalanceScheduler(
 	maxTablesPerSchedule int,
-	maxFreezeCNTimeout time.Duration,
+	freezeFilter *freezeFilter,
 	opts ...balanceOption,
 ) scheduler {
 	s := &balanceScheduler{
-		freezeFilter:         newFreezeFilter(maxFreezeCNTimeout),
+		freezeFilter:         freezeFilter,
 		stateFilter:          newStateFilter(),
 		maxTablesPerSchedule: maxTablesPerSchedule,
 	}
@@ -158,12 +158,12 @@ func (s *balanceScheduler) doBalance(
 	sort.Slice(
 		cns,
 		func(i, j int) bool {
-			return t.getShardsCount(cns[i].id) < t.getShardsCount(cns[j].id)
+			return t.getReplicaCount(cns[i].id) < t.getReplicaCount(cns[j].id)
 		},
 	)
 
-	min := t.getShardsCount(cns[0].id)
-	max := t.getShardsCount(cns[len(cns)-1].id)
+	min := t.getReplicaCount(cns[0].id)
+	max := t.getReplicaCount(cns[len(cns)-1].id)
 	if max-min <= 1 {
 		return false, nil
 	}
@@ -171,9 +171,9 @@ func (s *balanceScheduler) doBalance(
 	from := cns[len(cns)-1].id
 	to := cns[0].id
 
-	old, new := t.moveLocked(from, to)
-	r.addOpLocked(from, newDeleteOp(old))
-	r.addOpLocked(to, newAddOp(new))
+	shard, old, new := t.moveLocked(from, to)
+	r.addOpLocked(from, newDeleteReplicaOp(shard, old))
+	r.addOpLocked(to, newAddReplicaOp(shard, new))
 
 	getLogger().Info(
 		"move shard",

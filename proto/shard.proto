@@ -43,10 +43,10 @@ enum Policy {
 
 // OpType operator type.
 enum OpType {
-    AddShard    = 0;
-    DeleteShard = 1;
-    DeleteALL   = 2;
-    CreateTable = 3;
+    AddReplica    = 0;
+    DeleteReplica = 1;
+    DeleteAll     = 2;
+    CreateTable   = 3;
 }
 
 enum CNState {
@@ -54,7 +54,7 @@ enum CNState {
     Down    = 1;
 }
 
-enum ShardState {
+enum ReplicaState {
     Allocating = 0;
     Allocated  = 1;
     Running    = 2;
@@ -69,32 +69,40 @@ message ShardsMetadata {
     uint32          ShardsCount      = 2;
     uint32          Version          = 3;
     uint32          TenantID         = 4;
-    repeated uint64 PhysicalShardIDs = 5;
+    uint32          MaxReplicaCount  = 5;
+    repeated uint64 PhysicalShardIDs = 6;
 }
 
 // TableShard when ShardsMetadata are created, the Shards corresponding to a table 
 // are determined, and each Shard is assigned a corresponding CN node to handle requests
 // for that Shard.
 //
-// The binding relationship between CN and Shard changes dynamically during the runtime, and 
-// presumably if the corresponding CN goes offline, or if a new CN comes online and causes 
-// an imbalance between Shard and CN, then the binding relationship will be readjusted.
-//
 // When the Table's shards count changed, the corresponding Version field increments itself. 
 // This makes it easy to found expired information.
 message TableShard {
-    uint64     TableID       = 1;
-    uint64     ShardID       = 2;
-    uint32     ReplicaID     = 3;
-    Policy     Policy        = 4;
-    string     CN            = 5;
-    // Version incrments when shards count changed
-    uint32     ShardsVersion = 6;
-    // BindVersion incrments when the cn changed
-    uint64     BindVersion   = 7;
-    ShardState State         = 8; 
+    uint64                TableID   = 1;
+    uint64                ShardID   = 2;
+    Policy                Policy    = 3;
+    // Version increment when shards count changed
+    uint32                Version   = 4;
+    repeated ShardReplica Replicas  = 5 [(gogoproto.nullable) = false];
 }
 
+// ShardReplica a tableShard will have multiple replicas, the data of these replicas is exactly 
+// the same, each replica is a ShardReplica. ShardReplica can run on any available CN node.
+//
+// The binding relationship between CN and ShardReplica changes dynamically during the runtime, 
+// and presumably if the corresponding CN goes offline, or if a new CN comes online and causes 
+// an imbalance between ShardReplica and CN, then the binding relationship will be readjusted.
+//
+// The number of replicas is used to extend the read performance.
+message ShardReplica {
+    uint64       ReplicaID = 1;
+    ReplicaState State     = 2;
+    string       CN        = 3;
+    // Version increment when the cn changed
+    uint64       Version   = 4;
+}
 
 // Method sharding operations
 enum Method {
@@ -132,7 +140,8 @@ message Response {
 message Operator {
     OpType         Type           = 1;
     TableShard     TableShard     = 2 [(gogoproto.nullable) = false];
-    uint64         TableID        = 3;
+    ShardReplica   Replica        = 3 [(gogoproto.nullable) = false];
+    uint64         TableID        = 4;
 }
 
 message CreateShardsRequest {

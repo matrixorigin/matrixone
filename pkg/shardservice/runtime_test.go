@@ -44,7 +44,7 @@ func TestAddWithOldVersion(t *testing.T) {
 			t1 := newTestTable(1, 1, 1)
 			r.add(t1)
 
-			t1.allocate(0, "cn1")
+			t1.allocate("cn1", 0, 0)
 			t1 = newTestTable(1, 1, 1)
 			r.add(t1)
 			require.Equal(t, 1, len(r.tables))
@@ -67,17 +67,22 @@ func TestAddWithNewVersion(t *testing.T) {
 			t1 := newTestTable(1, 1, 3)
 			r.add(t1)
 
-			t1.allocate(0, "cn1")
-			t1.allocate(1, "cn1")
+			t1.allocate("cn1", 0, 0)
+			t1.allocate("cn1", 1, 0)
 			s1 := t1.shards[0]
+			r1 := s1.Replicas[0]
+			s1.Replicas = nil
+
 			s2 := t1.shards[1]
+			r2 := s2.Replicas[0]
+			s2.Replicas = nil
 
 			t1 = newTestTable(1, 2, 3)
 			r.add(t1)
 			require.Equal(t, 1, len(r.tables))
 			require.Equal(t, 2, len(r.cns["cn1"].incompleteOps))
-			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteShard, TableShard: s1}, r.cns["cn1"].incompleteOps[0])
-			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteShard, TableShard: s2}, r.cns["cn1"].incompleteOps[1])
+			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteReplica, TableShard: s1, Replica: r1}, r.cns["cn1"].incompleteOps[0])
+			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteReplica, TableShard: s2, Replica: r2}, r.cns["cn1"].incompleteOps[1])
 			for i, s := range t1.shards {
 				require.Equal(t, s, r.tables[t1.id].shards[i])
 			}
@@ -108,17 +113,22 @@ func TestDeleteWithAllocated(t *testing.T) {
 			t1 := newTestTable(1, 1, 3)
 			r.add(t1)
 
-			t1.allocate(0, "cn1")
-			t1.allocate(1, "cn1")
+			t1.allocate("cn1", 0, 0)
+			t1.allocate("cn1", 1, 0)
 
 			s1 := t1.shards[0]
+			r1 := s1.Replicas[0]
+			s1.Replicas = nil
+
 			s2 := t1.shards[1]
+			r2 := s2.Replicas[0]
+			s2.Replicas = nil
 
 			r.delete(t1.id)
 			require.Equal(t, 0, len(r.tables))
 			require.Equal(t, 2, len(r.cns["cn1"].incompleteOps))
-			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteShard, TableShard: s1}, r.cns["cn1"].incompleteOps[0])
-			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteShard, TableShard: s2}, r.cns["cn1"].incompleteOps[1])
+			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteReplica, TableShard: s1, Replica: r1}, r.cns["cn1"].incompleteOps[0])
+			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteReplica, TableShard: s2, Replica: r2}, r.cns["cn1"].incompleteOps[1])
 		},
 	)
 }
@@ -128,24 +138,24 @@ func TestAllocate(t *testing.T) {
 		"cn1,cn2",
 		func(r *rt) {
 			t1 := newTestTable(1, 1, 3)
-			t1.allocate(0, "cn1")
-			t1.allocate(1, "cn2")
+			t1.allocate("cn1", 0, 0)
+			t1.allocate("cn2", 1, 0)
 
-			require.Equal(t, pb.ShardState_Allocated, t1.shards[0].State)
-			require.Equal(t, pb.ShardState_Allocated, t1.shards[1].State)
-			require.Equal(t, pb.ShardState_Allocating, t1.shards[2].State)
+			require.Equal(t, pb.ReplicaState_Allocated, t1.shards[0].Replicas[0].State)
+			require.Equal(t, pb.ReplicaState_Allocated, t1.shards[1].Replicas[0].State)
+			require.Equal(t, pb.ReplicaState_Allocating, t1.shards[2].Replicas[0].State)
 
-			require.Equal(t, uint64(2), t1.shards[0].BindVersion)
-			require.Equal(t, uint64(2), t1.shards[1].BindVersion)
-			require.Equal(t, uint64(1), t1.shards[2].BindVersion)
+			require.Equal(t, uint64(2), t1.shards[0].Replicas[0].Version)
+			require.Equal(t, uint64(2), t1.shards[1].Replicas[0].Version)
+			require.Equal(t, uint64(1), t1.shards[2].Replicas[0].Version)
 
-			require.Equal(t, uint32(1), t1.shards[0].ShardsVersion)
-			require.Equal(t, uint32(1), t1.shards[1].ShardsVersion)
-			require.Equal(t, uint32(1), t1.shards[2].ShardsVersion)
+			require.Equal(t, uint32(1), t1.shards[0].Version)
+			require.Equal(t, uint32(1), t1.shards[1].Version)
+			require.Equal(t, uint32(1), t1.shards[2].Version)
 
-			require.Equal(t, "cn1", t1.shards[0].CN)
-			require.Equal(t, "cn2", t1.shards[1].CN)
-			require.Equal(t, "", t1.shards[2].CN)
+			require.Equal(t, "cn1", t1.shards[0].Replicas[0].CN)
+			require.Equal(t, "cn2", t1.shards[1].Replicas[0].CN)
+			require.Equal(t, "", t1.shards[2].Replicas[0].CN)
 		},
 	)
 }
@@ -160,7 +170,7 @@ func TestNeedAllocate(t *testing.T) {
 			t1.allocated = true
 			require.False(t, t1.needAllocate())
 
-			t1.shards[0].State = pb.ShardState_Tombstone
+			t1.shards[0].Replicas[0].State = pb.ReplicaState_Tombstone
 			require.True(t, t1.needAllocate())
 		},
 	)
@@ -171,13 +181,13 @@ func TestGetShardsCount(t *testing.T) {
 		"cn1,cn2",
 		func(r *rt) {
 			t1 := newTestTable(1, 1, 4)
-			t1.allocate(0, "cn1")
-			t1.allocate(1, "cn2")
-			t1.allocate(2, "cn2")
+			t1.allocate("cn1", 0, 0)
+			t1.allocate("cn2", 1, 0)
+			t1.allocate("cn2", 2, 0)
 
-			require.Equal(t, 0, t1.getShardsCount("cn3"))
-			require.Equal(t, 1, t1.getShardsCount("cn1"))
-			require.Equal(t, 2, t1.getShardsCount("cn2"))
+			require.Equal(t, 0, t1.getReplicaCount("cn3"))
+			require.Equal(t, 1, t1.getReplicaCount("cn1"))
+			require.Equal(t, 2, t1.getReplicaCount("cn2"))
 		},
 	)
 }
@@ -189,15 +199,15 @@ func TestValid(t *testing.T) {
 			t1 := newTestTable(1, 1, 1)
 			s1 := t1.shards[0]
 
-			require.True(t, t1.valid(s1))
+			require.True(t, t1.valid(s1, s1.Replicas[0]))
 
-			target := s1
-			target.BindVersion--
-			require.False(t, t1.valid(target))
+			target := s1.Replicas[0]
+			target.Version--
+			require.False(t, t1.valid(s1, target))
 
-			target = s1
-			target.ShardsVersion--
-			require.False(t, t1.valid(target))
+			target = s1.Replicas[0]
+			target.Version--
+			require.False(t, t1.valid(s1, target))
 
 			func() {
 				defer func() {
@@ -206,9 +216,9 @@ func TestValid(t *testing.T) {
 					}
 				}()
 
-				target = s1
-				target.BindVersion++
-				t1.valid(target)
+				target = s1.Replicas[0]
+				target.Version++
+				t1.valid(s1, target)
 			}()
 
 			func() {
@@ -218,9 +228,9 @@ func TestValid(t *testing.T) {
 					}
 				}()
 
-				target = s1
-				target.ShardsVersion++
-				t1.valid(target)
+				target := s1
+				target.Version++
+				t1.valid(target, target.Replicas[0])
 			}()
 		},
 	)
@@ -231,24 +241,23 @@ func TestMove(t *testing.T) {
 		"cn1,cn2",
 		func(r *rt) {
 			t1 := newTestTable(1, 1, 2)
-			t1.allocate(0, "cn1")
-			t1.allocate(1, "cn2")
-			t1.shards[0].State = pb.ShardState_Running
-			t1.shards[1].State = pb.ShardState_Running
+			t1.allocate("cn1", 0, 0)
+			t1.allocate("cn2", 1, 0)
+			t1.shards[0].Replicas[0].State = pb.ReplicaState_Running
+			t1.shards[1].Replicas[0].State = pb.ReplicaState_Running
 
 			v := t1.shards[0]
-
-			old, new := t1.moveLocked("cn1", "cn2")
-
-			expect := v
+			expect := v.Replicas[0]
 			expect.CN = "cn1"
-			expect.State = pb.ShardState_Tombstone
+			expect.State = pb.ReplicaState_Tombstone
+
+			_, old, new := t1.moveLocked("cn1", "cn2")
+
 			require.Equal(t, expect, old)
 
-			expect = v
-			expect.BindVersion++
+			expect.Version++
 			expect.CN = "cn2"
-			expect.State = pb.ShardState_Allocated
+			expect.State = pb.ReplicaState_Allocated
 			require.Equal(t, expect, new)
 		},
 	)
@@ -259,29 +268,29 @@ func TestAllocateCompleted(t *testing.T) {
 		"cn1,cn2",
 		func(r *rt) {
 			t1 := newTestTable(1, 1, 3)
-			t1.allocate(0, "cn1")
-			t1.allocate(1, "cn2")
-			t1.allocate(2, "cn2")
+			t1.allocate("cn1", 0, 0)
+			t1.allocate("cn2", 1, 0)
+			t1.allocate("cn2", 2, 0)
 
-			s1 := t1.shards[0]
-			s2 := t1.shards[1]
-			s3 := t1.shards[2]
+			s1 := t1.shards[0].Clone()
+			s2 := t1.shards[1].Clone()
+			s3 := t1.shards[2].Clone()
 
-			t1.allocateCompleted(s1)
-			require.Equal(t, pb.ShardState_Running, t1.shards[0].State)
-			require.Equal(t, pb.ShardState_Allocated, t1.shards[1].State)
-			require.Equal(t, pb.ShardState_Allocated, t1.shards[2].State)
+			t1.allocateCompleted(s1, s1.Replicas[0])
+			require.Equal(t, pb.ReplicaState_Running, t1.shards[0].Replicas[0].State)
+			require.Equal(t, pb.ReplicaState_Allocated, t1.shards[1].Replicas[0].State)
+			require.Equal(t, pb.ReplicaState_Allocated, t1.shards[2].Replicas[0].State)
 
-			t1.allocateCompleted(s2)
-			require.Equal(t, pb.ShardState_Running, t1.shards[0].State)
-			require.Equal(t, pb.ShardState_Running, t1.shards[1].State)
-			require.Equal(t, pb.ShardState_Allocated, t1.shards[2].State)
+			t1.allocateCompleted(s2, s2.Replicas[0])
+			require.Equal(t, pb.ReplicaState_Running, t1.shards[0].Replicas[0].State)
+			require.Equal(t, pb.ReplicaState_Running, t1.shards[1].Replicas[0].State)
+			require.Equal(t, pb.ReplicaState_Allocated, t1.shards[2].Replicas[0].State)
 
-			s3.BindVersion--
-			t1.allocateCompleted(s3)
-			require.Equal(t, pb.ShardState_Running, t1.shards[0].State)
-			require.Equal(t, pb.ShardState_Running, t1.shards[1].State)
-			require.Equal(t, pb.ShardState_Allocated, t1.shards[2].State)
+			s3.Replicas[0].Version--
+			t1.allocateCompleted(s3, s3.Replicas[0])
+			require.Equal(t, pb.ReplicaState_Running, t1.shards[0].Replicas[0].State)
+			require.Equal(t, pb.ReplicaState_Running, t1.shards[1].Replicas[0].State)
+			require.Equal(t, pb.ReplicaState_Allocated, t1.shards[2].Replicas[0].State)
 		},
 	)
 }
@@ -306,7 +315,7 @@ func TestHeartbeatWithDownCN(t *testing.T) {
 
 			ops := r.heartbeat("cn1", nil)
 			require.Equal(t, 1, len(ops))
-			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteALL}, ops[0])
+			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteAll}, ops[0])
 		},
 	)
 }
@@ -317,7 +326,7 @@ func TestHeartbeatWithUnknownCN(t *testing.T) {
 		func(r *rt) {
 			ops := r.heartbeat("cn2", nil)
 			require.Equal(t, 1, len(ops))
-			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteALL}, ops[0])
+			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteAll}, ops[0])
 		},
 	)
 }
@@ -330,19 +339,25 @@ func TestHeartbeatWithOp(t *testing.T) {
 
 			t1 := newTestTable(1, 1, 3)
 			r.add(t1)
-			t1.allocate(0, "cn1")
-			t1.allocate(1, "cn1")
+			t1.allocate("cn1", 0, 0)
+			t1.allocate("cn1", 1, 0)
 
-			s1 := t1.shards[0]
-			s2 := t1.shards[1]
+			s1 := t1.shards[0].Clone()
+			r1 := s1.Replicas[0]
 
-			r.addOpLocked("cn1", newAddOp(s1))
-			r.addOpLocked("cn1", newAddOp(s2))
+			s2 := t1.shards[1].Clone()
+			r2 := s2.Replicas[0]
+
+			r.addOpLocked("cn1", newAddReplicaOp(s1, s1.Replicas[0]))
+			r.addOpLocked("cn1", newAddReplicaOp(s2, s2.Replicas[0]))
 
 			ops := r.heartbeat("cn1", nil)
 			require.Equal(t, 2, len(ops))
-			require.Equal(t, pb.Operator{Type: pb.OpType_AddShard, TableShard: s1}, ops[0])
-			require.Equal(t, pb.Operator{Type: pb.OpType_AddShard, TableShard: s2}, ops[1])
+
+			s1.Replicas = nil
+			s2.Replicas = nil
+			require.Equal(t, pb.Operator{Type: pb.OpType_AddReplica, TableShard: s1, Replica: r1}, ops[0])
+			require.Equal(t, pb.Operator{Type: pb.OpType_AddReplica, TableShard: s2, Replica: r2}, ops[1])
 		},
 	)
 }
@@ -355,21 +370,25 @@ func TestHeartbeatWithOpCompleted(t *testing.T) {
 
 			t1 := newTestTable(1, 1, 3)
 			r.add(t1)
-			t1.allocate(0, "cn1")
-			t1.allocate(1, "cn1")
+			t1.allocate("cn1", 0, 0)
+			t1.allocate("cn1", 1, 0)
 
-			s1 := t1.shards[0]
-			s2 := t1.shards[1]
+			s1 := t1.shards[0].Clone()
+			s2 := t1.shards[1].Clone()
 
-			r.addOpLocked("cn1", newAddOp(s1))
-			r.addOpLocked("cn1", newAddOp(s2))
+			r.addOpLocked("cn1", newAddReplicaOp(s1, s1.Replicas[0]))
+			r.addOpLocked("cn1", newAddReplicaOp(s2, s2.Replicas[0]))
 
 			ops := r.heartbeat("cn1", []pb.TableShard{s1})
-			require.Equal(t, pb.ShardState_Running, r.tables[t1.id].shards[0].State)
+			require.Equal(t, pb.ReplicaState_Running, r.tables[t1.id].shards[0].Replicas[0].State)
+
+			r2 := s2.Replicas[0]
+			s2.Replicas = nil
 			require.Equal(t, 1, len(ops))
-			require.Equal(t, pb.Operator{Type: pb.OpType_AddShard, TableShard: s2}, ops[0])
+			require.Equal(t, pb.Operator{Type: pb.OpType_AddReplica, TableShard: s2, Replica: r2}, ops[0])
+
 			require.Equal(t, 1, len(r.cns["cn1"].incompleteOps))
-			require.Equal(t, pb.Operator{Type: pb.OpType_AddShard, TableShard: s2}, r.cns["cn1"].incompleteOps[0])
+			require.Equal(t, pb.Operator{Type: pb.OpType_AddReplica, TableShard: s2, Replica: r2}, r.cns["cn1"].incompleteOps[0])
 		},
 	)
 }
@@ -382,16 +401,19 @@ func TestHeartbeatWithStaleShard(t *testing.T) {
 
 			t1 := newTestTable(1, 1, 3)
 			r.add(t1)
-			t1.allocate(0, "cn1")
-			t1.allocate(1, "cn1")
-			s1 := t1.shards[0]
-			s2 := t1.shards[1]
+			t1.allocate("cn1", 0, 0)
+			t1.allocate("cn1", 1, 0)
+			s1 := t1.shards[0].Clone()
+			s2 := t1.shards[1].Clone()
 
-			t1.allocate(1, "cn2")
+			t1.allocate("cn2", 1, 0)
 
 			ops := r.heartbeat("cn1", []pb.TableShard{s1, s2})
 			require.Equal(t, 1, len(ops))
-			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteShard, TableShard: s2}, ops[0])
+
+			r2 := s2.Replicas[0]
+			s2.Replicas = nil
+			require.Equal(t, pb.Operator{Type: pb.OpType_DeleteReplica, TableShard: s2, Replica: r2}, ops[0])
 			require.Equal(t, 1, len(r.cns["cn1"].incompleteOps))
 		},
 	)
@@ -402,7 +424,7 @@ func TestHeartbeatWithTableNotExists(t *testing.T) {
 		"cn1",
 		func(r *rt) {
 			t1 := newTestTable(1, 1, 1)
-			t1.allocate(0, "cn1")
+			t1.allocate("cn1", 0, 0)
 			s1 := t1.shards[0]
 
 			ops := r.heartbeat("cn1", []pb.TableShard{s1})
@@ -454,12 +476,12 @@ func TestGetAvailableCNsLockedWithFilters(t *testing.T) {
 			t1 := newTestTable(1, 1, 3)
 			r.add(t1)
 
-			t1.allocate(0, "cn1")
-			t1.allocate(1, "cn2")
-			t1.allocate(2, "cn3")
+			t1.allocate("cn1", 0, 0)
+			t1.allocate("cn2", 1, 0)
+			t1.allocate("cn3", 2, 0)
 
-			t1.shards[1].State = pb.ShardState_Running
-			t1.shards[2].State = pb.ShardState_Running
+			t1.shards[1].Replicas[0].State = pb.ReplicaState_Running
+			t1.shards[2].Replicas[0].State = pb.ReplicaState_Running
 
 			f2 := newFreezeFilter(time.Minute)
 			f2.freeze["cn3"] = time.Now()
@@ -526,35 +548,17 @@ func newTestTableWithAll(
 	shardsCount uint32,
 	physicalShardIDs []uint64,
 ) *table {
-	table := &table{
-		metadata: pb.ShardsMetadata{
-			TenantID:    tenantID,
-			ShardsCount: shardsCount,
-			Policy:      policy,
-			Version:     version,
-		},
-		id:        id,
-		allocated: false,
+	metadata := pb.ShardsMetadata{
+		TenantID:         tenantID,
+		ShardsCount:      shardsCount,
+		Policy:           policy,
+		Version:          version,
+		MaxReplicaCount:  1,
+		PhysicalShardIDs: physicalShardIDs,
 	}
-	table.shards = make([]pb.TableShard, 0, shardsCount)
-	for i := uint32(0); i < shardsCount; i++ {
-		table.shards = append(table.shards,
-			pb.TableShard{
-				Policy:        policy,
-				TableID:       id,
-				State:         pb.ShardState_Allocating,
-				BindVersion:   1,
-				ShardsVersion: version,
-				ShardID:       uint64(i + 1),
-			})
-	}
-	if policy == pb.Policy_Partition {
-		if len(physicalShardIDs) != len(table.shards) {
-			panic("partition and shard count not match")
-		}
-		for i, id := range physicalShardIDs {
-			table.shards[i].ShardID = id
-		}
-	}
-	return table
+	return newTable(
+		id,
+		metadata,
+		1,
+	)
 }
