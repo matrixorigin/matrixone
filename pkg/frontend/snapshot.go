@@ -341,7 +341,7 @@ func restoreToAccount(
 	snapshotName string,
 	toAccountId uint32,
 	views *[]*tableInfo) (err error) {
-	logInfof("snapshot", fmt.Sprintf("[%s] start to restore account: %v", snapshotName, toAccountId))
+	getLogger().Info(fmt.Sprintf("[%s] start to restore account: %v", snapshotName, toAccountId))
 
 	var dbNames []string
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
@@ -353,7 +353,7 @@ func restoreToAccount(
 
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
-			logInfof("snapshot", fmt.Sprintf("skip db: %v", dbName))
+			getLogger().Info(fmt.Sprintf("skip db: %v", dbName))
 			continue
 		}
 
@@ -382,7 +382,7 @@ func restoreToDatabase(
 	dbName string,
 	toAccountId uint32,
 	views *[]*tableInfo) (err error) {
-	logInfof("snapshot", fmt.Sprintf("[%s] start to restore db: %v", snapshotName, dbName))
+	getLogger().Info(fmt.Sprintf("[%s] start to restore db: %v", snapshotName, dbName))
 	return restoreToDatabaseOrTable(ctx, bh, snapshotName, dbName, "", toAccountId, views)
 }
 
@@ -394,7 +394,7 @@ func restoreToTable(
 	tblName string,
 	toAccountId uint32,
 	views *[]*tableInfo) (err error) {
-	logInfof("snapshot", fmt.Sprintf("[%s] start to restore table: %v", snapshotName, tblName))
+	getLogger().Info(fmt.Sprintf("[%s] start to restore table: %v", snapshotName, tblName))
 	return restoreToDatabaseOrTable(ctx, bh, snapshotName, dbName, tblName, toAccountId, views)
 }
 
@@ -407,7 +407,7 @@ func restoreToDatabaseOrTable(
 	toAccountId uint32,
 	views *[]*tableInfo) (err error) {
 	if needSkipDb(dbName) {
-		logInfof("snapshot", fmt.Sprintf("skip db: %v", dbName))
+		getLogger().Info(fmt.Sprintf("skip db: %v", dbName))
 		return
 	}
 
@@ -447,7 +447,7 @@ func restoreToDatabaseOrTable(
 	for _, tblInfo := range tableInfos {
 		if needSkipTable(dbName, tblInfo.tblName) {
 			// TODO skip tables which should not to be restored
-			logInfof("snapshot", fmt.Sprintf("skip table: %v.%v", dbName, tblInfo.tblName))
+			getLogger().Info(fmt.Sprintf("skip table: %v.%v", dbName, tblInfo.tblName))
 			continue
 		}
 
@@ -537,7 +537,7 @@ func restoreViews(
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 	for _, key := range sortedViews {
 		if tblInfo, ok := keyTableInfoMap[key]; ok {
-			logInfof("snapshot", fmt.Sprintf("[%s] start to restore view: %v", snapshotName, tblInfo.tblName))
+			getLogger().Info(fmt.Sprintf("[%s] start to restore view: %v", snapshotName, tblInfo.tblName))
 
 			if err = bh.Exec(toCtx, "use "+tblInfo.dbName); err != nil {
 				return err
