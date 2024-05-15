@@ -99,13 +99,18 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 }
 
 func (entry *ObjectEntry) InMemoryDeletesExisted() bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.InMemoryDeletesExistedLocked()
+}
+
+func (entry *ObjectEntry) InMemoryDeletesExistedLocked() bool {
 	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
 	if tombstone != nil {
-		return tombstone.InMemoryDeletesExisted()
+		return tombstone.InMemoryDeletesExistedLocked()
 	}
 	return false
 }
-
 func NewObjectEntry(
 	table *TableEntry,
 	id *objectio.ObjectId,
@@ -399,6 +404,14 @@ func (entry *ObjectEntry) Is1PC() bool {
 func (entry *ObjectEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevel(level)))
+	if level == common.PPL0 {
+		return w.String()
+	}
+	return w.String()
+}
+func (entry *ObjectEntry) PPStringLocked(level common.PPLevel, depth int, prefix string) string {
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevelLocked(level)))
 	if level == common.PPL0 {
 		return w.String()
 	}
