@@ -415,6 +415,16 @@ func (n *ObjectMVCCHandle) GetDeltaPersistedTSLocked() types.TS {
 	return persisted
 }
 
+func (n *ObjectMVCCHandle) GetDeltaCommitedTSLocked() types.TS {
+	commitTS := types.TS{}
+	for _, deletes := range n.deletes {
+		ts := deletes.getDeltaCommittedTSLocked()
+		if ts.Greater(&commitTS) {
+			commitTS = ts
+		}
+	}
+	return commitTS
+}
 func (n *ObjectMVCCHandle) UpgradeDeleteChain(blkID uint16) {
 	deletes := n.deletes[blkID]
 	if deletes == nil {
@@ -767,6 +777,17 @@ func (n *MVCCHandle) getDeltaPersistedTSLocked() types.TS {
 	n.deltaloc.LoopChainLocked(func(m *catalog.MVCCNode[*catalog.MetadataMVCCNode]) bool {
 		if !m.BaseNode.DeltaLoc.IsEmpty() && m.IsCommitted() {
 			persisted = m.GetStart()
+			return false
+		}
+		return true
+	})
+	return persisted
+}
+func (n *MVCCHandle) getDeltaCommittedTSLocked() types.TS {
+	persisted := types.TS{}
+	n.deltaloc.LoopChainLocked(func(m *catalog.MVCCNode[*catalog.MetadataMVCCNode]) bool {
+		if !m.BaseNode.DeltaLoc.IsEmpty() && m.IsCommitted() {
+			persisted = m.GetEnd()
 			return false
 		}
 		return true

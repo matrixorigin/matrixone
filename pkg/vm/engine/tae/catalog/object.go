@@ -81,7 +81,7 @@ func (entry *ObjectEntry) IsDeletesFlushedBefore(ts types.TS) bool {
 	if tombstone == nil {
 		return true
 	}
-	persistedTS := tombstone.GetDeltaPersistedTSLocked()
+	persistedTS := tombstone.GetDeltaCommitedTSLocked()
 	return persistedTS.Less(&ts)
 }
 func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) string {
