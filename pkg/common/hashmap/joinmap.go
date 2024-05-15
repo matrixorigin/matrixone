@@ -61,17 +61,13 @@ func (jm *JoinMap) IsDup() bool {
 func (jm *JoinMap) NewIterator() Iterator {
 	if jm.shm == nil {
 		return &intHashMapIterator{
-			mp:      jm.ihm,
-			m:       jm.ihm.m,
-			ibucket: jm.ihm.ibucket,
-			nbucket: jm.ihm.nbucket,
+			mp: jm.ihm,
+			m:  jm.ihm.m,
 		}
 	} else {
 		return &strHashmapIterator{
-			mp:      jm.shm,
-			m:       jm.shm.m,
-			ibucket: jm.shm.ibucket,
-			nbucket: jm.shm.nbucket,
+			mp: jm.shm,
+			m:  jm.shm.m,
 		}
 	}
 }
@@ -82,8 +78,6 @@ func (jm *JoinMap) Dup() *JoinMap {
 			m:       jm.ihm.m,
 			hashMap: jm.ihm.hashMap,
 			hasNull: jm.ihm.hasNull,
-			ibucket: jm.ihm.ibucket,
-			nbucket: jm.ihm.nbucket,
 			keys:    make([]uint64, UnitLimit),
 			keyOffs: make([]uint32, UnitLimit),
 			values:  make([]uint64, UnitLimit),
@@ -107,8 +101,6 @@ func (jm *JoinMap) Dup() *JoinMap {
 			m:             jm.shm.m,
 			hashMap:       jm.shm.hashMap,
 			hasNull:       jm.shm.hasNull,
-			ibucket:       jm.shm.ibucket,
-			nbucket:       jm.shm.nbucket,
 			values:        make([]uint64, UnitLimit),
 			zValues:       make([]int64, UnitLimit),
 			keys:          make([][]byte, UnitLimit),

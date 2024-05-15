@@ -20,24 +20,21 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 var (
@@ -60,7 +57,7 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 	if ses.GetTxnHandler().InMultiStmtTransactionMode() && ses.GetTxnHandler().InActiveTxn() {
 		ses.cleanCache()
 	}
-	logError(ses, ses.GetDebugString(), execErr.Error())
+	ses.Error(execCtx.reqCtx, execErr.Error())
 	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback || isErrorRollbackWholeTxn(execErr)
 	txnErr := ses.GetTxnHandler().Rollback(execCtx)
 	if txnErr != nil {
@@ -95,7 +92,7 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 	// First recover all panics.   If paniced, we will abort.
 	if r := recover(); r != nil {
 		recoverErr := moerr.ConvertPanicError(execCtx.reqCtx, r)
-		logError(ses, ses.GetDebugString(), "recover from panic", zap.Error(recoverErr), zap.Error(execErr))
+		ses.Error(execCtx.reqCtx, "recover from panic", zap.Error(recoverErr), zap.Error(execErr))
 	}
 
 	if execCtx.txnOpt.byCommit {
@@ -443,7 +440,6 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	if !th.inActiveTxnUnsafe() || th.shareTxn {
 		return nil
 	}
-	sessionInfo := execCtx.ses.GetDebugString()
 	if th.txnOp == nil {
 		th.invalidateTxnUnsafe()
 	}
@@ -477,11 +473,11 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		}
 	}()
 
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+	if execCtx.ses.GetLogLevel().Enabled(zap.DebugLevel) {
 		txnId := th.txnOp.Txn().DebugString()
-		logDebugf(sessionInfo, "CommitTxn txnId:%s", txnId)
+		execCtx.ses.Debugf(execCtx.reqCtx, "CommitTxn txnId:%s", txnId)
 		defer func() {
-			logDebugf(sessionInfo, "CommitTxn exit txnId:%s", txnId)
+			execCtx.ses.Debugf(execCtx.reqCtx, "CommitTxn exit txnId:%s", txnId)
 		}()
 	}
 	if th.txnOp != nil {
@@ -546,8 +542,6 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		return nil
 	}
 
-	sessionInfo := execCtx.ses.GetDebugString()
-
 	if th.txnOp == nil {
 		th.invalidateTxnUnsafe()
 	}
@@ -573,11 +567,11 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
 		}
 	}()
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+	if execCtx.ses.GetLogLevel().Enabled(zap.DebugLevel) {
 		txnId := th.txnOp.Txn().DebugString()
-		logDebugf(sessionInfo, "RollbackTxn txnId:%s", txnId)
+		execCtx.ses.Debugf(execCtx.reqCtx, "RollbackTxn txnId:%s", txnId)
 		defer func() {
-			logDebugf(sessionInfo, "RollbackTxn exit txnId:%s", txnId)
+			execCtx.ses.Debugf(execCtx.reqCtx, "RollbackTxn exit txnId:%s", txnId)
 		}()
 	}
 	if th.txnOp != nil {
