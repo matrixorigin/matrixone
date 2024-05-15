@@ -546,6 +546,9 @@ func testFileService(
 		for _, entry := range entries {
 			err := fs.Delete(ctx, path.Join("qux/quux", entry.Name))
 			assert.Nil(t, err)
+			// delete again
+			err = fs.Delete(ctx, path.Join("qux/quux", entry.Name))
+			assert.Nil(t, err)
 		}
 		entries, err = fs.List(ctx, "qux/quux")
 		assert.Nil(t, err)
