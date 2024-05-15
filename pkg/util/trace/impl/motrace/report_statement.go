@@ -464,7 +464,7 @@ func mergeStats(e, n *StatementInfo) error {
 	return nil
 }
 
-var noExecPlan = []byte(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null}`)
+var noExecPlan = []byte(`{}`)
 
 // ExecPlan2Json return ExecPlan Serialized json-str //
 // please used in s.mux.Lock()

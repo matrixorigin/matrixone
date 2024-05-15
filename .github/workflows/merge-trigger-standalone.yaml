@@ -9,9 +9,10 @@ on:
       - '**.go'
       - '**.c'
       - '**.h'
+      - 'test/distributed/**'
 
 jobs:
   mo-checkin-regression:
     name: MO Checkin Regression(Standalone BVT)
-    uses: matrixorigin/CI/.github/workflows/merge-trigger-standalone.yaml@main
+    uses: matrixorigin/CI/.github/workflows/merge-trigger-standalone.yaml@release/1.2-dev
     secrets: inherit

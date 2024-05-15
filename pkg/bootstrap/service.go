@@ -51,138 +51,20 @@ var (
 
 var (
 	bootstrappedCheckerDB = catalog.MOTaskDB
-	step1InitSQLs         = []string{
-		fmt.Sprintf(`create table %s.%s(
-			id 			bigint unsigned not null,
-			table_id 	bigint unsigned not null,
-			database_id bigint unsigned not null,
-			name 		varchar(64) not null,
-			type        varchar(11) not null,
-    		algo	varchar(11),
-    		algo_table_type varchar(11),
-			algo_params varchar(2048),
-			is_visible  tinyint not null,
-			hidden      tinyint not null,
-			comment 	varchar(2048) not null,
-			column_name    varchar(256) not null,
-			ordinal_position  int unsigned  not null,
-			options     text,
-			index_table_name varchar(5000),
-			primary key(id, column_name)
-		);`, catalog.MO_CATALOG, catalog.MO_INDEXES),
-
-		fmt.Sprintf(`CREATE TABLE %s.%s (
-			  table_id bigint unsigned NOT NULL,
-			  database_id bigint unsigned not null,
-			  number smallint unsigned NOT NULL,
-			  name varchar(64) NOT NULL,
-    		  partition_type varchar(50) NOT NULL,
-              partition_expression varchar(2048) NULL,
-			  description_utf8 text,
-			  comment varchar(2048) NOT NULL,
-			  options text,
-			  partition_table_name varchar(1024) NOT NULL,
-    		  PRIMARY KEY table_id (table_id, name)
-			);`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS),
-
-		fmt.Sprintf(`create table %s.%s (
-			table_id   bigint unsigned, 
-			col_name   varchar(770), 
-			col_index  int,
-			offset     bigint unsigned, 
-			step       bigint unsigned,  
-			primary key(table_id, col_name)
-		);`, catalog.MO_CATALOG, catalog.MOAutoIncrTable),
-
-		fmt.Sprintf(`create table %s.%s(
-			constraint_name varchar(5000) not null,
-			constraint_id BIGINT UNSIGNED not null default 0,
-			db_name varchar(5000) not null,
-			db_id BIGINT UNSIGNED not null default 0,
-			table_name varchar(5000) not null,
-			table_id BIGINT UNSIGNED not null default 0,
-			column_name varchar(256) not null,
-			column_id BIGINT UNSIGNED not null default 0,
-			refer_db_name varchar(5000) not null,
-			refer_db_id BIGINT UNSIGNED not null default 0,
-			refer_table_name varchar(5000) not null,
-			refer_table_id BIGINT UNSIGNED not null default 0,
-			refer_column_name varchar(256) not null,
-			refer_column_id BIGINT UNSIGNED not null default 0,
-			on_delete varchar(128) not null,
-			on_update varchar(128) not null,
-	
-			primary key(
-				constraint_name,
-				constraint_id,
-				db_name,
-				db_id,
-				table_name,
-				table_id,
-				column_name,
-				column_id,
-				refer_db_name,
-				refer_db_id,
-				refer_table_name,
-				refer_table_id,
-				refer_column_name,
-				refer_column_id)
-		);`, catalog.MO_CATALOG, catalog.MOForeignKeys),
+	// Note: The following tables belong to data dictionary table, and system tables's creation will depend on
+	// the following system tables. Therefore, when creating tenants, they must be created first
+	step1InitSQLs = []string{
+		frontend.MoCatalogMoIndexesDDL,
+		frontend.MoCatalogMoTablePartitionsDDL,
+		frontend.MoCatalogMoAutoIncrTableDDL,
+		frontend.MoCatalogMoForeignKeysDDL,
 	}
 
 	step2InitSQLs = []string{
-		fmt.Sprintf(`create database %s`,
-			catalog.MOTaskDB),
-
-		fmt.Sprintf(`create table %s.sys_async_task (
-			task_id                     bigint primary key auto_increment,
-			task_metadata_id            varchar(50) unique not null,
-			task_metadata_executor      int,
-			task_metadata_context       blob,
-			task_metadata_option        varchar(1000),
-			task_parent_id              varchar(50),
-			task_status                 int,
-			task_runner                 varchar(50),
-			task_epoch                  int,
-			last_heartbeat              bigint,
-			result_code                 int null,
-			error_msg                   varchar(1000) null,
-			create_at                   bigint,
-			end_at                      bigint)`,
-			catalog.MOTaskDB),
-
-		fmt.Sprintf(`create table %s.sys_cron_task (
-			cron_task_id				bigint primary key auto_increment,
-    		task_metadata_id            varchar(50) unique not null,
-			task_metadata_executor      int,
-			task_metadata_context       blob,
-			task_metadata_option 		varchar(1000),
-			cron_expr					varchar(100) not null,
-			next_time					bigint,
-			trigger_times				int,
-			create_at					bigint,
-			update_at					bigint)`,
-			catalog.MOTaskDB),
-
-		fmt.Sprintf(`create table %s.sys_daemon_task (
-			task_id                     bigint primary key auto_increment,
-			task_metadata_id            varchar(50),
-			task_metadata_executor      int,
-			task_metadata_context       blob,
-			task_metadata_option        varchar(1000),
-			account_id                  int unsigned not null,
-			account                     varchar(128) not null,
-			task_type                   varchar(64) not null,
-			task_runner                 varchar(64),
-			task_status                 int not null,
-			last_heartbeat              timestamp,
-			create_at                   timestamp not null,
-			update_at                   timestamp not null,
-			end_at                      timestamp,
-			last_run                    timestamp,
-			details                     blob)`,
-			catalog.MOTaskDB),
-
+		fmt.Sprintf(`create database %s`, catalog.MOTaskDB),
+		frontend.MoTaskSysAsyncTaskDDL,
+		frontend.MoTaskSysCronTaskDDL,
+		frontend.MoTaskSysDaemonTaskDDL,
 		fmt.Sprintf(`create index idx_task_status on %s.sys_async_task(task_status)`,
 			catalog.MOTaskDB),
 
@@ -203,41 +85,9 @@ var (
 	}
 
 	step3InitSQLs = []string{
-		fmt.Sprintf(`create table %s.%s (
-			version             varchar(50) not null,
-		    version_offset      int unsigned default 0,
-			state               int,
-			create_at           timestamp not null,
-			update_at           timestamp not null,
-			primary key(version, version_offset)
-		)`, catalog.MO_CATALOG, catalog.MOVersionTable),
-
-		fmt.Sprintf(`create table %s.%s (
-			id                   bigint unsigned not null primary key auto_increment,
-			from_version         varchar(50) not null,
-			to_version           varchar(50) not null,
-			final_version        varchar(50) not null,
-            final_version_offset int unsigned default 0,
-			state                int,
-			upgrade_cluster      int,
-			upgrade_tenant       int,
-			upgrade_order        int,
-			total_tenant         int,
-			ready_tenant         int,
-			create_at            timestamp not null,
-			update_at            timestamp not null
-		)`, catalog.MO_CATALOG, catalog.MOUpgradeTable),
-
-		fmt.Sprintf(`create table %s.%s (
-			id                  bigint unsigned not null primary key auto_increment,
-			upgrade_id		    bigint unsigned not null,
-			target_version      varchar(50) not null,
-			from_account_id     int not null,
-			to_account_id       int not null,
-			ready               int,
-			create_at           timestamp not null,
-			update_at           timestamp not null
-		)`, catalog.MO_CATALOG, catalog.MOUpgradeTenantTable),
+		frontend.MoCatalogMoVersionDDL,
+		frontend.MoCatalogMoUpgradeDDL,
+		frontend.MoCatalogMoUpgradeTenantDDL,
 	}
 
 	initMoVersionFormat = `insert into %s.%s values ('%s', %d, %d, current_timestamp(), current_timestamp())`

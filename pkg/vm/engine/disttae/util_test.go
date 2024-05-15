@@ -20,6 +20,9 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/stretchr/testify/require"
 )
 
 func makeColExprForTest(idx int32, typ types.T) *plan.Expr {
@@ -1377,4 +1379,26 @@ func TestEvalExprListToVec(t *testing.T) {
 	}
 	proc.FreeVectors()
 	require.Zero(t, m.CurrNB())
+}
+
+func Test_removeIf(t *testing.T) {
+	strs := []string{"abc", "bc", "def"}
+
+	del1 := make(map[string]struct{})
+	del1["abc"] = struct{}{}
+	res1 := removeIf[string](strs, func(t string) bool {
+		return find[string](del1, t)
+	})
+	assert.Equal(t, []string{"bc", "def"}, res1)
+
+	del2 := make(map[string]struct{})
+	for _, str := range strs {
+		del2[str] = struct{}{}
+	}
+	res2 := removeIf[string](strs, func(t string) bool {
+		return find[string](del2, t)
+	})
+	assert.Equal(t, []string{}, res2)
+
+	assert.Equal(t, []string(nil), removeIf[string](nil, nil))
 }
