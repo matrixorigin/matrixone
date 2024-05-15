@@ -74,14 +74,14 @@ func (entry *ObjectEntry) GetCompSize() int {
 	stats := entry.GetObjectStats()
 	return int(stats.Size())
 }
-func (entry *ObjectEntry) IsDeletesFlushedBefore(ts types.TS)bool{
+func (entry *ObjectEntry) IsDeletesFlushedBefore(ts types.TS) bool {
 	entry.RLock()
 	defer entry.LoadObjectInfoForLastNode()
-	tombstone:=entry.GetTable().TryGetTombstone(entry.ID)
-	if tombstone ==nil{
+	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
+	if tombstone == nil {
 		return true
 	}
-	persistedTS:=tombstone.GetDeltaPersistedTSLocked()
+	persistedTS := tombstone.GetDeltaPersistedTSLocked()
 	return persistedTS.Less(&ts)
 }
 func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) string {
