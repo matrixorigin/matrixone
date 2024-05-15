@@ -35,9 +35,6 @@ const (
 type Argument struct {
 	ctr *container
 
-	// hash table bucket related information.
-	IBucket, NBucket uint64
-
 	vm.OperatorBase
 }
 
