@@ -1202,7 +1202,7 @@ func TestDeadLockWithIndirectDependsOn(t *testing.T) {
 							pb.Granularity_Row,
 							time.Second*5,
 						)
-
+						time.Sleep(time.Second * 10)
 						require.NoError(t, s.Unlock(ctx, txn3, timestamp.Timestamp{}))
 					}()
 					go func() {
