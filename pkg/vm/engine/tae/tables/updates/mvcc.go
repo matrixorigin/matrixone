@@ -404,7 +404,7 @@ func (n *ObjectMVCCHandle) UpgradeAllDeleteChain() {
 		deletes.upgradeDeleteChain()
 	}
 }
-func (n *ObjectMVCCHandle) GetDeltaPersistedTS() types.TS {
+func (n *ObjectMVCCHandle) GetDeltaPersistedTSLocked() types.TS {
 	persisted := types.TS{}
 	for _, deletes := range n.deletes {
 		ts := deletes.getDeltaPersistedTSLocked()
