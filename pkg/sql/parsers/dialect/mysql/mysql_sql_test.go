@@ -60,8 +60,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select A from t1",
-		output: "select A from t1",
+		input:  "select t.a from sa.t cross_l2 join u",
+		output: "select t.a from sa.t cross_l2 join u",
 	}
 )
 
