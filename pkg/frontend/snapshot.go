@@ -59,7 +59,7 @@ var (
 
 	restoreTableDataFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {snapshot = '%s'}"
 
-	restoreSkipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug"}
+	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", "mo_catalog"}
 )
 
 type snapshotRecord struct {
@@ -341,8 +341,29 @@ func restoreToAccount(
 	snapshotName string,
 	toAccountId uint32,
 	views *[]*tableInfo) (err error) {
-	dbNames, err := showDatabases(ctx, bh, snapshotName)
-	if err != nil {
+	logInfof("snapshot", fmt.Sprintf("[%s] start to restore account: %v", snapshotName, toAccountId))
+
+	var dbNames []string
+	toCtx := defines.AttachAccountId(ctx, toAccountId)
+
+	// delete current dbs
+	if dbNames, err = showDatabases(toCtx, bh, ""); err != nil {
+		return
+	}
+
+	for _, dbName := range dbNames {
+		if needSkipDb(dbName) {
+			logInfof("snapshot", fmt.Sprintf("skip db: %v", dbName))
+			continue
+		}
+
+		if err = bh.Exec(toCtx, fmt.Sprintf("drop database %s", dbName)); err != nil {
+			return
+		}
+	}
+
+	// restore dbs
+	if dbNames, err = showDatabases(ctx, bh, snapshotName); err != nil {
 		return
 	}
 
@@ -361,6 +382,7 @@ func restoreToDatabase(
 	dbName string,
 	toAccountId uint32,
 	views *[]*tableInfo) (err error) {
+	logInfof("snapshot", fmt.Sprintf("[%s] start to restore db: %v", snapshotName, dbName))
 	return restoreToDatabaseOrTable(ctx, bh, snapshotName, dbName, "", toAccountId, views)
 }
 
@@ -372,6 +394,7 @@ func restoreToTable(
 	tblName string,
 	toAccountId uint32,
 	views *[]*tableInfo) (err error) {
+	logInfof("snapshot", fmt.Sprintf("[%s] start to restore table: %v", snapshotName, tblName))
 	return restoreToDatabaseOrTable(ctx, bh, snapshotName, dbName, tblName, toAccountId, views)
 }
 
@@ -383,7 +406,8 @@ func restoreToDatabaseOrTable(
 	tblName string,
 	toAccountId uint32,
 	views *[]*tableInfo) (err error) {
-	if needSkip(dbName, tblName) {
+	if needSkipDb(dbName) {
+		logInfof("snapshot", fmt.Sprintf("skip db: %v", dbName))
 		return
 	}
 
@@ -421,6 +445,13 @@ func restoreToDatabaseOrTable(
 	}
 
 	for _, tblInfo := range tableInfos {
+		if needSkipTable(dbName, tblInfo.tblName) {
+			// TODO skip tables which should not to be restored
+			logInfof("snapshot", fmt.Sprintf("skip table: %v.%v", dbName, tblInfo.tblName))
+			continue
+		}
+
+		// TODO skip table which has foreign keys
 		if tblInfo.typ == view {
 			*views = append(*views, tblInfo)
 			continue
@@ -506,6 +537,8 @@ func restoreViews(
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 	for _, key := range sortedViews {
 		if tblInfo, ok := keyTableInfoMap[key]; ok {
+			logInfof("snapshot", fmt.Sprintf("[%s] start to restore view: %v", snapshotName, tblInfo.tblName))
+
 			if err = bh.Exec(toCtx, "use "+tblInfo.dbName); err != nil {
 				return err
 			}
@@ -523,11 +556,11 @@ func restoreViews(
 	return nil
 }
 
-func needSkip(dbName string, tblName string) bool {
-	if slices.Contains(restoreSkipDbs, dbName) {
-		return true
-	}
+func needSkipDb(dbName string) bool {
+	return slices.Contains(skipDbs, dbName)
+}
 
+func needSkipTable(dbName string, tblName string) bool {
 	if dbName == "information_schema" {
 		return true
 	}
@@ -715,7 +748,11 @@ func getStringColsList(ctx context.Context, bh BackgroundExec, sql string, colIn
 }
 
 func showDatabases(ctx context.Context, bh BackgroundExec, snapshotName string) ([]string, error) {
-	sql := fmt.Sprintf("show databases {snapshot = '%s'}", snapshotName)
+	sql := "show databases"
+	if len(snapshotName) > 0 {
+		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
+	}
+
 	// cols: dbname
 	colsList, err := getStringColsList(ctx, bh, sql, 0)
 	if err != nil {
@@ -729,8 +766,12 @@ func showDatabases(ctx context.Context, bh BackgroundExec, snapshotName string) 
 	return dbNames, nil
 }
 
-func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string) ([]*tableInfo, error) {
+func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) ([]*tableInfo, error) {
 	sql := fmt.Sprintf("show full tables from `%s` {snapshot = '%s'}", dbName, snapshotName)
+	if len(tblName) > 0 {
+		sql = fmt.Sprintf("show full tables from `%s` like '%s' {snapshot = '%s'}", dbName, tblName, snapshotName)
+	}
+
 	// cols: table name, table type
 	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
 	if err != nil {
@@ -749,24 +790,17 @@ func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string,
 }
 
 func getTableInfos(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) ([]*tableInfo, error) {
-	tableInfos, err := showFullTables(ctx, bh, snapshotName, dbName)
+	tableInfos, err := showFullTables(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
 		return nil, err
 	}
 
-	// filter by tblName
-	ans := make([]*tableInfo, 0, len(tableInfos))
 	for _, tblInfo := range tableInfos {
-		if tblName != "" && tblInfo.tblName != tblName {
-			continue
-		}
-
 		if tblInfo.createSql, err = getCreateTableSql(ctx, bh, snapshotName, dbName, tblInfo.tblName); err != nil {
 			return nil, err
 		}
-		ans = append(ans, tblInfo)
 	}
-	return ans, nil
+	return tableInfos, nil
 }
 
 func getCreateTableSql(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (string, error) {
