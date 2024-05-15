@@ -36,9 +36,11 @@ func (m TableShard) Same(
 		m.Version == m2.Version
 }
 
-func (m TableShard) HasRunningReplica() bool {
+func (m TableShard) HasReplicaWithState(
+	state ReplicaState,
+) bool {
 	for _, r := range m.Replicas {
-		if r.State == ReplicaState_Running {
+		if r.State == state {
 			return true
 		}
 	}

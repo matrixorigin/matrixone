@@ -160,6 +160,28 @@ func TestAllocate(t *testing.T) {
 	)
 }
 
+func TestAllocateWithMultiReplicas(t *testing.T) {
+	runRuntimeTest(
+		"cn1,cn2",
+		func(r *rt) {
+			t1 := newTestTableWithReplicas(1, 1, 1, 2)
+			t1.allocate("cn1", 0, 0)
+			t1.allocate("cn2", 0, 1)
+
+			require.Equal(t, pb.ReplicaState_Allocated, t1.shards[0].Replicas[0].State)
+			require.Equal(t, pb.ReplicaState_Allocated, t1.shards[0].Replicas[1].State)
+
+			require.Equal(t, uint64(2), t1.shards[0].Replicas[0].Version)
+			require.Equal(t, uint64(2), t1.shards[0].Replicas[1].Version)
+
+			require.Equal(t, uint32(1), t1.shards[0].Version)
+
+			require.Equal(t, "cn1", t1.shards[0].Replicas[0].CN)
+			require.Equal(t, "cn2", t1.shards[0].Replicas[1].CN)
+		},
+	)
+}
+
 func TestNeedAllocate(t *testing.T) {
 	runRuntimeTest(
 		"cn1,cn2",
@@ -176,14 +198,30 @@ func TestNeedAllocate(t *testing.T) {
 	)
 }
 
-func TestGetShardsCount(t *testing.T) {
+func TestNeedAllocateWithMultiReplicas(t *testing.T) {
 	runRuntimeTest(
 		"cn1,cn2",
 		func(r *rt) {
-			t1 := newTestTable(1, 1, 4)
+			t1 := newTestTableWithReplicas(1, 1, 1, 2)
+			require.True(t, t1.needAllocate())
+
+			t1.allocated = true
+			require.False(t, t1.needAllocate())
+
+			t1.shards[0].Replicas[0].State = pb.ReplicaState_Tombstone
+			require.True(t, t1.needAllocate())
+		},
+	)
+}
+
+func TestGetReplicaCount(t *testing.T) {
+	runRuntimeTest(
+		"cn1,cn2",
+		func(r *rt) {
+			t1 := newTestTableWithReplicas(1, 1, 1, 3)
 			t1.allocate("cn1", 0, 0)
-			t1.allocate("cn2", 1, 0)
-			t1.allocate("cn2", 2, 0)
+			t1.allocate("cn2", 0, 1)
+			t1.allocate("cn2", 0, 2)
 
 			require.Equal(t, 0, t1.getReplicaCount("cn3"))
 			require.Equal(t, 1, t1.getReplicaCount("cn1"))
@@ -536,6 +574,24 @@ func newTestTable(
 		pb.Policy_Hash,
 		version,
 		count,
+		1,
+		nil,
+	)
+}
+
+func newTestTableWithReplicas(
+	id uint64,
+	version uint32,
+	count uint32,
+	replicas uint32,
+) *table {
+	return newTestTableWithAll(
+		0,
+		id,
+		pb.Policy_Hash,
+		version,
+		count,
+		replicas,
 		nil,
 	)
 }
@@ -546,6 +602,7 @@ func newTestTableWithAll(
 	policy pb.Policy,
 	version uint32,
 	shardsCount uint32,
+	maxReplicaCount uint32,
 	physicalShardIDs []uint64,
 ) *table {
 	metadata := pb.ShardsMetadata{
@@ -553,7 +610,7 @@ func newTestTableWithAll(
 		ShardsCount:      shardsCount,
 		Policy:           policy,
 		Version:          version,
-		MaxReplicaCount:  1,
+		MaxReplicaCount:  maxReplicaCount,
 		PhysicalShardIDs: physicalShardIDs,
 	}
 	return newTable(

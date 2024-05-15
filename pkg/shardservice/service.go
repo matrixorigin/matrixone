@@ -216,7 +216,7 @@ OUT:
 			continue
 		}
 		for _, shard := range shards {
-			if !shard.HasRunningReplica() {
+			if !shard.HasReplicaWithState(pb.ReplicaState_Running) {
 				getLogger().Warn("shard is not running",
 					zap.String("shard", shard.String()))
 				time.Sleep(time.Second)
