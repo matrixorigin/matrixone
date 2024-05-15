@@ -74,9 +74,6 @@ func (entry *ObjectEntry) GetCompSize() int {
 	stats := entry.GetObjectStats()
 	return int(stats.Size())
 }
-<<<<<<< Updated upstream
-
-=======
 func (entry *ObjectEntry) IsDeletesFlushedBefore(ts types.TS) bool {
 	entry.RLock()
 	defer entry.RUnlock()
@@ -87,7 +84,6 @@ func (entry *ObjectEntry) IsDeletesFlushedBefore(ts types.TS) bool {
 	persistedTS := tombstone.GetDeltaCommitedTSLocked()
 	return persistedTS.Less(&ts)
 }
->>>>>>> Stashed changes
 func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) string {
 	zonemapStr := "nil"
 	if z := entry.GetSortKeyZonemap(); z != nil {
