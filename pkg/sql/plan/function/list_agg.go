@@ -455,7 +455,7 @@ var supportedAggInNewFramework = []FuncNew{
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bitmap_construct_agg",
-					aggRegister: agg.RegisterBitmapConstruct1,
+					aggRegister: agg.RegisterBitmapConstruct2,
 				},
 			},
 		},
@@ -479,7 +479,7 @@ var supportedAggInNewFramework = []FuncNew{
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bitmap_or_agg",
-					aggRegister: agg.RegisterBitmapOr1,
+					aggRegister: agg.RegisterBitmapOr2,
 				},
 			},
 		},
