@@ -335,7 +335,10 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
 			msgReceiver := c.proc.NewMessageReceiver([]int32{spec.Tag}, process.AddrBroadCastOnCurrentCN())
-			msgs := msgReceiver.ReceiveMessage(true)
+			msgs, ctxDone := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
+			if ctxDone {
+				return nil
+			}
 			for i := range msgs {
 				msg, ok := msgs[i].(process.RuntimeFilterMessage)
 				if !ok {
