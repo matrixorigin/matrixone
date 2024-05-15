@@ -164,6 +164,11 @@ var (
 
 	// default lower_case_table_names
 	defaultLowerCaseTableNames = "1"
+
+	// largestEntryLimit is the max size for reading file to csv buf
+	LargestEntryLimit = 10 * 1024 * 1024
+
+	CNPrimaryCheck = false
 )
 
 // FrontendParameters of the frontend
@@ -515,6 +520,9 @@ type ObservabilityParameters struct {
 	// DisableSpan default: false. Disable span collection
 	DisableSpan bool `toml:"disableSpan"`
 
+	// DisableError default: false. Disable error collection
+	DisableError bool `toml:"disableError"`
+
 	// LongSpanTime default: 500 ms. Only record span, which duration >= LongSpanTime
 	LongSpanTime toml.Duration `toml:"longSpanTime"`
 
@@ -568,6 +576,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		MetricStorageUsageCheckNewInterval: toml.Duration{},
 		MergeCycle:                         toml.Duration{},
 		DisableSpan:                        false,
+		DisableError:                       false,
 		LongSpanTime:                       toml.Duration{},
 		SkipRunningStmt:                    defaultSkipRunningStmt,
 		DisableSqlWriter:                   false,

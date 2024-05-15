@@ -18,15 +18,16 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"sort"
 )
 
-type GetCheckpointRange = func(snapshot types.TS, files []*metaFile) ([]*metaFile, int, error)
+type GetCheckpointRange = func(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int, error)
 
-func SpecifiedCheckpoint(snapshot types.TS, files []*metaFile) ([]*metaFile, int, error) {
+func SpecifiedCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int, error) {
 	for i, file := range files {
 		if snapshot.LessEq(&file.end) {
 			return files, i, nil
@@ -35,10 +36,12 @@ func SpecifiedCheckpoint(snapshot types.TS, files []*metaFile) ([]*metaFile, int
 	return files, len(files) - 1, nil
 }
 
-func AllAfterAndGCheckpoint(snapshot types.TS, files []*metaFile) ([]*metaFile, int, error) {
-	var prev *metaFile
+func AllAfterAndGCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int, error) {
+	prev := &MetaFile{}
 	for i, file := range files {
-		if snapshot.LessEq(&file.end) && snapshot.Less(&prev.end) && file.start.IsEmpty() {
+		if snapshot.LessEq(&file.end) &&
+			snapshot.Less(&prev.end) &&
+			file.start.IsEmpty() {
 			return files, i - 1, nil
 		}
 		prev = file
@@ -53,13 +56,62 @@ func ListSnapshotCheckpoint(
 	tid uint64,
 	listFunc GetCheckpointRange,
 ) ([]*CheckpointEntry, error) {
-	files, idx, err := listMeta(ctx, fs, snapshot, listFunc)
+	files, idx, err := ListSnapshotMeta(ctx, fs, snapshot, listFunc)
 	if err != nil {
 		return nil, err
 	}
 	if len(files) == 0 {
 		return nil, nil
 	}
+	return ListSnapshotCheckpointWithMeta(ctx, fs, files, idx, types.TS{}, false)
+}
+
+func ListSnapshotMeta(
+	ctx context.Context,
+	fs fileservice.FileService,
+	snapshot types.TS,
+	listFunc GetCheckpointRange,
+) ([]*MetaFile, int, error) {
+	dirs, err := fs.List(ctx, CheckpointDir)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(dirs) == 0 {
+		return nil, 0, nil
+	}
+	metaFiles := make([]*MetaFile, 0)
+	for i, dir := range dirs {
+		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		metaFiles = append(metaFiles, &MetaFile{
+			start: start,
+			end:   end,
+			index: i,
+			name:  dir.Name,
+		})
+	}
+	sort.Slice(metaFiles, func(i, j int) bool {
+		return metaFiles[i].end.Less(&metaFiles[j].end)
+	})
+
+	for i, file := range metaFiles {
+		// TODO: remove log
+		logutil.Infof("metaFiles[%d]: %v", i, file.String())
+	}
+
+	if listFunc == nil {
+		listFunc = AllAfterAndGCheckpoint
+	}
+	return listFunc(snapshot, metaFiles)
+}
+
+func ListSnapshotCheckpointWithMeta(
+	ctx context.Context,
+	fs fileservice.FileService,
+	files []*MetaFile,
+	idx int,
+	gcStage types.TS,
+	isAll bool,
+) ([]*CheckpointEntry, error) {
 	reader, err := blockio.NewFileReader(fs, CheckpointDir+files[idx].name)
 	if err != nil {
 		return nil, nil
@@ -93,38 +145,22 @@ func ListSnapshotCheckpoint(
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].end.Less(&entries[j].end)
 	})
+	if isAll && gcStage.IsEmpty() {
+		return entries, nil
+	}
 	for i := range entries {
-		if entries[i].end.Equal(&maxGlobalEnd) && entries[i].entryType == ET_Global {
+		if !gcStage.IsEmpty() {
+			if entries[i].end.Less(&gcStage) {
+				continue
+			}
 			return entries[i:], nil
 		}
+
+		if entries[i].end.Equal(&maxGlobalEnd) &&
+			entries[i].entryType == ET_Global {
+			return entries[i:], nil
+		}
+
 	}
 	return entries, nil
-}
-
-func listMeta(ctx context.Context, fs fileservice.FileService, snapshot types.TS, listFunc GetCheckpointRange) ([]*metaFile, int, error) {
-	dirs, err := fs.List(ctx, CheckpointDir)
-	if err != nil {
-		return nil, 0, err
-	}
-	if len(dirs) == 0 {
-		return nil, 0, nil
-	}
-	metaFiles := make([]*metaFile, 0)
-	for i, dir := range dirs {
-		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		metaFiles = append(metaFiles, &metaFile{
-			start: start,
-			end:   end,
-			index: i,
-			name:  dir.Name,
-		})
-	}
-	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].end.Less(&metaFiles[j].end)
-	})
-
-	if listFunc == nil {
-		listFunc = AllAfterAndGCheckpoint
-	}
-	return listFunc(snapshot, metaFiles)
 }

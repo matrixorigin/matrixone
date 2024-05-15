@@ -57,12 +57,12 @@ func (node *SnapshotLevelType) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Level.String())
 }
 
-type ObejectInfo struct {
+type ObjectInfo struct {
 	SLevel  SnapshotLevelType // snapshot level
 	ObjName Identifier        // object name
 }
 
-func (node *ObejectInfo) Format(ctx *FmtCtx) {
+func (node *ObjectInfo) Format(ctx *FmtCtx) {
 	node.SLevel.Format(ctx)
 	ctx.WriteString(" ")
 	node.ObjName.Format(ctx)
@@ -73,7 +73,7 @@ type CreateSnapShot struct {
 
 	IfNotExists bool
 	Name        Identifier // snapshot name
-	Obeject     ObejectInfo
+	Object      ObjectInfo
 }
 
 func (node *CreateSnapShot) Format(ctx *FmtCtx) {
@@ -83,7 +83,7 @@ func (node *CreateSnapShot) Format(ctx *FmtCtx) {
 	}
 	node.Name.Format(ctx)
 	ctx.WriteString(" for ")
-	node.Obeject.Format(ctx)
+	node.Object.Format(ctx)
 }
 
 func (node *CreateSnapShot) GetStatementType() string { return "Create Snapshot" }
@@ -140,3 +140,72 @@ func (node *ShowSnapShots) Format(ctx *FmtCtx) {
 func (node *ShowSnapShots) GetStatementType() string { return "Show Snapshot" }
 
 func (node *ShowSnapShots) GetQueryType() string { return QueryTypeDQL }
+
+type RestoreLevel int
+
+const (
+	RESTORELEVELCLUSTER RestoreLevel = iota
+	RESTORELEVELACCOUNT
+	RESTORELEVELDATABASE
+	RESTORELEVELTABLE
+)
+
+func (s RestoreLevel) String() string {
+	switch s {
+	case RESTORELEVELCLUSTER:
+		return "cluster"
+	case RESTORELEVELACCOUNT:
+		return "account"
+	case RESTORELEVELDATABASE:
+		return "database"
+	case RESTORELEVELTABLE:
+		return "table"
+	}
+	return "unknown"
+}
+
+type RestoreSnapShot struct {
+	statementImpl
+
+	Level         RestoreLevel
+	AccountName   Identifier // account name
+	DatabaseName  Identifier // database name
+	TableName     Identifier // table name
+	SnapShotName  Identifier // snapshot name
+	ToAccountName Identifier // to account name
+}
+
+func (node *RestoreSnapShot) Format(ctx *FmtCtx) {
+	ctx.WriteString("restore ")
+	switch node.Level {
+	case RESTORELEVELCLUSTER:
+		ctx.WriteString("cluster")
+	case RESTORELEVELACCOUNT:
+		ctx.WriteString("account ")
+		node.AccountName.Format(ctx)
+	case RESTORELEVELDATABASE:
+		ctx.WriteString("account ")
+		node.AccountName.Format(ctx)
+		ctx.WriteString(" database ")
+		node.DatabaseName.Format(ctx)
+	case RESTORELEVELTABLE:
+		ctx.WriteString("account ")
+		node.AccountName.Format(ctx)
+		ctx.WriteString(" database ")
+		node.DatabaseName.Format(ctx)
+		ctx.WriteString(" table ")
+		node.TableName.Format(ctx)
+	}
+
+	ctx.WriteString(" from snapshot ")
+	node.SnapShotName.Format(ctx)
+
+	if len(node.ToAccountName) > 0 {
+		ctx.WriteString(" to account ")
+		node.ToAccountName.Format(ctx)
+	}
+}
+
+func (node *RestoreSnapShot) GetStatementType() string { return "Restore Snapshot" }
+
+func (node *RestoreSnapShot) GetQueryType() string { return QueryTypeOth }

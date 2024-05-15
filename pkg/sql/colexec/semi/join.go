@@ -33,22 +33,21 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
-	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, false)
+	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	arg.ctr.vecs = make([]*vector.Vector, len(arg.Conditions[0]))
 
-	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
-	for i := range ap.ctr.evecs {
-		ap.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, ap.Conditions[0][i])
+	arg.ctr.evecs = make([]evalVector, len(arg.Conditions[0]))
+	for i := range arg.ctr.evecs {
+		arg.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, arg.Conditions[0][i])
 		if err != nil {
 			return err
 		}
 	}
 
-	if ap.Cond != nil {
-		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	if arg.Cond != nil {
+		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
 	}
 	return err
 }
@@ -61,8 +60,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ap := arg
-	ctr := ap.ctr
+	ctr := arg.ctr
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
@@ -77,7 +75,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.state = Probe
 			}
-			if ctr.mp != nil && ctr.mp.PushedRuntimeFilterIn() && ap.Cond == nil {
+			if ctr.mp != nil && ctr.mp.PushedRuntimeFilterIn() && arg.Cond == nil {
 				ctr.skipProbe = true
 			}
 
@@ -97,8 +95,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if ctr.skipProbe {
 				vecused := make([]bool, len(bat.Vecs))
-				newvecs := make([]*vector.Vector, len(ap.Result))
-				for i, pos := range ap.Result {
+				newvecs := make([]*vector.Vector, len(arg.Result))
+				for i, pos := range arg.Result {
 					vecused[pos] = true
 					newvecs[i] = bat.Vecs[pos]
 				}
@@ -116,7 +114,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				proc.PutBatch(bat)
 				continue
 			}
-			if err := ctr.probe(bat, ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
+			if err := ctr.probe(bat, arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
 				bat.Clean(proc.Mp())
 				return result, err
 			}

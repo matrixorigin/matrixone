@@ -45,8 +45,7 @@ func (d *distinctHash) grows(more int) error {
 
 	var err error
 	for i := oldLen; i < newLen; i++ {
-		if d.maps[i], err = hashmap.NewStrMap(
-			true, 0, 0, d.mp); err != nil {
+		if d.maps[i], err = hashmap.NewStrMap(true, d.mp); err != nil {
 			return err
 		}
 	}
@@ -83,6 +82,8 @@ func (d *distinctHash) bulkFill(group int, vs []*vector.Vector) ([]bool, error) 
 		}
 
 		oldLen := d.maps[group].GroupCount()
+		indexOffset := oldLen + 1
+
 		values, _, err := iterator.Insert(i, n, vs)
 		if err != nil {
 			return nil, err
@@ -90,8 +91,8 @@ func (d *distinctHash) bulkFill(group int, vs []*vector.Vector) ([]bool, error) 
 
 		dd := d.bs[i:]
 		for k, v := range values {
-			if v > oldLen && !d.bs1[v-oldLen] {
-				d.bs1[v-oldLen] = true
+			if v > oldLen && !d.bs1[v-indexOffset] {
+				d.bs1[v-indexOffset] = true
 				dd[k] = true
 			} else {
 				dd[k] = false

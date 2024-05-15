@@ -178,7 +178,7 @@ func (obj *object) RunCalibration() (score int, err error) {
 }
 
 func (obj *object) estimateRawScore() (score int, dropped bool) {
-	if obj.meta.HasDropCommitted() {
+	if obj.meta.HasDropCommitted() && !obj.meta.InMemoryDeletesExisted() {
 		dropped = true
 		return
 	}
@@ -186,7 +186,7 @@ func (obj *object) estimateRawScore() (score int, dropped bool) {
 	obj.RLock()
 	objectMVCC := obj.tryGetMVCC()
 	if objectMVCC != nil {
-		changeCnt = objectMVCC.GetChangeIntentionCnt()
+		changeCnt = objectMVCC.GetChangeIntentionCntLocked()
 	}
 	obj.RUnlock()
 	if changeCnt == 0 {
@@ -298,7 +298,7 @@ func (obj *object) EstimateMemSize() (int, int) {
 }
 
 func (obj *object) GetRowsOnReplay() uint64 {
-	fileRows := uint64(obj.meta.GetLatestCommittedNode().
+	fileRows := uint64(obj.meta.GetLatestCommittedNodeLocked().
 		BaseNode.ObjectStats.Rows())
 	return fileRows
 }

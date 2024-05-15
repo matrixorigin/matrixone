@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -134,7 +133,7 @@ func (interpreter *Interpreter) GetSimpleExprValueWithSpVar(e tree.Expr) (interf
 	if err != nil {
 		return nil, err
 	}
-	return GetSimpleExprValue(retExpr, interpreter.ses)
+	return GetSimpleExprValue(interpreter.ctx, retExpr, interpreter.ses)
 }
 
 // Currently we support only binary, unary and comparison expression.
@@ -313,7 +312,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		// create new variable scope and push it
 		curScope := make(map[string]interface{})
 		*interpreter.varScope = append(*interpreter.varScope, curScope)
-		logutil.Info("current scope level: " + strconv.Itoa(len(*interpreter.varScope)))
+		interpreter.ses.Infof(interpreter.ctx, "current scope level: "+strconv.Itoa(len(*interpreter.varScope)))
 		// recursively execute
 		for _, innerSt := range st.Stmts {
 			_, err := interpreter.interpret(innerSt)
@@ -501,7 +500,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		var value interface{}
 		// store variables into current scope
 		if st.DefaultVal != nil {
-			value, err = GetSimpleExprValue(st.DefaultVal, interpreter.ses)
+			value, err = GetSimpleExprValue(interpreter.ctx, st.DefaultVal, interpreter.ses)
 			if err != nil {
 				return SpNotOk, nil
 			}

@@ -266,7 +266,15 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		return nodeID
 	}
 
-	ts := node.GetScanTS()
+	//----------------------------------------------------------------------
+	//ts1 := node.GetScanTS()
+
+	scanSnapshot := node.ScanSnapshot
+	if scanSnapshot == nil {
+		scanSnapshot = &Snapshot{}
+	}
+	//----------------------------------------------------------------------
+
 	var pkPos int32 = -1
 	if len(node.TableDef.Pkey.Names) == 1 {
 		pkPos = node.TableDef.Name2ColIndex[node.TableDef.Pkey.Names[0]]
@@ -392,7 +400,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			}
 
 			idxTag := builder.genNewTag()
-			idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName)
+
+			//idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
+			idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *scanSnapshot)
 
 			builder.addNameByColRef(idxTag, idxTableDef)
 
@@ -531,7 +541,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 				Limit:        node.Limit,
 				Offset:       node.Offset,
 				BindingTags:  []int32{idxTag},
-				ScanTS:       ts,
+				ScanSnapshot: node.ScanSnapshot,
 			}, builder.ctxByNode[nodeID])
 
 			return idxTableNodeID
@@ -621,8 +631,9 @@ END0:
 		}
 
 		idxTag := builder.genNewTag()
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName)
 
+		//idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *scanSnapshot)
 		builder.addNameByColRef(idxTag, idxTableDef)
 
 		var idxFilter *plan.Expr
@@ -667,7 +678,7 @@ END0:
 			Limit:        node.Limit,
 			Offset:       node.Offset,
 			BindingTags:  []int32{idxTag},
-			ScanTS:       ts,
+			ScanSnapshot: node.ScanSnapshot,
 		}, builder.ctxByNode[nodeID])
 
 		node.Limit, node.Offset = nil, nil
@@ -754,8 +765,8 @@ END0:
 
 		idxTag := builder.genNewTag()
 		idxDef := node.TableDef.Indexes[idxPos]
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName)
-
+		//idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *scanSnapshot)
 		builder.addNameByColRef(idxTag, idxTableDef)
 
 		col.RelPos = idxTag
@@ -788,7 +799,7 @@ END0:
 			Limit:        node.Limit,
 			Offset:       node.Offset,
 			BindingTags:  []int32{idxTag},
-			ScanTS:       ts,
+			ScanSnapshot: node.ScanSnapshot,
 		}, builder.ctxByNode[nodeID])
 
 		node.Limit, node.Offset = nil, nil
@@ -838,7 +849,15 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	if leftChild.NodeType != plan.Node_TABLE_SCAN {
 		return nodeID
 	}
-	ts := leftChild.GetScanTS()
+
+	//----------------------------------------------------------------------
+	//ts2 := leftChild.GetScanTS()
+
+	scanSnapshot := leftChild.ScanSnapshot
+	if scanSnapshot == nil {
+		scanSnapshot = &Snapshot{}
+	}
+	//----------------------------------------------------------------------
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
 
@@ -916,8 +935,8 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		}
 
 		idxTag := builder.genNewTag()
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(leftChild.ObjRef.SchemaName, idxDef.IndexTableName)
-
+		//idxObjRef, idxTableDef := builder.compCtx.Resolve(leftChild.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(leftChild.ObjRef.SchemaName, idxDef.IndexTableName, *scanSnapshot)
 		builder.addNameByColRef(idxTag, idxTableDef)
 
 		rfTag := builder.genNewMsgTag()
@@ -964,7 +983,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			ObjRef:                 idxObjRef,
 			ParentObjRef:           DeepCopyObjectRef(leftChild.ObjRef),
 			BindingTags:            []int32{idxTag},
-			ScanTS:                 ts,
+			ScanSnapshot:           leftChild.ScanSnapshot,
 			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, len(condIdx) < numParts, 0, probeExpr)},
 		}, builder.ctxByNode[nodeID])
 

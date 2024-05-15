@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/KimMachineGun/automemlimit/memlimit"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -49,7 +49,7 @@ type MergeExecutor struct {
 	rt                  *dbutils.Runtime
 	cnSched             CNMergeScheduler
 	memAvail            int
-	memSpare            int // 15% of total memory
+	memSpare            int // 10% of total memory or container memory limit
 	cpuPercent          float64
 	activeMergeBlkCount int32
 	activeEstimateBytes int64
@@ -67,11 +67,29 @@ func NewMergeExecutor(rt *dbutils.Runtime, sched CNMergeScheduler) *MergeExecuto
 	}
 }
 
+func (e *MergeExecutor) setSpareMem(total uint64) {
+	containerMLimit, err := memlimit.FromCgroup()
+	logutil.Infof("[Mergeblocks] constainer memory limit %v, host mem %v, err %v",
+		common.HumanReadableBytes(int(containerMLimit)),
+		common.HumanReadableBytes(int(total)),
+		err)
+	tenth := int(float64(total) * 0.1)
+	limitdiff := 0
+	if containerMLimit > 0 {
+		limitdiff = int(total - containerMLimit)
+	}
+	if limitdiff > tenth {
+		e.memSpare = limitdiff
+	} else {
+		e.memSpare = tenth
+	}
+}
+
 func (e *MergeExecutor) RefreshMemInfo() {
 	if stats, err := mem.VirtualMemory(); err == nil {
 		e.memAvail = int(stats.Available)
 		if e.memSpare == 0 {
-			e.memSpare = int(float32(stats.Total) * 0.15)
+			e.setSpareMem(stats.Total)
 		}
 	}
 	if percents, err := cpu.Percent(0, false); err == nil {
@@ -119,49 +137,10 @@ func (e *MergeExecutor) OnExecDone(v any) {
 	atomic.AddInt64(&e.activeEstimateBytes, -int64(stat.estBytes))
 }
 
-// TODO: remove manually merge on dn
-func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catalog.ObjectEntry) error {
-	mem := e.MemAvailBytes()
-	if mem > constMaxMemCap {
-		mem = constMaxMemCap
-	}
-	osize, esize, _ := estimateMergeConsume(objs)
-	if esize > 2*mem/3 {
-		return moerr.NewInternalErrorNoCtx("no enough mem to merge. osize %d, mem %d", osize, mem)
-	}
-
-	objCnt := len(objs)
-
-	scopes := make([]common.ID, objCnt)
-	for i, obj := range objs {
-		scopes[i] = *obj.AsCommonID()
-	}
-
-	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return jobs.NewMergeObjectsTask(ctx, txn, objs, e.rt)
-	}
-	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, tasks.DataCompactionTask, scopes, factory)
-	if err == tasks.ErrScheduleScopeConflict {
-		return moerr.NewInternalErrorNoCtx("conflict with running merging jobs, try later")
-	} else if err != nil {
-		return moerr.NewInternalErrorNoCtx("schedule error: %v", err)
-	}
-
-	blkn := 0
-	for _, obj := range objs {
-		blkn += obj.BlockCnt()
-	}
-	logMergeTask(entry.GetLastestSchemaLocked().Name, task.ID(), objs, blkn, osize, esize)
-	if err = task.WaitDone(context.Background()); err != nil {
-		return moerr.NewInternalErrorNoCtx("merge error: %v", err)
-	}
-	return nil
-}
-
 func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 
-	mobjs, kind := policy.Revise(int64(e.cpuPercent), int64(e.MemAvailBytes()))
+	mobjs, kind := policy.Revise(e.CPUPercent(), int64(e.MemAvailBytes()))
 	if len(mobjs) < 2 {
 		return
 	}
@@ -212,7 +191,7 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 		}
 
 		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-			return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt)
+			return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes)
 		}
 		task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
 		if err != nil {
@@ -238,6 +217,10 @@ func (e *MergeExecutor) MemAvailBytes() int {
 	return avail
 }
 
+func (e *MergeExecutor) CPUPercent() int64 {
+	return int64(e.cpuPercent)
+}
+
 func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blkn, osize, esize int) {
 	rows := 0
 	infoBuf := &bytes.Buffer{}
@@ -250,11 +233,9 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 	if taskId == math.MaxUint64 {
 		platform = "CN"
 		v2.TaskCNMergeScheduledByCounter.Inc()
-		v2.TaskCNMergedBlocksCounter.Add(float64(blkn))
 		v2.TaskCNMergedSizeCounter.Add(float64(osize))
 	} else {
 		v2.TaskDNMergeScheduledByCounter.Inc()
-		v2.TaskDNMergedBlocksCounter.Add(float64(blkn))
 		v2.TaskDNMergedSizeCounter.Add(float64(osize))
 	}
 	logutil.Infof(

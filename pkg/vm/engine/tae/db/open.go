@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
-	"go.uber.org/zap"
 )
 
 const (
@@ -60,9 +59,6 @@ func fillRuntimeOptions(opts *options.Options) {
 	if opts.MergeCfg.CNStandaloneTake {
 		common.ShouldStandaloneCNTakeOver.Store(true)
 	}
-	w := &bytes.Buffer{}
-	toml.NewEncoder(w).Encode(opts.MergeCfg)
-	logutil.Info("mergeblocks options", zap.String("toml", w.String()), zap.Bool("standalone", opts.IsStandalone))
 }
 
 func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
@@ -88,6 +84,10 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	opts = opts.FillDefaults(dirname)
 	fillRuntimeOptions(opts)
 
+	wbuf := &bytes.Buffer{}
+	werr := toml.NewEncoder(wbuf).Encode(opts)
+	logutil.Info("open-tae", common.OperationField("Config"),
+		common.AnyField("toml", wbuf.String()), common.ErrorField(werr))
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
 		// TODO:fileservice needs to be passed in as a parameter
@@ -161,8 +161,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
 		checkpoint.WithGlobalMinCount(int(opts.CheckpointCfg.GlobalMinCount)),
 		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval),
-		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount),
-		checkpoint.WithDisableGC(opts.GCCfg.DisableGC))
+		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
 
 	now := time.Now()
 	checkpointed, ckpLSN, valid, err := db.BGCheckpointRunner.Replay(dataFactory)
@@ -187,7 +186,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
-	db.MergeHandle = newMergeTaskBuiler(db)
+	db.MergeHandle = newMergeTaskBuilder(db)
 	scanner.RegisterOp(db.MergeHandle)
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
@@ -209,7 +208,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.DiskCleaner.Start()
 	// Init gc manager at last
 	// TODO: clean-try-gc requires configuration parameters
-	db.GCManager = gc.NewManager(
+	cronJobs := []func(*gc.Manager){
 		gc.WithCronJob(
 			"clean-transfer-table",
 			opts.CheckpointCfg.FlushInterval,
@@ -267,8 +266,18 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				}
 				return nil
 			},
-		),
-	)
+		)}
+	if opts.CheckpointCfg.MetadataCheckInterval != 0 {
+		cronJobs = append(cronJobs,
+			gc.WithCronJob(
+				"metadata-check",
+				opts.CheckpointCfg.MetadataCheckInterval,
+				func(ctx context.Context) error {
+					db.Catalog.CheckMetadata()
+					return nil
+				}))
+	}
+	db.GCManager = gc.NewManager(cronJobs...)
 
 	db.GCManager.Start()
 

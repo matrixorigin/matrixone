@@ -16,7 +16,6 @@ package db
 
 import (
 	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -48,7 +47,7 @@ type MergeTaskBuilder struct {
 	suspendCnt atomic.Int32
 }
 
-func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
+func newMergeTaskBuilder(db *DB) *MergeTaskBuilder {
 	op := &MergeTaskBuilder{
 		db:            db,
 		LoopProcessor: new(catalog.LoopProcessor),
@@ -62,25 +61,6 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 	op.PostObjectFn = op.onPostObject
 	op.PostTableFn = op.onPostTable
 	return op
-}
-
-func (s *MergeTaskBuilder) ManuallyMerge(entry *catalog.TableEntry, objs []*catalog.ObjectEntry) error {
-	// stop new merge task
-	s.suspend.Store(true)
-	defer s.suspend.Store(false)
-	// waiting the runing merge sched task to finish
-	for s.suspendCnt.Load() < 2 {
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	// all status are safe in the TaskBuilder
-	for _, obj := range objs {
-		// TODO(_), delete this if every object has objectStat in memory
-		if err := obj.CheckAndLoad(); err != nil {
-			return err
-		}
-	}
-	return s.executor.ManuallyExecute(entry, objs)
 }
 
 func (s *MergeTaskBuilder) ConfigPolicy(tbl *catalog.TableEntry, c any) {
@@ -149,7 +129,7 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	}
 	tableEntry.RLock()
 	// this table is creating or altering
-	if !tableEntry.IsCommitted() {
+	if !tableEntry.IsCommittedLocked() {
 		tableEntry.RUnlock()
 		return moerr.GetOkStopCurrRecur()
 	}
@@ -175,7 +155,7 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 
 	// Skip uncommitted entries
 	// TODO: consider the case: add metaloc, is it possible to see a constructing object?
-	if !objectEntry.IsCommitted() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
+	if !objectEntry.IsCommittedLocked() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
 		return moerr.GetOkStopCurrRecur()
 	}
 

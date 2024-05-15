@@ -17,7 +17,6 @@ package hashbuild
 import (
 	"bytes"
 	"runtime"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -36,21 +35,20 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
+	arg.ctr = new(container)
 	if len(proc.Reg.MergeReceivers) > 1 {
-		ap.ctr.InitReceiver(proc, true)
-		ap.ctr.isMerge = true
+		arg.ctr.InitReceiver(proc, true)
+		arg.ctr.isMerge = true
 	} else {
-		ap.ctr.InitReceiver(proc, false)
+		arg.ctr.InitReceiver(proc, false)
 	}
 
-	if ap.NeedHashMap {
-		ap.ctr.vecs = make([][]*vector.Vector, 0)
-		ctr := ap.ctr
-		ctr.executor = make([]colexec.ExpressionExecutor, len(ap.Conditions))
+	if arg.NeedHashMap {
+		arg.ctr.vecs = make([][]*vector.Vector, 0)
+		ctr := arg.ctr
+		ctr.executor = make([]colexec.ExpressionExecutor, len(arg.Conditions))
 		ctr.keyWidth = 0
-		for i, expr := range ap.Conditions {
+		for i, expr := range arg.Conditions {
 			typ := expr.Typ
 			width := types.T(typ.Id).TypeLen()
 			// todo : for varlena type, always go strhashmap
@@ -58,25 +56,24 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 				width = 128
 			}
 			ctr.keyWidth += width
-			ctr.executor[i], err = colexec.NewExpressionExecutor(proc, ap.Conditions[i])
+			ctr.executor[i], err = colexec.NewExpressionExecutor(proc, arg.Conditions[i])
 			if err != nil {
 				return err
 			}
 		}
 
 		if ctr.keyWidth <= 8 {
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(false, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
 				return err
 			}
 		} else {
-			if ctr.strHashMap, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
+			if ctr.strHashMap, err = hashmap.NewStrMap(false, proc.Mp()); err != nil {
 				return err
 			}
 		}
-
 	}
 
-	ap.ctr.batches = make([]*batch.Batch, 0)
+	arg.ctr.batches = make([]*batch.Batch, 0)
 
 	return nil
 }
@@ -383,11 +380,11 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 
 	if ap.RuntimeFilterSpec.Expr == nil {
 		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		sendFilter(ap, proc, runtimeFilter)
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		return nil
 	} else if ctr.inputBatchRowCount == 0 || len(ctr.uniqueJoinKeys) == 0 || ctr.uniqueJoinKeys[0].Length() == 0 {
 		runtimeFilter.Typ = process.RuntimeFilter_DROP
-		sendFilter(ap, proc, runtimeFilter)
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		return nil
 	}
 
@@ -415,7 +412,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 
 	if hashmapCount > uint64(inFilterCardLimit) {
 		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		sendFilter(ap, proc, runtimeFilter)
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		return nil
 	} else {
 		// Composite primary key
@@ -445,7 +442,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		runtimeFilter.Typ = process.RuntimeFilter_IN
 		runtimeFilter.Card = int32(vec.Length())
 		runtimeFilter.Data = data
-		sendFilter(ap, proc, runtimeFilter)
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		ctr.runtimeFilterIn = true
 	}
 	return nil
@@ -464,12 +461,4 @@ func (ctr *container) evalJoinCondition(proc *process.Process) error {
 		}
 	}
 	return nil
-}
-
-func sendFilter(ap *Argument, proc *process.Process, runtimeFilter process.RuntimeFilterMessage) {
-	anal := proc.GetAnalyze(ap.GetIdx(), ap.GetParallelIdx(), ap.GetParallelMajor())
-	sendRuntimeFilterStart := time.Now()
-	proc.SendMessage(runtimeFilter)
-	anal.WaitStop(sendRuntimeFilterStart)
-	ap.ctr.runtimeFilterHandled = true
 }

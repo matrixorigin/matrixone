@@ -36,10 +36,10 @@ func (c *DashboardCreator) initTaskDashboard() error {
 		c.withRowOptions(
 			c.initTaskFlushTableTailRow(),
 			c.initTaskMergeRow(),
+			c.initTaskMergeTransferPageRow(),
 			c.initCommitTimeRow(),
 			c.initTaskCheckpointRow(),
 			c.initTaskSelectivityRow(),
-			c.initTaskMergeTransferPageRow(),
 			c.initTaskStorageUsageRow(),
 		)...)
 
@@ -52,12 +52,12 @@ func (c *DashboardCreator) initTaskDashboard() error {
 
 func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 	return dashboard.Row(
-		"Task Merge Transfer Page Length",
+		"Task Merge Transfer Page Size",
 		c.withGraph(
 			"Transfer Page Length",
 			12,
-			`sum(`+c.getMetricWithFilter("mo_task_merge_transfer_page_size", ``)+`)`,
-			"{{ "+c.by+" }}"),
+			`sum(`+c.getMetricWithFilter("mo_task_merge_transfer_page_size", ``)+`)`+`* 28 * 1.3`,
+			"{{ "+c.by+" }}", axis.Unit("decbytes")),
 	)
 }
 
@@ -130,15 +130,6 @@ func (c *DashboardCreator) initTaskMergeRow() dashboard.Option {
 				fmt.Sprintf(
 					"sum by (%s) (increase(%s[$interval]))",
 					c.by,
-					c.getMetricWithFilter(`mo_task_execute_results_total`, `type="merged_block"`)),
-				fmt.Sprintf(
-					"sum by (%s) (increase(%s[$interval]))",
-					c.by,
-					c.getMetricWithFilter(`mo_task_execute_results_total`, `type="merged_block",nodetype="cn"`)),
-
-				fmt.Sprintf(
-					"sum by (%s) (increase(%s[$interval]))",
-					c.by,
 					c.getMetricWithFilter(`mo_task_scheduled_by_total`, `type="merge"`)),
 
 				fmt.Sprintf(
@@ -147,8 +138,6 @@ func (c *DashboardCreator) initTaskMergeRow() dashboard.Option {
 					c.getMetricWithFilter(`mo_task_scheduled_by_total`, `type="merge",nodetype="cn"`)),
 			},
 			[]string{
-				"Block Count",
-				"CN Block Count",
 				"Schedule Count",
 				"CN Schedule Count",
 			},

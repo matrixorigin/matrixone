@@ -14,8 +14,10 @@
 
 package malloc
 
+import "unsafe"
+
 type Handle struct {
-	slice []byte
+	ptr   unsafe.Pointer
 	class int
 }
 
@@ -29,11 +31,10 @@ func (h *Handle) Free() {
 	}
 	pid := runtime_procPin()
 	runtime_procUnpin()
-	if pid >= len(shards) {
-		pid = 0
-	}
+	shard := pid % numShards
 	select {
-	case shards[pid][h.class] <- h:
+	case shards[shard].pools[h.class] <- h:
+		shards[shard].numFree.Add(1)
 	default:
 	}
 }

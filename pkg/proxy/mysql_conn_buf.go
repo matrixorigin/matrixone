@@ -15,15 +15,12 @@
 package proxy
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
@@ -81,7 +78,6 @@ type msgBuf struct {
 	name string
 	src  io.Reader
 
-	peer *msgBuf
 	// buf keeps message which is read from src. It can contain multiple messages.
 	// The default available part of buffer is only [0:defaultBufLen]. The rest part
 	// [defaultBufLen:] is used to save data to handle events when the first part is full.
@@ -100,9 +96,6 @@ type msgBuf struct {
 	reqC chan IEvent
 	// respC is the channel of event response.
 	respC chan []byte
-	// inTxn is the session txn state which is updated by the OK and EOF packet from server.
-	// It is used to check if we should start a connection transfer.
-	inTxn atomic.Bool
 }
 
 // newMsgBuf creates a new message buffer.
@@ -129,14 +122,13 @@ func newMsgBuf(
 	}
 }
 
-func setPeer(p1, p2 *msgBuf) {
-	p1.peer = p2
-	p2.peer = p1
-}
-
 // readAvail returns the position that is available to read.
 func (b *msgBuf) readAvail() int {
 	return b.end - b.begin
+}
+
+func (b *msgBuf) readAvailBuf() []byte {
+	return b.buf[b.begin:b.end]
 }
 
 // writeAvail returns the position that is available to write.
@@ -174,19 +166,10 @@ func (b *msgBuf) preRecv() (int, error) {
 // The first return value is true if the command is handled, means it does not need
 // to be sent through tunnel anymore; false otherwise.
 // The second return value is true means that the transfer happened.
-func (b *msgBuf) consumeMsg(msg []byte, transfer *atomic.Bool, wg *sync.WaitGroup) (bool, bool) {
-	if b.reqC == nil {
-		return false, false
-	}
-	// For the client->server pipe, we catch some statements to do some more actions.
-	if b.name == connClientName {
-		return b.consumeClient(msg), false
-	} else {
-		return false, b.consumeServer(msg, transfer, wg)
-	}
-}
-
 func (b *msgBuf) consumeClient(msg []byte) bool {
+	if b.reqC == nil {
+		return false
+	}
 	e, r := makeEvent(msg, b)
 	if e == nil {
 		return false
@@ -198,79 +181,6 @@ func (b *msgBuf) consumeClient(msg []byte) bool {
 	return r
 }
 
-func (b *msgBuf) consumeServer(msg []byte, transfer *atomic.Bool, wg *sync.WaitGroup) bool {
-	inTxn := true
-
-	// For the server->client pipe, we should the transaction status from the
-	// OK and EOF packet, which is used in connection transfer. If the session
-	// is in a transaction, a transfer should not start.
-	if isOKPacket(msg) {
-		inTxn = b.handleOKPacket(msg)
-	} else if isEOFPacket(msg) {
-		inTxn = b.handleEOFPacket(msg)
-	} else {
-		b.setTxnStatus(0)
-	}
-
-	if wg != nil && transfer != nil && !inTxn && transfer.Load() {
-		wg.Add(1)
-		return true
-	}
-	return false
-}
-
-// handleOKPacket handles the OK packet from server to update the txn state.
-func (b *msgBuf) handleOKPacket(msg []byte) bool {
-	var mp *frontend.MysqlProtocolImpl
-	// the sequence ID should be 1 for OK packet.
-	if msg[3] != 1 {
-		return b.setTxnStatus(0)
-	}
-	pos := 5
-	_, pos, ok := mp.ReadIntLenEnc(msg, pos)
-	if !ok {
-		return b.setTxnStatus(0)
-	}
-	_, pos, ok = mp.ReadIntLenEnc(msg, pos)
-	if !ok {
-		return b.setTxnStatus(0)
-	}
-	if len(msg[pos:]) < 2 {
-		return b.setTxnStatus(0)
-	}
-	status := binary.LittleEndian.Uint16(msg[pos:])
-	return b.setTxnStatus(status)
-}
-
-// handleEOFPacket handles the EOF packet from server to update the txn state.
-func (b *msgBuf) handleEOFPacket(msg []byte) bool {
-	if len(msg) < 9 {
-		return b.setTxnStatus(0)
-	}
-	return b.setTxnStatus(binary.LittleEndian.Uint16(msg[7:]))
-}
-
-// setTxnStatus sets the txn state according to the incoming status.
-func (b *msgBuf) setTxnStatus(status uint16) bool {
-	// assume it is in txn by priority.
-	v := true
-	if status&frontend.SERVER_QUERY_WAS_SLOW != 0 &&
-		status&frontend.SERVER_STATUS_NO_GOOD_INDEX_USED != 0 &&
-		status&frontend.SERVER_STATUS_IN_TRANS == 0 {
-		v = false
-	}
-	b.inTxn.Store(v)
-	if b.peer != nil {
-		b.peer.inTxn.Store(v)
-	}
-	return v
-}
-
-// isInTxn returns if the session is in a transaction.
-func (b *msgBuf) isInTxn() bool {
-	return b.inTxn.Load()
-}
-
 func (b *msgBuf) debugLogs(data []byte, dataLeft int) {
 	logger := logutil.GetSkip1Logger()
 	if logger.Core().Enabled(zap.DebugLevel) {
@@ -278,17 +188,17 @@ func (b *msgBuf) debugLogs(data []byte, dataLeft int) {
 			logutil.Debugf("proxy debug: client, conn ID: %d, data left: %d, data: %v",
 				b.cid, dataLeft, data)
 		} else {
-			logutil.Debugf("proxy debug: server, conn ID: %d, in txn: %v, data left: %d, data: %v",
-				b.cid, b.isInTxn(), dataLeft, data)
+			logutil.Debugf("proxy debug: server, conn ID: %d, data left: %d, data: %v",
+				b.cid, dataLeft, data)
 		}
 	}
 }
 
 // sendTo sends the data in buffer to destination.
-func (b *msgBuf) sendTo(dst io.Writer, transfer *atomic.Bool, wg *sync.WaitGroup) (bool, error) {
+func (b *msgBuf) sendTo(dst io.Writer) error {
 	l, err := b.preRecv()
 	if err != nil {
-		return false, err
+		return err
 	}
 	readPos := b.begin
 	writePos := readPos + l
@@ -309,10 +219,10 @@ func (b *msgBuf) sendTo(dst io.Writer, transfer *atomic.Bool, wg *sync.WaitGroup
 		// the data at the position of writePos.
 		extraLen, err = io.ReadFull(b.src, b.buf[writePos:writePos+dataLeft])
 		if err != nil {
-			return false, err
+			return err
 		}
 		if extraLen < dataLeft {
-			return false, io.ErrShortWrite
+			return io.ErrShortWrite
 		}
 		writePos += extraLen
 		dataLeft = 0
@@ -322,13 +232,12 @@ func (b *msgBuf) sendTo(dst io.Writer, transfer *atomic.Bool, wg *sync.WaitGroup
 	b.debugLogs(b.buf[readPos:writePos], dataLeft)
 
 	var handled bool
-	var transferred bool
 
 	if dataLeft == 0 {
-		handled, transferred = b.consumeMsg(b.buf[readPos:writePos], transfer, wg)
-		// r is true, means the query has been handled and no transfer happened.
+		handled = b.consumeClient(b.buf[readPos:writePos])
+		// means the query has been handled
 		if handled {
-			return false, nil
+			return nil
 		}
 	}
 
@@ -337,23 +246,23 @@ func (b *msgBuf) sendTo(dst io.Writer, transfer *atomic.Bool, wg *sync.WaitGroup
 	// Write the data in buffer.
 	n, err := dst.Write(b.buf[readPos:writePos])
 	if err != nil {
-		return false, err
+		return err
 	}
 	if n < writePos-readPos {
-		return false, io.ErrShortWrite
+		return io.ErrShortWrite
 	}
 
 	// The buffer does not hold all packet data, so continue to read the packet.
 	if dataLeft > 0 {
 		m, err := io.CopyN(dst, b.src, int64(dataLeft))
 		if err != nil {
-			return false, err
+			return err
 		}
 		if int(m) < dataLeft {
-			return false, io.ErrShortWrite
+			return io.ErrShortWrite
 		}
 	}
-	return transferred, err
+	return err
 }
 
 // receive receives a MySQL packet. This is used in test only.

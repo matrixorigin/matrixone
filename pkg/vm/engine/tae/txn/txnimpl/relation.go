@@ -87,7 +87,7 @@ func (it *txnRelationIt) Next() {
 			entry.RUnlock()
 			continue
 		}
-		valid, err = entry.IsVisible(it.txnDB.store.txn, entry.RWMutex)
+		valid, err = entry.IsVisibleWithLock(it.txnDB.store.txn, entry.RWMutex)
 		entry.RUnlock()
 		if err != nil {
 			it.err = err

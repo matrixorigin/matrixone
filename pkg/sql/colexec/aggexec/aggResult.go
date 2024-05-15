@@ -48,12 +48,12 @@ func (r *basicResult) init(
 	r.ess = mg.GetVector(types.T_bool.ToType())
 }
 
-func (r *basicResult) preExtend(more int) (oldLen, newLen int, err error) {
+func (r *basicResult) extend(more int) (oldLen, newLen int, err error) {
 	oldLen, newLen = r.res.Length(), r.res.Length()+more
-	if err = r.res.PreExtend(newLen, r.mp); err != nil {
+	if err = r.res.PreExtend(more, r.mp); err != nil {
 		return oldLen, oldLen, err
 	}
-	if err = r.ess.PreExtend(newLen, r.mp); err != nil {
+	if err = r.ess.PreExtend(more, r.mp); err != nil {
 		return oldLen, oldLen, err
 	}
 	r.res.SetLength(newLen)
@@ -64,6 +64,19 @@ func (r *basicResult) preExtend(more int) (oldLen, newLen int, err error) {
 		r.empty[i] = true
 	}
 	return oldLen, newLen, nil
+}
+
+func (r *basicResult) preAllocate(more int) (err error) {
+	oldLen := r.res.Length()
+	if err = r.res.PreExtend(more, r.mp); err != nil {
+		return err
+	}
+	if err = r.ess.PreExtend(more, r.mp); err != nil {
+		return err
+	}
+	r.res.SetLength(oldLen)
+	r.ess.SetLength(oldLen)
+	return nil
 }
 
 func (r *basicResult) mergeEmpty(other basicResult, i, j int) {
@@ -194,7 +207,7 @@ func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](
 }
 
 func (r *aggFuncResult[T]) grows(more int) error {
-	oldLen, newLen, err := r.preExtend(more)
+	oldLen, newLen, err := r.extend(more)
 	if err != nil {
 		return err
 	}
@@ -254,7 +267,7 @@ func initBytesAggFuncResult(
 }
 
 func (r *aggFuncBytesResult) grows(more int) error {
-	oldLen, newLen, err := r.preExtend(more)
+	oldLen, newLen, err := r.extend(more)
 	if err != nil {
 		return err
 	}

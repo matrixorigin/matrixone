@@ -30,7 +30,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -582,9 +581,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 
 			} else {
 				if int64(len(entry.Data)) < entry.Size {
-					vector.onRelease = append(vector.onRelease,
-						malloc.Alloc(int(entry.Size), &entry.Data).Free,
-					)
+					entry.Data = make([]byte, entry.Size)
 				}
 				var n int
 				n, err = io.ReadFull(r, entry.Data)
@@ -763,10 +760,11 @@ func (l *LocalFS) deleteSingle(_ context.Context, filePath string) error {
 	nativePath := l.toNativeFilePath(path.File)
 
 	_, err = os.Stat(nativePath)
-	if os.IsNotExist(err) {
-		return moerr.NewFileNotFoundNoCtx(path.File)
-	}
 	if err != nil {
+		if os.IsNotExist(err) {
+			// ignore not found error
+			return nil
+		}
 		return err
 	}
 

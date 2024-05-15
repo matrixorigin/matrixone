@@ -17,10 +17,11 @@ package logtailreplay
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -41,6 +42,15 @@ type Partition struct {
 		start types.TS
 		end   types.TS
 	}
+
+	TableInfo   TableInfo
+	TableInfoOK bool
+}
+
+type TableInfo struct {
+	ID            uint64
+	Name          string
+	PrimarySeqnum int
 }
 
 func (p *Partition) CanServe(ts types.TS) bool {
@@ -97,10 +107,16 @@ func (p *Partition) Unlock() {
 	p.lock <- struct{}{}
 }
 
-func (p *Partition) checkValid() bool {
+func (p *Partition) IsValid() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.mu.start.LessEq(&p.mu.end)
+}
+
+func (p *Partition) IsEmpty() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.mu.start == types.MaxTs()
 }
 
 func (p *Partition) UpdateStart(ts types.TS) {
@@ -119,6 +135,12 @@ func (p *Partition) UpdateDuration(start types.TS, end types.TS) {
 	p.mu.end = end
 }
 
+func (p *Partition) GetDuration() (types.TS, types.TS) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.mu.start, p.mu.end
+}
+
 func (p *Partition) ConsumeSnapCkps(
 	_ context.Context,
 	ckps []*checkpoint.CheckpointEntry,
@@ -129,6 +151,9 @@ func (p *Partition) ConsumeSnapCkps(
 ) (
 	err error,
 ) {
+	if len(ckps) == 0 {
+		return nil
+	}
 	//Notice that checkpoints must contain only one or zero global checkpoint
 	//followed by zero or multi continuous incremental checkpoints.
 	state := p.state.Load()
@@ -157,10 +182,9 @@ func (p *Partition) ConsumeSnapCkps(
 		end = start
 	}
 	p.UpdateDuration(start, end)
-	if !p.checkValid() {
-		panic("invalid checkpoint")
+	if !p.IsValid() {
+		return moerr.NewInternalErrorNoCtx("invalid checkpoints duration")
 	}
-
 	return nil
 }
 
@@ -191,7 +215,6 @@ func (p *Partition) ConsumeCheckpoints(
 
 	curState = p.state.Load()
 	if len(curState.checkpoints) == 0 {
-		logutil.Infof("xxxx impossible path")
 		p.UpdateDuration(types.TS{}, types.MaxTs())
 		return nil
 	}

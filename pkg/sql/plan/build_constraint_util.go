@@ -19,13 +19,16 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -247,7 +250,8 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		dbName = ctx.DefaultDatabase()
 	}
 
-	obj, tableDef := ctx.Resolve(dbName, tblName)
+	// snapshot to fix
+	obj, tableDef := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -1088,6 +1092,7 @@ func buildValueScan(
 		}
 	}
 	bat.SetRowCount(len(slt.Rows))
+	rowsetData.RowCount = int32(len(slt.Rows))
 	nodeId, _ := uuid.NewV7()
 	scanNode := &plan.Node{
 		NodeType:      plan.Node_VALUE_SCAN,
@@ -1215,7 +1220,7 @@ func appendPrimaryConstrantPlan(
 	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 		// needCheck := true
 		needCheck := !builder.qry.LoadTag
-		useFuzzyFilter := CNPrimaryCheck
+		useFuzzyFilter := config.CNPrimaryCheck
 		if isUpdate {
 			needCheck = updatePkCol
 			useFuzzyFilter = false
@@ -1311,7 +1316,6 @@ func appendPrimaryConstrantPlan(
 						},
 					},
 				},
-				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
 			}
 			lastNodeId = builder.appendNode(sinkScanNode, bindCtx)
 
@@ -1352,6 +1356,7 @@ func appendPrimaryConstrantPlan(
 						},
 					},
 				}},
+				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
 			}
 
 			var tableScanId int32
@@ -1415,7 +1420,7 @@ func appendPrimaryConstrantPlan(
 	// The refactor that using fuzzy filter has not been completely finished, Update type Insert cannot directly use fuzzy filter for duplicate detection.
 	//  so the original logic is retained. should be deleted later
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
-	if CNPrimaryCheck {
+	if config.CNPrimaryCheck {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 			rfTag := builder.genNewMsgTag()
 

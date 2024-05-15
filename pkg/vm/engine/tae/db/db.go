@@ -16,6 +16,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync/atomic"
 	"time"
@@ -96,17 +97,38 @@ func (db *DB) ForceCheckpoint(
 	db.BGCheckpointRunner.DisableCheckpoint()
 	defer db.BGCheckpointRunner.EnableCheckpoint()
 	db.BGCheckpointRunner.CleanPenddingCheckpoint()
+	if flushDuration == 0 {
+		flushDuration = time.Minute * 3 / 2
+	}
 	t0 := time.Now()
 	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
 	logutil.Infof("[Force Checkpoint] flush takes %v: %v", time.Since(t0), err)
 	if err != nil {
 		return err
 	}
-	if err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, true); err != nil {
-		return err
+
+	wait := flushDuration - time.Since(t0)
+	if wait < time.Minute {
+		wait = time.Minute
 	}
-	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
-	return err
+
+	timeout := time.After(wait)
+	for {
+		select {
+		case <-timeout:
+			return moerr.NewInternalError(ctx, fmt.Sprintf("timeout for: %v", err))
+		default:
+			err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, true)
+			if dbutils.IsRetrieableCheckpoint(err) {
+				db.BGCheckpointRunner.CleanPenddingCheckpoint()
+				interval := flushDuration.Milliseconds() / 400
+				time.Sleep(time.Duration(interval))
+				break
+			}
+			logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
+			return err
+		}
+	}
 }
 
 func (db *DB) ForceGlobalCheckpoint(

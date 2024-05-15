@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"os"
@@ -27,34 +28,27 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-
-	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
-	"github.com/BurntSushi/toml"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 type CloseFlag struct {
@@ -209,7 +203,6 @@ func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient)
 	if err != nil {
 		return nil, err
 	}
-	logutil.Info("Using Dump Storage Engine and Cluster Nodes.")
 	pu := mo_config.NewParameterUnit(sv, eng, txnClient, engine.Nodes{})
 
 	return pu, nil
@@ -262,7 +255,7 @@ func WildcardMatch(pattern, target string) bool {
 }
 
 // getExprValue executes the expression and returns the value.
-func getExprValue(e tree.Expr, ses *Session) (interface{}, error) {
+func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -302,22 +295,26 @@ func getExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 	}
 
 	//2.run the select
-	ctx := ses.GetRequestContext()
 
 	//run the statement in the same session
 	ses.ClearResultBatches()
-	err = executeStmtInSameSession(ctx, ses, compositedSelect)
+	//!!!different ExecCtx
+	tempExecCtx := ExecCtx{
+		reqCtx: execCtx.reqCtx,
+		ses:    ses,
+	}
+	err = executeStmtInSameSession(tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect)
 	if err != nil {
 		return nil, err
 	}
 
 	batches := ses.GetResultBatches()
 	if len(batches) == 0 {
-		return nil, moerr.NewInternalError(ctx, "the expr %s does not generate a value", e.String())
+		return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	if batches[0].VectorCount() > 1 {
-		return nil, moerr.NewInternalError(ctx, "the expr %s generates multi columns value", e.String())
+		return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
 	}
 
 	//evaluate the count of rows, the count of columns
@@ -329,7 +326,7 @@ func getExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		}
 		count += b.RowCount()
 		if count > 1 {
-			return nil, moerr.NewInternalError(ctx, "the expr %s generates multi rows value", e.String())
+			return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
 		}
 		if resultVec == nil && b.GetVector(0).Length() != 0 {
 			resultVec = b.GetVector(0)
@@ -337,7 +334,7 @@ func getExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 	}
 
 	if resultVec == nil {
-		return nil, moerr.NewInternalError(ctx, "the expr %s does not generate a value", e.String())
+		return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	// for the decimal type, we need the type of expr
@@ -354,11 +351,11 @@ func getExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		}
 	}
 
-	return getValueFromVector(resultVec, ses, planExpr)
+	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
 }
 
 // only support single value and unary minus
-func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
+func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interface{}, error) {
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
@@ -373,20 +370,22 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		}
 		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
 		// Here the evalExpr may execute some function that needs engine.Engine.
-		ses.txnCompileCtx.GetProcess().Ctx = context.WithValue(ses.txnCompileCtx.GetProcess().Ctx, defines.EngineKey{}, ses.storage)
+		ses.txnCompileCtx.GetProcess().Ctx = attachValue(ses.txnCompileCtx.GetProcess().Ctx,
+			defines.EngineKey{},
+			ses.GetTxnHandler().GetStorage())
 
 		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 		if err != nil {
 			return nil, err
 		}
 
-		value, err := getValueFromVector(vec, ses, planExpr)
+		value, err := getValueFromVector(ctx, vec, ses, planExpr)
 		vec.Free(ses.txnCompileCtx.GetProcess().Mp())
 		return value, err
 	}
 }
 
-func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (interface{}, error) {
+func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, expr *plan2.Expr) (interface{}, error) {
 	if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 		return nil, nil
 	}
@@ -449,7 +448,7 @@ func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (int
 	case types.T_enum:
 		return vector.MustFixedCol[types.Enum](vec)[0], nil
 	default:
-		return nil, moerr.NewInvalidArg(ses.GetRequestContext(), "variable type", vec.GetType().Oid.String())
+		return nil, moerr.NewInvalidArg(ctx, "variable type", vec.GetType().Oid.String())
 	}
 }
 
@@ -458,10 +457,6 @@ type statementStatus int
 const (
 	success statementStatus = iota
 	fail
-	sessionId = "session_id"
-
-	txnId       = "txn_id"
-	statementId = "statement_id"
 )
 
 func (s statementStatus) String() string {
@@ -477,7 +472,7 @@ func (s statementStatus) String() string {
 // logStatementStatus prints the status of the statement into the log.
 func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement, status statementStatus, err error) {
 	var stmtStr string
-	stm := motrace.StatementFromContext(ctx)
+	stm := ses.GetStmtInfo()
 	if stm == nil {
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
 		stmt.Format(fmtCtx)
@@ -492,17 +487,17 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	str := SubStringFromBegin(stmtStr, int(getGlobalPu().SV.LengthOfQueryPrinted))
 	outBytes, outPacket := ses.GetMysqlProtocol().CalculateOutTrafficBytes(true)
 	if status == success {
-		logDebug(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
+		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
 		err = nil // make sure: it is nil for EndStatement
 	} else {
-		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
+		ses.Error(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
 	}
 
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
 	if !ses.IsBackgroundSession() {
-		motrace.EndStatement(ctx, err, ses.SendRows(), outBytes, outPacket)
+		stmt := ses.GetStmtInfo()
+		stmt.EndStatement(ctx, err, ses.SendRows(), outBytes, outPacket)
 	}
-
 	// need just below EndStatement
 	ses.SetTStmt(nil)
 }
@@ -523,62 +518,19 @@ func initLogger() {
 	logger = rt.Logger().Named("frontend")
 }
 
+// appendSessionField append session id, transaction id and statement id to the fields
 func appendSessionField(fields []zap.Field, ses FeSession) []zap.Field {
 	if ses != nil {
+		fields = append(fields, logutil.SessionIdField(uuid.UUID(ses.GetUUID()).String()))
 		if ses.GetStmtInfo() != nil {
-			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.GetStmtInfo().SessionID).String()))
-			fields = append(fields, zap.String(statementId, uuid.UUID(ses.GetStmtInfo().StatementID).String()))
-			txnInfo := ses.GetTxnInfo()
-			if txnInfo != "" {
-				fields = append(fields, zap.String(txnId, txnInfo))
+			fields = append(fields, logutil.StatementIdField(uuid.UUID(ses.GetStmtInfo().StatementID).String()))
+			// discard ses.GetTxnInfo(), it need ses.Lock(). may cause deadlock: locked by itself.
+			if !ses.GetStmtInfo().IsZeroTxnID() {
+				fields = append(fields, logutil.TxnIdField(hex.EncodeToString(ses.GetStmtInfo().TransactionID[:])))
 			}
-		} else {
-			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.GetUUID()).String()))
 		}
 	}
 	return fields
-}
-
-func logInfo(ses FeSession, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().User == db_holder.MOLoggerUser {
-		return
-	}
-	fields = append(fields, zap.String("session_info", info))
-	fields = appendSessionField(fields, ses)
-	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
-}
-
-func logInfof(info string, msg string, fields ...zap.Field) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
-		fields = append(fields, zap.String("session_info", info))
-		getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
-	}
-}
-
-func logDebug(ses FeSession, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().User == db_holder.MOLoggerUser {
-		return
-	}
-	fields = append(fields, zap.String("session_info", info))
-	fields = appendSessionField(fields, ses)
-	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
-}
-
-func logError(ses FeSession, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().User == db_holder.MOLoggerUser {
-		return
-	}
-	fields = append(fields, zap.String("session_info", info))
-	fields = appendSessionField(fields, ses)
-	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
-}
-
-// todo: remove this function after all the logDebugf are replaced by logDebug
-func logDebugf(info string, msg string, fields ...interface{}) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		fields = append(fields, info)
-		logutil.Debugf(msg+" %s", fields...)
-	}
 }
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
@@ -733,7 +685,7 @@ const (
 // execute.... // prepare stmt1 from .... ; set var1 = val1 ; set var2 = val2 ;
 // Format 2: COM_STMT_EXECUTE
 // execute.... // prepare stmt1 from .... ; param0 ; param1 ...
-func makeExecuteSql(ses *Session, stmt tree.Statement) string {
+func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement) string {
 	if ses == nil || stmt == nil {
 		return ""
 	}
@@ -743,7 +695,7 @@ func makeExecuteSql(ses *Session, stmt tree.Statement) string {
 	switch t := stmt.(type) {
 	case *tree.Execute:
 		name := string(t.Name)
-		prepareStmt, err := ses.GetPrepareStmt(name)
+		prepareStmt, err := ses.GetPrepareStmt(ctx, name)
 		if err != nil || prepareStmt == nil {
 			break
 		}
@@ -899,6 +851,9 @@ type UserInput struct {
 	sql           string
 	stmt          tree.Statement
 	sqlSourceType []string
+	isRetstore    bool
+	fromAccount   uint32
+	toAccount     uint32
 }
 
 func (ui *UserInput) getSql() string {
@@ -933,12 +888,12 @@ func (ui *UserInput) genSqlSourceType(ses FeSession) {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
-	flag, _, _ := isSpecialUser(tenant.User)
+	flag, _, _ := isSpecialUser(tenant.GetUser())
 	if flag {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
-	if tenant.Tenant == sysAccountName && tenant.User == "internal" {
+	if tenant.GetTenant() == sysAccountName && tenant.GetUser() == "internal" {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
@@ -1011,5 +966,44 @@ func (b *strParamBinder) bindIdentStr(ident *tree.AccountIdentified) string {
 		return b.bind(ident.Str)
 	default:
 		return ""
+	}
+}
+
+func resetBits(t *uint32, val uint32) {
+	if t == nil {
+		return
+	}
+	*t = val
+}
+
+func setBits(t *uint32, bit uint32) {
+	if t == nil {
+		return
+	}
+	*t |= bit
+}
+
+func clearBits(t *uint32, bit uint32) {
+	if t == nil {
+		return
+	}
+	*t &= ^bit
+}
+
+func bitsIsSet(t uint32, bit uint32) bool {
+	return t&bit != 0
+}
+
+func attachValue(ctx context.Context, key, val any) context.Context {
+	if ctx == nil {
+		panic("context is nil")
+	}
+
+	return context.WithValue(ctx, key, val)
+}
+
+func updateTempEngine(storage engine.Engine, te *memoryengine.Engine) {
+	if ee, ok := storage.(*engine.EntireEngine); ok && ee != nil {
+		ee.TempEngine = te
 	}
 }

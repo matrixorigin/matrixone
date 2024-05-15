@@ -15,7 +15,9 @@
 package logtail
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -95,7 +97,7 @@ var (
 	snapshotSchemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
-		types.New(types.T_TS, types.MaxVarcharLen, 0),
+		types.New(types.T_int64, 0, 0),
 		types.New(types.T_enum, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
@@ -135,10 +137,7 @@ func NewSnapshotMeta() *SnapshotMeta {
 	}
 }
 
-func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
-	sm.Lock()
-	defer sm.Unlock()
-
+func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
 	insTable, _, _, _, delTableTxn := data.GetTblBatchs()
 	insAccIDs := vector.MustFixedCol[uint32](insTable.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
 	insTIDs := vector.MustFixedCol[uint64](insTable.GetVectorByName(catalog2.SystemRelAttr_ID).GetDownstreamVector())
@@ -181,11 +180,23 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	for i := 0; i < delTableTxn.Length(); i++ {
 		tid := delTableIDs[i]
 		dropAt := delDropAts[i]
+		if sm.acctIndexes[tid] == nil {
+			//In the upgraded cluster, because the inc checkpoint is consumed halfway,
+			// there may be no record of the create table entry, only the delete entry
+			continue
+		}
 		table := sm.acctIndexes[tid]
 		table.deleteAt = dropAt
 		sm.acctIndexes[tid] = table
 		sm.tables[table.accID][tid] = table
 	}
+}
+
+func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
+	sm.Lock()
+	defer sm.Unlock()
+
+	sm.updateTableInfo(data)
 	if sm.tid == 0 {
 		return sm
 	}
@@ -276,18 +287,19 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				if snapshotType == SnapshotTypeCluster {
 					for account := range sm.tables {
 						if snapshotList[account] == nil {
-							snapshotList[account] = containers.MakeVector(colTypes[0], mp)
+							snapshotList[account] = containers.MakeVector(types.T_TS.ToType(), mp)
 						}
 						err = vector.AppendFixed[types.TS](snapshotList[account].GetDownstreamVector(), snapTs, false, mp)
 						if err != nil {
 							return nil, err
 						}
+						logutil.Infof("GetSnapshot ts %v", snapTs.ToString())
 					}
 					continue
 				}
 				id := uint32(acct)
 				if snapshotList[id] == nil {
-					snapshotList[id] = containers.MakeVector(colTypes[0], mp)
+					snapshotList[id] = containers.MakeVector(types.T_TS.ToType(), mp)
 				}
 				logutil.Infof("GetSnapshot: id %d, ts %v", id, snapTs.ToString())
 				err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), snapTs, false, mp)
@@ -307,9 +319,9 @@ func (sm *SnapshotMeta) SetTid(tid uint64) {
 	sm.tid = tid
 }
 
-func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) error {
+func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint32, error) {
 	if len(sm.objects) == 0 {
-		return nil
+		return 0, nil
 	}
 	bat := containers.NewBatch()
 	for i, attr := range objectInfoSchemaAttr {
@@ -344,25 +356,29 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) error 
 	defer deltaBat.Close()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(bat)); err != nil {
-		return err
+		return 0, err
 	}
 	if deltaBat.Length() > 0 {
 		logutil.Infof("deltaBat length is %d", deltaBat.Length())
 		if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(deltaBat)); err != nil {
-			return err
+			return 0, err
 		}
 	}
 
 	_, err = writer.WriteEnd(context.Background())
-	return err
+	if err != nil {
+		return 0, err
+	}
+	size := writer.GetObjectStats()[0].OriginSize()
+	return size, err
 }
 
-func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) error {
+func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (uint32, error) {
 	if len(sm.tables) == 0 {
-		return nil
+		return 0, nil
 	}
 	bat := containers.NewBatch()
 	for i, attr := range tableInfoSchemaAttr {
@@ -390,14 +406,18 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) e
 	defer bat.Close()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(bat)); err != nil {
-		return err
+		return 0, err
 	}
 
 	_, err = writer.WriteEnd(context.Background())
-	return err
+	if err != nil {
+		return 0, err
+	}
+	size := writer.GetObjectStats()[0].OriginSize()
+	return size, err
 }
 
 func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
@@ -567,6 +587,26 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 	return nil
 }
 
+func (sm *SnapshotMeta) InitTableInfo(data *CheckpointData) {
+	sm.Lock()
+	defer sm.Unlock()
+	sm.updateTableInfo(data)
+}
+
+func (sm *SnapshotMeta) TableInfoString() string {
+	sm.RLock()
+	defer sm.RUnlock()
+	var buf bytes.Buffer
+	for accID, tables := range sm.tables {
+		buf.WriteString(fmt.Sprintf("accountID: %d\n", accID))
+		for tid, table := range tables {
+			buf.WriteString(fmt.Sprintf("tableID: %d, create: %s, deleteAt: %s\n",
+				tid, table.createAt.ToString(), table.deleteAt.ToString()))
+		}
+	}
+	return buf.String()
+}
+
 func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint32][]types.TS, tid uint64) []types.TS {
 	sm.RLock()
 	defer sm.RUnlock()
@@ -601,6 +641,13 @@ func (sm *SnapshotMeta) MergeTableInfo(SnapshotList map[uint32][]types.TS) error
 		}
 	}
 	return nil
+}
+
+func (sm *SnapshotMeta) String() string {
+	sm.RLock()
+	defer sm.RUnlock()
+	return fmt.Sprintf("account count: %d, table count: %d, object count: %d",
+		len(sm.tables), len(sm.acctIndexes), len(sm.objects))
 }
 
 func isSnapshotRefers(table *TableInfo, snapVec []types.TS) bool {
