@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -64,6 +65,7 @@ func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
+		tc.arg.Free(tc.proc, false, nil)
 	}
 }
 
@@ -79,9 +81,9 @@ func TestTop(t *testing.T) {
 		}
 		resetChildren(tc.arg, bats)
 		_, _ = tc.arg.Call(tc.proc)
-		tc.proc.FreeVectors()
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -106,6 +108,7 @@ func BenchmarkTop(b *testing.B) {
 			_, _ = tc.arg.Call(tc.proc)
 			tc.arg.Free(tc.proc, false, nil)
 			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+			tc.proc.FreeVectors()
 		}
 	}
 }
@@ -116,7 +119,7 @@ func newTestCase(m *mpool.MPool, ts []types.Type, limit int64, fs []*plan.OrderB
 		proc:  testutil.NewProcessWithMPool(m),
 		arg: &Argument{
 			Fs:    fs,
-			Limit: limit,
+			Limit: plan2.MakePlan2Int64ConstExprWithType(limit),
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,

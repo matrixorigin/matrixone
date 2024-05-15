@@ -27,6 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -90,6 +91,10 @@ func (replayer *Replayer) postReplayWal() {
 			entry.GetTable().DeletedDirties = append(entry.GetTable().DeletedDirties, entry)
 		}
 		return
+	}
+	processor.TombstoneFn = func(t data.Tombstone) error {
+		t.UpgradeAllDeleteChain()
+		return nil
 	}
 	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
 		panic(err)

@@ -162,6 +162,8 @@ type TxnOperator interface {
 	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
 	// RemoveWaitLock remove wait lock for current txn
 	RemoveWaitLock(key uint64)
+	// LockTableCount get quality of lock table
+	LockTableCount() int32
 	// LockSkipped return true if lock need skipped.
 	LockSkipped(tableID uint64, mode lock.LockMode) bool
 

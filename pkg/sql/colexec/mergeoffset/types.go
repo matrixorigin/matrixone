@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -27,12 +28,14 @@ var _ vm.Operator = new(Argument)
 
 type container struct {
 	colexec.ReceiverOperator
-	seen uint64
+	seen           uint64
+	offset         uint64
+	offsetExecutor colexec.ExpressionExecutor
 }
 
 type Argument struct {
 	// Offset records the offset number of mergeOffset operator
-	Offset uint64
+	Offset *plan.Expr
 	// ctr contains the attributes needn't do serialization work
 	ctr *container
 	buf *batch.Batch
@@ -64,7 +67,7 @@ func NewArgument() *Argument {
 	return reuse.Alloc[Argument](nil)
 }
 
-func (arg *Argument) WithOffset(offset uint64) *Argument {
+func (arg *Argument) WithOffset(offset *plan.Expr) *Argument {
 	arg.Offset = offset
 	return arg
 }
@@ -78,6 +81,11 @@ func (arg *Argument) Release() {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
+		if arg.ctr.offsetExecutor != nil {
+			arg.ctr.offsetExecutor.Free()
+			arg.ctr.offsetExecutor = nil
+		}
+		arg.ctr = nil
 	}
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())

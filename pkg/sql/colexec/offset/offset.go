@@ -19,6 +19,8 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -27,11 +29,23 @@ const argName = "offset"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(argName)
-	n := arg
-	buf.WriteString(fmt.Sprintf("offset(%v)", n.Offset))
+	buf.WriteString(fmt.Sprintf("offset(%v)", arg.OffsetExpr))
 }
 
-func (arg *Argument) Prepare(_ *process.Process) error {
+func (arg *Argument) Prepare(proc *process.Process) error {
+	var err error
+	if arg.offsetExecutor == nil {
+		arg.offsetExecutor, err = colexec.NewExpressionExecutor(proc, arg.OffsetExpr)
+		if err != nil {
+			return err
+		}
+	}
+	vec, err := arg.offsetExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	if err != nil {
+		return err
+	}
+	arg.offset = uint64(vector.MustFixedCol[int64](vec)[0])
+
 	return nil
 }
 
@@ -53,12 +67,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 	anal.Input(bat, arg.GetIsFirst())
 
-	if arg.Seen > arg.Offset {
+	if arg.Seen > arg.offset {
 		return result, nil
 	}
 	length := bat.RowCount()
-	if arg.Seen+uint64(length) > arg.Offset {
-		sels := newSels(int64(arg.Offset-arg.Seen), int64(length)-int64(arg.Offset-arg.Seen), proc)
+	if arg.Seen+uint64(length) > arg.offset {
+		sels := newSels(int64(arg.offset-arg.Seen), int64(length)-int64(arg.offset-arg.Seen), proc)
 		arg.Seen += uint64(length)
 		bat.Shrink(sels, false)
 		proc.Mp().PutSels(sels)

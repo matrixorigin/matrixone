@@ -35,13 +35,16 @@ type container struct {
 	poses []int32           // sorted list of attributes
 	cmps  []compare.Compare // compare structure used to do sort work
 
+	limit         int64
+	limitExecutor colexec.ExpressionExecutor
+
 	bat *batch.Batch // bat stores the final result of merge-top
 
 	executorsForOrderList []colexec.ExpressionExecutor
 }
 
 type Argument struct {
-	Limit int64               // Limit store the number of mergeTop-operator
+	Limit *plan.Expr          // Limit store the number of mergeTop-operator
 	ctr   *container          // ctr stores the attributes needn't do Serialization work
 	Fs    []*plan.OrderBySpec // Fs store the order information
 
@@ -73,7 +76,7 @@ func NewArgument() *Argument {
 	return reuse.Alloc[Argument](nil)
 }
 
-func (arg *Argument) WithLimit(limit int64) *Argument {
+func (arg *Argument) WithLimit(limit *plan.Expr) *Argument {
 	arg.Limit = limit
 	return arg
 }
@@ -96,6 +99,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanBatch(mp)
 		ctr.cleanExecutors()
 		ctr.FreeMergeTypeOperator(pipelineFailed)
+		arg.ctr = nil
 	}
 }
 
@@ -112,6 +116,11 @@ func (ctr *container) cleanExecutors() {
 			continue
 		}
 		ctr.executorsForOrderList[i].Free()
+	}
+
+	if ctr.limitExecutor != nil {
+		ctr.limitExecutor.Free()
+		ctr.limitExecutor = nil
 	}
 }
 

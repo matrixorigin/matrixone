@@ -19,14 +19,11 @@ import (
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -168,7 +165,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
 	ie.proto.stashResult = true
-	logutil.Info("internalExecutor new session", trace.ContextField(ctx), zap.String("session uuid", sess.uuid.String()))
+	sess.Info(ctx, "internalExecutor new session")
 	tempExecCtx := ExecCtx{
 		reqCtx: ctx,
 		ses:    sess,
@@ -191,7 +188,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	//
 	mp, err := mpool.NewMPool("internal_exec_cmd_session", getGlobalPu().SV.GuestMmuLimitation, mpool.NoFixed)
 	if err != nil {
-		logutil.Fatalf("internalExecutor cannot create mpool in newCmdSession")
+		getLogger().Fatal("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
 	sess := NewSession(ctx, ie.proto, mp, GSysVariables, true, nil)
