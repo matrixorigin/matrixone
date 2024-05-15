@@ -84,6 +84,17 @@ func (r *rt) heartbeat(
 				t.allocateCompleted(shard, replica)
 			}
 		},
+		func(
+			shard pb.TableShard,
+			replica pb.ShardReplica,
+		) {
+			if t, ok := r.tables[shard.TableID]; ok {
+				i, j, ok := t.findReplica(shard, replica)
+				if ok {
+					t.shards[i].Replicas = append(t.shards[i].Replicas[:j], t.shards[i].Replicas[j+1:]...)
+				}
+			}
+		},
 	)
 
 	var ops []pb.Operator
@@ -145,7 +156,7 @@ func (r *rt) get(
 	defer r.RUnlock()
 
 	table, ok := r.tables[id]
-	if !ok || !table.allocated {
+	if !ok || table.needAllocate() {
 		return nil
 	}
 
@@ -261,7 +272,6 @@ type table struct {
 	id        uint64
 	metadata  pb.ShardsMetadata
 	shards    []pb.TableShard
-	allocated bool
 	replicaID uint64
 }
 
@@ -271,27 +281,25 @@ func newTable(
 	initReplicaVersion uint64,
 ) *table {
 	t := &table{
-		metadata:  metadata,
-		id:        id,
-		allocated: false,
+		metadata: metadata,
+		id:       id,
 	}
 	if metadata.MaxReplicaCount == 0 {
 		metadata.MaxReplicaCount = 1
 	}
 
-	n := metadata.ShardsCount * metadata.MaxReplicaCount
-	t.shards = make([]pb.TableShard, 0, n)
+	t.shards = make([]pb.TableShard, 0, metadata.ShardsCount)
 	for i := uint32(0); i < metadata.ShardsCount; i++ {
-		for j := uint32(0); j < metadata.MaxReplicaCount; j++ {
-			t.shards = append(t.shards,
-				pb.TableShard{
-					Policy:   metadata.Policy,
-					TableID:  id,
-					Version:  metadata.Version,
-					ShardID:  uint64(i + 1),
-					Replicas: t.newShardReplicas(int(metadata.MaxReplicaCount), initReplicaVersion),
-				})
-		}
+		t.shards = append(
+			t.shards,
+			pb.TableShard{
+				Policy:   metadata.Policy,
+				TableID:  id,
+				Version:  metadata.Version,
+				ShardID:  uint64(i + 1),
+				Replicas: t.newShardReplicas(int(metadata.MaxReplicaCount), initReplicaVersion),
+			},
+		)
 	}
 	if metadata.Policy == pb.Policy_Partition {
 		ids := metadata.PhysicalShardIDs
@@ -316,17 +324,39 @@ func (t *table) allocate(
 }
 
 func (t *table) needAllocate() bool {
-	if !t.allocated {
-		return true
-	}
 	for _, s := range t.shards {
 		for _, r := range s.Replicas {
-			if r.State == pb.ReplicaState_Tombstone {
+			if r.State == pb.ReplicaState_Allocating {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func (t *table) getMovingCompletedReplica() (int, int, bool) {
+	for i, s := range t.shards {
+		if t.metadata.MaxReplicaCount >= uint32(len(s.Replicas)) {
+			continue
+		}
+
+		index := -1
+		movingCount := 0
+		runningCount := 0
+		for j, r := range s.Replicas {
+			if r.State == pb.ReplicaState_Moving {
+				index = j
+				movingCount++
+			} else if r.State == pb.ReplicaState_Running {
+				runningCount++
+			}
+		}
+		if movingCount == 1 &&
+			runningCount == len(s.Replicas)-1 {
+			return i, index, true
+		}
+	}
+	return 0, 0, false
 }
 
 func (t *table) getReplicaCount(cn string) int {
@@ -378,22 +408,36 @@ func (t *table) valid(
 func (t *table) moveLocked(
 	from,
 	to string,
-) (pb.TableShard, pb.ShardReplica, pb.ShardReplica) {
+) (pb.TableShard, pb.ShardReplica) {
 	for i := range t.shards {
 		for j := range t.shards[i].Replicas {
 			if t.shards[i].Replicas[j].CN == from &&
 				t.shards[i].Replicas[j].State == pb.ReplicaState_Running {
-				old := t.shards[i].Replicas[j]
-				old.State = pb.ReplicaState_Tombstone
-
-				t.shards[i].Replicas[j].CN = to
-				t.shards[i].Replicas[j].Version++
-				t.shards[i].Replicas[j].State = pb.ReplicaState_Allocated
-				return t.shards[i], old, t.shards[i].Replicas[j]
+				t.shards[i].Replicas[j].State = pb.ReplicaState_Moving
+				r := t.addReplica(i, to, t.shards[i].Replicas[j].Version)
+				return t.shards[i], r
 			}
 		}
 	}
 	panic("cannot find running shard replica")
+}
+
+func (t *table) addReplica(
+	i int,
+	cn string,
+	version uint64,
+) pb.ShardReplica {
+	r := pb.ShardReplica{
+		ReplicaID: t.nextReplicaID(),
+		State:     pb.ReplicaState_Allocated,
+		Version:   version,
+		CN:        cn,
+	}
+	t.shards[i].Replicas = append(
+		t.shards[i].Replicas,
+		r,
+	)
+	return r
 }
 
 func (t *table) allocateCompleted(
@@ -489,7 +533,8 @@ func (c *cn) hasSame(
 
 func (c *cn) closeCompletedOp(
 	shards []pb.TableShard,
-	apply func(pb.TableShard, pb.ShardReplica),
+	applyAdd func(pb.TableShard, pb.ShardReplica),
+	applyDelete func(pb.TableShard, pb.ShardReplica),
 ) {
 	has := func(
 		s pb.TableShard,
@@ -514,13 +559,14 @@ func (c *cn) closeCompletedOp(
 		switch op.Type {
 		case pb.OpType_DeleteReplica:
 			if !has(op.TableShard, op.Replica) {
+				applyDelete(op.TableShard, op.Replica)
 				continue
 			}
 			ops = append(ops, op)
 			c.notifyOps = append(c.notifyOps, op)
 		case pb.OpType_AddReplica:
 			if has(op.TableShard, op.Replica) {
-				apply(op.TableShard, op.Replica)
+				applyAdd(op.TableShard, op.Replica)
 				continue
 			}
 			ops = append(ops, op)

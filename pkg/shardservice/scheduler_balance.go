@@ -171,8 +171,10 @@ func (s *balanceScheduler) doBalance(
 	from := cns[len(cns)-1].id
 	to := cns[0].id
 
-	shard, old, new := t.moveLocked(from, to)
-	r.addOpLocked(from, newDeleteReplicaOp(shard, old))
+	// We cannot directly remove the migrated replica, because we need to still provide
+	// the service during the migration process. The old replica can only be removed when
+	// the new replica is running. See replicaScheduler for delete logic.
+	shard, new := t.moveLocked(from, to)
 	r.addOpLocked(to, newAddReplicaOp(shard, new))
 
 	getLogger().Info(
@@ -182,7 +184,7 @@ func (s *balanceScheduler) doBalance(
 		zap.Int("from-count", max),
 		zap.String("to", to),
 		zap.Int("to-count", min),
-		zap.String("shard", new.String()),
+		zap.String("new-replica", new.String()),
 	)
 
 	now := time.Now()

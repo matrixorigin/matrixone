@@ -58,7 +58,8 @@ enum ReplicaState {
     Allocating = 0;
     Allocated  = 1;
     Running    = 2;
-    Tombstone  = 3;
+    Moving     = 3;
+    Tombstone  = 4;
 }
 
 

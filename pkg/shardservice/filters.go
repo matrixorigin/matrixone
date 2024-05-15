@@ -55,7 +55,10 @@ func newStateFilter() *stateFilter {
 	return &stateFilter{}
 }
 
-func (f *stateFilter) filter(r *rt, cns []*cn) []*cn {
+func (f *stateFilter) filter(
+	r *rt,
+	cns []*cn,
+) []*cn {
 	if len(cns) == 0 {
 		return cns
 	}

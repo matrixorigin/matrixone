@@ -14,10 +14,6 @@
 
 package shardservice
 
-import (
-	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
-)
-
 // allocateScheduler is a scheduler that allocates shards to CNs.
 // Shards that meet one of the following 2 conditions will be assigned a CN:
 // 1. shard.cn == "", means the shard is new created.
@@ -65,8 +61,7 @@ func (s *allocateScheduler) doAllocate(
 	}
 	for i := range t.shards {
 		for j := range t.shards[i].Replicas {
-			if t.shards[i].Replicas[j].CN == "" ||
-				t.shards[i].Replicas[j].State == pb.ReplicaState_Tombstone {
+			if t.shards[i].Replicas[j].CN == "" {
 				cn := getCN()
 				t.allocate(cn, i, j)
 				r.addOpLocked(
@@ -76,5 +71,4 @@ func (s *allocateScheduler) doAllocate(
 			}
 		}
 	}
-	t.allocated = true
 }

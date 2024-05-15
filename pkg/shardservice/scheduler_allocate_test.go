@@ -46,7 +46,7 @@ func TestScheduleAllocate(t *testing.T) {
 
 			s := newAllocateScheduler()
 			require.NoError(t, s.schedule(r))
-			require.Equal(t, true, t1.allocated)
+			require.Equal(t, false, t1.needAllocate())
 
 			for i := 0; i < 3; i++ {
 				require.Equal(t, expectStates[i], t1.shards[i].Replicas[0].State)
@@ -106,7 +106,7 @@ func TestScheduleAllocateWithNoCN(t *testing.T) {
 
 			s := newAllocateScheduler()
 			require.NoError(t, s.schedule(r))
-			require.False(t, t1.allocated)
+			require.True(t, t1.needAllocate())
 		},
 	)
 }

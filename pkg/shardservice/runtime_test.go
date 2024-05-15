@@ -189,9 +189,6 @@ func TestNeedAllocate(t *testing.T) {
 			t1 := newTestTable(1, 1, 3)
 			require.True(t, t1.needAllocate())
 
-			t1.allocated = true
-			require.False(t, t1.needAllocate())
-
 			t1.shards[0].Replicas[0].State = pb.ReplicaState_Tombstone
 			require.True(t, t1.needAllocate())
 		},
@@ -204,9 +201,6 @@ func TestNeedAllocateWithMultiReplicas(t *testing.T) {
 		func(r *rt) {
 			t1 := newTestTableWithReplicas(1, 1, 1, 2)
 			require.True(t, t1.needAllocate())
-
-			t1.allocated = true
-			require.False(t, t1.needAllocate())
 
 			t1.shards[0].Replicas[0].State = pb.ReplicaState_Tombstone
 			require.True(t, t1.needAllocate())
@@ -287,13 +281,13 @@ func TestMove(t *testing.T) {
 			v := t1.shards[0]
 			expect := v.Replicas[0]
 			expect.CN = "cn1"
-			expect.State = pb.ReplicaState_Tombstone
+			expect.State = pb.ReplicaState_Moving
 
-			_, old, new := t1.moveLocked("cn1", "cn2")
+			_, new := t1.moveLocked("cn1", "cn2")
 
-			require.Equal(t, expect, old)
+			require.Equal(t, expect, t1.shards[0].Replicas[0])
 
-			expect.Version++
+			expect.ReplicaID = t1.nextReplicaID() - 1
 			expect.CN = "cn2"
 			expect.State = pb.ReplicaState_Allocated
 			require.Equal(t, expect, new)

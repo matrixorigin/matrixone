@@ -47,15 +47,13 @@ func (s *downScheduler) schedule(
 	}
 
 	for _, shards := range r.tables {
-		if !shards.allocated {
-			continue
-		}
 		for i := range shards.shards {
 			for j := range shards.shards[i].Replicas {
 				if _, ok := s.downCNs[shards.shards[i].Replicas[j].CN]; !ok {
 					continue
 				}
-				shards.shards[i].Replicas[j].State = pb.ReplicaState_Tombstone
+				shards.shards[i].Replicas[j].CN = ""
+				shards.shards[i].Replicas[j].State = pb.ReplicaState_Allocating
 			}
 		}
 	}

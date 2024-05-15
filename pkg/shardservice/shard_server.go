@@ -87,7 +87,9 @@ func (s *server) initSchedulers() {
 		newBalanceScheduler(
 			s.cfg.MaxScheduleTables,
 			freezeFilter,
-		))
+		),
+		newReplicaScheduler(),
+	)
 }
 
 func (s *server) initRemote() {

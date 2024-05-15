@@ -33,10 +33,8 @@ var (
 			s.Replicas[0].CN = cn
 			switch op {
 			case pb.OpType_AddReplica:
+				s.Replicas[0].ReplicaID = t.replicaID
 				s.Replicas[0].State = pb.ReplicaState_Allocated
-			case pb.OpType_DeleteReplica:
-				s.Replicas[0].State = pb.ReplicaState_Tombstone
-				s.Replicas[0].Version--
 			}
 			r := s.Replicas[0]
 			s.Replicas = nil
@@ -53,13 +51,6 @@ var (
 		cn string,
 	) func(t *table) pb.Operator {
 		return factory(id, cn, pb.OpType_AddReplica)
-	}
-
-	deleteOp = func(
-		id uint64,
-		cn string,
-	) func(t *table) pb.Operator {
-		return factory(id, cn, pb.OpType_DeleteReplica)
 	}
 )
 
@@ -91,15 +82,12 @@ func TestScheduleBalance(t *testing.T) {
 			},
 			expectAfterBalancesCN: []map[string]int{
 				{
-					"cn1": 1,
+					"cn1": 2,
 					"cn2": 1,
 				},
 			},
 			expectOp: []map[string][]func(t *table) pb.Operator{
 				{
-					"cn1": {
-						deleteOp(0, "cn1"),
-					},
 					"cn2": {
 						addOp(0, "cn2"),
 					},
@@ -123,7 +111,7 @@ func TestScheduleBalance(t *testing.T) {
 			},
 			expectAfterBalancesCN: []map[string]int{
 				{
-					"cn1": 1,
+					"cn1": 2,
 					"cn2": 1,
 				},
 				{
@@ -132,9 +120,6 @@ func TestScheduleBalance(t *testing.T) {
 			},
 			expectOp: []map[string][]func(t *table) pb.Operator{
 				{
-					"cn1": {
-						deleteOp(0, "cn1"),
-					},
 					"cn2": {
 						addOp(0, "cn2"),
 					},
@@ -213,15 +198,12 @@ func TestScheduleBalance(t *testing.T) {
 			},
 			expectAfterBalancesCN: []map[string]int{
 				{
-					"cn1": 1,
+					"cn1": 2,
 					"cn2": 1,
 				},
 			},
 			expectOp: []map[string][]func(t *table) pb.Operator{
 				{
-					"cn1": {
-						deleteOp(0, "cn1"),
-					},
 					"cn2": {
 						addOp(0, "cn2"),
 					},
@@ -254,11 +236,13 @@ func TestScheduleBalance(t *testing.T) {
 						for cn, count := range expectCNs {
 							actualCount := 0
 							for _, s := range table.shards {
-								if s.Replicas[0].CN == cn {
-									actualCount++
+								for _, r := range s.Replicas {
+									if r.CN == cn {
+										actualCount++
+									}
 								}
 							}
-							require.Equal(t, count, actualCount, "%s", c.name)
+							require.Equal(t, count, actualCount, "%s, %s", c.name, cn)
 						}
 					}
 				}
