@@ -82,23 +82,8 @@ func (mr *MockCompilerContext2MockRecorder) CheckTimeStampValid(ts interface{}) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckTimeStampValid", reflect.TypeOf((*MockCompilerContext2)(nil).CheckTimeStampValid), ts)
 }
 
-// ResolveSubscriptionTableById mocks base method.
-func (m *MockCompilerContext2) ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ResolveSubscriptionTableById", tableId, pubmeta)
-	ret0, _ := ret[0].(*ObjectRef)
-	ret1, _ := ret[1].(*TableDef)
-	return ret0, ret1
-}
-
-// ResolveSubscriptionTableById indicates an expected call of ResolveSubscriptionTableById.
-func (mr *MockCompilerContext2MockRecorder) ResolveSubscriptionTableById(tableId, pubmeta interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsPubliResolveSubscriptionTableByIdshing", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveSubscriptionTableById), tableId, pubmeta)
-}
-
 // DatabaseExists mocks base method.
-func (m *MockCompilerContext2) DatabaseExists(name string, snapshot plan.Snapshot) bool {
+func (m *MockCompilerContext2) DatabaseExists(name string, snapshot Snapshot) bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DatabaseExists", name, snapshot)
 	ret0, _ := ret[0].(bool)
@@ -171,7 +156,7 @@ func (mr *MockCompilerContext2MockRecorder) GetContext() *gomock.Call {
 }
 
 // GetDatabaseId mocks base method.
-func (m *MockCompilerContext2) GetDatabaseId(dbName string, snapshot plan.Snapshot) (uint64, error) {
+func (m *MockCompilerContext2) GetDatabaseId(dbName string, snapshot Snapshot) (uint64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetDatabaseId", dbName, snapshot)
 	ret0, _ := ret[0].(uint64)
@@ -186,10 +171,10 @@ func (mr *MockCompilerContext2MockRecorder) GetDatabaseId(dbName, snapshot inter
 }
 
 // GetPrimaryKeyDef mocks base method.
-func (m *MockCompilerContext2) GetPrimaryKeyDef(dbName, tableName string, snapshot plan.Snapshot) []*plan.ColDef {
+func (m *MockCompilerContext2) GetPrimaryKeyDef(dbName, tableName string, snapshot Snapshot) []*ColDef {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetPrimaryKeyDef", dbName, tableName, snapshot)
-	ret0, _ := ret[0].([]*plan.ColDef)
+	ret0, _ := ret[0].([]*ColDef)
 	return ret0
 }
 
@@ -214,10 +199,10 @@ func (mr *MockCompilerContext2MockRecorder) GetProcess() *gomock.Call {
 }
 
 // GetQueryResultMeta mocks base method.
-func (m *MockCompilerContext2) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
+func (m *MockCompilerContext2) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetQueryResultMeta", uuid)
-	ret0, _ := ret[0].([]*plan.ColDef)
+	ret0, _ := ret[0].([]*ColDef)
 	ret1, _ := ret[1].(string)
 	ret2, _ := ret[2].(error)
 	return ret0, ret1, ret2
@@ -230,10 +215,10 @@ func (mr *MockCompilerContext2MockRecorder) GetQueryResultMeta(uuid interface{})
 }
 
 // GetQueryingSubscription mocks base method.
-func (m *MockCompilerContext2) GetQueryingSubscription() *plan.SubscriptionMeta {
+func (m *MockCompilerContext2) GetQueryingSubscription() *SubscriptionMeta {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetQueryingSubscription")
-	ret0, _ := ret[0].(*plan.SubscriptionMeta)
+	ret0, _ := ret[0].(*SubscriptionMeta)
 	return ret0
 }
 
@@ -241,20 +226,6 @@ func (m *MockCompilerContext2) GetQueryingSubscription() *plan.SubscriptionMeta 
 func (mr *MockCompilerContext2MockRecorder) GetQueryingSubscription() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetQueryingSubscription", reflect.TypeOf((*MockCompilerContext2)(nil).GetQueryingSubscription))
-}
-
-// GetRestoreInfo mocks base method.
-func (m *MockCompilerContext2) GetRestoreInfo() *RestoreInfo {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetRestoreInfo")
-	ret0, _ := ret[0].(*RestoreInfo)
-	return ret0
-}
-
-// GetRestoreInfo indicates an expected call of GetRestoreInfo.
-func (mr *MockCompilerContext2MockRecorder) GetRestoreInfo() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRestoreInfo", reflect.TypeOf((*MockCompilerContext2)(nil).GetRestoreInfo))
 }
 
 // GetRootSql mocks base method.
@@ -269,6 +240,20 @@ func (m *MockCompilerContext2) GetRootSql() string {
 func (mr *MockCompilerContext2MockRecorder) GetRootSql() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRootSql", reflect.TypeOf((*MockCompilerContext2)(nil).GetRootSql))
+}
+
+// GetSnapshot mocks base method.
+func (m *MockCompilerContext2) GetSnapshot() *Snapshot {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSnapshot")
+	ret0, _ := ret[0].(*Snapshot)
+	return ret0
+}
+
+// GetSnapshot indicates an expected call of GetSnapshot.
+func (mr *MockCompilerContext2MockRecorder) GetSnapshot() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSnapshot", reflect.TypeOf((*MockCompilerContext2)(nil).GetSnapshot))
 }
 
 // GetStatsCache mocks base method.
@@ -286,10 +271,10 @@ func (mr *MockCompilerContext2MockRecorder) GetStatsCache() *gomock.Call {
 }
 
 // GetSubscriptionMeta mocks base method.
-func (m *MockCompilerContext2) GetSubscriptionMeta(dbName string, snapshot plan.Snapshot) (*plan.SubscriptionMeta, error) {
+func (m *MockCompilerContext2) GetSubscriptionMeta(dbName string, snapshot Snapshot) (*SubscriptionMeta, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetSubscriptionMeta", dbName, snapshot)
-	ret0, _ := ret[0].(*plan.SubscriptionMeta)
+	ret0, _ := ret[0].(*SubscriptionMeta)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -312,6 +297,20 @@ func (m *MockCompilerContext2) GetUserName() string {
 func (mr *MockCompilerContext2MockRecorder) GetUserName() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserName", reflect.TypeOf((*MockCompilerContext2)(nil).GetUserName))
+}
+
+// GetViews mocks base method.
+func (m *MockCompilerContext2) GetViews() []string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetViews")
+	ret0, _ := ret[0].([]string)
+	return ret0
+}
+
+// GetViews indicates an expected call of GetViews.
+func (mr *MockCompilerContext2MockRecorder) GetViews() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetViews", reflect.TypeOf((*MockCompilerContext2)(nil).GetViews))
 }
 
 // IsPublishing mocks base method.
@@ -346,11 +345,11 @@ func (mr *MockCompilerContext2MockRecorder) ReplacePlan(execPlan interface{}) *g
 }
 
 // Resolve mocks base method.
-func (m *MockCompilerContext2) Resolve(schemaName, tableName string, snapshot plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+func (m *MockCompilerContext2) Resolve(schemaName, tableName string, snapshot Snapshot) (*ObjectRef, *TableDef) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Resolve", schemaName, tableName, snapshot)
-	ret0, _ := ret[0].(*plan.ObjectRef)
-	ret1, _ := ret[1].(*plan.TableDef)
+	ret0, _ := ret[0].(*ObjectRef)
+	ret1, _ := ret[1].(*TableDef)
 	return ret0, ret1
 }
 
@@ -376,11 +375,11 @@ func (mr *MockCompilerContext2MockRecorder) ResolveAccountIds(accountNames inter
 }
 
 // ResolveById mocks base method.
-func (m *MockCompilerContext2) ResolveById(tableId uint64, snapshot plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+func (m *MockCompilerContext2) ResolveById(tableId uint64, snapshot Snapshot) (*ObjectRef, *TableDef) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ResolveById", tableId, snapshot)
-	ret0, _ := ret[0].(*plan.ObjectRef)
-	ret1, _ := ret[1].(*plan.TableDef)
+	ret0, _ := ret[0].(*ObjectRef)
+	ret1, _ := ret[1].(*TableDef)
 	return ret0, ret1
 }
 
@@ -391,10 +390,10 @@ func (mr *MockCompilerContext2MockRecorder) ResolveById(tableId, snapshot interf
 }
 
 // ResolveSnapshotWithSnapshotName mocks base method.
-func (m *MockCompilerContext2) ResolveSnapshotWithSnapshotName(snapshotName string) (Snapshot, error) {
+func (m *MockCompilerContext2) ResolveSnapshotWithSnapshotName(snapshotName string) (*Snapshot, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ResolveSnapshotWithSnapshotName", snapshotName)
-	ret0, _ := ret[0].(Snapshot)
+	ret0, _ := ret[0].(*Snapshot)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -405,8 +404,23 @@ func (mr *MockCompilerContext2MockRecorder) ResolveSnapshotWithSnapshotName(snap
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveSnapshotWithSnapshotName", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveSnapshotWithSnapshotName), snapshotName)
 }
 
+// ResolveSubscriptionTableById mocks base method.
+func (m *MockCompilerContext2) ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResolveSubscriptionTableById", tableId, pubmeta)
+	ret0, _ := ret[0].(*ObjectRef)
+	ret1, _ := ret[1].(*TableDef)
+	return ret0, ret1
+}
+
+// ResolveSubscriptionTableById indicates an expected call of ResolveSubscriptionTableById.
+func (mr *MockCompilerContext2MockRecorder) ResolveSubscriptionTableById(tableId, pubmeta interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveSubscriptionTableById", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveSubscriptionTableById), tableId, pubmeta)
+}
+
 // ResolveUdf mocks base method.
-func (m *MockCompilerContext2) ResolveUdf(name string, args []*plan.Expr) (*function.Udf, error) {
+func (m *MockCompilerContext2) ResolveUdf(name string, args []*Expr) (*function.Udf, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ResolveUdf", name, args)
 	ret0, _ := ret[0].(*function.Udf)
@@ -448,7 +462,7 @@ func (mr *MockCompilerContext2MockRecorder) SetBuildingAlterView(yesOrNo, dbName
 }
 
 // SetQueryingSubscription mocks base method.
-func (m *MockCompilerContext2) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
+func (m *MockCompilerContext2) SetQueryingSubscription(meta *SubscriptionMeta) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "SetQueryingSubscription", meta)
 }
@@ -459,20 +473,32 @@ func (mr *MockCompilerContext2MockRecorder) SetQueryingSubscription(meta interfa
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetQueryingSubscription", reflect.TypeOf((*MockCompilerContext2)(nil).SetQueryingSubscription), meta)
 }
 
-// SetRestoreInfo mocks base method.
-func (m *MockCompilerContext2) SetRestoreInfo(restoreInfo *RestoreInfo) {
+// SetSnapshot mocks base method.
+func (m *MockCompilerContext2) SetSnapshot(snapshot *Snapshot) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetRestoreInfo", restoreInfo)
+	m.ctrl.Call(m, "SetSnapshot", snapshot)
 }
 
-// SetRestoreInfo indicates an expected call of SetRestoreInfo.
-func (mr *MockCompilerContext2MockRecorder) SetRestoreInfo(restoreInfo interface{}) *gomock.Call {
+// SetSnapshot indicates an expected call of SetSnapshot.
+func (mr *MockCompilerContext2MockRecorder) SetSnapshot(snapshot interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetRestoreInfo", reflect.TypeOf((*MockCompilerContext2)(nil).SetRestoreInfo), restoreInfo)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetSnapshot", reflect.TypeOf((*MockCompilerContext2)(nil).SetSnapshot), snapshot)
+}
+
+// SetViews mocks base method.
+func (m *MockCompilerContext2) SetViews(views []string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetViews", views)
+}
+
+// SetViews indicates an expected call of SetViews.
+func (mr *MockCompilerContext2MockRecorder) SetViews(views interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetViews", reflect.TypeOf((*MockCompilerContext2)(nil).SetViews), views)
 }
 
 // Stats mocks base method.
-func (m *MockCompilerContext2) Stats(obj *plan.ObjectRef, snapshot plan.Snapshot) (*statsinfo.StatsInfo, error) {
+func (m *MockCompilerContext2) Stats(obj *ObjectRef, snapshot Snapshot) (*statsinfo.StatsInfo, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Stats", obj, snapshot)
 	ret0, _ := ret[0].(*statsinfo.StatsInfo)
@@ -524,10 +550,10 @@ func (mr *MockOptimizer2MockRecorder) CurrentContext() *gomock.Call {
 }
 
 // Optimize mocks base method.
-func (m *MockOptimizer2) Optimize(stmt tree.Statement) (*plan.Query, error) {
+func (m *MockOptimizer2) Optimize(stmt tree.Statement) (*Query, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Optimize", stmt)
-	ret0, _ := ret[0].(*plan.Query)
+	ret0, _ := ret[0].(*Query)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -562,7 +588,7 @@ func (m *MockRule) EXPECT() *MockRuleMockRecorder {
 }
 
 // Apply mocks base method.
-func (m *MockRule) Apply(arg0 *plan.Node, arg1 *plan.Query, arg2 *process.Process) {
+func (m *MockRule) Apply(arg0 *Node, arg1 *Query, arg2 *process.Process) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "Apply", arg0, arg1, arg2)
 }
@@ -574,7 +600,7 @@ func (mr *MockRuleMockRecorder) Apply(arg0, arg1, arg2 interface{}) *gomock.Call
 }
 
 // Match mocks base method.
-func (m *MockRule) Match(arg0 *plan.Node) bool {
+func (m *MockRule) Match(arg0 *Node) bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Match", arg0)
 	ret0, _ := ret[0].(bool)
