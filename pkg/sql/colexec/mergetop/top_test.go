@@ -87,19 +87,33 @@ func TestTop(t *testing.T) {
 		for {
 			ok, err := tc.arg.Call(tc.proc)
 			if ok.Status == vm.ExecStop || err != nil {
-				cleanResult(&ok, tc.proc)
 				break
 			}
-			cleanResult(&ok, tc.proc)
 		}
-		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-				if bat != nil {
-					bat.Clean(tc.proc.Mp())
-				}
+		tc.arg.Reset(tc.proc, false, nil)
+
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[1].Ch <- nil
+		for {
+			ok, err := tc.arg.Call(tc.proc)
+			if ok.Status == vm.ExecStop || err != nil {
+				break
 			}
 		}
+		// for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
+		// 	for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
+		// 		bat := <-tc.proc.Reg.MergeReceivers[i].Ch
+		// 		if bat != nil {
+		// 			bat.Clean(tc.proc.Mp())
+		// 		}
+		// 	}
+		// }
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, tc.proc.Mp().CurrNB(), int64(0))
@@ -125,10 +139,8 @@ func BenchmarkTop(b *testing.B) {
 			for {
 				ok, err := tc.arg.Call(tc.proc)
 				if ok.Status == vm.ExecStop || err != nil {
-					cleanResult(&ok, tc.proc)
 					break
 				}
-				cleanResult(&ok, tc.proc)
 			}
 			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
 				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
@@ -191,10 +203,4 @@ func newExpression(pos int32) *plan.Expr {
 // create a new block based on the type information, ds[i] == true: in descending order
 func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
-}
-
-func cleanResult(result *vm.CallResult, proc *process.Process) {
-	if result.Batch != nil {
-		result.Batch.Clean(proc.Mp())
-	}
 }

@@ -131,6 +131,10 @@ type DeleteCtx struct {
 	PrimaryKeyIdx         int
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 // delete from t1 using t1 join t2 on t1.a = t2.a;
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.RemoteDelete {
