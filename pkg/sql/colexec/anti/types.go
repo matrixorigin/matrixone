@@ -20,8 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -64,15 +64,16 @@ type container struct {
 }
 
 type Argument struct {
-	ctr        *container
-	Result     []int32
-	Typs       []types.Type
-	Cond       *plan.Expr
-	Conditions [][]*plan.Expr
-	HashOnPK   bool
-	IsShuffle  bool
-	bat        *batch.Batch
-	lastrow    int
+	ctr                *container
+	Result             []int32
+	Typs               []types.Type
+	Cond               *plan.Expr
+	Conditions         [][]*plan.Expr
+	HashOnPK           bool
+	IsShuffle          bool
+	bat                *batch.Batch
+	lastrow            int
+	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
 	vm.OperatorBase
 }
