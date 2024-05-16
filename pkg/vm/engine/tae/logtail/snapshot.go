@@ -477,7 +477,8 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 func (sm *SnapshotMeta) RebuildTid(ins *containers.Batch) {
 	insTIDs := vector.MustFixedCol[uint64](ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 	if ins.Length() != 1 {
-		panic(fmt.Sprintf("RebuildTid unexpected length %d", ins.Length()))
+		logutil.Warnf("RebuildTid unexpected length %d", ins.Length())
+		return
 	}
 	logutil.Infof("RebuildTid tid %d", insTIDs[0])
 	sm.SetTid(insTIDs[0])
