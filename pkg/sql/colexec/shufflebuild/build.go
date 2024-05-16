@@ -40,6 +40,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	if arg.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
 	}
+	arg.RuntimeFilterSpec.Handled = false
 	arg.ctr = new(container)
 	arg.ctr.shuffleIdx = -1
 	if len(proc.Reg.MergeReceivers) > 1 {
@@ -367,25 +368,6 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 		}
 	}
 
-	return nil
-}
-
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	err := ctr.collectBuildBatches(ap, proc, anal, isFirst)
-	if err != nil {
-		return err
-	}
-	err = ctr.buildHashmap(ap, proc)
-	if err != nil {
-		return err
-	}
-	if !ap.NeedMergedBatch {
-		// if do not need merged batch, free it now to save memory
-		for i := range ctr.batches {
-			proc.PutBatch(ctr.batches[i])
-		}
-		ctr.batches = nil
-	}
 	return nil
 }
 
