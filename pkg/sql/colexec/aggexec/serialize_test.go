@@ -98,16 +98,12 @@ func TestSerial_SingleAggFuncExecSerial(t *testing.T) {
 		retType:   types.T_int64.ToType(),
 		emptyNull: true,
 	}
-	RegisterSingleAggFromFixedToFixed(
-		MakeSingleAgg1RegisteredInfo(
-			MakeSingleColumnAggInformation(info.aggID, info.argType, tSinglePrivate1Ret, true, info.emptyNull),
-			gTestSingleAggPrivateSer1,
-			nil, fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
+	registerTheTestingCount(info.aggID, info.emptyNull)
 
 	// methods to check the correctness of the serialized AggFuncExec.
 	checkFn := func(src, dst AggFuncExec) error {
-		s1, ok1 := src.(*singleAggFuncExec1[int32, int64])
-		s2, ok2 := dst.(*singleAggFuncExec1[int32, int64])
+		s1, ok1 := src.(*singleAggFuncExecNew1[int32, int64])
+		s2, ok2 := dst.(*singleAggFuncExecNew1[int32, int64])
 		if !ok1 || !ok2 {
 			return moerr.NewInternalErrorNoCtx("type assertion failed")
 		}
@@ -466,53 +462,6 @@ func TestSerial_MedianColumnExec(t *testing.T) {
 			info.aggID, info.distinct, info.argType)
 		require.NoError(t, fillTestData(mg, 10, executor, info.argType))
 		require.NoError(t, testAggExecSerialize(executor, checkFn))
-		executor.Free()
-	}
-
-	require.Equal(t, int64(0), mg.Mp().CurrNB())
-}
-
-type testSingleAggPrivateSer1 struct {
-	testSingleAggPrivate1
-}
-
-func gTestSingleAggPrivateSer1() SingleAggFromFixedRetFixed[int32, int64] {
-	return &testSingleAggPrivateSer1{}
-}
-
-func (s *testSingleAggPrivateSer1) Marshal() []byte {
-	return []byte("testSingleAggPrivateSer1")
-}
-
-func (s *testSingleAggPrivateSer1) Unmarshal(bs []byte) {
-	if string(bs) != "testSingleAggPrivateSer1" {
-		panic("unmarshal failed")
-	}
-}
-
-// this test is to check if the agg framework can serialize and deserialize the private struct of the agg function.
-func TestSerial_Agg1(t *testing.T) {
-	mg := newTestAggMemoryManager()
-
-	info := singleAggInfo{
-		aggID:     gUniqueAggIdForTest(),
-		distinct:  false,
-		argType:   types.T_int32.ToType(),
-		retType:   types.T_int64.ToType(),
-		emptyNull: true,
-	}
-	RegisterSingleAggFromFixedToFixed(
-		MakeSingleAgg1RegisteredInfo(
-			MakeSingleColumnAggInformation(info.aggID, info.argType, tSinglePrivate1Ret, true, info.emptyNull),
-			gTestSingleAggPrivateSer1,
-			nil, fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
-
-	{
-		executor := MakeAgg(
-			mg,
-			info.aggID, info.distinct, info.argType)
-		require.NoError(t, fillTestData(mg, 10, executor, info.argType))
-		require.NoError(t, testAggExecSerialize(executor, nil))
 		executor.Free()
 	}
 

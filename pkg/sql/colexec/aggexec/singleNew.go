@@ -22,58 +22,57 @@ import (
 // all the codes in this file were to make the single column aggregation executor from agg information.
 
 func newSingleAggFuncExec1NewVersion(
-	mg AggMemoryManager, info singleAggInfo, opt singleAggOptimizedInfo, impl aggImplementation) AggFuncExec {
+	mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
 	switch info.retType.Oid {
 	case types.T_bool:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[bool](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[bool](mg, info, impl)
 	case types.T_int8:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[int8](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[int8](mg, info, impl)
 	case types.T_int16:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[int16](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[int16](mg, info, impl)
 	case types.T_int32:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[int32](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[int32](mg, info, impl)
 	case types.T_int64:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[int64](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[int64](mg, info, impl)
 	case types.T_uint8:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[uint8](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[uint8](mg, info, impl)
 	case types.T_uint16:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[uint16](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[uint16](mg, info, impl)
 	case types.T_uint32:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[uint32](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[uint32](mg, info, impl)
 	case types.T_uint64:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[uint64](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[uint64](mg, info, impl)
 	case types.T_float32:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[float32](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[float32](mg, info, impl)
 	case types.T_float64:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[float64](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[float64](mg, info, impl)
 	case types.T_decimal64:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Decimal64](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Decimal64](mg, info, impl)
 	case types.T_decimal128:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Decimal128](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Decimal128](mg, info, impl)
 	case types.T_date:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Date](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Date](mg, info, impl)
 	case types.T_datetime:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Datetime](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Datetime](mg, info, impl)
 	case types.T_time:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Time](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Time](mg, info, impl)
 	case types.T_timestamp:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Timestamp](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Timestamp](mg, info, impl)
 	case types.T_bit:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[uint64](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[uint64](mg, info, impl)
 	case types.T_TS:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.TS](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.TS](mg, info, impl)
 	case types.T_Rowid:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Rowid](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Rowid](mg, info, impl)
 	case types.T_Blockid:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Blockid](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Blockid](mg, info, impl)
 	case types.T_uuid:
-		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Uuid](mg, info, opt, impl)
+		return newSingleAggFuncExec1NewVersionWithKnownResultType[types.Uuid](mg, info, impl)
 	}
-	panic(fmt.Sprintf("unsupported result type %s for singleAggFuncExec1", info.retType))
+	panic(fmt.Sprintf("unsupported result type %s for single column agg executor1", info.retType))
 }
 
-func newSingleAggFuncExec1NewVersionWithKnownResultType[to types.FixedSizeTExceptStrType](
-	mg AggMemoryManager, info singleAggInfo, opt singleAggOptimizedInfo, impl aggImplementation) AggFuncExec {
+func newSingleAggFuncExec1NewVersionWithKnownResultType[to types.FixedSizeTExceptStrType](mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
 
 	switch info.argType.Oid {
 	case types.T_bool:
@@ -186,223 +185,223 @@ func newSingleAggFuncExec1NewVersionWithKnownResultType[to types.FixedSizeTExcep
 		e.init(mg, info, impl)
 		return e
 	}
-	panic(fmt.Sprintf("unexpected parameter to Init a singleAggFuncExec1, aggInfo: %s", info))
+	panic(fmt.Sprintf("unexpected parameter to Init a singleAggFuncExec1NewVersion, aggInfo: %s", info))
 }
 
-func newSingleAggFuncExec2(
-	mg AggMemoryManager, info singleAggInfo, opt singleAggOptimizedInfo, impl aggImplementation) AggFuncExec {
+func newSingleAggFuncExec2NewVersion(
+	mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
 	switch info.argType.Oid {
 	case types.T_bool:
-		e := &singleAggFuncExec2[bool]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[bool]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_bit:
-		e := &singleAggFuncExec2[uint64]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[uint64]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_int8:
-		e := &singleAggFuncExec2[int8]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[int8]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_int16:
-		e := &singleAggFuncExec2[int16]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[int16]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_int32:
-		e := &singleAggFuncExec2[int32]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[int32]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_int64:
-		e := &singleAggFuncExec2[int64]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[int64]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_uint8:
-		e := &singleAggFuncExec2[uint8]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[uint8]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_uint16:
-		e := &singleAggFuncExec2[uint16]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[uint16]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_uint32:
-		e := &singleAggFuncExec2[uint32]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[uint32]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_uint64:
-		e := &singleAggFuncExec2[uint64]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[uint64]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_float32:
-		e := &singleAggFuncExec2[float32]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[float32]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_float64:
-		e := &singleAggFuncExec2[float64]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[float64]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_decimal64:
-		e := &singleAggFuncExec2[types.Decimal64]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[types.Decimal64]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_decimal128:
-		e := &singleAggFuncExec2[types.Decimal128]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[types.Decimal128]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_date:
-		e := &singleAggFuncExec2[types.Date]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[types.Date]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_datetime:
-		e := &singleAggFuncExec2[types.Datetime]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[types.Datetime]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_time:
-		e := &singleAggFuncExec2[types.Time]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[types.Time]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_timestamp:
-		e := &singleAggFuncExec2[types.Timestamp]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[types.Timestamp]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_TS:
-		e := &singleAggFuncExec2[types.TS]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[types.TS]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_Rowid:
-		e := &singleAggFuncExec2[types.Rowid]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[types.Rowid]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_Blockid:
-		e := &singleAggFuncExec2[types.Blockid]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[types.Blockid]{}
+		e.init(mg, info, impl)
 		return e
 
 	case types.T_uuid:
-		e := &singleAggFuncExec2[types.Uuid]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew2[types.Uuid]{}
+		e.init(mg, info, impl)
 		return e
 	}
 	panic(fmt.Sprintf("unsupported parameter type %s for singleAggFuncExec2", info.argType))
 }
 
-func newSingleAggFuncExec3(
-	mg AggMemoryManager, info singleAggInfo, opt singleAggOptimizedInfo, impl aggImplementation) AggFuncExec {
+func newSingleAggFuncExec3NewVersion(
+	mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
 	switch info.retType.Oid {
 	case types.T_bool:
-		e := &singleAggFuncExec3[bool]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[bool]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_bit:
-		e := &singleAggFuncExec3[uint64]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[uint64]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_int8:
-		e := &singleAggFuncExec3[int8]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[int8]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_int16:
-		e := &singleAggFuncExec3[int16]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[int16]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_int32:
-		e := &singleAggFuncExec3[int32]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[int32]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_int64:
-		e := &singleAggFuncExec3[int64]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[int64]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_uint8:
-		e := &singleAggFuncExec3[uint8]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[uint8]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_uint16:
-		e := &singleAggFuncExec3[uint16]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[uint16]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_uint32:
-		e := &singleAggFuncExec3[uint32]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[uint32]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_uint64:
-		e := &singleAggFuncExec3[uint64]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[uint64]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_float32:
-		e := &singleAggFuncExec3[float32]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[float32]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_float64:
-		e := &singleAggFuncExec3[float64]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[float64]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_decimal64:
-		e := &singleAggFuncExec3[types.Decimal64]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[types.Decimal64]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_decimal128:
-		e := &singleAggFuncExec3[types.Decimal128]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[types.Decimal128]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_date:
-		e := &singleAggFuncExec3[types.Date]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[types.Date]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_datetime:
-		e := &singleAggFuncExec3[types.Datetime]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[types.Datetime]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_time:
-		e := &singleAggFuncExec3[types.Time]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[types.Time]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_timestamp:
-		e := &singleAggFuncExec3[types.Timestamp]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[types.Timestamp]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_TS:
-		e := &singleAggFuncExec3[types.TS]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[types.TS]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_Rowid:
-		e := &singleAggFuncExec3[types.Rowid]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[types.Rowid]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_Blockid:
-		e := &singleAggFuncExec3[types.Blockid]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[types.Blockid]{}
+		e.init(mg, info, impl)
 		return e
 	case types.T_uuid:
-		e := &singleAggFuncExec3[types.Uuid]{}
-		e.init(mg, info, opt, impl)
+		e := &singleAggFuncExecNew3[types.Uuid]{}
+		e.init(mg, info, impl)
 		return e
 	}
 	panic(fmt.Sprintf("unsupported result type %s for singleAggFuncExec3", info.retType))
 }
 
-func newSingleAggFuncExec4(
-	mg AggMemoryManager, info singleAggInfo, opt singleAggOptimizedInfo, impl aggImplementation) AggFuncExec {
-	e := &singleAggFuncExec4{}
-	e.init(mg, info, opt, impl)
+func newSingleAggFuncExec4NewVersion(
+	mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
+	e := &singleAggFuncExecNew4{}
+	e.init(mg, info, impl)
 	return e
 }

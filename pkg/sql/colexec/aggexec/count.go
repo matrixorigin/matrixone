@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -32,6 +33,25 @@ type countColumnExec struct {
 	distinctHash
 
 	ret aggFuncResult[int64]
+}
+
+func (exec *countColumnExec) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		ExecType: EncodedAggExecType_special_count_column,
+		Info:     d,
+		Result:   r,
+		Groups:   nil,
+	}
+	return encoded.Marshal()
+}
+
+func (exec *countColumnExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+	return exec.ret.unmarshal(result)
 }
 
 func newCountColumnExecExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
@@ -224,6 +244,25 @@ type countStarExec struct {
 	singleAggInfo
 	singleAggExecExtraInformation
 	ret aggFuncResult[int64]
+}
+
+func (exec *countStarExec) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		ExecType: EncodedAggExecType_special_count_star,
+		Info:     d,
+		Result:   r,
+		Groups:   nil,
+	}
+	return encoded.Marshal()
+}
+
+func (exec *countStarExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+	return exec.ret.unmarshal(result)
 }
 
 func newCountStarExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec {

@@ -23,6 +23,9 @@ import (
 
 var _ AggFuncExec = &singleAggFuncExecNew3[bool]{}
 
+// for sca.
+var _ = RegisterAggFromBytesRetFixed[bool]
+
 func RegisterAggFromBytesRetFixed[to types.FixedSizeTExceptStrType](
 	basicInformation SingleColumnAggInformation,
 	initCommonContext AggCommonContextInit,
