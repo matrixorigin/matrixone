@@ -262,7 +262,7 @@ create snapshot sp_01 for account test_account;
 use snapshot_read;
 drop table students;
 drop table users;
-restore account test_account database snapshot_read from snapshot sp_01 to account test_account;
+restore account test_account database snapshot_read from snapshot sp_01;
 select count(*) from snapshot_read.students;
 count(*)
 50
@@ -270,7 +270,7 @@ select count(*) from snapshot_read.users;
 count(*)
 11
 drop database snapshot_read;
-restore account test_account database snapshot_read from snapshot sp_01 to account test_account;
+restore account test_account database snapshot_read from snapshot sp_01;
 select count(*) from snapshot_read.students;
 count(*)
 50
