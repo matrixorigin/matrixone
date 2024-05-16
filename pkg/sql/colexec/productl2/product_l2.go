@@ -124,12 +124,14 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 var (
 	arrayF32Pool = sync.Pool{
 		New: func() interface{} {
-			return make([]float32, 128)
+			s := make([]float32, 128)
+			return &s
 		},
 	}
 	arrayF64Pool = sync.Pool{
 		New: func() interface{} {
-			return make([]float64, 128)
+			s := make([]float64, 128)
+			return &s
 		},
 	}
 )
@@ -173,7 +175,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 				clusterEmbedding := types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
 				tblEmbedding := types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
 
-				normalizeTblEmbedding := arrayF32Pool.Get().([]float32)
+				normalizeTblEmbedding := *(arrayF32Pool.Get().(*[]float32))
 				if cap(normalizeTblEmbedding) < len(tblEmbedding) {
 					normalizeTblEmbedding = make([]float32, len(tblEmbedding))
 				} else {
@@ -186,12 +188,12 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 					leastDistance = dist
 					leastClusterIndex = i
 				}
-				arrayF32Pool.Put(normalizeTblEmbedding)
+				arrayF32Pool.Put(&normalizeTblEmbedding)
 			case types.T_array_float64:
 				clusterEmbedding := types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
 				tblEmbedding := types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
 
-				normalizeTblEmbedding := arrayF64Pool.Get().([]float64)
+				normalizeTblEmbedding := *(arrayF64Pool.Get().(*[]float64))
 				if cap(normalizeTblEmbedding) < len(tblEmbedding) {
 					normalizeTblEmbedding = make([]float64, len(tblEmbedding))
 				} else {
@@ -204,7 +206,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 					leastDistance = dist
 					leastClusterIndex = i
 				}
-				arrayF64Pool.Put(normalizeTblEmbedding)
+				arrayF64Pool.Put(&normalizeTblEmbedding)
 			}
 		}
 		for k, rp := range ap.Result {

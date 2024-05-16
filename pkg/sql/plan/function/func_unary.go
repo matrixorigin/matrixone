@@ -107,13 +107,15 @@ func AbsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.Functio
 var (
 	arrayF32Pool = sync.Pool{
 		New: func() interface{} {
-			return make([]float32, 128)
+			s := make([]float32, 128)
+			return &s
 		},
 	}
 
 	arrayF64Pool = sync.Pool{
 		New: func() interface{} {
-			return make([]float64, 128)
+			s := make([]float64, 128)
+			return &s
 		},
 	}
 )
@@ -133,7 +135,7 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 		switch t := parameters[0].GetType().Oid; t {
 		case types.T_array_float32:
 			inArrayF32 := types.BytesToArray[float32](data)
-			outArrayF32 := arrayF32Pool.Get().([]float32)
+			outArrayF32 := *(arrayF32Pool.Get().(*[]float32))
 			if cap(outArrayF32) < len(inArrayF32) {
 				outArrayF32 = make([]float32, len(inArrayF32))
 			} else {
@@ -141,10 +143,10 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 			}
 			outArrayF32, _ = moarray.NormalizeL2(inArrayF32, &outArrayF32)
 			_ = rs.AppendBytes(types.ArrayToBytes[float32](outArrayF32), false)
-			arrayF32Pool.Put(outArrayF32)
+			arrayF32Pool.Put(&outArrayF32)
 		case types.T_array_float64:
 			inArrayF64 := types.BytesToArray[float64](data)
-			outArrayF64 := arrayF64Pool.Get().([]float64)
+			outArrayF64 := *(arrayF64Pool.Get().(*[]float64))
 			if cap(outArrayF64) < len(inArrayF64) {
 				outArrayF64 = make([]float64, len(inArrayF64))
 			} else {
@@ -152,7 +154,7 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 			}
 			outArrayF64, _ = moarray.NormalizeL2(inArrayF64, &outArrayF64)
 			_ = rs.AppendBytes(types.ArrayToBytes[float64](outArrayF64), false)
-			arrayF64Pool.Put(outArrayF64)
+			arrayF64Pool.Put(&outArrayF64)
 		}
 
 	}
