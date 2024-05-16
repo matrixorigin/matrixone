@@ -93,16 +93,15 @@ func (c *checker) Check() error {
 			for itObject.Valid() {
 				objectEntry := itObject.Get().GetPayload()
 				stats := objectEntry.GetObjectStats()
-				logutil.Infof("object %s,", stats.ObjectName().String())
 				if _, ok := allObjects[stats.ObjectName().String()]; ok {
-					logutil.Infof("allObjects %s,", stats.ObjectName().String())
+					logutil.Infof("allObjects found object %s,", stats.ObjectName().String())
 					delete(allObjects, stats.ObjectName().String())
 				}
 				it2 := table.GetDeleteList().Iter()
 				for it2.Next() {
 					objID := it2.Item().ObjectID
-					logutil.Infof("deleteList %s,", objID.String())
-					if _, ok := allObjects[objID.String()]; ok {
+					if _, ok := allObjects[objID.String()+"0000"]; ok {
+						logutil.Infof("allObjects found tombstone %s,", objID.String()+"0000")
 						delete(allObjects, objID.String())
 					}
 				}
