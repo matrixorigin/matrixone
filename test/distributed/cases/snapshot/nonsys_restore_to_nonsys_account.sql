@@ -277,6 +277,8 @@ create database db01;
 restore account acc01 FROM snapshot sp05;
 show databases;
 drop snapshot sp05;
+drop database db01;
+
 
 
 

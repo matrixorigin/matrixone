@@ -314,6 +314,10 @@ create database db01;
 restore account sys FROM snapshot sp05;
 show databases;
 drop snapshot sp05;
+drop database db01;
+
+
+
 
 -- sys create sp01,sp02, restore sp02, restore sp01
 drop database if exists db01;
