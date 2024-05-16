@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -86,6 +87,7 @@ type processHelper struct {
 	txnClient        client.TxnClient
 	sessionInfo      process.SessionInfo
 	analysisNodeList []int32
+	StmtId           uuid.UUID
 }
 
 // messageSenderOnClient is a structure
@@ -381,6 +383,11 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
 	proc.DispatchNotifyCh = make(chan process.WrapCs)
+	{
+		txn := proc.TxnOperator.Txn()
+		txnId := txn.GetID()
+		proc.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
+	}
 
 	c := reuse.Alloc[Compile](nil)
 	c.proc = proc
@@ -517,6 +524,12 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	result.sessionInfo, err = convertToProcessSessionInfo(procInfo.SessionInfo)
 	if err != nil {
 		return processHelper{}, err
+	}
+	if sessLogger := procInfo.SessionLogger; sessLogger != nil {
+		copy(result.sessionInfo.SessionId[:], sessLogger.SessId)
+		copy(result.StmtId[:], sessLogger.StmtId)
+		result.sessionInfo.LogLevel = enumLogLevel2ZapLogLevel(sessLogger.LogLevel)
+		// txnId, ignore. more in txnOperator.
 	}
 
 	return result, nil

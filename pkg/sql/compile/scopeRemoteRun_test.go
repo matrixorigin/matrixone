@@ -48,7 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -395,9 +394,10 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		{
 			Arg: &table_function.Argument{},
 		},
-		{
-			Arg: &hashbuild.Argument{},
-		},
+		//hashbuild operator dont need to serialize
+		//{
+		//	Arg: &hashbuild.Argument{},
+		//},
 		{
 			Arg: &external.Argument{
 				Es: &external.ExternalParam{
@@ -480,7 +480,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.MergeTop), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
 		{Op: int32(vm.MergeOrder), OrderBy: []*plan.OrderBySpec{}},
 		{Op: int32(vm.TableFunction), TableFunction: &pipeline.TableFunction{}},
-		{Op: int32(vm.HashBuild), HashBuild: &pipeline.HashBuild{}},
+		//{Op: int32(vm.HashBuild), HashBuild: &pipeline.HashBuild{}},
 		{Op: int32(vm.External), ExternalScan: &pipeline.ExternalScan{}},
 		{Op: int32(vm.Source), StreamScan: &pipeline.StreamScan{}},
 	}

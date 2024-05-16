@@ -18,29 +18,44 @@ import "time"
 
 func init() {
 	go func() {
-		lastNumAllocs := make([]int64, numShards)
-		for range time.NewTicker(time.Second * 37).C {
-			for i := 0; i < numShards; i++ {
-				numAllocs := shards[i].numAlloc.Load()
-				if numAllocs == lastNumAllocs[i] {
-					// not active, flush
-					shards[i].flush()
-				}
-				lastNumAllocs[i] = numAllocs
-			}
+		maxIdle := time.Second * 37
+		lastNumAllocs := make(map[[2]int]int64)
+		for range time.NewTicker(maxIdle).C {
+			evict(lastNumAllocs)
 		}
 	}()
 }
 
-func (s *Shard) flush() {
-	for _, ch := range s.pools {
-	loop:
-		for {
-			select {
-			case <-ch:
-			default:
-				break loop
+func evict(stats map[[2]int]int64) {
+	for shardIndex := 0; shardIndex < numShards; shardIndex++ {
+		for poolIndex := 0; poolIndex < len(classSizes); poolIndex++ {
+			pool := &shards[shardIndex].pools[poolIndex]
+			numAllocs := pool.numAlloc.Load()
+			key := [2]int{shardIndex, poolIndex}
+			if numAllocs == stats[key] {
+				// not active, flush
+				pool.flush()
 			}
+			stats[key] = numAllocs
 		}
 	}
+}
+
+func (p *Pool) flush() {
+	for {
+		select {
+		case <-p.ch:
+		default:
+			return
+		}
+	}
+}
+
+func cachingObjects() (ret int) {
+	for i := 0; i < numShards; i++ {
+		for j := 0; j < len(classSizes); j++ {
+			ret += len(shards[i].pools[j].ch)
+		}
+	}
+	return
 }

@@ -77,6 +77,7 @@ const (
 	IntersectAll
 
 	HashBuild
+	ShuffleBuild
 
 	TableFunction
 	TableScan
