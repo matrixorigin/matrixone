@@ -29,7 +29,7 @@ func newData(size int, counter *atomic.Int64) *Data {
 	data := &Data{
 		size: size,
 	}
-	ptr, handle := malloc.Alloc(size)
+	ptr, handle := malloc.Alloc(size, true)
 	data.bufHandle = handle
 	data.buf = unsafe.Slice((*byte)(ptr), size)
 	data.ref.init(1)
