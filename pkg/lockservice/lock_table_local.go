@@ -94,6 +94,7 @@ func (l *localLockTable) doLock(
 	if c.txn.deadlockFound {
 		logReturnInDoLock(c.txn, "return in deadlockFound", c.w)
 		if c.w != nil {
+			c.w.disableNotify()
 			c.w.close(fmt.Sprintf("deadlockFound in doLock, txn: %x", c.txn.txnID))
 		}
 		c.done(ErrDeadLockDetected)
