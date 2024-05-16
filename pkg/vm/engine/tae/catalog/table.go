@@ -122,7 +122,9 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 
 	var sid types.Uuid
 	if schema.Name == SystemDBSchema.Name {
-		e.tableData = DefaultTableDataFactory(e) // TODO(aptend): add data handle
+		if DefaultTableDataFactory != nil {
+			e.tableData = DefaultTableDataFactory(e) // TODO(aptend): add data handle
+		}
 		sid = SystemObject_DB_ID
 	} else if schema.Name == SystemTableSchema.Name {
 		sid = SystemObject_Table_ID
