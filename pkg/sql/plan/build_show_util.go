@@ -82,9 +82,7 @@ func ConstructCreateTableSQL(tableDef *plan.TableDef, ctx CompilerContext) (stri
 					buf.WriteString(" DEFAULT NULL")
 				}
 			} else if len(col.Default.OriginString) > 0 {
-				if !col.Primary {
-					buf.WriteString(" DEFAULT " + formatStr(col.Default.OriginString))
-				}
+				buf.WriteString(" DEFAULT " + formatStr(col.Default.OriginString))
 			}
 
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {

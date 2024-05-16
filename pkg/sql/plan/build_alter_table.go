@@ -151,23 +151,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	}
 	alterTablePlan.CreateTmpTableSql = createTmpDdl
 
-	createDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.originTableName)
-	if err != nil {
-		return nil, err
-	}
-	alterTablePlan.CreateTableSql = createDdl
-
 	insertTmpDml, err := buildAlterInsertDataSQL(ctx, alterTableCtx)
 	if err != nil {
 		return nil, err
 	}
 	alterTablePlan.InsertTmpDataSql = insertTmpDml
-
-	insertDml, err := builInsertSQL(ctx, alterTableCtx)
-	if err != nil {
-		return nil, err
-	}
-	alterTablePlan.InsertDataSql = insertDml
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
 	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
@@ -251,9 +239,7 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 					buf.WriteString(" DEFAULT NULL")
 				}
 			} else if len(col.Default.OriginString) > 0 {
-				if !col.Primary {
-					buf.WriteString(" DEFAULT " + formatStr(col.Default.OriginString))
-				}
+				buf.WriteString(" DEFAULT " + formatStr(col.Default.OriginString))
 			}
 
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
