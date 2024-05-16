@@ -39,7 +39,6 @@ func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
 	}
 
 	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_special_approx_count,
 		Info:     d,
 		Result:   r,
 		Groups:   nil,
@@ -90,7 +89,6 @@ func (exec *approxCountVarExec) marshal() ([]byte, error) {
 	}
 
 	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_special_approx_count,
 		Info:     d,
 		Result:   r,
 		Groups:   nil,

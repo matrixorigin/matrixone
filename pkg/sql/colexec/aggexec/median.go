@@ -59,7 +59,6 @@ func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
 	}
 
 	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_special_median,
 		Info:     d,
 		Result:   r,
 		Groups:   nil,

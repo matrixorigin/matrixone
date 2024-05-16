@@ -38,7 +38,7 @@ func UnmarshalAggFuncExec(
 
 	exec := MakeAgg(mg, info.Id, info.IsDistinct, info.Args...)
 
-	if encoded.GetExecType() == EncodedAggExecType_special_group_concat {
+	if encoded.Info.Id == aggIdOfGroupConcat {
 		if len(encoded.Groups) > 0 && len(encoded.Groups[0]) > 0 {
 			exec.(*groupConcatExec).separator = encoded.Groups[0]
 		}
@@ -73,7 +73,6 @@ func (exec *multiAggFuncExec1[to]) marshal() ([]byte, error) {
 		return nil, err
 	}
 	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_multi_return_fixed,
 		Info:     d,
 		Result:   r,
 	}
@@ -102,7 +101,6 @@ func (exec *multiAggFuncExec2) marshal() ([]byte, error) {
 		return nil, err
 	}
 	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_multi_return_fixed,
 		Info:     d,
 		Result:   r,
 	}

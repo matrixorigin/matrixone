@@ -43,7 +43,6 @@ func (exec *groupConcatExec) marshal() ([]byte, error) {
 		return nil, err
 	}
 	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_special_group_concat,
 		Info:     d,
 		Result:   r,
 		Groups:   [][]byte{exec.separator},

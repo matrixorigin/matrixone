@@ -63,7 +63,6 @@ func (exec *singleWindowExec) marshal() ([]byte, error) {
 	}
 
 	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_single_window,
 		Info:     d,
 		Result:   r,
 		Groups:   nil,

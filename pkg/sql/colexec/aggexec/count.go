@@ -42,7 +42,6 @@ func (exec *countColumnExec) marshal() ([]byte, error) {
 		return nil, err
 	}
 	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_special_count_column,
 		Info:     d,
 		Result:   r,
 		Groups:   nil,
@@ -253,7 +252,6 @@ func (exec *countStarExec) marshal() ([]byte, error) {
 		return nil, err
 	}
 	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_special_count_star,
 		Info:     d,
 		Result:   r,
 		Groups:   nil,

@@ -82,7 +82,6 @@ func (exec *clusterCentersExec) marshal() ([]byte, error) {
 	}
 
 	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_special_cluster_center,
 		Info:     d,
 		Result:   r,
 		Groups:   nil,
