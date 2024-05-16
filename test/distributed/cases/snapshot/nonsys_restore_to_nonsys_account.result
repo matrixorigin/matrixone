@@ -450,14 +450,12 @@ create database db01;
 restore account acc01 FROM snapshot sp05;
 show databases;
 Database
-db01
 information_schema
 mo_catalog
 mysql
 system
 system_metrics
 drop snapshot sp05;
-drop database db01;
 drop database if exists db01;
 create database db01;
 use db01;
