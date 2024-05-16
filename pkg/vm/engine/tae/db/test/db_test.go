@@ -2665,6 +2665,125 @@ func TestMergeblocks2(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
+// Object1: 1, 2, 3 | 4, 5, 6
+// Object2: 7, 8, 9 | 10, 11, 12
+// Now delete 1 and 10, then after merge:
+// Object1: 2, 3, 4 | 5, 6, 7
+// Object2: 8, 9, 11 | 12
+// Delete map not nil on: [obj1, blk1] and [obj2, blk2]
+func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 3
+	schema.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 12)
+	bats := bat.Split(2)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bats[0], true)
+
+	txn, rel := tae.GetRelation()
+	_ = rel.Append(context.Background(), bats[1])
+	assert.Nil(t, txn.Commit(context.Background()))
+
+	// flush to nblk
+	{
+		txn, rel := tae.GetRelation()
+		blkMetas := testutil.GetAllBlockMetas(rel)
+		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tae.DB.Runtime, types.MaxTs())
+		require.NoError(t, err)
+		require.NoError(t, task.OnExec(context.Background()))
+		require.NoError(t, txn.Commit(context.Background()))
+
+		testutil.CheckAllColRowsByScan(t, rel, 12, true)
+	}
+
+	{
+		t.Log("************split one object into two objects************")
+
+		txn, rel = tae.GetRelation()
+		objIt := rel.MakeObjectIt()
+		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		objHandle, err := rel.GetObject(&obj.ID)
+		assert.NoError(t, err)
+
+		objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
+		task, err := jobs.NewMergeObjectsTask(nil, txn, objsToMerge, tae.Runtime, 0)
+		assert.NoError(t, err)
+		assert.NoError(t, task.OnExec(context.Background()))
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
+
+	{
+		t.Log("************check del map************")
+		it := rel.MakeObjectIt()
+		for it.Valid() {
+			obj := it.GetObject()
+			assert.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 0)))
+			assert.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 1)))
+			it.Next()
+		}
+	}
+
+	{
+		t.Log("************delete during merge************")
+
+		txn, rel = tae.GetRelation()
+		objIt := rel.MakeObjectIt()
+		obj1 := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		objHandle1, err := rel.GetObject(&obj1.ID)
+		assert.NoError(t, err)
+		objIt.Next()
+		obj2 := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		objHandle2, err := rel.GetObject(&obj2.ID)
+		assert.NoError(t, err)
+
+		v := testutil.GetSingleSortKeyValue(bat, schema, 1)
+		filter := handle.NewEQFilter(v)
+		txn2, rel := tae.GetRelation()
+		_ = rel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, txn2.Commit(context.Background()))
+		_, rel = tae.GetRelation()
+		testutil.CheckAllColRowsByScan(t, rel, 11, true)
+
+		v = testutil.GetSingleSortKeyValue(bat, schema, 10)
+		filter = handle.NewEQFilter(v)
+		txn2, rel = tae.GetRelation()
+		_ = rel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, txn2.Commit(context.Background()))
+		_, rel = tae.GetRelation()
+		testutil.CheckAllColRowsByScan(t, rel, 10, true)
+
+		objsToMerge := []*catalog.ObjectEntry{objHandle1.GetMeta().(*catalog.ObjectEntry), objHandle2.GetMeta().(*catalog.ObjectEntry)}
+		task, err := jobs.NewMergeObjectsTask(nil, txn, objsToMerge, tae.Runtime, 0)
+		assert.NoError(t, err)
+		assert.NoError(t, task.OnExec(context.Background()))
+		assert.NoError(t, txn.Commit(context.Background()))
+		{
+			t.Log("************check del map again************")
+			_, rel = tae.GetRelation()
+			objCnt := 0
+			for it := rel.MakeObjectIt(); it.Valid(); it.Next() {
+				obj := it.GetObject()
+				if objCnt == 0 {
+					assert.NotNil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 0)))
+				} else {
+					assert.NotNil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 1)))
+				}
+				objCnt++
+			}
+			assert.Equal(t, 2, objCnt)
+		}
+	}
+}
+
 func TestMergeEmptyBlocks(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)

@@ -208,7 +208,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.DiskCleaner.Start()
 	// Init gc manager at last
 	// TODO: clean-try-gc requires configuration parameters
-	db.GCManager = gc.NewManager(
+	cronJobs := []func(*gc.Manager){
 		gc.WithCronJob(
 			"clean-transfer-table",
 			opts.CheckpointCfg.FlushInterval,
@@ -266,8 +266,18 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				}
 				return nil
 			},
-		),
-	)
+		)}
+	if opts.CheckpointCfg.MetadataCheckInterval != 0 {
+		cronJobs = append(cronJobs,
+			gc.WithCronJob(
+				"metadata-check",
+				opts.CheckpointCfg.MetadataCheckInterval,
+				func(ctx context.Context) error {
+					db.Catalog.CheckMetadata()
+					return nil
+				}))
+	}
+	db.GCManager = gc.NewManager(cronJobs...)
 
 	db.GCManager.Start()
 

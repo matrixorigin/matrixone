@@ -65,15 +65,18 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		return
 	}
 
+	if node.Stats.HashmapStats.Shuffle {
+		rfTag := builder.genNewMsgTag()
+		node.RuntimeFilterProbeList = append(node.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, nil))
+		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, 0, nil))
+		return
+	}
+
 	if node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER || node.JoinType == plan.Node_SINGLE || node.JoinType == plan.Node_MARK {
 		return
 	}
 
 	if node.JoinType == plan.Node_ANTI && !node.BuildOnLeft {
-		return
-	}
-
-	if node.Stats.HashmapStats.Shuffle {
 		return
 	}
 

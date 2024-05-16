@@ -67,6 +67,7 @@ message Shuffle{
   int32 AliveRegCnt = 5;
   repeated uint64 shuffle_ranges_uint64 = 6;
   repeated int64 shuffle_ranges_int64=7;
+  plan.RuntimeFilterSpec runtimeFilterSpec = 8;
 }
 
 message Dispatch {
@@ -220,6 +221,7 @@ message AntiJoin{
   repeated plan.Expr right_cond = 5;
   bool hash_on_pk = 6;
   bool is_shuffle = 7;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
 }
 
 message LeftJoin {

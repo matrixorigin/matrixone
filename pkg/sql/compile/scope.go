@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -337,7 +338,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			msgReceiver := c.proc.NewMessageReceiver([]int32{spec.Tag}, process.AddrBroadCastOnCurrentCN())
 			msgs, ctxDone := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
 			if ctxDone {
-				return nil
+				return s.Proc.Ctx.Err()
 			}
 			for i := range msgs {
 				msg, ok := msgs[i].(process.RuntimeFilterMessage)
@@ -495,7 +496,12 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
-		db, err = c.e.Database(ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
+		txnOp := s.Proc.TxnOperator
+		if !s.DataSource.Timestamp.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+			s.DataSource.Timestamp.Less(s.Proc.TxnOperator.Txn().SnapshotTS) {
+			txnOp = s.Proc.TxnOperator.CloneSnapshotOp(s.DataSource.Timestamp)
+		}
+		db, err = c.e.Database(ctx, s.DataSource.SchemaName, txnOp)
 		if err != nil {
 			return err
 		}

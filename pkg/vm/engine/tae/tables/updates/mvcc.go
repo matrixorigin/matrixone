@@ -267,8 +267,13 @@ func (n *AppendMVCCHandle) AddAppendNodeLocked(
 
 // Reschedule until all appendnode is committed.
 // Pending appendnode is not visible for compaction txn.
+func (n *AppendMVCCHandle) PrepareCompactLocked() bool {
+	return n.allAppendsCommittedLocked()
+}
 func (n *AppendMVCCHandle) PrepareCompact() bool {
-	return n.allAppendsCommitted()
+	n.RLock()
+	defer n.RUnlock()
+	return n.allAppendsCommittedLocked()
 }
 
 func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
@@ -276,9 +281,14 @@ func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
 }
 
 // check if all appendnodes are committed.
-func (n *AppendMVCCHandle) allAppendsCommitted() bool {
-	n.RLock()
-	defer n.RUnlock()
+func (n *AppendMVCCHandle) allAppendsCommittedLocked() bool {
+	if n.appends == nil {
+		logutil.Warnf("[MetadataCheck] appends mvcc is nil, obj %v, has dropped %v, deleted at %v",
+			n.meta.ID.String(),
+			n.meta.HasDropCommittedLocked(),
+			n.meta.GetDeleteAtLocked().ToString())
+		return false
+	}
 	return n.appends.IsCommitted()
 }
 
@@ -461,6 +471,15 @@ func (n *ObjectMVCCHandle) StringLocked(level common.PPLevel, depth int, prefix 
 	}
 	return s
 }
+func (n *ObjectMVCCHandle) String(level common.PPLevel, depth int, prefix string) string {
+	n.RLock()
+	defer n.RUnlock()
+	s := ""
+	for _, deletes := range n.deletes {
+		s = fmt.Sprintf("%s%s", s, deletes.StringLocked(level, depth+1, prefix))
+	}
+	return s
+}
 
 func (n *ObjectMVCCHandle) StringBlkLocked(level common.PPLevel, depth int, prefix string, blkid int) string {
 	s := ""
@@ -503,7 +522,7 @@ func (n *ObjectMVCCHandle) ReplayDeltaLoc(vMVCCNode any, blkID uint16) {
 	mvcc := n.GetOrCreateDeleteChainLocked(blkID)
 	mvcc.ReplayDeltaLoc(mvccNode)
 }
-func (n *ObjectMVCCHandle) InMemoryDeletesExisted() bool {
+func (n *ObjectMVCCHandle) InMemoryDeletesExistedLocked() bool {
 	for _, deletes := range n.deletes {
 		if !deletes.deletes.mask.IsEmpty() {
 			return true
@@ -589,7 +608,29 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 	deltalocEnd = deltalocBat.Length()
 	return
 }
+func (n *ObjectMVCCHandle) CheckTombstone() {
+	n.RLock()
+	defer n.RUnlock()
+	for _, deletes := range n.deletes {
+		persistedTS := deletes.getDeltaPersistedTSLocked()
+		deletes.deletes.LoopChainLocked(func(node *DeleteNode) bool {
+			if node.IsPersistedDeletedNode() {
+				return true
+			}
+			if !node.IsCommitted() {
+				return true
+			}
+			if node.End.Less(&persistedTS) {
+				logutil.Warnf("[MetadataCheck] in memory deletes should be flushed node %v, tombstone %v",
+					node.StringLocked(),
+					n.StringLocked(3, 0, ""))
+				return false
+			}
+			return true
+		})
+	}
 
+}
 func VisitDeltaloc(bat, tnBatch *containers.Batch, object *catalog.ObjectEntry, blkID *objectio.Blockid, node *catalog.MVCCNode[*catalog.MetadataMVCCNode], commitTS, createTS types.TS) {
 	is_sorted := false
 	if !object.IsAppendable() && object.GetSchema().HasSortKey() {
@@ -698,7 +739,11 @@ func (n *MVCCHandle) GetID() *common.ID {
 	return id
 }
 func (n *MVCCHandle) GetEntry() *catalog.ObjectEntry { return n.meta }
-
+func (n *MVCCHandle) String(level common.PPLevel, depth int, prefix string) string {
+	n.RLock()
+	defer n.RUnlock()
+	return n.StringLocked(level, depth, prefix)
+}
 func (n *MVCCHandle) StringLocked(level common.PPLevel, depth int, prefix string) string {
 	inMemoryCount := 0
 	if n.deletes.DepthLocked() > 0 {

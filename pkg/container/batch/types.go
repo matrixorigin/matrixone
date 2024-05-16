@@ -16,6 +16,7 @@ package batch
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
@@ -34,11 +35,12 @@ var (
 )
 
 type EncodeBatch struct {
-	rowCount  int64
-	Vecs      []*vector.Vector
-	Attrs     []string
-	AggInfos  [][]byte
-	Recursive int32
+	rowCount   int64
+	Vecs       []*vector.Vector
+	Attrs      []string
+	AggInfos   [][]byte
+	Recursive  int32
+	ShuffleIdx int32
 }
 
 func (m *EncodeBatch) MarshalBinary() ([]byte, error) {
@@ -86,6 +88,7 @@ func (m *EncodeBatch) MarshalBinary() ([]byte, error) {
 	}
 
 	buf.Write(types.EncodeInt32(&m.Recursive))
+	buf.Write(types.EncodeInt32(&m.ShuffleIdx))
 
 	return buf.Bytes(), nil
 }
@@ -160,7 +163,8 @@ func (m *EncodeBatch) unmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) err
 	m.AggInfos = aggs
 
 	m.Recursive = types.DecodeInt32(buf[:4])
-
+	buf = buf[4:]
+	m.ShuffleIdx = types.DecodeInt32(buf[:4])
 	return nil
 }
 
@@ -175,7 +179,7 @@ type Batch struct {
 	Recursive int32
 	// Ro if true, Attrs is read only
 	Ro         bool
-	ShuffleIDX int //used only in shuffle dispatch
+	ShuffleIDX int32 //used only in shuffle
 	// reference count, default is 1
 	Cnt int64
 	// Attrs column name list

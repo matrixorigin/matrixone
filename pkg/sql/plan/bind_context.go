@@ -50,6 +50,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 			bc.recRecursiveScanNodeId = parent.recRecursiveScanNodeId
 			bc.isTryBindingCTE = parent.isTryBindingCTE
 		}
+		bc.snapshot = parent.snapshot
 	}
 
 	return bc

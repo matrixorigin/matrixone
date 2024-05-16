@@ -424,7 +424,7 @@ count(*)
 create snapshot snapshot_01 for account test_account;
 drop database test_snapshot_restore;
 drop database snapshot_read;
-restore account test_account from snapshot snapshot_01 to account test_account;
+restore account test_account from snapshot snapshot_01;
 use test_snapshot_restore;
 select count(*) from test_snapshot_restore.test_restore;
 count(*)
@@ -573,7 +573,7 @@ count(*)
 create snapshot snapshot_01 for account test_account;
 drop database test_snapshot_restore;
 drop database snapshot_read;
-restore account test_account from snapshot snapshot_01 to account test_account;
+restore account test_account from snapshot snapshot_01;
 use test_snapshot_restore;
 select count(*) from test_snapshot_restore.test_restore;
 count(*)

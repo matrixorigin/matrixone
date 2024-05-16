@@ -361,7 +361,13 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	if len(createTable.Database) == 0 {
 		createTable.Database = ctx.DefaultDatabase()
 	}
-	if sub, err := ctx.GetSubscriptionMeta(createTable.Database, Snapshot{TS: &timestamp.Timestamp{}}); err != nil {
+
+	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		snapshot = ctx.GetSnapshot()
+	}
+
+	if sub, err := ctx.GetSubscriptionMeta(createTable.Database, *snapshot); err != nil {
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
