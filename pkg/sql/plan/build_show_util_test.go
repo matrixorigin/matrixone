@@ -1,0 +1,179 @@
+package plan
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"testing"
+)
+
+func Test_buildTestShowCreateTable(t *testing.T) {
+	type args struct {
+		sql  string
+		want string
+	}
+
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "test1",
+			sql: `CREATE TABLE employees (
+				id INT NOT NULL,
+				fname VARCHAR(30),
+				lname VARCHAR(30),
+				hired DATE NOT NULL DEFAULT '1970-01-01',
+				separated DATE NOT NULL DEFAULT '9999-12-31',
+				job_code INT NOT NULL,
+				store_id INT NOT NULL
+			)`,
+			want: "CREATE TABLE `employees` (\n  `id` INT NOT NULL,\n  `fname` VARCHAR(30) DEFAULT NULL,\n  `lname` VARCHAR(30) DEFAULT NULL,\n  `hired` DATE NOT NULL DEFAULT '1970-01-01',\n  `separated` DATE NOT NULL DEFAULT '9999-12-31',\n  `job_code` INT NOT NULL,\n  `store_id` INT NOT NULL\n)",
+		},
+		{
+			name: "test2",
+			sql: `CREATE TABLE t_time (
+				    id INT AUTO_INCREMENT PRIMARY KEY,
+				    date_column DATE, 
+				    time_column TIME(3),
+				    datetime_column DATETIME(6), 
+				    timestamp_column TIMESTAMP(6),
+				    timestamp_column2 TIMESTAMP
+				);`,
+			want: "CREATE TABLE `t_time` (\n  `id` INT NOT NULL AUTO_INCREMENT,\n  `date_column` DATE DEFAULT NULL,\n  `time_column` TIME(3) DEFAULT NULL,\n  `datetime_column` DATETIME(6) DEFAULT NULL,\n  `timestamp_column` TIMESTAMP(6) NULL DEFAULT NULL,\n  `timestamp_column2` TIMESTAMP NULL DEFAULT NULL,\nPRIMARY KEY (`id`)\n)",
+		},
+		{
+			name: "test3",
+			sql: `CREATE TABLE t_time (
+				id INT AUTO_INCREMENT PRIMARY KEY,
+				date_column DATE,
+				time_column TIME(3) DEFAULT NULL,
+				datetime_column DATETIME(6)  DEFAULT NULL,
+				timestamp_column TIMESTAMP(6)  NULL DEFAULT NULL,
+				timestamp_column2 TIMESTAMP  NULL DEFAULT NULL
+				)`,
+			want: "CREATE TABLE `t_time` (\n  `id` INT NOT NULL AUTO_INCREMENT,\n  `date_column` DATE DEFAULT NULL,\n  `time_column` TIME(3) DEFAULT NULL,\n  `datetime_column` DATETIME(6) DEFAULT NULL,\n  `timestamp_column` TIMESTAMP(6) NULL DEFAULT NULL,\n  `timestamp_column2` TIMESTAMP NULL DEFAULT NULL,\nPRIMARY KEY (`id`)\n)",
+		},
+		{
+			name: "test4",
+			sql: `CREATE TABLE t_log (
+				LOG_ID bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+				ROUND_ID bigint(20) UNSIGNED NOT NULL,
+				USER_ID int(10) UNSIGNED NOT NULL,
+				USER_IP int(10) UNSIGNED DEFAULT NULL,
+				END_TIME datetime NOT NULL,
+				USER_TYPE int(11) DEFAULT NULL,
+				APP_ID int(11) DEFAULT NULL,
+				PRIMARY KEY (LOG_ID,END_TIME),
+				KEY IDX_EndTime (END_TIME),
+				KEY IDX_RoundId (ROUND_ID),
+				KEY IDX_UserId_EndTime (USER_ID,END_TIME)
+				)`,
+			want: "CREATE TABLE `t_log` (\n  `log_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,\n  `round_id` BIGINT UNSIGNED NOT NULL,\n  `user_id` INT UNSIGNED NOT NULL,\n  `user_ip` INT UNSIGNED DEFAULT NULL,\n  `end_time` DATETIME NOT NULL,\n  `user_type` INT DEFAULT NULL,\n  `app_id` INT DEFAULT NULL,\nPRIMARY KEY (`log_id`,`end_time`),\nKEY `idx_endtime` (`end_time`),\nKEY `idx_roundid` (`round_id`),\nKEY `idx_userid_endtime` (`user_id`,`end_time`)\n)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := buildTestShowCreateTable(tt.sql)
+			if err != nil {
+				t.Fatalf("test name:%v, err: %+v, sql=%v", tt.name, err, tt.sql)
+			}
+
+			if tt.want != got {
+				t.Errorf("buildShow failed. \nExpected/Got:\n%s\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
+func Test_SingleShowCreateTable(t *testing.T) {
+	type args struct {
+		sql  string
+		want string
+	}
+
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "test4",
+			sql: `CREATE TABLE t_log (
+				LOG_ID bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+				ROUND_ID bigint(20) UNSIGNED NOT NULL,
+				USER_ID int(10) UNSIGNED NOT NULL,
+				USER_IP int(10) UNSIGNED DEFAULT NULL,
+				END_TIME datetime NOT NULL,
+				USER_TYPE int(11) DEFAULT NULL,
+				APP_ID int(11) DEFAULT NULL,
+				PRIMARY KEY (LOG_ID,END_TIME),
+				KEY IDX_EndTime (END_TIME),
+				KEY IDX_RoundId (ROUND_ID),
+				KEY IDX_UserId_EndTime (USER_ID,END_TIME)
+				)`,
+			want: "CREATE TABLE `t_log` (\n  `log_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,\n  `round_id` BIGINT UNSIGNED NOT NULL,\n  `user_id` INT UNSIGNED NOT NULL,\n  `user_ip` INT UNSIGNED DEFAULT NULL,\n  `end_time` DATETIME NOT NULL,\n  `user_type` INT DEFAULT NULL,\n  `app_id` INT DEFAULT NULL,\nPRIMARY KEY (`log_id`,`end_time`),\nKEY `idx_endtime` (`end_time`),\nKEY `idx_roundid` (`round_id`),\nKEY `idx_userid_endtime` (`user_id`,`end_time`)\n)",
+		},
+		{
+			name: "test5",
+			sql: `create table t (
+				a timestamp not null default current_timestamp,
+				b timestamp(3) default current_timestamp(3),
+				c datetime default current_timestamp,
+				d datetime(4) default current_timestamp(4),
+				e varchar(20) default 'cUrrent_tImestamp',
+				f datetime(2) default current_timestamp(2) on update current_timestamp(2),
+				g timestamp(2) default current_timestamp(2) on update current_timestamp(2),
+				h date default '2024-01-01'
+				)`,
+			want: "CREATE TABLE `employees` (\n`id` INT NOT NULL,\n`fname` VARCHAR(30)  DEFAULT NULL,\n`lname` VARCHAR(30)  DEFAULT NULL,\n`hired` DATE NOT NULL DEFAULT '1970-01-01',\n`separated` DATE NOT NULL DEFAULT '9999-12-31',\n`job_code` INT NOT NULL,\n`store_id` INT NOT NULL\n)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := buildTestShowCreateTable(tt.sql)
+			if err != nil {
+				t.Fatalf("test name:%v, err: %+v, sql=%v", tt.name, err, tt.sql)
+			}
+
+			if tt.want != got {
+				t.Errorf("buildShow failed. \nExpected/Got:\n%s\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
+func buildTestCreateTableStmt(opt Optimizer, sql string) (*TableDef, error) {
+	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
+	if err != nil {
+		return nil, err
+	}
+	// this sql always return single statement
+	context := opt.CurrentContext()
+	ddlPlan, err := BuildPlan(context, statements[0], false)
+	//if ddlPlan != nil {
+	//	testDeepCopy(ddlPlan)
+	//}
+
+	planDdl := ddlPlan.Plan.(*plan.Plan_Ddl)
+	definition := planDdl.Ddl.Definition.(*plan.DataDefinition_CreateTable)
+	definition.CreateTable.TableDef.TableType = catalog.SystemOrdinaryRel
+
+	return definition.CreateTable.TableDef, err
+}
+
+func buildTestShowCreateTable(sql string) (string, error) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, sql)
+	if err != nil {
+		return "", err
+	}
+
+	showSQL, err := convTableDefToDDL(tableDef, &mock.ctxt)
+	if err != nil {
+		return "", err
+	}
+	return showSQL, nil
+}
