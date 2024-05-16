@@ -469,7 +469,9 @@ func (l *localLockTable) handleLockConflictLocked(
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
 	}
 	c.result.ConflictKey = key
-	c.result.ConflictTxn = c.w.waitFor[0]
+	if len(c.w.waitFor) == 0 {
+		c.result.ConflictTxn = c.w.waitFor[0]
+	}
 	c.result.Waiters = uint32(conflictWith.waiters.size())
 	conflictWith.waiters.iter(func(w *waiter) bool {
 		c.result.PrevWaiter = w.txn.TxnID
