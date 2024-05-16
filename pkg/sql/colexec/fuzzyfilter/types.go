@@ -89,6 +89,10 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
 	if arg.bloomFilter != nil {
