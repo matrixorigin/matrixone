@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"runtime"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,8 +35,11 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	if arg.RuntimeFilterSpec == nil {
+		panic("there must be runtime filter in shuffle build!")
+	}
+	arg.RuntimeFilterSpec.Handled = false
 	arg.ctr = new(container)
-	arg.ctr.shuffleIdx = -1
 	if len(proc.Reg.MergeReceivers) > 1 {
 		arg.ctr.InitReceiver(proc, true)
 		arg.ctr.isMerge = true
@@ -92,21 +93,32 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := ap.ctr
 	for {
 		switch ctr.state {
+		case ReceiveBatch:
+			err := ctr.collectBuildBatches(ap, proc, anal, arg.GetIsFirst())
+			if err != nil {
+				return result, err
+			}
+			if err = ctr.handleRuntimeFilter(ap, proc); err != nil {
+				return result, err
+			}
+			ctr.state = BuildHashMap
 		case BuildHashMap:
-			if err := ctr.build(ap, proc, anal, arg.GetIsFirst()); err != nil {
+			err := ctr.buildHashmap(ap, proc)
+			if err != nil {
 				ctr.cleanHashMap()
 				return result, err
+			}
+			if !ap.NeedMergedBatch {
+				// if do not need merged batch, free it now to save memory
+				for i := range ctr.batches {
+					proc.PutBatch(ctr.batches[i])
+				}
+				ctr.batches = nil
 			}
 			if ap.ctr.intHashMap != nil {
 				anal.Alloc(ap.ctr.intHashMap.Size())
 			} else if ap.ctr.strHashMap != nil {
 				anal.Alloc(ap.ctr.strHashMap.Size())
-			}
-			ctr.state = HandleRuntimeFilter
-
-		case HandleRuntimeFilter:
-			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
-				return result, err
 			}
 			ctr.state = SendHashMap
 
@@ -198,12 +210,7 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 			proc.PutBatch(currentBatch)
 			continue
 		}
-		if ctr.shuffleIdx == -1 {
-			ctr.shuffleIdx = currentBatch.ShuffleIDX
-		} else if ctr.shuffleIdx != currentBatch.ShuffleIDX {
-			logutil.Errorf("wrong batch shuffleIDX in shuffleBuild! expect %v, receive %v", ctr.shuffleIdx, currentBatch.ShuffleIDX)
-			panic("wrong batch shuffleIDX in shuffleBuild!")
-		}
+
 		anal.Input(currentBatch, isFirst)
 		anal.Alloc(int64(currentBatch.Size()))
 		ctr.inputBatchRowCount += currentBatch.RowCount()
@@ -356,100 +363,20 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 	return nil
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	err := ctr.collectBuildBatches(ap, proc, anal, isFirst)
-	if err != nil {
-		return err
-	}
-	err = ctr.buildHashmap(ap, proc)
-	if err != nil {
-		return err
-	}
-	if !ap.NeedMergedBatch {
-		// if do not need merged batch, free it now to save memory
-		for i := range ctr.batches {
-			proc.PutBatch(ctr.batches[i])
-		}
-		ctr.batches = nil
-	}
-	return nil
-}
-
 func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
 	if ap.RuntimeFilterSpec == nil {
+		panic("there must be runtime filter in shuffle build!")
+	}
+	// only shuffle build operator with parallelIdx = 0 send this runtime filter
+	if ap.GetParallelIdx() != 0 {
+		ap.RuntimeFilterSpec.Handled = true
 		return nil
 	}
-
+	//only support runtime filter pass for now in shuffle join
 	var runtimeFilter process.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
-
-	if ap.RuntimeFilterSpec.Expr == nil {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
-		return nil
-	} else if ctr.inputBatchRowCount == 0 || len(ctr.uniqueJoinKeys) == 0 || ctr.uniqueJoinKeys[0].Length() == 0 {
-		runtimeFilter.Typ = process.RuntimeFilter_DROP
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
-		return nil
-	}
-
-	var hashmapCount uint64
-	if ctr.keyWidth <= 8 {
-		hashmapCount = ctr.intHashMap.GroupCount()
-	} else {
-		hashmapCount = ctr.strHashMap.GroupCount()
-	}
-
-	inFilterCardLimit := ap.RuntimeFilterSpec.UpperLimit
-	//inFilterCardLimit := plan.GetInFilterCardLimit()
-	//bloomFilterCardLimit := int64(plan.BloomFilterCardLimit)
-	//v, ok = runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_bloom_filter")
-	//if ok {
-	//	bloomFilterCardLimit = v.(int64)
-	//}
-
-	vec := ctr.uniqueJoinKeys[0]
-
-	defer func() {
-		vec.Free(proc.Mp())
-		ctr.uniqueJoinKeys = nil
-	}()
-
-	if hashmapCount > uint64(inFilterCardLimit) {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
-		return nil
-	} else {
-		// Composite primary key
-		if ap.RuntimeFilterSpec.Expr.GetF() != nil {
-			bat := batch.NewWithSize(len(ctr.uniqueJoinKeys))
-			bat.SetRowCount(vec.Length())
-			copy(bat.Vecs, ctr.uniqueJoinKeys)
-
-			newVec, err := colexec.EvalExpressionOnce(proc, ap.RuntimeFilterSpec.Expr, []*batch.Batch{bat})
-			if err != nil {
-				return err
-			}
-
-			for i := range ctr.uniqueJoinKeys {
-				ctr.uniqueJoinKeys[i].Free(proc.Mp())
-			}
-
-			vec = newVec
-		}
-
-		vec.InplaceSort()
-		data, err := vec.MarshalBinary()
-		if err != nil {
-			return err
-		}
-
-		runtimeFilter.Typ = process.RuntimeFilter_IN
-		runtimeFilter.Card = int32(vec.Length())
-		runtimeFilter.Data = data
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
-		ctr.runtimeFilterIn = true
-	}
+	runtimeFilter.Typ = process.RuntimeFilter_PASS
+	proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 	return nil
 }
 
