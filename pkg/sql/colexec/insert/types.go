@@ -91,6 +91,10 @@ type InsertCtx struct {
 	TableDef              *plan.TableDef
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
