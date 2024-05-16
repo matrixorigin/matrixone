@@ -34,7 +34,7 @@ func init() {
 	}
 }
 
-func NewStrMap(hasNull bool, ibucket, nbucket uint64, m *mpool.MPool) (*StrHashMap, error) {
+func NewStrMap(hasNull bool, m *mpool.MPool) (*StrHashMap, error) {
 	mp := &hashtable.StringHashMap{}
 	if err := mp.Init(m); err != nil {
 		return nil, err
@@ -43,8 +43,6 @@ func NewStrMap(hasNull bool, ibucket, nbucket uint64, m *mpool.MPool) (*StrHashM
 		m:             m,
 		hashMap:       mp,
 		hasNull:       hasNull,
-		ibucket:       ibucket,
-		nbucket:       nbucket,
 		values:        make([]uint64, UnitLimit),
 		zValues:       make([]int64, UnitLimit),
 		keys:          make([][]byte, UnitLimit),
@@ -54,10 +52,8 @@ func NewStrMap(hasNull bool, ibucket, nbucket uint64, m *mpool.MPool) (*StrHashM
 
 func (m *StrHashMap) NewIterator() Iterator {
 	return &strHashmapIterator{
-		mp:      m,
-		m:       m.m,
-		ibucket: m.ibucket,
-		nbucket: m.nbucket,
+		mp: m,
+		m:  m.m,
 	}
 }
 
@@ -336,11 +332,7 @@ func (m *StrHashMap) Dup(pool *mpool.MPool) *StrHashMap {
 		values:        make([]uint64, len(m.values)),
 		zValues:       make([]int64, len(m.zValues)),
 		strHashStates: make([][3]uint64, len(m.strHashStates)),
-
-		ibucket: m.ibucket,
-		nbucket: m.nbucket,
-
-		m: pool,
+		m:             pool,
 	}
 	copy(val.values, m.values)
 	copy(val.zValues, m.zValues)
