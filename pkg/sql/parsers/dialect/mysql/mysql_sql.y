@@ -442,7 +442,7 @@ import (
 %token <str> ARROW
 
 // Insert
-%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL
+%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL STRICT
 
 %token <str> UNUSED BINDINGS
 
@@ -710,7 +710,7 @@ import (
 
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
-%type <unsignedOpt> unsigned_opt header_opt parallel_opt
+%type <unsignedOpt> unsigned_opt header_opt parallel_opt strict_opt
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt
 %type <item> pwd_expire clear_pwd_opt
@@ -1296,7 +1296,7 @@ mo_dump_stmt:
 
 
 load_data_stmt:
-    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt parallel_opt
+    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt parallel_opt strict_opt
     {
         $$ = &tree.Load{
             Local: $3,
@@ -1306,6 +1306,7 @@ load_data_stmt:
         }
         $$.(*tree.Load).Param.Tail = $9
         $$.(*tree.Load).Param.Parallel = $10
+        $$.(*tree.Load).Param.Strict = $11
     }
 
 load_extension_stmt:
@@ -1363,11 +1364,26 @@ parallel_opt:
         } else if str == "false" {
             $$ = false
         } else {
+            yylex.Error("error strict flag")
+            goto ret1
+        }
+    }
+strict_opt:
+    {
+        $$ = false
+    }
+|   STRICT STRING
+    {
+        str := strings.ToLower($2)
+        if str == "true" {
+            $$ = true
+        } else if str == "false" {
+            $$ = false
+        } else {
             yylex.Error("error parallel flag")
             goto ret1
         }
     }
-
 normal_ident:
     ident
     {

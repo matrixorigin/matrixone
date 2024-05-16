@@ -139,6 +139,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		MinCount:               s.cfg.Ckp.MinCount,
 		ScanInterval:           s.cfg.Ckp.ScanInterval.Duration,
 		FlushInterval:          s.cfg.Ckp.FlushInterval.Duration,
+		MetadataCheckInterval:  s.cfg.Ckp.MetadataCheckInterval.Duration,
 		IncrementalInterval:    s.cfg.Ckp.IncrementalInterval.Duration,
 		GlobalMinCount:         s.cfg.Ckp.GlobalMinCount,
 		ReservedWALEntryCount:  s.cfg.Ckp.ReservedWALEntryCount,

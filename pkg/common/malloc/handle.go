@@ -31,11 +31,10 @@ func (h *Handle) Free() {
 	}
 	pid := runtime_procPin()
 	runtime_procUnpin()
-	if pid >= len(shards) {
-		pid = 0
-	}
+	shard := pid % numShards
 	select {
-	case shards[pid][h.class] <- h:
+	case shards[shard].pools[h.class].ch <- h:
+		shards[shard].pools[h.class].numFree.Add(1)
 	default:
 	}
 }

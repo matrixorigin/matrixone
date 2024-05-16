@@ -21,14 +21,14 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,8 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
@@ -65,9 +63,9 @@ type ComputationWrapper interface {
 
 	GetProcess() *process.Process
 
-	GetColumns() ([]interface{}, error)
+	GetColumns(ctx context.Context) ([]interface{}, error)
 
-	Compile(requestCtx context.Context, fill func(*batch.Batch) error) (interface{}, error)
+	Compile(any any, fill func(*batch.Batch) error) (interface{}, error)
 
 	GetUUID() []byte
 
@@ -77,6 +75,9 @@ type ComputationWrapper interface {
 
 	GetServerStatus() uint16
 	Clear()
+	Plan() *plan.Plan
+	ResetPlanAndStmt(stmt tree.Statement)
+	Free()
 }
 
 type ColumnInfo interface {
@@ -273,22 +274,17 @@ var _ FeSession = &Session{}
 var _ FeSession = &backSession{}
 
 type FeSession interface {
-	GetRequestContext() context.Context
 	GetTimeZone() *time.Location
 	GetStatsCache() *plan2.StatsCache
 	GetUserName() string
 	GetSql() string
 	GetAccountId() uint32
 	GetTenantInfo() *TenantInfo
-	GetStorage() engine.Engine
 	GetBackgroundExec(ctx context.Context) BackgroundExec
 	GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec
-	GetGlobalSystemVariableValue(name string) (interface{}, error)
-	GetSessionVar(name string) (interface{}, error)
+	GetGlobalSystemVariableValue(ctx context.Context, name string) (interface{}, error)
+	GetSessionVar(ctx context.Context, name string) (interface{}, error)
 	GetUserDefinedVar(name string) (SystemVariableType, *UserDefinedVar, error)
-	GetConnectContext() context.Context
-	IfInitedTempEngine() bool
-	GetTempTableStorage() *memorystorage.Storage
 	GetDebugString() string
 	GetFromRealUser() bool
 	getLastCommitTS() timestamp.Timestamp
@@ -303,12 +299,12 @@ type FeSession interface {
 	GetDatabaseName() string
 	SetDatabaseName(db string)
 	GetMysqlResultSet() *MysqlResultSet
-	GetGlobalVar(name string) (interface{}, error)
+	GetGlobalVar(ctx context.Context, name string) (interface{}, error)
 	SetNewResponse(category int, affectedRows uint64, cmd int, d interface{}, isLastStmt bool) *Response
 	GetTxnCompileCtx() *TxnCompilerContext
 	GetCmd() CommandType
 	IsBackgroundSession() bool
-	GetPrepareStmt(name string) (*PrepareStmt, error)
+	GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error)
 	CountPayload(i int)
 	RemovePrepareStmt(name string)
 	SetShowStmtType(statement ShowStatementType)
@@ -323,16 +319,12 @@ type FeSession interface {
 	getQueryId(internal bool) []string
 	SetMysqlResultSet(mrs *MysqlResultSet)
 	GetConnectionID() uint32
-	SetRequestContext(ctx context.Context)
 	IsDerivedStmt() bool
 	SetAccountId(uint32)
 	SetPlan(plan *plan.Plan)
 	SetData([][]interface{})
 	GetIsInternal() bool
 	getCNLabels() map[string]string
-	SetTempTableStorage(getClock clock.Clock) (*metadata.TNService, error)
-	SetTempEngine(ctx context.Context, te engine.Engine) error
-	EnableInitTempEngine()
 	GetUpstream() FeSession
 	cleanCache()
 	getNextProcessId() string
@@ -347,9 +339,35 @@ type FeSession interface {
 	DisableTrace() bool
 	Close()
 	Clear()
+	getCachedPlan(sql string) *cachedPlan
+
+	SessionLogger
+}
+
+type SessionLogger interface {
+	SessionLoggerGetter
+	Info(ctx context.Context, msg string, fields ...zap.Field)
+	Error(ctx context.Context, msg string, fields ...zap.Field)
+	Warn(ctx context.Context, msg string, fields ...zap.Field)
+	Fatal(ctx context.Context, msg string, fields ...zap.Field)
+	Debug(ctx context.Context, msg string, fields ...zap.Field)
+	Infof(ctx context.Context, msg string, args ...any)
+	Errorf(ctx context.Context, msg string, args ...any)
+	Warnf(ctx context.Context, msg string, args ...any)
+	Fatalf(ctx context.Context, msg string, args ...any)
+	Debugf(ctx context.Context, msg string, args ...any)
+	GetLogger() SessionLogger
+}
+
+type SessionLoggerGetter interface {
+	GetSessId() uuid.UUID
+	GetStmtId() uuid.UUID
+	GetTxnId() uuid.UUID
+	GetLogLevel() zapcore.Level
 }
 
 type ExecCtx struct {
+	reqCtx      context.Context
 	prepareStmt *PrepareStmt
 	runResult   *util.RunResult
 	//stmt will be replaced by the Execute
@@ -365,7 +383,24 @@ type ExecCtx struct {
 	loadLocalWriter *io.PipeWriter
 	proc            *process.Process
 	proto           MysqlProtocol
+	ses             FeSession
+	txnOpt          FeTxnOption
+	cws             []ComputationWrapper
+	input           *UserInput
+	//In the session migration, skip the response to the client
+	skipRespClient bool
+	//In the session migration, executeParamTypes for the EXECUTE stmt should be migrated
+	//from the old session to the new session.
+	executeParamTypes []byte
 }
+
+// outputCallBackFunc is the callback function to send the result to the client.
+// parameters:
+//
+//	FeSession
+//	ExecCtx
+//	batch.Batch
+type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch) error
 
 // TODO: shared component among the session implmentation
 type feSessionImpl struct {
@@ -378,7 +413,7 @@ type feSessionImpl struct {
 	txnCompileCtx *TxnCompilerContext
 	mrs           *MysqlResultSet
 	//it gets the result set from the pipeline and send it to the client
-	outputCallback func(interface{}, *batch.Batch) error
+	outputCallback outputCallBackFunc
 
 	//all the result set of executing the sql in background task
 	allResultSet []*MysqlResultSet
@@ -421,11 +456,12 @@ func (ses *feSessionImpl) Close() {
 	ses.proto = nil
 	ses.mrs = nil
 	if ses.txnHandler != nil {
-		ses.txnHandler.ses = nil
 		ses.txnHandler = nil
 	}
 	if ses.txnCompileCtx != nil {
-		ses.txnCompileCtx.ses = nil
+		ses.txnCompileCtx.execCtx = nil
+		ses.txnCompileCtx.snapshot = nil
+		ses.txnCompileCtx.views = nil
 		ses.txnCompileCtx = nil
 	}
 	ses.sql = ""
@@ -580,7 +616,7 @@ func (ses *feSessionImpl) GetMysqlResultSet() *MysqlResultSet {
 	return ses.mrs
 }
 
-func (ses *feSessionImpl) SetOutputCallback(callback func(interface{}, *batch.Batch) error) {
+func (ses *feSessionImpl) SetOutputCallback(callback outputCallBackFunc) {
 	ses.outputCallback = callback
 }
 

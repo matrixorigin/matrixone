@@ -99,13 +99,18 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 }
 
 func (entry *ObjectEntry) InMemoryDeletesExisted() bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.InMemoryDeletesExistedLocked()
+}
+
+func (entry *ObjectEntry) InMemoryDeletesExistedLocked() bool {
 	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
 	if tombstone != nil {
-		return tombstone.InMemoryDeletesExisted()
+		return tombstone.InMemoryDeletesExistedLocked()
 	}
 	return false
 }
-
 func NewObjectEntry(
 	table *TableEntry,
 	id *objectio.ObjectId,
@@ -404,6 +409,14 @@ func (entry *ObjectEntry) PPString(level common.PPLevel, depth int, prefix strin
 	}
 	return w.String()
 }
+func (entry *ObjectEntry) PPStringLocked(level common.PPLevel, depth int, prefix string) string {
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevelLocked(level)))
+	if level == common.PPL0 {
+		return w.String()
+	}
+	return w.String()
+}
 
 func (entry *ObjectEntry) StringLocked() string {
 	return entry.StringWithLevelLocked(common.PPL1)
@@ -568,17 +581,17 @@ func (entry *ObjectEntry) GetSchemaLocked() *Schema {
 // a block can be compacted:
 // 1. no uncommited node
 // 2. at least one committed node
-// 3. not compacted
 func (entry *ObjectEntry) PrepareCompact() bool {
 	entry.RLock()
 	defer entry.RUnlock()
+	return entry.PrepareCompactLocked()
+}
+
+func (entry *ObjectEntry) PrepareCompactLocked() bool {
 	if entry.HasUncommittedNodeLocked() {
 		return false
 	}
 	if !entry.HasCommittedNodeLocked() {
-		return false
-	}
-	if entry.HasDropCommittedLocked() {
 		return false
 	}
 	return true
@@ -600,18 +613,16 @@ func (entry *ObjectEntry) ObjectPersisted() bool {
 }
 
 // PXU TODO: I can't understand this code
-// for old flushed objects, stats may be empty
+// aobj has persisted data after it is dropped
+// obj always has persisted data
 func (entry *ObjectEntry) HasCommittedPersistedData() bool {
 	entry.RLock()
 	defer entry.RUnlock()
-	if entry.IsEmptyLocked() {
-		return false
-	}
 	if entry.IsAppendable() {
 		lastNode := entry.GetLatestNodeLocked()
 		return lastNode.HasDropCommitted()
 	} else {
-		return true
+		return entry.HasCommittedNodeLocked()
 	}
 }
 func (entry *ObjectEntry) MustGetObjectStats() (objectio.ObjectStats, error) {

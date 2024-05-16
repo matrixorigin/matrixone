@@ -133,6 +133,16 @@ func (txn *activeTxn) close(
 	// cancel all blocked waiters
 	txn.cancelBlocks()
 
+	isRemoteTable := txn.remoteService != ""
+	canSkipTable := func(isRemoteTable bool, l lockTable) bool {
+		if isRemoteTable {
+			if _, ok := l.(*remoteLockTable); ok {
+				return true
+			}
+		}
+		return false
+	}
+
 	n := len(txn.lockHolders)
 	var wg sync.WaitGroup
 	v2.TxnUnlockTableTotalHistogram.Observe(float64(n))
@@ -147,7 +157,7 @@ func (txn *activeTxn) close(
 				// LockTable, it is a bug.
 				panic(err)
 			}
-			if l == nil {
+			if l == nil || canSkipTable(isRemoteTable, l) {
 				continue
 			}
 

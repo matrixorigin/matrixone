@@ -67,12 +67,12 @@ Project
               Join Type: RIGHT
               Join Cond: (t2.c1 = t1.c1)
               Runtime Filter Build: #[-1,0]
-              ->  Table Scan on d1.t2
+              ->  Table Scan on d1.t2 [ForceOneCN]
                     Runtime Filter Probe: t2.c1
               ->  Sort
                     Sort Key: t1.c1 INTERNAL
                     Limit: 10
-                    ->  Table Scan on d1.t1
+                    ->  Table Scan on d1.t1 [ForceOneCN]
 select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10;
 c1    c1    c2    c3
 1    1    1    1
@@ -95,12 +95,12 @@ Project
               Join Type: RIGHT
               Join Cond: (t2.c1 = t1.c1)
               Runtime Filter Build: #[-1,0]
-              ->  Table Scan on d1.t2
+              ->  Table Scan on d1.t2 [ForceOneCN]
                     Runtime Filter Probe: t2.c1
               ->  Sort
                     Sort Key: t1.c1 INTERNAL
                     Limit: 30
-                    ->  Table Scan on d1.t1
+                    ->  Table Scan on d1.t1 [ForceOneCN]
 select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10 offset 20;
 c1    c1    c2    c3
 21    21    21    21

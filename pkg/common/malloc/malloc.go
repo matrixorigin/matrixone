@@ -15,8 +15,7 @@
 package malloc
 
 import (
-	"runtime"
-	"time"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -24,22 +23,26 @@ import (
 )
 
 const (
-	maxBufferSize   = 1 << 31
+	maxBufferSize   = 2 * (1 << 30)
 	minClassSize    = 128
-	maxClassSize    = 1 << 20
-	classSizeFactor = 1.5
+	maxClassSize    = 8 * (1 << 20)
+	classSizeFactor = 1.8
+	numShards       = 16
 )
 
-var (
-	numShards        = runtime.GOMAXPROCS(-1)
-	evictAllDuration = time.Hour * 7
-	minEvictInterval = time.Millisecond * 100
+type Shard struct {
+	pools []Pool
+}
 
+type Pool struct {
+	numAlloc atomic.Int64
+	numFree  atomic.Int64
+	ch       chan *Handle
+}
+
+var (
 	bufferedObjectsPerClass = func() int {
-		n := maxBufferSize / numShards / len(classSizes) / ((minClassSize + maxClassSize) / 2)
-		if n < 8 {
-			n = 8
-		}
+		n := maxBufferSize / numShards / classSumSize
 		logutil.Info("malloc",
 			zap.Any("max buffer size", maxBufferSize),
 			zap.Any("num shards", numShards),
@@ -58,41 +61,28 @@ var (
 		return
 	}()
 
-	shards = func() (ret [][]chan *Handle) {
+	classSumSize = func() (ret int) {
+		for _, size := range classSizes {
+			ret += size
+		}
+		return
+	}()
+
+	shards = func() (ret []Shard) {
+		ret = make([]Shard, numShards)
 		for i := 0; i < numShards; i++ {
-			var shard []chan *Handle
 			for range classSizes {
-				shard = append(shard, make(chan *Handle, bufferedObjectsPerClass))
+				ret[i].pools = append(
+					ret[i].pools,
+					Pool{
+						ch: make(chan *Handle, bufferedObjectsPerClass),
+					},
+				)
 			}
-			ret = append(ret, shard)
 		}
 		return
 	}()
 )
-
-func init() {
-	// evict
-	go func() {
-		evictOne := func() {
-			for _, shard := range shards {
-				for i := len(shard) - 1; i >= 0; i-- {
-					select {
-					case <-shard[i]:
-						return
-					default:
-					}
-				}
-			}
-		}
-		interval := evictAllDuration / time.Duration(numShards*len(classSizes)*bufferedObjectsPerClass)
-		if interval < minEvictInterval {
-			interval = minEvictInterval
-		}
-		for range time.NewTicker(interval).C {
-			evictOne()
-		}
-	}()
-}
 
 func requestSizeToClass(size int) int {
 	for class, classSize := range classSizes {
@@ -103,15 +93,16 @@ func requestSizeToClass(size int) int {
 	return -1
 }
 
-func classAllocate(class int) *Handle {
+func classAllocate(class int, clearMem bool) *Handle {
 	pid := runtime_procPin()
 	runtime_procUnpin()
-	if pid >= len(shards) {
-		pid = 0
-	}
+	shard := pid % numShards
 	select {
-	case handle := <-shards[pid][class]:
-		clear(unsafe.Slice((*byte)(handle.ptr), classSizes[handle.class]))
+	case handle := <-shards[shard].pools[class].ch:
+		shards[shard].pools[class].numAlloc.Add(1)
+		if clearMem {
+			clear(unsafe.Slice((*byte)(handle.ptr), classSizes[handle.class]))
+		}
 		return handle
 	default:
 		slice := make([]byte, classSizes[class])
@@ -122,7 +113,7 @@ func classAllocate(class int) *Handle {
 	}
 }
 
-func Alloc(n int) (unsafe.Pointer, *Handle) {
+func Alloc(n int, clear bool) (unsafe.Pointer, *Handle) {
 	if n == 0 {
 		return nil, dumbHandle
 	}
@@ -130,21 +121,8 @@ func Alloc(n int) (unsafe.Pointer, *Handle) {
 	if class == -1 {
 		return unsafe.Pointer(unsafe.SliceData(make([]byte, n))), dumbHandle
 	}
-	handle := classAllocate(class)
+	handle := classAllocate(class, clear)
 	return handle.ptr, handle
-}
-
-func AllocTyped[T any](target **T) *Handle {
-	var t T
-	size := unsafe.Sizeof(t)
-	class := requestSizeToClass(int(size))
-	if class == -1 {
-		*target = new(T)
-		return dumbHandle
-	}
-	handle := classAllocate(class)
-	*target = (*T)(handle.ptr)
-	return handle
 }
 
 //go:linkname runtime_procPin runtime.procPin

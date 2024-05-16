@@ -112,6 +112,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			arg.ctr.buf.Clean(proc.Mp())
 			arg.ctr.buf = nil
 		}
+
+		arg.ctr = nil
 	}
 }
 

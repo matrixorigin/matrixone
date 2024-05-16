@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -33,7 +34,7 @@ func TestExtractRowFromVector(t *testing.T) {
 	for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
 		columnIdx := 0
 		row := make([]interface{}, 1)
-		err := extractRowFromVector(nil, vec, columnIdx, row, rowIdx, false)
+		err := extractRowFromVector(context.TODO(), nil, vec, columnIdx, row, rowIdx, false)
 		require.NoError(t, err)
 		require.Equal(t, row[columnIdx].(uint64), values[rowIdx])
 	}

@@ -102,5 +102,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		if arg.ctr.checkConflictBat != nil {
 			arg.ctr.checkConflictBat.Clean(proc.GetMPool())
 		}
+		arg.ctr = nil
 	}
 }

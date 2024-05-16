@@ -88,6 +88,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.FreeAllReg()
+		arg.ctr = nil
 	}
 }
 

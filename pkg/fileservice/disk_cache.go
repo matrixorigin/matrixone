@@ -227,7 +227,7 @@ func (d *DiskCache) Read(
 			d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
 		}
 
-		if err := entry.ReadFromOSFile(file); err != nil {
+		if err := readFromOSFile(entry, file, DefaultCacheDataAllocator); err != nil {
 			// ignore error
 			numError++
 			logutil.Warn("read disk cache error", zap.Any("error", err))
