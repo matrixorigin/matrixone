@@ -17,6 +17,7 @@ package shard;
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/shard";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "timestamp.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = true;
  
@@ -111,6 +112,7 @@ enum Method {
     CreateShards  = 1;
     DeleteShards  = 2;
     GetShards     = 3;
+    ShardRead     = 4;
 }
 
 message Request {
@@ -120,6 +122,7 @@ message Request {
   DeleteShardsRequest        DeleteShards        = 4 [(gogoproto.nullable) = false];
   HeartbeatRequest           Heartbeat           = 5 [(gogoproto.nullable) = false];
   GetShardsRequest           GetShards           = 6 [(gogoproto.nullable) = false];
+  ShardReadRequest           ShardRead           = 7 [(gogoproto.nullable) = false];
 }
 
 message Response {
@@ -132,6 +135,7 @@ message Response {
     DeleteShardsResponse       DeleteShards         = 5 [(gogoproto.nullable) = false];
     HeartbeatResponse          Heartbeat            = 6 [(gogoproto.nullable) = false];
     GetShardsResponse          GetShards            = 7 [(gogoproto.nullable) = false];
+    ShardReadResponse          ShardRead            = 8 [(gogoproto.nullable) = false];
 }
 
 // Operator is a description of a command that needs to be sent down to CN for execution.
@@ -176,4 +180,15 @@ message GetShardsRequest {
 
 message GetShardsResponse {
     repeated TableShard Shards  = 1 [(gogoproto.nullable) = false];
+}
+
+message ShardReadRequest {
+    TableShard          Shard    = 1 [(gogoproto.nullable) = false];
+    string              CN       = 2;
+    bytes               Payload  = 3;
+    timestamp.Timestamp ReadAt   = 4 [(gogoproto.nullable) = false];
+}
+
+message ShardReadResponse {
+    bytes      Payload  = 1;
 }

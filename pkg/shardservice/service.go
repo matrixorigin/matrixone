@@ -59,7 +59,8 @@ type service struct {
 	remote struct {
 		cluster clusterservice.MOCluster
 		pool    morpc.MessagePool[*pb.Request, *pb.Response]
-		rpc     morpc.MethodBasedClient[*pb.Request, *pb.Response]
+		client  morpc.MethodBasedClient[*pb.Request, *pb.Response]
+		server  morpc.MethodBasedServer[*pb.Request, *pb.Response]
 	}
 
 	atomic struct {
@@ -113,7 +114,7 @@ func (s *service) Close() error {
 	s.stopper.Stop()
 	close(s.createC)
 	close(s.deleteC)
-	return s.remote.rpc.Close()
+	return s.remote.client.Close()
 }
 
 func (s *service) Create(
@@ -165,12 +166,70 @@ func (s *service) Delete(
 	return nil
 }
 
-func (s *service) GetShards(
+func (s *service) Read(
+	ctx context.Context,
 	table uint64,
-) ([]pb.TableShard, error) {
-	shards := s.doGetReadCache(table)
-	if len(shards) > 0 {
-		return shards, nil
+	payload []byte,
+	opts ReadOptions,
+) ([][]byte, error) {
+	cache, err := s.getShards(table)
+	if err != nil {
+		return nil, err
+	}
+
+	build := func(
+		shard pb.TableShard,
+		replica pb.ShardReplica,
+	) *pb.Request {
+		shard.Replicas = nil
+		req := s.remote.pool.AcquireRequest()
+		req.RPCMethod = pb.Method_ShardRead
+		req.ShardRead.Shard = shard
+		req.ShardRead.Payload = payload
+		req.ShardRead.CN = replica.CN
+		req.ShardRead.ReadAt = opts.readAt
+		return req
+	}
+
+	var values [][]byte
+	var futures []*morpc.Future
+	err = cache.selectReplicas(
+		table,
+		func(
+			shard pb.TableShard,
+			replica pb.ShardReplica,
+		) error {
+			f, err := s.remote.client.AsyncSend(
+				ctx,
+				build(shard, replica),
+			)
+			if err != nil {
+				return err
+			}
+			futures = append(futures, f)
+			return nil
+		},
+	)
+
+	for _, f := range futures {
+		v, e := f.Get()
+		if e == nil {
+			resp := v.(*pb.Response)
+			values = append(values, resp.ShardRead.Payload)
+			s.remote.pool.ReleaseResponse(resp)
+		}
+		f.Close()
+		err = errors.Join(err, e)
+	}
+	return values, err
+}
+
+func (s *service) getShards(
+	table uint64,
+) (*readCache, error) {
+	cache := s.getReadCache()
+	if cache.hasTableCache(table) {
+		return cache, nil
 	}
 
 	// make sure only one goroutine to get shards from
@@ -179,11 +238,6 @@ func (s *service) GetShards(
 	defer s.cache.Unlock()
 
 	fn := func() ([]pb.TableShard, error) {
-		shards = s.doGetReadCache(table)
-		if len(shards) > 0 {
-			return shards, nil
-		}
-
 		metadata, err := s.storage.Get(table)
 		if err != nil {
 			return nil, err
@@ -207,6 +261,11 @@ func (s *service) GetShards(
 
 OUT:
 	for {
+		cache := s.getReadCache()
+		if cache.hasTableCache(table) {
+			return cache, nil
+		}
+
 		shards, err := fn()
 		if err != nil || len(shards) == 0 {
 			getLogger().Error("failed to get table shards",
@@ -223,68 +282,18 @@ OUT:
 				continue OUT
 			}
 		}
-		cache := s.cache.read.Load()
+		cache = s.cache.read.Load()
 		cache = cache.clone()
-		cache.shards[table] = shards
-		return shards, nil
+		cache.addShards(table, shards)
+		s.cache.read.Store(cache)
+		return cache, nil
 	}
 }
 
-func (s *service) initRemote() {
-	s.remote.cluster = clusterservice.GetMOCluster()
-
-	s.remote.pool = morpc.NewMessagePool(
-		func() *pb.Request {
-			return &pb.Request{}
-		},
-		func() *pb.Response {
-			return &pb.Response{}
-		},
-	)
-
-	c, err := morpc.NewMethodBasedClient(
-		"shard-client",
-		s.cfg.RPC,
-		s.remote.pool,
-	)
-	if err != nil {
-		panic(err)
-	}
-	s.remote.rpc = c
-
-	// register rpc method
-	s.remote.rpc.RegisterMethod(
-		uint32(pb.Method_Heartbeat),
-		func(r *pb.Request) (string, error) {
-			return getTNAddress(s.remote.cluster), nil
-		},
-	)
-	s.remote.rpc.RegisterMethod(
-		uint32(pb.Method_CreateShards),
-		func(r *pb.Request) (string, error) {
-			return getTNAddress(s.remote.cluster), nil
-		},
-	)
-	s.remote.rpc.RegisterMethod(
-		uint32(pb.Method_DeleteShards),
-		func(r *pb.Request) (string, error) {
-			return getTNAddress(s.remote.cluster), nil
-		},
-	)
-	s.remote.rpc.RegisterMethod(
-		uint32(pb.Method_GetShards),
-		func(r *pb.Request) (string, error) {
-			return getTNAddress(s.remote.cluster), nil
-		},
-	)
-}
-
-func (s *service) doGetReadCache(
-	table uint64,
-) []pb.TableShard {
+func (s *service) getReadCache() *readCache {
 	cache := s.cache.read.Load()
 	if cache != nil {
-		return cache.shards[table]
+		return cache
 	}
 	return nil
 }
@@ -526,7 +535,7 @@ func (s *service) send(
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	resp, err := s.remote.rpc.Send(ctx, req)
+	resp, err := s.remote.client.Send(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -626,10 +635,58 @@ func (s *allocatedCache) addUnsubscribe(
 
 type readCache struct {
 	shards map[uint64][]pb.TableShard
+	ops    map[uint64][]uint64
 }
 
 func newReadCache() *readCache {
-	return &readCache{shards: make(map[uint64][]pb.TableShard)}
+	return &readCache{
+		shards: make(map[uint64][]pb.TableShard),
+		ops:    make(map[uint64][]uint64),
+	}
+}
+
+func (c *readCache) selectReplicas(
+	tableID uint64,
+	apply func(pb.TableShard, pb.ShardReplica) error,
+) error {
+	shards := c.shards[tableID]
+	if len(shards) == 0 {
+		panic("shards is empty")
+	}
+
+	ops := c.ops[tableID]
+	if len(ops) != len(shards) {
+		panic("ops is not equal to shards")
+	}
+
+	for i, shard := range shards {
+		seq := atomic.AddUint64(&c.ops[tableID][i], 1)
+		err := apply(
+			shard,
+			shard.Replicas[seq%uint64(len(shard.Replicas))],
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *readCache) hasTableCache(
+	tableID uint64,
+) bool {
+	if c == nil {
+		return false
+	}
+
+	_, ok := c.shards[tableID]
+	return ok
+}
+
+func (c *readCache) getShards(
+	table uint64,
+) []pb.TableShard {
+	return c.shards[table]
 }
 
 func (c *readCache) clone() *readCache {
@@ -637,13 +694,25 @@ func (c *readCache) clone() *readCache {
 	for k, v := range c.shards {
 		clone.shards[k] = append(([]pb.TableShard)(nil), v...)
 	}
+	for k, v := range c.ops {
+		clone.ops[k] = append(([]uint64)(nil), v...)
+	}
 	return clone
+}
+
+func (c *readCache) addShards(
+	table uint64,
+	shards []pb.TableShard,
+) {
+	c.shards[table] = shards
+	c.ops[table] = make([]uint64, len(shards))
 }
 
 func (c *readCache) delete(
 	tableID uint64,
 ) {
 	delete(c.shards, tableID)
+	delete(c.ops, tableID)
 }
 
 func getTNAddress(cluster clusterservice.MOCluster) string {

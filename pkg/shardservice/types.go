@@ -15,7 +15,10 @@
 package shardservice
 
 import (
+	"context"
+
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -43,6 +46,9 @@ type ShardServer interface {
 // ShardService is sharding service. Each CN node holds an instance of the
 // ShardService.
 type ShardService interface {
+	// Read read data from shards.
+	Read(ctx context.Context, table uint64, payload []byte, opts ReadOptions) ([][]byte, error)
+
 	// Create creates table shards metadata in current txn. And create shard
 	// binds after txn committed asynchronously. Nothing happened if txn aborted.
 	//
@@ -51,8 +57,7 @@ type ShardService interface {
 	// Delete deletes table shards metadata in current txn. Table shards need
 	// to be deleted if table deleted. Nothing happened if txn aborted.
 	Delete(table uint64, txnOp client.TxnOperator) error
-	// GetShards returns table shards metadata.
-	GetShards(table uint64) ([]pb.TableShard, error)
+
 	// Close close the service
 	Close() error
 }
@@ -81,4 +86,35 @@ type ShardStorage interface {
 	Create(table uint64, txnOp client.TxnOperator) (bool, error)
 	Delete(table uint64, txnOp client.TxnOperator) (bool, error)
 	Unsubscribe(tables ...uint64) error
+}
+
+var (
+	DefaultOptions   = ReadOptions{}
+	BroadcastOptions = DefaultOptions.Broadcast()
+)
+
+type ReadOptions struct {
+	broadcast bool
+	pk        []byte
+	readAt    timestamp.Timestamp
+	shardID   uint64
+}
+
+func (opts ReadOptions) Broadcast() ReadOptions {
+	opts.broadcast = true
+	return opts
+}
+
+func (opts ReadOptions) PK(
+	pk []byte,
+) ReadOptions {
+	opts.pk = pk
+	return opts
+}
+
+func (opts ReadOptions) ReadAt(
+	readAt timestamp.Timestamp,
+) ReadOptions {
+	opts.readAt = readAt
+	return opts
 }

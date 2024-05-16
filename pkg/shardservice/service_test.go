@@ -191,9 +191,9 @@ func TestGetShardsWithAllocated(t *testing.T) {
 			mustAddTestShards(t, ctx, s1, table, shards, 1)
 			waitReplicaCount(table, s1, 1)
 
-			values, err := s1.GetShards(table)
+			cache, err := s1.getShards(table)
 			require.NoError(t, err)
-			require.Equal(t, 1, len(values))
+			require.Equal(t, 1, len(cache.getShards(table)))
 		},
 		nil,
 	)
@@ -214,9 +214,9 @@ func TestGetShardsWithoutCreate(t *testing.T) {
 
 			addTestCommittedTable(s1, table, shards, pb.Policy_Hash)
 
-			values, err := s1.GetShards(table)
+			cache, err := s1.getShards(table)
 			require.NoError(t, err)
-			require.Equal(t, 1, len(values))
+			require.Equal(t, 1, len(cache.getShards(table)))
 			require.Equal(t, 1, len(s1.getAllocatedShards()))
 		},
 		nil,
