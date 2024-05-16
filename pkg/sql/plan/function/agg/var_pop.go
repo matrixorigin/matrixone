@@ -79,7 +79,7 @@ func RegisterVarPop2(id int64) {
 
 	aggexec.RegisterAggFromFixedRetFixed(
 		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), VarPopReturnType, false, true),
-		generateAggAvgDecimalCommonContext, generateAggVarPopOfDecimalGroupContext, aggVarPopOfDecimalInitResult,
+		generateAggVarPopOfDecimalCommonContext, generateAggVarPopOfDecimalGroupContext, aggVarPopOfDecimalInitResult,
 		aggVarPopOfDecimal64Fill, aggVarPopOfDecimal64Fills, aggVarPopOfDecimalMerge, aggVarPopOfDecimalFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(

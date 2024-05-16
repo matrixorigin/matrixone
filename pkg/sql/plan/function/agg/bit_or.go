@@ -96,7 +96,7 @@ func aggBitOrFill[from numeric](
 	resultGetter aggexec.AggGetter[uint64], resultSetter aggexec.AggSetter[uint64]) error {
 	vv := float64(value)
 	if vv > math.MaxUint64 {
-		resultSetter(math.MaxUint64)
+		resultSetter(math.MaxInt64)
 		return nil
 	}
 	if vv < 0 {

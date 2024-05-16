@@ -46,9 +46,7 @@ type AggGroupContextInit func(resultType types.Type, parameters ...types.Type) A
 type AggCommonContextInit func(resultType types.Type, parameters ...types.Type) AggCommonExecContext
 
 func (a *AggContext) setCommonContext(c AggCommonExecContext) {
-	if !a.hasCommonContext {
-		a.commonContext = c
-	}
+	a.commonContext = c
 }
 
 func (a *AggContext) preAllocate(more int) {
