@@ -91,6 +91,13 @@ func registerTheTestingCount(id int64, emptyGroupToBeNull bool) {
 		fillSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil)
 }
 
+func registerTheTestingCountWithContext(id int64, commonCtx AggCommonContextInit, groupCtx AggGroupContextInit) {
+	RegisterAggFromFixedRetFixed(
+		MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, false, true),
+		commonCtx, groupCtx, tSinglePrivate1InitResult,
+		fillSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil)
+}
+
 func TestSingleAggFuncExec1(t *testing.T) {
 	mg := newTestAggMemoryManager()
 

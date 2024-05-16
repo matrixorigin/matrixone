@@ -467,3 +467,56 @@ func TestSerial_MedianColumnExec(t *testing.T) {
 
 	require.Equal(t, int64(0), mg.Mp().CurrNB())
 }
+
+type mockContext struct{}
+
+func gMockCommonContext(_ types.Type, _ ...types.Type) AggCommonExecContext {
+	return &mockContext{}
+}
+func gMockGroupContext(_ types.Type, _ ...types.Type) AggGroupExecContext {
+	return &mockContext{}
+}
+func (c *mockContext) Marshal() []byte {
+	return []byte("mockContext")
+}
+func (c *mockContext) Unmarshal(data []byte) {
+	if string(data) != "mockContext" {
+		panic("mockContext unmarshal failed")
+	}
+}
+
+func TestSerial_ExecContext(t *testing.T) {
+	mg := newTestAggMemoryManager()
+	info := singleAggInfo{
+		aggID:   gUniqueAggIdForTest(),
+		argType: types.T_int32.ToType(),
+		retType: types.T_int64.ToType(),
+	}
+
+	registerTheTestingCountWithContext(
+		info.aggID, gMockCommonContext, gMockGroupContext)
+	executor := MakeAgg(mg, info.aggID, false, info.argType)
+	require.NoError(t, executor.GroupGrow(2))
+
+	require.NoError(t,
+		testAggExecSerialize(executor, func(src, dst AggFuncExec) error {
+			s1, ok1 := src.(*singleAggFuncExecNew1[int32, int64])
+			s2, ok2 := dst.(*singleAggFuncExecNew1[int32, int64])
+			if !ok1 || !ok2 {
+				return moerr.NewInternalErrorNoCtx("type assertion failed")
+			}
+			if _, ok := s2.execContext.commonContext.(*mockContext); !ok {
+				return moerr.NewInternalErrorNoCtx("commonContext not right")
+			}
+			if len(s1.execContext.groupContext) != len(s2.execContext.groupContext) ||
+				len(s1.execContext.groupContext) != 2 {
+				return moerr.NewInternalErrorNoCtx("groupContext number not right")
+			}
+			if _, ok := s2.execContext.groupContext[0].(*mockContext); !ok {
+				return moerr.NewInternalErrorNoCtx("groupContext not right")
+			}
+			return nil
+		}))
+	executor.Free()
+	require.Equal(t, int64(0), mg.Mp().CurrNB())
+}
