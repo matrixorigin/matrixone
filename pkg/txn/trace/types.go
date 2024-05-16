@@ -258,8 +258,10 @@ type StatementFilter interface {
 }
 
 type csvEvent interface {
-	toCSVRecord(
-		cn string,
-		buf *buffer,
-		records []string)
+	toCSVRecord(cn string, buf *buffer, records []string)
+}
+
+type event struct {
+	csv    csvEvent
+	buffer *buffer
 }
