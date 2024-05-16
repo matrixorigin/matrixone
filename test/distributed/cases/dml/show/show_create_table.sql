@@ -106,5 +106,17 @@ show create table t3;
 --ERROR 3819 (HY000): constraint violation: Column 'e' cannot be null
 INSERT INTO t3 (id, i, j, t, e) VALUES (4, NULL, 50, 'Example text 4', null);
 select * from t3 order by id;
+
+-----------------------------------------------------------------------------------------------------
+CREATE TABLE t4 (
+id INT PRIMARY KEY,
+a VARCHAR(30) NULL default 'foo',
+b VARCHAR(30) NOT NULL default 'foo',
+c INT NULL DEFAULT 1000,
+d INT NOT NULL DEFAULT 2000
+);
+
+desc t4;
+show create table t4;
 -----------------------------------------------------------------------------------------------------
 drop database if exists db1;

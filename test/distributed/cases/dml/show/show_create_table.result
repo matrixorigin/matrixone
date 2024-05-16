@@ -174,4 +174,21 @@ id    i    j    t    e
 1    10    20    Example text 1    Y
 2    30    40    Example text 2    Y
 3    null    50    Example text 3    Y
+CREATE TABLE t4 (
+id INT PRIMARY KEY,
+a VARCHAR(30) NULL default 'foo',
+b VARCHAR(30) NOT NULL default 'foo',
+c INT NULL DEFAULT 1000,
+d INT NOT NULL DEFAULT 2000
+);
+desc t4;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO    PRI    null        
+a    VARCHAR(30)    YES        'foo'        
+b    VARCHAR(30)    NO        'foo'        
+c    INT(32)    YES        1000        
+d    INT(32)    NO        2000        
+show create table t4;
+Table    Create Table
+t4    CREATE TABLE `t4` (\n  `id` INT NOT NULL,\n  `a` VARCHAR(30) DEFAULT 'foo',\n  `b` VARCHAR(30) NOT NULL DEFAULT 'foo',\n  `c` INT DEFAULT 1000,\n  `d` INT NOT NULL DEFAULT 2000,\n  PRIMARY KEY (`id`)\n)
 drop database if exists db1;

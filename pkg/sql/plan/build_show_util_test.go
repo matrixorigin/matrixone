@@ -41,7 +41,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				    timestamp_column TIMESTAMP(6),
 				    timestamp_column2 TIMESTAMP
 				);`,
-			want: "CREATE TABLE `t_time` (\n  `id` INT NOT NULL AUTO_INCREMENT,\n  `date_column` DATE DEFAULT NULL,\n  `time_column` TIME(3) DEFAULT NULL,\n  `datetime_column` DATETIME(6) DEFAULT NULL,\n  `timestamp_column` TIMESTAMP(6) NULL DEFAULT NULL,\n  `timestamp_column2` TIMESTAMP NULL DEFAULT NULL,\nPRIMARY KEY (`id`)\n)",
+			want: "CREATE TABLE `t_time` (\n  `id` INT NOT NULL AUTO_INCREMENT,\n  `date_column` DATE DEFAULT NULL,\n  `time_column` TIME(3) DEFAULT NULL,\n  `datetime_column` DATETIME(6) DEFAULT NULL,\n  `timestamp_column` TIMESTAMP(6) NULL DEFAULT NULL,\n  `timestamp_column2` TIMESTAMP NULL DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)",
 		},
 		{
 			name: "test3",
@@ -53,7 +53,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				timestamp_column TIMESTAMP(6)  NULL DEFAULT NULL,
 				timestamp_column2 TIMESTAMP  NULL DEFAULT NULL
 				)`,
-			want: "CREATE TABLE `t_time` (\n  `id` INT NOT NULL AUTO_INCREMENT,\n  `date_column` DATE DEFAULT NULL,\n  `time_column` TIME(3) DEFAULT NULL,\n  `datetime_column` DATETIME(6) DEFAULT NULL,\n  `timestamp_column` TIMESTAMP(6) NULL DEFAULT NULL,\n  `timestamp_column2` TIMESTAMP NULL DEFAULT NULL,\nPRIMARY KEY (`id`)\n)",
+			want: "CREATE TABLE `t_time` (\n  `id` INT NOT NULL AUTO_INCREMENT,\n  `date_column` DATE DEFAULT NULL,\n  `time_column` TIME(3) DEFAULT NULL,\n  `datetime_column` DATETIME(6) DEFAULT NULL,\n  `timestamp_column` TIMESTAMP(6) NULL DEFAULT NULL,\n  `timestamp_column2` TIMESTAMP NULL DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)",
 		},
 		{
 			name: "test4",
@@ -70,7 +70,35 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				KEY IDX_RoundId (ROUND_ID),
 				KEY IDX_UserId_EndTime (USER_ID,END_TIME)
 				)`,
-			want: "CREATE TABLE `t_log` (\n  `log_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,\n  `round_id` BIGINT UNSIGNED NOT NULL,\n  `user_id` INT UNSIGNED NOT NULL,\n  `user_ip` INT UNSIGNED DEFAULT NULL,\n  `end_time` DATETIME NOT NULL,\n  `user_type` INT DEFAULT NULL,\n  `app_id` INT DEFAULT NULL,\nPRIMARY KEY (`log_id`,`end_time`),\nKEY `idx_endtime` (`end_time`),\nKEY `idx_roundid` (`round_id`),\nKEY `idx_userid_endtime` (`user_id`,`end_time`)\n)",
+			want: "CREATE TABLE `t_log` (\n  `log_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,\n  `round_id` BIGINT UNSIGNED NOT NULL,\n  `user_id` INT UNSIGNED NOT NULL,\n  `user_ip` INT UNSIGNED DEFAULT NULL,\n  `end_time` DATETIME NOT NULL,\n  `user_type` INT DEFAULT NULL,\n  `app_id` INT DEFAULT NULL,\n  PRIMARY KEY (`log_id`,`end_time`),\n  KEY `idx_endtime` (`end_time`),\n  KEY `idx_roundid` (`round_id`),\n  KEY `idx_userid_endtime` (`user_id`,`end_time`)\n)",
+		},
+		{
+			name: "test5",
+			sql: `CREATE TABLE example_table (
+				id INT NOT NULL,
+				name VARCHAR(255) NOT NULL DEFAULT 'default_name',
+				email VARCHAR(255),
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+				PRIMARY KEY (id),
+				UNIQUE KEY uk1 (name),
+				UNIQUE KEY uk2 (email)
+				);`,
+			want: "CREATE TABLE `example_table` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) NOT NULL DEFAULT 'default_name',\n  `email` VARCHAR(255) DEFAULT NULL,\n  `created_at` TIMESTAMP DEFAULT current_timestamp(),\n  `updated_at` TIMESTAMP DEFAULT current_timestamp() ON UPDATE current_timestamp(),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk1` (`name`),\n  UNIQUE KEY `uk2` (`email`)\n)",
+		},
+		{
+			name: "test6",
+			sql: `create table t (
+				a timestamp not null default current_timestamp,
+				b timestamp(3) default current_timestamp(3),
+				c datetime default current_timestamp,
+				d datetime(4) default current_timestamp(4),
+				e varchar(20) default 'cUrrent_tImestamp',
+				f datetime(2) default current_timestamp(2) on update current_timestamp(2),
+				g timestamp(2) default current_timestamp(2) on update current_timestamp(2),
+				h date default '2024-01-01'
+				)`,
+			want: "CREATE TABLE `t` (\n  `a` TIMESTAMP NOT NULL DEFAULT current_timestamp(),\n  `b` TIMESTAMP(3) DEFAULT current_timestamp(3),\n  `c` DATETIME DEFAULT current_timestamp(),\n  `d` DATETIME(4) DEFAULT current_timestamp(4),\n  `e` VARCHAR(20) DEFAULT 'cUrrent_tImestamp',\n  `f` DATETIME(2) DEFAULT current_timestamp(2) ON UPDATE current_timestamp(2),\n  `g` TIMESTAMP(2) DEFAULT current_timestamp(2) ON UPDATE current_timestamp(2),\n  `h` DATE DEFAULT '2024-01-01'\n)",
 		},
 	}
 	for _, tt := range tests {
@@ -99,35 +127,18 @@ func Test_SingleShowCreateTable(t *testing.T) {
 		want string
 	}{
 		{
-			name: "test4",
-			sql: `CREATE TABLE t_log (
-				LOG_ID bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT,
-				ROUND_ID bigint(20) UNSIGNED NOT NULL,
-				USER_ID int(10) UNSIGNED NOT NULL,
-				USER_IP int(10) UNSIGNED DEFAULT NULL,
-				END_TIME datetime NOT NULL,
-				USER_TYPE int(11) DEFAULT NULL,
-				APP_ID int(11) DEFAULT NULL,
-				PRIMARY KEY (LOG_ID,END_TIME),
-				KEY IDX_EndTime (END_TIME),
-				KEY IDX_RoundId (ROUND_ID),
-				KEY IDX_UserId_EndTime (USER_ID,END_TIME)
-				)`,
-			want: "CREATE TABLE `t_log` (\n  `log_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,\n  `round_id` BIGINT UNSIGNED NOT NULL,\n  `user_id` INT UNSIGNED NOT NULL,\n  `user_ip` INT UNSIGNED DEFAULT NULL,\n  `end_time` DATETIME NOT NULL,\n  `user_type` INT DEFAULT NULL,\n  `app_id` INT DEFAULT NULL,\nPRIMARY KEY (`log_id`,`end_time`),\nKEY `idx_endtime` (`end_time`),\nKEY `idx_roundid` (`round_id`),\nKEY `idx_userid_endtime` (`user_id`,`end_time`)\n)",
-		},
-		{
-			name: "test5",
-			sql: `create table t (
-				a timestamp not null default current_timestamp,
-				b timestamp(3) default current_timestamp(3),
-				c datetime default current_timestamp,
-				d datetime(4) default current_timestamp(4),
-				e varchar(20) default 'cUrrent_tImestamp',
-				f datetime(2) default current_timestamp(2) on update current_timestamp(2),
-				g timestamp(2) default current_timestamp(2) on update current_timestamp(2),
-				h date default '2024-01-01'
-				)`,
-			want: "CREATE TABLE `employees` (\n`id` INT NOT NULL,\n`fname` VARCHAR(30)  DEFAULT NULL,\n`lname` VARCHAR(30)  DEFAULT NULL,\n`hired` DATE NOT NULL DEFAULT '1970-01-01',\n`separated` DATE NOT NULL DEFAULT '9999-12-31',\n`job_code` INT NOT NULL,\n`store_id` INT NOT NULL\n)",
+			name: "test7",
+			sql: `CREATE TABLE example_table (
+				id INT NOT NULL,
+				name VARCHAR(255) NOT NULL DEFAULT 'default_name',
+				email VARCHAR(255),
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+				PRIMARY KEY (id),
+				UNIQUE KEY uk1 (name),
+				UNIQUE KEY uk2 (email)
+				);`,
+			want: "CREATE TABLE `example_table` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) NOT NULL DEFAULT 'default_name',\n  `email` VARCHAR(255) DEFAULT NULL,\n  `created_at` TIMESTAMP DEFAULT current_timestamp(),\n  `updated_at` TIMESTAMP DEFAULT current_timestamp() ON UPDATE current_timestamp(),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk1` (`name`),\n  UNIQUE KEY `uk2` (`email`)\n)",
 		},
 	}
 
@@ -171,7 +182,7 @@ func buildTestShowCreateTable(sql string) (string, error) {
 		return "", err
 	}
 
-	showSQL, err := convTableDefToDDL(tableDef, &mock.ctxt)
+	showSQL, err := ConstructCreateTableSQL(tableDef, &mock.ctxt)
 	if err != nil {
 		return "", err
 	}
