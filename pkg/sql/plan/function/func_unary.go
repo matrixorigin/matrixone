@@ -127,6 +127,7 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 		data, null := source.GetStrValue(i)
 		if null {
 			_ = rs.AppendMustNullForBytesResult()
+			continue
 		}
 
 		switch t := parameters[0].GetType().Oid; t {
