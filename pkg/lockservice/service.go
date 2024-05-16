@@ -248,7 +248,7 @@ func (s *service) reduceCanMoveGroupTables(txn *activeTxn) {
 func (s *service) checkCanMoveGroupTables() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.isStatus(pb.Status_ServiceLockEnable) {
+	if s.mu.status != pb.Status_ServiceLockEnable {
 		return
 	}
 
@@ -267,7 +267,7 @@ func (s *service) checkCanMoveGroupTables() {
 		s.mu.groupTables = append(s.mu.groupTables, res)
 	}
 	s.mu.restartTime, _ = s.clock.Now()
-	s.setStatus(pb.Status_ServiceLockWaiting)
+	s.mu.status = pb.Status_ServiceLockWaiting
 }
 
 func (s *service) canLockOnServiceStatus(
@@ -299,9 +299,6 @@ func (s *service) canLockOnServiceStatus(
 func (s *service) validGroupTable(group uint32, tableID uint64) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if len(s.mu.lockTableRef) == 0 {
-		return true
-	}
 	_, ok := s.mu.lockTableRef[group][tableID]
 	return ok
 }
