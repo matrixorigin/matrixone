@@ -21,6 +21,8 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -338,6 +340,30 @@ type FeSession interface {
 	Close()
 	Clear()
 	getCachedPlan(sql string) *cachedPlan
+
+	SessionLogger
+}
+
+type SessionLogger interface {
+	SessionLoggerGetter
+	Info(ctx context.Context, msg string, fields ...zap.Field)
+	Error(ctx context.Context, msg string, fields ...zap.Field)
+	Warn(ctx context.Context, msg string, fields ...zap.Field)
+	Fatal(ctx context.Context, msg string, fields ...zap.Field)
+	Debug(ctx context.Context, msg string, fields ...zap.Field)
+	Infof(ctx context.Context, msg string, args ...any)
+	Errorf(ctx context.Context, msg string, args ...any)
+	Warnf(ctx context.Context, msg string, args ...any)
+	Fatalf(ctx context.Context, msg string, args ...any)
+	Debugf(ctx context.Context, msg string, args ...any)
+	GetLogger() SessionLogger
+}
+
+type SessionLoggerGetter interface {
+	GetSessId() uuid.UUID
+	GetStmtId() uuid.UUID
+	GetTxnId() uuid.UUID
+	GetLogLevel() zapcore.Level
 }
 
 type ExecCtx struct {
@@ -434,6 +460,8 @@ func (ses *feSessionImpl) Close() {
 	}
 	if ses.txnCompileCtx != nil {
 		ses.txnCompileCtx.execCtx = nil
+		ses.txnCompileCtx.snapshot = nil
+		ses.txnCompileCtx.views = nil
 		ses.txnCompileCtx = nil
 	}
 	ses.sql = ""

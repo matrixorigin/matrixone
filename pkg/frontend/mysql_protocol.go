@@ -1155,15 +1155,16 @@ func (mp *MysqlProtocolImpl) writeZeros(data []byte, pos int, count int) int {
 // hash2 = SHA1(hash1)
 // check(hash2, hpwd)
 func (mp *MysqlProtocolImpl) checkPassword(pwd, salt, auth []byte) bool {
+	ses := mp.GetSession()
 	sha := sha1.New()
 	_, err := sha.Write(salt)
 	if err != nil {
-		logutil.Errorf("SHA1(salt) failed.")
+		ses.Error(mp.ctx, "SHA1(salt) failed.")
 		return false
 	}
 	_, err = sha.Write(pwd)
 	if err != nil {
-		logutil.Errorf("SHA1(hpwd) failed.")
+		ses.Error(mp.ctx, "SHA1(hpwd) failed.")
 		return false
 	}
 	hash1 := sha.Sum(nil)
@@ -1188,22 +1189,22 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 
 	ses := mp.GetSession()
 	if !mp.SV.SkipCheckUser {
-		logDebugf(mp.getDebugStringUnsafe(), "authenticate user 1")
+		ses.Debugf(ctx, "authenticate user 1")
 		psw, err = ses.AuthenticateUser(ctx, mp.GetUserName(), mp.GetDatabaseName(), mp.authResponse, mp.GetSalt(), mp.checkPassword)
 		if err != nil {
 			return err
 		}
-		logDebugf(mp.getDebugStringUnsafe(), "authenticate user 2")
+		ses.Debugf(ctx, "authenticate user 2")
 
 		//TO Check password
 		if mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-			logDebugf(mp.getDebugStringUnsafe(), "check password succeeded")
+			ses.Debugf(ctx, "check password succeeded")
 			ses.InitGlobalSystemVariables(ctx)
 		} else {
 			return moerr.NewInternalError(ctx, "check password failed")
 		}
 	} else {
-		logDebugf(mp.getDebugStringUnsafe(), "skip authenticate user")
+		ses.Debugf(ctx, "skip authenticate user")
 		//Get tenant info
 		tenant, err = GetTenantInfo(ctx, mp.GetUserName())
 		if err != nil {
@@ -1215,7 +1216,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 
 			//TO Check password
 			if len(psw) == 0 || mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-				logInfo(mp.ses, mp.ses.GetDebugString(), "check password succeeded")
+				mp.ses.Info(ctx, "check password succeeded")
 			} else {
 				return moerr.NewInternalError(ctx, "check password failed")
 			}
@@ -1236,7 +1237,7 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 	} else if uint32(capabilities)&CLIENT_PROTOCOL_41 != 0 {
 		var resp41 response41
 		var ok2 bool
-		logDebugf(mp.getDebugStringUnsafe(), "analyse handshake response")
+		mp.GetSession().Debug(ctx, "analyse handshake response")
 		if ok2, resp41, err = mp.analyseHandshakeResponse41(ctx, payload); !ok2 {
 			return false, err
 		}
@@ -1294,30 +1295,30 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 		v2.AuthenticateDurationHistogram.Observe(ses.timestampMap[TSAuthenticateEnd].Sub(ses.timestampMap[TSAuthenticateStart]).Seconds())
 	}()
 
-	logDebugf(mp.getDebugStringUnsafe(), "authenticate user")
+	ses.Debugf(ctx, "authenticate user")
 	mp.incDebugCount(0)
 	if err := mp.authenticateUser(ctx, mp.authResponse); err != nil {
-		logutil.Errorf("authenticate user failed.error:%v", err)
+		ses.Errorf(ctx, "authenticate user failed.error:%v", err)
 		errorCode, sqlState, msg := RewriteError(err, mp.username)
 		ses.timestampMap[TSSendErrPacketStart] = time.Now()
 		err2 := mp.sendErrPacket(errorCode, sqlState, msg)
 		ses.timestampMap[TSSendErrPacketEnd] = time.Now()
 		v2.SendErrPacketDurationHistogram.Observe(ses.timestampMap[TSSendErrPacketEnd].Sub(ses.timestampMap[TSSendErrPacketStart]).Seconds())
 		if err2 != nil {
-			logutil.Errorf("send err packet failed.error:%v", err2)
+			ses.Errorf(ctx, "send err packet failed.error:%v", err2)
 			return err2
 		}
 		return err
 	}
 
 	mp.incDebugCount(2)
-	logDebugf(mp.getDebugStringUnsafe(), "handle handshake end")
+	ses.Debugf(ctx, "handle handshake end")
 	ses.timestampMap[TSSendOKPacketStart] = time.Now()
 	err := mp.sendOKPacket(0, 0, 0, 0, "")
 	ses.timestampMap[TSSendOKPacketEnd] = time.Now()
 	v2.SendOKPacketDurationHistogram.Observe(ses.timestampMap[TSSendOKPacketEnd].Sub(ses.timestampMap[TSSendOKPacketStart]).Seconds())
 	mp.incDebugCount(3)
-	logDebugf(mp.getDebugStringUnsafe(), "handle handshake response ok")
+	ses.Debugf(ctx, "handle handshake response ok")
 	if err != nil {
 		return err
 	}
@@ -2758,7 +2759,7 @@ func (mp *MysqlProtocolImpl) MakeEOFPayload(warnings, status uint16) []byte {
 func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 	// TODO(volgariver6): when proxy is stable, remove this deadline setting.
 	if err := rs.RawConn().SetReadDeadline(time.Now().Add(defaultSaltReadTimeout)); err != nil {
-		logDebugf(mp.GetDebugString(), "failed to set deadline for salt updating: %v", err)
+		mp.ses.Debugf(mp.ctx, "failed to set deadline for salt updating: %v", err)
 		return
 	}
 	var i proxy.ExtraInfo
@@ -2766,10 +2767,10 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 	if err := i.Decode(reader); err != nil {
 		// If the error is timeout, we treat it as normal case and do not update extra info.
 		if err, ok := err.(net.Error); ok && err.Timeout() {
-			logInfo(mp.ses, mp.GetDebugString(), "cannot get salt, maybe not use proxy",
+			mp.ses.Info(mp.ctx, "cannot get salt, maybe not use proxy",
 				zap.Error(err))
 		} else {
-			logError(mp.ses, mp.GetDebugString(), "failed to get extra info",
+			mp.ses.Error(mp.ctx, "failed to get extra info",
 				zap.Error(err))
 		}
 		return
