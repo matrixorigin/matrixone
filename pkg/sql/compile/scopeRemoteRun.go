@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"time"
 	"unsafe"
 
@@ -1399,6 +1400,14 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
 		arg.IsShuffle = t.IsShuffle
+		v.Arg = arg
+	case vm.ProductL2:
+		t := opr.GetProductL2()
+		arg := productl2.NewArgument()
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.Typs = convertToTypes(t.Types)
+		arg.IsShuffle = t.IsShuffle
+		arg.OnExpr = t.Expr
 		v.Arg = arg
 	case vm.Projection:
 		arg := projection.NewArgument()

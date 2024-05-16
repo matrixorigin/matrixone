@@ -17,7 +17,10 @@ package productl2
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
+	"math"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
@@ -118,6 +121,19 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	return nil
 }
 
+var (
+	arrayF32Pool = sync.Pool{
+		New: func() interface{} {
+			return make([]float32, 128)
+		},
+	}
+	arrayF64Pool = sync.Pool{
+		New: func() interface{} {
+			return make([]float64, 128)
+		},
+	}
+)
+
 func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
@@ -138,18 +154,57 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 
 	leastClusterIndex := 0
 	leastDistance := 0.0
+
+	//centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetLit().GetI32Val()
+	//tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetLit().GetI32Val()
+
+	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
+	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
+
+	logutil.Infof("centroidColPos tblColPos %v %v", centroidColPos, tblColPos)
 	for j = ctr.probeIdx; j < probeCount; j++ {
+		leastClusterIndex = 0
+		leastDistance = math.MaxFloat64
 
 		for i = 0; i < buildCount; i++ {
 			// find the nearest cluster center
-			//TODO: generalize it for float64.
-			clusterEmbedding := types.BytesToArray[float32](ctr.bat.Vecs[0].GetBytesAt(i))
-			tblEmbedding := types.BytesToArray[float32](ctr.inBat.Vecs[0].GetBytesAt(i))
+			switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
+			case types.T_array_float32:
+				clusterEmbedding := types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+				tblEmbedding := types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
 
-			dist, _ := moarray.L2Distance(clusterEmbedding, tblEmbedding)
-			if leastDistance < dist {
-				leastDistance = dist
-				leastClusterIndex = i
+				normalizeTblEmbedding := arrayF32Pool.Get().([]float32)
+				if cap(normalizeTblEmbedding) < len(tblEmbedding) {
+					normalizeTblEmbedding = make([]float32, len(tblEmbedding))
+				} else {
+					normalizeTblEmbedding = normalizeTblEmbedding[:len(tblEmbedding)]
+				}
+				normalizeTblEmbedding, _ = moarray.NormalizeL2[float32](tblEmbedding, &normalizeTblEmbedding)
+
+				dist, _ := moarray.L2Distance[float32](clusterEmbedding, normalizeTblEmbedding)
+				if dist < leastDistance {
+					leastDistance = dist
+					leastClusterIndex = i
+				}
+				arrayF32Pool.Put(normalizeTblEmbedding)
+			case types.T_array_float64:
+				clusterEmbedding := types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+				tblEmbedding := types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+
+				normalizeTblEmbedding := arrayF64Pool.Get().([]float64)
+				if cap(normalizeTblEmbedding) < len(tblEmbedding) {
+					normalizeTblEmbedding = make([]float64, len(tblEmbedding))
+				} else {
+					normalizeTblEmbedding = normalizeTblEmbedding[:len(tblEmbedding)]
+				}
+				normalizeTblEmbedding, _ = moarray.NormalizeL2[float64](tblEmbedding, &normalizeTblEmbedding)
+
+				dist, _ := moarray.L2Distance[float64](clusterEmbedding, normalizeTblEmbedding)
+				if dist < leastDistance {
+					leastDistance = dist
+					leastClusterIndex = i
+				}
+				arrayF64Pool.Put(normalizeTblEmbedding)
 			}
 		}
 		for k, rp := range ap.Result {

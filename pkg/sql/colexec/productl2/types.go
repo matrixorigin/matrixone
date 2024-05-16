@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -36,9 +37,9 @@ type container struct {
 	colexec.ReceiverOperator
 
 	state int
-	bat   *batch.Batch
+	bat   *batch.Batch // build batch
 	rbat  *batch.Batch
-	inBat *batch.Batch
+	inBat *batch.Batch // probe batch
 
 	probeIdx int
 }
@@ -48,6 +49,7 @@ type Argument struct {
 	Typs      []types.Type
 	Result    []colexec.ResultPos
 	IsShuffle bool
+	OnExpr    *plan.Expr
 	vm.OperatorBase
 }
 

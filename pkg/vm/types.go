@@ -105,6 +105,7 @@ const (
 	Shuffle
 
 	Sample
+	ProductL2
 )
 
 // Instruction contains relational algebra
