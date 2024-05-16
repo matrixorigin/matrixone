@@ -238,6 +238,23 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 		return
 	}
 
+	if v.wait >= waitTooLong {
+		lockDetail := ""
+		v.lt.mu.RLock()
+		lock, ok := v.lt.mu.store.Get(v.key)
+		if ok {
+			lockDetail = lock.String()
+		}
+		getLogger().Warn("wait too long",
+			zap.Duration("wait", v.wait),
+			zap.String("key", hex.EncodeToString(v.key)),
+			zap.String("bind", v.lt.bind.DebugString()),
+			zap.String("lock", lockDetail),
+			zap.String("txn", hex.EncodeToString(v.txn.TxnID)))
+		v.lt.mu.RUnlock()
+		return
+	}
+
 	holders := func() []pb.WaitTxn {
 		var holders []pb.WaitTxn
 		v.lt.mu.RLock()
@@ -269,24 +286,11 @@ func (mw *waiterEvents) addToOrphanCheck(
 	w *waiter,
 	wait time.Duration,
 ) {
-	if wait >= waitTooLong {
-		lockDetail := ""
-		w.lt.mu.RLock()
-		lock, ok := w.lt.mu.store.Get(w.conflictKey)
-		if ok {
-			lockDetail = lock.String()
-		}
-		getLogger().Warn("wait too long",
-			zap.String("key", hex.EncodeToString(w.conflictKey)),
-			zap.String("bind", w.lt.bind.DebugString()),
-			zap.String("lock", lockDetail),
-			zap.String("txn", hex.EncodeToString(w.txn.TxnID)))
-		w.lt.mu.RUnlock()
-	}
-
 	v := checkOrphan{
-		key: w.conflictKey,
-		lt:  w.lt,
+		wait: wait,
+		key:  w.conflictKey,
+		lt:   w.lt,
+		txn:  w.txn,
 	}
 
 	select {
@@ -296,6 +300,8 @@ func (mw *waiterEvents) addToOrphanCheck(
 }
 
 type checkOrphan struct {
-	key []byte
-	lt  *localLockTable
+	wait time.Duration
+	key  []byte
+	lt   *localLockTable
+	txn  pb.WaitTxn
 }
