@@ -30,8 +30,8 @@ import (
 var _ vm.Operator = new(Argument)
 
 const (
-	BuildHashMap = iota
-	HandleRuntimeFilter
+	ReceiveBatch = iota
+	BuildHashMap
 	SendHashMap
 	SendBatch
 	End

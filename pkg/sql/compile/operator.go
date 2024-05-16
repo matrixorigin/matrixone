@@ -125,6 +125,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Result = t.Result
 		arg.HashOnPK = t.HashOnPK
 		arg.IsShuffle = t.IsShuffle
+		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		res.Arg = arg
 	case vm.Group:
 		t := sourceIns.Arg.(*group.Argument)
@@ -930,6 +931,7 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	return arg
 }
 
@@ -1324,6 +1326,9 @@ func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.A
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+	}
+	if left {
+		arg.RuntimeFilterSpecs = node.RuntimeFilterProbeList
 	}
 	return arg
 }
@@ -1758,6 +1763,9 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 			ret.NeedMergedBatch = true
 			ret.NeedAllocateSels = true
 		}
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
+		}
 
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
@@ -1780,7 +1788,7 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 		ret.NeedMergedBatch = needMergedBatch
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 
 	case vm.Left:
@@ -1792,7 +1800,7 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 
 	case vm.Right:
@@ -1804,7 +1812,7 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 
 	case vm.RightSemi:
@@ -1816,7 +1824,7 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 
 	case vm.RightAnti:
@@ -1828,7 +1836,7 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 
 	case vm.Semi:
@@ -1845,7 +1853,7 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 			ret.NeedAllocateSels = true
 		}
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 
 	default:

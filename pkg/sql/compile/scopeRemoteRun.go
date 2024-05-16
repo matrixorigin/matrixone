@@ -816,13 +816,14 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
-			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.Typs),
-			LeftCond:  t.Conditions[0],
-			RightCond: t.Conditions[1],
-			Result:    t.Result,
-			HashOnPk:  t.HashOnPK,
-			IsShuffle: t.IsShuffle,
+			Expr:                   t.Cond,
+			Types:                  convertToPlanTypes(t.Typs),
+			LeftCond:               t.Conditions[0],
+			RightCond:              t.Conditions[1],
+			Result:                 t.Result,
+			HashOnPk:               t.HashOnPK,
+			IsShuffle:              t.IsShuffle,
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
 	case *shuffle.Argument:
 		in.Shuffle = &pipeline.Shuffle{}
@@ -1216,6 +1217,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Result = t.Result
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		v.Arg = arg
 	case vm.Shuffle:
 		t := opr.GetShuffle()

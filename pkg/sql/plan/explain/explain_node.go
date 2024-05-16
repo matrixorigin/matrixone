@@ -549,6 +549,9 @@ func (ndesc *NodeDescribeImpl) GetBlockFilterConditionInfo(ctx context.Context, 
 }
 
 func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	if ndesc.Node.NodeType == plan.Node_JOIN && ndesc.Node.Stats.HashmapStats.Shuffle {
+		return "", nil
+	}
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	buf.WriteString("Runtime Filter Probe: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {
@@ -575,6 +578,9 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, opt
 }
 
 func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	if ndesc.Node.NodeType == plan.Node_JOIN && ndesc.Node.Stats.HashmapStats.Shuffle {
+		return "", nil
+	}
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	buf.WriteString("Runtime Filter Build: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {

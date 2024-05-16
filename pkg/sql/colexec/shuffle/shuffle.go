@@ -102,6 +102,10 @@ SENDLAST:
 			}
 		}
 	}
+	//need to wait for runtimefilter_pass before send batch
+	if err := arg.handleRuntimeFilter(proc); err != nil {
+		return vm.CancelResult, err
+	}
 
 	// send batch in send pool
 	result := vm.NewCallResult()
@@ -110,6 +114,32 @@ SENDLAST:
 	arg.ctr.lastSentBatch = result.Batch
 	arg.ctr.sendPool = arg.ctr.sendPool[:length-1]
 	return result, nil
+}
+
+func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
+	if len(arg.RuntimeFilterSpecs) > 0 {
+		for _, spec := range arg.RuntimeFilterSpecs {
+			msgReceiver := proc.NewMessageReceiver([]int32{spec.Tag}, process.AddrBroadCastOnCurrentCN())
+			msgs, ctxDone := msgReceiver.ReceiveMessage(true, proc.Ctx)
+			if ctxDone {
+				return proc.Ctx.Err()
+			}
+			for i := range msgs {
+				msg, ok := msgs[i].(process.RuntimeFilterMessage)
+				if !ok {
+					panic("expect runtime filter message, receive unknown message!")
+				}
+				switch msg.Typ {
+				case process.RuntimeFilter_PASS, process.RuntimeFilter_DROP:
+					continue
+				default:
+					panic("unsupported runtime filter type!")
+				}
+			}
+			msgReceiver.Free()
+		}
+	}
+	return nil
 }
 
 func (arg *Argument) initShuffle() {
