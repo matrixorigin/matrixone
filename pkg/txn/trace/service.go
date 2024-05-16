@@ -876,3 +876,34 @@ type loadAction struct {
 	sql  string
 	file string
 }
+
+type writer struct {
+	buf *buf.ByteBuf
+	dst []byte
+	idx int
+}
+
+func (w writer) WriteUint(v uint64) {
+	w.buf.MustWrite(uintToString(w.dst, v))
+}
+
+func (w writer) WriteInt(v int64) {
+	w.buf.MustWrite(intToString(w.dst, v))
+}
+
+func (w writer) WriteString(v string) {
+	w.buf.WriteString(v)
+}
+
+func (w writer) WriteHex(v []byte) {
+	if len(v) == 0 {
+		return
+	}
+	dst := w.dst[:hex.EncodedLen(len(v))]
+	hex.Encode(dst, v)
+	w.buf.MustWrite(dst)
+}
+
+func (w writer) data() string {
+	return util.UnsafeBytesToString(w.buf.RawSlice(w.idx, w.buf.GetWriteIndex()))
+}
