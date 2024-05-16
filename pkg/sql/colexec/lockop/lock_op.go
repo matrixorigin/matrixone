@@ -806,6 +806,10 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 	return arg
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 // Free free mem
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.rt == nil {
