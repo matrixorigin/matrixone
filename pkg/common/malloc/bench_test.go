@@ -20,7 +20,14 @@ import (
 
 func BenchmarkAllocFree(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		_, handle := Alloc(4096)
+		_, handle := Alloc(4096, true)
+		handle.Free()
+	}
+}
+
+func BenchmarkAllocFreeNoClear(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, handle := Alloc(4096, false)
 		handle.Free()
 	}
 }
@@ -28,8 +35,45 @@ func BenchmarkAllocFree(b *testing.B) {
 func BenchmarkParallelAllocFree(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for size := 1; pb.Next(); size++ {
-			_, handle := Alloc(size % 65536)
+			_, handle := Alloc(size%65536, true)
 			handle.Free()
 		}
 	})
+}
+
+func BenchmarkParallelAllocFreeNoClear(b *testing.B) {
+	b.RunParallel(func(pb *testing.PB) {
+		for size := 1; pb.Next(); size++ {
+			_, handle := Alloc(size%65536, false)
+			handle.Free()
+		}
+	})
+}
+
+func BenchmarkMax(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, handle := Alloc(maxClassSize, true)
+		handle.Free()
+	}
+}
+
+func BenchmarkMaxNoClear(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, handle := Alloc(maxClassSize, false)
+		handle.Free()
+	}
+}
+
+func BenchmarkMin(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, handle := Alloc(minClassSize, true)
+		handle.Free()
+	}
+}
+
+func BenchmarkMinNoClear(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, handle := Alloc(minClassSize, false)
+		handle.Free()
+	}
 }
