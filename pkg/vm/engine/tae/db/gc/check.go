@@ -84,13 +84,16 @@ func (c *checker) Check() error {
 	it := catalog.MakeDBIt(true)
 	for ; it.Valid(); it.Next() {
 		db := it.Get().GetPayload()
+		logutil.Infof("db %s,", db)
 		itTable := db.MakeTableIt(true)
 		for itTable.Valid() {
+			logutil.Infof("table %s,", itTable.Get().GetPayload())
 			table := itTable.Get().GetPayload()
 			itObject := table.MakeObjectIt(true)
 			for itObject.Valid() {
 				objectEntry := itObject.Get().GetPayload()
 				stats := objectEntry.GetObjectStats()
+				logutil.Infof("object %s,", stats.ObjectName().String())
 				if _, ok := allObjects[stats.ObjectName().String()]; ok {
 					logutil.Infof("allObjects %s,", stats.ObjectName().String())
 					delete(allObjects, stats.ObjectName().String())
