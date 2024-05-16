@@ -51,7 +51,6 @@ func (mixin *withFilterMixin) reset() {
 	mixin.filterState.evaluated = false
 	mixin.filterState.filter = nil
 	mixin.columns.pkPos = -1
-	mixin.columns.rowidPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
 	mixin.columns.colTypes = nil
@@ -80,7 +79,6 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	mixin.columns.colTypes = make([]types.Type, len(cols))
 	// mixin.columns.colNulls = make([]bool, len(cols))
 	mixin.columns.pkPos = -1
-	mixin.columns.rowidPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	compPKName2Pos := make(map[string]struct{})
 	positions := make(map[string]int)
@@ -92,7 +90,6 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	}
 	for i, column := range cols {
 		if column == catalog.Row_ID {
-			mixin.columns.rowidPos = i
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
 		} else {
@@ -475,7 +472,8 @@ func (r *blockReader) Read(
 	if !r.dontPrefetch {
 		//prefetch some objects
 		for len(r.steps) > 0 && r.steps[0] == r.currentStep {
-			prefetchFile := r.scanType == SMALL || r.scanType == LARGE
+			// always true for now, will optimize this in the future
+			prefetchFile := r.scanType == SMALL || r.scanType == LARGE || r.scanType == NORMAL
 			if filter != nil && blockInfo.Sorted {
 				err = blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 			} else {
@@ -558,7 +556,7 @@ func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
 func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
-	encodedPrimaryKey []byte,
+	pkVal []byte,
 	ts timestamp.Timestamp,
 	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
@@ -576,8 +574,8 @@ func newBlockMergeReader(
 			fs,
 			proc,
 		),
-		encodedPrimaryKey: encodedPrimaryKey,
-		deletaLocs:        make(map[string][]objectio.Location),
+		pkVal:      pkVal,
+		deletaLocs: make(map[string][]objectio.Location),
 	}
 	return r
 }
@@ -661,10 +659,10 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	}
 	ts := types.TimestampToTS(r.ts)
 
-	if filter != nil && info.Sorted && len(r.encodedPrimaryKey) > 0 {
+	if filter != nil && info.Sorted && len(r.pkVal) > 0 {
 		iter := state.NewPrimaryKeyDelIter(
 			ts,
-			logtailreplay.Prefix(r.encodedPrimaryKey),
+			logtailreplay.Prefix(r.pkVal),
 			info.BlockID,
 		)
 		for iter.Next() {

@@ -741,7 +741,7 @@ func (p *PartitionState) HandleMetadataInsert(
 			numInserted++
 		} else if blockEntry.CommitTs.GreaterEq(&commitTimeVector[i]) {
 			// it possible to get an older version blk from lazy loaded checkpoint
-			return
+			continue
 		}
 
 		// the following codes handle block which be inserted or updated by a newer delta location.
@@ -968,16 +968,6 @@ func (p *PartitionState) HandleMetadataDelete(
 	input *api.Batch) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataDelete")
 	defer task.End()
-
-	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
-	deleteTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
-
-	for i, rowID := range rowIDVector {
-		blockID := rowID.CloneBlockID()
-		pivot := ObjectEntry{}
-		objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(&blockID))
-		p.objectDeleteHelper(tableID, pivot, deleteTimeVector[i])
-	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)

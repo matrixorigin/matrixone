@@ -42,9 +42,6 @@ type outputQueue struct {
 
 func NewOutputQueue(ctx context.Context, ses *Session, columnCount int, mrs *MysqlResultSet, ep *ExportConfig) *outputQueue {
 	const countOfResultSet = 1
-	if ctx == nil {
-		ctx = ses.GetRequestContext()
-	}
 	if mrs == nil {
 		//Create a new temporary result set per pipeline thread.
 		mrs = &MysqlResultSet{}
@@ -104,15 +101,13 @@ func (oq *outputQueue) getEmptyRow() ([]interface{}, error) {
 flush will force the data flushed into the protocol.
 */
 func (oq *outputQueue) flush() error {
-	oq.proto.DisableAutoFlush()
-	defer oq.proto.EnableAutoFlush()
 
 	if oq.rowIdx <= 0 {
 		return nil
 	}
 	if oq.ep.needExportToFile() {
 		if err := exportDataToCSVFile(oq); err != nil {
-			logError(oq.ses, oq.ses.GetDebugString(),
+			oq.ses.Error(oq.ctx,
 				"Error occurred while exporting to CSV file",
 				zap.Error(err))
 			return err
@@ -125,7 +120,7 @@ func (oq *outputQueue) flush() error {
 		}
 
 		if err := oq.proto.SendResultSetTextBatchRowSpeedup(oq.mrs, oq.rowIdx); err != nil {
-			logError(oq.ses, oq.ses.GetDebugString(),
+			oq.ses.Error(oq.ctx,
 				"Flush error",
 				zap.Error(err))
 			return err
@@ -144,7 +139,7 @@ func (oq *outputQueue) flush() error {
 // For the background execution, we need to make a copy of the bytes. Because the data
 // has been saved in the session. Later the data will be used but then the batch.Batch has
 // been returned to the pipeline and may be reused and changed by the pipeline.
-func extractRowFromEveryVector(ses FeSession, dataSet *batch.Batch, j int, oq outputPool, needCopyBytes bool) ([]interface{}, error) {
+func extractRowFromEveryVector(ctx context.Context, ses FeSession, dataSet *batch.Batch, j int, oq outputPool, needCopyBytes bool) ([]interface{}, error) {
 	row, err := oq.getEmptyRow()
 	if err != nil {
 		return nil, err
@@ -160,7 +155,7 @@ func extractRowFromEveryVector(ses FeSession, dataSet *batch.Batch, j int, oq ou
 			rowIndex = 0
 		}
 
-		err = extractRowFromVector(ses, vec, i, row, rowIndex, needCopyBytes)
+		err = extractRowFromVector(ctx, ses, vec, i, row, rowIndex, needCopyBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -170,7 +165,7 @@ func extractRowFromEveryVector(ses FeSession, dataSet *batch.Batch, j int, oq ou
 }
 
 // extractRowFromVector gets the rowIndex row from the i vector
-func extractRowFromVector(ses FeSession, vec *vector.Vector, i int, row []interface{}, rowIndex int, needCopyBytes bool) error {
+func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector, i int, row []interface{}, rowIndex int, needCopyBytes bool) error {
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
 		row[i] = nil
 		return nil
@@ -244,10 +239,10 @@ func extractRowFromVector(ses FeSession, vec *vector.Vector, i int, row []interf
 	case types.T_enum:
 		row[i] = copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes)
 	default:
-		logError(ses, ses.GetDebugString(),
+		ses.Error(ctx,
 			"Failed to extract row from vector, unsupported type",
 			zap.Int("typeID", int(vec.GetType().Oid)))
-		return moerr.NewInternalError(ses.GetRequestContext(), "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
+		return moerr.NewInternalError(ctx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
 	}
 	return nil
 }

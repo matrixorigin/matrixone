@@ -14,15 +14,31 @@
 
 package malloc
 
-import "testing"
+import (
+	"testing"
+	"unsafe"
+)
 
 func TestAllocFree(t *testing.T) {
-	var bs []byte
 	for i := 0; i < 1<<19; i++ {
-		handle := Alloc(i, &bs)
+		ptr, handle := Alloc(i, true)
+		bs := unsafe.Slice((*byte)(ptr), i)
 		if len(bs) != i {
 			t.Fatal()
 		}
 		handle.Free()
+	}
+
+	// evict
+	stats := make(map[[2]int]int64)
+	evict(stats) // collect infos
+	n := cachingObjects()
+	if n == 0 {
+		t.Fatal()
+	}
+	evict(stats) // flush
+	n = cachingObjects()
+	if n != 0 {
+		t.Fatalf("got %v", n)
 	}
 }

@@ -53,6 +53,10 @@ func (m *mockedBackgroundHandler) ExecStmt(ctx context.Context, statement tree.S
 	return nil
 }
 
+func (m *mockedBackgroundHandler) ExecRestore(context.Context, string, uint32, uint32) error {
+	panic("unimplement")
+}
+
 func (m *mockedBackgroundHandler) GetExecResultSet() []interface{} {
 	return nil
 }
@@ -197,7 +201,6 @@ func TestDoShowSubscriptions(t *testing.T) {
 	ses.SetTimeZone(time.UTC)
 	ses.SetTenantInfo(tenant)
 	ses.SetMysqlResultSet(&MysqlResultSet{})
-	ses.connectCtx = ctx
 	defer ses.Close()
 
 	mp := ses.GetMemPool()

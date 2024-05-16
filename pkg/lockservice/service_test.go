@@ -1323,6 +1323,118 @@ func TestReLockSuccWithLockTableBindChanged(t *testing.T) {
 	)
 }
 
+func TestIssue16121(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			// change lock table to remote from local
+			b := l1.tableGroups.get(0, 0).getBind()
+			b.ServiceID = l2.serviceID
+			r := &remoteLockTable{
+				serviceID: l2.serviceID,
+				bind:      b,
+			}
+			l1.tableGroups.Lock()
+			l1.tableGroups.holders[0].tables[0] = r
+			l1.tableGroups.Unlock()
+
+			require.NoError(t, l2.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
+
+		},
+		nil,
+	)
+}
+
+func TestReLockSuccWithBindChanged(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			b := l1.tableGroups.get(0, 0).getBind()
+			r := &remoteLockTable{bind: b}
+			l1.tableGroups.Lock()
+			l1.tableGroups.holders[0].tables[0] = r
+			l1.tableGroups.Unlock()
+
+			// should lock failed
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+
+			// should lock succ
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+		},
+		nil,
+	)
+}
+
 func TestReLockSuccWithReStartCN(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
@@ -1624,6 +1736,83 @@ func TestOldTxnLockInRollingRestartCN(t *testing.T) {
 	)
 }
 
+func TestLeaveGetBindInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			l1 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			err = l.Unlock(
+				ctx,
+				[]byte("txn1"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+
+			// test
+			t2, _ := l1.clock.Now()
+			option.SnapShotTs = t2
+			_, err = l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+
+			err = l1.Unlock(
+				ctx,
+				[]byte("txn2"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+
+			for {
+				if l.isStatus(pb.Status_ServiceCanRestart) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			// get bind
+			_, err = getLockTableBind(
+				l.remote.client,
+				0,
+				0,
+				0,
+				l.serviceID,
+				pb.Sharding_ByRow)
+			require.Error(t, err)
+			require.True(t, alloc.canRestartService("s1"))
+		},
+	)
+}
+
 func TestNewTxnLockInRollingRestartCN(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -1780,14 +1969,14 @@ func TestRemoteLockFailedInRollingRestartCN(t *testing.T) {
 			}
 			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
 
-			// remote lock should be failed
+			// remote lock should be failed,
 			t2, _ := l2.clock.Now()
 			option.SnapShotTs = t2
 			_, err = l2.Lock(
 				ctx,
 				0,
 				[][]byte{{1}},
-				[]byte("txn1"),
+				[]byte("txn2"),
 				option)
 			require.Error(t, err)
 		},

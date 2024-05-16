@@ -54,15 +54,14 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(_ *process.Process) error {
-	ap := arg
-	if ap.RemoteDelete {
-		ap.ctr = new(container)
-		ap.ctr.state = vm.Build
-		ap.ctr.blockId_type = make(map[types.Blockid]int8)
-		ap.ctr.blockId_bitmap = make(map[types.Blockid]*nulls.Nulls)
-		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerObject)}
-		ap.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[types.Blockid]*batch.Batch)
-		ap.ctr.partitionId_blockId_deltaLoc = make(map[int]map[types.Blockid]*batch.Batch)
+	if arg.RemoteDelete {
+		arg.ctr = new(container)
+		arg.ctr.state = vm.Build
+		arg.ctr.blockId_type = make(map[types.Blockid]int8)
+		arg.ctr.blockId_bitmap = make(map[types.Blockid]*nulls.Nulls)
+		arg.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerObject)}
+		arg.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[types.Blockid]*batch.Batch)
+		arg.ctr.partitionId_blockId_deltaLoc = make(map[int]map[types.Blockid]*batch.Batch)
 	}
 	return nil
 }

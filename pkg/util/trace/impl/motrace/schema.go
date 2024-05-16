@@ -213,6 +213,8 @@ var (
 			messageCol,
 			extraCol,
 			stackCol,
+			sessionIDCol,
+			statementIDCol,
 		},
 		Condition: &table.ViewSingleCondition{Column: rawItemCol, Table: logInfoTbl},
 	}

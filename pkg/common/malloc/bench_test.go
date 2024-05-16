@@ -19,37 +19,61 @@ import (
 )
 
 func BenchmarkAllocFree(b *testing.B) {
-	var bs []byte
 	for i := 0; i < b.N; i++ {
-		handle := Alloc(4096, &bs)
+		_, handle := Alloc(4096, true)
+		handle.Free()
+	}
+}
+
+func BenchmarkAllocFreeNoClear(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, handle := Alloc(4096, false)
 		handle.Free()
 	}
 }
 
 func BenchmarkParallelAllocFree(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
-		var bs []byte
 		for size := 1; pb.Next(); size++ {
-			handle := Alloc(size%65536, &bs)
+			_, handle := Alloc(size%65536, true)
 			handle.Free()
 		}
 	})
 }
 
-func BenchmarkAllocTyped(b *testing.B) {
+func BenchmarkParallelAllocFreeNoClear(b *testing.B) {
+	b.RunParallel(func(pb *testing.PB) {
+		for size := 1; pb.Next(); size++ {
+			_, handle := Alloc(size%65536, false)
+			handle.Free()
+		}
+	})
+}
+
+func BenchmarkMax(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		var f *float64
-		handle := AllocTyped(&f)
+		_, handle := Alloc(maxClassSize, true)
 		handle.Free()
 	}
 }
 
-func BenchmarkParallelAllocTyped(b *testing.B) {
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			var f *float64
-			handle := AllocTyped(&f)
-			handle.Free()
-		}
-	})
+func BenchmarkMaxNoClear(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, handle := Alloc(maxClassSize, false)
+		handle.Free()
+	}
+}
+
+func BenchmarkMin(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, handle := Alloc(minClassSize, true)
+		handle.Free()
+	}
+}
+
+func BenchmarkMinNoClear(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, handle := Alloc(minClassSize, false)
+		handle.Free()
+	}
 }

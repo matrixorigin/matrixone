@@ -183,7 +183,7 @@ func TestMySQLConnSend(t *testing.T) {
 			require.Equal(t, "ect 1", string(res[:n]))
 		}()
 		d1 := newMySQLConn("source", dst1, 8, nil, nil, 0)
-		_, err := d1.sendTo(src2, nil, nil)
+		err := d1.sendTo(src2)
 		require.NoError(t, err)
 	})
 
@@ -208,7 +208,7 @@ func TestMySQLConnSend(t *testing.T) {
 			require.Equal(t, q, string(res[5:n]))
 		}()
 		d1 := newMySQLConn("source", dst1, 30, nil, nil, 0)
-		_, err := d1.sendTo(src2, nil, nil)
+		err := d1.sendTo(src2)
 		require.NoError(t, err)
 	})
 }

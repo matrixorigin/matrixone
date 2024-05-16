@@ -91,9 +91,6 @@ type IOVector struct {
 
 	// Caches indicates extra caches to operate on
 	Caches []IOVectorCache
-
-	onRelease []func()
-	released  bool
 }
 
 type IOEntry struct {
@@ -139,8 +136,6 @@ type IOEntry struct {
 
 	// fromCache indicates which cache filled the entry
 	fromCache IOVectorCache
-
-	allocator CacheDataAllocator
 }
 
 func (i IOEntry) String() string {

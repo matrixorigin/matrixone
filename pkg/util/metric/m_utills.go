@@ -12,26 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package motrace
+package metric
 
-import "context"
+import "github.com/shirou/gopsutil/v3/cpu"
 
-type stmContextKeyType int
-
-const currentStmKey stmContextKeyType = iota
-
-func ContextWithStatement(parent context.Context, s *StatementInfo) context.Context {
-	return context.WithValue(parent, currentStmKey, s)
-}
-
-func StatementFromContext(ctx context.Context) *StatementInfo {
-	if ctx == nil {
-		return nil
-	} else if val := ctx.Value(currentStmKey); val == nil {
-		return nil
-	} else if stm, ok := val.(*StatementInfo); !ok {
-		return nil
-	} else {
-		return stm
-	}
+// CPUTotalTime is used to workaround sca issues from gopsutil version upgrades
+func CPUTotalTime(c cpu.TimesStat) float64 {
+	return c.User + c.System + c.Idle + c.Nice + c.Iowait + c.Irq +
+		c.Softirq + c.Steal + c.Guest + c.GuestNice
 }

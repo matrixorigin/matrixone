@@ -1778,7 +1778,7 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 }
 
 // databaseIsValid checks whether the database exists or not.
-func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
+func databaseIsValid(dbName string, ctx CompilerContext, snapshot Snapshot) (string, error) {
 	connectDBFirst := false
 	if len(dbName) == 0 {
 		connectDBFirst = true
@@ -1787,7 +1787,7 @@ func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
 		dbName = ctx.DefaultDatabase()
 	}
 
-	if len(dbName) == 0 || !ctx.DatabaseExists(dbName) {
+	if len(dbName) == 0 || !ctx.DatabaseExists(dbName, snapshot) {
 		if connectDBFirst {
 			return "", moerr.NewNoDB(ctx.GetContext())
 		} else {
@@ -2014,10 +2014,12 @@ func MakeIntervalExpr(num int64, str string) *Expr {
 }
 
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
+	rightType := plan.Type{Id: int32(types.T_tuple)}
+	if matchPrefix {
+		rightType = left.Typ
+	}
 	rightArg := &plan.Expr{
-		Typ: plan.Type{
-			Id: int32(types.T_tuple),
-		},
+		Typ: rightType,
 		Expr: &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
 				Len:  length,

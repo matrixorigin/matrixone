@@ -114,7 +114,7 @@ func (t StmtKind) RespType() RespType {
 	return RespType((int(t) >> 2) & 0x7)
 }
 
-func (t StmtKind) HandleType() ExecLocation {
+func (t StmtKind) ExecLocation() ExecLocation {
 	return ExecLocation((int(t) >> 5) & 0x1)
 }
 
@@ -600,5 +600,9 @@ func (node *ShowSnapShots) StmtKind() StmtKind {
 }
 
 func (node *UpgradeStatement) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *RestoreSnapShot) StmtKind() StmtKind {
 	return frontendStatusTyp
 }

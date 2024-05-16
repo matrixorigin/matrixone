@@ -339,7 +339,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				}
 			}
 
-			if err := entry.setCachedData(); err != nil {
+			if err := setCachedData(&entry, DefaultCacheDataAllocator); err != nil {
 				return err
 			}
 
@@ -470,10 +470,11 @@ func (l *LocalETLFS) deleteSingle(ctx context.Context, filePath string) error {
 	nativePath := l.toNativeFilePath(path.File)
 
 	_, err = os.Stat(nativePath)
-	if os.IsNotExist(err) {
-		return moerr.NewFileNotFoundNoCtx(path.File)
-	}
 	if err != nil {
+		if os.IsNotExist(err) {
+			// ignore not found error
+			return nil
+		}
 		return err
 	}
 

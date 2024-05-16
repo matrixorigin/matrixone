@@ -82,7 +82,7 @@ Number of columns in mo_user
 11
 show column_number from mo_account;
 Number of columns in mo_account
-8
+9
 show column_number from mo_role;
 Number of columns in mo_role
 6
@@ -177,7 +177,7 @@ Number of columns in rawlog
 23
 show column_number from log_info;
 Number of columns in log_info
-12
+14
 show column_number from error_info;
 Number of columns in error_info
 9
