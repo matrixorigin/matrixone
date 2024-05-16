@@ -1583,8 +1583,6 @@ func TestIssue3231(t *testing.T) {
 			require.NoError(t, err)
 			b1 := alloc.GetLatest(0, 0)
 
-			time.Sleep(time.Second)
-
 			_, err = l2.Lock(
 				ctx,
 				0,
