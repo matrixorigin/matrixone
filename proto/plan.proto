@@ -846,7 +846,7 @@ message Snapshot {
 	// The timestamp of the snapshot
 	timestamp.Timestamp TS = 1;
 	// Tenant information for creating snapshots
-	SnapshotTenant createdByTenant = 2;
+	SnapshotTenant tenant = 2;
 }
 
 // Tenant information for creating snapshots
