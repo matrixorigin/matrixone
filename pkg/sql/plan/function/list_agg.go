@@ -355,7 +355,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.VarPopReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "var_pop",
-					aggRegister: agg.RegisterVarPop1,
+					aggRegister: agg.RegisterVarPop2,
 				},
 			},
 		},
@@ -376,7 +376,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.VarPopReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "stddev_pop",
-					aggRegister: agg.RegisterStdDevPop1,
+					aggRegister: agg.RegisterStdDevPop2,
 				},
 			},
 		},
