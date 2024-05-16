@@ -39,7 +39,7 @@ func RegisterAggFromFixedRetFixed[from, to types.FixedSizeTExceptStrType](
 		panic(fmt.Sprintf("agg function with id %d and arg %s has been registered", basicInformation.id, basicInformation.arg))
 	}
 
-	registeredAggFunctions[key] = aggImplementation{
+	impl := aggImplementation{
 		registeredAggInfo: registeredAggInfo{
 			isSingleAgg:          true,
 			acceptNull:           false,
@@ -63,7 +63,14 @@ func RegisterAggFromFixedRetFixed[from, to types.FixedSizeTExceptStrType](
 			flush: flush,
 		},
 	}
+	if initResult == nil {
+		impl.logic.init = nil
+	}
+	if flush == nil {
+		impl.logic.flush = nil
+	}
 
+	registeredAggFunctions[key] = impl
 	singleAgg[basicInformation.id] = true
 	return
 }
