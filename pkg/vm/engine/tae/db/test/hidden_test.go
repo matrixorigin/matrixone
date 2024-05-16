@@ -34,7 +34,7 @@ import (
 // 2. Append data (append rows less than a block) and commit. Scan hidden column and check.
 // 3. Append data and the total rows is more than a block. Commit and then compact the full block.
 // 4. Scan hidden column and check.
-// 5. Append data and the total rows is more than a Object. Commit and then merge sort the full Object.
+// 5. Append data and the total rows is more than one Object. Commit and then merge sort the full Object.
 // 6. Scan hidden column and check.
 func TestHiddenWithPK1(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -186,7 +186,7 @@ func TestHiddenWithPK1(t *testing.T) {
 				if meta.IsAppendable() {
 					assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
 				} else {
-					if j != 2 {
+					if objIdx != 1 {
 						assert.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, offsets)
 					} else {
 						assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)

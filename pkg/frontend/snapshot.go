@@ -24,9 +24,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type tableType string
@@ -56,7 +59,7 @@ var (
 
 	restoreTableDataFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {snapshot = '%s'}"
 
-	restoreSkipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug"}
+	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", "mo_catalog"}
 )
 
 type snapshotRecord struct {
@@ -71,7 +74,8 @@ type snapshotRecord struct {
 }
 
 type tableInfo struct {
-	name      string
+	dbName    string
+	tblName   string
 	typ       tableType
 	createSql string
 }
@@ -277,29 +281,28 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return moerr.NewInternalError(ctx, "accountName(%v) does not match snapshot.accountName(%v)", srcAccountName, snapshot.accountName)
 	}
 
-	curAccount := ses.GetTenantInfo()
-	// default restore to self
-	toAccountId := curAccount.TenantID
+	// default restore to src account
+	toAccountId, err := getAccountId(ctx, bh, snapshot.accountName)
+	if err != nil {
+		return err
+	}
+
 	if len(toAccountName) > 0 {
 		// can't restore to another account if cur account is not sys
-		if !curAccount.IsSysTenant() {
-			err = moerr.NewInternalError(ctx, "non-sys tenant can't restore snapshot to another account")
+		if !ses.GetTenantInfo().IsSysTenant() {
+			err = moerr.NewInternalError(ctx, "non-sys account can't restore snapshot to another account")
 			return
 		}
 
-		newAccountName := string(stmt.ToAccountName)
-		if toAccountId, err = getAccountId(ctx, bh, newAccountName); err != nil {
+		if toAccountName == sysAccountName && snapshot.accountName != sysAccountName {
+			err = moerr.NewInternalError(ctx, "non-sys account's snapshot can't restore to sys account")
+			return
+		}
+
+		if toAccountId, err = getAccountId(ctx, bh, string(stmt.ToAccountName)); err != nil {
 			return err
 		}
 	}
-
-	if toAccountId == sysAccountID && snapshot.accountName != sysAccountName {
-		err = moerr.NewInternalError(ctx, "non-sys account's snapshot can't restore to sys account")
-		return
-	}
-
-	// TODO stop toAccount
-	// TODO defer open toAccount
 
 	// restore as a txn
 	if err = bh.Exec(ctx, "begin;"); err != nil {
@@ -309,66 +312,110 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		err = finishTxn(ctx, bh, err)
 	}()
 
+	// collect views during table restoration
+	var views []*tableInfo
+
 	switch stmt.Level {
 	case tree.RESTORELEVELCLUSTER:
 		// TODO
 	case tree.RESTORELEVELACCOUNT:
-		return restoreToAccount(ctx, bh, snapshotName, toAccountId)
+		if err = restoreToAccount(ctx, bh, snapshotName, toAccountId, &views); err != nil {
+			return err
+		}
 	case tree.RESTORELEVELDATABASE:
-		return restoreToDatabase(ctx, bh, snapshotName, dbName, toAccountId)
+		if err = restoreToDatabase(ctx, bh, snapshotName, dbName, toAccountId, &views); err != nil {
+			return err
+		}
 	case tree.RESTORELEVELTABLE:
-		return restoreToTable(ctx, bh, snapshotName, dbName, tblName, toAccountId)
+		if err = restoreToTable(ctx, bh, snapshotName, dbName, tblName, toAccountId, &views); err != nil {
+			return err
+		}
 	}
-	return
+
+	return restoreViews(ctx, ses, bh, snapshotName, views, toAccountId)
 }
 
-func restoreToAccount(ctx context.Context, bh BackgroundExec, snapshotName string, toAccountId uint32) (err error) {
-	dbNames, err := showDatabases(ctx, bh, snapshotName)
-	if err != nil {
+func restoreToAccount(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshotName string,
+	toAccountId uint32,
+	views *[]*tableInfo) (err error) {
+	getLogger().Info(fmt.Sprintf("[%s] start to restore account: %v", snapshotName, toAccountId))
+
+	var dbNames []string
+	toCtx := defines.AttachAccountId(ctx, toAccountId)
+
+	// delete current dbs
+	if dbNames, err = showDatabases(toCtx, bh, ""); err != nil {
 		return
 	}
 
 	for _, dbName := range dbNames {
-		if err = restoreToDatabase(ctx, bh, snapshotName, dbName, toAccountId); err != nil {
+		if needSkipDb(dbName) {
+			getLogger().Info(fmt.Sprintf("skip db: %v", dbName))
+			continue
+		}
+
+		if err = bh.Exec(toCtx, fmt.Sprintf("drop database %s", dbName)); err != nil {
+			return
+		}
+	}
+
+	// restore dbs
+	if dbNames, err = showDatabases(ctx, bh, snapshotName); err != nil {
+		return
+	}
+
+	for _, dbName := range dbNames {
+		if err = restoreToDatabase(ctx, bh, snapshotName, dbName, toAccountId, views); err != nil {
 			return
 		}
 	}
 	return
 }
 
-func restoreToDatabase(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, toAccountId uint32) (err error) {
-	return restoreToDatabaseOrTable(ctx, bh, snapshotName, dbName, "", toAccountId)
+func restoreToDatabase(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshotName string,
+	dbName string,
+	toAccountId uint32,
+	views *[]*tableInfo) (err error) {
+	getLogger().Info(fmt.Sprintf("[%s] start to restore db: %v", snapshotName, dbName))
+	return restoreToDatabaseOrTable(ctx, bh, snapshotName, dbName, "", toAccountId, views)
 }
 
-func restoreToTable(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string, toAccountId uint32) (err error) {
-	return restoreToDatabaseOrTable(ctx, bh, snapshotName, dbName, tblName, toAccountId)
+func restoreToTable(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshotName string,
+	dbName string,
+	tblName string,
+	toAccountId uint32,
+	views *[]*tableInfo) (err error) {
+	getLogger().Info(fmt.Sprintf("[%s] start to restore table: %v", snapshotName, tblName))
+	return restoreToDatabaseOrTable(ctx, bh, snapshotName, dbName, tblName, toAccountId, views)
 }
 
-func needSkip(dbName string, tblName string) bool {
-	if slices.Contains(restoreSkipDbs, dbName) {
-		return true
-	}
-
-	if dbName == "information_schema" {
-		return true
-	}
-
-	if dbName == "mo_catalog" {
-		return true
-	}
-
-	return false
-}
-
-func restoreToDatabaseOrTable(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string, toAccountId uint32) (err error) {
-	if needSkip(dbName, tblName) {
+func restoreToDatabaseOrTable(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshotName string,
+	dbName string,
+	tblName string,
+	toAccountId uint32,
+	views *[]*tableInfo) (err error) {
+	if needSkipDb(dbName) {
+		getLogger().Info(fmt.Sprintf("skip db: %v", dbName))
 		return
 	}
 
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
+	restoreToTbl := tblName != ""
 
 	// if restore to db, delete the same name db first
-	if tblName == "" {
+	if !restoreToTbl {
 		if err = bh.Exec(toCtx, "drop database if exists "+dbName); err != nil {
 			return
 		}
@@ -382,40 +429,39 @@ func restoreToDatabaseOrTable(ctx context.Context, bh BackgroundExec, snapshotNa
 		return
 	}
 
-	// if restore to table, delete the same name table first
-	if tblName != "" {
-		if err = bh.Exec(toCtx, "drop table if exists "+dbName+"."+tblName); err != nil {
-			return
-		}
-	}
-
-	var tableInfos []*tableInfo
-	if tblName == "" {
-		tableInfos, err = getTableInfos(ctx, bh, snapshotName, dbName)
-		if err != nil {
-			return
-		}
-	} else {
-		tableInfos, err = getTableInfo(ctx, bh, snapshotName, dbName, tblName)
-		if err != nil {
-			return
-		}
+	tableInfos, err := getTableInfos(ctx, bh, snapshotName, dbName, tblName)
+	if err != nil {
+		return
 	}
 
 	// if restore to table, expect only one table here
-	if tblName != "" && len(tableInfos) != 1 {
-		return moerr.NewInternalError(ctx, "find %v tableInfos by name, expect only 1", len(tableInfos))
+	if restoreToTbl && len(tableInfos) != 1 {
+		return moerr.NewInternalError(ctx, "find %v tableInfos by name, expect 1", len(tableInfos))
 	}
 
 	curAccountId, err := defines.GetAccountId(ctx)
 	if err != nil {
-		return err
+		return
 	}
 
 	for _, tblInfo := range tableInfos {
-		// TODO handle view restoration
-		if tblInfo.typ == view {
+		if needSkipTable(dbName, tblInfo.tblName) {
+			// TODO skip tables which should not to be restored
+			getLogger().Info(fmt.Sprintf("skip table: %v.%v", dbName, tblInfo.tblName))
 			continue
+		}
+
+		// TODO skip table which has foreign keys
+		if tblInfo.typ == view {
+			*views = append(*views, tblInfo)
+			continue
+		}
+
+		// if restore to table, delete the same name table first
+		if restoreToTbl {
+			if err = bh.Exec(toCtx, "drop table if exists "+dbName+"."+tblName); err != nil {
+				return
+			}
 		}
 
 		// create table
@@ -424,7 +470,7 @@ func restoreToDatabaseOrTable(ctx context.Context, bh BackgroundExec, snapshotNa
 		}
 
 		// insert data
-		insertIntoSql := fmt.Sprintf(restoreTableDataFmt, dbName, tblInfo.name, dbName, tblInfo.name, snapshotName)
+		insertIntoSql := fmt.Sprintf(restoreTableDataFmt, dbName, tblInfo.tblName, dbName, tblInfo.tblName, snapshotName)
 
 		if curAccountId == toAccountId {
 			if err = bh.Exec(ctx, insertIntoSql); err != nil {
@@ -438,6 +484,92 @@ func restoreToDatabaseOrTable(ctx context.Context, bh BackgroundExec, snapshotNa
 	}
 
 	return
+}
+
+func restoreViews(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	snapshotName string,
+	views []*tableInfo,
+	toAccountId uint32) error {
+	snapshot, err := doResolveSnapshotWithSnapshotName(ctx, ses, snapshotName)
+	if err != nil {
+		return err
+	}
+
+	compCtx := ses.GetTxnCompileCtx()
+	oldSnapshot := compCtx.GetSnapshot()
+	compCtx.SetSnapshot(snapshot)
+	defer func() {
+		compCtx.SetSnapshot(oldSnapshot)
+	}()
+
+	keyTableInfoMap := make(map[string]*tableInfo)
+	g := topsort{next: make(map[string][]string)}
+	for _, view := range views {
+		key := genKey(view.dbName, view.tblName)
+		keyTableInfoMap[key] = view
+
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1, 0)
+		if err != nil {
+			return err
+		}
+
+		// build create sql to find dependent views
+		if _, err = plan.BuildPlan(compCtx, stmts[0], false); err != nil {
+			return err
+		}
+
+		g.addVertex(key)
+		for _, depView := range compCtx.GetViews() {
+			g.addEdge(depView, key)
+		}
+	}
+
+	// topsort
+	sortedViews, ok := g.sort()
+	if !ok {
+		return moerr.NewInternalError(ctx, "There is a cycle in dependency graph")
+	}
+
+	// create views
+	toCtx := defines.AttachAccountId(ctx, toAccountId)
+	for _, key := range sortedViews {
+		if tblInfo, ok := keyTableInfoMap[key]; ok {
+			getLogger().Info(fmt.Sprintf("[%s] start to restore view: %v", snapshotName, tblInfo.tblName))
+
+			if err = bh.Exec(toCtx, "use "+tblInfo.dbName); err != nil {
+				return err
+			}
+
+			if err = bh.Exec(toCtx, "drop view if exists "+tblInfo.tblName); err != nil {
+				return err
+			}
+
+			if err = bh.Exec(toCtx, tblInfo.createSql); err != nil {
+				return err
+			}
+		}
+		// if not ok, means that view is not in this restoration task, ignore
+	}
+	return nil
+}
+
+func needSkipDb(dbName string) bool {
+	return slices.Contains(skipDbs, dbName)
+}
+
+func needSkipTable(dbName string, tblName string) bool {
+	if dbName == "information_schema" {
+		return true
+	}
+
+	if dbName == "mo_catalog" {
+		return true
+	}
+
+	return false
 }
 
 func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotName string) (bool, error) {
@@ -524,33 +656,34 @@ func getSnapshotByName(ctx context.Context, bh BackgroundExec, snapshotName stri
 	if records, err := getSnapshotRecords(ctx, bh, sql); err != nil {
 		return nil, err
 	} else if len(records) != 1 {
-		return nil, moerr.NewInternalError(ctx, "find %v snapshotRecords by name, expect only 1", len(records))
+		return nil, moerr.NewInternalError(ctx, "find %v snapshot records by name(%v), expect only 1", len(records), snapshotName)
 	} else {
 		return records[0], nil
 	}
 }
 
-func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses FeSession, snapshotName string) (snapshot plan.Snapshot, err error) {
+func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snapshotName string) (snapshot *pbplan.Snapshot, err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	var record *snapshotRecord
 	if record, err = getSnapshotByName(ctx, bh, snapshotName); err != nil {
-		return plan.Snapshot{TS: &timestamp.Timestamp{}}, err
+		return
 	}
 
 	if record == nil {
-		return plan.Snapshot{TS: &timestamp.Timestamp{}}, moerr.NewInternalError(ctx, "snapshot %s does not exist", snapshotName)
+		err = moerr.NewInternalError(ctx, "snapshot %s does not exist", snapshotName)
+		return
 	}
 
 	var accountId uint32
 	if accountId, err = getAccountId(ctx, bh, record.accountName); err != nil {
-		return plan.Snapshot{TS: &timestamp.Timestamp{}}, err
+		return
 	}
 
-	return plan.Snapshot{
+	return &pbplan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: record.ts},
-		CreatedByTenant: &plan.SnapshotTenant{
+		Tenant: &pbplan.SnapshotTenant{
 			TenantName: record.accountName,
 			TenantID:   accountId,
 		},
@@ -615,7 +748,11 @@ func getStringColsList(ctx context.Context, bh BackgroundExec, sql string, colIn
 }
 
 func showDatabases(ctx context.Context, bh BackgroundExec, snapshotName string) ([]string, error) {
-	sql := fmt.Sprintf("show databases {snapshot = '%s'}", snapshotName)
+	sql := "show databases"
+	if len(snapshotName) > 0 {
+		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
+	}
+
 	// cols: dbname
 	colsList, err := getStringColsList(ctx, bh, sql, 0)
 	if err != nil {
@@ -629,8 +766,12 @@ func showDatabases(ctx context.Context, bh BackgroundExec, snapshotName string) 
 	return dbNames, nil
 }
 
-func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string) ([]*tableInfo, error) {
+func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) ([]*tableInfo, error) {
 	sql := fmt.Sprintf("show full tables from `%s` {snapshot = '%s'}", dbName, snapshotName)
+	if len(tblName) > 0 {
+		sql = fmt.Sprintf("show full tables from `%s` like '%s' {snapshot = '%s'}", dbName, tblName, snapshotName)
+	}
+
 	// cols: table name, table type
 	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
 	if err != nil {
@@ -640,47 +781,26 @@ func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string,
 	ans := make([]*tableInfo, len(colsList))
 	for i, cols := range colsList {
 		ans[i] = &tableInfo{
-			name: cols[0],
-			typ:  tableType(cols[1]),
+			dbName:  dbName,
+			tblName: cols[0],
+			typ:     tableType(cols[1]),
 		}
 	}
 	return ans, nil
 }
 
-func getTableInfos(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string) ([]*tableInfo, error) {
-	tableInfos, err := showFullTables(ctx, bh, snapshotName, dbName)
+func getTableInfos(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) ([]*tableInfo, error) {
+	tableInfos, err := showFullTables(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, tblInfo := range tableInfos {
-		if tblInfo.createSql, err = getCreateTableSql(ctx, bh, snapshotName, dbName, tblInfo.name); err != nil {
+		if tblInfo.createSql, err = getCreateTableSql(ctx, bh, snapshotName, dbName, tblInfo.tblName); err != nil {
 			return nil, err
 		}
 	}
 	return tableInfos, nil
-}
-
-func getTableInfo(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) ([]*tableInfo, error) {
-	tableInfos, err := showFullTables(ctx, bh, snapshotName, dbName)
-	if err != nil {
-		return nil, err
-	}
-
-	// filter by tblName
-	var ans []*tableInfo
-	for _, tblInfo := range tableInfos {
-		if tblInfo.name == tblName {
-			ans = append(ans, tblInfo)
-		}
-	}
-
-	for _, tblInfo := range ans {
-		if tblInfo.createSql, err = getCreateTableSql(ctx, bh, snapshotName, dbName, tblInfo.name); err != nil {
-			return nil, err
-		}
-	}
-	return ans, nil
 }
 
 func getCreateTableSql(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (string, error) {

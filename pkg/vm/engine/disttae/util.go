@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -1062,6 +1063,97 @@ func evalLiteralExpr(expr *plan.Literal, oid types.T) (canEval bool, val any) {
 		return transferSval(val.Jsonval, oid)
 	case *plan.Literal_EnumVal:
 		return transferUval(val.EnumVal, oid)
+	}
+	return
+}
+
+type PKFilter struct {
+	op      uint8
+	val     any
+	data    []byte
+	isVec   bool
+	isValid bool
+	isNull  bool
+}
+
+func (f *PKFilter) String() string {
+	var buf bytes.Buffer
+	buf.WriteString(
+		fmt.Sprintf("PKFilter{op: %d, isVec: %v, isValid: %v, isNull: %v, val: %v, data(len=%d)",
+			f.op, f.isVec, f.isValid, f.isNull, f.val, len(f.data),
+		))
+	return buf.String()
+}
+
+func (f *PKFilter) SetNull() {
+	f.isNull = true
+	f.isValid = false
+}
+
+func (f *PKFilter) SetFullData(op uint8, isVec bool, val []byte) {
+	f.data = val
+	f.op = op
+	f.isVec = isVec
+	f.isValid = true
+	f.isNull = false
+}
+
+func (f *PKFilter) SetVal(op uint8, isVec bool, val any) {
+	f.op = op
+	f.val = val
+	f.isValid = true
+	f.isVec = false
+	f.isNull = false
+}
+
+// func (f *PKFilter) MustGetVector() *vector.Vector {
+// 	if !f.isVec || !f.isValid || f.isNull {
+// 		panic(moerr.NewInternalErrorNoCtx("MustGetVector failed"))
+// 	}
+// 	vec := vector.NewVec(types.T_any.ToType())
+// 	err := vec.UnmarshalBinary(f.data)
+// 	if err != nil {
+// 		panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("MustGetVector failed: %v", err)))
+// 	}
+
+// 	return vec
+// }
+
+func getPKFilterByExpr(
+	expr *plan.Expr,
+	pkName string,
+	oid types.T,
+	proc *process.Process,
+) (retFilter PKFilter) {
+	valExpr := getPkExpr(expr, pkName, proc)
+	if valExpr == nil {
+		return
+	}
+	switch exprImpl := valExpr.Expr.(type) {
+	case *plan.Expr_Lit:
+		if exprImpl.Lit.Isnull {
+			retFilter.SetNull()
+			return
+		}
+
+		canEval, val := evalLiteralExpr(exprImpl.Lit, oid)
+		if !canEval {
+			return
+		}
+		retFilter.SetVal(function.EQUAL, false, val)
+		return
+	case *plan.Expr_Vec:
+		retFilter.SetFullData(function.IN, true, exprImpl.Vec.Data)
+		return
+	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "prefix_eq":
+			val := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
+			retFilter.SetVal(function.PREFIX_EQ, false, val)
+			return
+			// case "prefix_between":
+			// case "prefix_in":
+		}
 	}
 	return
 }

@@ -43,7 +43,6 @@ type S3FS struct {
 	storage   ObjectStorage
 	keyPrefix string
 
-	allocator   CacheDataAllocator
 	memCache    *MemCache
 	diskCache   *DiskCache
 	remoteCache *RemoteCache
@@ -105,11 +104,6 @@ func NewS3FS(
 		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err
 		}
-	}
-	if fs.memCache != nil {
-		fs.allocator = fs.memCache
-	} else {
-		fs.allocator = DefaultCacheDataAllocator
 	}
 
 	return fs, nil
@@ -412,14 +406,6 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	stats := statistic.StatsInfoFromContext(ctx)
 	stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
 
-	allocator := s.allocator
-	if vector.Policy.Any(SkipMemoryCache) {
-		allocator = DefaultCacheDataAllocator
-	}
-	for i := range vector.Entries {
-		vector.Entries[i].allocator = allocator
-	}
-
 	for _, cache := range vector.Caches {
 		cache := cache
 		if err := readCache(ctx, cache, vector); err != nil {
@@ -710,7 +696,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 			}
 		}
 
-		if err = entry.setCachedData(); err != nil {
+		if err = setCachedData(&entry, s.memCache); err != nil {
 			return err
 		}
 
