@@ -1,0 +1,134 @@
+create account acc1 ADMIN_NAME 'admin1' IDENTIFIED BY 'test123';
+show databases;
+Database
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+create database fk_test;
+use fk_test;
+create table t1 (a int primary key);
+insert into t1 values (1);
+create table t2 (a int primary key, b int, FOREIGN KEY (b) REFERENCES t2(a));
+insert into t2 values (1, 1);
+create table t3 (a int primary key, b int unique key, FOREIGN KEY (a) REFERENCES t1(a), FOREIGN KEY (b) REFERENCES t2(a));
+insert into t3 values (1, 1);
+create table t4 (a int primary key, b int, FOREIGN KEY (b) REFERENCES t3(b));
+insert into t4 values (2, 1);
+create table t5 (a int, FOREIGN KEY (a) REFERENCES t4(a));
+insert into t5 values (2);
+create table t6 (a int, FOREIGN KEY (a) REFERENCES t4(a));
+insert into t6 values (2);
+show full tables;
+Tables_in_fk_test    Table_type
+t1    BASE TABLE
+t2    BASE TABLE
+t3    BASE TABLE
+t4    BASE TABLE
+t5    BASE TABLE
+t6    BASE TABLE
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+desc t2;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    INT(32)    YES    MUL    null        
+desc t3;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    INT(32)    YES    MUL    null        
+desc t4;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    INT(32)    YES    MUL    null        
+desc t5;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES    MUL    null        
+desc t6;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES    MUL    null        
+select * from t1;
+a
+1
+select * from t2;
+a    b
+1    1
+select * from t3;
+a    b
+1    1
+select * from t4;
+a    b
+2    1
+select * from t5;
+a
+2
+select * from t6;
+a
+2
+create snapshot sn1 for account acc1;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+sn1    2024-05-15 14:54:00.906635    account    acc1        
+drop database fk_test;
+restore account acc1 from snapshot sn1;
+show databases;
+Database
+fk_test
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+use fk_test;
+show full tables;
+Tables_in_fk_test    Table_type
+t1    BASE TABLE
+t2    BASE TABLE
+t3    BASE TABLE
+t4    BASE TABLE
+t5    BASE TABLE
+t6    BASE TABLE
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+desc t2;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    INT(32)    YES    MUL    null        
+desc t3;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    INT(32)    YES    MUL    null        
+desc t4;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    INT(32)    YES    MUL    null        
+desc t5;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES    MUL    null        
+desc t6;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES    MUL    null        
+select * from t1;
+a
+1
+select * from t2;
+a    b
+1    1
+select * from t3;
+a    b
+1    1
+select * from t4;
+a    b
+2    1
+select * from t5;
+a
+2
+select * from t6;
+a
+2
+drop snapshot sn1;
+drop database fk_test;
+drop account acc1;
