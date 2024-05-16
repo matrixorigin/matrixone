@@ -37,6 +37,7 @@ func (c *checker) Check() error {
 	maxTs := entry.GetEnd()
 	checkpoints := c.cleaner.ckpClient.ICKPSeekLT(entry.GetEnd(), 40)
 	unconsumedTable := NewGCTable()
+
 	for _, ckp := range checkpoints {
 		_, data, err := logtail.LoadCheckpointEntriesFromKey(c.cleaner.ctx, c.cleaner.fs.Service,
 			ckp.GetLocation(), ckp.GetVersion(), nil, &types.TS{})
@@ -91,11 +92,13 @@ func (c *checker) Check() error {
 				objectEntry := itObject.Get().GetPayload()
 				stats := objectEntry.GetObjectStats()
 				if _, ok := allObjects[stats.ObjectName().String()]; ok {
+					logutil.Infof("allObjects %s,", stats.ObjectName().String())
 					delete(allObjects, stats.ObjectName().String())
 				}
 				it2 := table.GetDeleteList().Iter()
 				for it2.Next() {
 					objID := it2.Item().ObjectID
+					logutil.Infof("deleteList %s,", objID.String())
 					if _, ok := allObjects[objID.String()]; ok {
 						delete(allObjects, objID.String())
 					}
