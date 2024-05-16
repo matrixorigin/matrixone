@@ -38,6 +38,9 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) error {
 	arg.ctr = new(container)
+	if arg.RuntimeFilterSpec != nil {
+		arg.RuntimeFilterSpec.Handled = false
+	}
 	arg.initShuffle()
 	return nil
 }
@@ -68,6 +71,10 @@ SENDLAST:
 		//send shuffle pool
 		for i, bat := range arg.ctr.shufflePool {
 			if bat != nil {
+				//need to wait for runtimefilter_pass before send batch
+				if err := arg.handleRuntimeFilter(proc); err != nil {
+					return vm.CancelResult, err
+				}
 				result.Batch = bat
 				arg.ctr.lastSentBatch = result.Batch
 				arg.ctr.shufflePool[i] = nil
@@ -100,6 +107,10 @@ SENDLAST:
 			}
 			if bat != nil {
 				// can directly send this batch
+				//need to wait for runtimefilter_pass before send batch
+				if err := arg.handleRuntimeFilter(proc); err != nil {
+					return vm.CancelResult, err
+				}
 				return result, nil
 			}
 		}
@@ -119,27 +130,25 @@ SENDLAST:
 }
 
 func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
-	if len(arg.RuntimeFilterSpecs) > 0 {
-		for _, spec := range arg.RuntimeFilterSpecs {
-			msgReceiver := proc.NewMessageReceiver([]int32{spec.Tag}, process.AddrBroadCastOnCurrentCN())
-			msgs, ctxDone := msgReceiver.ReceiveMessage(true, proc.Ctx)
-			if ctxDone {
-				return proc.Ctx.Err()
+	if arg.RuntimeFilterSpec != nil && !arg.RuntimeFilterSpec.Handled {
+		msgReceiver := proc.NewMessageReceiver([]int32{arg.RuntimeFilterSpec.Tag}, process.AddrBroadCastOnCurrentCN())
+		msgs, ctxDone := msgReceiver.ReceiveMessage(true, proc.Ctx)
+		if ctxDone {
+			return proc.Ctx.Err()
+		}
+		for i := range msgs {
+			msg, ok := msgs[i].(process.RuntimeFilterMessage)
+			if !ok {
+				panic("expect runtime filter message, receive unknown message!")
 			}
-			for i := range msgs {
-				msg, ok := msgs[i].(process.RuntimeFilterMessage)
-				if !ok {
-					panic("expect runtime filter message, receive unknown message!")
-				}
-				switch msg.Typ {
-				case process.RuntimeFilter_PASS, process.RuntimeFilter_DROP:
-					logutil.Infof("receive runtime filter in shuffle !")
-					continue
-				default:
-					panic("unsupported runtime filter type!")
-				}
+			switch msg.Typ {
+			case process.RuntimeFilter_PASS, process.RuntimeFilter_DROP:
+				arg.RuntimeFilterSpec.Handled = true
+				logutil.Infof("receive runtime filter in shuffle !")
+				continue
+			default:
+				panic("unsupported runtime filter type!")
 			}
-			msgReceiver.Free()
 		}
 	}
 	return nil

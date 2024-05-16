@@ -67,6 +67,7 @@ message Shuffle{
   int32 AliveRegCnt = 5;
   repeated uint64 shuffle_ranges_uint64 = 6;
   repeated int64 shuffle_ranges_int64=7;
+  plan.RuntimeFilterSpec runtimeFilterSpec = 8;
 }
 
 message Dispatch {

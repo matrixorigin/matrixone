@@ -33,7 +33,7 @@ type Argument struct {
 	ShuffleColMax      int64
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
-	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+	RuntimeFilterSpec  *plan.RuntimeFilterSpec
 	vm.OperatorBase
 }
 
@@ -77,6 +77,9 @@ type container struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if arg.RuntimeFilterSpec != nil {
+		arg.RuntimeFilterSpec.Handled = false
+	}
 	if arg.ctr != nil {
 		for i := range arg.ctr.shufflePool {
 			if arg.ctr.shufflePool[i] != nil {

@@ -426,6 +426,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.AliveRegCnt = sourceArg.AliveRegCnt
 		arg.ShuffleRangeInt64 = sourceArg.ShuffleRangeInt64
 		arg.ShuffleRangeUint64 = sourceArg.ShuffleRangeUint64
+		arg.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		res.Arg = arg
 	case vm.Dispatch:
 		ok := false
@@ -1327,8 +1328,8 @@ func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.A
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
-	if left {
-		arg.RuntimeFilterSpecs = node.RuntimeFilterProbeList
+	if left && len(node.RuntimeFilterProbeList) > 0 {
+		arg.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
 	}
 	return arg
 }
