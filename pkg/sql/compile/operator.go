@@ -594,7 +594,7 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	txnOp := proc.TxnOperator
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.LessEq(proc.TxnOperator.Txn().SnapshotTS) {
+			n.ScanSnapshot.TS.Less(proc.TxnOperator.Txn().SnapshotTS) {
 			txnOp = proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 
 			if n.ScanSnapshot.Tenant != nil {
