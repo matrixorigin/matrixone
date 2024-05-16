@@ -4169,7 +4169,6 @@ var fkBannedDatabase = map[string]bool{
 	sysview.InformationDBConst: true,
 	sysview.MysqlDBConst:       true,
 	trace.DebugDB:              true,
-	"tpch":                     true,
 }
 
 // IsFkBannedDatabase denotes the database should not have any
