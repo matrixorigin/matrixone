@@ -455,12 +455,16 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		stats.ExecutionEnd()
 
 		cost := time.Since(start)
+		row := 0
+		if result != nil {
+			row = int(result.AffectRows)
+		}
 		txnTrace.GetService().TxnStatementCompleted(
 			txnOp,
 			sql,
 			cost,
 			seq,
-			int(result.AffectRows),
+			row,
 			err,
 		)
 		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
