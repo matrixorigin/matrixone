@@ -403,7 +403,6 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
 	runtimeFilter.Typ = process.RuntimeFilter_PASS
 	proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
-	logutil.Infof("send runtime filter in shuffle build!")
 	return nil
 }
 

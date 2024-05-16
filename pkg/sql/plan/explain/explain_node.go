@@ -354,7 +354,9 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if err != nil {
 			return nil, err
 		}
-		lines = append(lines, filterInfo)
+		if len(filterInfo) > 0 {
+			lines = append(lines, filterInfo)
+		}
 	}
 
 	if len(ndesc.Node.RuntimeFilterBuildList) > 0 {
@@ -362,7 +364,9 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if err != nil {
 			return nil, err
 		}
-		lines = append(lines, filterInfo)
+		if len(filterInfo) > 0 {
+			lines = append(lines, filterInfo)
+		}
 	}
 
 	// Get Limit And Offset info

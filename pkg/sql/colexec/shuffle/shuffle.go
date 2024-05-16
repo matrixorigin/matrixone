@@ -17,8 +17,6 @@ package shuffle
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -144,7 +142,6 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 			switch msg.Typ {
 			case process.RuntimeFilter_PASS, process.RuntimeFilter_DROP:
 				arg.RuntimeFilterSpec.Handled = true
-				logutil.Infof("receive runtime filter in shuffle !")
 				continue
 			default:
 				panic("unsupported runtime filter type!")
