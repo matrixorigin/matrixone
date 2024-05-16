@@ -625,6 +625,7 @@ create database db01;
 restore account sys FROM snapshot sp05;
 show databases;
 Database
+db01
 information_schema
 mo_catalog
 mo_debug
