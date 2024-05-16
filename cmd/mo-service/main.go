@@ -134,10 +134,12 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) {
 		heapName, _ := uuid.NewV7()
 		heapProfilePath := catalog.BuildProfilePath("heap", heapName.String())
 		cnservice.SaveProfile(heapProfilePath, profile.HEAP, globalEtlFS)
+		detail += ". heap profile: " + heapProfilePath
 		//dump goroutine before stopping services
 		routineName, _ := uuid.NewV7()
 		routineProfilePath := catalog.BuildProfilePath("routine", routineName.String())
 		cnservice.SaveProfile(routineProfilePath, profile.GOROUTINE, globalEtlFS)
+		detail += " routine profile: " + routineProfilePath
 	case <-shutdownC:
 		// waiting, give a chance let all log stores and tn stores to get
 		// shutdown cmd from ha keeper

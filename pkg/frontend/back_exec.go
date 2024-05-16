@@ -98,7 +98,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	return doComQueryInBack(back.backSes, &execCtx, &UserInput{sql: sql})
 }
 
-func (back *backExec) ExecRestore(ctx context.Context, sql string, fromAccount uint32, toAccount uint32) error {
+func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uint32, toAccount uint32) error {
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
@@ -137,10 +137,10 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, fromAccount u
 	}
 
 	userInput := &UserInput{
-		sql:         sql,
-		isRetstore:  true,
-		fromAccount: fromAccount,
-		toAccount:   toAccount,
+		sql:       sql,
+		isRestore: true,
+		opAccount: opAccount,
+		toAccount: toAccount,
 	}
 
 	execCtx := ExecCtx{
@@ -278,10 +278,9 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 		backSes.mrs = &MysqlResultSet{}
 		stmt := cw.GetAst()
 
-		if insertStmt, ok := stmt.(*tree.Insert); ok && input.isRetstore {
+		if insertStmt, ok := stmt.(*tree.Insert); ok && input.isRestore {
 			insertStmt.IsRestore = true
-			insertStmt.FromDataTenantID = input.fromAccount
-			insertStmt.DestTableTenantID = input.toAccount
+			insertStmt.FromDataTenantID = input.opAccount
 		}
 
 		tenant := backSes.GetTenantNameWithStmt(stmt)

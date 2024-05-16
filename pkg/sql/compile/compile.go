@@ -2225,8 +2225,8 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 			n.ScanSnapshot.TS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
 			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 
-			if n.ScanSnapshot.CreatedByTenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.CreatedByTenant.TenantID)
+			if n.ScanSnapshot.Tenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
 			}
 		}
 	}
@@ -3744,8 +3744,8 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 			n.ScanSnapshot.TS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
 			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 
-			if n.ScanSnapshot.CreatedByTenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.CreatedByTenant.TenantID)
+			if n.ScanSnapshot.Tenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
 			}
 		}
 	}
@@ -3842,8 +3842,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			n.ScanSnapshot.TS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
 			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 
-			if n.ScanSnapshot.CreatedByTenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.CreatedByTenant.TenantID)
+			if n.ScanSnapshot.Tenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
 			}
 		}
 	}
