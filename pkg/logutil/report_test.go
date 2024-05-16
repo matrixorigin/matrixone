@@ -92,7 +92,7 @@ func TestReport(t *testing.T) {
 				MaxDays:    tt.fields.MaxDays,
 				MaxBackups: tt.fields.MaxBackups,
 			}
-			require.Equal(t, tt.wantLevel, cfg.getLevel())
+			require.Equal(t, tt.wantLevel, cfg.GetLevel())
 			require.Equal(t, len(tt.wantOpts), len(cfg.getOptions()))
 			require.Equal(t, tt.wantSyncer, cfg.getSyncer())
 			wantMsg, _ := tt.wantEncoder.EncodeEntry(tt.fields.Entry, nil)

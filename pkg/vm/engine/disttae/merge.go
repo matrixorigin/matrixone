@@ -145,6 +145,10 @@ func (t *cnMergeTask) GetBlockMaxRows() uint32 {
 	return options.DefaultBlockMaxRows
 }
 
+func (t *cnMergeTask) GetObjectMaxBlocks() uint16 {
+	return options.DefaultBlocksPerObject
+}
+
 func (t *cnMergeTask) GetTargetObjSize() uint32 {
 	return t.targetObjSize
 }
