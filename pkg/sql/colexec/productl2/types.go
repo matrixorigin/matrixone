@@ -53,6 +53,10 @@ type Argument struct {
 	vm.OperatorBase
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
 	return &arg.OperatorBase
 }
