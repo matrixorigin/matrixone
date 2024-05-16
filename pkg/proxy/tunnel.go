@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
@@ -39,6 +41,9 @@ const (
 
 	pipeClientToServer = "c2s"
 	pipeServerToClient = "s2c"
+
+	minSequenceID = 0
+	maxSequenceID = 255
 )
 
 var (
@@ -154,8 +159,6 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 		t.mu.clientConn = newMySQLConn(connClientName, cc.RawConn(), 0, t.reqC, t.respC, cc.ConnID())
 		t.mu.serverConn = newMySQLConn(connServerName, sc.RawConn(), 0, t.reqC, t.respC, sc.ConnID())
 
-		setPeer(t.mu.clientConn.msgBuf, t.mu.serverConn.msgBuf)
-
 		// Create the pipes from client to server and server to client.
 		t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
 		t.mu.scp = t.newPipe(pipeServerToClient, t.mu.serverConn, t.mu.clientConn)
@@ -232,7 +235,6 @@ func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, sync bool) {
 	defer t.mu.Unlock()
 	_ = t.mu.serverConn.Close()
 	t.mu.serverConn = newServerConn
-	setPeer(t.mu.clientConn.msgBuf, t.mu.serverConn.msgBuf)
 
 	if sync {
 		t.mu.csp.dst = t.mu.serverConn
@@ -271,7 +273,7 @@ func (t *tunnel) canStartTransfer(sync bool) bool {
 	}
 
 	// We are now in a transaction.
-	if !scp.safeToTransfer() {
+	if !scp.safeToTransferLocked() {
 		t.logger.Info("reason: txn status is true")
 		return false
 	}
@@ -449,6 +451,10 @@ type pipe struct {
 	src *MySQLConn
 	dst *MySQLConn
 
+	// this value do not need in mutex as it is read and write in
+	// a single goroutine.
+	transferred bool
+
 	mu struct {
 		sync.Mutex
 		// cond is used to control the pause of the pipe.
@@ -461,6 +467,9 @@ type pipe struct {
 		inPreRecv bool
 		// paused indicates that the pipe is paused to do transfer.
 		paused bool
+		// inTxn indicates that if the session is in a txn. It only
+		// matters for server end.
+		inTxn bool
 		// Track last cmd time and whether we are in a transaction.
 		lastCmdTime time.Time
 	}
@@ -512,6 +521,8 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		p.mu.started = false
 		p.mu.cond.Broadcast()
 	}
+	var lastSeq int16 = -1
+	var rotated bool
 	prepareNextMessage := func() (terminate bool, err error) {
 		if terminate := func() bool {
 			p.mu.Lock()
@@ -543,6 +554,40 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			return false, moerr.NewInternalError(errutil.ContextWithNoReport(ctx, true),
 				"preRecv message: %s, name %s", re.Error(), p.name)
 		}
+		// set txn status and cmd time within the mutex together.
+		// only server->client pipe need to set the txn status.
+		if p.name == pipeServerToClient {
+			var currSeq int16
+			buf := p.src.readAvailBuf()
+
+			// issue#16042
+			if len(buf) > 3 {
+				currSeq = int16(buf[3])
+			}
+
+			// last sequence id is 255 and current sequence id is 0, the
+			// sequence ID is rotated, in which case, we do NOT allow to
+			// do the migration.
+			if currSeq == minSequenceID && lastSeq == maxSequenceID {
+				rotated = true
+			}
+
+			// the server starts a new response, reset the rotated.
+			if rotated && currSeq != minSequenceID && currSeq < lastSeq {
+				rotated = false
+			}
+
+			p.mu.inTxn = checkTxnStatus(buf)
+			if !p.mu.inTxn && p.tun.transferIntent.Load() && !rotated {
+				peer.wg.Add(1)
+				p.transferred = true
+			} else {
+				p.transferred = false
+			}
+			if len(buf) > 3 {
+				lastSeq = int16(buf[3])
+			}
+		}
 		p.mu.lastCmdTime = time.Now()
 		return false, nil
 	}
@@ -557,9 +602,8 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	}
 	defer finish()
 
-	var transferred bool
 	for ctx.Err() == nil {
-		if p.name == pipeServerToClient && transferred {
+		if p.name == pipeServerToClient && p.transferred {
 			if err := p.handleTransferIntent(ctx, &peer.wg); err != nil {
 				p.logger.Error("failed to transfer connection", zap.Error(err))
 			}
@@ -573,12 +617,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		// If the server is in transfer, we wait here until the transfer is finished.
 		p.wg.Wait()
 
-		var peerWg *sync.WaitGroup
-		if peer != nil {
-			peerWg = &peer.wg
-		}
-
-		if transferred, err = p.src.sendTo(p.dst, &p.tun.transferIntent, peerWg); err != nil {
+		if err = p.src.sendTo(p.dst); err != nil {
 			return moerr.NewInternalErrorNoCtx("send message error: %v", err)
 		}
 	}
@@ -587,7 +626,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 
 func (p *pipe) handleTransferIntent(ctx context.Context, wg *sync.WaitGroup) error {
 	// If it is not in a txn and transfer intent is true, transfer it sync.
-	if p.safeToTransfer() && p.tun != nil {
+	if p.tun != nil && p.safeToTransfer() {
 		err := p.tun.transferSync(ctx)
 		wg.Done()
 		return err
@@ -648,8 +687,70 @@ func (p *pipe) pause(ctx context.Context) error {
 // safeToTransfer indicates whether it is safe to transfer the session.
 // NB: the pipe MUST be server-to-client pipe.
 func (p *pipe) safeToTransfer() bool {
-	if p.src == nil {
-		return false
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !p.mu.inTxn
+}
+
+func (p *pipe) safeToTransferLocked() bool {
+	return !p.mu.inTxn
+}
+
+// txnStatus return if the session is within a transaction.
+// first, we consider it as true and check the three conditions:
+// 1. SERVER_STATUS_IN_TRANS is not set
+// 2. SERVER_QUERY_WAS_SLOW and SERVER_STATUS_NO_GOOD_INDEX_USED is set
+func txnStatus(status uint16) bool {
+	// assume it is in txn by priority.
+	v := true
+	if status&frontend.SERVER_QUERY_WAS_SLOW != 0 &&
+		status&frontend.SERVER_STATUS_NO_GOOD_INDEX_USED != 0 &&
+		status&frontend.SERVER_STATUS_IN_TRANS == 0 {
+		v = false
 	}
-	return !p.src.isInTxn()
+	return v
+}
+
+// handleOKPacket handles the OK packet from server to update the txn state.
+func handleOKPacket(msg []byte) bool {
+	var mp *frontend.MysqlProtocolImpl
+	// the sequence ID should be 1 for OK packet.
+	if msg[3] != 1 {
+		return txnStatus(0)
+	}
+	pos := 5
+	_, pos, ok := mp.ReadIntLenEnc(msg, pos)
+	if !ok {
+		return txnStatus(0)
+	}
+	_, pos, ok = mp.ReadIntLenEnc(msg, pos)
+	if !ok {
+		return txnStatus(0)
+	}
+	if len(msg[pos:]) < 2 {
+		return txnStatus(0)
+	}
+	status := binary.LittleEndian.Uint16(msg[pos:])
+	return txnStatus(status)
+}
+
+// handleEOFPacket handles the EOF packet from server to update the txn state.
+func handleEOFPacket(msg []byte) bool {
+	if len(msg) < 9 {
+		return txnStatus(0)
+	}
+	return txnStatus(binary.LittleEndian.Uint16(msg[7:]))
+}
+
+func checkTxnStatus(msg []byte) bool {
+	inTxn := true
+	// For the server->client pipe, we get the transaction status from the
+	// OK and EOF packet, which is used in connection transfer. If the session
+	// is in a transaction, a transfer should not start.
+	if isOKPacket(msg) {
+		inTxn = handleOKPacket(msg)
+	} else if isEOFPacket(msg) {
+		inTxn = handleEOFPacket(msg)
+	}
+	return inTxn
 }

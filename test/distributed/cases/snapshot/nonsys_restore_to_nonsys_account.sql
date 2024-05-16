@@ -52,9 +52,7 @@ select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database 
 restore account acc01 from snapshot sp01;
 select count(*) from rs01;
 select * from rs01;
--- @bvt:issue#16055
 select count(*) from rs01 {snapshot = 'sp01'};
--- @bvt:issue
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';

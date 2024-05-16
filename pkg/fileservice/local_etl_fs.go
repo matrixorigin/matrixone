@@ -470,10 +470,11 @@ func (l *LocalETLFS) deleteSingle(ctx context.Context, filePath string) error {
 	nativePath := l.toNativeFilePath(path.File)
 
 	_, err = os.Stat(nativePath)
-	if os.IsNotExist(err) {
-		return moerr.NewFileNotFoundNoCtx(path.File)
-	}
 	if err != nil {
+		if os.IsNotExist(err) {
+			// ignore not found error
+			return nil
+		}
 		return err
 	}
 

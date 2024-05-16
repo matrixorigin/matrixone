@@ -311,7 +311,7 @@ func hashShuffle(ap *Argument, bat *batch.Batch, proc *process.Process) (*batch.
 		return bat, nil
 	}
 	if groupByVec.IsConst() {
-		bat.ShuffleIDX = int(shuffleConstVectorByHash(ap, bat))
+		bat.ShuffleIDX = int32(shuffleConstVectorByHash(ap, bat))
 		return bat, nil
 	}
 
@@ -326,7 +326,7 @@ func hashShuffle(ap *Argument, bat *batch.Batch, proc *process.Process) (*batch.
 			break
 		}
 		if len(sels[i]) == bat.RowCount() {
-			bat.ShuffleIDX = i
+			bat.ShuffleIDX = int32(i)
 			return bat, nil
 		}
 	}
@@ -773,7 +773,7 @@ func putBatchIntoShuffledPoolsBySels(ap *Argument, srcBatch *batch.Batch, sels [
 				if err != nil {
 					return err
 				}
-				bat.ShuffleIDX = regIndex
+				bat.ShuffleIDX = int32(regIndex)
 				ap.ctr.shufflePool[regIndex] = bat
 			}
 			length := len(newSels)
@@ -804,7 +804,7 @@ func rangeShuffle(ap *Argument, bat *batch.Batch, proc *process.Process) (*batch
 	if groupByVec.GetSorted() || groupByVec.IsConst() {
 		ok, regIndex := allBatchInOneRange(ap, bat)
 		if ok {
-			bat.ShuffleIDX = int(regIndex)
+			bat.ShuffleIDX = int32(regIndex)
 			return bat, nil
 		}
 	}
@@ -819,7 +819,7 @@ func rangeShuffle(ap *Argument, bat *batch.Batch, proc *process.Process) (*batch
 			break
 		}
 		if len(sels[i]) == bat.RowCount() {
-			bat.ShuffleIDX = i
+			bat.ShuffleIDX = int32(i)
 			return bat, nil
 		}
 	}

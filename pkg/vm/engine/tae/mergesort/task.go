@@ -57,6 +57,7 @@ type MergeTaskHost interface {
 	GetTotalSize() uint32
 	GetTotalRowCnt() uint32
 	GetBlockMaxRows() uint32
+	GetObjectMaxBlocks() uint16
 	GetTargetObjSize() uint32
 }
 
