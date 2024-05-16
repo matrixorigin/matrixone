@@ -44,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -3052,7 +3051,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			ses.getRoutineManager().accountRoutine.EnKillQueue(int64(targetAccountId), version)
 
 			if err := postDropSuspendAccount(ctx, ses, aa.Name, int64(targetAccountId), version); err != nil {
-				logutil.Errorf("post alter account suspend error: %s", err.Error())
+				ses.Errorf(ctx, "post alter account suspend error: %s", err.Error())
 			}
 		}
 
@@ -3065,7 +3064,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			}
 			err = postAlterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusRestricted.String())
 			if err != nil {
-				logutil.Errorf("post alter account restricted error: %s", err.Error())
+				ses.Errorf(ctx, "post alter account restricted error: %s", err.Error())
 			}
 		}
 
@@ -3078,7 +3077,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			}
 			err = postAlterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusOpen.String())
 			if err != nil {
-				logutil.Errorf("post alter account not restricted error: %s", err.Error())
+				ses.Errorf(ctx, "post alter account not restricted error: %s", err.Error())
 			}
 		}
 	}
@@ -3243,7 +3242,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn TxnOperator) (*plan.SubscriptionMeta, error) {
 	dbMeta, err := getGlobalPu().StorageEngine.Database(ctx, dbName, txn)
 	if err != nil {
-		logutil.Errorf("Get Subscription database %s meta error: %s", dbName, err.Error())
+		ses.Errorf(ctx, "Get Subscription database %s meta error: %s", dbName, err.Error())
 		return nil, moerr.NewNoDB(ctx)
 	}
 
@@ -3375,7 +3374,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, a
 			return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
 		}
 	} else if !canSub(tenantInfo.GetTenant(), accountList) {
-		logError(ses, ses.GetDebugString(),
+		ses.Error(ctx,
 			"checkSubscriptionValidCommon",
 			zap.String("subName", subName),
 			zap.String("accName", accName),
@@ -4282,7 +4281,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
 
 	if err := postDropSuspendAccount(ctx, ses, da.Name, accountId, version); err != nil {
-		logutil.Errorf("post drop account error: %s", err.Error())
+		ses.Errorf(ctx, "post drop account error: %s", err.Error())
 	}
 
 	return err
@@ -9229,6 +9228,11 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		for _, st := range stmt {
+			st.Free()
+		}
+	}()
 
 	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 
@@ -9236,7 +9240,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	argsMap = make(map[string]tree.Expr) // map arg to param
 
 	// build argsAttr and argsMap
-	logutil.Info("Interpret procedure call length:" + strconv.Itoa(len(argList)))
+	ses.Infof(ctx, "Interpret procedure call length:"+strconv.Itoa(len(argList)))
 	i := 0
 	for curName, v := range argList {
 		argsAttr[curName] = v.InOutType
@@ -9410,7 +9414,7 @@ func doGetGlobalSystemVariable(ctx context.Context, ses *Session) (ret map[strin
 			if sv, ok := gSysVarsDefs[variableName]; ok {
 				val, err = sv.GetType().ConvertFromString(variableValue)
 				if err != nil {
-					logError(ses, ses.GetDebugString(), err.Error(), zap.String("variable name:", variableName), zap.String("convert from variable value:", variableValue))
+					ses.Error(ctx, err.Error(), zap.String("variable name:", variableName), zap.String("convert from variable value:", variableValue))
 					return nil, err
 				}
 				sysVars[variableName] = val
@@ -9451,7 +9455,7 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 			accountId = tenantInfo.GetTenantID()
 			sql = getSqlForUpdateSystemVariableValue(getVariableValue(varValue), uint64(accountId), varName)
 			if _, ok := sv.GetType().(SystemVariableBoolType); ok {
-				logInfo(ses, ses.GetDebugString(), "set global bool type value", zap.String("variable name", varName), zap.String("variable value", getVariableValue(varValue)), zap.String("update sql", sql))
+				ses.Info(ctx, "set global bool type value", zap.String("variable name", varName), zap.String("variable value", getVariableValue(varValue)), zap.String("update sql", sql))
 			}
 			rtnErr = bh.Exec(ctx, sql)
 			if rtnErr != nil {

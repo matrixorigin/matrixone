@@ -96,9 +96,7 @@ type Argument struct {
 	ctr          *container
 	IsShuffle    bool // is shuffle group
 	PreAllocSize uint64
-	NeedEval     bool // need to projection the aggregate column
-	Ibucket      uint64
-	Nbucket      uint64
+	NeedEval     bool         // need to projection the aggregate column
 	Exprs        []*plan.Expr // group Expressions
 	Types        []types.Type
 	Aggs         []aggexec.AggFuncExecExpression
@@ -169,6 +167,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanHashMap()
 		ctr.cleanAggVectors()
 		ctr.cleanGroupVectors()
+		arg.ctr = nil
 	}
 }
 

@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
@@ -31,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -129,8 +132,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.IsShuffle = t.IsShuffle
 		arg.PreAllocSize = t.PreAllocSize
 		arg.NeedEval = t.NeedEval
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Exprs = t.Exprs
 		arg.Types = t.Types
 		arg.Aggs = t.Aggs
@@ -304,22 +305,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Fs = t.Fs
 		res.Arg = arg
 	case vm.Intersect:
-		t := sourceIns.Arg.(*intersect.Argument)
 		arg := intersect.NewArgument()
-		arg.IBucket = t.IBucket
-		arg.NBucket = t.NBucket
 		res.Arg = arg
 	case vm.Minus: // 2
-		t := sourceIns.Arg.(*minus.Argument)
 		arg := minus.NewArgument()
-		arg.IBucket = t.IBucket
-		arg.NBucket = t.NBucket
 		res.Arg = arg
 	case vm.IntersectAll:
-		t := sourceIns.Arg.(*intersectall.Argument)
 		arg := intersectall.NewArgument()
-		arg.IBucket = t.IBucket
-		arg.NBucket = t.NBucket
 		res.Arg = arg
 	case vm.Merge:
 		t := sourceIns.Arg.(*merge.Argument)
@@ -376,19 +368,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Rets = t.Rets
 		arg.Attrs = t.Attrs
 		arg.Params = t.Params
-		res.Arg = arg
-	case vm.HashBuild:
-		t := sourceIns.Arg.(*hashbuild.Argument)
-		arg := hashbuild.NewArgument()
-		arg.NeedHashMap = t.NeedHashMap
-		arg.NeedExpr = t.NeedExpr
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
-		arg.Typs = t.Typs
-		arg.Conditions = t.Conditions
-		arg.HashOnPK = t.HashOnPK
-		arg.NeedMergedBatch = t.NeedMergedBatch
-		arg.NeedAllocateSels = t.NeedAllocateSels
 		res.Arg = arg
 	case vm.External:
 		t := sourceIns.Arg.(*external.Argument)
@@ -572,7 +551,7 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 	return arg
 }
 
-func constructFuzzyFilter(c *Compile, n, right *plan.Node) *fuzzyfilter.Argument {
+func constructFuzzyFilter(n, right *plan.Node) *fuzzyfilter.Argument {
 	pkName := n.TableDef.Pkey.PkeyColName
 	var pkTyp plan.Type
 	if pkName == catalog.CPrimaryKeyColName {
@@ -609,12 +588,25 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 		attrs = append(attrs, col.Name)
 	}
 
+	ctx := proc.Ctx
+	txnOp := proc.TxnOperator
+	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
+		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+			n.ScanSnapshot.TS.LessEq(proc.TxnOperator.Txn().SnapshotTS) {
+			txnOp = proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+
+			if n.ScanSnapshot.Tenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
+			}
+		}
+	}
+
 	if preCtx.Ref.SchemaName != "" {
-		dbSource, err := eg.Database(proc.Ctx, preCtx.Ref.SchemaName, proc.TxnOperator)
+		dbSource, err := eg.Database(ctx, preCtx.Ref.SchemaName, txnOp)
 		if err != nil {
 			return nil, err
 		}
-		if _, err = dbSource.Relation(proc.Ctx, preCtx.Ref.ObjName, proc); err != nil {
+		if _, err = dbSource.Relation(ctx, preCtx.Ref.ObjName, proc); err != nil {
 			schemaName = defines.TEMPORARY_DBNAME
 		}
 	}
@@ -695,6 +687,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
 		TableDef:              oldCtx.TableDef,
 	}
+
 	if len(oldCtx.PartitionTableNames) > 0 {
 		dbSource, err := eg.Database(proc.Ctx, oldCtx.Ref.SchemaName, proc.TxnOperator)
 		if err != nil {
@@ -840,7 +833,7 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 	return arg
 }
 
-func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *right.Argument {
+func constructRight(n *plan.Node, left_typs, right_typs []types.Type, proc *process.Process) *right.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
@@ -858,7 +851,7 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 	return arg
 }
 
-func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *rightsemi.Argument {
+func constructRightSemi(n *plan.Node, right_typs []types.Type, proc *process.Process) *rightsemi.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		_, result[i] = constructJoinResult(expr, proc)
@@ -876,7 +869,7 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 	return arg
 }
 
-func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *rightanti.Argument {
+func constructRightAnti(n *plan.Node, right_typs []types.Type, proc *process.Process) *rightanti.Argument {
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		_, result[i] = constructJoinResult(expr, proc)
@@ -1170,34 +1163,8 @@ func constructGroup(_ context.Context, n, cn *plan.Node, ibucket, nbucket int, n
 	arg.Types = typs
 	arg.NeedEval = needEval
 	arg.Exprs = n.GroupBy
-	arg.Ibucket = uint64(ibucket)
-	arg.Nbucket = uint64(nbucket)
 	arg.IsShuffle = shuffle
 	arg.PreAllocSize = preAllocSize
-	return arg
-}
-
-// ibucket: bucket number
-// nbucket:
-// construct operator argument
-func constructIntersectAll(ibucket, nbucket int) *intersectall.Argument {
-	arg := intersectall.NewArgument()
-	arg.IBucket = uint64(ibucket)
-	arg.NBucket = uint64(nbucket)
-	return arg
-}
-
-func constructMinus(ibucket, nbucket int) *minus.Argument {
-	arg := minus.NewArgument()
-	arg.IBucket = uint64(ibucket)
-	arg.NBucket = uint64(nbucket)
-	return arg
-}
-
-func constructIntersect(ibucket, nbucket int) *intersect.Argument {
-	arg := intersect.NewArgument()
-	arg.IBucket = uint64(ibucket)
-	arg.NBucket = uint64(nbucket)
 	return arg
 }
 
@@ -1540,7 +1507,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	return arg
 }
 
-func constructJoinBuildInstruction(c *Compile, in vm.Instruction, shuffleCnt int, isDup bool) vm.Instruction {
+func constructJoinBuildInstruction(c *Compile, in vm.Instruction, isDup bool, isShuffle bool) vm.Instruction {
 	switch in.Op {
 	case vm.IndexJoin:
 		arg := in.Arg.(*indexjoin.Argument)
@@ -1555,16 +1522,24 @@ func constructJoinBuildInstruction(c *Compile, in vm.Instruction, shuffleCnt int
 			Arg:     ret,
 		}
 	default:
+		if isShuffle {
+			return vm.Instruction{
+				Op:      vm.ShuffleBuild,
+				Idx:     in.Idx,
+				IsFirst: true,
+				Arg:     constructShuffleBuild(in, c.proc, isDup),
+			}
+		}
 		return vm.Instruction{
 			Op:      vm.HashBuild,
 			Idx:     in.Idx,
 			IsFirst: true,
-			Arg:     constructHashBuild(c, in, c.proc, shuffleCnt, isDup),
+			Arg:     constructHashBuild(in, c.proc, isDup),
 		}
 	}
 }
 
-func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, shuffleCnt int, isDup bool) *hashbuild.Argument {
+func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *hashbuild.Argument {
 	// XXX BUG
 	// relation index of arg.Conditions should be rewritten to 0 here.
 	ret := hashbuild.NewArgument()
@@ -1762,6 +1737,120 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 	default:
 		ret.Release()
 		panic(moerr.NewInternalError(proc.Ctx, "unsupport join type '%v'", in.Op))
+	}
+	return ret
+}
+
+func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool) *shufflebuild.Argument {
+	ret := shufflebuild.NewArgument()
+
+	switch in.Op {
+	case vm.Anti:
+		arg := in.Arg.(*anti.Argument)
+		ret.Typs = arg.Typs
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.HashOnPK = arg.HashOnPK
+		if arg.Cond == nil {
+			ret.NeedMergedBatch = false
+			ret.NeedAllocateSels = false
+		} else {
+			ret.NeedMergedBatch = true
+			ret.NeedAllocateSels = true
+		}
+
+	case vm.Join:
+		arg := in.Arg.(*join.Argument)
+		ret.Typs = arg.Typs
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.HashOnPK = arg.HashOnPK
+
+		// to find if hashmap need to keep build batches for probe
+		var needMergedBatch bool
+		if arg.Cond != nil {
+			needMergedBatch = true
+		}
+		for _, rp := range arg.Result {
+			if rp.Rel == 1 {
+				needMergedBatch = true
+				break
+			}
+		}
+		ret.NeedMergedBatch = needMergedBatch
+		ret.NeedAllocateSels = true
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+		}
+
+	case vm.Left:
+		arg := in.Arg.(*left.Argument)
+		ret.Typs = arg.Typs
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+		}
+
+	case vm.Right:
+		arg := in.Arg.(*right.Argument)
+		ret.Typs = arg.RightTypes
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+		}
+
+	case vm.RightSemi:
+		arg := in.Arg.(*rightsemi.Argument)
+		ret.Typs = arg.RightTypes
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+		}
+
+	case vm.RightAnti:
+		arg := in.Arg.(*rightanti.Argument)
+		ret.Typs = arg.RightTypes
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+		}
+
+	case vm.Semi:
+		arg := in.Arg.(*semi.Argument)
+		ret.Typs = arg.Typs
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.HashOnPK = arg.HashOnPK
+		if arg.Cond == nil {
+			ret.NeedMergedBatch = false
+			ret.NeedAllocateSels = false
+		} else {
+			ret.NeedMergedBatch = true
+			ret.NeedAllocateSels = true
+		}
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+		}
+
+	default:
+		ret.Release()
+		panic(moerr.NewInternalError(proc.Ctx, "unsupported type for shuffle join: '%v'", in.Op))
 	}
 	return ret
 }

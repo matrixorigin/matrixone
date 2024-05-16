@@ -164,7 +164,7 @@ type Object interface {
 
 type Tombstone interface {
 	EstimateMemSizeLocked() (dsize int)
-	GetChangeIntentionCnt() uint32
+	GetChangeIntentionCntLocked() uint32
 	GetDeleteCnt() uint32
 	GetDeletesListener() func(uint64, types.TS) error
 	GetDeltaLocAndCommitTSByTxn(blkID uint16, txn txnif.TxnReader) (objectio.Location, types.TS)
@@ -176,6 +176,7 @@ type Tombstone interface {
 	IsDeletedLocked(row uint32, txn txnif.TxnReader, blkID uint16) (bool, error)
 	SetDeletesListener(l func(uint64, types.TS) error)
 	StringLocked(level common.PPLevel, depth int, prefix string) string
+	String(level common.PPLevel, depth int, prefix string) string
 	// TryGetDeleteChain(blkID uint16) *updates.MVCCHandle
 	UpgradeAllDeleteChain()
 	UpgradeDeleteChain(blkID uint16)
@@ -183,7 +184,8 @@ type Tombstone interface {
 	ReplayDeltaLoc(any, uint16)
 	VisitDeletes(ctx context.Context, start, end types.TS, bat, tnBatch *containers.Batch, skipMemory bool) (*containers.Batch, int, int, error)
 	GetObject() any
-	InMemoryDeletesExisted() bool
+	InMemoryDeletesExistedLocked() bool
 	// for test
 	GetLatestDeltaloc(uint16) objectio.Location
+	CheckTombstone()
 }
