@@ -1085,6 +1085,7 @@ func ConstandFoldForParam(exprs []*plan.Expr, proc *process.Process, varAndParam
 	for i := range exprs {
 		if hasParam(exprs[i]) {
 			ok = false
+			break
 		}
 	}
 	if ok {
