@@ -337,11 +337,18 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 	}
 
-	if err = restoreTablesWithFk(ctx, bh, snapshotName, fkDeps, fkTables, toAccountId); err != nil {
-		return
+	if len(fkTables) > 0 {
+		if err = restoreTablesWithFk(ctx, bh, snapshotName, fkDeps, fkTables, toAccountId); err != nil {
+			return
+		}
 	}
 
-	return restoreViews(ctx, ses, bh, snapshotName, views, toAccountId)
+	if len(views) > 0 {
+		if err = restoreViews(ctx, ses, bh, snapshotName, views, toAccountId); err != nil {
+			return
+		}
+	}
+	return
 }
 
 func restoreToAccount(
@@ -945,6 +952,12 @@ func getFkDeps(ctx context.Context, bh BackgroundExec, snapshotName string, dbNa
 
 	for _, rs := range resultSet {
 		for row := uint64(0); row < rs.GetRowCount(); row++ {
+			if dbName, err = rs.GetString(ctx, row, 0); err != nil {
+				return
+			}
+			if tblName, err = rs.GetString(ctx, row, 1); err != nil {
+				return
+			}
 			if referDbName, err = rs.GetString(ctx, row, 2); err != nil {
 				return
 			}
