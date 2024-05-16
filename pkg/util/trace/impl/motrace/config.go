@@ -53,6 +53,8 @@ type tracerProviderConfig struct {
 
 	// disableSpan
 	disableSpan bool
+	// disableError
+	disableError bool
 	// debugMode used in Tracer.Debug
 	debugMode bool // DebugMode
 
@@ -85,6 +87,8 @@ type tracerProviderConfig struct {
 
 	cuConfig   config.OBCUConfig // WithCUConfig
 	cuConfigV1 config.OBCUConfig // WithCUConfig
+
+	tcpPacket bool // WithTCPPacket
 
 	labels map[string]string
 
@@ -182,6 +186,12 @@ func WithSpanDisable(disable bool) tracerProviderOption {
 	}
 }
 
+func WithErrorDisable(disable bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.disableError = disable
+	}
+}
+
 func WithSkipRunningStmt(skip bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.skipRunningStmt = skip
@@ -210,6 +220,12 @@ func WithCUConfig(cu config.OBCUConfig, cuv1 config.OBCUConfig) tracerProviderOp
 	return func(cfg *tracerProviderConfig) {
 		cfg.cuConfig = cu
 		cfg.cuConfigV1 = cuv1
+	}
+}
+
+func WithTCPPacket(count bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.tcpPacket = count
 	}
 }
 

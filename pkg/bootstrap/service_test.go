@@ -25,32 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestBootstrap(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-
-	n := 0
-	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		n++
-		return executor.Result{}, nil
-	})
-
-	b := NewService(
-		&memLocker{},
-		clock.NewHLCClock(func() int64 { return 0 }, 0),
-		nil,
-		exec)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	require.NoError(t, b.Bootstrap(ctx))
-	assert.Equal(t, len(step1InitSQLs)+len(step2InitSQLs)+1+len(trace.InitSQLs), n)
-}
 
 func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())

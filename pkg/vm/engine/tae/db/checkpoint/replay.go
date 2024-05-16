@@ -41,12 +41,6 @@ const (
 	ReadData
 )
 
-type metaFile struct {
-	index int
-	start types.TS
-	end   types.TS
-}
-
 func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	maxTs types.TS,
 	maxLSN uint64,
@@ -66,11 +60,11 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	if len(dirs) == 0 {
 		return
 	}
-	metaFiles := make([]*metaFile, 0)
+	metaFiles := make([]*MetaFile, 0)
 	var readDuration, applyDuration time.Duration
 	for i, dir := range dirs {
 		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		metaFiles = append(metaFiles, &metaFile{
+		metaFiles = append(metaFiles, &MetaFile{
 			start: start,
 			end:   end,
 			index: i,
@@ -303,10 +297,10 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, t
 	if len(dirs) == 0 {
 		return "", nil
 	}
-	metaFiles := make([]*metaFile, 0)
+	metaFiles := make([]*MetaFile, 0)
 	for i, dir := range dirs {
 		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		metaFiles = append(metaFiles, &metaFile{
+		metaFiles = append(metaFiles, &MetaFile{
 			start: start,
 			end:   end,
 			index: i,

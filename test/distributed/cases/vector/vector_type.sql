@@ -104,12 +104,10 @@ select c2-c1 from vector_exp_01;
 select c2*c1 from vector_exp_01;
 select c2/c1 from vector_exp_01;
 -- vector +/-* tinyint unsigned
--- @bvt:issue#15115
 select c2+c3 from vector_exp_01;
 select c2-c3 from vector_exp_01;
 select c2*c3 from vector_exp_01;
 select c2/c3 from vector_exp_01;
--- @bvt:issue
 -- vector +/-* bigint
 select c2+c4 from vector_exp_01;
 select c2-c4 from vector_exp_01;

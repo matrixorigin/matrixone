@@ -593,3 +593,13 @@ null
 null
 null
 drop table t1;
+set @tt=now();
+select @tt;
+@tt
+2024-04-09 16:58:58.056874
+select date_add(@tt, Interval 30 SECOND);
+date_add(@tt, interval(30, second))
+2024-04-09 16:59:28.056874000
+select date_sub(@tt, Interval 30 SECOND);
+date_sub(@tt, interval(30, second))
+2024-04-09 16:58:28.056874000

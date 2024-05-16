@@ -32,13 +32,20 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
 	}()
+
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt)
 	bindCtx := NewBindContext(builder, nil)
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		bindCtx.snapshot = ctx.GetSnapshot()
+	}
+
 	rootId, err := builder.buildSelect(stmt, bindCtx, true)
-	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	if err != nil {
 		return nil, err
 	}
+	ctx.SetViews(bindCtx.views)
+
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
@@ -204,6 +211,12 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildShowSnapShots(stmt, ctx)
 	case *tree.CreateAccount:
 		return buildCreateAccount(stmt, ctx, isPrepareStmt)
+	case *tree.AlterAccount:
+		return buildAlterAccount(stmt, ctx, isPrepareStmt)
+	case *tree.DropAccount:
+		return buildDropAccount(stmt, ctx, isPrepareStmt)
+	case *tree.ShowAccountUpgrade:
+		return buildShowAccountUpgrade(stmt, ctx)
 	default:
 		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}

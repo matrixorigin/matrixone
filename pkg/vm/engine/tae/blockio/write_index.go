@@ -16,6 +16,7 @@ package blockio
 
 import (
 	hll "github.com/axiomhq/hyperloglog"
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -73,7 +74,7 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector,
 		if isNull {
 			return
 		}
-		b.sks[idx].Insert(v)
+		b.sks[idx].InsertHash(xxhash.Sum64(v))
 		return
 	}, nil)
 }

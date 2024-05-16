@@ -15,20 +15,118 @@
 package malloc
 
 import (
-	"github.com/nnsgmsone/mmap"
+	"sync/atomic"
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
-// New allocates a slice of size n. The returned slice is from manually managed
-// memory and MUST be released by calling Free. Failure to do so will result in
-// a memory leak.
-func Alloc(n int) []byte {
-	return mmap.Alloc(n)
+const (
+	maxBufferSize   = 2 * (1 << 30)
+	minClassSize    = 128
+	maxClassSize    = 8 * (1 << 20)
+	classSizeFactor = 1.8
+	numShards       = 16
+)
+
+type Shard struct {
+	pools []Pool
 }
 
-func Free(b []byte) {
-	if cap(b) == 0 {
-		return
-	}
-	b = b[:cap(b)]
-	mmap.Free(b)
+type Pool struct {
+	numAlloc atomic.Int64
+	numFree  atomic.Int64
+	ch       chan *Handle
 }
+
+var (
+	bufferedObjectsPerClass = func() int {
+		n := maxBufferSize / numShards / classSumSize
+		logutil.Info("malloc",
+			zap.Any("max buffer size", maxBufferSize),
+			zap.Any("num shards", numShards),
+			zap.Any("classes", len(classSizes)),
+			zap.Any("min class size", minClassSize),
+			zap.Any("max class size", maxClassSize),
+			zap.Any("buffer objects per class", n),
+		)
+		return n
+	}()
+
+	classSizes = func() (ret []int) {
+		for size := minClassSize; size <= maxClassSize; size = int(float64(size) * classSizeFactor) {
+			ret = append(ret, size)
+		}
+		return
+	}()
+
+	classSumSize = func() (ret int) {
+		for _, size := range classSizes {
+			ret += size
+		}
+		return
+	}()
+
+	shards = func() (ret []Shard) {
+		ret = make([]Shard, numShards)
+		for i := 0; i < numShards; i++ {
+			for range classSizes {
+				ret[i].pools = append(
+					ret[i].pools,
+					Pool{
+						ch: make(chan *Handle, bufferedObjectsPerClass),
+					},
+				)
+			}
+		}
+		return
+	}()
+)
+
+func requestSizeToClass(size int) int {
+	for class, classSize := range classSizes {
+		if classSize >= size {
+			return class
+		}
+	}
+	return -1
+}
+
+func classAllocate(class int, clearMem bool) *Handle {
+	pid := runtime_procPin()
+	runtime_procUnpin()
+	shard := pid % numShards
+	select {
+	case handle := <-shards[shard].pools[class].ch:
+		shards[shard].pools[class].numAlloc.Add(1)
+		if clearMem {
+			clear(unsafe.Slice((*byte)(handle.ptr), classSizes[handle.class]))
+		}
+		return handle
+	default:
+		slice := make([]byte, classSizes[class])
+		return &Handle{
+			ptr:   unsafe.Pointer(unsafe.SliceData(slice)),
+			class: class,
+		}
+	}
+}
+
+func Alloc(n int, clear bool) (unsafe.Pointer, *Handle) {
+	if n == 0 {
+		return nil, dumbHandle
+	}
+	class := requestSizeToClass(n)
+	if class == -1 {
+		return unsafe.Pointer(unsafe.SliceData(make([]byte, n))), dumbHandle
+	}
+	handle := classAllocate(class, clear)
+	return handle.ptr, handle
+}
+
+//go:linkname runtime_procPin runtime.procPin
+func runtime_procPin() int
+
+//go:linkname runtime_procUnpin runtime.procUnpin
+func runtime_procUnpin() int

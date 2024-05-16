@@ -36,6 +36,7 @@ const (
 	PPL1
 	PPL2
 	PPL3
+	PPL4
 )
 
 type ZonemapPrintKind int

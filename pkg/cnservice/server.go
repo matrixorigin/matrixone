@@ -23,12 +23,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
-	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -82,6 +84,7 @@ func NewService(
 
 	configKVMap, _ := dumpCnConfig(*cfg)
 	options = append(options, WithConfigData(configKVMap))
+	options = append(options, WithBootstrapOptions(bootstrap.WithUpgradeTenantBatch(cfg.UpgradeTenantBatchSize)))
 
 	// get metadata fs
 	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
@@ -302,6 +305,33 @@ func (s *service) SQLAddress() string {
 // SessionMgr implements the frontend.BaseService interface.
 func (s *service) SessionMgr() *queryservice.SessionManager {
 	return s.sessionMgr
+}
+
+func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
+	finalVersion := s.GetFinalVersion()
+	tenantFetchFunc := func() (int32, string, error) {
+		return int32(tenantID), finalVersion, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	defer cancel()
+	if _, err := s.bootstrapService.MaybeUpgradeTenant(ctx, tenantFetchFunc, nil); err != nil {
+		return err
+	}
+	return nil
+}
+
+// UpgradeTenant Manual command tenant upgrade entrance
+func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*120)
+	defer cancel()
+	if _, err := s.bootstrapService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *service) GetFinalVersion() string {
+	return s.bootstrapService.GetFinalVersion()
 }
 
 func (s *service) stopFrontend() error {
@@ -622,31 +652,34 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if s.cfg.Txn.EnableLeakCheck == 1 {
 			opts = append(opts, client.WithEnableLeakCheck(
 				s.cfg.Txn.MaxActiveAges.Duration,
-				func(txnID []byte, createAt time.Time, createBy txn.TxnOptions) {
+				func(actives []client.ActiveTxn) {
 					name, _ := uuid.NewV7()
 					profPath := catalog.BuildProfilePath("routine", name.String())
 
-					fields := []zap.Field{
-						zap.String("txn-id", hex.EncodeToString(txnID)),
-						zap.Time("create-at", createAt),
-						zap.String("options", createBy.String()),
-						zap.String("profile", profPath),
+					for _, txn := range actives {
+						fields := []zap.Field{
+							zap.String("txn-id", hex.EncodeToString(txn.ID)),
+							zap.Time("create-at", txn.CreateAt),
+							zap.String("options", txn.Options.String()),
+							zap.String("profile", profPath),
+						}
+						if txn.Options.InRunSql {
+							//the txn runs sql in compile.Run() and doest not exist
+							v2.TxnLongRunningCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found long running txn", fields...)
+						} else if txn.Options.InCommit {
+							v2.TxnInCommitCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found txn in commit", fields...)
+						} else if txn.Options.InRollback {
+							v2.TxnInRollbackCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found txn in rollback", fields...)
+						} else {
+							v2.TxnLeakCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found leak txn", fields...)
+						}
 					}
-					if createBy.InRunSql {
-						//the txn runs sql in compile.Run() and doest not exist
-						v2.TxnLongRunningCounter.Inc()
-						runtime.DefaultRuntime().Logger().Error("found long running txn", fields...)
-					} else if createBy.InCommit {
-						v2.TxnInCommitCounter.Inc()
-						runtime.DefaultRuntime().Logger().Error("found txn in commit", fields...)
-					} else if createBy.InRollback {
-						v2.TxnInRollbackCounter.Inc()
-						runtime.DefaultRuntime().Logger().Error("found txn in rollback", fields...)
-					} else {
-						v2.TxnLeakCounter.Inc()
-						runtime.DefaultRuntime().Logger().Error("found leak txn", fields...)
-					}
-					s.saveProfile(profPath)
+
+					SaveProfile(profPath, profile.GOROUTINE, s.etlFS)
 				}))
 		}
 		if s.cfg.Txn.Limit > 0 {
@@ -787,21 +820,28 @@ func (s *service) bootstrap() error {
 		s.options.bootstrapOptions...)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
 	defer cancel()
+
 	// bootstrap cannot fail. We panic here to make sure the service can not start.
 	// If bootstrap failed, need clean all data to retry.
 	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
 		panic(err)
 	}
-	return s.stopper.RunTask(func(ctx context.Context) {
-		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
-		defer cancel()
-		if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
-			if err != context.Canceled {
-				panic(err)
+
+	if s.cfg.AutomaticUpgrade {
+		return s.stopper.RunTask(func(ctx context.Context) {
+			ctx, cancel := context.WithTimeout(ctx, time.Minute*120)
+			defer cancel()
+			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
+				if err != context.Canceled {
+					runtime.DefaultRuntime().Logger().Error("bootstrap system automatic upgrade failed by: ", zap.Error(err))
+					//panic(err)
+				}
 			}
-		}
-	})
+		})
+	}
+	return nil
 }
 
 func (s *service) initTxnTraceService() {
@@ -822,11 +862,16 @@ func (s *service) initTxnTraceService() {
 	rt.SetGlobalVariables(runtime.TxnTraceService, ts)
 }
 
-func (s *service) saveProfile(profilePath string) {
+// SaveProfile saves profile into etl fs
+// profileType defined in pkg/util/profile/profile.go
+func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileService) {
+	if len(profilePath) == 0 || len(profileType) == 0 || etlFS == nil {
+		return
+	}
 	reader, writer := io.Pipe()
 	go func() {
 		// dump all goroutines
-		_ = profile.ProfileGoroutine(writer, 2)
+		_ = profile.ProfileRuntime(profileType, writer, 2)
 		_ = writer.Close()
 	}()
 	writeVec := fileservice.IOVector{
@@ -841,7 +886,7 @@ func (s *service) saveProfile(profilePath string) {
 	}
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*3)
 	defer cancel()
-	err := s.etlFS.Write(ctx, writeVec)
+	err := etlFS.Write(ctx, writeVec)
 	if err != nil {
 		logutil.Errorf("save profile %s failed. err:%v", profilePath, err)
 		return

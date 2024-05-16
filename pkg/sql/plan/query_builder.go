@@ -21,19 +21,23 @@ import (
 	"go/constant"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool) *QueryBuilder {
@@ -1250,7 +1254,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_LOCK_OP:
 		preNode := builder.qry.Nodes[node.Children[0]]
 		pkexpr := &plan.Expr{
-			Typ: *node.LockTargets[0].GetPrimaryColTyp(),
+			Typ: node.LockTargets[0].GetPrimaryColTyp(),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: node.BindingTags[1],
@@ -1423,6 +1427,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
 
+	builder.parseOptimizeHints()
 	for i, rootID := range builder.qry.Steps {
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
@@ -1432,6 +1437,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
+		builder.optimizeDateFormatExpr(rootID)
 
 		builder.pushdownLimitToTableScan(rootID)
 
@@ -1485,6 +1491,12 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.generateRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
+		builder.forceJoinOnOneCN(rootID, false)
+		// after this ,never call ReCalcNodeStats again !!!
+
+		if builder.isForUpdate {
+			reCheckifNeedLockWholeTable(builder)
+		}
 
 		builder.handleMessgaes(rootID)
 
@@ -1596,6 +1608,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		if err != nil {
 			return 0, err
 		}
+		ctx.views = append(ctx.views, subCtx.views...)
 
 		if idx == 0 {
 			projectLength = len(builder.qry.Nodes[nodeID].ProjectList)
@@ -1640,7 +1653,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 					argsCastType[i].Scale = 0
 				}
 			}
-			var targetType *plan.Type
+			var targetType plan.Type
 			var targetArgType types.Type
 			if len(argsCastType) == 0 {
 				targetArgType = tmpArgsType[0]
@@ -1665,7 +1678,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 				if !argsType[idx].Eq(targetArgType) {
 					node := builder.qry.Nodes[tmpID]
 					if argsType[idx].Oid == types.T_any {
-						node.ProjectList[columnIdx].Typ = *targetType
+						node.ProjectList[columnIdx].Typ = targetType
 					} else {
 						node.ProjectList[columnIdx], err = appendCastBeforeExpr(builder.GetContext(), node.ProjectList[columnIdx], targetType)
 						if err != nil {
@@ -1973,15 +1986,19 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				subCtx.cteName = table
 				subCtx.maskedCTEs = cteRef.maskedCTEs
 				cteRef.isRecursive = false
+
+				oldSnapshot := builder.compCtx.GetSnapshot()
+				builder.compCtx.SetSnapshot(subCtx.snapshot)
 				nodeID, err := builder.buildSelect(s, subCtx, false)
+				builder.compCtx.SetSnapshot(oldSnapshot)
 				if err != nil {
 					return 0, err
 				}
 				if len(cteRef.ast.Name.Cols) > 0 && len(cteRef.ast.Name.Cols) != len(builder.qry.Nodes[nodeID].ProjectList) {
 					return 0, moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(builder.qry.Nodes[nodeID].ProjectList), len(cteRef.ast.Name.Cols))
 				}
+				ctx.views = append(ctx.views, subCtx.views...)
 			} else {
-
 				initCtx := NewBindContext(builder, ctx)
 				initCtx.initSelect = true
 				initCtx.sinkTag = builder.genNewTag()
@@ -1993,6 +2010,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				if len(cteRef.ast.Name.Cols) > 0 && len(cteRef.ast.Name.Cols) != len(builder.qry.Nodes[initLastNodeID].ProjectList) {
 					return 0, moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(builder.qry.Nodes[initLastNodeID].ProjectList), len(cteRef.ast.Name.Cols))
 				}
+				//ctx.views = append(ctx.views, initCtx.views...)
+
 				recursiveNodeId := initLastNodeID
 				for _, r := range stmts {
 					subCtx := NewBindContext(builder, ctx)
@@ -2013,6 +2032,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					if err != nil {
 						return 0, err
 					}
+					//ctx.views = append(ctx.views, subCtx.views...)
 				}
 				builder.qry.Steps = builder.qry.Steps[:0]
 			}
@@ -2086,13 +2106,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
 		}
 		bat := batch.NewWithSize(len(valuesClause.Rows[0]))
-		strTyp := &plan.Type{
+		strTyp := plan.Type{
 			Id:          int32(types.T_text),
 			NotNullable: false,
 		}
 		strColTyp := makeTypeByPlan2Type(strTyp)
 		strColTargetTyp := &plan.Expr{
-			Typ: *strTyp,
+			Typ: strTyp,
 			Expr: &plan.Expr_T{
 				T: &plan.TargetType{},
 			},
@@ -2152,7 +2172,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			tableDef.Cols[i] = &plan.ColDef{
 				ColId: 0,
 				Name:  colName,
-				Typ:   *strTyp,
+				Typ:   strTyp,
 			}
 		}
 		bat.SetRowCount(rowCount)
@@ -2382,7 +2402,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if len(r.Parts[2]) > 0 {
 			schema = r.Parts[2]
 		}
-		pk := builder.compCtx.GetPrimaryKeyDef(schema, table)
+
+		// snapshot to fix
+		pk := builder.compCtx.GetPrimaryKeyDef(schema, table, Snapshot{TS: &timestamp.Timestamp{}})
 		if len(pk) > 1 || pk[0].Name != r.Parts[0] {
 			return 0, moerr.NewNotSupported(builder.GetContext(), "%s is not primary key in time window", tree.String(col, dialect.MYSQL))
 		}
@@ -2449,7 +2471,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					}
 				}
 				if astTimeWindow.Fill.Val != nil {
-					e, err := appendCastBeforeExpr(builder.GetContext(), v, &t.Typ)
+					e, err := appendCastBeforeExpr(builder.GetContext(), v, t.Typ)
 					if err != nil {
 						return 0, err
 					}
@@ -2474,7 +2496,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					if err != nil {
 						return 0, err
 					}
-					col, err := appendCastBeforeExpr(builder.GetContext(), v, &fillCols[i].Typ)
+					col, err := appendCastBeforeExpr(builder.GetContext(), v, fillCols[i].Typ)
 					if err != nil {
 						return 0, err
 					}
@@ -3233,6 +3255,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		if subCtx.hasSingleRow {
 			ctx.hasSingleRow = true
 		}
+		ctx.views = append(ctx.views, subCtx.views...)
 
 	case *tree.TableName:
 		schema := string(tbl.SchemaName)
@@ -3282,12 +3305,17 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					subCtx := NewBindContext(builder, ctx)
 					subCtx.maskedCTEs = cteRef.maskedCTEs
 					subCtx.cteName = table
+					subCtx.snapshot = cteRef.snapshot
 					//reset defaultDatabase
 					if len(cteRef.defaultDatabase) > 0 {
 						subCtx.defaultDatabase = cteRef.defaultDatabase
 					}
 					cteRef.isRecursive = false
+
+					oldSnapshot := builder.compCtx.GetSnapshot()
+					builder.compCtx.SetSnapshot(subCtx.snapshot)
 					nodeID, err = builder.buildSelect(s, subCtx, false)
+					builder.compCtx.SetSnapshot(oldSnapshot)
 					if err != nil {
 						return
 					}
@@ -3295,6 +3323,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					if subCtx.hasSingleRow {
 						ctx.hasSingleRow = true
 					}
+					ctx.views = append(ctx.views, subCtx.views...)
 
 					cols := cteRef.ast.Name.Cols
 
@@ -3358,7 +3387,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						}
 						for i := range n.ProjectList {
 							projTyp := projects[i].GetTyp()
-							n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], &projTyp)
+							n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
 							if err != nil {
 								return
 							}
@@ -3448,12 +3477,25 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			schema = ctx.defaultDatabase
 		}
 
-		schema, err = databaseIsValid(schema, builder.compCtx)
+		if tbl.AtTsExpr != nil {
+			ctx.snapshot, err = builder.resolveTsHint(tbl.AtTsExpr)
+			if err != nil {
+				return 0, err
+			}
+		}
+		snapshot := ctx.snapshot
+		if snapshot == nil {
+			snapshot = &Snapshot{TS: &timestamp.Timestamp{}}
+		}
+
+		// TODO
+		schema, err = databaseIsValid(schema, builder.compCtx, *snapshot)
 		if err != nil {
 			return 0, err
 		}
 
-		obj, tableDef := builder.compCtx.Resolve(schema, table)
+		// TODO
+		obj, tableDef := builder.compCtx.Resolve(schema, table, *snapshot)
 		if tableDef == nil {
 			return 0, moerr.NewParseError(builder.GetContext(), "table %q does not exist", table)
 		}
@@ -3545,7 +3587,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					},
 					defaultDatabase: defaultDatabase,
 					maskedCTEs:      maskedCTEs,
+					snapshot:        snapshot,
 				}
+				// consist with frontend.genKey()
+				ctx.views = append(ctx.views, schema+"#"+table)
 
 				newTableName := tree.NewTableName(viewName, tree.ObjectNamePrefix{
 					CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
@@ -3558,11 +3603,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 		nodeID = builder.appendNode(&plan.Node{
-			NodeType:    nodeType,
-			Stats:       nil,
-			ObjRef:      obj,
-			TableDef:    tableDef,
-			BindingTags: []int32{builder.genNewTag()},
+			NodeType:     nodeType,
+			Stats:        nil,
+			ObjRef:       obj,
+			TableDef:     tableDef,
+			BindingTags:  []int32{builder.genNewTag()},
+			ScanSnapshot: snapshot,
 		}, ctx)
 
 	case *tree.JoinTableExpr:
@@ -3846,6 +3892,8 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	if err != nil {
 		return 0, err
 	}
+	ctx.views = append(ctx.views, leftCtx.views...)
+
 	if _, ok := tbl.Right.(*tree.TableFunction); ok {
 		return 0, moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
 	}
@@ -3853,6 +3901,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	if err != nil {
 		return 0, err
 	}
+	ctx.views = append(ctx.views, rightCtx.views...)
 
 	if builder.qry.Nodes[rightChildID].NodeType == plan.Node_FUNCTION_SCAN {
 		if joinType != plan.Node_INNER {
@@ -4022,4 +4071,108 @@ func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
 		}
 		return false
 	}
+}
+
+func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *Snapshot, err error) {
+	if tsExpr == nil {
+		return
+	}
+
+	conds := splitAstConjunction(tsExpr.Expr)
+	if len(conds) != 1 {
+		err = moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
+		return
+	}
+
+	binder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
+	binder.builder = builder
+	defExpr, err := binder.BindExpr(conds[0], 0, false)
+	if err != nil {
+		return
+	}
+	exprLit, ok := defExpr.Expr.(*plan.Expr_Lit)
+	if !ok {
+		err = moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
+		return
+	}
+
+	var tenant *SnapshotTenant
+	if bgSnapshot := builder.compCtx.GetSnapshot(); IsSnapshotValid(bgSnapshot) {
+		tenant = &SnapshotTenant{
+			TenantName: bgSnapshot.Tenant.TenantName,
+			TenantID:   bgSnapshot.Tenant.TenantID,
+		}
+	}
+
+	switch lit := exprLit.Lit.Value.(type) {
+	case *plan.Literal_Sval:
+		if tsExpr.Type == tree.ATTIMESTAMPTIME {
+			var ts time.Time
+			if ts, err = time.Parse("2006-01-02 15:04:05.999999999", lit.Sval); err != nil {
+				return
+			}
+
+			tsNano := ts.UTC().UnixNano()
+			if tsNano <= 0 {
+				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
+				return
+			}
+
+			if time.Now().UTC().UnixNano()-tsNano <= options.DefaultGCTTL.Nanoseconds() && 0 <= time.Now().UTC().UnixNano()-tsNano {
+				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
+			} else {
+				var valid bool
+				if valid, err = builder.compCtx.CheckTimeStampValid(tsNano); err != nil {
+					return
+				}
+
+				if !valid {
+					err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value, no corresponding snapshot ", lit.Sval)
+					return
+				}
+
+				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
+			}
+		} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+			return builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
+		} else if tsExpr.Type == tree.ATMOTIMESTAMP {
+			var ts timestamp.Timestamp
+			if ts, err = timestamp.ParseTimestamp(lit.Sval); err != nil {
+				return
+			}
+
+			snapshot = &Snapshot{TS: &ts, Tenant: tenant}
+		} else {
+			err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint type", tsExpr.Type.String())
+			return
+		}
+	case *plan.Literal_I64Val:
+		if tsExpr.Type == tree.ATTIMESTAMPTIME {
+			if lit.I64Val <= 0 {
+				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
+				return
+			}
+
+			snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: lit.I64Val}, Tenant: tenant}
+		} else {
+			err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint for snapshot hint", lit.I64Val)
+			return
+		}
+	default:
+		err = moerr.NewInvalidArg(builder.GetContext(), "invalid input expr ", tsExpr.Expr.String())
+	}
+
+	return
+}
+
+func IsSnapshotValid(snapshot *Snapshot) bool {
+	if snapshot == nil {
+		return false
+	}
+
+	if snapshot.TS == nil || snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) {
+		return false
+	}
+
+	return true
 }

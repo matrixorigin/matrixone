@@ -213,8 +213,15 @@ func performLock(
 			zap.Int32("primary-index", target.primaryColumnIndexInBatch))
 		var filterCols []int32
 		priVec := bat.GetVector(target.primaryColumnIndexInBatch)
+		// For partitioned tables, filter is not nil
 		if target.filter != nil {
 			filterCols = vector.MustFixedCol[int32](bat.GetVector(target.filterColIndexInBatch))
+			for _, value := range filterCols {
+				// has Illegal Partition index
+				if value == -1 {
+					return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
+				}
+			}
 		}
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
@@ -464,7 +471,7 @@ func doLock(
 			rows,
 			txn.ID,
 			options)
-		if !moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+		if !canRetryLock(txnOp, err) {
 			break
 		}
 	}
@@ -559,6 +566,20 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, err
 	}
 	return true, result.TableDefChanged, snapshotTS, nil
+}
+
+func canRetryLock(txn client.TxnOperator, err error) bool {
+	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+		return true
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		!moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
+		return false
+	}
+	if txn.LockTableCount() == 0 {
+		return true
+	}
+	return false
 }
 
 // DefaultLockOptions create a default lock operation. The parker is used to
@@ -783,6 +804,10 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 		})
 	}
 	return arg
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
 }
 
 // Free free mem

@@ -27,13 +27,13 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -62,6 +62,7 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithLongQueryTime(SV.LongQueryTime),
 		WithLongSpanTime(SV.LongSpanTime.Duration),
 		WithSpanDisable(SV.DisableSpan),
+		WithErrorDisable(SV.DisableError),
 		WithSkipRunningStmt(SV.SkipRunningStmt),
 		WithSQLWriterDisable(SV.DisableSqlWriter),
 		WithAggregatorDisable(SV.DisableStmtAggregation),
@@ -69,6 +70,7 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithSelectThreshold(SV.SelectAggrThreshold.Duration),
 		WithStmtMergeEnable(SV.EnableStmtMerge),
 		WithCUConfig(SV.CU, SV.CUv1),
+		WithTCPPacket(SV.TCPPacket),
 		WithLabels(SV.LabelSelector),
 
 		DebugMode(SV.EnableTraceDebug),
@@ -97,6 +99,9 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 		_, span := gTracer.Start(ctx, "TraceInit")
 		defer span.End()
 		defer trace.SetDefaultTracer(gTracer)
+	}
+	if config.disableError {
+		DisableLogErrorReport(true)
 	}
 
 	// init DefaultContext / DefaultSpanContext
@@ -169,6 +174,37 @@ func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) err
 	return nil
 }
 
+// InitSchema2
+// PS: only in system bootstrap init schema with `executor.TxnExecutor`
+func InitSchemaWithTxn(ctx context.Context, txn executor.TxnExecutor) error {
+	_, err := txn.Exec(sqlCreateDBConst, executor.StatementOption{})
+	if err != nil {
+		return err
+	}
+
+	var createCost time.Duration
+	defer func() {
+		logutil.Debugf("[Trace] init tables: create cost %d ms", createCost.Milliseconds())
+	}()
+
+	instant := time.Now()
+	for _, tbl := range tables {
+		_, err = txn.Exec(tbl.ToCreateSql(ctx, true), executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, v := range views {
+		_, err = txn.Exec(v.ToCreateSql(ctx, true), executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+	}
+	createCost = time.Since(instant)
+	return nil
+}
+
 func Shutdown(ctx context.Context) error {
 	if !GetTracerProvider().IsEnable() {
 		return nil
@@ -213,7 +249,10 @@ func GetNodeResource() *trace.MONodeResource {
 func SetTracerProvider(p *MOTracerProvider) {
 	gTracerProvider.Store(p)
 }
-func GetTracerProvider() *MOTracerProvider {
+
+// GetTracerProvider returns the global TracerProvider.
+// It will be initialized at startup.
+var GetTracerProvider = func() *MOTracerProvider {
 	return gTracerProvider.Load().(*MOTracerProvider)
 }
 

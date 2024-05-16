@@ -16,11 +16,11 @@ package hashbuild
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -67,16 +67,13 @@ type Argument struct {
 	NeedExpr    bool
 	NeedHashMap bool
 	IsDup       bool
-	Ibucket     uint64
-	Nbucket     uint64
 	Typs        []types.Type
 	Conditions  []*plan.Expr
 
-	HashOnPK             bool
-	NeedMergedBatch      bool
-	NeedAllocateSels     bool
-	RuntimeFilterSenders []*colexec.RuntimeFilterChan
-
+	HashOnPK          bool
+	NeedMergedBatch   bool
+	NeedAllocateSels  bool
+	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
 	vm.OperatorBase
 }
 
@@ -111,15 +108,16 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetRuntimeFilterSenders(rfs []*colexec.RuntimeFilterChan) {
-	arg.RuntimeFilterSenders = rfs
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
+	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
 	if ctr != nil {
 		ctr.cleanBatches(proc)
-		ctr.cleanEvalVectors(proc.Mp())
+		ctr.cleanEvalVectors()
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
 		}
@@ -129,6 +127,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		} else {
 			ctr.FreeAllReg()
 		}
+		arg.ctr = nil
 	}
 }
 
@@ -139,7 +138,7 @@ func (ctr *container) cleanBatches(proc *process.Process) {
 	ctr.batches = nil
 }
 
-func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
+func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.executor {
 		if ctr.executor[i] != nil {
 			ctr.executor[i].Free()

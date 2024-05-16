@@ -15,6 +15,7 @@
 package process
 
 import (
+	"context"
 	"sync"
 )
 
@@ -36,6 +37,8 @@ func (m MsgType) MessageName() string {
 	switch m {
 	case MsgTopValue:
 		return "MsgTopValue"
+	case MsgRuntimeFilter:
+		return "MsgRuntimeFilter"
 	}
 	return "unknown message type"
 }
@@ -43,10 +46,9 @@ func (m MsgType) MessageName() string {
 func NewMessageBoard() *MessageBoard {
 	m := &MessageBoard{
 		Messages: make([]*Message, 0, 1024),
+		Waiters:  make([]chan bool, 0, 16),
 		RwMutex:  &sync.RWMutex{},
-		Mutex:    &sync.Mutex{},
 	}
-	m.Cond = sync.NewCond(m.Mutex)
 	return m
 }
 
@@ -66,9 +68,15 @@ type Message interface {
 
 type MessageBoard struct {
 	Messages []*Message
+	Waiters  []chan bool
 	RwMutex  *sync.RWMutex // for nonblock message
-	Mutex    *sync.Mutex   // for block message
-	Cond     *sync.Cond    //for block message
+}
+
+func (m *MessageBoard) Reset() {
+	m.RwMutex.Lock()
+	defer m.RwMutex.Unlock()
+	m.Messages = m.Messages[:0]
+	m.Waiters = m.Waiters[:0]
 }
 
 type MessageReceiver struct {
@@ -77,18 +85,23 @@ type MessageReceiver struct {
 	received []int32
 	addr     *MessageAddress
 	mb       *MessageBoard
+	waiter   chan bool
 }
 
 func (proc *Process) SendMessage(m Message) {
 	mb := proc.MessageBoard
-	mb.RwMutex.Lock()
-	defer mb.RwMutex.Unlock()
 	if m.GetReceiverAddr().CnAddr == CURRENTCN { // message for current CN
+		mb.RwMutex.Lock()
 		mb.Messages = append(mb.Messages, &m)
 		if m.NeedBlock() {
 			// broadcast for block message
-			mb.Cond.Broadcast()
+			for _, ch := range mb.Waiters {
+				if ch != nil && len(ch) == 0 {
+					ch <- true
+				}
+			}
 		}
+		mb.RwMutex.Unlock()
 	} else {
 		//todo: send message to other CN, need to lookup cnlist
 		panic("unsupported message yet!")
@@ -109,6 +122,9 @@ func (mr *MessageReceiver) receiveMessageNonBlock() []Message {
 	var result []Message
 	lenMessages := int32(len(mr.mb.Messages))
 	for ; mr.offset < lenMessages; mr.offset++ {
+		if mr.mb.Messages[mr.offset] == nil {
+			continue
+		}
 		message := *mr.mb.Messages[mr.offset]
 		if !MatchAddress(message, mr.addr) {
 			continue
@@ -131,23 +147,35 @@ func (mr *MessageReceiver) Free() {
 	mr.mb.RwMutex.Lock()
 	defer mr.mb.RwMutex.Unlock()
 	for i := range mr.received {
-		mr.mb.Messages[i] = nil
+		mr.mb.Messages[mr.received[i]] = nil
 	}
 	mr.received = nil
+	mr.waiter = nil
 }
 
-func (mr *MessageReceiver) ReceiveMessage(needBlock bool) []Message {
-	if !needBlock {
-		return mr.receiveMessageNonBlock()
+func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) ([]Message, bool) {
+	var result = mr.receiveMessageNonBlock()
+	if !needBlock || len(result) > 0 {
+		return result, false
 	}
-	var result []Message
-	for len(result) == 0 {
-		mr.mb.Cond.L.Lock()
-		mr.mb.Cond.Wait()
-		mr.mb.Cond.L.Unlock()
+	if mr.waiter == nil {
+		mr.waiter = make(chan bool, 1)
+		mr.mb.RwMutex.Lock()
+		mr.mb.Waiters = append(mr.mb.Waiters, mr.waiter)
+		mr.mb.RwMutex.Unlock()
+	}
+	for {
 		result = mr.receiveMessageNonBlock()
+		if len(result) > 0 {
+			break
+		}
+		select {
+		case <-mr.waiter:
+		case <-ctx.Done():
+			return result, true
+		}
 	}
-	return result
+	return result, false
 }
 
 func MatchAddress(m Message, raddr *MessageAddress) bool {

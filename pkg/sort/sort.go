@@ -15,6 +15,7 @@
 package sort
 
 import (
+	"bytes"
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -32,25 +33,26 @@ const (
 type xorshift uint64
 type sortedHint int // hint for pdqsort when choosing the pivot
 
-func NewBoolLess() func([]bool, int64, int64) bool {
-	return boolLess[bool]
+type LessFunc[T any] func(a, b T) bool
+
+func GenericLess[T types.OrderedT](a, b T) bool {
+	return a < b
 }
 
-func NewDecimal64Less() func(data []types.Decimal64, i, j int64) bool {
-	return decimal64Less
+func BoolLess(a, b bool) bool { return !a && b }
+
+func Decimal64Less(a, b types.Decimal64) bool { return a.Lt(b) }
+
+func Decimal128Less(a, b types.Decimal128) bool { return a.Lt(b) }
+
+func UuidLess(a, b types.Uuid) bool {
+	return a.Lt(b)
 }
 
-func NewDecimal128Less() func(data []types.Decimal128, i, j int64) bool {
-	return decimal128Less
-}
-
-func NewUuidCompLess() func(data []types.Uuid, i, j int64) bool {
-	return uuidLess
-}
-
-func NewGenericCompLess[T types.OrderedT]() func([]T, int64, int64) bool {
-	return genericLess[T]
-}
+// it seems that go has no const generic type, handle these types respectively
+func TsLess(a, b types.TS) bool           { return bytes.Compare(a[:], b[:]) < 0 }
+func RowidLess(a, b types.Rowid) bool     { return bytes.Compare(a[:], b[:]) < 0 }
+func BlockidLess(a, b types.Blockid) bool { return bytes.Compare(a[:], b[:]) < 0 }
 
 func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol []string) {
 	if hasNull {
@@ -252,6 +254,27 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		} else {
 			genericSort(col, os, arrayGreater[float64])
 		}
+	case types.T_TS:
+		col := vector.MustFixedCol[types.TS](vec)
+		if !desc {
+			genericSort(col, os, tsLess)
+		} else {
+			genericSort(col, os, tsGreater)
+		}
+	case types.T_Rowid:
+		col := vector.MustFixedCol[types.Rowid](vec)
+		if !desc {
+			genericSort(col, os, rowidLess)
+		} else {
+			genericSort(col, os, rowidGreater)
+		}
+	case types.T_Blockid:
+		col := vector.MustFixedCol[types.Blockid](vec)
+		if !desc {
+			genericSort(col, os, blockidLess)
+		} else {
+			genericSort(col, os, blockidGreater)
+		}
 	}
 }
 
@@ -277,6 +300,30 @@ func decimal128Less(data []types.Decimal128, i, j int64) bool {
 
 func decimal128Greater(data []types.Decimal128, i, j int64) bool {
 	return data[i].Compare(data[j]) > 0
+}
+
+func tsLess(data []types.TS, i, j int64) bool {
+	return data[i].Less(&data[j])
+}
+
+func tsGreater(data []types.TS, i, j int64) bool {
+	return data[i].Greater(&data[j])
+}
+
+func rowidLess(data []types.Rowid, i, j int64) bool {
+	return data[i].Less(data[j])
+}
+
+func rowidGreater(data []types.Rowid, i, j int64) bool {
+	return data[i].Great(data[j])
+}
+
+func blockidLess(data []types.Blockid, i, j int64) bool {
+	return data[i].Less(data[j])
+}
+
+func blockidGreater(data []types.Blockid, i, j int64) bool {
+	return data[i].Great(data[j])
 }
 
 func uuidLess(data []types.Uuid, i, j int64) bool {

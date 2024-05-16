@@ -259,7 +259,3 @@ func (s *ShardIdSlice) Slice(i, j int) []byte {
 func (s *ShardIdSlice) Get(i int) uint64 {
 	return binary.LittleEndian.Uint64(s.GetBytes(i))
 }
-
-func (t *Table) UpdateObjectInfos(_ context.Context) error {
-	return nil
-}

@@ -51,7 +51,6 @@ func (mixin *withFilterMixin) reset() {
 	mixin.filterState.evaluated = false
 	mixin.filterState.filter = nil
 	mixin.columns.pkPos = -1
-	mixin.columns.rowidPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
 	mixin.columns.colTypes = nil
@@ -80,7 +79,6 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	mixin.columns.colTypes = make([]types.Type, len(cols))
 	// mixin.columns.colNulls = make([]bool, len(cols))
 	mixin.columns.pkPos = -1
-	mixin.columns.rowidPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	compPKName2Pos := make(map[string]struct{})
 	positions := make(map[string]int)
@@ -92,7 +90,6 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	}
 	for i, column := range cols {
 		if column == catalog.Row_ID {
-			mixin.columns.rowidPos = i
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
 		} else {
@@ -228,7 +225,6 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkC
 	ok, hasNull, searchFunc := getNonCompositePKSearchFuncByExpr(
 		mixin.filterState.expr,
 		mixin.tableDef.Pkey.PkeyColName,
-		mixin.columns.colTypes[mixin.columns.pkPos].Oid,
 		proc,
 	)
 	if !ok || searchFunc == nil {
@@ -476,7 +472,8 @@ func (r *blockReader) Read(
 	if !r.dontPrefetch {
 		//prefetch some objects
 		for len(r.steps) > 0 && r.steps[0] == r.currentStep {
-			prefetchFile := r.scanType == SMALL || r.scanType == LARGE
+			// always true for now, will optimize this in the future
+			prefetchFile := r.scanType == SMALL || r.scanType == LARGE || r.scanType == NORMAL
 			if filter != nil && blockInfo.Sorted {
 				err = blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 			} else {
@@ -559,7 +556,7 @@ func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
 func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
-	encodedPrimaryKey []byte,
+	pkVal []byte,
 	ts timestamp.Timestamp,
 	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
@@ -577,8 +574,8 @@ func newBlockMergeReader(
 			fs,
 			proc,
 		),
-		encodedPrimaryKey: encodedPrimaryKey,
-		deletaLocs:        make(map[string][]objectio.Location),
+		pkVal:      pkVal,
+		deletaLocs: make(map[string][]objectio.Location),
 	}
 	return r
 }
@@ -590,12 +587,12 @@ func (r *blockMergeReader) Close() error {
 
 func (r *blockMergeReader) prefetchDeletes() error {
 	//load delta locations for r.blocks.
-	r.table.db.txn.blockId_tn_delete_metaLoc_batch.RLock()
-	defer r.table.db.txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+	r.table.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
+	defer r.table.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
 
 	if !r.loaded {
 		for _, info := range r.blks {
-			bats, ok := r.table.db.txn.blockId_tn_delete_metaLoc_batch.data[info.BlockID]
+			bats, ok := r.table.getTxn().blockId_tn_delete_metaLoc_batch.data[info.BlockID]
 
 			if !ok {
 				return nil
@@ -662,10 +659,10 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	}
 	ts := types.TimestampToTS(r.ts)
 
-	if filter != nil && info.Sorted && len(r.encodedPrimaryKey) > 0 {
+	if filter != nil && info.Sorted && len(r.pkVal) > 0 {
 		iter := state.NewPrimaryKeyDelIter(
 			ts,
-			logtailreplay.Prefix(r.encodedPrimaryKey),
+			logtailreplay.Prefix(r.pkVal),
 			info.BlockID,
 		)
 		for iter.Next() {
@@ -691,22 +688,25 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 
 	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
 	//load deletes from txn.writes for the specified block
-	r.table.db.txn.forEachTableWrites(r.table.db.databaseId, r.table.tableId, r.table.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
-		if entry.isGeneratedByTruncate() {
-			return
-		}
-		if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
-			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-			for _, v := range vs {
-				id, offset := v.Decode()
-				if id == info.BlockID {
-					r.buffer = append(r.buffer, int64(offset))
+	r.table.getTxn().forEachTableWrites(
+		r.table.db.databaseId,
+		r.table.tableId,
+		r.table.getTxn().GetSnapshotWriteOffset(), func(entry Entry) {
+			if entry.isGeneratedByTruncate() {
+				return
+			}
+			if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					id, offset := v.Decode()
+					if id == info.BlockID {
+						r.buffer = append(r.buffer, int64(offset))
+					}
 				}
 			}
-		}
-	})
+		})
 	//load deletes from txn.deletedBlocks.
-	txn := r.table.db.txn
+	txn := r.table.getTxn()
 	txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID, &r.buffer)
 	return nil
 }

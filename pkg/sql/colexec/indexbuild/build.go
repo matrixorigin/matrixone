@@ -16,10 +16,8 @@ package indexbuild
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -32,17 +30,16 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	if len(ap.RuntimeFilterSenders) == 0 {
+	if arg.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in index build!")
 	}
 
-	ap.ctr = new(container)
+	arg.ctr = new(container)
 	if len(proc.Reg.MergeReceivers) > 1 {
-		ap.ctr.InitReceiver(proc, true)
-		ap.ctr.isMerge = true
+		arg.ctr.InitReceiver(proc, true)
+		arg.ctr.isMerge = true
 	} else {
-		ap.ctr.InitReceiver(proc, false)
+		arg.ctr.InitReceiver(proc, false)
 	}
 
 	return nil
@@ -57,18 +54,17 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
-	ap := arg
-	ctr := ap.ctr
+	ctr := arg.ctr
 	for {
 		switch ctr.state {
 		case ReceiveBatch:
-			if err := ctr.build(ap, proc, anal, arg.GetIsFirst()); err != nil {
+			if err := ctr.build(arg, proc, anal, arg.GetIsFirst()); err != nil {
 				return result, err
 			}
 			ctr.state = HandleRuntimeFilter
 
 		case HandleRuntimeFilter:
-			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
+			if err := ctr.handleRuntimeFilter(arg, proc); err != nil {
 				return result, err
 			}
 			ctr.state = End
@@ -110,7 +106,7 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 			return err
 		}
 		proc.PutBatch(currentBatch)
-		if ctr.batch.RowCount() > int(ap.RuntimeFilterSenders[0].Spec.UpperLimit) {
+		if ctr.batch.RowCount() > int(ap.RuntimeFilterSpec.UpperLimit) {
 			// for index build, can exit early
 			return nil
 		}
@@ -127,29 +123,25 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
-	var runtimeFilter *pipeline.RuntimeFilter
+	var runtimeFilter process.RuntimeFilterMessage
+	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
 
-	if ap.RuntimeFilterSenders[0].Spec.Expr == nil {
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ: pipeline.RuntimeFilter_PASS,
-		}
+	if ap.RuntimeFilterSpec.Expr == nil {
+		runtimeFilter.Typ = process.RuntimeFilter_PASS
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		return nil
 	} else if ctr.batch == nil || ctr.batch.RowCount() == 0 {
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ: pipeline.RuntimeFilter_DROP,
-		}
-	}
-
-	if runtimeFilter != nil {
-		sendFilter(ap, proc, runtimeFilter)
+		runtimeFilter.Typ = process.RuntimeFilter_DROP
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		return nil
 	}
 
-	inFilterCardLimit := ap.RuntimeFilterSenders[0].Spec.UpperLimit
+	inFilterCardLimit := ap.RuntimeFilterSpec.UpperLimit
 
 	if ctr.batch.RowCount() > int(inFilterCardLimit) {
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ: pipeline.RuntimeFilter_PASS,
-		}
+		runtimeFilter.Typ = process.RuntimeFilter_PASS
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		return nil
 	} else {
 		if len(ctr.batch.Vecs) != 1 {
 			panic("there must be only 1 vector in index build batch")
@@ -161,25 +153,10 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 			return err
 		}
 
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ:  pipeline.RuntimeFilter_IN,
-			Card: int32(vec.Length()),
-			Data: data,
-		}
+		runtimeFilter.Typ = process.RuntimeFilter_IN
+		runtimeFilter.Card = int32(vec.Length())
+		runtimeFilter.Data = data
+		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 	}
-	sendFilter(ap, proc, runtimeFilter)
 	return nil
-}
-
-func sendFilter(ap *Argument, proc *process.Process, runtimeFilter *pipeline.RuntimeFilter) {
-	anal := proc.GetAnalyze(ap.GetIdx(), ap.GetParallelIdx(), ap.GetParallelMajor())
-	sendRuntimeFilterStart := time.Now()
-
-	select {
-	case <-proc.Ctx.Done():
-		ap.ctr.state = End
-	case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-		ap.ctr.state = End
-	}
-	anal.WaitStop(sendRuntimeFilterStart)
 }

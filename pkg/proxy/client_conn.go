@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 // clientBaseConnID is the base connection ID for client.
@@ -57,7 +58,7 @@ func (c *clientInfo) parse(full string) error {
 	if err != nil {
 		return err
 	}
-	c.labelInfo.Tenant = Tenant(tenant.Tenant)
+	c.labelInfo.Tenant = Tenant(tenant.GetTenant())
 	c.username = tenant.GetUser()
 
 	// For label part.
@@ -356,7 +357,7 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 	// Before connect to backend server, update the salt.
 	cn.salt = c.mysqlProto.GetSalt()
 
-	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", cn.backendConnID), resp)
+	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", cn.connID), resp)
 }
 
 // handleSetVar handles the set variable event.
@@ -383,8 +384,11 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 	}
 
 	badCNServers := make(map[string]struct{})
-	filterFn := func(uuid string) bool {
-		if _, ok := badCNServers[uuid]; ok {
+	if prevAdd != "" {
+		badCNServers[prevAdd] = struct{}{}
+	}
+	filterFn := func(str string) bool {
+		if _, ok := badCNServers[str]; ok {
 			return true
 		}
 		return false
@@ -403,8 +407,8 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 			v2.ProxyConnectRouteFailCounter.Inc()
 			return nil, err
 		}
-		// We have to set proxy connection ID after cn is returned.
-		cn.proxyConnID = c.connID
+		// We have to set connection ID after cn is returned.
+		cn.connID = c.connID
 
 		// Set the salt value of cn server.
 		cn.salt = c.mysqlProto.GetSalt()
@@ -419,7 +423,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		if err != nil {
 			if isRetryableErr(err) {
 				v2.ProxyConnectRetryCounter.Inc()
-				badCNServers[cn.uuid] = struct{}{}
+				badCNServers[cn.addr] = struct{}{}
 				c.log.Warn("failed to connect to CN server, will retry",
 					zap.String("current server uuid", cn.uuid),
 					zap.String("current server address", cn.addr),
@@ -434,26 +438,49 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 				v2.ProxyConnectCommonFailCounter.Inc()
 				return nil, err
 			}
-		} else {
-			break
 		}
-	}
 
-	if prevAdd == "" {
-		// r is the packet received from CN server, send r to client.
-		if err := c.mysqlProto.WritePacket(r[4:]); err != nil {
-			v2.ProxyConnectCommonFailCounter.Inc()
-			return nil, err
+		if prevAdd == "" {
+			// r is the packet received from CN server, send r to client.
+			if err := c.mysqlProto.WritePacket(r[4:]); err != nil {
+				v2.ProxyConnectCommonFailCounter.Inc()
+				closeErr := sc.Close()
+				if closeErr != nil {
+					c.log.Error("failed to close server connection", zap.Error(closeErr))
+				}
+				return nil, err
+			}
+		} else {
+			// The connection has been transferred to a new server, but migration fails,
+			// but we don't return error, which will cause unknown issue.
+			if err := c.migrateConn(prevAdd, sc); err != nil {
+				closeErr := sc.Close()
+				if closeErr != nil {
+					c.log.Error("failed to close server connection", zap.Error(closeErr))
+				}
+				c.log.Error("failed to migrate connection to cn, will retry",
+					zap.Uint32("conn ID", c.connID),
+					zap.String("current uuid", cn.uuid),
+					zap.String("current addr", cn.addr),
+					zap.Any("bad backend servers", badCNServers),
+					zap.Error(err),
+				)
+				badCNServers[cn.addr] = struct{}{}
+				continue
+			}
 		}
-	} else {
-		// The connection has been transferred to a new server, but migration fails,
-		// but we don't return error, which will cause unknown issue.
-		if err := c.migrateConn(prevAdd, sc); err != nil {
-			c.log.Error("failed to migrate connection information", zap.Error(err))
-			return sc, nil
-		}
+
+		// connection to cn server successfully.
+		break
 	}
 	if !isOKPacket(r) {
+		// If we do not close here, there will be a lot of unused connections
+		// in connManager.
+		if sc != nil {
+			if closeErr := sc.Close(); closeErr != nil {
+				c.log.Error("failed to close server connection", zap.Error(closeErr))
+			}
+		}
 		v2.ProxyConnectCommonFailCounter.Inc()
 		return nil, withCode(moerr.NewInternalErrorNoCtx("access error"),
 			codeAuthFailed)

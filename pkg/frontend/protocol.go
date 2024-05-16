@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 // Response Categories
@@ -40,6 +40,10 @@ const (
 	ResultResponse
 	// LocalInfileRequest local infile message
 	LocalInfileRequest
+)
+
+const (
+	ConnectionInfoKey = "connection_info"
 )
 
 type Request struct {
@@ -186,6 +190,8 @@ type Protocol interface {
 	incDebugCount(int)
 
 	resetDebugCount() []uint64
+
+	UpdateCtx(context.Context)
 }
 
 type ProtocolImpl struct {
@@ -215,6 +221,12 @@ type ProtocolImpl struct {
 
 	//for debug
 	debugCount [16]uint64
+
+	ctx context.Context
+}
+
+func (pi *ProtocolImpl) UpdateCtx(ctx context.Context) {
+	pi.ctx = ctx
 }
 
 func (pi *ProtocolImpl) incDebugCount(i int) {
@@ -270,7 +282,7 @@ func (pi *ProtocolImpl) IsEstablished() bool {
 }
 
 func (pi *ProtocolImpl) SetEstablished() {
-	logDebugf(pi.GetDebugString(), "SWITCH ESTABLISHED to true")
+	getLogger().Debug("SWITCH ESTABLISHED to true", zap.String(ConnectionInfoKey, pi.GetDebugString()))
 	pi.established.Store(true)
 }
 
@@ -279,7 +291,7 @@ func (pi *ProtocolImpl) IsTlsEstablished() bool {
 }
 
 func (pi *ProtocolImpl) SetTlsEstablished() {
-	logutil.Debugf("SWITCH TLS_ESTABLISHED to true")
+	getLogger().Debug("SWITCH TLS_ESTABLISHED to true", zap.String(ConnectionInfoKey, pi.GetDebugString()))
 	pi.tlsEstablished.Store(true)
 }
 
@@ -327,21 +339,9 @@ func (mp *MysqlProtocolImpl) GetRequest(payload []byte) *Request {
 	return req
 }
 
-func (mp *MysqlProtocolImpl) getAbortTransactionErrorInfo() string {
-	ses := mp.GetSession()
-	//update error message in Case1,Case3,Case4.
-	if ses != nil && ses.OptionBitsIsSet(OPTION_ATTACH_ABORT_TRANSACTION_ERROR) {
-		ses.ClearOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
-	}
-	return ""
-}
-
 func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) error {
 	//move here to prohibit potential recursive lock
 	var attachAbort string
-	if resp.GetCategory() == ErrorResponse {
-		attachAbort = mp.getAbortTransactionErrorInfo()
-	}
 
 	mp.m.Lock()
 	defer mp.m.Unlock()
@@ -407,7 +407,7 @@ func (mp *MysqlProtocolImpl) EnableAutoFlush() {
 }
 
 func (mp *MysqlProtocolImpl) Flush() error {
-	return mp.tcpConn.Flush(0)
+	return nil
 }
 
 var _ MysqlProtocol = &FakeProtocol{}
@@ -421,6 +421,10 @@ type FakeProtocol struct {
 	username string
 	database string
 	ioses    goetty.IOSession
+}
+
+func (fp *FakeProtocol) UpdateCtx(ctx context.Context) {
+
 }
 
 func (fp *FakeProtocol) GetCapability() uint32 {

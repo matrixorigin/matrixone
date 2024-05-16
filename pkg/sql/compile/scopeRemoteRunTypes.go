@@ -17,23 +17,24 @@ package compile
 import (
 	"context"
 	"fmt"
-	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"hash/crc32"
 	"runtime"
 	"sync/atomic"
 	"time"
+
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -86,6 +87,7 @@ type processHelper struct {
 	txnClient        client.TxnClient
 	sessionInfo      process.SessionInfo
 	analysisNodeList []int32
+	StmtId           uuid.UUID
 }
 
 // messageSenderOnClient is a structure
@@ -121,7 +123,7 @@ func newMessageSenderOnClient(
 
 // XXX we can set a scope as argument directly next day.
 func (sender *messageSenderOnClient) send(
-	scopeData, procData []byte, messageType pipeline.Method) error {
+	scopeData, procData []byte, _ pipeline.Method) error {
 	sdLen := len(scopeData)
 	if sdLen <= maxMessageSizeToMoRpc {
 		message := cnclient.AcquireMessage()
@@ -169,6 +171,7 @@ func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 	case val, ok := <-sender.receiveCh:
 		if !ok || val == nil {
 			// ch close
+			logutil.Errorf("the stream is closed, ok: %v, val: %v", ok, val)
 			return nil, moerr.NewStreamClosed(sender.ctx)
 		}
 		return val, nil
@@ -218,12 +221,8 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			return nil, false, moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
 		}
 
-		bat, err = decodeBatch(sender.c.proc.Mp(), sender.c.proc, dataBuffer)
-		if err != nil {
-			return nil, false, err
-		}
-
-		return bat, false, nil
+		bat, err = decodeBatch(sender.c.proc.Mp(), dataBuffer)
+		return bat, false, err
 	}
 }
 
@@ -384,6 +383,11 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
 	proc.DispatchNotifyCh = make(chan process.WrapCs)
+	{
+		txn := proc.TxnOperator.Txn()
+		txnId := txn.GetID()
+		proc.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
+	}
 
 	c := reuse.Alloc[Compile](nil)
 	c.proc = proc
@@ -395,12 +399,9 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 	c.ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
 
-	c.fill = func(_ any, b *batch.Batch) error {
+	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)
 	}
-
-	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
-
 	return c
 }
 
@@ -425,10 +426,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return nil
 	}
 
-	// There is still a memory problem here. If row count is very small, but the cap of batch's vectors is very large,
-	// to encode will allocate a large memory.
-	// but I'm not sure how string type store data in vector, so I can't do a simple optimization like vec.col = vec.col[:len].
-	data, err := types.Encode(b)
+	data, err := b.MarshalBinary()
 	if err != nil {
 		return err
 	}
@@ -526,6 +524,12 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	result.sessionInfo, err = convertToProcessSessionInfo(procInfo.SessionInfo)
 	if err != nil {
 		return processHelper{}, err
+	}
+	if sessLogger := procInfo.SessionLogger; sessLogger != nil {
+		copy(result.sessionInfo.SessionId[:], sessLogger.SessId)
+		copy(result.StmtId[:], sessLogger.StmtId)
+		result.sessionInfo.LogLevel = enumLogLevel2ZapLogLevel(sessLogger.LogLevel)
+		// txnId, ignore. more in txnOperator.
 	}
 
 	return result, nil

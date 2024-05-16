@@ -29,6 +29,9 @@ const (
 	PrefixPriColName = "__mo_cpkey_"
 	PrefixCBColName  = "__mo_cbkey_"
 
+	// Wildcard characters for partition subtable name
+	PartitionSubTableWildcard = "\\%!\\%%\\%!\\%%"
+
 	ExternalFilePath = "__mo_filepath"
 
 	// MOAutoIncrTable mo auto increment table name
@@ -38,6 +41,7 @@ const (
 	TableTailAttrAborted  = "__mo_%1_aborted"
 	TableTailAttrPKVal    = "__mo_%1_pk_val"
 
+	MOAccountTable = "mo_account"
 	// MOVersionTable mo version table. This table records information about the
 	// versions of the MO cluster that have been upgraded. In other words, you can
 	// query this table to find out all the versions of the MO cluster that have
@@ -74,6 +78,7 @@ var InternalColumns = map[string]int8{
 	SystemSI_IVFFLAT_TblCol_Centroids_centroid: 0,
 	SystemSI_IVFFLAT_TblCol_Entries_version:    0,
 	SystemSI_IVFFLAT_TblCol_Entries_id:         0,
+	SystemSI_IVFFLAT_TblCol_Entries_entry:      0,
 }
 
 var InternalTableNames = map[string]int8{
@@ -103,6 +108,10 @@ const (
 )
 
 const (
+	MO_COMMENT_NO_DEL_HINT = "[mo_no_del_hint]"
+)
+
+const (
 	// Non-hard-coded data dictionary table
 	MO_INDEXES = "mo_indexes"
 
@@ -114,6 +123,9 @@ const (
 
 	// MOSysDaemonTask is the table name of daemon task table in mo_task.
 	MOSysDaemonTask = "sys_daemon_task"
+
+	// MOSysAsyncTask is the table name of async task table in mo_task.
+	MOSysAsyncTask = "sys_async_task"
 
 	// MOStages if the table name of mo_stages table in mo_cataglog.
 	MO_STAGES = "mo_stages"
@@ -294,6 +306,7 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_version = "__mo_index_centroid_fk_version"
 	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
+	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
 )
 
 const (

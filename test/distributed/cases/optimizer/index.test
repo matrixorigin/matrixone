@@ -1,3 +1,4 @@
+SET GLOBAL experimental_master_index = 1;
 drop database if exists d1;
 create database d1;
 use d1;
@@ -63,3 +64,4 @@ insert into t1 select result, result from generate_series(1,10000)g;
 select mo_ctl('dn','flush','d1.t1');
 select * from t1 where b in (1,2) for update;
 drop database if exists d1;
+SET GLOBAL experimental_master_index = 0;

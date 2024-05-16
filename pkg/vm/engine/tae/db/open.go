@@ -15,22 +15,24 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"path"
 	"sync/atomic"
 	"time"
 
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-
+	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -45,6 +47,19 @@ import (
 const (
 	WALDir = "wal"
 )
+
+func fillRuntimeOptions(opts *options.Options) {
+	common.RuntimeCNMergeMemControl.Store(opts.MergeCfg.CNMergeMemControlHint)
+	common.RuntimeMinCNMergeSize.Store(opts.MergeCfg.CNTakeOverExceed)
+	common.RuntimeCNTakeOverAll.Store(opts.MergeCfg.CNTakeOverAll)
+	common.RuntimeOverallFlushMemCap.Store(opts.CheckpointCfg.OverallFlushMemControl)
+	if opts.IsStandalone {
+		common.IsStandaloneBoost.Store(true)
+	}
+	if opts.MergeCfg.CNStandaloneTake {
+		common.ShouldStandaloneCNTakeOver.Store(true)
+	}
+}
 
 func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
 	dbLocker, err := createDBLock(dirname)
@@ -67,7 +82,12 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}()
 
 	opts = opts.FillDefaults(dirname)
+	fillRuntimeOptions(opts)
 
+	wbuf := &bytes.Buffer{}
+	werr := toml.NewEncoder(wbuf).Encode(opts)
+	logutil.Info("open-tae", common.OperationField("Config"),
+		common.AnyField("toml", wbuf.String()), common.ErrorField(werr))
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
 		// TODO:fileservice needs to be passed in as a parameter
@@ -75,10 +95,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}
 
 	db = &DB{
-		Dir:       dirname,
-		Opts:      opts,
-		Closed:    new(atomic.Value),
-		usageMemo: logtail.NewTNUsageMemo(),
+		Dir:          dirname,
+		Opts:         opts,
+		Closed:       new(atomic.Value),
+		usageMemo:    logtail.NewTNUsageMemo(),
+		CNMergeSched: merge.NewTaskServiceGetter(opts.TaskServiceGetter),
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	transferTable := model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
@@ -165,7 +186,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
-	db.MergeHandle = newMergeTaskBuiler(db)
+	db.MergeHandle = newMergeTaskBuilder(db)
 	scanner.RegisterOp(db.MergeHandle)
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
@@ -187,7 +208,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.DiskCleaner.Start()
 	// Init gc manager at last
 	// TODO: clean-try-gc requires configuration parameters
-	db.GCManager = gc.NewManager(
+	cronJobs := []func(*gc.Manager){
 		gc.WithCronJob(
 			"clean-transfer-table",
 			opts.CheckpointCfg.FlushInterval,
@@ -245,8 +266,18 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				}
 				return nil
 			},
-		),
-	)
+		)}
+	if opts.CheckpointCfg.MetadataCheckInterval != 0 {
+		cronJobs = append(cronJobs,
+			gc.WithCronJob(
+				"metadata-check",
+				opts.CheckpointCfg.MetadataCheckInterval,
+				func(ctx context.Context) error {
+					db.Catalog.CheckMetadata()
+					return nil
+				}))
+	}
+	db.GCManager = gc.NewManager(cronJobs...)
 
 	db.GCManager.Start()
 

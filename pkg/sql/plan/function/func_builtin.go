@@ -25,7 +25,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -44,6 +43,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"github.com/google/uuid"
 )
 
 func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
@@ -502,8 +503,8 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-// buildInPurgeLog act like `select mo_purge_log('rawlog,statement_info,metric', '2023-06-27')`
-func buildInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+// builtInPurgeLog act like `select mo_purge_log('rawlog,statement_info,metric', '2023-06-27')`
+func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint8](result)
 
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -541,12 +542,18 @@ func buildInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 				return moerr.NewNotSupported(proc.Ctx, "purge '%s'", tblName)
 			}
 		}
+
 		for _, tblName := range tableNames {
 			for _, tbl := range tables {
 				if strings.TrimSpace(tblName) == tbl.Table {
 					sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
 						tbl.Database, tbl.Table, tbl.TimestampColumn.Name, v2.String())
-					opts := executor.Options{}.WithDatabase(tbl.Database)
+					opts := executor.Options{}.WithDatabase(tbl.Database).
+						WithTxn(proc.TxnOperator).
+						WithTimeZone(proc.SessionInfo.TimeZone)
+					if proc.TxnOperator != nil {
+						opts = opts.WithDisableIncrStatement() // this option always with WithTxn()
+					}
 					res, err := exec.Exec(proc.Ctx, sql, opts)
 					if err != nil {
 						return err
@@ -990,21 +997,16 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-// Serial have a similar function named SerialWithCompacted in the index_util
+// BuiltInSerial have a similar function named SerialWithCompacted in the index_util
 // Serial func is used by users, the function make true when input vec have ten
 // rows, the output vec is ten rows, when the vectors have null value, the output
 // vec will set the row null
 // for example:
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
-func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	ps := types.NewPackerArray(length, proc.Mp())
-	defer func() {
-		for _, p := range ps {
-			p.FreeMem()
-		}
-	}()
+	op.tryExpand(length, proc.Mp())
 
 	bitMap := new(nulls.Nulls)
 
@@ -1013,16 +1015,18 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
 			return nil
 		}
-		SerialHelper(v, bitMap, ps, false)
+		SerialHelper(v, bitMap, op.ps, false)
 	}
 
+	//NOTE: make sure to use uint64(length) instead of len(op.ps[i])
+	// as length of packer array could be larger than length of input vectors
 	for i := uint64(0); i < uint64(length); i++ {
 		if bitMap.Contains(i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
-			if err := rs.AppendBytes(ps[i].GetBuf(), false); err != nil {
+			if err := rs.AppendBytes(op.ps[i].GetBuf(), false); err != nil {
 				return err
 			}
 		}
@@ -1030,29 +1034,26 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	ps := types.NewPackerArray(length, proc.Mp())
-	defer func() {
-		for _, p := range ps {
-			p.FreeMem()
-		}
-	}()
+	op.tryExpand(length, proc.Mp())
 
 	for _, v := range parameters {
 		if v.IsConstNull() {
 			for i := 0; i < v.Length(); i++ {
-				ps[i].EncodeNull()
+				op.ps[i].EncodeNull()
 			}
 			continue
 		}
 
-		SerialHelper(v, nil, ps, true)
+		SerialHelper(v, nil, op.ps, true)
 	}
 
+	//NOTE: make sure to use uint64(length) instead of len(op.ps[i])
+	// as length of packer array could be larger than length of input vectors
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.AppendBytes(ps[i].GetBuf(), false); err != nil {
+		if err := rs.AppendBytes(op.ps[i].GetBuf(), false); err != nil {
 			return err
 		}
 	}

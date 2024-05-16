@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"math"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -798,8 +799,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	case plan.Node_VALUE_SCAN:
 		if node.RowsetData != nil {
-			colsData := node.RowsetData.Cols
-			rowCount := float64(len(colsData[0].Data))
+			rowCount := float64(node.RowsetData.RowCount)
 			node.Stats.TableCnt = rowCount
 			node.Stats.BlockNum = int32(rowCount/float64(options.DefaultBlockMaxRows) + 1)
 			node.Stats.Cost = rowCount
@@ -850,6 +850,14 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				node.Stats.Cost = childStats.Outcnt
 				node.Stats.Selectivity = childStats.Selectivity
 			}
+		}
+
+	case plan.Node_INSERT:
+		if len(node.Children) > 0 && childStats != nil {
+			node.Stats.Outcnt = childStats.Outcnt
+			node.Stats.Cost = childStats.Outcnt
+			node.Stats.Selectivity = childStats.Selectivity
+			node.Stats.Rowsize = GetRowSizeFromTableDef(node.TableDef, true) * 0.8
 		}
 
 	default:
@@ -982,7 +990,7 @@ func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error
 	return nil
 }
 
-func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
+func recalcStatsByRuntimeFilter(node *plan.Node, joinNode *plan.Node, runtimeFilterSel float64) {
 	if node.NodeType != plan.Node_TABLE_SCAN {
 		return
 	}
@@ -1004,7 +1012,18 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if shouldReturnMinimalStats(node) {
 		return DefaultMinimalStats()
 	}
-	s, err := builder.compCtx.Stats(node.ObjRef)
+
+	//ts := timestamp.Timestamp{}
+	//if node.ScanTS != nil {
+	//	ts = *node.ScanTS
+	//}
+
+	scanSnapshot := node.ScanSnapshot
+	if scanSnapshot == nil {
+		scanSnapshot = &Snapshot{}
+	}
+
+	s, err := builder.compCtx.Stats(node.ObjRef, *scanSnapshot)
 	if err != nil || s == nil {
 		return DefaultStats()
 	}
@@ -1017,10 +1036,28 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	for i := range node.FilterList {
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
 		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s)
-		if currentBlockSel < 1 {
-			copyOfExpr := DeepCopyExpr(node.FilterList[i])
-			copyOfExpr.Selectivity = currentBlockSel
-			blockExprList = append(blockExprList, copyOfExpr)
+		if builder.optimizerHints != nil {
+			if builder.optimizerHints.blockFilter == 1 { //always trying to pushdown blockfilters if zonemappable
+				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
+					copyOfExpr := DeepCopyExpr(node.FilterList[i])
+					copyOfExpr.Selectivity = currentBlockSel
+					blockExprList = append(blockExprList, copyOfExpr)
+				}
+			} else if builder.optimizerHints.blockFilter == 2 { // never pushdown blockfilters
+				node.BlockFilterList = nil
+			} else {
+				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
+					copyOfExpr := DeepCopyExpr(node.FilterList[i])
+					copyOfExpr.Selectivity = currentBlockSel
+					blockExprList = append(blockExprList, copyOfExpr)
+				}
+			}
+		} else {
+			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
+				copyOfExpr := DeepCopyExpr(node.FilterList[i])
+				copyOfExpr.Selectivity = currentBlockSel
+				blockExprList = append(blockExprList, copyOfExpr)
+			}
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
@@ -1031,11 +1068,11 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
 
 	// if there is a limit, outcnt is limit number
-	if node.Limit != nil && len(node.FilterList) == 0 {
+	if node.Limit != nil {
 		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
 			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 				stats.Outcnt = float64(c.I64Val)
-				stats.BlockNum = int32((stats.Outcnt / DefaultBlockMaxRows) + 1)
+				stats.BlockNum = int32(((stats.Outcnt / stats.Selectivity) / DefaultBlockMaxRows) + 1)
 				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
 			}
 		}
@@ -1103,6 +1140,10 @@ func resetHashMapStats(stats *plan.Stats) {
 }
 
 func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive bool) {
+	if builder.optimizerHints != nil && builder.optimizerHints.joinOrdering != 0 {
+		return
+	}
+
 	node := builder.qry.Nodes[nodeID]
 	if recursive && len(node.Children) > 0 {
 		for _, child := range node.Children {
@@ -1240,6 +1281,7 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 		TableCnt:     stats.TableCnt,
 		Selectivity:  stats.Selectivity,
 		HashmapStats: hashmapStats,
+		ForceOneCN:   stats.ForceOneCN,
 	}
 }
 

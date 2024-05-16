@@ -16,14 +16,17 @@ package proxy
 
 import (
 	"context"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 // serverBaseConnID is the base connection ID for server.
@@ -42,6 +45,7 @@ type ServerConn interface {
 	// After it finished, server connection should be closed immediately because
 	// it is a temp connection.
 	// The first return value indicates that if the execution result is OK.
+	// NB: the stmt can only be simple stmt, which returns OK or Err only.
 	ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error)
 	// Close closes the connection to CN server.
 	Close() error
@@ -55,9 +59,6 @@ type serverConn struct {
 	conn goetty.IOSession
 	// connID is the proxy connection ID, which is not useful in most case.
 	connID uint32
-	// backendConnID is the connection generated be backend CN
-	// server. It is tracked by connManager.
-	backendConnID uint32
 	// mysqlProto is used to build handshake info.
 	mysqlProto *frontend.MysqlProtocolImpl
 	// rebalancer is used to track connections between proxy and server.
@@ -70,7 +71,11 @@ var _ ServerConn = (*serverConn)(nil)
 
 // newServerConn creates a connection to CN server.
 func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Duration) (ServerConn, error) {
-	c, err := cn.Connect(timeout)
+	var logger *zap.Logger
+	if r != nil && r.logger != nil {
+		logger = r.logger.RawLogger()
+	}
+	c, err := cn.Connect(logger, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +110,7 @@ func (w *wrappedConn) Close() error {
 
 // ConnID implements the ServerConn interface.
 func (s *serverConn) ConnID() uint32 {
-	return s.backendConnID
+	return s.connID
 }
 
 // RawConn implements the ServerConn interface.
@@ -149,6 +154,8 @@ func (s *serverConn) HandleHandshake(
 	case <-ch:
 		return r, err
 	case <-ctx.Done():
+		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d",
+			s.cnServer.addr, timeout, s.connID)
 		// Return a retryable error.
 		return nil, newConnectErr(context.DeadlineExceeded)
 	}

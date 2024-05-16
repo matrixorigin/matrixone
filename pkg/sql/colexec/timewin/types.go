@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -86,7 +86,7 @@ type container struct {
 	curIdx int
 
 	group int
-	aggs  []agg.Agg[any]
+	aggs  []aggexec.AggFuncExec
 
 	wstart []int64
 	wend   []int64
@@ -99,7 +99,7 @@ type Argument struct {
 	ctr *container
 
 	Types []types.Type
-	Aggs  []agg.Aggregate
+	Aggs  []aggexec.AggFuncExecExpression
 
 	Interval *Interval
 	Sliding  *Interval
@@ -147,13 +147,19 @@ type Interval struct {
 	Val int64
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
+		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanTsVector()
 		ctr.cleanAggVector()
 		ctr.cleanWin()
+		arg.ctr = nil
 	}
 }
 

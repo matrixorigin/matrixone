@@ -35,10 +35,12 @@ type StorageCfg struct {
 
 type CheckpointCfg struct {
 	FlushInterval             time.Duration `toml:"flush-inerterval"`
+	MetadataCheckInterval     time.Duration `toml:"metadata-check-inerterval"`
 	MinCount                  int64         `toml:"checkpoint-min-count"`
 	ScanInterval              time.Duration `toml:"scan-interval"`
 	IncrementalInterval       time.Duration `toml:"checkpoint-incremental-interval"`
 	GlobalMinCount            int64         `toml:"checkpoint-global-interval"`
+	OverallFlushMemControl    uint64        `toml:"overall-flush-mem-control"`
 	ForceUpdateGlobalInterval bool
 	GlobalVersionInterval     time.Duration
 	GCCheckpointInterval      time.Duration
@@ -69,6 +71,13 @@ type SchedulerCfg struct {
 
 type LogtailCfg struct {
 	PageSize int32 `toml:"page-size"`
+}
+
+type MergeConfig struct {
+	CNMergeMemControlHint uint64
+	CNTakeOverAll         bool
+	CNTakeOverExceed      uint64
+	CNStandaloneTake      bool
 }
 
 type LogtailServerCfg struct {

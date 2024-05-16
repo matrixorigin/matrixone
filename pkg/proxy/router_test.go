@@ -37,7 +37,7 @@ func TestCNServer(t *testing.T) {
 		addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 		require.NoError(t, os.RemoveAll(addr))
 		cn := testMakeCNServer("", addr, 0, "", labelInfo{})
-		c, err := cn.Connect(0)
+		c, err := cn.Connect(nil, 0)
 		require.Error(t, err)
 		require.Nil(t, c)
 	})
@@ -52,7 +52,7 @@ func TestCNServer(t *testing.T) {
 			require.NoError(t, stopFn())
 		}()
 		cn := testMakeCNServer("", addr, 0, "", labelInfo{})
-		c, err := cn.Connect(0)
+		c, err := cn.Connect(nil, 0)
 		require.NoError(t, err)
 		require.NotNil(t, c)
 	})
@@ -532,7 +532,7 @@ func TestRouter_Filter(t *testing.T) {
 	ru := newRouter(mc, re, true)
 
 	cn, err := ru.Route(ctx, clientInfo{username: "dump"}, func(s string) bool {
-		return s == "cn1"
+		return s == addr1
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
@@ -594,7 +594,7 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	}
 	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1}, func(s string) bool {
 		// choose cn2
-		return s == "cn1" || s == "cn3"
+		return s == addr1 || s == addr3
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
@@ -606,7 +606,7 @@ func TestRouter_RetryableConnect(t *testing.T) {
 
 	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, func(s string) bool {
 		// choose cn1
-		return s == "cn2" || s == "cn3"
+		return s == addr2 || s == addr3
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
@@ -619,7 +619,7 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	// could not connect to cn3, because of timeout.
 	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, func(s string) bool {
 		// choose cn3
-		return s == "cn1" || s == "cn2"
+		return s == addr1 || s == addr2
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cn)

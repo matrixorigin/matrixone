@@ -392,36 +392,26 @@ func newResultFunc[T types.FixedSizeT](
 	return f
 }
 
-func (fr *FunctionResult[T]) PreExtendAndReset(size int) error {
+func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	if fr.vec == nil {
 		fr.vec = fr.getVectorMethod(fr.typ)
 	}
 
-	if fr.isVarlena {
-		if err := fr.vec.PreExtend(size, fr.mp); err != nil {
-			return err
-		}
-		fr.vec.Reset(fr.typ)
-		return nil
-	}
-
-	fr.length = 0
-	if fr.vec.Capacity() < size {
-		if err := fr.vec.PreExtend(size, fr.mp); err != nil {
-			return err
-		}
-		fr.vec.Reset(fr.typ)
-		fr.vec.SetLength(size)
-		fr.cols = MustFixedCol[T](fr.vec)
-		return nil
-	}
-
 	oldLength := fr.vec.Length()
+
+	if more := targetSize - oldLength; more > 0 {
+		if err := fr.vec.PreExtend(more, fr.mp); err != nil {
+			return err
+		}
+	}
 	fr.vec.Reset(fr.typ)
-	fr.vec.SetLength(size)
-	// if fr.cols == nil, means the vector is first time to be sent to structure `FunctionResult`.
-	if (fr.cols == nil) || (len(fr.cols) > 0 && size > oldLength) {
-		fr.cols = MustFixedCol[T](fr.vec)
+
+	if !fr.isVarlena {
+		fr.length = 0
+		fr.vec.SetLength(targetSize)
+		if targetSize > oldLength {
+			fr.cols = MustFixedCol[T](fr.vec)
+		}
 	}
 	return nil
 }

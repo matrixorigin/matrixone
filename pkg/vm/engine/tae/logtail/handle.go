@@ -261,7 +261,7 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 		entry.RUnlock()
 		return nil
 	}
-	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
+	mvccNodes := entry.ClonePreparedInRangeLocked(b.start, b.end)
 	entry.RUnlock()
 	for _, node := range mvccNodes {
 		if node.IsAborted() {
@@ -286,7 +286,7 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 		entry.RUnlock()
 		return nil
 	}
-	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
+	mvccNodes := entry.ClonePreparedInRangeLocked(b.start, b.end)
 	entry.RUnlock()
 	for _, node := range mvccNodes {
 		if node.IsAborted() {
@@ -505,9 +505,7 @@ func (b *TableLogtailRespBuilder) VisitObj(e *catalog.ObjectEntry) error {
 	}
 }
 func (b *TableLogtailRespBuilder) visitObjMeta(e *catalog.ObjectEntry) (bool, error) {
-	e.RLock()
 	mvccNodes := e.ClonePreparedInRange(b.start, b.end)
-	e.RUnlock()
 	if len(mvccNodes) == 0 {
 		return false, nil
 	}
@@ -693,6 +691,7 @@ func LoadCheckpointEntries(
 		v2.LogTailLoadCheckpointDurationHistogram.Observe(time.Since(now).Seconds())
 	}()
 	locationsAndVersions := strings.Split(metLoc, ";")
+
 	datas := make([]*CNCheckpointData, len(locationsAndVersions)/2)
 
 	readers := make([]*blockio.BlockReader, len(locationsAndVersions)/2)

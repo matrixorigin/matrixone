@@ -127,11 +127,6 @@ type Argument struct {
 	ctr *container
 	// the five attributes below are passed by the outside
 
-	// Ibucket determines the data partition this operator need to deal with
-	Ibucket uint64
-	// Nbucket means how many partitions there are
-	Nbucket uint64
-
 	// // the input batch's columns' type
 	// Typs []types.Type
 
@@ -193,6 +188,10 @@ func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

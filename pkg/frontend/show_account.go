@@ -28,12 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -140,7 +138,7 @@ func getSqlForTableStats(accountId int32) string {
 	return fmt.Sprintf(getTableStatsFormatV2, accountId, sysAccountID)
 }
 
-func requestStorageUsage(ses *Session, accIds [][]int32) (resp any, tried bool, err error) {
+func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int32) (resp any, tried bool, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 		req := db.StorageUsageReq{}
@@ -159,11 +157,7 @@ func requestStorageUsage(ses *Session, accIds [][]int32) (resp any, tried bool, 
 		return usage, nil
 	}
 
-	var ctx context.Context
-	var txnOperator client.TxnOperator
-	if ctx, txnOperator, err = ses.txnHandler.GetTxn(); err != nil {
-		return nil, false, err
-	}
+	txnOperator := ses.txnHandler.GetTxn()
 
 	// create a new proc for `handler`
 	proc := process.New(ctx, ses.proc.GetMPool(),
@@ -204,7 +198,7 @@ func requestStorageUsage(ses *Session, accIds [][]int32) (resp any, tried bool, 
 }
 
 func handleStorageUsageResponse_V0(ctx context.Context, fs fileservice.FileService,
-	usage *db.StorageUsageResp_V0) (map[int32]uint64, error) {
+	usage *db.StorageUsageResp_V0, logger SessionLogger) (map[int32]uint64, error) {
 	result := make(map[int32]uint64, 0)
 	for idx := range usage.CkpEntries {
 		version := usage.CkpEntries[idx].Version
@@ -214,7 +208,7 @@ func handleStorageUsageResponse_V0(ctx context.Context, fs fileservice.FileServi
 		if version < logtail.CheckpointVersion9 {
 			// exist old version checkpoint which hasn't storage usage data in it,
 			// to avoid inaccurate info leading misunderstand, we chose to return empty result
-			logutil.Info("[storage usage]: found older ckp when handle storage usage response")
+			logger.Info(ctx, "[storage usage]: found older ckp when handle storage usage response")
 			return map[int32]uint64{}, nil
 		}
 
@@ -322,7 +316,7 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 	}
 
 	// step 2: query to tn
-	response, tried, err := requestStorageUsage(ses, accIds)
+	response, tried, err := requestStorageUsage(ctx, ses, accIds)
 	if err != nil {
 		return nil, err
 	}
@@ -333,13 +327,13 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 			return nil, moerr.NewInternalErrorNoCtx("storage usage response decode failed, retry later")
 		}
 
-		fs, err := fileservice.Get[fileservice.FileService](ses.GetParameterUnit().FileService, defines.SharedFileServiceName)
+		fs, err := fileservice.Get[fileservice.FileService](getGlobalPu().FileService, defines.SharedFileServiceName)
 		if err != nil {
 			return nil, err
 		}
 
 		// step 3: handling these pulled data
-		return handleStorageUsageResponse_V0(ctx, fs, usage)
+		return handleStorageUsageResponse_V0(ctx, fs, usage, ses.GetLogger())
 
 	} else {
 		usage, ok := response.(*db.StorageUsageResp)
@@ -440,12 +434,13 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		}
 
 		if len(allAccountInfo) != 1 {
-			return moerr.NewInternalError(ctx, "no such account %v", account.TenantID)
+			return moerr.NewInternalError(ctx, "no such account %v", account.GetTenantID())
 		}
 	}
 
-	rsOfMoAccount = bh.ses.GetAllMysqlResultSet()[0]
-	MoAccountColumns = bh.ses.rs
+	backSes := bh.(*backExec)
+	rsOfMoAccount = backSes.backSes.allResultSet[0]
+	MoAccountColumns = backSes.backSes.rs
 	bh.ClearExecResultSet()
 
 	// step 2
@@ -489,8 +484,8 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		eachAccountInfo = nil
 	}
 
-	rsOfEachAccount := bh.ses.GetAllMysqlResultSet()[0]
-	EachAccountColumns = bh.ses.rs
+	rsOfEachAccount := backSes.backSes.allResultSet[0]
+	EachAccountColumns = backSes.backSes.rs
 	bh.ClearExecResultSet()
 
 	//step4: generate mysql result set
@@ -501,7 +496,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 
 	oq := newFakeOutputQueue(outputRS)
 	for _, b := range outputBatches {
-		if err = fillResultSet(oq, b, ses); err != nil {
+		if err = fillResultSet(ctx, oq, b, ses); err != nil {
 			return err
 		}
 	}
@@ -509,8 +504,8 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	ses.SetMysqlResultSet(outputRS)
 
 	ses.rs = mergeRsColumns(MoAccountColumns, EachAccountColumns)
-	if openSaveQueryResult(ses) {
-		err = saveResult(ses, outputBatches)
+	if openSaveQueryResult(ctx, ses) {
+		err = saveResult(ctx, ses, outputBatches)
 	}
 
 	return err
@@ -532,13 +527,13 @@ func mergeRsColumns(rsOfMoAccountColumns *plan.ResultColDef, rsOfEachAccountColu
 	return def
 }
 
-func saveResult(ses *Session, outputBatch []*batch.Batch) error {
+func saveResult(ctx context.Context, ses *Session, outputBatch []*batch.Batch) error {
 	for _, b := range outputBatch {
-		if err := saveQueryResult(ses, b); err != nil {
+		if err := saveQueryResult(ctx, ses, b); err != nil {
 			return err
 		}
 	}
-	if err := saveQueryResultMeta(ses); err != nil {
+	if err := saveQueryResultMeta(ctx, ses); err != nil {
 		return err
 	}
 	return nil
@@ -591,7 +586,7 @@ func initOutputRs(rs *MysqlResultSet, rsOfMoAccount *MysqlResultSet, rsOfEachAcc
 
 // getAccountInfo gets account info from mo_account under sys account
 func getAccountInfo(ctx context.Context,
-	bh *BackgroundHandler,
+	bh BackgroundExec,
 	sql string,
 	returnAccountIds bool) ([]*batch.Batch, [][]int32, error) {
 	var err error
@@ -622,7 +617,7 @@ func getAccountInfo(ctx context.Context,
 }
 
 // getTableStats gets the table statistics for the account
-func getTableStats(ctx context.Context, bh *BackgroundHandler, accountId int32) (*batch.Batch, error) {
+func getTableStats(ctx context.Context, bh BackgroundExec, accountId int32) (*batch.Batch, error) {
 	var sql string
 	var err error
 	var rs []*batch.Batch

@@ -101,6 +101,10 @@ type TxnOperator interface {
 	// GetOverview returns txn overview
 	GetOverview() TxnOverview
 
+	// CloneSnapshotOp clone a read-only snapshot op from parent txn operator
+	CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
+	IsSnapOp() bool
+
 	// Txn returns the current txn metadata
 	Txn() txn.TxnMeta
 	// TxnOptions returns the current txn options
@@ -158,8 +162,12 @@ type TxnOperator interface {
 	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
 	// RemoveWaitLock remove wait lock for current txn
 	RemoveWaitLock(key uint64)
+	// LockTableCount get quality of lock table
+	LockTableCount() int32
 	// LockSkipped return true if lock need skipped.
 	LockSkipped(tableID uint64, mode lock.LockMode) bool
+
+	GetWaitActiveCost() time.Duration
 
 	// AddWorkspace for the transaction
 	AddWorkspace(workspace Workspace)
@@ -252,6 +260,10 @@ type Workspace interface {
 
 	IncrSQLCount()
 	GetSQLCount() uint64
+
+	CloneSnapshotWS() Workspace
+
+	BindTxnOp(op TxnOperator)
 }
 
 // TxnOverview txn overview include meta and status

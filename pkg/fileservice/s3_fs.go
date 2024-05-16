@@ -20,7 +20,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
-	"math"
 	"net/http/httptrace"
 	pathpkg "path"
 	"sort"
@@ -44,7 +43,6 @@ type S3FS struct {
 	storage   ObjectStorage
 	keyPrefix string
 
-	allocator   CacheDataAllocator
 	memCache    *MemCache
 	diskCache   *DiskCache
 	remoteCache *RemoteCache
@@ -52,7 +50,7 @@ type S3FS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 
-	ioLocks IOLocks
+	ioMerger *IOMerger
 }
 
 // key mapping scheme:
@@ -76,6 +74,7 @@ func NewS3FS(
 		keyPrefix:       args.KeyPrefix,
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
+		ioMerger:        NewIOMerger(),
 	}
 
 	var err error
@@ -105,11 +104,6 @@ func NewS3FS(
 		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err
 		}
-	}
-	if fs.memCache != nil {
-		fs.allocator = fs.memCache
-	} else {
-		fs.allocator = DefaultCacheDataAllocator
 	}
 
 	return fs, nil
@@ -254,17 +248,17 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	if err != nil {
 		return err
 	}
-	startLock := time.Now()
-	unlock, wait := s.ioLocks.Lock(IOLockKey{
-		File: filePath,
-	})
 
-	if unlock != nil {
-		defer unlock()
+	startLock := time.Now()
+	done, wait := s.ioMerger.Merge(IOMergeKey{
+		Path: filePath,
+	})
+	if done != nil {
+		defer done()
 	} else {
 		wait()
 	}
-	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
+	statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
 
 	// load to disk cache
 	if s.diskCache != nil {
@@ -403,25 +397,14 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	startLock := time.Now()
-	unlock, wait := s.ioLocks.Lock(IOLockKey{
-		File: vector.FilePath,
-	})
-
-	if unlock != nil {
-		defer unlock()
+	done, wait := s.ioMerger.Merge(vector.ioMergeKey())
+	if done != nil {
+		defer done()
 	} else {
 		wait()
 	}
 	stats := statistic.StatsInfoFromContext(ctx)
-	stats.AddLockTimeConsumption(time.Since(startLock))
-
-	allocator := s.allocator
-	if vector.Policy.Any(SkipMemoryCache) {
-		allocator = DefaultCacheDataAllocator
-	}
-	for i := range vector.Entries {
-		vector.Entries[i].allocator = allocator
-	}
+	stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -485,17 +468,15 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
-	startLock := time.Now()
-	unlock, wait := s.ioLocks.Lock(IOLockKey{
-		File: vector.FilePath,
-	})
 
-	if unlock != nil {
-		defer unlock()
+	startLock := time.Now()
+	done, wait := s.ioMerger.Merge(vector.ioMergeKey())
+	if done != nil {
+		defer done()
 	} else {
 		wait()
 	}
-	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
+	statistic.StatsInfoFromContext(ctx).AddS3FSReadCacheIOMergerTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -530,38 +511,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		return err
 	}
 
-	readFullObject := vector.Policy.CacheFullFile() &&
-		!vector.Policy.Any(SkipDiskCache)
-
-	var min, max *int64
-	if readFullObject {
-		// full range
-		min = ptrTo[int64](0)
-		max = (*int64)(nil)
-
-	} else {
-		// minimal range
-		min = ptrTo(int64(math.MaxInt))
-		max = ptrTo(int64(0))
-		for _, entry := range vector.Entries {
-			entry := entry
-			if entry.done {
-				continue
-			}
-			if entry.Offset < *min {
-				min = &entry.Offset
-			}
-			if entry.Size < 0 {
-				entry.Size = 0
-				max = nil
-			}
-			if max != nil {
-				if end := entry.Offset + entry.Size; end > *max {
-					max = &end
-				}
-			}
-		}
-	}
+	min, max, readFullObject := vector.readRange()
 
 	// a function to get an io.ReadCloser
 	getReader := func(ctx context.Context, min *int64, max *int64) (io.ReadCloser, error) {
@@ -746,7 +696,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 			}
 		}
 
-		if err = entry.setCachedData(); err != nil {
+		if err = setCachedData(&entry, s.memCache); err != nil {
 			return err
 		}
 

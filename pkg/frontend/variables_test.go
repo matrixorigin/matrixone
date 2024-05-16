@@ -16,8 +16,9 @@ package frontend
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/smartystreets/goconvey/convey"
 )

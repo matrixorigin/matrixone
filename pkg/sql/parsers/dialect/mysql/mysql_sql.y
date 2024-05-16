@@ -46,6 +46,7 @@ import (
 
     PartitionNames tree.IdentifierList
 
+    atTimeStamp *tree.AtTimeStamp
     tableDef tree.TableDef
     tableDefs tree.TableDefs
     tableName *tree.TableName
@@ -152,6 +153,8 @@ import (
     subPartition *tree.SubPartition
     subPartitions []*tree.SubPartition
 
+    upgrade_target *tree.Target
+
     subquery *tree.Subquery
     funcExpr *tree.FuncExpr
 
@@ -254,7 +257,7 @@ import (
     timeFill *tree.Fill
     fillMode tree.FillMode
 
-    snapshotObject tree.ObejectInfo
+    snapshotObject tree.ObjectInfo
 
 }
 
@@ -419,6 +422,9 @@ import (
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
 
+// upgrade
+%token <str> UPGRADE RETRY
+
 // Built-in function
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT SERIAL_EXTRACT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
@@ -436,7 +442,7 @@ import (
 %token <str> ARROW
 
 // Insert
-%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL
+%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL STRICT
 
 %token <str> UNUSED BINDINGS
 
@@ -466,16 +472,19 @@ import (
 // Sample Related.
 %token <str> PERCENT SAMPLE
 
+// Snapshot READ
+%token <str> MO_TS
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
-%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt
+%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
 %type <statement> create_source_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
@@ -498,7 +507,7 @@ import (
 %type <statement> mo_dump_stmt
 %type <statement> load_extension_stmt
 %type <statement> kill_stmt
-%type <statement> backup_stmt
+%type <statement> backup_stmt snapshot_restore_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -524,8 +533,9 @@ import (
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
-%type <subscriptionOption> subcription_opt
+%type <subscriptionOption> subscription_opt
 %type <accountsSetOption> alter_publication_accounts_opt
+%type <str> alter_publication_db_name_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -543,6 +553,7 @@ import (
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 %type <selectLockInfo> select_lock_opt
+%type <upgrade_target> target
 
 %type <functionName> func_name
 %type <funcArgs> func_args_list_opt func_args_list
@@ -558,6 +569,7 @@ import (
 %type <procArgDecl> proc_arg_decl
 %type <procArgType> proc_arg_in_out_type
 
+%type <atTimeStamp> table_snapshot_opt
 %type <tableDefs> table_elem_list_opt table_elem_list
 %type <tableDef> table_elem constaint_def constraint_elem index_def table_elem_2
 %type <tableName> table_name table_name_opt_wild
@@ -606,6 +618,7 @@ import (
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam
 %type <str> charset_keyword db_name db_name_opt
+%type <str> backup_type_opt backup_timestamp_opt
 %type <str> not_keyword func_not_keyword
 %type <str> non_reserved_keyword
 %type <str> equal_opt column_keyword_opt
@@ -616,7 +629,7 @@ import (
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
 %type <fullOpt> full_opt
-%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword
+%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword snapshot_option_opt
 %type <userMiscOption> pwd_or_lck pwd_or_lck_opt
 //%type <userMiscOptions> pwd_or_lck_list
 
@@ -679,7 +692,7 @@ import (
 %type <frameBound> frame_bound frame_bound_start
 %type <frameType> frame_type
 %type <str> fields_or_columns
-%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt
+%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry
 %type <boolVal> linear_opt
 %type <partition> partition
 %type <partitions> partition_list_opt partition_list
@@ -697,7 +710,7 @@ import (
 
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
-%type <unsignedOpt> unsigned_opt header_opt parallel_opt
+%type <unsignedOpt> unsigned_opt header_opt parallel_opt strict_opt
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt
 %type <item> pwd_expire clear_pwd_opt
@@ -746,8 +759,8 @@ import (
 %type <str> explain_foramt_value trim_direction
 %type <str> priority_opt priority quick_opt ignore_opt wild_opt
 
-%type <str> account_name account_admin_name account_role_name
-%type <expr> account_name_or_param
+%type <str> account_name account_role_name
+%type <expr> account_name_or_param account_admin_name
 %type <accountAuthOption> account_auth_option
 %type <alterAccountAuthOption> alter_account_auth_option
 %type <accountIdentified> account_identified
@@ -769,7 +782,7 @@ import (
 
 %token <str> KILL
 %type <killOption> kill_opt
-%token <str> BACKUP FILESYSTEM PARALLELISM
+%token <str> BACKUP FILESYSTEM PARALLELISM RESTORE
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %type<tableLock> table_lock_elem
@@ -870,6 +883,7 @@ stmt:
 
 normal_stmt:
     create_stmt
+|   upgrade_stmt
 |   call_stmt
 |   mo_dump_stmt
 |   insert_stmt
@@ -900,27 +914,53 @@ normal_stmt:
         $$ = $1
     }
 |   kill_stmt
-|   backup_stmt   
+|   backup_stmt
+|   snapshot_restore_stmt
+
 
 backup_stmt:
-    BACKUP STRING FILESYSTEM STRING PARALLELISM STRING
+    BACKUP STRING FILESYSTEM STRING PARALLELISM STRING backup_type_opt backup_timestamp_opt
 	{
         var timestamp = $2
         var isS3 = false
         var dir = $4
         var parallelism = $6
         var option []string
-        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option)
+        var backuptype = $7
+        var backupts = $8
+        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option, backuptype, backupts)
 	}
-    | BACKUP STRING S3OPTION '{' infile_or_s3_params '}'
+    | BACKUP STRING S3OPTION '{' infile_or_s3_params '}' backup_type_opt backup_timestamp_opt
     {
         var timestamp = $2
         var isS3 = true
         var dir string
         var parallelism string
         var option = $5
-        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option)
+        var backuptype = $7
+        var backupts = $8
+        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option, backuptype, backupts)
     }
+
+backup_type_opt:
+    {
+        $$ = ""
+    }
+|    TYPE STRING
+    {
+        $$ = $2
+    }
+
+backup_timestamp_opt:
+    {
+        $$ = ""
+    }
+|   TIMESTAMP STRING
+    {
+        $$ = $2
+    }
+
+
 
 create_snapshot_stmt:
     CREATE SNAPSHOT not_exists_opt ident FOR snapshot_object_opt
@@ -928,7 +968,7 @@ create_snapshot_stmt:
         $$ = &tree.CreateSnapShot{
             IfNotExists: $3,
             Name: tree.Identifier($4.Compare()),
-            Obeject: $6,
+            Object: $6,
         }
     }
 
@@ -938,22 +978,89 @@ snapshot_object_opt:
         spLevel := tree.SnapshotLevelType{
             Level: tree.SNAPSHOTLEVELCLUSTER,
         }
-        $$ = tree.ObejectInfo{
+        $$ = tree.ObjectInfo{
             SLevel: spLevel,
             ObjName: "",
         }
     }
-|    ACCOUNT ident
+|   ACCOUNT ident
     {
         spLevel := tree.SnapshotLevelType{
             Level: tree.SNAPSHOTLEVELACCOUNT,
         }
-        $$ = tree.ObejectInfo{
+        $$ = tree.ObjectInfo{
             SLevel: spLevel,
             ObjName: tree.Identifier($2.Compare()),
         }
     }
 
+
+snapshot_restore_stmt:
+    RESTORE CLUSTER FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELCLUSTER,
+            SnapShotName: tree.Identifier($5.ToLower()),
+        }
+
+    }
+|   RESTORE ACCOUNT ident FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELACCOUNT,
+            AccountName:tree.Identifier($3.ToLower()),
+            SnapShotName:tree.Identifier($6.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELDATABASE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            SnapShotName: tree.Identifier($8.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELTABLE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            TableName: tree.Identifier($7.ToLower()),
+            SnapShotName: tree.Identifier($10.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident FROM SNAPSHOT ident TO ACCOUNT ident
+    {
+        $$ = &tree.RestoreSnapShot{ 
+            Level: tree.RESTORELEVELACCOUNT,
+            AccountName:tree.Identifier($3.ToLower()),
+            SnapShotName:tree.Identifier($6.ToLower()),
+            ToAccountName: tree.Identifier($9.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident TO ACCOUNT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELDATABASE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            SnapShotName: tree.Identifier($8.ToLower()),
+            ToAccountName: tree.Identifier($11.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident TO ACCOUNT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELTABLE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            TableName: tree.Identifier($7.ToLower()),
+            SnapShotName: tree.Identifier($10.ToLower()),
+            ToAccountName: tree.Identifier($13.ToLower()),
+        }
+    }
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
@@ -1189,7 +1296,7 @@ mo_dump_stmt:
 
 
 load_data_stmt:
-    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt parallel_opt
+    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt parallel_opt strict_opt
     {
         $$ = &tree.Load{
             Local: $3,
@@ -1199,6 +1306,7 @@ load_data_stmt:
         }
         $$.(*tree.Load).Param.Tail = $9
         $$.(*tree.Load).Param.Parallel = $10
+        $$.(*tree.Load).Param.Strict = $11
     }
 
 load_extension_stmt:
@@ -1256,11 +1364,26 @@ parallel_opt:
         } else if str == "false" {
             $$ = false
         } else {
+            yylex.Error("error strict flag")
+            goto ret1
+        }
+    }
+strict_opt:
+    {
+        $$ = false
+    }
+|   STRICT STRING
+    {
+        str := strings.ToLower($2)
+        if str == "true" {
+            $$ = true
+        } else if str == "false" {
+            $$ = false
+        } else {
             yylex.Error("error parallel flag")
             goto ret1
         }
     }
-
 normal_ident:
     ident
     {
@@ -1777,6 +1900,10 @@ priv_type:
         {
                 $$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_ACCOUNT
         }
+|    UPGRADE ACCOUNT
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_UPGRADE_ACCOUNT
+	}
 |    ALL PRIVILEGES
     {
         $$ = tree.PRIVILEGE_TYPE_STATIC_ALL
@@ -2575,6 +2702,7 @@ prepareable_stmt:
 |   drop_stmt
 |   show_stmt
 |   update_stmt
+|   alter_account_stmt
 |   select_stmt
     {
         $$ = $1
@@ -2773,6 +2901,46 @@ analyze_stmt:
     {
         $$ = tree.NewAnalyzeStmt($3, $5)
     }
+
+upgrade_stmt:
+    UPGRADE ACCOUNT target opt_retry
+    {
+        $$ = &tree.UpgradeStatement{
+        	Target: $3,
+        	Retry: $4,
+        }
+    }
+
+target:
+    STRING
+    {
+        $$ = &tree.Target{
+        	AccountName: $1,
+        	IsALLAccount: false,
+        }
+    }
+    | ALL
+    {
+        $$ = &tree.Target{
+        	AccountName: "",
+        	IsALLAccount: true,
+        }
+    }
+
+opt_retry:
+    {
+        $$ = -1
+    }
+|   WITH RETRY INTEGRAL
+    {
+    	res := $3.(int64)
+    	if res <= 0 {
+            yylex.Error("retry value can not less than 0")
+            $$ = -1
+        }
+        $$ = res
+    }
+
 
 alter_stmt:
     alter_user_stmt
@@ -3242,7 +3410,7 @@ visibility:
 
 
 alter_account_stmt:
-    ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
+    ALTER ACCOUNT exists_opt account_name_or_param alter_account_auth_option account_status_option account_comment_opt
     {
         var ifExists = $3
         var name = $4
@@ -3492,6 +3660,7 @@ show_stmt:
 |   show_table_values_stmt
 |   show_table_size_stmt
 |   show_accounts_stmt
+|   show_upgrade_stmt
 |   show_publications_stmt
 |   show_subscriptions_stmt
 |   show_servers_stmt
@@ -3755,7 +3924,7 @@ show_sequences_stmt:
     }
 
 show_tables_stmt:
-    SHOW full_opt TABLES database_name_opt like_opt where_expression_opt
+    SHOW full_opt TABLES database_name_opt like_opt where_expression_opt snapshot_option_opt
     {
         $$ = &tree.ShowTables{
             Open: false,
@@ -3763,6 +3932,7 @@ show_tables_stmt:
             DBName: $4,
             Like: $5,
             Where: $6,
+            SnapshotName : $7,
         }
     }
 |   SHOW OPEN full_opt TABLES database_name_opt like_opt where_expression_opt
@@ -3777,9 +3947,13 @@ show_tables_stmt:
     }
 
 show_databases_stmt:
-    SHOW DATABASES like_opt where_expression_opt
+    SHOW DATABASES like_opt where_expression_opt snapshot_option_opt
     {
-        $$ = &tree.ShowDatabases{Like: $3, Where: $4}
+        $$ = &tree.ShowDatabases{
+            Like: $3, 
+            Where: $4,
+            SnapshotName: $5,
+        }
     }
 |   SHOW SCHEMAS like_opt where_expression_opt
     {
@@ -3824,6 +3998,12 @@ show_publications_stmt:
 	$$ = &tree.ShowPublications{Like: $3}
     }
 
+show_upgrade_stmt:
+    SHOW UPGRADE
+    {
+    	$$ = &tree.ShowAccountUpgrade{}
+    }
+
 
 show_subscriptions_stmt:
     SHOW SUBSCRIPTIONS like_opt
@@ -3863,6 +4043,17 @@ table_column_name:
         $$ = $2
     }
 
+snapshot_option_opt:
+    {
+        $$ = ""
+    }
+|   '{' SNAPSHOT '=' STRING '}'
+    {
+        $$ = $4
+    }
+
+
+
 from_or_in:
     FROM
 |   IN
@@ -3881,14 +4072,20 @@ full_opt:
     }
 
 show_create_stmt:
-    SHOW CREATE TABLE table_name_unresolved
+    SHOW CREATE TABLE table_name_unresolved snapshot_option_opt
     {
-        $$ = &tree.ShowCreateTable{Name: $4}
+        $$ = &tree.ShowCreateTable{
+            Name: $4,
+            SnapshotName: $5,
+        }
     }
 |
-    SHOW CREATE VIEW table_name_unresolved
+    SHOW CREATE VIEW table_name_unresolved snapshot_option_opt
     {
-        $$ = &tree.ShowCreateView{Name: $4}
+        $$ = &tree.ShowCreateView{
+            Name: $4,
+            SnapshotName: $5,
+        }
     }
 |   SHOW CREATE DATABASE not_exists_opt db_name
     {
@@ -3974,7 +4171,7 @@ drop_sequence_stmt:
     }
 
 drop_account_stmt:
-    DROP ACCOUNT exists_opt account_name
+    DROP ACCOUNT exists_opt account_name_or_param
     {
         var ifExists = $3
         var name = $4
@@ -5929,39 +6126,53 @@ account_auth_option:
 account_admin_name:
     STRING
     {
-    	$$ = $1
+        var Str = $1
+        $$ = tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char)
     }
 |	ident
 	{
-		$$ = $1.Compare()
+		var Str = $1.Compare()
+        $$ = tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char)
 	}
+|   VALUE_ARG
+    {
+        $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
+    }
 
 account_identified:
     IDENTIFIED BY STRING
     {
-        var Typ = tree.AccountIdentifiedByPassword
-        var Str = $3
         $$ = *tree.NewAccountIdentified(
-            Typ,
-            Str,
+            tree.AccountIdentifiedByPassword,
+            tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
+        )
+    }
+|   IDENTIFIED BY VALUE_ARG
+    {
+        $$ = *tree.NewAccountIdentified(
+            tree.AccountIdentifiedByPassword,
+            tree.NewParamExpr(yylex.(*Lexer).GetParamIndex()),
         )
     }
 |   IDENTIFIED BY RANDOM PASSWORD
     {
-        var Typ = tree.AccountIdentifiedByRandomPassword
-        var Str string
         $$ = *tree.NewAccountIdentified(
-            Typ,
-            Str,
+            tree.AccountIdentifiedByRandomPassword,
+            nil,
         )
     }
 |   IDENTIFIED WITH STRING
     {
-        var Typ = tree.AccountIdentifiedWithSSL
-        var Str = $3
         $$ = *tree.NewAccountIdentified(
-            Typ,
-            Str,
+            tree.AccountIdentifiedWithSSL,
+            tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
+        )
+    }
+|   IDENTIFIED WITH VALUE_ARG
+    {
+        $$ = *tree.NewAccountIdentified(
+            tree.AccountIdentifiedWithSSL,
+            tree.NewParamExpr(yylex.(*Lexer).GetParamIndex()),
         )
     }
 
@@ -6030,15 +6241,34 @@ create_publication_stmt:
         var IfNotExists = $3
         var Name = tree.Identifier($4.Compare())
         var Database = tree.Identifier($6.Compare())
+        var Table = tree.Identifier("")
         var AccountsSet = $7
         var Comment = $8
-	    $$ = tree.NewCreatePublication(
-	        IfNotExists,
-	        Name,
-	        Database,
-	        AccountsSet,
-	        Comment,
-	    )
+        $$ = tree.NewCreatePublication(
+            IfNotExists,
+            Name,
+            Database,
+            Table,
+            AccountsSet,
+            Comment,
+        )
+    }
+|   CREATE PUBLICATION not_exists_opt ident TABLE ident alter_publication_accounts_opt comment_opt
+    {
+        var IfNotExists = $3
+        var Name = tree.Identifier($4.Compare())
+        var Database = tree.Identifier("")
+        var Table = tree.Identifier($6.Compare())
+        var AccountsSet = $7
+        var Comment = $8
+        $$ = tree.NewCreatePublication(
+            IfNotExists,
+            Name,
+            Database,
+            Table,
+            AccountsSet,
+            Comment,
+        )
     }
 
 create_stage_stmt:
@@ -6172,13 +6402,14 @@ alter_stage_stmt:
 
 
 alter_publication_stmt:
-    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
+    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt alter_publication_db_name_opt comment_opt
     {
         var ifExists = $3
         var name = tree.Identifier($4.Compare())
         var accountsSet = $5
-        var comment = $6
-        $$ = tree.NewAlterPublication(ifExists, name, accountsSet, comment)
+        var dbName = $6
+        var comment = $7
+        $$ = tree.NewAlterPublication(ifExists, name, accountsSet, dbName, comment)
     }
 
 alter_publication_accounts_opt:
@@ -6210,6 +6441,14 @@ alter_publication_accounts_opt:
 	    }
     }
 
+alter_publication_db_name_opt:
+    {
+	    $$ = ""
+    }
+    | DATABASE db_name
+    {
+	    $$ = $2
+    }
 
 drop_publication_stmt:
     DROP PUBLICATION exists_opt ident
@@ -6446,7 +6685,7 @@ user_identified:
     {
     $$ = &tree.AccountIdentified{
         Typ: tree.AccountIdentifiedByPassword,
-        Str: $3,
+        Str: tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
     }
     }
 |   IDENTIFIED BY RANDOM PASSWORD
@@ -6459,7 +6698,7 @@ user_identified:
     {
     $$ = &tree.AccountIdentified{
         Typ: tree.AccountIdentifiedWithSSL,
-        Str: $3,
+        Str: tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
     }
     }
 
@@ -6711,7 +6950,7 @@ using_opt:
     }
 
 create_database_stmt:
-    CREATE database_or_schema not_exists_opt ident subcription_opt create_option_list_opt
+    CREATE database_or_schema not_exists_opt ident subscription_opt create_option_list_opt
     {
         var IfNotExists = $3
         var Name = tree.Identifier($4.Compare())
@@ -6726,7 +6965,7 @@ create_database_stmt:
     }
 // CREATE comment_opt database_or_schema comment_opt not_exists_opt ident
 
-subcription_opt:
+subscription_opt:
     {
 	$$ = nil
     }
@@ -6900,6 +7139,9 @@ replace_opt:
         $$ = true
     }
 
+
+
+
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
@@ -6992,6 +7234,15 @@ create_table_stmt:
         t.IsAsLike = true
         t.Table = *$5
         t.LikeTableName = *$7
+        $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name subscription_opt
+    {
+        t := tree.NewCreateTable()
+        t.Temporary = $2
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.SubscriptionOption = $6
         $$ = t
     }
 
@@ -7917,31 +8168,45 @@ table_name_list:
 // <table>
 // <schema>.<table>
 table_name:
-    ident
+    ident table_snapshot_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, nil)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, $2)
     }
-|   ident '.' ident
+|   ident '.' ident table_snapshot_opt
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, $4)
     }
-|   ident '{' expression '}'
+
+table_snapshot_opt:
     {
-        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        atTs := &tree.AtTimeStamp{
-            Expr: $3,
-        }
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
+        $$ = nil
     }
-|   ident '.' ident '{' expression '}'
+|   '{' '}'
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        atTs := &tree.AtTimeStamp{
-            Expr: $5,
+        $$ = nil
+    }
+|   '{' TIMESTAMP '=' expression '}'
+    {
+        $$ = &tree.AtTimeStamp{
+            Type: tree.ATTIMESTAMPTIME,
+            Expr: $4,
         }
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
+    }
+|   '{' SNAPSHOT '=' expression '}'
+    {
+        $$ = &tree.AtTimeStamp{
+            Type: tree.ATTIMESTAMPSNAPSHOT,
+            Expr: $4,
+        }
+    }
+|   '{' MO_TS '=' expression '}'
+    {
+        $$ = &tree.AtTimeStamp{
+            Type: tree.ATMOTIMESTAMP,
+            Expr: $4,
+        }
     }
 
 table_elem_list_opt:
@@ -11636,6 +11901,7 @@ non_reserved_keyword:
 |   SNAPSHOTS
 |   STAGES
 |   BACKUP
+|   RESTORE
 |   FILESYSTEM
 |   PARALLELISM
 |	VALUE
@@ -11759,6 +12025,7 @@ non_reserved_keyword:
 |	SAMPLE
 |	PERCENT
 |	OWNERSHIP
+|   MO_TS
 
 func_not_keyword:
     DATE_ADD
@@ -11823,6 +12090,7 @@ not_keyword:
 |   BITMAP_BIT_POSITION
 |   BITMAP_BUCKET_NUMBER
 |   BITMAP_COUNT
+
 
 //mo_keywords:
 //    PROPERTIES

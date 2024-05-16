@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -64,6 +65,7 @@ func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
+		tc.arg.Free(tc.proc, false, nil)
 	}
 }
 
@@ -71,17 +73,28 @@ func TestTop(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-
 		bats := []*batch.Batch{
-			newBatch(t, tc.types, tc.proc, Rows),
-			newBatch(t, tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
 			batch.EmptyBatch,
 		}
 		resetChildren(tc.arg, bats)
 		_, _ = tc.arg.Call(tc.proc)
-		tc.proc.FreeVectors()
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.arg.Reset(tc.proc, false, nil)
+
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		bats = []*batch.Batch{
+			newBatch(tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
+			batch.EmptyBatch,
+		}
+		resetChildren(tc.arg, bats)
+		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -98,14 +111,15 @@ func BenchmarkTop(b *testing.B) {
 			require.NoError(t, err)
 
 			bats := []*batch.Batch{
-				newBatch(t, tc.types, tc.proc, BenchmarkRows),
-				newBatch(t, tc.types, tc.proc, BenchmarkRows),
+				newBatch(tc.types, tc.proc, BenchmarkRows),
+				newBatch(tc.types, tc.proc, BenchmarkRows),
 				batch.EmptyBatch,
 			}
 			resetChildren(tc.arg, bats)
 			_, _ = tc.arg.Call(tc.proc)
 			tc.arg.Free(tc.proc, false, nil)
 			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+			tc.proc.FreeVectors()
 		}
 	}
 }
@@ -116,7 +130,7 @@ func newTestCase(m *mpool.MPool, ts []types.Type, limit int64, fs []*plan.OrderB
 		proc:  testutil.NewProcessWithMPool(m),
 		arg: &Argument{
 			Fs:    fs,
-			Limit: limit,
+			Limit: plan2.MakePlan2Int64ConstExprWithType(limit),
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
@@ -140,7 +154,7 @@ func newExpression(pos int32) *plan.Expr {
 }
 
 // create a new block based on the type information
-func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -112,7 +113,7 @@ var (
 		ClusterBy:        []table.Column{reqAtCol},
 		// Engine
 		Engine:        table.NormalTableEngine,
-		Comment:       "record each statement and stats info",
+		Comment:       "record each statement and stats info" + catalog.MO_COMMENT_NO_DEL_HINT,
 		PathBuilder:   table.NewAccountDatePathBuilder(),
 		AccountColumn: &accountCol,
 		// TimestampColumn
@@ -184,7 +185,7 @@ var (
 		PrimaryKeyColumn: nil,
 		ClusterBy:        []table.Column{timestampCol},
 		Engine:           table.NormalTableEngine,
-		Comment:          "read merge data from log, error, span",
+		Comment:          "read merge data from log, error, span" + catalog.MO_COMMENT_NO_DEL_HINT,
 		PathBuilder:      table.NewAccountDatePathBuilder(),
 		AccountColumn:    nil,
 		// TimestampColumn
@@ -212,6 +213,8 @@ var (
 			messageCol,
 			extraCol,
 			stackCol,
+			sessionIDCol,
+			statementIDCol,
 		},
 		Condition: &table.ViewSingleCondition{Column: rawItemCol, Table: logInfoTbl},
 	}

@@ -35,9 +35,6 @@ const (
 type Argument struct {
 	ctr *container
 
-	// hash table bucket related information.
-	IBucket, NBucket uint64
-
 	vm.OperatorBase
 }
 
@@ -85,12 +82,17 @@ type container struct {
 	bat *batch.Batch
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	mp := proc.Mp()
 	if arg.ctr != nil {
 		arg.ctr.cleanBatch(mp)
 		arg.ctr.cleanHashMap()
 		arg.ctr.FreeAllReg()
+		arg.ctr = nil
 	}
 }
 

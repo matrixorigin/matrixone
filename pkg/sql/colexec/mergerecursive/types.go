@@ -69,14 +69,20 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
+		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
 		for _, b := range arg.ctr.bats {
 			if b != nil {
 				b.Clean(proc.Mp())
 			}
 			arg.ctr.bats = nil
 		}
+		arg.ctr = nil
 	}
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())

@@ -41,8 +41,6 @@ type container struct {
 }
 
 type Argument struct {
-	// Ts is not used
-	Ts       uint64
 	Affected uint64
 	Engine   engine.Engine
 
@@ -95,6 +93,10 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
@@ -104,5 +106,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		if arg.ctr.checkConflictBat != nil {
 			arg.ctr.checkConflictBat.Clean(proc.GetMPool())
 		}
+		arg.ctr = nil
 	}
 }

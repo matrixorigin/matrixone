@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -48,8 +50,12 @@ func newTxnTableForTest(
 		engine:   engine,
 		tnStores: []DNStore{tnStore},
 	}
+	c := client.NewTxnClient(nil, nil, nil)
+	op, _ := c.New(context.Background(), timestamp.Timestamp{})
+	op.AddWorkspace(txn)
+
 	db := &txnDatabase{
-		txn: txn,
+		op: op,
 	}
 	table := &txnTable{
 		db:         db,

@@ -87,6 +87,7 @@ transaction_isolation    REPEATABLE-READ
 transaction_operator_open_log    off
 transaction_prealloc_size    4096
 transaction_read_only    0
+transferred    off
 show variables like 'transaction_isolation';
 Variable_name    Value
 transaction_isolation    REPEATABLE-READ
@@ -199,9 +200,9 @@ select table_name, column_name from columns where table_schema = 'mo_catalog' an
 table_name    column_name
 mo_account    account_id
 mo_account    account_name
+mo_account    admin_name
 mo_account    comments
 mo_account    create_version
-mo_account    created_time
 desc views;
 Field    Type    Null    Key    Default    Extra    Comment
 table_catalog    VARCHAR(3)    NO        null        

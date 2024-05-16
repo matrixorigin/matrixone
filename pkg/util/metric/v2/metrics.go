@@ -87,6 +87,9 @@ func initFileServiceMetrics() {
 	registry.MustRegister(s3ConnDurationHistogram)
 	registry.MustRegister(localIOBytesHistogram)
 	registry.MustRegister(localIODurationHistogram)
+
+	registry.MustRegister(ioMergerCounter)
+	registry.MustRegister(ioMergerDuration)
 }
 
 func initLogtailMetrics() {
@@ -97,6 +100,7 @@ func initLogtailMetrics() {
 
 	registry.MustRegister(LogTailBytesHistogram)
 	registry.MustRegister(logTailApplyDurationHistogram)
+	registry.MustRegister(logtailUpdatePartitionDurationHistogram)
 	registry.MustRegister(LogTailAppendDurationHistogram)
 	registry.MustRegister(logTailSendDurationHistogram)
 	registry.MustRegister(LogTailLoadCheckpointDurationHistogram)

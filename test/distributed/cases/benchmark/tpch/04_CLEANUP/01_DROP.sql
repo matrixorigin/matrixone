@@ -1,4 +1,6 @@
 use TPCH;
+create snapshot tpch_snapshot for account sys;
+create snapshot tpch_cluster for cluster;
 drop table if exists customer;
 drop table if exists lineitem;
 drop table if exists nation;
@@ -6,4 +8,3 @@ drop table if exists orders;
 drop table if exists part;
 drop table if exists partsupp;
 drop table if exists supplier;
-drop database if exists TPCH;

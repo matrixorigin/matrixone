@@ -143,7 +143,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 					}
 				}
 				return nil
-			})
+			}, nil)
 		require.NoError(t, err)
 
 		col1 := &plan.Expr{
