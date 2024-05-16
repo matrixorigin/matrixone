@@ -832,6 +832,11 @@ func (c *checkpointCleaner) Process() {
 		// TODO: Error handle
 		return
 	}
+
+	ck := checker{
+		cleaner: c,
+	}
+	ck.Check()
 }
 
 func (c *checkpointCleaner) checkExtras(item any) bool {
