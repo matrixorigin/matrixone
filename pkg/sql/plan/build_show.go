@@ -83,20 +83,20 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	tblName := stmt.Name.GetTableName()
 	dbName := stmt.Name.GetDBName()
 
-	snapshot := Snapshot{TS: &timestamp.Timestamp{}}
+	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
 	if len(stmt.SnapshotName) > 0 {
 		if snapshot, err = ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName); err != nil {
 			return nil, err
 		}
 	}
 
-	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, snapshot)
+	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, *snapshot)
 	if err != nil {
 		return nil, err
 	}
 
 	// check if the database is a subscription
-	sub, err := ctx.GetSubscriptionMeta(dbName, snapshot)
+	sub, err := ctx.GetSubscriptionMeta(dbName, *snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}()
 	}
 
-	_, tableDef := ctx.Resolve(dbName, tblName, snapshot)
+	_, tableDef := ctx.Resolve(dbName, tblName, *snapshot)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -324,7 +324,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			if ctx.GetQueryingSubscription() != nil {
 				_, fkTableDef = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
 			} else {
-				_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
+				_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, *snapshot)
 			}
 		}
 
@@ -475,19 +475,19 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	tblName := stmt.Name.GetTableName()
 	dbName := stmt.Name.GetDBName()
 
-	snapshot := Snapshot{TS: &timestamp.Timestamp{}}
+	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
 	if len(stmt.SnapshotName) > 0 {
 		if snapshot, err = ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName); err != nil {
 			return nil, err
 		}
 	}
 
-	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, snapshot)
+	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, *snapshot)
 	if err != nil {
 		return nil, err
 	}
 
-	_, tableDef := ctx.Resolve(dbName, tblName, snapshot)
+	_, tableDef := ctx.Resolve(dbName, tblName, *snapshot)
 	if tableDef == nil || tableDef.TableType != catalog.SystemViewRel {
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
 	}
@@ -530,7 +530,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 		if err != nil {
 			return nil, err
 		}
-		accountId = snapshot.CreatedByTenant.TenantID
+		accountId = snapshot.Tenant.TenantID
 		snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.SnapshotName)
 	}
 	// Any account should show database MO_CATALOG_DB_NAME
@@ -584,17 +584,17 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		return nil, err
 	}
 
-	snapshot := Snapshot{TS: &timestamp.Timestamp{}}
+	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
 	snapshotSpec := ""
 	if len(stmt.SnapshotName) > 0 {
 		if snapshot, err = ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName); err != nil {
 			return nil, err
 		}
-		accountId = snapshot.CreatedByTenant.TenantID
+		accountId = snapshot.Tenant.TenantID
 		snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.SnapshotName)
 	}
 
-	dbName, err := databaseIsValid(stmt.DBName, ctx, snapshot)
+	dbName, err := databaseIsValid(stmt.DBName, ctx, *snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -605,7 +605,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		tableType = fmt.Sprintf(", case relkind when 'v' then 'VIEW' when '%s' then 'CLUSTER TABLE' else 'BASE TABLE' end as Table_type", catalog.SystemClusterRel)
 	}
 
-	sub, err := ctx.GetSubscriptionMeta(dbName, snapshot)
+	sub, err := ctx.GetSubscriptionMeta(dbName, *snapshot)
 	if err != nil {
 		return nil, err
 	}

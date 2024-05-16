@@ -75,7 +75,8 @@ col1    col2    col3
 1    -321    null
 2    -1    null
 select count(*) from rs01 {snapshot = 'sp01'};
-
+count(*)
+6
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
 count(*)
 1

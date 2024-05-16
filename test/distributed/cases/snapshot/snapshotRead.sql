@@ -391,9 +391,7 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account sys;
 use test04;
 select count(*) from normal_table01 {snapshot = 'sp08'};
--- @bvt:issue#15907
 select count(*) from t3 {snapshot = 'sp08'};
--- @bvt:issue
 use mo_catalog;
 select count(*) from cluster02 {snapshot = 'sp08'};
 use test04;
@@ -406,9 +404,7 @@ select count(*) from normal_table01 {snapshot = 'sp08'};
 use mo_catalog;
 select count(*) from cluster02 {snapshot = 'sp08'};
 use test04;
--- @bvt:issue#15907
 select count(*) from t3 {snapshot = 'sp08'};
--- @bvt:issue
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp08'} where reldatabase = 'test04';
 drop account test_tenant_1;
 -- @ignore:0,6,7
@@ -487,9 +483,7 @@ drop snapshot if exists sp09;
 create snapshot sp09 for account sys;
 -- @ignore:1
 show snapshots;
--- @bvt:issue#15907
 select count(*) from tran01{snapshot = 'sp09'};
--- @bvt:issue
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp09'} where reldatabase = 'test06';
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = 'sp09'} where datname = 'test06';

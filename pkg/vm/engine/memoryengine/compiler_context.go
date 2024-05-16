@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -38,6 +37,26 @@ type CompilerContext struct {
 	defaultDB string
 	engine    *Engine
 	txnOp     client.TxnOperator
+}
+
+func (c *CompilerContext) GetViews() []string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) SetViews(views []string) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) GetSnapshot() *plan.Snapshot {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) SetSnapshot(snapshot *plan.Snapshot) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (c *CompilerContext) ReplacePlan(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
@@ -60,7 +79,7 @@ func (c *CompilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("implement me")
 }
 
-func (c *CompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (plan.Snapshot, error) {
+func (c *CompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -128,14 +147,11 @@ func (c *CompilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bo
 	ctx := c.GetContext()
 	txnOpt := c.txnOp
 
-	if snapshot.TS != nil {
-		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
-			snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
-			txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
+		txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
 
-			if snapshot.CreatedByTenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
-			}
+		if snapshot.Tenant != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -151,14 +167,11 @@ func (c *CompilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (
 	ctx := c.GetContext()
 	txnOpt := c.txnOp
 
-	if snapshot.TS != nil {
-		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
-			snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
-			txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
+		txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
 
-			if snapshot.CreatedByTenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
-			}
+		if snapshot.Tenant != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -269,14 +282,11 @@ func (c *CompilerContext) getTableAttrs(dbName string, tableName string, snapsho
 	ctx := c.GetContext()
 	txnOpt := c.txnOp
 
-	if snapshot.TS != nil {
-		if !snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) &&
-			snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
-			txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
+		txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
 
-			if snapshot.CreatedByTenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.CreatedByTenant.TenantID)
-			}
+		if snapshot.Tenant != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -313,14 +323,6 @@ func (c *CompilerContext) getTableAttrs(dbName string, tableName string, snapsho
 func (c *CompilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {}
 func (c *CompilerContext) GetBuildingAlterView() (bool, string, string) {
 	return false, "", ""
-}
-
-func (c *CompilerContext) GetRestoreInfo() *plan.RestoreInfo {
-	panic("unimplement")
-}
-
-func (c *CompilerContext) SetRestoreInfo(restoreInfo *plan.RestoreInfo) {
-	panic("unimplement")
 }
 
 func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {

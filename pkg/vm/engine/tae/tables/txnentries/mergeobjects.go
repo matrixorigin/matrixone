@@ -36,18 +36,16 @@ import (
 
 type mergeObjectsEntry struct {
 	sync.RWMutex
-	txn                txnif.AsyncTxn
-	relation           handle.Relation
-	droppedObjs        []*catalog.ObjectEntry
-	createdObjs        []*catalog.ObjectEntry
-	createdBlkCnt      []int
-	totalCreatedBlkCnt int
-	transMappings      *api.BlkTransferBooking
-	skipTransfer       bool
+	txn           txnif.AsyncTxn
+	relation      handle.Relation
+	droppedObjs   []*catalog.ObjectEntry
+	createdObjs   []*catalog.ObjectEntry
+	transMappings *api.BlkTransferBooking
+	skipTransfer  bool
 
 	rt                   *dbutils.Runtime
 	pageIds              []*common.ID
-	delTbls              []*model.TransDels
+	delTbls              [][]*model.TransDels
 	collectTs            types.TS
 	transCntBeforeCommit int
 	nextRoundDirties     map[*catalog.ObjectEntry]struct{}
@@ -60,26 +58,25 @@ func NewMergeObjectsEntry(
 	transMappings *api.BlkTransferBooking,
 	rt *dbutils.Runtime,
 ) (*mergeObjectsEntry, error) {
-	createdBlkCnt := make([]int, len(createdObjs))
 	totalCreatedBlkCnt := 0
-	for i, obj := range createdObjs {
-		createdBlkCnt[i] = totalCreatedBlkCnt
+	for _, obj := range createdObjs {
 		totalCreatedBlkCnt += obj.BlockCnt()
 	}
 	entry := &mergeObjectsEntry{
-		txn:                txn,
-		relation:           relation,
-		createdObjs:        createdObjs,
-		totalCreatedBlkCnt: totalCreatedBlkCnt,
-		createdBlkCnt:      createdBlkCnt,
-		droppedObjs:        droppedObjs,
-		transMappings:      transMappings,
-		skipTransfer:       transMappings == nil,
-		rt:                 rt,
+		txn:           txn,
+		relation:      relation,
+		createdObjs:   createdObjs,
+		droppedObjs:   droppedObjs,
+		transMappings: transMappings,
+		skipTransfer:  transMappings == nil,
+		rt:            rt,
 	}
 
 	if !entry.skipTransfer && totalCreatedBlkCnt > 0 {
-		entry.delTbls = make([]*model.TransDels, totalCreatedBlkCnt)
+		entry.delTbls = make([][]*model.TransDels, len(createdObjs))
+		for i := 0; i < len(createdObjs); i++ {
+			entry.delTbls[i] = make([]*model.TransDels, createdObjs[i].BlockCnt())
+		}
 		entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
 		entry.collectTs = rt.Now()
 		var err error
@@ -223,10 +220,10 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 				"%s-%d find no transfer mapping for row %d, mapping range (%d, %d)",
 				dropped.ID.String(), blkOffsetInObj, row, _min, _max))
 		}
-		if entry.delTbls[destpos.BlkIdx] == nil {
-			entry.delTbls[destpos.BlkIdx] = model.NewTransDels(entry.txn.GetPrepareTS())
+		if entry.delTbls[destpos.ObjIdx][destpos.BlkIdx] == nil {
+			entry.delTbls[destpos.ObjIdx][destpos.BlkIdx] = model.NewTransDels(entry.txn.GetPrepareTS())
 		}
-		entry.delTbls[destpos.BlkIdx].Mapping[int(destpos.RowIdx)] = ts[i]
+		entry.delTbls[destpos.ObjIdx][destpos.BlkIdx].Mapping[int(destpos.RowIdx)] = ts[i]
 		var targetObj handle.Object
 		targetObj, err = entry.relation.GetObject(&entry.createdObjs[destpos.ObjIdx].ID)
 		if err != nil {
@@ -253,7 +250,7 @@ func (s *tempStat) String() string {
 
 // ATTENTION !!! (from, to] !!!
 func (entry *mergeObjectsEntry) collectDelsAndTransfer(from, to types.TS) (transCnt int, stat tempStat, err error) {
-	if len(entry.createdBlkCnt) == 0 {
+	if len(entry.createdObjs) == 0 {
 		return
 	}
 
@@ -317,7 +314,7 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	defer func() {
 		v2.TaskCommitMergeObjectsDurationHistogram.Observe(time.Since(inst).Seconds())
 	}()
-	if len(entry.createdBlkCnt) == 0 || entry.skipTransfer {
+	if len(entry.createdObjs) == 0 || entry.skipTransfer {
 		logutil.Infof("mergeblocks commit %v, [%v,%v], no transfer",
 			entry.relation.ID(),
 			entry.txn.GetStartTS().ToString(),
@@ -339,11 +336,12 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	}
 	tblEntry.Stats.Unlock()
 
-	objID := entry.createdObjs[0].ID
-	for i, delTbl := range entry.delTbls {
-		if delTbl != nil {
-			destid := objectio.NewBlockidWithObjectID(&objID, uint16(i))
-			entry.rt.TransferDelsMap.SetDelsForBlk(*destid, delTbl)
+	for objIdx := range entry.delTbls {
+		for blkIdx, delTbl := range entry.delTbls[objIdx] {
+			if delTbl != nil {
+				destId := objectio.NewBlockidWithObjectID(&entry.createdObjs[objIdx].ID, uint16(blkIdx))
+				entry.rt.TransferDelsMap.SetDelsForBlk(*destId, delTbl)
+			}
 		}
 	}
 	rest := time.Since(inst1)
