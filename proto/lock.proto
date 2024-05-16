@@ -339,6 +339,10 @@ message Result {
   timestamp.Timestamp Timestamp       = 4 [(gogoproto.nullable) = false];
   // TableDefChanged conflict with ddl lock, need rebuild plan to get new table def
   bool                TableDefChanged = 5;
+  bytes               ConflictKey     = 6;
+  bytes               ConflictTxn     = 7;   
+  bytes               PrevWaiter      = 8; 
+  uint32              Waiters         = 9;                 
 }
 
 message ExtraMutation {

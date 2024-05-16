@@ -647,12 +647,20 @@ func (s *service) TxnStatementCompleted(
 	sql string,
 	cost time.Duration,
 	seq uint64,
+	affectRows int,
 	err error,
 ) {
 	if !s.Enabled(FeatureTraceTxnAction) &&
 		!s.Enabled(FeatureTraceTxn) &&
 		!s.Enabled(FeatureTraceStatement) {
 		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	if err == nil {
+		err = infoErr{
+			info: buf.writeInt(int64(affectRows)),
+		}
 	}
 
 	s.AddTxnDurationAction(
@@ -667,6 +675,10 @@ func (s *service) TxnStatementCompleted(
 		op,
 		sql,
 		cost)
+
+	s.txnActionC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) AddTxnDurationAction(
@@ -717,6 +729,51 @@ func (s *service) AddTxnAction(
 		value,
 		unit,
 		err)
+}
+
+func (s *service) AddTxnActionInfo(
+	op client.TxnOperator,
+	eventType client.EventType,
+	seq uint64,
+	tableID uint64,
+	value func(Writer),
+) {
+	if !s.Enabled(FeatureTraceTxnAction) {
+		return
+	}
+
+	if s.atomic.closed.Load() {
+		return
+	}
+
+	filters := s.atomic.txnFilters.Load()
+	if skipped := filters.filter(op); skipped {
+		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	w := writer{
+		buf: buf.buf,
+		dst: buf.alloc(1024),
+		idx: buf.buf.GetWriteIndex(),
+	}
+	value(w)
+
+	s.txnActionC <- event{
+		csv: actionEvent{
+			ts:        time.Now().UnixNano(),
+			action:    eventType.Name,
+			actionSeq: seq,
+			tableID:   tableID,
+			value:     0,
+			unit:      w.data(),
+			txnID:     op.Txn().ID,
+			err:       "",
+		},
+	}
+	s.txnActionC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) doTxnEventAction(event client.TxnEvent) {
@@ -924,4 +981,12 @@ func addTxnFilterSQL(
 		TraceTxnFilterTable,
 		method,
 		value)
+}
+
+type infoErr struct {
+	info string
+}
+
+func (e infoErr) Error() string {
+	return e.info
 }
