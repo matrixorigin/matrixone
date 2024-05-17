@@ -185,7 +185,6 @@ type SingleColumnAggInformation struct {
 	id                   int64
 	arg                  types.Type
 	ret                  func(p []types.Type) types.Type
-	acceptNull           bool
 	setNullForEmptyGroup bool
 }
 
@@ -198,12 +197,11 @@ type MultiColumnAggInformation struct {
 
 func MakeSingleColumnAggInformation(
 	id int64, paramType types.Type, getRetType func(p []types.Type) types.Type,
-	acceptNull bool, setNullForEmptyGroup bool) SingleColumnAggInformation {
+	setNullForEmptyGroup bool) SingleColumnAggInformation {
 	return SingleColumnAggInformation{
 		id:                   id,
 		arg:                  paramType,
 		ret:                  getRetType,
-		acceptNull:           acceptNull,
 		setNullForEmptyGroup: setNullForEmptyGroup,
 	}
 }

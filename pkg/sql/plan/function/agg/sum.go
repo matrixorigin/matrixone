@@ -22,91 +22,91 @@ import (
 
 func RegisterSum2(id int64) {
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), SumReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), SumReturnType, true),
 		nil,
 		nil,
 		aggSumInitResult[uint64],
 		aggSumFill[uint64, uint64], aggSumFills[uint64, uint64], aggSumMerge[uint64, uint64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), SumReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), SumReturnType, true),
 		nil,
 		nil,
 		aggSumInitResult[int64],
 		aggSumFill[int8, int64], aggSumFills[int8, int64], aggSumMerge[int8, int64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), SumReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), SumReturnType, true),
 		nil,
 		nil,
 		aggSumInitResult[int64],
 		aggSumFill[int16, int64], aggSumFills[int16, int64], aggSumMerge[int16, int64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), SumReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), SumReturnType, true),
 		nil,
 		nil,
 		aggSumInitResult[int64],
 		aggSumFill[int32, int64], aggSumFills[int32, int64], aggSumMerge[int32, int64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), SumReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), SumReturnType, true),
 		nil,
 		nil,
 		aggSumInitResult[int64],
 		aggSumFill[int64, int64], aggSumFills[int64, int64], aggSumMerge[int64, int64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), SumReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), SumReturnType, true),
 		nil,
 		nil,
 		aggSumInitResult[uint64],
 		aggSumFill[uint8, uint64], aggSumFills[uint8, uint64], aggSumMerge[uint8, uint64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), SumReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), SumReturnType, true),
 		nil,
 		nil,
 		aggSumInitResult[uint64],
 		aggSumFill[uint16, uint64], aggSumFills[uint16, uint64], aggSumMerge[uint16, uint64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), SumReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), SumReturnType, true),
 		nil,
 		nil,
 		aggSumInitResult[uint64],
 		aggSumFill[uint32, uint64], aggSumFills[uint32, uint64], aggSumMerge[uint32, uint64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), SumReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), SumReturnType, true),
 		nil,
 		nil,
 		aggSumInitResult[uint64],
 		aggSumFill[uint64, uint64], aggSumFills[uint64, uint64], aggSumMerge[uint64, uint64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), SumReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), SumReturnType, true),
 		nil,
 		nil,
 		aggSumInitResult[float64],
 		aggSumFill[float32, float64], aggSumFills[float32, float64], aggSumMerge[float32, float64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), SumReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), SumReturnType, true),
 		nil,
 		nil,
 		aggSumInitResult[float64],
 		aggSumFill[float64, float64], aggSumFills[float64, float64], aggSumMerge[float64, float64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), SumReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), SumReturnType, true),
 		aggSumOfDecimalInitCommonContext,
 		nil,
 		aggSumOfDecimalInitResult,
 		aggSumOfDecimal128Fill, aggSumOfDecimal128Fills, aggSumOfDecimal128Merge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), SumReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), SumReturnType, true),
 		aggSumOfDecimalInitCommonContext,
 		nil,
 		aggSumOfDecimalInitResult,

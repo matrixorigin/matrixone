@@ -82,9 +82,9 @@ func (exec *clusterCentersExec) marshal() ([]byte, error) {
 	}
 
 	encoded := &EncodedAgg{
-		Info:     d,
-		Result:   r,
-		Groups:   nil,
+		Info:   d,
+		Result: r,
+		Groups: nil,
 	}
 
 	encoded.Groups = make([][]byte, len(exec.groupData)+1)

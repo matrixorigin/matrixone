@@ -23,133 +23,133 @@ import (
 
 func RegisterMax2(id int64) {
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[uint64],
 		aggMaxFill[uint64], aggMaxFills[uint64], aggMaxMerge[uint64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[int8],
 		aggMaxFill[int8], aggMaxFills[int8], aggMaxMerge[int8], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[int16],
 		aggMaxFill[int16], aggMaxFills[int16], aggMaxMerge[int16], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[int32],
 		aggMaxFill[int32], aggMaxFills[int32], aggMaxMerge[int32], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[int64],
 		aggMaxFill[int64], aggMaxFills[int64], aggMaxMerge[int64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[uint8],
 		aggMaxFill[uint8], aggMaxFills[uint8], aggMaxMerge[uint8], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[uint16],
 		aggMaxFill[uint16], aggMaxFills[uint16], aggMaxMerge[uint16], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[uint32],
 		aggMaxFill[uint32], aggMaxFills[uint32], aggMaxMerge[uint32], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[uint64],
 		aggMaxFill[uint64], aggMaxFills[uint64], aggMaxMerge[uint64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[float32],
 		aggMaxFill[float32], aggMaxFills[float32], aggMaxMerge[float32], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[float64],
 		aggMaxFill[float64], aggMaxFills[float64], aggMaxMerge[float64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_date.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_date.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[types.Date],
 		aggMaxFill[types.Date], aggMaxFills[types.Date], aggMaxMerge[types.Date], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_datetime.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_datetime.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[types.Datetime],
 		aggMaxFill[types.Datetime], aggMaxFills[types.Datetime], aggMaxMerge[types.Datetime], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_timestamp.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_timestamp.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[types.Timestamp],
 		aggMaxFill[types.Timestamp], aggMaxFills[types.Timestamp], aggMaxMerge[types.Timestamp], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_time.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_time.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[types.Time],
 		aggMaxFill[types.Time], aggMaxFills[types.Time], aggMaxMerge[types.Time], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_bool.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_bool.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[bool],
 		aggMaxOfBoolFill, aggMaxOfBoolFills, aggMaxOfBoolMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[types.Uuid],
 		aggMaxOfUuidFill, aggMaxOfUuidFills, aggMaxOfUuidMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[types.Decimal64],
 		aggMaxOfDecimal64Fill, aggMaxOfDecimal64Fills, aggMaxOfDecimal64Merge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), MaxReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), MaxReturnType, true),
 		nil,
 		nil,
 		aggMaxInitResult[types.Decimal128],
@@ -158,7 +158,7 @@ func RegisterMax2(id int64) {
 	varlenList := []types.T{types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_binary, types.T_varbinary}
 	for _, t := range varlenList {
 		aggexec.RegisterAggFromBytesRetBytes(
-			aggexec.MakeSingleColumnAggInformation(id, t.ToType(), MaxReturnType, false, true),
+			aggexec.MakeSingleColumnAggInformation(id, t.ToType(), MaxReturnType, true),
 			nil,
 			nil,
 			nil,

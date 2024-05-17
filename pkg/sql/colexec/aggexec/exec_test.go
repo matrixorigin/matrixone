@@ -86,14 +86,14 @@ func mergeSinglePrivate1(
 
 func registerTheTestingCount(id int64, emptyGroupToBeNull bool) {
 	RegisterAggFromFixedRetFixed(
-		MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, false, emptyGroupToBeNull),
+		MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, emptyGroupToBeNull),
 		nil, nil, tSinglePrivate1InitResult,
 		fillSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil)
 }
 
 func registerTheTestingCountWithContext(id int64, commonCtx AggCommonContextInit, groupCtx AggGroupContextInit) {
 	RegisterAggFromFixedRetFixed(
-		MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, false, true),
+		MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, true),
 		commonCtx, groupCtx, tSinglePrivate1InitResult,
 		fillSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil)
 }

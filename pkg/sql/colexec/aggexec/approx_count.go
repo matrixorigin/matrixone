@@ -39,9 +39,9 @@ func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
 	}
 
 	encoded := &EncodedAgg{
-		Info:     d,
-		Result:   r,
-		Groups:   nil,
+		Info:   d,
+		Result: r,
+		Groups: nil,
 	}
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))
@@ -89,9 +89,9 @@ func (exec *approxCountVarExec) marshal() ([]byte, error) {
 	}
 
 	encoded := &EncodedAgg{
-		Info:     d,
-		Result:   r,
-		Groups:   nil,
+		Info:   d,
+		Result: r,
+		Groups: nil,
 	}
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))

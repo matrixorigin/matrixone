@@ -22,14 +22,14 @@ import (
 
 func RegisterBitmapConstruct2(id int64) {
 	aggexec.RegisterAggFromFixedRetBytes(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), BitmapConstructReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), BitmapConstructReturnType, true),
 		nil, generateBitmapGroupContext, nil,
 		aggBitmapConstructFill, aggBitmapConstructFills, aggBitmapConstructMerge, aggBitmapConstructFlush)
 }
 
 func RegisterBitmapOr2(id int64) {
 	aggexec.RegisterAggFromBytesRetBytes(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitmapOrReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitmapOrReturnType, true),
 		nil, generateBitmapGroupContext, nil,
 		aggBitmapOrFill, aggBitmapOrFills, aggBitmapConstructMerge, aggBitmapConstructFlush)
 }

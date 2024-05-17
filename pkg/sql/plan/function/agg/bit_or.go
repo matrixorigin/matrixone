@@ -22,67 +22,67 @@ import (
 
 func RegisterBitOr2(id int64) {
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), BitAndReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), BitAndReturnType, true),
 		nil, nil, aggBitOrInitResult,
 		aggBitOrFill[uint64], aggBitOrFills[uint64], aggBitOrMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), BitAndReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), BitAndReturnType, true),
 		nil, nil, aggBitOrInitResult,
 		aggBitOrFill[uint8], aggBitOrFills[uint8], aggBitOrMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), BitAndReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), BitAndReturnType, true),
 		nil, nil, aggBitOrInitResult,
 		aggBitOrFill[uint16], aggBitOrFills[uint16], aggBitOrMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), BitAndReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), BitAndReturnType, true),
 		nil, nil, aggBitOrInitResult,
 		aggBitOrFill[uint32], aggBitOrFills[uint32], aggBitOrMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), BitAndReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), BitAndReturnType, true),
 		nil, nil, aggBitOrInitResult,
 		aggBitOrFill[uint64], aggBitOrFills[uint64], aggBitOrMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), BitAndReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), BitAndReturnType, true),
 		nil, nil, aggBitOrInitResult,
 		aggBitOrFill[int8], aggBitOrFills[int8], aggBitOrMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), BitAndReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), BitAndReturnType, true),
 		nil, nil, aggBitOrInitResult,
 		aggBitOrFill[int16], aggBitOrFills[int16], aggBitOrMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), BitAndReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), BitAndReturnType, true),
 		nil, nil, aggBitOrInitResult,
 		aggBitOrFill[int32], aggBitOrFills[int32], aggBitOrMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), BitAndReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), BitAndReturnType, true),
 		nil, nil, aggBitOrInitResult,
 		aggBitOrFill[int64], aggBitOrFills[int64], aggBitOrMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), BitAndReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), BitAndReturnType, true),
 		nil, nil, aggBitOrInitResult,
 		aggBitOrFill[float32], aggBitOrFills[float32], aggBitOrMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), BitAndReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), BitAndReturnType, true),
 		nil, nil, aggBitOrInitResult,
 		aggBitOrFill[float64], aggBitOrFills[float64], aggBitOrMerge, nil)
 
 	aggexec.RegisterAggFromBytesRetBytes(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_binary.ToType(), BitAndReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_binary.ToType(), BitAndReturnType, true),
 		nil, nil, nil,
 		aggBitOrOfBinaryFill, aggBitOrOfBinaryFills, aggBitOrOfBinaryMerge, nil)
 
 	aggexec.RegisterAggFromBytesRetBytes(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitAndReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitAndReturnType, true),
 		nil, nil, nil,
 		aggBitOrOfBinaryFill, aggBitOrOfBinaryFills, aggBitOrOfBinaryMerge, nil)
 }

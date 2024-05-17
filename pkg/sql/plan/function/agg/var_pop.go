@@ -23,67 +23,67 @@ import (
 
 func RegisterVarPop2(id int64) {
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), VarPopReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), VarPopReturnType, true),
 		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
 		aggVarPopFill[uint64], aggVarPopFills[uint64], aggVarPopMerge, aggVarPopFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), VarPopReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), VarPopReturnType, true),
 		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
 		aggVarPopFill[int8], aggVarPopFills[int8], aggVarPopMerge, aggVarPopFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), VarPopReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), VarPopReturnType, true),
 		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
 		aggVarPopFill[int16], aggVarPopFills[int16], aggVarPopMerge, aggVarPopFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), VarPopReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), VarPopReturnType, true),
 		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
 		aggVarPopFill[int32], aggVarPopFills[int32], aggVarPopMerge, aggVarPopFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), VarPopReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), VarPopReturnType, true),
 		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
 		aggVarPopFill[int64], aggVarPopFills[int64], aggVarPopMerge, aggVarPopFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), VarPopReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), VarPopReturnType, true),
 		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
 		aggVarPopFill[uint8], aggVarPopFills[uint8], aggVarPopMerge, aggVarPopFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), VarPopReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), VarPopReturnType, true),
 		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
 		aggVarPopFill[uint16], aggVarPopFills[uint16], aggVarPopMerge, aggVarPopFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), VarPopReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), VarPopReturnType, true),
 		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
 		aggVarPopFill[uint32], aggVarPopFills[uint32], aggVarPopMerge, aggVarPopFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), VarPopReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), VarPopReturnType, true),
 		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
 		aggVarPopFill[uint64], aggVarPopFills[uint64], aggVarPopMerge, aggVarPopFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), VarPopReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), VarPopReturnType, true),
 		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
 		aggVarPopFill[float32], aggVarPopFills[float32], aggVarPopMerge, aggVarPopFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), VarPopReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), VarPopReturnType, true),
 		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
 		aggVarPopFill[float64], aggVarPopFills[float64], aggVarPopMerge, aggVarPopFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), VarPopReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), VarPopReturnType, true),
 		generateAggVarPopOfDecimalCommonContext, generateAggVarPopOfDecimalGroupContext, aggVarPopOfDecimalInitResult,
 		aggVarPopOfDecimal64Fill, aggVarPopOfDecimal64Fills, aggVarPopOfDecimalMerge, aggVarPopOfDecimalFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), VarPopReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), VarPopReturnType, true),
 		generateAggVarPopOfDecimalCommonContext, generateAggVarPopOfDecimalGroupContext, aggVarPopOfDecimalInitResult,
 		aggVarPopOfDecimal128Fill, aggVarPopOfDecimal128Fills, aggVarPopOfDecimalMerge, aggVarPopOfDecimalFlush)
 }

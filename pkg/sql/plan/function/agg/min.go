@@ -23,133 +23,133 @@ import (
 
 func RegisterMin2(id int64) {
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[uint64],
 		aggMinFill[uint64], aggMinFills[uint64], aggMinMerge[uint64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[int8],
 		aggMinFill[int8], aggMinFills[int8], aggMinMerge[int8], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[int16],
 		aggMinFill[int16], aggMinFills[int16], aggMinMerge[int16], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[int32],
 		aggMinFill[int32], aggMinFills[int32], aggMinMerge[int32], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[int64],
 		aggMinFill[int64], aggMinFills[int64], aggMinMerge[int64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[uint8],
 		aggMinFill[uint8], aggMinFills[uint8], aggMinMerge[uint8], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[uint16],
 		aggMinFill[uint16], aggMinFills[uint16], aggMinMerge[uint16], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[uint32],
 		aggMinFill[uint32], aggMinFills[uint32], aggMinMerge[uint32], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[uint64],
 		aggMinFill[uint64], aggMinFills[uint64], aggMinMerge[uint64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[float32],
 		aggMinFill[float32], aggMinFills[float32], aggMinMerge[float32], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[float64],
 		aggMinFill[float64], aggMinFills[float64], aggMinMerge[float64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_date.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_date.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[types.Date],
 		aggMinFill[types.Date], aggMinFills[types.Date], aggMinMerge[types.Date], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_datetime.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_datetime.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[types.Datetime],
 		aggMinFill[types.Datetime], aggMinFills[types.Datetime], aggMinMerge[types.Datetime], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_timestamp.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_timestamp.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[types.Timestamp],
 		aggMinFill[types.Timestamp], aggMinFills[types.Timestamp], aggMinMerge[types.Timestamp], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_time.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_time.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[types.Time],
 		aggMinFill[types.Time], aggMinFills[types.Time], aggMinMerge[types.Time], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_bool.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_bool.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[bool],
 		aggMinOfBoolFill, aggMinOfBoolFills, aggMinOfBoolMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[types.Uuid],
 		aggMinOfUuidFill, aggMinOfUuidFills, aggMinOfUuidMerge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[types.Decimal64],
 		aggMinOfDecimal64Fill, aggMinOfDecimal64Fills, aggMinOfDecimal64Merge, nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), MinReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), MinReturnType, true),
 		nil,
 		nil,
 		aggMinInitResult[types.Decimal128],
@@ -158,7 +158,7 @@ func RegisterMin2(id int64) {
 	varlenList := []types.T{types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_binary, types.T_varbinary}
 	for _, t := range varlenList {
 		aggexec.RegisterAggFromBytesRetBytes(
-			aggexec.MakeSingleColumnAggInformation(id, t.ToType(), MinReturnType, false, true),
+			aggexec.MakeSingleColumnAggInformation(id, t.ToType(), MinReturnType, true),
 			nil,
 			nil,
 			nil,
@@ -201,7 +201,7 @@ var fromTypeIDtoMaxValue = map[types.T]interface{}{
 	types.T_timestamp: types.Timestamp(math.MaxInt64),
 	types.T_time:      types.Time(math.MaxInt64),
 	types.T_bool:      true,
-	types.T_uuid:      types.Uuid([16]byte{
+	types.T_uuid: types.Uuid([16]byte{
 		math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8,
 		math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8, math.MaxUint8}),
 	types.T_decimal64:  types.Decimal64Max,

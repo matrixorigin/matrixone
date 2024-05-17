@@ -21,67 +21,67 @@ import (
 
 func RegisterAvg2(id int64) {
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), AvgReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), AvgReturnType, true),
 		nil, generateAggAvgContext, aggAvgInitResult,
 		aggAvgFill[uint64], aggAvgFills[uint64], aggAvgMerge[uint64], aggAvgFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), AvgReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), AvgReturnType, true),
 		nil, generateAggAvgContext, aggAvgInitResult,
 		aggAvgFill[int8], aggAvgFills[int8], aggAvgMerge[int8], aggAvgFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), AvgReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), AvgReturnType, true),
 		nil, generateAggAvgContext, aggAvgInitResult,
 		aggAvgFill[int16], aggAvgFills[int16], aggAvgMerge[int16], aggAvgFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), AvgReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), AvgReturnType, true),
 		nil, generateAggAvgContext, aggAvgInitResult,
 		aggAvgFill[int32], aggAvgFills[int32], aggAvgMerge[int32], aggAvgFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), AvgReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), AvgReturnType, true),
 		nil, generateAggAvgContext, aggAvgInitResult,
 		aggAvgFill[int64], aggAvgFills[int64], aggAvgMerge[int64], aggAvgFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), AvgReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), AvgReturnType, true),
 		nil, generateAggAvgContext, aggAvgInitResult,
 		aggAvgFill[uint8], aggAvgFills[uint8], aggAvgMerge[uint8], aggAvgFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), AvgReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), AvgReturnType, true),
 		nil, generateAggAvgContext, aggAvgInitResult,
 		aggAvgFill[uint16], aggAvgFills[uint16], aggAvgMerge[uint16], aggAvgFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), AvgReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), AvgReturnType, true),
 		nil, generateAggAvgContext, aggAvgInitResult,
 		aggAvgFill[uint32], aggAvgFills[uint32], aggAvgMerge[uint32], aggAvgFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), AvgReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), AvgReturnType, true),
 		nil, generateAggAvgContext, aggAvgInitResult,
 		aggAvgFill[uint64], aggAvgFills[uint64], aggAvgMerge[uint64], aggAvgFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), AvgReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), AvgReturnType, true),
 		nil, generateAggAvgContext, aggAvgInitResult,
 		aggAvgFill[float32], aggAvgFills[float32], aggAvgMerge[float32], aggAvgFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), AvgReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), AvgReturnType, true),
 		nil, generateAggAvgContext, aggAvgInitResult,
 		aggAvgFill[float64], aggAvgFills[float64], aggAvgMerge[float64], aggAvgFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), AvgReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), AvgReturnType, true),
 		generateAggAvgDecimalCommonContext, generateAggAvgContext, aggAvgOfDecimalInitResult,
 		aggAvgOfDecimal64Fill, aggAvgOfDecimal64Fills, aggAvgOfDecimalMerge, aggAvgOfDecimalFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
-		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), AvgReturnType, false, true),
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), AvgReturnType, true),
 		generateAggAvgDecimalCommonContext, generateAggAvgContext, aggAvgOfDecimalInitResult,
 		aggAvgOfDecimal128Fill, aggAvgOfDecimal128Fills, aggAvgOfDecimalMerge, aggAvgOfDecimalFlush)
 }

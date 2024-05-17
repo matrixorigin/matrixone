@@ -73,8 +73,8 @@ func (exec *multiAggFuncExec1[to]) marshal() ([]byte, error) {
 		return nil, err
 	}
 	encoded := &EncodedAgg{
-		Info:     d,
-		Result:   r,
+		Info:   d,
+		Result: r,
 	}
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))
@@ -101,8 +101,8 @@ func (exec *multiAggFuncExec2) marshal() ([]byte, error) {
 		return nil, err
 	}
 	encoded := &EncodedAgg{
-		Info:     d,
-		Result:   r,
+		Info:   d,
+		Result: r,
 	}
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))

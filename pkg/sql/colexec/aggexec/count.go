@@ -42,9 +42,9 @@ func (exec *countColumnExec) marshal() ([]byte, error) {
 		return nil, err
 	}
 	encoded := &EncodedAgg{
-		Info:     d,
-		Result:   r,
-		Groups:   nil,
+		Info:   d,
+		Result: r,
+		Groups: nil,
 	}
 	return encoded.Marshal()
 }
@@ -252,9 +252,9 @@ func (exec *countStarExec) marshal() ([]byte, error) {
 		return nil, err
 	}
 	encoded := &EncodedAgg{
-		Info:     d,
-		Result:   r,
-		Groups:   nil,
+		Info:   d,
+		Result: r,
+		Groups: nil,
 	}
 	return encoded.Marshal()
 }
