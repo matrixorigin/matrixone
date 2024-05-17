@@ -73,6 +73,14 @@ func RegisterAggFromBytesRetBytes(
 	return
 }
 
+// newSingleAggFuncExec4NewVersion creates a singleAggFuncExecNew4 from the agg information.
+func newSingleAggFuncExec4NewVersion(
+	mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
+	e := &singleAggFuncExecNew4{}
+	e.init(mg, info, impl)
+	return e
+}
+
 // singleAggFuncExecNew4 is the agg executor for single-column aggregation function
 // with fixed input and output types were both var-len types.
 type singleAggFuncExecNew4 struct {

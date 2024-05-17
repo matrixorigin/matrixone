@@ -16,11 +16,10 @@ package aggexec
 
 import (
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// singleAggInfo contains the basic information of single column agg.
+// singleAggInfo is the basic information of single column agg.
 type singleAggInfo struct {
 	aggID    int64
 	distinct bool
@@ -64,6 +63,7 @@ func (info singleAggInfo) getEncoded() *EncodedBasicInfo {
 	}
 }
 
+// singleAggExecExtraInformation is the extra information of single column agg to optimize the execution.
 type singleAggExecExtraInformation struct {
 	partialGroup  int
 	partialResult any
@@ -73,4 +73,45 @@ func (optimized *singleAggExecExtraInformation) SetExtraInformation(partialResul
 	optimized.partialGroup = groupIndex
 	optimized.partialResult = partialResult
 	return nil
+}
+
+// multiAggInfo is the basic information of multi column agg.
+type multiAggInfo struct {
+	aggID    int64
+	distinct bool
+	argTypes []types.Type
+	retType  types.Type
+
+	// emptyNull indicates that whether we should return null for a group without any input value.
+	emptyNull bool
+}
+
+func (info multiAggInfo) String() string {
+	args := "[" + info.argTypes[0].String()
+	for i := 1; i < len(info.argTypes); i++ {
+		args += ", " + info.argTypes[i].String()
+	}
+	args += "]"
+	return fmt.Sprintf("{aggID: %d, argTypes: %s, retType: %s}", info.aggID, args, info.retType.String())
+}
+
+func (info multiAggInfo) AggID() int64 {
+	return info.aggID
+}
+
+func (info multiAggInfo) IsDistinct() bool {
+	return info.distinct
+}
+
+func (info multiAggInfo) TypesInfo() ([]types.Type, types.Type) {
+	return info.argTypes, info.retType
+}
+
+func (info multiAggInfo) getEncoded() *EncodedBasicInfo {
+	return &EncodedBasicInfo{
+		Id:         info.aggID,
+		IsDistinct: info.distinct,
+		Args:       info.argTypes,
+		Ret:        info.retType,
+	}
 }

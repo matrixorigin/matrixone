@@ -78,6 +78,102 @@ func RegisterAggFromBytesRetFixed[to types.FixedSizeTExceptStrType](
 	return
 }
 
+// newSingleAggFuncExec3NewVersion creates a singleAggFuncExecNew3 from the agg information.
+func newSingleAggFuncExec3NewVersion(
+	mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
+	switch info.retType.Oid {
+	case types.T_bool:
+		e := &singleAggFuncExecNew3[bool]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_bit:
+		e := &singleAggFuncExecNew3[uint64]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_int8:
+		e := &singleAggFuncExecNew3[int8]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_int16:
+		e := &singleAggFuncExecNew3[int16]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_int32:
+		e := &singleAggFuncExecNew3[int32]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_int64:
+		e := &singleAggFuncExecNew3[int64]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_uint8:
+		e := &singleAggFuncExecNew3[uint8]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_uint16:
+		e := &singleAggFuncExecNew3[uint16]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_uint32:
+		e := &singleAggFuncExecNew3[uint32]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_uint64:
+		e := &singleAggFuncExecNew3[uint64]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_float32:
+		e := &singleAggFuncExecNew3[float32]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_float64:
+		e := &singleAggFuncExecNew3[float64]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_decimal64:
+		e := &singleAggFuncExecNew3[types.Decimal64]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_decimal128:
+		e := &singleAggFuncExecNew3[types.Decimal128]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_date:
+		e := &singleAggFuncExecNew3[types.Date]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_datetime:
+		e := &singleAggFuncExecNew3[types.Datetime]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_time:
+		e := &singleAggFuncExecNew3[types.Time]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_timestamp:
+		e := &singleAggFuncExecNew3[types.Timestamp]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_TS:
+		e := &singleAggFuncExecNew3[types.TS]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_Rowid:
+		e := &singleAggFuncExecNew3[types.Rowid]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_Blockid:
+		e := &singleAggFuncExecNew3[types.Blockid]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_uuid:
+		e := &singleAggFuncExecNew3[types.Uuid]{}
+		e.init(mg, info, impl)
+		return e
+	}
+	panic(fmt.Sprintf("unsupported result type %s for singleAggFuncExec3", info.retType))
+}
+
 // singleAggFuncExecNew3 is the aggregation executor for single aggregation function
 // with a variable-length input and a fixed-length return value.
 type singleAggFuncExecNew3[to types.FixedSizeTExceptStrType] struct {
