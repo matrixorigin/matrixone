@@ -662,9 +662,7 @@ select * from index01;
 show create table index01;
 show create table index02;
 use db10;
--- @bvt:issue#16062
 select * from index03;
--- @bvt:issue
 
 -- @ignore:1
 show snapshots;
