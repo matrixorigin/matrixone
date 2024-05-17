@@ -119,4 +119,13 @@ d INT NOT NULL DEFAULT 2000
 desc t4;
 show create table t4;
 -----------------------------------------------------------------------------------------------------
+CREATE TABLE t5 (
+y datetime NOT NULL DEFAULT '2023-06-21 00:00:00' PRIMARY KEY,
+a int DEFAULT NULL,
+b char(10) DEFAULT NULL
+);
+
+desc t5;
+show create table t5;
+-----------------------------------------------------------------------------------------------------
 drop database if exists db1;
