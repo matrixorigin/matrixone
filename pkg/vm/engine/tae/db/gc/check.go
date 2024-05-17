@@ -1,10 +1,17 @@
 package gc
 
 import (
+	"context"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"time"
 )
 
 type checker struct {
@@ -83,6 +90,9 @@ func (c *checker) Check() error {
 	}
 	catalog := c.cleaner.ckpClient.GetCatalog()
 	it := catalog.MakeDBIt(true)
+	bat := makeRespBatchFromSchema(logtail.BlkMetaSchema, common.DebugAllocator)
+	defer bat.Close()
+	end := types.BuildTS(time.Now().UnixNano(), 0)
 	for ; it.Valid(); it.Next() {
 		db := it.Get().GetPayload()
 		itTable := db.MakeTableIt(true)
@@ -99,16 +109,29 @@ func (c *checker) Check() error {
 			}
 			it2 := table.GetDeleteList().Items()
 			for _, itt := range it2 {
-				objID := itt.ObjectID
-				if _, ok := allObjects[objID.String()+"0000"]; ok {
-					delete(allObjects, objID.String())
+				_, _, _, err = itt.VisitDeletes(context.Background(), maxTs, end, bat, nil, true)
+				if err != nil {
+					logutil.Errorf("visit deletes failed: %v", err)
+					continue
 				}
+				//if _, ok := allObjects[objID.String()+"0000"]; ok {
+				//	delete(allObjects, objID.String())
+				//}
+				//deleteIT := common.NewGenericSortedDListIt(nil, itt.MVCC, false)
+				//for deleteIT.Valid() {
+				//
+				//	deleteIT.Next()
+				//}
 			}
 			itTable.Next()
 		}
 	}
-
-	logutil.Infof("catalog.SimplePPString(common.PPL3) is %v", catalog.SimplePPString(common.PPL3))
+	for i := 0; i < bat.Length(); i++ {
+		deltaLoc := objectio.Location(bat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
+		if _, ok := allObjects[deltaLoc.Name().String()]; ok {
+			delete(allObjects, deltaLoc.Name().String())
+		}
+	}
 	for name := range allObjects {
 		logutil.Infof("not found object %s,", name)
 	}
@@ -116,4 +139,30 @@ func (c *checker) Check() error {
 	logutil.Infof("all objects: %d, objects: %d, tombstones: %d, unconsumed objects: %d, unconsumed tombstones: %d, allObjects: %d",
 		allCount, len(objects), len(tombstones), len(unconsumedObjects), len(unconsumedTombstones), len(allObjects))
 	return nil
+}
+
+func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *containers.Batch {
+	bat := containers.NewBatch()
+
+	bat.AddVector(
+		catalog.AttrRowID,
+		containers.MakeVector(types.T_Rowid.ToType(), mp),
+	)
+	bat.AddVector(
+		catalog.AttrCommitTs,
+		containers.MakeVector(types.T_TS.ToType(), mp),
+	)
+	// Types() is not used, then empty schema can also be handled here
+	typs := schema.AllTypes()
+	attrs := schema.AllNames()
+	for i, attr := range attrs {
+		if attr == catalog.PhyAddrColumnName {
+			continue
+		}
+		bat.AddVector(
+			attr,
+			containers.MakeVector(typs[i], mp),
+		)
+	}
+	return bat
 }

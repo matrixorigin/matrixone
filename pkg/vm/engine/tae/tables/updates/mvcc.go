@@ -374,6 +374,11 @@ func (n *ObjectMVCCHandle) TryGetDeleteChain(blkID uint16) *MVCCHandle {
 	deletes := n.deletes[blkID]
 	return deletes
 }
+
+func (n *ObjectMVCCHandle) GetDeletesChain() map[uint16]*MVCCHandle {
+	return n.deletes
+}
+
 func (n *ObjectMVCCHandle) SetDeletesListener(l func(uint64, types.TS) error) {
 	n.deletesListener = l
 }
