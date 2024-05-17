@@ -3331,17 +3331,18 @@ func (c *Compile) newScopeListOnCurrentCN(childrenCount int, blocks int) []*Scop
 	return ss
 }
 
-func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
-	var ss []*Scope
+/*
+	func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
+		var ss []*Scope
 
-	currentFirstFlag := c.anal.isFirst
-	for _, cn := range c.cnList {
-		c.anal.isFirst = currentFirstFlag
-		ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(cn.Mcpu, blocks), childrenCount, cn.Addr)...)
+		currentFirstFlag := c.anal.isFirst
+		for _, cn := range c.cnList {
+			c.anal.isFirst = currentFirstFlag
+			ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(cn.Mcpu, blocks), childrenCount, cn.Addr)...)
+		}
+		return ss
 	}
-	return ss
-}
-
+*/
 func (c *Compile) newScopeListForShuffleGroup(childrenCount int, blocks int) ([]*Scope, []*Scope) {
 	parent := make([]*Scope, 0, len(c.cnList))
 	children := make([]*Scope, 0, len(c.cnList))
