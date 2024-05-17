@@ -92,6 +92,10 @@ func (l *localLockTable) doLock(
 	blocked bool) {
 	// deadlock detected, return
 	if c.txn.deadlockFound {
+		if c.w != nil {
+			c.w.disableNotify()
+			c.w.close()
+		}
 		c.done(ErrDeadLockDetected)
 		return
 	}
