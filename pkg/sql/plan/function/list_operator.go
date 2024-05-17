@@ -319,7 +319,7 @@ var supportedOperators = []FuncNew{
 	{
 		functionId: AND,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:     BINARY_LOGICAL_OPERATOR,
+		layout:     MULTIARY_LOGICAL_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			cost := 0
 			for _, source := range inputs {
@@ -361,7 +361,7 @@ var supportedOperators = []FuncNew{
 	{
 		functionId: OR,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:     BINARY_LOGICAL_OPERATOR,
+		layout:     MULTIARY_LOGICAL_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			cost := 0
 			for _, source := range inputs {

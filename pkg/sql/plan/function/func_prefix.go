@@ -24,6 +24,11 @@ import (
 )
 
 func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if parameters[1].AllNull() {
+		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
+		return nil
+	}
+
 	lvec := parameters[0]
 	rval := parameters[1].GetBytesAt(0)
 	res := vector.MustFixedCol[bool](result.GetResultVector())

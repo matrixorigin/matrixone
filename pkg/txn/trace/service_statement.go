@@ -51,10 +51,13 @@ func (s *service) AddStatement(
 	}
 
 	sql = truncateSQL(sql)
-	s.statementC <- newStatement(
-		op.Txn().ID,
-		sql,
-		cost)
+	s.statementC <- event{
+		csv: newStatement(
+			op.Txn().ID,
+			sql,
+			cost,
+		),
+	}
 }
 
 func (s *service) AddStatementFilter(
@@ -188,7 +191,7 @@ func (s *service) handleStatements(ctx context.Context) {
 		4,
 		TraceStatementTable,
 		s.statementC,
-		s.statementBufC)
+	)
 }
 
 func addStatementFilterSQL(

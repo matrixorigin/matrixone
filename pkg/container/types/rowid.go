@@ -178,6 +178,11 @@ func (b *Blockid) String() string {
 	return fmt.Sprintf("%s-%d-%d", uuid.String(), filen, blkn)
 }
 
+func (b *Blockid) ObjectNameString() string {
+	fileNum, _ := b.Offsets()
+	return fmt.Sprintf("%v_%05d", b.Segment().ToString(), fileNum)
+}
+
 func (b *Blockid) ShortString() string {
 	filen, blkn := b.Offsets()
 	return fmt.Sprintf("%d-%d", filen, blkn)

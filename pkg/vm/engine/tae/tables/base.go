@@ -1085,5 +1085,5 @@ func (blk *baseObject) GetDeltaPersistedTS() types.TS {
 	if objMVCC == nil {
 		return types.TS{}
 	}
-	return objMVCC.GetDeltaPersistedTS()
+	return objMVCC.GetDeltaPersistedTSLocked()
 }

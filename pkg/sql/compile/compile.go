@@ -455,7 +455,18 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		stats.ExecutionEnd()
 
 		cost := time.Since(start)
-		txnTrace.GetService().TxnStatementCompleted(txnOp, sql, cost, seq, err)
+		row := 0
+		if result != nil {
+			row = int(result.AffectRows)
+		}
+		txnTrace.GetService().TxnStatementCompleted(
+			txnOp,
+			sql,
+			cost,
+			seq,
+			row,
+			err,
+		)
 		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
 	}()
 
@@ -519,6 +530,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		return nil, c.proc.Ctx.Err()
 	}
 	result.AffectRows = runC.getAffectedRows()
+
 	if c.proc.TxnOperator != nil {
 		return result, c.proc.TxnOperator.GetWorkspace().Adjust(writeOffset)
 	}
