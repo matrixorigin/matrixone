@@ -72,7 +72,6 @@ func RegisterAggFromFixedRetFixed[from, to types.FixedSizeTExceptStrType](
 
 	registeredAggFunctions[key] = impl
 	singleAgg[basicInformation.id] = true
-	return
 }
 
 // newSingleAggFuncExec1NewVersion creates a singleAggFuncExecNew1 from agg information.

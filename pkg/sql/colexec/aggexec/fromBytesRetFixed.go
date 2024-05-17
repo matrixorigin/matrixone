@@ -75,7 +75,6 @@ func RegisterAggFromBytesRetFixed[to types.FixedSizeTExceptStrType](
 	registeredAggFunctions[key] = impl
 
 	singleAgg[basicInformation.id] = true
-	return
 }
 
 // newSingleAggFuncExec3NewVersion creates a singleAggFuncExecNew3 from the agg information.

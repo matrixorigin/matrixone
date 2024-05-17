@@ -70,7 +70,6 @@ func RegisterAggFromBytesRetBytes(
 
 	registeredAggFunctions[key] = impl
 	singleAgg[basicInformation.id] = true
-	return
 }
 
 // newSingleAggFuncExec4NewVersion creates a singleAggFuncExecNew4 from the agg information.

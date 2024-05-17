@@ -206,13 +206,11 @@ func aggAvgOfDecimalFlush(
 
 	if count == 0 {
 		resultSetter(types.Decimal128{B0_63: 0, B64_127: 0})
-	} else {
-		v, _, err := resultGetter().Div(types.Decimal128{B0_63: uint64(count), B64_127: 0}, int32(argScale), 0)
-		if err == nil {
-			resultSetter(v)
-		}
+		return nil
 	}
-	return nil
+	v, _, err := resultGetter().Div(types.Decimal128{B0_63: uint64(count), B64_127: 0}, int32(argScale), 0)
+	resultSetter(v)
+	return err
 }
 
 func aggAvgOfDecimal64Fill(
