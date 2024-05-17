@@ -823,6 +823,19 @@ func DeepCopyFkey(fkey *ForeignKeyDef) *ForeignKeyDef {
 	return def
 }
 
+func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSpec {
+	if rf == nil {
+		return nil
+	}
+	return &plan.RuntimeFilterSpec{
+		Tag:         rf.Tag,
+		MatchPrefix: rf.MatchPrefix,
+		UpperLimit:  rf.UpperLimit,
+		Expr:        DeepCopyExpr(rf.Expr),
+		Handled:     false,
+	}
+}
+
 func DeepCopyExpr(expr *Expr) *Expr {
 	if expr == nil {
 		return nil

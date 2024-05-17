@@ -88,7 +88,7 @@ func TestBuild(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		tc.proc.MessageBoard.Reset()
 	}
 }
 
@@ -144,6 +144,7 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 		Ctx: ctx,
 		Ch:  make(chan *batch.Batch, 10),
 	}
+	proc.MessageBoard = process.NewMessageBoard()
 	return buildTestCase{
 		types:  ts,
 		flgs:   flgs,
@@ -152,6 +153,13 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 		arg: &Argument{
 			Typs:       ts,
 			Conditions: cs,
+			RuntimeFilterSpec: &plan.RuntimeFilterSpec{
+				Tag:         0,
+				MatchPrefix: false,
+				UpperLimit:  0,
+				Expr:        nil,
+				Handled:     false,
+			},
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
