@@ -27,14 +27,14 @@ import (
 type ServerOption func(*server)
 
 type server struct {
-	cfg             Config
-	initBindVersion uint64
-	r               *rt
-	env             Env
-	schedulers      []scheduler
-	filters         []filter
-	stopper         *stopper.Stopper
-	rpc             morpc.MethodBasedServer[*pb.Request, *pb.Response]
+	cfg                Config
+	initReplicaVersion uint64
+	r                  *rt
+	env                Env
+	schedulers         []scheduler
+	filters            []filter
+	stopper            *stopper.Stopper
+	rpc                morpc.MethodBasedServer[*pb.Request, *pb.Response]
 }
 
 func NewShardServer(
@@ -51,7 +51,7 @@ func NewShardServer(
 			"shard-server",
 			stopper.WithLogger(getLogger().RawLogger()),
 		),
-		initBindVersion: uint64(time.Now().UnixNano()),
+		initReplicaVersion: uint64(time.Now().UnixNano()),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -117,10 +117,26 @@ func (s *server) initRemote() {
 }
 
 func (s *server) initHandlers() {
-	s.rpc.RegisterMethod(uint32(pb.Method_Heartbeat), s.handleHeartbeat, true)
-	s.rpc.RegisterMethod(uint32(pb.Method_CreateShards), s.handleCreateShards, true)
-	s.rpc.RegisterMethod(uint32(pb.Method_DeleteShards), s.handleDeleteShards, true)
-	s.rpc.RegisterMethod(uint32(pb.Method_GetShards), s.handleGetShards, true)
+	s.rpc.RegisterMethod(
+		uint32(pb.Method_Heartbeat),
+		s.handleHeartbeat,
+		true,
+	)
+	s.rpc.RegisterMethod(
+		uint32(pb.Method_CreateShards),
+		s.handleCreateShards,
+		true,
+	)
+	s.rpc.RegisterMethod(
+		uint32(pb.Method_DeleteShards),
+		s.handleDeleteShards,
+		true,
+	)
+	s.rpc.RegisterMethod(
+		uint32(pb.Method_GetShards),
+		s.handleGetShards,
+		true,
+	)
 }
 
 func (s *server) handleHeartbeat(
@@ -184,11 +200,12 @@ func (s *server) doCreate(
 	id uint64,
 	metadata pb.ShardsMetadata,
 ) {
-	s.r.add(newTable(
-		id,
-		metadata,
-		s.initBindVersion,
-	))
+	s.r.add(
+		newTable(
+			id,
+			metadata,
+			s.initReplicaVersion,
+		))
 }
 
 func (s *server) schedule(ctx context.Context) {

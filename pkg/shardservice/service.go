@@ -171,57 +171,68 @@ func (s *service) Read(
 	table uint64,
 	payload []byte,
 	opts ReadOptions,
-) ([][]byte, error) {
+	apply func([]byte),
+) error {
 	cache, err := s.getShards(table)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	build := func(
+	newReadRequest := func(
 		shard pb.TableShard,
-		replica pb.ShardReplica,
 	) *pb.Request {
-		shard.Replicas = nil
 		req := s.remote.pool.AcquireRequest()
 		req.RPCMethod = pb.Method_ShardRead
 		req.ShardRead.Shard = shard
 		req.ShardRead.Payload = payload
-		req.ShardRead.CN = replica.CN
+		req.ShardRead.CN = shard.Replicas[0].CN
 		req.ShardRead.ReadAt = opts.readAt
 		return req
 	}
 
-	var values [][]byte
-	var futures []*morpc.Future
-	err = cache.selectReplicas(
+	selected := newSlice()
+	defer selected.close()
+
+	cache.selectReplicas(
 		table,
 		func(
+			metadata pb.ShardsMetadata,
 			shard pb.TableShard,
 			replica pb.ShardReplica,
-		) error {
-			f, err := s.remote.client.AsyncSend(
-				ctx,
-				build(shard, replica),
-			)
-			if err != nil {
-				return err
+		) bool {
+			if opts.filter(metadata, shard, replica) {
+				shard.Replicas = []pb.ShardReplica{replica}
+				selected.values = append(selected.values, shard)
 			}
-			futures = append(futures, f)
-			return nil
+			return true
 		},
 	)
 
-	for _, f := range futures {
+	futures := newFutureSlice()
+	for _, shard := range selected.values {
+		f, e := s.remote.client.AsyncSend(
+			ctx,
+			newReadRequest(shard),
+		)
+		if e != nil {
+			err = errors.Join(err, e)
+			continue
+		}
+
+		futures.values = append(futures.values, f)
+	}
+
+	for _, f := range futures.values {
 		v, e := f.Get()
 		if e == nil {
 			resp := v.(*pb.Response)
-			values = append(values, resp.ShardRead.Payload)
+			apply(resp.ShardRead.Payload)
 			s.remote.pool.ReleaseResponse(resp)
 		}
 		f.Close()
 		err = errors.Join(err, e)
 	}
-	return values, err
+	return err
 }
 
 func (s *service) getShards(
@@ -237,10 +248,10 @@ func (s *service) getShards(
 	s.cache.Lock()
 	defer s.cache.Unlock()
 
-	fn := func() ([]pb.TableShard, error) {
+	fn := func() (pb.ShardsMetadata, []pb.TableShard, error) {
 		metadata, err := s.storage.Get(table)
 		if err != nil {
-			return nil, err
+			return pb.ShardsMetadata{}, nil, err
 		}
 		if metadata.Policy == pb.Policy_None {
 			panic("none shards cannot call GetShards")
@@ -253,10 +264,10 @@ func (s *service) getShards(
 
 		resp, err := s.send(req)
 		if err != nil {
-			return nil, err
+			return pb.ShardsMetadata{}, nil, err
 		}
 		defer s.remote.pool.ReleaseResponse(resp)
-		return resp.GetShards.Shards, nil
+		return metadata, resp.GetShards.Shards, nil
 	}
 
 OUT:
@@ -266,7 +277,7 @@ OUT:
 			return cache, nil
 		}
 
-		shards, err := fn()
+		metadata, shards, err := fn()
 		if err != nil || len(shards) == 0 {
 			getLogger().Error("failed to get table shards",
 				zap.Error(err),
@@ -284,7 +295,7 @@ OUT:
 		}
 		cache = s.cache.read.Load()
 		cache = cache.clone()
-		cache.addShards(table, shards)
+		cache.addShards(table, metadata, shards)
 		s.cache.read.Store(cache)
 		return cache, nil
 	}
@@ -301,6 +312,21 @@ func (s *service) getReadCache() *readCache {
 func (s *service) getAllocatedShards() []pb.TableShard {
 	shards := s.cache.allocate.Load()
 	return shards.values
+}
+
+func (s *service) getAllocatedShard(
+	table uint64,
+) (pb.TableShard, bool) {
+	shards := s.cache.allocate.Load()
+	if len(shards.values) == 0 {
+		return pb.TableShard{}, false
+	}
+	for _, shard := range shards.values {
+		if shard.TableID == table {
+			return shard, true
+		}
+	}
+	return pb.TableShard{}, false
 }
 
 func (s *service) heartbeat(
@@ -634,42 +660,25 @@ func (s *allocatedCache) addUnsubscribe(
 }
 
 type readCache struct {
-	shards map[uint64][]pb.TableShard
-	ops    map[uint64][]uint64
+	shards map[uint64]shardsCache
 }
 
 func newReadCache() *readCache {
 	return &readCache{
-		shards: make(map[uint64][]pb.TableShard),
-		ops:    make(map[uint64][]uint64),
+		shards: make(map[uint64]shardsCache),
 	}
 }
 
 func (c *readCache) selectReplicas(
 	tableID uint64,
-	apply func(pb.TableShard, pb.ShardReplica) error,
-) error {
-	shards := c.shards[tableID]
-	if len(shards) == 0 {
+	apply func(pb.ShardsMetadata, pb.TableShard, pb.ShardReplica) bool,
+) {
+	sc, ok := c.shards[tableID]
+	if !ok {
 		panic("shards is empty")
 	}
 
-	ops := c.ops[tableID]
-	if len(ops) != len(shards) {
-		panic("ops is not equal to shards")
-	}
-
-	for i, shard := range shards {
-		seq := atomic.AddUint64(&c.ops[tableID][i], 1)
-		err := apply(
-			shard,
-			shard.Replicas[seq%uint64(len(shard.Replicas))],
-		)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	sc.selectReplicas(apply)
 }
 
 func (c *readCache) hasTableCache(
@@ -678,41 +687,41 @@ func (c *readCache) hasTableCache(
 	if c == nil {
 		return false
 	}
-
 	_, ok := c.shards[tableID]
 	return ok
 }
 
 func (c *readCache) getShards(
 	table uint64,
-) []pb.TableShard {
-	return c.shards[table]
+) (shardsCache, bool) {
+	cache, ok := c.shards[table]
+	return cache, ok
 }
 
 func (c *readCache) clone() *readCache {
 	clone := newReadCache()
 	for k, v := range c.shards {
-		clone.shards[k] = append(([]pb.TableShard)(nil), v...)
-	}
-	for k, v := range c.ops {
-		clone.ops[k] = append(([]uint64)(nil), v...)
+		clone.shards[k] = v
 	}
 	return clone
 }
 
 func (c *readCache) addShards(
 	table uint64,
+	metadata pb.ShardsMetadata,
 	shards []pb.TableShard,
 ) {
-	c.shards[table] = shards
-	c.ops[table] = make([]uint64, len(shards))
+	c.shards[table] = shardsCache{
+		metadata: metadata,
+		shards:   shards,
+		ops:      make([]uint64, len(shards)),
+	}
 }
 
 func (c *readCache) delete(
 	tableID uint64,
 ) {
 	delete(c.shards, tableID)
-	delete(c.ops, tableID)
 }
 
 func getTNAddress(cluster clusterservice.MOCluster) string {
@@ -725,4 +734,25 @@ func getTNAddress(cluster clusterservice.MOCluster) string {
 		},
 	)
 	return address
+}
+
+type shardsCache struct {
+	metadata pb.ShardsMetadata
+	shards   []pb.TableShard
+	ops      []uint64
+}
+
+func (sc *shardsCache) selectReplicas(
+	apply func(pb.ShardsMetadata, pb.TableShard, pb.ShardReplica) bool,
+) {
+	for i, shard := range sc.shards {
+		seq := atomic.AddUint64(&sc.ops[i], 1)
+		if !apply(
+			sc.metadata,
+			shard,
+			shard.Replicas[seq%uint64(len(shard.Replicas))],
+		) {
+			return
+		}
+	}
 }

@@ -15,7 +15,10 @@
 package shardservice
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 )
@@ -44,6 +47,11 @@ func (s *service) initRemote() {
 	}
 	s.remote.server = svr
 
+	s.remote.server.RegisterMethod(
+		uint32(pb.Method_ShardRead),
+		s.handleRemoteRead,
+		true,
+	)
 }
 
 func (s *service) initRemoteClient() {
@@ -82,4 +90,53 @@ func (s *service) initRemoteClient() {
 			return getTNAddress(s.remote.cluster), nil
 		},
 	)
+}
+
+func (s *service) handleRemoteRead(
+	ctx context.Context,
+	req *pb.Request,
+	resp *pb.Response,
+) error {
+	if err := s.validReplica(
+		req.ShardRead.Shard,
+		req.ShardRead.Shard.Replicas[0],
+	); err != nil {
+		return err
+	}
+
+	if err := s.storage.WaitLogAppliedAt(
+		ctx,
+		req.ShardRead.ReadAt,
+	); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *service) validReplica(
+	shard pb.TableShard,
+	replica pb.ShardReplica,
+) error {
+	current, ok := s.getAllocatedShard(shard.TableID)
+	if !ok {
+		return moerr.NewReplicaNotFound(replica.String())
+	}
+	if !shard.Same(current) {
+		return moerr.NewReplicaNotMatch(current.String(), shard.String())
+	}
+
+	for _, r := range shard.Replicas {
+		if r.ReplicaID != replica.ReplicaID {
+			continue
+		}
+
+		if r.Same(replica) {
+			return nil
+		}
+
+		return moerr.NewReplicaNotMatch(r.String(), shard.String())
+	}
+
+	return moerr.NewReplicaNotFound(replica.String())
 }

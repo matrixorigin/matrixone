@@ -15,10 +15,12 @@
 package shardservice
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -145,4 +147,19 @@ func (s *MemShardStorage) AddCommitted(
 	s.Lock()
 	defer s.Unlock()
 	s.committed[tableID] = value
+}
+
+func (s *MemShardStorage) WaitLogAppliedAt(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+) error {
+	return nil
+}
+
+func (s *MemShardStorage) Read(
+	ctx context.Context,
+	table uint64,
+	payload []byte,
+) ([]byte, error) {
+	return nil, nil
 }

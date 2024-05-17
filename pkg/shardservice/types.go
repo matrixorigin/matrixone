@@ -86,6 +86,8 @@ type ShardStorage interface {
 	Create(table uint64, txnOp client.TxnOperator) (bool, error)
 	Delete(table uint64, txnOp client.TxnOperator) (bool, error)
 	Unsubscribe(tables ...uint64) error
+	WaitLogAppliedAt(ctx context.Context, ts timestamp.Timestamp) error
+	Read(ctx context.Context, table uint64, payload []byte) ([]byte, error)
 }
 
 var (
@@ -95,26 +97,7 @@ var (
 
 type ReadOptions struct {
 	broadcast bool
-	pk        []byte
+	hash      uint64
 	readAt    timestamp.Timestamp
 	shardID   uint64
-}
-
-func (opts ReadOptions) Broadcast() ReadOptions {
-	opts.broadcast = true
-	return opts
-}
-
-func (opts ReadOptions) PK(
-	pk []byte,
-) ReadOptions {
-	opts.pk = pk
-	return opts
-}
-
-func (opts ReadOptions) ReadAt(
-	readAt timestamp.Timestamp,
-) ReadOptions {
-	opts.readAt = readAt
-	return opts
 }
