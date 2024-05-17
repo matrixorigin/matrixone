@@ -338,7 +338,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			msgReceiver := c.proc.NewMessageReceiver([]int32{spec.Tag}, process.AddrBroadCastOnCurrentCN())
 			msgs, ctxDone := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
 			if ctxDone {
-				return s.Proc.Ctx.Err()
+				return nil
 			}
 			for i := range msgs {
 				msg, ok := msgs[i].(process.RuntimeFilterMessage)
