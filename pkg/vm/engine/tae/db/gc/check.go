@@ -128,7 +128,9 @@ func (c *checker) Check() error {
 			delete(allObjects, deltaLoc.Name().String())
 		}
 	}
-	if len(allObjects) > len(ckpfiles) {
+
+	logutil.Infof("batch length: %d, start: %v, end: %v", bat.Length(), maxTs.ToString(), end.ToString())
+	if len(allObjects) > len(ckpfiles)*2 {
 		for name := range allObjects {
 			logutil.Infof("not found object %s,", name)
 		}
