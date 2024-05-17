@@ -52,9 +52,7 @@ select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database 
 restore account acc01 from snapshot sp01;
 select count(*) from rs01;
 select * from rs01;
--- @bvt:issue#16055
 select count(*) from rs01 {snapshot = 'sp01'};
--- @bvt:issue
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
@@ -273,13 +271,12 @@ drop snapshot snap01;
 
 
 -- restore null
--- @bvt:issue#15943
 drop snapshot if exists sp05;
 create snapshot sp05 for account acc01;
 create database db01;
 restore account acc01 FROM snapshot sp05;
 show databases;
--- @bvt:issue
+drop snapshot sp05;
 
 
 
@@ -563,7 +560,6 @@ create snapshot sp15 for account acc01;
 restore account acc01 database db07 from snapshot sp15;
 restore account acc01 database db08 from snapshot sp15;
 
--- @bvt:issue#15943
 use db08;
 show tables;
 select * from index01;
@@ -572,7 +568,6 @@ use db07;
 show tables;
 show create table table01 {snapshot = 'sp14'};
 show create table table01;
--- @bvt:issue
 
 -- @ignore:1
 show snapshots;

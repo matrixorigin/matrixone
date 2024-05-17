@@ -77,6 +77,7 @@ const (
 	IntersectAll
 
 	HashBuild
+	ShuffleBuild
 
 	TableFunction
 	TableScan
@@ -130,6 +131,9 @@ type Operator interface {
 	// Free release all the memory allocated from mPool in an operator.
 	// pipelineFailed marks the process status of the pipeline when the method is called.
 	Free(proc *process.Process, pipelineFailed bool, err error)
+
+	// Reset clean all the memory that can be reused.
+	Reset(proc *process.Process, pipelineFailed bool, err error)
 
 	// String returns the string representation of an operator.
 	String(buf *bytes.Buffer)

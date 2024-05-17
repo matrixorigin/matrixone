@@ -81,10 +81,16 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 	if stmt.IsRestore {
-		builder.compCtx.SetRestoreInfo(&RestoreInfo{
-			Tenant:   "xxx",
-			TenantID: stmt.FromDataTenantID,
+		oldSnapshot := builder.compCtx.GetSnapshot()
+		builder.compCtx.SetSnapshot(&Snapshot{
+			Tenant: &plan.SnapshotTenant{
+				TenantName: "xxx",
+				TenantID:   stmt.FromDataTenantID,
+			},
 		})
+		defer func() {
+			builder.compCtx.SetSnapshot(oldSnapshot)
+		}()
 	}
 
 	bindCtx := NewBindContext(builder, nil)

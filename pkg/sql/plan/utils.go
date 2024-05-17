@@ -1098,6 +1098,10 @@ func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsCo
 }
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
+	if expr.Typ.Id == int32(types.T_interval) {
+		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
+	}
+
 	// If it is Expr_List, perform constant folding on its elements
 	if elist := expr.GetList(); elist != nil {
 		exprList := elist.List

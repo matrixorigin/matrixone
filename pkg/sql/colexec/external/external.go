@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -180,7 +181,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	result.Batch = arg.buf
 	if result.Batch != nil {
-		result.Batch.ShuffleIDX = param.Idx
+		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
 	return result, nil
 }
@@ -1182,46 +1183,47 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols
 		str = param.prevStr + str
 		param.prevStr = ""
 	}
-	var jsonMap map[string]interface{}
-	var decoder = json.NewDecoder(bytes.NewReader([]byte(str)))
-	decoder.UseNumber()
-	err = decoder.Decode(&jsonMap)
+	jsonNode, err := bytejson.ParseNodeString(str)
 	if err != nil {
 		logutil.Errorf("json unmarshal err:%v", err)
 		param.prevStr = str
 		return nil, err
 	}
-	if len(jsonMap) < getRealAttrCnt(attrs, cols) {
+	defer jsonNode.Free()
+	g, ok := jsonNode.V.(*bytejson.Group)
+	if !ok || !g.Obj {
+		return nil, moerr.NewInvalidInput(ctx, "not a object")
+	}
+	if len(g.Keys) < getRealAttrCnt(attrs, cols) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo)
 	}
 	for idx, attr := range attrs {
 		if cols[idx].Hidden {
 			continue
 		}
-		if val, ok := jsonMap[attr]; ok {
-			if val == nil {
-				res = append(res, csvparser.Field{IsNull: true})
-				continue
-			}
-			tp := cols[idx].Typ.Id
-			if tp != int32(types.T_json) {
-				val = fmt.Sprintf("%v", val)
-				res = append(res, csvparser.Field{Val: fmt.Sprintf("%v", val), IsNull: val == JsonNull})
-				continue
-			}
-			var bj bytejson.ByteJson
-			err = bj.UnmarshalObject(val)
-			if err != nil {
-				return nil, err
-			}
-			dt, err := bj.Marshal()
-			if err != nil {
-				return nil, err
-			}
-			res = append(res, csvparser.Field{Val: string(dt)})
-		} else {
+		ki := slices.Index(g.Keys, attr)
+		if ki < 0 {
 			return nil, moerr.NewInvalidInput(ctx, "the attr %s is not in json", attr)
 		}
+
+		valN := g.Values[ki]
+		if valN.V == nil {
+			res = append(res, csvparser.Field{IsNull: true})
+			continue
+		}
+
+		tp := cols[idx].Typ.Id
+		if tp == int32(types.T_json) {
+			data, err := valN.ByteJsonRaw()
+			if err != nil {
+				return nil, err
+			}
+			res = append(res, csvparser.Field{Val: string(data)})
+			continue
+		}
+
+		val := fmt.Sprint(valN)
+		res = append(res, csvparser.Field{Val: val, IsNull: val == JsonNull})
 	}
 	return res, nil
 }
@@ -1235,41 +1237,41 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 		str = param.prevStr + str
 		param.prevStr = ""
 	}
-	var jsonArray []interface{}
-	var decoder = json.NewDecoder(bytes.NewReader([]byte(str)))
-	decoder.UseNumber()
-	err = decoder.Decode(&jsonArray)
+	jsonNode, err := bytejson.ParseNodeString(str)
 	if err != nil {
 		param.prevStr = str
 		return nil, err
 	}
-	if len(jsonArray) < getRealAttrCnt(attrs, cols) {
+	defer jsonNode.Free()
+	g, ok := jsonNode.V.(*bytejson.Group)
+	if !ok || g.Obj {
+		return nil, moerr.NewInvalidInput(ctx, "not a json array")
+	}
+	if len(g.Values) < getRealAttrCnt(attrs, cols) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo)
 	}
-	for idx, val := range jsonArray {
-		if val == nil {
-			res = append(res, csvparser.Field{IsNull: true})
-			continue
-		}
+	for idx, valN := range g.Values {
 		if idx >= len(cols) {
 			return nil, moerr.NewInvalidInput(ctx, str+" , wrong number of colunms")
 		}
-		tp := cols[idx].Typ.Id
-		if tp != int32(types.T_json) {
-			val = fmt.Sprintf("%v", val)
-			res = append(res, csvparser.Field{Val: fmt.Sprintf("%v", val), IsNull: val == JsonNull})
+
+		if valN.V == nil {
+			res = append(res, csvparser.Field{IsNull: true})
 			continue
 		}
-		var bj bytejson.ByteJson
-		err = bj.UnmarshalObject(val)
-		if err != nil {
-			return nil, err
+
+		tp := cols[idx].Typ.Id
+		if tp == int32(types.T_json) {
+			data, err := valN.ByteJsonRaw()
+			if err != nil {
+				return nil, err
+			}
+			res = append(res, csvparser.Field{Val: string(data)})
+			continue
 		}
-		dt, err := bj.Marshal()
-		if err != nil {
-			return nil, err
-		}
-		res = append(res, csvparser.Field{Val: string(dt)})
+
+		val := fmt.Sprint(valN)
+		res = append(res, csvparser.Field{Val: val, IsNull: val == JsonNull})
 	}
 	return res, nil
 }

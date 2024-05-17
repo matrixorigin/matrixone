@@ -851,9 +851,11 @@ type UserInput struct {
 	sql           string
 	stmt          tree.Statement
 	sqlSourceType []string
-	isRetstore    bool
-	fromAccount   uint32
-	toAccount     uint32
+	isRestore     bool
+	// operator account, the account executes restoration
+	// e.g. sys takes a snapshot sn1 for acc1, then restores acc1 from snapshot sn1. In this scenario, sys is the operator account
+	opAccount uint32
+	toAccount uint32
 }
 
 func (ui *UserInput) getSql() string {
@@ -1006,4 +1008,59 @@ func updateTempEngine(storage engine.Engine, te *memoryengine.Engine) {
 	if ee, ok := storage.(*engine.EntireEngine); ok && ee != nil {
 		ee.TempEngine = te
 	}
+}
+
+func genKey(dbName, tblName string) string {
+	return fmt.Sprintf("%s#%s", dbName, tblName)
+}
+
+type topsort struct {
+	next map[string][]string
+}
+
+func (g *topsort) addVertex(v string) {
+	g.next[v] = make([]string, 0)
+}
+
+func (g *topsort) addEdge(from, to string) {
+	g.next[from] = append(g.next[from], to)
+}
+
+func (g *topsort) sort() (ans []string, ok bool) {
+	inDegree := make(map[string]uint)
+	for u := range g.next {
+		inDegree[u] = 0
+	}
+	for _, nextVertices := range g.next {
+		for _, v := range nextVertices {
+			inDegree[v] += 1
+		}
+	}
+
+	var noPreVertices []string
+	for v, deg := range inDegree {
+		if deg == 0 {
+			noPreVertices = append(noPreVertices, v)
+		}
+	}
+
+	for len(noPreVertices) > 0 {
+		// find vertex whose inDegree = 0
+		v := noPreVertices[0]
+		noPreVertices = noPreVertices[1:]
+		ans = append(ans, v)
+
+		// update the next vertices from v
+		for _, to := range g.next[v] {
+			inDegree[to] -= 1
+			if inDegree[to] == 0 {
+				noPreVertices = append(noPreVertices, to)
+			}
+		}
+	}
+
+	if len(ans) == len(inDegree) {
+		ok = true
+	}
+	return
 }

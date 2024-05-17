@@ -211,8 +211,6 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 		case pb.Status_ServiceLockWaiting:
 			// maybe pb.Status_ServiceUnLockSucc
 			if k.service.isStatus(pb.Status_ServiceLockEnable) {
-				k.service.setRestartTime()
-				k.service.setStatus(pb.Status_ServiceLockWaiting)
 				go k.service.checkCanMoveGroupTables()
 			}
 		default:

@@ -75,7 +75,8 @@ col1    col2    col3
 1    -321    null
 2    -1    null
 select count(*) from rs01 {snapshot = 'sp01'};
-
+count(*)
+6
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
 count(*)
 1
@@ -444,15 +445,17 @@ drop database test02;
 drop database test03;
 drop snapshot snap01;
 drop snapshot if exists sp05;
-
 create snapshot sp05 for account acc01;
-
 create database db01;
-
 restore account acc01 FROM snapshot sp05;
-
 show databases;
-
+Database
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+drop snapshot sp05;
 drop database if exists db01;
 create database db01;
 use db01;
@@ -866,26 +869,32 @@ create snapshot sp15 for account acc01;
 restore account acc01 database db07 from snapshot sp15;
 restore account acc01 database db08 from snapshot sp15;
 use db08;
-
 show tables;
-
+Tables_in_db08
+index01
 select * from index01;
-
+col1
+1
+2
 show create table index01;
-
+Table    Create Table
+index01    CREATE TABLE `index01` (\n`col1` INT DEFAULT null,\nKEY `key1` (`col1`)\n)
 use db07;
-
 show tables;
-
+Tables_in_db07
+table01
+table02
 show create table table01 {snapshot = 'sp14'};
-
+Table    Create Table
+table01    CREATE TABLE `table01` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('a','b','c') DEFAULT NULL\n)
 show create table table01;
-
+Table    Create Table
+table01    CREATE TABLE `table01` (\n`col1` INT DEFAULT null,\n`col2` ENUM('a','b','c') DEFAULT null\n)
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp15    2024-05-13 08:01:57.962808    account    acc01        
-sp14    2024-05-13 08:01:57.636599    account    acc01        
-sp04    2024-05-13 08:01:52.160466    account    acc01        
+sp15    2024-05-15 10:34:38.582216    account    acc01        
+sp14    2024-05-15 10:34:38.340968    account    acc01        
+sp04    2024-05-15 10:34:33.052223    account    acc01        
 drop snapshot sp14;
 drop snapshot sp15;
 drop database db07;
@@ -983,6 +992,8 @@ index02    CREATE TABLE `index02` (\n`col1` CHAR(1) DEFAULT NULL,\n`col2` INT DE
 use db10;
 select * from index03;
 emp_no    birth_date    first_name    last_name    gender    hire_date
+9001    1980-12-17    SMITH    CLERK    F    2008-12-17
+9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 sp16    2024-05-13 08:01:59.05906    account    acc01        
