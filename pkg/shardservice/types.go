@@ -47,7 +47,7 @@ type ShardServer interface {
 // ShardService.
 type ShardService interface {
 	// Read read data from shards.
-	Read(ctx context.Context, table uint64, payload []byte, opts ReadOptions) ([][]byte, error)
+	Read(ctx context.Context, table uint64, payload []byte, apply func([]byte), opts ReadOptions) error
 
 	// Create creates table shards metadata in current txn. And create shard
 	// binds after txn committed asynchronously. Nothing happened if txn aborted.
@@ -87,17 +87,16 @@ type ShardStorage interface {
 	Delete(table uint64, txnOp client.TxnOperator) (bool, error)
 	Unsubscribe(tables ...uint64) error
 	WaitLogAppliedAt(ctx context.Context, ts timestamp.Timestamp) error
-	Read(ctx context.Context, table uint64, payload []byte) ([]byte, error)
+	Read(ctx context.Context, table uint64, payload []byte, ts timestamp.Timestamp) ([]byte, error)
 }
 
 var (
-	DefaultOptions   = ReadOptions{}
-	BroadcastOptions = DefaultOptions.Broadcast()
+	DefaultOptions = ReadOptions{}
 )
 
 type ReadOptions struct {
-	broadcast bool
-	hash      uint64
-	readAt    timestamp.Timestamp
-	shardID   uint64
+	hash    uint64
+	readAt  timestamp.Timestamp
+	shardID uint64
+	adjust  func(*pb.TableShard)
 }

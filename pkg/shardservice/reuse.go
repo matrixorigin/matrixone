@@ -22,6 +22,7 @@ import (
 
 type shardSlice struct {
 	values []pb.TableShard
+	local  []int
 }
 
 func newSlice() *shardSlice {
@@ -34,6 +35,7 @@ func (s shardSlice) TypeName() string {
 
 func (s *shardSlice) reset() {
 	s.values = s.values[:0]
+	s.local = s.local[:0]
 }
 
 func (s *shardSlice) close() {

@@ -20,11 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
-func (opts ReadOptions) Broadcast() ReadOptions {
-	opts.broadcast = true
-	return opts
-}
-
 func (opts ReadOptions) PK(
 	pk []byte,
 ) ReadOptions {
@@ -39,10 +34,17 @@ func (opts ReadOptions) ReadAt(
 	return opts
 }
 
-func (opts ReadOptions) Partition(
-	partitionTableID uint64,
+func (opts ReadOptions) Shard(
+	value uint64,
 ) ReadOptions {
-	opts.shardID = partitionTableID
+	opts.shardID = value
+	return opts
+}
+
+func (opts ReadOptions) Adjust(
+	fn func(*pb.TableShard),
+) ReadOptions {
+	opts.adjust = fn
 	return opts
 }
 

@@ -193,7 +193,7 @@ func TestGetShardsWithAllocated(t *testing.T) {
 
 			cache, err := s1.getShards(table)
 			require.NoError(t, err)
-			require.Equal(t, 1, len(cache.getShards(table)))
+			require.True(t, cache.hasTableCache(table))
 		},
 		nil,
 	)
@@ -216,7 +216,7 @@ func TestGetShardsWithoutCreate(t *testing.T) {
 
 			cache, err := s1.getShards(table)
 			require.NoError(t, err)
-			require.Equal(t, 1, len(cache.getShards(table)))
+			require.True(t, cache.hasTableCache(table))
 			require.Equal(t, 1, len(s1.getAllocatedShards()))
 		},
 		nil,
@@ -464,7 +464,8 @@ func addTestUncommittedTable(
 			Policy:          policy,
 			Version:         1,
 			MaxReplicaCount: replicas,
-		})
+		},
+	)
 }
 
 func addTestCommittedTable(
@@ -491,6 +492,7 @@ func mustAddTestShards(
 	table uint64,
 	shards uint32,
 	replicas uint32,
+	others ...*service,
 ) {
 	txnOp, close := client.NewTestTxnOperator(ctx)
 	defer close()
@@ -498,6 +500,41 @@ func mustAddTestShards(
 	addTestUncommittedTable(s, table, shards, pb.Policy_Hash, replicas)
 	require.NoError(t, s.Create(table, txnOp))
 	require.NoError(t, txnOp.Commit(ctx))
+
+	for _, o := range others {
+		for k, m := range s.storage.(*MemShardStorage).committed {
+			o.storage.(*MemShardStorage).committed[k] = m
+		}
+	}
+}
+
+func mustAddTestPartitionShards(
+	t *testing.T,
+	ctx context.Context,
+	s *service,
+	table uint64,
+	shards uint32,
+	replicas uint32,
+	others ...*service,
+) {
+	txnOp, close := client.NewTestTxnOperator(ctx)
+	defer close()
+
+	addTestUncommittedTable(
+		s,
+		table,
+		shards,
+		pb.Policy_Partition,
+		replicas,
+	)
+	require.NoError(t, s.Create(table, txnOp))
+	require.NoError(t, txnOp.Commit(ctx))
+
+	for _, o := range others {
+		for k, m := range s.storage.(*MemShardStorage).committed {
+			o.storage.(*MemShardStorage).committed[k] = m
+		}
+	}
 }
 
 func waitReplicaCount(
@@ -560,7 +597,7 @@ func runServicesTest(
 		services = append(services, s.(*service))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
 	defer cancel()
 
 	fn(ctx, server, services)

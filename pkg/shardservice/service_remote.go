@@ -16,6 +16,7 @@ package shardservice
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -52,6 +53,10 @@ func (s *service) initRemote() {
 		s.handleRemoteRead,
 		true,
 	)
+
+	if err := s.remote.server.Start(); err != nil {
+		panic(err)
+	}
 }
 
 func (s *service) initRemoteClient() {
@@ -90,6 +95,13 @@ func (s *service) initRemoteClient() {
 			return getTNAddress(s.remote.cluster), nil
 		},
 	)
+
+	s.remote.client.RegisterMethod(
+		uint32(pb.Method_ShardRead),
+		func(r *pb.Request) (string, error) {
+			return getCNAddress(r.ShardRead.CN, s.remote.cluster), nil
+		},
+	)
 }
 
 func (s *service) handleRemoteRead(
@@ -97,20 +109,16 @@ func (s *service) handleRemoteRead(
 	req *pb.Request,
 	resp *pb.Response,
 ) error {
-	if err := s.validReplica(
-		req.ShardRead.Shard,
-		req.ShardRead.Shard.Replicas[0],
-	); err != nil {
-		return err
-	}
-
-	if err := s.storage.WaitLogAppliedAt(
+	value, err := s.doRead(
 		ctx,
+		req.ShardRead.Shard,
 		req.ShardRead.ReadAt,
-	); err != nil {
+		req.ShardRead.Payload,
+	)
+	if err != nil {
 		return err
 	}
-
+	resp.ShardRead.Payload = value
 	return nil
 }
 
@@ -126,7 +134,7 @@ func (s *service) validReplica(
 		return moerr.NewReplicaNotMatch(current.String(), shard.String())
 	}
 
-	for _, r := range shard.Replicas {
+	for _, r := range current.Replicas {
 		if r.ReplicaID != replica.ReplicaID {
 			continue
 		}
@@ -139,4 +147,29 @@ func (s *service) validReplica(
 	}
 
 	return moerr.NewReplicaNotFound(replica.String())
+}
+
+func (s *service) send(
+	req *pb.Request,
+) (*pb.Response, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	return s.unwrapError(
+		s.remote.client.Send(ctx, req),
+	)
+}
+
+func (s *service) unwrapError(
+	resp *pb.Response,
+	err error,
+) (*pb.Response, error) {
+	if err != nil {
+		return nil, err
+	}
+	if err := resp.UnwrapError(); err != nil {
+		s.remote.pool.ReleaseResponse(resp)
+		return nil, err
+	}
+	return resp, nil
 }

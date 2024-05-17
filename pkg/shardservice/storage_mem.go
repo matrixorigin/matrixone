@@ -15,13 +15,16 @@
 package shardservice
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"sync/atomic"
 
+	"github.com/fagongzi/goetty/v2/buf"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 )
 
 type MemShardStorage struct {
@@ -29,11 +32,12 @@ type MemShardStorage struct {
 	count struct {
 		unsubscribe map[uint64]int
 	}
+	id                atomic.Uint64
 	committed         map[uint64]pb.ShardsMetadata
 	uncommittedAdd    map[uint64]pb.ShardsMetadata
 	uncommittedDelete map[uint64]struct{}
-
-	id atomic.Uint64
+	kv                *mem.KV
+	waiter            client.TimestampWaiter
 }
 
 func NewMemShardStorage() ShardStorage {
@@ -41,6 +45,8 @@ func NewMemShardStorage() ShardStorage {
 		committed:         make(map[uint64]pb.ShardsMetadata),
 		uncommittedAdd:    make(map[uint64]pb.ShardsMetadata),
 		uncommittedDelete: make(map[uint64]struct{}),
+		kv:                mem.NewKV(),
+		waiter:            client.NewTimestampWaiter(),
 	}
 	s.id.Store(1000000000)
 	s.count.unsubscribe = make(map[uint64]int)
@@ -125,6 +131,44 @@ func (s *MemShardStorage) UnsubscribeCount(
 	return s.count.unsubscribe[table]
 }
 
+func (s *MemShardStorage) WaitLogAppliedAt(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+) error {
+	_, err := s.waiter.GetTimestamp(ctx, ts)
+	return err
+}
+
+func (s *MemShardStorage) Read(
+	ctx context.Context,
+	table uint64,
+	payload []byte,
+	ts timestamp.Timestamp,
+) ([]byte, error) {
+	s.RLock()
+	defer s.RUnlock()
+
+	var value []byte
+	key := newKey(payload, ts)
+	s.kv.DescendRange(
+		key,
+		func(
+			k, v []byte,
+		) bool {
+			if bytes.Equal(k, key) {
+				return true
+			}
+			if !bytes.Equal(payload, k[:len(k)-12]) {
+				return false
+			}
+
+			value = v
+			return false
+		},
+	)
+	return value, nil
+}
+
 func (s *MemShardStorage) UncommittedAdd(
 	tableID uint64,
 	value pb.ShardsMetadata,
@@ -149,17 +193,24 @@ func (s *MemShardStorage) AddCommitted(
 	s.committed[tableID] = value
 }
 
-func (s *MemShardStorage) WaitLogAppliedAt(
-	ctx context.Context,
+func (s *MemShardStorage) set(
+	key, value []byte,
 	ts timestamp.Timestamp,
-) error {
-	return nil
+) {
+	s.Lock()
+	defer s.Unlock()
+
+	s.kv.Set(newKey(key, ts), value)
+	s.waiter.NotifyLatestCommitTS(ts)
 }
 
-func (s *MemShardStorage) Read(
-	ctx context.Context,
-	table uint64,
-	payload []byte,
-) ([]byte, error) {
-	return nil, nil
+func newKey(
+	key []byte,
+	ts timestamp.Timestamp,
+) []byte {
+	newKey := make([]byte, len(key)+12)
+	copy(newKey, key)
+	buf.Int64ToBytesTo(ts.PhysicalTime, newKey[len(key):])
+	buf.Uint32ToBytesTo(ts.LogicalTime, newKey[len(key)+8:])
+	return newKey
 }

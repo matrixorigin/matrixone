@@ -166,73 +166,17 @@ func (s *service) Delete(
 	return nil
 }
 
-func (s *service) Read(
-	ctx context.Context,
+func (s *service) removeReadCache(
 	table uint64,
-	payload []byte,
-	opts ReadOptions,
-	apply func([]byte),
-) error {
-	cache, err := s.getShards(table)
-	if err != nil {
-		return err
+) {
+	old := s.getReadCache()
+	if !old.hasTableCache(table) {
+		return
 	}
 
-	newReadRequest := func(
-		shard pb.TableShard,
-	) *pb.Request {
-		req := s.remote.pool.AcquireRequest()
-		req.RPCMethod = pb.Method_ShardRead
-		req.ShardRead.Shard = shard
-		req.ShardRead.Payload = payload
-		req.ShardRead.CN = shard.Replicas[0].CN
-		req.ShardRead.ReadAt = opts.readAt
-		return req
-	}
-
-	selected := newSlice()
-	defer selected.close()
-
-	cache.selectReplicas(
-		table,
-		func(
-			metadata pb.ShardsMetadata,
-			shard pb.TableShard,
-			replica pb.ShardReplica,
-		) bool {
-			if opts.filter(metadata, shard, replica) {
-				shard.Replicas = []pb.ShardReplica{replica}
-				selected.values = append(selected.values, shard)
-			}
-			return true
-		},
-	)
-
-	futures := newFutureSlice()
-	for _, shard := range selected.values {
-		f, e := s.remote.client.AsyncSend(
-			ctx,
-			newReadRequest(shard),
-		)
-		if e != nil {
-			err = errors.Join(err, e)
-			continue
-		}
-
-		futures.values = append(futures.values, f)
-	}
-
-	for _, f := range futures.values {
-		v, e := f.Get()
-		if e == nil {
-			resp := v.(*pb.Response)
-			apply(resp.ShardRead.Payload)
-			s.remote.pool.ReleaseResponse(resp)
-		}
-		f.Close()
-		err = errors.Join(err, e)
-	}
-	return err
+	new := old.clone()
+	delete(new.shards, table)
+	s.cache.read.CompareAndSwap(old, new)
 }
 
 func (s *service) getShards(
@@ -254,7 +198,7 @@ func (s *service) getShards(
 			return pb.ShardsMetadata{}, nil, err
 		}
 		if metadata.Policy == pb.Policy_None {
-			panic("none shards cannot call GetShards")
+			panic("none policy cannot call GetShards")
 		}
 
 		req := s.remote.pool.AcquireRequest()
@@ -555,24 +499,6 @@ func (s *service) removeCache(
 	}
 }
 
-func (s *service) send(
-	req *pb.Request,
-) (*pb.Response, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	resp, err := s.remote.client.Send(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := resp.UnwrapError(); err != nil {
-		s.remote.pool.ReleaseResponse(resp)
-		return nil, err
-	}
-	return resp, nil
-}
-
 type allocatedCache struct {
 	values []pb.TableShard
 	ops    []uint64
@@ -659,6 +585,12 @@ func (s *allocatedCache) addUnsubscribe(
 	s.ops = append(s.ops, tableID)
 }
 
+func (s *service) isLocalReplica(
+	replica pb.ShardReplica,
+) bool {
+	return s.cfg.ServiceID == replica.CN
+}
+
 type readCache struct {
 	shards map[uint64]shardsCache
 }
@@ -691,13 +623,6 @@ func (c *readCache) hasTableCache(
 	return ok
 }
 
-func (c *readCache) getShards(
-	table uint64,
-) (shardsCache, bool) {
-	cache, ok := c.shards[table]
-	return cache, ok
-}
-
 func (c *readCache) clone() *readCache {
 	clone := newReadCache()
 	for k, v := range c.shards {
@@ -724,11 +649,28 @@ func (c *readCache) delete(
 	delete(c.shards, tableID)
 }
 
-func getTNAddress(cluster clusterservice.MOCluster) string {
+func getTNAddress(
+	cluster clusterservice.MOCluster,
+) string {
 	address := ""
 	cluster.GetTNService(
 		clusterservice.NewSelector(),
 		func(t metadata.TNService) bool {
+			address = t.ShardServiceAddress
+			return true
+		},
+	)
+	return address
+}
+
+func getCNAddress(
+	cn string,
+	cluster clusterservice.MOCluster,
+) string {
+	address := ""
+	cluster.GetCNService(
+		clusterservice.NewSelector().SelectByServiceID(cn),
+		func(t metadata.CNService) bool {
 			address = t.ShardServiceAddress
 			return true
 		},
