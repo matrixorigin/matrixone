@@ -462,6 +462,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Offset), Offset: plan.MakePlan2Int64ConstExprWithType(0)},
 		{Op: int32(vm.Order), OrderBy: []*plan.OrderBySpec{}},
 		{Op: int32(vm.Product), Product: &pipeline.Product{}},
+		{Op: int32(vm.ProductL2), ProductL2: &pipeline.ProductL2{}},
 		{Op: int32(vm.Projection), ProjectList: []*plan.Expr{}},
 		{Op: int32(vm.Restrict), Filter: &plan.Expr{}},
 		{Op: int32(vm.Semi), SemiJoin: &pipeline.SemiJoin{}},
