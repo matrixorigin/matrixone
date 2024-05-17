@@ -7,14 +7,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strings"
 )
 
 // ConstructCreateTableSQL used to build CREATE Table statement
-func ConstructCreateTableSQL(tableDef *plan.TableDef, ctx CompilerContext) (string, error) {
+func ConstructCreateTableSQL(tableDef *plan.TableDef, snapshot Snapshot, ctx CompilerContext) (string, error) {
 	var err error
 	var createStr string
 
@@ -193,7 +192,7 @@ func ConstructCreateTableSQL(tableDef *plan.TableDef, ctx CompilerContext) (stri
 			if ctx.GetQueryingSubscription() != nil {
 				_, fkTableDef = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
 			} else {
-				_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
+				_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, snapshot)
 			}
 		}
 

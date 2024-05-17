@@ -3,6 +3,7 @@ package plan
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"testing"
 )
@@ -182,7 +183,8 @@ func buildTestShowCreateTable(sql string) (string, error) {
 		return "", err
 	}
 
-	showSQL, err := ConstructCreateTableSQL(tableDef, &mock.ctxt)
+	snapshot := Snapshot{TS: &timestamp.Timestamp{}}
+	showSQL, err := ConstructCreateTableSQL(tableDef, snapshot, &mock.ctxt)
 	if err != nil {
 		return "", err
 	}

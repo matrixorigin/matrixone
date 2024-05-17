@@ -122,7 +122,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	// sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	// logutil.Info(sql)
 
-	ddlStr, err := ConstructCreateTableSQL(tableDef, ctx)
+	ddlStr, err := ConstructCreateTableSQL(tableDef, *snapshot, ctx)
 	if err != nil {
 		return nil, err
 	}
