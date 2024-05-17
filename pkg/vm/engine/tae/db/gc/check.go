@@ -107,7 +107,6 @@ func (c *checker) Check() error {
 			}
 			itTable.Next()
 		}
-		it.Next()
 	}
 	for name := range allObjects {
 		logutil.Infof("not found object %s,", name)
