@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,27 +14,12 @@
 
 package malloc
 
-import "unsafe"
+import (
+	_ "unsafe"
+)
 
-type Handle struct {
-	ptr   unsafe.Pointer
-	class int
-}
+//go:linkname runtime_procPin runtime.procPin
+func runtime_procPin() int
 
-var dumbHandle = &Handle{
-	class: -1,
-}
-
-func (h *Handle) Free() {
-	if h.class < 0 {
-		return
-	}
-	pid := runtime_procPin()
-	runtime_procUnpin()
-	shard := pid % numShards
-	select {
-	case shards[shard].pools[h.class].ch <- h:
-		shards[shard].pools[h.class].numFree.Add(1)
-	default:
-	}
-}
+//go:linkname runtime_procUnpin runtime.procUnpin
+func runtime_procUnpin() int
