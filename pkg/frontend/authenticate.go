@@ -9228,6 +9228,11 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		for _, st := range stmt {
+			st.Free()
+		}
+	}()
 
 	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 

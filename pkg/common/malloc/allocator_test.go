@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,17 +15,32 @@
 package malloc
 
 import (
+	"math"
 	"testing"
 	"unsafe"
 )
 
-func TestAllocFree(t *testing.T) {
-	for i := 0; i < 1<<19; i++ {
-		ptr, handle := Alloc(i)
-		bs := unsafe.Slice((*byte)(ptr), i)
-		if len(bs) != i {
-			t.Fatal()
+func testAllocator(
+	t *testing.T,
+	newAllocator func() Allocator,
+) {
+	t.Helper()
+
+	t.Run("allocate", func(t *testing.T) {
+		allocator := newAllocator()
+		for i := uint64(1); i < 128*MB; i = uint64(math.Ceil(float64(i) * 1.1)) {
+			ptr, dec := allocator.Allocate(i)
+			slice := unsafe.Slice((*byte)(ptr), i)
+			for _, i := range slice {
+				if i != 0 {
+					t.Fatal("not zeroed")
+				}
+			}
+			for i := range slice {
+				slice[i] = byte(i)
+			}
+			dec.Deallocate(ptr)
 		}
-		handle.Free()
-	}
+	})
+
 }

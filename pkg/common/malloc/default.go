@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,33 +14,25 @@
 
 package malloc
 
-import "time"
+import (
+	"os"
+	"runtime"
+	"strings"
+)
 
-func init() {
-	go func() {
-		lastNumAllocs := make([]int64, numShards)
-		for range time.NewTicker(time.Second * 37).C {
-			for i := 0; i < numShards; i++ {
-				numAllocs := shards[i].numAlloc.Load()
-				if numAllocs == lastNumAllocs[i] {
-					// not active, flush
-					shards[i].flush()
-				}
-				lastNumAllocs[i] = numAllocs
-			}
-		}
-	}()
-}
+func NewDefault() Allocator {
+	switch strings.TrimSpace(strings.ToLower(os.Getenv("MO_MALLOC"))) {
 
-func (s *Shard) flush() {
-	for _, ch := range s.pools {
-	loop:
-		for {
-			select {
-			case <-ch:
-			default:
-				break loop
-			}
-		}
+	case "c":
+		return NewCAllocator()
+
+	default:
+		return NewShardedAllocator(
+			runtime.GOMAXPROCS(0),
+			func() Allocator {
+				return NewClassAllocator()
+			},
+		)
+
 	}
 }

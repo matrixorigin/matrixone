@@ -2695,12 +2695,6 @@ func executeStmt(ses *Session,
 
 // execute query
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
-	//fmt.Fprintln(os.Stderr, "doComQuery", input.getSql())
-	//defer func() {
-	//	if retErr != nil {
-	//		fmt.Fprintln(os.Stderr, "doComQuery", retErr)
-	//	}
-	//}()
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	// set the batch buf for stream scan
 	var inMemStreamScan []*kafka.Message
@@ -2728,17 +2722,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}(ses.tStmt)
 	ses.tStmt = nil
 
-	// proc := process.New(
-	// 	requestCtx,
-	// 	ses.GetMemPool(),
-	// 	getGlobalPu().TxnClient,
-	// 	nil,
-	// 	getGlobalPu().FileService,
-	// 	getGlobalPu().LockService,
-	// 	getGlobalPu().QueryClient,
-	// 	getGlobalPu().HAKeeperClient,
-	// 	getGlobalPu().UdfService,
-	// 	globalAicm)
 	proc := ses.proc
 	proc.Ctx = execCtx.reqCtx
 
@@ -2764,7 +2747,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		LogLevel:             zapcore.InfoLevel, //TODO: need set by session level config
 		SessionId:            ses.GetSessId(),
 	}
-	// proc.SetStmtProfile(&ses.stmtProfile)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
@@ -2798,8 +2780,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	proc.SessionInfo.User = userNameOnly
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
-	// ses.txnCompileCtx.SetProcess(proc)
-	// ses.proc.SessionInfo = proc.SessionInfo
 
 	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, &statsInfo)
