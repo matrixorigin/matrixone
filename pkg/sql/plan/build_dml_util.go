@@ -744,9 +744,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						lastNodeId = builder.appendNode(projectNode, bindCtx)
 						lastNodeIdForTblJoinCentroids = builder.appendNode(projectNodeForTblJoinCentroids, bindCtx)
 
-						preUKStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, delCtx.tableDef,
-							lastNodeId, lastNodeIdForTblJoinCentroids,
-							multiTableIndex, true, idxRefs, idxTableDefs)
+						preUKStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, multiTableIndex, true, idxRefs, idxTableDefs)
 						if err != nil {
 							return err
 						}
@@ -1441,8 +1439,6 @@ func buildInsertPlansWithRelatedHiddenTable(
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
 			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-			lastNodeIdForTblJoinCentroids := appendSinkScanNode(builder, bindCtx, sourceStep)
-
 			var idxRefs = make([]*ObjectRef, 3)
 			var idxTableDefs = make([]*TableDef, 3)
 			// TODO: node should hold snapshot and account info
@@ -1464,9 +1460,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				}
 			}
 
-			newSourceStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, tableDef,
-				lastNodeId, lastNodeIdForTblJoinCentroids,
-				multiTableIndex, false, idxRefs, idxTableDefs)
+			newSourceStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, tableDef, lastNodeId, multiTableIndex, false, idxRefs, idxTableDefs)
 			if err != nil {
 				return err
 			}
@@ -2541,85 +2535,7 @@ func buildSerialFullAndPKColsProjMasterIndex(builder *QueryBuilder, bindCtx *Bin
 	return projectNode, nil
 }
 
-func appendPreInsertSkVectorPlan(
-	builder *QueryBuilder,
-	bindCtx *BindContext,
-	tableDef *TableDef,
-	lastNodeId, lastNodeIdForTblJoinCentroids int32,
-	multiTableIndex *MultiTableIndex,
-	isUpdate bool,
-	idxRefs []*ObjectRef,
-	indexTableDefs []*TableDef) (int32, error) {
-
-	/*
-		### Sample SQL:
-		INSERT INTO `a`.`__mo_index_secondary_018ebbd4-ebb7-7898-b0bb-3b133af1905e`
-					(
-								`__mo_index_centroid_fk_version`,
-								`__mo_index_centroid_fk_id`,
-								`__mo_index_pri_col`,
-								`__mo_index_centroid_fk_entry`
-					)
-		SELECT     `__mo_index_tbl_join_centroids`.`__mo_index_centroid_version` ,
-				   `__mo_index_tbl_join_centroids`.`__mo_index_joined_centroid_id` ,
-				   `__mo_index_tbl_join_centroids`.`__mo_org_tbl_pk_may_serial_col` ,
-				   `t1`.`b`
-		FROM       (
-						  SELECT `t1`.`a` AS `__mo_org_tbl_pk_may_serial_col`,
-								 `t1`.`b`
-						  FROM   `a`.`t1`) AS `t1`
-		INNER JOIN
-				   (
-							  SELECT     `centroids`.`__mo_index_centroid_version` AS `__mo_index_centroid_version`,
-										 serial_extract( min( serial_full( l2_distance(`centroids`.`__mo_index_centroid`, `t1`.`__mo_org_tbl_norm_vec_col`), `centroids`.`__mo_index_centroid_id`)), 1 AS bigint) AS `__mo_index_joined_centroid_id`,
-										 `__mo_org_tbl_pk_may_serial_col`
-							  FROM       (
-												SELECT `t1`.`a`               AS `__mo_org_tbl_pk_may_serial_col`,
-													   normalize_l2(`t1`.`b`) AS `__mo_org_tbl_norm_vec_col`,
-												FROM   `a`.`t1`
-										 ) AS `t1`
-							  CROSS JOIN
-										 (
-												SELECT *
-												FROM   `a`.`centroids`
-												WHERE  `__mo_index_centroid_version` = ( SELECT cast(__mo_index_val AS bigint) FROM   `a`.`meta` WHERE  `__mo_index_key` = 'version')
-										 ) AS `centroids`
-							  GROUP BY   `__mo_index_centroid_version`,
-										 __mo_org_tbl_pk_may_serial_col
-					) AS `__mo_index_tbl_join_centroids`
-
-		ON         `__mo_index_tbl_join_centroids`.`__mo_org_tbl_pk_may_serial_col` = `t1`.`__mo_org_tbl_pk_may_serial_col`;
-
-		### Corresponding Plan
-		-------------------------------------------------------------------------------------------------------------------------------------
-		| Plan 1:                                                                                                                           |
-		| Insert on vecdb3.__mo_index_secondary_018ebf04-f31c-79fe-973b-cc18e91117c0                                                        |
-		|   ->  Lock                                                                                                                        |
-		|         ->  Join                                                                                                                  |
-		|               Join Type: INNER                                                                                                    |
-		|               Join Cond: (a = a)                                                                                                  |
-		|               ->  Project                                                                                                         |
-		|                     ->  Sink Scan                                                                                                 |
-		|                           DataSource: Plan 0                                                                                      |
-		|               ->  Project                                                                                                         |
-		|                     ->  Aggregate                                                                                                 |
-		|                           Group Key: __mo_index_centroid_version, a                                                               |
-		|                           Aggregate Functions: min(serial_full(l2_distance(__mo_index_centroid, #[0,4]), __mo_index_centroid_id)) |
-		|                           ->  Join                                                                                                |
-		|                                 Join Type: INNER                                                                                  |
-		|                                 ->  Project                                                                                       |
-		|                                       ->  Project                                                                                 |
-		|                                             ->  Sink Scan                                                                         |
-		|                                                   DataSource: Plan 0                                                              |
-		|                                 ->  Join                                                                                          |
-		|                                       Join Type: INNER                                                                            |
-		|                                       Join Cond: (__mo_index_centroid_version = cast(__mo_index_val AS BIGINT))                   |
-		|                                       ->  Table Scan on vecdb3.__mo_index_secondary_018ebf04-f31c-7cc9-a9ba-f25f08228699          |
-		|                                       ->  Table Scan on vecdb3.__mo_index_secondary_018ebf04-f31c-7e8a-a18a-fca905316151          |
-		|                                             Filter Cond: (__mo_index_key = cast('version' AS VARCHAR))                            |
-		-------------------------------------------------------------------------------------------------------------------------------------
-
-	*/
+func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, multiTableIndex *MultiTableIndex, isUpdate bool, idxRefs []*ObjectRef, indexTableDefs []*TableDef) (int32, error) {
 
 	//1.a get vector & pk column details
 	var posOriginPk, posOriginVecColumn int
@@ -2645,7 +2561,6 @@ func appendPreInsertSkVectorPlan(
 
 	//1.b Handle mo_cp_key
 	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, posOriginPk)
-	lastNodeIdForTblJoinCentroids = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeIdForTblJoinCentroids, posOriginPk)
 
 	// 2. scan meta table to find the `current version` number
 	metaCurrVersionRow, err := makeMetaTblScanWhereKeyEqVersion(builder, bindCtx, indexTableDefs, idxRefs)
@@ -2660,44 +2575,16 @@ func appendPreInsertSkVectorPlan(
 		return -1, err
 	}
 
-	// 4. Make  Table Projection with cpPk, normalize_l2()
-	tableId := lastNodeIdForTblJoinCentroids
-	projectTblScan, err := makeTableProjectionIncludingNormalizeL2(builder, bindCtx, tableId, tableDef,
-		typeOriginPk, posOriginPk,
-		typeOriginVecColumn, posOriginVecColumn)
-	if err != nil {
-		return -1, err
+	// 4. create "CrossJoinL2" on tbl x centroids
+	joinTblAndCentroidsUsingCrossL2Join := makeTblCrossJoinL2Centroids(builder, bindCtx, tableDef, lastNodeId, currVersionCentroids, typeOriginPk, posOriginPk, typeOriginVecColumn, posOriginVecColumn)
+
+	// 5. Create a Project with CP Key for LockNode
+	projectWithCpKey, i, err2 := makeFinalProject(builder, bindCtx, joinTblAndCentroidsUsingCrossL2Join, err)
+	if err2 != nil {
+		return i, err2
 	}
 
-	// 5. create "tbl" cross join "centroids"
-	// Projections:
-	// centroids.version, centroids.centroid_id, tbl.pk, tbl.embedding,
-	// centroids.centroid, normalize_l2(tbl.embedding)
-	var leftChildTblId = projectTblScan
-	var rightChildCentroidsId = currVersionCentroids
-	var crossJoinTblAndCentroidsID = makeCrossJoinTblAndCentroids(builder, bindCtx, tableDef,
-		leftChildTblId, rightChildCentroidsId,
-		typeOriginPk, posOriginPk,
-		typeOriginVecColumn)
-
-	// 6. select centroids.version, serial_extract(min( pair< l2_distance, centroid_id >, 1 ), pk,
-	//    from crossJoinTblAndCentroidsID group by pk,
-	minCentroidIdNode, err := makeMinCentroidIdAndCpKey(builder, bindCtx, crossJoinTblAndCentroidsID, multiTableIndex)
-	if err != nil {
-		return -1, err
-	}
-
-	// 7. Final project: centroids.version, centroids.centroid_id, tbl.pk, tbl.embedding, cp_col
-	projectId, err := makeFinalProjectWithTblEmbedding(builder, bindCtx,
-		lastNodeId, minCentroidIdNode,
-		tableDef,
-		typeOriginPk, posOriginPk,
-		typeOriginVecColumn, posOriginVecColumn)
-	if err != nil {
-		return -1, err
-	}
-
-	lastNodeId = projectId
+	lastNodeId = projectWithCpKey
 
 	if lockNodeId, ok := appendLockNode(
 		builder,
