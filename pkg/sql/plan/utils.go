@@ -1062,6 +1062,9 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 // todo: remove this in the future
 func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
 	if tableDef.Pkey != nil {
+		if colName == tableDef.Pkey.PkeyColName {
+			return 0
+		}
 		pkNames := tableDef.Pkey.Names
 		for i := range pkNames {
 			if pkNames[i] == colName {
