@@ -191,16 +191,11 @@ func (r *basicResult) unmarshal0(data []byte) error {
 
 type aggFuncResult[T types.FixedSizeTExceptStrType] struct {
 	basicResult
-	requireInit    bool
-	requiredResult T
-
 	values []T // for quick get/set
 }
 
 type aggFuncBytesResult struct {
 	basicResult
-	requireInit    bool
-	requiredResult []byte
 }
 
 func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](
@@ -208,17 +203,6 @@ func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](
 	emptyNull bool) aggFuncResult[T] {
 	r := aggFuncResult[T]{}
 	r.init(mg, typ, emptyNull)
-	return r
-}
-
-// initFixedAggFuncResult2 is used to initialize the result with a fixed value.
-// fixed value is the required first value of the result.
-// e.g. max(int) = math.MinInt64, min(int) = math.MaxInt64.
-func initFixedAggFuncResult2[T types.FixedSizeTExceptStrType](
-	mg AggMemoryManager, typ types.Type, emptyNull bool, value T) aggFuncResult[T] {
-	r := initFixedAggFuncResult[T](mg, typ, emptyNull)
-	r.requireInit = true
-	r.requiredResult = value
 	return r
 }
 
@@ -230,9 +214,6 @@ func (r *aggFuncResult[T]) grows(more int) error {
 	r.values = vector.MustFixedCol[T](r.res)
 	// reset the new row.
 	var v T
-	if r.requireInit {
-		v = r.requiredResult
-	}
 	for i, j := oldLen, newLen; i < j; i++ {
 		r.values[i] = v
 	}
@@ -248,32 +229,11 @@ func (r *aggFuncResult[T]) aggSet(v T) {
 	r.values[r.groupToSet] = v
 }
 
-func (r *aggFuncResult[T]) marshal() ([]byte, error) {
-	d, err := r.basicResult.marshal()
-	if err != nil {
-		return nil, err
-	}
-	rLen := int64(len(d))
-	bs := types.EncodeInt64(&rLen)
-	bs = append(bs, d...)
-	bs = append(bs, types.EncodeBool(&r.requireInit)...)
-	if r.requireInit {
-		bs = append(bs, types.EncodeFixed[T](r.requiredResult)...)
-	}
-	return bs, nil
-}
-
 func (r *aggFuncResult[T]) unmarshal(data []byte) error {
-	l := types.DecodeInt64(data[:8])
-	d1, d2 := data[8:8+l], data[8+l:]
-	if err := r.unmarshal0(d1); err != nil {
+	if err := r.unmarshal0(data); err != nil {
 		return err
 	}
 	r.values = vector.MustFixedCol[T](r.res)
-	r.requireInit = types.DecodeBool(d2[:1])
-	if r.requireInit {
-		r.requiredResult = types.DecodeFixed[T](d2[1:])
-	}
 	return nil
 }
 
@@ -306,34 +266,16 @@ func initBytesAggFuncResult(
 	return r
 }
 
-func initBytesAggFuncResult2(
-	mg AggMemoryManager, typ types.Type, emptyNull bool, value []byte) aggFuncBytesResult {
-	r := initBytesAggFuncResult(mg, typ, emptyNull)
-	r.requireInit = true
-	r.requiredResult = value
-	return r
-}
-
 func (r *aggFuncBytesResult) grows(more int) error {
 	oldLen, newLen, err := r.extend(more)
 	if err != nil {
 		return err
 	}
 
-	if r.requireInit {
-		v := r.requiredResult
-		for i, j := oldLen, newLen; i < j; i++ {
-			if err = vector.SetBytesAt(r.res, i, v, r.mp); err != nil {
-				return err
-			}
-		}
-
-	} else {
-		v := []byte("")
-		for i, j := oldLen, newLen; i < j; i++ {
-			// this will never cause error.
-			_ = vector.SetBytesAt(r.res, i, v, r.mp)
-		}
+	var v = []byte("")
+	for i, j := oldLen, newLen; i < j; i++ {
+		// this will never cause error.
+		_ = vector.SetBytesAt(r.res, i, v, r.mp)
 	}
 	return nil
 }
@@ -349,32 +291,8 @@ func (r *aggFuncBytesResult) aggSet(v []byte) error {
 	return vector.SetBytesAt(r.res, r.groupToSet, v, r.mp)
 }
 
-func (r *aggFuncBytesResult) marshal() ([]byte, error) {
-	d, err := r.basicResult.marshal()
-	if err != nil {
-		return nil, err
-	}
-	rLen := int64(len(d))
-	bs := types.EncodeInt64(&rLen)
-	bs = append(bs, d...)
-	bs = append(bs, types.EncodeBool(&r.requireInit)...)
-	if r.requireInit {
-		bs = append(bs, r.requiredResult...)
-	}
-	return bs, nil
-}
-
 func (r *aggFuncBytesResult) unmarshal(data []byte) error {
-	l := types.DecodeInt64(data[:8])
-	d1, d2 := data[8:8+l], data[8+l:]
-	if err := r.unmarshal0(d1); err != nil {
-		return err
-	}
-	r.requireInit = types.DecodeBool(d2[:1])
-	if r.requireInit {
-		r.requiredResult = append(r.requiredResult, d2[1:]...)
-	}
-	return nil
+	return r.unmarshal0(data)
 }
 
 func (r *aggFuncBytesResult) eq(other aggFuncBytesResult) bool {
