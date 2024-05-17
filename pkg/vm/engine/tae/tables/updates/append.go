@@ -137,13 +137,13 @@ func (node *AppendNode) PrepareCommit() error {
 	return err
 }
 
-func (node *AppendNode) ApplyCommit() error {
+func (node *AppendNode) ApplyCommit(id string) error {
 	node.mvcc.Lock()
 	defer node.mvcc.Unlock()
 	if node.IsCommitted() {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
-	node.TxnMVCCNode.ApplyCommit()
+	node.TxnMVCCNode.ApplyCommit(id)
 	listener := node.mvcc.GetAppendListener()
 	if listener == nil {
 		return nil
