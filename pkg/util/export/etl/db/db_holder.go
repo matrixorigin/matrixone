@@ -269,11 +269,15 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 
 	csvData := csvWriter.GetContent()
 
-	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s FIELDS TERMINATED BY ','", csvData, tbl.Database, tbl.Table)
+	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s FIELDS TERMINATED BY ',' ESCAPED BY '\"'", csvData, tbl.Database, tbl.Table)
 
 	// Use the transaction to execute the SQL command
 
 	_, execErr := sqlDb.Exec(loadSQL)
+	// if execErr != nil {
+	// 	fmt.Printf("%s", loadSQL)
+	// 	fmt.Print("ddd")
+	// }
 
 	return execErr
 
