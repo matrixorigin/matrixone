@@ -233,10 +233,10 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 func (node *DeleteNode) IsPersistedDeletedNode() bool {
 	return node.nt == NT_Persisted
 }
-func (node *DeleteNode) ApplyCommit() (err error) {
+func (node *DeleteNode) ApplyCommit(id string) (err error) {
 	node.chain.Load().mvcc.Lock()
 	defer node.chain.Load().mvcc.Unlock()
-	_, err = node.TxnMVCCNode.ApplyCommit()
+	_, err = node.TxnMVCCNode.ApplyCommit(id)
 	if err != nil {
 		return
 	}

@@ -214,7 +214,7 @@ type BaseMVCCNode interface {
 	GetPrepare() types.TS
 	GetTxn() TxnReader
 
-	ApplyCommit() (err error)
+	ApplyCommit(string) (err error)
 	ApplyRollback() (err error)
 	PrepareCommit() (err error)
 	PrepareRollback() (err error)
@@ -329,7 +329,7 @@ type TxnEntryType int16
 type TxnEntry interface {
 	PrepareCommit() error
 	PrepareRollback() error
-	ApplyCommit() error
+	ApplyCommit(string) error
 	ApplyRollback() error
 	MakeCommand(uint32) (TxnCmd, error)
 	Is1PC() bool
