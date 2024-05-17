@@ -94,14 +94,14 @@ func (c *checker) Check() error {
 				if _, ok := allObjects[stats.ObjectName().String()]; ok {
 					delete(allObjects, stats.ObjectName().String())
 				}
-				it2 := table.GetDeleteList().Items()
-				for _, itt := range it2 {
-					objID := itt.ObjectID
-					if _, ok := allObjects[objID.String()+"0000"]; ok {
-						delete(allObjects, objID.String())
-					}
-				}
 				itObject.Next()
+			}
+			it2 := table.GetDeleteList().Items()
+			for _, itt := range it2 {
+				objID := itt.ObjectID
+				if _, ok := allObjects[objID.String()+"0000"]; ok {
+					delete(allObjects, objID.String())
+				}
 			}
 			itTable.Next()
 		}
