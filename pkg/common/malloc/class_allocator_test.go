@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,31 +14,10 @@
 
 package malloc
 
-import (
-	"testing"
-	"unsafe"
-)
+import "testing"
 
-func TestAllocFree(t *testing.T) {
-	for i := 0; i < 1<<19; i++ {
-		ptr, handle := Alloc(i, true)
-		bs := unsafe.Slice((*byte)(ptr), i)
-		if len(bs) != i {
-			t.Fatal()
-		}
-		handle.Free()
-	}
-
-	// evict
-	stats := make(map[[2]int]int64)
-	evict(stats) // collect infos
-	n := cachingObjects()
-	if n == 0 {
-		t.Fatal()
-	}
-	evict(stats) // flush
-	n = cachingObjects()
-	if n != 0 {
-		t.Fatalf("got %v", n)
-	}
+func TestClassAllocator(t *testing.T) {
+	testAllocator(t, func() Allocator {
+		return NewClassAllocator()
+	})
 }
