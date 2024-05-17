@@ -10,6 +10,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"time"
 )
@@ -65,6 +66,10 @@ func (c *checker) Check() error {
 	if err != nil {
 		return err
 	}
+	ckpfiles, _, err := checkpoint.ListSnapshotMeta(c.cleaner.ctx, c.cleaner.fs.Service, entry.GetStart(), nil)
+	if err != nil {
+		return err
+	}
 	allCount := len(allObjects)
 	for name := range allObjects {
 		isfound := false
@@ -109,19 +114,11 @@ func (c *checker) Check() error {
 			}
 			it2 := table.GetDeleteList().Items()
 			for _, itt := range it2 {
-				_, _, _, err = itt.VisitDeletes(context.Background(), maxTs, end, bat, nil, true)
+				_, _, _, err = itt.VisitDeletes(c.cleaner.ctx, maxTs, end, bat, nil, true)
 				if err != nil {
 					logutil.Errorf("visit deletes failed: %v", err)
 					continue
 				}
-				//if _, ok := allObjects[objID.String()+"0000"]; ok {
-				//	delete(allObjects, objID.String())
-				//}
-				//deleteIT := common.NewGenericSortedDListIt(nil, itt.MVCC, false)
-				//for deleteIT.Valid() {
-				//
-				//	deleteIT.Next()
-				//}
 			}
 			itTable.Next()
 		}
@@ -132,8 +129,12 @@ func (c *checker) Check() error {
 			delete(allObjects, deltaLoc.Name().String())
 		}
 	}
-	for name := range allObjects {
-		logutil.Infof("not found object %s,", name)
+	if len(allObjects) > len(ckpfiles) {
+		for name := range allObjects {
+			logutil.Infof("not found object %s,", name)
+		}
+		logutil.Warnf("GC abnormal!!! all objects: %d, objects: %d, tombstones: %d, unconsumed objects: %d, unconsumed tombstones: %d, allObjects: %d",
+			allCount, len(objects), len(tombstones), len(unconsumedObjects), len(unconsumedTombstones), len(allObjects))
 	}
 
 	logutil.Infof("all objects: %d, objects: %d, tombstones: %d, unconsumed objects: %d, unconsumed tombstones: %d, allObjects: %d",
