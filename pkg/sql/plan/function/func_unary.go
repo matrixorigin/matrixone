@@ -125,8 +125,20 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	rowCount := uint64(length)
+
+	var inArrayF32 []float32
+	var outArrayF32Ptr *[]float32
+	var outArrayF32 []float32
+
+	var inArrayF64 []float64
+	var outArrayF64Ptr *[]float64
+	var outArrayF64 []float64
+
+	var data []byte
+	var null bool
+
 	for i := uint64(0); i < rowCount; i++ {
-		data, null := source.GetStrValue(i)
+		data, null = source.GetStrValue(i)
 		if null {
 			_ = rs.AppendMustNullForBytesResult()
 			continue
@@ -134,8 +146,11 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 
 		switch t := parameters[0].GetType().Oid; t {
 		case types.T_array_float32:
-			inArrayF32 := types.BytesToArray[float32](data)
-			outArrayF32 := *(arrayF32Pool.Get().(*[]float32))
+			inArrayF32 = types.BytesToArray[float32](data)
+
+			outArrayF32Ptr = arrayF32Pool.Get().(*[]float32)
+			outArrayF32 = *outArrayF32Ptr
+
 			if cap(outArrayF32) < len(inArrayF32) {
 				outArrayF32 = make([]float32, len(inArrayF32))
 			} else {
@@ -143,10 +158,15 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 			}
 			outArrayF32, _ = moarray.NormalizeL2(inArrayF32, &outArrayF32)
 			_ = rs.AppendBytes(types.ArrayToBytes[float32](outArrayF32), false)
-			arrayF32Pool.Put(&outArrayF32)
+
+			*outArrayF32Ptr = outArrayF32
+			arrayF32Pool.Put(outArrayF32Ptr)
 		case types.T_array_float64:
-			inArrayF64 := types.BytesToArray[float64](data)
-			outArrayF64 := *(arrayF64Pool.Get().(*[]float64))
+			inArrayF64 = types.BytesToArray[float64](data)
+
+			outArrayF64Ptr = arrayF64Pool.Get().(*[]float64)
+			outArrayF64 = *outArrayF64Ptr
+
 			if cap(outArrayF64) < len(inArrayF64) {
 				outArrayF64 = make([]float64, len(inArrayF64))
 			} else {
@@ -154,7 +174,9 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 			}
 			outArrayF64, _ = moarray.NormalizeL2(inArrayF64, &outArrayF64)
 			_ = rs.AppendBytes(types.ArrayToBytes[float64](outArrayF64), false)
-			arrayF64Pool.Put(&outArrayF64)
+
+			*outArrayF64Ptr = outArrayF64
+			arrayF64Pool.Put(outArrayF64Ptr)
 		}
 
 	}

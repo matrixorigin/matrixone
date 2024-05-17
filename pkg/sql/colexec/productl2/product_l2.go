@@ -123,13 +123,13 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 var (
 	arrayF32Pool = sync.Pool{
 		New: func() interface{} {
-			s := make([]float32, 128)
+			s := make([]float32, 0)
 			return &s
 		},
 	}
 	arrayF64Pool = sync.Pool{
 		New: func() interface{} {
-			s := make([]float64, 128)
+			s := make([]float64, 0)
 			return &s
 		},
 	}
@@ -159,6 +159,16 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
 	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
 
+	var clusterEmbeddingF32 []float32
+	var tblEmbeddingF32 []float32
+	var normalizeTblEmbeddingPtrF32 *[]float32
+	var normalizeTblEmbeddingF32 []float32
+
+	var clusterEmbeddingF64 []float64
+	var tblEmbeddingF64 []float64
+	var normalizeTblEmbeddingPtrF64 *[]float64
+	var normalizeTblEmbeddingF64 []float64
+
 	for j = ctr.probeIdx; j < probeCount; j++ {
 		leastClusterIndex = 0
 		leastDistance = math.MaxFloat64
@@ -168,41 +178,46 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			// find the nearest cluster center from the build table.
 			switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
 			case types.T_array_float32:
-				clusterEmbedding := types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				tblEmbedding := types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+				clusterEmbeddingF32 = types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+				tblEmbeddingF32 = types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
 
-				normalizeTblEmbedding := *(arrayF32Pool.Get().(*[]float32))
-				if cap(normalizeTblEmbedding) < len(tblEmbedding) {
-					normalizeTblEmbedding = make([]float32, len(tblEmbedding))
+				normalizeTblEmbeddingPtrF32 = arrayF32Pool.Get().(*[]float32)
+				normalizeTblEmbeddingF32 = *normalizeTblEmbeddingPtrF32
+				if cap(normalizeTblEmbeddingF32) < len(tblEmbeddingF32) {
+					normalizeTblEmbeddingF32 = make([]float32, len(tblEmbeddingF32))
 				} else {
-					normalizeTblEmbedding = normalizeTblEmbedding[:len(tblEmbedding)]
+					normalizeTblEmbeddingF32 = normalizeTblEmbeddingF32[:len(tblEmbeddingF32)]
 				}
-				normalizeTblEmbedding, _ = moarray.NormalizeL2[float32](tblEmbedding, &normalizeTblEmbedding)
+				normalizeTblEmbeddingF32, _ = moarray.NormalizeL2[float32](tblEmbeddingF32, &normalizeTblEmbeddingF32)
 
-				dist, _ := moarray.L2Distance[float32](clusterEmbedding, normalizeTblEmbedding)
+				dist, _ := moarray.L2Distance[float32](clusterEmbeddingF32, normalizeTblEmbeddingF32)
 				if dist < leastDistance {
 					leastDistance = dist
 					leastClusterIndex = i
 				}
-				arrayF32Pool.Put(&normalizeTblEmbedding)
+				// article:https://blog.mike.norgate.xyz/unlocking-go-slice-performance-navigating-sync-pool-for-enhanced-efficiency-7cb63b0b453e
+				*normalizeTblEmbeddingPtrF32 = normalizeTblEmbeddingF32
+				arrayF32Pool.Put(normalizeTblEmbeddingPtrF32)
 			case types.T_array_float64:
-				clusterEmbedding := types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				tblEmbedding := types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+				clusterEmbeddingF64 = types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+				tblEmbeddingF64 = types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
 
-				normalizeTblEmbedding := *(arrayF64Pool.Get().(*[]float64))
-				if cap(normalizeTblEmbedding) < len(tblEmbedding) {
-					normalizeTblEmbedding = make([]float64, len(tblEmbedding))
+				normalizeTblEmbeddingPtrF64 = arrayF64Pool.Get().(*[]float64)
+				normalizeTblEmbeddingF64 = *normalizeTblEmbeddingPtrF64
+				if cap(normalizeTblEmbeddingF64) < len(tblEmbeddingF64) {
+					normalizeTblEmbeddingF64 = make([]float64, len(tblEmbeddingF64))
 				} else {
-					normalizeTblEmbedding = normalizeTblEmbedding[:len(tblEmbedding)]
+					normalizeTblEmbeddingF64 = normalizeTblEmbeddingF64[:len(tblEmbeddingF64)]
 				}
-				normalizeTblEmbedding, _ = moarray.NormalizeL2[float64](tblEmbedding, &normalizeTblEmbedding)
+				normalizeTblEmbeddingF64, _ = moarray.NormalizeL2[float64](tblEmbeddingF64, &normalizeTblEmbeddingF64)
 
-				dist, _ := moarray.L2Distance[float64](clusterEmbedding, normalizeTblEmbedding)
+				dist, _ := moarray.L2Distance[float64](clusterEmbeddingF64, normalizeTblEmbeddingF64)
 				if dist < leastDistance {
 					leastDistance = dist
 					leastClusterIndex = i
 				}
-				arrayF64Pool.Put(&normalizeTblEmbedding)
+				*normalizeTblEmbeddingPtrF64 = normalizeTblEmbeddingF64
+				arrayF64Pool.Put(normalizeTblEmbeddingPtrF64)
 			}
 		}
 		for k, rp := range ap.Result {
