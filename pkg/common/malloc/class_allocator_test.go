@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,27 +14,10 @@
 
 package malloc
 
-import "unsafe"
+import "testing"
 
-type Handle struct {
-	ptr   unsafe.Pointer
-	class int
-}
-
-var dumbHandle = &Handle{
-	class: -1,
-}
-
-func (h *Handle) Free() {
-	if h.class < 0 {
-		return
-	}
-	pid := runtime_procPin()
-	runtime_procUnpin()
-	shard := pid % numShards
-	select {
-	case shards[shard].pools[h.class] <- h:
-		shards[shard].numFree.Add(1)
-	default:
-	}
+func TestClassAllocator(t *testing.T) {
+	testAllocator(t, func() Allocator {
+		return NewClassAllocator()
+	})
 }
