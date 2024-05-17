@@ -412,6 +412,14 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	stats := statistic.StatsInfoFromContext(ctx)
 	stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
 
+	allocator := s.allocator
+	if vector.Policy.Any(SkipMemoryCache) {
+		allocator = DefaultCacheDataAllocator
+	}
+	for i := range vector.Entries {
+		vector.Entries[i].allocator = allocator
+	}
+
 	for _, cache := range vector.Caches {
 		cache := cache
 		if err := readCache(ctx, cache, vector); err != nil {
@@ -515,11 +523,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
-	}
-
-	allocator := s.allocator
-	if vector.Policy.Any(SkipMemoryCache) {
-		allocator = DefaultCacheDataAllocator
 	}
 
 	min, max, readFullObject := vector.readRange()
@@ -707,7 +710,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 			}
 		}
 
-		if err = entry.setCachedData(allocator); err != nil {
+		if err = entry.setCachedData(); err != nil {
 			return err
 		}
 
