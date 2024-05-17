@@ -153,8 +153,8 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	probeCount := ctr.inBat.RowCount()
 	var i, j int
 
-	leastClusterIndex := 0
-	leastDistance := math.MaxFloat64
+	var leastClusterIndex int
+	var leastDistance float64
 
 	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
 	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
