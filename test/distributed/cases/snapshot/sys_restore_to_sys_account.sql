@@ -1,4 +1,4 @@
--- @bvt:issue#15954
+-- @bvt:issue#16150
 use mo_catalog;
 create cluster table clu01(col1 int, col2 decimal);
 insert into clu01 values(1,2,0);
@@ -63,9 +63,7 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase =
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 restore account sys from snapshot sp01;
--- @bvt:issue#16055
 select count(*) from rs01 {snapshot = 'sp01'};
--- @bvt:issue
 select * from rs01 {snapshot = 'sp01'};
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
 -- @ignore:0,6,7
@@ -135,7 +133,7 @@ show databases;
 select count(*) from rs02;
 select count(*) from rs03;
 use mo_catalog;
--- @bvt:issue#15954
+-- @bvt:issue#16150
 select count(*) from cluster01;
 -- @bvt:issue
 drop table cluster01;
@@ -310,13 +308,15 @@ drop snapshot snap01;
 
 
 -- restore null
--- @bvt:issue#15943
 drop snapshot if exists sp05;
 create snapshot sp05 for account sys;
 create database db01;
 restore account sys FROM snapshot sp05;
 show databases;
--- @bvt:issue
+drop snapshot sp05;
+
+
+
 
 -- sys create sp01,sp02, restore sp02, restore sp01
 drop database if exists db01;
@@ -586,14 +586,12 @@ create snapshot sp15 for account sys;
 restore account sys database db07 from snapshot sp15;
 restore account sys database db08 from snapshot sp15;
 
--- @bvt:issue#15943
 show databases;
 use db07;
 show tables;
 show create table table01 {snapshot = 'sp14'};
 show create table table01;
 select * from table01;
--- @bvt:issue
 
 -- @ignore:1
 show snapshots;

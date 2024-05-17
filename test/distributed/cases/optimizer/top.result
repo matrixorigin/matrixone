@@ -157,13 +157,13 @@ Project
   ->  Sort
         Sort Key: t1.c1 DESC
         Limit: 10, Offset: 10
-        Send Message: [tag 1 , type MsgTopValue]
+        Send Message: [tag 2 , type MsgTopValue]
         ->  Join
               Join Type: INNER   hashOnPK
               Join Cond: (t1.c1 = t2.c1) shuffle: range(t1.c1)
               ->  Table Scan on d1.t1
                     Sort Key: c1 DESC
-                    Recv Message: [tag 1 , type MsgTopValue]
+                    Recv Message: [tag 2 , type MsgTopValue]
               ->  Table Scan on d1.t2
                     Filter Cond: t2.c2 BETWEEN 33333 AND 555555
                     Block Filter Cond: t2.c2 BETWEEN 33333 AND 555555

@@ -428,7 +428,7 @@ drop database test_snapshot_restore;
 drop database snapshot_read;
 -- @session
 
-restore account test_account from snapshot snapshot_01 to account test_account;
+restore account test_account from snapshot snapshot_01;
 
 -- @session:id=5&user=test_account:test_user&password=111
 use test_snapshot_restore;
@@ -581,7 +581,7 @@ drop database snapshot_read;
 -- @session
 
 
-restore account test_account from snapshot snapshot_01 to account test_account;
+restore account test_account from snapshot snapshot_01;
 -- @session:id=8&user=test_account:test_user&password=111
 use test_snapshot_restore;
 select count(*) from test_snapshot_restore.test_restore;

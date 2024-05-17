@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -42,6 +41,19 @@ type MockCompilerContext struct {
 	// ctx default: nil
 	ctx context.Context
 }
+
+func (m *MockCompilerContext) GetViews() []string {
+	return nil
+}
+
+func (m *MockCompilerContext) SetViews(views []string) {
+}
+
+func (m *MockCompilerContext) GetSnapshot() *Snapshot {
+	return nil
+}
+
+func (m *MockCompilerContext) SetSnapshot(snapshot *Snapshot) {}
 
 func (m *MockCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
 	//TODO implement me
@@ -881,14 +893,6 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot 
 	return m.objects[name], tableDef
 }
 
-func (m *MockCompilerContext) GetRestoreInfo() *RestoreInfo {
-	panic("unimplement")
-}
-
-func (m *MockCompilerContext) SetRestoreInfo(restoreInfo *RestoreInfo) {
-	panic("unimplement")
-}
-
 func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot Snapshot) (*ObjectRef, *TableDef) {
 	name := m.id2name[tableId]
 	tableDef := DeepCopyTableDef(m.tables[name], true)
@@ -955,8 +959,8 @@ func (m *MockCompilerContext) IsPublishing(dbName string) (bool, error) {
 	return false, nil
 }
 
-func (m *MockCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (Snapshot, error) {
-	return plan.Snapshot{TS: &timestamp.Timestamp{}}, nil
+func (m *MockCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*Snapshot, error) {
+	return nil, nil
 }
 
 func (m *MockCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {

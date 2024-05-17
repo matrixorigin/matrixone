@@ -147,6 +147,25 @@ func TestFuzzyFilter(t *testing.T) {
 				result, err := tc.arg.Call(tc.proc)
 				require.NoError(t, err)
 				if result.Status == vm.ExecStop {
+					tc.arg.Reset(tc.proc, false, err)
+					tc.arg.GetChildren(0).Free(tc.proc, false, err)
+					break
+				}
+			}
+
+			err = tc.arg.Prepare(tc.proc)
+			require.NoError(t, err)
+
+			bat = newBatch(tc.types, tc.proc, int64(r))
+			tc.proc.Reg.MergeReceivers[0].Ch <- bat
+			tc.proc.Reg.MergeReceivers[0].Ch <- nil
+			tc.proc.Reg.MergeReceivers[1].Ch <- nil
+
+			resetChildren(tc.arg, []*batch.Batch{bat})
+			for {
+				result, err := tc.arg.Call(tc.proc)
+				require.NoError(t, err)
+				if result.Status == vm.ExecStop {
 					tc.arg.Free(tc.proc, false, err)
 					tc.arg.GetChildren(0).Free(tc.proc, false, err)
 					require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
