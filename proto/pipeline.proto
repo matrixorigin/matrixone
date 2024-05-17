@@ -316,8 +316,7 @@ message ProductL2 {
   repeated int32 rel_list = 1;
   repeated int32 col_list = 2;
   repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
-  bool is_shuffle =4;
-  plan.Expr  expr = 5;
+  plan.Expr  expr = 4;
 }
 
 message IndexJoin {

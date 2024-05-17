@@ -1410,7 +1410,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg := productl2.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
-		arg.IsShuffle = t.IsShuffle
 		arg.OnExpr = t.Expr
 		v.Arg = arg
 	case vm.Projection:

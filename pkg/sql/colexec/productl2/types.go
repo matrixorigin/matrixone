@@ -45,11 +45,10 @@ type container struct {
 }
 
 type Argument struct {
-	ctr       *container
-	Typs      []types.Type
-	Result    []colexec.ResultPos
-	IsShuffle bool
-	OnExpr    *plan.Expr
+	ctr    *container
+	Typs   []types.Type
+	Result []colexec.ResultPos
+	OnExpr *plan.Expr
 	vm.OperatorBase
 }
 

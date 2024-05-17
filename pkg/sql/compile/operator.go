@@ -273,7 +273,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg := productl2.NewArgument()
 		arg.Result = t.Result
 		arg.Typs = t.Typs
-		arg.IsShuffle = t.IsShuffle
 		arg.OnExpr = t.OnExpr
 		res.Arg = arg
 	case vm.Projection:
