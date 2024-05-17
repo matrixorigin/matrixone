@@ -118,10 +118,10 @@ create database test03;
 use test03;
 drop table if exists pri01;
 create table pri01(
-                      deptno int unsigned comment '部门编号',
-                      dname varchar(15) comment '部门名称',
-                      loc varchar(50)  comment '部门所在位置',
-                      primary key(deptno)
+          deptno int unsigned comment '部门编号',
+          dname varchar(15) comment '部门名称',
+          loc varchar(50)  comment '部门所在位置',
+          primary key(deptno)
 ) comment='部门表';
 
 insert into pri01 values (10,'ACCOUNTING','NEW YORK');
@@ -181,12 +181,13 @@ select * from test03.aff01{snapshot = 'sp04'};
 select * from test03.pri01{snapshot = 'sp04'};
 select count(*) from test03.aff01{snapshot = 'sp04'};
 
--- @bvt:issue#15971
 restore account acc01 from snapshot sp04;
+use test03;
 show create table aff01;
 show create table pri01;
 select count(*) from aff01;
--- @bvt:issue
+drop database test03;
+drop snapshot sp04;
 
 
 
@@ -439,7 +440,6 @@ show create table db03.tm1;
 show create table db03.ti2;
 show create table db03.tm2;
 
--- @bvt:issue#15971
 restore account acc01 from snapshot sp14;
 show databases;
 select * from db03.ti1;
@@ -450,7 +450,6 @@ show create table db03.ti1;
 show create table db03.tm1;
 show create table db03.ti2;
 show create table db03.tm2;
--- @bvt:issue
 
 -- @ignore:1
 show snapshots;
