@@ -290,7 +290,7 @@ DELETE FROM snapshot_read.users;
 select count(*) from snapshot_read.users;
 count(*)
 0
-restore account test_account database snapshot_read table users from snapshot sp_01 to account test_account;
+restore account test_account database snapshot_read table users from snapshot sp_01;
 select count(*) from snapshot_read.users;
 count(*)
 11

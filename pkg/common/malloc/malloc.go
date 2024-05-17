@@ -23,17 +23,21 @@ import (
 )
 
 const (
-	maxBufferSize   = 1 << 30
+	maxBufferSize   = 2 * (1 << 30)
 	minClassSize    = 128
-	maxClassSize    = 1 << 20
-	classSizeFactor = 1.5
+	maxClassSize    = 8 * (1 << 20)
+	classSizeFactor = 1.8
 	numShards       = 16
 )
 
 type Shard struct {
+	pools []Pool
+}
+
+type Pool struct {
 	numAlloc atomic.Int64
 	numFree  atomic.Int64
-	pools    []chan *Handle
+	ch       chan *Handle
 }
 
 var (
@@ -70,7 +74,9 @@ var (
 			for range classSizes {
 				ret[i].pools = append(
 					ret[i].pools,
-					make(chan *Handle, bufferedObjectsPerClass),
+					Pool{
+						ch: make(chan *Handle, bufferedObjectsPerClass),
+					},
 				)
 			}
 		}
@@ -87,14 +93,16 @@ func requestSizeToClass(size int) int {
 	return -1
 }
 
-func classAllocate(class int) *Handle {
+func classAllocate(class int, clearMem bool) *Handle {
 	pid := runtime_procPin()
 	runtime_procUnpin()
 	shard := pid % numShards
 	select {
-	case handle := <-shards[shard].pools[class]:
-		shards[shard].numAlloc.Add(1)
-		clear(unsafe.Slice((*byte)(handle.ptr), classSizes[handle.class]))
+	case handle := <-shards[shard].pools[class].ch:
+		shards[shard].pools[class].numAlloc.Add(1)
+		if clearMem {
+			clear(unsafe.Slice((*byte)(handle.ptr), classSizes[handle.class]))
+		}
 		return handle
 	default:
 		slice := make([]byte, classSizes[class])
@@ -105,7 +113,7 @@ func classAllocate(class int) *Handle {
 	}
 }
 
-func Alloc(n int) (unsafe.Pointer, *Handle) {
+func Alloc(n int, clear bool) (unsafe.Pointer, *Handle) {
 	if n == 0 {
 		return nil, dumbHandle
 	}
@@ -113,7 +121,7 @@ func Alloc(n int) (unsafe.Pointer, *Handle) {
 	if class == -1 {
 		return unsafe.Pointer(unsafe.SliceData(make([]byte, n))), dumbHandle
 	}
-	handle := classAllocate(class)
+	handle := classAllocate(class, clear)
 	return handle.ptr, handle
 }
 

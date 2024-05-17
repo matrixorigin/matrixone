@@ -308,13 +308,15 @@ drop snapshot snap01;
 
 
 -- restore null
--- @bvt:issue#15943
 drop snapshot if exists sp05;
 create snapshot sp05 for account sys;
 create database db01;
 restore account sys FROM snapshot sp05;
 show databases;
--- @bvt:issue
+drop snapshot sp05;
+
+
+
 
 -- sys create sp01,sp02, restore sp02, restore sp01
 drop database if exists db01;
@@ -584,14 +586,12 @@ create snapshot sp15 for account sys;
 restore account sys database db07 from snapshot sp15;
 restore account sys database db08 from snapshot sp15;
 
--- @bvt:issue#15943
 show databases;
 use db07;
 show tables;
 show create table table01 {snapshot = 'sp14'};
 show create table table01;
 select * from table01;
--- @bvt:issue
 
 -- @ignore:1
 show snapshots;
