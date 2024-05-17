@@ -31,12 +31,21 @@ const (
 type BatchType int8
 type CleanerState int8
 
+const CurrentVersion = uint16(3)
+
+const (
+	Versions BatchType = iota
+	ObjectList
+	TombstoneList
+)
+
 const (
 	CreateBlock BatchType = iota
 	DeleteBlock
 	DropTable
 	DropDB
 	DeleteFile
+	Tombstone
 )
 
 const (
@@ -52,6 +61,8 @@ const (
 	GCAttrCommitTS   = "commit_ts"
 	GCCreateTS       = "create_time"
 	GCDeleteTS       = "delete_time"
+	GCAttrTombstone  = "tombstone"
+	GCAttrVersion    = "version"
 )
 
 var (
@@ -81,6 +92,26 @@ var (
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_varchar, 5000, 0),
+	}
+
+	TombstoneSchemaAttr = []string{
+		GCAttrTombstone,
+		GCAttrObjectName,
+		GCAttrCommitTS,
+	}
+
+	TombstoneSchemaTypes = []types.Type{
+		types.New(types.T_varchar, 5000, 0),
+		types.New(types.T_varchar, 5000, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
+	}
+
+	VersionsSchemaAttr = []string{
+		GCAttrVersion,
+	}
+
+	VersionsSchemaTypes = []types.Type{
+		types.New(types.T_uint16, 0, 0),
 	}
 
 	DropTableSchemaAttr = []string{
