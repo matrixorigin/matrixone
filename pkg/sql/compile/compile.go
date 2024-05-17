@@ -1032,12 +1032,12 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 			if c.anal.qry.LoadTag {
 				wr = &process.WaitRegister{
 					Ctx: c.ctx,
-					Ch:  make(chan *batch.Batch, ncpu),
+					Ch:  make(chan *process.RegisterMessage, ncpu),
 				}
 			} else {
 				wr = &process.WaitRegister{
 					Ctx: c.ctx,
-					Ch:  make(chan *batch.Batch, 1),
+					Ch:  make(chan *process.RegisterMessage, 1),
 				}
 			}
 			c.appendStepRegs(s, nodeId, wr)
@@ -1517,7 +1517,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				dataScope := c.newMergeScope(ss)
 				dataScope.IsEnd = true
 				if c.anal.qry.LoadTag {
-					dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, dataScope.NodeInfo.Mcpu) // reset the channel buffer of sink for load
+					dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, dataScope.NodeInfo.Mcpu) // reset the channel buffer of sink for load
 				}
 				parallelSize := c.getParallelSizeForExternalScan(n, dataScope.NodeInfo.Mcpu)
 				scopes := make([]*Scope, 0, parallelSize)
@@ -1529,7 +1529,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					scopes[i].Proc = process.NewFromProc(c.proc, c.ctx, 1)
 					if c.anal.qry.LoadTag {
 						for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
-							rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+							rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 						}
 					}
 					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)

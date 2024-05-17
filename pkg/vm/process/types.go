@@ -74,6 +74,12 @@ type RegisterMessage struct {
 	Err   error
 }
 
+func NewRegMsg(bat *batch.Batch) *RegisterMessage {
+	return &RegisterMessage{
+		Batch: bat,
+	}
+}
+
 // WaitRegister channel
 type WaitRegister struct {
 	Ctx context.Context

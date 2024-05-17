@@ -130,10 +130,11 @@ func processValue(ctr *container, ap *Argument, proc *process.Process, anal proc
 		proc.PutBatch(ctr.buf)
 		ctr.buf = nil
 	}
-	ctr.buf, _, err = ctr.ReceiveFromAllRegs(anal)
+	msg, _, err := ctr.ReceiveFromAllRegs(anal)
 	if err != nil {
 		return result, err
 	}
+	ctr.buf = msg.Batch
 	if ctr.buf == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop
@@ -256,10 +257,11 @@ func processPrev(ctr *container, ap *Argument, proc *process.Process, anal proce
 		proc.PutBatch(ctr.buf)
 		ctr.buf = nil
 	}
-	ctr.buf, _, err = ctr.ReceiveFromAllRegs(anal)
+	msg, _, err := ctr.ReceiveFromAllRegs(anal)
 	if err != nil {
 		return result, err
 	}
+	ctr.buf = msg.Batch
 	if ctr.buf == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop
@@ -430,14 +432,14 @@ func processNext(ctr *container, ap *Argument, proc *process.Process, anal proce
 		return result, nil
 	}
 	for {
-		bat, end, err := ctr.ReceiveFromAllRegs(anal)
+		msg, end, err := ctr.ReceiveFromAllRegs(anal)
 		if err != nil {
 			return result, err
 		}
 		if end {
 			break
 		}
-		ctr.bats = append(ctr.bats, bat)
+		ctr.bats = append(ctr.bats, msg.Batch)
 	}
 	if len(ctr.bats) == 0 {
 		result.Batch = nil
@@ -471,14 +473,14 @@ func processLinear(ctr *container, ap *Argument, proc *process.Process, anal pro
 		return result, nil
 	}
 	for {
-		bat, end, err := ctr.ReceiveFromAllRegs(anal)
+		msg, end, err := ctr.ReceiveFromAllRegs(anal)
 		if err != nil {
 			return result, err
 		}
 		if end {
 			break
 		}
-		ctr.bats = append(ctr.bats, bat)
+		ctr.bats = append(ctr.bats, msg.Batch)
 	}
 	if len(ctr.bats) == 0 {
 		result.Batch = nil
@@ -504,10 +506,11 @@ func processDefault(ctr *container, ap *Argument, proc *process.Process, anal pr
 		proc.PutBatch(ctr.buf)
 		ctr.buf = nil
 	}
-	ctr.buf, _, err = ctr.ReceiveFromAllRegs(anal)
+	msg, _, err := ctr.ReceiveFromAllRegs(anal)
 	if err != nil {
 		return result, err
 	}
+	ctr.buf = msg.Batch
 	if ctr.buf == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop

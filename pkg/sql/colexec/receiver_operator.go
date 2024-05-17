@@ -18,7 +18,6 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -42,31 +41,31 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool)
 	}
 }
 
-func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Analyze) (*batch.Batch, bool, error) {
+func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Analyze) (*process.RegisterMessage, bool, error) {
 	start := time.Now()
 	defer analyze.WaitStop(start)
 	select {
 	case <-r.proc.Ctx.Done():
 		return nil, true, nil
-	case bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
+	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
 		if !ok {
-			return nil, true, nil
+			return nil, true, msg.Err
 		}
-		return bat, false, nil
+		return msg, false, msg.Err
 	}
 }
 
-func (r *ReceiverOperator) ReceiveFromSingleRegNonBlock(regIdx int, analyze process.Analyze) (*batch.Batch, bool, error) {
+func (r *ReceiverOperator) ReceiveFromSingleRegNonBlock(regIdx int, analyze process.Analyze) (*process.RegisterMessage, bool, error) {
 	start := time.Now()
 	defer analyze.WaitStop(start)
 	select {
 	case <-r.proc.Ctx.Done():
 		return nil, true, nil
-	case bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
-		if !ok || bat == nil {
-			return nil, true, nil
+	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
+		if !ok || msg.Batch == nil {
+			return nil, true, msg.Err
 		}
-		return bat, false, nil
+		return msg, false, msg.Err
 	default:
 		return nil, false, nil
 	}
@@ -85,35 +84,35 @@ func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
 
 // You MUST Init ReceiverOperator with Merge-Type
 // if you want to use this function
-func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.Batch, bool, error) {
+func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*process.RegisterMessage, bool, error) {
 	for {
 		if r.aliveMergeReceiver == 0 {
 			return nil, true, nil
 		}
 
 		start := time.Now()
-		chosen, bat, ok := r.selectFromAllReg()
+		chosen, msg, ok := r.selectFromAllReg()
 		analyze.WaitStop(start)
 
 		// chosen == 0 means the info comes from proc context.Done
 		if chosen == 0 {
-			return nil, true, nil
+			return nil, true, msg.Err
 		}
 
 		if !ok {
-			return nil, true, nil
+			return nil, true, msg.Err
 		}
 
-		if bat == nil {
+		if msg.Batch == nil {
 			continue
 		}
 
-		if bat.IsEmpty() {
-			r.proc.PutBatch(bat)
+		if msg.Batch.IsEmpty() {
+			r.proc.PutBatch(msg.Batch)
 			continue
 		}
 
-		return bat, false, nil
+		return msg, false, msg.Err
 	}
 }
 
@@ -128,9 +127,9 @@ func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 	// Senders will never send more because the context is done.
 	for _, ch := range r.chs {
 		for len(ch) > 0 {
-			bat := <-ch
-			if bat != nil {
-				bat.Clean(mp)
+			msg := <-ch
+			if msg.Batch != nil {
+				msg.Batch.Clean(mp)
 			}
 		}
 	}
@@ -212,7 +211,7 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *process.RegisterMessage, bo
 		return chosen, msg, ok
 	}
 
-	if !ok || msg == nil {
+	if !ok || msg.Batch == nil {
 		r.DisableChosen(chosen)
 	}
 	return chosen, msg, ok

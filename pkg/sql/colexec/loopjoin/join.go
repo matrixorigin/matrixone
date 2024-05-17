@@ -72,11 +72,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				err = ctr.probe(arg, proc, anal, arg.GetIsLast(), &result)
 				return result, err
 			}
-			ctr.inBat, _, err = ctr.ReceiveFromSingleReg(0, anal)
+			msg, _, err := ctr.ReceiveFromSingleReg(0, anal)
 			if err != nil {
 				return result, err
 			}
-
+			ctr.inBat = msg.Batch
 			if ctr.inBat == nil {
 				ctr.state = End
 				continue
@@ -104,10 +104,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	for {
-		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+		msg, _, err := ctr.ReceiveFromSingleReg(1, anal)
 		if err != nil {
 			return err
 		}
+		bat := msg.Batch
 		if bat == nil {
 			break
 		}

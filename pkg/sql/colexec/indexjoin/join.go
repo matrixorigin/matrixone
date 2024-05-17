@@ -52,10 +52,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.state {
 
 		case Probe:
-			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+			msg, _, err := ctr.ReceiveFromSingleReg(0, anal)
 			if err != nil {
 				return result, err
 			}
+			bat := msg.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
