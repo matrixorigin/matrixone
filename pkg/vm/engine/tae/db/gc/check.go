@@ -84,10 +84,8 @@ func (c *checker) Check() error {
 	it := catalog.MakeDBIt(true)
 	for ; it.Valid(); it.Next() {
 		db := it.Get().GetPayload()
-		logutil.Infof("db %s,", db)
 		itTable := db.MakeTableIt(true)
 		for itTable.Valid() {
-			logutil.Infof("table %s,", itTable.Get().GetPayload())
 			table := itTable.Get().GetPayload()
 			itObject := table.MakeObjectIt(true)
 			for itObject.Valid() {
@@ -96,9 +94,9 @@ func (c *checker) Check() error {
 				if _, ok := allObjects[stats.ObjectName().String()]; ok {
 					delete(allObjects, stats.ObjectName().String())
 				}
-				it2 := table.GetDeleteList().Iter()
-				for it2.Next() {
-					objID := it2.Item().ObjectID
+				it2 := table.GetDeleteList().Items()
+				for _, itt := range it2 {
+					objID := itt.ObjectID
 					if _, ok := allObjects[objID.String()+"0000"]; ok {
 						delete(allObjects, objID.String())
 					}
