@@ -532,7 +532,7 @@ func constructByte(ctx context.Context, obj interface{}, bat *batch.Batch, index
 				val := vector.GetFixedAt[types.Blockid](vec, i)
 				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
 			default:
-				logError(ses, ses.GetDebugString(),
+				ses.Error(ctx,
 					"Failed to construct byte due to unsupported type",
 					zap.Int("typeOid", int(vec.GetType().Oid)))
 				ByteChan <- &BatchByte{

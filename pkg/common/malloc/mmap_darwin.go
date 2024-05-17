@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package motrace
+package malloc
 
-import "context"
+import (
+	"unsafe"
 
-type stmContextKeyType int
+	"golang.org/x/sys/unix"
+)
 
-const currentStmKey stmContextKeyType = iota
+const (
+	madv_FREE_REUSABLE = 0x7
+	madv_FREE_REUSE    = 0x8
+)
 
-func ContextWithStatement(parent context.Context, s *StatementInfo) context.Context {
-	return context.WithValue(parent, currentStmKey, s)
+func (f *fixedSizeMmapAllocator) reuseMem(ptr unsafe.Pointer) {
+	if err := unix.Madvise(
+		unsafe.Slice((*byte)(ptr), f.size),
+		madv_FREE_REUSE,
+	); err != nil {
+		panic(err)
+	}
+	clear(unsafe.Slice((*byte)(ptr), f.size))
 }
 
-func StatementFromContext(ctx context.Context) *StatementInfo {
-	if ctx == nil {
-		return nil
-	} else if val := ctx.Value(currentStmKey); val == nil {
-		return nil
-	} else if stm, ok := val.(*StatementInfo); !ok {
-		return nil
-	} else {
-		return stm
+func (f *fixedSizeMmapAllocator) freeMem(ptr unsafe.Pointer) {
+	if err := unix.Madvise(
+		unsafe.Slice((*byte)(ptr), f.size),
+		madv_FREE_REUSABLE,
+	); err != nil {
+		panic(err)
 	}
 }

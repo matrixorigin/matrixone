@@ -96,7 +96,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		// receive topvalue message
 		if arg.msgReceiver != nil {
-			msgs := arg.msgReceiver.ReceiveMessage(false)
+			msgs, _ := arg.msgReceiver.ReceiveMessage(false, proc.Ctx)
 			for i := range msgs {
 				msg, ok := msgs[i].(process.TopValueMessage)
 				if !ok {

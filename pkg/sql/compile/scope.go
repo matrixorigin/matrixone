@@ -31,10 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -59,6 +59,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
 	"github.com/panjf2000/ants/v2"
 	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
@@ -123,7 +124,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
-			getLogger().Error("panic in scope run",
+			c.proc.Error(c.ctx, "panic in scope run",
 				zap.String("sql", c.sql),
 				zap.String("error", err.Error()))
 		}
@@ -213,7 +214,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 			defer func() {
 				if e := recover(); e != nil {
 					err := moerr.ConvertPanicError(c.ctx, e)
-					getLogger().Error("panic in merge run run",
+					c.proc.Error(c.ctx, "panic in merge run run",
 						zap.String("sql", c.sql),
 						zap.String("error", err.Error()))
 					errChan <- err
@@ -335,7 +336,10 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
 			msgReceiver := c.proc.NewMessageReceiver([]int32{spec.Tag}, process.AddrBroadCastOnCurrentCN())
-			msgs := msgReceiver.ReceiveMessage(true)
+			msgs, ctxDone := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
+			if ctxDone {
+				return nil
+			}
 			for i := range msgs {
 				msg, ok := msgs[i].(process.RuntimeFilterMessage)
 				if !ok {
@@ -492,7 +496,12 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
-		db, err = c.e.Database(ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
+		txnOp := s.Proc.TxnOperator
+		if !s.DataSource.Timestamp.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+			s.DataSource.Timestamp.Less(s.Proc.TxnOperator.Txn().SnapshotTS) {
+			txnOp = s.Proc.TxnOperator.CloneSnapshotOp(s.DataSource.Timestamp)
+		}
+		db, err = c.e.Database(ctx, s.DataSource.SchemaName, txnOp)
 		if err != nil {
 			return err
 		}
@@ -959,7 +968,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		// Add log for cn panic which reported on issue 10656
 		// If you find this log is printed, please report the repro details
 		if len(s.Instructions) < 2 {
-			logutil.Error("the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}),
+			c.proc.Error(c.proc.Ctx, "the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}),
 				zap.String("stack", string(debug.Stack())),
 			)
 			return nil, moerr.NewInternalErrorNoCtx("the length of s.Instructions is too short !")
@@ -1054,7 +1063,7 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 			func() {
 				streamSender, errStream := cnclient.GetStreamSender(fromAddr)
 				if errStream != nil {
-					logutil.Errorf("Failed to get stream sender txnID=%s, err=%v",
+					s.Proc.Errorf(s.Proc.Ctx, "Failed to get stream sender txnID=%s, err=%v",
 						s.Proc.TxnOperator.Txn().DebugString(), errStream)
 					closeWithError(errStream, s.Proc.Reg.MergeReceivers[receiverIdx])
 					return

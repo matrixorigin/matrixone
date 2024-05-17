@@ -18,14 +18,16 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRCBytes(t *testing.T) {
-	var size atomic.Int64
+	allocator := malloc.NewClassAllocator()
 
+	var size atomic.Int64
 	r := RCBytes{
-		d:    newData(1, &size),
+		d:    newData(allocator, 1, &size),
 		size: &size,
 	}
 	// test Bytes

@@ -1284,7 +1284,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	// deal with some special function
 	switch name {
 	case "interval":
-		// rewrite interval function to ListExpr, and retrun directly
+		// rewrite interval function to ListExpr, and return directly
 		return &plan.Expr{
 			Typ: plan.Type{
 				Id: int32(types.T_interval),

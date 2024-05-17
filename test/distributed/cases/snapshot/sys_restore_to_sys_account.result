@@ -1,21 +1,21 @@
 use mo_catalog;
-[unknown result because it is related to issue#15954]
+[unknown result because it is related to issue#16150]
 create cluster table clu01(col1 int, col2 decimal);
-[unknown result because it is related to issue#15954]
+[unknown result because it is related to issue#16150]
 insert into clu01 values(1,2,0);
-[unknown result because it is related to issue#15954]
+[unknown result because it is related to issue#16150]
 drop snapshot if exists sp01;
-[unknown result because it is related to issue#15954]
+[unknown result because it is related to issue#16150]
 create snapshot sp01 for account sys;
-[unknown result because it is related to issue#15954]
+[unknown result because it is related to issue#16150]
 insert into clu01 values(2,3,0);
-[unknown result because it is related to issue#15954]
+[unknown result because it is related to issue#16150]
 restore account sys from snapshot sp01;
-[unknown result because it is related to issue#15954]
+[unknown result because it is related to issue#16150]
 select * from clu01;
-[unknown result because it is related to issue#15954]
+[unknown result because it is related to issue#16150]
 drop table clu01;
-[unknown result because it is related to issue#15954]
+[unknown result because it is related to issue#16150]
 drop database if exists test;
 create database test;
 use test;
@@ -69,7 +69,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-276165    test01    def    create database test01    0    1    2024-05-13 15:18:52    0    
+275510    test01    def    create database test01    0    1    2024-05-15 14:06:07    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 __mo_fake_pk_col
@@ -94,7 +94,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-276165    test01    def    create database test01    0    1    2024-05-13 15:18:52    0    
+275510    test01    def    create database test01    0    1    2024-05-15 14:06:07    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 __mo_fake_pk_col
@@ -148,10 +148,10 @@ count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-276171    test02    def    create database test02    0    1    2024-05-13 15:18:53    0    
+275516    test02    def    create database test02    0    1    2024-05-15 14:06:07    0    
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'mo_catalog';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-1    mo_catalog    mo_catalog        0    0    2024-05-11 22:28:24    0    
+1    mo_catalog    mo_catalog        0    0    2024-05-15 12:08:32    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp02'} where att_database = 'test02';
 attname
 __mo_fake_pk_col
@@ -270,16 +270,16 @@ show create table aff01;
 Table    Create Table
 aff01    CREATE TABLE `aff01` (\n`empno` INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n`ename` VARCHAR(15) DEFAULT NULL COMMENT '雇员姓名',\n`job` VARCHAR(10) DEFAULT NULL COMMENT '雇员职位',\n`mgr` INT UNSIGNED DEFAULT NULL COMMENT '雇员对应的领导的编号',\n`hiredate` DATE DEFAULT NULL COMMENT '雇员的雇佣日期',\n`sal` DECIMAL(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n`comm` DECIMAL(7,2) DEFAULT NULL COMMENT '奖金',\n`deptno` INT UNSIGNED DEFAULT NULL COMMENT '所在部门',\nPRIMARY KEY (`empno`),\nCONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp04'} where reldatabase = 'test03';
-internal error: find 0 snapshotRecords by name, expect only 1
+internal error: find 0 snapshot records by name(sp04), expect only 1
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
-internal error: find 0 snapshotRecords by name, expect only 1
+internal error: find 0 snapshot records by name(sp04), expect only 1
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
-internal error: find 0 snapshotRecords by name, expect only 1
+internal error: find 0 snapshot records by name(sp04), expect only 1
 drop snapshot if exists sp04;
 create snapshot sp04 for account sys;
 show snapshots where snapshot_name = 'sp04';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp04    2024-05-13 07:18:55.197576    account    sys        
+sp04    2024-05-15 06:06:08.133411    account    sys        
 select * from aff01{snapshot = 'sp04'};
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -620,15 +620,20 @@ drop database test02;
 drop database test03;
 drop snapshot snap01;
 drop snapshot if exists sp05;
-
 create snapshot sp05 for account sys;
-
 create database db01;
-
 restore account sys FROM snapshot sp05;
-
 show databases;
-
+Database
+information_schema
+mo_catalog
+mo_debug
+mo_task
+mysql
+sys_restore_to_sys_account
+system
+system_metrics
+drop snapshot sp05;
 drop database if exists db01;
 create database db01;
 use db01;
@@ -647,8 +652,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2024-05-13 07:18:57.161927    account    sys        
-sp07    2024-05-13 07:18:57.071829    account    sys        
+sp08    2024-05-15 06:06:08.797713    account    sys        
+sp07    2024-05-15 06:06:08.772359    account    sys        
 restore account sys from snapshot sp08;
 select * from table02;
 col1    col2
@@ -694,8 +699,8 @@ drop snapshot if exists sp10;
 create snapshot sp10 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp10    2024-05-13 07:18:57.833974    account    sys        
-sp09    2024-05-13 07:18:57.677651    account    sys        
+sp10    2024-05-15 06:06:09.060988    account    sys        
+sp09    2024-05-15 06:06:09.039712    account    sys        
 restore account sys from snapshot sp09;
 select * from table02;
 col1    col2
@@ -815,92 +820,12 @@ truncate tm2;
 drop snapshot if exists sp15;
 create snapshot sp15 for account sys;
 show create table ti1 {snapshot = 'sp14'};
-internal error: panic runtime error: invalid memory address or nil pointer dereference: 
-runtime.panicmem
-	/opt/homebrew/Cellar/go/1.22.0/libexec/src/runtime/panic.go:261
-runtime.sigpanic
-	/opt/homebrew/Cellar/go/1.22.0/libexec/src/runtime/signal_unix.go:881
-github.com/matrixorigin/matrixone/pkg/sql/plan.buildShowCreateTable
-	/Users/ariznawl/wl_123/matrixone/pkg/sql/plan/build_show.go:332
-github.com/matrixorigin/matrixone/pkg/sql/plan.BuildPlan
-	/Users/ariznawl/wl_123/matrixone/pkg/sql/plan/build.go:140
-github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).Optimize
-	/Users/ariznawl/wl_123/matrixone/pkg/sql/plan/optimize.go:56
-github.com/matrixorigin/matrixone/pkg/frontend.buildPlan
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:1963
-github.com/matrixorigin/matrixone/pkg/frontend.(*TxnComputationWrapper).Compile
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/computation_wrapper.go:244
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2627
-github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2527
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2498
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2468
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2382
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2351
-github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2896
-github.com/matrixorigin/matrixone/pkg/frontend.ExecRequest
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2970
-github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/routine.go:285
-github.com/matrixorigin/matrixone/pkg/frontend.(*RoutineManager).Handler
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/routine_manager.go:516
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleMessage
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/server.go:187
-github.com/fagongzi/goetty/v2.(*server).doStart.func2.1
-	/Users/ariznawl/go/pkg/mod/github.com/matrixorigin/goetty/v2@v2.0.0-20231122095211-6a25dc9130ca/application.go:356
-runtime.goexit
-	/opt/homebrew/Cellar/go/1.22.0/libexec/src/runtime/asm_arm64.s:1222
+
 show create table tm1 {snapshot = 'sp15'};
 Table    Create Table
 tm1    CREATE TABLE `tm1` (\n`a` INT NOT NULL,\n`b` INT DEFAULT NULL,\n`c` INT DEFAULT NULL\n)
 show create table ti1 {snapshot = 'sp14'};
-internal error: panic runtime error: invalid memory address or nil pointer dereference: 
-runtime.panicmem
-	/opt/homebrew/Cellar/go/1.22.0/libexec/src/runtime/panic.go:261
-runtime.sigpanic
-	/opt/homebrew/Cellar/go/1.22.0/libexec/src/runtime/signal_unix.go:881
-github.com/matrixorigin/matrixone/pkg/sql/plan.buildShowCreateTable
-	/Users/ariznawl/wl_123/matrixone/pkg/sql/plan/build_show.go:332
-github.com/matrixorigin/matrixone/pkg/sql/plan.BuildPlan
-	/Users/ariznawl/wl_123/matrixone/pkg/sql/plan/build.go:140
-github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).Optimize
-	/Users/ariznawl/wl_123/matrixone/pkg/sql/plan/optimize.go:56
-github.com/matrixorigin/matrixone/pkg/frontend.buildPlan
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:1963
-github.com/matrixorigin/matrixone/pkg/frontend.(*TxnComputationWrapper).Compile
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/computation_wrapper.go:244
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2627
-github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2527
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2498
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2468
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2382
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2351
-github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2896
-github.com/matrixorigin/matrixone/pkg/frontend.ExecRequest
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/mysql_cmd_executor.go:2970
-github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/routine.go:285
-github.com/matrixorigin/matrixone/pkg/frontend.(*RoutineManager).Handler
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/routine_manager.go:516
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleMessage
-	/Users/ariznawl/wl_123/matrixone/pkg/frontend/server.go:187
-github.com/fagongzi/goetty/v2.(*server).doStart.func2.1
-	/Users/ariznawl/go/pkg/mod/github.com/matrixorigin/goetty/v2@v2.0.0-20231122095211-6a25dc9130ca/application.go:356
-runtime.goexit
-	/opt/homebrew/Cellar/go/1.22.0/libexec/src/runtime/asm_arm64.s:1222
+
 show create table tm1 {snapshot = 'sp15'};
 Table    Create Table
 tm1    CREATE TABLE `tm1` (\n`a` INT NOT NULL,\n`b` INT DEFAULT NULL,\n`c` INT DEFAULT NULL\n)
@@ -1087,21 +1012,31 @@ restore account sys database db07 from snapshot sp15;
 restore account sys database db08 from snapshot sp15;
 invalid database db08
 show databases;
-
+Database
+db07
+information_schema
+mo_catalog
+mo_debug
+mo_task
+mysql
+sys_restore_to_sys_account
+system
+system_metrics
 use db07;
-
 show tables;
-
+Tables_in_db07
+table02
 show create table table01 {snapshot = 'sp14'};
-
+Table    Create Table
+table01    CREATE TABLE `table01` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('a','b','c') DEFAULT NULL\n)
 show create table table01;
-
+no such table db07.table01
 select * from table01;
-
+SQL parser error: table "table01" does not exist
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp15    2024-05-13 07:19:00.54944    account    sys        
-sp14    2024-05-13 07:19:00.377505    account    sys        
+sp15    2024-05-15 11:22:49.672343    account    sys        
+sp14    2024-05-15 11:22:49.529353    account    sys        
 drop snapshot sp14;
 drop snapshot sp15;
 drop database db07;
@@ -1199,9 +1134,11 @@ index02    CREATE TABLE `index02` (\n`col1` CHAR(1) DEFAULT NULL,\n`col2` INT DE
 use db10;
 select * from index03;
 emp_no    birth_date    first_name    last_name    gender    hire_date
+9001    1980-12-17    SMITH    CLERK    F    2008-12-17
+9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp16    2024-05-13 07:19:01.560046    account    sys        
+sp16    2024-05-15 06:06:10.244994    account    sys        
 drop database db09;
 drop database db10;
 drop snapshot sp16;
@@ -1277,7 +1214,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp18'} where datname = 'db11';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-276293    db11    def    create database db11    0    1    2024-05-13 15:19:02    0    
+275637    db11    def    create database db11    0    1    2024-05-15 14:06:10    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database = 'db11';
 attname
 __mo_rowid
