@@ -258,6 +258,20 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			return err
 		}
 		buf.WriteString(")")
+	case function.MULTIARY_LOGICAL_OPERATOR:
+		buf.WriteString("(")
+		err = describeExpr(ctx, funcExpr.Args[0], options, buf)
+		if err != nil {
+			return err
+		}
+		for i := 1; i < len(funcExpr.Args); i++ {
+			buf.WriteString(" " + funcExpr.Func.GetObjName() + " ")
+			err = describeExpr(ctx, funcExpr.Args[i], options, buf)
+			if err != nil {
+				return err
+			}
+		}
+		buf.WriteString(")")
 	case function.CAST_EXPRESSION:
 		buf.WriteString(funcName)
 		buf.WriteString("(")

@@ -43,6 +43,12 @@ import (
 	"go.uber.org/zap"
 )
 
+var checkPrimaryKeyOnly bool
+
+func init() {
+	checkPrimaryKeyOnly = true
+}
+
 // -----------------------------------------------------------------
 // ------------------------ withFilterMixin ------------------------
 // -----------------------------------------------------------------
@@ -133,12 +139,12 @@ func (mixin *withFilterMixin) getReadFilter(proc *process.Process, blkCnt int) (
 		return
 	}
 	pk := mixin.tableDef.Pkey
-	if pk == nil {
+	if mixin.filterState.expr == nil || pk == nil {
 		mixin.filterState.evaluated = true
 		mixin.filterState.filter = nil
 		return
 	}
-	if pk.CompPkeyCol == nil {
+	if pk.CompPkeyCol == nil || checkPrimaryKeyOnly {
 		return mixin.getNonCompositPKFilter(proc, blkCnt)
 	}
 	return mixin.getCompositPKFilter(proc, blkCnt)
