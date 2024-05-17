@@ -23,11 +23,6 @@ import (
 )
 
 func Test_buildTestShowCreateTable(t *testing.T) {
-	type args struct {
-		sql  string
-		want string
-	}
-
 	tests := []struct {
 		name string
 		sql  string
@@ -131,11 +126,6 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 }
 
 func Test_SingleShowCreateTable(t *testing.T) {
-	type args struct {
-		sql  string
-		want string
-	}
-
 	tests := []struct {
 		name string
 		sql  string

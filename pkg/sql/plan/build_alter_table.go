@@ -540,16 +540,6 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 	return insertSQL, nil
 }
 
-func builInsertSQL(ctx CompilerContext, alterCtx *AlterTableContext) (string, error) {
-	schemaName := alterCtx.schemaName
-	originTableName := alterCtx.originTableName
-	copyTableName := alterCtx.copyTableName
-
-	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` SELECT * FROM `%s`.`%s`",
-		formatStr(schemaName), formatStr(originTableName), formatStr(schemaName), formatStr(copyTableName))
-	return insertSQL, nil
-}
-
 const UnKnownColId uint64 = math.MaxUint64
 
 type AlterTableContext struct {
