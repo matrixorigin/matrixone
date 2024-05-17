@@ -48,6 +48,7 @@ type LocalFS struct {
 	sync.RWMutex
 	dirFiles map[string]*os.File
 
+	allocator   CacheDataAllocator
 	memCache    *MemCache
 	diskCache   *DiskCache
 	remoteCache *RemoteCache
@@ -106,6 +107,12 @@ func NewLocalFS(
 
 	if err := fs.initCaches(ctx, cacheConfig); err != nil {
 		return nil, err
+	}
+
+	if fs.memCache != nil {
+		fs.allocator = fs.memCache
+	} else {
+		fs.allocator = DefaultCacheDataAllocator
 	}
 
 	return fs, nil
@@ -434,6 +441,11 @@ func (l *LocalFS) read(
 	}
 	defer file.Close()
 
+	allocator := l.allocator
+	if vector.Policy.Any(SkipMemoryCache) {
+		allocator = DefaultCacheDataAllocator
+	}
+
 	for i, entry := range vector.Entries {
 		if entry.Size == 0 {
 			return moerr.NewEmptyRangeNoCtx(path.File)
@@ -582,7 +594,7 @@ func (l *LocalFS) read(
 				}
 			}
 
-			if err = setCachedData(&entry, l.memCache); err != nil {
+			if err = entry.setCachedData(allocator); err != nil {
 				return err
 			}
 

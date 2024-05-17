@@ -43,6 +43,7 @@ type S3FS struct {
 	storage   ObjectStorage
 	keyPrefix string
 
+	allocator   CacheDataAllocator
 	memCache    *MemCache
 	diskCache   *DiskCache
 	remoteCache *RemoteCache
@@ -104,6 +105,11 @@ func NewS3FS(
 		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err
 		}
+	}
+	if fs.memCache != nil {
+		fs.allocator = fs.memCache
+	} else {
+		fs.allocator = DefaultCacheDataAllocator
 	}
 
 	return fs, nil
@@ -511,6 +517,11 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		return err
 	}
 
+	allocator := s.allocator
+	if vector.Policy.Any(SkipMemoryCache) {
+		allocator = DefaultCacheDataAllocator
+	}
+
 	min, max, readFullObject := vector.readRange()
 
 	// a function to get an io.ReadCloser
@@ -696,7 +707,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 			}
 		}
 
-		if err = setCachedData(&entry, s.memCache); err != nil {
+		if err = entry.setCachedData(allocator); err != nil {
 			return err
 		}
 

@@ -22,23 +22,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 )
 
-func setCachedData[P interface {
-	*A
-	CacheDataAllocator
-}, A any](i *IOEntry, allocator P) error {
+func (i *IOEntry) setCachedData(allocator CacheDataAllocator) error {
 	if i.ToCacheData == nil {
 		return nil
 	}
 	if len(i.Data) == 0 {
 		return nil
 	}
-	var bs memorycache.CacheData
-	var err error
 	if allocator == nil {
-		bs, err = i.ToCacheData(bytes.NewReader(i.Data), i.Data, DefaultCacheDataAllocator)
-	} else {
-		bs, err = i.ToCacheData(bytes.NewReader(i.Data), i.Data, allocator)
+		allocator = DefaultCacheDataAllocator
 	}
+	bs, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, allocator)
 	if err != nil {
 		return err
 	}
@@ -46,10 +40,7 @@ func setCachedData[P interface {
 	return nil
 }
 
-func readFromOSFile[P interface {
-	*A
-	CacheDataAllocator
-}, A any](i *IOEntry, file *os.File, allocator P) error {
+func (i *IOEntry) ReadFromOSFile(file *os.File, allocator CacheDataAllocator) error {
 	r := io.LimitReader(file, i.Size)
 
 	if cap(i.Data) < int(i.Size) {
@@ -74,7 +65,7 @@ func readFromOSFile[P interface {
 	if i.ReadCloserForRead != nil {
 		*i.ReadCloserForRead = io.NopCloser(bytes.NewReader(i.Data))
 	}
-	if err := setCachedData(i, allocator); err != nil {
+	if err := i.setCachedData(allocator); err != nil {
 		return err
 	}
 
