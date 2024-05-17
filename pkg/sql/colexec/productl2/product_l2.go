@@ -17,7 +17,6 @@ package productl2
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"math"
 	"sync"
@@ -155,21 +154,18 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	var i, j int
 
 	leastClusterIndex := 0
-	leastDistance := 0.0
-
-	//centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetLit().GetI32Val()
-	//tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetLit().GetI32Val()
+	leastDistance := math.MaxFloat64
 
 	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
 	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
 
-	logutil.Infof("centroidColPos tblColPos %v %v", centroidColPos, tblColPos)
 	for j = ctr.probeIdx; j < probeCount; j++ {
 		leastClusterIndex = 0
 		leastDistance = math.MaxFloat64
 
 		for i = 0; i < buildCount; i++ {
-			// find the nearest cluster center
+			// for each row in probe table,
+			// find the nearest cluster center from the build table.
 			switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
 			case types.T_array_float32:
 				clusterEmbedding := types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
