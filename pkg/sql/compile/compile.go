@@ -30,11 +30,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
-	_ "go.uber.org/automaxprocs"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -88,6 +83,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	_ "go.uber.org/automaxprocs"
+	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -451,7 +449,18 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		stats.ExecutionEnd()
 
 		cost := time.Since(start)
-		txnTrace.GetService().TxnStatementCompleted(txnOp, sql, cost, seq, err)
+		row := 0
+		if result != nil {
+			row = int(result.AffectRows)
+		}
+		txnTrace.GetService().TxnStatementCompleted(
+			txnOp,
+			sql,
+			cost,
+			seq,
+			row,
+			err,
+		)
 		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
 	}()
 
@@ -515,6 +524,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		return nil, c.proc.Ctx.Err()
 	}
 	result.AffectRows = runC.getAffectedRows()
+
 	if c.proc.TxnOperator != nil {
 		return result, c.proc.TxnOperator.GetWorkspace().Adjust(writeOffset)
 	}
@@ -1924,6 +1934,9 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			EnclosedBy: &tree.EnclosedBy{
 				Value: n.ExternScan.EnclosedBy[0],
 			},
+			EscapedBy: &tree.EscapedBy{
+				Value: n.ExternScan.EscapedBy[0],
+			},
 		}
 		param.JsonData = n.ExternScan.JsonType
 	}
@@ -2212,17 +2225,11 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 
 	//-----------------------------------------------------------------------------------------------------
-	//if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
-	//	txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
-	//} else {
-	//	txnOp = c.proc.TxnOperator
-	//}
-
 	ctx := c.ctx
 	txnOp = c.proc.TxnOperator
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+			n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
 			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 
 			if n.ScanSnapshot.Tenant != nil {
@@ -3731,17 +3738,11 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 	var txnOp client.TxnOperator
 
 	//-----------------------------------------------------------------------------------------------------
-	//if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
-	//	txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
-	//} else {
-	//	txnOp = c.proc.TxnOperator
-	//}
-
 	ctx := c.ctx
 	txnOp = c.proc.TxnOperator
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+			n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
 			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 
 			if n.ScanSnapshot.Tenant != nil {
@@ -3829,17 +3830,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var txnOp client.TxnOperator
 
 	//------------------------------------------------------------------------------------------------------------------
-	//if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
-	//	txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
-	//} else {
-	//	txnOp = c.proc.TxnOperator
-	//}
-
 	ctx := c.ctx
 	txnOp = c.proc.TxnOperator
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+			n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
 			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 
 			if n.ScanSnapshot.Tenant != nil {
