@@ -689,7 +689,7 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 	}
 	if s.isShuffle() {
 		for _, rr := range s.Proc.Reg.MergeReceivers {
-			rr.Ch = make(chan *batch.Batch, 16)
+			rr.Ch = make(chan *process.RegisterMessage, 16)
 		}
 	}
 	return nil

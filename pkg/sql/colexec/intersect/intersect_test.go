@@ -97,9 +97,9 @@ func newIntersectTestCase(proc *process.Process, leftBatches, rightBatches []*ba
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	{
-		c := make(chan *batch.Batch, len(leftBatches)+10)
+		c := make(chan *process.RegisterMessage, len(leftBatches)+10)
 		for i := range leftBatches {
-			c <- leftBatches[i]
+			c <- testutil.NewRegMsg(leftBatches[i])
 		}
 		c <- nil
 		proc.Reg.MergeReceivers[0] = &process.WaitRegister{
@@ -108,9 +108,9 @@ func newIntersectTestCase(proc *process.Process, leftBatches, rightBatches []*ba
 		}
 	}
 	{
-		c := make(chan *batch.Batch, len(rightBatches)+10)
+		c := make(chan *process.RegisterMessage, len(rightBatches)+10)
 		for i := range rightBatches {
-			c <- rightBatches[i]
+			c <- testutil.NewRegMsg(rightBatches[i])
 		}
 		c <- nil
 		proc.Reg.MergeReceivers[1] = &process.WaitRegister{
