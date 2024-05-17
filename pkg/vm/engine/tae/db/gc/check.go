@@ -3,6 +3,7 @@ package gc
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
@@ -106,6 +107,8 @@ func (c *checker) Check() error {
 			itTable.Next()
 		}
 	}
+
+	logutil.Infof("catalog.SimplePPString(common.PPL3) is %v", catalog.SimplePPString(common.PPL3))
 	for name := range allObjects {
 		logutil.Infof("not found object %s,", name)
 	}
