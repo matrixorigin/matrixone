@@ -90,7 +90,6 @@ func TestProjection(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-
 		bats := []*batch.Batch{
 			newBatch(tc.types, tc.proc, Rows),
 			newBatch(tc.types, tc.proc, Rows),
@@ -98,10 +97,21 @@ func TestProjection(t *testing.T) {
 		}
 		resetChildren(tc.arg, bats)
 		_, _ = tc.arg.Call(tc.proc)
-
-		tc.proc.FreeVectors()
-		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.arg.Reset(tc.proc, false, nil)
+
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		bats = []*batch.Batch{
+			newBatch(tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
+			batch.EmptyBatch,
+		}
+		resetChildren(tc.arg, bats)
+		_, _ = tc.arg.Call(tc.proc)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }

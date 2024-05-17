@@ -67,8 +67,6 @@ type Argument struct {
 	NeedExpr    bool
 	NeedHashMap bool
 	IsDup       bool
-	Ibucket     uint64
-	Nbucket     uint64
 	Typs        []types.Type
 	Conditions  []*plan.Expr
 
@@ -108,6 +106,10 @@ func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

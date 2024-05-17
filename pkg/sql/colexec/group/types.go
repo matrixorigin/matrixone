@@ -96,9 +96,7 @@ type Argument struct {
 	ctr          *container
 	IsShuffle    bool // is shuffle group
 	PreAllocSize uint64
-	NeedEval     bool // need to projection the aggregate column
-	Ibucket      uint64
-	Nbucket      uint64
+	NeedEval     bool         // need to projection the aggregate column
 	Exprs        []*plan.Expr // group Expressions
 	Types        []types.Type
 	Aggs         []aggexec.AggFuncExecExpression
@@ -159,6 +157,10 @@ func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

@@ -17,6 +17,7 @@ package motrace
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -61,7 +62,6 @@ func mustDecimal128(v types.Decimal128, err error) types.Decimal128 {
 }
 
 func StatementInfoNew(i Item, ctx context.Context) Item {
-	stmt := NewStatementInfo() // Get a new statement from the pool
 	if s, ok := i.(*StatementInfo); ok {
 
 		// execute the stat plan
@@ -73,36 +73,15 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		s.exported = true
 
 		// copy value
-		stmt.StatementID = s.StatementID
-		stmt.SessionID = s.SessionID
-		stmt.TransactionID = s.TransactionID
-		stmt.Account = s.Account
-		stmt.User = s.User
-		stmt.Host = s.Host
-		stmt.RoleId = s.RoleId
-		stmt.StatementType = s.StatementType
-		stmt.QueryType = s.QueryType
-		stmt.SqlSourceType = s.SqlSourceType
-		stmt.Statement = s.Statement
-		stmt.StmtBuilder.WriteString(s.Statement)
-		stmt.Status = s.Status
-		stmt.Duration = s.Duration
-		stmt.ResultCount = s.ResultCount
-		stmt.RowsRead = s.RowsRead
-		stmt.BytesScan = s.BytesScan
-		stmt.ConnType = s.ConnType
-		stmt.statsArray = s.statsArray
-		stmt.RequestAt = s.RequestAt
-		stmt.ResponseAt = s.ResponseAt
-		stmt.end = s.end
-		stmt.StatementTag = s.StatementTag
-		stmt.StatementFingerprint = s.StatementFingerprint
-		stmt.Error = s.Error
-		stmt.Database = s.Database
-		stmt.AggrMemoryTime = s.AggrMemoryTime
+		stmt := s.CloneWithoutExecPlan() // Get a new statement from the pool
+		stmt.exported = false
 
 		// initialize the AggrCount as 0 here since aggr is not started
 		stmt.AggrCount = 0
+		// fixme: StmtBuilder maybe not best choose
+		stmt.StmtBuilder.Reset()
+		stmt.StmtBuilder.WriteString(s.Statement)
+
 		return stmt
 	}
 	return nil
@@ -378,6 +357,48 @@ func (s *StatementInfo) free() {
 	stmtPool.Put(s)
 }
 
+func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
+	stmt := NewStatementInfo() // Get a new statement from the pool
+	stmt.StatementID = s.StatementID
+	stmt.SessionID = s.SessionID
+	stmt.TransactionID = s.TransactionID
+	stmt.Account = s.Account
+	stmt.User = s.User
+	stmt.Host = s.Host
+	stmt.RoleId = s.RoleId
+	stmt.Database = s.Database
+	stmt.Statement = s.Statement
+	// s.StmtBuilder.Reset()
+	stmt.StatementFingerprint = s.StatementFingerprint
+	stmt.StatementTag = s.StatementTag
+	stmt.SqlSourceType = s.SqlSourceType
+	stmt.RequestAt = s.RequestAt
+	stmt.StatementType = s.StatementType
+	stmt.QueryType = s.QueryType
+	stmt.Status = s.Status
+	stmt.Error = s.Error
+	stmt.ResponseAt = s.ResponseAt
+	stmt.Duration = s.Duration
+	stmt.ExecPlan = nil // without ExecPlan
+	stmt.RowsRead = s.RowsRead
+	stmt.BytesScan = s.BytesScan
+	stmt.AggrCount = s.AggrCount
+	stmt.AggrMemoryTime = s.AggrMemoryTime // mark
+	stmt.ResultCount = s.ResultCount
+	stmt.ConnType = s.ConnType
+	stmt.end = s.end
+	stmt.reported = s.reported
+	stmt.exported = s.exported
+	// bytes element
+	stmt.jsonByte = nil // without ExecPlan
+	stmt.statsArray = s.statsArray
+	stmt.stated = s.stated
+	// part: skipTxn ctrl
+	stmt.skipTxnOnce = s.skipTxnOnce
+	stmt.skipTxnID = s.skipTxnID
+	return stmt
+}
+
 func (s *StatementInfo) GetTable() *table.Table { return SingleStatementTable }
 
 func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
@@ -387,7 +408,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(stmtIDCol, table.UuidField(s.StatementID[:]))
 	if !s.IsZeroTxnID() {
-		row.SetColumnVal(txnIDCol, table.UuidField(s.TransactionID[:]))
+		row.SetColumnVal(txnIDCol, table.StringField(hex.EncodeToString(s.TransactionID[:])))
 	}
 	row.SetColumnVal(sesIDCol, table.UuidField(s.SessionID[:]))
 	row.SetColumnVal(accountCol, table.StringField(s.Account))
@@ -555,9 +576,12 @@ func (s *StatementInfo) SetTxnID(id []byte) {
 }
 
 func (s *StatementInfo) IsZeroTxnID() bool {
-	return bytes.Equal(s.TransactionID[:], NilTxnID[:])
+	return s.TransactionID == NilTxnID
 }
 
+// Report do report statement info to the Collector.
+// Pls note that Report is only locked in EndStatement.
+// Pls note that Report should only call twice at most: one for status:Running, one for status:Failed/Success.
 func (s *StatementInfo) Report(ctx context.Context) {
 	ReportStatement(ctx, s)
 }
@@ -577,14 +601,14 @@ const TcpIpv4HeaderSize = 66
 // 13: avg payload prefix of err response
 const ResponseErrPacketSize = TcpIpv4HeaderSize + 13
 
-func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64, outPacket int64) {
+func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64, outPacket int64) {
 	if !GetTracerProvider().IsEnable() {
 		return
 	}
-	s := StatementFromContext(ctx)
 	if s == nil {
-		panic(moerr.NewInternalError(ctx, "no statement info in context"))
+		return
 	}
+
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	if !s.end { // cooperate with s.mux
@@ -662,8 +686,12 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 		return nil
 	}
 	// Filter out the Running record.
-	if s.Status == StatementStatusRunning && GetTracerProvider().skipRunningStmt {
-		return nil
+	if s.Status == StatementStatusRunning {
+		if GetTracerProvider().skipRunningStmt {
+			return nil
+		} else {
+			s = s.CloneWithoutExecPlan()
+		}
 	}
 	// Filter out the MO_LOGGER SQL statements
 	//if s.User == db_holder.MOLoggerUser {
