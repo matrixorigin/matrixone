@@ -1,3 +1,4 @@
+-- @bvt:issue#16213
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop account if exists acc02;
@@ -206,9 +207,7 @@ select count(*) from acc_test03.table03;
 select * from acc_test03.table04;
 show create table acc_test04.index03;
 -- @session
-
 restore account acc01 from snapshot sp04 to account acc02;
-
 -- @session:id=3&user=acc02:test_account&password=111
 show databases;
 select count(*) from acc_test02.pri01;
@@ -255,7 +254,6 @@ create snapshot sp08 for account acc01;
 show snapshots;
 
 restore account acc01 from snapshot sp07 to account acc02;
-
 restore account acc01 from snapshot sp08 to account acc02;
 
 -- @session:id=1&user=acc02:test_account&password=111
@@ -364,3 +362,4 @@ drop database test01;
 
 drop account acc01;
 drop account acc02;
+-- @bvt:issue
