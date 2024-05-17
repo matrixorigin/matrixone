@@ -736,13 +736,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							Children:    []int32{lastNodeId},
 							ProjectList: projectProjection,
 						}
-						projectNodeForTblJoinCentroids := &Node{
-							NodeType:    plan.Node_PROJECT,
-							Children:    []int32{lastNodeIdForTblJoinCentroids},
-							ProjectList: projectProjectionForTblJoinCentroids,
-						}
 						lastNodeId = builder.appendNode(projectNode, bindCtx)
-						lastNodeIdForTblJoinCentroids = builder.appendNode(projectNodeForTblJoinCentroids, bindCtx)
 
 						preUKStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, multiTableIndex, true, idxRefs, idxTableDefs)
 						if err != nil {
@@ -2579,9 +2573,9 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 	joinTblAndCentroidsUsingCrossL2Join := makeTblCrossJoinL2Centroids(builder, bindCtx, tableDef, lastNodeId, currVersionCentroids, typeOriginPk, posOriginPk, typeOriginVecColumn, posOriginVecColumn)
 
 	// 5. Create a Project with CP Key for LockNode
-	projectWithCpKey, i, err2 := makeFinalProject(builder, bindCtx, joinTblAndCentroidsUsingCrossL2Join, err)
-	if err2 != nil {
-		return i, err2
+	projectWithCpKey, err := makeFinalProject(builder, bindCtx, joinTblAndCentroidsUsingCrossL2Join)
+	if err != nil {
+		return -1, err
 	}
 
 	lastNodeId = projectWithCpKey

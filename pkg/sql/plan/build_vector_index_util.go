@@ -21,14 +21,14 @@ import (
 )
 
 var (
-	bigIntType  = types.T_int64.ToType()
-	varCharType = types.T_varchar.ToType()
-
-	opTypeToDistanceFunc = map[string]string{
-		"vector_l2_ops":     "l2_distance",
-		"vector_ip_ops":     "inner_product",
-		"vector_cosine_ops": "cosine_distance",
-	}
+	bigIntType = types.T_int64.ToType()
+	//varCharType = types.T_varchar.ToType()
+	//
+	//opTypeToDistanceFunc = map[string]string{
+	//	"vector_l2_ops":     "l2_distance",
+	//	"vector_ip_ops":     "inner_product",
+	//	"vector_cosine_ops": "cosine_distance",
+	//}
 )
 
 func makeIvfFlatIndexTblScan(builder *QueryBuilder, bindCtx *BindContext,
@@ -175,7 +175,7 @@ func makeTblCrossJoinL2Centroids(builder *QueryBuilder, bindCtx *BindContext, ta
 	return joinTblAndCentroidsUsingCrossL2Join
 }
 
-func makeFinalProject(builder *QueryBuilder, bindCtx *BindContext, joinTblAndCentroidsUsingCrossL2Join int32, err error) (int32, int32, error) {
+func makeFinalProject(builder *QueryBuilder, bindCtx *BindContext, joinTblAndCentroidsUsingCrossL2Join int32) (int32, error) {
 	var finalProjections = getProjectionByLastNode(builder, joinTblAndCentroidsUsingCrossL2Join)
 
 	centroidsVersion := DeepCopyExpr(finalProjections[0])
@@ -188,7 +188,7 @@ func makeFinalProject(builder *QueryBuilder, bindCtx *BindContext, joinTblAndCen
 		DeepCopyExpr(finalProjections[2]),
 	})
 	if err != nil {
-		return 0, -1, err
+		return -1, err
 	}
 
 	projectWithCpKey := builder.appendNode(
@@ -198,5 +198,5 @@ func makeFinalProject(builder *QueryBuilder, bindCtx *BindContext, joinTblAndCen
 			ProjectList: []*Expr{centroidsVersion, centroidsId, tblPk, tblEmbedding, cpKey},
 		},
 		bindCtx)
-	return projectWithCpKey, 0, nil
+	return projectWithCpKey, nil
 }
