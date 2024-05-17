@@ -91,7 +91,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.MinReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "min",
-					aggRegister: agg.RegisterMin2,
+					aggRegister: agg.RegisterMin1,
 				},
 			},
 		},
@@ -112,7 +112,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.MaxReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "max",
-					aggRegister: agg.RegisterMax2,
+					aggRegister: agg.RegisterMax1,
 				},
 			},
 		},
@@ -133,7 +133,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.SumReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "sum",
-					aggRegister: agg.RegisterSum2,
+					aggRegister: agg.RegisterSum1,
 				},
 			},
 		},
@@ -154,7 +154,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.AvgReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "avg",
-					aggRegister: agg.RegisterAvg2,
+					aggRegister: agg.RegisterAvg1,
 				},
 			},
 		},
@@ -271,7 +271,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.AnyValueReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "any_value",
-					aggRegister: agg.RegisterAnyValue2,
+					aggRegister: agg.RegisterAnyValue1,
 				},
 			},
 		},
@@ -292,7 +292,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.BitAndReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_and",
-					aggRegister: agg.RegisterBitAnd2,
+					aggRegister: agg.RegisterBitAnd1,
 				},
 			},
 		},
@@ -313,7 +313,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.BitAndReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_or",
-					aggRegister: agg.RegisterBitOr2,
+					aggRegister: agg.RegisterBitOr1,
 				},
 			},
 		},
@@ -334,7 +334,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.BitAndReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_xor",
-					aggRegister: agg.RegisterBitXor2,
+					aggRegister: agg.RegisterBitXor1,
 				},
 			},
 		},
@@ -355,7 +355,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.VarPopReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "var_pop",
-					aggRegister: agg.RegisterVarPop2,
+					aggRegister: agg.RegisterVarPop1,
 				},
 			},
 		},
@@ -376,7 +376,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.VarPopReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "stddev_pop",
-					aggRegister: agg.RegisterStdDevPop2,
+					aggRegister: agg.RegisterStdDevPop1,
 				},
 			},
 		},
@@ -455,7 +455,7 @@ var supportedAggInNewFramework = []FuncNew{
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bitmap_construct_agg",
-					aggRegister: agg.RegisterBitmapConstruct2,
+					aggRegister: agg.RegisterBitmapConstruct1,
 				},
 			},
 		},
@@ -479,7 +479,7 @@ var supportedAggInNewFramework = []FuncNew{
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bitmap_or_agg",
-					aggRegister: agg.RegisterBitmapOr2,
+					aggRegister: agg.RegisterBitmapOr1,
 				},
 			},
 		},

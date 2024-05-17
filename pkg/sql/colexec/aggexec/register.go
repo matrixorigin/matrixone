@@ -144,26 +144,16 @@ func getMultiArgAggImplByInfo(
 
 type aggImplementation struct {
 	registeredAggInfo
-	ret func([]types.Type) types.Type
 
-	ctx   aggContextImplementation
-	logic aggLogicImplementation
-}
+	generator any
+	ret       func([]types.Type) types.Type
 
-type aggContextImplementation struct {
-	hasCommonContext      bool
-	generateCommonContext AggCommonContextInit
-
-	hasGroupContext      bool
-	generateGroupContext AggGroupContextInit
-}
-
-type aggLogicImplementation struct {
-	init  any // func(result type, parameter types) result
-	fill  any // func(commonContext, groupContext, value, getter, setter) error
-	fills any // func(commonContext, groupContext, value, count, getter, setter) error
-	merge any // func(commonContext, groupContext1, groupContext2, getter1, getter2, setter) error
-	flush any // func(commonContext, groupContext, getter, setter) error
+	init     any
+	fill     any
+	fillNull any
+	fills    any
+	merge    any
+	flush    any
 }
 
 type multiColumnAggImplementation struct {
@@ -185,6 +175,7 @@ type SingleColumnAggInformation struct {
 	id                   int64
 	arg                  types.Type
 	ret                  func(p []types.Type) types.Type
+	acceptNull           bool
 	setNullForEmptyGroup bool
 }
 
@@ -197,11 +188,12 @@ type MultiColumnAggInformation struct {
 
 func MakeSingleColumnAggInformation(
 	id int64, paramType types.Type, getRetType func(p []types.Type) types.Type,
-	setNullForEmptyGroup bool) SingleColumnAggInformation {
+	acceptNull bool, setNullForEmptyGroup bool) SingleColumnAggInformation {
 	return SingleColumnAggInformation{
 		id:                   id,
 		arg:                  paramType,
 		ret:                  getRetType,
+		acceptNull:           acceptNull,
 		setNullForEmptyGroup: setNullForEmptyGroup,
 	}
 }
@@ -215,6 +207,191 @@ func MakeMultiColumnAggInformation(
 		ret:                  getRetType,
 		setNullForEmptyGroup: setNullForEmptyGroup,
 	}
+}
+
+type SingleAggImplementationFixedFixed[from, to types.FixedSizeTExceptStrType] struct {
+	SingleColumnAggInformation
+	generator func() SingleAggFromFixedRetFixed[from, to]
+
+	init     SingleAggInit1[from, to]
+	fill     SingleAggFill1[from, to]
+	fillNull SingleAggFillNull1[from, to]
+	fills    SingleAggFills1[from, to]
+	merge    SingleAggMerge1[from, to]
+	flush    SingleAggFlush1[from, to]
+}
+
+func MakeSingleAgg1RegisteredInfo[from, to types.FixedSizeTExceptStrType](
+	info SingleColumnAggInformation,
+	impl func() SingleAggFromFixedRetFixed[from, to],
+	init SingleAggInit1[from, to],
+	fill SingleAggFill1[from, to],
+	fillNull SingleAggFillNull1[from, to],
+	fills SingleAggFills1[from, to],
+	merge SingleAggMerge1[from, to],
+	flush SingleAggFlush1[from, to],
+) SingleAggImplementationFixedFixed[from, to] {
+
+	registeredInfo1 := SingleAggImplementationFixedFixed[from, to]{
+		SingleColumnAggInformation: info,
+		generator:                  impl,
+		init:                       init,
+		fill:                       fill,
+		fillNull:                   fillNull,
+		fills:                      fills,
+		merge:                      merge,
+		flush:                      flush,
+	}
+	return registeredInfo1
+}
+
+func RegisterSingleAggFromFixedToFixed[from, to types.FixedSizeTExceptStrType](
+	info SingleAggImplementationFixedFixed[from, to]) {
+
+	key := generateKeyOfSingleColumnAgg(info.id, info.arg)
+	if _, ok := registeredAggFunctions[key]; ok {
+		panic(fmt.Sprintf("aggID %d with argType %s has been registered", info.id, info.arg))
+	}
+
+	registeredAggFunctions[key] = aggImplementation{
+		registeredAggInfo: registeredAggInfo{
+			isSingleAgg:          true,
+			acceptNull:           info.acceptNull,
+			setNullForEmptyGroup: info.setNullForEmptyGroup,
+		},
+		generator: info.generator,
+		ret:       info.ret,
+		init:      info.init,
+		fill:      info.fill,
+		fillNull:  info.fillNull,
+		fills:     info.fills,
+		merge:     info.merge,
+		flush:     info.flush,
+	}
+	singleAgg[info.id] = true
+}
+
+type SingleAggImplementationFixedVar[from types.FixedSizeTExceptStrType] struct {
+	SingleColumnAggInformation
+	generator func() SingleAggFromFixedRetVar[from]
+
+	init     SingleAggInit2[from]
+	fill     SingleAggFill2[from]
+	fillNull SingleAggFillNull2[from]
+	fills    SingleAggFills2[from]
+	merge    SingleAggMerge2[from]
+	flush    SingleAggFlush2[from]
+}
+
+func MakeSingleAgg2RegisteredInfo[from types.FixedSizeTExceptStrType](
+	info SingleColumnAggInformation,
+	impl func() SingleAggFromFixedRetVar[from],
+	init SingleAggInit2[from],
+	fill SingleAggFill2[from],
+	fillNull SingleAggFillNull2[from],
+	fills SingleAggFills2[from],
+	merge SingleAggMerge2[from],
+	flush SingleAggFlush2[from],
+) SingleAggImplementationFixedVar[from] {
+
+	registeredInfo2 := SingleAggImplementationFixedVar[from]{
+		SingleColumnAggInformation: info,
+		generator:                  impl,
+		init:                       init,
+		fill:                       fill,
+		fillNull:                   fillNull,
+		fills:                      fills,
+		merge:                      merge,
+		flush:                      flush,
+	}
+	return registeredInfo2
+}
+
+func RegisterSingleAggFromFixedToVar[from types.FixedSizeTExceptStrType](
+	info SingleAggImplementationFixedVar[from]) {
+
+	key := generateKeyOfSingleColumnAgg(info.id, info.arg)
+	if _, ok := registeredAggFunctions[key]; ok {
+		panic(fmt.Sprintf("aggID %d with argType %s has been registered", info.id, info.arg))
+	}
+
+	registeredAggFunctions[key] = aggImplementation{
+		registeredAggInfo: registeredAggInfo{
+			isSingleAgg:          true,
+			acceptNull:           info.acceptNull,
+			setNullForEmptyGroup: info.setNullForEmptyGroup,
+		},
+		generator: info.generator,
+		ret:       info.ret,
+		init:      info.init,
+		fill:      info.fill,
+		fillNull:  info.fillNull,
+		fills:     info.fills,
+		merge:     info.merge,
+		flush:     info.flush,
+	}
+	singleAgg[info.id] = true
+}
+
+type SingleAggImplementationVarVar struct {
+	SingleColumnAggInformation
+	generator func() SingleAggFromVarRetVar
+	init      SingleAggInit4
+	fill      SingleAggFill4
+	fillNull  SingleAggFillNull4
+	fills     SingleAggFills4
+	merge     SingleAggMerge4
+	flush     SingleAggFlush4
+}
+
+func MakeSingleAgg4RegisteredInfo(
+	info SingleColumnAggInformation,
+	impl func() SingleAggFromVarRetVar,
+	init SingleAggInit4,
+	fill SingleAggFill4,
+	fillNull SingleAggFillNull4,
+	fills SingleAggFills4,
+	merge SingleAggMerge4,
+	flush SingleAggFlush4,
+) SingleAggImplementationVarVar {
+
+	registeredInfo4 := SingleAggImplementationVarVar{
+		SingleColumnAggInformation: info,
+		generator:                  impl,
+		init:                       init,
+		fill:                       fill,
+		fillNull:                   fillNull,
+		fills:                      fills,
+		merge:                      merge,
+		flush:                      flush,
+	}
+	return registeredInfo4
+}
+
+func RegisterSingleAggFromVarToVar(
+	info SingleAggImplementationVarVar) {
+
+	key := generateKeyOfSingleColumnAgg(info.id, info.arg)
+	if _, ok := registeredAggFunctions[key]; ok {
+		panic(fmt.Sprintf("aggID %d with argType %s has been registered", info.id, info.arg))
+	}
+
+	registeredAggFunctions[key] = aggImplementation{
+		registeredAggInfo: registeredAggInfo{
+			isSingleAgg:          true,
+			acceptNull:           info.acceptNull,
+			setNullForEmptyGroup: info.setNullForEmptyGroup,
+		},
+		generator: info.generator,
+		ret:       info.ret,
+		init:      info.init,
+		fill:      info.fill,
+		fillNull:  info.fillNull,
+		fills:     info.fills,
+		merge:     info.merge,
+		flush:     info.flush,
+	}
+	singleAgg[info.id] = true
 }
 
 type MultiColumnAggRetFixedRegisteredInfo[to types.FixedSizeTExceptStrType] struct {

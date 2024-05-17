@@ -110,11 +110,10 @@ type AggFuncExec interface {
 
 // indicate who implements the AggFuncExec interface.
 var (
-	_ AggFuncExec = (*singleAggFuncExecNew1[int32, int64])(nil)
-	_ AggFuncExec = (*singleAggFuncExecNew2[int32])(nil)
-	_ AggFuncExec = (*singleAggFuncExecNew3[int64])(nil)
-	_ AggFuncExec = (*singleAggFuncExecNew4)(nil)
-
+	_ AggFuncExec = (*singleAggFuncExec1[int8, int64])(nil)
+	_ AggFuncExec = (*singleAggFuncExec2[int64])(nil)
+	_ AggFuncExec = (*singleAggFuncExec3[int64])(nil)
+	_ AggFuncExec = &singleAggFuncExec4{}
 	_ AggFuncExec = (*multiAggFuncExec1[int8])(nil)
 	_ AggFuncExec = (*multiAggFuncExec2)(nil)
 	_ AggFuncExec = &groupConcatExec{}
@@ -197,20 +196,23 @@ func makeSingleAgg(
 		retType:   result,
 		emptyNull: agg.setNullForEmptyGroup,
 	}
+	opt := singleAggOptimizedInfo{
+		receiveNull: agg.acceptNull,
+	}
 
 	pIsVarLen, rIsVarLen := param.IsVarlen(), result.IsVarlen()
 	if pIsVarLen && rIsVarLen {
-		return newSingleAggFuncExec4NewVersion(mg, info, agg)
+		return newSingleAggFuncExec4(mg, info, opt, agg)
 	}
 
 	if !pIsVarLen && rIsVarLen {
-		return newSingleAggFuncExec2NewVersion(mg, info, agg)
+		return newSingleAggFuncExec2(mg, info, opt, agg)
 	}
 
 	if pIsVarLen {
-		return newSingleAggFuncExec3NewVersion(mg, info, agg)
+		return newSingleAggFuncExec3(mg, info, opt, agg)
 	}
-	return newSingleAggFuncExec1NewVersion(mg, info, agg)
+	return newSingleAggFuncExec1(mg, info, opt, agg)
 }
 
 // makeMultiAgg supports creating an aggregation function executor for multiple columns.
@@ -237,7 +239,9 @@ func makeMultiAgg(
 	}
 
 	if info.retType.IsVarlen() {
-		return newMultiAggFuncExecRetVar(mg, info, agg)
+		e := &multiAggFuncExec2{}
+		e.init(mg, info, agg)
+		return e
 	}
 	return newMultiAggFuncExecRetFixed(mg, info, agg)
 }
