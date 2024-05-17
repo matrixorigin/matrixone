@@ -144,18 +144,8 @@ func getMultiArgAggImplByInfo(
 
 type aggImplementation struct {
 	registeredAggInfo
+	ret func([]types.Type) types.Type
 
-	generator any
-	ret       func([]types.Type) types.Type
-
-	init     any
-	fill     any
-	fillNull any
-	fills    any
-	merge    any
-	flush    any
-
-	// optimized.
 	ctx   aggContextImplementation
 	logic aggLogicImplementation
 }
