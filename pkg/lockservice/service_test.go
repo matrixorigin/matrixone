@@ -1538,6 +1538,66 @@ func TestReLockSuccWithKeepBindTimeout(t *testing.T) {
 		},
 		nil,
 	)
+}
+
+func TestIssue3231(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l1.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			alloc.setRestartService("s1")
+
+			// should lock succ
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+			b1 := alloc.GetLatest(0, 0)
+
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{2}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+			b2 := alloc.GetLatest(0, 0)
+			// maybe not equal before fixed, because table bind 0 has moved
+			// when service is waiting status
+			require.True(t, b1.ServiceID == b2.ServiceID)
+			require.True(t, b1.Version == b2.Version)
+		},
+		nil,
+	)
 
 }
 

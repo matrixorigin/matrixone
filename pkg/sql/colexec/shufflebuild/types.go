@@ -30,8 +30,8 @@ import (
 var _ vm.Operator = new(Argument)
 
 const (
-	BuildHashMap = iota
-	HandleRuntimeFilter
+	ReceiveBatch = iota
+	BuildHashMap
 	SendHashMap
 	SendBatch
 	End
@@ -39,10 +39,7 @@ const (
 
 type container struct {
 	colexec.ReceiverOperator
-
-	state      int
-	shuffleIdx int32
-
+	state              int
 	hasNull            bool
 	isMerge            bool
 	multiSels          [][]int32
@@ -50,26 +47,22 @@ type container struct {
 	batchIdx           int
 	tmpBatch           *batch.Batch
 	inputBatchRowCount int
-
-	executor []colexec.ExpressionExecutor
-	vecs     [][]*vector.Vector
-
-	intHashMap *hashmap.IntHashMap
-	strHashMap *hashmap.StrHashMap
-	keyWidth   int // keyWidth is the width of hash columns, it determines which hash map to use.
-
-	uniqueJoinKeys  []*vector.Vector
-	runtimeFilterIn bool
+	executor           []colexec.ExpressionExecutor
+	vecs               [][]*vector.Vector
+	intHashMap         *hashmap.IntHashMap
+	strHashMap         *hashmap.StrHashMap
+	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
+	uniqueJoinKeys     []*vector.Vector
+	runtimeFilterIn    bool
 }
 
 type Argument struct {
 	ctr *container
 	// need to generate a push-down filter expression
-	NeedExpr   bool
-	IsDup      bool
-	Typs       []types.Type
-	Conditions []*plan.Expr
-
+	NeedExpr          bool
+	IsDup             bool
+	Typs              []types.Type
+	Conditions        []*plan.Expr
 	HashOnPK          bool
 	NeedMergedBatch   bool
 	NeedAllocateSels  bool
@@ -106,6 +99,10 @@ func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
