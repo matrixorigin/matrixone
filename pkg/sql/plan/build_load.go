@@ -91,7 +91,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	bindCtx := NewBindContext(builder, nil)
 	terminated := ","
 	enclosedBy := []byte("\"")
-	escapedBy := []byte("\\")
+	escapedBy := []byte{0}
 	if stmt.Param.Tail.Fields != nil {
 		if stmt.Param.Tail.Fields.EnclosedBy != nil {
 			if stmt.Param.Tail.Fields.EnclosedBy.Value != 0 {
