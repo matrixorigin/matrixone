@@ -428,7 +428,7 @@ drop database test_snapshot_restore;
 drop database snapshot_read;
 -- @session
 
-restore account test_account from snapshot snapshot_01 to account test_account;
+restore account test_account from snapshot snapshot_01;
 
 -- @session:id=5&user=test_account:test_user&password=111
 use test_snapshot_restore;
@@ -581,6 +581,20 @@ create snapshot snapshot_01 for account test_account;
 -- @session:id=7&user=test_account:test_user&password=111
 drop database test_snapshot_restore;
 drop database snapshot_read;
+-- @session
+
+
+restore account test_account from snapshot snapshot_01;
+-- @session:id=8&user=test_account:test_user&password=111
+use test_snapshot_restore;
+select count(*) from test_snapshot_restore.test_restore;
+select count(*) from test_snapshot_restore.test_restore_2;
+select count(*) from test_snapshot_restore.factories;
+
+use snapshot_read;
+select count(*) from snapshot_read.test_snapshot_read;
+select count(*) from snapshot_read.users;
+select count(*) from snapshot_read.students;
 -- @session
 
 create account test_account_01 admin_name = 'test_user' identified by '111';
