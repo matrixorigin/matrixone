@@ -169,7 +169,8 @@ type Tombstone interface {
 	GetDeletesListener() func(uint64, types.TS) error
 	GetDeltaLocAndCommitTSByTxn(blkID uint16, txn txnif.TxnReader) (objectio.Location, types.TS)
 	GetDeltaLocAndCommitTS(blkID uint16) (objectio.Location, types.TS, types.TS)
-	GetDeltaPersistedTS() types.TS
+	GetDeltaPersistedTSLocked() types.TS
+	GetDeltaCommitedTSLocked() types.TS
 	// GetOrCreateDeleteChain(blkID uint16) *updates.MVCCHandle
 	HasDeleteIntentsPreparedIn(from types.TS, to types.TS) (found bool, isPersist bool)
 	HasInMemoryDeleteIntentsPreparedInByBlock(blockID uint16, from, to types.TS) (bool, bool)
