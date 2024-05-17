@@ -870,8 +870,11 @@ func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileS
 	}
 	reader, writer := io.Pipe()
 	go func() {
-		// dump all goroutines
-		_ = profile.ProfileRuntime(profileType, writer, 2)
+		debug := 0
+		if profile.GOROUTINE == profileType {
+			debug = 2
+		}
+		_ = profile.ProfileRuntime(profileType, writer, debug)
 		_ = writer.Close()
 	}()
 	writeVec := fileservice.IOVector{
