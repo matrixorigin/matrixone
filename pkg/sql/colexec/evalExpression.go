@@ -1265,21 +1265,31 @@ func GetExprZoneMap(
 				if f() {
 					return zms[expr.AuxId]
 				}
-				if res, ok = zms[args[0].AuxId].And(zms[args[1].AuxId]); !ok {
-					zms[expr.AuxId].Reset()
-				} else {
-					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
+				zmRes := zms[args[0].AuxId]
+				for i := 1; i < len(args); i++ {
+					if res, ok = zmRes.And(zms[args[1].AuxId]); !ok {
+						zmRes.Reset()
+						break
+					} else {
+						zmRes = index.SetBool(zmRes, res)
+					}
 				}
+				zms[expr.AuxId] = zmRes
 
 			case "or":
 				if f() {
 					return zms[expr.AuxId]
 				}
-				if res, ok = zms[args[0].AuxId].Or(zms[args[1].AuxId]); !ok {
-					zms[expr.AuxId].Reset()
-				} else {
-					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
+				zmRes := zms[args[0].AuxId]
+				for i := 1; i < len(args); i++ {
+					if res, ok = zmRes.Or(zms[args[1].AuxId]); !ok {
+						zmRes.Reset()
+						break
+					} else {
+						zmRes = index.SetBool(zmRes, res)
+					}
 				}
+				zms[expr.AuxId] = zmRes
 
 			case "+":
 				if f() {
