@@ -471,10 +471,34 @@ func doLock(
 			rows,
 			txn.ID,
 			options)
-		if !moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+		if !canRetryLock(txnOp, err) {
 			break
 		}
 	}
+	if err != nil {
+		return false, false, timestamp.Timestamp{}, err
+	}
+
+	if len(result.ConflictKey) > 0 {
+		trace.GetService().AddTxnActionInfo(
+			txnOp,
+			client.LockEvent,
+			seq,
+			tableID,
+			func(writer trace.Writer) {
+				writer.WriteHex(result.ConflictKey)
+				writer.WriteString(":")
+				writer.WriteHex(result.ConflictTxn)
+				writer.WriteString("/")
+				writer.WriteUint(uint64(result.Waiters))
+				if len(result.PrevWaiter) > 0 {
+					writer.WriteString("/")
+					writer.WriteHex(result.PrevWaiter)
+				}
+			},
+		)
+	}
+
 	trace.GetService().AddTxnDurationAction(
 		txnOp,
 		client.LockEvent,
@@ -482,9 +506,6 @@ func doLock(
 		tableID,
 		time.Since(startAt),
 		nil)
-	if err != nil {
-		return false, false, timestamp.Timestamp{}, err
-	}
 
 	// add bind locks
 	if err = txnOp.AddLockTable(result.LockedOn); err != nil {
@@ -566,6 +587,20 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, err
 	}
 	return true, result.TableDefChanged, snapshotTS, nil
+}
+
+func canRetryLock(txn client.TxnOperator, err error) bool {
+	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+		return true
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		!moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
+		return false
+	}
+	if txn.LockTableCount() == 0 {
+		return true
+	}
+	return false
 }
 
 // DefaultLockOptions create a default lock operation. The parker is used to
@@ -790,6 +825,10 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 		})
 	}
 	return arg
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
 }
 
 // Free free mem

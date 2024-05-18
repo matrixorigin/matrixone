@@ -33,7 +33,6 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -126,18 +125,18 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) {
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
 
+	go saveProfilesLoop(sigchan)
+
 	detail := "Starting shutdown..."
 	select {
 	case sig := <-sigchan:
 		detail += "signal: " + sig.String()
 		//dump heap profile before stopping services
-		heapName, _ := uuid.NewV7()
-		heapProfilePath := catalog.BuildProfilePath("heap", heapName.String())
-		cnservice.SaveProfile(heapProfilePath, profile.HEAP, globalEtlFS)
+		heapProfilePath := saveProfile(profile.HEAP)
+		detail += ". heap profile: " + heapProfilePath
 		//dump goroutine before stopping services
-		routineName, _ := uuid.NewV7()
-		routineProfilePath := catalog.BuildProfilePath("routine", routineName.String())
-		cnservice.SaveProfile(routineProfilePath, profile.GOROUTINE, globalEtlFS)
+		routineProfilePath := saveProfile(profile.GOROUTINE)
+		detail += " routine profile: " + routineProfilePath
 	case <-shutdownC:
 		// waiting, give a chance let all log stores and tn stores to get
 		// shutdown cmd from ha keeper

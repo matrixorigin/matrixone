@@ -34,10 +34,6 @@ const (
 type Argument struct {
 	ctr *container
 
-	// hash table bucket related information.
-	IBucket uint64
-	NBucket uint64
-
 	vm.OperatorBase
 }
 
@@ -91,6 +87,10 @@ type container struct {
 	inBuckets []uint8
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
@@ -109,5 +109,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			ctr.cnts = nil
 		}
 		ctr.FreeAllReg()
+
+		arg.ctr = nil
 	}
 }

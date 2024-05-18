@@ -77,7 +77,7 @@ func replaceHost(
 // by port base and the port slot.
 type AddressManager interface {
 	// Register registers a service by its name and port slot.
-	Register(portSlot int)
+	Register(portSlot int) int
 	// ListenAddress returns the service address of the service.
 	ListenAddress(slot int) string
 	// ServiceAddress returns the service address of the service.
@@ -110,16 +110,17 @@ func NewAddressManager(serviceAddress string, portBase int) AddressManager {
 }
 
 // Register implements the AddressManager interface.
-func (m *addressManager) Register(portSlot int) {
+func (m *addressManager) Register(portSlot int) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.portBase == 0 {
-		return
+		return 0
 	}
 	if _, ok := m.mu.services[portSlot]; ok {
-		return
+		return m.mu.services[portSlot]
 	}
 	m.mu.services[portSlot] = m.portAdvanceLocked()
+	return m.mu.services[portSlot]
 }
 
 // ListenAddress implements the AddressManager interface.

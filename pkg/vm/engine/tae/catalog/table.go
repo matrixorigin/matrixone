@@ -622,8 +622,8 @@ Append Txn:
 	s-----------------------p---------c         Yes
 	           s----------------------p         No, schema at s is not same with schema at p
 */
-func (entry *TableEntry) ApplyCommit() (err error) {
-	err = entry.BaseEntryImpl.ApplyCommit()
+func (entry *TableEntry) ApplyCommit(id string) (err error) {
+	err = entry.BaseEntryImpl.ApplyCommit(id)
 	if err != nil {
 		return
 	}

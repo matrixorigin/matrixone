@@ -90,6 +90,10 @@ type container struct {
 	buf *batch.Batch
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if ctr := arg.ctr; ctr != nil {
 		mp := proc.Mp()
@@ -120,5 +124,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			ctr.buf.Clean(proc.Mp())
 			ctr.buf = nil
 		}
+
+		arg.ctr = nil
 	}
 }

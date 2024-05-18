@@ -318,6 +318,7 @@ func newtestOperator() *testOperator {
 	return &testOperator{}
 }
 
+func (o *testOperator) SetFootPrints(prints [][2]uint32) {}
 func (o *testOperator) AddWorkspace(_ client.Workspace) {
 }
 
@@ -422,6 +423,10 @@ func (o *testOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockO
 }
 
 func (o *testOperator) RemoveWaitLock(key uint64) {
+	panic("should not call")
+}
+
+func (o *testOperator) LockTableCount() int32 {
 	panic("should not call")
 }
 

@@ -33,6 +33,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -149,6 +150,12 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			bb.WriteString(execSql)
 			text = SubStringFromBegin(bb.String(), int(getGlobalPu().SV.LengthOfQueryPrinted))
 		} else {
+			// ignore envStmt == ""
+			// case: exec `set @ t= 2;` will trigger an internal query with the same session.
+			// If you need real sql, can try:
+			//	+ fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+			//	+ cw.GetAst().Format(fmtCtx)
+			//  + envStmt = fmtCtx.String()
 			text = SubStringFromBegin(envStmt, int(getGlobalPu().SV.LengthOfQueryPrinted))
 		}
 	} else {
@@ -162,16 +169,27 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	ses.SetSqlOfStmt(text)
 
 	//note: txn id here may be empty
+	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
+	// fixme: this op leads all internal/background executor got NULL result if call last_query_id().
 	if sqlType != constant.InternalSql {
 		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
 
+	// -------------------------------------
+	// Gen StatementInfo
+	// -------------------------------------
+
 	if !motrace.GetTracerProvider().IsEnable() {
+		return ctx, nil
+	}
+	if sqlType == constant.InternalSql && envStmt == "" {
+		// case: exec `set @ t= 2;` will trigger an internal query with the same session, like: `select 2 from dual`
+		// ignore internal EMPTY query.
 		return ctx, nil
 	}
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
-		tenant, _ = GetTenantInfo(ctx, "internal")
+		tenant, _ = GetTenantInfo(ctx, "internal") // pls task care of mce.GetDoQueryFunc() call case.
 	}
 	stm := motrace.NewStatementInfo()
 	// set TransactionID
@@ -182,7 +200,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		if err != nil {
 			return nil, err
 		}
-		copy(stm.TransactionID[:], txn.Txn().ID)
+		stm.SetTxnID(txn.Txn().ID)
 	}
 	// set SessionID
 	copy(stm.SessionID[:], ses.GetUUID())
@@ -210,17 +228,13 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		// fix original issue #8165
 		stm.User = ""
 	}
-	if sqlType != constant.InternalSql {
-		ses.SetTStmt(stm)
-	}
-	if !stm.IsZeroTxnID() {
-		stm.Report(ctx)
-	}
 	if stm.IsMoLogger() && stm.StatementType == "Load" && len(stm.Statement) > 128 {
 		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-45:]
 	}
+	stm.Report(ctx) // pls keep it simple: Only call Report twice at most.
+	ses.SetTStmt(stm)
 
-	return motrace.ContextWithStatement(ctx, stm), nil
+	return ctx, nil
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time,
@@ -245,14 +259,14 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 			if err != nil {
 				return nil, err
 			}
-			motrace.EndStatement(ctx, retErr, 0, 0, 0)
+			ses.tStmt.EndStatement(ctx, retErr, 0, 0, 0)
 		}
 	} else {
 		ctx, err = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
 		if err != nil {
 			return nil, err
 		}
-		motrace.EndStatement(ctx, retErr, 0, 0, 0)
+		ses.tStmt.EndStatement(ctx, retErr, 0, 0, 0)
 	}
 
 	tenant := ses.GetTenantInfo()
@@ -272,7 +286,11 @@ var RecordStatementTxnID = func(ctx context.Context, fses FeSession) error {
 	}
 	var txn TxnOperator
 	var err error
-	if stm := motrace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
+	if ses == nil {
+		return nil
+	}
+
+	if stm := ses.tStmt; stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.InActiveTxn() {
 			// simplify the logic of TxnOperator. refer to https://github.com/matrixorigin/matrixone/pull/13436#pullrequestreview-1779063200
 			txn = handler.GetTxn()
@@ -282,7 +300,9 @@ var RecordStatementTxnID = func(ctx context.Context, fses FeSession) error {
 			stm.SetTxnID(txn.Txn().ID)
 			ses.SetTxnId(txn.Txn().ID)
 		}
-		stm.Report(ctx)
+		// simplify the logic of query's CollectionTxnOperator. refer to https://github.com/matrixorigin/matrixone/pull/13625
+		// only call at the beginning / or the end of query's life-cycle.
+		// stm.Report(ctx)
 	}
 
 	// set frontend statement's txn-id
@@ -458,7 +478,7 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) erro
 	procBatchTime := time.Since(procBatchBegin)
 	tTime := time.Since(begin)
 	ses.sentRows.Add(int64(n))
-	logDebugf(ses.GetDebugString(), "rowCount %v \n"+
+	ses.Debugf(execCtx.reqCtx, "rowCount %v \n"+
 		"time of getDataFromPipeline : %s \n"+
 		"processBatchTime %v \n"+
 		"row2colTime %v \n"+
@@ -495,7 +515,7 @@ func doUse(ctx context.Context, ses FeSession, db string) error {
 	oldDB := ses.GetDatabaseName()
 	ses.SetDatabaseName(db)
 
-	logDebugf(ses.GetDebugString(), "User %s change database from [%s] to [%s]", ses.GetUserName(), oldDB, ses.GetDatabaseName())
+	ses.Debugf(ctx, "User %s change database from [%s] to [%s]", ses.GetUserName(), oldDB, ses.GetDatabaseName())
 
 	return nil
 }
@@ -1012,6 +1032,8 @@ func constructCollationBatch(ses *Session, rows [][]interface{}) (*batch.Batch, 
 }
 
 func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) error {
+	ses.EnterFPrint(115)
+	defer ses.ExitFPrint(115)
 	// rewrite analyzeStmt to `select approx_count_distinct(col), .. from tbl`
 	// IMO, this approach is simple and future-proof
 	// Although this rewriting processing could have been handled in rewrite module,
@@ -2270,7 +2292,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	_, err = writer.Write(packet.Payload)
 	if err != nil {
 		skipWrite = true // next, we just need read the rest of the data,no need to write it to pipe.
-		logError(ses, ses.GetDebugString(),
+		ses.Errorf(execCtx.reqCtx,
 			"Failed to load local file",
 			zap.String("path", param.Filepath),
 			zap.Error(err))
@@ -2309,7 +2331,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		if !skipWrite {
 			_, err = writer.Write(packet.Payload)
 			if err != nil {
-				logError(ses, ses.GetDebugString(),
+				ses.Errorf(execCtx.reqCtx,
 					"Failed to load local file",
 					zap.String("path", param.Filepath),
 					zap.Uint64("epoch", epoch),
@@ -2325,18 +2347,20 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 			}
 		}
 		if epoch%printEvery == 0 {
-			logDebugf(ses.GetDebugString(), "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
+			ses.Debugf(execCtx.reqCtx, "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
 			minReadTime, maxReadTime, minWriteTime, maxWriteTime = 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 		}
 		epoch += 1
 	}
-	logDebugf(ses.GetDebugString(), "load local '%s', read&write all data from client cost: %s", param.Filepath, time.Since(start))
+	ses.Debugf(execCtx.reqCtx, "load local '%s', read&write all data from client cost: %s", param.Filepath, time.Since(start))
 	return
 }
 
 func executeStmtWithResponse(ses *Session,
 	execCtx *ExecCtx,
 ) (err error) {
+	ses.EnterFPrint(3)
+	defer ses.ExitFPrint(3)
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "executeStmtWithResponse",
 		trace.WithKind(trace.SpanKindStatement))
@@ -2356,6 +2380,8 @@ func executeStmtWithResponse(ses *Session,
 	// TODO put in one txn
 	// insert data after create table in "create table ... as select ..." stmt
 	if ses.createAsSelectSql != "" {
+		ses.EnterFPrint(114)
+		defer ses.ExitFPrint(114)
 		sql := ses.createAsSelectSql
 		ses.createAsSelectSql = ""
 		tempExecCtx := ExecCtx{
@@ -2378,6 +2404,8 @@ func executeStmtWithResponse(ses *Session,
 func executeStmtWithTxn(ses FeSession,
 	execCtx *ExecCtx,
 ) (err error) {
+	ses.EnterFPrint(4)
+	defer ses.ExitFPrint(4)
 	if !ses.IsDerivedStmt() {
 		err = executeStmtWithWorkspace(ses, execCtx)
 	} else {
@@ -2394,6 +2422,8 @@ func executeStmtWithTxn(ses FeSession,
 func executeStmtWithWorkspace(ses FeSession,
 	execCtx *ExecCtx,
 ) (err error) {
+	ses.EnterFPrint(5)
+	defer ses.ExitFPrint(5)
 	if ses.IsDerivedStmt() {
 		return
 	}
@@ -2474,6 +2504,8 @@ func executeStmtWithIncrStmt(ses FeSession,
 	execCtx *ExecCtx,
 	txnOp TxnOperator,
 ) (err error) {
+	ses.EnterFPrint(6)
+	defer ses.ExitFPrint(6)
 	if ses.IsDerivedStmt() {
 		return
 	}
@@ -2493,6 +2525,8 @@ func executeStmtWithIncrStmt(ses FeSession,
 		//if txnOp != nil {
 		//	err = rollbackLastStmt(execCtx, txnOp, err)
 		//}
+		tempTxn := ses.GetTxnHandler().GetTxn()
+		setFPrints(tempTxn, ses.GetFPrints())
 	}()
 
 	err = dispatchStmt(ses, execCtx)
@@ -2501,6 +2535,8 @@ func executeStmtWithIncrStmt(ses FeSession,
 
 func dispatchStmt(ses FeSession,
 	execCtx *ExecCtx) (err error) {
+	ses.EnterFPrint(7)
+	defer ses.ExitFPrint(7)
 	//5. check plan within txn
 	if execCtx.cw.Plan() != nil {
 		if checkModify(execCtx.cw.Plan(), ses) {
@@ -2535,6 +2571,8 @@ func dispatchStmt(ses FeSession,
 func executeStmt(ses *Session,
 	execCtx *ExecCtx,
 ) (err error) {
+	ses.EnterFPrint(8)
+	defer ses.ExitFPrint(8)
 	if txw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
 		ses.GetTxnCompileCtx().tcw = txw
 	}
@@ -2624,6 +2662,8 @@ func executeStmt(ses *Session,
 
 	cmpBegin = time.Now()
 
+	ses.EnterFPrint(62)
+	defer ses.ExitFPrint(62)
 	if ret, err = execCtx.cw.Compile(execCtx, ses.GetOutputCallback(execCtx)); err != nil {
 		return
 	}
@@ -2648,7 +2688,7 @@ func executeStmt(ses *Session,
 
 	// only log if build time is longer than 1s
 	if time.Since(cmpBegin) > time.Second {
-		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Build : %s", time.Since(cmpBegin).String()))
+		ses.Infof(execCtx.reqCtx, "time of Exec.Build : %s", time.Since(cmpBegin).String())
 	}
 
 	//output result & status
@@ -2675,12 +2715,8 @@ func executeStmt(ses *Session,
 
 // execute query
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
-	//fmt.Fprintln(os.Stderr, "doComQuery", input.getSql())
-	//defer func() {
-	//	if retErr != nil {
-	//		fmt.Fprintln(os.Stderr, "doComQuery", retErr)
-	//	}
-	//}()
+	ses.EnterFPrint(2)
+	defer ses.ExitFPrint(2)
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	// set the batch buf for stream scan
 	var inMemStreamScan []*kafka.Message
@@ -2700,17 +2736,14 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	//here,we only need the user_name.
 	userNameOnly := rootName
 
-	// proc := process.New(
-	// 	requestCtx,
-	// 	ses.GetMemPool(),
-	// 	getGlobalPu().TxnClient,
-	// 	nil,
-	// 	getGlobalPu().FileService,
-	// 	getGlobalPu().LockService,
-	// 	getGlobalPu().QueryClient,
-	// 	getGlobalPu().HAKeeperClient,
-	// 	getGlobalPu().UdfService,
-	// 	globalAicm)
+	// case: exec `set @ t= 2;` will trigger an internal query, like: `select 1 from dual`, in the same session.
+	defer func(stmt *motrace.StatementInfo) {
+		if stmt != nil {
+			ses.tStmt = stmt
+		}
+	}(ses.tStmt)
+	ses.tStmt = nil
+
 	proc := ses.proc
 	proc.Ctx = execCtx.reqCtx
 
@@ -2733,8 +2766,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		SqlHelper:            ses.GetSqlHelper(),
 		Buf:                  ses.GetBuffer(),
 		SourceInMemScanBatch: inMemStreamScan,
+		LogLevel:             zapcore.InfoLevel, //TODO: need set by session level config
+		SessionId:            ses.GetSessId(),
 	}
-	// proc.SetStmtProfile(&ses.stmtProfile)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
@@ -2768,8 +2802,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	proc.SessionInfo.User = userNameOnly
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
-	// ses.txnCompileCtx.SetProcess(proc)
-	// ses.proc.SessionInfo = proc.SessionInfo
 
 	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, &statsInfo)
@@ -2954,6 +2986,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			}
 		}
 	}()
+	ses.EnterFPrint(1)
+	defer ses.ExitFPrint(1)
 
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "ExecRequest",
@@ -2961,7 +2995,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	defer span.End()
 
 	var sql string
-	logDebugf(ses.GetDebugString(), "cmd %v", req.GetCmd())
+	ses.Debugf(execCtx.reqCtx, "cmd %v", req.GetCmd())
 	ses.SetCmd(req.GetCmd())
 	switch req.GetCmd() {
 	case COM_QUIT:
@@ -2969,7 +3003,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		ses.addSqlCount(1)
-		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(getGlobalPu().SV.LengthOfQueryPrinted))))
+		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(SubStringFromBegin(query, int(getGlobalPu().SV.LengthOfQueryPrinted))))
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
@@ -3009,7 +3043,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		newLastStmtID := ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
-		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
@@ -3054,7 +3088,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql = fmt.Sprintf("deallocate prepare %s", stmtName)
-		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
@@ -3069,7 +3103,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql = fmt.Sprintf("reset prepare %s", stmtName)
-		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err)
@@ -3106,7 +3140,7 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 	}
 
 	sql := fmt.Sprintf("execute %s", stmtName)
-	logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 	err = ses.GetMysqlProtocol().ParseExecuteData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
 		return "", nil, err
@@ -3130,7 +3164,7 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 	}
 
 	sql := fmt.Sprintf("send long data for stmt %s", stmtName)
-	logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 
 	err = ses.GetMysqlProtocol().ParseSendLongData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
@@ -3245,10 +3279,10 @@ type jsonPlanHandler struct {
 	buffer     *bytes.Buffer
 }
 
-func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, opts ...marshalPlanOptions) *jsonPlanHandler {
+func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, opts ...marshalPlanOptions) *jsonPlanHandler {
 	h := NewMarshalPlanHandler(ctx, stmt, plan, opts...)
 	jsonBytes := h.Marshal(ctx)
-	statsBytes, stats := h.Stats(ctx)
+	statsBytes, stats := h.Stats(ctx, ses)
 	return &jsonPlanHandler{
 		jsonBytes:  jsonBytes,
 		statsBytes: statsBytes,
@@ -3409,7 +3443,7 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 var sqlQueryIgnoreExecPlan = []byte(`{}`)
 var sqlQueryNoRecordExecPlan = []byte(`{"code":200,"message":"sql query no record execution plan"}`)
 
-func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.StatsArray, stats motrace.Statistic) {
+func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByte statistic.StatsArray, stats motrace.Statistic) {
 	if h.query != nil {
 		options := &explain.MarshalPlanOptions
 		statsByte.Reset()
@@ -3434,7 +3468,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				statsInfo.CompileDuration+
 				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
 		if val < 0 {
-			logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
+			ses.Warnf(ctx, " negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
 				uuid.UUID(h.stmt.StatementID).String(),
 				statsInfo.ParseDuration,
 				statsInfo.CompileDuration,

@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package motrace
+package malloc
 
-import "context"
+import (
+	"os"
+	"runtime"
+	"strings"
+)
 
-type stmContextKeyType int
+func NewDefault() Allocator {
+	switch strings.TrimSpace(strings.ToLower(os.Getenv("MO_MALLOC"))) {
 
-const currentStmKey stmContextKeyType = iota
+	case "c":
+		return NewCAllocator()
 
-func ContextWithStatement(parent context.Context, s *StatementInfo) context.Context {
-	return context.WithValue(parent, currentStmKey, s)
-}
+	default:
+		return NewShardedAllocator(
+			runtime.GOMAXPROCS(0),
+			func() Allocator {
+				return NewClassAllocator()
+			},
+		)
 
-func StatementFromContext(ctx context.Context) *StatementInfo {
-	if ctx == nil {
-		return nil
-	} else if val := ctx.Value(currentStmKey); val == nil {
-		return nil
-	} else if stm, ok := val.(*StatementInfo); !ok {
-		return nil
-	} else {
-		return stm
 	}
 }

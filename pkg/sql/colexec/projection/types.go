@@ -71,6 +71,10 @@ type container struct {
 	uafs          []func(v, w *vector.Vector) error // vector.GetUnionAllFunction
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		for i := range arg.ctr.projExecutors {
@@ -79,6 +83,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			}
 		}
 		arg.ctr.projExecutors = nil
+		arg.ctr = nil
 	}
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())

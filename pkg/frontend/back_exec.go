@@ -20,20 +20,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -55,6 +56,8 @@ func (back *backExec) Close() {
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) error {
+	back.backSes.EnterFPrint(91)
+	defer back.backSes.ExitFPrint(91)
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
@@ -98,7 +101,9 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	return doComQueryInBack(back.backSes, &execCtx, &UserInput{sql: sql})
 }
 
-func (back *backExec) ExecRestore(ctx context.Context, sql string, fromAccount uint32, toAccount uint32) error {
+func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uint32, toAccount uint32) error {
+	back.backSes.EnterFPrint(97)
+	defer back.backSes.ExitFPrint(97)
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
@@ -137,10 +142,10 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, fromAccount u
 	}
 
 	userInput := &UserInput{
-		sql:         sql,
-		isRetstore:  true,
-		fromAccount: fromAccount,
-		toAccount:   toAccount,
+		sql:       sql,
+		isRestore: true,
+		opAccount: opAccount,
+		toAccount: toAccount,
 	}
 
 	execCtx := ExecCtx{
@@ -182,12 +187,8 @@ func (back *backExec) Clear() {
 // execute query
 func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	input *UserInput) (retErr error) {
-	//fmt.Fprintln(os.Stderr, "doComQueryInBack", input.getSql())
-	//defer func() {
-	//	if retErr != nil {
-	//		fmt.Fprintln(os.Stderr, "doComQueryInBack", retErr)
-	//	}
-	//}()
+	backSes.EnterFPrint(92)
+	defer backSes.ExitFPrint(92)
 	backSes.GetTxnCompileCtx().SetExecCtx(execCtx)
 	backSes.SetSql(input.getSql())
 	//the ses.GetUserName returns the user_name with the account_name.
@@ -246,6 +247,7 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "backExec.doComQueryInBack",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
+	execCtx.input = input
 
 	proc.SessionInfo.User = userNameOnly
 	cws, err := GetComputationWrapperInBack(execCtx, backSes.proto.GetDatabaseName(),
@@ -267,6 +269,9 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	}()
 
 	defer func() {
+		execCtx.stmt = nil
+		execCtx.cw = nil
+		execCtx.cws = nil
 		for i := 0; i < len(cws); i++ {
 			cws[i].Free()
 		}
@@ -278,10 +283,9 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 		backSes.mrs = &MysqlResultSet{}
 		stmt := cw.GetAst()
 
-		if insertStmt, ok := stmt.(*tree.Insert); ok && input.isRetstore {
+		if insertStmt, ok := stmt.(*tree.Insert); ok && input.isRestore {
 			insertStmt.IsRestore = true
-			insertStmt.FromDataTenantID = input.fromAccount
-			insertStmt.DestTableTenantID = input.toAccount
+			insertStmt.FromDataTenantID = input.opAccount
 		}
 
 		tenant := backSes.GetTenantNameWithStmt(stmt)
@@ -327,6 +331,8 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 func executeStmtInBack(backSes *backSession,
 	execCtx *ExecCtx,
 ) (err error) {
+	execCtx.ses.EnterFPrint(93)
+	defer execCtx.ses.ExitFPrint(93)
 	var cmpBegin time.Time
 	var ret interface{}
 
@@ -360,6 +366,8 @@ func executeStmtInBack(backSes *backSession,
 
 	cmpBegin = time.Now()
 
+	execCtx.ses.EnterFPrint(94)
+	defer execCtx.ses.ExitFPrint(94)
 	if ret, err = execCtx.cw.Compile(execCtx, backSes.GetOutputCallback(execCtx)); err != nil {
 		return
 	}
@@ -384,7 +392,7 @@ func executeStmtInBack(backSes *backSession,
 
 	// only log if build time is longer than 1s
 	if time.Since(cmpBegin) > time.Second {
-		logInfo(backSes, backSes.GetDebugString(), fmt.Sprintf("time of Exec.Build : %s", time.Since(cmpBegin).String()))
+		backSes.Infof(execCtx.reqCtx, "time of Exec.Build : %s", time.Since(cmpBegin).String())
 	}
 
 	StmtKind := execCtx.stmt.StmtKind().OutputType()
@@ -413,7 +421,7 @@ func executeStmtInBack(backSes *backSession,
 	return
 }
 
-var GetComputationWrapperInBack = func(exeCtx *ExecCtx, db string, input *UserInput, user string, eng engine.Engine, proc *process.Process, ses FeSession) ([]ComputationWrapper, error) {
+var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserInput, user string, eng engine.Engine, proc *process.Process, ses FeSession) ([]ComputationWrapper, error) {
 	var cw []ComputationWrapper = nil
 
 	var stmts []tree.Statement = nil
@@ -423,23 +431,13 @@ var GetComputationWrapperInBack = func(exeCtx *ExecCtx, db string, input *UserIn
 	if input.getStmt() != nil {
 		stmts = append(stmts, input.getStmt())
 	} else if isCmdFieldListSql(input.getSql()) {
-		cmdFieldStmt, err = parseCmdFieldList(exeCtx.reqCtx, input.getSql())
+		cmdFieldStmt, err = parseCmdFieldList(execCtx.reqCtx, input.getSql())
 		if err != nil {
 			return nil, err
 		}
 		stmts = append(stmts, cmdFieldStmt)
 	} else {
-		var v interface{}
-		var origin interface{}
-		v, err = ses.GetGlobalVar(exeCtx.reqCtx, "lower_case_table_names")
-		if err != nil {
-			v = int64(1)
-		}
-		origin, err = ses.GetGlobalVar(exeCtx.reqCtx, "keep_user_target_list_in_result")
-		if err != nil {
-			origin = int64(0)
-		}
-		stmts, err = parsers.Parse(exeCtx.reqCtx, dialect.MYSQL, input.getSql(), v.(int64), origin.(int64))
+		stmts, err = parseSql(execCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -476,6 +474,9 @@ var NewBackgroundExec = func(
 		},
 	}
 	backSes.uuid, _ = uuid.NewV7()
+	if up, ok := upstream.(*Session); ok {
+		backSes.upstream = up
+	}
 	bh := &backExec{
 		backSes: backSes,
 	}
@@ -488,9 +489,9 @@ var NewBackgroundExec = func(
 func executeSQLInBackgroundSession(reqCtx context.Context, upstream *Session, mp *mpool.MPool, sql string) ([]ExecResult, error) {
 	bh := NewBackgroundExec(reqCtx, upstream, mp)
 	defer bh.Close()
-	logutil.Debugf("background exec sql:%v", sql)
+	upstream.Debugf(reqCtx, "background exec sql:%v", sql)
 	err := bh.Exec(reqCtx, sql)
-	logutil.Debugf("background exec sql done")
+	upstream.Debug(reqCtx, "background exec sql done")
 	if err != nil {
 		return nil, err
 	}
@@ -501,6 +502,8 @@ func executeSQLInBackgroundSession(reqCtx context.Context, upstream *Session, mp
 // To be clear, only for the select statement derived from the set_var statement
 // in an independent transaction
 func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCtx, stmt tree.Statement) error {
+	ses.EnterFPrint(111)
+	defer ses.ExitFPrint(111)
 	switch stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
 	default:
@@ -544,7 +547,7 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 			panic("need txn handler 4")
 		}
 	}()
-	logDebug(ses, ses.GetDebugString(), "query trace(ExecStmtInSameSession)",
+	ses.Debug(ctx, "query trace(ExecStmtInSameSession)",
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
 	return doComQuery(ses, execCtx, &UserInput{stmt: stmt})
@@ -633,6 +636,7 @@ func (backSes *backSession) getCachedPlan(sql string) *cachedPlan {
 
 func (backSes *backSession) Close() {
 	backSes.feSessionImpl.Close()
+	backSes.upstream = nil
 }
 
 func (backSes *backSession) Clear() {
@@ -784,6 +788,9 @@ func (backSes *backSession) GetFromRealUser() bool {
 }
 
 func (backSes *backSession) GetDebugString() string {
+	if backSes.upstream != nil {
+		return backSes.upstream.GetDebugString()
+	}
 	return ""
 }
 
@@ -804,6 +811,8 @@ func (backSes *backSession) GetGlobalSystemVariableValue(ctx context.Context, na
 }
 
 func (backSes *backSession) GetBackgroundExec(ctx context.Context) BackgroundExec {
+	backSes.EnterFPrint(98)
+	defer backSes.ExitFPrint(98)
 	return NewBackgroundExec(
 		ctx,
 		backSes,
@@ -827,6 +836,91 @@ func (backSes *backSession) GetGlobalVar(ctx context.Context, name string) (inte
 		return val, nil
 	}
 	return nil, moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
+}
+
+func (backSes *backSession) GetSessId() uuid.UUID {
+	return uuid.UUID(backSes.GetUUID())
+}
+
+func (backSes *backSession) GetLogLevel() zapcore.Level {
+	if backSes.upstream == nil {
+		config := logutil.GetDefaultConfig()
+		return config.GetLevel().Level()
+	}
+	return backSes.upstream.GetLogLevel()
+}
+
+func (backSes *backSession) GetLogger() SessionLogger {
+	return backSes
+}
+
+func (backSes *backSession) getMOLogger() *log.MOLogger {
+	if backSes.upstream == nil {
+		return getLogger()
+	} else {
+		return backSes.upstream.logger
+	}
+}
+
+func (backSes *backSession) log(ctx context.Context, level zapcore.Level, msg string, fields ...zap.Field) {
+	logger := backSes.getMOLogger()
+	if logger.Enabled(level) {
+		fields = append(fields, zap.String("session_info", backSes.GetDebugString()), zap.Bool("background", true))
+		fields = appendSessionField(fields, backSes)
+		fields = appendTraceField(fields, ctx)
+		logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
+	}
+}
+
+func (backSes *backSession) logf(ctx context.Context, level zapcore.Level, msg string, args ...any) {
+	logger := backSes.getMOLogger()
+	if logger.Enabled(level) {
+		fields := make([]zap.Field, 0, 5)
+		fields = append(fields, zap.String("session_info", backSes.GetDebugString()), zap.Bool("background", true))
+		fields = appendSessionField(fields, backSes)
+		fields = appendTraceField(fields, ctx)
+		logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
+	}
+}
+
+func (backSes *backSession) Info(ctx context.Context, msg string, fields ...zap.Field) {
+	backSes.log(ctx, zap.InfoLevel, msg, fields...)
+}
+
+func (backSes *backSession) Error(ctx context.Context, msg string, fields ...zap.Field) {
+	backSes.log(ctx, zap.ErrorLevel, msg, fields...)
+}
+
+func (backSes *backSession) Warn(ctx context.Context, msg string, fields ...zap.Field) {
+	backSes.log(ctx, zap.WarnLevel, msg, fields...)
+}
+
+func (backSes *backSession) Fatal(ctx context.Context, msg string, fields ...zap.Field) {
+	backSes.log(ctx, zap.FatalLevel, msg, fields...)
+}
+
+func (backSes *backSession) Debug(ctx context.Context, msg string, fields ...zap.Field) {
+	backSes.log(ctx, zap.DebugLevel, msg, fields...)
+}
+
+func (backSes *backSession) Infof(ctx context.Context, msg string, args ...any) {
+	backSes.logf(ctx, zap.InfoLevel, msg, args...)
+}
+
+func (backSes *backSession) Errorf(ctx context.Context, msg string, args ...any) {
+	backSes.logf(ctx, zap.ErrorLevel, msg, args...)
+}
+
+func (backSes *backSession) Warnf(ctx context.Context, msg string, args ...any) {
+	backSes.logf(ctx, zap.WarnLevel, msg, args...)
+}
+
+func (backSes *backSession) Fatalf(ctx context.Context, msg string, args ...any) {
+	backSes.logf(ctx, zap.FatalLevel, msg, args...)
+}
+
+func (backSes *backSession) Debugf(ctx context.Context, msg string, args ...any) {
+	backSes.logf(ctx, zap.DebugLevel, msg, args...)
 }
 
 type SqlHelper struct {
