@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
@@ -33,25 +32,6 @@ func (s *service) Read(
 	cache, err := s.getShards(table)
 	if err != nil {
 		return err
-	}
-
-	newReadRequest := func(
-		shard pb.TableShard,
-	) *pb.Request {
-		req := s.remote.pool.AcquireRequest()
-		req.RPCMethod = pb.Method_ShardRead
-		req.ShardRead.Shard = shard
-		req.ShardRead.Payload = payload
-		req.ShardRead.CN = shard.Replicas[0].CN
-		req.ShardRead.ReadAt = opts.readAt
-		return req
-	}
-
-	maybeRemoveReadCache := func(e error) {
-		if moerr.IsMoErrCode(e, moerr.ErrReplicaNotFound) ||
-			moerr.IsMoErrCode(e, moerr.ErrReplicaNotMatch) {
-			s.removeReadCache(table)
-		}
 	}
 
 	selected := newSlice()
@@ -86,7 +66,11 @@ func (s *service) Read(
 		}
 		f, e := s.remote.client.AsyncSend(
 			ctx,
-			newReadRequest(shard),
+			s.newReadRequest(
+				shard,
+				payload,
+				opts.readAt,
+			),
 		)
 		if e != nil {
 			err = errors.Join(err, e)
@@ -109,7 +93,7 @@ func (s *service) Read(
 		if e == nil {
 			apply(v)
 		}
-		maybeRemoveReadCache(e)
+		s.maybeRemoveReadCache(table, e)
 		err = errors.Join(err, e)
 		continue
 	}
@@ -125,7 +109,7 @@ func (s *service) Read(
 			apply(resp.ShardRead.Payload)
 			s.remote.pool.ReleaseResponse(resp)
 		} else {
-			maybeRemoveReadCache(e)
+			s.maybeRemoveReadCache(table, e)
 			err = errors.Join(err, e)
 		}
 

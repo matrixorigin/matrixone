@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -496,6 +497,16 @@ func (s *service) removeCache(
 	if cache != nil {
 		cache.delete(tableID)
 		s.cache.read.Store(cache)
+	}
+}
+
+func (s *service) maybeRemoveReadCache(
+	table uint64,
+	err error,
+) {
+	if moerr.IsMoErrCode(err, moerr.ErrReplicaNotFound) ||
+		moerr.IsMoErrCode(err, moerr.ErrReplicaNotMatch) {
+		s.removeReadCache(table)
 	}
 }
 

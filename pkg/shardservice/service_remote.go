@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 func (s *service) initRemote() {
@@ -172,4 +173,18 @@ func (s *service) unwrapError(
 		return nil, err
 	}
 	return resp, nil
+}
+
+func (s *service) newReadRequest(
+	shard pb.TableShard,
+	payload []byte,
+	readAt timestamp.Timestamp,
+) *pb.Request {
+	req := s.remote.pool.AcquireRequest()
+	req.RPCMethod = pb.Method_ShardRead
+	req.ShardRead.Shard = shard
+	req.ShardRead.Payload = payload
+	req.ShardRead.CN = shard.Replicas[0].CN
+	req.ShardRead.ReadAt = readAt
+	return req
 }
