@@ -124,6 +124,7 @@ func (c *checker) Check() error {
 	}
 	for i := 0; i < bat.Length(); i++ {
 		deltaLoc := objectio.Location(bat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
+		logutil.Infof("deltaLoc: %v", deltaLoc.String())
 		if _, ok := allObjects[deltaLoc.Name().String()]; ok {
 			delete(allObjects, deltaLoc.Name().String())
 		}
