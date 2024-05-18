@@ -134,6 +134,7 @@ type DataRowEntry struct {
 }
 
 func (d DataRowEntry) Less(than DataRowEntry) bool {
+	//asc
 	return bytes.Compare(d.PK, than.PK) < 0
 }
 
@@ -340,9 +341,11 @@ func NewPartitionState(noData bool) *PartitionState {
 	return &PartitionState{
 		noData:          noData,
 		rows:            btree.NewBTreeGOptions((RowEntry).Less, opts),
+		tombstones:      btree.NewBTreeGOptions((ObjTombstoneRowEntry).Less, opts),
 		dataObjects:     btree.NewBTreeGOptions((ObjectEntry).Less, opts),
 		blockDeltas:     btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
 		primaryIndex:    btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
+		dataRows:        btree.NewBTreeGOptions((ObjDataRowEntry).Less, opts),
 		dirtyBlocks:     btree.NewBTreeGOptions((types.Blockid).Less, opts),
 		objectIndexByTS: btree.NewBTreeGOptions((ObjectIndexByTSEntry).Less, opts),
 		shared:          new(sharedStates),
@@ -352,9 +355,11 @@ func NewPartitionState(noData bool) *PartitionState {
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
 		rows:            p.rows.Copy(),
+		tombstones:      p.tombstones.Copy(),
 		dataObjects:     p.dataObjects.Copy(),
 		blockDeltas:     p.blockDeltas.Copy(),
 		primaryIndex:    p.primaryIndex.Copy(),
+		dataRows:        p.dataRows.Copy(),
 		noData:          p.noData,
 		dirtyBlocks:     p.dirtyBlocks.Copy(),
 		objectIndexByTS: p.objectIndexByTS.Copy(),
@@ -552,68 +557,55 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 				p.objectIndexByTS.Set(e)
 			}
 		}
-
 		if objEntry.EntryState && objEntry.DeleteTime.IsEmpty() {
 			panic("logic error")
 		}
 		// for appendable object, gc rows when delete object
-		iter := p.rows.Copy().Iter()
-		objID := objEntry.ObjectStats.ObjectName().ObjectId()
-		trunctPoint := startTSCol[idx]
-		blkCnt := objEntry.ObjectStats.BlkCnt()
-		for i := uint32(0); i < blkCnt; i++ {
+		if objEntry.EntryState {
+			iter := p.rows.Copy().Iter()
+			objID := objEntry.ObjectStats.ObjectName().ObjectId()
+			trunctPoint := startTSCol[idx]
+			blkCnt := objEntry.ObjectStats.BlkCnt()
+			for i := uint32(0); i < blkCnt; i++ {
 
-			blkID := objectio.NewBlockidWithObjectID(objID, uint16(i))
-			pivot := RowEntry{
-				// aobj has only one blk
-				BlockID: *blkID,
-			}
-			for ok := iter.Seek(pivot); ok; ok = iter.Next() {
-				entry := iter.Item()
-				if entry.BlockID != *blkID {
-					break
+				blkID := objectio.NewBlockidWithObjectID(objID, uint16(i))
+				pivot := RowEntry{
+					// aobj has only one blk
+					BlockID: *blkID,
 				}
-				scanCnt++
+				for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+					entry := iter.Item()
+					if entry.BlockID != *blkID {
+						break
+					}
+					scanCnt++
 
-				// if the inserting block is appendable, need to delete the rows for it;
-				// if the inserting block is non-appendable and has delta location, need to delete
-				// the deletes for it.
-				if objEntry.EntryState {
-					if entry.Time.LessEq(&trunctPoint) {
-						// delete the row
-						p.rows.Delete(entry)
+					// if the inserting block is appendable, need to delete the rows for it;
+					// if the inserting block is non-appendable and has delta location, need to delete
+					// the deletes for it.
+					if objEntry.EntryState {
+						if entry.Time.LessEq(&trunctPoint) {
+							// delete the row
+							p.rows.Delete(entry)
 
-						// delete the row's primary index
-						if objEntry.EntryState && len(entry.PrimaryIndexBytes) > 0 {
-							p.primaryIndex.Delete(&PrimaryIndexEntry{
-								Bytes:      entry.PrimaryIndexBytes,
-								RowEntryID: entry.ID,
-							})
+							// delete the row's primary index
+							if len(entry.PrimaryIndexBytes) > 0 {
+								p.primaryIndex.Delete(&PrimaryIndexEntry{
+									Bytes:      entry.PrimaryIndexBytes,
+									RowEntryID: entry.ID,
+								})
+							}
+							numDeleted++
+							blockDeleted++
 						}
-						numDeleted++
-						blockDeleted++
 					}
 				}
+				iter.Release()
 
-				//it's tricky here.
-				//Due to consuming lazily the checkpoint,
-				//we have to take the following scenario into account:
-				//1. CN receives deletes for a non-appendable block from the log tail,
-				//   then apply the deletes into PartitionState.rows.
-				//2. CN receives block meta of the above non-appendable block to be inserted
-				//   from the checkpoint, then apply the block meta into PartitionState.blocks.
-				// So , if the above scenario happens, we need to set the non-appendable block into
-				// PartitionState.dirtyBlocks.
-				if !objEntry.EntryState && !objEntry.HasDeltaLoc {
-					p.dirtyBlocks.Set(entry.BlockID)
-					break
+				// if there are no rows for the block, delete the block from the dirty
+				if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
+					p.dirtyBlocks.Delete(*blkID)
 				}
-			}
-			iter.Release()
-
-			// if there are no rows for the block, delete the block from the dirty
-			if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
-				p.dirtyBlocks.Delete(*blkID)
 			}
 		}
 	}
@@ -832,20 +824,6 @@ func (p *PartitionState) HandleMetadataInsert(
 					break
 				}
 				scanCnt++
-				//it's tricky here.
-				//Due to consuming lazily the checkpoint,
-				//we have to take the following scenario into account:
-				//1. CN receives deletes for a non-appendable block from the log tail,
-				//   then apply the deletes into PartitionState.rows.
-				//2. CN receives block meta of the above non-appendable block to be inserted
-				//   from the checkpoint, then apply the block meta into PartitionState.blocks.
-				// So , if the above scenario happens, we need to set the non-appendable block into
-				// PartitionState.dirtyBlocks.
-				if !isAppendable && isEmptyDelta {
-					p.dirtyBlocks.Set(blockID)
-					break
-				}
-
 				// if the inserting block is appendable, need to delete the rows for it;
 				// if the inserting block is non-appendable and has delta location, need to delete
 				// the deletes for it.
@@ -855,7 +833,7 @@ func (p *PartitionState) HandleMetadataInsert(
 						p.rows.Delete(entry)
 
 						// delete the row's primary index
-						if isAppendable && len(entry.PrimaryIndexBytes) > 0 {
+						if len(entry.PrimaryIndexBytes) > 0 {
 							p.primaryIndex.Delete(&PrimaryIndexEntry{
 								Bytes:      entry.PrimaryIndexBytes,
 								RowEntryID: entry.ID,
