@@ -305,10 +305,10 @@ restore account acc01 from snapshot sp04;
 use test03;
 show create table aff01;
 Table    Create Table
-aff01    CREATE TABLE `aff01` (\n`empno` INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n`ename` VARCHAR(15) DEFAULT null COMMENT '雇员姓名',\n`job` VARCHAR(10) DEFAULT null COMMENT '雇员职位',\n`mgr` INT UNSIGNED DEFAULT null COMMENT '雇员对应的领导的编号',\n`hiredate` DATE DEFAULT null COMMENT '雇员的雇佣日期',\n`sal` DECIMAL(7,2) DEFAULT null COMMENT '雇员的基本工资',\n`comm` DECIMAL(7,2) DEFAULT null COMMENT '奖金',\n`deptno` INT UNSIGNED DEFAULT null COMMENT '所在部门',\nPRIMARY KEY (`empno`),\nCONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+aff01    CREATE TABLE `aff01` (\n  `empno` INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` VARCHAR(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` VARCHAR(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` INT UNSIGNED DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` DATE DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` DECIMAL(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` DECIMAL(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` INT UNSIGNED DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n`deptno` INT UNSIGNED NOT NULL COMMENT '部门编号',\n`dname` VARCHAR(15) DEFAULT null COMMENT '部门名称',\n`loc` VARCHAR(50) DEFAULT null COMMENT '部门所在位置',\nPRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+pri01    CREATE TABLE `pri01` (\n  `deptno` INT UNSIGNED NOT NULL COMMENT '部门编号',\n  `dname` VARCHAR(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` VARCHAR(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
 select count(*) from aff01;
 count(*)
 14
@@ -720,16 +720,16 @@ a    b    c
 2    2    2
 show create table db03.ti1;
 Table    Create Table
-ti1    CREATE TABLE `ti1` (\n`a` INT NOT NULL,\n`b` INT DEFAULT null,\n`c` INT DEFAULT null,\nCONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table db03.tm1;
 Table    Create Table
-tm1    CREATE TABLE `tm1` (\n`a` INT NOT NULL,\n`b` INT DEFAULT null,\n`c` INT DEFAULT null,\nCONSTRAINT `fm1` FOREIGN KEY (`b`) REFERENCES `tm2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  CONSTRAINT `fm1` FOREIGN KEY (`b`) REFERENCES `tm2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table db03.ti2;
 Table    Create Table
-ti2    CREATE TABLE `ti2` (\n`a` INT NOT NULL AUTO_INCREMENT,\n`b` INT DEFAULT null,\n`c` INT DEFAULT null,\nPRIMARY KEY (`a`)\n)
+ti2    CREATE TABLE `ti2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show create table db03.tm2;
 Table    Create Table
-tm2    CREATE TABLE `tm2` (\n`a` INT NOT NULL AUTO_INCREMENT,\n`b` INT DEFAULT null,\n`c` INT DEFAULT null,\nPRIMARY KEY (`a`)\n)
+tm2    CREATE TABLE `tm2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 sp15    2024-05-17 04:45:37.101762    account    acc01
