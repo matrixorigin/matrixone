@@ -12,27 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package frontend
+package v1_2_1
 
 import (
-	"time"
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 )
 
-func executeStatusStmtInBack(backSes *backSession,
-	execCtx *ExecCtx) (err error) {
-	execCtx.ses.EnterFPrint(96)
-	defer execCtx.ses.ExitFPrint(96)
-	fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
-	setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
-	runBegin := time.Now()
-	if _, err = execCtx.runner.Run(0); err != nil {
-		return
-	}
+var (
+	logger *log.MOLogger
+	once   sync.Once
+)
 
-	// only log if run time is longer than 1s
-	if time.Since(runBegin) > time.Second {
-		backSes.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
-	}
+func getLogger() *log.MOLogger {
+	once.Do(initLogger)
+	return logger
+}
 
-	return
+func initLogger() {
+	rt := runtime.ProcessLevelRuntime()
+	if rt == nil {
+		rt = runtime.DefaultRuntime()
+	}
+	logger = rt.Logger()
 }
