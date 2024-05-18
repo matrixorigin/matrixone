@@ -45,8 +45,8 @@ func (c *checker) Check() error {
 	maxTs := entry.GetEnd()
 	checkpoints := c.cleaner.ckpClient.ICKPSeekLT(entry.GetEnd(), 40)
 	unconsumedTable := NewGCTable()
-
 	for _, ckp := range checkpoints {
+		logutil.Infof("load checkpoint: %v, entry is %v", ckp.String(), entry.String())
 		_, data, err := logtail.LoadCheckpointEntriesFromKey(c.cleaner.ctx, c.cleaner.fs.Service,
 			ckp.GetLocation(), ckp.GetVersion(), nil, &types.TS{})
 		if err != nil {
