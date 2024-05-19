@@ -86,6 +86,9 @@ type checkpointCleaner struct {
 
 	disableGC bool
 
+	// checkGC is to check the correctness of GC
+	checkGC bool
+
 	option struct {
 		sync.RWMutex
 		enableGC bool
@@ -145,6 +148,14 @@ func (c *checkpointCleaner) isEnableGC() bool {
 	c.option.Lock()
 	defer c.option.Unlock()
 	return c.option.enableGC
+}
+
+func (c *checkpointCleaner) SetCheckGC(enable bool) {
+	c.checkGC = enable
+}
+
+func (c *checkpointCleaner) isEnableCheckGC() bool {
+	return c.checkGC
 }
 
 func (c *checkpointCleaner) Replay() error {
@@ -841,6 +852,9 @@ func (c *checkpointCleaner) Process() {
 		return
 	}
 
+	if !c.isEnableCheckGC() {
+		return
+	}
 	ck := checker{
 		cleaner: c,
 	}
