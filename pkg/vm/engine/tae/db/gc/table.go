@@ -106,6 +106,7 @@ func (t *GCTable) deleteTombstone(name string) {
 	for obj := range t.tombstones[name].objects {
 		delete(t.tombstones[name].objects, obj)
 	}
+	logutil.Infof("delete tombstone %s", name)
 	delete(t.tombstones, name)
 }
 

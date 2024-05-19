@@ -83,6 +83,7 @@ func (c *checker) Check() error {
 			delete(objects, name)
 		}
 		if _, ok := tombstones[name]; ok {
+			logutil.Infof("tombstone: %v", name)
 			isfound = true
 			delete(tombstones, name)
 		}
@@ -130,7 +131,6 @@ func (c *checker) Check() error {
 	}
 	for i := 0; i < bat.Length(); i++ {
 		deltaLoc := objectio.Location(bat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
-		logutil.Infof("deltaLoc: %v", deltaLoc.String())
 		if _, ok := allObjects[deltaLoc.Name().String()]; ok {
 			delete(allObjects, deltaLoc.Name().String())
 		}
