@@ -36,7 +36,13 @@ func (c *checker) getObjects() (map[string]struct{}, error) {
 func (c *checker) Check() error {
 	c.cleaner.inputs.RLock()
 	defer c.cleaner.inputs.RUnlock()
-	gcTable := c.cleaner.GetInputs()
+	gcTables := c.cleaner.GetGCTables()
+	gcTable := gcTables[0]
+	for i, table := range gcTables {
+		if i > 0 {
+			gcTable.Merge(table)
+		}
+	}
 	gcTable.Lock()
 	objects := gcTable.objects
 	tombstones := gcTable.tombstones

@@ -313,6 +313,13 @@ func (c *checkpointCleaner) GetInputs() *GCTable {
 	return c.inputs.tables[0]
 }
 
+func (c *checkpointCleaner) GetGCTables() []*GCTable {
+	c.inputs.RLock()
+	defer c.inputs.RUnlock()
+	logutil.Infof("GetGCTables: %d", len(c.inputs.tables))
+	return c.inputs.tables
+}
+
 func (c *checkpointCleaner) SetMinMergeCountForTest(count int) {
 	c.minMergeCount.Lock()
 	defer c.minMergeCount.Unlock()
