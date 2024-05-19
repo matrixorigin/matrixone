@@ -85,7 +85,6 @@ func (c *checker) Check() error {
 			objectsLen--
 		}
 		if _, ok := tombstones[name]; ok {
-			logutil.Infof("tombstone: %v", name)
 			isfound = true
 			tombstonesLen--
 		}
