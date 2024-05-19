@@ -1920,7 +1920,7 @@ func (data *CheckpointData) WriteTo(
 					for y := 0; y < bat.Length(); y++ {
 						blockID := delBlockIDs[y]
 						commitTS := commitTSVec[y]
-						deltaLoc := objectio.Location(bat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+						deltaLoc := objectio.Location(bat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(y).([]byte))
 						logutil.Infof("WriteSubBatch blockID: %d, commitTS: %d, deltaLoc: %s", blockID.String(), commitTS.ToString(), deltaLoc.Name().String())
 					}
 				}
