@@ -17,6 +17,10 @@ package process
 import (
 	"context"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
+	"github.com/google/uuid"
 )
 
 const ALLCN = "ALLCN"
@@ -43,15 +47,6 @@ func (m MsgType) MessageName() string {
 	return "unknown message type"
 }
 
-func NewMessageBoard() *MessageBoard {
-	m := &MessageBoard{
-		Messages: make([]*Message, 0, 1024),
-		Waiters:  make([]chan bool, 0, 16),
-		RwMutex:  &sync.RWMutex{},
-	}
-	return m
-}
-
 type MessageAddress struct {
 	CnAddr     string
 	OperatorID int32
@@ -66,17 +61,64 @@ type Message interface {
 	GetReceiverAddr() MessageAddress
 }
 
-type MessageBoard struct {
-	Messages []*Message
-	Waiters  []chan bool
-	RwMutex  *sync.RWMutex // for nonblock message
+type MessageCenter struct {
+	StmtIDToBoard map[uuid.UUID]*MessageBoard
+	RwMutex       *sync.Mutex
 }
 
-func (m *MessageBoard) Reset() {
+func (m *MessageCenter) deleteStmtID(stmtID uuid.UUID) bool {
+	m.RwMutex.Lock()
+	defer m.RwMutex.Unlock()
+	_, ok := m.StmtIDToBoard[stmtID]
+	delete(m.StmtIDToBoard, stmtID)
+	return ok
+}
+
+type MessageBoard struct {
+	multiCN       bool
+	stmtId        uuid.UUID
+	MessageCenter *MessageCenter
+	Messages      []*Message
+	Waiters       []chan bool
+	RwMutex       *sync.RWMutex
+}
+
+func NewMessageBoard() *MessageBoard {
+	m := &MessageBoard{
+		Messages: make([]*Message, 0, 1024),
+		Waiters:  make([]chan bool, 0, 16),
+		RwMutex:  &sync.RWMutex{},
+	}
+	return m
+}
+
+func (m *MessageBoard) SetMultiCN(center *MessageCenter, stmtId uuid.UUID) *MessageBoard {
+	logutil.Infof("set multiCN  messageBoard for stmtid %v", stmtId)
+	center.RwMutex.Lock()
+	defer center.RwMutex.Unlock()
+	mb, ok := center.StmtIDToBoard[stmtId]
+	if ok {
+		logutil.Infof("get messageBoard for stmtid %v, address %v", stmtId, &mb.RwMutex)
+		return mb
+	}
+	m.multiCN = true
+	m.stmtId = stmtId
+	m.MessageCenter = center
+	center.StmtIDToBoard[stmtId] = m
+	logutil.Infof("register messageBoard for stmtid %v, address %v", stmtId, &m.RwMutex)
+	return m
+}
+
+func (m *MessageBoard) Reset() *MessageBoard {
+	if m.multiCN {
+		return NewMessageBoard()
+	}
 	m.RwMutex.Lock()
 	defer m.RwMutex.Unlock()
 	m.Messages = m.Messages[:0]
 	m.Waiters = m.Waiters[:0]
+	m.multiCN = false
+	return m
 }
 
 type MessageReceiver struct {
@@ -90,6 +132,7 @@ type MessageReceiver struct {
 
 func (proc *Process) SendMessage(m Message) {
 	mb := proc.MessageBoard
+	logutil.Infof("send message %v to messageBoard address %v", m.GetMsgTag(), &mb.RwMutex)
 	if m.GetReceiverAddr().CnAddr == CURRENTCN { // message for current CN
 		mb.RwMutex.Lock()
 		mb.Messages = append(mb.Messages, &m)
@@ -154,8 +197,10 @@ func (mr *MessageReceiver) Free() {
 }
 
 func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) ([]Message, bool) {
+	logutil.Infof("trying to receive message %v on messageBoard address %v", mr.tags, &mr.mb.RwMutex)
 	var result = mr.receiveMessageNonBlock()
 	if !needBlock || len(result) > 0 {
+		logutil.Infof("receive message %v on messageBoard address %v", mr.tags, &mr.mb.RwMutex)
 		return result, false
 	}
 	if mr.waiter == nil {
@@ -169,12 +214,14 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 		if len(result) > 0 {
 			break
 		}
+		logutil.Infof("receive message %v on messageBoard address %v", mr.tags, &mr.mb.RwMutex)
 		select {
 		case <-mr.waiter:
 		case <-ctx.Done():
 			return result, true
 		}
 	}
+	logutil.Infof("receive message %v on messageBoard address %v", mr.tags, &mr.mb.RwMutex)
 	return result, false
 }
 

@@ -150,6 +150,20 @@ func (c Compile) TypeName() string {
 	return "compile.Compile"
 }
 
+func (c *Compile) GetMessageCenter() *process.MessageCenter {
+	if c == nil || c.e == nil {
+		return nil
+	}
+	m := c.e.GetMessageCenter()
+	if m != nil {
+		mc, ok := m.(*process.MessageCenter)
+		if ok {
+			return mc
+		}
+	}
+	return nil
+}
+
 func (c *Compile) reset() {
 	if c.anal != nil {
 		c.anal.release()
@@ -161,7 +175,7 @@ func (c *Compile) reset() {
 		c.fuzzys[i].release()
 	}
 
-	c.MessageBoard.Messages = c.MessageBoard.Messages[:0]
+	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
 	c.scope = c.scope[:0]
 	c.pn = nil
@@ -592,7 +606,6 @@ func (c *Compile) canRetry(err error) bool {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
-	c.MessageBoard.Reset()
 	err := c.lockMetaTables()
 	if err != nil {
 		return err
