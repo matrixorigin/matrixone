@@ -1914,16 +1914,6 @@ func (data *CheckpointData) WriteTo(
 				if block, size, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
 					return
 				}
-				if uint16(i) == BLKMetaInsertIDX {
-					delBlockIDs := vector.MustFixedCol[types.Blockid](bat.GetVectorByName(pkgcatalog.BlockMeta_ID).GetDownstreamVector())
-					commitTSVec := vector.MustFixedCol[types.TS](bat.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).GetDownstreamVector())
-					for y := 0; y < bat.Length(); y++ {
-						blockID := delBlockIDs[y]
-						commitTS := commitTSVec[y]
-						deltaLoc := objectio.Location(bat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(y).([]byte))
-						logutil.Debugf("WriteSubBatch blockID: %d, commitTS: %d, deltaLoc: %s", blockID.String(), commitTS.ToString(), deltaLoc.Name().String())
-					}
-				}
 				Endoffset := offset + bat.Length()
 				blockLoc := BuildBlockLoaction(block.GetID(), uint64(offset), uint64(Endoffset))
 				indexes[i] = append(indexes[i], blockIndexes{
