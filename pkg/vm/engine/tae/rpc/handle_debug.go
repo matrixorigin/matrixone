@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/shlex"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -88,7 +89,13 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		return nil, nil
 	}
 
+	size := memo.GatherSpecialTableSize()
 	usages := memo.GatherAllAccSize()
+	for accId, _ := range usages {
+		if accId != uint64(catalog.System_Account) {
+			usages[accId] += size
+		}
+	}
 
 	newIds := make([]uint32, 0)
 	for _, id := range req.AccIds {
