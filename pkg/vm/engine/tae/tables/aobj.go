@@ -117,15 +117,17 @@ func (obj *aobject) PrepareCompact() bool {
 	obj.FreezeAppend()
 	obj.freezelock.Unlock()
 
-	droppedCommitted := obj.meta.HasDropCommitted()
+	obj.meta.RLock()
+	defer obj.meta.RUnlock()
+	droppedCommitted := obj.meta.HasDropCommittedLocked()
 
 	if droppedCommitted {
-		if !obj.meta.PrepareCompact() {
+		if !obj.meta.PrepareCompactLocked() {
 			return false
 		}
 	} else {
-		if !obj.meta.PrepareCompact() ||
-			!obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
+		if !obj.meta.PrepareCompactLocked() ||
+			!obj.appendMVCC.PrepareCompactLocked() /* all appends are committed */ {
 			return false
 		}
 	}
