@@ -17,7 +17,6 @@ package trace
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -338,15 +337,10 @@ func (s *service) RefreshTableFilters() error {
 func (s *service) handleDataEvents(ctx context.Context) {
 	s.handleEvent(
 		ctx,
-		s.dataCSVFile,
 		9,
 		EventDataTable,
 		s.entryC,
 	)
-}
-
-func (s *service) dataCSVFile() string {
-	return filepath.Join(s.dir, fmt.Sprintf("data-%d.csv", s.seq.Add(1)))
 }
 
 func addTableFilterSQL(
