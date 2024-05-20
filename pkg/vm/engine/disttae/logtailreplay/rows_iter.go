@@ -16,8 +16,10 @@ package logtailreplay
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	"github.com/tidwall/btree"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type RowsIter interface {
@@ -85,7 +87,6 @@ func (p *rowsIter) Next() bool {
 			// not visible
 			continue
 		}
-		//FIXME::??
 		if entry.RowID.Equal(p.lastRowID) {
 			// already met
 			continue

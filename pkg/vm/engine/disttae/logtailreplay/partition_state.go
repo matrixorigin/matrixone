@@ -47,6 +47,8 @@ type PartitionState struct {
 	//TODO:: remove it.
 	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 	dataRows     *btree.BTreeG[ObjDataRowEntry]
+	//TODO::build a index for dataRows by timestamp for truncate entry by ts when handle object/block insert.
+	//dataRowsIndexByTS *btree.BTreeG[DataRowsIndexByTSEntry]
 
 	//table data objects
 	dataObjects *btree.BTreeG[ObjectEntry]
@@ -95,6 +97,16 @@ func (o ObjTombstoneRowEntry) Less(than ObjTombstoneRowEntry) bool {
 	return bytes.Compare(o.ShortObjName[:], than.ShortObjName[:]) < 0
 }
 
+func (o ObjTombstoneRowEntry) MutateTombstones() (*btree.BTreeG[TombstoneRowEntry], func()) {
+	curTombstones := o.Tombstones.Load()
+	tombstones := curTombstones.Copy()
+	return tombstones, func() {
+		if !o.Tombstones.CompareAndSwap(curTombstones, tombstones) {
+			panic("concurrent mutation of tombstones")
+		}
+	}
+}
+
 type ObjDataRowEntry struct {
 	ShortObjName objectio.ObjectNameShort
 
@@ -105,37 +117,64 @@ func (o ObjDataRowEntry) Less(than ObjDataRowEntry) bool {
 	return bytes.Compare(o.ShortObjName[:], than.ShortObjName[:]) < 0
 }
 
-type TombstoneRowEntry struct {
-	RowID types.Rowid
+func (o ObjDataRowEntry) MutateRows() (*btree.BTreeG[DataRowEntry], func()) {
+	curRows := o.DataRows.Load()
+	rows := curRows.Copy()
+	return rows, func() {
+		if !o.DataRows.CompareAndSwap(curRows, rows) {
+			panic("concurrent mutation of data rows")
+		}
+	}
+}
 
+type TombstoneRowEntry struct {
+	BlockID types.Blockid
+	Offset  uint32
+
+	// PK maybe nil
 	PK   []byte
 	Time types.TS
 }
 
 func (t TombstoneRowEntry) Less(than TombstoneRowEntry) bool {
 	//asc
-	cmp := t.RowID.CloneBlockID().Compare(than.RowID.CloneBlockID())
+	cmp := t.BlockID.Compare(than.BlockID)
 	if cmp < 0 {
 		return true
 	}
 	if cmp > 0 {
 		return false
 	}
-	return t.RowID.GetRowOffset() < than.RowID.GetRowOffset()
+	return t.Offset < than.Offset
 }
 
 type DataRowEntry struct {
-	PK []byte
+	//The same PK maybe been inserted and deleted ,then inserted.
+	PK   []byte
+	Time types.TS
 
 	RowID  types.Rowid
-	Time   types.TS
 	Batch  *batch.Batch
 	Offset int64
 }
 
 func (d DataRowEntry) Less(than DataRowEntry) bool {
 	//asc
-	return bytes.Compare(d.PK, than.PK) < 0
+	cmp := bytes.Compare(d.PK, than.PK)
+	if cmp < 0 {
+		return true
+	}
+	if cmp > 0 {
+		return false
+	}
+	//desc
+	if than.Time.Less(&d.Time) {
+		return true
+	}
+	if d.Time.Less(&than.Time) {
+		return false
+	}
+	return false
 }
 
 // RowEntry represents a version of a row
@@ -465,7 +504,7 @@ func (p *PartitionState) HandleObjectDelete(
 
 func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch, fs fileservice.FileService) {
 
-	var numDeleted, blockDeleted, scanCnt int64
+	var numDeleted int64
 	statsVec := mustVectorFromProto(bat.Vecs[2])
 	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
 	sortedCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[4]))
@@ -562,50 +601,14 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 		}
 		// for appendable object, gc rows when delete object
 		if objEntry.EntryState {
-			iter := p.rows.Copy().Iter()
 			objID := objEntry.ObjectStats.ObjectName().ObjectId()
 			trunctPoint := startTSCol[idx]
 			blkCnt := objEntry.ObjectStats.BlkCnt()
+			// aobj has only one blk
 			for i := uint32(0); i < blkCnt; i++ {
-
 				blkID := objectio.NewBlockidWithObjectID(objID, uint16(i))
-				pivot := RowEntry{
-					// aobj has only one blk
-					BlockID: *blkID,
-				}
-				for ok := iter.Seek(pivot); ok; ok = iter.Next() {
-					entry := iter.Item()
-					if entry.BlockID != *blkID {
-						break
-					}
-					scanCnt++
-
-					// if the inserting block is appendable, need to delete the rows for it;
-					// if the inserting block is non-appendable and has delta location, need to delete
-					// the deletes for it.
-					if objEntry.EntryState {
-						if entry.Time.LessEq(&trunctPoint) {
-							// delete the row
-							p.rows.Delete(entry)
-
-							// delete the row's primary index
-							if len(entry.PrimaryIndexBytes) > 0 {
-								p.primaryIndex.Delete(&PrimaryIndexEntry{
-									Bytes:      entry.PrimaryIndexBytes,
-									RowEntryID: entry.ID,
-								})
-							}
-							numDeleted++
-							blockDeleted++
-						}
-					}
-				}
-				iter.Release()
-
-				// if there are no rows for the block, delete the block from the dirty
-				if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
-					p.dirtyBlocks.Delete(*blkID)
-				}
+				numDeleted += p.truncateDataRowsByBlk(*blkID, trunctPoint)
+				numDeleted += p.truncateTombstonesByBlk(*blkID, trunctPoint)
 			}
 		}
 	}
@@ -642,15 +645,30 @@ func (p *PartitionState) HandleRowsInsert(
 	for i, rowID := range rowIDVector {
 
 		blockID := rowID.CloneBlockID()
-		pivot := RowEntry{
-			BlockID: blockID,
-			RowID:   rowID,
-			Time:    timeVector[i],
+		objPivot := ObjDataRowEntry{
+			ShortObjName: *objectio.ShortName(&blockID),
 		}
-		entry, ok := p.rows.Get(pivot)
+		objEntry, ok := p.dataRows.Get(objPivot)
+		if !ok {
+			objEntry = objPivot
+			objEntry.DataRows = &atomic.Pointer[btree.BTreeG[DataRowEntry]]{}
+			opts := btree.Options{
+				Degree: 64,
+			}
+			objEntry.DataRows.Store(
+				btree.NewBTreeGOptions(DataRowEntry.Less, opts))
+
+			p.dataRows.Set(objEntry)
+		}
+
+		rows, done := objEntry.MutateRows()
+		pivot := DataRowEntry{
+			PK:   primaryKeys[i],
+			Time: timeVector[i],
+		}
+		entry, ok := rows.Get(pivot)
 		if !ok {
 			entry = pivot
-			entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
 			numInserted++
 		}
 
@@ -658,19 +676,13 @@ func (p *PartitionState) HandleRowsInsert(
 			entry.Batch = batch
 			entry.Offset = int64(i)
 		}
-		entry.PrimaryIndexBytes = primaryKeys[i]
-		p.rows.Set(entry)
+		rows.Set(entry)
+		done()
 
-		{
-			entry := &PrimaryIndexEntry{
-				Bytes:      primaryKeys[i],
-				RowEntryID: entry.ID,
-				BlockID:    blockID,
-				RowID:      rowID,
-				Time:       entry.Time,
-			}
-			p.primaryIndex.Set(entry)
-		}
+		//if !ok {
+		//	p.dataRows.Set(objEntry)
+		//}
+
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
@@ -711,42 +723,41 @@ func (p *PartitionState) HandleRowsDelete(
 	for i, rowID := range rowIDVector {
 
 		blockID := rowID.CloneBlockID()
-		pivot := RowEntry{
-			BlockID: blockID,
-			RowID:   rowID,
-			Time:    timeVector[i],
+		objPivot := ObjTombstoneRowEntry{
+			ShortObjName: *objectio.ShortName(&blockID),
 		}
-		entry, ok := p.rows.Get(pivot)
+		objEntry, ok := p.tombstones.Get(objPivot)
 		if !ok {
-			entry = pivot
-			entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
-			numDeletes++
+			objEntry = objPivot
+			objEntry.Tombstones = &atomic.Pointer[btree.BTreeG[TombstoneRowEntry]]{}
+			opts := btree.Options{
+				Degree: 64,
+			}
+			objEntry.Tombstones.Store(
+				btree.NewBTreeGOptions(TombstoneRowEntry.Less, opts))
+
+			p.tombstones.Set(objEntry)
 		}
 
-		entry.Deleted = true
-		if i < len(primaryKeys) {
-			entry.PrimaryIndexBytes = primaryKeys[i]
+		tombstones, done := objEntry.MutateTombstones()
+		pivot := TombstoneRowEntry{
+			BlockID: blockID,
+			Offset:  rowID.GetRowOffset(),
 		}
-		if !p.noData {
-			entry.Batch = batch
-			entry.Offset = int64(i)
+		entry, ok := tombstones.Get(pivot)
+		if !ok {
+			entry = pivot
+			numDeletes++
 		}
-		p.rows.Set(entry)
+		entry.Time = timeVector[i]
+		if i < len(primaryKeys) && len(primaryKeys[i]) > 0 {
+			entry.PK = primaryKeys[i]
+		}
+		tombstones.Set(entry)
+		done()
 
 		//handle memory deletes for non-appendable block.
 		p.dirtyBlocks.Set(blockID)
-
-		// primary key
-		if i < len(primaryKeys) && len(primaryKeys[i]) > 0 {
-			entry := &PrimaryIndexEntry{
-				Bytes:      primaryKeys[i],
-				RowEntryID: entry.ID,
-				BlockID:    blockID,
-				RowID:      rowID,
-				Time:       entry.Time,
-			}
-			p.primaryIndex.Set(entry)
-		}
 
 	}
 
@@ -755,6 +766,94 @@ func (p *PartitionState) HandleRowsDelete(
 		c.DistTAE.Logtail.DeleteEntries.Add(1)
 		c.DistTAE.Logtail.DeleteRows.Add(numDeletes)
 	})
+}
+
+func (p *PartitionState) truncateDataRowsByBlk(
+	bid types.Blockid,
+	ts types.TS,
+) (numDeleted int64) {
+	//truncate deletes
+	objPivot := ObjDataRowEntry{
+		ShortObjName: *objectio.ShortName(&bid),
+	}
+	objIter := p.dataRows.Copy().Iter()
+	defer objIter.Release()
+	if ok := objIter.Seek(objPivot); !ok {
+		return
+	}
+
+	rows, done := objIter.Item().MutateRows()
+	iter := rows.Copy().Iter()
+	defer iter.Release()
+	firstCalled := false
+	for {
+
+		if !firstCalled {
+			if !iter.First() {
+				break
+			}
+			firstCalled = true
+		} else {
+			if !iter.Next() {
+				break
+			}
+		}
+		item := iter.Item()
+		if *item.RowID.BorrowBlockID() != bid {
+			continue
+		}
+		if item.Time.LessEq(&ts) {
+			rows.Delete(item)
+			numDeleted++
+		}
+	}
+	done()
+
+	return
+}
+
+func (p *PartitionState) truncateTombstonesByBlk(
+	bid types.Blockid,
+	ts types.TS) (numDeleted int64) {
+
+	scanCnt := int64(0)
+	blockDeleted := int64(0)
+
+	//truncate deletes
+	objPivot := ObjTombstoneRowEntry{
+		ShortObjName: *objectio.ShortName(&bid),
+	}
+	objIter := p.tombstones.Copy().Iter()
+	defer objIter.Release()
+	if ok := objIter.Seek(objPivot); !ok {
+		return
+	}
+
+	tombstones, done := objIter.Item().MutateTombstones()
+	iter := tombstones.Copy().Iter()
+	defer iter.Release()
+	pivot := TombstoneRowEntry{
+		BlockID: bid,
+	}
+	for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+		entry := iter.Item()
+		if entry.BlockID != bid {
+			break
+		}
+		scanCnt++
+		if entry.Time.LessEq(&ts) {
+			tombstones.Delete(entry)
+			numDeleted++
+			blockDeleted++
+		}
+	}
+	done()
+
+	// if there are no rows for the block, delete the block from the dirty
+	if scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
+		p.dirtyBlocks.Delete(bid)
+	}
+	return
 }
 
 func (p *PartitionState) HandleMetadataInsert(
@@ -810,46 +909,11 @@ func (p *PartitionState) HandleMetadataInsert(
 			p.blockDeltas.Set(blockEntry)
 		}
 
-		{
-			scanCnt := int64(0)
-			blockDeleted := int64(0)
-			trunctPoint := memTruncTSVector[i]
-			iter := p.rows.Copy().Iter()
-			pivot := RowEntry{
-				BlockID: blockID,
-			}
-			for ok := iter.Seek(pivot); ok; ok = iter.Next() {
-				entry := iter.Item()
-				if entry.BlockID != blockID {
-					break
-				}
-				scanCnt++
-				// if the inserting block is appendable, need to delete the rows for it;
-				// if the inserting block is non-appendable and has delta location, need to delete
-				// the deletes for it.
-				if isAppendable || (!isAppendable && !isEmptyDelta) {
-					if entry.Time.LessEq(&trunctPoint) {
-						// delete the row
-						p.rows.Delete(entry)
-
-						// delete the row's primary index
-						if len(entry.PrimaryIndexBytes) > 0 {
-							p.primaryIndex.Delete(&PrimaryIndexEntry{
-								Bytes:      entry.PrimaryIndexBytes,
-								RowEntryID: entry.ID,
-							})
-						}
-						numDeleted++
-						blockDeleted++
-					}
-				}
-			}
-			iter.Release()
-
-			// if there are no rows for the block, delete the block from the dirty
-			if scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
-				p.dirtyBlocks.Delete(blockID)
-			}
+		if isAppendable {
+			numDeleted += p.truncateDataRowsByBlk(blockID, memTruncTSVector[i])
+			numDeleted += p.truncateTombstonesByBlk(blockID, memTruncTSVector[i])
+		} else if !isEmptyDelta {
+			numDeleted += p.truncateTombstonesByBlk(blockID, memTruncTSVector[i])
 		}
 
 		//create object by block insert to set objEntry.HasDeltaLoc
