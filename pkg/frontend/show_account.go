@@ -424,15 +424,15 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		}
 	}
 
-	if specialTableCnt, specialDBCnt, err = getSpecialTableCnt(ctx, bh, accIds); err != nil {
+	specialTableCnt, specialDBCnt, err = getSpecialTableCnt(ctx, bh, accIds)
+	t1 := time.Now()
+	v2.TaskShowAccountsGetTableStatsDurationHistogram.Observe(t1.Sub(t0).Seconds())
+	if err != nil {
 		return err
 	}
 
-	t1 := time.Now()
-	v2.TaskShowAccountsGetTableStatsDurationHistogram.Observe(t1.Sub(t0).Seconds())
-
 	usage, err := getAccountsStorageUsage(ctx, ses, accIds)
-	v2.TaskShowAccountsGetUsageDurationHistogram.Observe(time.Now().Sub(t1).Seconds())
+	v2.TaskShowAccountsGetUsageDurationHistogram.Observe(time.Since(t1).Seconds())
 	if err != nil {
 		return err
 	}
