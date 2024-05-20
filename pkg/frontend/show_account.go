@@ -17,10 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"math"
-	"strconv"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,9 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
+	"strconv"
+	"strings"
+	"time"
 )
 
 const (
@@ -388,7 +389,10 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	account := ses.GetTenantInfo()
 
 	err = bh.Exec(ctx, "begin;")
+	t0 := time.Now()
 	defer func() {
+		now := time.Now()
+		v2.TaskShowAccountsTotalDurationHistogram.Observe(now.Sub(t0).Seconds())
 		err = finishTxn(ctx, bh, err)
 	}()
 
@@ -423,7 +427,11 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		return err
 	}
 
+	t1 := time.Now()
+	v2.TaskShowAccountsGetTableStatsDurationHistogram.Observe(t1.Sub(t0).Seconds())
+
 	usage, err := getAccountsStorageUsage(ctx, ses, accIds)
+	v2.TaskShowAccountsGetUsageDurationHistogram.Observe(time.Now().Sub(t1).Seconds())
 	if err != nil {
 		return err
 	}
