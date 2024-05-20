@@ -813,14 +813,14 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	}()
 	// cols
 	vec := bats[0].Vecs[0]
-	def := vec.GetStringAt(0)
+	def := vec.UnsafeGetStringAt(0)
 	r := &plan.ResultColDef{}
 	if err = r.Unmarshal([]byte(def)); err != nil {
 		return nil, "", err
 	}
 	// paths
 	vec = bats[0].Vecs[1]
-	str := vec.GetStringAt(0)
+	str := vec.UnsafeGetStringAt(0)
 	return r.ResultCols, str, nil
 }
 

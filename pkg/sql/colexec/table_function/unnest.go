@@ -137,7 +137,7 @@ func unnestCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResu
 	if !pathVec.IsConst() || !outerVec.IsConst() {
 		return false, moerr.NewInvalidInput(proc.Ctx, "unnest: second and third arguments must be scalar")
 	}
-	path, err = types.ParseStringToPath(pathVec.GetStringAt(0))
+	path, err = types.ParseStringToPath(pathVec.UnsafeGetStringAt(0))
 	if err != nil {
 		return false, err
 	}
