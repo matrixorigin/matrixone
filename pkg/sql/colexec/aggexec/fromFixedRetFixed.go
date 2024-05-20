@@ -640,10 +640,10 @@ func (exec *singleAggFuncExecNew1[from, to]) Merge(next AggFuncExec, groupIdx1, 
 
 	if err := exec.merge(
 		exec.execContext.getGroupContext(groupIdx1),
-		exec.execContext.getGroupContext(groupIdx2),
+		other.execContext.getGroupContext(groupIdx2),
 		commonContext,
 		exec.ret.groupIsEmpty(groupIdx1),
-		exec.ret.groupIsEmpty(groupIdx2),
+		other.ret.groupIsEmpty(groupIdx2),
 		getter1, getter2, setter); err != nil {
 		return err
 	}
@@ -669,7 +669,7 @@ func (exec *singleAggFuncExecNew1[from, to]) BatchMerge(next AggFuncExec, offset
 
 		if err := exec.merge(
 			exec.execContext.getGroupContext(groupIdx1),
-			exec.execContext.getGroupContext(groupIdx2),
+			other.execContext.getGroupContext(groupIdx2),
 			commonContext,
 			exec.ret.groupIsEmpty(groupIdx1),
 			other.ret.groupIsEmpty(groupIdx2),
