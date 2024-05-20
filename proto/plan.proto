@@ -731,6 +731,7 @@ message Node {
 		MARK	= 7;
 		APPLY	= 8;
 		INDEX = 9;
+		L2 = 10;
 	}
 
 	enum AggMode {
