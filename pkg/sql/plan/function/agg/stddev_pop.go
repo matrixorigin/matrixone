@@ -20,192 +20,104 @@ import (
 	"math"
 )
 
-func RegisterStdDevPop1(id int64) {
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), VarPopReturnType, false, true),
-			newAggVarPop[uint64],
-			InitAggVarPop1[uint64],
-			FillAggVarPop1[uint64], nil, FillsAggVarPop1[uint64],
-			MergeAggVarPop1[uint64],
-			FlushAggStdDevPop1[uint64],
-		))
+func RegisterStdDevPop2(id int64) {
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), VarPopReturnType, true),
+		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
+		aggVarPopFill[uint64], aggVarPopFills[uint64], aggVarPopMerge, aggStdDevPopFlush)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), VarPopReturnType, false, true),
-			newAggVarPop[int8],
-			InitAggVarPop1[int8],
-			FillAggVarPop1[int8], nil, FillsAggVarPop1[int8],
-			MergeAggVarPop1[int8],
-			FlushAggStdDevPop1[int8],
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), VarPopReturnType, true),
+		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
+		aggVarPopFill[int8], aggVarPopFills[int8], aggVarPopMerge, aggStdDevPopFlush)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), VarPopReturnType, false, true),
-			newAggVarPop[int16],
-			InitAggVarPop1[int16],
-			FillAggVarPop1[int16], nil, FillsAggVarPop1[int16],
-			MergeAggVarPop1[int16],
-			FlushAggStdDevPop1[int16],
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), VarPopReturnType, true),
+		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
+		aggVarPopFill[int16], aggVarPopFills[int16], aggVarPopMerge, aggStdDevPopFlush)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), VarPopReturnType, false, true),
-			newAggVarPop[int32],
-			InitAggVarPop1[int32],
-			FillAggVarPop1[int32], nil, FillsAggVarPop1[int32],
-			MergeAggVarPop1[int32],
-			FlushAggStdDevPop1[int32],
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), VarPopReturnType, true),
+		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
+		aggVarPopFill[int32], aggVarPopFills[int32], aggVarPopMerge, aggStdDevPopFlush)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), VarPopReturnType, false, true),
-			newAggVarPop[int64],
-			InitAggVarPop1[int64],
-			FillAggVarPop1[int64], nil, FillsAggVarPop1[int64],
-			MergeAggVarPop1[int64],
-			FlushAggStdDevPop1[int64],
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), VarPopReturnType, true),
+		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
+		aggVarPopFill[int64], aggVarPopFills[int64], aggVarPopMerge, aggStdDevPopFlush)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), VarPopReturnType, false, true),
-			newAggVarPop[uint8],
-			InitAggVarPop1[uint8],
-			FillAggVarPop1[uint8], nil, FillsAggVarPop1[uint8],
-			MergeAggVarPop1[uint8],
-			FlushAggStdDevPop1[uint8],
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), VarPopReturnType, true),
+		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
+		aggVarPopFill[uint8], aggVarPopFills[uint8], aggVarPopMerge, aggStdDevPopFlush)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), VarPopReturnType, false, true),
-			newAggVarPop[uint16],
-			InitAggVarPop1[uint16],
-			FillAggVarPop1[uint16], nil, FillsAggVarPop1[uint16],
-			MergeAggVarPop1[uint16],
-			FlushAggStdDevPop1[uint16],
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), VarPopReturnType, true),
+		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
+		aggVarPopFill[uint16], aggVarPopFills[uint16], aggVarPopMerge, aggStdDevPopFlush)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), VarPopReturnType, false, true),
-			newAggVarPop[uint32],
-			InitAggVarPop1[uint32],
-			FillAggVarPop1[uint32], nil, FillsAggVarPop1[uint32],
-			MergeAggVarPop1[uint32],
-			FlushAggStdDevPop1[uint32],
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), VarPopReturnType, true),
+		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
+		aggVarPopFill[uint32], aggVarPopFills[uint32], aggVarPopMerge, aggStdDevPopFlush)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), VarPopReturnType, false, true),
-			newAggVarPop[uint64],
-			InitAggVarPop1[uint64],
-			FillAggVarPop1[uint64], nil, FillsAggVarPop1[uint64],
-			MergeAggVarPop1[uint64],
-			FlushAggStdDevPop1[uint64],
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), VarPopReturnType, true),
+		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
+		aggVarPopFill[uint64], aggVarPopFills[uint64], aggVarPopMerge, aggStdDevPopFlush)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), VarPopReturnType, false, true),
-			newAggVarPop[float32],
-			InitAggVarPop1[float32],
-			FillAggVarPop1[float32], nil, FillsAggVarPop1[float32],
-			MergeAggVarPop1[float32],
-			FlushAggStdDevPop1[float32],
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), VarPopReturnType, true),
+		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
+		aggVarPopFill[float32], aggVarPopFills[float32], aggVarPopMerge, aggStdDevPopFlush)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), VarPopReturnType, false, true),
-			newAggVarPop[float64],
-			InitAggVarPop1[float64],
-			FillAggVarPop1[float64], nil, FillsAggVarPop1[float64],
-			MergeAggVarPop1[float64],
-			FlushAggStdDevPop1[float64],
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), VarPopReturnType, true),
+		nil, generateAggVarPopGroupContext, aggVarPopInitResult,
+		aggVarPopFill[float64], aggVarPopFills[float64], aggVarPopMerge, aggStdDevPopFlush)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), VarPopReturnType, false, true),
-			newAggVarPopDecimal64,
-			InitAggVarPop1Decimal64,
-			FillAggVarPop1Decimal64, nil, FillsAggVarPop1Decimal64,
-			MergeAggVarPop1Decimal64,
-			FlushAggStdDevPopDecimal64,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal64.ToType(), VarPopReturnType, true),
+		generateAggVarPopOfDecimalCommonContext, generateAggVarPopOfDecimalGroupContext, aggVarPopOfDecimalInitResult,
+		aggVarPopOfDecimal64Fill, aggVarPopOfDecimal64Fills, aggVarPopOfDecimalMerge, aggStdDevPopOfDecimalFlush)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), VarPopReturnType, false, true),
-			newAggVarPopDecimal128,
-			InitAggVarPop1Decimal128,
-			FillAggVarPop1Decimal128, nil, FillsAggVarPop1Decimal128,
-			MergeAggVarPop1Decimal128,
-			FlushAggStdDevPopDecimal128,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), VarPopReturnType, true),
+		generateAggVarPopOfDecimalCommonContext, generateAggVarPopOfDecimalGroupContext, aggVarPopOfDecimalInitResult,
+		aggVarPopOfDecimal128Fill, aggVarPopOfDecimal128Fills, aggVarPopOfDecimalMerge, aggStdDevPopOfDecimalFlush)
 }
 
-func FlushAggStdDevPop1[from numeric](
-	exec aggexec.SingleAggFromFixedRetFixed[from, float64],
-	getter aggexec.AggGetter[float64], setter aggexec.AggSetter[float64]) error {
-	a := exec.(*aggVarPop[from])
-	if a.count <= 1 {
-		setter(0)
-		return nil
+func aggStdDevPopFlush(
+	groupCtx aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	resultGetter aggexec.AggGetter[float64],
+	resultSetter aggexec.AggSetter[float64]) error {
+	if err := aggVarPopFlush(groupCtx, nil, resultGetter, resultSetter); err != nil {
+		return err
 	}
-	avg := a.sum / float64(a.count)
-	variance := getter()/float64(a.count) - math.Pow(avg, 2)
-	setter(math.Sqrt(variance))
+	resultSetter(math.Sqrt(resultGetter()))
 	return nil
 }
 
-func FlushAggStdDevPopDecimal128(
-	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128],
-	getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {
-	a := exec.(*aggVarPopDecimal128)
-	r, err := getVarianceFromSumPowCount(a.sum, getter(), a.count, a.argScale)
+func aggStdDevPopOfDecimalFlush(
+	groupCtx aggexec.AggGroupExecContext,
+	commonCtx aggexec.AggCommonExecContext,
+	resultGetter aggexec.AggGetter[types.Decimal128],
+	resultSetter aggexec.AggSetter[types.Decimal128]) error {
+	a := groupCtx.(*aggVarPopOfDecimalGroupContext)
+	b := commonCtx.(*aggVarPopOfDecimalCommonContext)
+
+	r, err := getVarianceFromSumPowCount(a.sum, resultGetter(), a.count, b.argScale)
 	if err != nil {
 		return err
 	}
 	if r.B0_63 == 0 && r.B64_127 == 0 {
-		setter(r)
+		resultSetter(r)
 		return nil
 	}
-	temp, err1 := types.Decimal128FromFloat64(
-		math.Sqrt(types.Decimal128ToFloat64(r, a.retScale)),
-		38, a.retScale)
-	if err1 != nil {
-		return err1
-	}
-	setter(temp)
-	return nil
-}
-
-func FlushAggStdDevPopDecimal64(
-	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128],
-	getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {
-	a := exec.(*aggVarPopDecimal128)
-	r, err := getVarianceFromSumPowCount(a.sum, getter(), a.count, a.argScale)
-	if err != nil {
-		return err
-	}
-	if r.B0_63 == 0 && r.B64_127 == 0 {
-		setter(r)
-		return nil
-	}
-	temp, err1 := types.Decimal128FromFloat64(
-		math.Sqrt(types.Decimal128ToFloat64(r, a.retScale)),
-		38, a.retScale)
-	if err1 != nil {
-		return err1
-	}
-	setter(temp)
-	return nil
+	r, err = types.Decimal128FromFloat64(
+		math.Sqrt(types.Decimal128ToFloat64(r, b.resultScale)),
+		38, b.resultScale)
+	resultSetter(r)
+	return err
 }
