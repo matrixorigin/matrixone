@@ -375,7 +375,8 @@ func restoreToAccount(
 			continue
 		}
 
-		if err = bh.Exec(toCtx, fmt.Sprintf("drop database %s", dbName)); err != nil {
+		getLogger().Info(fmt.Sprintf("skip drop db: %v", dbName))
+		if err = bh.Exec(toCtx, fmt.Sprintf("drop database if exists %s", dbName)); err != nil {
 			return
 		}
 	}
@@ -440,11 +441,13 @@ func restoreToDatabaseOrTable(
 
 	// if restore to db, delete the same name db first
 	if !restoreToTbl {
+		getLogger().Info(fmt.Sprintf("[%s] start to drop database: %v", snapshotName, dbName))
 		if err = bh.Exec(toCtx, "drop database if exists "+dbName); err != nil {
 			return
 		}
 	}
 
+	getLogger().Info(fmt.Sprintf("[%s] start to create database: %v", snapshotName, dbName))
 	if err = bh.Exec(toCtx, "create database if not exists "+dbName); err != nil {
 		return
 	}
@@ -603,6 +606,7 @@ func recreateTable(
 	snapshotName string,
 	tblInfo *tableInfo,
 	toAccountId uint32) (err error) {
+	getLogger().Info(fmt.Sprintf("[%s] start to restore table: %v", snapshotName, tblInfo.tblName))
 	curAccountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return
@@ -619,11 +623,13 @@ func recreateTable(
 	}
 
 	// create table
+	getLogger().Info(fmt.Sprintf("[%s] start to create table: %v", snapshotName, tblInfo.tblName))
 	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
 		return
 	}
 
 	// insert data
+	getLogger().Info(fmt.Sprintf("[%s] start to insert select table: %v", snapshotName, tblInfo.tblName))
 	insertIntoSql := fmt.Sprintf(restoreTableDataFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotName)
 
 	if curAccountId == toAccountId {
@@ -832,6 +838,7 @@ func getStringColsList(ctx context.Context, bh BackgroundExec, sql string, colIn
 }
 
 func showDatabases(ctx context.Context, bh BackgroundExec, snapshotName string) ([]string, error) {
+	getLogger().Info(fmt.Sprintf("[%s] start to get all database ", snapshotName))
 	sql := "show databases"
 	if len(snapshotName) > 0 {
 		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
@@ -874,6 +881,7 @@ func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string,
 }
 
 func getTableInfos(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) ([]*tableInfo, error) {
+	getLogger().Info(fmt.Sprintf("[%s] start to get table info: %v", snapshotName, dbName))
 	tableInfos, err := showFullTables(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
 		return nil, err
