@@ -244,6 +244,7 @@ func (v *Vector) CleanOnlyData() {
 	v.sorted = false
 }
 
+// no copy. it is unsafe if the user cannot determine the vector's life
 func (v *Vector) UnsafeGetStringAt(i int) string {
 	if v.IsConst() {
 		i = 0
@@ -251,6 +252,16 @@ func (v *Vector) UnsafeGetStringAt(i int) string {
 	var bs []types.Varlena
 	ToSlice(v, &bs)
 	return bs[i].UnsafeGetString(v.area)
+}
+
+// always copy
+func (v *Vector) GetStringAt(i int) string {
+	if v.IsConst() {
+		i = 0
+	}
+	var bs []types.Varlena
+	ToSlice(v, &bs)
+	return bs[i].GetString(v.area)
 }
 
 // GetArrayAt Returns []T at the specific index of the vector

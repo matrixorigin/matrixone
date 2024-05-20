@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 const (
@@ -118,11 +119,11 @@ func GetArray[T RealNumbers](v *Varlena, area []byte) []T {
 }
 
 // See the lifespan comment above.
-// func (v *Varlena) UnsafeGetString(area []byte) string {
-// 	return util.UnsafeBytesToString(v.GetByteSlice(area))
-// }
-
 func (v *Varlena) UnsafeGetString(area []byte) string {
+	return util.UnsafeBytesToString(v.GetByteSlice(area))
+}
+
+func (v *Varlena) GetString(area []byte) string {
 	return string(v.GetByteSlice(area))
 }
 
