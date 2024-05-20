@@ -587,11 +587,11 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			}
 			// create readers for reading dirty blocks from partition table.
 			for num, relName := range s.DataSource.PartitionRelationNames {
-				subrel, err := db.Relation(c.ctx, relName, c.proc)
+				subrel, err := db.Relation(ctx, relName, c.proc)
 				if err != nil {
 					return err
 				}
-				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.FilterExpr, dirtyRanges[num], len(s.DataSource.OrderBy) > 0)
+				memRds, err := subrel.NewReader(ctx, mcpu, s.DataSource.FilterExpr, dirtyRanges[num], len(s.DataSource.OrderBy) > 0)
 				if err != nil {
 					return err
 				}
