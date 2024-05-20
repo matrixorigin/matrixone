@@ -3,8 +3,6 @@ create account acc01 admin_name = 'test_account' identified by '111';
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 
-
-
 -- @session:id=1&user=acc01:test_account&password=111
 drop database if exists acc_test04;
 create database acc_test04;
@@ -64,7 +62,7 @@ create account acc01 admin_name = 'test_account' identified by '111';
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 
--- @session:id=1&user=acc01:test_account&password=111
+-- @session:id=5&user=acc01:test_account&password=111
 drop database if exists acc_test02;
 create database acc_test02;
 use acc_test02;
@@ -173,7 +171,7 @@ show create table acc_test04.index03;
 drop snapshot if exists sp04;
 create snapshot sp04 for account acc01;
 
--- @session:id=1&user=acc01:test_account&password=111
+-- @session:id=6&user=acc01:test_account&password=111
 insert into acc_test02.pri01 values (50,'ACCOUNTING','NEW YORK');
 insert into acc_test02.aff01 values (9000,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,50);
 truncate table acc_test03.table01;
@@ -190,7 +188,7 @@ show create table acc_test04.index03;
 
 restore account acc01 from snapshot sp04 to account acc02;
 
--- @session:id=3&user=acc02:test_account&password=111
+-- @session:id=7&user=acc02:test_account&password=111
 show databases;
 select count(*) from acc_test02.pri01;
 select count(*) from acc_test02.aff01;
