@@ -229,10 +229,7 @@ func aggAvgOfDecimal64Fills(
 	argScale := *(commonCtx.(*aggAvgDecimalCommonCtx))
 	*groupCtx.(*aggAvgContext) += aggAvgContext(count)
 
-	v := types.Decimal128{B0_63: uint64(value), B64_127: 0}
-	if value.Sign() {
-		v.B64_127 = ^v.B64_127
-	}
+	v := aggexec.FromD64ToD128(value)
 	r, _, err := v.Mul(types.Decimal128{B0_63: uint64(count), B64_127: 0}, int32(argScale), 0)
 	if err != nil {
 		return err
