@@ -588,9 +588,18 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 		}
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		for i := 0; i < pk.Length(); i++ {
-			v := pk.UnsafeGetStringAt(i)
-			mp[v] = true
+		if pk.IsConst() {
+			for i := 0; i < pk.Length(); i++ {
+				v := pk.UnsafeGetStringAt(i)
+				mp[v] = true
+			}
+		} else {
+			vs := vector.MustFixedCol[types.Varlena](pk)
+			area := pk.GetArea()
+			for i := 0; i < len(vs); i++ {
+				v := vs[i].UnsafeGetString(area)
+				mp[v] = true
+			}
 		}
 	case types.T_array_float32:
 		for i := 0; i < pk.Length(); i++ {
@@ -772,10 +781,21 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 			}
 		case types.T_char, types.T_varchar, types.T_json,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			for i := 0; i < vec.Length(); i++ {
-				v := vec.UnsafeGetStringAt(i)
-				if mp[v] {
-					sels = append(sels, int32(i))
+			if pk.IsConst() {
+				for i := 0; i < pk.Length(); i++ {
+					v := pk.UnsafeGetStringAt(i)
+					if mp[v] {
+						sels = append(sels, int32(i))
+					}
+				}
+			} else {
+				vs := vector.MustFixedCol[types.Varlena](pk)
+				area := pk.GetArea()
+				for i := 0; i < len(vs); i++ {
+					v := vs[i].UnsafeGetString(area)
+					if mp[v] {
+						sels = append(sels, int32(i))
+					}
 				}
 			}
 		case types.T_array_float32:
