@@ -250,7 +250,7 @@ func (v *Vector) UnsafeGetStringAt(i int) string {
 	}
 	var bs []types.Varlena
 	ToSlice(v, &bs)
-	return bs[i].GetString(v.area)
+	return bs[i].UnsafeGetString(v.area)
 }
 
 // GetArrayAt Returns []T at the specific index of the vector
