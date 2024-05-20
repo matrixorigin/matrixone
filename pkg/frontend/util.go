@@ -422,7 +422,7 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, e
 	case types.T_float64:
 		return vector.MustFixedCol[float64](vec)[0], nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
-		return vec.UnsafeGetStringAt(0), nil
+		return vec.GetStringAt(0), nil
 	case types.T_array_float32:
 		return vector.GetArrayAt[float32](vec, 0), nil
 	case types.T_array_float64:
@@ -1004,7 +1004,7 @@ func (b *strParamBinder) bind(e tree.Expr) string {
 	case *tree.NumVal:
 		return val.OrigString()
 	case *tree.ParamExpr:
-		return b.params.UnsafeGetStringAt(val.Offset - 1)
+		return b.params.GetStringAt(val.Offset - 1)
 	default:
 		b.err = moerr.NewInternalError(b.ctx, "invalid params type %T", e)
 		return ""
