@@ -126,7 +126,7 @@ func (s *service) validReplica(
 	shard pb.TableShard,
 	replica pb.ShardReplica,
 ) error {
-	current, ok := s.getAllocatedShard(shard.TableID)
+	current, ok := s.getAllocatedShard(shard.TableID, shard.ShardID)
 	if !ok {
 		return moerr.NewReplicaNotFound(replica.String())
 	}

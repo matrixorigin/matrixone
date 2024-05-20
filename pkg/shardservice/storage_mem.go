@@ -72,6 +72,21 @@ func (s *MemShardStorage) Get(
 	return s.committed[table], nil
 }
 
+func (s *MemShardStorage) GetDeleted(
+	tables map[uint64]struct{},
+) ([]uint64, error) {
+	s.RLock()
+	defer s.RUnlock()
+
+	var deleted []uint64
+	for table := range tables {
+		if _, ok := s.committed[table]; !ok {
+			deleted = append(deleted, table)
+		}
+	}
+	return deleted, nil
+}
+
 func (s *MemShardStorage) Create(
 	ctx context.Context,
 	table uint64,

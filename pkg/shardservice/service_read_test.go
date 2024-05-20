@@ -285,6 +285,71 @@ func TestReadWithStaleReplica(t *testing.T) {
 	)
 }
 
+func TestReadWithLazyCreateShards(t *testing.T) {
+	runServicesTest(
+		t,
+		"cn1",
+		func(
+			ctx context.Context,
+			server *server,
+			services []*service,
+		) {
+			s1 := services[0]
+			store1 := s1.storage.(*MemShardStorage)
+
+			table := uint64(1)
+			shards := uint32(3)
+			mustAddTestShards(t, ctx, s1, table, shards, 1)
+
+			k := []byte("k")
+			s1v1 := []byte("s1v1")
+			s1v2 := []byte("s1v2")
+			store1.set(k, s1v1, newTestTimestamp(1))
+			store1.set(k, s1v2, newTestTimestamp(2))
+			store1.waiter.NotifyLatestCommitTS(newTestTimestamp(4))
+
+			fn := func(
+				s *service,
+				ts timestamp.Timestamp,
+				expectValues [][]byte,
+			) {
+				var values [][]byte
+				err := s.Read(
+					ctx,
+					table,
+					k,
+					func(b []byte) {
+						values = append(values, b)
+					},
+					DefaultOptions.ReadAt(ts),
+				)
+				require.NoError(t, err)
+
+				sort.Slice(
+					expectValues,
+					func(i, j int) bool {
+						return string(expectValues[i]) < string(expectValues[j])
+					},
+				)
+				sort.Slice(
+					values,
+					func(i, j int) bool {
+						return string(values[i]) < string(values[j])
+					},
+				)
+
+				require.Equal(t, expectValues, values)
+			}
+
+			fn(s1, newTestTimestamp(2), [][]byte{s1v1, s1v1, s1v1})
+			fn(s1, newTestTimestamp(3), [][]byte{s1v2, s1v2, s1v2})
+		},
+		func(c *Config) []Option {
+			return []Option{withDisableAppendCreateCallback()}
+		},
+	)
+}
+
 func newTestTimestamp(
 	v int64,
 ) timestamp.Timestamp {

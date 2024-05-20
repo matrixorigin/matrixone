@@ -22,11 +22,12 @@ import (
 )
 
 var (
-	defaultLockListenAddress   = "127.0.0.1:6004"
-	defaultMaxScheduleTables   = 1
-	defaultFreezeCNTimeout     = time.Minute
-	defaultScheduleDuration    = time.Second
-	defaultCNHeartbeatDuration = time.Second * 2
+	defaultLockListenAddress      = "127.0.0.1:6004"
+	defaultMaxScheduleTables      = 1
+	defaultFreezeCNTimeout        = time.Minute
+	defaultScheduleDuration       = time.Second
+	defaultCNHeartbeatDuration    = time.Second * 2
+	defaultCNCheckDeletedDuration = time.Minute
 )
 
 // Shard config
@@ -51,6 +52,8 @@ type Config struct {
 	SelectCNLabel string `toml:"cn-select-label-name"`
 	// CNHeartbeatDuration how often to send heartbeat to shard server.
 	CNHeartbeatDuration toml.Duration `toml:"cn-heartbeat-duration"`
+	// CNCheckDeletedDuration how often to check deleted tables in CN.
+	CNCheckDeletedDuration toml.Duration `toml:"cn-check-deleted-duration"`
 }
 
 // Validate validate
@@ -75,6 +78,9 @@ func (c *Config) Validate() {
 	}
 	if c.CNHeartbeatDuration.Duration == 0 {
 		c.CNHeartbeatDuration.Duration = defaultCNHeartbeatDuration
+	}
+	if c.CNCheckDeletedDuration.Duration == 0 {
+		c.CNCheckDeletedDuration.Duration = defaultCNCheckDeletedDuration
 	}
 	c.RPC.Adjust()
 }

@@ -40,6 +40,18 @@ func withDisableHeartbeat() Option {
 	}
 }
 
+func withDisableAppendDeleteCallback() Option {
+	return func(s *service) {
+		s.options.disableAppendDeleteCallback = true
+	}
+}
+
+func withDisableAppendCreateCallback() Option {
+	return func(s *service) {
+		s.options.disableAppendCreateCallback = true
+	}
+}
+
 type service struct {
 	cfg     Config
 	storage ShardStorage
@@ -70,7 +82,9 @@ type service struct {
 	}
 
 	options struct {
-		disableHeartbeat atomic.Bool
+		disableHeartbeat            atomic.Bool
+		disableAppendDeleteCallback bool
+		disableAppendCreateCallback bool
 	}
 }
 
@@ -109,6 +123,7 @@ func (s *service) validate() {
 	if s.storage == nil {
 		panic("storage is nil")
 	}
+	s.cfg.Validate()
 }
 
 func (s *service) Close() error {
@@ -133,16 +148,22 @@ func (s *service) Create(
 		return err
 	}
 
-	txnOp.AppendEventCallback(
-		client.ClosedEvent,
-		func(txn client.TxnEvent) {
-			if txn.Committed() {
-				s.createC <- table
-			} else {
-				s.atomic.abort.Add(1)
-			}
-		},
-	)
+	if !s.options.disableAppendCreateCallback {
+		txnOp.AppendEventCallback(
+			client.ClosedEvent,
+			func(txn client.TxnEvent) {
+				if txn.Committed() {
+					// The callback here is not guaranteed to execute after the transaction has
+					// already committed.
+					// The creation will lazy execute in Read.
+					s.createC <- table
+				} else {
+					s.atomic.abort.Add(1)
+				}
+			},
+		)
+	}
+
 	return nil
 }
 
@@ -157,16 +178,19 @@ func (s *service) Delete(
 		return err
 	}
 
-	txnOp.AppendEventCallback(
-		client.ClosedEvent,
-		func(txn client.TxnEvent) {
-			if txn.Committed() {
-				s.deleteC <- table
-			} else {
-				s.atomic.abort.Add(1)
-			}
-		},
-	)
+	if !s.options.disableAppendDeleteCallback {
+		txnOp.AppendEventCallback(
+			client.ClosedEvent,
+			func(txn client.TxnEvent) {
+				if txn.Committed() {
+					s.deleteC <- table
+				} else {
+					s.atomic.abort.Add(1)
+				}
+			},
+		)
+	}
+
 	return nil
 }
 
@@ -191,8 +215,7 @@ func (s *service) getShards(
 		return cache, nil
 	}
 
-	// make sure only one goroutine to get shards from
-	// shard server
+	// make sure only one goroutine to get shards from shard server
 	s.cache.Lock()
 	defer s.cache.Unlock()
 
@@ -264,13 +287,15 @@ func (s *service) getAllocatedShards() []pb.TableShard {
 
 func (s *service) getAllocatedShard(
 	table uint64,
+	shardID uint64,
 ) (pb.TableShard, bool) {
 	shards := s.cache.allocate.Load()
 	if len(shards.values) == 0 {
 		return pb.TableShard{}, false
 	}
 	for _, shard := range shards.values {
-		if shard.TableID == table {
+		if shard.TableID == table &&
+			shard.ShardID == shardID {
 			return shard, true
 		}
 	}
@@ -282,6 +307,10 @@ func (s *service) heartbeat(
 ) {
 	timer := time.NewTimer(s.cfg.CNHeartbeatDuration.Duration)
 	defer timer.Stop()
+
+	checkTimer := time.NewTimer(s.cfg.CNCheckDeletedDuration.Duration)
+	defer checkTimer.Stop()
+
 	m := make(map[uint64]bool)
 	for {
 		select {
@@ -305,6 +334,12 @@ func (s *service) heartbeat(
 					zap.Uint64("table", table),
 					zap.Error(err))
 			}
+		case <-checkTimer.C:
+			if err := s.handleCheckDeleted(); err != nil {
+				getLogger().Error("failed to check deleted table shards",
+					zap.Error(err))
+			}
+			checkTimer.Reset(s.cfg.CNCheckDeletedDuration.Duration)
 		}
 	}
 }
@@ -491,6 +526,30 @@ func (s *service) handleDeleteTable(
 	s.remote.pool.ReleaseResponse(resp)
 
 	return s.storage.Unsubscribe(tableID)
+}
+
+func (s *service) handleCheckDeleted() error {
+	shards := s.getAllocatedShards()
+	if len(shards) == 0 {
+		return nil
+	}
+	m := make(map[uint64]struct{})
+	for _, shard := range shards {
+		m[shard.TableID] = struct{}{}
+	}
+
+	deleted, err := s.storage.GetDeleted(m)
+	if err != nil {
+		return err
+	}
+	for _, table := range deleted {
+		select {
+		case s.deleteC <- table:
+		default:
+			return nil
+		}
+	}
+	return nil
 }
 
 func (s *service) removeCache(

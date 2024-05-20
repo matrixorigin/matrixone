@@ -100,6 +100,8 @@ type filter interface {
 type ShardStorage interface {
 	// Get returns the latest metadata of the shards corresponding to the table.
 	Get(table uint64) (pb.ShardsMetadata, error)
+	// GetDeleted returns the table ids of the shards that have been deleted.
+	GetDeleted(tables map[uint64]struct{}) ([]uint64, error)
 	// Create creates the metadata for the sharding corresponding to the table with the given
 	// transaction.
 	Create(ctx context.Context, table uint64, txnOp client.TxnOperator) (bool, error)

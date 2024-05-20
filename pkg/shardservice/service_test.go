@@ -124,6 +124,35 @@ func TestDeleteShards(t *testing.T) {
 	)
 }
 
+func TestDeleteShardsInAsyncTask(t *testing.T) {
+	runServicesTest(
+		t,
+		"cn1",
+		func(
+			ctx context.Context,
+			server *server,
+			services []*service,
+		) {
+			s1 := services[0]
+			table := uint64(1)
+			shards := uint32(1)
+			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			waitReplicaCount(table, s1, 1)
+
+			txnOp, close := client.NewTestTxnOperator(ctx)
+			defer close()
+
+			require.NoError(t, s1.Delete(context.TODO(), table, txnOp))
+			require.NoError(t, txnOp.Commit(ctx))
+
+			waitReplicaCount(table, s1, 0)
+		},
+		func(c *Config) []Option {
+			return []Option{withDisableAppendDeleteCallback()}
+		},
+	)
+}
+
 func TestDeleteShardsWithTxnAborted(t *testing.T) {
 	runServicesTest(
 		t,
@@ -599,6 +628,7 @@ func runServicesTest(
 			ListenAddress: cn.ShardServiceAddress,
 		}
 		cfg.CNHeartbeatDuration.Duration = time.Millisecond * 10
+		cfg.CNCheckDeletedDuration.Duration = time.Millisecond * 10
 
 		var opts []Option
 		if adjustConfigFunc != nil {

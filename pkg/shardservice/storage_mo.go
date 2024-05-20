@@ -108,6 +108,61 @@ func (s *storage) Get(
 	return metadata, nil
 }
 
+func (s *storage) GetDeleted(
+	tables map[uint64]struct{},
+) ([]uint64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+
+	var targets []string
+	for table := range tables {
+		targets = append(targets, fmt.Sprintf("%d", table))
+	}
+
+	var exists []uint64
+	now, _ := s.clock.Now()
+	err := s.executor.ExecTxn(
+		ctx,
+		func(
+			txn executor.TxnExecutor,
+		) error {
+			res, err := txn.Exec(
+				getCheckMetadataSQL(targets),
+				executor.StatementOption{},
+			)
+			if err != nil {
+				return err
+			}
+			defer res.Close()
+
+			res.ReadRows(
+				func(rows int, cols []*vector.Vector) bool {
+					exists = append(exists, executor.GetFixedRows[uint64](cols[0])...)
+					return true
+				},
+			)
+			return nil
+		},
+		executor.Options{}.WithMinCommittedTS(now),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(exists) == len(tables) {
+		return nil, nil
+	}
+
+	var deleted []uint64
+	for _, table := range exists {
+		delete(tables, table)
+	}
+	for table := range tables {
+		deleted = append(deleted, table)
+	}
+	return deleted, nil
+}
+
 func (s *storage) Create(
 	ctx context.Context,
 	table uint64,
@@ -346,6 +401,17 @@ func getMetadataSQL(
 		catalog.MO_CATALOG,
 		catalog.MOShardsMetadata,
 		table,
+	)
+}
+
+func getCheckMetadataSQL(
+	tables []string,
+) string {
+	return fmt.Sprintf(
+		"select table_id from %s.%s where table_id in (%s)",
+		catalog.MO_CATALOG,
+		catalog.MOShardsMetadata,
+		strings.Join(tables, ","),
 	)
 }
 
