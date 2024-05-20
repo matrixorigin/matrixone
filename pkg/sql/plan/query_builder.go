@@ -3878,6 +3878,8 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	switch tbl.JoinType {
 	case tree.JOIN_TYPE_CROSS, tree.JOIN_TYPE_INNER, tree.JOIN_TYPE_NATURAL:
 		joinType = plan.Node_INNER
+	case tree.JOIN_TYPE_CROSS_L2:
+		joinType = plan.Node_L2
 	case tree.JOIN_TYPE_LEFT, tree.JOIN_TYPE_NATURAL_LEFT:
 		joinType = plan.Node_LEFT
 	case tree.JOIN_TYPE_RIGHT, tree.JOIN_TYPE_NATURAL_RIGHT:
@@ -3930,19 +3932,26 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		if err != nil {
 			return 0, err
 		}
-
 		node.OnList = joinConds
 
 	case *tree.UsingJoinCond:
-		for _, col := range cond.Cols {
-			expr, err := ctx.addUsingCol(string(col), joinType, leftCtx, rightCtx)
-			if err != nil {
-				return 0, err
+		if tbl.JoinType == tree.JOIN_TYPE_CROSS_L2 {
+			for _, col := range cond.Cols {
+				expr, err := ctx.addUsingColForCrossL2(string(col), joinType, leftCtx, rightCtx)
+				if err != nil {
+					return 0, err
+				}
+				node.OnList = append(node.OnList, expr)
 			}
-
-			node.OnList = append(node.OnList, expr)
+		} else {
+			for _, col := range cond.Cols {
+				expr, err := ctx.addUsingCol(string(col), joinType, leftCtx, rightCtx)
+				if err != nil {
+					return 0, err
+				}
+				node.OnList = append(node.OnList, expr)
+			}
 		}
-
 	default:
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
 			leftCols := make(map[string]bool)
