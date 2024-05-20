@@ -51,10 +51,13 @@ func (s *service) AddStatement(
 	}
 
 	sql = truncateSQL(sql)
-	s.statementC <- newStatement(
-		op.Txn().ID,
-		sql,
-		cost)
+	s.statementC <- event{
+		csv: newStatement(
+			op.Txn().ID,
+			sql,
+			cost,
+		),
+	}
 }
 
 func (s *service) AddStatementFilter(
@@ -145,8 +148,8 @@ func (s *service) RefreshStatementFilters() error {
 
 			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 				for i := 0; i < rows; i++ {
-					methods = append(methods, cols[0].GetStringAt(i))
-					values = append(values, cols[1].GetStringAt(i))
+					methods = append(methods, cols[0].UnsafeGetStringAt(i))
+					values = append(values, cols[1].UnsafeGetStringAt(i))
 				}
 				return true
 			})
@@ -188,7 +191,7 @@ func (s *service) handleStatements(ctx context.Context) {
 		4,
 		TraceStatementTable,
 		s.statementC,
-		s.statementBufC)
+	)
 }
 
 func addStatementFilterSQL(

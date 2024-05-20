@@ -185,7 +185,6 @@ func newClientConn(
 	}
 	c := &clientConn{
 		ctx:            ctx,
-		log:            logger,
 		counterSet:     cs,
 		conn:           conn,
 		haKeeperClient: haKeeperClient,
@@ -205,6 +204,7 @@ func newClientConn(
 	if err != nil {
 		return nil, err
 	}
+	c.log = logger.With(zap.Uint32("ConnID", c.connID))
 	fp := config.FrontendParameters{
 		EnableTls: cfg.TLSEnabled,
 	}
@@ -405,6 +405,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		cn, err = c.router.Route(c.ctx, c.clientInfo, filterFn)
 		if err != nil {
 			v2.ProxyConnectRouteFailCounter.Inc()
+			c.log.Error("route failed", zap.Error(err))
 			return nil, err
 		}
 		// We have to set connection ID after cn is returned.
@@ -436,6 +437,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 				continue
 			} else {
 				v2.ProxyConnectCommonFailCounter.Inc()
+				c.log.Error("failed to connect to CN server, cannot retry", zap.Error(err))
 				return nil, err
 			}
 		}
@@ -443,6 +445,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		if prevAdd == "" {
 			// r is the packet received from CN server, send r to client.
 			if err := c.mysqlProto.WritePacket(r[4:]); err != nil {
+				c.log.Error("failed to write packet to client", zap.Error(err))
 				v2.ProxyConnectCommonFailCounter.Inc()
 				closeErr := sc.Close()
 				if closeErr != nil {
@@ -474,6 +477,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		break
 	}
 	if !isOKPacket(r) {
+		c.log.Error("response is not OK", zap.Any("packet", err))
 		// If we do not close here, there will be a lot of unused connections
 		// in connManager.
 		if sc != nil {

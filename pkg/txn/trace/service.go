@@ -85,19 +85,15 @@ func WithFlushDuration(value time.Duration) Option {
 }
 
 type service struct {
-	cn            string
-	client        client.TxnClient
-	clock         clock.Clock
-	executor      executor.SQLExecutor
-	stopper       *stopper.Stopper
-	txnC          chan csvEvent
-	txnBufC       chan *buffer
-	entryC        chan csvEvent
-	entryBufC     chan *buffer
-	txnActionC    chan csvEvent
-	txnActionBufC chan *buffer
-	statementC    chan csvEvent
-	statementBufC chan *buffer
+	cn         string
+	client     client.TxnClient
+	clock      clock.Clock
+	executor   executor.SQLExecutor
+	stopper    *stopper.Stopper
+	txnC       chan event
+	entryC     chan event
+	txnActionC chan event
+	statementC chan event
 
 	loadC  chan loadAction
 	seq    atomic.Uint64
@@ -162,14 +158,11 @@ func NewService(
 	if s.options.bufferSize == 0 {
 		s.options.bufferSize = 1000000
 	}
-	s.txnBufC = make(chan *buffer, s.options.bufferSize)
-	s.entryBufC = make(chan *buffer, s.options.bufferSize)
-	s.entryC = make(chan csvEvent, s.options.bufferSize)
-	s.txnC = make(chan csvEvent, s.options.bufferSize)
-	s.txnActionC = make(chan csvEvent, s.options.bufferSize)
-	s.txnActionBufC = make(chan *buffer, s.options.bufferSize)
-	s.statementC = make(chan csvEvent, s.options.bufferSize)
-	s.statementBufC = make(chan *buffer, s.options.bufferSize)
+
+	s.entryC = make(chan event, s.options.bufferSize)
+	s.txnC = make(chan event, s.options.bufferSize)
+	s.txnActionC = make(chan event, s.options.bufferSize)
+	s.statementC = make(chan event, s.options.bufferSize)
 
 	if err := s.stopper.RunTask(s.handleTxnEvents); err != nil {
 		panic(err)
@@ -254,10 +247,8 @@ func (s *service) DecodeHexComplexPK(hexPK string) (string, error) {
 func (s *service) Close() {
 	s.stopper.Stop()
 	s.atomic.closed.Store(true)
-	close(s.entryBufC)
 	close(s.entryC)
 	close(s.txnC)
-	close(s.txnBufC)
 	close(s.loadC)
 }
 
@@ -266,8 +257,7 @@ func (s *service) handleEvent(
 	fileCreator func() string,
 	columns int,
 	tableName string,
-	csvC chan csvEvent,
-	bufferC chan *buffer) {
+	eventC chan event) {
 	ticker := time.NewTicker(s.options.flushDuration)
 	defer ticker.Stop()
 
@@ -340,23 +330,21 @@ func (s *service) handleEvent(
 			if s.atomic.flushEnabled.Load() {
 				flush()
 			}
-		case e := <-csvC:
-			e.toCSVRecord(s.cn, buf, records)
-			if err := w.Write(records); err != nil {
-				s.logger.Fatal("failed to write csv record",
-					zap.Error(err))
-			}
+		case e := <-eventC:
+			if e.buffer != nil {
+				e.buffer.close()
+			} else {
+				e.csv.toCSVRecord(s.cn, buf, records)
+				if err := w.Write(records); err != nil {
+					s.logger.Fatal("failed to write csv record",
+						zap.Error(err))
+				}
 
-			sum += bytes()
-			if sum > s.options.flushBytes &&
-				s.atomic.flushEnabled.Load() {
-				flush()
-			}
-
-			select {
-			case v := <-bufferC:
-				v.close()
-			default:
+				sum += bytes()
+				if sum > s.options.flushBytes &&
+					s.atomic.flushEnabled.Load() {
+					flush()
+				}
 			}
 		}
 	}
@@ -432,8 +420,8 @@ func (s *service) watch(ctx context.Context) {
 				defer res.Close()
 				res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 					for i := 0; i < rows; i++ {
-						features = append(features, cols[0].GetStringAt(i))
-						states = append(states, cols[1].GetStringAt(i))
+						features = append(features, cols[0].UnsafeGetStringAt(i))
+						states = append(states, cols[1].UnsafeGetStringAt(i))
 					}
 					return true
 				})
@@ -776,6 +764,9 @@ func (l *EntryData) writeToBuf(
 	rows := l.vecs[0].Length()
 	for row := 0; row < rows; row++ {
 		idx := buf.buf.GetWriteIndex()
+		buf.buf.WriteString("row-")
+		buf.buf.MustWrite(intToString(dst, int64(row)))
+		buf.buf.WriteString("{")
 		for col, name := range l.columns {
 			if _, ok := disableColumns[name]; ok {
 				continue
@@ -796,6 +787,7 @@ func (l *EntryData) writeToBuf(
 				buf.buf.WriteString(", ")
 			}
 		}
+		buf.buf.WriteString("}")
 		if buf.buf.GetWriteIndex() > idx {
 			data := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
 			fn(factory(data, row))
@@ -883,4 +875,35 @@ func escape(value string) string {
 type loadAction struct {
 	sql  string
 	file string
+}
+
+type writer struct {
+	buf *buf.ByteBuf
+	dst []byte
+	idx int
+}
+
+func (w writer) WriteUint(v uint64) {
+	w.buf.MustWrite(uintToString(w.dst, v))
+}
+
+func (w writer) WriteInt(v int64) {
+	w.buf.MustWrite(intToString(w.dst, v))
+}
+
+func (w writer) WriteString(v string) {
+	w.buf.WriteString(v)
+}
+
+func (w writer) WriteHex(v []byte) {
+	if len(v) == 0 {
+		return
+	}
+	dst := w.dst[:hex.EncodedLen(len(v))]
+	hex.Encode(dst, v)
+	w.buf.MustWrite(dst)
+}
+
+func (w writer) data() string {
+	return util.UnsafeBytesToString(w.buf.RawSlice(w.idx, w.buf.GetWriteIndex()))
 }

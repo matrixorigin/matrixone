@@ -724,7 +724,7 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement) stri
 				if isNull {
 					paramValues[i] = "NULL"
 				} else {
-					paramValues[i] = vs[i].GetString(prepareStmt.params.GetArea())
+					paramValues[i] = vs[i].UnsafeGetString(prepareStmt.params.GetArea())
 				}
 			}
 			bb.WriteString(strings.Join(paramValues, " ; "))
@@ -1063,4 +1063,48 @@ func (g *topsort) sort() (ans []string, ok bool) {
 		ok = true
 	}
 	return
+}
+
+func setFPrints(txnOp TxnOperator, fprints footPrints) {
+	if txnOp != nil {
+		txnOp.SetFootPrints(fprints.prints[:])
+	}
+}
+
+type footPrints struct {
+	prints [256][2]uint32
+}
+
+func (fprints *footPrints) reset() {
+	for i := 0; i < len(fprints.prints); i++ {
+		fprints.prints[i][0] = 0
+		fprints.prints[i][1] = 0
+	}
+}
+
+func (fprints *footPrints) String() string {
+	strBuf := strings.Builder{}
+	for i := 0; i < len(fprints.prints); i++ {
+		if fprints.prints[i][0] == 0 && fprints.prints[i][1] == 0 {
+			continue
+		}
+		strBuf.WriteString("[")
+		strBuf.WriteString(fmt.Sprintf("%d", i))
+		strBuf.WriteString(": ")
+		strBuf.WriteString(fmt.Sprintf("enter:%d exit:%d", fprints.prints[i][0], fprints.prints[i][1]))
+		strBuf.WriteString("] ")
+	}
+	return strBuf.String()
+}
+
+func (fprints *footPrints) addEnter(idx int) {
+	if idx >= 0 && idx < len(fprints.prints) {
+		fprints.prints[idx][0]++
+	}
+}
+
+func (fprints *footPrints) addExit(idx int) {
+	if idx >= 0 && idx < len(fprints.prints) {
+		fprints.prints[idx][1]++
+	}
 }

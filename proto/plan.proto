@@ -731,6 +731,7 @@ message Node {
 		MARK	= 7;
 		APPLY	= 8;
 		INDEX = 9;
+		L2 = 10;
 	}
 
 	enum AggMode {
@@ -864,6 +865,7 @@ message ExternScan {
     bytes  enclosed_by = 5;
     string terminated = 6;
 	string json_type = 7;
+    bytes  escaped_by = 8;
 }
 
 message LockTarget {

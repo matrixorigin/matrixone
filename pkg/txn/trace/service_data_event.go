@@ -55,10 +55,14 @@ func (s *service) ApplyLogtail(
 	entryData.createApply(
 		buf,
 		func(e dataEvent) {
-			s.entryC <- e
+			s.entryC <- event{
+				csv: e,
+			}
 		},
 		&s.atomic.complexPKTables)
-	s.entryBufC <- buf
+	s.entryC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) ApplyFlush(
@@ -96,12 +100,17 @@ func (s *service) ApplyFlush(
 	buf.buf.WriteString(" ")
 	buf.buf.MustWrite(result)
 
-	s.entryC <- newFlushEvent(
-		time.Now().UnixNano(),
-		txnID,
-		tableID,
-		buf.buf.RawSlice(idx, buf.buf.GetWriteIndex()))
-	s.entryBufC <- buf
+	s.entryC <- event{
+		csv: newFlushEvent(
+			time.Now().UnixNano(),
+			txnID,
+			tableID,
+			buf.buf.RawSlice(idx, buf.buf.GetWriteIndex()),
+		),
+	}
+	s.entryC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) ApplyTransferRowID(
@@ -156,12 +165,17 @@ func (s *service) ApplyTransferRowID(
 	buf.buf.WriteString(toBlockIDHex)
 	data := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
 
-	s.entryC <- newTransferEvent(
-		time.Now().UnixNano(),
-		txnID,
-		tableID,
-		data)
-	s.entryBufC <- buf
+	s.entryC <- event{
+		csv: newTransferEvent(
+			time.Now().UnixNano(),
+			txnID,
+			tableID,
+			data,
+		),
+	}
+	s.entryC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) ApplyDeleteObject(
@@ -198,11 +212,16 @@ func (s *service) ApplyDeleteObject(
 	buf.buf.WriteString(tag)
 	data := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
 
-	s.entryC <- newDeleteObjectEvent(
-		time.Now().UnixNano(),
-		tableID,
-		data)
-	s.entryBufC <- buf
+	s.entryC <- event{
+		csv: newDeleteObjectEvent(
+			time.Now().UnixNano(),
+			tableID,
+			data,
+		),
+	}
+	s.entryC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) AddTableFilter(name string, columns []string) error {
@@ -297,7 +316,7 @@ func (s *service) RefreshTableFilters() error {
 			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 				for i := 0; i < rows; i++ {
 					id := vector.MustFixedCol[uint64](cols[0])[i]
-					columns := cols[1].GetStringAt(i)
+					columns := cols[1].UnsafeGetStringAt(i)
 					filters = append(filters, NewKeepTableFilter(id, strings.Split(columns, ",")))
 				}
 				return true
@@ -323,7 +342,7 @@ func (s *service) handleDataEvents(ctx context.Context) {
 		9,
 		EventDataTable,
 		s.entryC,
-		s.entryBufC)
+	)
 }
 
 func (s *service) dataCSVFile() string {

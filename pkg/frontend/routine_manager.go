@@ -297,31 +297,34 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 When the io is closed, the Closed will be called.
 */
 func (rm *RoutineManager) Closed(rs goetty.IOSession) {
-	ses := rm.getRoutine(rs).getSession()
-	ses.Debugf(rm.getCtx(), "clean resource of the connection %d:%s", rs.ID(), rs.RemoteAddress())
+	rt := rm.deleteRoutine(rs)
+	if rt == nil {
+		return
+	}
+
 	defer func() {
 		v2.CloseRoutineCounter.Inc()
-		ses.Debugf(rm.getCtx(), "resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
 	}()
-	rt := rm.deleteRoutine(rs)
 
-	if rt != nil {
-		ses := rt.getSession()
-		if ses != nil {
-			rt.decreaseCount(func() {
-				account := ses.GetTenantInfo()
-				accountName := sysAccountName
-				if account != nil {
-					accountName = account.GetTenant()
-				}
-				metric.ConnectionCounter(accountName).Dec()
-				rm.accountRoutine.deleteRoutine(int64(account.GetTenantID()), rt)
-			})
-			rm.sessionManager.RemoveSession(ses)
-			ses.Debugf(rm.getCtx(), "the io session was closed.")
-		}
-		rt.cleanup()
+	ses := rt.getSession()
+	if ses != nil {
+		ses.Debugf(rm.getCtx(), "clean resource of the connection %d:%s", rs.ID(), rs.RemoteAddress())
+		defer func() {
+			ses.Debugf(rm.getCtx(), "resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
+		}()
+		rt.decreaseCount(func() {
+			account := ses.GetTenantInfo()
+			accountName := sysAccountName
+			if account != nil {
+				accountName = account.GetTenant()
+			}
+			metric.ConnectionCounter(accountName).Dec()
+			rm.accountRoutine.deleteRoutine(int64(account.GetTenantID()), rt)
+		})
+		rm.sessionManager.RemoveSession(ses)
+		ses.Debugf(rm.getCtx(), "the io session was closed.")
 	}
+	rt.cleanup()
 }
 
 /*

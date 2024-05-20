@@ -1032,6 +1032,8 @@ func constructCollationBatch(ses *Session, rows [][]interface{}) (*batch.Batch, 
 }
 
 func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) error {
+	ses.EnterFPrint(115)
+	defer ses.ExitFPrint(115)
 	// rewrite analyzeStmt to `select approx_count_distinct(col), .. from tbl`
 	// IMO, this approach is simple and future-proof
 	// Although this rewriting processing could have been handled in rewrite module,
@@ -2357,6 +2359,8 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 func executeStmtWithResponse(ses *Session,
 	execCtx *ExecCtx,
 ) (err error) {
+	ses.EnterFPrint(3)
+	defer ses.ExitFPrint(3)
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "executeStmtWithResponse",
 		trace.WithKind(trace.SpanKindStatement))
@@ -2376,6 +2380,8 @@ func executeStmtWithResponse(ses *Session,
 	// TODO put in one txn
 	// insert data after create table in "create table ... as select ..." stmt
 	if ses.createAsSelectSql != "" {
+		ses.EnterFPrint(114)
+		defer ses.ExitFPrint(114)
 		sql := ses.createAsSelectSql
 		ses.createAsSelectSql = ""
 		tempExecCtx := ExecCtx{
@@ -2398,6 +2404,8 @@ func executeStmtWithResponse(ses *Session,
 func executeStmtWithTxn(ses FeSession,
 	execCtx *ExecCtx,
 ) (err error) {
+	ses.EnterFPrint(4)
+	defer ses.ExitFPrint(4)
 	if !ses.IsDerivedStmt() {
 		err = executeStmtWithWorkspace(ses, execCtx)
 	} else {
@@ -2414,6 +2422,8 @@ func executeStmtWithTxn(ses FeSession,
 func executeStmtWithWorkspace(ses FeSession,
 	execCtx *ExecCtx,
 ) (err error) {
+	ses.EnterFPrint(5)
+	defer ses.ExitFPrint(5)
 	if ses.IsDerivedStmt() {
 		return
 	}
@@ -2494,6 +2504,8 @@ func executeStmtWithIncrStmt(ses FeSession,
 	execCtx *ExecCtx,
 	txnOp TxnOperator,
 ) (err error) {
+	ses.EnterFPrint(6)
+	defer ses.ExitFPrint(6)
 	if ses.IsDerivedStmt() {
 		return
 	}
@@ -2513,6 +2525,8 @@ func executeStmtWithIncrStmt(ses FeSession,
 		//if txnOp != nil {
 		//	err = rollbackLastStmt(execCtx, txnOp, err)
 		//}
+		tempTxn := ses.GetTxnHandler().GetTxn()
+		setFPrints(tempTxn, ses.GetFPrints())
 	}()
 
 	err = dispatchStmt(ses, execCtx)
@@ -2521,6 +2535,8 @@ func executeStmtWithIncrStmt(ses FeSession,
 
 func dispatchStmt(ses FeSession,
 	execCtx *ExecCtx) (err error) {
+	ses.EnterFPrint(7)
+	defer ses.ExitFPrint(7)
 	//5. check plan within txn
 	if execCtx.cw.Plan() != nil {
 		if checkModify(execCtx.cw.Plan(), ses) {
@@ -2555,6 +2571,8 @@ func dispatchStmt(ses FeSession,
 func executeStmt(ses *Session,
 	execCtx *ExecCtx,
 ) (err error) {
+	ses.EnterFPrint(8)
+	defer ses.ExitFPrint(8)
 	if txw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
 		ses.GetTxnCompileCtx().tcw = txw
 	}
@@ -2644,6 +2662,8 @@ func executeStmt(ses *Session,
 
 	cmpBegin = time.Now()
 
+	ses.EnterFPrint(62)
+	defer ses.ExitFPrint(62)
 	if ret, err = execCtx.cw.Compile(execCtx, ses.GetOutputCallback(execCtx)); err != nil {
 		return
 	}
@@ -2695,12 +2715,8 @@ func executeStmt(ses *Session,
 
 // execute query
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
-	//fmt.Fprintln(os.Stderr, "doComQuery", input.getSql())
-	//defer func() {
-	//	if retErr != nil {
-	//		fmt.Fprintln(os.Stderr, "doComQuery", retErr)
-	//	}
-	//}()
+	ses.EnterFPrint(2)
+	defer ses.ExitFPrint(2)
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	// set the batch buf for stream scan
 	var inMemStreamScan []*kafka.Message
@@ -2728,17 +2744,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}(ses.tStmt)
 	ses.tStmt = nil
 
-	// proc := process.New(
-	// 	requestCtx,
-	// 	ses.GetMemPool(),
-	// 	getGlobalPu().TxnClient,
-	// 	nil,
-	// 	getGlobalPu().FileService,
-	// 	getGlobalPu().LockService,
-	// 	getGlobalPu().QueryClient,
-	// 	getGlobalPu().HAKeeperClient,
-	// 	getGlobalPu().UdfService,
-	// 	globalAicm)
 	proc := ses.proc
 	proc.Ctx = execCtx.reqCtx
 
@@ -2764,7 +2769,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		LogLevel:             zapcore.InfoLevel, //TODO: need set by session level config
 		SessionId:            ses.GetSessId(),
 	}
-	// proc.SetStmtProfile(&ses.stmtProfile)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
@@ -2798,8 +2802,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	proc.SessionInfo.User = userNameOnly
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
-	// ses.txnCompileCtx.SetProcess(proc)
-	// ses.proc.SessionInfo = proc.SessionInfo
 
 	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, &statsInfo)
@@ -2984,6 +2986,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			}
 		}
 	}()
+	ses.EnterFPrint(1)
+	defer ses.ExitFPrint(1)
 
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "ExecRequest",

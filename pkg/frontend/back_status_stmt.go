@@ -20,6 +20,10 @@ import (
 
 func executeStatusStmtInBack(backSes *backSession,
 	execCtx *ExecCtx) (err error) {
+	execCtx.ses.EnterFPrint(96)
+	defer execCtx.ses.ExitFPrint(96)
+	fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
+	setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 	runBegin := time.Now()
 	if _, err = execCtx.runner.Run(0); err != nil {
 		return

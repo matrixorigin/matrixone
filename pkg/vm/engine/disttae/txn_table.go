@@ -1770,7 +1770,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	switch typ {
 	case deletion.FlushDeltaLoc:
 		tbl.getTxn().hasS3Op.Store(true)
-		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].GetStringAt(0))
+		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].UnsafeGetStringAt(0))
 		if err != nil {
 			return err
 		}
@@ -1972,7 +1972,7 @@ func (tbl *txnTable) NewReader(
 func (tbl *txnTable) tryExtractPKFilter(expr *plan.Expr) (retPKFilter PKFilter) {
 	pk := tbl.tableDef.Pkey
 	if pk != nil && expr != nil {
-		if pk.CompPkeyCol != nil {
+		if !checkPrimaryKeyOnly && pk.CompPkeyCol != nil {
 			pkVals := make([]*plan.Literal, len(pk.Names))
 			_, hasNull := getCompositPKVals(expr, pk.Names, pkVals, tbl.proc.Load())
 			if hasNull {

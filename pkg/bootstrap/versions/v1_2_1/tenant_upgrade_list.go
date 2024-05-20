@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,35 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package malloc
+package v1_2_1
 
-import "time"
+import (
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+)
 
-func init() {
-	go func() {
-		lastNumAllocs := make([]int64, numShards)
-		for range time.NewTicker(time.Second * 37).C {
-			for i := 0; i < numShards; i++ {
-				numAllocs := shards[i].numAlloc.Load()
-				if numAllocs == lastNumAllocs[i] {
-					// not active, flush
-					shards[i].flush()
-				}
-				lastNumAllocs[i] = numAllocs
-			}
-		}
-	}()
-}
-
-func (s *Shard) flush() {
-	for _, ch := range s.pools {
-	loop:
-		for {
-			select {
-			case <-ch:
-			default:
-				break loop
-			}
-		}
-	}
-}
+var tenantUpgEntries = []versions.UpgradeEntry{}

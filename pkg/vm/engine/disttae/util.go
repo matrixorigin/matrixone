@@ -588,9 +588,18 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 		}
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		for i := 0; i < pk.Length(); i++ {
-			v := pk.GetStringAt(i)
-			mp[v] = true
+		if pk.IsConst() {
+			for i := 0; i < pk.Length(); i++ {
+				v := pk.UnsafeGetStringAt(i)
+				mp[v] = true
+			}
+		} else {
+			vs := vector.MustFixedCol[types.Varlena](pk)
+			area := pk.GetArea()
+			for i := 0; i < len(vs); i++ {
+				v := vs[i].UnsafeGetString(area)
+				mp[v] = true
+			}
 		}
 	case types.T_array_float32:
 		for i := 0; i < pk.Length(); i++ {
@@ -772,10 +781,21 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 			}
 		case types.T_char, types.T_varchar, types.T_json,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			for i := 0; i < vec.Length(); i++ {
-				v := vec.GetStringAt(i)
-				if mp[v] {
-					sels = append(sels, int32(i))
+			if pk.IsConst() {
+				for i := 0; i < pk.Length(); i++ {
+					v := pk.UnsafeGetStringAt(i)
+					if mp[v] {
+						sels = append(sels, int32(i))
+					}
+				}
+			} else {
+				vs := vector.MustFixedCol[types.Varlena](pk)
+				area := pk.GetArea()
+				for i := 0; i < len(vs); i++ {
+					v := vs[i].UnsafeGetString(area)
+					if mp[v] {
+						sels = append(sels, int32(i))
+					}
 				}
 			}
 		case types.T_array_float32:
@@ -864,9 +884,9 @@ func getNonCompositePKSearchFuncByExpr(
 			v := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
 			searchPKFunc = vector.FixedSizedBinarySearchOffsetByValFactory([]types.Decimal128{v}, types.CompareDecimal128)
 		case *plan.Literal_Sval:
-			searchPKFunc = vector.VarlenBinarySearchOffsetByValFactory([][]byte{util.UnsafeStringToBytes(val.Sval)})
+			searchPKFunc = vector.VarlenBinarySearchOffsetByValFactory([][]byte{[]byte(val.Sval)})
 		case *plan.Literal_Jsonval:
-			searchPKFunc = vector.VarlenBinarySearchOffsetByValFactory([][]byte{util.UnsafeStringToBytes(val.Jsonval)})
+			searchPKFunc = vector.VarlenBinarySearchOffsetByValFactory([][]byte{[]byte(val.Jsonval)})
 		case *plan.Literal_EnumVal:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Enum{types.Enum(val.EnumVal)})
 		}
@@ -874,12 +894,12 @@ func getNonCompositePKSearchFuncByExpr(
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "prefix_eq":
-			val := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
+			val := []byte(exprImpl.F.Args[1].GetLit().GetSval())
 			searchPKFunc = vector.CollectOffsetsByPrefixEqFactory(val)
 
 		case "prefix_between":
-			lval := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
-			rval := util.UnsafeStringToBytes(exprImpl.F.Args[2].GetLit().GetSval())
+			lval := []byte(exprImpl.F.Args[1].GetLit().GetSval())
+			rval := []byte(exprImpl.F.Args[2].GetLit().GetSval())
 			searchPKFunc = vector.CollectOffsetsByPrefixBetweenFactory(lval, rval)
 
 		case "prefix_in":
@@ -968,7 +988,7 @@ func evalLiteralExpr2(expr *plan.Literal, oid types.T) (ret []byte, can bool) {
 			ret = types.EncodeFloat64(&dval)
 		}
 	case *plan.Literal_Sval:
-		ret = util.UnsafeStringToBytes(val.Sval)
+		ret = []byte(val.Sval)
 	case *plan.Literal_Bval:
 		ret = types.EncodeBool(&val.Bval)
 	case *plan.Literal_U8Val:
@@ -1013,7 +1033,7 @@ func evalLiteralExpr2(expr *plan.Literal, oid types.T) (ret []byte, can bool) {
 		v := types.Enum(val.EnumVal)
 		ret = types.EncodeEnum(&v)
 	case *plan.Literal_Jsonval:
-		ret = util.UnsafeStringToBytes(val.Jsonval)
+		ret = []byte(val.Jsonval)
 	default:
 		can = false
 	}
@@ -1148,7 +1168,7 @@ func getPKFilterByExpr(
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "prefix_eq":
-			val := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
+			val := []byte(exprImpl.F.Args[1].GetLit().GetSval())
 			retFilter.SetVal(function.PREFIX_EQ, false, val)
 			return
 			// case "prefix_between":
@@ -1559,14 +1579,14 @@ func getCompositeFilterFuncByExpr(
 		return EvalSelectedOnFixedSizeColumnFactory(v)
 	case *plan.Literal_Sval:
 		if isSorted {
-			return EvalSelectedOnVarlenSortedColumnFactory(util.UnsafeStringToBytes(val.Sval))
+			return EvalSelectedOnVarlenSortedColumnFactory([]byte(val.Sval))
 		}
-		return EvalSelectedOnVarlenColumnFactory(util.UnsafeStringToBytes(val.Sval))
+		return EvalSelectedOnVarlenColumnFactory([]byte(val.Sval))
 	case *plan.Literal_Jsonval:
 		if isSorted {
-			return EvalSelectedOnVarlenSortedColumnFactory(util.UnsafeStringToBytes(val.Jsonval))
+			return EvalSelectedOnVarlenSortedColumnFactory([]byte(val.Jsonval))
 		}
-		return EvalSelectedOnVarlenColumnFactory(util.UnsafeStringToBytes(val.Jsonval))
+		return EvalSelectedOnVarlenColumnFactory([]byte(val.Jsonval))
 	case *plan.Literal_EnumVal:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(val.EnumVal)

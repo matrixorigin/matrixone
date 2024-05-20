@@ -17,6 +17,7 @@ package shuffle
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -32,7 +33,7 @@ type Argument struct {
 	ShuffleColMax      int64
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
-
+	RuntimeFilterSpec  *plan.RuntimeFilterSpec
 	vm.OperatorBase
 }
 
@@ -75,7 +76,14 @@ type container struct {
 	lastSentBatch *batch.Batch
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if arg.RuntimeFilterSpec != nil {
+		arg.RuntimeFilterSpec.Handled = false
+	}
 	if arg.ctr != nil {
 		for i := range arg.ctr.shufflePool {
 			if arg.ctr.shufflePool[i] != nil {

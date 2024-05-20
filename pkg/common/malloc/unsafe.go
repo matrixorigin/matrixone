@@ -15,21 +15,11 @@
 package malloc
 
 import (
-	"testing"
+	_ "unsafe"
 )
 
-func BenchmarkAllocFree(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		_, handle := Alloc(4096)
-		handle.Free()
-	}
-}
+//go:linkname runtime_procPin runtime.procPin
+func runtime_procPin() int
 
-func BenchmarkParallelAllocFree(b *testing.B) {
-	b.RunParallel(func(pb *testing.PB) {
-		for size := 1; pb.Next(); size++ {
-			_, handle := Alloc(size % 65536)
-			handle.Free()
-		}
-	})
-}
+//go:linkname runtime_procUnpin runtime.procUnpin
+func runtime_procUnpin() int

@@ -34,25 +34,8 @@ message EncodedBasicInfo {
     ];
 }
 
-enum EncodedAggExecType {
-    single_fixed_fixed = 0;
-    single_fixed_var = 1;
-    single_var_fixed = 2;
-    single_var_var = 3;
-    multi_return_fixed = 4;
-    multi_return_var = 5;
-    special_group_concat = 6;
-    special_count_column = 7;
-    special_count_star = 8;
-    special_approx_count = 9;
-    special_median = 10;
-    special_cluster_center = 11;
-    single_window = 12;
-}
-
 message EncodedAgg {
-    EncodedAggExecType exec_type = 1;
-    EncodedBasicInfo info = 2;
-    bytes  result = 3;
-    repeated bytes groups = 4;
+    EncodedBasicInfo info = 1;
+    bytes  result = 2;
+    repeated bytes groups = 3;
 }

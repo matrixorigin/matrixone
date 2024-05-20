@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"time"
 	"unsafe"
 
@@ -816,13 +817,14 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
-			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.Typs),
-			LeftCond:  t.Conditions[0],
-			RightCond: t.Conditions[1],
-			Result:    t.Result,
-			HashOnPk:  t.HashOnPK,
-			IsShuffle: t.IsShuffle,
+			Expr:                   t.Cond,
+			Types:                  convertToPlanTypes(t.Typs),
+			LeftCond:               t.Conditions[0],
+			RightCond:              t.Conditions[1],
+			Result:                 t.Result,
+			HashOnPk:               t.HashOnPK,
+			IsShuffle:              t.IsShuffle,
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
 	case *shuffle.Argument:
 		in.Shuffle = &pipeline.Shuffle{}
@@ -833,6 +835,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Shuffle.AliveRegCnt = t.AliveRegCnt
 		in.Shuffle.ShuffleRangesUint64 = t.ShuffleRangeUint64
 		in.Shuffle.ShuffleRangesInt64 = t.ShuffleRangeInt64
+		in.Shuffle.RuntimeFilterSpec = t.RuntimeFilterSpec
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, ShuffleType: t.ShuffleType, RecSink: t.RecSink, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
@@ -1216,6 +1219,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Result = t.Result
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		v.Arg = arg
 	case vm.Shuffle:
 		t := opr.GetShuffle()
@@ -1227,6 +1231,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.AliveRegCnt = t.AliveRegCnt
 		arg.ShuffleRangeInt64 = t.ShuffleRangesInt64
 		arg.ShuffleRangeUint64 = t.ShuffleRangesUint64
+		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		v.Arg = arg
 	case vm.Dispatch:
 		t := opr.GetDispatch()
@@ -1399,6 +1404,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
 		arg.IsShuffle = t.IsShuffle
+		v.Arg = arg
+	case vm.ProductL2:
+		t := opr.GetProductL2()
+		arg := productl2.NewArgument()
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.Typs = convertToTypes(t.Types)
+		arg.OnExpr = t.Expr
 		v.Arg = arg
 	case vm.Projection:
 		arg := projection.NewArgument()
