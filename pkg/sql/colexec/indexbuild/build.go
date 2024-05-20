@@ -95,10 +95,10 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 		if err != nil {
 			return err
 		}
-		currentBatch = msg.Batch
-		if currentBatch == nil {
+		if msg.Batch == nil {
 			break
 		}
+		currentBatch = msg.Batch
 		if currentBatch.IsEmpty() {
 			proc.PutBatch(currentBatch)
 			continue

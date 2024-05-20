@@ -65,6 +65,10 @@ type Analyze interface {
 	AddInsertTime(t time.Time)
 }
 
+var (
+	EmtpyRegisterMessage = NewRegMsg(nil)
+)
+
 // RegisterMessage channel data
 // Err == nil means pipeline finish with error
 // Batch == nil means pipeline finish without error

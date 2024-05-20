@@ -100,11 +100,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = Probe
 
 		case Probe:
-			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+			msg, _, err := ctr.ReceiveFromSingleReg(0, anal)
 			if err != nil {
 				return result, err
 			}
 
+			bat := msg.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -138,10 +139,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+	msg, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
 	}
+	bat := msg.Batch
 	if bat != nil && bat.AuxData != nil {
 		ctr.mp = bat.DupJmAuxData()
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
@@ -150,10 +152,11 @@ func (ctr *container) receiveHashMap(anal process.Analyze) error {
 }
 
 func (ctr *container) receiveBatch(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+	msg, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
 	}
+	bat := msg.Batch
 	if bat != nil {
 		ctr.evalNullSels(bat)
 		ctr.nullWithBatch, err = DumpBatch(bat, proc, ctr.nullSels)

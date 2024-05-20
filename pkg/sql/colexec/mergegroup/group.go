@@ -16,12 +16,13 @@ package mergegroup
 
 import (
 	"bytes"
+	"runtime"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"runtime"
 )
 
 const argName = "merge_group"
@@ -55,7 +56,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.state {
 		case Build:
 			for {
-				bat, end, err := ctr.ReceiveFromAllRegs(anal)
+				msg, end, err := ctr.ReceiveFromAllRegs(anal)
 				if err != nil {
 					result.Status = vm.ExecStop
 					return result, nil
@@ -64,6 +65,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				if end {
 					break
 				}
+				bat := msg.Batch
 				anal.Input(bat, arg.GetIsFirst())
 				if err = ctr.process(bat, proc); err != nil {
 					bat.Clean(proc.Mp())

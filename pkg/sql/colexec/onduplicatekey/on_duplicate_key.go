@@ -17,6 +17,7 @@ package onduplicatekey
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -58,15 +59,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.state {
 		case Build:
 			for {
-				bat, end, err := ctr.ReceiveFromAllRegs(anal)
+				msg, end, err := ctr.ReceiveFromAllRegs(anal)
 				if err != nil {
 					result.Status = vm.ExecStop
 					return result, nil
 				}
 
-				if end {
+				if end || msg.Batch == nil {
 					break
 				}
+				bat := msg.Batch
 				anal.Input(bat, arg.GetIsFirst())
 				err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
 				if err != nil {

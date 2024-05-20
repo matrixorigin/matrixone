@@ -17,8 +17,9 @@ package timewin
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -101,16 +102,18 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := ap.ctr
 	var err error
 	var bat *batch.Batch
+	var msg *process.RegisterMessage
 
 	result := vm.NewCallResult()
 	for {
 
 		switch ctr.status {
 		case dataTag:
-			bat, _, err = ctr.ReceiveFromAllRegs(anal)
+			msg, _, err = ctr.ReceiveFromAllRegs(anal)
 			if err != nil {
 				return result, err
 			}
+			bat := msg.Batch
 			if bat == nil {
 				if ctr.cur == hasGrow {
 					ctr.status = evalLastCur
@@ -132,10 +135,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = evalTag
 		case initTag:
-			bat, _, err = ctr.ReceiveFromAllRegs(anal)
+			msg, _, err = ctr.ReceiveFromAllRegs(anal)
 			if err != nil {
 				return result, err
 			}
+			bat = msg.Batch
 			if bat == nil {
 				result.Batch = nil
 				result.Status = vm.ExecStop

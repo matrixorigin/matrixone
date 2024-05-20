@@ -213,7 +213,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.status {
 		case receiving:
-			bat, end, err := ctr.ReceiveFromAllRegs(anal)
+			msg, end, err := ctr.ReceiveFromAllRegs(anal)
 			if err != nil {
 				return result, err
 			}
@@ -234,6 +234,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
+			bat := msg.Batch
 			if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
 				return result, err
 			}

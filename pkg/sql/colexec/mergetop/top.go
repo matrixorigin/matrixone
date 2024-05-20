@@ -103,7 +103,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
 	for {
-		bat, end, err := ctr.ReceiveFromAllRegs(anal)
+		msg, end, err := ctr.ReceiveFromAllRegs(anal)
 		if err != nil {
 			return true, nil
 		}
@@ -111,6 +111,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			return false, nil
 		}
 
+		bat := msg.Batch
 		anal.Input(bat, isFirst)
 
 		ctr.n = len(bat.Vecs)

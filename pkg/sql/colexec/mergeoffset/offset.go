@@ -49,13 +49,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	var end bool
 	var err error
+	var msg *process.RegisterMessage
 	if arg.buf != nil {
 		proc.PutBatch(arg.buf)
 		arg.buf = nil
 	}
 
 	for {
-		arg.buf, end, err = arg.ctr.ReceiveFromAllRegs(anal)
+		msg, end, err = arg.ctr.ReceiveFromAllRegs(anal)
 		if err != nil {
 			// WTF, nil?
 			result.Status = vm.ExecStop
@@ -68,6 +69,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 		}
 
+		arg.buf = msg.Batch
 		anal.Input(arg.buf, arg.GetIsFirst())
 		if arg.ctr.seen > arg.Offset {
 			anal.Output(arg.buf, arg.GetIsLast())

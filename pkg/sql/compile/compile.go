@@ -3310,7 +3310,7 @@ func (c *Compile) newScopeListForShuffleGroup(childrenCount int, blocks int) ([]
 		scopes := c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 			}
 		}
 		children = append(children, scopes...)
@@ -3461,7 +3461,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].BuildIdx = lnum
 			ss[i].ShuffleCnt = dop
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 			}
 		}
 		children = append(children, ss...)
@@ -3542,7 +3542,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	if ss == nil {
 		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *batch.Batch, shuffleChannelBufferSize),
+			Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
@@ -3575,7 +3575,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *batch.Batch, 1),
+			Ch:  make(chan *process.RegisterMessage, 1),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,

@@ -50,6 +50,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := ap.ctr
 	result := vm.NewCallResult()
 	var err error
+	var msg *process.RegisterMessage
 	for {
 		switch ctr.state {
 		case Build:
@@ -65,11 +66,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				return result, nil
 			}
-			ctr.inBat, _, err = ctr.ReceiveFromSingleReg(0, anal)
+			msg, _, err = ctr.ReceiveFromSingleReg(0, anal)
 			if err != nil {
 				return result, err
 			}
-
+			ctr.inBat = msg.Batch
 			if ctr.inBat == nil {
 				ctr.state = End
 				continue
@@ -100,10 +101,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	for {
-		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+		msg, _, err := ctr.ReceiveFromSingleReg(1, anal)
 		if err != nil {
 			return err
 		}
+		bat := msg.Batch
 		if bat == nil {
 			break
 		}

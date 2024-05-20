@@ -46,12 +46,17 @@ func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Anal
 	defer analyze.WaitStop(start)
 	select {
 	case <-r.proc.Ctx.Done():
-		return nil, true, nil
+		return process.EmtpyRegisterMessage, true, nil
 	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
 		if !ok {
-			return nil, true, msg.Err
+			return process.EmtpyRegisterMessage, true, nil
 		}
-		return msg, false, msg.Err
+
+		if msg == nil {
+			return process.EmtpyRegisterMessage, true, nil
+		} else {
+			return msg, false, msg.Err
+		}
 	}
 }
 
@@ -60,14 +65,14 @@ func (r *ReceiverOperator) ReceiveFromSingleRegNonBlock(regIdx int, analyze proc
 	defer analyze.WaitStop(start)
 	select {
 	case <-r.proc.Ctx.Done():
-		return nil, true, nil
+		return process.EmtpyRegisterMessage, true, nil
 	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
-		if !ok || msg.Batch == nil {
-			return nil, true, msg.Err
+		if !ok || msg == nil {
+			return process.EmtpyRegisterMessage, true, nil
 		}
 		return msg, false, msg.Err
 	default:
-		return nil, false, nil
+		return process.EmtpyRegisterMessage, false, nil
 	}
 }
 
@@ -87,7 +92,7 @@ func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
 func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*process.RegisterMessage, bool, error) {
 	for {
 		if r.aliveMergeReceiver == 0 {
-			return nil, true, nil
+			return process.EmtpyRegisterMessage, true, nil
 		}
 
 		start := time.Now()
@@ -96,14 +101,14 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*process
 
 		// chosen == 0 means the info comes from proc context.Done
 		if chosen == 0 {
-			return nil, true, msg.Err
+			return process.EmtpyRegisterMessage, true, nil
 		}
 
 		if !ok {
-			return nil, true, msg.Err
+			return process.EmtpyRegisterMessage, true, nil
 		}
 
-		if msg.Batch == nil {
+		if msg == nil || msg.Batch == nil {
 			continue
 		}
 
@@ -128,7 +133,7 @@ func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 	for _, ch := range r.chs {
 		for len(ch) > 0 {
 			msg := <-ch
-			if msg.Batch != nil {
+			if msg != nil && msg.Batch != nil {
 				msg.Batch.Clean(mp)
 			}
 		}
@@ -205,13 +210,13 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *process.RegisterMessage, bo
 		if chosen != 0 && ok {
 			msg = (*process.RegisterMessage)(value.UnsafePointer())
 		}
-		if !ok || msg.Batch == nil {
+		if !ok || msg == nil {
 			r.RemoveChosen(chosen)
 		}
 		return chosen, msg, ok
 	}
 
-	if !ok || msg.Batch == nil {
+	if !ok || msg == nil {
 		r.DisableChosen(chosen)
 	}
 	return chosen, msg, ok

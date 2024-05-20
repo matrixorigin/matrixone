@@ -46,11 +46,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result := vm.NewCallResult()
 	for !arg.ctr.last {
-		bat, _, err := arg.ctr.ReceiveFromSingleReg(0, anal)
+		msg, _, err := arg.ctr.ReceiveFromSingleReg(0, anal)
 		if err != nil {
 			result.Status = vm.ExecStop
 			return result, err
 		}
+		bat := msg.Batch
 		if bat == nil || bat.End() {
 			result.Batch = nil
 			result.Status = vm.ExecStop

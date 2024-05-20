@@ -16,9 +16,10 @@ package window
 
 import (
 	"bytes"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -74,12 +75,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 	result := vm.NewCallResult()
 	var bat *batch.Batch
+	var msg *process.RegisterMessage
 
 	for {
 		switch ctr.status {
 		case receiveAll:
 			for {
-				bat, end, err = ctr.ReceiveFromAllRegs(anal)
+				msg, end, err = ctr.ReceiveFromAllRegs(anal)
 				if err != nil {
 					return result, err
 				}
@@ -88,6 +90,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.status = eval
 					break
 				}
+				bat = msg.Batch
 				if ctr.bat == nil {
 					ctr.bat = bat
 					continue
@@ -103,7 +106,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.bat.AddRowCount(bat.RowCount())
 			}
 		case receive:
-			ctr.bat, end, err = ctr.ReceiveFromAllRegs(anal)
+			msg, end, err = ctr.ReceiveFromAllRegs(anal)
 			if err != nil {
 				return result, err
 			}
@@ -112,6 +115,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.status = eval
 			}
+			ctr.bat = msg.Batch
 		case eval:
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err

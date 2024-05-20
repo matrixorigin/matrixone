@@ -80,7 +80,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.status {
 		case receive:
-			bat, end, err := ctr.ReceiveFromAllRegs(anal)
+			msg, end, err := ctr.ReceiveFromAllRegs(anal)
 			if err != nil {
 				return result, err
 			}
@@ -88,7 +88,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.indexList = make([]int64, len(ctr.batchList))
 				ctr.status = eval
 			} else {
-				if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
+				if err = ctr.mergeAndEvaluateOrderColumn(proc, msg.Batch); err != nil {
 					return result, err
 				}
 			}
