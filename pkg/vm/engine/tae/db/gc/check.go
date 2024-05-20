@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const NotFoundLimit = 50
+const NotFoundLimit = 30
 
 type checker struct {
 	cleaner *checkpointCleaner
@@ -36,6 +36,7 @@ func (c *checker) getObjects() (map[string]struct{}, error) {
 }
 
 func (c *checker) Check() error {
+	now := time.Now()
 	c.cleaner.inputs.RLock()
 	defer c.cleaner.inputs.RUnlock()
 	gcTables := c.cleaner.GetGCTables()
@@ -46,8 +47,6 @@ func (c *checker) Check() error {
 	gcTable.Lock()
 	objects := gcTable.objects
 	tombstones := gcTable.tombstones
-	objectsLen := len(objects)
-	tombstonesLen := len(tombstones)
 	gcTable.Unlock()
 	entry := c.cleaner.GetMaxConsumed()
 	maxTs := entry.GetEnd()
@@ -82,12 +81,10 @@ func (c *checker) Check() error {
 		isfound := false
 		if _, ok := objects[name]; ok {
 			isfound = true
-			objectsLen--
 			delete(objects, name)
 		}
 		if _, ok := tombstones[name]; ok {
 			isfound = true
-			tombstonesLen--
 			delete(tombstones, name)
 		}
 		if _, ok := unconsumedObjects[name]; ok {
@@ -139,15 +136,33 @@ func (c *checker) Check() error {
 		}
 	}
 
-	if len(allObjects) > ckpObjectCount {
+	if len(objects) != 0 || len(tombstones) != 0 || len(unconsumedObjects) != 0 || len(unconsumedTombstones) != 0 {
+		for _, name := range objects {
+			logutil.Errorf("lost object %s,", name)
+		}
+
+		for _, name := range tombstones {
+			logutil.Errorf("lost tombstone %s,", name)
+		}
+
+		for _, name := range unconsumedObjects {
+			logutil.Errorf("lost unconsumed object %s,", name)
+		}
+
+		for _, name := range unconsumedTombstones {
+			logutil.Errorf("lost unconsumed tombstone %s,", name)
+		}
+	}
+
+	if len(allObjects) > ckpObjectCount+NotFoundLimit {
 		for name := range allObjects {
 			logutil.Infof("not found object %s,", name)
 		}
-		logutil.Warnf("GC abnormal!!! all objects: %d, objects: %d, tombstones: %d, unconsumed objects: %d, unconsumed tombstones: %d, allObjects: %d, ckpfiles: %d",
-			allCount, len(objects), len(tombstones), len(unconsumedObjects), len(unconsumedTombstones), len(allObjects), len(ckpfiles))
+		logutil.Warnf("[Check GC]GC abnormal!!! const: %v, all objects: %d, not found: %d, checkpoint file: %d",
+			time.Since(now), allCount, len(allObjects)-ckpObjectCount, ckpObjectCount)
 	} else {
-		logutil.Infof("all objects: %d, objects: %d, tombstones: %d, unconsumed objects: %d, unconsumed tombstones: %d, allObjects: %d",
-			allCount, len(objects), len(tombstones), len(unconsumedObjects), len(unconsumedTombstones), len(allObjects))
+		logutil.Infof("[Check GC]Check end!!! const: %v, all objects: %d, not found: %d",
+			time.Since(now), allCount, len(allObjects)-ckpObjectCount)
 	}
 	return nil
 }
