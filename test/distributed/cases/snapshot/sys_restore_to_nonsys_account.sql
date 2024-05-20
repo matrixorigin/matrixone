@@ -28,7 +28,7 @@ select count(*) from s3t;
 select * from s3t where col1 = 23;
 -- @session
 
-restore account acc01 from snapshot sp01 acc01;
+restore account acc01 from snapshot sp01;
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
