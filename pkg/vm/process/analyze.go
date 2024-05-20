@@ -44,6 +44,7 @@ func newAnalyzeInfo() *AnalyzeInfo {
 
 func resetAnalyzeInfo(a *AnalyzeInfo) {
 	a.NodeId = 0
+	a.InputBlocks = 0
 	a.InputRows = 0
 	a.OutputRows = 0
 	a.TimeConsumed = 0
@@ -80,6 +81,12 @@ func (a *analyze) Stop() {
 func (a *analyze) Alloc(size int64) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.MemorySize, size)
+	}
+}
+
+func (a *analyze) InputBlock() {
+	if a.analInfo != nil {
+		atomic.AddInt64(&a.analInfo.InputBlocks, 1)
 	}
 }
 

@@ -1637,6 +1637,7 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 
 func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 	a := &plan.AnalyzeInfo{
+		InputBlocks:      info.InputBlocks,
 		InputRows:        info.InputRows,
 		OutputRows:       info.OutputRows,
 		InputSize:        info.InputSize,

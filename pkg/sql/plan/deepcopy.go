@@ -1058,6 +1058,7 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 	}
 
 	return &plan.AnalyzeInfo{
+		InputBlocks:            analyzeinfo.GetInputBlocks(),
 		InputRows:              analyzeinfo.GetInputRows(),
 		OutputRows:             analyzeinfo.GetOutputRows(),
 		InputSize:              analyzeinfo.GetInputSize(),

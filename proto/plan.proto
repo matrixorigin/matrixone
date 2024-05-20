@@ -636,6 +636,7 @@ message AnalyzeInfo {
 	int64 insertTime = 14;
 	repeated int64 time_consumed_array_major = 15;
 	repeated int64 time_consumed_array_minor = 16;
+	int64 input_blocks=17;
 }
 
 message PartitionPrune {

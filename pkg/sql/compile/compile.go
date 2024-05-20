@@ -3717,6 +3717,7 @@ func (c *Compile) fillAnalyzeInfo() {
 	c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.DeleteMulti.Load())
 
 	for i, anal := range c.anal.analInfos {
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputBlocks, atomic.LoadInt64(&anal.InputBlocks))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputRows, atomic.LoadInt64(&anal.InputRows))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.OutputRows, atomic.LoadInt64(&anal.OutputRows))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputSize, atomic.LoadInt64(&anal.InputSize))
