@@ -136,9 +136,7 @@ func (c *checker) Check() error {
 			for itObject.Valid() {
 				objectEntry := itObject.Get().GetPayload()
 				stats := objectEntry.GetObjectStats()
-				if _, ok := allObjects[stats.ObjectName().String()]; ok {
-					delete(allObjects, stats.ObjectName().String())
-				}
+				delete(allObjects, stats.ObjectName().String())
 				itObject.Next()
 			}
 			it2 := table.GetDeleteList().Items()
@@ -154,25 +152,23 @@ func (c *checker) Check() error {
 	}
 	for i := 0; i < bat.Length(); i++ {
 		deltaLoc := objectio.Location(bat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
-		if _, ok := allObjects[deltaLoc.Name().String()]; ok {
-			delete(allObjects, deltaLoc.Name().String())
-		}
+		delete(allObjects, deltaLoc.Name().String())
 	}
 
 	if len(objects) != 0 || len(tombstones) != 0 || len(unconsumedObjects) != 0 || len(unconsumedTombstones) != 0 {
-		for _, name := range objects {
+		for name := range objects {
 			logutil.Errorf("[Check GC]lost object %s,", name)
 		}
 
-		for _, name := range tombstones {
+		for name := range tombstones {
 			logutil.Errorf("[Check GC]lost tombstone %s,", name)
 		}
 
-		for _, name := range unconsumedObjects {
+		for name := range unconsumedObjects {
 			logutil.Errorf("[Check GC]lost unconsumed object %s,", name)
 		}
 
-		for _, name := range unconsumedTombstones {
+		for name := range unconsumedTombstones {
 			logutil.Errorf("[Check GC]lost unconsumed tombstone %s,", name)
 		}
 	}
