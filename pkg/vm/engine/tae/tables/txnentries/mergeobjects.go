@@ -135,7 +135,7 @@ func (entry *mergeObjectsEntry) ApplyRollback() (err error) {
 	return
 }
 
-func (entry *mergeObjectsEntry) ApplyCommit() (err error) {
+func (entry *mergeObjectsEntry) ApplyCommit(_ string) (err error) {
 	return
 }
 

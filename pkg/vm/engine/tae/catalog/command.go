@@ -247,7 +247,7 @@ func (cmd *EntryCommand[T, N]) ApplyCommit() {
 	if cmd.mvccNode.Is1PC() {
 		return
 	}
-	if err := cmd.mvccNode.ApplyCommit(); err != nil {
+	if err := cmd.mvccNode.ApplyCommit(cmd.mvccNode.Txn.GetID()); err != nil {
 		panic(err)
 	}
 }
