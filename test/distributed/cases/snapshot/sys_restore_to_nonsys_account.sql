@@ -359,7 +359,7 @@ insert into rs01 values (10, -1, null);
 select count(*) from rs01;
 -- @session
 
-restore account acc01 from snapshot sp03 sys;
+restore account acc01 from snapshot sp03 to account sys;
 drop snapshot sp03;
 
 -- @session:id=1&user=acc01:test_account&password=111
