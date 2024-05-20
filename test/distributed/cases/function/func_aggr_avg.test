@@ -264,3 +264,8 @@ select avg(distinct a),avg(distinct grp) from t1;
 insert into t1 values (null,null,'');
 select avg(distinct a),avg(distinct grp) from t1;
 drop table t1;
+
+create table d1 (i1 int);
+insert into d1 select * from generate_series(0, 999) g;
+select avg(distinct i1) from d1;
+drop table d1;

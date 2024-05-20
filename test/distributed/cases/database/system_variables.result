@@ -200,9 +200,9 @@ select table_name, column_name from columns where table_schema = 'mo_catalog' an
 table_name    column_name
 mo_account    account_id
 mo_account    account_name
+mo_account    admin_name
 mo_account    comments
 mo_account    create_version
-mo_account    created_time
 desc views;
 Field    Type    Null    Key    Default    Extra    Comment
 table_catalog    VARCHAR(3)    NO        null        

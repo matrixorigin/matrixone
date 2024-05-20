@@ -107,8 +107,8 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Durati
 			err := r.ForceIncrementalCheckpoint(end, false)
 			if err != nil {
 				if dbutils.IsRetrieableCheckpoint(err) {
-					interval := versionInterval * time.Millisecond / 400
-					time.Sleep(interval)
+					interval := versionInterval.Milliseconds() / 400
+					time.Sleep(time.Duration(interval))
 					break
 				}
 				return err
@@ -133,7 +133,9 @@ func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end typ
 	r.ForceGlobalCheckpoint(end, versionInterval)
 
 	op := func() (ok bool, err error) {
+		r.storage.RLock()
 		global, _ := r.storage.globals.Max()
+		r.storage.RUnlock()
 		if global == nil {
 			return false, nil
 		}

@@ -104,7 +104,7 @@ func TestDeleteChain1(t *testing.T) {
 
 	commitTxn(txn1)
 	assert.Nil(t, n1.PrepareCommit())
-	assert.Nil(t, n1.ApplyCommit())
+	assert.Nil(t, n1.ApplyCommit(txn1.ID))
 	t.Log(chain.StringLocked())
 
 	var startTs2 types.TS
@@ -176,7 +176,7 @@ func TestDeleteChain2(t *testing.T) {
 	commitTxn(txn1)
 	err = n1.PrepareCommit()
 	assert.Nil(t, err)
-	err = n1.ApplyCommit()
+	err = n1.ApplyCommit(txn1.ID)
 	assert.Nil(t, err)
 	t.Log(chain.StringLocked())
 
@@ -195,7 +195,7 @@ func TestDeleteChain2(t *testing.T) {
 	commitTxn(txn3)
 	err = n3.PrepareCommit()
 	assert.Nil(t, err)
-	err = n3.ApplyCommit()
+	err = n3.ApplyCommit(txn3.ID)
 	assert.Nil(t, err)
 	t.Log(chain.StringLocked())
 
@@ -213,20 +213,20 @@ func TestDeleteChain2(t *testing.T) {
 	assert.True(t, mask.IsEmpty())
 
 	var startTs1 types.TS
-	mask, err = chain.CollectDeletesInRange(startTs1, txn3.GetCommitTS(), nil)
+	mask, err = chain.CollectDeletesInRangeWithLock(startTs1, txn3.GetCommitTS(), nil)
 	assert.NoError(t, err)
 	t.Log(mask.GetBitmap().String())
 	assert.Equal(t, 8, mask.GetCardinality())
 
 	var startTs2 types.TS
 	commitTS := txn3.GetCommitTS()
-	mask, err = chain.CollectDeletesInRange(startTs2, commitTS.Next(), nil)
+	mask, err = chain.CollectDeletesInRangeWithLock(startTs2, commitTS.Next(), nil)
 	assert.NoError(t, err)
 	t.Log(mask.GetBitmap().String())
 	assert.Equal(t, 8, mask.GetCardinality())
 
 	commitTS = txn3.GetCommitTS()
-	mask, err = chain.CollectDeletesInRange(txn1.GetCommitTS(), commitTS.Next(), nil)
+	mask, err = chain.CollectDeletesInRangeWithLock(txn1.GetCommitTS(), commitTS.Next(), nil)
 	assert.NoError(t, err)
 	t.Log(mask.GetBitmap().String())
 	assert.Equal(t, 4, mask.GetCardinality())

@@ -72,7 +72,7 @@ func (store *mockTxnStore) PrepareCommit() error {
 
 func (store *mockTxnStore) ApplyCommit() error {
 	for e := range store.entries {
-		err := e.ApplyCommit()
+		err := e.ApplyCommit(store.txn.GetID())
 		if err != nil {
 			return err
 		}
@@ -260,7 +260,7 @@ func (txn *mockTxn) GetDatabaseByID(id uint64) (handle.Database, error) {
 }
 
 func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
-	_, entry, err := txn.catalog.DropDBEntry(name, txn)
+	_, entry, err := txn.catalog.DropDBEntryByName(name, txn)
 	if err != nil {
 		return nil, err
 	}

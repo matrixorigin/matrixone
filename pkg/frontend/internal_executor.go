@@ -19,14 +19,11 @@ import (
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -141,25 +138,43 @@ func (res *internalExecResult) Float64ValueByName(ctx context.Context, ridx uint
 func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
 	ie.Lock()
 	defer ie.Unlock()
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
+	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer func() {
 		sess.Close()
 	}()
+	sess.EnterFPrint(112)
+	defer sess.ExitFPrint(112)
 	ie.proto.stashResult = false
 	if sql == "" {
 		return
 	}
-	return doComQuery(ctx, sess, &UserInput{sql: sql})
+	tempExecCtx := ExecCtx{
+		reqCtx: ctx,
+		ses:    sess,
+	}
+	return doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
 }
 
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 	ie.Lock()
 	defer ie.Unlock()
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
+	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
+	sess.EnterFPrint(113)
+	defer sess.ExitFPrint(113)
 	ie.proto.stashResult = true
-	logutil.Info("internalExecutor new session", trace.ContextField(ctx), zap.String("session uuid", sess.uuid.String()))
-	err := doComQuery(ctx, sess, &UserInput{sql: sql})
+	sess.Info(ctx, "internalExecutor new session")
+	tempExecCtx := ExecCtx{
+		reqCtx: ctx,
+		ses:    sess,
+	}
+	err := doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
 	res.err = err
 	return res
@@ -177,12 +192,10 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	//
 	mp, err := mpool.NewMPool("internal_exec_cmd_session", getGlobalPu().SV.GuestMmuLimitation, mpool.NoFixed)
 	if err != nil {
-		logutil.Fatalf("internalExecutor cannot create mpool in newCmdSession")
+		getLogger().Fatal("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
-	sess := NewSession(ie.proto, mp, GSysVariables, true, nil)
-	sess.SetRequestContext(ctx)
-	sess.SetConnectContext(ctx)
+	sess := NewSession(ctx, ie.proto, mp, GSysVariables, true, nil)
 	sess.disableTrace = true
 
 	var t *TenantInfo
@@ -229,6 +242,10 @@ type internalProtocol struct {
 	result      *internalExecResult
 	database    string
 	username    string
+}
+
+func (ip *internalProtocol) UpdateCtx(ctx context.Context) {
+
 }
 
 func (ip *internalProtocol) GetCapability() uint32 {

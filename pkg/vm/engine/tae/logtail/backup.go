@@ -442,23 +442,32 @@ func LoadCheckpointEntriesFromKey(
 	location objectio.Location,
 	version uint32,
 	softDeletes *map[string]bool,
-) ([]objectio.Location, *CheckpointData, error) {
-	locations := make([]objectio.Location, 0)
+	baseTS *types.TS,
+) ([]*objectio.BackupObject, *CheckpointData, error) {
+	locations := make([]*objectio.BackupObject, 0)
 	data, err := getCheckpointData(ctx, fs, location, version)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	locations = append(locations, location)
+	locations = append(locations, &objectio.BackupObject{
+		Location: location,
+		NeedCopy: true,
+	})
 
 	for _, location = range data.locations {
-		locations = append(locations, location)
+		locations = append(locations, &objectio.BackupObject{
+			Location: location,
+			NeedCopy: true,
+		})
 	}
 	for i := 0; i < data.bats[ObjectInfoIDX].Length(); i++ {
 		var objectStats objectio.ObjectStats
 		buf := data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
 		deletedAt := data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_DeleteAt).Get(i).(types.TS)
+		createAt := data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_CreateAt).Get(i).(types.TS)
+		commitAt := data.bats[ObjectInfoIDX].GetVectorByName(txnbase.SnapshotAttr_CommitTS).Get(i).(types.TS)
 		isAblk := data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_State).Get(i).(bool)
 		if objectStats.Extent().End() == 0 {
 			panic(fmt.Sprintf("object %v Extent not empty", objectStats.ObjectName().String()))
@@ -467,8 +476,16 @@ func LoadCheckpointEntriesFromKey(
 		if deletedAt.IsEmpty() && isAblk {
 			panic(fmt.Sprintf("object %v is not deleted", objectStats.ObjectName().String()))
 		}
-
-		locations = append(locations, objectStats.ObjectLocation())
+		bo := &objectio.BackupObject{
+			Location: objectStats.ObjectLocation(),
+			CrateTS:  createAt,
+			DropTS:   deletedAt,
+		}
+		if baseTS.IsEmpty() || (!baseTS.IsEmpty() &&
+			(createAt.GreaterEq(baseTS) || commitAt.GreaterEq(baseTS))) {
+			bo.NeedCopy = true
+		}
+		locations = append(locations, bo)
 		if !deletedAt.IsEmpty() {
 			if softDeletes != nil {
 				if !(*softDeletes)[objectStats.ObjectName().String()] {
@@ -495,16 +512,26 @@ func LoadCheckpointEntriesFromKey(
 	for i := 0; i < data.bats[BLKMetaInsertIDX].Length(); i++ {
 		deltaLoc := objectio.Location(
 			data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		commitTS := data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_CommitTs).Get(i).(types.TS)
 		if deltaLoc.IsEmpty() {
 			metaLoc := objectio.Location(
 				data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte))
 			panic(fmt.Sprintf("block %v deltaLoc is empty", metaLoc.String()))
 		}
-		locations = append(locations, deltaLoc)
+		bo := &objectio.BackupObject{
+			Location: deltaLoc,
+			CrateTS:  commitTS,
+		}
+		if baseTS.IsEmpty() ||
+			(!baseTS.IsEmpty() && commitTS.GreaterEq(baseTS)) {
+			bo.NeedCopy = true
+		}
+		locations = append(locations, bo)
 	}
 	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
 		metaLoc := objectio.Location(
 			data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		commitTS := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_CommitTs).Get(i).(types.TS)
 		if !metaLoc.IsEmpty() {
 			if softDeletes != nil {
 				if !(*softDeletes)[metaLoc.Name().String()] {
@@ -521,7 +548,15 @@ func LoadCheckpointEntriesFromKey(
 		if deltaLoc.IsEmpty() {
 			panic(fmt.Sprintf("block %v deltaLoc is empty", deltaLoc.String()))
 		}
-		locations = append(locations, deltaLoc)
+		bo := &objectio.BackupObject{
+			Location: deltaLoc,
+			CrateTS:  commitTS,
+		}
+		if baseTS.IsEmpty() ||
+			(!baseTS.IsEmpty() && commitTS.GreaterEq(baseTS)) {
+			bo.NeedCopy = true
+		}
+		locations = append(locations, bo)
 	}
 	return locations, data, nil
 }

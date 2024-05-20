@@ -38,6 +38,8 @@ type Argument struct {
 	Attrs      []string
 	IsUpdate   bool
 
+	EstimatedRowCount int64
+
 	buf *batch.Batch
 
 	vm.OperatorBase
@@ -72,6 +74,10 @@ func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

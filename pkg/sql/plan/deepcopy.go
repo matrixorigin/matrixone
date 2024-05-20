@@ -275,7 +275,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 	if node.RowsetData != nil {
 		newNode.RowsetData = &plan.RowsetData{
-			Cols: make([]*plan.ColData, len(node.RowsetData.Cols)),
+			Cols:     make([]*plan.ColData, len(node.RowsetData.Cols)),
+			RowCount: node.RowsetData.RowCount,
 		}
 
 		for idx, col := range node.RowsetData.Cols {
@@ -820,6 +821,19 @@ func DeepCopyFkey(fkey *ForeignKeyDef) *ForeignKeyDef {
 	copy(def.Cols, fkey.Cols)
 	copy(def.ForeignCols, fkey.ForeignCols)
 	return def
+}
+
+func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSpec {
+	if rf == nil {
+		return nil
+	}
+	return &plan.RuntimeFilterSpec{
+		Tag:         rf.Tag,
+		MatchPrefix: rf.MatchPrefix,
+		UpperLimit:  rf.UpperLimit,
+		Expr:        DeepCopyExpr(rf.Expr),
+		Handled:     false,
+	}
 }
 
 func DeepCopyExpr(expr *Expr) *Expr {

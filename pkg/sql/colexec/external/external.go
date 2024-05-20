@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -180,7 +181,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	result.Batch = arg.buf
 	if result.Batch != nil {
-		result.Batch.ShuffleIDX = param.Idx
+		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
 	return result, nil
 }
@@ -362,7 +363,8 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 	return r, nil
 }
 
-func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, cols []*plan.ColDef) ([]int64, error) {
+// TODO : merge below two functions
+func ReadFileOffsetNoStrict(param *tree.ExternParam, mcpu int, fileSize int64) ([]int64, error) {
 	arr := make([]int64, 0)
 
 	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
@@ -380,12 +382,50 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, cols []*p
 			},
 		},
 	}
-
-	visibleCols := make([]*plan.ColDef, 0)
-	for _, col := range cols {
-		if !col.Hidden {
-			visibleCols = append(visibleCols, col)
+	var tailSize []int64
+	var offset []int64
+	for i := 0; i < mcpu; i++ {
+		vec.Entries[0].Offset = int64(i) * (fileSize / int64(mcpu))
+		if err = fs.Read(param.Ctx, &vec); err != nil {
+			return nil, err
 		}
+		r2 := bufio.NewReader(r)
+		line, _ := r2.ReadString('\n')
+		tailSize = append(tailSize, int64(len(line)))
+		offset = append(offset, vec.Entries[0].Offset)
+	}
+
+	start := int64(0)
+	for i := 0; i < mcpu; i++ {
+		if i+1 < mcpu {
+			arr = append(arr, start)
+			arr = append(arr, offset[i+1]+tailSize[i+1])
+			start = offset[i+1] + tailSize[i+1]
+		} else {
+			arr = append(arr, start)
+			arr = append(arr, -1)
+		}
+	}
+	return arr, nil
+}
+
+func ReadFileOffsetStrict(param *tree.ExternParam, mcpu int, fileSize int64, visibleCols []*plan.ColDef) ([]int64, error) {
+	arr := make([]int64, 0)
+
+	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
+	if err != nil {
+		return nil, err
+	}
+	var r io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            0,
+				Size:              -1,
+				ReadCloserForRead: &r,
+			},
+		},
 	}
 
 	var offset []int64
@@ -457,7 +497,7 @@ func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) 
 		if err != nil {
 			return 0, err
 		}
-		if len(fields) != len(cols) {
+		if len(fields) < len(cols) {
 			continue
 		}
 		if isLegalLine(param, cols, fields) {
@@ -789,11 +829,12 @@ func makeBatch(param *ExternalParam, batchSize int, proc *process.Process) (bat 
 	for i := range param.Attrs {
 		typ := makeType(&param.Cols[i].Typ, param.ParallelLoad)
 		bat.Vecs[i] = proc.GetVector(typ)
-		err = bat.Vecs[i].PreExtend(batchSize, proc.GetMPool())
-		if err != nil {
-			bat.Clean(proc.GetMPool())
-			return nil, err
-		}
+	}
+	if err = bat.PreExtend(proc.GetMPool(), batchSize); err != nil {
+		bat.Clean(proc.GetMPool())
+		return nil, err
+	}
+	for i := range bat.Vecs {
 		bat.Vecs[i].SetLength(batchSize)
 	}
 	return bat, nil
@@ -1142,46 +1183,47 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols
 		str = param.prevStr + str
 		param.prevStr = ""
 	}
-	var jsonMap map[string]interface{}
-	var decoder = json.NewDecoder(bytes.NewReader([]byte(str)))
-	decoder.UseNumber()
-	err = decoder.Decode(&jsonMap)
+	jsonNode, err := bytejson.ParseNodeString(str)
 	if err != nil {
 		logutil.Errorf("json unmarshal err:%v", err)
 		param.prevStr = str
 		return nil, err
 	}
-	if len(jsonMap) < getRealAttrCnt(attrs, cols) {
+	defer jsonNode.Free()
+	g, ok := jsonNode.V.(*bytejson.Group)
+	if !ok || !g.Obj {
+		return nil, moerr.NewInvalidInput(ctx, "not a object")
+	}
+	if len(g.Keys) < getRealAttrCnt(attrs, cols) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo)
 	}
 	for idx, attr := range attrs {
 		if cols[idx].Hidden {
 			continue
 		}
-		if val, ok := jsonMap[attr]; ok {
-			if val == nil {
-				res = append(res, csvparser.Field{IsNull: true})
-				continue
-			}
-			tp := cols[idx].Typ.Id
-			if tp != int32(types.T_json) {
-				val = fmt.Sprintf("%v", val)
-				res = append(res, csvparser.Field{Val: fmt.Sprintf("%v", val), IsNull: val == JsonNull})
-				continue
-			}
-			var bj bytejson.ByteJson
-			err = bj.UnmarshalObject(val)
-			if err != nil {
-				return nil, err
-			}
-			dt, err := bj.Marshal()
-			if err != nil {
-				return nil, err
-			}
-			res = append(res, csvparser.Field{Val: string(dt)})
-		} else {
+		ki := slices.Index(g.Keys, attr)
+		if ki < 0 {
 			return nil, moerr.NewInvalidInput(ctx, "the attr %s is not in json", attr)
 		}
+
+		valN := g.Values[ki]
+		if valN.V == nil {
+			res = append(res, csvparser.Field{IsNull: true})
+			continue
+		}
+
+		tp := cols[idx].Typ.Id
+		if tp == int32(types.T_json) {
+			data, err := valN.ByteJsonRaw()
+			if err != nil {
+				return nil, err
+			}
+			res = append(res, csvparser.Field{Val: string(data)})
+			continue
+		}
+
+		val := fmt.Sprint(valN)
+		res = append(res, csvparser.Field{Val: val, IsNull: val == JsonNull})
 	}
 	return res, nil
 }
@@ -1195,41 +1237,41 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 		str = param.prevStr + str
 		param.prevStr = ""
 	}
-	var jsonArray []interface{}
-	var decoder = json.NewDecoder(bytes.NewReader([]byte(str)))
-	decoder.UseNumber()
-	err = decoder.Decode(&jsonArray)
+	jsonNode, err := bytejson.ParseNodeString(str)
 	if err != nil {
 		param.prevStr = str
 		return nil, err
 	}
-	if len(jsonArray) < getRealAttrCnt(attrs, cols) {
+	defer jsonNode.Free()
+	g, ok := jsonNode.V.(*bytejson.Group)
+	if !ok || g.Obj {
+		return nil, moerr.NewInvalidInput(ctx, "not a json array")
+	}
+	if len(g.Values) < getRealAttrCnt(attrs, cols) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo)
 	}
-	for idx, val := range jsonArray {
-		if val == nil {
-			res = append(res, csvparser.Field{IsNull: true})
-			continue
-		}
+	for idx, valN := range g.Values {
 		if idx >= len(cols) {
 			return nil, moerr.NewInvalidInput(ctx, str+" , wrong number of colunms")
 		}
-		tp := cols[idx].Typ.Id
-		if tp != int32(types.T_json) {
-			val = fmt.Sprintf("%v", val)
-			res = append(res, csvparser.Field{Val: fmt.Sprintf("%v", val), IsNull: val == JsonNull})
+
+		if valN.V == nil {
+			res = append(res, csvparser.Field{IsNull: true})
 			continue
 		}
-		var bj bytejson.ByteJson
-		err = bj.UnmarshalObject(val)
-		if err != nil {
-			return nil, err
+
+		tp := cols[idx].Typ.Id
+		if tp == int32(types.T_json) {
+			data, err := valN.ByteJsonRaw()
+			if err != nil {
+				return nil, err
+			}
+			res = append(res, csvparser.Field{Val: string(data)})
+			continue
 		}
-		dt, err := bj.Marshal()
-		if err != nil {
-			return nil, err
-		}
-		res = append(res, csvparser.Field{Val: string(dt)})
+
+		val := fmt.Sprint(valN)
+		res = append(res, csvparser.Field{Val: val, IsNull: val == JsonNull})
 	}
 	return res, nil
 }

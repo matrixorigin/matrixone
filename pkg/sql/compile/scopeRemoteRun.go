@@ -21,12 +21,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
-
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -50,7 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -97,10 +92,14 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // CnServerMessageHandler is responsible for processing the cn-client message received at cn-server.
@@ -343,7 +342,7 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
 	if err != nil {
-		logutil.Errorf("Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
+		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
 			c.sql, c.proc.TxnOperator.Txn().DebugString(), err)
 		return err
 	}
@@ -395,7 +394,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 func encodeProcessInfo(proc *process.Process, sql string) ([]byte, error) {
 	procInfo := &pipeline.ProcessInfo{}
 	if len(proc.AnalInfos) == 0 {
-		getLogger().Error("empty plan", zap.String("sql", sql))
+		proc.Error(proc.Ctx, "empty plan", zap.String("sql", sql))
 	}
 	{
 		procInfo.Id = proc.Id
@@ -434,7 +433,50 @@ func encodeProcessInfo(proc *process.Process, sql string) ([]byte, error) {
 			QueryId:      proc.SessionInfo.QueryId,
 		}
 	}
+	{ // log info
+		stmtId := proc.StmtProfile.GetStmtId()
+		txnId := proc.StmtProfile.GetTxnId()
+		procInfo.SessionLogger = &pipeline.SessionLoggerInfo{
+			SessId:   proc.SessionInfo.SessionId[:],
+			StmtId:   stmtId[:],
+			TxnId:    txnId[:],
+			LogLevel: zapLogLevel2EnumLogLevel(proc.SessionInfo.LogLevel),
+		}
+	}
 	return procInfo.Marshal()
+}
+
+var zapLogLevel2EnumLogLevelMap = map[zapcore.Level]pipeline.SessionLoggerInfo_LogLevel{
+	zap.DebugLevel:  pipeline.SessionLoggerInfo_Debug,
+	zap.InfoLevel:   pipeline.SessionLoggerInfo_Info,
+	zap.WarnLevel:   pipeline.SessionLoggerInfo_Warn,
+	zap.ErrorLevel:  pipeline.SessionLoggerInfo_Error,
+	zap.DPanicLevel: pipeline.SessionLoggerInfo_Panic,
+	zap.PanicLevel:  pipeline.SessionLoggerInfo_Panic,
+	zap.FatalLevel:  pipeline.SessionLoggerInfo_Fatal,
+}
+
+func zapLogLevel2EnumLogLevel(level zapcore.Level) pipeline.SessionLoggerInfo_LogLevel {
+	if lvl, exist := zapLogLevel2EnumLogLevelMap[level]; exist {
+		return lvl
+	}
+	return pipeline.SessionLoggerInfo_Info
+}
+
+var enumLogLevel2ZapLogLevelMap = map[pipeline.SessionLoggerInfo_LogLevel]zapcore.Level{
+	pipeline.SessionLoggerInfo_Debug: zap.DebugLevel,
+	pipeline.SessionLoggerInfo_Info:  zap.InfoLevel,
+	pipeline.SessionLoggerInfo_Warn:  zap.WarnLevel,
+	pipeline.SessionLoggerInfo_Error: zap.ErrorLevel,
+	pipeline.SessionLoggerInfo_Panic: zap.PanicLevel,
+	pipeline.SessionLoggerInfo_Fatal: zap.FatalLevel,
+}
+
+func enumLogLevel2ZapLogLevel(level pipeline.SessionLoggerInfo_LogLevel) zapcore.Level {
+	if lvl, exist := enumLogLevel2ZapLogLevelMap[level]; exist {
+		return lvl
+	}
+	return zap.InfoLevel
 }
 
 func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
@@ -726,8 +768,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			AffectedRows: t.AffectedRows(),
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
-			IBucket:      t.IBucket,
-			NBucket:      t.Nbucket,
 			// deleteCtx
 			RowIdIdx:              int32(t.DeleteCtx.RowIdIdx),
 			PartitionTableIds:     t.DeleteCtx.PartitionTableIDs,
@@ -754,11 +794,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
-			SchemaName: t.SchemaName,
-			TableDef:   t.TableDef,
-			HasAutoCol: t.HasAutoCol,
-			IsUpdate:   t.IsUpdate,
-			Attrs:      t.Attrs,
+			SchemaName:        t.SchemaName,
+			TableDef:          t.TableDef,
+			HasAutoCol:        t.HasAutoCol,
+			IsUpdate:          t.IsUpdate,
+			Attrs:             t.Attrs,
+			EstimatedRowCount: int64(t.EstimatedRowCount),
 		}
 	case *lockop.Argument:
 		in.LockOp = &pipeline.LockOp{
@@ -775,13 +816,14 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
-			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.Typs),
-			LeftCond:  t.Conditions[0],
-			RightCond: t.Conditions[1],
-			Result:    t.Result,
-			HashOnPk:  t.HashOnPK,
-			IsShuffle: t.IsShuffle,
+			Expr:                   t.Cond,
+			Types:                  convertToPlanTypes(t.Typs),
+			LeftCond:               t.Conditions[0],
+			RightCond:              t.Conditions[1],
+			Result:                 t.Result,
+			HashOnPk:               t.HashOnPK,
+			IsShuffle:              t.IsShuffle,
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
 	case *shuffle.Argument:
 		in.Shuffle = &pipeline.Shuffle{}
@@ -792,6 +834,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Shuffle.AliveRegCnt = t.AliveRegCnt
 		in.Shuffle.ShuffleRangesUint64 = t.ShuffleRangeUint64
 		in.Shuffle.ShuffleRangesInt64 = t.ShuffleRangeInt64
+		in.Shuffle.RuntimeFilterSpec = t.RuntimeFilterSpec
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, ShuffleType: t.ShuffleType, RecSink: t.RecSink, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
@@ -827,8 +870,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			IsShuffle:    t.IsShuffle,
 			PreAllocSize: t.PreAllocSize,
 			NeedEval:     t.NeedEval,
-			Ibucket:      t.Ibucket,
-			Nbucket:      t.Nbucket,
 			Exprs:        t.Exprs,
 			Types:        convertToPlanTypes(t.Types),
 			Aggs:         convertToPipelineAggregates(t.Aggs),
@@ -899,7 +940,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			IsShuffle:              t.IsShuffle,
 		}
 	case *limit.Argument:
-		in.Limit = t.Limit
+		in.Limit = t.LimitExpr
 	case *loopanti.Argument:
 		in.Anti = &pipeline.AntiJoin{
 			Result: t.Result,
@@ -943,7 +984,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Result: t.Result,
 		}
 	case *offset.Argument:
-		in.Offset = t.Offset
+		in.Offset = t.OffsetExpr
 	case *order.Argument:
 		in.OrderBy = t.OrderBySpec
 	case *product.Argument:
@@ -988,7 +1029,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			HashOnPk:               t.HashOnPK,
 		}
 	case *top.Argument:
-		in.Limit = uint64(t.Limit)
+		in.Limit = t.Limit
 		in.OrderBy = t.Fs
 	// we reused ANTI to store the information here because of the lack of related structure.
 	case *intersect.Argument: // 1
@@ -1012,7 +1053,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *mergeoffset.Argument:
 		in.Offset = t.Offset
 	case *mergetop.Argument:
-		in.Limit = uint64(t.Limit)
+		in.Limit = t.Limit
 		in.OrderBy = t.Fs
 	case *mergeorder.Argument:
 		in.OrderBy = t.OrderBySpecs
@@ -1040,18 +1081,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Params: t.Params,
 			Name:   t.FuncName,
 		}
-	case *hashbuild.Argument:
-		in.HashBuild = &pipeline.HashBuild{
-			NeedExpr:         t.NeedExpr,
-			NeedHash:         t.NeedHashMap,
-			Ibucket:          t.Ibucket,
-			Nbucket:          t.Nbucket,
-			Types:            convertToPlanTypes(t.Typs),
-			Conds:            t.Conditions,
-			HashOnPk:         t.HashOnPK,
-			NeedMergedBatch:  t.NeedMergedBatch,
-			NeedAllocateSels: t.NeedAllocateSels,
-		}
+
 	case *external.Argument:
 		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
 		i := 0
@@ -1100,8 +1130,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg := deletion.NewArgument()
 		arg.RemoteDelete = t.RemoteDelete
 		arg.SegmentMap = t.SegmentMap
-		arg.IBucket = t.IBucket
-		arg.Nbucket = t.NBucket
 		arg.DeleteCtx = &deletion.DeleteCtx{
 			CanTruncate:           t.CanTruncate,
 			RowIdIdx:              int(t.RowIdIdx),
@@ -1135,6 +1163,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Attrs = t.GetAttrs()
 		arg.HasAutoCol = t.GetHasAutoCol()
 		arg.IsUpdate = t.GetIsUpdate()
+		arg.EstimatedRowCount = int64(t.GetEstimatedRowCount())
 		v.Arg = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()
@@ -1189,6 +1218,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Result = t.Result
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		v.Arg = arg
 	case vm.Shuffle:
 		t := opr.GetShuffle()
@@ -1200,6 +1230,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.AliveRegCnt = t.AliveRegCnt
 		arg.ShuffleRangeInt64 = t.ShuffleRangesInt64
 		arg.ShuffleRangeUint64 = t.ShuffleRangesUint64
+		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		v.Arg = arg
 	case vm.Dispatch:
 		t := opr.GetDispatch()
@@ -1246,8 +1277,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.IsShuffle = t.IsShuffle
 		arg.PreAllocSize = t.PreAllocSize
 		arg.NeedEval = t.NeedEval
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
 		arg.Exprs = t.Exprs
 		arg.Types = convertToTypes(t.Types)
 		arg.Aggs = convertToAggregates(t.Aggs)
@@ -1416,7 +1445,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		v.Arg = arg
 	case vm.Top:
 		v.Arg = top.NewArgument().
-			WithLimit(int64(opr.Limit)).
+			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
 	// should change next day?
 	case vm.Intersect:
@@ -1447,7 +1476,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		v.Arg = mergeoffset.NewArgument().WithOffset(opr.Offset)
 	case vm.MergeTop:
 		v.Arg = mergetop.NewArgument().
-			WithLimit(int64(opr.Limit)).
+			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
 	case vm.MergeOrder:
 		arg := mergeorder.NewArgument()
@@ -1460,19 +1489,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Args = opr.TableFunction.Args
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
-		v.Arg = arg
-	case vm.HashBuild:
-		t := opr.GetHashBuild()
-		arg := hashbuild.NewArgument()
-		arg.Ibucket = t.Ibucket
-		arg.Nbucket = t.Nbucket
-		arg.NeedHashMap = t.NeedHash
-		arg.NeedExpr = t.NeedExpr
-		arg.Typs = convertToTypes(t.Types)
-		arg.Conditions = t.Conds
-		arg.HashOnPK = t.HashOnPk
-		arg.NeedMergedBatch = t.NeedMergedBatch
-		arg.NeedAllocateSels = t.NeedAllocateSels
 		v.Arg = arg
 	case vm.External:
 		t := opr.GetExternalScan()

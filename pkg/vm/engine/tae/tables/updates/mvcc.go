@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -266,8 +267,13 @@ func (n *AppendMVCCHandle) AddAppendNodeLocked(
 
 // Reschedule until all appendnode is committed.
 // Pending appendnode is not visible for compaction txn.
+func (n *AppendMVCCHandle) PrepareCompactLocked() bool {
+	return n.allAppendsCommittedLocked()
+}
 func (n *AppendMVCCHandle) PrepareCompact() bool {
-	return n.allAppendsCommitted()
+	n.RLock()
+	defer n.RUnlock()
+	return n.allAppendsCommittedLocked()
 }
 
 func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
@@ -275,9 +281,14 @@ func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
 }
 
 // check if all appendnodes are committed.
-func (n *AppendMVCCHandle) allAppendsCommitted() bool {
-	n.RLock()
-	defer n.RUnlock()
+func (n *AppendMVCCHandle) allAppendsCommittedLocked() bool {
+	if n.appends == nil {
+		logutil.Warnf("[MetadataCheck] appends mvcc is nil, obj %v, has dropped %v, deleted at %v",
+			n.meta.ID.String(),
+			n.meta.HasDropCommittedLocked(),
+			n.meta.GetDeleteAtLocked().ToString())
+		return false
+	}
 	return n.appends.IsCommitted()
 }
 
@@ -361,7 +372,7 @@ func (n *ObjectMVCCHandle) OnApplyDelete(
 	n.meta.GetTable().RemoveRows(deleted)
 	return
 }
-func (n *ObjectMVCCHandle) GetOrCreateDeleteChain(blkID uint16) *MVCCHandle {
+func (n *ObjectMVCCHandle) GetOrCreateDeleteChainLocked(blkID uint16) *MVCCHandle {
 	deletes := n.deletes[blkID]
 	if deletes == nil {
 		deletes = NewMVCCHandle(n, blkID)
@@ -381,7 +392,7 @@ func (n *ObjectMVCCHandle) GetDeletesListener() func(uint64, types.TS) error {
 	return n.deletesListener
 }
 
-func (n *ObjectMVCCHandle) GetChangeIntentionCnt() uint32 {
+func (n *ObjectMVCCHandle) GetChangeIntentionCntLocked() uint32 {
 	changes := uint32(0)
 	for _, deletes := range n.deletes {
 		changes += deletes.GetChangeIntentionCnt()
@@ -403,10 +414,10 @@ func (n *ObjectMVCCHandle) UpgradeAllDeleteChain() {
 		deletes.upgradeDeleteChain()
 	}
 }
-func (n *ObjectMVCCHandle) GetDeltaPersistedTS() types.TS {
+func (n *ObjectMVCCHandle) GetDeltaPersistedTSLocked() types.TS {
 	persisted := types.TS{}
 	for _, deletes := range n.deletes {
-		ts := deletes.getDeltaPersistedTS()
+		ts := deletes.getDeltaPersistedTSLocked()
 		if ts.Greater(&persisted) {
 			persisted = ts
 		}
@@ -414,6 +425,16 @@ func (n *ObjectMVCCHandle) GetDeltaPersistedTS() types.TS {
 	return persisted
 }
 
+func (n *ObjectMVCCHandle) GetDeltaCommitedTSLocked() types.TS {
+	commitTS := types.TS{}
+	for _, deletes := range n.deletes {
+		ts := deletes.getDeltaCommittedTSLocked()
+		if ts.Greater(&commitTS) {
+			commitTS = ts
+		}
+	}
+	return commitTS
+}
 func (n *ObjectMVCCHandle) UpgradeDeleteChain(blkID uint16) {
 	deletes := n.deletes[blkID]
 	if deletes == nil {
@@ -423,9 +444,9 @@ func (n *ObjectMVCCHandle) UpgradeDeleteChain(blkID uint16) {
 }
 
 // for test
-func (n *ObjectMVCCHandle) UpgradeDeleteChainByTS(ts types.TS) {
+func (n *ObjectMVCCHandle) UpgradeDeleteChainByTSLocked(ts types.TS) {
 	for _, deletes := range n.deletes {
-		deletes.upgradeDeleteChainByTS(ts)
+		deletes.upgradeDeleteChainByTSLocked(ts)
 	}
 }
 
@@ -437,11 +458,13 @@ func (n *ObjectMVCCHandle) EstimateMemSizeLocked() (dsize int) {
 }
 
 func (n *ObjectMVCCHandle) GetDeltaLocAndCommitTS(blkID uint16) (loc objectio.Location, start, end types.TS) {
+	n.RLock()
+	defer n.RUnlock()
 	deletes := n.deletes[blkID]
 	if deletes == nil {
 		return
 	}
-	return deletes.GetDeltaLocAndCommitTS()
+	return deletes.GetDeltaLocAndCommitTSLocked()
 }
 func (n *ObjectMVCCHandle) GetDeltaLocAndCommitTSByTxn(blkID uint16, txn txnif.TxnReader) (objectio.Location, types.TS) {
 	deletes := n.deletes[blkID]
@@ -452,6 +475,15 @@ func (n *ObjectMVCCHandle) GetDeltaLocAndCommitTSByTxn(blkID uint16, txn txnif.T
 }
 
 func (n *ObjectMVCCHandle) StringLocked(level common.PPLevel, depth int, prefix string) string {
+	s := ""
+	for _, deletes := range n.deletes {
+		s = fmt.Sprintf("%s%s", s, deletes.StringLocked(level, depth+1, prefix))
+	}
+	return s
+}
+func (n *ObjectMVCCHandle) String(level common.PPLevel, depth int, prefix string) string {
+	n.RLock()
+	defer n.RUnlock()
 	s := ""
 	for _, deletes := range n.deletes {
 		s = fmt.Sprintf("%s%s", s, deletes.StringLocked(level, depth+1, prefix))
@@ -497,10 +529,10 @@ func (n *ObjectMVCCHandle) HasInMemoryDeleteIntentsPreparedInByBlock(blkID uint1
 
 func (n *ObjectMVCCHandle) ReplayDeltaLoc(vMVCCNode any, blkID uint16) {
 	mvccNode := vMVCCNode.(*catalog.MVCCNode[*catalog.MetadataMVCCNode])
-	mvcc := n.GetOrCreateDeleteChain(blkID)
+	mvcc := n.GetOrCreateDeleteChainLocked(blkID)
 	mvcc.ReplayDeltaLoc(mvccNode)
 }
-func (n *ObjectMVCCHandle) InMemoryDeletesExisted() bool {
+func (n *ObjectMVCCHandle) InMemoryDeletesExistedLocked() bool {
 	for _, deletes := range n.deletes {
 		if !deletes.deletes.mask.IsEmpty() {
 			return true
@@ -531,11 +563,12 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 	deltalocBat *containers.Batch,
 	tnInsertBat *containers.Batch,
 	skipInMemory bool) (delBatch *containers.Batch, deltalocStart, deltalocEnd int, err error) {
+	n.RLock()
+	defer n.RUnlock()
 	deltalocStart = deltalocBat.Length()
 	for blkOffset, mvcc := range n.deletes {
-		n.RLock()
-		nodes := mvcc.deltaloc.ClonePreparedInRange(start, end)
-		n.RUnlock()
+		newStart := start
+		nodes := mvcc.deltaloc.ClonePreparedInRangeLocked(start, end)
 		var skipData bool
 		if len(nodes) != 0 {
 			blkID := objectio.NewBlockidWithObjectID(&n.meta.ID, blkOffset)
@@ -546,11 +579,13 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 			// block has newer delta data on s3, no need to collect data
 			startTS := newest.GetStart()
 			skipData = startTS.GreaterEq(&end)
-			start = newest.GetStart()
+			newStart = newest.GetStart()
 		}
 		if !skipData && !skipInMemory {
 			deletes := n.deletes[blkOffset]
-			delBat, err := deletes.CollectDeleteInRangeAfterDeltalocation(ctx, start, end, false, common.LogtailAllocator)
+			n.RUnlock()
+			delBat, err := deletes.CollectDeleteInRangeAfterDeltalocation(ctx, newStart, end, false, common.LogtailAllocator)
+			n.RLock()
 			if err != nil {
 				if delBatch != nil {
 					delBatch.Close()
@@ -583,7 +618,29 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 	deltalocEnd = deltalocBat.Length()
 	return
 }
+func (n *ObjectMVCCHandle) CheckTombstone() {
+	n.RLock()
+	defer n.RUnlock()
+	for _, deletes := range n.deletes {
+		persistedTS := deletes.getDeltaPersistedTSLocked()
+		deletes.deletes.LoopChainLocked(func(node *DeleteNode) bool {
+			if node.IsPersistedDeletedNode() {
+				return true
+			}
+			if !node.IsCommitted() {
+				return true
+			}
+			if node.End.Less(&persistedTS) {
+				logutil.Warnf("[MetadataCheck] in memory deletes should be flushed node %v, tombstone %v",
+					node.StringLocked(),
+					n.StringLocked(3, 0, ""))
+				return false
+			}
+			return true
+		})
+	}
 
+}
 func VisitDeltaloc(bat, tnBatch *containers.Batch, object *catalog.ObjectEntry, blkID *objectio.Blockid, node *catalog.MVCCNode[*catalog.MetadataMVCCNode], commitTS, createTS types.TS) {
 	is_sorted := false
 	if !object.IsAppendable() && object.GetSchema().HasSortKey() {
@@ -692,7 +749,11 @@ func (n *MVCCHandle) GetID() *common.ID {
 	return id
 }
 func (n *MVCCHandle) GetEntry() *catalog.ObjectEntry { return n.meta }
-
+func (n *MVCCHandle) String(level common.PPLevel, depth int, prefix string) string {
+	n.RLock()
+	defer n.RUnlock()
+	return n.StringLocked(level, depth, prefix)
+}
 func (n *MVCCHandle) StringLocked(level common.PPLevel, depth int, prefix string) string {
 	inMemoryCount := 0
 	if n.deletes.DepthLocked() > 0 {
@@ -721,9 +782,9 @@ func (n *MVCCHandle) EstimateMemSizeLocked() (dsize int) {
 // *************** All deletes related APIs *****************
 // ==========================================================
 
-func (n *MVCCHandle) getDeltaPersistedTS() types.TS {
+func (n *MVCCHandle) getDeltaPersistedTSLocked() types.TS {
 	persisted := types.TS{}
-	n.deltaloc.LoopChain(func(m *catalog.MVCCNode[*catalog.MetadataMVCCNode]) bool {
+	n.deltaloc.LoopChainLocked(func(m *catalog.MVCCNode[*catalog.MetadataMVCCNode]) bool {
 		if !m.BaseNode.DeltaLoc.IsEmpty() && m.IsCommitted() {
 			persisted = m.GetStart()
 			return false
@@ -732,19 +793,30 @@ func (n *MVCCHandle) getDeltaPersistedTS() types.TS {
 	})
 	return persisted
 }
+func (n *MVCCHandle) getDeltaCommittedTSLocked() types.TS {
+	persisted := types.TS{}
+	n.deltaloc.LoopChainLocked(func(m *catalog.MVCCNode[*catalog.MetadataMVCCNode]) bool {
+		if !m.BaseNode.DeltaLoc.IsEmpty() && m.IsCommitted() {
+			persisted = m.GetEnd()
+			return false
+		}
+		return true
+	})
+	return persisted
+}
 
-func (n *MVCCHandle) upgradeDeleteChainByTS(flushed types.TS) {
+func (n *MVCCHandle) upgradeDeleteChainByTSLocked(flushed types.TS) {
 	if n.persistedTS.Equal(&flushed) {
 		return
 	}
-	n.deletes = n.deletes.shrinkDeleteChainByTS(flushed)
+	n.deletes = n.deletes.shrinkDeleteChainByTSLocked(flushed)
 
 	n.persistedTS = flushed
 }
 
 func (n *MVCCHandle) upgradeDeleteChain() {
-	persisted := n.getDeltaPersistedTS()
-	n.upgradeDeleteChainByTS(persisted)
+	persisted := n.getDeltaPersistedTSLocked()
+	n.upgradeDeleteChainByTSLocked(persisted)
 }
 
 func (n *MVCCHandle) IncChangeIntentionCnt() {
@@ -800,7 +872,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 	if n.deletes.IsEmpty() {
 		return
 	}
-	if !n.ExistDeleteInRange(start, end) {
+	if !n.ExistDeleteInRangeLocked(start, end) {
 		return
 	}
 
@@ -820,7 +892,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 		pkVec = containers.MakeVector(pkType, mp)
 		aborts = &nulls.Bitmap{}
 		id := objectio.NewBlockidWithObjectID(&n.meta.ID, n.blkID)
-		n.deletes.LoopChain(
+		n.deletes.LoopChainLocked(
 			func(node *DeleteNode) bool {
 				needWait, txn := node.NeedWaitCommitting(end.Next())
 				if needWait {
@@ -893,6 +965,7 @@ func (n *MVCCHandle) InMemoryCollectDeleteInRange(
 	// for deleteNode version less than 2, pk doesn't exist in memory
 	// collect pk by block.Foreach
 	if len(deletes) != 0 {
+		logutil.Infof("visit deletes: collect pk by load, obj is %v", n.meta.ID.String())
 		pkIdx := pkDef.Idx
 		data := n.meta.GetObjectData()
 		data.Foreach(ctx, schema, n.blkID, pkIdx, func(v any, isNull bool, row int) error {
@@ -972,10 +1045,10 @@ func (n *MVCCHandle) CollectDeleteInRangeAfterDeltalocation(
 
 // ExistDeleteInRange check if there is any delete in the range [start, end]
 // it loops the delete chain and check if there is any delete node in the range
-func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
+func (n *MVCCHandle) ExistDeleteInRangeLocked(start, end types.TS) (exist bool) {
 	for {
 		needWaitFound := false
-		n.deletes.LoopChain(
+		n.deletes.LoopChainLocked(
 			func(node *DeleteNode) bool {
 				needWait, txn := node.NeedWaitCommitting(end.Next())
 				if needWait {
@@ -1006,6 +1079,9 @@ func (n *MVCCHandle) GetDeleteNodeByRow(row uint32) (an *DeleteNode) {
 func (n *MVCCHandle) GetDeltaLocAndCommitTS() (objectio.Location, types.TS, types.TS) {
 	n.RLock()
 	defer n.RUnlock()
+	return n.GetDeltaLocAndCommitTSLocked()
+}
+func (n *MVCCHandle) GetDeltaLocAndCommitTSLocked() (objectio.Location, types.TS, types.TS) {
 	node := n.deltaloc.GetLatestNodeLocked()
 	if node == nil {
 		return nil, types.TS{}, types.TS{}
@@ -1018,7 +1094,7 @@ func (n *MVCCHandle) GetDeltaLocAndCommitTS() (objectio.Location, types.TS, type
 func (n *MVCCHandle) GetDeltaLocAndCommitTSByTxn(txn txnif.TxnReader) (objectio.Location, types.TS) {
 	n.RLock()
 	defer n.RUnlock()
-	node := n.deltaloc.GetVisibleNode(txn)
+	node := n.deltaloc.GetVisibleNodeLocked(txn)
 	if node == nil {
 		return nil, types.TS{}
 	}
@@ -1035,11 +1111,11 @@ func (n *MVCCHandle) isEmptyLocked() bool {
 	}
 	return true
 }
-func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.Location, needCheckWhenCommit bool) (entry txnif.TxnEntry, ok bool, err error) {
+func (n *MVCCHandle) TryDeleteByDeltalocLocked(txn txnif.AsyncTxn, deltaLoc objectio.Location, needCheckWhenCommit bool) (entry txnif.TxnEntry, ok bool, err error) {
 	if !n.isEmptyLocked() {
 		return
 	}
-	_, entry, err = n.UpdateDeltaLoc(txn, deltaLoc, needCheckWhenCommit)
+	_, entry, err = n.UpdateDeltaLocLocked(txn, deltaLoc, needCheckWhenCommit)
 	if err != nil {
 		return
 	}
@@ -1067,14 +1143,14 @@ func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.L
 	}
 	return
 }
-func (n *MVCCHandle) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc objectio.Location, needCheckWhenCommit bool) (isNewNode bool, entry txnif.TxnEntry, err error) {
-	needWait, txnToWait := n.deltaloc.NeedWaitCommitting(txn.GetStartTS())
+func (n *MVCCHandle) UpdateDeltaLocLocked(txn txnif.TxnReader, deltaloc objectio.Location, needCheckWhenCommit bool) (isNewNode bool, entry txnif.TxnEntry, err error) {
+	needWait, txnToWait := n.deltaloc.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {
 		n.Unlock()
 		txnToWait.GetTxnState(true)
 		n.Lock()
 	}
-	err = n.deltaloc.CheckConflict(txn)
+	err = n.deltaloc.CheckConflictLocked(txn)
 	if err != nil {
 		return
 	}
@@ -1084,7 +1160,7 @@ func (n *MVCCHandle) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc objectio.Locat
 	}
 	entry = n.deltaloc
 
-	if !n.deltaloc.IsEmpty() {
+	if !n.deltaloc.IsEmptyLocked() {
 		node := n.deltaloc.GetLatestNodeLocked()
 		if node.IsSameTxn(txn) {
 			node.BaseNode.Update(baseNode)

@@ -15,12 +15,14 @@
 package txnimpl
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"runtime/trace"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -1443,12 +1445,38 @@ func (tbl *txnTable) PrePrepare() (err error) {
 	return
 }
 
+func (tbl *txnTable) dumpCore(errMsg string) {
+	var errInfo bytes.Buffer
+	errInfo.WriteString(fmt.Sprintf("Table: %s", tbl.entry.String()))
+	errInfo.WriteString(fmt.Sprintf("\nTxn: %s", tbl.store.txn.String()))
+	errInfo.WriteString(fmt.Sprintf("\nErr: %s", errMsg))
+	logutil.Error(errInfo.String())
+	util.EnableCoreDump()
+	util.CoreDump()
+}
+
 func (tbl *txnTable) PrepareCommit() (err error) {
 	for idx, node := range tbl.txnEntries.entries {
 		if tbl.txnEntries.IsDeleted(idx) {
 			continue
 		}
 		if err = node.PrepareCommit(); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
+				var buf bytes.Buffer
+				buf.WriteString(fmt.Sprintf("%d/%d No Txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
+				obj, ok := node.(*catalog.ObjectEntry)
+				if ok {
+					buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
+				}
+				for idx2, node2 := range tbl.txnEntries.entries {
+					buf.WriteString(fmt.Sprintf("%d. node type %T, ", idx2, node2))
+					obj, ok := node2.(*catalog.ObjectEntry)
+					if ok {
+						buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
+					}
+				}
+				tbl.dumpCore(buf.String())
+			}
 			break
 		}
 	}
@@ -1468,7 +1496,39 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 		if node.Is1PC() {
 			continue
 		}
-		if err = node.ApplyCommit(); err != nil {
+		if err = node.ApplyCommit(tbl.store.txn.GetID()); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
+				var buf bytes.Buffer
+				buf.WriteString(fmt.Sprintf("%d/%d No Txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
+				obj, ok := node.(*catalog.ObjectEntry)
+				if ok {
+					buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
+				}
+				for idx2, node2 := range tbl.txnEntries.entries {
+					buf.WriteString(fmt.Sprintf("%d. node type %T, ", idx2, node2))
+					obj, ok := node2.(*catalog.ObjectEntry)
+					if ok {
+						buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
+					}
+				}
+				tbl.dumpCore(buf.String())
+			}
+			if moerr.IsMoErrCode(err, moerr.ErrMissingTxn) {
+				var buf bytes.Buffer
+				buf.WriteString(fmt.Sprintf("%d/%d missing txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
+				obj, ok := node.(*catalog.ObjectEntry)
+				if ok {
+					buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
+				}
+				for idx2, node2 := range tbl.txnEntries.entries {
+					buf.WriteString(fmt.Sprintf("%d. node type %T, ", idx2, node2))
+					obj, ok := node2.(*catalog.ObjectEntry)
+					if ok {
+						buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
+					}
+				}
+				tbl.dumpCore(buf.String())
+			}
 			break
 		}
 		csn++
@@ -1484,7 +1544,39 @@ func (tbl *txnTable) Apply1PCCommit() (err error) {
 		if !node.Is1PC() {
 			continue
 		}
-		if err = node.ApplyCommit(); err != nil {
+		if err = node.ApplyCommit(tbl.store.txn.GetID()); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
+				var buf bytes.Buffer
+				buf.WriteString(fmt.Sprintf("%d/%d No Txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
+				obj, ok := node.(*catalog.ObjectEntry)
+				if ok {
+					buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
+				}
+				for idx2, node2 := range tbl.txnEntries.entries {
+					buf.WriteString(fmt.Sprintf("%d. node type %T, ", idx2, node2))
+					obj, ok := node2.(*catalog.ObjectEntry)
+					if ok {
+						buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
+					}
+				}
+				tbl.dumpCore(buf.String())
+			}
+			if moerr.IsMoErrCode(err, moerr.ErrMissingTxn) {
+				var buf bytes.Buffer
+				buf.WriteString(fmt.Sprintf("%d/%d missing txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
+				obj, ok := node.(*catalog.ObjectEntry)
+				if ok {
+					buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
+				}
+				for idx2, node2 := range tbl.txnEntries.entries {
+					buf.WriteString(fmt.Sprintf("%d. node type %T, ", idx2, node2))
+					obj, ok := node2.(*catalog.ObjectEntry)
+					if ok {
+						buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
+					}
+				}
+				tbl.dumpCore(buf.String())
+			}
 			break
 		}
 		tbl.csnStart++

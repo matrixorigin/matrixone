@@ -538,7 +538,7 @@ var supportedStringBuiltIns = []FuncNew{
 	{
 		functionId: ILIKE,
 		class:      plan.Function_STRICT,
-		layout:     BINARY_LOGICAL_OPERATOR,
+		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() {
@@ -3843,6 +3843,28 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInPurgeLog
+				},
+			},
+		},
+	},
+
+	// function `mo_admin_name`
+	{
+		functionId: MO_ADMIN_NAME,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInternalGetAdminName
 				},
 			},
 		},

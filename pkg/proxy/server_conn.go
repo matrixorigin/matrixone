@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 // serverBaseConnID is the base connection ID for server.
@@ -58,9 +59,6 @@ type serverConn struct {
 	conn goetty.IOSession
 	// connID is the proxy connection ID, which is not useful in most case.
 	connID uint32
-	// backendConnID is the connection generated be backend CN
-	// server. It is tracked by connManager.
-	backendConnID uint32
 	// mysqlProto is used to build handshake info.
 	mysqlProto *frontend.MysqlProtocolImpl
 	// rebalancer is used to track connections between proxy and server.
@@ -73,7 +71,11 @@ var _ ServerConn = (*serverConn)(nil)
 
 // newServerConn creates a connection to CN server.
 func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Duration) (ServerConn, error) {
-	c, err := cn.Connect(timeout)
+	var logger *zap.Logger
+	if r != nil && r.logger != nil {
+		logger = r.logger.RawLogger()
+	}
+	c, err := cn.Connect(logger, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +110,7 @@ func (w *wrappedConn) Close() error {
 
 // ConnID implements the ServerConn interface.
 func (s *serverConn) ConnID() uint32 {
-	return s.backendConnID
+	return s.connID
 }
 
 // RawConn implements the ServerConn interface.

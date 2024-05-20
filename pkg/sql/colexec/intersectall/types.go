@@ -49,10 +49,6 @@ type container struct {
 type Argument struct {
 	// execution container
 	ctr *container
-	// index in buckets
-	IBucket uint64
-	// buckets count
-	NBucket uint64
 
 	vm.OperatorBase
 }
@@ -88,6 +84,10 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
@@ -96,6 +96,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			ctr.buf.Clean(proc.Mp())
 			ctr.buf = nil
 		}
+		arg.ctr = nil
 	}
 }
 

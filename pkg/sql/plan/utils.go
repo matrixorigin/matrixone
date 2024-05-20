@@ -1062,6 +1062,9 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 // todo: remove this in the future
 func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
 	if tableDef.Pkey != nil {
+		if colName == tableDef.Pkey.PkeyColName {
+			return 0
+		}
 		pkNames := tableDef.Pkey.Names
 		for i := range pkNames {
 			if pkNames[i] == colName {
@@ -1095,6 +1098,10 @@ func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsCo
 }
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
+	if expr.Typ.Id == int32(types.T_interval) {
+		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
+	}
+
 	// If it is Expr_List, perform constant folding on its elements
 	if elist := expr.GetList(); elist != nil {
 		exprList := elist.List
@@ -1778,7 +1785,7 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 }
 
 // databaseIsValid checks whether the database exists or not.
-func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
+func databaseIsValid(dbName string, ctx CompilerContext, snapshot Snapshot) (string, error) {
 	connectDBFirst := false
 	if len(dbName) == 0 {
 		connectDBFirst = true
@@ -1787,7 +1794,7 @@ func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
 		dbName = ctx.DefaultDatabase()
 	}
 
-	if len(dbName) == 0 || !ctx.DatabaseExists(dbName) {
+	if len(dbName) == 0 || !ctx.DatabaseExists(dbName, snapshot) {
 		if connectDBFirst {
 			return "", moerr.NewNoDB(ctx.GetContext())
 		} else {
@@ -2014,10 +2021,12 @@ func MakeIntervalExpr(num int64, str string) *Expr {
 }
 
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
+	rightType := plan.Type{Id: int32(types.T_tuple)}
+	if matchPrefix {
+		rightType = left.Typ
+	}
 	rightArg := &plan.Expr{
-		Typ: plan.Type{
-			Id: int32(types.T_tuple),
-		},
+		Typ: rightType,
 		Expr: &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
 				Len:  length,

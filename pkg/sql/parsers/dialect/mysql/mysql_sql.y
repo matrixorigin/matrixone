@@ -46,6 +46,7 @@ import (
 
     PartitionNames tree.IdentifierList
 
+    atTimeStamp *tree.AtTimeStamp
     tableDef tree.TableDef
     tableDefs tree.TableDefs
     tableName *tree.TableName
@@ -226,8 +227,8 @@ import (
     killOption tree.KillOption
     statementOption tree.StatementOption
 
-    tableLock *tree.TableLock
-    tableLocks []*tree.TableLock
+    tableLock tree.TableLock
+    tableLocks []tree.TableLock
     tableLockType tree.TableLockType
     cstr *tree.CStr
     incrementByOption *tree.IncrementByOption
@@ -256,7 +257,7 @@ import (
     timeFill *tree.Fill
     fillMode tree.FillMode
 
-    snapshotObject tree.ObejectInfo
+    snapshotObject tree.ObjectInfo
 
 }
 
@@ -441,7 +442,7 @@ import (
 %token <str> ARROW
 
 // Insert
-%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL
+%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL STRICT
 
 %token <str> UNUSED BINDINGS
 
@@ -506,7 +507,7 @@ import (
 %type <statement> mo_dump_stmt
 %type <statement> load_extension_stmt
 %type <statement> kill_stmt
-%type <statement> backup_stmt
+%type <statement> backup_stmt snapshot_restore_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -568,6 +569,7 @@ import (
 %type <procArgDecl> proc_arg_decl
 %type <procArgType> proc_arg_in_out_type
 
+%type <atTimeStamp> table_snapshot_opt
 %type <tableDefs> table_elem_list_opt table_elem_list
 %type <tableDef> table_elem constaint_def constraint_elem index_def table_elem_2
 %type <tableName> table_name table_name_opt_wild
@@ -616,6 +618,7 @@ import (
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam
 %type <str> charset_keyword db_name db_name_opt
+%type <str> backup_type_opt backup_timestamp_opt
 %type <str> not_keyword func_not_keyword
 %type <str> non_reserved_keyword
 %type <str> equal_opt column_keyword_opt
@@ -626,7 +629,7 @@ import (
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
 %type <fullOpt> full_opt
-%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword
+%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword snapshot_option_opt
 %type <userMiscOption> pwd_or_lck pwd_or_lck_opt
 //%type <userMiscOptions> pwd_or_lck_list
 
@@ -707,7 +710,7 @@ import (
 
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
-%type <unsignedOpt> unsigned_opt header_opt parallel_opt
+%type <unsignedOpt> unsigned_opt header_opt parallel_opt strict_opt
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt
 %type <item> pwd_expire clear_pwd_opt
@@ -779,7 +782,7 @@ import (
 
 %token <str> KILL
 %type <killOption> kill_opt
-%token <str> BACKUP FILESYSTEM PARALLELISM
+%token <str> BACKUP FILESYSTEM PARALLELISM RESTORE
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %type<tableLock> table_lock_elem
@@ -911,28 +914,53 @@ normal_stmt:
         $$ = $1
     }
 |   kill_stmt
-|   backup_stmt   
+|   backup_stmt
+|   snapshot_restore_stmt
 
 
 backup_stmt:
-    BACKUP STRING FILESYSTEM STRING PARALLELISM STRING
+    BACKUP STRING FILESYSTEM STRING PARALLELISM STRING backup_type_opt backup_timestamp_opt
 	{
         var timestamp = $2
         var isS3 = false
         var dir = $4
         var parallelism = $6
         var option []string
-        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option)
+        var backuptype = $7
+        var backupts = $8
+        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option, backuptype, backupts)
 	}
-    | BACKUP STRING S3OPTION '{' infile_or_s3_params '}'
+    | BACKUP STRING S3OPTION '{' infile_or_s3_params '}' backup_type_opt backup_timestamp_opt
     {
         var timestamp = $2
         var isS3 = true
         var dir string
         var parallelism string
         var option = $5
-        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option)
+        var backuptype = $7
+        var backupts = $8
+        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option, backuptype, backupts)
     }
+
+backup_type_opt:
+    {
+        $$ = ""
+    }
+|    TYPE STRING
+    {
+        $$ = $2
+    }
+
+backup_timestamp_opt:
+    {
+        $$ = ""
+    }
+|   TIMESTAMP STRING
+    {
+        $$ = $2
+    }
+
+
 
 create_snapshot_stmt:
     CREATE SNAPSHOT not_exists_opt ident FOR snapshot_object_opt
@@ -940,7 +968,7 @@ create_snapshot_stmt:
         $$ = &tree.CreateSnapShot{
             IfNotExists: $3,
             Name: tree.Identifier($4.Compare()),
-            Obeject: $6,
+            Object: $6,
         }
     }
 
@@ -950,22 +978,89 @@ snapshot_object_opt:
         spLevel := tree.SnapshotLevelType{
             Level: tree.SNAPSHOTLEVELCLUSTER,
         }
-        $$ = tree.ObejectInfo{
+        $$ = tree.ObjectInfo{
             SLevel: spLevel,
             ObjName: "",
         }
     }
-|    ACCOUNT ident
+|   ACCOUNT ident
     {
         spLevel := tree.SnapshotLevelType{
             Level: tree.SNAPSHOTLEVELACCOUNT,
         }
-        $$ = tree.ObejectInfo{
+        $$ = tree.ObjectInfo{
             SLevel: spLevel,
             ObjName: tree.Identifier($2.Compare()),
         }
     }
 
+
+snapshot_restore_stmt:
+    RESTORE CLUSTER FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELCLUSTER,
+            SnapShotName: tree.Identifier($5.ToLower()),
+        }
+
+    }
+|   RESTORE ACCOUNT ident FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELACCOUNT,
+            AccountName:tree.Identifier($3.ToLower()),
+            SnapShotName:tree.Identifier($6.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELDATABASE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            SnapShotName: tree.Identifier($8.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELTABLE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            TableName: tree.Identifier($7.ToLower()),
+            SnapShotName: tree.Identifier($10.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident FROM SNAPSHOT ident TO ACCOUNT ident
+    {
+        $$ = &tree.RestoreSnapShot{ 
+            Level: tree.RESTORELEVELACCOUNT,
+            AccountName:tree.Identifier($3.ToLower()),
+            SnapShotName:tree.Identifier($6.ToLower()),
+            ToAccountName: tree.Identifier($9.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident TO ACCOUNT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELDATABASE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            SnapShotName: tree.Identifier($8.ToLower()),
+            ToAccountName: tree.Identifier($11.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident TO ACCOUNT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELTABLE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            TableName: tree.Identifier($7.ToLower()),
+            SnapShotName: tree.Identifier($10.ToLower()),
+            ToAccountName: tree.Identifier($13.ToLower()),
+        }
+    }
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
@@ -973,165 +1068,143 @@ kill_stmt:
         var connectionId uint64
         switch v := $3.(type) {
         case uint64:
-	        connectionId = v
+	    connectionId = v
         case int64:
-	        connectionId = uint64(v)
+	    connectionId = uint64(v)
         default:
-	        yylex.Error("parse integral fail")
+	    yylex.Error("parse integral fail")
 		goto ret1
         }
 
-        var Option = $2
-        var ConnectionId = connectionId
-        var StmtOption =  $4
-	    $$ = tree.NewKill(
-            Option,
-            ConnectionId,
-            StmtOption,
-        )
+	$$ = &tree.Kill{
+            Option: $2,
+            ConnectionId: connectionId,
+            StmtOption:  $4,
+	}
     }
 
 kill_opt:
 {
-    ko := tree.NewKillOption()
-    ko.Exist = false
-    $$ = *ko
+    $$ = tree.KillOption{
+        Exist: false,
+    }
 }
 | CONNECTION
 {
-    ko := tree.NewKillOption()
-    ko.Typ = tree.KillTypeConnection
-    ko.Exist = true
-    $$ = *ko
+    $$ = tree.KillOption{
+	Exist: true,
+	Typ: tree.KillTypeConnection,
+    }
 }
 | QUERY
 {
-    ko := tree.NewKillOption()
-    ko.Typ = tree.KillTypeQuery
-    ko.Exist = true
-    $$ = *ko
+    $$ = tree.KillOption{
+	Exist: true,
+	Typ: tree.KillTypeQuery,
+    }
 }
 
 statement_id_opt:
 {
-    so := tree.NewStatementOption()
-    so.Exist = false
-    $$ = *so
+    $$ = tree.StatementOption{
+        Exist: false,
+    }
 }
 | STRING
 {
-    so := tree.NewStatementOption()
-    so.Exist = true
-    so.StatementId = $1
-    $$ = *so
+    $$ = tree.StatementOption{
+        Exist: true,
+        StatementId: $1,
+    }
 }
 
 call_stmt:
     CALL proc_name '(' expression_list_opt ')'
     {
-        var Name = $2
-        var Args = $4
-        $$ = tree.NewCallStmt(
-            Name,
-            Args,
-        )
+        $$ = &tree.CallStmt{
+            Name: $2,
+            Args: $4,
+        }
     }
+
 
 leave_stmt:
     LEAVE ident
     {
-        var Name = tree.Identifier($2.ToLower())
-        $$ = tree.NewLeaveStmt(Name)
+        $$ = &tree.LeaveStmt{
+            Name: tree.Identifier($2.ToLower()),
+        }
     }
 
 iterate_stmt:
     ITERATE ident
     {
-        var Name = tree.Identifier($2.ToLower())
-        $$ = tree.NewIterateStmt(Name)
+        $$ = &tree.IterateStmt{
+            Name: tree.Identifier($2.ToLower()),
+        }
     }
 
 while_stmt:
     WHILE expression DO stmt_list_return END WHILE
     {
-        var Name tree.Identifier
-        var Cond = $2
-        var Body = $4
-        $$ = tree.NewWhileStmt(
-            Name,
-            Cond,
-            Body,
-        )
+        $$ = &tree.WhileStmt{
+            Name: "",
+            Cond: $2,
+            Body: $4,
+        }
     }
 |   ident ':' WHILE expression DO stmt_list_return END WHILE ident
     {
-        var Name = tree.Identifier($1.ToLower())
-        var Cond = $4
-        var Body = $6
-        $$ = tree.NewWhileStmt(
-            Name,
-            Cond,
-            Body,
-        )
+        $$ = &tree.WhileStmt{
+            Name: tree.Identifier($1.ToLower()),
+            Cond: $4,
+            Body: $6,
+        }
     }
 
 repeat_stmt:
     REPEAT stmt_list_return UNTIL expression END REPEAT
     {
-        var Name tree.Identifier
-        var Body = $2
-        var Cond = $4
-        $$ = tree.NewRepeatStmt(
-            Name,
-            Body,
-            Cond,
-        )
+        $$ = &tree.RepeatStmt{
+            Name: "",
+            Body: $2,
+            Cond: $4,
+        }
     }
 |    ident ':' REPEAT stmt_list_return UNTIL expression END REPEAT ident
     {
-        var Name = tree.Identifier($1.ToLower())
-        var Body = $4
-        var Cond = $6
-        $$ = tree.NewRepeatStmt(
-            Name,
-            Body,
-            Cond,
-        )
+        $$ = &tree.RepeatStmt{
+            Name: tree.Identifier($1.ToLower()),
+            Body: $4,
+            Cond: $6,
+        }
     }
 
 loop_stmt:
     LOOP stmt_list_return END LOOP
     {
-        var Name tree.Identifier
-        var Body = $2
-        $$ = tree.NewLoopStmt(
-            Name,
-            Body,
-        )
+        $$ = &tree.LoopStmt{
+            Name: "",
+            Body: $2,
+        }
     }
 |   ident ':' LOOP stmt_list_return END LOOP ident
     {
-        var Name = tree.Identifier($1.ToLower())
-        var Body = $4
-        $$ = tree.NewLoopStmt(
-            Name,
-            Body,
-        )
+        $$ = &tree.LoopStmt{
+            Name: tree.Identifier($1.ToLower()),
+            Body: $4,
+        }
     }
 
 if_stmt:
     IF expression THEN stmt_list_return elseif_clause_list_opt else_clause_opt2 END IF
     {
-        var Cond = $2
-        var Body = $4
-        var Elifs = $5
-        var Else = $6
-        $$ = tree.NewIfStmt(
-            Cond,
-            Body,
-            Elifs,
-            Else,
-        )
+        $$ = &tree.IfStmt{
+            Cond: $2,
+            Body: $4,
+            Elifs: $5,
+            Else: $6,
+        }
     }
 
 elseif_clause_list_opt:
@@ -1156,25 +1229,20 @@ elseif_clause_list:
 elseif_clause:
     ELSEIF expression THEN stmt_list_return
     {
-        var Cond = $2
-        var Body = $4
-        $$ = tree.NewElseIfStmt(
-            Cond,
-            Body,
-        )
+        $$ = &tree.ElseIfStmt{
+            Cond: $2,
+            Body: $4,
+        }
     }
 
 case_stmt:
     CASE expression when_clause_list2 else_clause_opt2 END CASE
     {
-        var Expr = $2
-        var Whens = $3
-        var Else = $4
-        $$ = tree.NewCaseStmt(
-            Expr,
-            Whens,
-            Else,
-        )
+        $$ = &tree.CaseStmt{
+            Expr: $2,
+            Whens: $3,
+            Else: $4,
+        }
     }
 
 when_clause_list2:
@@ -1190,12 +1258,10 @@ when_clause_list2:
 when_clause2:
     WHEN expression THEN stmt_list_return
     {
-        var Cond = $2
-        var Body = $4
-        $$ = tree.NewWhenStmt(
-            Cond,
-            Body,
-        )
+        $$ = &tree.WhenStmt{
+            Cond: $2,
+            Body: $4,
+        }
     }
 
 else_clause_opt2:
@@ -1212,23 +1278,25 @@ mo_dump_stmt:
    MODUMP QUERY_RESULT STRING INTO STRING export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
     {
         ep := &tree.ExportParam{
-            Outfile:    true,
-            QueryId:    $3,
-            FilePath :  $5,
-            Fields:     $6,
-            Lines:      $7,
-            Header:     $8,
-            MaxFileSize:uint64($9)*1024,
-            ForceQuote: $10,
-	    }
-        $$ = tree.NewMoDump(ep)
+		Outfile:    true,
+		QueryId:    $3,
+		FilePath :  $5,
+		Fields:     $6,
+		Lines:      $7,
+		Header:     $8,
+		MaxFileSize:uint64($9)*1024,
+		ForceQuote: $10,
+	}
+        $$ = &tree.MoDump{
+            ExportParams: ep,
+        }
     }
 
 
 
 
 load_data_stmt:
-    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt parallel_opt
+    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt parallel_opt strict_opt
     {
         $$ = &tree.Load{
             Local: $3,
@@ -1238,6 +1306,7 @@ load_data_stmt:
         }
         $$.(*tree.Load).Param.Tail = $9
         $$.(*tree.Load).Param.Parallel = $10
+        $$.(*tree.Load).Param.Strict = $11
     }
 
 load_extension_stmt:
@@ -1295,11 +1364,26 @@ parallel_opt:
         } else if str == "false" {
             $$ = false
         } else {
+            yylex.Error("error strict flag")
+            goto ret1
+        }
+    }
+strict_opt:
+    {
+        $$ = false
+    }
+|   STRICT STRING
+    {
+        str := strings.ToLower($2)
+        if str == "true" {
+            $$ = true
+        } else if str == "false" {
+            $$ = false
+        } else {
             yylex.Error("error parallel flag")
             goto ret1
         }
     }
-
 normal_ident:
     ident
     {
@@ -1626,38 +1710,39 @@ local_opt:
 grant_stmt:
     GRANT priv_list ON object_type priv_level TO role_spec_list grant_option_opt
     {
-        var Privileges = $2
-        var ObjType = $4
-        var Level = $5
-        var Roles = $7
-        var GrantOption = $8
-        GrantPrivilege := tree.NewGrantPrivilege(Privileges, ObjType, Level, Roles, GrantOption)
-
-        grant := tree.NewGrant(tree.GrantTypePrivilege)
-        grant.GrantPrivilege = GrantPrivilege
-        $$ = grant
+        $$ = &tree.Grant{
+            Typ: tree.GrantTypePrivilege,
+            GrantPrivilege: tree.GrantPrivilege{
+                Privileges: $2,
+                ObjType: $4,
+                Level: $5,
+                Roles: $7,
+                GrantOption: $8,
+            },
+        }
     }
 |   GRANT role_spec_list TO drop_user_spec_list grant_option_opt
     {
-        var Roles = $2
-        var Users = $4
-        var GrantOption = $5
-        GrantRole := tree.NewGrantRole(Roles, Users, GrantOption)
-
-        grant := tree.NewGrant(tree.GrantTypeRole)
-        grant.GrantRole = GrantRole
-        $$ = grant
+        $$ = &tree.Grant{
+            Typ: tree.GrantTypeRole,
+            GrantRole:tree.GrantRole{
+                Roles: $2,
+                Users: $4,
+                GrantOption: $5,
+            },
+        }
     }
 |   GRANT PROXY ON user_spec TO user_spec_list grant_option_opt
     {
-        var ProxyUser = $4
-        var Users = $6
-        var GrantOption = $7
-        GrantProxy := tree.NewGrantProxy(ProxyUser, Users, GrantOption)
+        $$ =  &tree.Grant{
+            Typ: tree.GrantTypeProxy,
+            GrantProxy:tree.GrantProxy{
+                ProxyUser: $4,
+                Users: $6,
+                GrantOption: $7,
+            },
+        }
 
-        grant := tree.NewGrant(tree.GrantTypeProxy)
-        grant.GrantProxy = GrantProxy
-        $$ = grant
     }
 
 grant_option_opt:
@@ -1676,59 +1761,63 @@ grant_option_opt:
 revoke_stmt:
     REVOKE exists_opt  priv_list ON object_type priv_level FROM role_spec_list
     {
-        var IfExists = $2
-        var Privileges = $3
-        var ObjType = $5
-        var Level = $6
-        var Roles = $8
-        rp := tree.NewRevokePrivilege(IfExists, Privileges, ObjType, Level, Roles)
-        re := tree.NewRevoke(tree.RevokeTypePrivilege)
-        re.RevokePrivilege = rp
-        $$ = re
+        $$ = &tree.Revoke{
+            Typ: tree.RevokeTypePrivilege,
+            RevokePrivilege: tree.RevokePrivilege{
+                IfExists: $2,
+                Privileges: $3,
+                ObjType: $5,
+                Level: $6,
+                Roles: $8,
+            },
+        }
     }
 |   REVOKE exists_opt role_spec_list FROM user_spec_list
     {
-        var IfExists = $2
-        var Roles = $3
-        var Users = $5
-        rr := tree.NewRevokeRole(IfExists, Roles, Users)
-        re := tree.NewRevoke(tree.RevokeTypeRole)
-        re.RevokeRole = rr
-        $$ = re
+        $$ = &tree.Revoke{
+            Typ: tree.RevokeTypeRole,
+            RevokeRole: tree.RevokeRole{
+                IfExists: $2,
+                Roles: $3,
+                Users: $5,
+            },
+        }
     }
 
 priv_level:
     '*'
     {
-        var Level = tree.PRIVILEGE_LEVEL_TYPE_STAR
-        $$ = tree.NewPrivilegeLevel(Level)
+        $$ = &tree.PrivilegeLevel{
+            Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+        }
     }
 |   '*' '.' '*'
     {
-        var Level = tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR
-        $$ = tree.NewPrivilegeLevel(Level)
+        $$ = &tree.PrivilegeLevel{
+            Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR,
+        }
     }
 |   ident '.' '*'
     {
-        var Level = tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR
-        pl := tree.NewPrivilegeLevel(Level)
-        pl.DbName = $1.Compare()
-        $$ = pl
+        $$ = &tree.PrivilegeLevel{
+            Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+            DbName: $1.Compare(),
+        }
     }
 |   ident '.' ident
     {
-        var Level = tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE
-        pl := tree.NewPrivilegeLevel(Level)
-        pl.DbName = $1.Compare()
-        pl.TabName = $3.Compare()
-        $$ = pl
+        $$ = &tree.PrivilegeLevel{
+            Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+            DbName: $1.Compare(),
+            TabName: $3.Compare(),
+        }
     }
 |   ident
     {
-        var Level = tree.PRIVILEGE_LEVEL_TYPE_TABLE
-        pl := tree.NewPrivilegeLevel(Level)
-        pl.TabName = $1.Compare()
-        $$ = pl
+        $$ = &tree.PrivilegeLevel{
+            Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+            TabName: $1.Compare(),
+        }
     }
 
 object_type:
@@ -1771,21 +1860,17 @@ priv_list:
 priv_elem:
     priv_type
     {
-        var Type = $1
-        var ColumnList []*tree.UnresolvedName
-        $$ = tree.NewPrivilege(
-            Type,
-            ColumnList,
-        )
+        $$ = &tree.Privilege{
+            Type: $1,
+            ColumnList: nil,
+        }
     }
 |   priv_type '(' column_name_list ')'
     {
-        var Type = $1
-        var ColumnList = $3
-        $$ = tree.NewPrivilege(
-            Type,
-            ColumnList,
-        )
+        $$ = &tree.Privilege{
+            Type: $1,
+            ColumnList: $3,
+        }
     }
 
 column_name_list:
@@ -1808,13 +1893,13 @@ priv_type:
         $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_ACCOUNT
     }
 |    DROP ACCOUNT
-    {
-        $$ = tree.PRIVILEGE_TYPE_STATIC_DROP_ACCOUNT
-    }
+        {
+            $$ = tree.PRIVILEGE_TYPE_STATIC_DROP_ACCOUNT
+        }
 |    ALTER ACCOUNT
-    {
-        $$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_ACCOUNT
-    }
+        {
+                $$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_ACCOUNT
+        }
 |    UPGRADE ACCOUNT
 	{
 		$$ = tree.PRIVILEGE_TYPE_STATIC_UPGRADE_ACCOUNT
@@ -2567,14 +2652,13 @@ lock_stmt:
 lock_table_stmt:
     LOCK TABLES table_lock_list
     {
-        var TableLocks = $3
-        $$ = tree.NewLockTableStmt(TableLocks)
+        $$ = &tree.LockTableStmt{TableLocks:$3}
     }
 
 table_lock_list:
     table_lock_elem
     {
-       $$ = []*tree.TableLock{$1}
+       $$ = []tree.TableLock{$1}
     }
 |   table_lock_list ',' table_lock_elem
     {
@@ -2584,12 +2668,7 @@ table_lock_list:
 table_lock_elem:
     table_name table_lock_type
     {
-        var Table = $1
-        var LockType = $2
-        $$ = tree.NewTableLock(
-            Table,
-            LockType,
-        )
+        $$ = tree.TableLock{Table: *$1, LockType: $2}
     }
 
 table_lock_type:
@@ -2613,7 +2692,7 @@ table_lock_type:
 unlock_table_stmt:
     UNLOCK TABLES
     {
-       $$ = tree.NewUnLockTableStmt()
+       $$ = &tree.UnLockTableStmt{}
     }
 
 prepareable_stmt:
@@ -3845,7 +3924,7 @@ show_sequences_stmt:
     }
 
 show_tables_stmt:
-    SHOW full_opt TABLES database_name_opt like_opt where_expression_opt
+    SHOW full_opt TABLES database_name_opt like_opt where_expression_opt snapshot_option_opt
     {
         $$ = &tree.ShowTables{
             Open: false,
@@ -3853,6 +3932,7 @@ show_tables_stmt:
             DBName: $4,
             Like: $5,
             Where: $6,
+            SnapshotName : $7,
         }
     }
 |   SHOW OPEN full_opt TABLES database_name_opt like_opt where_expression_opt
@@ -3867,9 +3947,13 @@ show_tables_stmt:
     }
 
 show_databases_stmt:
-    SHOW DATABASES like_opt where_expression_opt
+    SHOW DATABASES like_opt where_expression_opt snapshot_option_opt
     {
-        $$ = &tree.ShowDatabases{Like: $3, Where: $4}
+        $$ = &tree.ShowDatabases{
+            Like: $3, 
+            Where: $4,
+            SnapshotName: $5,
+        }
     }
 |   SHOW SCHEMAS like_opt where_expression_opt
     {
@@ -3959,6 +4043,17 @@ table_column_name:
         $$ = $2
     }
 
+snapshot_option_opt:
+    {
+        $$ = ""
+    }
+|   '{' SNAPSHOT '=' STRING '}'
+    {
+        $$ = $4
+    }
+
+
+
 from_or_in:
     FROM
 |   IN
@@ -3977,14 +4072,20 @@ full_opt:
     }
 
 show_create_stmt:
-    SHOW CREATE TABLE table_name_unresolved
+    SHOW CREATE TABLE table_name_unresolved snapshot_option_opt
     {
-        $$ = &tree.ShowCreateTable{Name: $4}
+        $$ = &tree.ShowCreateTable{
+            Name: $4,
+            SnapshotName: $5,
+        }
     }
 |
-    SHOW CREATE VIEW table_name_unresolved
+    SHOW CREATE VIEW table_name_unresolved snapshot_option_opt
     {
-        $$ = &tree.ShowCreateView{Name: $4}
+        $$ = &tree.ShowCreateView{
+            Name: $4,
+            SnapshotName: $5,
+        }
     }
 |   SHOW CREATE DATABASE not_exists_opt db_name
     {
@@ -4231,28 +4332,24 @@ delete_without_using_stmt:
 |    DELETE priority_opt quick_opt ignore_opt table_name_wild_list FROM table_references where_expression_opt
     {
         // Multiple-Table Syntax
-        var Tables = $5
-        var Where = $8
-        d := tree.NewDelete(
-            Tables,
-            Where,
-        )
-        d.TableRefs = tree.TableExprs{$7}
-        $$ = d
+        $$ = &tree.Delete{
+            Tables: $5,
+            Where: $8,
+            TableRefs: tree.TableExprs{$7},
+        }
     }
+
+
 
 delete_with_using_stmt:
     DELETE priority_opt quick_opt ignore_opt FROM table_name_wild_list USING table_references where_expression_opt
     {
         // Multiple-Table Syntax
-        var Tables = $6
-        var Where = $9
-        d := tree.NewDelete(
-            Tables,
-            Where,
-        )
-        d.TableRefs = tree.TableExprs{$8}
-        $$ = d
+        $$ = &tree.Delete{
+            Tables: $6,
+            Where: $9,
+            TableRefs: tree.TableExprs{$8},
+        }
     }
 
 table_name_wild_list:
@@ -4904,30 +5001,15 @@ limit_opt:
 limit_clause:
     LIMIT expression
     {
-        var Offset tree.Expr
-        var Count = $2
-        $$ = tree.NewLimit(
-            Offset,
-            Count,
-        )
+        $$ = &tree.Limit{Count: $2}
     }
 |   LIMIT expression ',' expression
     {
-        var Offset = $2
-        var Count = $4
-        $$ = tree.NewLimit(
-            Offset, 
-            Count,
-        )
+        $$ = &tree.Limit{Offset: $2, Count: $4}
     }
 |   LIMIT expression OFFSET expression
     {
-        var Offset = $4
-        var Count = $2
-        $$ = tree.NewLimit(
-            Offset, 
-            Count,
-        )
+        $$ = &tree.Limit{Offset: $4, Count: $2}
     }
 
 order_by_opt:
@@ -5281,9 +5363,9 @@ from_opt:
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
         tn := tree.NewTableName(tree.Identifier(""), prefix, nil)
-        $$ = tree.NewFrom(
-            tree.TableExprs{&tree.AliasedTableExpr{Expr: tn}},
-        )
+        $$ = &tree.From{
+            Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tn}},
+        }
     }
 |   from_clause
     {
@@ -5293,10 +5375,9 @@ from_opt:
 from_clause:
     FROM table_references
     {
-        var Tables = tree.TableExprs{$2}
-        $$ = tree.NewFrom(
-            Tables,
-        )
+        $$ = &tree.From{
+            Tables: tree.TableExprs{$2},
+        }
     }
 
 table_references:
@@ -5425,10 +5506,7 @@ on_expression_opt:
     }
 |   ON expression
     {
-        var Expr = $2
-        $$ = tree.NewOnJoinCond(
-            Expr,
-        )
+        $$ = &tree.OnJoinCond{Expr: $2}
     }
 
 straight_join:
@@ -5464,17 +5542,11 @@ join_condition_opt:
 join_condition:
     ON expression
     {
-        var Expr = $2
-        $$ = tree.NewOnJoinCond(
-            Expr,
-        )
+        $$ = &tree.OnJoinCond{Expr: $2}
     }
 |   USING '(' column_list ')'
     {
-        var Cols = $3
-        $$ = tree.NewUsingJoinCond(
-            Cols,
-        )
+        $$ = &tree.UsingJoinCond{Cols: $3}
     }
 
 column_list:
@@ -6751,12 +6823,11 @@ index_option_list:
             } else if opt2.Visible != tree.VISIBLE_TYPE_INVALID {
                 opt1.Visible = opt2.Visible
             } else if opt2.AlgoParamList > 0 {
-	            opt1.AlgoParamList = opt2.AlgoParamList
-	        } else if len(opt2.AlgoParamVectorOpType) > 0 {
-	            opt1.AlgoParamVectorOpType = opt2.AlgoParamVectorOpType
-	        }
+	      opt1.AlgoParamList = opt2.AlgoParamList
+	    } else if len(opt2.AlgoParamVectorOpType) > 0 {
+	      opt1.AlgoParamVectorOpType = opt2.AlgoParamVectorOpType
+	    }
             $$ = opt1
-            opt2.Free()
         }
     }
 
@@ -6775,9 +6846,9 @@ index_option:
     		return 1
     	}
 
-    	io := tree.NewIndexOption()
-	    io.AlgoParamList = val
-	    $$ = io
+	io := tree.NewIndexOption()
+	io.AlgoParamList = val
+	$$ = io
     }
 |   OP_TYPE STRING
     {
@@ -8097,69 +8168,45 @@ table_name_list:
 // <table>
 // <schema>.<table>
 table_name:
-    ident
+    ident table_snapshot_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, nil)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, $2)
     }
-|   ident '.' ident
+|   ident '.' ident table_snapshot_opt
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, $4)
     }
-|   ident '{' TIMESTAMP '=' expression '}'
+
+table_snapshot_opt:
     {
-        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        atTs := &tree.AtTimeStamp{
+        $$ = nil
+    }
+|   '{' '}'
+    {
+        $$ = nil
+    }
+|   '{' TIMESTAMP '=' expression '}'
+    {
+        $$ = &tree.AtTimeStamp{
             Type: tree.ATTIMESTAMPTIME,
-            Expr: $5,
+            Expr: $4,
         }
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
     }
-|   ident '{' SNAPSHOT '=' expression '}'
+|   '{' SNAPSHOT '=' expression '}'
     {
-        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        atTs := &tree.AtTimeStamp{
+        $$ = &tree.AtTimeStamp{
             Type: tree.ATTIMESTAMPSNAPSHOT,
-            Expr: $5,
+            Expr: $4,
         }
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
     }
-|   ident '{' MO_TS '=' expression '}'
+|   '{' MO_TS '=' expression '}'
     {
-        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        atTs := &tree.AtTimeStamp{
+        $$ = &tree.AtTimeStamp{
             Type: tree.ATMOTIMESTAMP,
-            Expr: $5,
+            Expr: $4,
         }
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
-    }
-|   ident '.' ident '{' TIMESTAMP '=' expression '}'
-    {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        atTs := &tree.AtTimeStamp{
-            Type: tree.ATTIMESTAMPTIME,
-            Expr: $7,
-        }
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
-    }
-|   ident '.' ident '{' SNAPSHOT '=' expression '}'
-    {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        atTs := &tree.AtTimeStamp{
-            Type: tree.ATTIMESTAMPSNAPSHOT,
-            Expr: $7,
-        }
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
-    }
-|   ident '.' ident '{' MO_TS '=' expression '}'
-    {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        atTs := &tree.AtTimeStamp{
-            Type: tree.ATMOTIMESTAMP,
-            Expr: $7,
-        }
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
     }
 
 table_elem_list_opt:
@@ -11271,33 +11318,28 @@ char_type:
 do_stmt:
     DO expression_list
     {
-        var Exprs = $2
-        $$ = tree.NewDo(Exprs)
+        $$ = &tree.Do {
+            Exprs: $2,
+        }
     }
 
 declare_stmt:
     DECLARE var_name_list column_type
     {
-        var Variables = $2
-        var ColumnType = $3
-        var DefaultVal = tree.NewNumValWithType(constant.MakeUnknown(), "null", false, tree.P_null)
-        $$ = tree.NewDeclare(
-            Variables,
-            ColumnType,
-            DefaultVal,
-        )
+        $$ = &tree.Declare {
+            Variables: $2,
+            ColumnType: $3,
+            DefaultVal: tree.NewNumValWithType(constant.MakeUnknown(), "null", false, tree.P_null),
+        }
     }
     |
     DECLARE var_name_list column_type DEFAULT expression
     {
-        var Variables = $2
-        var ColumnType = $3
-        var DefaultVal = $5
-        $$ = tree.NewDeclare(
-            Variables,
-            ColumnType,
-            DefaultVal,
-        )
+        $$ = &tree.Declare {
+            Variables: $2,
+            ColumnType: $3,
+            DefaultVal: $5,
+        }
     }
 
 spatial_type:
@@ -11859,6 +11901,7 @@ non_reserved_keyword:
 |   SNAPSHOTS
 |   STAGES
 |   BACKUP
+|   RESTORE
 |   FILESYSTEM
 |   PARALLELISM
 |	VALUE

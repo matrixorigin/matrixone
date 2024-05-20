@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -312,7 +313,14 @@ func (un *TxnMVCCNode) Compare2(o *TxnMVCCNode) int {
 	return 1
 }
 
-func (un *TxnMVCCNode) ApplyCommit() (ts types.TS, err error) {
+func (un *TxnMVCCNode) ApplyCommit(id string) (ts types.TS, err error) {
+	if un.Txn == nil {
+		err = moerr.NewTxnNotFoundNoCtx()
+		return
+	}
+	if un.Txn.GetID() != id {
+		err = moerr.NewMissingTxnNoCtx()
+	}
 	if un.Is1PC() {
 		un.End = un.Txn.GetPrepareTS()
 	} else {
@@ -407,6 +415,10 @@ func (un *TxnMVCCNode) String() string {
 }
 
 func (un *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {
+	if un.Txn == nil {
+		err = moerr.NewTxnNotFoundNoCtx()
+		return
+	}
 	un.Prepare = un.Txn.GetPrepareTS()
 	ts = un.Prepare
 	return

@@ -17,6 +17,7 @@ package engine
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -316,6 +318,7 @@ func newtestOperator() *testOperator {
 	return &testOperator{}
 }
 
+func (o *testOperator) SetFootPrints(prints [][2]uint32) {}
 func (o *testOperator) AddWorkspace(_ client.Workspace) {
 }
 
@@ -423,6 +426,10 @@ func (o *testOperator) RemoveWaitLock(key uint64) {
 	panic("should not call")
 }
 
+func (o *testOperator) LockTableCount() int32 {
+	panic("should not call")
+}
+
 func (o *testOperator) GetOverview() client.TxnOverview {
 	panic("should not call")
 }
@@ -442,3 +449,7 @@ func (o *testOperator) NextSequence() uint64 {
 func (o *testOperator) EnterRunSql() {}
 
 func (o *testOperator) ExitRunSql() {}
+
+func (o *testOperator) GetWaitActiveCost() time.Duration {
+	return time.Duration(0)
+}

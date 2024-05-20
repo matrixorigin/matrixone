@@ -157,6 +157,9 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 			} else if ndesc.Node.TableDef != nil {
 				buf.WriteString(ndesc.Node.TableDef.GetName())
 			}
+			if ndesc.Node.Stats.ForceOneCN {
+				buf.WriteString(" [ForceOneCN]")
+			}
 		case plan.Node_FUNCTION_SCAN:
 			buf.WriteString(" on ")
 			if ndesc.Node.TableDef != nil && ndesc.Node.TableDef.TblFunc != nil {
@@ -351,7 +354,9 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if err != nil {
 			return nil, err
 		}
-		lines = append(lines, filterInfo)
+		if len(filterInfo) > 0 {
+			lines = append(lines, filterInfo)
+		}
 	}
 
 	if len(ndesc.Node.RuntimeFilterBuildList) > 0 {
@@ -359,7 +364,9 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if err != nil {
 			return nil, err
 		}
-		lines = append(lines, filterInfo)
+		if len(filterInfo) > 0 {
+			lines = append(lines, filterInfo)
+		}
 	}
 
 	// Get Limit And Offset info
@@ -500,7 +507,7 @@ func (ndesc *NodeDescribeImpl) GetPartitionPruneInfo(ctx context.Context, option
 }
 
 func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf := bytes.NewBuffer(make([]byte, 0, 512))
 	buf.WriteString("Filter Cond: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
@@ -546,6 +553,9 @@ func (ndesc *NodeDescribeImpl) GetBlockFilterConditionInfo(ctx context.Context, 
 }
 
 func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	if ndesc.Node.NodeType == plan.Node_JOIN && ndesc.Node.Stats.HashmapStats.Shuffle {
+		return "", nil
+	}
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	buf.WriteString("Runtime Filter Probe: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {
@@ -572,6 +582,9 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, opt
 }
 
 func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	if ndesc.Node.NodeType == plan.Node_JOIN && ndesc.Node.Stats.HashmapStats.Shuffle {
+		return "", nil
+	}
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	buf.WriteString("Runtime Filter Build: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {

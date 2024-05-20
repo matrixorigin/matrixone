@@ -147,13 +147,19 @@ type Interval struct {
 	Val int64
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
+		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanTsVector()
 		ctr.cleanAggVector()
 		ctr.cleanWin()
+		arg.ctr = nil
 	}
 }
 

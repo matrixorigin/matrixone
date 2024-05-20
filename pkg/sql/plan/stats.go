@@ -23,8 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -799,8 +798,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	case plan.Node_VALUE_SCAN:
 		if node.RowsetData != nil {
-			colsData := node.RowsetData.Cols
-			rowCount := float64(len(colsData[0].Data))
+			rowCount := float64(node.RowsetData.RowCount)
 			node.Stats.TableCnt = rowCount
 			node.Stats.BlockNum = int32(rowCount/float64(options.DefaultBlockMaxRows) + 1)
 			node.Stats.Cost = rowCount
@@ -1001,11 +999,6 @@ func recalcStatsByRuntimeFilter(node *plan.Node, joinNode *plan.Node, runtimeFil
 		node.Stats.Cost = 1
 	}
 	node.Stats.BlockNum = int32(node.Stats.Outcnt/2) + 1
-	if joinNode.JoinType == plan.Node_RIGHT || joinNode.BuildOnLeft {
-		if !joinNode.Stats.HashmapStats.Shuffle {
-			node.Stats.ForceOneCN = true
-		}
-	}
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
@@ -1018,7 +1011,18 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if shouldReturnMinimalStats(node) {
 		return DefaultMinimalStats()
 	}
-	s, err := builder.compCtx.Stats(node.ObjRef)
+
+	//ts := timestamp.Timestamp{}
+	//if node.ScanTS != nil {
+	//	ts = *node.ScanTS
+	//}
+
+	scanSnapshot := node.ScanSnapshot
+	if scanSnapshot == nil {
+		scanSnapshot = &Snapshot{}
+	}
+
+	s, err := builder.compCtx.Stats(node.ObjRef, *scanSnapshot)
 	if err != nil || s == nil {
 		return DefaultStats()
 	}

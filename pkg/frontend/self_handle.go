@@ -15,373 +15,414 @@
 package frontend
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func execInFrontend(requestCtx context.Context,
-	ses *Session,
-	execCtx *ExecCtx,
-) (err error) {
+func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
+	ses.EnterFPrint(9)
+	defer ses.ExitFPrint(9)
 	//check transaction states
 	switch st := execCtx.stmt.(type) {
 	case *tree.BeginTransaction:
-		err = ses.GetTxnHandler().TxnBegin()
-		if err != nil {
-			return
-		}
-		RecordStatementTxnID(requestCtx, ses)
+		ses.EnterFPrint(10)
+		defer ses.ExitFPrint(10)
+		RecordStatementTxnID(execCtx.reqCtx, ses)
 	case *tree.CommitTransaction:
-		err = ses.GetTxnHandler().TxnCommit()
-		if err != nil {
-			return
-		}
 	case *tree.RollbackTransaction:
-		err = ses.GetTxnHandler().TxnRollback()
-		if err != nil {
-			return
-		}
 	case *tree.SetRole:
-
+		ses.EnterFPrint(11)
+		defer ses.ExitFPrint(11)
 		ses.InvalidatePrivilegeCache()
 		//switch role
-		err = handleSwitchRole(requestCtx, ses, st)
+		err = handleSwitchRole(ses, execCtx, st)
 		if err != nil {
 			return
 		}
 	case *tree.Use:
-
+		ses.EnterFPrint(12)
+		defer ses.ExitFPrint(12)
 		var v interface{}
-		v, err = ses.GetGlobalVar("lower_case_table_names")
+		v, err = ses.GetGlobalVar(execCtx.reqCtx, "lower_case_table_names")
 		if err != nil {
 			return
 		}
 		st.Name.SetConfig(v.(int64))
 		//use database
-		err = handleChangeDB(requestCtx, ses, st.Name.Compare())
+		err = handleChangeDB(ses, execCtx, st.Name.Compare())
 		if err != nil {
 			return
 		}
-		err = changeVersion(requestCtx, ses, st.Name.Compare())
+		err = changeVersion(execCtx.reqCtx, ses, st.Name.Compare())
 		if err != nil {
 			return
 		}
 	case *tree.MoDump:
 
 		//dump
-		err = handleDump(requestCtx, ses, st)
+		err = handleDump(ses, execCtx, st)
 		if err != nil {
 			return
 		}
 	case *tree.PrepareStmt:
-		_, ses.proc.TxnOperator, err = ses.GetTxnHandler().GetTxn()
+		ses.EnterFPrint(13)
+		defer ses.ExitFPrint(13)
+		execCtx.prepareStmt, err = handlePrepareStmt(ses, execCtx, st)
 		if err != nil {
 			return
 		}
-		execCtx.prepareStmt, err = handlePrepareStmt(requestCtx, ses, st, execCtx.sqlOfStmt)
-		if err != nil {
-			return
-		}
-		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		err = authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 		if err != nil {
 			ses.RemovePrepareStmt(execCtx.prepareStmt.Name)
 			return
 		}
 	case *tree.PrepareString:
-		_, ses.proc.TxnOperator, err = ses.GetTxnHandler().GetTxn()
+		ses.EnterFPrint(14)
+		defer ses.ExitFPrint(14)
+		execCtx.prepareStmt, err = handlePrepareString(ses, execCtx, st)
 		if err != nil {
 			return
 		}
-		execCtx.prepareStmt, err = handlePrepareString(requestCtx, ses, st)
-		if err != nil {
-			return
-		}
-		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		err = authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 		if err != nil {
 			ses.RemovePrepareStmt(execCtx.prepareStmt.Name)
 			return
 		}
 	case *tree.CreateConnector:
-
-		err = handleCreateConnector(requestCtx, ses, st)
+		ses.EnterFPrint(15)
+		defer ses.ExitFPrint(15)
+		err = handleCreateConnector(execCtx.reqCtx, ses, st)
 		if err != nil {
 			return
 		}
 	case *tree.PauseDaemonTask:
-
-		err = handlePauseDaemonTask(requestCtx, ses, st)
+		ses.EnterFPrint(16)
+		defer ses.ExitFPrint(16)
+		err = handlePauseDaemonTask(execCtx.reqCtx, ses, st)
 		if err != nil {
 			return
 		}
 	case *tree.CancelDaemonTask:
-
-		err = handleCancelDaemonTask(requestCtx, ses, st.TaskID)
+		ses.EnterFPrint(17)
+		defer ses.ExitFPrint(17)
+		err = handleCancelDaemonTask(execCtx.reqCtx, ses, st.TaskID)
 		if err != nil {
 			return
 		}
 	case *tree.ResumeDaemonTask:
-
-		err = handleResumeDaemonTask(requestCtx, ses, st)
+		ses.EnterFPrint(18)
+		defer ses.ExitFPrint(18)
+		err = handleResumeDaemonTask(execCtx.reqCtx, ses, st)
 		if err != nil {
 			return
 		}
 	case *tree.DropConnector:
-
-		err = handleDropConnector(requestCtx, ses, st)
+		ses.EnterFPrint(19)
+		defer ses.ExitFPrint(19)
+		err = handleDropConnector(execCtx.reqCtx, ses, st)
 		if err != nil {
 			return
 		}
 	case *tree.ShowConnectors:
-
-		if err = handleShowConnectors(requestCtx, ses, execCtx.isLastStmt); err != nil {
+		ses.EnterFPrint(20)
+		defer ses.ExitFPrint(20)
+		if err = handleShowConnectors(execCtx.reqCtx, ses); err != nil {
 			return
 		}
 	case *tree.Deallocate:
-
-		err = handleDeallocate(requestCtx, ses, st)
+		ses.EnterFPrint(21)
+		defer ses.ExitFPrint(21)
+		err = handleDeallocate(ses, execCtx, st)
 		if err != nil {
 			return
 		}
 	case *tree.Reset:
-
-		err = handleReset(requestCtx, ses, st)
+		ses.EnterFPrint(22)
+		defer ses.ExitFPrint(22)
+		err = handleReset(ses, execCtx, st)
 		if err != nil {
 			return
 		}
 	case *tree.SetVar:
-
-		err = handleSetVar(requestCtx, ses, st, execCtx.sqlOfStmt)
+		ses.EnterFPrint(23)
+		defer ses.ExitFPrint(23)
+		err = handleSetVar(ses, execCtx, st, execCtx.sqlOfStmt)
 		if err != nil {
 			return
 		}
 	case *tree.ShowVariables:
-
-		err = handleShowVariables(ses, st, execCtx.proc, execCtx.isLastStmt)
+		ses.EnterFPrint(24)
+		defer ses.ExitFPrint(24)
+		err = handleShowVariables(ses, execCtx, st)
 		if err != nil {
 			return
 		}
 	case *tree.ShowErrors, *tree.ShowWarnings:
-
-		err = handleShowErrors(ses, execCtx.isLastStmt)
+		ses.EnterFPrint(25)
+		defer ses.ExitFPrint(25)
+		err = handleShowErrors(ses)
 		if err != nil {
 			return
 		}
 	case *tree.AnalyzeStmt:
-
-		if err = handleAnalyzeStmt(requestCtx, ses, st); err != nil {
+		ses.EnterFPrint(26)
+		defer ses.ExitFPrint(26)
+		if err = handleAnalyzeStmt(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.ExplainStmt:
-
-		if err = handleExplainStmt(requestCtx, ses, st); err != nil {
+		ses.EnterFPrint(27)
+		defer ses.ExitFPrint(27)
+		if err = handleExplainStmt(ses, execCtx, st); err != nil {
 			return
 		}
 	case *InternalCmdFieldList:
-
-		if err = handleCmdFieldList(requestCtx, ses, st); err != nil {
+		ses.EnterFPrint(28)
+		defer ses.ExitFPrint(28)
+		if err = handleCmdFieldList(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CreatePublication:
-
-		if err = handleCreatePublication(requestCtx, ses, st); err != nil {
+		ses.EnterFPrint(29)
+		defer ses.ExitFPrint(29)
+		if err = handleCreatePublication(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.AlterPublication:
-
-		if err = handleAlterPublication(requestCtx, ses, st); err != nil {
+		ses.EnterFPrint(30)
+		defer ses.ExitFPrint(30)
+		if err = handleAlterPublication(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropPublication:
-
-		if err = handleDropPublication(requestCtx, ses, st); err != nil {
+		ses.EnterFPrint(31)
+		defer ses.ExitFPrint(31)
+		if err = handleDropPublication(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.ShowSubscriptions:
-
-		if err = handleShowSubscriptions(requestCtx, ses, st, execCtx.isLastStmt); err != nil {
+		ses.EnterFPrint(32)
+		defer ses.ExitFPrint(32)
+		if err = handleShowSubscriptions(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CreateStage:
-
-		if err = handleCreateStage(requestCtx, ses, st); err != nil {
+		ses.EnterFPrint(33)
+		defer ses.ExitFPrint(33)
+		if err = handleCreateStage(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropStage:
-
-		if err = handleDropStage(requestCtx, ses, st); err != nil {
+		ses.EnterFPrint(34)
+		defer ses.ExitFPrint(34)
+		if err = handleDropStage(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.AlterStage:
-
-		if err = handleAlterStage(requestCtx, ses, st); err != nil {
+		ses.EnterFPrint(35)
+		defer ses.ExitFPrint(35)
+		if err = handleAlterStage(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CreateAccount:
-
+		ses.EnterFPrint(36)
+		defer ses.ExitFPrint(36)
 		ses.InvalidatePrivilegeCache()
-		if err = handleCreateAccount(requestCtx, ses, st, execCtx.proc); err != nil {
+		if err = handleCreateAccount(ses, execCtx, st, execCtx.proc); err != nil {
 			return
 		}
 	case *tree.DropAccount:
-
+		ses.EnterFPrint(37)
+		defer ses.ExitFPrint(37)
 		ses.InvalidatePrivilegeCache()
-		if err = handleDropAccount(requestCtx, ses, st, execCtx.proc); err != nil {
+		if err = handleDropAccount(ses, execCtx, st, execCtx.proc); err != nil {
 			return
 		}
 	case *tree.AlterAccount:
 		ses.InvalidatePrivilegeCache()
-
-		if err = handleAlterAccount(requestCtx, ses, st, execCtx.proc); err != nil {
+		ses.EnterFPrint(38)
+		defer ses.ExitFPrint(38)
+		if err = handleAlterAccount(ses, execCtx, st, execCtx.proc); err != nil {
 			return
 		}
 	case *tree.AlterDataBaseConfig:
 		ses.InvalidatePrivilegeCache()
-
+		ses.EnterFPrint(39)
+		defer ses.ExitFPrint(39)
 		if st.IsAccountLevel {
-			if err = handleAlterAccountConfig(requestCtx, ses, st); err != nil {
+			if err = handleAlterAccountConfig(ses, execCtx, st); err != nil {
 				return
 			}
 		} else {
-			if err = handleAlterDataBaseConfig(requestCtx, ses, st); err != nil {
+			if err = handleAlterDataBaseConfig(ses, execCtx, st); err != nil {
 				return
 			}
 		}
 	case *tree.CreateUser:
-
+		ses.EnterFPrint(40)
+		defer ses.ExitFPrint(40)
 		ses.InvalidatePrivilegeCache()
-		if err = handleCreateUser(requestCtx, ses, st); err != nil {
+		if err = handleCreateUser(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropUser:
-
+		ses.EnterFPrint(41)
+		defer ses.ExitFPrint(41)
 		ses.InvalidatePrivilegeCache()
-		if err = handleDropUser(requestCtx, ses, st); err != nil {
+		if err = handleDropUser(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.AlterUser: //TODO
-
+		ses.EnterFPrint(42)
+		defer ses.ExitFPrint(42)
 		ses.InvalidatePrivilegeCache()
-		if err = handleAlterUser(requestCtx, ses, st); err != nil {
+		if err = handleAlterUser(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CreateRole:
-
+		ses.EnterFPrint(43)
+		defer ses.ExitFPrint(43)
 		ses.InvalidatePrivilegeCache()
-		if err = handleCreateRole(requestCtx, ses, st); err != nil {
+		if err = handleCreateRole(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropRole:
-
+		ses.EnterFPrint(44)
+		defer ses.ExitFPrint(44)
 		ses.InvalidatePrivilegeCache()
-		if err = handleDropRole(requestCtx, ses, st); err != nil {
+		if err = handleDropRole(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CreateFunction:
-
+		ses.EnterFPrint(45)
+		defer ses.ExitFPrint(45)
 		if err = st.Valid(); err != nil {
 			return err
 		}
-		if err = handleCreateFunction(requestCtx, ses, st); err != nil {
+		if err = handleCreateFunction(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropFunction:
-
-		if err = handleDropFunction(requestCtx, ses, st, execCtx.proc); err != nil {
+		ses.EnterFPrint(46)
+		defer ses.ExitFPrint(46)
+		if err = handleDropFunction(ses, execCtx, st, execCtx.proc); err != nil {
 			return
 		}
 	case *tree.CreateProcedure:
-
-		if err = handleCreateProcedure(requestCtx, ses, st); err != nil {
+		ses.EnterFPrint(47)
+		defer ses.ExitFPrint(47)
+		if err = handleCreateProcedure(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropProcedure:
-
-		if err = handleDropProcedure(requestCtx, ses, st); err != nil {
+		ses.EnterFPrint(48)
+		defer ses.ExitFPrint(48)
+		if err = handleDropProcedure(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CallStmt:
-
-		if err = handleCallProcedure(requestCtx, ses, st, execCtx.proc); err != nil {
+		ses.EnterFPrint(49)
+		defer ses.ExitFPrint(49)
+		if err = handleCallProcedure(ses, execCtx, st, execCtx.proc); err != nil {
 			return
 		}
 	case *tree.Grant:
-
+		ses.EnterFPrint(50)
+		defer ses.ExitFPrint(50)
 		ses.InvalidatePrivilegeCache()
 		switch st.Typ {
 		case tree.GrantTypeRole:
-			if err = handleGrantRole(requestCtx, ses, st.GrantRole); err != nil {
+			if err = handleGrantRole(ses, execCtx, &st.GrantRole); err != nil {
 				return
 			}
 		case tree.GrantTypePrivilege:
-			if err = handleGrantPrivilege(requestCtx, ses, st.GrantPrivilege); err != nil {
+			if err = handleGrantPrivilege(ses, execCtx, &st.GrantPrivilege); err != nil {
 				return
 			}
 		}
 	case *tree.Revoke:
-
+		ses.EnterFPrint(51)
+		defer ses.ExitFPrint(51)
 		ses.InvalidatePrivilegeCache()
 		switch st.Typ {
 		case tree.RevokeTypeRole:
-			if err = handleRevokeRole(requestCtx, ses, st.RevokeRole); err != nil {
+			if err = handleRevokeRole(ses, execCtx, &st.RevokeRole); err != nil {
 				return
 			}
 		case tree.RevokeTypePrivilege:
-			if err = handleRevokePrivilege(requestCtx, ses, st.RevokePrivilege); err != nil {
+			if err = handleRevokePrivilege(ses, execCtx, &st.RevokePrivilege); err != nil {
 				return
 			}
 		}
 	case *tree.Kill:
-
+		ses.EnterFPrint(52)
+		defer ses.ExitFPrint(52)
 		ses.InvalidatePrivilegeCache()
-		if err = handleKill(requestCtx, ses, st); err != nil {
+		if err = handleKill(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.ShowAccounts:
-
-		if err = handleShowAccounts(requestCtx, ses, st, execCtx.isLastStmt); err != nil {
+		ses.EnterFPrint(53)
+		defer ses.ExitFPrint(53)
+		if err = handleShowAccounts(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.ShowCollation:
-
-		if err = handleShowCollation(ses, st, execCtx.proc, execCtx.isLastStmt); err != nil {
+		ses.EnterFPrint(54)
+		defer ses.ExitFPrint(54)
+		if err = handleShowCollation(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.ShowBackendServers:
-
-		if err = handleShowBackendServers(requestCtx, ses, execCtx.isLastStmt); err != nil {
+		ses.EnterFPrint(55)
+		defer ses.ExitFPrint(55)
+		if err = handleShowBackendServers(ses, execCtx); err != nil {
 			return
 		}
 	case *tree.SetTransaction:
-
+		ses.EnterFPrint(56)
+		defer ses.ExitFPrint(56)
 		//TODO: handle set transaction
 	case *tree.LockTableStmt:
 
 	case *tree.UnLockTableStmt:
 
 	case *tree.BackupStart:
-
-		if err = handleStartBackup(requestCtx, ses, st); err != nil {
+		ses.EnterFPrint(57)
+		defer ses.ExitFPrint(57)
+		if err = handleStartBackup(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.EmptyStmt:
 
-		if err = handleEmptyStmt(requestCtx, ses, st); err != nil {
+		if err = handleEmptyStmt(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CreateSnapShot:
+		ses.EnterFPrint(58)
+		defer ses.ExitFPrint(58)
 		//TODO: invalidate privilege cache
-		if err = handleCreateSnapshot(requestCtx, ses, st); err != nil {
+		if err = handleCreateSnapshot(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.DropSnapShot:
+		ses.EnterFPrint(59)
+		defer ses.ExitFPrint(59)
 		//TODO: invalidate privilege cache
-		if err = handleDropSnapshot(requestCtx, ses, st); err != nil {
+		if err = handleDropSnapshot(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.RestoreSnapShot:
+		ses.EnterFPrint(60)
+		defer ses.ExitFPrint(60)
+		//TODO: invalidate privilege cache
+		if err = handleRestoreSnapshot(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.UpgradeStatement:
+		ses.EnterFPrint(61)
+		defer ses.ExitFPrint(61)
 		//TODO: invalidate privilege cache
-		if err = handleExecUpgrade(requestCtx, ses, st); err != nil {
+		if err = handleExecUpgrade(ses, execCtx, st); err != nil {
 			return
 		}
 	}
