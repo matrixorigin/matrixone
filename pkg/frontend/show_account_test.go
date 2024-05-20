@@ -16,6 +16,11 @@ package frontend
 
 import (
 	"context"
+	"math/rand"
+	"testing"
+	"time"
+
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,11 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"math/rand"
-	"testing"
-	"time"
-
-	"github.com/golang/mock/gomock"
 )
 
 func Test_getSqlForAccountInfo(t *testing.T) {
