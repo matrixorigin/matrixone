@@ -267,8 +267,13 @@ func (n *AppendMVCCHandle) AddAppendNodeLocked(
 
 // Reschedule until all appendnode is committed.
 // Pending appendnode is not visible for compaction txn.
+func (n *AppendMVCCHandle) PrepareCompactLocked() bool {
+	return n.allAppendsCommittedLocked()
+}
 func (n *AppendMVCCHandle) PrepareCompact() bool {
-	return n.allAppendsCommitted()
+	n.RLock()
+	defer n.RUnlock()
+	return n.allAppendsCommittedLocked()
 }
 
 func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
@@ -276,9 +281,14 @@ func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
 }
 
 // check if all appendnodes are committed.
-func (n *AppendMVCCHandle) allAppendsCommitted() bool {
-	n.RLock()
-	defer n.RUnlock()
+func (n *AppendMVCCHandle) allAppendsCommittedLocked() bool {
+	if n.appends == nil {
+		logutil.Warnf("[MetadataCheck] appends mvcc is nil, obj %v, has dropped %v, deleted at %v",
+			n.meta.ID.String(),
+			n.meta.HasDropCommittedLocked(),
+			n.meta.GetDeleteAtLocked().ToString())
+		return false
+	}
 	return n.appends.IsCommitted()
 }
 
@@ -409,7 +419,7 @@ func (n *ObjectMVCCHandle) UpgradeAllDeleteChain() {
 		deletes.upgradeDeleteChain()
 	}
 }
-func (n *ObjectMVCCHandle) GetDeltaPersistedTS() types.TS {
+func (n *ObjectMVCCHandle) GetDeltaPersistedTSLocked() types.TS {
 	persisted := types.TS{}
 	for _, deletes := range n.deletes {
 		ts := deletes.getDeltaPersistedTSLocked()
@@ -420,6 +430,16 @@ func (n *ObjectMVCCHandle) GetDeltaPersistedTS() types.TS {
 	return persisted
 }
 
+func (n *ObjectMVCCHandle) GetDeltaCommitedTSLocked() types.TS {
+	commitTS := types.TS{}
+	for _, deletes := range n.deletes {
+		ts := deletes.getDeltaCommittedTSLocked()
+		if ts.Greater(&commitTS) {
+			commitTS = ts
+		}
+	}
+	return commitTS
+}
 func (n *ObjectMVCCHandle) UpgradeDeleteChain(blkID uint16) {
 	deletes := n.deletes[blkID]
 	if deletes == nil {
@@ -772,6 +792,17 @@ func (n *MVCCHandle) getDeltaPersistedTSLocked() types.TS {
 	n.deltaloc.LoopChainLocked(func(m *catalog.MVCCNode[*catalog.MetadataMVCCNode]) bool {
 		if !m.BaseNode.DeltaLoc.IsEmpty() && m.IsCommitted() {
 			persisted = m.GetStart()
+			return false
+		}
+		return true
+	})
+	return persisted
+}
+func (n *MVCCHandle) getDeltaCommittedTSLocked() types.TS {
+	persisted := types.TS{}
+	n.deltaloc.LoopChainLocked(func(m *catalog.MVCCNode[*catalog.MetadataMVCCNode]) bool {
+		if !m.BaseNode.DeltaLoc.IsEmpty() && m.IsCommitted() {
+			persisted = m.GetEnd()
 			return false
 		}
 		return true

@@ -22,6 +22,7 @@ import (
 // package. And register the upgrade logic into handles.
 func (s *service) initUpgrade() {
 	s.handles = append(s.handles, v1_2_0.Handler)
+	// TODO: When v1.2.0 release, open the commented code as follows, Enable v1.2.1 upgrade package
 	//s.handles = append(s.handles, v1_2_1.Handler)
 }
 
