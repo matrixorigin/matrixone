@@ -7796,7 +7796,7 @@ func TestDeduplication(t *testing.T) {
 	txn.GetStore().IncreateWriteCnt()
 	assert.NoError(t, txn.Commit(context.Background()))
 	assert.NoError(t, obj.PrepareCommit())
-	assert.NoError(t, obj.ApplyCommit())
+	assert.NoError(t, obj.ApplyCommit(txn.GetID()))
 
 	txns := make([]txnif.AsyncTxn, 0)
 	for i := 0; i < 5; i++ {
