@@ -232,9 +232,9 @@ func (e *MVCCNode[T]) IdempotentUpdate(un *MVCCNode[T]) {
 	e.BaseNode.Update(un.BaseNode)
 }
 
-func (e *MVCCNode[T]) ApplyCommit() (err error) {
+func (e *MVCCNode[T]) ApplyCommit(id string) (err error) {
 	var commitTS types.TS
-	commitTS, err = e.TxnMVCCNode.ApplyCommit()
+	commitTS, err = e.TxnMVCCNode.ApplyCommit(id)
 	if err != nil {
 		return
 	}
