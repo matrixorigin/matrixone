@@ -156,7 +156,7 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 			} else {
 				outArrayF32 = outArrayF32[:len(inArrayF32)]
 			}
-			_ = moarray.NormalizeL2(inArrayF32, &outArrayF32)
+			_ = moarray.NormalizeL2(inArrayF32, outArrayF32)
 			_ = rs.AppendBytes(types.ArrayToBytes[float32](outArrayF32), false)
 
 			*outArrayF32Ptr = outArrayF32
@@ -172,7 +172,7 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 			} else {
 				outArrayF64 = outArrayF64[:len(inArrayF64)]
 			}
-			_ = moarray.NormalizeL2(inArrayF64, &outArrayF64)
+			_ = moarray.NormalizeL2(inArrayF64, outArrayF64)
 			_ = rs.AppendBytes(types.ArrayToBytes[float64](outArrayF64), false)
 
 			*outArrayF64Ptr = outArrayF64

@@ -113,8 +113,9 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 	var sumOfSquares T
+	var difference T
 	for i := range v1 {
-		difference := v1[i] - v2[i]
+		difference = v1[i] - v2[i]
 		sumOfSquares += difference * difference
 	}
 	return math.Sqrt(float64(sumOfSquares)), nil
@@ -194,7 +195,7 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	return cosineSimilarity, nil
 }
 
-func NormalizeL2[T types.RealNumbers](v1 []T, normalized *[]T) error {
+func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 
 	if len(v1) == 0 {
 		return moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
@@ -207,13 +208,13 @@ func NormalizeL2[T types.RealNumbers](v1 []T, normalized *[]T) error {
 	}
 	norm := math.Sqrt(sumSquares)
 	if norm == 0 {
-		copy(*normalized, v1)
+		copy(normalized, v1)
 		return nil
 	}
 
 	// Divide each element by the norm
 	for i, val := range v1 {
-		(*normalized)[i] = T(float64(val) / norm)
+		normalized[i] = T(float64(val) / norm)
 	}
 
 	return nil
