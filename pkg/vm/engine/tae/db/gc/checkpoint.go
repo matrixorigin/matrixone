@@ -320,14 +320,12 @@ func (c *checkpointCleaner) GeteCkpGC() *types.TS {
 func (c *checkpointCleaner) GetInputs() *GCTable {
 	c.inputs.RLock()
 	defer c.inputs.RUnlock()
-	logutil.Infof("GetInputs: %d", len(c.inputs.tables))
 	return c.inputs.tables[0]
 }
 
 func (c *checkpointCleaner) GetGCTables() []*GCTable {
 	c.inputs.RLock()
 	defer c.inputs.RUnlock()
-	logutil.Infof("GetGCTables: %d", len(c.inputs.tables))
 	return c.inputs.tables
 }
 

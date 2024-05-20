@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const NotFoundLimit = 50
+
 type checker struct {
 	cleaner *checkpointCleaner
 }
@@ -37,11 +39,9 @@ func (c *checker) Check() error {
 	c.cleaner.inputs.RLock()
 	defer c.cleaner.inputs.RUnlock()
 	gcTables := c.cleaner.GetGCTables()
-	gcTable := gcTables[0]
-	for i, table := range gcTables {
-		if i > 0 {
-			gcTable.Merge(table)
-		}
+	gcTable := NewGCTable()
+	for _, table := range gcTables {
+		gcTable.Merge(table)
 	}
 	gcTable.Lock()
 	objects := gcTable.objects
@@ -54,7 +54,6 @@ func (c *checker) Check() error {
 	checkpoints := c.cleaner.ckpClient.ICKPSeekLT(entry.GetEnd(), 40)
 	unconsumedTable := NewGCTable()
 	for _, ckp := range checkpoints {
-		logutil.Infof("load checkpoint: %v, entry is %v", ckp.String(), entry.String())
 		_, data, err := logtail.LoadCheckpointEntriesFromKey(c.cleaner.ctx, c.cleaner.fs.Service,
 			ckp.GetLocation(), ckp.GetVersion(), nil, &types.TS{})
 		if err != nil {
@@ -77,16 +76,19 @@ func (c *checker) Check() error {
 	if err != nil {
 		return err
 	}
+	ckpObjectCount := len(ckpfiles) * 2
 	allCount := len(allObjects)
 	for name := range allObjects {
 		isfound := false
 		if _, ok := objects[name]; ok {
 			isfound = true
 			objectsLen--
+			delete(objects, name)
 		}
 		if _, ok := tombstones[name]; ok {
 			isfound = true
 			tombstonesLen--
+			delete(tombstones, name)
 		}
 		if _, ok := unconsumedObjects[name]; ok {
 			isfound = true
@@ -137,18 +139,16 @@ func (c *checker) Check() error {
 		}
 	}
 
-	logutil.Infof("batch length: %d, start: %v, end: %v", bat.Length(), maxTs.ToString(), end.ToString())
-	if len(allObjects) > len(ckpfiles)*2 {
+	if len(allObjects) > ckpObjectCount {
 		for name := range allObjects {
 			logutil.Infof("not found object %s,", name)
 		}
 		logutil.Warnf("GC abnormal!!! all objects: %d, objects: %d, tombstones: %d, unconsumed objects: %d, unconsumed tombstones: %d, allObjects: %d, ckpfiles: %d",
-			allCount, objectsLen, tombstonesLen, len(unconsumedObjects), len(unconsumedTombstones), len(allObjects), len(ckpfiles))
+			allCount, len(objects), len(tombstones), len(unconsumedObjects), len(unconsumedTombstones), len(allObjects), len(ckpfiles))
 	} else {
 		logutil.Infof("all objects: %d, objects: %d, tombstones: %d, unconsumed objects: %d, unconsumed tombstones: %d, allObjects: %d",
-			allCount, objectsLen, tombstonesLen, len(unconsumedObjects), len(unconsumedTombstones), len(allObjects))
+			allCount, len(objects), len(tombstones), len(unconsumedObjects), len(unconsumedTombstones), len(allObjects))
 	}
-	logutil.Debugf("GC finished %v", catalog.SimplePPString(common.PPL3))
 	return nil
 }
 
