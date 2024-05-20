@@ -3745,9 +3745,6 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	if n.TableDef.Partition != nil {
-		return true
-	}
 	if len(n.RuntimeFilterProbeList) == 0 {
 		return true
 	}
