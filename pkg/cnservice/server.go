@@ -829,6 +829,8 @@ func (s *service) bootstrap() error {
 		panic(err)
 	}
 
+	trace.GetService().EnableFlush()
+
 	if s.cfg.AutomaticUpgrade {
 		return s.stopper.RunTask(func(ctx context.Context) {
 			ctx, cancel := context.WithTimeout(ctx, time.Minute*120)
