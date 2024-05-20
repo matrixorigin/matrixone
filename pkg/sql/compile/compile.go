@@ -19,9 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"math"
 	"net"
 	"runtime"
@@ -31,6 +28,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 
 	"github.com/google/uuid"
 	"github.com/panjf2000/ants/v2"
@@ -454,7 +455,18 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		stats.ExecutionEnd()
 
 		cost := time.Since(start)
-		txnTrace.GetService().TxnStatementCompleted(txnOp, sql, cost, seq, err)
+		row := 0
+		if result != nil {
+			row = int(result.AffectRows)
+		}
+		txnTrace.GetService().TxnStatementCompleted(
+			txnOp,
+			sql,
+			cost,
+			seq,
+			row,
+			err,
+		)
 		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
 	}()
 
@@ -518,6 +530,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		return nil, c.proc.Ctx.Err()
 	}
 	result.AffectRows = runC.getAffectedRows()
+
 	if c.proc.TxnOperator != nil {
 		return result, c.proc.TxnOperator.GetWorkspace().Adjust(writeOffset)
 	}
@@ -1237,7 +1250,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 
-		groupInfo := constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc)
+		groupInfo := constructGroup(c.ctx, n, ns[n.Children[0]], false, 0, c.proc)
 		defer groupInfo.Release()
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
 
@@ -2339,7 +2352,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	ss = append(ss, children...)
-	rs := c.newScopeList(1, int(n.Stats.BlockNum))
+	rs := c.newScopeListOnCurrentCN(1, int(n.Stats.BlockNum))
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
 	for i := range gn.GroupBy {
@@ -2351,7 +2364,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true, 0, c.proc),
+			Arg: constructGroup(c.ctx, gn, n, true, 0, c.proc),
 		})
 		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
 			idx = i
@@ -2367,7 +2380,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 }
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs := c.newJoinScopeListWithBucket(c.newScopeList(2, int(n.Stats.BlockNum)), ss, children, n)
+	rs := c.newJoinScopeListWithBucket(c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum)), ss, children, n)
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
@@ -3023,7 +3036,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: c.anal.isFirst,
-				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc),
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], false, 0, c.proc),
 			})
 
 		rs := c.newMergeScope([]*Scope{mergeToGroup})
@@ -3052,7 +3065,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 			Op:      vm.Group,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc),
+			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], false, 0, c.proc),
 		})
 	}
 	c.anal.isFirst = false
@@ -3114,7 +3127,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: c.anal.isFirst,
-				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, len(ss), c.proc),
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], true, len(ss), c.proc),
 			})
 		}
 		ss = c.compileProjection(n, c.compileRestrict(n, ss))
@@ -3138,7 +3151,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: currentIsFirst,
-				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, len(children), c.proc),
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], true, len(children), c.proc),
 			})
 		}
 		children = c.compileProjection(n, c.compileRestrict(n, children))
@@ -3193,7 +3206,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: currentIsFirst,
-				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, len(children), c.proc),
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], true, len(children), c.proc),
 			})
 		}
 		children = c.compileProjection(n, c.compileRestrict(n, children))
@@ -3317,17 +3330,31 @@ func (c *Compile) newMergeRemoteScope(ss []*Scope, nodeinfo engine.Node) *Scope 
 	return rs
 }
 
-func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
+func (c *Compile) newScopeListOnCurrentCN(childrenCount int, blocks int) []*Scope {
 	var ss []*Scope
-
 	currentFirstFlag := c.anal.isFirst
-	for _, n := range c.cnList {
+	for _, cn := range c.cnList {
+		if !isSameCN(cn.Addr, c.addr) {
+			continue
+		}
 		c.anal.isFirst = currentFirstFlag
-		ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)...)
+		ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(cn.Mcpu, blocks), childrenCount, cn.Addr)...)
 	}
 	return ss
 }
 
+/*
+	func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
+		var ss []*Scope
+
+		currentFirstFlag := c.anal.isFirst
+		for _, cn := range c.cnList {
+			c.anal.isFirst = currentFirstFlag
+			ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(cn.Mcpu, blocks), childrenCount, cn.Addr)...)
+		}
+		return ss
+	}
+*/
 func (c *Compile) newScopeListForShuffleGroup(childrenCount int, blocks int) ([]*Scope, []*Scope) {
 	parent := make([]*Scope, 0, len(c.cnList))
 	children := make([]*Scope, 0, len(c.cnList))
