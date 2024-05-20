@@ -40,16 +40,18 @@ func (c *checker) Check() error {
 	c.cleaner.inputs.RLock()
 	defer c.cleaner.inputs.RUnlock()
 	gcTables := c.cleaner.GetGCTables()
+
+	// Collect the objects and tombstones that the disk cleaner has already consumed
 	gcTable := NewGCTable()
 	for _, table := range gcTables {
 		gcTable.Merge(table)
 	}
-	gcTable.Lock()
 	objects := gcTable.objects
 	tombstones := gcTable.tombstones
-	gcTable.Unlock()
 	entry := c.cleaner.GetMaxConsumed()
 	maxTs := entry.GetEnd()
+
+	// Collect the objects and tombstones that the disk cleaner has not consumed
 	checkpoints := c.cleaner.ckpClient.ICKPSeekLT(entry.GetEnd(), 40)
 	unconsumedTable := NewGCTable()
 	for _, ckp := range checkpoints {
@@ -67,14 +69,19 @@ func (c *checker) Check() error {
 	}
 	unconsumedObjects := unconsumedTable.objects
 	unconsumedTombstones := unconsumedTable.tombstones
+
+	// Collect all objects
 	allObjects, err := c.getObjects()
 	if err != nil {
 		return err
 	}
+
+	// Collect all checkpoint files
 	ckpfiles, _, err := checkpoint.ListSnapshotMeta(c.cleaner.ctx, c.cleaner.fs.Service, entry.GetStart(), nil)
 	if err != nil {
 		return err
 	}
+	// The number of checkpoint files is ckpObjectCount
 	ckpObjectCount := len(ckpfiles) * 2
 	allCount := len(allObjects)
 	for name := range allObjects {
@@ -99,6 +106,8 @@ func (c *checker) Check() error {
 			delete(allObjects, name)
 		}
 	}
+
+	// Collect all objects in memory
 	catalog := c.cleaner.ckpClient.GetCatalog()
 	it := catalog.MakeDBIt(true)
 	bat := makeRespBatchFromSchema(logtail.BlkMetaSchema, common.DebugAllocator)
