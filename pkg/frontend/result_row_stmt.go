@@ -29,7 +29,8 @@ import (
 // executeResultRowStmt run the statemet that responses result rows
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
-
+	ses.EnterFPrint(63)
+	defer ses.ExitFPrint(63)
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 
@@ -44,11 +45,17 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
 		}
 
+		ses.EnterFPrint(64)
+		defer ses.ExitFPrint(64)
 		err = respColumnDefsWithoutFlush(ses, execCtx, columns)
 		if err != nil {
 			return
 		}
 
+		ses.EnterFPrint(65)
+		defer ses.ExitFPrint(65)
+		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
+		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		runBegin := time.Now()
 		/*
 			Step 2: Start pipeline
@@ -74,11 +81,17 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 
+		ses.EnterFPrint(66)
+		defer ses.ExitFPrint(66)
 		err = respColumnDefsWithoutFlush(ses, execCtx, columns)
 		if err != nil {
 			return
 		}
 
+		ses.EnterFPrint(67)
+		defer ses.ExitFPrint(67)
+		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
+		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		runBegin := time.Now()
 		/*
 			Step 1: Start
@@ -103,11 +116,18 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		if c, ok := execCtx.cw.(*TxnComputationWrapper); ok {
 			ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
 		}
+
+		ses.EnterFPrint(68)
+		defer ses.ExitFPrint(68)
 		err = respColumnDefsWithoutFlush(ses, execCtx, columns)
 		if err != nil {
 			return
 		}
 
+		ses.EnterFPrint(69)
+		defer ses.ExitFPrint(69)
+		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
+		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		runBegin := time.Now()
 		/*
 			Step 2: Start pipeline
@@ -179,6 +199,8 @@ func respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx, columns []any) (
 
 func respStreamResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
+	ses.EnterFPrint(70)
+	defer ses.ExitFPrint(70)
 	if execCtx.skipRespClient {
 		return nil
 	}
@@ -245,6 +267,8 @@ func respStreamResultRow(ses *Session,
 
 func respPrebuildResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
+	ses.EnterFPrint(71)
+	defer ses.ExitFPrint(71)
 	if execCtx.skipRespClient {
 		return nil
 	}
@@ -258,6 +282,8 @@ func respPrebuildResultRow(ses *Session,
 
 func respMixedResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
+	ses.EnterFPrint(72)
+	defer ses.ExitFPrint(72)
 	if execCtx.skipRespClient {
 		return nil
 	}
