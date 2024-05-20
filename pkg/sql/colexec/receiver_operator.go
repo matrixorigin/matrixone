@@ -48,15 +48,11 @@ func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Anal
 	case <-r.proc.Ctx.Done():
 		return process.EmtpyRegisterMessage, true, nil
 	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
-		if !ok {
+		if !ok || msg == nil {
 			return process.EmtpyRegisterMessage, true, nil
 		}
 
-		if msg == nil {
-			return process.EmtpyRegisterMessage, true, nil
-		} else {
-			return msg, false, msg.Err
-		}
+		return msg, false, msg.Err
 	}
 }
 
@@ -108,7 +104,15 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*process
 			return process.EmtpyRegisterMessage, true, nil
 		}
 
-		if msg == nil || msg.Batch == nil {
+		if msg == nil {
+			continue
+		}
+
+		if msg.Err != nil {
+			return msg, false, msg.Err
+		}
+
+		if msg.Batch == nil {
 			continue
 		}
 
