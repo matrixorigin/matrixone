@@ -16,8 +16,6 @@ count(*)
 select COUNT(*)  from tt;
 count(*)
 1
-Variable_name    Value
-keep_user_target_list_in_result    0
 set global keep_user_target_list_in_result = 1;
 select aa from tt;
 aa
