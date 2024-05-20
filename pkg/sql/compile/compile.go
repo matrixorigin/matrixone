@@ -1157,7 +1157,7 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 				for _, row := range colsData[i].Data {
 					if row.Pos >= 0 {
 						isNull := params.GetNulls().Contains(uint64(row.Pos - 1))
-						str := vs[row.Pos-1].GetString(params.GetArea())
+						str := vs[row.Pos-1].UnsafeGetString(params.GetArea())
 						if err := util.SetBytesToAnyVector(ctx, str, int(row.RowPos), isNull, bat.Vecs[i],
 							proc); err != nil {
 							return nil, err

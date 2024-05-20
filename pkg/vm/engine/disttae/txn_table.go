@@ -1770,7 +1770,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	switch typ {
 	case deletion.FlushDeltaLoc:
 		tbl.getTxn().hasS3Op.Store(true)
-		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].GetStringAt(0))
+		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].UnsafeGetStringAt(0))
 		if err != nil {
 			return err
 		}
