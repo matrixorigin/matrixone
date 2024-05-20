@@ -16,7 +16,6 @@ count(*)
 select COUNT(*)  from tt;
 count(*)
 1
-show variables like 'keep_user_target%';
 Variable_name    Value
 keep_user_target_list_in_result    0
 set global keep_user_target_list_in_result = 1;
