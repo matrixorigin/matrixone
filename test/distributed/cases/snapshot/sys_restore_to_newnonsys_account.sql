@@ -207,7 +207,6 @@ select * from acc_test03.table04;
 show create table acc_test04.index03;
 -- @session
 
--- @bvt:issue#15971
 restore account acc01 from snapshot sp04 to account acc02;
 
 -- @session:id=10&user=acc01:test_account&password=111
@@ -221,7 +220,7 @@ select count(*) from acc_test03.table04;
 select count(*) from acc_test03.table04;
 drop database acc_test03;
 -- @session
--- @bvt:issue
+
 drop snapshot sp04;
 
 
