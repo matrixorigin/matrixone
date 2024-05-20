@@ -267,8 +267,13 @@ func (n *AppendMVCCHandle) AddAppendNodeLocked(
 
 // Reschedule until all appendnode is committed.
 // Pending appendnode is not visible for compaction txn.
+func (n *AppendMVCCHandle) PrepareCompactLocked() bool {
+	return n.allAppendsCommittedLocked()
+}
 func (n *AppendMVCCHandle) PrepareCompact() bool {
-	return n.allAppendsCommitted()
+	n.RLock()
+	defer n.RUnlock()
+	return n.allAppendsCommittedLocked()
 }
 
 func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
@@ -276,9 +281,14 @@ func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
 }
 
 // check if all appendnodes are committed.
-func (n *AppendMVCCHandle) allAppendsCommitted() bool {
-	n.RLock()
-	defer n.RUnlock()
+func (n *AppendMVCCHandle) allAppendsCommittedLocked() bool {
+	if n.appends == nil {
+		logutil.Warnf("[MetadataCheck] appends mvcc is nil, obj %v, has dropped %v, deleted at %v",
+			n.meta.ID.String(),
+			n.meta.HasDropCommittedLocked(),
+			n.meta.GetDeleteAtLocked().ToString())
+		return false
+	}
 	return n.appends.IsCommitted()
 }
 
