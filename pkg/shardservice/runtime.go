@@ -197,7 +197,7 @@ func (r *rt) getAvailableCNsLocked(
 ) []*cn {
 	var cns []*cn
 	for _, cn := range r.cns {
-		if cn.available(t.metadata.TenantID, r.env) {
+		if cn.available(t.metadata.AccountID, r.env) {
 			cns = append(cns, cn)
 		}
 	}
@@ -296,19 +296,15 @@ func newTable(
 				Policy:   metadata.Policy,
 				TableID:  id,
 				Version:  metadata.Version,
-				ShardID:  uint64(i + 1),
 				Replicas: t.newShardReplicas(int(metadata.MaxReplicaCount), initReplicaVersion),
 			},
 		)
 	}
-	if metadata.Policy == pb.Policy_Partition {
-		ids := metadata.PhysicalShardIDs
-		if len(ids) != len(t.shards) {
-			panic("partition and shard count not match")
-		}
-		for i, id := range ids {
-			t.shards[i].ShardID = id
-		}
+	if len(metadata.ShardIDs) != len(t.shards) {
+		panic("partition and shard count not match")
+	}
+	for i, id := range metadata.ShardIDs {
+		t.shards[i].ShardID = id
 	}
 	return t
 }
@@ -483,7 +479,7 @@ type cn struct {
 }
 
 func (c *cn) available(
-	tenantID uint32,
+	tenantID uint64,
 	env Env,
 ) bool {
 	if c.state == pb.CNState_Down {

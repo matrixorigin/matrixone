@@ -591,6 +591,10 @@ func newTestTable(
 	version uint32,
 	count uint32,
 ) *table {
+	shardIDs := make([]uint64, 0, count)
+	for i := uint64(1); i <= uint64(count); i++ {
+		shardIDs = append(shardIDs, i)
+	}
 	return newTestTableWithAll(
 		0,
 		id,
@@ -598,7 +602,7 @@ func newTestTable(
 		version,
 		count,
 		1,
-		nil,
+		shardIDs,
 	)
 }
 
@@ -608,6 +612,10 @@ func newTestTableWithReplicas(
 	count uint32,
 	replicas uint32,
 ) *table {
+	shardIDs := make([]uint64, 0, count)
+	for i := uint64(1); i <= uint64(count); i++ {
+		shardIDs = append(shardIDs, i)
+	}
 	return newTestTableWithAll(
 		0,
 		id,
@@ -615,26 +623,26 @@ func newTestTableWithReplicas(
 		version,
 		count,
 		replicas,
-		nil,
+		shardIDs,
 	)
 }
 
 func newTestTableWithAll(
-	tenantID uint32,
+	accountID uint64,
 	id uint64,
 	policy pb.Policy,
 	version uint32,
 	shardsCount uint32,
 	maxReplicaCount uint32,
-	physicalShardIDs []uint64,
+	shardIDs []uint64,
 ) *table {
 	metadata := pb.ShardsMetadata{
-		TenantID:         tenantID,
-		ShardsCount:      shardsCount,
-		Policy:           policy,
-		Version:          version,
-		MaxReplicaCount:  maxReplicaCount,
-		PhysicalShardIDs: physicalShardIDs,
+		AccountID:       accountID,
+		ShardsCount:     shardsCount,
+		Policy:          policy,
+		Version:         version,
+		MaxReplicaCount: maxReplicaCount,
+		ShardIDs:        shardIDs,
 	}
 	return newTable(
 		id,

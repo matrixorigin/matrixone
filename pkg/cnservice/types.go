@@ -535,10 +535,8 @@ func (c *Config) SetDefaultValue() {
 	}
 	c.Txn.NormalStateNoWait = false
 	c.LockService.ServiceID = c.UUID
-	c.LockService.Validate()
 
 	c.ShardService.ServiceID = c.UUID
-	c.ShardService.Validate()
 
 	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
 
@@ -581,7 +579,7 @@ func (s *service) getLockServiceConfig() lockservice.Config {
 func (s *service) getShardServiceConfig() shardservice.Config {
 	s.cfg.ShardService.ServiceID = s.cfg.UUID
 	s.cfg.ShardService.RPC = s.cfg.RPC
-	s.cfg.ShardService.ListenAddress = s.lockServiceListenAddr()
+	s.cfg.ShardService.ListenAddress = s.shardServiceListenAddr()
 	return s.cfg.ShardService
 }
 
@@ -621,6 +619,7 @@ type service struct {
 	pu                     *config.ParameterUnit
 	moCluster              clusterservice.MOCluster
 	lockService            lockservice.LockService
+	shardService           shardservice.ShardService
 	sqlExecutor            executor.SQLExecutor
 	sessionMgr             *queryservice.SessionManager
 	// queryService is used to handle query request from other CN service.

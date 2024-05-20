@@ -62,7 +62,7 @@ func TestCreateShardsWithSkip(t *testing.T) {
 			s1 := services[0]
 			addTestUncommittedTable(s1, table, shards, pb.Policy_None, 1)
 
-			require.NoError(t, s1.Create(table, txnOp))
+			require.NoError(t, s1.Create(context.TODO(), table, txnOp))
 			require.NoError(t, txnOp.Commit(ctx))
 			require.Equal(t, uint64(1), s1.atomic.skip.Load())
 
@@ -89,7 +89,7 @@ func TestCreateShardsWithTxnAborted(t *testing.T) {
 			s1 := services[0]
 			addTestUncommittedTable(s1, table, shards, pb.Policy_Hash, 1)
 
-			require.NoError(t, s1.Create(table, txnOp))
+			require.NoError(t, s1.Create(context.TODO(), table, txnOp))
 			require.NoError(t, txnOp.Rollback(ctx))
 			require.Equal(t, uint64(1), s1.atomic.abort.Load())
 		},
@@ -115,7 +115,7 @@ func TestDeleteShards(t *testing.T) {
 			txnOp, close := client.NewTestTxnOperator(ctx)
 			defer close()
 
-			require.NoError(t, s1.Delete(table, txnOp))
+			require.NoError(t, s1.Delete(context.TODO(), table, txnOp))
 			require.NoError(t, txnOp.Commit(ctx))
 
 			waitReplicaCount(table, s1, 0)
@@ -142,7 +142,7 @@ func TestDeleteShardsWithTxnAborted(t *testing.T) {
 			txnOp, close := client.NewTestTxnOperator(ctx)
 			defer close()
 
-			require.NoError(t, s1.Delete(table, txnOp))
+			require.NoError(t, s1.Delete(context.TODO(), table, txnOp))
 			require.NoError(t, txnOp.Rollback(ctx))
 			require.Equal(t, uint64(1), s1.atomic.abort.Load())
 		},
@@ -168,7 +168,7 @@ func TestDeleteShardsWithSkip(t *testing.T) {
 			s1 := services[0]
 			addTestCommittedTable(s1, table, shards, pb.Policy_None)
 
-			require.NoError(t, s1.Delete(table, txnOp))
+			require.NoError(t, s1.Delete(context.TODO(), table, txnOp))
 			require.NoError(t, txnOp.Commit(ctx))
 			require.Equal(t, uint64(1), s1.atomic.skip.Load())
 		},
@@ -281,7 +281,7 @@ func TestShardCanBeAllocatedWithLabel(t *testing.T) {
 			defer close()
 
 			addTestUncommittedTable(s2, table, shards, pb.Policy_Hash, 1)
-			require.NoError(t, s2.Create(table, txnOp))
+			require.NoError(t, s2.Create(context.TODO(), table, txnOp))
 			require.NoError(t, txnOp.Commit(ctx))
 
 			waitReplicaCount(table, s2, 2)
@@ -455,15 +455,21 @@ func addTestUncommittedTable(
 	policy pb.Policy,
 	replicas uint32,
 ) {
+	shardIDs := make([]uint64, 0, shardCount)
+	for i := uint64(1); i <= uint64(shardCount); i++ {
+		shardIDs = append(shardIDs, i)
+	}
+
 	store := s.storage.(*MemShardStorage)
 	store.UncommittedAdd(
 		tableID,
 		pb.ShardsMetadata{
-			TenantID:        1,
+			AccountID:       1,
 			ShardsCount:     shardCount,
 			Policy:          policy,
 			Version:         1,
 			MaxReplicaCount: replicas,
+			ShardIDs:        shardIDs,
 		},
 	)
 }
@@ -474,14 +480,20 @@ func addTestCommittedTable(
 	shardCount uint32,
 	policy pb.Policy,
 ) {
+	shardIDs := make([]uint64, 0, shardCount)
+	for i := uint64(1); i <= uint64(shardCount); i++ {
+		shardIDs = append(shardIDs, i)
+	}
+
 	store := s.storage.(*MemShardStorage)
 	store.AddCommitted(
 		tableID,
 		pb.ShardsMetadata{
-			TenantID:    1,
+			AccountID:   1,
 			ShardsCount: shardCount,
 			Policy:      policy,
 			Version:     1,
+			ShardIDs:    shardIDs,
 		})
 }
 
@@ -498,7 +510,7 @@ func mustAddTestShards(
 	defer close()
 
 	addTestUncommittedTable(s, table, shards, pb.Policy_Hash, replicas)
-	require.NoError(t, s.Create(table, txnOp))
+	require.NoError(t, s.Create(context.TODO(), table, txnOp))
 	require.NoError(t, txnOp.Commit(ctx))
 
 	for _, o := range others {
@@ -527,7 +539,7 @@ func mustAddTestPartitionShards(
 		pb.Policy_Partition,
 		replicas,
 	)
-	require.NoError(t, s.Create(table, txnOp))
+	require.NoError(t, s.Create(context.TODO(), table, txnOp))
 	require.NoError(t, txnOp.Commit(ctx))
 
 	for _, o := range others {

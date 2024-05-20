@@ -73,6 +73,7 @@ func (s *MemShardStorage) Get(
 }
 
 func (s *MemShardStorage) Create(
+	ctx context.Context,
 	table uint64,
 	txnOp client.TxnOperator,
 ) (bool, error) {
@@ -95,6 +96,7 @@ func (s *MemShardStorage) Create(
 }
 
 func (s *MemShardStorage) Delete(
+	ctx context.Context,
 	table uint64,
 	txnOp client.TxnOperator,
 ) (bool, error) {
@@ -176,10 +178,8 @@ func (s *MemShardStorage) UncommittedAdd(
 	s.Lock()
 	defer s.Unlock()
 
-	if value.Policy == pb.Policy_Partition {
-		for i := 0; i < int(value.ShardsCount); i++ {
-			value.PhysicalShardIDs = append(value.PhysicalShardIDs, s.id.Add(1))
-		}
+	if len(value.ShardIDs) != int(value.ShardsCount) {
+		panic("shard count and shard ids not match")
 	}
 	s.uncommittedAdd[tableID] = value
 }

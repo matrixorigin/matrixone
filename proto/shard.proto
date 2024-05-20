@@ -70,9 +70,9 @@ message ShardsMetadata {
     Policy          Policy           = 1;
     uint32          ShardsCount      = 2;
     uint32          Version          = 3;
-    uint32          TenantID         = 4;
+    uint64          AccountID        = 4;
     uint32          MaxReplicaCount  = 5;
-    repeated uint64 PhysicalShardIDs = 6;
+    repeated uint64 ShardIDs         = 6;
 }
 
 // TableShard when ShardsMetadata are created, the Shards corresponding to a table 

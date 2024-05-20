@@ -16,11 +16,25 @@ package shardservice
 
 import (
 	"context"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
+
+const (
+	defaultTimeout = time.Second * 10
+)
+
+func GetService() ShardService {
+	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ShardService)
+	if !ok {
+		panic("shard service not found")
+	}
+	return v.(ShardService)
+}
 
 // ShardServer used for balance and allocate shards on their cns.
 // ShardServer adheres to the following principles:
@@ -53,10 +67,10 @@ type ShardService interface {
 	// binds after txn committed asynchronously. Nothing happened if txn aborted.
 	//
 	// ShardBalancer will allocate CN after TableShardBind created.
-	Create(table uint64, txnOp client.TxnOperator) error
+	Create(ctx context.Context, table uint64, txnOp client.TxnOperator) error
 	// Delete deletes table shards metadata in current txn. Table shards need
 	// to be deleted if table deleted. Nothing happened if txn aborted.
-	Delete(table uint64, txnOp client.TxnOperator) error
+	Delete(ctx context.Context, table uint64, txnOp client.TxnOperator) error
 
 	// Close close the service
 	Close() error
@@ -73,7 +87,7 @@ type scheduler interface {
 
 type Env interface {
 	HasCN(serviceID string) bool
-	Available(tenantID uint32, cn string) bool
+	Available(accountID uint64, cn string) bool
 }
 
 // filter is used to filter out or select certain CNs when selecting CNs for ShardBalance.
@@ -81,12 +95,23 @@ type filter interface {
 	filter(r *rt, cn []*cn) []*cn
 }
 
+// ShardStorage is used to store metadata for Table Shards, handle read operations for
+// shards, and Log tail subscriptions.
 type ShardStorage interface {
+	// Get returns the latest metadata of the shards corresponding to the table.
 	Get(table uint64) (pb.ShardsMetadata, error)
-	Create(table uint64, txnOp client.TxnOperator) (bool, error)
-	Delete(table uint64, txnOp client.TxnOperator) (bool, error)
+	// Create creates the metadata for the sharding corresponding to the table with the given
+	// transaction.
+	Create(ctx context.Context, table uint64, txnOp client.TxnOperator) (bool, error)
+	// Create delete the metadata for the sharding corresponding to the table with the given
+	// transaction.
+	Delete(ctx context.Context, table uint64, txnOp client.TxnOperator) (bool, error)
+	// Unsubscribe unsubscribes the log tail of the tables.
 	Unsubscribe(tables ...uint64) error
+	// WaitLogAppliedAt wait until the log tail corresponding to ts has been fully consumed.
+	// Ensure that subsequent reads have full log tail data.
 	WaitLogAppliedAt(ctx context.Context, ts timestamp.Timestamp) error
+	// Read read data with the given timestamp
 	Read(ctx context.Context, table uint64, payload []byte, ts timestamp.Timestamp) ([]byte, error)
 }
 

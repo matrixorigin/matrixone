@@ -39,7 +39,7 @@ func (e *env) HasCN(serviceID string) bool {
 }
 
 func (e *env) Available(
-	tenantID uint32,
+	accountID uint64,
 	serviceID string,
 ) bool {
 	cn, ok := e.getCN(serviceID)
@@ -55,7 +55,7 @@ func (e *env) Available(
 	if !ok {
 		return false
 	}
-	value := fmt.Sprintf("%d", tenantID)
+	value := fmt.Sprintf("%d", accountID)
 
 	for _, v := range values.Labels {
 		if v == value {

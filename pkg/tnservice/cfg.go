@@ -403,11 +403,9 @@ func (c *Config) SetDefaultValue() {
 
 	c.RPC.Adjust()
 	c.LockService.ServiceID = c.UUID
-	c.LockService.Validate()
 
 	c.ShardService.RPC = c.RPC
 	c.ShardService.ServiceID = c.UUID
-	c.ShardService.Validate()
 
 	if c.PortBase != 0 {
 		if c.ServiceHost == "" {

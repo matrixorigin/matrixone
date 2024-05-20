@@ -16,7 +16,6 @@ package shardservice
 
 import (
 	"context"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -153,7 +152,7 @@ func (s *service) validReplica(
 func (s *service) send(
 	req *pb.Request,
 ) (*pb.Response, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 
 	return s.unwrapError(

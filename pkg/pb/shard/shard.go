@@ -65,7 +65,7 @@ func (m TableShard) GetReplica(
 	return -1
 }
 
-func (m TableShard) GetPhysicalTableID() uint64 {
+func (m TableShard) GetRealTableID() uint64 {
 	switch m.Policy {
 	case Policy_None:
 		return m.TableID

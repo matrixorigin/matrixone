@@ -119,10 +119,12 @@ func (s *service) Close() error {
 }
 
 func (s *service) Create(
+	ctx context.Context,
 	table uint64,
 	txnOp client.TxnOperator,
 ) error {
 	created, err := s.storage.Create(
+		ctx,
 		table,
 		txnOp,
 	)
@@ -145,10 +147,11 @@ func (s *service) Create(
 }
 
 func (s *service) Delete(
+	ctx context.Context,
 	table uint64,
 	txnOp client.TxnOperator,
 ) error {
-	deleted, err := s.storage.Delete(table, txnOp)
+	deleted, err := s.storage.Delete(ctx, table, txnOp)
 	if err != nil || !deleted {
 		s.atomic.skip.Add(1)
 		return err
@@ -415,7 +418,7 @@ func (s *service) handleAddReplica(
 
 	if shard.Policy != pb.Policy_Partition &&
 		newShards.count(shard.TableID) > 1 {
-		newShards.addUnsubscribe(shard.GetPhysicalTableID())
+		newShards.addUnsubscribe(shard.GetRealTableID())
 	}
 }
 
@@ -429,7 +432,7 @@ func (s *service) handleDeleteReplica(
 	}
 	if shard.Policy == pb.Policy_Partition ||
 		newShards.count(shard.TableID) == 0 {
-		newShards.addUnsubscribe(shard.GetPhysicalTableID())
+		newShards.addUnsubscribe(shard.GetRealTableID())
 	}
 }
 
@@ -437,7 +440,7 @@ func (s *service) handleDeleteAll(
 	newShards *allocatedCache,
 ) {
 	for _, shard := range newShards.values {
-		newShards.addUnsubscribe(shard.GetPhysicalTableID())
+		newShards.addUnsubscribe(shard.GetRealTableID())
 	}
 	newShards.clean()
 }
@@ -445,18 +448,18 @@ func (s *service) handleDeleteAll(
 func (s *service) handleCreateTable(
 	tableID uint64,
 ) error {
-	shards, err := s.storage.Get(tableID)
+	metadata, err := s.storage.Get(tableID)
 	if err != nil {
 		return err
 	}
-	if shards.Policy == pb.Policy_None {
+	if metadata.Policy == pb.Policy_None {
 		return nil
 	}
 
 	req := s.remote.pool.AcquireRequest()
 	req.RPCMethod = pb.Method_CreateShards
 	req.CreateShards.ID = tableID
-	req.CreateShards.Metadata = shards
+	req.CreateShards.Metadata = metadata
 
 	resp, err := s.send(req)
 	if err != nil {
@@ -466,7 +469,7 @@ func (s *service) handleCreateTable(
 
 	getLogger().Info("table shards created",
 		zap.Uint64("table", tableID),
-		zap.String("shards", shards.String()))
+		zap.String("shards", metadata.String()))
 	return nil
 }
 

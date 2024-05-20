@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/predefine"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -108,6 +109,7 @@ func init() {
 	initSQLs = append(initSQLs, sql)
 
 	initSQLs = append(initSQLs, trace.InitSQLs...)
+	initSQLs = append(initSQLs, shardservice.InitSQLs...)
 }
 
 type service struct {
