@@ -67,6 +67,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	ctr := ap.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
@@ -82,9 +83,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			msg, _, err := ctr.ReceiveFromSingleReg(0, analyze)
-			if err != nil {
-				return result, err
+			msg := ctr.ReceiveFromSingleReg(0, analyze)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
 			bat := msg.Batch
 
@@ -139,9 +140,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	msg, _, err := ctr.ReceiveFromSingleReg(1, anal)
-	if err != nil {
-		return err
+	msg := ctr.ReceiveFromSingleReg(1, anal)
+	if msg.Err != nil {
+		return msg.Err
 	}
 	bat := msg.Batch
 	if bat != nil && bat.AuxData != nil {
@@ -153,9 +154,9 @@ func (ctr *container) receiveHashMap(anal process.Analyze) error {
 
 func (ctr *container) receiveBatch(anal process.Analyze) error {
 	for {
-		msg, _, err := ctr.ReceiveFromSingleReg(1, anal)
-		if err != nil {
-			return err
+		msg := ctr.ReceiveFromSingleReg(1, anal)
+		if msg.Err != nil {
+			return msg.Err
 		}
 		bat := msg.Batch
 		if bat != nil {

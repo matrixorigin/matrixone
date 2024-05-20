@@ -67,7 +67,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	var err error
-	var end bool
 	ap := arg
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
@@ -81,12 +80,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.status {
 		case receiveAll:
 			for {
-				msg, end, err = ctr.ReceiveFromAllRegs(anal)
-				if err != nil {
-					return result, err
+				msg = ctr.ReceiveFromAllRegs(anal)
+				if msg.Err != nil {
+					return result, msg.Err
 				}
 
-				if end {
+				if msg.Batch == nil {
 					ctr.status = eval
 					break
 				}
@@ -106,11 +105,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.bat.AddRowCount(bat.RowCount())
 			}
 		case receive:
-			msg, end, err = ctr.ReceiveFromAllRegs(anal)
-			if err != nil {
-				return result, err
+			msg = ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
-			if end {
+			if msg.Batch == nil {
 				ctr.status = done
 			} else {
 				ctr.status = eval

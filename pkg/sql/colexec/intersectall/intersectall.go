@@ -100,9 +100,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 // build use all batches from proc.Reg.MergeReceiver[1](right relation) to build the hash map.
 func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isFirst bool) error {
 	for {
-		msg, _, err := ctr.ReceiveFromSingleReg(1, analyzer)
-		if err != nil {
-			return err
+		msg := ctr.ReceiveFromSingleReg(1, analyzer)
+		if msg.Err != nil {
+			return msg.Err
 		}
 		bat := msg.Batch
 
@@ -159,9 +159,9 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		ctr.buf = nil
 	}
 	for {
-		msg, _, err := ctr.ReceiveFromSingleReg(0, analyzer)
-		if err != nil {
-			return false, err
+		msg := ctr.ReceiveFromSingleReg(0, analyzer)
+		if msg.Err != nil {
+			return false, msg.Err
 		}
 		bat := msg.Batch
 		if bat == nil {

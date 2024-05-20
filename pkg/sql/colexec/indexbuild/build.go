@@ -88,12 +88,12 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 	var currentBatch *batch.Batch
 	for {
 		if ap.ctr.isMerge {
-			msg, _, err = ctr.ReceiveFromAllRegs(anal)
+			msg = ctr.ReceiveFromAllRegs(anal)
 		} else {
-			msg, _, err = ctr.ReceiveFromSingleReg(0, anal)
+			msg = ctr.ReceiveFromSingleReg(0, anal)
 		}
-		if err != nil {
-			return err
+		if msg.Err != nil {
+			return msg.Err
 		}
 		if msg.Batch == nil {
 			break

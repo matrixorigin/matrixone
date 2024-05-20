@@ -109,9 +109,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		switch ctr.status {
 		case dataTag:
-			msg, _, err = ctr.ReceiveFromAllRegs(anal)
-			if err != nil {
-				return result, err
+			msg = ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
 			bat := msg.Batch
 			if bat == nil {
@@ -135,9 +135,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = evalTag
 		case initTag:
-			msg, _, err = ctr.ReceiveFromAllRegs(anal)
-			if err != nil {
-				return result, err
+			msg = ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
 			bat = msg.Batch
 			if bat == nil {

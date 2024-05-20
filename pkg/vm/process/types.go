@@ -66,7 +66,7 @@ type Analyze interface {
 }
 
 var (
-	EmtpyRegisterMessage = NewRegMsg(nil)
+	NormalEndRegisterMessage = NewRegMsg(nil)
 )
 
 // RegisterMessage channel data

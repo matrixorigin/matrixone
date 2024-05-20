@@ -76,15 +76,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
-
+	var err error
 	for {
 		switch ctr.status {
 		case receive:
-			msg, end, err := ctr.ReceiveFromAllRegs(anal)
-			if err != nil {
-				return result, err
+			msg := ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
-			if end {
+			if msg.Batch == nil {
 				ctr.indexList = make([]int64, len(ctr.batchList))
 				ctr.status = eval
 			} else {

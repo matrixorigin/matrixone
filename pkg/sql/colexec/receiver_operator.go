@@ -41,36 +41,36 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool)
 	}
 }
 
-func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Analyze) (*process.RegisterMessage, bool, error) {
+func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Analyze) *process.RegisterMessage {
 	start := time.Now()
 	defer analyze.WaitStop(start)
 	select {
 	case <-r.proc.Ctx.Done():
-		return process.EmtpyRegisterMessage, true, nil
+		return process.NormalEndRegisterMessage
 	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
 		if !ok || msg == nil {
-			return process.EmtpyRegisterMessage, true, nil
+			return process.NormalEndRegisterMessage
 		}
 
-		return msg, false, msg.Err
+		return msg
 	}
 }
 
-func (r *ReceiverOperator) ReceiveFromSingleRegNonBlock(regIdx int, analyze process.Analyze) (*process.RegisterMessage, bool, error) {
-	start := time.Now()
-	defer analyze.WaitStop(start)
-	select {
-	case <-r.proc.Ctx.Done():
-		return process.EmtpyRegisterMessage, true, nil
-	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
-		if !ok || msg == nil {
-			return process.EmtpyRegisterMessage, true, nil
-		}
-		return msg, false, msg.Err
-	default:
-		return process.EmtpyRegisterMessage, false, nil
-	}
-}
+// func (r *ReceiverOperator) ReceiveFromSingleRegNonBlock(regIdx int, analyze process.Analyze) (*process.RegisterMessage, bool, error) {
+// 	start := time.Now()
+// 	defer analyze.WaitStop(start)
+// 	select {
+// 	case <-r.proc.Ctx.Done():
+// 		return process.EmtpyRegisterMessage, true, nil
+// 	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
+// 		if !ok || msg == nil {
+// 			return process.EmtpyRegisterMessage, true, nil
+// 		}
+// 		return msg, false, msg.Err
+// 	default:
+// 		return process.EmtpyRegisterMessage, false, nil
+// 	}
+// }
 
 func (r *ReceiverOperator) FreeAllReg() {
 	for i := range r.proc.Reg.MergeReceivers {
@@ -85,10 +85,10 @@ func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
 
 // You MUST Init ReceiverOperator with Merge-Type
 // if you want to use this function
-func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*process.RegisterMessage, bool, error) {
+func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) *process.RegisterMessage {
 	for {
 		if r.aliveMergeReceiver == 0 {
-			return process.EmtpyRegisterMessage, true, nil
+			return process.NormalEndRegisterMessage
 		}
 
 		start := time.Now()
@@ -97,11 +97,11 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*process
 
 		// chosen == 0 means the info comes from proc context.Done
 		if chosen == 0 {
-			return process.EmtpyRegisterMessage, true, nil
+			return process.NormalEndRegisterMessage
 		}
 
 		if !ok {
-			return process.EmtpyRegisterMessage, true, nil
+			return process.NormalEndRegisterMessage
 		}
 
 		if msg == nil {
@@ -109,7 +109,7 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*process
 		}
 
 		if msg.Err != nil {
-			return msg, false, msg.Err
+			return msg
 		}
 
 		if msg.Batch == nil {
@@ -121,7 +121,7 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*process
 			continue
 		}
 
-		return msg, false, msg.Err
+		return msg
 	}
 }
 
@@ -214,13 +214,13 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *process.RegisterMessage, bo
 		if chosen != 0 && ok {
 			msg = (*process.RegisterMessage)(value.UnsafePointer())
 		}
-		if !ok || msg == nil {
+		if !ok || msg == nil || msg.Batch == nil {
 			r.RemoveChosen(chosen)
 		}
 		return chosen, msg, ok
 	}
 
-	if !ok || msg == nil {
+	if !ok || msg == nil || msg.Batch == nil {
 		r.DisableChosen(chosen)
 	}
 	return chosen, msg, ok

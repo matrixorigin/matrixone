@@ -103,11 +103,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
 	for {
-		msg, end, err := ctr.ReceiveFromAllRegs(anal)
-		if err != nil {
-			return true, nil
+		msg := ctr.ReceiveFromAllRegs(anal)
+		if msg.Err != nil {
+			return true, msg.Err
 		}
-		if end {
+		if msg.Batch == nil {
 			return false, nil
 		}
 

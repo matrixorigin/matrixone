@@ -69,9 +69,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			var err error
-			msg, _, err := ctr.ReceiveFromSingleReg(0, anal)
-			if err != nil {
-				return result, err
+			msg := ctr.ReceiveFromSingleReg(0, anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
 
 			bat := msg.Batch
@@ -100,10 +100,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+	var err error
 	for {
-		msg, _, err := ctr.ReceiveFromSingleReg(1, anal)
-		if err != nil {
-			return err
+		msg := ctr.ReceiveFromSingleReg(1, anal)
+		if msg.Err != nil {
+			return msg.Err
 		}
 		bat := msg.Batch
 		if bat == nil {

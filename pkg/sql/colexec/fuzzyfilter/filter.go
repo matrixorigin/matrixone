@@ -119,9 +119,9 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 		switch arg.state {
 		case Build:
 
-			msg, _, err := arg.ReceiveFromSingleReg(1, anal)
-			if err != nil {
-				return result, err
+			msg := arg.ReceiveFromSingleReg(1, anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
 			bat := msg.Batch
 			if bat == nil {
@@ -157,9 +157,9 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 
 		case Probe:
 
-			msg, _, err := arg.ReceiveFromSingleReg(0, anal)
-			if err != nil {
-				return result, err
+			msg := arg.ReceiveFromSingleReg(0, anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
 
 			bat := msg.Batch
@@ -210,9 +210,9 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 		switch arg.state {
 		case Build:
 
-			msg, _, err := arg.ReceiveFromSingleReg(1, anal)
-			if err != nil {
-				return result, err
+			msg := arg.ReceiveFromSingleReg(1, anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
 
 			bat := msg.Batch
@@ -246,9 +246,9 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 
 		case Probe:
 
-			msg, _, err := arg.ReceiveFromSingleReg(0, anal)
-			if err != nil {
-				return result, err
+			msg := arg.ReceiveFromSingleReg(0, anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
 
 			bat := msg.Batch

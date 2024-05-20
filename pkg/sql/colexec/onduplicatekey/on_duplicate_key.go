@@ -54,18 +54,18 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	ctr := arg.ctr
 	result := vm.NewCallResult()
-
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
 			for {
-				msg, end, err := ctr.ReceiveFromAllRegs(anal)
-				if err != nil {
+				msg := ctr.ReceiveFromAllRegs(anal)
+				if msg.Err != nil {
 					result.Status = vm.ExecStop
 					return result, nil
 				}
 
-				if end || msg.Batch == nil {
+				if msg.Batch == nil {
 					break
 				}
 				bat := msg.Batch

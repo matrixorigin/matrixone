@@ -49,8 +49,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	var end bool
-	var err error
 	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
 	if arg.buf != nil {
@@ -59,10 +57,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	switch arg.ctr.status {
 	case sendInitial:
-		msg, _, err = arg.ctr.ReceiveFromSingleReg(0, anal)
-		if err != nil {
+		msg = arg.ctr.ReceiveFromSingleReg(0, anal)
+		if msg.Err != nil {
 			result.Status = vm.ExecStop
-			return result, err
+			return result, msg.Err
 		}
 		arg.buf = msg.Batch
 		if arg.buf == nil {
@@ -77,8 +75,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	case sendRecursive:
 		for {
-			msg, end, _ = arg.ctr.ReceiveFromAllRegs(anal)
-			if end || msg.Batch == nil {
+			msg = arg.ctr.ReceiveFromAllRegs(anal)
+			if msg.Batch == nil {
 				result.Batch = nil
 				result.Status = vm.ExecStop
 				return result, nil

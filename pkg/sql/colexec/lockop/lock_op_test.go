@@ -525,13 +525,13 @@ func runLockBlockingOpTest(
 				batches2 = append(batches2, bat)
 			}
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.batchFetchFunc = func(process.Analyze) (*process.RegisterMessage, bool, error) {
+			arg.rt.batchFetchFunc = func(process.Analyze) *process.RegisterMessage {
 				if len(batches) == 0 {
-					return nil, true, nil
+					return nil
 				}
 				bat := batches[0]
 				batches = batches[1:]
-				return testutil.NewRegMsg(bat), false, nil
+				return testutil.NewRegMsg(bat)
 			}
 
 			var err error

@@ -44,7 +44,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	var end bool
 	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
 	if arg.buf != nil {
@@ -53,8 +52,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	for {
-		msg, end, _ = arg.ctr.ReceiveFromAllRegs(anal)
-		if end {
+		msg = arg.ctr.ReceiveFromAllRegs(anal)
+		if msg.Err != nil {
+			result.Status = vm.ExecStop
+			return result, msg.Err
+		}
+		if msg.Batch == nil {
 			result.Status = vm.ExecStop
 			return result, nil
 		}

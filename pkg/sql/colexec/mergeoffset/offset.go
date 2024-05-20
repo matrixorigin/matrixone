@@ -47,8 +47,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
-	var end bool
-	var err error
 	var msg *process.RegisterMessage
 	if arg.buf != nil {
 		proc.PutBatch(arg.buf)
@@ -56,14 +54,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	for {
-		msg, end, err = arg.ctr.ReceiveFromAllRegs(anal)
-		if err != nil {
+		msg = arg.ctr.ReceiveFromAllRegs(anal)
+		if msg.Err != nil {
 			// WTF, nil?
 			result.Status = vm.ExecStop
-			return result, nil
+			return result, msg.Err
 		}
 
-		if end {
+		if msg.Batch == nil {
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
