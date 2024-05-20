@@ -1084,7 +1084,7 @@ func constructWindow(_ context.Context, n *plan.Node, proc *process.Process) *wi
 				if err != nil {
 					panic(err)
 				}
-				cfg = []byte(vec.GetStringAt(0))
+				cfg = []byte(vec.UnsafeGetStringAt(0))
 				vec.Free(proc.Mp())
 
 				args = f.F.Args[:len(f.F.Args)-1]
@@ -1163,7 +1163,7 @@ func constructGroup(_ context.Context, n, cn *plan.Node, ibucket, nbucket int, n
 					if err != nil {
 						panic(err)
 					}
-					cfg = []byte(vec.GetStringAt(0))
+					cfg = []byte(vec.UnsafeGetStringAt(0))
 					vec.Free(proc.Mp())
 
 					args = f.F.Args[:len(f.F.Args)-1]

@@ -589,7 +589,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		for i := 0; i < pk.Length(); i++ {
-			v := pk.GetStringAt(i)
+			v := pk.UnsafeGetStringAt(i)
 			mp[v] = true
 		}
 	case types.T_array_float32:
@@ -773,7 +773,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 		case types.T_char, types.T_varchar, types.T_json,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			for i := 0; i < vec.Length(); i++ {
-				v := vec.GetStringAt(i)
+				v := vec.UnsafeGetStringAt(i)
 				if mp[v] {
 					sels = append(sels, int32(i))
 				}
