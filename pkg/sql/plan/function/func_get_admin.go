@@ -54,7 +54,7 @@ func builtInInternalGetAdminName(parameters []*vector.Vector, result vector.Func
 
 		var adminNme string
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-			adminNme = cols[0].GetStringAt(0)
+			adminNme = cols[0].UnsafeGetStringAt(0)
 			return true
 		})
 		if err = rs.AppendBytes(functionUtil.QuickStrToBytes(adminNme), false); err != nil {

@@ -243,7 +243,7 @@ func checkPKDup(
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		for i := start; i < start+count; i++ {
-			v := pk.GetStringAt(i)
+			v := pk.UnsafeGetStringAt(i)
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, []byte(v), false)
 				return true, entry
