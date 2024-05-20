@@ -207,9 +207,7 @@ func NormalizeL2[T types.RealNumbers](v1 []T, normalized *[]T) error {
 	}
 	norm := math.Sqrt(sumSquares)
 	if norm == 0 {
-		for i := range v1 {
-			(*normalized)[i] = v1[i]
-		}
+		copy(*normalized, v1)
 		return nil
 	}
 
