@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 
@@ -266,6 +267,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Result = t.Result
 		arg.Typs = t.Typs
 		arg.IsShuffle = t.IsShuffle
+		res.Arg = arg
+	case vm.ProductL2:
+		t := sourceIns.Arg.(*productl2.Argument)
+		arg := productl2.NewArgument()
+		arg.Result = t.Result
+		arg.Typs = t.Typs
+		arg.OnExpr = t.OnExpr
 		res.Arg = arg
 	case vm.Projection:
 		t := sourceIns.Arg.(*projection.Argument)
@@ -1064,7 +1072,7 @@ func constructWindow(_ context.Context, n *plan.Node, proc *process.Process) *wi
 				if err != nil {
 					panic(err)
 				}
-				cfg = []byte(vec.GetStringAt(0))
+				cfg = []byte(vec.UnsafeGetStringAt(0))
 				vec.Free(proc.Mp())
 
 				args = f.F.Args[:len(f.F.Args)-1]
@@ -1133,7 +1141,7 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 					if err != nil {
 						panic(err)
 					}
-					cfg = []byte(vec.GetStringAt(0))
+					cfg = []byte(vec.UnsafeGetStringAt(0))
 					vec.Free(proc.Mp())
 
 					args = f.F.Args[:len(f.F.Args)-1]
@@ -1426,6 +1434,18 @@ func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) 
 	return arg
 }
 
+func constructProductL2(n *plan.Node, typs []types.Type, proc *process.Process) *productl2.Argument {
+	result := make([]colexec.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
+	}
+	arg := productl2.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.OnExpr = colexec.RewriteFilterExprList(n.OnList)
+	return arg
+}
+
 func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *loopjoin.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
@@ -1683,7 +1703,6 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
-
 	case vm.Product:
 		arg := in.Arg.(*product.Argument)
 		ret.NeedHashMap = false
@@ -1691,7 +1710,13 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
-
+	case vm.ProductL2:
+		arg := in.Arg.(*productl2.Argument)
+		ret.NeedHashMap = false
+		ret.Typs = arg.Typs
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 	case vm.LoopAnti:
 		arg := in.Arg.(*loopanti.Argument)
 		ret.NeedHashMap = false

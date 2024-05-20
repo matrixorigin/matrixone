@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"sort"
@@ -48,6 +49,42 @@ type medianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R floa
 	// groups stores the values of the column for each group.
 	// todo: it has a problem that same as the `clusterCentersExec.groupData` in `cluster_centers.go`
 	groups []*vector.Vector
+}
+
+func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+
+	encoded := &EncodedAgg{
+		Info:   d,
+		Result: r,
+		Groups: nil,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			if encoded.Groups[i], err = exec.groups[i].MarshalBinary(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+	if len(groups) > 0 {
+		exec.groups = make([]*vector.Vector, len(groups))
+		for i := range exec.groups {
+			exec.groups[i] = vector.NewVec(exec.singleAggInfo.argType)
+			if err := vectorUnmarshal(exec.groups[i], groups[i], mp); err != nil {
+				return err
+			}
+		}
+	}
+	return exec.ret.unmarshal(result)
 }
 
 func newMedianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R float64 | types.Decimal128](mg AggMemoryManager, info singleAggInfo) medianColumnExecSelf[T, R] {

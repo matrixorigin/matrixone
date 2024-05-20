@@ -16,6 +16,7 @@ package versions
 
 import (
 	"fmt"
+
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -198,33 +199,33 @@ func CheckTableColumn(txn executor.TxnExecutor,
 		Name:    columnName,
 	}
 
-	sql := fmt.Sprintf(`SELECT mo_show_visible_bin(atttyp, 2) AS DATA_TYPE, 
-       CASE WHEN attnotnull != 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE, 
-       internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH, 
-       internal_numeric_precision(atttyp) AS NUMERIC_PRECISION, 
-       internal_numeric_scale(atttyp) AS NUMERIC_SCALE, 
-       internal_datetime_scale(atttyp) AS DATETIME_PRECISION, 
-       attnum AS ORDINAL_POSITION, 
-       mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT, 
-       CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA, 
-       att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns 
-            WHERE att_relname != 'mo_increment_columns' AND att_relname NOT LIKE '__mo_cpkey_%%' 
-            AND attname != '__mo_rowid' 
+	sql := fmt.Sprintf(`SELECT mo_show_visible_bin(atttyp, 2) AS DATA_TYPE,
+       CASE WHEN attnotnull != 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE,
+       internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,
+       internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,
+       internal_numeric_scale(atttyp) AS NUMERIC_SCALE,
+       internal_datetime_scale(atttyp) AS DATETIME_PRECISION,
+       attnum AS ORDINAL_POSITION,
+       mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT,
+       CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA,
+       att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns
+            WHERE att_relname != 'mo_increment_columns' AND att_relname NOT LIKE '__mo_cpkey_%%'
+            AND attname != '__mo_rowid'
             AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
 
 	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf(`SELECT mo_show_visible_bin(atttyp, 2) AS DATA_TYPE, 
-       CASE WHEN attnotnull != 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE, 
-       internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH, 
-       internal_numeric_precision(atttyp) AS NUMERIC_PRECISION, 
-       internal_numeric_scale(atttyp) AS NUMERIC_SCALE, 
-       internal_datetime_scale(atttyp) AS DATETIME_PRECISION, 
-       attnum AS ORDINAL_POSITION, 
-       mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT, 
-       CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA, 
-       att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns 
-            WHERE att_relname != 'mo_increment_columns' AND att_relname NOT LIKE '__mo_cpkey_%%' 
-            AND attname != '__mo_rowid' AND account_id = 0 
+		sql = fmt.Sprintf(`SELECT mo_show_visible_bin(atttyp, 2) AS DATA_TYPE,
+       CASE WHEN attnotnull != 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE,
+       internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,
+       internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,
+       internal_numeric_scale(atttyp) AS NUMERIC_SCALE,
+       internal_datetime_scale(atttyp) AS DATETIME_PRECISION,
+       attnum AS ORDINAL_POSITION,
+       mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT,
+       CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA,
+       att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns
+            WHERE att_relname != 'mo_increment_columns' AND att_relname NOT LIKE '__mo_cpkey_%%'
+            AND attname != '__mo_rowid' AND account_id = 0
             AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
 	}
 
@@ -235,16 +236,16 @@ func CheckTableColumn(txn executor.TxnExecutor,
 	defer res.Close()
 
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		data_type := cols[0].GetStringAt(0)
-		is_nullable := cols[1].GetStringAt(0)
+		data_type := cols[0].UnsafeGetStringAt(0)
+		is_nullable := cols[1].UnsafeGetStringAt(0)
 		character_length := vector.GetFixedAt[int64](cols[2], 0)
 		numeric_precision := vector.GetFixedAt[int64](cols[3], 0)
 		numeric_scale := vector.GetFixedAt[int64](cols[4], 0)
 		datetime_precision := vector.GetFixedAt[int64](cols[5], 0)
 		ordinal_position := vector.GetFixedAt[int32](cols[6], 0)
-		column_default := cols[7].GetStringAt(0)
-		extra := cols[8].GetStringAt(0)
-		column_comment := cols[9].GetStringAt(0)
+		column_default := cols[7].UnsafeGetStringAt(0)
+		extra := cols[8].UnsafeGetStringAt(0)
+		column_comment := cols[9].UnsafeGetStringAt(0)
 
 		colInfo.IsExits = true
 		colInfo.ColType = data_type
@@ -280,7 +281,7 @@ func CheckViewDefinition(txn executor.TxnExecutor, accountId uint32, schema stri
 	loaded := false
 	n := 0
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		view_def = cols[0].GetStringAt(0)
+		view_def = cols[0].UnsafeGetStringAt(0)
 		n++
 		loaded = true
 		return false
@@ -299,12 +300,12 @@ func CheckTableDefinition(txn executor.TxnExecutor, accountId uint32, schema str
 		return false, moerr.NewInternalErrorNoCtx("schema name or table name is empty")
 	}
 
-	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl 
-                              WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition' 
+	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl
+                              WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
                               AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
 	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl 
-                                  WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition' 
+		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl
+                                  WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
                                   AND account_id = 0 AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
 	}
 
