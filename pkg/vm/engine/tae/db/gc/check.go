@@ -138,25 +138,25 @@ func (c *checker) Check() error {
 
 	if len(objects) != 0 || len(tombstones) != 0 || len(unconsumedObjects) != 0 || len(unconsumedTombstones) != 0 {
 		for _, name := range objects {
-			logutil.Errorf("lost object %s,", name)
+			logutil.Errorf("[Check GC]lost object %s,", name)
 		}
 
 		for _, name := range tombstones {
-			logutil.Errorf("lost tombstone %s,", name)
+			logutil.Errorf("[Check GC]lost tombstone %s,", name)
 		}
 
 		for _, name := range unconsumedObjects {
-			logutil.Errorf("lost unconsumed object %s,", name)
+			logutil.Errorf("[Check GC]lost unconsumed object %s,", name)
 		}
 
 		for _, name := range unconsumedTombstones {
-			logutil.Errorf("lost unconsumed tombstone %s,", name)
+			logutil.Errorf("[Check GC]lost unconsumed tombstone %s,", name)
 		}
 	}
 
 	if len(allObjects) > ckpObjectCount+NotFoundLimit {
 		for name := range allObjects {
-			logutil.Infof("not found object %s,", name)
+			logutil.Infof("[Check GC]not found object %s,", name)
 		}
 		logutil.Warnf("[Check GC]GC abnormal!!! const: %v, all objects: %d, not found: %d, checkpoint file: %d",
 			time.Since(now), allCount, len(allObjects)-ckpObjectCount, ckpObjectCount)
