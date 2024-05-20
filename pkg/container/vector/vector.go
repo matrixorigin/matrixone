@@ -244,7 +244,7 @@ func (v *Vector) CleanOnlyData() {
 	v.sorted = false
 }
 
-func (v *Vector) GetStringAt(i int) string {
+func (v *Vector) UnsafeGetStringAt(i int) string {
 	if v.IsConst() {
 		i = 0
 	}
