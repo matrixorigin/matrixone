@@ -673,6 +673,10 @@ func (c *checkpointCleaner) softGC(
 ) ([]string, map[uint32][]types.TS) {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
+	now := time.Now()
+	defer func() {
+		logutil.Infof("[DiskCleaner] softGC takes %v", time.Since(now))
+	}()
 	if len(c.inputs.tables) == 0 {
 		return nil, nil
 	}
