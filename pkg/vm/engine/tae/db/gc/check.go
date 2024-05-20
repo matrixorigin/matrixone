@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const NotFoundLimit = 30
+const NotFoundLimit = 10
 
 type checker struct {
 	cleaner *checkpointCleaner
