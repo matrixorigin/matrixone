@@ -20,7 +20,12 @@ import (
 	"strings"
 )
 
-func NewDefault() Allocator {
+func NewDefault(config *Config) Allocator {
+	if config == nil {
+		c := defaultConfig
+		config = &c
+	}
+
 	switch strings.TrimSpace(strings.ToLower(os.Getenv("MO_MALLOC"))) {
 
 	case "c":
@@ -30,7 +35,7 @@ func NewDefault() Allocator {
 		return NewShardedAllocator(
 			runtime.GOMAXPROCS(0),
 			func() Allocator {
-				return NewClassAllocator()
+				return NewClassAllocator(config.CheckFraction)
 			},
 		)
 
