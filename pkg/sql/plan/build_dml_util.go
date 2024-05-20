@@ -17,25 +17,22 @@ package plan
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"strings"
 	"sync"
 
 	"github.com/google/uuid"
-
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
-
-	"golang.org/x/exp/slices"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+	"golang.org/x/exp/slices"
 )
 
 var dmlPlanCtxPool = sync.Pool{
@@ -465,7 +462,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							ProjectList: projectProjection,
 						}
 						lastNodeId = builder.appendNode(projectNode, bindCtx)
-						preUKStep, err := appendPreInsertUkPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, idx, true, uniqueTableDef, isUk)
+						preUKStep, err := appendPreInsertPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, idx, true, uniqueTableDef, isUk)
 						if err != nil {
 							return err
 						}
@@ -1292,7 +1289,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				}
 
 				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-				newSourceStep, err := appendPreInsertUkPlan(builder, bindCtx, tableDef, lastNodeId, idx, false, idxTableDef, indexdef.Unique)
+				newSourceStep, err := appendPreInsertPlan(builder, bindCtx, tableDef, lastNodeId, idx, false, idxTableDef, indexdef.Unique)
 				if err != nil {
 					return err
 				}
@@ -1642,26 +1639,26 @@ func makeOneDeletePlan(
 				FilterList: []*plan.Expr{filterExpr},
 			}
 			lastNodeId = builder.appendNode(filterNode, bindCtx)
+			// append lock
+			lockTarget := &plan.LockTarget{
+				TableId:            delNodeInfo.tableDef.TblId,
+				PrimaryColIdxInBat: int32(delNodeInfo.pkPos),
+				PrimaryColTyp:      delNodeInfo.pkTyp,
+				RefreshTsIdxInBat:  -1, //unsupport now
+				// FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
+				LockTable: delNodeInfo.lockTable,
+			}
+			// if delNodeInfo.tableDef.Partition != nil {
+			// 	lockTarget.IsPartitionTable = true
+			// 	lockTarget.PartitionTableIds = delNodeInfo.partTableIDs
+			// }
+			lockNode := &Node{
+				NodeType:    plan.Node_LOCK_OP,
+				Children:    []int32{lastNodeId},
+				LockTargets: []*plan.LockTarget{lockTarget},
+			}
+			lastNodeId = builder.appendNode(lockNode, bindCtx)
 		}
-		// append lock
-		lockTarget := &plan.LockTarget{
-			TableId:            delNodeInfo.tableDef.TblId,
-			PrimaryColIdxInBat: int32(delNodeInfo.pkPos),
-			PrimaryColTyp:      delNodeInfo.pkTyp,
-			RefreshTsIdxInBat:  -1, //unsupport now
-			// FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
-			LockTable: delNodeInfo.lockTable,
-		}
-		// if delNodeInfo.tableDef.Partition != nil {
-		// 	lockTarget.IsPartitionTable = true
-		// 	lockTarget.PartitionTableIds = delNodeInfo.partTableIDs
-		// }
-		lockNode := &Node{
-			NodeType:    plan.Node_LOCK_OP,
-			Children:    []int32{lastNodeId},
-			LockTargets: []*plan.LockTarget{lockTarget},
-		}
-		lastNodeId = builder.appendNode(lockNode, bindCtx)
 	}
 	truncateTable := &plan.TruncateTable{}
 	if canTruncate {
@@ -2796,9 +2793,9 @@ func recomputeMoCPKeyViaProjection(builder *QueryBuilder, bindCtx *BindContext, 
 	return lastNodeId
 }
 
-// appendPreInsertUkPlan  build preinsert plan.
-// sink_scan -> preinsert_uk -> sink
-func appendPreInsertUkPlan(
+// appendPreInsertPlan  build preinsert plan.
+// sink_scan -> [preinsert_uk | preinsert_sk] -> sink
+func appendPreInsertPlan(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
 	tableDef *TableDef,
@@ -2874,12 +2871,12 @@ func appendPreInsertUkPlan(
 		})
 	}
 	//TODO: once everything works, rename all the UK to a more generic name that means UK and SK.
-	// ie preInsertUkNode -> preInsertIKNode
+	// ie preInsert -> preInsertIKNode
 	// NOTE: we have build secondary index by reusing the whole code flow of Unique Index.
 	// This would be done in a separate PR after verifying the correctness of the current code.
-	var preInsertUkNode *Node
+	var preInsert *Node
 	if isUK {
-		preInsertUkNode = &Node{
+		preInsert = &Node{
 			NodeType:    plan.Node_PRE_INSERT_UK,
 			Children:    []int32{lastNodeId},
 			ProjectList: preinsertUkProjection,
@@ -2893,7 +2890,7 @@ func appendPreInsertUkPlan(
 	} else {
 		// NOTE: We don't defined PreInsertSkCtx. Instead, we use PreInsertUkCtx for both UK and SK since there
 		// is no difference in the contents.
-		preInsertUkNode = &Node{
+		preInsert = &Node{
 			NodeType:    plan.Node_PRE_INSERT_SK,
 			Children:    []int32{lastNodeId},
 			ProjectList: preinsertUkProjection,
@@ -2905,20 +2902,22 @@ func appendPreInsertUkPlan(
 			},
 		}
 	}
-	lastNodeId = builder.appendNode(preInsertUkNode, bindCtx)
+	lastNodeId = builder.appendNode(preInsert, bindCtx)
 
-	if lockNodeId, ok := appendLockNode(
-		builder,
-		bindCtx,
-		lastNodeId,
-		uniqueTableDef,
-		false,
-		false,
-		-1,
-		nil,
-		isUpddate,
-	); ok {
-		lastNodeId = lockNodeId
+	if isUK {
+		if lockNodeId, ok := appendLockNode(
+			builder,
+			bindCtx,
+			lastNodeId,
+			uniqueTableDef,
+			false,
+			false,
+			-1,
+			nil,
+			isUpddate,
+		); ok {
+			lastNodeId = lockNodeId
+		}
 	}
 
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)

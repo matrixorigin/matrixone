@@ -538,7 +538,7 @@ var supportedStringBuiltIns = []FuncNew{
 	{
 		functionId: ILIKE,
 		class:      plan.Function_STRICT,
-		layout:     BINARY_LOGICAL_OPERATOR,
+		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() {

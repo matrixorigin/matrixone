@@ -318,6 +318,7 @@ func newtestOperator() *testOperator {
 	return &testOperator{}
 }
 
+func (o *testOperator) SetFootPrints(prints [][2]uint32) {}
 func (o *testOperator) AddWorkspace(_ client.Workspace) {
 }
 
