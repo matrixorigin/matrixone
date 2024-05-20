@@ -39,6 +39,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Output:                  "output",
 	vm.Offset:                  "offset",
 	vm.Product:                 "product",
+	vm.ProductL2:               "product l2",
 	vm.Restrict:                "restrict",
 	vm.Dispatch:                "dispatch",
 	vm.Shuffle:                 "shuffle",

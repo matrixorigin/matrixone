@@ -63,10 +63,9 @@ func (exec *singleWindowExec) marshal() ([]byte, error) {
 	}
 
 	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_single_window,
-		Info:     d,
-		Result:   r,
-		Groups:   nil,
+		Info:   d,
+		Result: r,
+		Groups: nil,
 	}
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))
