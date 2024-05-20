@@ -194,10 +194,10 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	return cosineSimilarity, nil
 }
 
-func NormalizeL2[T types.RealNumbers](v1 []T, normalized *[]T) ([]T, error) {
+func NormalizeL2[T types.RealNumbers](v1 []T, normalized *[]T) error {
 
 	if len(v1) == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
+		return moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
 	}
 
 	// Compute the norm of the vector
@@ -207,7 +207,10 @@ func NormalizeL2[T types.RealNumbers](v1 []T, normalized *[]T) ([]T, error) {
 	}
 	norm := math.Sqrt(sumSquares)
 	if norm == 0 {
-		return v1, nil
+		for i := range v1 {
+			(*normalized)[i] = v1[i]
+		}
+		return nil
 	}
 
 	// Divide each element by the norm
@@ -215,7 +218,7 @@ func NormalizeL2[T types.RealNumbers](v1 []T, normalized *[]T) ([]T, error) {
 		(*normalized)[i] = T(float64(val) / norm)
 	}
 
-	return *normalized, nil
+	return nil
 }
 
 // L1Norm returns l1 distance to origin.
