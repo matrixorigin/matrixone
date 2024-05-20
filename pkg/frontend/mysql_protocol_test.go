@@ -187,6 +187,7 @@ func TestKill(t *testing.T) {
 	txnOp.EXPECT().GetWorkspace().Return(wp).AnyTimes()
 	txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOp, nil).AnyTimes()
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
