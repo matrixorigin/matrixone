@@ -481,8 +481,6 @@ func (sm *SnapshotMeta) RebuildTid(ins *containers.Batch) {
 		return
 	}
 	logutil.Infof("RebuildTid tid %d", insTIDs[0])
-	sm.Lock()
-	defer sm.Unlock()
 	sm.SetTid(insTIDs[0])
 }
 
