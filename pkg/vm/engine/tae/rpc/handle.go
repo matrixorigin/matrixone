@@ -1322,16 +1322,11 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		memo.LeaveProcessing()
 	}()
 
-	if !memo.HasUpdate() {
-		resp.Succeed = true
-		return nil, nil
-	}
-
-	size := memo.GatherSpecialTableSize()
+	specialSize := memo.GatherSpecialTableSize()
 	usages := memo.GatherAllAccSize()
 	for accId, _ := range usages {
 		if accId != uint64(catalog.System_Account) {
-			usages[accId] += size
+			usages[accId] += specialSize
 		}
 	}
 
@@ -1356,18 +1351,28 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		resp.Sizes = append(resp.Sizes, size)
 	}
 
+	var notReadyNewAcc []uint32
+
 	// new accounts
 	traverseCatalogForNewAccounts(h.db.Catalog, memo, newIds)
-
 	for idx := range newIds {
 		if size, exist := memo.GatherNewAccountSize(uint64(newIds[idx])); exist {
+			size += specialSize
 			resp.AccIds = append(resp.AccIds, int64(newIds[idx]))
 			resp.Sizes = append(resp.Sizes, size)
-			memo.AddReqTrace(uint64(newIds[idx]), size, start, "new")
+			memo.AddReqTrace(uint64(newIds[idx]), size, start, "new, ready")
+		} else {
+			notReadyNewAcc = append(notReadyNewAcc, newIds[idx])
 		}
 	}
 
 	memo.ClearNewAccCache()
+
+	for idx := range notReadyNewAcc {
+		resp.AccIds = append(resp.AccIds, int64(notReadyNewAcc[idx]))
+		resp.Sizes = append(resp.Sizes, specialSize)
+		memo.AddReqTrace(uint64(newIds[idx]), specialSize, start, " new, not ready, only special")
+	}
 
 	resp.Succeed = true
 
