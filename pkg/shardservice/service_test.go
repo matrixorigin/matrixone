@@ -124,7 +124,7 @@ func TestDeleteShards(t *testing.T) {
 	)
 }
 
-func TestDeleteShardsInAsyncTask(t *testing.T) {
+func TestAsyncDeleteShards(t *testing.T) {
 	runServicesTest(
 		t,
 		"cn1",
@@ -150,6 +150,37 @@ func TestDeleteShardsInAsyncTask(t *testing.T) {
 		func(c *Config) []Option {
 			return []Option{withDisableAppendDeleteCallback()}
 		},
+	)
+}
+
+func TestAsyncUpdateShards(t *testing.T) {
+	runServicesTest(
+		t,
+		"cn1",
+		func(
+			ctx context.Context,
+			server *server,
+			services []*service,
+		) {
+			s1 := services[0]
+			table := uint64(1)
+			shards := uint32(1)
+			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			waitReplicaCount(table, s1, 1)
+
+			store := s1.storage.(*MemShardStorage)
+			store.Lock()
+			v := store.committed[table]
+			v.Version++
+			v.ShardsCount = 2
+			v.ShardIDs = []uint64{1, 2}
+			store.committed[table] = v
+			store.Unlock()
+			waitReplicaCount(table, s1, 2)
+			require.Equal(t, uint64(3), s1.atomic.added.Load())
+			require.Equal(t, uint64(1), s1.atomic.removed.Load())
+		},
+		nil,
 	)
 }
 
@@ -627,8 +658,8 @@ func runServicesTest(
 			ServiceID:     cn.ServiceID,
 			ListenAddress: cn.ShardServiceAddress,
 		}
-		cfg.CNHeartbeatDuration.Duration = time.Millisecond * 10
-		cfg.CNCheckDeletedDuration.Duration = time.Millisecond * 10
+		cfg.HeartbeatDuration.Duration = time.Millisecond * 10
+		cfg.CheckChangedDuration.Duration = time.Millisecond * 10
 
 		var opts []Option
 		if adjustConfigFunc != nil {

@@ -22,12 +22,12 @@ import (
 )
 
 var (
-	defaultLockListenAddress      = "127.0.0.1:6004"
-	defaultMaxScheduleTables      = 1
-	defaultFreezeCNTimeout        = time.Minute
-	defaultScheduleDuration       = time.Second
-	defaultCNHeartbeatDuration    = time.Second * 2
-	defaultCNCheckDeletedDuration = time.Minute
+	defaultLockListenAddress    = "127.0.0.1:6004"
+	defaultMaxScheduleTables    = 1
+	defaultFreezeCNTimeout      = time.Minute
+	defaultScheduleDuration     = time.Second
+	defaultHeartbeatDuration    = time.Second * 2
+	defaultCheckChangedDuration = time.Minute
 )
 
 // Shard config
@@ -50,10 +50,10 @@ type Config struct {
 	ScheduleDuration toml.Duration `toml:"schedule-duration"`
 	// SelectCNLabel label name for tenant to select CNs.
 	SelectCNLabel string `toml:"cn-select-label-name"`
-	// CNHeartbeatDuration how often to send heartbeat to shard server.
-	CNHeartbeatDuration toml.Duration `toml:"cn-heartbeat-duration"`
-	// CNCheckDeletedDuration how often to check deleted tables in CN.
-	CNCheckDeletedDuration toml.Duration `toml:"cn-check-deleted-duration"`
+	// HeartbeatDuration how often to send heartbeat to shard server.
+	HeartbeatDuration toml.Duration `toml:"heartbeat-duration"`
+	// CheckChangedDuration how often to check deleted tables or sharding changed in CN.
+	CheckChangedDuration toml.Duration `toml:"check-changed-duration"`
 }
 
 // Validate validate
@@ -76,11 +76,11 @@ func (c *Config) Validate() {
 	if c.ScheduleDuration.Duration == 0 {
 		c.ScheduleDuration.Duration = defaultScheduleDuration
 	}
-	if c.CNHeartbeatDuration.Duration == 0 {
-		c.CNHeartbeatDuration.Duration = defaultCNHeartbeatDuration
+	if c.HeartbeatDuration.Duration == 0 {
+		c.HeartbeatDuration.Duration = defaultHeartbeatDuration
 	}
-	if c.CNCheckDeletedDuration.Duration == 0 {
-		c.CNCheckDeletedDuration.Duration = defaultCNCheckDeletedDuration
+	if c.CheckChangedDuration.Duration == 0 {
+		c.CheckChangedDuration.Duration = defaultCheckChangedDuration
 	}
 	c.RPC.Adjust()
 }

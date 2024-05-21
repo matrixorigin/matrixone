@@ -108,9 +108,11 @@ func (s *storage) Get(
 	return metadata, nil
 }
 
-func (s *storage) GetDeleted(
-	tables map[uint64]struct{},
-) ([]uint64, error) {
+func (s *storage) GetChanged(
+	tables map[uint64]uint32,
+	applyDeleted func(uint64),
+	applyChanged func(uint64),
+) error {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 
@@ -119,7 +121,7 @@ func (s *storage) GetDeleted(
 		targets = append(targets, fmt.Sprintf("%d", table))
 	}
 
-	var exists []uint64
+	current := make(map[uint64]uint32)
 	now, _ := s.clock.Now()
 	err := s.executor.ExecTxn(
 		ctx,
@@ -136,8 +138,15 @@ func (s *storage) GetDeleted(
 			defer res.Close()
 
 			res.ReadRows(
-				func(rows int, cols []*vector.Vector) bool {
-					exists = append(exists, executor.GetFixedRows[uint64](cols[0])...)
+				func(
+					rows int,
+					cols []*vector.Vector,
+				) bool {
+					ids := executor.GetFixedRows[uint64](cols[0])
+					versions := executor.GetFixedRows[uint32](cols[1])
+					for i := 0; i < rows; i++ {
+						current[ids[i]] = versions[i]
+					}
 					return true
 				},
 			)
@@ -146,21 +155,20 @@ func (s *storage) GetDeleted(
 		executor.Options{}.WithMinCommittedTS(now),
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	if len(exists) == len(tables) {
-		return nil, nil
+	for table, version := range tables {
+		new, ok := current[table]
+		if !ok {
+			applyDeleted(table)
+			continue
+		}
+		if new > version {
+			applyChanged(table)
+		}
 	}
-
-	var deleted []uint64
-	for _, table := range exists {
-		delete(tables, table)
-	}
-	for table := range tables {
-		deleted = append(deleted, table)
-	}
-	return deleted, nil
+	return nil
 }
 
 func (s *storage) Create(
@@ -408,7 +416,7 @@ func getCheckMetadataSQL(
 	tables []string,
 ) string {
 	return fmt.Sprintf(
-		"select table_id from %s.%s where table_id in (%s)",
+		"select table_id, version from %s.%s where table_id in (%s)",
 		catalog.MO_CATALOG,
 		catalog.MOShardsMetadata,
 		strings.Join(tables, ","),

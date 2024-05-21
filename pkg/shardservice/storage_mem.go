@@ -72,19 +72,25 @@ func (s *MemShardStorage) Get(
 	return s.committed[table], nil
 }
 
-func (s *MemShardStorage) GetDeleted(
-	tables map[uint64]struct{},
-) ([]uint64, error) {
+func (s *MemShardStorage) GetChanged(
+	tables map[uint64]uint32,
+	applyDeleted func(uint64),
+	applyChanged func(uint64),
+) error {
 	s.RLock()
 	defer s.RUnlock()
 
-	var deleted []uint64
-	for table := range tables {
-		if _, ok := s.committed[table]; !ok {
-			deleted = append(deleted, table)
+	for table, version := range tables {
+		new, ok := s.committed[table]
+		if !ok {
+			applyDeleted(table)
+			continue
+		}
+		if new.Version > version {
+			applyChanged(table)
 		}
 	}
-	return deleted, nil
+	return nil
 }
 
 func (s *MemShardStorage) Create(

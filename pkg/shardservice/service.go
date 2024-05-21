@@ -77,8 +77,10 @@ type service struct {
 	}
 
 	atomic struct {
-		abort atomic.Uint64
-		skip  atomic.Uint64
+		abort   atomic.Uint64
+		skip    atomic.Uint64
+		removed atomic.Uint64
+		added   atomic.Uint64
 	}
 
 	options struct {
@@ -113,7 +115,7 @@ func NewService(
 
 	s.validate()
 	s.initRemote()
-	if err := s.stopper.RunTask(s.heartbeat); err != nil {
+	if err := s.stopper.RunTask(s.doTask); err != nil {
 		panic(err)
 	}
 	return s
@@ -302,14 +304,14 @@ func (s *service) getAllocatedShard(
 	return pb.TableShard{}, false
 }
 
-func (s *service) heartbeat(
+func (s *service) doTask(
 	ctx context.Context,
 ) {
-	timer := time.NewTimer(s.cfg.CNHeartbeatDuration.Duration)
+	timer := time.NewTimer(s.cfg.HeartbeatDuration.Duration)
 	defer timer.Stop()
 
-	checkTimer := time.NewTimer(s.cfg.CNCheckDeletedDuration.Duration)
-	defer checkTimer.Stop()
+	checkChangedTimer := time.NewTimer(s.cfg.CheckChangedDuration.Duration)
+	defer checkChangedTimer.Stop()
 
 	m := make(map[uint64]bool)
 	for {
@@ -321,7 +323,7 @@ func (s *service) heartbeat(
 				getLogger().Error("failed to heartbeat",
 					zap.Error(err))
 			}
-			timer.Reset(s.cfg.CNHeartbeatDuration.Duration)
+			timer.Reset(s.cfg.HeartbeatDuration.Duration)
 		case table := <-s.createC:
 			if err := s.handleCreateTable(table); err != nil {
 				getLogger().Error("failed to create table shards",
@@ -334,12 +336,12 @@ func (s *service) heartbeat(
 					zap.Uint64("table", table),
 					zap.Error(err))
 			}
-		case <-checkTimer.C:
-			if err := s.handleCheckDeleted(); err != nil {
-				getLogger().Error("failed to check deleted table shards",
+		case <-checkChangedTimer.C:
+			if err := s.handleCheckChanged(); err != nil {
+				getLogger().Error("failed to check table shards changed",
 					zap.Error(err))
 			}
-			checkTimer.Reset(s.cfg.CNCheckDeletedDuration.Duration)
+			checkChangedTimer.Reset(s.cfg.CheckChangedDuration.Duration)
 		}
 	}
 }
@@ -450,7 +452,7 @@ func (s *service) handleAddReplica(
 	if !newShards.add(shard, replica) {
 		return
 	}
-
+	s.atomic.added.Add(1)
 	if shard.Policy != pb.Policy_Partition &&
 		newShards.count(shard.TableID) > 1 {
 		newShards.addUnsubscribe(shard.GetRealTableID())
@@ -465,6 +467,7 @@ func (s *service) handleDeleteReplica(
 	if !newShards.delete(shard, replica) {
 		return
 	}
+	s.atomic.removed.Add(1)
 	if shard.Policy == pb.Policy_Partition ||
 		newShards.count(shard.TableID) == 0 {
 		newShards.addUnsubscribe(shard.GetRealTableID())
@@ -528,28 +531,31 @@ func (s *service) handleDeleteTable(
 	return s.storage.Unsubscribe(tableID)
 }
 
-func (s *service) handleCheckDeleted() error {
+func (s *service) handleCheckChanged() error {
 	shards := s.getAllocatedShards()
 	if len(shards) == 0 {
 		return nil
 	}
-	m := make(map[uint64]struct{})
-	for _, shard := range shards {
-		m[shard.TableID] = struct{}{}
-	}
 
-	deleted, err := s.storage.GetDeleted(m)
-	if err != nil {
-		return err
+	m := make(map[uint64]uint32)
+	for _, shard := range shards {
+		m[shard.TableID] = shard.Version
 	}
-	for _, table := range deleted {
-		select {
-		case s.deleteC <- table:
-		default:
-			return nil
-		}
-	}
-	return nil
+	return s.storage.GetChanged(
+		m,
+		func(deleted uint64) {
+			select {
+			case s.deleteC <- deleted:
+			default:
+			}
+		},
+		func(changed uint64) {
+			select {
+			case s.createC <- changed:
+			default:
+			}
+		},
+	)
 }
 
 func (s *service) removeCache(
