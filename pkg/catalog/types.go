@@ -756,6 +756,7 @@ var (
 	QueryResultMetaDir  string
 	//ProfileDir holds all profiles dumped by the runtime/pprof
 	ProfileDir string
+	TraceDir   string
 )
 
 func init() {
@@ -763,6 +764,7 @@ func init() {
 	QueryResultMetaPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta/%s_%s.blk")
 	QueryResultMetaDir = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta")
 	ProfileDir = fileservice.JoinPath(defines.ETLFileServiceName, "/profile")
+	TraceDir = fileservice.JoinPath(defines.ETLFileServiceName, "/trace")
 }
 
 const QueryResultName = "%s_%s_%d.blk"
