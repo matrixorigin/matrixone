@@ -112,7 +112,11 @@ func TestMergeBlock(t *testing.T) {
 	batch1.SetRowCount(3)
 
 	argument1 := Argument{
-		Tbl: &mockRelation{},
+		container: &Container{
+			source: &mockRelation{},
+			mp:     make(map[int]*batch.Batch),
+			mp2:    make(map[int][]*batch.Batch),
+		},
 		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
 		affectedRows: 0,
 		OperatorBase: vm.OperatorBase{
@@ -126,13 +130,13 @@ func TestMergeBlock(t *testing.T) {
 	}
 	resetChildren(&argument1, batch1)
 
-	argument1.Prepare(proc)
+	// argument1.Prepare(proc)
 	_, err := argument1.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15*3), argument1.affectedRows)
 	// Check Tbl
 	{
-		result := argument1.Tbl.(*mockRelation).result
+		result := argument1.container.source.(*mockRelation).result
 		// check attr names
 		require.True(t, reflect.DeepEqual(
 			[]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats},
@@ -201,7 +205,11 @@ func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
 
 func TestArgument_GetMetaLocBat(t *testing.T) {
 	arg := Argument{
-		Tbl: &mockRelation{},
+		container: &Container{
+			source: &mockRelation{},
+			mp:     make(map[int]*batch.Batch),
+			mp2:    make(map[int][]*batch.Batch),
+		},
 		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
 		affectedRows: 0,
 		OperatorBase: vm.OperatorBase{
@@ -217,7 +225,7 @@ func TestArgument_GetMetaLocBat(t *testing.T) {
 	proc := testutil.NewProc()
 	proc.Ctx = context.TODO()
 
-	arg.Prepare(proc)
+	// arg.Prepare(proc)
 
 	bat := mockBlockInfoBat(proc, true)
 	arg.GetMetaLocBat(bat, proc)

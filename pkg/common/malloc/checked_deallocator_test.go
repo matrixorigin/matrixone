@@ -14,10 +14,38 @@
 
 package malloc
 
-import "testing"
+import (
+	"fmt"
+	"runtime"
+	"strings"
+	"testing"
+)
 
-func TestClassAllocator(t *testing.T) {
-	testAllocator(t, func() Allocator {
-		return NewClassAllocator(1)
-	})
+func TestCheckedDeallocator(t *testing.T) {
+	allocator := NewClassAllocator(1)
+
+	func() {
+		defer func() {
+			p := recover()
+			if p == nil {
+				t.Fatal("should panic")
+			}
+			msg := fmt.Sprintf("%v", p)
+			if !strings.Contains(msg, "double free") {
+				t.Fatalf("got %v", msg)
+			}
+		}()
+		ptr, dec := allocator.Allocate(42)
+		dec.Deallocate(ptr)
+		dec.Deallocate(ptr)
+	}()
+
+	func() {
+		ptr, dec := allocator.Allocate(42)
+		_ = ptr
+		_ = dec
+		dec.Deallocate(ptr) // comment out this line to trigger memory leak panic
+	}()
+	runtime.GC()
+
 }
