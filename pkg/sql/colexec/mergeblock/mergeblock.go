@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -38,25 +37,13 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 
 	ref := arg.Ref
 	eng := arg.Engine
-	rel, err := colexec.GetRelationByObjRef(proc.Ctx, proc, eng, ref)
+	partitionNames := arg.PartitionTableNames
+	rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
 	if err != nil {
 		return err
 	}
-	ap.container.source = rel
-	if len(arg.PartitionTableNames) > 0 {
-		dbSource, err := arg.Engine.Database(proc.Ctx, ref.SchemaName, proc.TxnOperator)
-		if err != nil {
-			return err
-		}
-		ap.container.partitionSources = make([]engine.Relation, len(arg.PartitionTableNames))
-		for i, pTableName := range arg.PartitionTableNames {
-			pRel, err := dbSource.Relation(proc.Ctx, pTableName, proc)
-			if err != nil {
-				return err
-			}
-			ap.container.partitionSources[i] = pRel
-		}
-	}
+	arg.container.source = rel
+	arg.container.partitionSources = partitionRels
 	return nil
 }
 

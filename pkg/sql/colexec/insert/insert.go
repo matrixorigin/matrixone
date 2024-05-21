@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -58,26 +57,13 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	}
 	ref := arg.InsertCtx.Ref
 	eng := arg.InsertCtx.Engine
-	rel, err := colexec.GetRelationByObjRef(proc.Ctx, proc, eng, ref)
+	partitionNames := arg.InsertCtx.PartitionTableNames
+	rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
 	if err != nil {
 		return err
 	}
 	arg.ctr.source = rel
-	if len(arg.InsertCtx.PartitionTableNames) > 0 {
-		dbSource, err := arg.InsertCtx.Engine.Database(proc.Ctx, ref.SchemaName, proc.TxnOperator)
-		if err != nil {
-			return err
-		}
-		arg.ctr.partitionSources = make([]engine.Relation, len(arg.InsertCtx.PartitionTableNames))
-		// get the relation instances for each partition sub table
-		for i, pTableName := range arg.InsertCtx.PartitionTableNames {
-			pRel, err := dbSource.Relation(proc.Ctx, pTableName, proc)
-			if err != nil {
-				return err
-			}
-			arg.ctr.partitionSources[i] = pRel
-		}
-	}
+	arg.ctr.partitionSources = partitionRels
 	return nil
 }
 

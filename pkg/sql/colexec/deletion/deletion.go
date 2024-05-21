@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -67,26 +66,13 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 
 	ref := arg.DeleteCtx.Ref
 	eng := arg.DeleteCtx.Engine
-	rel, err := colexec.GetRelationByObjRef(proc.Ctx, proc, eng, ref)
+	partitionNames := arg.DeleteCtx.PartitionTableNames
+	rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
 	if err != nil {
 		return err
 	}
 	arg.source = rel
-	if len(arg.DeleteCtx.PartitionTableNames) > 0 {
-		dbSource, err := arg.DeleteCtx.Engine.Database(proc.Ctx, ref.SchemaName, proc.TxnOperator)
-		if err != nil {
-			return err
-		}
-		arg.partitionSources = make([]engine.Relation, len(arg.DeleteCtx.PartitionTableNames))
-		// get the relation instances for each partition sub table
-		for i, pTableName := range arg.DeleteCtx.PartitionTableNames {
-			pRel, err := dbSource.Relation(proc.Ctx, pTableName, proc)
-			if err != nil {
-				return err
-			}
-			arg.partitionSources[i] = pRel
-		}
-	}
+	arg.partitionSources = partitionRels
 	return nil
 }
 

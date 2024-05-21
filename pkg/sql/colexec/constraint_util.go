@@ -194,7 +194,7 @@ func BatchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx con
 	return nil
 }
 
-func GetRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (engine.Relation, error) {
+func getRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (engine.Relation, error) {
 	dbSource, err := eg.Database(ctx, ref.SchemaName, proc.TxnOperator)
 	if err != nil {
 		return nil, err
@@ -211,4 +211,35 @@ func GetRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.E
 	}
 	newObjeName := engine.GetTempTableName(ref.SchemaName, ref.ObjName)
 	return dbSource.Relation(ctx, newObjeName, proc)
+}
+
+func GetRelAndPartitionRelsByObjRef(
+	ctx context.Context,
+	proc *process.Process,
+	eng engine.Engine,
+	ref *plan.ObjectRef,
+	partitionTableNames []string,
+) (source engine.Relation, partitionSources []engine.Relation, err error) {
+	source, err = getRelationByObjRef(proc.Ctx, proc, eng, ref)
+	if err != nil {
+		return
+	}
+
+	if len(partitionTableNames) > 0 {
+		var dbSource engine.Database
+		var tmpRel engine.Relation
+		dbSource, err = eng.Database(proc.Ctx, ref.SchemaName, proc.TxnOperator)
+		if err != nil {
+			return
+		}
+		// get the relation instances for each partition sub table
+		for _, pTableName := range partitionTableNames {
+			tmpRel, err = dbSource.Relation(proc.Ctx, pTableName, proc)
+			if err != nil {
+				return
+			}
+			partitionSources = append(partitionSources, tmpRel)
+		}
+	}
+	return
 }
