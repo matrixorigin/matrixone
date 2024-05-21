@@ -18,6 +18,7 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -91,6 +92,11 @@ func ListSnapshotMeta(
 	sort.Slice(metaFiles, func(i, j int) bool {
 		return metaFiles[i].end.Less(&metaFiles[j].end)
 	})
+
+	for i, file := range metaFiles {
+		// TODO: remove log
+		logutil.Infof("metaFiles[%d]: %v", i, file.String())
+	}
 
 	if listFunc == nil {
 		listFunc = AllAfterAndGCheckpoint
