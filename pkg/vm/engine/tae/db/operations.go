@@ -316,7 +316,7 @@ func (t *TraceSpan) UnmarshalBinary(data []byte) error {
 }
 
 type StorageUsageReq struct {
-	AccIds []int32
+	AccIds []int64
 }
 
 func (s *StorageUsageReq) MarshalBinary() ([]byte, error) {
@@ -360,7 +360,7 @@ type StorageUsageResp_V0 struct {
 
 type StorageUsageResp struct {
 	Succeed bool
-	AccIds  []int32
+	AccIds  []int64
 	Sizes   []uint64
 	Magic   uint64
 }
