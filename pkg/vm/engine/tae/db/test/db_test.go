@@ -8730,3 +8730,52 @@ func TestSplitCommand(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 	tae.CheckRowsByScan(50, false)
 }
+
+func TestVisitTombstone(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	options.WithGlobalVersionInterval(time.Microsecond)(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	var metas []*catalog.ObjectEntry
+
+	txn, rel := tae.GetRelation()
+	it := rel.MakeObjectIt()
+	for it.Valid() {
+		blk := it.GetObject()
+		meta := blk.GetMeta().(*catalog.ObjectEntry)
+		metas = append(metas, meta)
+		it.Next()
+	}
+	_ = txn.Commit(context.Background())
+	if len(metas) == 0 {
+		return
+	}
+	txn, _ = tae.GetRelation()
+	task, err := jobs.NewFlushTableTailTask(nil, txn, metas, tae.Runtime, txn.GetStartTS())
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	{
+		tae.DeleteAll(true)
+	}
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	ts1 := tae.TxnMgr.Now()
+
+	tae.CompactBlocks(false)
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.ForceGlobalCheckpoint(ctx, ts1, time.Minute)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.Restart(context.Background())
+	t.Log(tae.Catalog.SimplePPString(3))
+}
