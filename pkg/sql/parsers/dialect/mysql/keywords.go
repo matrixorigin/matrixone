@@ -112,6 +112,7 @@ func init() {
 		"create":                     CREATE,
 		"cluster":                    CLUSTER,
 		"cross":                      CROSS,
+		"cross_l2":                   CROSS_L2,
 		"current_date":               CURRENT_DATE,
 		"current_time":               CURRENT_TIME,
 		"current_timestamp":          CURRENT_TIMESTAMP,
