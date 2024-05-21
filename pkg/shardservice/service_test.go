@@ -408,7 +408,7 @@ func TestBalanceWithMultiTable(t *testing.T) {
 			shards := uint32(3)
 
 			for _, table := range tables {
-				mustAddTestShards(t, ctx, s1, table, shards, 1)
+				mustAddTestShards(t, ctx, s1, table, shards, 1, s2, s3)
 				waitReplicaCount(table, s1, 3)
 			}
 
@@ -453,7 +453,7 @@ func TestBalanceWithMultiTableAndMultiShards(t *testing.T) {
 			replicas := uint32(3)
 
 			for _, table := range tables {
-				mustAddTestShards(t, ctx, s1, table, shards, replicas)
+				mustAddTestShards(t, ctx, s1, table, shards, replicas, s2, s3)
 				waitReplicaCount(table, s1, int(shards*replicas))
 			}
 
@@ -488,7 +488,7 @@ func TestForceUnsubscribe(t *testing.T) {
 			s1 := services[0]
 			table := uint64(1)
 			shards := uint32(4)
-			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			mustAddTestShards(t, ctx, s1, table, shards, 1, services[1])
 			waitReplicaCount(table, s1, 4)
 
 			s2 := services[1]

@@ -276,7 +276,7 @@ func TestReadWithStaleReplica(t *testing.T) {
 
 			err = fn(
 				func(shard *shard.TableShard) {
-					shard.ShardID = 10
+					shard.Replicas[0].Version = 10
 				},
 			)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrReplicaNotMatch))
