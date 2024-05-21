@@ -42,7 +42,7 @@ type releasableBatch struct {
 type merger[T any] struct {
 	heap *heapSlice[T]
 
-	cols    [][]T
+	cols    []*vector.Vector
 	deletes []*nulls.Nulls
 	nulls   []*nulls.Nulls
 
@@ -62,7 +62,10 @@ type merger[T any] struct {
 
 	sortKeyIdx int
 
-	mustColFunc func(*vector.Vector) []T
+	// get i-th data from vector.
+	// this function wraps vector.GetFixedAt or vector.UnsafeGetStringAt
+	// this enables Merge struct handling fixed and varlen vectors.
+	getData func(*vector.Vector, int) T
 
 	totalRowCnt   uint32
 	totalSize     uint32
@@ -72,14 +75,14 @@ type merger[T any] struct {
 	targetObjSize uint32
 }
 
-func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, mustColFunc func(*vector.Vector) []T) Merger {
+func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, getFunc func(*vector.Vector, int) T) Merger {
 	size := host.GetObjectCnt()
 	m := &merger[T]{
 		host:       host,
 		objCnt:     size,
 		bats:       make([]releasableBatch, size),
 		rowIdx:     make([]int64, size),
-		cols:       make([][]T, size),
+		cols:       make([]*vector.Vector, size),
 		deletes:    make([]*nulls.Nulls, size),
 		nulls:      make([]*nulls.Nulls, size),
 		heap:       newHeapSlice[T](size, lessFunc),
@@ -93,7 +96,7 @@ func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos 
 		totalSize:        host.GetTotalSize(),
 		totalRowCnt:      host.GetTotalRowCnt(),
 		loadedObjBlkCnts: make([]int, size),
-		mustColFunc:      mustColFunc,
+		getData:          getFunc,
 	}
 	m.rowSize = m.totalSize / m.totalRowCnt
 	totalBlkCnt := 0
@@ -114,8 +117,8 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		}
 
 		heapPush(m.heap, heapElem[T]{
-			data:   m.cols[i][m.rowIdx[i]],
-			isNull: m.nulls[i].Contains(uint64(m.rowIdx[i])),
+			data:   m.getData(m.cols[i], 0),
+			isNull: m.nulls[i].Contains(0),
 			src:    uint32(i),
 		})
 	}
@@ -250,7 +253,7 @@ func (m *merger[T]) loadBlk(ctx context.Context, objIdx uint32) (bool, error) {
 	m.loadedObjBlkCnts[objIdx]++
 
 	vec := nextBatch.GetVector(int32(m.sortKeyIdx))
-	m.cols[objIdx] = m.mustColFunc(vec)
+	m.cols[objIdx] = vec
 	m.nulls[objIdx] = vec.GetNulls()
 	m.deletes[objIdx] = del
 	m.rowIdx[objIdx] = 0
@@ -259,14 +262,14 @@ func (m *merger[T]) loadBlk(ctx context.Context, objIdx uint32) (bool, error) {
 
 func (m *merger[T]) pushNewElem(ctx context.Context, objIdx uint32) error {
 	m.rowIdx[objIdx]++
-	if m.rowIdx[objIdx] >= int64(len(m.cols[objIdx])) {
+	if m.rowIdx[objIdx] >= int64(m.cols[objIdx].Length()) {
 		if ok, err := m.loadBlk(ctx, objIdx); !ok {
 			return err
 		}
 	}
 	nextRow := m.rowIdx[objIdx]
 	heapPush(m.heap, heapElem[T]{
-		data:   m.cols[objIdx][nextRow],
+		data:   m.getData(m.cols[objIdx], int(nextRow)),
 		isNull: m.nulls[objIdx].Contains(uint64(nextRow)),
 		src:    objIdx,
 	})
@@ -290,55 +293,55 @@ func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) err
 	var merger Merger
 	typ := mergeHost.GetSortKeyType()
 	if typ.IsVarlen() {
-		merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, vector.MustStrCol)
+		merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, vector.UnsafeGetStringAt)
 	} else {
 		switch typ.Oid {
 		case types.T_bool:
-			merger = newMerger(mergeHost, sort.BoolLess, sortKeyPos, vector.MustFixedCol[bool])
+			merger = newMerger(mergeHost, sort.BoolLess, sortKeyPos, vector.GetFixedAt[bool])
 		case types.T_bit:
-			merger = newMerger(mergeHost, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64])
+			merger = newMerger(mergeHost, sort.GenericLess[uint64], sortKeyPos, vector.GetFixedAt[uint64])
 		case types.T_int8:
-			merger = newMerger(mergeHost, sort.GenericLess[int8], sortKeyPos, vector.MustFixedCol[int8])
+			merger = newMerger(mergeHost, sort.GenericLess[int8], sortKeyPos, vector.GetFixedAt[int8])
 		case types.T_int16:
-			merger = newMerger(mergeHost, sort.GenericLess[int16], sortKeyPos, vector.MustFixedCol[int16])
+			merger = newMerger(mergeHost, sort.GenericLess[int16], sortKeyPos, vector.GetFixedAt[int16])
 		case types.T_int32:
-			merger = newMerger(mergeHost, sort.GenericLess[int32], sortKeyPos, vector.MustFixedCol[int32])
+			merger = newMerger(mergeHost, sort.GenericLess[int32], sortKeyPos, vector.GetFixedAt[int32])
 		case types.T_int64:
-			merger = newMerger(mergeHost, sort.GenericLess[int64], sortKeyPos, vector.MustFixedCol[int64])
+			merger = newMerger(mergeHost, sort.GenericLess[int64], sortKeyPos, vector.GetFixedAt[int64])
 		case types.T_float32:
-			merger = newMerger(mergeHost, sort.GenericLess[float32], sortKeyPos, vector.MustFixedCol[float32])
+			merger = newMerger(mergeHost, sort.GenericLess[float32], sortKeyPos, vector.GetFixedAt[float32])
 		case types.T_float64:
-			merger = newMerger(mergeHost, sort.GenericLess[float64], sortKeyPos, vector.MustFixedCol[float64])
+			merger = newMerger(mergeHost, sort.GenericLess[float64], sortKeyPos, vector.GetFixedAt[float64])
 		case types.T_uint8:
-			merger = newMerger(mergeHost, sort.GenericLess[uint8], sortKeyPos, vector.MustFixedCol[uint8])
+			merger = newMerger(mergeHost, sort.GenericLess[uint8], sortKeyPos, vector.GetFixedAt[uint8])
 		case types.T_uint16:
-			merger = newMerger(mergeHost, sort.GenericLess[uint16], sortKeyPos, vector.MustFixedCol[uint16])
+			merger = newMerger(mergeHost, sort.GenericLess[uint16], sortKeyPos, vector.GetFixedAt[uint16])
 		case types.T_uint32:
-			merger = newMerger(mergeHost, sort.GenericLess[uint32], sortKeyPos, vector.MustFixedCol[uint32])
+			merger = newMerger(mergeHost, sort.GenericLess[uint32], sortKeyPos, vector.GetFixedAt[uint32])
 		case types.T_uint64:
-			merger = newMerger(mergeHost, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64])
+			merger = newMerger(mergeHost, sort.GenericLess[uint64], sortKeyPos, vector.GetFixedAt[uint64])
 		case types.T_date:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Date], sortKeyPos, vector.MustFixedCol[types.Date])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Date], sortKeyPos, vector.GetFixedAt[types.Date])
 		case types.T_timestamp:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Timestamp], sortKeyPos, vector.MustFixedCol[types.Timestamp])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Timestamp], sortKeyPos, vector.GetFixedAt[types.Timestamp])
 		case types.T_datetime:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Datetime], sortKeyPos, vector.MustFixedCol[types.Datetime])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Datetime], sortKeyPos, vector.GetFixedAt[types.Datetime])
 		case types.T_time:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Time], sortKeyPos, vector.MustFixedCol[types.Time])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Time], sortKeyPos, vector.GetFixedAt[types.Time])
 		case types.T_enum:
-			merger = newMerger(mergeHost, sort.GenericLess[types.Enum], sortKeyPos, vector.MustFixedCol[types.Enum])
+			merger = newMerger(mergeHost, sort.GenericLess[types.Enum], sortKeyPos, vector.GetFixedAt[types.Enum])
 		case types.T_decimal64:
-			merger = newMerger(mergeHost, sort.Decimal64Less, sortKeyPos, vector.MustFixedCol[types.Decimal64])
+			merger = newMerger(mergeHost, sort.Decimal64Less, sortKeyPos, vector.GetFixedAt[types.Decimal64])
 		case types.T_decimal128:
-			merger = newMerger(mergeHost, sort.Decimal128Less, sortKeyPos, vector.MustFixedCol[types.Decimal128])
+			merger = newMerger(mergeHost, sort.Decimal128Less, sortKeyPos, vector.GetFixedAt[types.Decimal128])
 		case types.T_uuid:
-			merger = newMerger(mergeHost, sort.UuidLess, sortKeyPos, vector.MustFixedCol[types.Uuid])
+			merger = newMerger(mergeHost, sort.UuidLess, sortKeyPos, vector.GetFixedAt[types.Uuid])
 		case types.T_TS:
-			merger = newMerger(mergeHost, sort.TsLess, sortKeyPos, vector.MustFixedCol[types.TS])
+			merger = newMerger(mergeHost, sort.TsLess, sortKeyPos, vector.GetFixedAt[types.TS])
 		case types.T_Rowid:
-			merger = newMerger(mergeHost, sort.RowidLess, sortKeyPos, vector.MustFixedCol[types.Rowid])
+			merger = newMerger(mergeHost, sort.RowidLess, sortKeyPos, vector.GetFixedAt[types.Rowid])
 		case types.T_Blockid:
-			merger = newMerger(mergeHost, sort.BlockidLess, sortKeyPos, vector.MustFixedCol[types.Blockid])
+			merger = newMerger(mergeHost, sort.BlockidLess, sortKeyPos, vector.GetFixedAt[types.Blockid])
 		default:
 			return moerr.NewErrUnsupportedDataType(ctx, typ)
 		}

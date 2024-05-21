@@ -380,18 +380,10 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) bool {
 	return res
 }
 
-func getFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int) (cols [][]T) {
-	cols = make([][]T, 0, len(bats))
+func getVectors(bats []*batch.Batch, idx int) (cols []*vector.Vector) {
+	cols = make([]*vector.Vector, 0, len(bats))
 	for i := range bats {
-		cols = append(cols, vector.MustFixedCol[T](bats[i].Vecs[idx]))
-	}
-	return
-}
-
-func getStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
-	cols = make([][]string, 0, len(bats))
-	for i := range bats {
-		cols = append(cols, vector.MustStrCol(bats[i].Vecs[idx]))
+		cols = append(cols, bats[i].Vecs[idx])
 	}
 	return
 }
@@ -433,47 +425,47 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 		pos := w.sortIndex
 		switch w.Bats[0].Vecs[sortIdx].GetType().Oid {
 		case types.T_bool:
-			merge = newMerge(len(w.Bats), sort.BoolLess, getFixedCols[bool](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.BoolLess, getVectors(w.Bats, pos), nulls, vector.GetFixedAt[bool])
 		case types.T_bit:
-			merge = newMerge(len(w.Bats), sort.GenericLess[uint64], getFixedCols[uint64](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[uint64], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[uint64])
 		case types.T_int8:
-			merge = newMerge(len(w.Bats), sort.GenericLess[int8], getFixedCols[int8](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[int8], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[int8])
 		case types.T_int16:
-			merge = newMerge(len(w.Bats), sort.GenericLess[int16], getFixedCols[int16](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[int16], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[int16])
 		case types.T_int32:
-			merge = newMerge(len(w.Bats), sort.GenericLess[int32], getFixedCols[int32](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[int32], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[int32])
 		case types.T_int64:
-			merge = newMerge(len(w.Bats), sort.GenericLess[int64], getFixedCols[int64](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[int64], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[int64])
 		case types.T_uint8:
-			merge = newMerge(len(w.Bats), sort.GenericLess[uint8], getFixedCols[uint8](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[uint8], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[uint8])
 		case types.T_uint16:
-			merge = newMerge(len(w.Bats), sort.GenericLess[uint16], getFixedCols[uint16](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[uint16], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[uint16])
 		case types.T_uint32:
-			merge = newMerge(len(w.Bats), sort.GenericLess[uint32], getFixedCols[uint32](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[uint32], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[uint32])
 		case types.T_uint64:
-			merge = newMerge(len(w.Bats), sort.GenericLess[uint64], getFixedCols[uint64](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[uint64], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[uint64])
 		case types.T_float32:
-			merge = newMerge(len(w.Bats), sort.GenericLess[float32], getFixedCols[float32](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[float32], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[float32])
 		case types.T_float64:
-			merge = newMerge(len(w.Bats), sort.GenericLess[float64], getFixedCols[float64](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[float64], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[float64])
 		case types.T_date:
-			merge = newMerge(len(w.Bats), sort.GenericLess[types.Date], getFixedCols[types.Date](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[types.Date], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[types.Date])
 		case types.T_datetime:
-			merge = newMerge(len(w.Bats), sort.GenericLess[types.Datetime], getFixedCols[types.Datetime](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[types.Datetime], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[types.Datetime])
 		case types.T_time:
-			merge = newMerge(len(w.Bats), sort.GenericLess[types.Time], getFixedCols[types.Time](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[types.Time], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[types.Time])
 		case types.T_timestamp:
-			merge = newMerge(len(w.Bats), sort.GenericLess[types.Timestamp], getFixedCols[types.Timestamp](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[types.Timestamp], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[types.Timestamp])
 		case types.T_enum:
-			merge = newMerge(len(w.Bats), sort.GenericLess[types.Enum], getFixedCols[types.Enum](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[types.Enum], getVectors(w.Bats, pos), nulls, vector.GetFixedAt[types.Enum])
 		case types.T_decimal64:
-			merge = newMerge(len(w.Bats), sort.Decimal64Less, getFixedCols[types.Decimal64](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.Decimal64Less, getVectors(w.Bats, pos), nulls, vector.GetFixedAt[types.Decimal64])
 		case types.T_decimal128:
-			merge = newMerge(len(w.Bats), sort.Decimal128Less, getFixedCols[types.Decimal128](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.Decimal128Less, getVectors(w.Bats, pos), nulls, vector.GetFixedAt[types.Decimal128])
 		case types.T_uuid:
-			merge = newMerge(len(w.Bats), sort.UuidLess, getFixedCols[types.Uuid](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.UuidLess, getVectors(w.Bats, pos), nulls, vector.GetFixedAt[types.Uuid])
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-			merge = newMerge(len(w.Bats), sort.GenericLess[string], getStrCols(w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[string], getVectors(w.Bats, pos), nulls, vector.UnsafeGetStringAt)
 			//TODO: check if we need T_array here? T_json is missing here.
 			// Update Oct 20 2023: I don't think it is necessary to add T_array here. Keeping this comment,
 			// in case anything fails in vector S3 flush in future.

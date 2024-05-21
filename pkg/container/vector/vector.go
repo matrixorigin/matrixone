@@ -211,6 +211,15 @@ func GetFixedAt[T any](v *Vector, idx int) T {
 	return slice[idx]
 }
 
+func UnsafeGetStringAt(v *Vector, i int) string {
+	if v.IsConst() {
+		i = 0
+	}
+	var bs []types.Varlena
+	ToSlice(v, &bs)
+	return bs[i].UnsafeGetString(v.area)
+}
+
 func (v *Vector) GetBytesAt(i int) []byte {
 	if v.IsConst() {
 		i = 0

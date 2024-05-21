@@ -33,9 +33,13 @@ type AObjMerger interface {
 type aObjMerger[T any] struct {
 	heap *heapSlice[T]
 
-	cols        [][]T
-	nulls       []*nulls.Nulls
-	sortKeyType *types.Type
+	cols  []*vector.Vector
+	nulls []*nulls.Nulls
+
+	// get i-th data from vector.
+	// this function wraps vector.GetFixedAt or vector.UnsafeGetStringAt
+	// this enables Merge struct handling fixed and varlen vectors.
+	getData func(*vector.Vector, int) T
 
 	resultBlkCnt int
 
@@ -58,55 +62,55 @@ func MergeAObj(
 	var merger AObjMerger
 	typ := batches[0].Vecs[sortKeyPos].GetType()
 	if typ.IsVarlen() {
-		merger = newAObjMerger(vpool, batches, sort.GenericLess[string], sortKeyPos, vector.MustStrCol, rowPerBlk, resultBlkCnt)
+		merger = newAObjMerger(vpool, batches, sort.GenericLess[string], sortKeyPos, vector.UnsafeGetStringAt, rowPerBlk, resultBlkCnt)
 	} else {
 		switch typ.Oid {
 		case types.T_bool:
-			merger = newAObjMerger(vpool, batches, sort.BoolLess, sortKeyPos, vector.MustFixedCol[bool], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.BoolLess, sortKeyPos, vector.GetFixedAt[bool], rowPerBlk, resultBlkCnt)
 		case types.T_bit:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, vector.GetFixedAt[uint64], rowPerBlk, resultBlkCnt)
 		case types.T_int8:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[int8], sortKeyPos, vector.MustFixedCol[int8], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[int8], sortKeyPos, vector.GetFixedAt[int8], rowPerBlk, resultBlkCnt)
 		case types.T_int16:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[int16], sortKeyPos, vector.MustFixedCol[int16], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[int16], sortKeyPos, vector.GetFixedAt[int16], rowPerBlk, resultBlkCnt)
 		case types.T_int32:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[int32], sortKeyPos, vector.MustFixedCol[int32], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[int32], sortKeyPos, vector.GetFixedAt[int32], rowPerBlk, resultBlkCnt)
 		case types.T_int64:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[int64], sortKeyPos, vector.MustFixedCol[int64], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[int64], sortKeyPos, vector.GetFixedAt[int64], rowPerBlk, resultBlkCnt)
 		case types.T_float32:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[float32], sortKeyPos, vector.MustFixedCol[float32], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[float32], sortKeyPos, vector.GetFixedAt[float32], rowPerBlk, resultBlkCnt)
 		case types.T_float64:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[float64], sortKeyPos, vector.MustFixedCol[float64], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[float64], sortKeyPos, vector.GetFixedAt[float64], rowPerBlk, resultBlkCnt)
 		case types.T_uint8:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint8], sortKeyPos, vector.MustFixedCol[uint8], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint8], sortKeyPos, vector.GetFixedAt[uint8], rowPerBlk, resultBlkCnt)
 		case types.T_uint16:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint16], sortKeyPos, vector.MustFixedCol[uint16], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint16], sortKeyPos, vector.GetFixedAt[uint16], rowPerBlk, resultBlkCnt)
 		case types.T_uint32:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint32], sortKeyPos, vector.MustFixedCol[uint32], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint32], sortKeyPos, vector.GetFixedAt[uint32], rowPerBlk, resultBlkCnt)
 		case types.T_uint64:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, vector.MustFixedCol[uint64], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[uint64], sortKeyPos, vector.GetFixedAt[uint64], rowPerBlk, resultBlkCnt)
 		case types.T_date:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Date], sortKeyPos, vector.MustFixedCol[types.Date], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Date], sortKeyPos, vector.GetFixedAt[types.Date], rowPerBlk, resultBlkCnt)
 		case types.T_timestamp:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Timestamp], sortKeyPos, vector.MustFixedCol[types.Timestamp], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Timestamp], sortKeyPos, vector.GetFixedAt[types.Timestamp], rowPerBlk, resultBlkCnt)
 		case types.T_datetime:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Datetime], sortKeyPos, vector.MustFixedCol[types.Datetime], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Datetime], sortKeyPos, vector.GetFixedAt[types.Datetime], rowPerBlk, resultBlkCnt)
 		case types.T_time:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Time], sortKeyPos, vector.MustFixedCol[types.Time], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Time], sortKeyPos, vector.GetFixedAt[types.Time], rowPerBlk, resultBlkCnt)
 		case types.T_enum:
-			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Enum], sortKeyPos, vector.MustFixedCol[types.Enum], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Enum], sortKeyPos, vector.GetFixedAt[types.Enum], rowPerBlk, resultBlkCnt)
 		case types.T_decimal64:
-			merger = newAObjMerger(vpool, batches, sort.Decimal64Less, sortKeyPos, vector.MustFixedCol[types.Decimal64], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.Decimal64Less, sortKeyPos, vector.GetFixedAt[types.Decimal64], rowPerBlk, resultBlkCnt)
 		case types.T_decimal128:
-			merger = newAObjMerger(vpool, batches, sort.Decimal128Less, sortKeyPos, vector.MustFixedCol[types.Decimal128], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.Decimal128Less, sortKeyPos, vector.GetFixedAt[types.Decimal128], rowPerBlk, resultBlkCnt)
 		case types.T_uuid:
-			merger = newAObjMerger(vpool, batches, sort.UuidLess, sortKeyPos, vector.MustFixedCol[types.Uuid], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.UuidLess, sortKeyPos, vector.GetFixedAt[types.Uuid], rowPerBlk, resultBlkCnt)
 		case types.T_TS:
-			merger = newAObjMerger(vpool, batches, sort.TsLess, sortKeyPos, vector.MustFixedCol[types.TS], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.TsLess, sortKeyPos, vector.GetFixedAt[types.TS], rowPerBlk, resultBlkCnt)
 		case types.T_Rowid:
-			merger = newAObjMerger(vpool, batches, sort.RowidLess, sortKeyPos, vector.MustFixedCol[types.Rowid], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.RowidLess, sortKeyPos, vector.GetFixedAt[types.Rowid], rowPerBlk, resultBlkCnt)
 		case types.T_Blockid:
-			merger = newAObjMerger(vpool, batches, sort.BlockidLess, sortKeyPos, vector.MustFixedCol[types.Blockid], rowPerBlk, resultBlkCnt)
+			merger = newAObjMerger(vpool, batches, sort.BlockidLess, sortKeyPos, vector.GetFixedAt[types.Blockid], rowPerBlk, resultBlkCnt)
 		default:
 			return nil, nil, nil, moerr.NewErrUnsupportedDataType(ctx, typ)
 		}
@@ -119,31 +123,31 @@ func newAObjMerger[T any](
 	batches []*containers.Batch,
 	lessFunc sort.LessFunc[T],
 	sortKeyPos int,
-	mustColFunc func(*vector.Vector) []T,
+	getFunc func(*vector.Vector, int) T,
 	rowPerBlk uint32,
 	resultBlkCnt int) AObjMerger {
 	size := len(batches)
 	m := &aObjMerger[T]{
 		vpool:        vpool,
 		heap:         newHeapSlice[T](size, lessFunc),
-		cols:         make([][]T, size),
+		cols:         make([]*vector.Vector, size),
 		nulls:        make([]*nulls.Nulls, size),
 		rowIdx:       make([]int64, size),
 		accRowCnt:    make([]int64, size),
 		bats:         batches,
 		resultBlkCnt: resultBlkCnt,
 		rowPerBlk:    rowPerBlk,
+		getData:      getFunc,
 	}
 
 	totalRowCnt := 0
 	for i, blk := range batches {
 		sortKeyCol := blk.Vecs[sortKeyPos].GetDownstreamVector()
-		m.sortKeyType = sortKeyCol.GetType()
-		m.cols[i] = mustColFunc(sortKeyCol)
+		m.cols[i] = sortKeyCol
 		m.nulls[i] = sortKeyCol.GetNulls()
 		m.rowIdx[i] = 0
 		m.accRowCnt[i] = int64(totalRowCnt)
-		totalRowCnt += len(m.cols[i])
+		totalRowCnt += m.cols[i].Length()
 	}
 	m.mapping = make([]uint32, totalRowCnt)
 
@@ -153,7 +157,7 @@ func newAObjMerger[T any](
 func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []uint32, error) {
 	for i := 0; i < len(am.bats); i++ {
 		heapPush(am.heap, heapElem[T]{
-			data:   am.cols[i][0],
+			data:   am.getData(am.cols[i], 0),
 			isNull: am.nulls[i].Contains(0),
 			src:    uint32(i),
 		})
@@ -208,12 +212,12 @@ func (am *aObjMerger[T]) nextPos() uint32 {
 
 func (am *aObjMerger[T]) pushNewElem(blkIdx uint32) bool {
 	am.rowIdx[blkIdx]++
-	if am.rowIdx[blkIdx] >= int64(len(am.cols[blkIdx])) {
+	if am.rowIdx[blkIdx] >= int64(am.cols[blkIdx].Length()) {
 		return false
 	}
 	nextRow := am.rowIdx[blkIdx]
 	heapPush(am.heap, heapElem[T]{
-		data:   am.cols[blkIdx][nextRow],
+		data:   am.getData(am.cols[blkIdx], int(nextRow)),
 		isNull: am.nulls[blkIdx].Contains(uint64(nextRow)),
 		src:    blkIdx,
 	})

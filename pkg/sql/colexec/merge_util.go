@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 )
 
@@ -24,7 +25,7 @@ type MergeInterface interface {
 }
 
 type heapElem[T any] struct {
-	data     *T
+	data     T
 	isNull   bool
 	batIndex int
 	rowIndex int
@@ -36,9 +37,8 @@ type heapElem[T any] struct {
 type Merge[T any] struct {
 	// the number of bacthes
 	size uint64
-	// convert the vecotrs which need to sort
-	// into cols data
-	cols [][]T
+	// vectors
+	cols []*vector.Vector
 	// pointer is used to specify
 	// which postion we have gotten.
 	// for example, pointers[i] means
@@ -49,66 +49,72 @@ type Merge[T any] struct {
 	nulls []*nulls.Nulls
 
 	heaps *mergeHeap[T]
+
+	// get i-th data from vector.
+	// this function wraps vector.GetFixedAt or vector.UnsafeGetStringAt
+	// this enables Merge struct handling fixed and varlen vectors.
+	getFunc func(*vector.Vector, int) T
 }
 
-func newMerge[T any](size int, compLess sort.LessFunc[T], cols [][]T, nulls []*nulls.Nulls) (merge *Merge[T]) {
+func newMerge[T any](size int, compLess sort.LessFunc[T], cols []*vector.Vector, nulls []*nulls.Nulls, getFunc func(*vector.Vector, int) T) (merge *Merge[T]) {
 	merge = &Merge[T]{
 		size:     uint64(size),
 		cols:     cols,
 		pointers: make([]int, size),
 		nulls:    nulls,
+		getFunc:  getFunc,
 	}
 	merge.heaps = newMergeHeap(uint64(size), compLess)
 	merge.initHeap()
 	return
 }
 
-func (merge *Merge[T]) initHeap() {
-	for i := 0; i < int(merge.size); i++ {
-		if len(merge.cols[i]) == 0 {
-			merge.pointers[i] = -1
-			merge.size--
+func (m *Merge[T]) initHeap() {
+	for i := 0; i < int(m.size); i++ {
+		if m.cols[i].Length() == 0 {
+			m.pointers[i] = -1
+			m.size--
 			continue
 		}
-		merge.heaps.push(&heapElem[T]{
-			data:     &merge.cols[i][merge.pointers[i]],
-			isNull:   merge.nulls[i].Contains(uint64(merge.pointers[i])),
+		m.heaps.push(&heapElem[T]{
+			data:     m.getFunc(m.cols[i], m.pointers[i]),
+			isNull:   m.nulls[i].Contains(uint64(m.pointers[i])),
 			batIndex: i,
-			rowIndex: merge.pointers[i],
+			rowIndex: m.pointers[i],
 		})
-		if merge.pointers[i] >= len(merge.cols[i]) {
-			merge.pointers[i] = -1
-			merge.size--
+		if m.pointers[i] >= m.cols[i].Length() {
+			m.pointers[i] = -1
+			m.size--
 		}
 	}
 }
 
-func (merge *Merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
-	data := merge.pushNext()
+func (m *Merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
+	data := m.pushNext()
 	if data == nil {
-		// now, merge.size is 0
-		return -1, -1, int(merge.size)
+		// now, m.size is 0
+		return -1, -1, int(m.size)
 	}
-	return data.batIndex, data.rowIndex, int(merge.size)
+	return data.batIndex, data.rowIndex, int(m.size)
 }
 
-func (merge *Merge[T]) pushNext() *heapElem[T] {
-	if merge.size == 0 {
+func (m *Merge[T]) pushNext() *heapElem[T] {
+	if m.size == 0 {
 		return nil
 	}
-	data := merge.heaps.pop()
+	data := m.heaps.pop()
 	batchIndex := data.batIndex
-	merge.pointers[batchIndex]++
-	if merge.pointers[batchIndex] >= len(merge.cols[batchIndex]) {
-		merge.pointers[batchIndex] = -1
-		merge.size--
+	m.pointers[batchIndex]++
+	if m.pointers[batchIndex] >= m.cols[batchIndex].Length() {
+		m.pointers[batchIndex] = -1
+		m.size--
 	}
-	if merge.pointers[batchIndex] != -1 {
-		merge.heaps.push(&heapElem[T]{
-			data:     &merge.cols[batchIndex][merge.pointers[batchIndex]],
-			isNull:   merge.nulls[batchIndex].Contains(uint64(merge.pointers[batchIndex])),
+	if m.pointers[batchIndex] != -1 {
+		m.heaps.push(&heapElem[T]{
+			data:     m.getFunc(m.cols[batchIndex], m.pointers[batchIndex]),
+			isNull:   m.nulls[batchIndex].Contains(uint64(m.pointers[batchIndex])),
 			batIndex: batchIndex,
-			rowIndex: merge.pointers[batchIndex],
+			rowIndex: m.pointers[batchIndex],
 		})
 	}
 	return data
@@ -153,7 +159,7 @@ func (heap *mergeHeap[T]) compLess(i, j int) bool {
 	if heap.datas[j].isNull {
 		return false
 	}
-	return heap.cmpLess(*heap.datas[i].data, *heap.datas[j].data)
+	return heap.cmpLess(heap.datas[i].data, heap.datas[j].data)
 }
 
 func (heap *mergeHeap[T]) down(i int) {
