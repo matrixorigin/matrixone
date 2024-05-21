@@ -591,16 +591,11 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_nul
 		sels[i] = int64(i)
 	}
 	ovec := bat.GetVector(int32(sortIndex))
-	var strCol []string
-	// T_json, T_array_float32, T_array_float64 are Varlen, but need not strCol
-	if ovec.GetType().IsMySQLString() {
-		strCol = vector.MustStrCol(ovec)
-	}
 	if allow_null {
 		// null last
-		sort.Sort(false, true, hasNull, sels, ovec, strCol)
+		sort.Sort(false, true, hasNull, sels, ovec)
 	} else {
-		sort.Sort(false, false, hasNull, sels, ovec, strCol)
+		sort.Sort(false, false, hasNull, sels, ovec)
 	}
 	return bat.Shuffle(sels, m)
 }

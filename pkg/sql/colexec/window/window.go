@@ -452,11 +452,7 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	if !ovec.IsConst() {
 		nullCnt := ovec.GetNulls().Count()
 		if nullCnt < ovec.Length() {
-			var strCol []string
-			if ovec.GetType().IsMySQLString() {
-				strCol = vector.MustStrCol(ovec)
-			}
-			sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec, strCol)
+			sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
 		}
 	}
 
@@ -476,15 +472,11 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 		if !vec.IsConst() {
 			nullCnt := vec.GetNulls().Count()
 			if nullCnt < vec.Length() {
-				var strCol []string
-				if vec.GetType().IsMySQLString() {
-					strCol = vector.MustStrCol(vec)
-				}
 				for i, j := 0, len(ps); i < j; i++ {
 					if i == j-1 {
-						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:], vec, strCol)
+						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:], vec)
 					} else {
-						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:ps[i+1]], vec, strCol)
+						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:ps[i+1]], vec)
 					}
 				}
 			}
