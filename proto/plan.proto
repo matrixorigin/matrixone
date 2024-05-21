@@ -636,6 +636,7 @@ message AnalyzeInfo {
 	int64 insertTime = 14;
 	repeated int64 time_consumed_array_major = 15;
 	repeated int64 time_consumed_array_minor = 16;
+	int64 input_blocks=17;
 }
 
 message PartitionPrune {
@@ -731,6 +732,7 @@ message Node {
 		MARK	= 7;
 		APPLY	= 8;
 		INDEX = 9;
+		L2 = 10;
 	}
 
 	enum AggMode {
@@ -1298,14 +1300,12 @@ message AlterTable {
 	AlgorithmType algorithm_type = 6;
 	string create_tmp_table_sql = 7;
 	string insert_tmp_data_sql = 8;
-	string create_table_sql = 9;
-	string insert_data_sql = 10;
-	map<uint64, ColDef> change_tbl_colId_map = 11;
+	map<uint64, ColDef> change_tbl_colId_map = 9;
 	//detect fk self refer constraint
-	repeated string detectSqls= 12;
+	repeated string detectSqls= 10;
 	// alter table may insert fk records related to this table
 	// into mo_foreign_keys
-	repeated string updateFkSqls = 13;
+	repeated string updateFkSqls = 11;
 }
 
 message DropTable {

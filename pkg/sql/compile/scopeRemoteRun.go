@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"time"
 	"unsafe"
 
@@ -1404,6 +1405,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Typs = convertToTypes(t.Types)
 		arg.IsShuffle = t.IsShuffle
 		v.Arg = arg
+	case vm.ProductL2:
+		t := opr.GetProductL2()
+		arg := productl2.NewArgument()
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.Typs = convertToTypes(t.Types)
+		arg.OnExpr = t.Expr
+		v.Arg = arg
 	case vm.Projection:
 		arg := projection.NewArgument()
 		arg.Es = opr.ProjectList
@@ -1637,6 +1645,7 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 
 func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 	a := &plan.AnalyzeInfo{
+		InputBlocks:      info.InputBlocks,
 		InputRows:        info.InputRows,
 		OutputRows:       info.OutputRows,
 		InputSize:        info.InputSize,

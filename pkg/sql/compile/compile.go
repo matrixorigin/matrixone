@@ -2579,6 +2579,15 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 				}
 			}
 		}
+	case plan.Node_L2:
+		rs = c.newBroadcastJoinScopeList(ss, children, node)
+		for i := range rs {
+			rs[i].appendInstruction(vm.Instruction{
+				Op:  vm.ProductL2,
+				Idx: c.anal.curr,
+				Arg: constructProductL2(node, rightTyps, c.proc),
+			})
+		}
 
 	case plan.Node_INDEX:
 		rs = c.newBroadcastJoinScopeList(ss, children, node)
@@ -3717,6 +3726,7 @@ func (c *Compile) fillAnalyzeInfo() {
 	c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.DeleteMulti.Load())
 
 	for i, anal := range c.anal.analInfos {
+		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputBlocks, atomic.LoadInt64(&anal.InputBlocks))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputRows, atomic.LoadInt64(&anal.InputRows))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.OutputRows, atomic.LoadInt64(&anal.OutputRows))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputSize, atomic.LoadInt64(&anal.InputSize))
@@ -3736,9 +3746,6 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	if n.TableDef.Partition != nil {
-		return true
-	}
 	if len(n.RuntimeFilterProbeList) == 0 {
 		return true
 	}
