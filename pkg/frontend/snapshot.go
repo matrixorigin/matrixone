@@ -455,8 +455,12 @@ func restoreToDatabaseOrTable(
 	}
 
 	// if restore to table, expect only one table here
-	if restoreToTbl && len(tableInfos) != 1 {
-		return moerr.NewInternalError(ctx, "find %v tableInfos by name, expect 1", len(tableInfos))
+	if restoreToTbl {
+		if len(tableInfos) == 0 {
+			return moerr.NewInternalError(ctx, "table %s not exists at snapshot %s", tblName, snapshotName)
+		} else if len(tableInfos) != 1 {
+			return moerr.NewInternalError(ctx, "find %v tableInfos by name %s at snapshot %s, expect only 1", len(tableInfos), tblName, snapshotName)
+		}
 	}
 
 	for _, tblInfo := range tableInfos {
