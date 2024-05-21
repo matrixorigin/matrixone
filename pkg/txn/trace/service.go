@@ -172,7 +172,7 @@ func NewService(
 		s.options.flushBytes = 16 * 1024 * 1024
 	}
 	if s.options.bufferSize == 0 {
-		s.options.bufferSize = 10000
+		s.options.bufferSize = 1000000
 	}
 	if s.options.writeFunc == nil {
 		s.options.writeFunc = s.writeToMO
