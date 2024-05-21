@@ -350,7 +350,7 @@ func (exec *approxCountVarExec) Fill(groupIndex int, row int, vectors []*vector.
 	if vectors[0].IsConst() {
 		row = 0
 	}
-	v := vector.MustBytesCol(vectors[0])[row]
+	v := vectors[0].GetBytesAt(row)
 	exec.groups[groupIndex].Insert(v)
 	return nil
 }
@@ -360,7 +360,7 @@ func (exec *approxCountVarExec) BulkFill(groupIndex int, vectors []*vector.Vecto
 		return nil
 	}
 	if vectors[0].IsConst() {
-		v := vector.MustBytesCol(vectors[0])[0]
+		v := vectors[0].GetBytesAt(0)
 		exec.groups[groupIndex].Insert(v)
 		return nil
 	}
@@ -386,7 +386,7 @@ func (exec *approxCountVarExec) BatchFill(offset int, groups []uint64, vectors [
 		return nil
 	}
 	if vectors[0].IsConst() {
-		v := vector.MustBytesCol(vectors[0])[0]
+		v := vectors[0].GetBytesAt(0)
 		for _, group := range groups {
 			if group != GroupNotMatched {
 				exec.groups[group-1].Insert(v)

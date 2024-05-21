@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -23,7 +24,7 @@ import (
 	"fmt"
 	"io"
 	gotrace "runtime/trace"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -940,19 +941,17 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 
 		bat.Shrink(sels, false)
 		execCtx.proc.Mp().PutSels(sels)
-		v0 := vector.MustStrCol(bat.Vecs[0])
-		v1 := vector.MustStrCol(bat.Vecs[1])
-		rows = rows[:len(v0)]
-		for i := range v0 {
-			rows[i][0] = v0[i]
-			rows[i][1] = v1[i]
+		rows = rows[:bat.Vecs[0].Length()]
+		for i := 0; i < bat.Vecs[0].Length(); i++ {
+			rows[i][0] = bat.Vecs[0].UnsafeGetStringAt(i)
+			rows[i][1] = bat.Vecs[1].UnsafeGetStringAt(i)
 		}
 		bat.Clean(execCtx.proc.Mp())
 	}
 
 	//sort by name
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i][0].(string) < rows[j][0].(string)
+	slices.SortFunc(rows, func(a, b []interface{}) int {
+		return cmp.Compare(a[0].(string), b[0].(string))
 	})
 
 	for _, row := range rows {
@@ -1675,28 +1674,24 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 
 		bat.Shrink(sels, false)
 		proc.Mp().PutSels(sels)
-		v0 := vector.MustStrCol(bat.Vecs[0])
-		v1 := vector.MustStrCol(bat.Vecs[1])
-		v2 := vector.MustFixedCol[int64](bat.Vecs[2])
-		v3 := vector.MustStrCol(bat.Vecs[3])
-		v4 := vector.MustStrCol(bat.Vecs[4])
-		v5 := vector.MustFixedCol[int32](bat.Vecs[5])
-		v6 := vector.MustStrCol(bat.Vecs[6])
-		rows = rows[:len(v0)]
-		for i := range v0 {
-			rows[i][0] = v0[i]
-			rows[i][1] = v1[i]
-			rows[i][2] = v2[i]
-			rows[i][3] = v3[i]
-			rows[i][4] = v4[i]
-			rows[i][5] = v5[i]
-			rows[i][6] = v6[i]
+		length := bat.Vecs[0].Length()
+		fixedV2 := vector.MustFixedCol[int64](bat.Vecs[2])
+		fixedV5 := vector.MustFixedCol[int32](bat.Vecs[5])
+		rows = rows[:length]
+		for i := 0; i < length; i++ {
+			rows[i][0] = bat.Vecs[0].UnsafeGetStringAt(i)
+			rows[i][1] = bat.Vecs[1].UnsafeGetStringAt(i)
+			rows[i][2] = fixedV2[i]
+			rows[i][3] = bat.Vecs[3].UnsafeGetStringAt(i)
+			rows[i][4] = bat.Vecs[4].UnsafeGetStringAt(i)
+			rows[i][5] = fixedV5[i]
+			rows[i][6] = bat.Vecs[6].UnsafeGetStringAt(i)
 		}
 	}
 
 	//sort by name
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i][0].(string) < rows[j][0].(string)
+	slices.SortFunc(rows, func(a, b []interface{}) int {
+		return cmp.Compare(a[0].(string), b[0].(string))
 	})
 
 	for _, row := range rows {

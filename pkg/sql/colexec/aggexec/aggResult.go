@@ -381,17 +381,15 @@ func (r *aggFuncBytesResult) eq(other aggFuncBytesResult) bool {
 	if !r.basicResult.eq0(other.basicResult) {
 		return false
 	}
-	vs1 := vector.MustBytesCol(r.res)
-	vs2 := vector.MustBytesCol(other.res)
-	if len(vs1) != len(vs2) {
+	if r.res.Length() != other.res.Length() {
 		return false
 	}
 	bs1 := vector.MustFixedCol[bool](r.ess)
-	for i, j := 0, len(vs1); i < j; i++ {
+	for i, j := 0, r.res.Length(); i < j; i++ {
 		if bs1[i] {
 			continue
 		}
-		if !bytes.Equal(vs1[i], vs2[i]) {
+		if !bytes.Equal(r.res.GetBytesAt(i), other.res.GetBytesAt(i)) {
 			return false
 		}
 	}

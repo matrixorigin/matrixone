@@ -555,8 +555,8 @@ func (txn *Transaction) insertPosForCNBlock(
 	b *batch.Batch,
 	dbName string,
 	tbName string) error {
-	blks := vector.MustBytesCol(vec)
-	for i, blk := range blks {
+	for i := 0; i < vec.Length(); i++ {
+		blk := vec.GetBytesAt(i)
 		blkInfo := *objectio.DecodeBlockInfo(blk)
 		txn.cnBlkId_Pos[blkInfo.BlockID] = Pos{
 			bat:       b,

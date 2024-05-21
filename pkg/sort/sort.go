@@ -54,7 +54,7 @@ func TsLess(a, b types.TS) bool           { return bytes.Compare(a[:], b[:]) < 0
 func RowidLess(a, b types.Rowid) bool     { return bytes.Compare(a[:], b[:]) < 0 }
 func BlockidLess(a, b types.Blockid) bool { return bytes.Compare(a[:], b[:]) < 0 }
 
-func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol []string) {
+func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 	if hasNull {
 		sz := len(os)
 		if nullsLast { // move null rows to the tail
@@ -232,13 +232,11 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 			genericSort(col, os, uuidGreater)
 		}
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
-		if strCol == nil {
-			strCol = vector.MustStrCol(vec)
-		}
+		col := vector.MustStrCol(vec)
 		if !desc {
-			genericSort(strCol, os, genericLess[string])
+			genericSort(col, os, genericLess[string])
 		} else {
-			genericSort(strCol, os, genericGreater[string])
+			genericSort(col, os, genericGreater[string])
 		}
 	case types.T_array_float32:
 		col := vector.MustArrayCol[float32](vec)
