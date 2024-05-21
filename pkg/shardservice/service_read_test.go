@@ -18,6 +18,7 @@ import (
 	"context"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
@@ -346,6 +347,57 @@ func TestReadWithLazyCreateShards(t *testing.T) {
 		},
 		func(c *Config) []Option {
 			return []Option{withDisableAppendCreateCallback()}
+		},
+	)
+}
+
+func TestReadWithNewShard(t *testing.T) {
+	runServicesTest(
+		t,
+		"cn1",
+		func(
+			ctx context.Context,
+			server *server,
+			services []*service,
+		) {
+			s1 := services[0]
+			store1 := s1.storage.(*MemShardStorage)
+			table := uint64(1)
+			shards := uint32(1)
+			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			waitReplicaCount(table, s1, 1)
+
+			store := s1.storage.(*MemShardStorage)
+			store.Lock()
+			v := store.committed[table]
+			v.Version++
+			v.ShardsCount = 2
+			v.ShardIDs = []uint64{1, 2}
+			store.committed[table] = v
+			store.Unlock()
+
+			k := []byte("k")
+			value := []byte("v")
+
+			store1.set(k, value, newTestTimestamp(1))
+			store1.waiter.NotifyLatestCommitTS(newTestTimestamp(4))
+
+			err := s1.Read(
+				ctx,
+				table,
+				k,
+				func(b []byte) {
+					require.Equal(t, value, b)
+				},
+				DefaultOptions.ReadAt(newTestTimestamp(2)).Shard(2),
+			)
+			require.NoError(t, err)
+			require.Equal(t, uint64(3), s1.atomic.added.Load())
+			require.Equal(t, uint64(1), s1.atomic.removed.Load())
+		},
+		func(c *Config) []Option {
+			c.CheckChangedDuration.Duration = time.Minute
+			return nil
 		},
 	)
 }

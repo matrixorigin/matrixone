@@ -578,6 +578,33 @@ func (s *service) maybeRemoveReadCache(
 	}
 }
 
+func (s *service) waitShardCreated(
+	ctx context.Context,
+	tableID uint64,
+	shardID uint64,
+) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			cache, err := s.getShards(tableID)
+			if err != nil {
+				return err
+			}
+
+			if cache.hasShard(tableID, shardID) {
+				return nil
+			}
+
+			if cache.hasTableCache(tableID) {
+				s.removeReadCache(tableID)
+			}
+		}
+		time.Sleep(s.cfg.HeartbeatDuration.Duration)
+	}
+}
+
 type allocatedCache struct {
 	values []pb.TableShard
 	ops    []uint64
@@ -700,6 +727,22 @@ func (c *readCache) hasTableCache(
 	}
 	_, ok := c.shards[tableID]
 	return ok
+}
+
+func (c *readCache) hasShard(
+	tableID uint64,
+	shardID uint64,
+) bool {
+	sc, ok := c.shards[tableID]
+	if !ok {
+		return false
+	}
+	for _, s := range sc.shards {
+		if s.ShardID == shardID {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *readCache) clone() *readCache {

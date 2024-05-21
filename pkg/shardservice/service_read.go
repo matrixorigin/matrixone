@@ -29,9 +29,33 @@ func (s *service) Read(
 	apply func([]byte),
 	opts ReadOptions,
 ) error {
-	cache, err := s.getShards(table)
-	if err != nil {
-		return err
+	var cache *readCache
+	var err error
+	for {
+		cache, err = s.getShards(table)
+		if err != nil {
+			return err
+		}
+		if opts.shardID == 0 ||
+			cache.hasShard(table, opts.shardID) {
+			break
+		}
+
+		// remove old read cache
+		s.removeReadCache(table)
+
+		// shards updated, create new allocated
+		s.createC <- table
+
+		// wait shard created
+		err = s.waitShardCreated(
+			ctx,
+			table,
+			opts.shardID,
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	selected := newSlice()
