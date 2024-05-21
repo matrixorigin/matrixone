@@ -462,17 +462,17 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	for i, account := range accounts {
 		item := new(TableItem)
 		item.Id = ids[i]
-		item.Name = names.UnsafeGetStringAt(i)
+		item.Name = names.GetStringAt(i)
 		item.AccountId = account
 		item.DatabaseId = databaseIds[i]
 		item.Ts = timestamps[i].ToTimestamp()
-		item.Kind = kinds.UnsafeGetStringAt(i)
-		item.ViewDef = viewDefs.UnsafeGetStringAt(i)
+		item.Kind = kinds.GetStringAt(i)
+		item.ViewDef = viewDefs.GetStringAt(i)
 		item.Constraint = append(item.Constraint, constraints.GetBytesAt(i)...)
-		item.Comment = comments.UnsafeGetStringAt(i)
+		item.Comment = comments.GetStringAt(i)
 		item.Partitioned = partitioneds[i]
-		item.Partition = paritions.UnsafeGetStringAt(i)
-		item.CreateSql = createSqls.UnsafeGetStringAt(i)
+		item.Partition = paritions.GetStringAt(i)
+		item.CreateSql = createSqls.GetStringAt(i)
 		item.Version = versions[i]
 		item.CatalogVersion = catalogVersions[i]
 		item.PrimaryIdx = -1
@@ -552,7 +552,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 	enumValues := bat.GetVector(catalog.MO_COLUMNS_ATT_ENUM_IDX + MO_OFF)
 	for i, account := range accounts {
 		key.AccountId = account
-		key.Name = tableNames.UnsafeGetStringAt(i)
+		key.Name = tableNames.GetStringAt(i)
 		key.DatabaseId = databaseIds[i]
 		key.Ts = timestamps[i].ToTimestamp()
 		key.Id = tableIds[i]
@@ -566,16 +566,16 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 		if _, ok := cc.tables.data.Get(key); ok {
 			col := column{
 				num:             nums[i],
-				name:            names.UnsafeGetStringAt(i),
-				comment:         comments.UnsafeGetStringAt(i),
+				name:            names.GetStringAt(i),
+				comment:         comments.GetStringAt(i),
 				isHidden:        isHiddens[i],
 				isAutoIncrement: isAutos[i],
 				hasDef:          hasDefs[i],
 				hasUpdate:       hasUpdates[i],
-				constraintType:  constraintTypes.UnsafeGetStringAt(i),
+				constraintType:  constraintTypes.GetStringAt(i),
 				isClusterBy:     clusters[i],
 				seqnum:          seqnums[i],
-				enumValues:      enumValues.UnsafeGetStringAt(i),
+				enumValues:      enumValues.GetStringAt(i),
 			}
 			copy(col.rowid[:], rowids[i][:])
 			col.typ = append(col.typ, typs.GetBytesAt(i)...)
@@ -626,11 +626,11 @@ func (cc *CatalogCache) InsertDatabase(bat *batch.Batch) {
 	for i, account := range accounts {
 		item := new(DatabaseItem)
 		item.Id = ids[i]
-		item.Name = names.UnsafeGetStringAt(i)
+		item.Name = names.GetStringAt(i)
 		item.AccountId = account
 		item.Ts = timestamps[i].ToTimestamp()
-		item.Typ = typs.UnsafeGetStringAt(i)
-		item.CreateSql = createSqls.UnsafeGetStringAt(i)
+		item.Typ = typs.GetStringAt(i)
+		item.CreateSql = createSqls.GetStringAt(i)
 		copy(item.Rowid[:], rowids[i][:])
 		cc.databases.data.Set(item)
 		cc.databases.rowidIndex.Set(item)

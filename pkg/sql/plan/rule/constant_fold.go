@@ -307,7 +307,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 		types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
 		return &plan.Literal{
 			Value: &plan.Literal_Sval{
-				Sval: vec.UnsafeGetStringAt(int(row)),
+				Sval: vec.GetStringAt(int(row)),
 			},
 		}
 	case types.T_json:
@@ -316,7 +316,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 		}
 		return &plan.Literal{
 			Value: &plan.Literal_Sval{
-				Sval: vec.UnsafeGetStringAt(0),
+				Sval: vec.GetStringAt(0),
 			},
 		}
 	case types.T_timestamp:

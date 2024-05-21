@@ -23,7 +23,7 @@ import (
 )
 
 func TestRCBytes(t *testing.T) {
-	allocator := malloc.NewClassAllocator()
+	allocator := malloc.NewDefault(nil)
 
 	var size atomic.Int64
 	r := RCBytes{

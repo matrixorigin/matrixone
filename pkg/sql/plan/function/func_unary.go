@@ -26,6 +26,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -103,15 +104,84 @@ func AbsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.Functio
 	})
 }
 
-func NormalizeL2Array[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(in []byte) ([]byte, error) {
-		_in := types.BytesToArray[T](in)
-		_out, err := moarray.NormalizeL2(_in)
-		if err != nil {
-			return nil, err
+var (
+	arrayF32Pool = sync.Pool{
+		New: func() interface{} {
+			s := make([]float32, 128)
+			return &s
+		},
+	}
+
+	arrayF64Pool = sync.Pool{
+		New: func() interface{} {
+			s := make([]float64, 128)
+			return &s
+		},
+	}
+)
+
+func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+
+	var inArrayF32 []float32
+	var outArrayF32Ptr *[]float32
+	var outArrayF32 []float32
+
+	var inArrayF64 []float64
+	var outArrayF64Ptr *[]float64
+	var outArrayF64 []float64
+
+	var data []byte
+	var null bool
+
+	for i := uint64(0); i < rowCount; i++ {
+		data, null = source.GetStrValue(i)
+		if null {
+			_ = rs.AppendMustNullForBytesResult()
+			continue
 		}
-		return types.ArrayToBytes[T](_out), nil
-	})
+
+		switch t := parameters[0].GetType().Oid; t {
+		case types.T_array_float32:
+			inArrayF32 = types.BytesToArray[float32](data)
+
+			outArrayF32Ptr = arrayF32Pool.Get().(*[]float32)
+			outArrayF32 = *outArrayF32Ptr
+
+			if cap(outArrayF32) < len(inArrayF32) {
+				outArrayF32 = make([]float32, len(inArrayF32))
+			} else {
+				outArrayF32 = outArrayF32[:len(inArrayF32)]
+			}
+			_ = moarray.NormalizeL2(inArrayF32, outArrayF32)
+			_ = rs.AppendBytes(types.ArrayToBytes[float32](outArrayF32), false)
+
+			*outArrayF32Ptr = outArrayF32
+			arrayF32Pool.Put(outArrayF32Ptr)
+		case types.T_array_float64:
+			inArrayF64 = types.BytesToArray[float64](data)
+
+			outArrayF64Ptr = arrayF64Pool.Get().(*[]float64)
+			outArrayF64 = *outArrayF64Ptr
+
+			if cap(outArrayF64) < len(inArrayF64) {
+				outArrayF64 = make([]float64, len(inArrayF64))
+			} else {
+				outArrayF64 = outArrayF64[:len(inArrayF64)]
+			}
+			_ = moarray.NormalizeL2(inArrayF64, outArrayF64)
+			_ = rs.AppendBytes(types.ArrayToBytes[float64](outArrayF64), false)
+
+			*outArrayF64Ptr = outArrayF64
+			arrayF64Pool.Put(outArrayF64Ptr)
+		}
+
+	}
+
+	return nil
 }
 
 func L1NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
