@@ -16,20 +16,19 @@ package frontend
 
 import (
 	"context"
-	"math"
+	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_getSqlForAccountInfo(t *testing.T) {
@@ -40,11 +39,11 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 	args := []arg{
 		{
 			s:    "show accounts;",
-			want: "select account_id as `account_id`, account_name as `account_name`, created_time as `created`, status as `status`, suspended_time as `suspended_time`, comments as `comment` from mo_catalog.mo_account ;",
+			want: "WITH db_tbl_counts AS (\tSELECT\t\tCAST(mt.account_id AS BIGINT) AS account_id,\t\tCOUNT(DISTINCT md.dat_id) AS db_count,\t\tCOUNT(DISTINCT mt.rel_id) AS tbl_count\tFROM\t\tmo_catalog.mo_tables AS mt\tJOIN\t\tmo_catalog.mo_database AS md\tON \t\tmt.account_id = md.account_id AND\t\tmt.relkind IN ('v','e','r','cluster') AND\t\tmd.dat_type != 'subscription'\tGROUP BY\t\tmt.account_id),final_result AS (\tSELECT\t\tCAST(ma.account_id AS BIGINT) AS account_id,\t\tma.account_name,\t\tma.admin_name,\t\tma.created_time,\t\tma.status,\t\tma.suspended_time,\t\tdb_tbl_counts.db_count,\t\tdb_tbl_counts.tbl_count,\t\tCAST(0 AS DOUBLE) AS size,\t\tma.comments\tFROM\t\tdb_tbl_counts\tJOIN\t\tmo_catalog.mo_account AS ma \tON \t\tdb_tbl_counts.account_id = ma.account_id \t\t   )SELECT * FROM final_result;",
 		},
 		{
 			s:    "show accounts like '%abc';",
-			want: "select account_id as `account_id`, account_name as `account_name`, created_time as `created`, status as `status`, suspended_time as `suspended_time`, comments as `comment` from mo_catalog.mo_account where account_name like '%abc';",
+			want: "WITH db_tbl_counts AS (\tSELECT\t\tCAST(mt.account_id AS BIGINT) AS account_id,\t\tCOUNT(DISTINCT md.dat_id) AS db_count,\t\tCOUNT(DISTINCT mt.rel_id) AS tbl_count\tFROM\t\tmo_catalog.mo_tables AS mt\tJOIN\t\tmo_catalog.mo_database AS md\tON \t\tmt.account_id = md.account_id AND\t\tmt.relkind IN ('v','e','r','cluster') AND\t\tmd.dat_type != 'subscription'\tGROUP BY\t\tmt.account_id),final_result AS (\tSELECT\t\tCAST(ma.account_id AS BIGINT) AS account_id,\t\tma.account_name,\t\tma.admin_name,\t\tma.created_time,\t\tma.status,\t\tma.suspended_time,\t\tdb_tbl_counts.db_count,\t\tdb_tbl_counts.tbl_count,\t\tCAST(0 AS DOUBLE) AS size,\t\tma.comments\tFROM\t\tdb_tbl_counts\tJOIN\t\tmo_catalog.mo_account AS ma \tON \t\tdb_tbl_counts.account_id = ma.account_id \t\twhere ma.account_name like '%abc'  )SELECT * FROM final_result;",
 		},
 	}
 
@@ -52,103 +51,72 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 		one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, a.s, 1, 0)
 		assert.NoError(t, err)
 		sa1 := one.(*tree.ShowAccounts)
-		r1 := getSqlForAllAccountInfo(sa1.Like)
+		r1 := getSqlForAccountInfo(sa1.Like, -1)
 		assert.Equal(t, a.want, r1)
 	}
 }
 
-func newAccountInfo(mp *mpool.MPool) (*batch.Batch, error) {
-	var err error
-	ret := batch.NewWithSize(idxOfComment + 1)
-	ret.Vecs[idxOfAccountId] = vector.NewVec(types.New(types.T_int32, 32, -1))
-	err = vector.AppendAny(ret.Vecs[idxOfAccountId], int32(0), false, mp)
-	if err != nil {
-		return nil, err
-	}
-	ret.Vecs[idxOfAccountName] = vector.NewVec(types.New(types.T_varchar, 300, 0))
-	err = vector.AppendAny(ret.Vecs[idxOfAccountName], []byte("acc"), false, mp)
-	if err != nil {
-		return nil, err
-	}
-	ret.Vecs[idxOfCreated] = vector.NewVec(types.New(types.T_timestamp, 8, 0))
-	err = vector.AppendAny(ret.Vecs[idxOfCreated], types.Timestamp(0), false, mp)
-	if err != nil {
-		return nil, err
-	}
-	ret.Vecs[idxOfStatus] = vector.NewVec(types.New(types.T_varchar, 300, 0))
-	err = vector.AppendAny(ret.Vecs[idxOfStatus], []byte("status"), false, mp)
-	if err != nil {
-		return nil, err
-	}
-	ret.Vecs[idxOfSuspendedTime] = vector.NewVec(types.New(types.T_timestamp, 8, 0))
-	err = vector.AppendAny(ret.Vecs[idxOfSuspendedTime], types.Timestamp(0), false, mp)
-	if err != nil {
-		return nil, err
-	}
-	ret.Vecs[idxOfComment] = vector.NewVec(types.New(types.T_varchar, 256, 0))
-	err = vector.AppendAny(ret.Vecs[idxOfComment], []byte("comment"), false, mp)
-	if err != nil {
-		return nil, err
-	}
-	return ret, nil
-}
-
-func newTableStatsResult(mp *mpool.MPool) (*batch.Batch, error) {
-	var err error
-	ret := batch.NewWithSize(idxOfComment + 1)
-	ret.Vecs[idxOfAdminName] = vector.NewVec(types.New(types.T_varchar, 300, 0))
-	err = vector.AppendAny(ret.Vecs[idxOfAdminName], []byte("name"), false, mp)
-	if err != nil {
-		return nil, err
-	}
-	ret.Vecs[idxOfDBCount] = vector.NewVec(types.New(types.T_int64, 8, 0))
-	err = vector.AppendAny(ret.Vecs[idxOfDBCount], int64(0), false, mp)
-	if err != nil {
-		return nil, err
-	}
-	ret.Vecs[idxOfTableCount] = vector.NewVec(types.New(types.T_int64, 8, 0))
-	err = vector.AppendAny(ret.Vecs[idxOfTableCount], int64(0), false, mp)
-	if err != nil {
-		return nil, err
-	}
-	ret.Vecs[idxOfSize] = vector.NewVec(types.New(types.T_decimal128, 29, 3))
-	err = vector.AppendAny(ret.Vecs[idxOfSize], types.Decimal128{}, false, mp)
-	if err != nil {
-		return nil, err
-	}
-	return ret, nil
-}
-
-func Test_mergeResult(t *testing.T) {
+func Test_updateStorageSize(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
 
-	outputBatch := batch.NewWithSize(finalColumnCount)
-	accountInfo, err := newAccountInfo(ses.pool)
-	assert.Nil(t, err)
-	tableStatsResult, err := newTableStatsResult(ses.pool)
-	assert.Nil(t, err)
-
-	err = mergeOutputResult(ses, outputBatch, accountInfo, []*batch.Batch{tableStatsResult})
-	assert.Nil(t, err)
+	size := uint64(9999 * 1024 * 1024)
+	bat := batch.Batch{}
+	bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_float64.ToType()))
+	vector.AppendFixed[float64](bat.Vecs[0], float64(0x00), false, ses.pool)
+	updateStorageSize(bat.Vecs[0], uint64(size), 0)
+	require.Equal(t, float64(size)/1024/1024, vector.GetFixedAt[float64](bat.Vecs[0], 0))
 }
 
-func Test_embeddingSizeToBatch(t *testing.T) {
+func Test_updateCount(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
 
-	bat := &batch.Batch{}
-	for i := 0; i <= finalColumnCount; i++ {
-		bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_float64.ToType()))
-		vector.AppendFixed(bat.Vecs[i], float64(99), false, ses.pool)
+	ori := int64(0x12)
+	add := int64(0x12)
+	bat := batch.Batch{}
+	bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_int64.ToType()))
+	vector.AppendFixed[int64](bat.Vecs[0], ori, false, ses.pool)
+	updateCount(bat.Vecs[0], add, 0)
+	require.Equal(t, ori+add, vector.GetFixedAt[int64](bat.Vecs[0], 0))
+}
+
+func Test_updateStorageUsageCache(t *testing.T) {
+	var accIds []int64
+	var sizes []uint64
+
+	for i := 0; i < 10; i++ {
+		accIds = append(accIds, int64(i))
+		sizes = append(sizes, rand.Uint64())
 	}
 
-	size := uint64(1024 * 1024 * 11235)
-	embeddingSizeToBatch(bat, size, ses.pool)
+	updateStorageUsageCache(accIds, sizes)
 
-	require.Equal(t, math.Round(float64(size)/1048576.0*1e6)/1e6, vector.GetFixedAt[float64](bat.Vecs[idxOfSize], 0))
+	usages := cnUsageCache.GatherAllAccSize()
+	for i := 0; i < len(accIds); i++ {
+		require.Equal(t, sizes[i], usages[uint64(i)])
+	}
+}
+
+func Test_checkStorageUsageCache(t *testing.T) {
+	var accIds [][]int64
+	var sizes []uint64
+
+	accIds = append(accIds, []int64{int64(0)})
+	sizes = append(sizes, rand.Uint64())
+	updateStorageUsageCache(accIds[0], []uint64{sizes[0]})
+
+	usages, ok := checkStorageUsageCache(accIds)
+	require.True(t, ok)
+	for i := 0; i < len(accIds); i++ {
+		require.Equal(t, sizes[i], usages[int64(i)])
+	}
+
+	time.Sleep(time.Second * 6)
+	_, ok = checkStorageUsageCache(accIds)
+	require.False(t, ok)
 }

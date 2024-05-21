@@ -1334,7 +1334,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		if usages != nil {
 			if size, exist := usages[uint64(id)]; exist {
 				memo.AddReqTrace(uint64(id), size, start, "req")
-				resp.AccIds = append(resp.AccIds, int32(id))
+				resp.AccIds = append(resp.AccIds, int64(id))
 				resp.Sizes = append(resp.Sizes, size)
 				delete(usages, uint64(id))
 				continue
@@ -1346,7 +1346,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 
 	for accId, size := range usages {
 		memo.AddReqTrace(uint64(accId), size, start, "oth")
-		resp.AccIds = append(resp.AccIds, int32(accId))
+		resp.AccIds = append(resp.AccIds, int64(accId))
 		resp.Sizes = append(resp.Sizes, size)
 	}
 
@@ -1355,7 +1355,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 
 	for idx := range newIds {
 		if size, exist := memo.GatherNewAccountSize(uint64(newIds[idx])); exist {
-			resp.AccIds = append(resp.AccIds, int32(newIds[idx]))
+			resp.AccIds = append(resp.AccIds, int64(newIds[idx]))
 			resp.Sizes = append(resp.Sizes, size)
 			memo.AddReqTrace(uint64(newIds[idx]), size, start, "new")
 		}
