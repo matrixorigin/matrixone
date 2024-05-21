@@ -320,7 +320,7 @@ func (h *Handle) TryPrefechTxn(ctx context.Context, meta txn.TxnMeta) error {
 	return nil
 }
 
-func traverseCatalogForNewAccounts(c *catalog.Catalog, memo *logtail.TNUsageMemo, ids []uint32) {
+func traverseCatalogForNewAccounts(c *catalog.Catalog, memo *logtail.TNUsageMemo, ids []uint64) {
 	if len(ids) == 0 {
 		return
 	}
@@ -331,7 +331,7 @@ func traverseCatalogForNewAccounts(c *catalog.Catalog, memo *logtail.TNUsageMemo
 		}
 
 		accId := entry.GetTenantID()
-		if !slices.Contains(ids, accId) {
+		if !slices.Contains(ids, uint64(accId)) {
 			return nil
 		}
 
