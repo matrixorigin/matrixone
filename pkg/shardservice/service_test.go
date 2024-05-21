@@ -670,7 +670,7 @@ func runServicesTest(
 		services = append(services, s.(*service))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
 	fn(ctx, server, services)
