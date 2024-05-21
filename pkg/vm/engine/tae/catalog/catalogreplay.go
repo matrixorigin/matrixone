@@ -66,7 +66,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 	var err error
 	un := cmd.mvccNode
 	if un.Is1PC() {
-		if err := un.ApplyCommit(); err != nil {
+		if err := un.ApplyCommit(cmd.mvccNode.Txn.GetID()); err != nil {
 			panic(err)
 		}
 	}
@@ -192,7 +192,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 
 	un := cmd.mvccNode
 	if un.Is1PC() {
-		if err := un.ApplyCommit(); err != nil {
+		if err := un.ApplyCommit(cmd.mvccNode.Txn.GetID()); err != nil {
 			panic(err)
 		}
 	}
@@ -377,7 +377,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 	obj, err := tbl.GetObjectByID(cmd.ID.ObjectID())
 	un := cmd.mvccNode
 	if un.Is1PC() {
-		if err := un.ApplyCommit(); err != nil {
+		if err := un.ApplyCommit(cmd.mvccNode.Txn.GetID()); err != nil {
 			panic(err)
 		}
 	}
