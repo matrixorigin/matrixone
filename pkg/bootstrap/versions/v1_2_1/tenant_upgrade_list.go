@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package catalog
+package v1_2_1
 
-type EntryState int8
-
-var DefaultTableDataFactory TableDataFactory
-
-const (
-	ES_Appendable EntryState = iota
-	ES_NotAppendable
-	ES_Frozen
+import (
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 )
 
-func (es EntryState) Repr() string {
-	switch es {
-	case ES_Appendable:
-		return "A"
-	case ES_NotAppendable:
-		return "NA"
-	case ES_Frozen:
-		return "F"
-	}
-	panic("not supported")
-}
+var tenantUpgEntries = []versions.UpgradeEntry{}
