@@ -450,7 +450,7 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, packers *Pa
 			// If not, we need to define arrayType in types/tuple.go as arrayF32TypeCode, arrayF64TypeCode etc
 			// NOTE 2: vs is []string and not []byte. vs[i] is not of form "[1,2,3]". It is binary string of []float32{1,2,3}
 			// NOTE 3: This class is mainly used by PreInsertUnique which gets triggered before inserting into column having
-			// Unique Key or Primary Key constraint. Vector cannot be UK or PK.\
+			// Unique Key or Primary Key constraint. Vector cannot be UK or PK.
 			if hasNull {
 				for i := 0; i < v.Length(); i++ {
 					if nulls.Contains(vNull, uint64(i)) {

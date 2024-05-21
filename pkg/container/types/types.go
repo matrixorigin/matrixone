@@ -452,6 +452,10 @@ func (t Type) IsVarlen() bool {
 	return t.Oid.FixedLength() < 0
 }
 
+func (t Type) IsMySQLString() bool {
+	return t.Oid.IsMySQLString()
+}
+
 // Special
 func (t Type) IsTuple() bool {
 	return t.Oid == T_tuple

@@ -16,7 +16,6 @@ package order
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/partition"
@@ -111,7 +110,12 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 		if !firstVec.IsConst() {
 			nullCnt := firstVec.GetNulls().Count()
 			if nullCnt < firstVec.Length() {
-				sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.resultOrderList, firstVec)
+				// T_json, T_array_float32, T_array_float64 are Varlen, but do not need strCol
+				var strCol []string
+				if firstVec.GetType().IsMySQLString() {
+					strCol = vector.MustStrCol(firstVec)
+				}
+				sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.resultOrderList, firstVec, strCol)
 			}
 		}
 
@@ -131,11 +135,16 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 
 					nullCnt := vec.GetNulls().Count()
 					if nullCnt < vec.Length() {
+						// T_json, T_array_float32, T_array_float64 are Varlen, but do not need strCol
+						var strCol []string
+						if vec.GetType().IsMySQLString() {
+							strCol = vector.MustStrCol(vec)
+						}
 						for m, n := 0, len(ps); m < n; m++ {
 							if m == n-1 {
-								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:], vec)
+								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:], vec, strCol)
 							} else {
-								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:ps[m+1]], vec)
+								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:ps[m+1]], vec, strCol)
 							}
 						}
 					}
