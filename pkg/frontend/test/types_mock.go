@@ -7,14 +7,24 @@ package mock_frontend
 import (
 	context "context"
 	reflect "reflect"
+	time "time"
 
 	gomock "github.com/golang/mock/gomock"
+	uuid "github.com/google/uuid"
+	buffer "github.com/matrixorigin/matrixone/pkg/common/buffer"
+	mpool "github.com/matrixorigin/matrixone/pkg/common/mpool"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	types "github.com/matrixorigin/matrixone/pkg/container/types"
+	frontend "github.com/matrixorigin/matrixone/pkg/frontend"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan0 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	util "github.com/matrixorigin/matrixone/pkg/util"
+	motrace "github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	process "github.com/matrixorigin/matrixone/pkg/vm/process"
+	zap "go.uber.org/zap"
+	zapcore "go.uber.org/zap/zapcore"
 )
 
 // MockComputationRunner is a mock of ComputationRunner interface.
@@ -510,6 +520,20 @@ func (mr *MockBackgroundExecMockRecorder) Exec(arg0, arg1 interface{}) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Exec", reflect.TypeOf((*MockBackgroundExec)(nil).Exec), arg0, arg1)
 }
 
+// ExecRestore mocks base method.
+func (m *MockBackgroundExec) ExecRestore(arg0 context.Context, arg1 string, arg2, arg3 uint32) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ExecRestore", arg0, arg1, arg2, arg3)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ExecRestore indicates an expected call of ExecRestore.
+func (mr *MockBackgroundExecMockRecorder) ExecRestore(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecRestore", reflect.TypeOf((*MockBackgroundExec)(nil).ExecRestore), arg0, arg1, arg2, arg3)
+}
+
 // ExecStmt mocks base method.
 func (m *MockBackgroundExec) ExecStmt(arg0 context.Context, arg1 tree.Statement) error {
 	m.ctrl.T.Helper()
@@ -522,18 +546,6 @@ func (m *MockBackgroundExec) ExecStmt(arg0 context.Context, arg1 tree.Statement)
 func (mr *MockBackgroundExecMockRecorder) ExecStmt(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecStmt", reflect.TypeOf((*MockBackgroundExec)(nil).ExecStmt), arg0, arg1)
-}
-
-func (m *MockBackgroundExec) ExecRestore(arg0 context.Context, arg1 string, arg2 uint32, arg3 uint32) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ExecStmt", arg0, arg1, arg2, arg3)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-func (mr *MockBackgroundExecMockRecorder) ExecRestore(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecStmt", reflect.TypeOf((*MockBackgroundExec)(nil).ExecStmt), arg0, arg1, arg2, arg3)
 }
 
 // GetExecResultBatches mocks base method.
@@ -638,4 +650,1527 @@ func (m *MockoutputPool) resetLineStr() {
 func (mr *MockoutputPoolMockRecorder) resetLineStr() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "resetLineStr", reflect.TypeOf((*MockoutputPool)(nil).resetLineStr))
+}
+
+// MockFeSession is a mock of FeSession interface.
+type MockFeSession struct {
+	ctrl     *gomock.Controller
+	recorder *MockFeSessionMockRecorder
+}
+
+// MockFeSessionMockRecorder is the mock recorder for MockFeSession.
+type MockFeSessionMockRecorder struct {
+	mock *MockFeSession
+}
+
+// NewMockFeSession creates a new mock instance.
+func NewMockFeSession(ctrl *gomock.Controller) *MockFeSession {
+	mock := &MockFeSession{ctrl: ctrl}
+	mock.recorder = &MockFeSessionMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockFeSession) EXPECT() *MockFeSessionMockRecorder {
+	return m.recorder
+}
+
+// Clear mocks base method.
+func (m *MockFeSession) Clear() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Clear")
+}
+
+// Clear indicates an expected call of Clear.
+func (mr *MockFeSessionMockRecorder) Clear() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Clear", reflect.TypeOf((*MockFeSession)(nil).Clear))
+}
+
+// Close mocks base method.
+func (m *MockFeSession) Close() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Close")
+}
+
+// Close indicates an expected call of Close.
+func (mr *MockFeSessionMockRecorder) Close() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockFeSession)(nil).Close))
+}
+
+// CopySeqToProc mocks base method.
+func (m *MockFeSession) CopySeqToProc(proc *process.Process) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "CopySeqToProc", proc)
+}
+
+// CopySeqToProc indicates an expected call of CopySeqToProc.
+func (mr *MockFeSessionMockRecorder) CopySeqToProc(proc interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CopySeqToProc", reflect.TypeOf((*MockFeSession)(nil).CopySeqToProc), proc)
+}
+
+// CountPayload mocks base method.
+func (m *MockFeSession) CountPayload(i int) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "CountPayload", i)
+}
+
+// CountPayload indicates an expected call of CountPayload.
+func (mr *MockFeSessionMockRecorder) CountPayload(i interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountPayload", reflect.TypeOf((*MockFeSession)(nil).CountPayload), i)
+}
+
+// Debug mocks base method.
+func (m *MockFeSession) Debug(ctx context.Context, msg string, fields ...zap.Field) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range fields {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Debug", varargs...)
+}
+
+// Debug indicates an expected call of Debug.
+func (mr *MockFeSessionMockRecorder) Debug(ctx, msg interface{}, fields ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, fields...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Debug", reflect.TypeOf((*MockFeSession)(nil).Debug), varargs...)
+}
+
+// Debugf mocks base method.
+func (m *MockFeSession) Debugf(ctx context.Context, msg string, args ...any) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range args {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Debugf", varargs...)
+}
+
+// Debugf indicates an expected call of Debugf.
+func (mr *MockFeSessionMockRecorder) Debugf(ctx, msg interface{}, args ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, args...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Debugf", reflect.TypeOf((*MockFeSession)(nil).Debugf), varargs...)
+}
+
+// DisableTrace mocks base method.
+func (m *MockFeSession) DisableTrace() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DisableTrace")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// DisableTrace indicates an expected call of DisableTrace.
+func (mr *MockFeSessionMockRecorder) DisableTrace() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DisableTrace", reflect.TypeOf((*MockFeSession)(nil).DisableTrace))
+}
+
+// EnterFPrint mocks base method.
+func (m *MockFeSession) EnterFPrint(idx int) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "EnterFPrint", idx)
+}
+
+// EnterFPrint indicates an expected call of EnterFPrint.
+func (mr *MockFeSessionMockRecorder) EnterFPrint(idx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnterFPrint", reflect.TypeOf((*MockFeSession)(nil).EnterFPrint), idx)
+}
+
+// Error mocks base method.
+func (m *MockFeSession) Error(ctx context.Context, msg string, fields ...zap.Field) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range fields {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Error", varargs...)
+}
+
+// Error indicates an expected call of Error.
+func (mr *MockFeSessionMockRecorder) Error(ctx, msg interface{}, fields ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, fields...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Error", reflect.TypeOf((*MockFeSession)(nil).Error), varargs...)
+}
+
+// Errorf mocks base method.
+func (m *MockFeSession) Errorf(ctx context.Context, msg string, args ...any) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range args {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Errorf", varargs...)
+}
+
+// Errorf indicates an expected call of Errorf.
+func (mr *MockFeSessionMockRecorder) Errorf(ctx, msg interface{}, args ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, args...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Errorf", reflect.TypeOf((*MockFeSession)(nil).Errorf), varargs...)
+}
+
+// ExitFPrint mocks base method.
+func (m *MockFeSession) ExitFPrint(idx int) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ExitFPrint", idx)
+}
+
+// ExitFPrint indicates an expected call of ExitFPrint.
+func (mr *MockFeSessionMockRecorder) ExitFPrint(idx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExitFPrint", reflect.TypeOf((*MockFeSession)(nil).ExitFPrint), idx)
+}
+
+// Fatal mocks base method.
+func (m *MockFeSession) Fatal(ctx context.Context, msg string, fields ...zap.Field) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range fields {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Fatal", varargs...)
+}
+
+// Fatal indicates an expected call of Fatal.
+func (mr *MockFeSessionMockRecorder) Fatal(ctx, msg interface{}, fields ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, fields...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Fatal", reflect.TypeOf((*MockFeSession)(nil).Fatal), varargs...)
+}
+
+// Fatalf mocks base method.
+func (m *MockFeSession) Fatalf(ctx context.Context, msg string, args ...any) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range args {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Fatalf", varargs...)
+}
+
+// Fatalf indicates an expected call of Fatalf.
+func (mr *MockFeSessionMockRecorder) Fatalf(ctx, msg interface{}, args ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, args...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Fatalf", reflect.TypeOf((*MockFeSession)(nil).Fatalf), varargs...)
+}
+
+// GetAccountId mocks base method.
+func (m *MockFeSession) GetAccountId() uint32 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAccountId")
+	ret0, _ := ret[0].(uint32)
+	return ret0
+}
+
+// GetAccountId indicates an expected call of GetAccountId.
+func (mr *MockFeSessionMockRecorder) GetAccountId() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccountId", reflect.TypeOf((*MockFeSession)(nil).GetAccountId))
+}
+
+// GetBackgroundExec mocks base method.
+func (m *MockFeSession) GetBackgroundExec(ctx context.Context) frontend.BackgroundExec {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetBackgroundExec", ctx)
+	ret0, _ := ret[0].(frontend.BackgroundExec)
+	return ret0
+}
+
+// GetBackgroundExec indicates an expected call of GetBackgroundExec.
+func (mr *MockFeSessionMockRecorder) GetBackgroundExec(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBackgroundExec", reflect.TypeOf((*MockFeSession)(nil).GetBackgroundExec), ctx)
+}
+
+// GetBuffer mocks base method.
+func (m *MockFeSession) GetBuffer() *buffer.Buffer {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetBuffer")
+	ret0, _ := ret[0].(*buffer.Buffer)
+	return ret0
+}
+
+// GetBuffer indicates an expected call of GetBuffer.
+func (mr *MockFeSessionMockRecorder) GetBuffer() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBuffer", reflect.TypeOf((*MockFeSession)(nil).GetBuffer))
+}
+
+// GetCmd mocks base method.
+func (m *MockFeSession) GetCmd() frontend.CommandType {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCmd")
+	ret0, _ := ret[0].(frontend.CommandType)
+	return ret0
+}
+
+// GetCmd indicates an expected call of GetCmd.
+func (mr *MockFeSessionMockRecorder) GetCmd() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCmd", reflect.TypeOf((*MockFeSession)(nil).GetCmd))
+}
+
+// GetConnectionID mocks base method.
+func (m *MockFeSession) GetConnectionID() uint32 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetConnectionID")
+	ret0, _ := ret[0].(uint32)
+	return ret0
+}
+
+// GetConnectionID indicates an expected call of GetConnectionID.
+func (mr *MockFeSessionMockRecorder) GetConnectionID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetConnectionID", reflect.TypeOf((*MockFeSession)(nil).GetConnectionID))
+}
+
+// GetDatabaseName mocks base method.
+func (m *MockFeSession) GetDatabaseName() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetDatabaseName")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetDatabaseName indicates an expected call of GetDatabaseName.
+func (mr *MockFeSessionMockRecorder) GetDatabaseName() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDatabaseName", reflect.TypeOf((*MockFeSession)(nil).GetDatabaseName))
+}
+
+// GetDebugString mocks base method.
+func (m *MockFeSession) GetDebugString() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetDebugString")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetDebugString indicates an expected call of GetDebugString.
+func (mr *MockFeSessionMockRecorder) GetDebugString() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDebugString", reflect.TypeOf((*MockFeSession)(nil).GetDebugString))
+}
+
+// GetFPrints mocks base method.
+func (m *MockFeSession) GetFPrints() footPrints {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetFPrints")
+	ret0, _ := ret[0].(footPrints)
+	return ret0
+}
+
+// GetFPrints indicates an expected call of GetFPrints.
+func (mr *MockFeSessionMockRecorder) GetFPrints() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFPrints", reflect.TypeOf((*MockFeSession)(nil).GetFPrints))
+}
+
+// GetFromRealUser mocks base method.
+func (m *MockFeSession) GetFromRealUser() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetFromRealUser")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// GetFromRealUser indicates an expected call of GetFromRealUser.
+func (mr *MockFeSessionMockRecorder) GetFromRealUser() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFromRealUser", reflect.TypeOf((*MockFeSession)(nil).GetFromRealUser))
+}
+
+// GetGlobalSystemVariableValue mocks base method.
+func (m *MockFeSession) GetGlobalSystemVariableValue(ctx context.Context, name string) (interface{}, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetGlobalSystemVariableValue", ctx, name)
+	ret0, _ := ret[0].(interface{})
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetGlobalSystemVariableValue indicates an expected call of GetGlobalSystemVariableValue.
+func (mr *MockFeSessionMockRecorder) GetGlobalSystemVariableValue(ctx, name interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetGlobalSystemVariableValue", reflect.TypeOf((*MockFeSession)(nil).GetGlobalSystemVariableValue), ctx, name)
+}
+
+// GetGlobalVar mocks base method.
+func (m *MockFeSession) GetGlobalVar(ctx context.Context, name string) (interface{}, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetGlobalVar", ctx, name)
+	ret0, _ := ret[0].(interface{})
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetGlobalVar indicates an expected call of GetGlobalVar.
+func (mr *MockFeSessionMockRecorder) GetGlobalVar(ctx, name interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetGlobalVar", reflect.TypeOf((*MockFeSession)(nil).GetGlobalVar), ctx, name)
+}
+
+// GetIsInternal mocks base method.
+func (m *MockFeSession) GetIsInternal() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetIsInternal")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// GetIsInternal indicates an expected call of GetIsInternal.
+func (mr *MockFeSessionMockRecorder) GetIsInternal() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetIsInternal", reflect.TypeOf((*MockFeSession)(nil).GetIsInternal))
+}
+
+// GetLastInsertID mocks base method.
+func (m *MockFeSession) GetLastInsertID() uint64 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLastInsertID")
+	ret0, _ := ret[0].(uint64)
+	return ret0
+}
+
+// GetLastInsertID indicates an expected call of GetLastInsertID.
+func (mr *MockFeSessionMockRecorder) GetLastInsertID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastInsertID", reflect.TypeOf((*MockFeSession)(nil).GetLastInsertID))
+}
+
+// GetLogLevel mocks base method.
+func (m *MockFeSession) GetLogLevel() zapcore.Level {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLogLevel")
+	ret0, _ := ret[0].(zapcore.Level)
+	return ret0
+}
+
+// GetLogLevel indicates an expected call of GetLogLevel.
+func (mr *MockFeSessionMockRecorder) GetLogLevel() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLogLevel", reflect.TypeOf((*MockFeSession)(nil).GetLogLevel))
+}
+
+// GetLogger mocks base method.
+func (m *MockFeSession) GetLogger() frontend.SessionLogger {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLogger")
+	ret0, _ := ret[0].(frontend.SessionLogger)
+	return ret0
+}
+
+// GetLogger indicates an expected call of GetLogger.
+func (mr *MockFeSessionMockRecorder) GetLogger() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLogger", reflect.TypeOf((*MockFeSession)(nil).GetLogger))
+}
+
+// GetMemPool mocks base method.
+func (m *MockFeSession) GetMemPool() *mpool.MPool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetMemPool")
+	ret0, _ := ret[0].(*mpool.MPool)
+	return ret0
+}
+
+// GetMemPool indicates an expected call of GetMemPool.
+func (mr *MockFeSessionMockRecorder) GetMemPool() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMemPool", reflect.TypeOf((*MockFeSession)(nil).GetMemPool))
+}
+
+// GetMysqlProtocol mocks base method.
+func (m *MockFeSession) GetMysqlProtocol() frontend.MysqlProtocol {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetMysqlProtocol")
+	ret0, _ := ret[0].(frontend.MysqlProtocol)
+	return ret0
+}
+
+// GetMysqlProtocol indicates an expected call of GetMysqlProtocol.
+func (mr *MockFeSessionMockRecorder) GetMysqlProtocol() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMysqlProtocol", reflect.TypeOf((*MockFeSession)(nil).GetMysqlProtocol))
+}
+
+// GetMysqlResultSet mocks base method.
+func (m *MockFeSession) GetMysqlResultSet() *frontend.MysqlResultSet {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetMysqlResultSet")
+	ret0, _ := ret[0].(*frontend.MysqlResultSet)
+	return ret0
+}
+
+// GetMysqlResultSet indicates an expected call of GetMysqlResultSet.
+func (mr *MockFeSessionMockRecorder) GetMysqlResultSet() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMysqlResultSet", reflect.TypeOf((*MockFeSession)(nil).GetMysqlResultSet))
+}
+
+// GetPrepareStmt mocks base method.
+func (m *MockFeSession) GetPrepareStmt(ctx context.Context, name string) (*frontend.PrepareStmt, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPrepareStmt", ctx, name)
+	ret0, _ := ret[0].(*frontend.PrepareStmt)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetPrepareStmt indicates an expected call of GetPrepareStmt.
+func (mr *MockFeSessionMockRecorder) GetPrepareStmt(ctx, name interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPrepareStmt", reflect.TypeOf((*MockFeSession)(nil).GetPrepareStmt), ctx, name)
+}
+
+// GetProc mocks base method.
+func (m *MockFeSession) GetProc() *process.Process {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetProc")
+	ret0, _ := ret[0].(*process.Process)
+	return ret0
+}
+
+// GetProc indicates an expected call of GetProc.
+func (mr *MockFeSessionMockRecorder) GetProc() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetProc", reflect.TypeOf((*MockFeSession)(nil).GetProc))
+}
+
+// GetRawBatchBackgroundExec mocks base method.
+func (m *MockFeSession) GetRawBatchBackgroundExec(ctx context.Context) frontend.BackgroundExec {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetRawBatchBackgroundExec", ctx)
+	ret0, _ := ret[0].(frontend.BackgroundExec)
+	return ret0
+}
+
+// GetRawBatchBackgroundExec indicates an expected call of GetRawBatchBackgroundExec.
+func (mr *MockFeSessionMockRecorder) GetRawBatchBackgroundExec(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRawBatchBackgroundExec", reflect.TypeOf((*MockFeSession)(nil).GetRawBatchBackgroundExec), ctx)
+}
+
+// GetSessId mocks base method.
+func (m *MockFeSession) GetSessId() uuid.UUID {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSessId")
+	ret0, _ := ret[0].(uuid.UUID)
+	return ret0
+}
+
+// GetSessId indicates an expected call of GetSessId.
+func (mr *MockFeSessionMockRecorder) GetSessId() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSessId", reflect.TypeOf((*MockFeSession)(nil).GetSessId))
+}
+
+// GetSessionVar mocks base method.
+func (m *MockFeSession) GetSessionVar(ctx context.Context, name string) (interface{}, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSessionVar", ctx, name)
+	ret0, _ := ret[0].(interface{})
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetSessionVar indicates an expected call of GetSessionVar.
+func (mr *MockFeSessionMockRecorder) GetSessionVar(ctx, name interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSessionVar", reflect.TypeOf((*MockFeSession)(nil).GetSessionVar), ctx, name)
+}
+
+// GetSql mocks base method.
+func (m *MockFeSession) GetSql() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSql")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetSql indicates an expected call of GetSql.
+func (mr *MockFeSessionMockRecorder) GetSql() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSql", reflect.TypeOf((*MockFeSession)(nil).GetSql))
+}
+
+// GetSqlCount mocks base method.
+func (m *MockFeSession) GetSqlCount() uint64 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSqlCount")
+	ret0, _ := ret[0].(uint64)
+	return ret0
+}
+
+// GetSqlCount indicates an expected call of GetSqlCount.
+func (mr *MockFeSessionMockRecorder) GetSqlCount() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSqlCount", reflect.TypeOf((*MockFeSession)(nil).GetSqlCount))
+}
+
+// GetSqlHelper mocks base method.
+func (m *MockFeSession) GetSqlHelper() *frontend.SqlHelper {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSqlHelper")
+	ret0, _ := ret[0].(*frontend.SqlHelper)
+	return ret0
+}
+
+// GetSqlHelper indicates an expected call of GetSqlHelper.
+func (mr *MockFeSessionMockRecorder) GetSqlHelper() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSqlHelper", reflect.TypeOf((*MockFeSession)(nil).GetSqlHelper))
+}
+
+// GetSqlOfStmt mocks base method.
+func (m *MockFeSession) GetSqlOfStmt() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSqlOfStmt")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetSqlOfStmt indicates an expected call of GetSqlOfStmt.
+func (mr *MockFeSessionMockRecorder) GetSqlOfStmt() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSqlOfStmt", reflect.TypeOf((*MockFeSession)(nil).GetSqlOfStmt))
+}
+
+// GetStatsCache mocks base method.
+func (m *MockFeSession) GetStatsCache() *plan0.StatsCache {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetStatsCache")
+	ret0, _ := ret[0].(*plan0.StatsCache)
+	return ret0
+}
+
+// GetStatsCache indicates an expected call of GetStatsCache.
+func (mr *MockFeSessionMockRecorder) GetStatsCache() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStatsCache", reflect.TypeOf((*MockFeSession)(nil).GetStatsCache))
+}
+
+// GetStmtId mocks base method.
+func (m *MockFeSession) GetStmtId() uuid.UUID {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetStmtId")
+	ret0, _ := ret[0].(uuid.UUID)
+	return ret0
+}
+
+// GetStmtId indicates an expected call of GetStmtId.
+func (mr *MockFeSessionMockRecorder) GetStmtId() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStmtId", reflect.TypeOf((*MockFeSession)(nil).GetStmtId))
+}
+
+// GetStmtInfo mocks base method.
+func (m *MockFeSession) GetStmtInfo() *motrace.StatementInfo {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetStmtInfo")
+	ret0, _ := ret[0].(*motrace.StatementInfo)
+	return ret0
+}
+
+// GetStmtInfo indicates an expected call of GetStmtInfo.
+func (mr *MockFeSessionMockRecorder) GetStmtInfo() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStmtInfo", reflect.TypeOf((*MockFeSession)(nil).GetStmtInfo))
+}
+
+// GetStmtProfile mocks base method.
+func (m *MockFeSession) GetStmtProfile() *process.StmtProfile {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetStmtProfile")
+	ret0, _ := ret[0].(*process.StmtProfile)
+	return ret0
+}
+
+// GetStmtProfile indicates an expected call of GetStmtProfile.
+func (mr *MockFeSessionMockRecorder) GetStmtProfile() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStmtProfile", reflect.TypeOf((*MockFeSession)(nil).GetStmtProfile))
+}
+
+// GetTenantInfo mocks base method.
+func (m *MockFeSession) GetTenantInfo() *frontend.TenantInfo {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTenantInfo")
+	ret0, _ := ret[0].(*frontend.TenantInfo)
+	return ret0
+}
+
+// GetTenantInfo indicates an expected call of GetTenantInfo.
+func (mr *MockFeSessionMockRecorder) GetTenantInfo() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTenantInfo", reflect.TypeOf((*MockFeSession)(nil).GetTenantInfo))
+}
+
+// GetTenantName mocks base method.
+func (m *MockFeSession) GetTenantName() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTenantName")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetTenantName indicates an expected call of GetTenantName.
+func (mr *MockFeSessionMockRecorder) GetTenantName() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTenantName", reflect.TypeOf((*MockFeSession)(nil).GetTenantName))
+}
+
+// GetTimeZone mocks base method.
+func (m *MockFeSession) GetTimeZone() *time.Location {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTimeZone")
+	ret0, _ := ret[0].(*time.Location)
+	return ret0
+}
+
+// GetTimeZone indicates an expected call of GetTimeZone.
+func (mr *MockFeSessionMockRecorder) GetTimeZone() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTimeZone", reflect.TypeOf((*MockFeSession)(nil).GetTimeZone))
+}
+
+// GetTxnCompileCtx mocks base method.
+func (m *MockFeSession) GetTxnCompileCtx() *frontend.TxnCompilerContext {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTxnCompileCtx")
+	ret0, _ := ret[0].(*frontend.TxnCompilerContext)
+	return ret0
+}
+
+// GetTxnCompileCtx indicates an expected call of GetTxnCompileCtx.
+func (mr *MockFeSessionMockRecorder) GetTxnCompileCtx() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTxnCompileCtx", reflect.TypeOf((*MockFeSession)(nil).GetTxnCompileCtx))
+}
+
+// GetTxnHandler mocks base method.
+func (m *MockFeSession) GetTxnHandler() *frontend.TxnHandler {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTxnHandler")
+	ret0, _ := ret[0].(*frontend.TxnHandler)
+	return ret0
+}
+
+// GetTxnHandler indicates an expected call of GetTxnHandler.
+func (mr *MockFeSessionMockRecorder) GetTxnHandler() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTxnHandler", reflect.TypeOf((*MockFeSession)(nil).GetTxnHandler))
+}
+
+// GetTxnId mocks base method.
+func (m *MockFeSession) GetTxnId() uuid.UUID {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTxnId")
+	ret0, _ := ret[0].(uuid.UUID)
+	return ret0
+}
+
+// GetTxnId indicates an expected call of GetTxnId.
+func (mr *MockFeSessionMockRecorder) GetTxnId() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTxnId", reflect.TypeOf((*MockFeSession)(nil).GetTxnId))
+}
+
+// GetTxnInfo mocks base method.
+func (m *MockFeSession) GetTxnInfo() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTxnInfo")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetTxnInfo indicates an expected call of GetTxnInfo.
+func (mr *MockFeSessionMockRecorder) GetTxnInfo() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTxnInfo", reflect.TypeOf((*MockFeSession)(nil).GetTxnInfo))
+}
+
+// GetUUID mocks base method.
+func (m *MockFeSession) GetUUID() []byte {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUUID")
+	ret0, _ := ret[0].([]byte)
+	return ret0
+}
+
+// GetUUID indicates an expected call of GetUUID.
+func (mr *MockFeSessionMockRecorder) GetUUID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUUID", reflect.TypeOf((*MockFeSession)(nil).GetUUID))
+}
+
+// GetUUIDString mocks base method.
+func (m *MockFeSession) GetUUIDString() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUUIDString")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetUUIDString indicates an expected call of GetUUIDString.
+func (mr *MockFeSessionMockRecorder) GetUUIDString() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUUIDString", reflect.TypeOf((*MockFeSession)(nil).GetUUIDString))
+}
+
+// GetUpstream mocks base method.
+func (m *MockFeSession) GetUpstream() frontend.FeSession {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUpstream")
+	ret0, _ := ret[0].(frontend.FeSession)
+	return ret0
+}
+
+// GetUpstream indicates an expected call of GetUpstream.
+func (mr *MockFeSessionMockRecorder) GetUpstream() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUpstream", reflect.TypeOf((*MockFeSession)(nil).GetUpstream))
+}
+
+// GetUserDefinedVar mocks base method.
+func (m *MockFeSession) GetUserDefinedVar(name string) (frontend.SystemVariableType, *frontend.UserDefinedVar, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUserDefinedVar", name)
+	ret0, _ := ret[0].(frontend.SystemVariableType)
+	ret1, _ := ret[1].(*frontend.UserDefinedVar)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetUserDefinedVar indicates an expected call of GetUserDefinedVar.
+func (mr *MockFeSessionMockRecorder) GetUserDefinedVar(name interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserDefinedVar", reflect.TypeOf((*MockFeSession)(nil).GetUserDefinedVar), name)
+}
+
+// GetUserName mocks base method.
+func (m *MockFeSession) GetUserName() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUserName")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetUserName indicates an expected call of GetUserName.
+func (mr *MockFeSessionMockRecorder) GetUserName() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserName", reflect.TypeOf((*MockFeSession)(nil).GetUserName))
+}
+
+// Info mocks base method.
+func (m *MockFeSession) Info(ctx context.Context, msg string, fields ...zap.Field) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range fields {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Info", varargs...)
+}
+
+// Info indicates an expected call of Info.
+func (mr *MockFeSessionMockRecorder) Info(ctx, msg interface{}, fields ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, fields...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Info", reflect.TypeOf((*MockFeSession)(nil).Info), varargs...)
+}
+
+// Infof mocks base method.
+func (m *MockFeSession) Infof(ctx context.Context, msg string, args ...any) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range args {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Infof", varargs...)
+}
+
+// Infof indicates an expected call of Infof.
+func (mr *MockFeSessionMockRecorder) Infof(ctx, msg interface{}, args ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, args...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Infof", reflect.TypeOf((*MockFeSession)(nil).Infof), varargs...)
+}
+
+// IsBackgroundSession mocks base method.
+func (m *MockFeSession) IsBackgroundSession() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsBackgroundSession")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsBackgroundSession indicates an expected call of IsBackgroundSession.
+func (mr *MockFeSessionMockRecorder) IsBackgroundSession() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsBackgroundSession", reflect.TypeOf((*MockFeSession)(nil).IsBackgroundSession))
+}
+
+// IsDerivedStmt mocks base method.
+func (m *MockFeSession) IsDerivedStmt() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsDerivedStmt")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsDerivedStmt indicates an expected call of IsDerivedStmt.
+func (mr *MockFeSessionMockRecorder) IsDerivedStmt() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsDerivedStmt", reflect.TypeOf((*MockFeSession)(nil).IsDerivedStmt))
+}
+
+// RemovePrepareStmt mocks base method.
+func (m *MockFeSession) RemovePrepareStmt(name string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "RemovePrepareStmt", name)
+}
+
+// RemovePrepareStmt indicates an expected call of RemovePrepareStmt.
+func (mr *MockFeSessionMockRecorder) RemovePrepareStmt(name interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemovePrepareStmt", reflect.TypeOf((*MockFeSession)(nil).RemovePrepareStmt), name)
+}
+
+// ResetFPrints mocks base method.
+func (m *MockFeSession) ResetFPrints() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ResetFPrints")
+}
+
+// ResetFPrints indicates an expected call of ResetFPrints.
+func (mr *MockFeSessionMockRecorder) ResetFPrints() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResetFPrints", reflect.TypeOf((*MockFeSession)(nil).ResetFPrints))
+}
+
+// SendRows mocks base method.
+func (m *MockFeSession) SendRows() int64 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SendRows")
+	ret0, _ := ret[0].(int64)
+	return ret0
+}
+
+// SendRows indicates an expected call of SendRows.
+func (mr *MockFeSessionMockRecorder) SendRows() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SendRows", reflect.TypeOf((*MockFeSession)(nil).SendRows))
+}
+
+// SetAccountId mocks base method.
+func (m *MockFeSession) SetAccountId(arg0 uint32) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetAccountId", arg0)
+}
+
+// SetAccountId indicates an expected call of SetAccountId.
+func (mr *MockFeSessionMockRecorder) SetAccountId(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetAccountId", reflect.TypeOf((*MockFeSession)(nil).SetAccountId), arg0)
+}
+
+// SetData mocks base method.
+func (m *MockFeSession) SetData(arg0 [][]interface{}) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetData", arg0)
+}
+
+// SetData indicates an expected call of SetData.
+func (mr *MockFeSessionMockRecorder) SetData(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetData", reflect.TypeOf((*MockFeSession)(nil).SetData), arg0)
+}
+
+// SetDatabaseName mocks base method.
+func (m *MockFeSession) SetDatabaseName(db string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetDatabaseName", db)
+}
+
+// SetDatabaseName indicates an expected call of SetDatabaseName.
+func (mr *MockFeSessionMockRecorder) SetDatabaseName(db interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDatabaseName", reflect.TypeOf((*MockFeSession)(nil).SetDatabaseName), db)
+}
+
+// SetMysqlResultSet mocks base method.
+func (m *MockFeSession) SetMysqlResultSet(mrs *frontend.MysqlResultSet) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetMysqlResultSet", mrs)
+}
+
+// SetMysqlResultSet indicates an expected call of SetMysqlResultSet.
+func (mr *MockFeSessionMockRecorder) SetMysqlResultSet(mrs interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetMysqlResultSet", reflect.TypeOf((*MockFeSession)(nil).SetMysqlResultSet), mrs)
+}
+
+// SetNewResponse mocks base method.
+func (m *MockFeSession) SetNewResponse(category int, affectedRows uint64, cmd int, d interface{}, isLastStmt bool) *frontend.Response {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetNewResponse", category, affectedRows, cmd, d, isLastStmt)
+	ret0, _ := ret[0].(*frontend.Response)
+	return ret0
+}
+
+// SetNewResponse indicates an expected call of SetNewResponse.
+func (mr *MockFeSessionMockRecorder) SetNewResponse(category, affectedRows, cmd, d, isLastStmt interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetNewResponse", reflect.TypeOf((*MockFeSession)(nil).SetNewResponse), category, affectedRows, cmd, d, isLastStmt)
+}
+
+// SetPlan mocks base method.
+func (m *MockFeSession) SetPlan(plan *plan.Plan) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetPlan", plan)
+}
+
+// SetPlan indicates an expected call of SetPlan.
+func (mr *MockFeSessionMockRecorder) SetPlan(plan interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetPlan", reflect.TypeOf((*MockFeSession)(nil).SetPlan), plan)
+}
+
+// SetShowStmtType mocks base method.
+func (m *MockFeSession) SetShowStmtType(statement frontend.ShowStatementType) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetShowStmtType", statement)
+}
+
+// SetShowStmtType indicates an expected call of SetShowStmtType.
+func (mr *MockFeSessionMockRecorder) SetShowStmtType(statement interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetShowStmtType", reflect.TypeOf((*MockFeSession)(nil).SetShowStmtType), statement)
+}
+
+// SetSql mocks base method.
+func (m *MockFeSession) SetSql(sql string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetSql", sql)
+}
+
+// SetSql indicates an expected call of SetSql.
+func (mr *MockFeSessionMockRecorder) SetSql(sql interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetSql", reflect.TypeOf((*MockFeSession)(nil).SetSql), sql)
+}
+
+// SetTStmt mocks base method.
+func (m *MockFeSession) SetTStmt(stmt *motrace.StatementInfo) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetTStmt", stmt)
+}
+
+// SetTStmt indicates an expected call of SetTStmt.
+func (mr *MockFeSessionMockRecorder) SetTStmt(stmt interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetTStmt", reflect.TypeOf((*MockFeSession)(nil).SetTStmt), stmt)
+}
+
+// SetTxnId mocks base method.
+func (m *MockFeSession) SetTxnId(i []byte) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetTxnId", i)
+}
+
+// SetTxnId indicates an expected call of SetTxnId.
+func (mr *MockFeSessionMockRecorder) SetTxnId(i interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetTxnId", reflect.TypeOf((*MockFeSession)(nil).SetTxnId), i)
+}
+
+// Warn mocks base method.
+func (m *MockFeSession) Warn(ctx context.Context, msg string, fields ...zap.Field) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range fields {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Warn", varargs...)
+}
+
+// Warn indicates an expected call of Warn.
+func (mr *MockFeSessionMockRecorder) Warn(ctx, msg interface{}, fields ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, fields...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Warn", reflect.TypeOf((*MockFeSession)(nil).Warn), varargs...)
+}
+
+// Warnf mocks base method.
+func (m *MockFeSession) Warnf(ctx context.Context, msg string, args ...any) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range args {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Warnf", varargs...)
+}
+
+// Warnf indicates an expected call of Warnf.
+func (mr *MockFeSessionMockRecorder) Warnf(ctx, msg interface{}, args ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, args...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Warnf", reflect.TypeOf((*MockFeSession)(nil).Warnf), varargs...)
+}
+
+// addSqlCount mocks base method.
+func (m *MockFeSession) addSqlCount(a uint64) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "addSqlCount", a)
+}
+
+// addSqlCount indicates an expected call of addSqlCount.
+func (mr *MockFeSessionMockRecorder) addSqlCount(a interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "addSqlCount", reflect.TypeOf((*MockFeSession)(nil).addSqlCount), a)
+}
+
+// cleanCache mocks base method.
+func (m *MockFeSession) cleanCache() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "cleanCache")
+}
+
+// cleanCache indicates an expected call of cleanCache.
+func (mr *MockFeSessionMockRecorder) cleanCache() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "cleanCache", reflect.TypeOf((*MockFeSession)(nil).cleanCache))
+}
+
+// getCNLabels mocks base method.
+func (m *MockFeSession) getCNLabels() map[string]string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "getCNLabels")
+	ret0, _ := ret[0].(map[string]string)
+	return ret0
+}
+
+// getCNLabels indicates an expected call of getCNLabels.
+func (mr *MockFeSessionMockRecorder) getCNLabels() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "getCNLabels", reflect.TypeOf((*MockFeSession)(nil).getCNLabels))
+}
+
+// getCachedPlan mocks base method.
+func (m *MockFeSession) getCachedPlan(sql string) *cachedPlan {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "getCachedPlan", sql)
+	ret0, _ := ret[0].(*cachedPlan)
+	return ret0
+}
+
+// getCachedPlan indicates an expected call of getCachedPlan.
+func (mr *MockFeSessionMockRecorder) getCachedPlan(sql interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "getCachedPlan", reflect.TypeOf((*MockFeSession)(nil).getCachedPlan), sql)
+}
+
+// getLastCommitTS mocks base method.
+func (m *MockFeSession) getLastCommitTS() timestamp.Timestamp {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "getLastCommitTS")
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	return ret0
+}
+
+// getLastCommitTS indicates an expected call of getLastCommitTS.
+func (mr *MockFeSessionMockRecorder) getLastCommitTS() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "getLastCommitTS", reflect.TypeOf((*MockFeSession)(nil).getLastCommitTS))
+}
+
+// getNextProcessId mocks base method.
+func (m *MockFeSession) getNextProcessId() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "getNextProcessId")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// getNextProcessId indicates an expected call of getNextProcessId.
+func (mr *MockFeSessionMockRecorder) getNextProcessId() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "getNextProcessId", reflect.TypeOf((*MockFeSession)(nil).getNextProcessId))
+}
+
+// getQueryId mocks base method.
+func (m *MockFeSession) getQueryId(internal bool) []string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "getQueryId", internal)
+	ret0, _ := ret[0].([]string)
+	return ret0
+}
+
+// getQueryId indicates an expected call of getQueryId.
+func (mr *MockFeSessionMockRecorder) getQueryId(internal interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "getQueryId", reflect.TypeOf((*MockFeSession)(nil).getQueryId), internal)
+}
+
+// updateLastCommitTS mocks base method.
+func (m *MockFeSession) updateLastCommitTS(ts timestamp.Timestamp) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "updateLastCommitTS", ts)
+}
+
+// updateLastCommitTS indicates an expected call of updateLastCommitTS.
+func (mr *MockFeSessionMockRecorder) updateLastCommitTS(ts interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "updateLastCommitTS", reflect.TypeOf((*MockFeSession)(nil).updateLastCommitTS), ts)
+}
+
+// MockSessionLogger is a mock of SessionLogger interface.
+type MockSessionLogger struct {
+	ctrl     *gomock.Controller
+	recorder *MockSessionLoggerMockRecorder
+}
+
+// MockSessionLoggerMockRecorder is the mock recorder for MockSessionLogger.
+type MockSessionLoggerMockRecorder struct {
+	mock *MockSessionLogger
+}
+
+// NewMockSessionLogger creates a new mock instance.
+func NewMockSessionLogger(ctrl *gomock.Controller) *MockSessionLogger {
+	mock := &MockSessionLogger{ctrl: ctrl}
+	mock.recorder = &MockSessionLoggerMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockSessionLogger) EXPECT() *MockSessionLoggerMockRecorder {
+	return m.recorder
+}
+
+// Debug mocks base method.
+func (m *MockSessionLogger) Debug(ctx context.Context, msg string, fields ...zap.Field) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range fields {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Debug", varargs...)
+}
+
+// Debug indicates an expected call of Debug.
+func (mr *MockSessionLoggerMockRecorder) Debug(ctx, msg interface{}, fields ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, fields...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Debug", reflect.TypeOf((*MockSessionLogger)(nil).Debug), varargs...)
+}
+
+// Debugf mocks base method.
+func (m *MockSessionLogger) Debugf(ctx context.Context, msg string, args ...any) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range args {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Debugf", varargs...)
+}
+
+// Debugf indicates an expected call of Debugf.
+func (mr *MockSessionLoggerMockRecorder) Debugf(ctx, msg interface{}, args ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, args...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Debugf", reflect.TypeOf((*MockSessionLogger)(nil).Debugf), varargs...)
+}
+
+// Error mocks base method.
+func (m *MockSessionLogger) Error(ctx context.Context, msg string, fields ...zap.Field) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range fields {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Error", varargs...)
+}
+
+// Error indicates an expected call of Error.
+func (mr *MockSessionLoggerMockRecorder) Error(ctx, msg interface{}, fields ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, fields...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Error", reflect.TypeOf((*MockSessionLogger)(nil).Error), varargs...)
+}
+
+// Errorf mocks base method.
+func (m *MockSessionLogger) Errorf(ctx context.Context, msg string, args ...any) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range args {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Errorf", varargs...)
+}
+
+// Errorf indicates an expected call of Errorf.
+func (mr *MockSessionLoggerMockRecorder) Errorf(ctx, msg interface{}, args ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, args...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Errorf", reflect.TypeOf((*MockSessionLogger)(nil).Errorf), varargs...)
+}
+
+// Fatal mocks base method.
+func (m *MockSessionLogger) Fatal(ctx context.Context, msg string, fields ...zap.Field) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range fields {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Fatal", varargs...)
+}
+
+// Fatal indicates an expected call of Fatal.
+func (mr *MockSessionLoggerMockRecorder) Fatal(ctx, msg interface{}, fields ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, fields...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Fatal", reflect.TypeOf((*MockSessionLogger)(nil).Fatal), varargs...)
+}
+
+// Fatalf mocks base method.
+func (m *MockSessionLogger) Fatalf(ctx context.Context, msg string, args ...any) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range args {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Fatalf", varargs...)
+}
+
+// Fatalf indicates an expected call of Fatalf.
+func (mr *MockSessionLoggerMockRecorder) Fatalf(ctx, msg interface{}, args ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, args...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Fatalf", reflect.TypeOf((*MockSessionLogger)(nil).Fatalf), varargs...)
+}
+
+// GetLogLevel mocks base method.
+func (m *MockSessionLogger) GetLogLevel() zapcore.Level {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLogLevel")
+	ret0, _ := ret[0].(zapcore.Level)
+	return ret0
+}
+
+// GetLogLevel indicates an expected call of GetLogLevel.
+func (mr *MockSessionLoggerMockRecorder) GetLogLevel() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLogLevel", reflect.TypeOf((*MockSessionLogger)(nil).GetLogLevel))
+}
+
+// GetLogger mocks base method.
+func (m *MockSessionLogger) GetLogger() frontend.SessionLogger {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLogger")
+	ret0, _ := ret[0].(frontend.SessionLogger)
+	return ret0
+}
+
+// GetLogger indicates an expected call of GetLogger.
+func (mr *MockSessionLoggerMockRecorder) GetLogger() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLogger", reflect.TypeOf((*MockSessionLogger)(nil).GetLogger))
+}
+
+// GetSessId mocks base method.
+func (m *MockSessionLogger) GetSessId() uuid.UUID {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSessId")
+	ret0, _ := ret[0].(uuid.UUID)
+	return ret0
+}
+
+// GetSessId indicates an expected call of GetSessId.
+func (mr *MockSessionLoggerMockRecorder) GetSessId() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSessId", reflect.TypeOf((*MockSessionLogger)(nil).GetSessId))
+}
+
+// GetStmtId mocks base method.
+func (m *MockSessionLogger) GetStmtId() uuid.UUID {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetStmtId")
+	ret0, _ := ret[0].(uuid.UUID)
+	return ret0
+}
+
+// GetStmtId indicates an expected call of GetStmtId.
+func (mr *MockSessionLoggerMockRecorder) GetStmtId() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStmtId", reflect.TypeOf((*MockSessionLogger)(nil).GetStmtId))
+}
+
+// GetTxnId mocks base method.
+func (m *MockSessionLogger) GetTxnId() uuid.UUID {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTxnId")
+	ret0, _ := ret[0].(uuid.UUID)
+	return ret0
+}
+
+// GetTxnId indicates an expected call of GetTxnId.
+func (mr *MockSessionLoggerMockRecorder) GetTxnId() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTxnId", reflect.TypeOf((*MockSessionLogger)(nil).GetTxnId))
+}
+
+// Info mocks base method.
+func (m *MockSessionLogger) Info(ctx context.Context, msg string, fields ...zap.Field) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range fields {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Info", varargs...)
+}
+
+// Info indicates an expected call of Info.
+func (mr *MockSessionLoggerMockRecorder) Info(ctx, msg interface{}, fields ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, fields...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Info", reflect.TypeOf((*MockSessionLogger)(nil).Info), varargs...)
+}
+
+// Infof mocks base method.
+func (m *MockSessionLogger) Infof(ctx context.Context, msg string, args ...any) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range args {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Infof", varargs...)
+}
+
+// Infof indicates an expected call of Infof.
+func (mr *MockSessionLoggerMockRecorder) Infof(ctx, msg interface{}, args ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, args...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Infof", reflect.TypeOf((*MockSessionLogger)(nil).Infof), varargs...)
+}
+
+// Warn mocks base method.
+func (m *MockSessionLogger) Warn(ctx context.Context, msg string, fields ...zap.Field) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range fields {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Warn", varargs...)
+}
+
+// Warn indicates an expected call of Warn.
+func (mr *MockSessionLoggerMockRecorder) Warn(ctx, msg interface{}, fields ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, fields...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Warn", reflect.TypeOf((*MockSessionLogger)(nil).Warn), varargs...)
+}
+
+// Warnf mocks base method.
+func (m *MockSessionLogger) Warnf(ctx context.Context, msg string, args ...any) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, msg}
+	for _, a := range args {
+		varargs = append(varargs, a)
+	}
+	m.ctrl.Call(m, "Warnf", varargs...)
+}
+
+// Warnf indicates an expected call of Warnf.
+func (mr *MockSessionLoggerMockRecorder) Warnf(ctx, msg interface{}, args ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, msg}, args...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Warnf", reflect.TypeOf((*MockSessionLogger)(nil).Warnf), varargs...)
+}
+
+// MockSessionLoggerGetter is a mock of SessionLoggerGetter interface.
+type MockSessionLoggerGetter struct {
+	ctrl     *gomock.Controller
+	recorder *MockSessionLoggerGetterMockRecorder
+}
+
+// MockSessionLoggerGetterMockRecorder is the mock recorder for MockSessionLoggerGetter.
+type MockSessionLoggerGetterMockRecorder struct {
+	mock *MockSessionLoggerGetter
+}
+
+// NewMockSessionLoggerGetter creates a new mock instance.
+func NewMockSessionLoggerGetter(ctrl *gomock.Controller) *MockSessionLoggerGetter {
+	mock := &MockSessionLoggerGetter{ctrl: ctrl}
+	mock.recorder = &MockSessionLoggerGetterMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockSessionLoggerGetter) EXPECT() *MockSessionLoggerGetterMockRecorder {
+	return m.recorder
+}
+
+// GetLogLevel mocks base method.
+func (m *MockSessionLoggerGetter) GetLogLevel() zapcore.Level {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLogLevel")
+	ret0, _ := ret[0].(zapcore.Level)
+	return ret0
+}
+
+// GetLogLevel indicates an expected call of GetLogLevel.
+func (mr *MockSessionLoggerGetterMockRecorder) GetLogLevel() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLogLevel", reflect.TypeOf((*MockSessionLoggerGetter)(nil).GetLogLevel))
+}
+
+// GetSessId mocks base method.
+func (m *MockSessionLoggerGetter) GetSessId() uuid.UUID {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSessId")
+	ret0, _ := ret[0].(uuid.UUID)
+	return ret0
+}
+
+// GetSessId indicates an expected call of GetSessId.
+func (mr *MockSessionLoggerGetterMockRecorder) GetSessId() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSessId", reflect.TypeOf((*MockSessionLoggerGetter)(nil).GetSessId))
+}
+
+// GetStmtId mocks base method.
+func (m *MockSessionLoggerGetter) GetStmtId() uuid.UUID {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetStmtId")
+	ret0, _ := ret[0].(uuid.UUID)
+	return ret0
+}
+
+// GetStmtId indicates an expected call of GetStmtId.
+func (mr *MockSessionLoggerGetterMockRecorder) GetStmtId() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStmtId", reflect.TypeOf((*MockSessionLoggerGetter)(nil).GetStmtId))
+}
+
+// GetTxnId mocks base method.
+func (m *MockSessionLoggerGetter) GetTxnId() uuid.UUID {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTxnId")
+	ret0, _ := ret[0].(uuid.UUID)
+	return ret0
+}
+
+// GetTxnId indicates an expected call of GetTxnId.
+func (mr *MockSessionLoggerGetterMockRecorder) GetTxnId() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTxnId", reflect.TypeOf((*MockSessionLoggerGetter)(nil).GetTxnId))
 }
