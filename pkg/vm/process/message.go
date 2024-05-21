@@ -64,14 +64,6 @@ type MessageCenter struct {
 	RwMutex       *sync.Mutex
 }
 
-func (m *MessageCenter) deleteStmtID(stmtID uuid.UUID) bool {
-	m.RwMutex.Lock()
-	defer m.RwMutex.Unlock()
-	_, ok := m.StmtIDToBoard[stmtID]
-	delete(m.StmtIDToBoard, stmtID)
-	return ok
-}
-
 type MessageBoard struct {
 	multiCN       bool
 	stmtId        uuid.UUID

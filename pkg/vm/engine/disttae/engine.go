@@ -126,8 +126,8 @@ func New(
 	)
 
 	e.messageCenter = &process.MessageCenter{
-		make(map[uuid.UUID]*process.MessageBoard, 64),
-		&sync.Mutex{},
+		StmtIDToBoard: make(map[uuid.UUID]*process.MessageBoard, 64),
+		RwMutex:       &sync.Mutex{},
 	}
 
 	if err := e.init(ctx); err != nil {
