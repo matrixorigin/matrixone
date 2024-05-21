@@ -371,11 +371,11 @@ func restoreToAccount(
 
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
-			getLogger().Info(fmt.Sprintf("skip drop db: %v", dbName))
+			getLogger().Info(fmt.Sprintf("[%s]skip drop db: %v", snapshotName, dbName))
 			continue
 		}
 
-		getLogger().Info(fmt.Sprintf("skip drop db: %v", dbName))
+		getLogger().Info(fmt.Sprintf("[%s]drop current exists db: %v", snapshotName, dbName))
 		if err = bh.Exec(toCtx, fmt.Sprintf("drop database if exists %s", dbName)); err != nil {
 			return
 		}
@@ -432,7 +432,7 @@ func restoreToDatabaseOrTable(
 	fkTables *[]*tableInfo,
 	views *[]*tableInfo) (err error) {
 	if needSkipDb(dbName) {
-		getLogger().Info(fmt.Sprintf("skip restore db: %v", dbName))
+		getLogger().Info(fmt.Sprintf("[%s] skip restore db: %v", snapshotName, dbName))
 		return
 	}
 
@@ -465,7 +465,7 @@ func restoreToDatabaseOrTable(
 	for _, tblInfo := range tableInfos {
 		if needSkipTable(dbName, tblInfo.tblName) {
 			// TODO skip tables which should not to be restored
-			getLogger().Info(fmt.Sprintf("skip table: %v.%v", dbName, tblInfo.tblName))
+			getLogger().Info(fmt.Sprintf("[%s] skip table: %v.%v", snapshotName, dbName, tblInfo.tblName))
 			continue
 		}
 
@@ -619,6 +619,7 @@ func recreateTable(
 		return
 	}
 
+	getLogger().Info(fmt.Sprintf("[%s] start to drop table: %v", snapshotName, tblInfo.tblName))
 	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s", tblInfo.tblName)); err != nil {
 		return
 	}
@@ -630,8 +631,8 @@ func recreateTable(
 	}
 
 	// insert data
-	getLogger().Info(fmt.Sprintf("[%s] start to insert select table: %v", snapshotName, tblInfo.tblName))
 	insertIntoSql := fmt.Sprintf(restoreTableDataFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotName)
+	getLogger().Info(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
 
 	if curAccountId == toAccountId {
 		if err = bh.Exec(ctx, insertIntoSql); err != nil {
