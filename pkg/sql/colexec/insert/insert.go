@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -53,6 +54,28 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 				return err
 			}
 			arg.ctr.s3Writer = s3Writer
+		}
+	}
+	ref := arg.InsertCtx.Ref
+	eng := arg.InsertCtx.Engine
+	rel, err := colexec.GetRelationByObjRef(proc.Ctx, proc, eng, ref)
+	if err != nil {
+		return err
+	}
+	arg.ctr.source = rel
+	if len(arg.InsertCtx.PartitionTableNames) > 0 {
+		dbSource, err := arg.InsertCtx.Engine.Database(proc.Ctx, ref.SchemaName, proc.TxnOperator)
+		if err != nil {
+			return err
+		}
+		arg.ctr.partitionSources = make([]engine.Relation, len(arg.InsertCtx.PartitionTableNames))
+		// get the relation instances for each partition sub table
+		for i, pTableName := range arg.InsertCtx.PartitionTableNames {
+			pRel, err := dbSource.Relation(proc.Ctx, pTableName, proc)
+			if err != nil {
+				return err
+			}
+			arg.ctr.partitionSources[i] = pRel
 		}
 	}
 	return nil
@@ -189,7 +212,6 @@ func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) 
 		return result, nil
 	}
 	bat := result.Batch
-	insertCtx := arg.InsertCtx
 
 	if arg.ctr.buf != nil {
 		proc.PutBatch(arg.ctr.buf)
@@ -213,7 +235,7 @@ func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) 
 			return result, err
 		}
 		for i, partitionBat := range insertBatches {
-			err = arg.InsertCtx.PartitionSources[i].Write(proc.Ctx, partitionBat)
+			err = arg.ctr.partitionSources[i].Write(proc.Ctx, partitionBat)
 			if err != nil {
 				partitionBat.Clean(proc.Mp())
 				return result, err
@@ -222,7 +244,7 @@ func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) 
 		}
 	} else {
 		// insert into table, insertBat will be deeply copied into txn's workspace.
-		err := insertCtx.Rel.Write(proc.Ctx, arg.ctr.buf)
+		err := arg.ctr.source.Write(proc.Ctx, arg.ctr.buf)
 		if err != nil {
 			return result, err
 		}

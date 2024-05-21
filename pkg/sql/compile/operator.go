@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
@@ -507,7 +508,7 @@ func constructRestrict(n *plan.Node, filterExpr *plan2.Expr) *restrict.Argument 
 	return arg
 }
 
-func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*deletion.Argument, error) {
+func constructDeletion(n *plan.Node, eg engine.Engine) (*deletion.Argument, error) {
 	oldCtx := n.DeleteCtx
 	delCtx := &deletion.DeleteCtx{
 		Ref:                   oldCtx.Ref,
@@ -518,28 +519,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		PartitionTableNames:   oldCtx.PartitionTableNames,
 		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
 		PrimaryKeyIdx:         int(oldCtx.PrimaryKeyIdx),
-	}
-	// get the relation instance of the original table
-	rel, _, err := getRel(proc.Ctx, proc, eg, oldCtx.Ref, nil)
-	if err != nil {
-		return nil, err
-	}
-	delCtx.Source = rel
-	if len(oldCtx.PartitionTableNames) > 0 {
-		dbSource, err := eg.Database(proc.Ctx, oldCtx.Ref.SchemaName, proc.TxnOperator)
-		if err != nil {
-			return nil, err
-		}
-
-		delCtx.PartitionSources = make([]engine.Relation, len(oldCtx.PartitionTableNames))
-		// get the relation instances for each partition sub table
-		for i, pTableName := range oldCtx.PartitionTableNames {
-			pRel, err := dbSource.Relation(proc.Ctx, pTableName, proc)
-			if err != nil {
-				return nil, err
-			}
-			delCtx.PartitionSources[i] = pRel
-		}
+		Engine:                eg,
 	}
 
 	arg := deletion.NewArgument()
@@ -673,48 +653,24 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.Argument, error) 
 	return arg, nil
 }
 
-func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
+func constructInsert(n *plan.Node, eg engine.Engine) (*insert.Argument, error) {
 	oldCtx := n.InsertCtx
-	ctx := proc.Ctx
-
 	var attrs []string
 	for _, col := range oldCtx.TableDef.Cols {
 		if col.Name != catalog.Row_ID {
 			attrs = append(attrs, col.Name)
 		}
 	}
-	originRel, _, err := getRel(ctx, proc, eg, oldCtx.Ref, nil)
-	if err != nil {
-		return nil, err
-	}
 	newCtx := &insert.InsertCtx{
 		Ref:                   oldCtx.Ref,
 		AddAffectedRows:       oldCtx.AddAffectedRows,
-		Rel:                   originRel,
+		Engine:                eg,
 		Attrs:                 attrs,
 		PartitionTableIDs:     oldCtx.PartitionTableIds,
 		PartitionTableNames:   oldCtx.PartitionTableNames,
 		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
 		TableDef:              oldCtx.TableDef,
 	}
-
-	if len(oldCtx.PartitionTableNames) > 0 {
-		dbSource, err := eg.Database(proc.Ctx, oldCtx.Ref.SchemaName, proc.TxnOperator)
-		if err != nil {
-			return nil, err
-		}
-
-		newCtx.PartitionSources = make([]engine.Relation, len(oldCtx.PartitionTableNames))
-		// get the relation instances for each partition sub table
-		for i, pTableName := range oldCtx.PartitionTableNames {
-			pRel, err := dbSource.Relation(proc.Ctx, pTableName, proc)
-			if err != nil {
-				return nil, err
-			}
-			newCtx.PartitionSources[i] = pRel
-		}
-	}
-
 	arg := insert.NewArgument()
 	arg.InsertCtx = newCtx
 	return arg, nil

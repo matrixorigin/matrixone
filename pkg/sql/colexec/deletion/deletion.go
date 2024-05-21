@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -53,7 +54,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(": delete rows")
 }
 
-func (arg *Argument) Prepare(_ *process.Process) error {
+func (arg *Argument) Prepare(proc *process.Process) error {
 	if arg.RemoteDelete {
 		arg.ctr = new(container)
 		arg.ctr.state = vm.Build
@@ -62,6 +63,29 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 		arg.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerObject)}
 		arg.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[types.Blockid]*batch.Batch)
 		arg.ctr.partitionId_blockId_deltaLoc = make(map[int]map[types.Blockid]*batch.Batch)
+	}
+
+	ref := arg.DeleteCtx.Ref
+	eng := arg.DeleteCtx.Engine
+	rel, err := colexec.GetRelationByObjRef(proc.Ctx, proc, eng, ref)
+	if err != nil {
+		return err
+	}
+	arg.source = rel
+	if len(arg.DeleteCtx.PartitionTableNames) > 0 {
+		dbSource, err := arg.DeleteCtx.Engine.Database(proc.Ctx, ref.SchemaName, proc.TxnOperator)
+		if err != nil {
+			return err
+		}
+		arg.partitionSources = make([]engine.Relation, len(arg.DeleteCtx.PartitionTableNames))
+		// get the relation instances for each partition sub table
+		for i, pTableName := range arg.DeleteCtx.PartitionTableNames {
+			pRel, err := dbSource.Relation(proc.Ctx, pTableName, proc)
+			if err != nil {
+				return err
+			}
+			arg.partitionSources[i] = pRel
+		}
 	}
 	return nil
 }
@@ -224,7 +248,7 @@ func (arg *Argument) normalDelete(proc *process.Process) (vm.CallResult, error) 
 			tempRows := uint64(delBatch.RowCount())
 			if tempRows > 0 {
 				affectedRows += tempRows
-				err = delCtx.PartitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
+				err = arg.partitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
 				if err != nil {
 					delBatch.Clean(proc.Mp())
 					return result, err
@@ -240,7 +264,7 @@ func (arg *Argument) normalDelete(proc *process.Process) (vm.CallResult, error) 
 		}
 		affectedRows = uint64(delBatch.RowCount())
 		if affectedRows > 0 {
-			err = delCtx.Source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
+			err = arg.source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
 			if err != nil {
 				delBatch.Clean(proc.GetMPool())
 				return result, err

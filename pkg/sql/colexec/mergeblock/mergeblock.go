@@ -17,7 +17,9 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -33,6 +35,28 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	ap.container = new(Container)
 	ap.container.mp = make(map[int]*batch.Batch)
 	ap.container.mp2 = make(map[int][]*batch.Batch)
+
+	ref := arg.Ref
+	eng := arg.Engine
+	rel, err := colexec.GetRelationByObjRef(proc.Ctx, proc, eng, ref)
+	if err != nil {
+		return err
+	}
+	ap.container.source = rel
+	if len(arg.PartitionTableNames) > 0 {
+		dbSource, err := arg.Engine.Database(proc.Ctx, ref.SchemaName, proc.TxnOperator)
+		if err != nil {
+			return err
+		}
+		ap.container.partitionSources = make([]engine.Relation, len(arg.PartitionTableNames))
+		for i, pTableName := range arg.PartitionTableNames {
+			pRel, err := dbSource.Relation(proc.Ctx, pTableName, proc)
+			if err != nil {
+				return err
+			}
+			ap.container.partitionSources[i] = pRel
+		}
+	}
 	return nil
 }
 
@@ -66,19 +90,19 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	// If the target is a partition table
-	if len(ap.PartitionSources) > 0 {
+	if len(ap.container.partitionSources) > 0 {
 		// 'i' aligns with partition number
-		for i := range ap.PartitionSources {
+		for i := range ap.container.partitionSources {
 			if ap.container.mp[i].RowCount() > 0 {
 				// batches in mp will be deeply copied into txn's workspace.
-				if err = ap.PartitionSources[i].Write(proc.Ctx, ap.container.mp[i]); err != nil {
+				if err = ap.container.partitionSources[i].Write(proc.Ctx, ap.container.mp[i]); err != nil {
 					return result, err
 				}
 			}
 
 			for _, bat := range ap.container.mp2[i] {
 				// batches in mp2 will be deeply copied into txn's workspace.
-				if err = ap.PartitionSources[i].Write(proc.Ctx, bat); err != nil {
+				if err = ap.container.partitionSources[i].Write(proc.Ctx, bat); err != nil {
 					return result, err
 				}
 
@@ -89,14 +113,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		// handle origin/main table.
 		if ap.container.mp[0].RowCount() > 0 {
 			//batches in mp will be deeply copied into txn's workspace.
-			if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
+			if err = ap.container.source.Write(proc.Ctx, ap.container.mp[0]); err != nil {
 				return result, err
 			}
 		}
 
 		for _, bat := range ap.container.mp2[0] {
 			//batches in mp2 will be deeply copied into txn's workspace.
-			if err = ap.Tbl.Write(proc.Ctx, bat); err != nil {
+			if err = ap.container.source.Write(proc.Ctx, bat); err != nil {
 				return result, err
 			}
 		}
