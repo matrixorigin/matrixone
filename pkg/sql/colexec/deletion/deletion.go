@@ -62,17 +62,18 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		arg.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerObject)}
 		arg.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[types.Blockid]*batch.Batch)
 		arg.ctr.partitionId_blockId_deltaLoc = make(map[int]map[types.Blockid]*batch.Batch)
+	} else {
+		ref := arg.DeleteCtx.Ref
+		eng := arg.DeleteCtx.Engine
+		partitionNames := arg.DeleteCtx.PartitionTableNames
+		rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
+		if err != nil {
+			return err
+		}
+		arg.source = rel
+		arg.partitionSources = partitionRels
 	}
 
-	ref := arg.DeleteCtx.Ref
-	eng := arg.DeleteCtx.Engine
-	partitionNames := arg.DeleteCtx.PartitionTableNames
-	rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
-	if err != nil {
-		return err
-	}
-	arg.source = rel
-	arg.partitionSources = partitionRels
 	return nil
 }
 
