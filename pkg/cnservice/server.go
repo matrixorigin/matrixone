@@ -858,7 +858,7 @@ func (s *service) initTxnTraceService() {
 		trace.WithBufferSize(s.cfg.Txn.Trace.BufferSize),
 		trace.WithFlushBytes(int(s.cfg.Txn.Trace.FlushBytes)),
 		trace.WithFlushDuration(s.cfg.Txn.Trace.FlushDuration.Duration),
-		trace.WithLoadToS3(s.cfg.Txn.Trace.LoadToS3, s.etlFS),
+		trace.WithLoadToS3(!s.cfg.Txn.Trace.LoadToMO, s.etlFS),
 	)
 	if err != nil {
 		panic(err)
