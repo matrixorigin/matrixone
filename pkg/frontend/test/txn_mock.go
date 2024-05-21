@@ -739,6 +739,18 @@ func (mr *MockTxnOperatorMockRecorder) Rollback(ctx interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Rollback", reflect.TypeOf((*MockTxnOperator)(nil).Rollback), ctx)
 }
 
+// SetFootPrints mocks base method.
+func (m *MockTxnOperator) SetFootPrints(prints [][2]uint32) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetFootPrints", prints)
+}
+
+// SetFootPrints indicates an expected call of SetFootPrints.
+func (mr *MockTxnOperatorMockRecorder) SetFootPrints(prints interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFootPrints", reflect.TypeOf((*MockTxnOperator)(nil).SetFootPrints), prints)
+}
+
 // Snapshot mocks base method.
 func (m *MockTxnOperator) Snapshot() ([]byte, error) {
 	m.ctrl.T.Helper()
