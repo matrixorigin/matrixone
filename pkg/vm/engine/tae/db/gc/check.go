@@ -75,6 +75,7 @@ func (c *checker) Check() error {
 			logutil.Errorf("load checkpoint failed: %v", err)
 			continue
 		}
+		defer data.Close()
 		unconsumedTable.UpdateTable(data)
 		end := ckp.GetEnd()
 		if end.Greater(&maxTs) {
