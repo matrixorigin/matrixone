@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -337,10 +338,38 @@ func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []
 
 // SaveFullTable is to write data to s3
 func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, files []string) ([]objectio.BlockObject, error) {
-	bats := t.collectData(files)
+	now := time.Now()
+	var bats []*containers.Batch
+	var blocks []objectio.BlockObject
+	var err error
+	var writer *objectio.ObjectWriter
+	var collectCost, writeCost time.Duration
+	logutil.Info("[DiskCleaner]", common.OperationField("SaveFullTable-Start"),
+		common.AnyField("max consumed :", start.ToString()+"-"+end.ToString()))
+	defer func() {
+		size := uint32(0)
+		objectCount := 0
+		tombstoneCount := 0
+		if len(blocks) > 0 && err == nil {
+			size = writer.GetObjectStats()[0].OriginSize()
+		}
+		if bats != nil {
+			objectCount = bats[ObjectList].Length()
+			tombstoneCount = bats[Tombstone].Length()
+		}
+		logutil.Info("[DiskCleaner]", common.OperationField("SaveFullTable-End"),
+			common.AnyField("collect cost :", collectCost.String()),
+			common.AnyField("write cost :", writeCost.String()),
+			common.AnyField("gc table size :", size),
+			common.AnyField("object count :", objectCount),
+			common.AnyField("tombstone count :", tombstoneCount))
+	}()
+	bats = t.collectData(files)
+	collectCost = time.Since(now)
+	now = time.Now()
 	defer t.closeBatch(bats)
 	name := blockio.EncodeGCMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
+	writer, err = objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +379,8 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 		}
 	}
 
-	blocks, err := writer.WriteEnd(context.Background())
+	blocks, err = writer.WriteEnd(context.Background())
+	writeCost = time.Since(now)
 	return blocks, err
 }
 

@@ -195,10 +195,12 @@ func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
 func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	sm.Lock()
 	defer sm.Unlock()
-
+	now := time.Now()
+	defer func() {
+		logutil.Infof("[UpdateSnapshot] cost %v", time.Since(now))
+	}()
 	sm.updateTableInfo(data)
 	if sm.tid == 0 {
-		logutil.Infof("[update snapshot]mo_snapshots not found")
 		return sm
 	}
 	ins := data.GetObjectBatchs()
@@ -219,7 +221,6 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 			if !deleteTS.IsEmpty() {
 				continue
 			}
-			logutil.Infof("[update snapshot]insert object %s", objectStats.ObjectName().String())
 			sm.objects[objectStats.ObjectName().SegmentId()] = &objectInfo{
 				stats:    objectStats,
 				createAt: createTS,
@@ -229,7 +230,6 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		if deleteTS.IsEmpty() {
 			panic(any("deleteTS is empty"))
 		}
-		logutil.Infof("[update snapshot]delete object %s", objectStats.ObjectName().String())
 		delete(sm.objects, objectStats.ObjectName().SegmentId())
 	}
 	del, _, _, _ := data.GetBlkBatchs()
@@ -248,6 +248,10 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 }
 
 func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileService, mp *mpool.MPool) (map[uint32]containers.Vector, error) {
+	now := time.Now()
+	defer func() {
+		logutil.Infof("[GetSnapshot] cost %v", time.Since(now))
+	}()
 	sm.RLock()
 	objects := sm.objects
 	sm.RUnlock()

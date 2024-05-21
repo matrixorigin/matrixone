@@ -16,7 +16,9 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -65,8 +67,14 @@ func (g *GCWorker) ExecDelete(ctx context.Context, names []string, disableGC boo
 		g.Unlock()
 		return nil
 	}
+	deleteCount := len(g.objects)
 	g.Unlock()
-
+	now := time.Now()
+	defer func() {
+		logutil.Info("[DB GC] exec delete files",
+			common.AnyField("file count", deleteCount),
+			common.AnyField("time cost", time.Since(now).String()))
+	}()
 	logutil.Infof("[DB GC] disableGC: %v, files to delete: %v", disableGC, g.objects)
 	var err error
 	if !disableGC {

@@ -355,6 +355,16 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	if maxConsumed == nil {
 		return nil
 	}
+	now := time.Now()
+	logutil.Info("[DiskCleaner]",
+		common.OperationField("MergeGCFile-Start"),
+		common.OperandField(maxConsumed.String()))
+	defer func() {
+		logutil.Info("[DiskCleaner]",
+			common.OperationField("MergeGCFile-End"),
+			common.AnyField("cost :", time.Since(now).String()),
+			common.OperandField(maxConsumed.String()))
+	}()
 	maxSnapEnd := types.TS{}
 	maxAcctEnd := types.TS{}
 	var snapFile, acctFile string
@@ -428,9 +438,6 @@ func (c *checkpointCleaner) mergeGCFile() error {
 		mergeTable = c.inputs.tables[0]
 	}
 	c.inputs.RUnlock()
-	logutil.Info("[DiskCleaner]",
-		common.OperationField("MergeGCFile start"),
-		common.OperandField(maxConsumed.String()))
 	_, err = mergeTable.SaveFullTable(maxConsumed.GetStart(), maxConsumed.GetEnd(), c.fs, nil)
 	if err != nil {
 		logutil.Errorf("SaveTable failed: %v", err.Error())
@@ -442,9 +449,6 @@ func (c *checkpointCleaner) mergeGCFile() error {
 		return err
 	}
 	c.updateMinMerged(maxConsumed)
-	logutil.Info("[DiskCleaner]",
-		common.OperationField("MergeGCFile end"),
-		common.OperandField(maxConsumed.String()))
 	return nil
 }
 
@@ -674,8 +678,11 @@ func (c *checkpointCleaner) softGC(
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
 	now := time.Now()
+	var softCost, mergeCost time.Duration
 	defer func() {
-		logutil.Infof("[DiskCleaner] softGC takes %v", time.Since(now))
+		logutil.Info("[DiskCleaner] softGC cost",
+			common.AnyField("soft-gc cost", softCost.String()),
+			common.AnyField("merge-table cost", mergeCost.String()))
 	}()
 	if len(c.inputs.tables) == 0 {
 		return nil, nil
@@ -685,10 +692,13 @@ func (c *checkpointCleaner) softGC(
 		mergeTable.Merge(table)
 	}
 	gc, snapList := mergeTable.SoftGC(t, gckp.GetEnd(), snapshots, c.snapshotMeta)
+	softCost = time.Since(now)
+	now = time.Now()
 	c.inputs.tables = make([]*GCTable, 0)
 	c.inputs.tables = append(c.inputs.tables, mergeTable)
 	c.updateMaxCompared(gckp)
 	c.snapshotMeta.MergeTableInfo(snapList)
+	mergeCost = time.Since(now)
 	//logutil.Infof("SoftGC is %v, merge table: %v", gc, mergeTable.String())
 	return gc, snapList
 }
@@ -790,6 +800,12 @@ func (c *checkpointCleaner) Process() {
 		return
 	}
 
+	now := time.Now()
+	defer func() {
+		logutil.Info("[DiskCleaner]",
+			common.AnyField("Process costs", time.Since(now).String()))
+
+	}()
 	maxConsumed := c.maxConsumed.Load()
 	if maxConsumed != nil {
 		ts = maxConsumed.GetEnd()
@@ -884,6 +900,7 @@ func (c *checkpointCleaner) createNewInput(
 	ckps []*checkpoint.CheckpointEntry) (input *GCTable, err error) {
 	now := time.Now()
 	var snapSize, tableSize uint32
+	input = NewGCTable()
 	logutil.Info("[DiskCleaner]", common.OperationField("Consume-Start"),
 		common.AnyField("entry count :", len(ckps)))
 	defer func() {
@@ -891,9 +908,10 @@ func (c *checkpointCleaner) createNewInput(
 			common.AnyField("cost :", time.Since(now).String()),
 			common.AnyField("snap meta size :", snapSize),
 			common.AnyField("table meta size :", tableSize),
+			common.AnyField("objects :", len(input.objects)),
+			common.AnyField("tombstones :", len(input.tombstones)),
 			common.OperandField(c.snapshotMeta.String()))
 	}()
-	input = NewGCTable()
 	var data *logtail.CheckpointData
 	for _, candidate := range ckps {
 		data, err = c.collectCkpData(candidate)
