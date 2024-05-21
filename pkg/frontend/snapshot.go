@@ -558,6 +558,7 @@ func restoreViews(
 			return err
 		}
 
+		compCtx.SetDatabase(view.dbName)
 		// build create sql to find dependent views
 		if _, err = plan.BuildPlan(compCtx, stmts[0], false); err != nil {
 			return err
