@@ -20,12 +20,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -35,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -84,6 +87,18 @@ func WithFlushDuration(value time.Duration) Option {
 	}
 }
 
+func WithLoadToS3(
+	writeToS3 bool,
+	fs fileservice.FileService,
+) Option {
+	return func(s *service) {
+		if writeToS3 {
+			s.options.writeFunc = s.writeToS3
+			s.options.fs = fs
+		}
+	}
+}
+
 type service struct {
 	cn         string
 	client     client.TxnClient
@@ -96,7 +111,6 @@ type service struct {
 	statementC chan event
 
 	loadC  chan loadAction
-	seq    atomic.Uint64
 	dir    string
 	logger *log.MOLogger
 
@@ -115,6 +129,8 @@ type service struct {
 	}
 
 	options struct {
+		fs            fileservice.FileService
+		writeFunc     func(loadAction) error
 		flushDuration time.Duration
 		flushBytes    int
 		bufferSize    int
@@ -143,7 +159,7 @@ func NewService(
 		executor: executor,
 		dir:      dataDir,
 		logger:   runtime.ProcessLevelRuntime().Logger().Named("txn-trace"),
-		loadC:    make(chan loadAction, 100000),
+		loadC:    make(chan loadAction, 4),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -157,6 +173,9 @@ func NewService(
 	}
 	if s.options.bufferSize == 0 {
 		s.options.bufferSize = 1000000
+	}
+	if s.options.writeFunc == nil {
+		s.options.writeFunc = s.writeToMO
 	}
 
 	s.entryC = make(chan event, s.options.bufferSize)
@@ -254,7 +273,6 @@ func (s *service) Close() {
 
 func (s *service) handleEvent(
 	ctx context.Context,
-	fileCreator func() string,
 	columns int,
 	tableName string,
 	eventC chan event) {
@@ -271,7 +289,7 @@ func (s *service) handleEvent(
 	defer buf.close()
 
 	open := func() {
-		current = fileCreator()
+		current = s.newFileName()
 
 		v, err := os.OpenFile(current, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0666)
 		if err != nil {
@@ -315,7 +333,8 @@ func (s *service) handleEvent(
 			sql: fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','",
 				current,
 				tableName),
-			file: current,
+			file:  current,
+			table: tableName,
 		}
 		sum = 0
 		open()
@@ -351,24 +370,6 @@ func (s *service) handleEvent(
 }
 
 func (s *service) handleLoad(ctx context.Context) {
-	load := func(sql string) error {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		return s.executor.ExecTxn(
-			ctx,
-			func(txn executor.TxnExecutor) error {
-				res, err := txn.Exec(sql, executor.StatementOption{})
-				if err != nil {
-					return err
-				}
-				res.Close()
-				return nil
-			},
-			executor.Options{}.
-				WithDatabase(DebugDB).
-				WithDisableTrace())
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -381,9 +382,9 @@ func (s *service) handleLoad(ctx context.Context) {
 				default:
 				}
 
-				if err := load(e.sql); err != nil {
+				if err := s.options.writeFunc(e); err != nil {
 					s.logger.Error("load trace data to table failed, retry later",
-						zap.String("sql", e.sql),
+						zap.String("file", e.file),
 						zap.Error(err))
 					time.Sleep(time.Second * 5)
 					continue
@@ -520,6 +521,10 @@ func (s *service) updateState(feature, state string) error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied().
 			WithDisableTrace())
+}
+
+func (s *service) newFileName() string {
+	return filepath.Join(s.dir, uuid.Must(uuid.NewV7()).String())
 }
 
 // EntryData entry data
@@ -873,8 +878,9 @@ func escape(value string) string {
 }
 
 type loadAction struct {
-	sql  string
-	file string
+	sql   string
+	file  string
+	table string
 }
 
 type writer struct {
