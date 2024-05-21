@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 )
@@ -41,7 +40,7 @@ type TaskScheduler interface {
 	Scheduler
 	ScheduleTxnTask(ctx *Context, taskType TaskType, factory TxnTaskFactory) (Task, error)
 	ScheduleMultiScopedTxnTask(ctx *Context, taskType TaskType, scopes []common.ID, factory TxnTaskFactory) (Task, error)
-	ScheduleMultiScopedTxnTaskWithObserver(ctx *Context, taskType TaskType, scopes []common.ID, factory TxnTaskFactory, observers ...base.Observer) (Task, error)
+	ScheduleMultiScopedTxnTaskWithObserver(ctx *Context, taskType TaskType, scopes []common.ID, factory TxnTaskFactory, observers ...iops.Observer) (Task, error)
 	ScheduleMultiScopedFn(ctx *Context, taskType TaskType, scopes []common.ID, fn FuncT) (Task, error)
 	ScheduleFn(ctx *Context, taskType TaskType, fn func() error) (Task, error)
 	ScheduleScopedFn(ctx *Context, taskType TaskType, scope *common.ID, fn func() error) (Task, error)
