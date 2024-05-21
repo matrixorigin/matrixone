@@ -77,6 +77,71 @@ func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](vals []T) func(*Vec
 	}
 }
 
+func VarlenBinarySearchOffsetByValsFactoryNoMustBytesCol(vals *Vector) func(*Vector) []int32 {
+	return func(vec *Vector) []int32 {
+		var sels []int32
+		n1 := vec.Length()
+		if n1 == 0 {
+			return sels
+		}
+		subVals := vals
+		if vals.Length() >= kMinLenForSubVector {
+			lowerBound := sort.Search(vals.Length(), func(i int) bool {
+				return bytes.Compare(vec.GetBytesAt(0), vals.GetBytesAt(i)) <= 0
+			})
+			upperBound := sort.Search(vals.Length(), func(i int) bool {
+				return bytes.Compare(vec.GetBytesAt(n1-1), vals.GetBytesAt(i)) < 0
+			})
+			subVals, _ = vals.Window(lowerBound, upperBound)
+		}
+
+		if subVals.Length() <= kMaxLenForBinarySearch {
+			offset := 0
+			for i := 0; i < subVals.Length(); i++ {
+				idx, found := sort.Find(n1, func(idx int) int {
+					return bytes.Compare(subVals.GetBytesAt(i), vec.GetBytesAt(offset+idx))
+				})
+				if idx < n1 {
+					if found {
+						sels = append(sels, int32(offset+idx))
+					}
+					offset += idx
+					n1 -= idx
+				} else {
+					break
+				}
+			}
+		} else {
+			n2 := subVals.Length()
+			i1, i2 := 0, 0
+			varlenas := MustFixedCol[types.Varlena](vec)
+			s1 := varlenas[0].GetByteSlice(vec.GetArea())
+			for i2 < n2 {
+				ord := bytes.Compare(s1, subVals.GetBytesAt(i2))
+				if ord == 0 {
+					sels = append(sels, int32(i1))
+					i1++
+					if i1 == n1 {
+						break
+					}
+					i2++
+					s1 = varlenas[i1].GetByteSlice(vec.GetArea())
+				} else if ord < 0 {
+					i1++
+					if i1 == n1 {
+						break
+					}
+					s1 = varlenas[i1].GetByteSlice(vec.GetArea())
+				} else {
+					i2++
+				}
+			}
+		}
+
+		return sels
+	}
+}
+
 func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int32 {
 	return func(vec *Vector) []int32 {
 		var sels []int32

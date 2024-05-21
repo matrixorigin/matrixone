@@ -2576,7 +2576,7 @@ func (v *Vector) String() string {
 				return v.UnsafeGetStringAt(0)
 			}
 		}
-		col := MustStrCol(v)
+		col := InefficientMustStrCol(v)
 		if v.nsp.Any() {
 			return fmt.Sprintf("%v-%s", col, v.nsp.GetBitmap().String())
 		} else {
