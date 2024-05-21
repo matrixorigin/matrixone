@@ -293,9 +293,7 @@ func (txn *Transaction) checkDup() error {
 		if e.fileName != "" {
 			continue
 		}
-		if (e.typ == DELETE || e.typ == DELETE_TXN || e.typ == UPDATE) &&
-			e.databaseId == catalog.MO_CATALOG_ID &&
-			e.tableId == catalog.MO_COLUMNS_ID {
+		if e.isCatalog() {
 			continue
 		}
 
