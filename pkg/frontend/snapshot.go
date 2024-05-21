@@ -359,7 +359,7 @@ func restoreToAccount(
 	fkDeps map[string][]string,
 	fkTables *[]*tableInfo,
 	views *[]*tableInfo) (err error) {
-	logInfof("snapshot", fmt.Sprintf("[%s] start to restore account: %v", snapshotName, toAccountId))
+	getLogger().Info(fmt.Sprintf("[%s] start to restore account: %v", snapshotName, toAccountId))
 
 	var dbNames []string
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
@@ -371,11 +371,11 @@ func restoreToAccount(
 
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
-			logInfof("snapshot", fmt.Sprintf("skip drop db: %v", dbName))
+			getLogger().Info(fmt.Sprintf("[%s]skip drop db: %v", snapshotName, dbName))
 			continue
 		}
 
-		getLogger().Info(fmt.Sprintf("skip drop db: %v", dbName))
+		getLogger().Info(fmt.Sprintf("[%s]drop current exists db: %v", snapshotName, dbName))
 		if err = bh.Exec(toCtx, fmt.Sprintf("drop database if exists %s", dbName)); err != nil {
 			return
 		}
@@ -403,7 +403,7 @@ func restoreToDatabase(
 	fkDeps map[string][]string,
 	fkTables *[]*tableInfo,
 	views *[]*tableInfo) (err error) {
-	logInfof("snapshot", fmt.Sprintf("[%s] start to restore db: %v", snapshotName, dbName))
+	getLogger().Info(fmt.Sprintf("[%s] start to restore db: %v", snapshotName, dbName))
 	return restoreToDatabaseOrTable(ctx, bh, snapshotName, dbName, "", toAccountId, fkDeps, fkTables, views)
 }
 
@@ -417,7 +417,7 @@ func restoreToTable(
 	fkDeps map[string][]string,
 	fkTables *[]*tableInfo,
 	views *[]*tableInfo) (err error) {
-	logInfof("snapshot", fmt.Sprintf("[%s] start to restore table: %v", snapshotName, tblName))
+	getLogger().Info(fmt.Sprintf("[%s] start to restore table: %v", snapshotName, tblName))
 	return restoreToDatabaseOrTable(ctx, bh, snapshotName, dbName, tblName, toAccountId, fkDeps, fkTables, views)
 }
 
@@ -432,7 +432,7 @@ func restoreToDatabaseOrTable(
 	fkTables *[]*tableInfo,
 	views *[]*tableInfo) (err error) {
 	if needSkipDb(dbName) {
-		logInfof("snapshot", fmt.Sprintf("skip restore db: %v", dbName))
+		getLogger().Info(fmt.Sprintf("[%s] skip restore db: %v", snapshotName, dbName))
 		return
 	}
 
@@ -464,7 +464,8 @@ func restoreToDatabaseOrTable(
 
 	for _, tblInfo := range tableInfos {
 		if needSkipTable(dbName, tblInfo.tblName) {
-			logInfof("snapshot", fmt.Sprintf("skip table: %v.%v", dbName, tblInfo.tblName))
+			// TODO skip tables which should not to be restored
+			getLogger().Info(fmt.Sprintf("[%s] skip table: %v.%v", snapshotName, dbName, tblInfo.tblName))
 			continue
 		}
 
@@ -520,7 +521,7 @@ func restoreTablesWithFk(
 	for _, key := range sortedTbls {
 		// if not ok, means that table is not in this restoration task, ignore
 		if tblInfo, ok := keyTableInfoMap[key]; ok {
-			logInfof("snapshot", fmt.Sprintf("[%s] start to restore table with fk: %v", snapshotName, tblInfo.tblName))
+			getLogger().Info(fmt.Sprintf("[%s] start to restore table with fk: %v", snapshotName, tblInfo.tblName))
 
 			if err = recreateTable(ctx, bh, snapshotName, tblInfo, toAccountId); err != nil {
 				return
@@ -582,7 +583,7 @@ func restoreViews(
 	for _, key := range sortedViews {
 		// if not ok, means that view is not in this restoration task, ignore
 		if tblInfo, ok := keyTableInfoMap[key]; ok {
-			logInfof("snapshot", fmt.Sprintf("[%s] start to restore view: %v", snapshotName, tblInfo.tblName))
+			getLogger().Info(fmt.Sprintf("[%s] start to restore view: %v", snapshotName, tblInfo.tblName))
 
 			if err = bh.Exec(toCtx, "use "+tblInfo.dbName); err != nil {
 				return err
@@ -618,6 +619,7 @@ func recreateTable(
 		return
 	}
 
+	getLogger().Info(fmt.Sprintf("[%s] start to drop table: %v", snapshotName, tblInfo.tblName))
 	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s", tblInfo.tblName)); err != nil {
 		return
 	}
@@ -629,8 +631,8 @@ func recreateTable(
 	}
 
 	// insert data
-	getLogger().Info(fmt.Sprintf("[%s] start to insert select table: %v", snapshotName, tblInfo.tblName))
 	insertIntoSql := fmt.Sprintf(restoreTableDataFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotName)
+	getLogger().Info(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
 
 	if curAccountId == toAccountId {
 		if err = bh.Exec(ctx, insertIntoSql); err != nil {
