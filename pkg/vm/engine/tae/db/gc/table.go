@@ -193,8 +193,12 @@ func (t *GCTable) SoftGC(
 				gc = append(gc, name)
 			}
 			// TODO: remove log
-			logutil.Infof("[soft GC] tombstone: %v, tombstone: %d, object: %d, same: %v, data: %d",
-				name, len(t.tombstones), len(tombstone.objects), sameName, len(objects))
+			logutil.Debug("[soft GC] Delete tombstone",
+				zap.String("tombstone", name),
+				zap.Int("tombstone", len(t.tombstones)),
+				zap.Int("object", len(tombstone.objects)),
+				zap.Bool("same", sameName),
+				zap.Int("data", len(objects)))
 			t.deleteTombstone(name)
 		}
 	}
@@ -344,8 +348,8 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 	var err error
 	var writer *objectio.ObjectWriter
 	var collectCost, writeCost time.Duration
-	logutil.Info("[DiskCleaner]", common.OperationField("SaveFullTable-Start"),
-		common.AnyField("max consumed :", start.ToString()+"-"+end.ToString()))
+	logutil.Info("[DiskCleaner]", zap.String("op", "SaveFullTable-Start"),
+		zap.String("max consumed :", start.ToString()+"-"+end.ToString()))
 	defer func() {
 		size := uint32(0)
 		objectCount := 0
@@ -355,14 +359,14 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 		}
 		if bats != nil {
 			objectCount = bats[ObjectList].Length()
-			tombstoneCount = bats[Tombstone].Length()
+			tombstoneCount = bats[TombstoneList].Length()
 		}
-		logutil.Info("[DiskCleaner]", common.OperationField("SaveFullTable-End"),
-			common.AnyField("collect cost :", collectCost.String()),
-			common.AnyField("write cost :", writeCost.String()),
-			common.AnyField("gc table size :", size),
-			common.AnyField("object count :", objectCount),
-			common.AnyField("tombstone count :", tombstoneCount))
+		logutil.Info("[DiskCleaner]", zap.String("op", "SaveFullTable-End"),
+			zap.String("collect cost :", collectCost.String()),
+			zap.String("write cost :", writeCost.String()),
+			zap.Uint32("gc table size :", size),
+			zap.Int("object count :", objectCount),
+			zap.Int("tombstone count :", tombstoneCount))
 	}()
 	bats = t.collectData(files)
 	collectCost = time.Since(now)

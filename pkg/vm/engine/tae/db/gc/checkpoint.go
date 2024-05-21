@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"go.uber.org/zap"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -357,13 +358,11 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	}
 	now := time.Now()
 	logutil.Info("[DiskCleaner]",
-		common.OperationField("MergeGCFile-Start"),
-		common.OperandField(maxConsumed.String()))
+		zap.String("MergeGCFile-Start", maxConsumed.String()))
 	defer func() {
 		logutil.Info("[DiskCleaner]",
-			common.OperationField("MergeGCFile-End"),
-			common.AnyField("cost :", time.Since(now).String()),
-			common.OperandField(maxConsumed.String()))
+			zap.String("MergeGCFile-End", maxConsumed.String()),
+			zap.String("cost :", time.Since(now).String()))
 	}()
 	maxSnapEnd := types.TS{}
 	maxAcctEnd := types.TS{}
@@ -681,8 +680,8 @@ func (c *checkpointCleaner) softGC(
 	var softCost, mergeCost time.Duration
 	defer func() {
 		logutil.Info("[DiskCleaner] softGC cost",
-			common.AnyField("soft-gc cost", softCost.String()),
-			common.AnyField("merge-table cost", mergeCost.String()))
+			zap.String("soft-gc cost", softCost.String()),
+			zap.String("merge-table cost", mergeCost.String()))
 	}()
 	if len(c.inputs.tables) == 0 {
 		return nil, nil
@@ -803,7 +802,7 @@ func (c *checkpointCleaner) Process() {
 	now := time.Now()
 	defer func() {
 		logutil.Info("[DiskCleaner]",
-			common.AnyField("Process costs", time.Since(now).String()))
+			zap.String("Process costs", time.Since(now).String()))
 
 	}()
 	maxConsumed := c.maxConsumed.Load()
@@ -901,16 +900,16 @@ func (c *checkpointCleaner) createNewInput(
 	now := time.Now()
 	var snapSize, tableSize uint32
 	input = NewGCTable()
-	logutil.Info("[DiskCleaner]", common.OperationField("Consume-Start"),
-		common.AnyField("entry count :", len(ckps)))
+	logutil.Info("[DiskCleaner]", zap.String("op", "Consume-Start"),
+		zap.Int("entry count :", len(ckps)))
 	defer func() {
-		logutil.Info("[DiskCleaner]", common.OperationField("Consume-End"),
-			common.AnyField("cost :", time.Since(now).String()),
-			common.AnyField("snap meta size :", snapSize),
-			common.AnyField("table meta size :", tableSize),
-			common.AnyField("objects :", len(input.objects)),
-			common.AnyField("tombstones :", len(input.tombstones)),
-			common.OperandField(c.snapshotMeta.String()))
+		logutil.Info("[DiskCleaner]", zap.String("op", "Consume-End"),
+			zap.String("cost :", time.Since(now).String()),
+			zap.Uint32("snap meta size :", snapSize),
+			zap.Uint32("table meta size :", tableSize),
+			zap.Int("objects :", len(input.objects)),
+			zap.Int("tombstones :", len(input.tombstones)),
+			zap.String("snapshots", c.snapshotMeta.String()))
 	}()
 	var data *logtail.CheckpointData
 	for _, candidate := range ckps {

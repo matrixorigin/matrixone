@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"go.uber.org/zap"
 	"sync"
 	"time"
 )
@@ -300,7 +301,8 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 						if err != nil {
 							return nil, err
 						}
-						logutil.Infof("GetSnapshot ts %v", snapTs.ToString())
+						logutil.Debug("[GetSnapshot] cluster snapshot",
+							common.OperationField(snapTs.ToString()))
 					}
 					continue
 				}
@@ -308,7 +310,9 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				if snapshotList[id] == nil {
 					snapshotList[id] = containers.MakeVector(types.T_TS.ToType(), mp)
 				}
-				logutil.Infof("GetSnapshot: id %d, ts %v", id, snapTs.ToString())
+				logutil.Debug("[GetSnapshot] snapshot",
+					zap.Uint32("account", id),
+					zap.String("snap ts", snapTs.ToString()))
 				err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), snapTs, false, mp)
 				if err != nil {
 					return nil, err

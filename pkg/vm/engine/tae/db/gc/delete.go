@@ -16,7 +16,7 @@ package gc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"go.uber.org/zap"
 	"sync"
 	"time"
 
@@ -72,8 +72,8 @@ func (g *GCWorker) ExecDelete(ctx context.Context, names []string, disableGC boo
 	now := time.Now()
 	defer func() {
 		logutil.Info("[DB GC] exec delete files",
-			common.AnyField("file count", deleteCount),
-			common.AnyField("time cost", time.Since(now).String()))
+			zap.Int("file count", deleteCount),
+			zap.String("time cost", time.Since(now).String()))
 	}()
 	logutil.Infof("[DB GC] disableGC: %v, files to delete: %v", disableGC, g.objects)
 	var err error
