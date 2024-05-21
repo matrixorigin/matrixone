@@ -150,6 +150,7 @@ func (t TombstoneRowEntry) Less(than TombstoneRowEntry) bool {
 
 type DataRowEntry struct {
 	//The same PK maybe been inserted and deleted ,then inserted.
+	//PK + Time is unique.
 	PK   []byte
 	Time types.TS
 
@@ -167,17 +168,20 @@ func (d DataRowEntry) Less(than DataRowEntry) bool {
 	if cmp > 0 {
 		return false
 	}
+	//asc
+	return d.Time.Compare(&than.Time) < 0
+
 	//desc
-	if than.Time.Less(&d.Time) {
-		return true
-	}
-	if d.Time.Less(&than.Time) {
-		return false
-	}
-	return false
+	//if than.Time.Less(&d.Time) {
+	//	return true
+	//}
+	//if d.Time.Less(&than.Time) {
+	//	return false
+	//}
+	//return false
 }
 
-// RowEntry represents a version of a row
+// RowEntry represents a version of a data row or tombstone row.
 type RowEntry struct {
 	BlockID types.Blockid // we need to iter by block id, so put it first to allow faster iteration
 	RowID   types.Rowid

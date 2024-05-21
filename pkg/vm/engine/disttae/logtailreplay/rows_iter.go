@@ -112,10 +112,15 @@ func (p *rowsIter) Close() error {
 }
 
 type primaryKeyIter struct {
-	ts           types.TS
-	spec         PrimaryKeyMatchSpec
-	iter         btree.IterG[*PrimaryIndexEntry]
-	rows         *btree.BTreeG[RowEntry]
+	ts   types.TS
+	spec PrimaryKeyMatchSpec
+
+	//TODO:: change to *btree.IterG[DataRowEntry]
+	iter btree.IterG[*PrimaryIndexEntry]
+
+	rows *btree.BTreeG[RowEntry]
+
+	//TODO:: change to *btree.IterG[DataRowEntry]
 	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 	curRow       RowEntry
 }
