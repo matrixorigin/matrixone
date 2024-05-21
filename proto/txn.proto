@@ -373,4 +373,6 @@ message TxnOptions {
     bool inRunSql = 11;
     bool inCommit = 12;
     bool inRollback = 13;
+    bool byBegin = 14;//created by the BEGIN statement
+    bool autocommit = 15;//AUTOCOMMIT
 }
