@@ -17,6 +17,7 @@ package aggexec
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -71,6 +72,65 @@ type clusterCentersExec struct {
 	distType   kmeans.DistanceType
 	initType   kmeans.InitType
 	normalize  bool
+}
+
+func (exec *clusterCentersExec) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+
+	encoded := &EncodedAgg{
+		Info:   d,
+		Result: r,
+		Groups: nil,
+	}
+
+	encoded.Groups = make([][]byte, len(exec.groupData)+1)
+	if len(exec.groupData) > 0 {
+		for i := range exec.groupData {
+			if encoded.Groups[i], err = exec.groupData[i].MarshalBinary(); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	{
+		t1 := uint16(exec.distType)
+		t2 := uint16(exec.initType)
+
+		bs := types.EncodeUint64(&exec.clusterCnt)
+		bs = append(bs, types.EncodeUint16(&t1)...)
+		bs = append(bs, types.EncodeUint16(&t2)...)
+		bs = append(bs, types.EncodeBool(&exec.normalize)...)
+		encoded.Groups[len(encoded.Groups)-1] = bs
+	}
+	return encoded.Marshal()
+}
+
+func (exec *clusterCentersExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+	if err := exec.ret.unmarshal(result); err != nil {
+		return err
+	}
+	if len(groups) > 0 {
+		exec.groupData = make([]*vector.Vector, len(groups)-1)
+		for i := range exec.groupData {
+			exec.groupData[i] = vector.NewVec(exec.singleAggInfo.argType)
+			if err := vectorUnmarshal(exec.groupData[i], groups[i], mp); err != nil {
+				return err
+			}
+		}
+		bs := groups[len(groups)-1]
+		if len(bs) != 13 { // 8+2+2+1
+			return moerr.NewInternalErrorNoCtx("invalid cluster center exec data")
+		}
+		exec.clusterCnt = types.DecodeUint64(bs[:8])
+		exec.distType = kmeans.DistanceType(types.DecodeUint16(bs[8:10]))
+		exec.initType = kmeans.InitType(types.DecodeUint16(bs[10:12]))
+		exec.normalize = types.DecodeBool(bs[12:])
+	}
+	return nil
 }
 
 func newClusterCentersExecutor(mg AggMemoryManager, info singleAggInfo) (AggFuncExec, error) {
