@@ -17,7 +17,6 @@ package trace
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -52,7 +51,9 @@ func (s *service) TxnCreated(op client.TxnOperator) {
 	register := false
 	if s.atomic.txnEventEnabled.Load() {
 		register = true
-		s.txnC <- newTxnCreated(op.Txn())
+		s.txnC <- event{
+			csv: newTxnCreated(op.Txn()),
+		}
 	}
 
 	if s.atomic.txnActionEventEnabled.Load() {
@@ -103,7 +104,9 @@ func (s *service) TxnExecSQL(
 	}
 
 	sql = truncateSQL(sql)
-	s.txnC <- newTxnInfoEvent(op.Txn(), txnExecuteEvent, sql)
+	s.txnC <- event{
+		csv: newTxnInfoEvent(op.Txn(), txnExecuteEvent, sql),
+	}
 }
 
 func (s *service) TxnConflictChanged(
@@ -134,11 +137,16 @@ func (s *service) TxnConflictChanged(
 	buf.buf.WriteString(", new-min-snapshot-ts: ")
 	buf.buf.WriteString(ts)
 	info := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
-	s.txnC <- newTxnInfoEvent(
-		op.Txn(),
-		txnConflictChanged,
-		util.UnsafeBytesToString(info))
-	s.txnBufC <- buf
+	s.txnC <- event{
+		csv: newTxnInfoEvent(
+			op.Txn(),
+			txnConflictChanged,
+			util.UnsafeBytesToString(info),
+		),
+	}
+	s.txnC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) TxnNoConflictChanged(
@@ -172,11 +180,16 @@ func (s *service) TxnNoConflictChanged(
 	buf.buf.WriteString(", new-min-snapshot-ts: ")
 	buf.buf.WriteString(newSnapshot)
 	info := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
-	s.txnC <- newTxnInfoEvent(
-		op.Txn(),
-		txnNoConflictChanged,
-		util.UnsafeBytesToString(info))
-	s.txnBufC <- buf
+	s.txnC <- event{
+		csv: newTxnInfoEvent(
+			op.Txn(),
+			txnNoConflictChanged,
+			util.UnsafeBytesToString(info),
+		),
+	}
+	s.txnC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) TxnUpdateSnapshot(
@@ -204,11 +217,16 @@ func (s *service) TxnUpdateSnapshot(
 	buf.buf.WriteString(" table:")
 	buf.buf.WriteString(table)
 	info := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
-	s.txnC <- newTxnInfoEvent(
-		op.Txn(),
-		txnUpdateSnapshotReasonEvent,
-		util.UnsafeBytesToString(info))
-	s.txnBufC <- buf
+	s.txnC <- event{
+		csv: newTxnInfoEvent(
+			op.Txn(),
+			txnUpdateSnapshotReasonEvent,
+			util.UnsafeBytesToString(info),
+		),
+	}
+	s.txnC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) TxnCommit(
@@ -253,7 +271,9 @@ func (s *service) TxnCommit(
 			op.Txn().ID,
 			buf,
 			func(e dataEvent) {
-				s.entryC <- e
+				s.entryC <- event{
+					csv: e,
+				}
 			},
 			&s.atomic.complexPKTables)
 		n++
@@ -263,7 +283,9 @@ func (s *service) TxnCommit(
 		buf.close()
 		return
 	}
-	s.entryBufC <- buf
+	s.entryC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) TxnRead(
@@ -300,10 +322,14 @@ func (s *service) TxnRead(
 		op.Txn().ID,
 		buf,
 		func(e dataEvent) {
-			s.entryC <- e
+			s.entryC <- event{
+				csv: e,
+			}
 		},
 		&s.atomic.complexPKTables)
-	s.entryBufC <- buf
+	s.entryC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) TxnReadBlock(
@@ -334,12 +360,17 @@ func (s *service) TxnReadBlock(
 	}
 
 	buf := reuse.Alloc[buffer](nil)
-	s.entryC <- newReadBlockEvent(
-		time.Now().UnixNano(),
-		op.Txn().ID,
-		tableID,
-		buf.writeHexWithBytes(block))
-	s.entryBufC <- buf
+	s.entryC <- event{
+		csv: newReadBlockEvent(
+			time.Now().UnixNano(),
+			op.Txn().ID,
+			tableID,
+			buf.writeHexWithBytes(block),
+		),
+	}
+	s.entryC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) TxnWrite(
@@ -377,10 +408,14 @@ func (s *service) TxnWrite(
 		buf,
 		typ,
 		func(e dataEvent) {
-			s.entryC <- e
+			s.entryC <- event{
+				csv: e,
+			}
 		},
 		&s.atomic.complexPKTables)
-	s.entryBufC <- buf
+	s.entryC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) TxnAdjustWorkspace(
@@ -429,10 +464,14 @@ func (s *service) TxnAdjustWorkspace(
 				adjustCount,
 				offsetCount,
 				func(e dataEvent) {
-					s.entryC <- e
+					s.entryC <- event{
+						csv: e,
+					}
 				},
 				&s.atomic.complexPKTables)
-			s.entryBufC <- buf
+			s.entryC <- event{
+				buffer: buf,
+			}
 		}()
 		offsetCount++
 	}
@@ -442,65 +481,73 @@ func (s *service) TxnEventEnabled() bool {
 	return s.atomic.txnEventEnabled.Load()
 }
 
-func (s *service) handleTxnActive(event client.TxnEvent) {
+func (s *service) handleTxnActive(e client.TxnEvent) {
 	if s.atomic.closed.Load() {
 		return
 	}
 
-	if !event.CostEvent && s.atomic.txnEventEnabled.Load() {
-		s.txnC <- newTxnActive(event.Txn)
-	}
-
-	if s.atomic.txnActionEventEnabled.Load() {
-		s.doTxnEventAction(event)
-	}
-}
-
-func (s *service) handleTxnUpdateSnapshot(event client.TxnEvent) {
-	if s.atomic.closed.Load() {
-		return
-	}
-
-	if event.CostEvent && s.atomic.txnEventEnabled.Load() {
-		s.txnC <- newTxnSnapshotUpdated(event.Txn)
-	}
-
-	if s.atomic.txnActionEventEnabled.Load() {
-		s.doTxnEventAction(event)
-	}
-}
-
-func (s *service) handleTxnCommit(event client.TxnEvent) {
-	if s.atomic.closed.Load() {
-		return
-	}
-
-	if event.CostEvent && s.atomic.txnEventEnabled.Load() {
-		s.txnC <- newTxnClosed(event.Txn)
-		if event.Err != nil {
-			s.doAddTxnError(event.Txn.ID, event.Err)
+	if !e.CostEvent && s.atomic.txnEventEnabled.Load() {
+		s.txnC <- event{
+			csv: newTxnActive(e.Txn),
 		}
 	}
 
 	if s.atomic.txnActionEventEnabled.Load() {
-		s.doTxnEventAction(event)
+		s.doTxnEventAction(e)
 	}
 }
 
-func (s *service) handleTxnRollback(event client.TxnEvent) {
+func (s *service) handleTxnUpdateSnapshot(e client.TxnEvent) {
 	if s.atomic.closed.Load() {
 		return
 	}
 
-	if event.CostEvent && s.atomic.txnEventEnabled.Load() {
-		s.txnC <- newTxnClosed(event.Txn)
-		if event.Err != nil {
-			s.doAddTxnError(event.Txn.ID, event.Err)
+	if e.CostEvent && s.atomic.txnEventEnabled.Load() {
+		s.txnC <- event{
+			csv: newTxnSnapshotUpdated(e.Txn),
 		}
 	}
 
 	if s.atomic.txnActionEventEnabled.Load() {
-		s.doTxnEventAction(event)
+		s.doTxnEventAction(e)
+	}
+}
+
+func (s *service) handleTxnCommit(e client.TxnEvent) {
+	if s.atomic.closed.Load() {
+		return
+	}
+
+	if e.CostEvent && s.atomic.txnEventEnabled.Load() {
+		s.txnC <- event{
+			csv: newTxnClosed(e.Txn),
+		}
+		if e.Err != nil {
+			s.doAddTxnError(e.Txn.ID, e.Err)
+		}
+	}
+
+	if s.atomic.txnActionEventEnabled.Load() {
+		s.doTxnEventAction(e)
+	}
+}
+
+func (s *service) handleTxnRollback(e client.TxnEvent) {
+	if s.atomic.closed.Load() {
+		return
+	}
+
+	if e.CostEvent && s.atomic.txnEventEnabled.Load() {
+		s.txnC <- event{
+			csv: newTxnClosed(e.Txn),
+		}
+		if e.Err != nil {
+			s.doAddTxnError(e.Txn.ID, e.Err)
+		}
+	}
+
+	if s.atomic.txnActionEventEnabled.Load() {
+		s.doTxnEventAction(e)
 	}
 }
 
@@ -599,12 +646,20 @@ func (s *service) TxnStatementCompleted(
 	sql string,
 	cost time.Duration,
 	seq uint64,
+	affectRows int,
 	err error,
 ) {
 	if !s.Enabled(FeatureTraceTxnAction) &&
 		!s.Enabled(FeatureTraceTxn) &&
 		!s.Enabled(FeatureTraceStatement) {
 		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	if err == nil {
+		err = infoErr{
+			info: buf.writeInt(int64(affectRows)),
+		}
 	}
 
 	s.AddTxnDurationAction(
@@ -619,6 +674,10 @@ func (s *service) TxnStatementCompleted(
 		op,
 		sql,
 		cost)
+
+	s.txnActionC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) AddTxnDurationAction(
@@ -671,6 +730,51 @@ func (s *service) AddTxnAction(
 		err)
 }
 
+func (s *service) AddTxnActionInfo(
+	op client.TxnOperator,
+	eventType client.EventType,
+	seq uint64,
+	tableID uint64,
+	value func(Writer),
+) {
+	if !s.Enabled(FeatureTraceTxnAction) {
+		return
+	}
+
+	if s.atomic.closed.Load() {
+		return
+	}
+
+	filters := s.atomic.txnFilters.Load()
+	if skipped := filters.filter(op); skipped {
+		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	w := writer{
+		buf: buf.buf,
+		dst: buf.alloc(1024),
+		idx: buf.buf.GetWriteIndex(),
+	}
+	value(w)
+
+	s.txnActionC <- event{
+		csv: actionEvent{
+			ts:        time.Now().UnixNano(),
+			action:    eventType.Name,
+			actionSeq: seq,
+			tableID:   tableID,
+			value:     0,
+			unit:      w.data(),
+			txnID:     op.Txn().ID,
+			err:       "",
+		},
+	}
+	s.txnActionC <- event{
+		buffer: buf,
+	}
+}
+
 func (s *service) doTxnEventAction(event client.TxnEvent) {
 	unit := ""
 	if event.CostEvent {
@@ -699,15 +803,17 @@ func (s *service) doAddTxnAction(
 	if err != nil {
 		e = err.Error()
 	}
-	s.txnActionC <- actionEvent{
-		ts:        time.Now().UnixNano(),
-		action:    action,
-		actionSeq: actionSequence,
-		tableID:   tableID,
-		value:     int64(value),
-		unit:      unit,
-		txnID:     txnID,
-		err:       e,
+	s.txnActionC <- event{
+		csv: actionEvent{
+			ts:        time.Now().UnixNano(),
+			action:    action,
+			actionSeq: actionSequence,
+			tableID:   tableID,
+			value:     int64(value),
+			unit:      unit,
+			txnID:     txnID,
+			err:       e,
+		},
 	}
 }
 
@@ -792,8 +898,8 @@ func (s *service) RefreshTxnFilters() error {
 
 			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 				for i := 0; i < rows; i++ {
-					methods = append(methods, cols[0].GetStringAt(i))
-					values = append(values, cols[1].GetStringAt(i))
+					methods = append(methods, cols[0].UnsafeGetStringAt(i))
+					values = append(values, cols[1].UnsafeGetStringAt(i))
 				}
 				return true
 			})
@@ -841,29 +947,19 @@ func (s *service) RefreshTxnFilters() error {
 func (s *service) handleTxnEvents(ctx context.Context) {
 	s.handleEvent(
 		ctx,
-		s.txnCSVFile,
 		8,
 		EventTxnTable,
 		s.txnC,
-		s.txnBufC)
+	)
 }
 
 func (s *service) handleTxnActionEvents(ctx context.Context) {
 	s.handleEvent(
 		ctx,
-		s.txnActionCSVFile,
 		9,
 		EventTxnActionTable,
 		s.txnActionC,
-		s.txnActionBufC)
-}
-
-func (s *service) txnCSVFile() string {
-	return filepath.Join(s.dir, fmt.Sprintf("txn-%d.csv", s.seq.Add(1)))
-}
-
-func (s *service) txnActionCSVFile() string {
-	return filepath.Join(s.dir, fmt.Sprintf("txn-action-%d.csv", s.seq.Add(1)))
+	)
 }
 
 func addTxnFilterSQL(
@@ -874,4 +970,12 @@ func addTxnFilterSQL(
 		TraceTxnFilterTable,
 		method,
 		value)
+}
+
+type infoErr struct {
+	info string
+}
+
+func (e infoErr) Error() string {
+	return e.info
 }

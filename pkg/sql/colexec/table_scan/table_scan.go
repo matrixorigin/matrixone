@@ -137,6 +137,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			bat)
 
 		bat.Cnt = 1
+		anal.InputBlock()
 		anal.S3IOByte(bat)
 		batSize := bat.Size()
 		arg.maxAllocSize = max(arg.maxAllocSize, batSize)

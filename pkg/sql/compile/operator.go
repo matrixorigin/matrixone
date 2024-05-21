@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 
@@ -266,6 +267,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Result = t.Result
 		arg.Typs = t.Typs
 		arg.IsShuffle = t.IsShuffle
+		res.Arg = arg
+	case vm.ProductL2:
+		t := sourceIns.Arg.(*productl2.Argument)
+		arg := productl2.NewArgument()
+		arg.Result = t.Result
+		arg.Typs = t.Typs
+		arg.OnExpr = t.OnExpr
 		res.Arg = arg
 	case vm.Projection:
 		t := sourceIns.Arg.(*projection.Argument)
@@ -1064,7 +1072,7 @@ func constructWindow(_ context.Context, n *plan.Node, proc *process.Process) *wi
 				if err != nil {
 					panic(err)
 				}
-				cfg = []byte(vec.GetStringAt(0))
+				cfg = []byte(vec.UnsafeGetStringAt(0))
 				vec.Free(proc.Mp())
 
 				args = f.F.Args[:len(f.F.Args)-1]
@@ -1114,7 +1122,7 @@ func constructSample(n *plan.Node, outputRowCount bool) *sample.Argument {
 	panic("only support sample by rows / percent now.")
 }
 
-func constructGroup(_ context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, shuffleDop int, proc *process.Process) *group.Argument {
+func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleDop int, proc *process.Process) *group.Argument {
 	aggregationExpressions := make([]aggexec.AggFuncExecExpression, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
@@ -1133,7 +1141,7 @@ func constructGroup(_ context.Context, n, cn *plan.Node, ibucket, nbucket int, n
 					if err != nil {
 						panic(err)
 					}
-					cfg = []byte(vec.GetStringAt(0))
+					cfg = []byte(vec.UnsafeGetStringAt(0))
 					vec.Free(proc.Mp())
 
 					args = f.F.Args[:len(f.F.Args)-1]
@@ -1150,10 +1158,10 @@ func constructGroup(_ context.Context, n, cn *plan.Node, ibucket, nbucket int, n
 		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
 	}
 
-	shuffle := false
+	shuffleGroup := false
 	var preAllocSize uint64 = 0
 	if n.Stats != nil && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
-		shuffle = true
+		shuffleGroup = true
 		if cn.NodeType == plan.Node_TABLE_SCAN && len(cn.FilterList) == 0 {
 			// if group on scan without filter, stats for hashmap is accurate to do preAlloc
 			// tune it up a little bit in case it is not so average after shuffle
@@ -1166,7 +1174,7 @@ func constructGroup(_ context.Context, n, cn *plan.Node, ibucket, nbucket int, n
 	arg.Types = typs
 	arg.NeedEval = needEval
 	arg.Exprs = n.GroupBy
-	arg.IsShuffle = shuffle
+	arg.IsShuffle = shuffleGroup
 	arg.PreAllocSize = preAllocSize
 	return arg
 }
@@ -1423,6 +1431,18 @@ func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) 
 	arg.Typs = typs
 	arg.Result = result
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	return arg
+}
+
+func constructProductL2(n *plan.Node, typs []types.Type, proc *process.Process) *productl2.Argument {
+	result := make([]colexec.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
+	}
+	arg := productl2.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.OnExpr = colexec.RewriteFilterExprList(n.OnList)
 	return arg
 }
 
@@ -1683,7 +1703,6 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
-
 	case vm.Product:
 		arg := in.Arg.(*product.Argument)
 		ret.NeedHashMap = false
@@ -1691,7 +1710,13 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
-
+	case vm.ProductL2:
+		arg := in.Arg.(*productl2.Argument)
+		ret.NeedHashMap = false
+		ret.Typs = arg.Typs
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 	case vm.LoopAnti:
 		arg := in.Arg.(*loopanti.Argument)
 		ret.NeedHashMap = false

@@ -829,6 +829,8 @@ func (s *service) bootstrap() error {
 		panic(err)
 	}
 
+	trace.GetService().EnableFlush()
+
 	if s.cfg.AutomaticUpgrade {
 		return s.stopper.RunTask(func(ctx context.Context) {
 			ctx, cancel := context.WithTimeout(ctx, time.Minute*120)
@@ -855,7 +857,9 @@ func (s *service) initTxnTraceService() {
 		trace.WithEnable(s.cfg.Txn.Trace.Enable, s.cfg.Txn.Trace.Tables),
 		trace.WithBufferSize(s.cfg.Txn.Trace.BufferSize),
 		trace.WithFlushBytes(int(s.cfg.Txn.Trace.FlushBytes)),
-		trace.WithFlushDuration(s.cfg.Txn.Trace.FlushDuration.Duration))
+		trace.WithFlushDuration(s.cfg.Txn.Trace.FlushDuration.Duration),
+		trace.WithLoadToS3(!s.cfg.Txn.Trace.LoadToMO, s.etlFS),
+	)
 	if err != nil {
 		panic(err)
 	}
@@ -870,8 +874,11 @@ func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileS
 	}
 	reader, writer := io.Pipe()
 	go func() {
-		// dump all goroutines
-		_ = profile.ProfileRuntime(profileType, writer, 2)
+		debug := 0
+		if profile.GOROUTINE == profileType {
+			debug = 2
+		}
+		_ = profile.ProfileRuntime(profileType, writer, debug)
 		_ = writer.Close()
 	}()
 	writeVec := fileservice.IOVector{

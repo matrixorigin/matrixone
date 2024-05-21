@@ -264,6 +264,9 @@ func (rt *Routine) handleRequest(req *Request) error {
 	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration)
 	rt.setCancelRequestFunc(cancelRequestFunc)
 	ses.UpdateDebugString()
+	ses.ResetFPrints()
+	ses.EnterFPrint(0)
+	defer ses.ExitFPrint(0)
 
 	if rt.needPrintSessionInfo() {
 		ses.Info(routineCtx, "mo received first request")
@@ -401,6 +404,8 @@ func (rt *Routine) cleanup() {
 		ses := rt.getSession()
 		//step A: rollback the txn
 		if ses != nil {
+			ses.EnterFPrint(110)
+			defer ses.ExitFPrint(110)
 			tempExecCtx := ExecCtx{
 				ses:    ses,
 				txnOpt: FeTxnOption{byRollback: true},

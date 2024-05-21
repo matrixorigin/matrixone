@@ -312,6 +312,13 @@ message Product {
   bool is_shuffle =4;
 }
 
+message ProductL2 {
+  repeated int32 rel_list = 1;
+  repeated int32 col_list = 2;
+  repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
+  plan.Expr  expr = 4;
+}
+
 message IndexJoin {
   repeated int32 result = 1;
   repeated plan.Type  types = 2 [(gogoproto.nullable) = false];
@@ -414,6 +421,7 @@ message Instruction{
   int32 parallel_id = 41;
   int32 max_parallel = 42;
   IndexJoin index_join = 43;
+  ProductL2 product_l2 = 44;
 }
 
 message AnalysisList {

@@ -26,11 +26,18 @@ import (
 	"runtime/pprof"
 	"sort"
 	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/felixge/fgprof"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 )
 
@@ -39,6 +46,7 @@ var (
 	allocsProfilePathFlag = flag.String("allocs-profile", "", "write allocs profile to the specified file")
 	heapProfilePathFlag   = flag.String("heap-profile", "", "write heap profile to the specified file")
 	httpListenAddr        = flag.String("debug-http", "", "http server listen address")
+	profileInterval       = flag.Duration("profile-interval", 0, "profile interval")
 	statusServer          = status.NewServer()
 )
 
@@ -372,4 +380,45 @@ func _formatBytes(n int64, unitIndex int) string {
 		str = fmt.Sprintf(" %d%s", rem, units[unitIndex])
 	}
 	return _formatBytes(next, unitIndex+1) + str
+}
+
+// saveProfilesLoop save profiles again and again until the
+// mo is terminated.
+func saveProfilesLoop(sigs chan os.Signal) {
+	if *profileInterval == 0 {
+		return
+	}
+
+	if *profileInterval < time.Second*10 {
+		*profileInterval = time.Second * 10
+	}
+
+	quit := false
+	tk := time.NewTicker(*profileInterval)
+	logutil.GetGlobalLogger().Info("save profiles loop started", zap.Duration("profile-interval", *profileInterval))
+	for {
+		select {
+		case <-tk.C:
+			saveProfiles()
+		case <-sigs:
+			quit = true
+		}
+		if quit {
+			break
+		}
+	}
+}
+
+func saveProfiles() {
+	//dump heap profile before stopping services
+	saveProfile(profile.HEAP)
+	//dump goroutine before stopping services
+	saveProfile(profile.GOROUTINE)
+}
+
+func saveProfile(typ string) string {
+	name, _ := uuid.NewV7()
+	profilePath := catalog.BuildProfilePath(typ, name.String())
+	cnservice.SaveProfile(profilePath, typ, globalEtlFS)
+	return profilePath
 }

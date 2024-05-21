@@ -145,6 +145,8 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	defer func() {
 		sess.Close()
 	}()
+	sess.EnterFPrint(112)
+	defer sess.ExitFPrint(112)
 	ie.proto.stashResult = false
 	if sql == "" {
 		return
@@ -164,6 +166,8 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
+	sess.EnterFPrint(113)
+	defer sess.ExitFPrint(113)
 	ie.proto.stashResult = true
 	sess.Info(ctx, "internalExecutor new session")
 	tempExecCtx := ExecCtx{
