@@ -86,7 +86,7 @@ func (replayer *Replayer) PreReplayWal() {
 func (replayer *Replayer) postReplayWal() {
 	processor := new(catalog.LoopProcessor)
 	processor.ObjectFn = func(entry *catalog.ObjectEntry) (err error) {
-		if entry.InMemoryDeletesExisted() {
+		if entry.InMemoryDeletesExistedLocked() {
 			entry.GetTable().DeletedDirties = append(entry.GetTable().DeletedDirties, entry)
 		}
 		return
