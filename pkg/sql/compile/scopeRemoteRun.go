@@ -769,6 +769,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			AffectedRows: t.AffectedRows(),
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
+			IBucket:      t.IBucket,
+			NBucket:      t.Nbucket,
 			// deleteCtx
 			RowIdIdx:              int32(t.DeleteCtx.RowIdIdx),
 			PartitionTableIds:     t.DeleteCtx.PartitionTableIDs,
@@ -1131,6 +1133,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg := deletion.NewArgument()
 		arg.RemoteDelete = t.RemoteDelete
 		arg.SegmentMap = t.SegmentMap
+		arg.IBucket = t.IBucket
+		arg.Nbucket = t.NBucket
 		arg.DeleteCtx = &deletion.DeleteCtx{
 			CanTruncate:           t.CanTruncate,
 			RowIdIdx:              int(t.RowIdIdx),
