@@ -1324,7 +1324,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 
 	specialSize := memo.GatherSpecialTableSize()
 	usages := memo.GatherAllAccSize()
-	for accId, _ := range usages {
+	for accId := range usages {
 		if accId != uint64(catalog.System_Account) {
 			usages[accId] += specialSize
 		}
