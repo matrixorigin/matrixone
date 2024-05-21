@@ -572,7 +572,6 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, opt
 			if v.MatchPrefix {
 				buf.WriteString(" Match Prefix ")
 			}
-			buf.WriteString(" tag: " + strconv.Itoa(int(v.Tag)))
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")

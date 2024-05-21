@@ -18,8 +18,6 @@ import (
 	"context"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/google/uuid"
 )
 
@@ -85,7 +83,7 @@ type MessageBoard struct {
 
 func NewMessageBoard() *MessageBoard {
 	m := &MessageBoard{
-		Messages: make([]*Message, 0, 1024),
+		Messages: make([]*Message, 0, 16),
 		Waiters:  make([]chan bool, 0, 16),
 		RwMutex:  &sync.RWMutex{},
 	}
@@ -93,19 +91,16 @@ func NewMessageBoard() *MessageBoard {
 }
 
 func (m *MessageBoard) SetMultiCN(center *MessageCenter, stmtId uuid.UUID) *MessageBoard {
-	logutil.Infof("set multiCN  messageBoard for stmtid %v", stmtId)
 	center.RwMutex.Lock()
 	defer center.RwMutex.Unlock()
 	mb, ok := center.StmtIDToBoard[stmtId]
 	if ok {
-		logutil.Infof("get messageBoard for stmtid %v, address %v", stmtId, &mb.RwMutex)
 		return mb
 	}
 	m.multiCN = true
 	m.stmtId = stmtId
 	m.MessageCenter = center
 	center.StmtIDToBoard[stmtId] = m
-	logutil.Infof("register messageBoard for stmtid %v, address %v", stmtId, &m.RwMutex)
 	return m
 }
 
@@ -132,7 +127,6 @@ type MessageReceiver struct {
 
 func (proc *Process) SendMessage(m Message) {
 	mb := proc.MessageBoard
-	logutil.Infof("send message %v to messageBoard address %v", m.GetMsgTag(), &mb.RwMutex)
 	if m.GetReceiverAddr().CnAddr == CURRENTCN { // message for current CN
 		mb.RwMutex.Lock()
 		mb.Messages = append(mb.Messages, &m)
@@ -197,10 +191,8 @@ func (mr *MessageReceiver) Free() {
 }
 
 func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) ([]Message, bool) {
-	logutil.Infof("trying to receive message %v on messageBoard address %v", mr.tags, &mr.mb.RwMutex)
 	var result = mr.receiveMessageNonBlock()
 	if !needBlock || len(result) > 0 {
-		logutil.Infof("receive message %v on messageBoard address %v", mr.tags, &mr.mb.RwMutex)
 		return result, false
 	}
 	if mr.waiter == nil {
@@ -214,14 +206,12 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 		if len(result) > 0 {
 			break
 		}
-		logutil.Infof("receive message %v on messageBoard address %v", mr.tags, &mr.mb.RwMutex)
 		select {
 		case <-mr.waiter:
 		case <-ctx.Done():
 			return result, true
 		}
 	}
-	logutil.Infof("receive message %v on messageBoard address %v", mr.tags, &mr.mb.RwMutex)
 	return result, false
 }
 
