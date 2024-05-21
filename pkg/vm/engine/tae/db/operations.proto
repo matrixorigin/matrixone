@@ -33,14 +33,6 @@ message AccessInfo {
     uint32 RoleID               = 3;
 }
 
-message CreateDatabaseReq {
-    option (gogoproto.typedecl) = false;
-    AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
-    string name                 = 2;
-    string CreateSql            = 3;
-    uint64 DatabaseId           = 4;
-}
-
 message FlushTable {
     option (gogoproto.typedecl) = false;
     AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];

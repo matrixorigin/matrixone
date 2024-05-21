@@ -31,6 +31,7 @@ import (
 const (
 	HashMapSizeForShuffle           = 160000
 	threshHoldForHybirdShuffle      = 4000000
+	threshHoldForHashShuffle        = 8000000
 	MAXShuffleDOP                   = 64
 	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
@@ -355,6 +356,9 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
+		if n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && n.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
+			n.Stats.HashmapStats.Shuffle = false
+		}
 	}
 }
 
