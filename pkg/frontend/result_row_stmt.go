@@ -30,7 +30,7 @@ import (
 // executeResultRowStmt run the statemet that responses result rows
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
-
+	var colDefs []*plan2.ColDef
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 
@@ -67,14 +67,14 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 	case *tree.ExplainAnalyze:
 		explainColName := "QUERY PLAN"
-		columns, err = GetExplainColumns(execCtx.reqCtx, explainColName)
+		colDefs, columns, err = GetExplainColumns(execCtx.reqCtx, explainColName)
 		if err != nil {
 			logError(ses, ses.GetDebugString(),
 				"Failed to get columns from ExplainColumns handler",
 				zap.Error(err))
 			return
 		}
-
+		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 		err = respColumnDefsWithoutFlush(ses, execCtx, columns)
 		if err != nil {
 			return
@@ -262,6 +262,8 @@ func respMixedResultRow(ses *Session,
 	if execCtx.skipRespClient {
 		return nil
 	}
+	//!!!the columnDef has been sent after the compiling ends. It should not be sent here again.
+	//only the result rows need to be sent.
 	mrs := ses.GetMysqlResultSet()
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
 		logError(ses, ses.GetDebugString(),

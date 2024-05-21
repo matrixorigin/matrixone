@@ -1,4 +1,3 @@
--- @bvt:issue#14784
 -- database level update/delete/insert
 create database if not exists snapshot_read;
 use snapshot_read;
@@ -266,7 +265,7 @@ drop table students;
 drop table users;
 -- @session
 
-restore account test_account database snapshot_read from snapshot sp_01 to account test_account;
+restore account test_account database snapshot_read from snapshot sp_01;
 
 -- @session:id=5&user=test_account:test_user&password=111
 select count(*) from snapshot_read.students;
@@ -278,7 +277,7 @@ select count(*) from snapshot_read.users;
 drop database snapshot_read;
 -- @session
 
-restore account test_account database snapshot_read from snapshot sp_01 to account test_account;
+restore account test_account database snapshot_read from snapshot sp_01;
 
 -- @session:id=7&user=test_account:test_user&password=111
 select count(*) from snapshot_read.students;
@@ -344,4 +343,3 @@ select count(*) from snapshot_read.users;
 drop snapshot sp_01;
 drop account test_account;
 drop account test_account_2;
--- @bvt:issue

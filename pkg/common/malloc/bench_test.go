@@ -33,21 +33,3 @@ func BenchmarkParallelAllocFree(b *testing.B) {
 		}
 	})
 }
-
-func BenchmarkAllocTyped(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		var f *float64
-		handle := AllocTyped(&f)
-		handle.Free()
-	}
-}
-
-func BenchmarkParallelAllocTyped(b *testing.B) {
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			var f *float64
-			handle := AllocTyped(&f)
-			handle.Free()
-		}
-	})
-}

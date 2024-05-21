@@ -15,6 +15,7 @@
 package rule
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -77,6 +78,10 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 }
 
 func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *plan.Expr {
+	if expr.Typ.Id == int32(types.T_interval) {
+		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
+	}
+
 	fn := expr.GetF()
 	if fn == nil {
 		if elist := expr.GetList(); elist != nil {

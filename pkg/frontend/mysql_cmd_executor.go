@@ -1801,7 +1801,7 @@ func handleEmptyStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.EmptyStmt) erro
 	return err
 }
 
-func GetExplainColumns(ctx context.Context, explainColName string) ([]interface{}, error) {
+func GetExplainColumns(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
 	}
@@ -1812,11 +1812,11 @@ func GetExplainColumns(ctx context.Context, explainColName string) ([]interface{
 		c.SetName(col.Name)
 		err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		columns[i] = c
 	}
-	return columns, err
+	return cols, columns, err
 }
 
 func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*explain.ExplainOptions, error) {
@@ -2675,12 +2675,6 @@ func executeStmt(ses *Session,
 
 // execute query
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
-	//fmt.Fprintln(os.Stderr, "doComQuery", input.getSql())
-	//defer func() {
-	//	if retErr != nil {
-	//		fmt.Fprintln(os.Stderr, "doComQuery", retErr)
-	//	}
-	//}()
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	// set the batch buf for stream scan
 	var inMemStreamScan []*kafka.Message
@@ -2700,17 +2694,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	//here,we only need the user_name.
 	userNameOnly := rootName
 
-	// proc := process.New(
-	// 	requestCtx,
-	// 	ses.GetMemPool(),
-	// 	getGlobalPu().TxnClient,
-	// 	nil,
-	// 	getGlobalPu().FileService,
-	// 	getGlobalPu().LockService,
-	// 	getGlobalPu().QueryClient,
-	// 	getGlobalPu().HAKeeperClient,
-	// 	getGlobalPu().UdfService,
-	// 	globalAicm)
 	proc := ses.proc
 	proc.Ctx = execCtx.reqCtx
 
@@ -2734,7 +2717,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		Buf:                  ses.GetBuffer(),
 		SourceInMemScanBatch: inMemStreamScan,
 	}
-	// proc.SetStmtProfile(&ses.stmtProfile)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
@@ -2768,8 +2750,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	proc.SessionInfo.User = userNameOnly
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
-	// ses.txnCompileCtx.SetProcess(proc)
-	// ses.proc.SessionInfo = proc.SessionInfo
 
 	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, &statsInfo)
@@ -2804,6 +2784,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	defer func() {
 		ses.SetMysqlResultSet(nil)
+		ses.rs = nil
+		ses.p = nil
 	}()
 
 	canCache := true

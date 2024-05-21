@@ -104,7 +104,7 @@ func TestDeleteChain1(t *testing.T) {
 
 	commitTxn(txn1)
 	assert.Nil(t, n1.PrepareCommit())
-	assert.Nil(t, n1.ApplyCommit())
+	assert.Nil(t, n1.ApplyCommit(txn1.ID))
 	t.Log(chain.StringLocked())
 
 	var startTs2 types.TS
@@ -176,7 +176,7 @@ func TestDeleteChain2(t *testing.T) {
 	commitTxn(txn1)
 	err = n1.PrepareCommit()
 	assert.Nil(t, err)
-	err = n1.ApplyCommit()
+	err = n1.ApplyCommit(txn1.ID)
 	assert.Nil(t, err)
 	t.Log(chain.StringLocked())
 
@@ -195,7 +195,7 @@ func TestDeleteChain2(t *testing.T) {
 	commitTxn(txn3)
 	err = n3.PrepareCommit()
 	assert.Nil(t, err)
-	err = n3.ApplyCommit()
+	err = n3.ApplyCommit(txn3.ID)
 	assert.Nil(t, err)
 	t.Log(chain.StringLocked())
 

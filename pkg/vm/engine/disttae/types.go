@@ -192,7 +192,6 @@ type Transaction struct {
 	rowId [6]uint32
 	segId types.Uuid
 	// use to cache opened snapshot tables by current txn.
-	//TODO::cache snapshot tables for snapshot read.
 	tableCache struct {
 		cachedIndex int
 		tableMap    *sync.Map
@@ -746,8 +745,7 @@ type withFilterMixin struct {
 
 		compPKPositions []uint16 // composite primary key pos in the columns
 
-		pkPos    int // -1 means no primary key in columns
-		rowidPos int // -1 means no rowid in columns
+		pkPos int // -1 means no primary key in columns
 
 		indexOfFirstSortedColumn int
 	}
@@ -797,7 +795,7 @@ type blockMergeReader struct {
 	*blockReader
 	table *txnTable
 
-	encodedPrimaryKey []byte
+	pkVal []byte
 
 	//for perfetch deletes
 	loaded     bool
