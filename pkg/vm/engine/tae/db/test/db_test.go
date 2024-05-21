@@ -6735,7 +6735,6 @@ func TestSnapshotGC(t *testing.T) {
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
-	db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
 	testutils.WaitExpect(5000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetMaxConsumed() == nil {
 			return false
