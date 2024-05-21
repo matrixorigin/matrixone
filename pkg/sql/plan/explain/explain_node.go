@@ -570,7 +570,7 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, opt
 				return "", err
 			}
 			if v.MatchPrefix {
-				buf.WriteString(" Match Prefix ")
+				buf.WriteString(" Match Prefix")
 			}
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
