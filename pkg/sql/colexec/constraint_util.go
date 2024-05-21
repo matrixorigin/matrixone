@@ -195,21 +195,20 @@ func BatchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx con
 }
 
 func GetRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (engine.Relation, error) {
-	var isTemp bool
-	isTemp = defines.TEMPORARY_DBNAME == ref.SchemaName
-	if isTemp {
-		dbSource, err := eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
-		if err != nil {
-			return nil, moerr.NewNoSuchTable(ctx, ref.SchemaName, ref.ObjName)
-		}
-		newObjeName := engine.GetTempTableName(ref.SchemaName, ref.ObjName)
-		ref.ObjName = newObjeName
-		return dbSource.Relation(ctx, newObjeName, proc)
-	} else {
-		dbSource, err := eg.Database(ctx, ref.SchemaName, proc.TxnOperator)
-		if err != nil {
-			return nil, err
-		}
-		return dbSource.Relation(ctx, ref.ObjName, proc)
+	dbSource, err := eg.Database(ctx, ref.SchemaName, proc.TxnOperator)
+	if err != nil {
+		return nil, err
 	}
+	relation, err := dbSource.Relation(ctx, ref.ObjName, proc)
+	if err == nil {
+		return relation, nil
+	}
+
+	// try to get temporary table
+	dbSource, err = eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
+	if err != nil {
+		return nil, moerr.NewNoSuchTable(ctx, ref.SchemaName, ref.ObjName)
+	}
+	newObjeName := engine.GetTempTableName(ref.SchemaName, ref.ObjName)
+	return dbSource.Relation(ctx, newObjeName, proc)
 }
