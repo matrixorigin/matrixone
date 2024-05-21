@@ -61,7 +61,7 @@ func NewCache(
 		}
 	}
 	c.l = lrucache.New(capacity, setFunc, getFunc, evictFunc)
-	c.allocator = malloc.NewDefault()
+	c.allocator = malloc.NewDefault(nil)
 	return &c
 }
 

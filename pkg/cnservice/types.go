@@ -241,6 +241,7 @@ type Config struct {
 			Dir           string        `toml:"dir"`
 			Enable        bool          `toml:"enable"`
 			Tables        []uint64      `toml:"tables"`
+			LoadToMO      bool          `toml:"load-to-mo"`
 		} `toml:"trace"`
 	} `toml:"txn"`
 

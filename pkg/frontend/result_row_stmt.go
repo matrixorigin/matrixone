@@ -29,6 +29,7 @@ import (
 // executeResultRowStmt run the statemet that responses result rows
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
+	var colDefs []*plan2.ColDef
 	ses.EnterFPrint(63)
 	defer ses.ExitFPrint(63)
 	switch statement := execCtx.stmt.(type) {
@@ -73,13 +74,15 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 	case *tree.ExplainAnalyze:
 		explainColName := "QUERY PLAN"
-		columns, err = GetExplainColumns(execCtx.reqCtx, explainColName)
+		colDefs, columns, err = GetExplainColumns(execCtx.reqCtx, explainColName)
 		if err != nil {
 			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from ExplainColumns handler",
 				zap.Error(err))
 			return
 		}
+
+		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 
 		ses.EnterFPrint(66)
 		defer ses.ExitFPrint(66)
