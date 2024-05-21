@@ -107,6 +107,11 @@ type StorageTxnOperator struct {
 	meta     txn.TxnMeta
 }
 
+func (s *StorageTxnOperator) SetFootPrints(prints [][2]uint32) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (s *StorageTxnOperator) IsSnapOp() bool {
 	panic("unimplemented")
 }

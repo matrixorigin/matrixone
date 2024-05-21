@@ -113,13 +113,13 @@ message StorageUsageResp_V0 {
 
 message StorageUsageReq {
     option (gogoproto.typedecl) = false;
-    repeated int32 AccIds = 1;
+    repeated int64 AccIds = 1;
 }
 
 message StorageUsageResp {
     option (gogoproto.typedecl)     = false;
     bool Succeed                    = 1;
-    repeated int32 AccIds           = 2;
+    repeated int64 AccIds           = 2;
     repeated uint64 Sizes            = 3;
     uint64 Magic                    = 4;
 }

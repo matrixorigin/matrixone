@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	hll "github.com/axiomhq/hyperloglog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -30,6 +31,47 @@ type approxCountFixedExec[T types.FixedSizeTExceptStrType] struct {
 	groups []*hll.Sketch
 }
 
+func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+
+	encoded := &EncodedAgg{
+		Info:   d,
+		Result: r,
+		Groups: nil,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i], err = exec.groups[i].MarshalBinary()
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *approxCountFixedExec[T]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+	err := exec.ret.unmarshal(result)
+	if err != nil {
+		return err
+	}
+	if len(groups) > 0 {
+		exec.groups = make([]*hll.Sketch, len(groups))
+		for i := range exec.groups {
+			exec.groups[i] = hll.New()
+			if err = exec.groups[i].UnmarshalBinary(groups[i]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 type approxCountVarExec struct {
 	singleAggInfo
 	singleAggExecExtraInformation
@@ -37,6 +79,47 @@ type approxCountVarExec struct {
 	ret aggFuncResult[uint64]
 
 	groups []*hll.Sketch
+}
+
+func (exec *approxCountVarExec) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+
+	encoded := &EncodedAgg{
+		Info:   d,
+		Result: r,
+		Groups: nil,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i], err = exec.groups[i].MarshalBinary()
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *approxCountVarExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+	err := exec.ret.unmarshal(result)
+	if err != nil {
+		return err
+	}
+	if len(groups) > 0 {
+		exec.groups = make([]*hll.Sketch, len(groups))
+		for i := range exec.groups {
+			exec.groups[i] = hll.New()
+			if err = exec.groups[i].UnmarshalBinary(groups[i]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func newApproxCountFixedExec[T types.FixedSizeTExceptStrType](mg AggMemoryManager, info singleAggInfo) AggFuncExec {
