@@ -272,11 +272,10 @@ func getBytesFromPrimaryVectorForHash(
 		}
 		return data[i*size : (i+1)*size], nil
 	} else if vec.GetType().IsVarlen() {
-		slice := vector.MustBytesCol(vec)
-		if i >= len(slice) {
+		if i >= vec.Length() {
 			return []byte{}, nil
 		}
-		return slice[i], nil
+		return vec.GetBytesAt(i), nil
 	}
 	panic(fmt.Sprintf("unknown type: %v", typ))
 }

@@ -190,10 +190,9 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 		rbat.SetRowCount(len(ures))
 		return rbat, nil
 	}
-	jsonSlice := vector.ExpandBytesCol(jsonVec)
 	rows := 0
-	for i := range jsonSlice {
-		json, err = fn(jsonSlice[i])
+	for i := 0; i < jsonVec.Length(); i++ {
+		json, err = fn(jsonVec.GetBytesAt(i))
 		if err != nil {
 			return nil, err
 		}

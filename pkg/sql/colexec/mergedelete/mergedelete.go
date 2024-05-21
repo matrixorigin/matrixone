@@ -64,17 +64,17 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	// |  blk_id  | batch.Marshal(int64 offset) | CNBlockOffset (CN Block )                 |  partitionIdx
 	// |  blk_id  | batch.Marshal(rowId)        | RawRowIdBatch (DN Blcok )                 |  partitionIdx
 	// |  blk_id  | batch.Marshal(int64 offset) | RawBatchOffset(RawBatch[in txn workspace])|  partitionIdx
-	blkIds := vector.MustStrCol(bat.GetVector(0))
-	deltaLocs := vector.MustBytesCol(bat.GetVector(1))
+	blkIds := bat.GetVector(0)
+	deltaLocs := bat.GetVector(1)
 	typs := vector.MustFixedCol[int8](bat.GetVector(2))
 
 	// If the target table is a partition table, Traverse partition subtables for separate processing
 	if len(ap.PartitionSources) > 0 {
 		partitionIdxs := vector.MustFixedCol[int32](bat.GetVector(3))
 		for i := 0; i < bat.RowCount(); i++ {
-			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
+			name = fmt.Sprintf("%s|%d", blkIds.UnsafeGetStringAt(i), typs[i])
 			bat := &batch.Batch{}
-			if err := bat.UnmarshalBinary(deltaLocs[i]); err != nil {
+			if err := bat.UnmarshalBinary(deltaLocs.GetBytesAt(i)); err != nil {
 				return result, err
 			}
 			bat.Cnt = 1
@@ -87,9 +87,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	} else {
 		// If the target table is a general table
 		for i := 0; i < bat.RowCount(); i++ {
-			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
+			name = fmt.Sprintf("%s|%d", blkIds.UnsafeGetStringAt(i), typs[i])
 			bat := &batch.Batch{}
-			if err := bat.UnmarshalBinary(deltaLocs[i]); err != nil {
+			if err := bat.UnmarshalBinary(deltaLocs.GetBytesAt(i)); err != nil {
 				return result, err
 			}
 			bat.Cnt = 1

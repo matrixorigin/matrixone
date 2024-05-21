@@ -532,7 +532,7 @@ func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionState) 
 	return dirtyBlks
 }
 
-func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (err error) {
+func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) error {
 	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
 	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
 
@@ -541,9 +541,9 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 		return nil
 	}
 	for _, bat := range bats {
-		vs := vector.MustStrCol(bat.GetVector(0))
-		for _, deltaLoc := range vs {
-			location, err := blockio.EncodeLocationFromString(deltaLoc)
+		vs := bat.GetVector(0)
+		for i := 0; i < vs.Length(); i++ {
+			location, err := blockio.EncodeLocationFromString(vs.UnsafeGetStringAt(i))
 			if err != nil {
 				return err
 			}
@@ -557,12 +557,12 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			if err != nil {
 				return err
 			}
-			defer release()
 			rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
 			for _, rowId := range rowIds {
 				_, offset := rowId.Decode()
 				*offsets = append(*offsets, int64(offset))
 			}
+			release()
 		}
 	}
 	return nil
@@ -582,9 +582,9 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 			continue
 		}
 		for _, bat := range bats {
-			vs := vector.MustStrCol(bat.GetVector(0))
-			for _, metalLoc := range vs {
-				location, err := blockio.EncodeLocationFromString(metalLoc)
+			vs := bat.GetVector(0)
+			for i := 0; i < vs.Length(); i++ {
+				location, err := blockio.EncodeLocationFromString(vs.UnsafeGetStringAt(i))
 				if err != nil {
 					return err
 				}
