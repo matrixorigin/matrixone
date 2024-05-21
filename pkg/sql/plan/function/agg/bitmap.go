@@ -20,28 +20,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
-func RegisterBitmapConstruct1(id int64) {
-	aggexec.RegisterSingleAggFromFixedToVar(
-		aggexec.MakeSingleAgg2RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), BitmapConstructReturnType, false, true),
-			newAggBitmapConstruct,
-			InitAggBitmapConstruct,
-			FillAggBitmapConstruct, nil, FillsAggBitmapConstruct,
-			MergeAggBitmapConstruct,
-			FlushAggBitmapConstruct,
-		))
+func RegisterBitmapConstruct2(id int64) {
+	aggexec.RegisterAggFromFixedRetBytes(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), BitmapConstructReturnType, true),
+		nil, generateBitmapGroupContext, nil,
+		aggBitmapConstructFill, aggBitmapConstructFills, aggBitmapConstructMerge, aggBitmapConstructFlush)
 }
 
-func RegisterBitmapOr1(id int64) {
-	aggexec.RegisterSingleAggFromVarToVar(
-		aggexec.MakeSingleAgg4RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitmapOrReturnType, false, true),
-			newAggBitmapOr,
-			InitAggBitmapOr,
-			FillAggBitmapOr, nil, FillsAggBitmapOr,
-			MergeAggBitmapOr,
-			FlushAggBitmapOr,
-		))
+func RegisterBitmapOr2(id int64) {
+	aggexec.RegisterAggFromBytesRetBytes(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitmapOrReturnType, true),
+		nil, generateBitmapGroupContext, nil,
+		aggBitmapOrFill, aggBitmapOrFills, aggBitmapConstructMerge, aggBitmapConstructFlush)
 }
 
 var BitmapConstructSupportedTypes = []types.T{
@@ -52,61 +42,61 @@ func BitmapConstructReturnType(_ []types.Type) types.Type {
 	return types.T_varbinary.ToType()
 }
 
-type aggBitmapConstruct struct {
+type aggBitmapGroupContext struct {
 	bmp *roaring.Bitmap
 }
 
-func newAggBitmapConstruct() aggexec.SingleAggFromFixedRetVar[uint64] {
-	return &aggBitmapConstruct{}
+func generateBitmapGroupContext(_ types.Type, _ ...types.Type) aggexec.AggGroupExecContext {
+	return &aggBitmapGroupContext{bmp: roaring.New()}
 }
-
-func (a *aggBitmapConstruct) Marshal() []byte {
-	b, _ := a.bmp.MarshalBinary()
+func (a *aggBitmapGroupContext) Marshal() []byte {
+	b, _ := a.bmp.ToBytes()
 	return b
 }
-func (a *aggBitmapConstruct) Unmarshal(bs []byte) {
+func (a *aggBitmapGroupContext) Unmarshal(bs []byte) {
 	a.bmp = roaring.New()
 	_ = a.bmp.UnmarshalBinary(bs)
 }
 
-func InitAggBitmapConstruct(
-	exec aggexec.SingleAggFromFixedRetVar[uint64], set aggexec.AggBytesSetter, arg, ret types.Type) error {
-	a := exec.(*aggBitmapConstruct)
-	a.bmp = roaring.New()
-	return nil
-}
-func FillAggBitmapConstruct(
-	exec aggexec.SingleAggFromFixedRetVar[uint64],
-	value uint64, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	a := exec.(*aggBitmapConstruct)
+func aggBitmapConstructFill(
+	groupCtx aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value uint64, isEmpty bool,
+	resultGetter aggexec.AggBytesGetter, resultSetter aggexec.AggBytesSetter) error {
+	a := groupCtx.(*aggBitmapGroupContext)
 	a.bmp.Add(uint32(value))
 	return nil
 }
-func FillsAggBitmapConstruct(
-	exec aggexec.SingleAggFromFixedRetVar[uint64],
-	value uint64, isNull bool, count int, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	if !isNull {
-		return FillAggBitmapConstruct(exec, value, getter, setter)
-	}
-	return nil
+func aggBitmapConstructFills(
+	groupCtx aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value uint64, count int, isEmpty bool,
+	resultGetter aggexec.AggBytesGetter, resultSetter aggexec.AggBytesSetter) error {
+	return aggBitmapConstructFill(groupCtx, nil, value, isEmpty, resultGetter, resultSetter)
 }
-func MergeAggBitmapConstruct(
-	exec1, exec2 aggexec.SingleAggFromFixedRetVar[uint64],
-	getter1, getter2 aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	a1 := exec1.(*aggBitmapConstruct)
-	a2 := exec2.(*aggBitmapConstruct)
+func aggBitmapConstructMerge(
+	groupCtx1, groupCtx2 aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
+	resultGetter1, resultGetter2 aggexec.AggBytesGetter,
+	resultSetter aggexec.AggBytesSetter) error {
+	if isEmpty2 {
+		return nil
+	}
+	a1 := groupCtx1.(*aggBitmapGroupContext)
+	a2 := groupCtx2.(*aggBitmapGroupContext)
 	a1.bmp.Or(a2.bmp)
 	return nil
 }
-func FlushAggBitmapConstruct(
-	exec aggexec.SingleAggFromFixedRetVar[uint64],
-	getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	a := exec.(*aggBitmapConstruct)
-	res, err := a.bmp.MarshalBinary()
+func aggBitmapConstructFlush(
+	groupCtx aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	resultGetter aggexec.AggBytesGetter,
+	resultSetter aggexec.AggBytesSetter) error {
+	a := groupCtx.(*aggBitmapGroupContext)
+	b, err := a.bmp.MarshalBinary()
 	if err != nil {
 		return err
 	}
-	return setter(res)
+	return resultSetter(b)
 }
 
 var BitmapOrSupportedTypes = []types.T{
@@ -115,64 +105,26 @@ var BitmapOrSupportedTypes = []types.T{
 
 var BitmapOrReturnType = BitmapConstructReturnType
 
-type aggBitmapOr struct {
-	bmp *roaring.Bitmap
-}
-
-func newAggBitmapOr() aggexec.SingleAggFromVarRetVar {
-	return &aggBitmapOr{}
-}
-
-func (a *aggBitmapOr) Marshal() []byte {
-	b, _ := a.bmp.MarshalBinary()
-	return b
-}
-func (a *aggBitmapOr) Unmarshal(bs []byte) {
-	a.bmp = roaring.New()
-	_ = a.bmp.UnmarshalBinary(bs)
-}
-
-func InitAggBitmapOr(
-	exec aggexec.SingleAggFromVarRetVar, set aggexec.AggBytesSetter, arg, ret types.Type) error {
-	a := exec.(*aggBitmapOr)
-	a.bmp = roaring.New()
-	return nil
-}
-func FillAggBitmapOr(
-	exec aggexec.SingleAggFromVarRetVar,
-	value []byte, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
+func aggBitmapOrFill(
+	groupCtx aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value []byte, isEmpty bool,
+	resultGetter aggexec.AggBytesGetter, resultSetter aggexec.AggBytesSetter) error {
 	bmp := roaring.New()
 	if err := bmp.UnmarshalBinary(value); err != nil {
 		return err
 	}
 
-	a := exec.(*aggBitmapOr)
+	a := groupCtx.(*aggBitmapGroupContext)
+	if isEmpty {
+		a.bmp = bmp
+		return nil
+	}
 	a.bmp.Or(bmp)
 	return nil
 }
-func FillsAggBitmapOr(
-	exec aggexec.SingleAggFromVarRetVar,
-	value []byte, isNull bool, count int, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	if !isNull {
-		return FillAggBitmapOr(exec, value, getter, setter)
-	}
-	return nil
-}
-func MergeAggBitmapOr(
-	exec1, exec2 aggexec.SingleAggFromVarRetVar,
-	getter1, getter2 aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	a1 := exec1.(*aggBitmapOr)
-	a2 := exec2.(*aggBitmapOr)
-	a1.bmp.Or(a2.bmp)
-	return nil
-}
-func FlushAggBitmapOr(
-	exec aggexec.SingleAggFromVarRetVar,
-	getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	a := exec.(*aggBitmapOr)
-	res, err := a.bmp.MarshalBinary()
-	if err != nil {
-		return err
-	}
-	return setter(res)
+func aggBitmapOrFills(
+	groupCtx aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value []byte, count int, isEmpty bool,
+	resultGetter aggexec.AggBytesGetter, resultSetter aggexec.AggBytesSetter) error {
+	return aggBitmapOrFill(groupCtx, nil, value, isEmpty, resultGetter, resultSetter)
 }

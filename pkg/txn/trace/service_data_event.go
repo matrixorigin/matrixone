@@ -17,7 +17,6 @@ package trace
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -316,7 +315,7 @@ func (s *service) RefreshTableFilters() error {
 			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 				for i := 0; i < rows; i++ {
 					id := vector.MustFixedCol[uint64](cols[0])[i]
-					columns := cols[1].GetStringAt(i)
+					columns := cols[1].UnsafeGetStringAt(i)
 					filters = append(filters, NewKeepTableFilter(id, strings.Split(columns, ",")))
 				}
 				return true
@@ -338,15 +337,10 @@ func (s *service) RefreshTableFilters() error {
 func (s *service) handleDataEvents(ctx context.Context) {
 	s.handleEvent(
 		ctx,
-		s.dataCSVFile,
 		9,
 		EventDataTable,
 		s.entryC,
 	)
-}
-
-func (s *service) dataCSVFile() string {
-	return filepath.Join(s.dir, fmt.Sprintf("data-%d.csv", s.seq.Add(1)))
 }
 
 func addTableFilterSQL(
