@@ -17,7 +17,6 @@ package trace
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -187,7 +186,6 @@ func (s *service) RefreshStatementFilters() error {
 func (s *service) handleStatements(ctx context.Context) {
 	s.handleEvent(
 		ctx,
-		s.slowStatementCSVFile,
 		4,
 		TraceStatementTable,
 		s.statementC,
@@ -202,8 +200,4 @@ func addStatementFilterSQL(
 		TraceStatementFilterTable,
 		method,
 		value)
-}
-
-func (s *service) slowStatementCSVFile() string {
-	return filepath.Join(s.dir, fmt.Sprintf("slow-%d.csv", s.seq.Add(1)))
 }
