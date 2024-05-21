@@ -28,7 +28,7 @@ select count(*) from s3t;
 select * from s3t where col1 = 23;
 -- @session
 
-restore account acc01 from snapshot sp01 to account acc01;
+restore account acc01 from snapshot sp01;
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
@@ -52,7 +52,7 @@ select avg(col1) from s3t;
 delete from s3t where col1 > 30000;
 -- @session
 
-restore account acc01 from snapshot sp02 to account acc01;
+restore account acc01 from snapshot sp02;
 
 -- @session:id=1&user=acc01:test_account&password=111
 select count(*) from s3t where col1 > 2000;
@@ -61,7 +61,7 @@ select avg(col1) from s3t;
 show create table s3t;
 -- @session
 
-restore account acc01 from snapshot sp01 to account acc01;
+restore account acc01 from snapshot sp01;
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
@@ -201,7 +201,7 @@ select * from acc_test03.table04;
 show create table acc_test04.index03;
 -- @session
 
-restore account acc01 from snapshot sp04 to account acc01;
+restore account acc01 from snapshot sp04;
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
@@ -252,7 +252,7 @@ create table table03 (col1 int);
 insert into table03 values (1),(2);
 -- @session
 
-restore account acc01 from snapshot sp07 to account acc01;
+restore account acc01 from snapshot sp07;
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test01;
@@ -261,7 +261,7 @@ select * from table01;
 select * from table02;
 -- @session
 
-restore account acc01 from snapshot sp08 to account acc01;
+restore account acc01 from snapshot sp08;
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test01;
@@ -312,7 +312,7 @@ insert into table02 values(139, 'database', null);
 alter table table02 drop column new;
 -- @session
 
-restore account acc01 from snapshot sp10 to account acc01;
+restore account acc01 from snapshot sp10;
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test02;

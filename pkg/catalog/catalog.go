@@ -146,40 +146,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		cmds := genCreateTables(GenRows(bat))
 		idx := 0
 		for i := range cmds {
-			// tae's logic
-			if len(cmds[i].Comment) > 0 {
-				cmds[i].Defs = append(cmds[i].Defs, &engine.CommentDef{
-					Comment: cmds[i].Comment,
-				})
-			}
-			if len(cmds[i].Viewdef) > 0 {
-				cmds[i].Defs = append(cmds[i].Defs, &engine.ViewDef{
-					View: cmds[i].Viewdef,
-				})
-			}
-			if len(cmds[i].Constraint) > 0 {
-				c := new(engine.ConstraintDef)
-				if err = c.UnmarshalBinary(cmds[i].Constraint); err != nil {
-					return nil, nil, err
-				}
-				cmds[i].Defs = append(cmds[i].Defs, c)
-			}
-			if cmds[i].Partitioned > 0 || len(cmds[i].Partition) > 0 {
-				cmds[i].Defs = append(cmds[i].Defs, &engine.PartitionDef{
-					Partitioned: cmds[i].Partitioned,
-					Partition:   cmds[i].Partition,
-				})
-			}
-			pro := new(engine.PropertiesDef)
-			pro.Properties = append(pro.Properties, engine.Property{
-				Key:   SystemRelAttr_Kind,
-				Value: string(cmds[i].RelKind),
-			})
-			pro.Properties = append(pro.Properties, engine.Property{
-				Key:   SystemRelAttr_CreateSQL,
-				Value: cmds[i].CreateSql,
-			})
-			cmds[i].Defs = append(cmds[i].Defs, pro)
+			// fill columns
 			if err = fillCreateTable(&idx, &cmds[i], es); err != nil {
 				return nil, nil, err
 			}
@@ -232,19 +199,55 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].Constraint = row[MO_TABLES_CONSTRAINT_IDX].([]byte)
 		cmds[i].RelKind = string(row[MO_TABLES_RELKIND_IDX].([]byte))
 	}
+
+	for i := range cmds {
+		// tae's logic
+		if len(cmds[i].Comment) > 0 {
+			cmds[i].Defs = append(cmds[i].Defs, &engine.CommentDef{
+				Comment: cmds[i].Comment,
+			})
+		}
+		if len(cmds[i].Viewdef) > 0 {
+			cmds[i].Defs = append(cmds[i].Defs, &engine.ViewDef{
+				View: cmds[i].Viewdef,
+			})
+		}
+		if len(cmds[i].Constraint) > 0 {
+			c := new(engine.ConstraintDef)
+			if err := c.UnmarshalBinary(cmds[i].Constraint); err != nil {
+				panic(err)
+			}
+			cmds[i].Defs = append(cmds[i].Defs, c)
+		}
+		if cmds[i].Partitioned > 0 || len(cmds[i].Partition) > 0 {
+			cmds[i].Defs = append(cmds[i].Defs, &engine.PartitionDef{
+				Partitioned: cmds[i].Partitioned,
+				Partition:   cmds[i].Partition,
+			})
+		}
+		pro := new(engine.PropertiesDef)
+		pro.Properties = append(pro.Properties, engine.Property{
+			Key:   SystemRelAttr_Kind,
+			Value: string(cmds[i].RelKind),
+		})
+		pro.Properties = append(pro.Properties, engine.Property{
+			Key:   SystemRelAttr_CreateSQL,
+			Value: cmds[i].CreateSql,
+		})
+		cmds[i].Defs = append(cmds[i].Defs, pro)
+	}
 	return cmds
 }
 
-func genUpdateConstraint(rows [][]any) []UpdateConstraint {
-	cmds := make([]UpdateConstraint, len(rows))
+func genUpdateConstraint(rows [][]any) []*api.AlterTableReq {
+	reqs := make([]*api.AlterTableReq, len(rows))
 	for i, row := range rows {
-		cmds[i].TableId = row[MO_TABLES_REL_ID_IDX].(uint64)
-		cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
-		cmds[i].TableName = string(row[MO_TABLES_REL_NAME_IDX].([]byte))
-		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
-		cmds[i].Constraint = row[MO_TABLES_UPDATE_CONSTRAINT].([]byte)
+		did := row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+		tid := row[MO_TABLES_REL_ID_IDX].(uint64)
+		cstr := row[MO_TABLES_UPDATE_CONSTRAINT].([]byte)
+		reqs[i] = api.NewUpdateConstraintReq(did, tid, string(cstr))
 	}
-	return cmds
+	return reqs
 }
 
 func genUpdateAltertable(rows [][]any) ([]*api.AlterTableReq, error) {

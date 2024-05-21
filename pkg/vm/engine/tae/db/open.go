@@ -123,6 +123,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
 	)
+	catalog.DefaultTableDataFactory = dataFactory.MakeTableFactory()
 	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo); err != nil {
 		return
 	}
