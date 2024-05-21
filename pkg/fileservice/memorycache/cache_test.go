@@ -24,8 +24,12 @@ import (
 
 func TestCache(t *testing.T) {
 	// test New with postSet, postGet, postEvict
-	c := NewCache(100, func(key cache.CacheKey, value CacheData) {},
-		func(key cache.CacheKey, value CacheData) {}, func(key cache.CacheKey, value CacheData) {})
+	c := NewCache(
+		100,
+		func(key cache.CacheKey, value CacheData) {},
+		func(key cache.CacheKey, value CacheData) {},
+		func(key cache.CacheKey, value CacheData) {},
+	)
 	// test Alloc and Set
 	key := cache.CacheKey{Path: "x", Sz: 1}
 	data := c.Alloc(1)

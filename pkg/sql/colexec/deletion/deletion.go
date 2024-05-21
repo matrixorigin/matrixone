@@ -53,7 +53,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(": delete rows")
 }
 
-func (arg *Argument) Prepare(_ *process.Process) error {
+func (arg *Argument) Prepare(proc *process.Process) error {
 	if arg.RemoteDelete {
 		arg.ctr = new(container)
 		arg.ctr.state = vm.Build
@@ -63,6 +63,16 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 		arg.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[types.Blockid]*batch.Batch)
 		arg.ctr.partitionId_blockId_deltaLoc = make(map[int]map[types.Blockid]*batch.Batch)
 	}
+
+	ref := arg.DeleteCtx.Ref
+	eng := arg.DeleteCtx.Engine
+	partitionNames := arg.DeleteCtx.PartitionTableNames
+	rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
+	if err != nil {
+		return err
+	}
+	arg.source = rel
+	arg.partitionSources = partitionRels
 	return nil
 }
 
@@ -224,7 +234,7 @@ func (arg *Argument) normalDelete(proc *process.Process) (vm.CallResult, error) 
 			tempRows := uint64(delBatch.RowCount())
 			if tempRows > 0 {
 				affectedRows += tempRows
-				err = delCtx.PartitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
+				err = arg.partitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
 				if err != nil {
 					delBatch.Clean(proc.Mp())
 					return result, err
@@ -240,7 +250,7 @@ func (arg *Argument) normalDelete(proc *process.Process) (vm.CallResult, error) 
 		}
 		affectedRows = uint64(delBatch.RowCount())
 		if affectedRows > 0 {
-			err = delCtx.Source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
+			err = arg.source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
 			if err != nil {
 				delBatch.Clean(proc.GetMPool())
 				return result, err

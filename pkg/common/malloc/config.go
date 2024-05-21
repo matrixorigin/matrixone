@@ -14,10 +14,14 @@
 
 package malloc
 
-import "testing"
+type Config struct {
+	// CheckFraction controls the fraction of checked deallocations
+	// On average, 1 / fraction of deallocations will be checked for double free or missing free
+	CheckFraction uint32 `toml:"check-fraction"`
+}
 
-func TestClassAllocator(t *testing.T) {
-	testAllocator(t, func() Allocator {
-		return NewClassAllocator(1)
-	})
+var defaultConfig Config
+
+func SetDefaultConfig(c Config) {
+	defaultConfig = c
 }
