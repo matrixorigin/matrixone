@@ -1412,7 +1412,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		nodeStats := ns[n.Children[0]].Stats
 
 		var arg *deletion.Argument
-		arg, err = constructDeletion(n, c.e, c.proc)
+		arg, err = constructDeletion(n, c.e)
 		if err != nil {
 			return nil, err
 		}
@@ -1425,8 +1425,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeDelete,
 				Arg: mergedelete.NewArgument().
-					WithDelSource(arg.DeleteCtx.Source).
-					WithPartitionSources(arg.DeleteCtx.PartitionSources),
+					WithObjectRef(arg.DeleteCtx.Ref).
+					WithParitionNames(arg.DeleteCtx.PartitionTableNames).
+					WithEngine(c.e),
 			})
 			rs.Magic = MergeDelete
 			ss = []*Scope{rs}
@@ -1552,7 +1553,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			c.proc.Debugf(c.ctx, "insert of '%s' write s3\n", c.sql)
 			if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
 				var insertArg *insert.Argument
-				insertArg, err = constructInsert(n, c.e, c.proc)
+				insertArg, err = constructInsert(n, c.e)
 				if err != nil {
 					return nil, err
 				}
@@ -1562,8 +1563,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				rs.Instructions = append(rs.Instructions, vm.Instruction{
 					Op: vm.MergeBlock,
 					Arg: mergeblock.NewArgument().
-						WithTbl(insertArg.InsertCtx.Rel).
-						WithPartitionSources(insertArg.InsertCtx.PartitionSources).
+						WithEngine(c.e).
+						WithObjectRef(insertArg.InsertCtx.Ref).
+						WithParitionNames(insertArg.InsertCtx.PartitionTableNames).
 						WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows),
 				})
 				ss = []*Scope{rs}
@@ -1606,7 +1608,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				}
 				for i := range scopes {
 					var insertArg *insert.Argument
-					insertArg, err = constructInsert(n, c.e, c.proc)
+					insertArg, err = constructInsert(n, c.e)
 					if err != nil {
 						return nil, err
 					}
@@ -1620,7 +1622,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				}
 
 				var insertArg *insert.Argument
-				insertArg, err = constructInsert(n, c.e, c.proc)
+				insertArg, err = constructInsert(n, c.e)
 				if err != nil {
 					return nil, err
 				}
@@ -1631,8 +1633,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				rs.Instructions = append(rs.Instructions, vm.Instruction{
 					Op: vm.MergeBlock,
 					Arg: mergeblock.NewArgument().
-						WithTbl(insertArg.InsertCtx.Rel).
-						WithPartitionSources(insertArg.InsertCtx.PartitionSources).
+						WithEngine(c.e).
+						WithObjectRef(insertArg.InsertCtx.Ref).
+						WithParitionNames(insertArg.InsertCtx.PartitionTableNames).
 						WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows),
 				})
 				ss = []*Scope{rs}
@@ -1641,7 +1644,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		} else {
 			for i := range ss {
 				var insertArg *insert.Argument
-				insertArg, err = constructInsert(n, c.e, c.proc)
+				insertArg, err = constructInsert(n, c.e)
 				if err != nil {
 					return nil, err
 				}
