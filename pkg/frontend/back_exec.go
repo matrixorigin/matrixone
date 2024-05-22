@@ -54,6 +54,8 @@ func (back *backExec) Close() {
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) error {
+	back.backSes.EnterFPrint(91)
+	defer back.backSes.ExitFPrint(91)
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
@@ -98,6 +100,8 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 }
 
 func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uint32, toAccount uint32) error {
+	back.backSes.EnterFPrint(97)
+	defer back.backSes.ExitFPrint(97)
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
@@ -181,6 +185,8 @@ func (back *backExec) Clear() {
 // execute query
 func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	input *UserInput) (retErr error) {
+	backSes.EnterFPrint(92)
+	defer backSes.ExitFPrint(92)
 	backSes.GetTxnCompileCtx().SetExecCtx(execCtx)
 	backSes.SetSql(input.getSql())
 	//the ses.GetUserName returns the user_name with the account_name.
@@ -323,6 +329,8 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 func executeStmtInBack(backSes *backSession,
 	execCtx *ExecCtx,
 ) (err error) {
+	execCtx.ses.EnterFPrint(93)
+	defer execCtx.ses.ExitFPrint(93)
 	var cmpBegin time.Time
 	var ret interface{}
 
@@ -356,6 +364,8 @@ func executeStmtInBack(backSes *backSession,
 
 	cmpBegin = time.Now()
 
+	execCtx.ses.EnterFPrint(94)
+	defer execCtx.ses.ExitFPrint(94)
 	if ret, err = execCtx.cw.Compile(execCtx, backSes.GetOutputCallback(execCtx)); err != nil {
 		return
 	}
@@ -487,6 +497,8 @@ func executeSQLInBackgroundSession(reqCtx context.Context, upstream *Session, mp
 // To be clear, only for the select statement derived from the set_var statement
 // in an independent transaction
 func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCtx, stmt tree.Statement) error {
+	ses.EnterFPrint(111)
+	defer ses.ExitFPrint(111)
 	switch stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
 	default:
@@ -790,6 +802,8 @@ func (backSes *backSession) GetGlobalSystemVariableValue(ctx context.Context, na
 }
 
 func (backSes *backSession) GetBackgroundExec(ctx context.Context) BackgroundExec {
+	backSes.EnterFPrint(98)
+	defer backSes.ExitFPrint(98)
 	return NewBackgroundExec(
 		ctx,
 		backSes,

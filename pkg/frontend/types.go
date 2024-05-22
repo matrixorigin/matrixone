@@ -338,6 +338,11 @@ type FeSession interface {
 	Close()
 	Clear()
 	getCachedPlan(sql string) *cachedPlan
+
+	GetFPrints() footPrints
+	ResetFPrints()
+	EnterFPrint(idx int)
+	ExitFPrint(idx int)
 }
 
 type ExecCtx struct {
@@ -424,6 +429,27 @@ type feSessionImpl struct {
 	uuid         uuid.UUID
 	debugStr     string
 	disableTrace bool
+	fprints      footPrints
+}
+
+func (ses *feSessionImpl) ResetFPrints() {
+	ses.fprints.reset()
+}
+
+func (ses *feSessionImpl) GetFPrints() footPrints {
+	return ses.fprints
+}
+
+func (ses *feSessionImpl) EnterFPrint(idx int) {
+	if ses != nil {
+		ses.fprints.addEnter(idx)
+	}
+}
+
+func (ses *feSessionImpl) ExitFPrint(idx int) {
+	if ses != nil {
+		ses.fprints.addExit(idx)
+	}
 }
 
 func (ses *feSessionImpl) Close() {
