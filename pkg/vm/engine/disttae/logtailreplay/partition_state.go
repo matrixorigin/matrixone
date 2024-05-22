@@ -45,8 +45,8 @@ type PartitionState struct {
 	tombstones *btree.BTreeG[ObjTombstoneRowEntry]
 
 	//TODO:: remove it.
-	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
-	dataRows     *btree.BTreeG[ObjDataRowEntry]
+	//primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
+	dataRows *btree.BTreeG[ObjDataRowEntry]
 	//TODO::build a index for dataRows by timestamp for truncate entry by ts when handle object/block insert.
 	//dataRowsIndexByTS *btree.BTreeG[DataRowsIndexByTSEntry]
 
@@ -131,7 +131,7 @@ type TombstoneRowEntry struct {
 	BlockID types.Blockid
 	Offset  uint32
 
-	// PK maybe nil
+	// PK maybe nil , in case of be compatible with old TN.
 	PK   []byte
 	Time types.TS
 }
@@ -181,44 +181,44 @@ func (d DataRowEntry) Less(than DataRowEntry) bool {
 	//return false
 }
 
-// RowEntry represents a version of a data row or tombstone row.
-type RowEntry struct {
-	BlockID types.Blockid // we need to iter by block id, so put it first to allow faster iteration
-	RowID   types.Rowid
-	Time    types.TS
-
-	ID                int64 // a unique version id, for primary index building and validating
-	Deleted           bool
-	Batch             *batch.Batch
-	Offset            int64
-	PrimaryIndexBytes []byte
-}
-
-func (r RowEntry) Less(than RowEntry) bool {
-	// asc
-	cmp := r.BlockID.Compare(than.BlockID)
-	if cmp < 0 {
-		return true
-	}
-	if cmp > 0 {
-		return false
-	}
-	// asc
-	if r.RowID.Less(than.RowID) {
-		return true
-	}
-	if than.RowID.Less(r.RowID) {
-		return false
-	}
-	// desc
-	if than.Time.Less(&r.Time) {
-		return true
-	}
-	if r.Time.Less(&than.Time) {
-		return false
-	}
-	return false
-}
+// RowEntry represents a version of a row or tombstone.
+//type RowEntry struct {
+//	BlockID types.Blockid // we need to iter by block id, so put it first to allow faster iteration
+//	RowID   types.Rowid
+//	Time    types.TS
+//
+//	ID                int64 // a unique version id, for primary index building and validating
+//	Deleted           bool
+//	Batch             *batch.Batch
+//	Offset            int64
+//	PrimaryIndexBytes []byte
+//}
+//
+//func (r RowEntry) Less(than RowEntry) bool {
+//	// asc
+//	cmp := r.BlockID.Compare(than.BlockID)
+//	if cmp < 0 {
+//		return true
+//	}
+//	if cmp > 0 {
+//		return false
+//	}
+//	// asc
+//	if r.RowID.Less(than.RowID) {
+//		return true
+//	}
+//	if than.RowID.Less(r.RowID) {
+//		return false
+//	}
+//	// desc
+//	if than.Time.Less(&r.Time) {
+//		return true
+//	}
+//	if r.Time.Less(&than.Time) {
+//		return false
+//	}
+//	return false
+//}
 
 type BlockEntry struct {
 	objectio.BlockInfo
@@ -294,53 +294,53 @@ func (o ObjectInfo) StatsValid() bool {
 	return o.ObjectStats.Rows() != 0
 }
 
-type ObjectIndexByCreateTSEntry struct {
-	ObjectInfo
-}
+//type ObjectIndexByCreateTSEntry struct {
+//	ObjectInfo
+//}
+//
+//func (o ObjectIndexByCreateTSEntry) Less(than ObjectIndexByCreateTSEntry) bool {
+//	//asc
+//	if o.CreateTime.Less(&than.CreateTime) {
+//
+//		return true
+//	}
+//	if than.CreateTime.Less(&o.CreateTime) {
+//		return false
+//	}
+//
+//	cmp := bytes.Compare(o.ObjectShortName()[:], than.ObjectShortName()[:])
+//	if cmp < 0 {
+//		return true
+//	}
+//	if cmp > 0 {
+//		return false
+//	}
+//	return false
+//}
+//
+//func (o *ObjectIndexByCreateTSEntry) Visible(ts types.TS) bool {
+//	return o.CreateTime.LessEq(&ts) &&
+//		(o.DeleteTime.IsEmpty() || ts.Less(&o.DeleteTime))
+//}
 
-func (o ObjectIndexByCreateTSEntry) Less(than ObjectIndexByCreateTSEntry) bool {
-	//asc
-	if o.CreateTime.Less(&than.CreateTime) {
-
-		return true
-	}
-	if than.CreateTime.Less(&o.CreateTime) {
-		return false
-	}
-
-	cmp := bytes.Compare(o.ObjectShortName()[:], than.ObjectShortName()[:])
-	if cmp < 0 {
-		return true
-	}
-	if cmp > 0 {
-		return false
-	}
-	return false
-}
-
-func (o *ObjectIndexByCreateTSEntry) Visible(ts types.TS) bool {
-	return o.CreateTime.LessEq(&ts) &&
-		(o.DeleteTime.IsEmpty() || ts.Less(&o.DeleteTime))
-}
-
-type PrimaryIndexEntry struct {
-	Bytes      []byte
-	RowEntryID int64
-
-	// fields for validating
-	BlockID types.Blockid
-	RowID   types.Rowid
-	Time    types.TS
-}
-
-func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
-	if res := bytes.Compare(p.Bytes, than.Bytes); res < 0 {
-		return true
-	} else if res > 0 {
-		return false
-	}
-	return p.RowEntryID < than.RowEntryID
-}
+//type PrimaryIndexEntry struct {
+//	Bytes      []byte
+//	RowEntryID int64
+//
+//	// fields for validating
+//	BlockID types.Blockid
+//	RowID   types.Rowid
+//	Time    types.TS
+//}
+//
+//func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
+//	if res := bytes.Compare(p.Bytes, than.Bytes); res < 0 {
+//		return true
+//	} else if res > 0 {
+//		return false
+//	}
+//	return p.RowEntryID < than.RowEntryID
+//}
 
 type ObjectIndexByTSEntry struct {
 	Time         types.TS // insert or delete time
@@ -382,12 +382,12 @@ func NewPartitionState(noData bool) *PartitionState {
 		Degree: 64,
 	}
 	return &PartitionState{
-		noData:          noData,
-		rows:            btree.NewBTreeGOptions((RowEntry).Less, opts),
-		tombstones:      btree.NewBTreeGOptions((ObjTombstoneRowEntry).Less, opts),
-		dataObjects:     btree.NewBTreeGOptions((ObjectEntry).Less, opts),
-		blockDeltas:     btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
-		primaryIndex:    btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
+		noData: noData,
+		//rows:            btree.NewBTreeGOptions((RowEntry).Less, opts),
+		tombstones:  btree.NewBTreeGOptions((ObjTombstoneRowEntry).Less, opts),
+		dataObjects: btree.NewBTreeGOptions((ObjectEntry).Less, opts),
+		blockDeltas: btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
+		//primaryIndex:    btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
 		dataRows:        btree.NewBTreeGOptions((ObjDataRowEntry).Less, opts),
 		dirtyBlocks:     btree.NewBTreeGOptions((types.Blockid).Less, opts),
 		objectIndexByTS: btree.NewBTreeGOptions((ObjectIndexByTSEntry).Less, opts),
@@ -397,11 +397,11 @@ func NewPartitionState(noData bool) *PartitionState {
 
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
-		rows:            p.rows.Copy(),
-		tombstones:      p.tombstones.Copy(),
-		dataObjects:     p.dataObjects.Copy(),
-		blockDeltas:     p.blockDeltas.Copy(),
-		primaryIndex:    p.primaryIndex.Copy(),
+		//rows:            p.rows.Copy(),
+		tombstones:  p.tombstones.Copy(),
+		dataObjects: p.dataObjects.Copy(),
+		blockDeltas: p.blockDeltas.Copy(),
+		//primaryIndex:    p.primaryIndex.Copy(),
 		dataRows:        p.dataRows.Copy(),
 		noData:          p.noData,
 		dirtyBlocks:     p.dirtyBlocks.Copy(),
@@ -785,23 +785,16 @@ func (p *PartitionState) truncateDataRowsByBlk(
 	if ok := objIter.Seek(objPivot); !ok {
 		return
 	}
+	item := objIter.Item()
+	if bytes.Compare(item.ShortObjName[:], objPivot.ShortObjName[:]) != 0 {
+		return
+	}
 
 	rows, done := objIter.Item().MutateRows()
 	iter := rows.Copy().Iter()
 	defer iter.Release()
-	firstCalled := false
-	for {
 
-		if !firstCalled {
-			if !iter.First() {
-				break
-			}
-			firstCalled = true
-		} else {
-			if !iter.Next() {
-				break
-			}
-		}
+	for ok := iter.First(); ok; ok = iter.Next() {
 		item := iter.Item()
 		if *item.RowID.BorrowBlockID() != bid {
 			continue
@@ -812,7 +805,29 @@ func (p *PartitionState) truncateDataRowsByBlk(
 		}
 	}
 	done()
+	//firstCalled := false
+	//for {
 
+	//	if !firstCalled {
+	//		if !iter.First() {
+	//			break
+	//		}
+	//		firstCalled = true
+	//	} else {
+	//		if !iter.Next() {
+	//			break
+	//		}
+	//	}
+	//	item := iter.Item()
+	//	if *item.RowID.BorrowBlockID() != bid {
+	//		continue
+	//	}
+	//	if item.Time.LessEq(&ts) {
+	//		rows.Delete(item)
+	//		numDeleted++
+	//	}
+	//}
+	//done()
 	return
 }
 
@@ -832,8 +847,12 @@ func (p *PartitionState) truncateTombstonesByBlk(
 	if ok := objIter.Seek(objPivot); !ok {
 		return
 	}
+	item := objIter.Item()
+	if bytes.Compare(item.ShortObjName[:], objPivot.ShortObjName[:]) != 0 {
+		return
+	}
 
-	tombstones, done := objIter.Item().MutateTombstones()
+	tombstones, done := item.MutateTombstones()
 	iter := tombstones.Copy().Iter()
 	defer iter.Release()
 	pivot := TombstoneRowEntry{

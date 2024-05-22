@@ -17,9 +17,10 @@ package logtailreplay
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/stretchr/testify/assert"
 )
 
 func BenchmarkPartitionStateConcurrentWriteAndIter(b *testing.B) {
@@ -47,7 +48,7 @@ func BenchmarkPartitionStateConcurrentWriteAndIter(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			state := partition.state.Load()
-			iter := state.NewRowsIter(types.BuildTS(0, 0), nil, false)
+			iter := state.NewRowsIter(types.BuildTS(0, 0))
 			iter.Close()
 		}
 	})

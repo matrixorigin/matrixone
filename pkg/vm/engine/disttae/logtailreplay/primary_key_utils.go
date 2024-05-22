@@ -40,8 +40,15 @@ func (p *PartitionState) PKExistInMemBetween(
 		dataRowIter := objItem.DataRows.Load().Copy().Iter()
 		defer dataRowIter.Release()
 
-		hasTombstone := objTombstoneIter.Seek(ObjTombstoneRowEntry{
+		hasTombstone := false
+		ret := objTombstoneIter.Seek(ObjTombstoneRowEntry{
 			ShortObjName: objItem.ShortObjName})
+		if ret {
+			item := objTombstoneIter.Item()
+			if bytes.Compare(item.ShortObjName[:], objItem.ShortObjName[:]) == 0 {
+				hasTombstone = true
+			}
+		}
 
 		for _, key := range keys {
 
@@ -61,10 +68,6 @@ func (p *PartitionState) PKExistInMemBetween(
 					return true, false
 				}
 
-				//some legacy deletion entries may not be indexed since old TN maybe
-				//don't take pk in log tail when delete row , so check all rows for changes.
-				//pivot.BlockID = entry.RowID.CloneBlockID()
-				//pivot.Offset  = entry.RowID.GetRowOffset()
 				if !hasTombstone {
 					break
 				}
@@ -80,6 +83,10 @@ func (p *PartitionState) PKExistInMemBetween(
 					continue
 				}
 				tombstone := tombstoneIter.Item()
+				if tombstone.BlockID.Compare(entry.RowID.CloneBlockID()) != 0 ||
+					tombstone.Offset != entry.RowID.GetRowOffset() {
+					continue
+				}
 				if tombstone.Time.GreaterEq(&from) {
 					return true, false
 				}

@@ -51,6 +51,13 @@ func BuildTestBlockid(a, b int64) (ret Blockid) {
 	return
 }
 
+func BuildRowid(blockid Blockid, offset uint32) (ret Rowid) {
+	copy(ret[:BlockidSize], blockid[:])
+	copy(ret[BlockidSize:], EncodeUint32(&offset))
+	return
+
+}
+
 func CompareRowidRowidAligned(a, b Rowid) int {
 	return bytes.Compare(a[:], b[:])
 }

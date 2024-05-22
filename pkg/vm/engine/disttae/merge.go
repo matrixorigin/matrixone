@@ -326,7 +326,7 @@ func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfo) (
 	}
 	deltalocDel := dels.Count()
 	// read tombstone in memory
-	iter := t.state.NewRowsIter(t.snapshot, &info.BlockID, true)
+	iter := t.state.NewRowTombstoneIter(t.snapshot, &info.BlockID)
 	for iter.Next() {
 		entry := iter.Entry()
 		_, offset := entry.RowID.Decode()

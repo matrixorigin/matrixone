@@ -18,12 +18,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPartitionStateRowsIter(t *testing.T) {
@@ -35,7 +36,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 	{
 		// empty rows
-		iter := state.NewRowsIter(types.BuildTS(0, 0), nil, false)
+		iter := state.NewRowsIter(types.BuildTS(0, 0))
 		n := 0
 		for iter.Next() {
 			n++
@@ -46,7 +47,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 	{
 		// iter again
-		iter := state.NewRowsIter(types.BuildTS(0, 0), nil, false)
+		iter := state.NewRowsIter(types.BuildTS(0, 0))
 		n := 0
 		for iter.Next() {
 			n++
@@ -86,7 +87,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	// rows iter
 	for i := 0; i < num; i++ {
 		ts := types.BuildTS(int64(i), 0)
-		iter := state.NewRowsIter(ts, nil, false)
+		iter := state.NewRowsIter(ts)
 		n := 0
 		rowIDs := make(map[types.Rowid]bool)
 		for iter.Next() {
@@ -138,7 +139,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 	// rows iter
 	for i := 0; i < num; i++ {
-		iter := state.NewRowsIter(types.BuildTS(int64(i), 0), nil, false)
+		iter := state.NewRowsIter(types.BuildTS(int64(i), 0))
 		n := 0
 		rowIDs := make(map[types.Rowid]bool)
 		for iter.Next() {
@@ -172,7 +173,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	for i := 0; i < num; i++ {
 		{
 			// rows iter
-			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i), 0), nil, false)
+			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i), 0))
 			rowIDs := make(map[types.Rowid]bool)
 			n := 0
 			for iter.Next() {
@@ -188,7 +189,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		{
 			// deleted rows iter
 			blockID, _ := buildRowID(i + 1).Decode()
-			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i+1), 0), &blockID, true)
+			iter := state.NewRowTombstoneIter(types.BuildTS(int64(deleteAt+i+1), 0), &blockID)
 			rowIDs := make(map[types.Rowid]bool)
 			n := 0
 			for iter.Next() {
@@ -248,7 +249,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	for i := 0; i < num; i++ {
 		{
 			blockID, _ := buildRowID(i + 1).Decode()
-			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i), 0), &blockID, true)
+			iter := state.NewRowTombstoneIter(types.BuildTS(int64(deleteAt+i), 0), &blockID)
 			rowIDs := make(map[types.Rowid]bool)
 			n := 0
 			for iter.Next() {
@@ -320,8 +321,6 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 		// should be deleted
 		iter := state.NewRowsIter(
 			types.BuildTS(num*2, 0),
-			nil,
-			false,
 		)
 		n := 0
 		for iter.Next() {
@@ -333,10 +332,9 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 
 	{
 		// iter deleted
-		iter := state.NewRowsIter(
+		iter := state.NewRowTombstoneIter(
 			types.BuildTS(num*2, 0),
 			nil,
-			true,
 		)
 		n := 0
 		for iter.Next() {
@@ -412,8 +410,6 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 		// should be deleted
 		iter := state.NewRowsIter(
 			types.BuildTS(num*2, 0),
-			nil,
-			false,
 		)
 		n := 0
 		for iter.Next() {
@@ -425,7 +421,7 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 
 	{
 		// iter deleted
-		iter := state.NewRowsIter(
+		iter := state.NewRowTombstoneIter(
 			types.BuildTS(num*2, 0),
 			nil,
 			true,

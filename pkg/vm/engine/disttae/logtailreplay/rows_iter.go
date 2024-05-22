@@ -19,13 +19,136 @@ import (
 
 	"github.com/tidwall/btree"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 type RowsIter interface {
 	Next() bool
 	Close() error
 	Entry() RowEntry
+}
+
+type RowEntry struct {
+	//BlockID types.Blockid // we need to iter by block id, so put it first to allow faster iteration
+	RowID types.Rowid
+	//PK    []byte
+	//Time    types.TS
+
+	//ID                int64 // a unique version id, for primary index building and validating
+	Deleted bool
+	Batch   *batch.Batch
+	Offset  int64
+	//PrimaryIndexBytes []byte
+}
+
+type rowTombstoneIter struct {
+	ts          types.TS
+	firstCalled bool
+	iter        btree.IterG[ObjTombstoneRowEntry]
+
+	firstIterated bool
+	tombstoneIter btree.IterG[TombstoneRowEntry]
+	curRow        RowEntry
+	//lastRowID    types.Rowid
+	checkBlockID bool
+	blockID      types.Blockid
+}
+
+func (p *PartitionState) NewRowTombstoneIter(
+	ts types.TS,
+	blockID *types.Blockid) *rowTombstoneIter {
+	iter := p.tombstones.Copy().Iter()
+	ret := &rowTombstoneIter{
+		ts:   ts,
+		iter: iter,
+	}
+	if blockID != nil {
+		ret.checkBlockID = true
+		ret.blockID = *blockID
+	}
+	return ret
+}
+
+func (p *rowTombstoneIter) Next() bool {
+
+	for {
+
+		for {
+
+			if !p.firstCalled {
+				if !p.iter.First() {
+					return false
+				}
+				p.firstCalled = true
+				p.tombstoneIter = p.iter.Item().Tombstones.Load().Copy().Iter()
+			}
+
+			if p.checkBlockID {
+				obj := p.iter.Item().ShortObjName
+				if bytes.Compare(objectio.ShortName(&p.blockID)[:], obj[:]) != 0 {
+					break
+				}
+			}
+
+			for {
+
+				if !p.firstIterated {
+					if p.checkBlockID {
+						if !p.tombstoneIter.Seek(TombstoneRowEntry{
+							BlockID: p.blockID,
+						}) {
+							break
+						}
+					} else {
+						if !p.tombstoneIter.First() {
+							break
+						}
+					}
+					p.firstIterated = true
+				} else {
+					if !p.tombstoneIter.Next() {
+						break
+					}
+				}
+				tombstone := p.tombstoneIter.Item()
+				//check block id
+				if p.checkBlockID && tombstone.BlockID != p.blockID {
+					break
+				}
+				if tombstone.Time.Greater(&p.ts) {
+					continue
+				}
+				p.curRow = RowEntry{
+					RowID:   types.BuildRowid(tombstone.BlockID, tombstone.Offset),
+					Deleted: true,
+				}
+				return true
+
+			}
+
+			break
+		}
+
+		p.tombstoneIter.Release()
+		//next object
+		if !p.iter.Next() {
+			return false
+		}
+		p.tombstoneIter = p.iter.Item().Tombstones.Load().Copy().Iter()
+		p.firstIterated = false
+
+	}
+}
+
+func (p *rowTombstoneIter) Entry() RowEntry {
+	return p.curRow
+}
+
+func (p *rowTombstoneIter) Close() error {
+	p.iter.Release()
+	return nil
 }
 
 type rowsIter struct {
@@ -39,7 +162,7 @@ type rowsIter struct {
 }
 
 // NewRowsIter creates a new iterator for data rows and tombstones.
-func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDeleted bool) *rowsIter {
+func (p *PartitionState) NewRowsIter(ts types.TS) *rowsIter {
 	iter := p.rows.Copy().Iter()
 	ret := &rowsIter{
 		ts:          ts,
@@ -112,17 +235,25 @@ func (p *rowsIter) Close() error {
 }
 
 type primaryKeyIter struct {
-	ts   types.TS
-	spec PrimaryKeyMatchSpec
+	ts          types.TS
+	spec        PrimaryKeyMatchSpec
+	firstCalled bool
 
-	//TODO:: change to *btree.IterG[DataRowEntry]
-	iter btree.IterG[*PrimaryIndexEntry]
+	objsRowIter  btree.IterG[ObjDataRowEntry]
+	objsTombIter btree.IterG[ObjTombstoneRowEntry]
 
-	rows *btree.BTreeG[RowEntry]
+	//iter    btree.IterG[*PrimaryIndexEntry]
 
-	//TODO:: change to *btree.IterG[DataRowEntry]
-	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
-	curRow       RowEntry
+	//data row iter for one object.
+	dataRowIter btree.IterG[DataRowEntry]
+	//data rows for one object.
+	dataRows *btree.BTreeG[DataRowEntry]
+
+	//rows       *btree.BTreeG[RowEntry]
+
+	//primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
+
+	curRow RowEntry
 }
 
 type PrimaryKeyMatchSpec struct {
@@ -139,19 +270,24 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 			var ok bool
 			if first {
 				first = false
-				ok = p.iter.Seek(&PrimaryIndexEntry{
-					Bytes: key,
+				ok = p.dataRowIter.Seek(DataRowEntry{
+					PK: key,
 				})
 			} else {
-				ok = p.iter.Next()
+				ok = p.dataRowIter.Next()
 			}
 
 			if !ok {
+				first = true
 				return false
 			}
-
-			item := p.iter.Item()
-			return bytes.Equal(item.Bytes, key)
+			if !bytes.Equal(p.dataRowIter.Item().PK, key) {
+				first = true
+				return false
+			}
+			return true
+			//item := p.dataRowIter.Item()
+			//return bytes.Equal(item.PK, key)
 		},
 	}
 }
@@ -164,19 +300,25 @@ func Prefix(prefix []byte) PrimaryKeyMatchSpec {
 			var ok bool
 			if first {
 				first = false
-				ok = p.iter.Seek(&PrimaryIndexEntry{
-					Bytes: prefix,
+				ok = p.dataRowIter.Seek(DataRowEntry{
+					PK: prefix,
 				})
 			} else {
-				ok = p.iter.Next()
+				ok = p.dataRowIter.Next()
 			}
 
 			if !ok {
+				first = true
 				return false
 			}
-
-			item := p.iter.Item()
-			return bytes.HasPrefix(item.Bytes, prefix)
+			//maybe iter.item > prefix.
+			if !bytes.HasPrefix(p.dataRowIter.Item().PK, prefix) {
+				first = true
+				return false
+			}
+			return true
+			//item := p.dataRowIter.Item()
+			//return bytes.HasPrefix(item.PK, prefix)
 		},
 	}
 }
@@ -223,7 +365,7 @@ func ExactIn(encodes [][]byte) PrimaryKeyMatchSpec {
 				first = false
 				// each seek may visit height items
 				// we choose to scan all if the seek is more expensive
-				if len(encodes)*p.primaryIndex.Height() > p.primaryIndex.Len() {
+				if len(encodes)*p.dataRows.Height() > p.dataRows.Len() {
 					iterateAll = true
 				}
 			}
@@ -233,6 +375,7 @@ func ExactIn(encodes [][]byte) PrimaryKeyMatchSpec {
 				case judge:
 					if iterateAll {
 						if !updateEncoded() {
+							first = true
 							return false
 						}
 						currentPhase = scan
@@ -243,24 +386,27 @@ func ExactIn(encodes [][]byte) PrimaryKeyMatchSpec {
 				case seek:
 					if !updateEncoded() {
 						// out of vec
+						first = true
 						return false
 					}
-					if !p.iter.Seek(&PrimaryIndexEntry{Bytes: encoded}) {
+					if !p.dataRowIter.Seek(DataRowEntry{PK: encoded}) {
+						first = true
 						return false
 					}
-					if match(p.iter.Item().Bytes) {
+					if match(p.dataRowIter.Item().PK) {
 						currentPhase = scan
 						return true
 					}
 
 				case scan:
-					if !p.iter.Next() {
+					if !p.dataRowIter.Next() {
+						first = true
 						return false
 					}
-					if match(p.iter.Item().Bytes) {
+					if match(p.dataRowIter.Item().PK) {
 						return true
 					}
-					p.iter.Prev()
+					p.dataRowIter.Prev()
 					currentPhase = judge
 				}
 			}
@@ -272,73 +418,149 @@ func (p *PartitionState) NewPrimaryKeyIter(
 	ts types.TS,
 	spec PrimaryKeyMatchSpec,
 ) *primaryKeyIter {
-	index := p.primaryIndex.Copy()
 	return &primaryKeyIter{
 		ts:           ts,
 		spec:         spec,
-		iter:         index.Iter(),
-		primaryIndex: index,
-		rows:         p.rows.Copy(),
+		objsRowIter:  p.dataRows.Copy().Iter(),
+		objsTombIter: p.tombstones.Copy().Iter(),
 	}
 }
 
 var _ RowsIter = new(primaryKeyIter)
 
 func (p *primaryKeyIter) Next() bool {
+
 	for {
-		if !p.spec.Move(p) {
-			return false
-		}
 
-		entry := p.iter.Item()
+		for {
 
-		// validate
-		valid := false
-		rowsIter := p.rows.Iter()
-		for ok := rowsIter.Seek(RowEntry{
-			BlockID: entry.BlockID,
-			RowID:   entry.RowID,
-			Time:    p.ts,
-		}); ok; ok = rowsIter.Next() {
-			row := rowsIter.Item()
-			if row.BlockID != entry.BlockID {
-				// no more
+			if !p.firstCalled {
+				if !p.objsRowIter.First() {
+					return false
+				}
+				p.firstCalled = true
+				p.dataRowIter = p.objsRowIter.Item().DataRows.Load().Copy().Iter()
+				p.dataRows = p.objsRowIter.Item().DataRows.Load()
+			}
+			if !p.spec.Move(p) {
 				break
 			}
-			if row.RowID != entry.RowID {
-				// no more
-				break
-			}
-			if row.Time.Greater(&p.ts) {
-				// not visible
+			entry := p.dataRowIter.Item()
+			//PK is not visible
+			if entry.Time.Greater(&p.ts) {
 				continue
 			}
-			if row.Deleted {
-				// visible and deleted, no longer valid
-				break
-			}
-			valid = row.ID == entry.RowEntryID
-			if valid {
-				p.curRow = row
-			}
-			break
-		}
-		rowsIter.Release()
 
-		if !valid {
-			continue
+			rowEntry := RowEntry{
+				RowID:  entry.RowID,
+				Batch:  entry.Batch,
+				Offset: entry.Offset,
+			}
+			shortName := *objectio.ShortName(entry.RowID.BorrowBlockID())
+			ok := p.objsTombIter.Seek(ObjTombstoneRowEntry{
+				ShortObjName: shortName,
+			})
+			if !ok {
+				p.curRow = rowEntry
+				return true
+			}
+			item := p.objsTombIter.Item()
+			if bytes.Compare(item.ShortObjName[:], shortName[:]) != 0 {
+				p.curRow = rowEntry
+				return true
+			}
+
+			//check tombstone.
+			tombstoneIter := item.Tombstones.Load().Copy().Iter()
+			ok = tombstoneIter.Seek(TombstoneRowEntry{
+				BlockID: entry.RowID.CloneBlockID(),
+				Offset:  entry.RowID.GetRowOffset(),
+			})
+			if !ok {
+				p.curRow = rowEntry
+				return true
+			}
+			tombstone := tombstoneIter.Item()
+			if tombstone.BlockID != entry.RowID.CloneBlockID() ||
+				tombstone.Offset != entry.RowID.GetRowOffset() {
+				p.curRow = rowEntry
+				return true
+			}
+			if tombstone.Time.Greater(&p.ts) {
+				p.curRow = rowEntry
+				return true
+			}
+
 		}
 
-		return true
+		p.dataRowIter.Release()
+		//next object
+		if !p.objsRowIter.Next() {
+			return false
+		}
+		p.dataRowIter = p.objsRowIter.Item().DataRows.Load().Copy().Iter()
+		p.dataRows = p.objsRowIter.Item().DataRows.Load()
+
 	}
+
 }
+
+//func (p *primaryKeyIter) Next() bool {
+//	for {
+//		if !p.spec.Move(p) {
+//			return false
+//		}
+//
+//		entry := p.iter.Item()
+//
+//		// validate
+//		valid := false
+//		rowsIter := p.rows.Iter()
+//		for ok := rowsIter.Seek(RowEntry{
+//			BlockID: entry.BlockID,
+//			RowID:   entry.RowID,
+//			Time:    p.ts,
+//		}); ok; ok = rowsIter.Next() {
+//			row := rowsIter.Item()
+//			if row.BlockID != entry.BlockID {
+//				// no more
+//				break
+//			}
+//			if row.RowID != entry.RowID {
+//				// no more
+//				break
+//			}
+//			if row.Time.Greater(&p.ts) {
+//				// not visible
+//				continue
+//			}
+//			if row.Deleted {
+//				// visible and deleted, no longer valid
+//				break
+//			}
+//			valid = row.ID == entry.RowEntryID
+//			if valid {
+//				p.curRow = row
+//			}
+//			break
+//		}
+//		rowsIter.Release()
+//
+//		if !valid {
+//			continue
+//		}
+//
+//		return true
+//	}
+//}
 
 func (p *primaryKeyIter) Entry() RowEntry {
 	return p.curRow
 }
 
 func (p *primaryKeyIter) Close() error {
-	p.iter.Release()
+	p.objsRowIter.Release()
+	p.objsTombIter.Release()
 	return nil
 }
 
@@ -347,18 +569,18 @@ type primaryKeyDelIter struct {
 	bid types.Blockid
 }
 
+// NewPrimaryKeyDelIter creates a new iterator to get tombstones by primary key and block id.
 func (p *PartitionState) NewPrimaryKeyDelIter(
 	ts types.TS,
 	spec PrimaryKeyMatchSpec,
 	bid types.Blockid,
 ) *primaryKeyDelIter {
-	iter := p.primaryIndex.Copy().Iter()
 	return &primaryKeyDelIter{
 		primaryKeyIter: primaryKeyIter{
-			ts:   ts,
-			spec: spec,
-			iter: iter,
-			rows: p.rows.Copy(),
+			ts:           ts,
+			spec:         spec,
+			objsRowIter:  p.dataRows.Copy().Iter(),
+			objsTombIter: p.tombstones.Copy().Iter(),
 		},
 		bid: bid,
 	}
@@ -367,54 +589,142 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 var _ RowsIter = new(primaryKeyDelIter)
 
 func (p *primaryKeyDelIter) Next() bool {
+
 	for {
-		if !p.spec.Move(&p.primaryKeyIter) {
+
+		for {
+
+			if !p.firstCalled {
+				if !p.objsRowIter.First() {
+					return false
+				}
+				p.firstCalled = true
+				p.dataRowIter = p.objsRowIter.Item().DataRows.Load().Copy().Iter()
+				p.dataRows = p.objsRowIter.Item().DataRows.Load()
+			}
+
+			if !p.spec.Move(&p.primaryKeyIter) {
+				break
+			}
+
+			entry := p.dataRowIter.Item()
+
+			//check whether the current object has tombstones.
+			shortName := *objectio.ShortName(entry.RowID.BorrowBlockID())
+			ok := p.objsTombIter.Seek(ObjTombstoneRowEntry{
+				ShortObjName: shortName,
+			})
+			if !ok {
+				//the current object has no tombstones.
+				break
+
+			}
+			item := p.objsTombIter.Item()
+			if bytes.Compare(item.ShortObjName[:], shortName[:]) != 0 {
+				//the current object has no tombstones.
+				break
+			}
+
+			if entry.RowID.BorrowBlockID().Compare(p.bid) != 0 {
+				continue
+			}
+
+			//PK is not visible
+			//if entry.Time.Greater(&p.ts) {
+			//	continue
+			//}
+
+			rowEntry := RowEntry{
+				RowID:  entry.RowID,
+				Batch:  entry.Batch,
+				Offset: entry.Offset,
+			}
+
+			//check tombstone.
+			tombstoneIter := item.Tombstones.Load().Copy().Iter()
+			ok = tombstoneIter.Seek(TombstoneRowEntry{
+				BlockID: entry.RowID.CloneBlockID(),
+				Offset:  entry.RowID.GetRowOffset(),
+			})
+			if !ok {
+				continue
+			}
+			tombstone := tombstoneIter.Item()
+			if tombstone.BlockID != entry.RowID.CloneBlockID() ||
+				tombstone.Offset != entry.RowID.GetRowOffset() {
+				continue
+			}
+			if tombstone.Time.Greater(&p.ts) {
+				continue
+			}
+
+			rowEntry.Deleted = true
+			p.curRow = rowEntry
+			return true
+
+		}
+
+		p.dataRowIter.Release()
+		//to check next object
+		if !p.objsRowIter.Next() {
 			return false
 		}
+		p.dataRowIter = p.objsRowIter.Item().DataRows.Load().Copy().Iter()
+		p.dataRows = p.objsRowIter.Item().DataRows.Load()
 
-		entry := p.iter.Item()
-
-		if entry.BlockID.Compare(p.bid) != 0 {
-			continue
-		}
-
-		// validate
-		valid := false
-		rowsIter := p.rows.Iter()
-		for ok := rowsIter.Seek(RowEntry{
-			BlockID: entry.BlockID,
-			RowID:   entry.RowID,
-			Time:    p.ts,
-		}); ok; ok = rowsIter.Next() {
-			row := rowsIter.Item()
-			if row.BlockID != entry.BlockID {
-				// no more
-				break
-			}
-			if row.RowID != entry.RowID {
-				// no more
-				break
-			}
-			if row.Time.Greater(&p.ts) {
-				// not visible
-				continue
-			}
-			if !row.Deleted {
-				// skip not deleted
-				continue
-			}
-			valid = row.ID == entry.RowEntryID
-			if valid {
-				p.curRow = row
-			}
-			break
-		}
-		rowsIter.Release()
-
-		if !valid {
-			continue
-		}
-
-		return true
 	}
+
 }
+
+//func (p *primaryKeyDelIter) Next() bool {
+//	for {
+//		if !p.spec.Move(&p.primaryKeyIter) {
+//			return false
+//		}
+//
+//		entry := p.iter.Item()
+//
+//		if entry.BlockID.Compare(p.bid) != 0 {
+//			continue
+//		}
+//
+//		// validate
+//		valid := false
+//		rowsIter := p.rows.Iter()
+//		for ok := rowsIter.Seek(RowEntry{
+//			BlockID: entry.BlockID,
+//			RowID:   entry.RowID,
+//			Time:    p.ts,
+//		}); ok; ok = rowsIter.Next() {
+//			row := rowsIter.Item()
+//			if row.BlockID != entry.BlockID {
+//				// no more
+//				break
+//			}
+//			if row.RowID != entry.RowID {
+//				// no more
+//				break
+//			}
+//			if row.Time.Greater(&p.ts) {
+//				// not visible
+//				continue
+//			}
+//			if !row.Deleted {
+//				// skip not deleted
+//				continue
+//			}
+//			valid = row.ID == entry.RowEntryID
+//			if valid {
+//				p.curRow = row
+//			}
+//			break
+//		}
+//		rowsIter.Release()
+//
+//		if !valid {
+//			continue
+//		}
+//
+//		return true
+//	}
+//}

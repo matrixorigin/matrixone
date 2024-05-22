@@ -192,7 +192,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	iter := partition.NewRowsIter(ts, nil, false)
+	iter := partition.NewRowsIter(ts)
 	defer func() { _ = iter.Close() }()
 	for iter.Next() {
 		entry := iter.Entry()
@@ -273,7 +273,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	handled := make(map[*batch.Batch]struct{})
 	// Calculate the in mem size
 	// TODO: It might includ some deleted row size
-	iter := part.NewRowsIter(ts, nil, false)
+	iter := part.NewRowsIter(ts)
 	defer func() { _ = iter.Close() }()
 	for iter.Next() {
 		entry := iter.Entry()
@@ -2219,8 +2219,6 @@ func (tbl *txnTable) newReader(
 	if iter == nil {
 		iter = state.NewRowsIter(
 			types.TimestampToTS(ts),
-			nil,
-			false,
 		)
 	}
 

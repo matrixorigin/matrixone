@@ -19,6 +19,8 @@ import (
 	"sort"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 var checkPrimaryKeyOnly bool
@@ -681,7 +682,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 		}
 		iter.Close()
 	} else {
-		iter := state.NewRowsIter(ts, &info.BlockID, true)
+		iter := state.NewRowTombstoneIter(ts, &info.BlockID)
 		currlen := len(r.buffer)
 		for iter.Next() {
 			entry := iter.Entry()
