@@ -63,6 +63,8 @@ type ShardService interface {
 	// Read read data from shards.
 	Read(ctx context.Context, table uint64, payload []byte, apply func([]byte), opts ReadOptions) error
 
+	// GetShardInfo returns the metadata of the shards corresponding to the table.
+	GetShardInfo(table uint64, txnOp client.TxnOperator) (pb.ShardsMetadata, bool, error)
 	// Create creates table shards metadata in current txn. And create shard
 	// binds after txn committed asynchronously. Nothing happened if txn aborted.
 	//

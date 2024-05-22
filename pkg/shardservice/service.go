@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -63,6 +64,7 @@ type service struct {
 	cache struct {
 		sync.Mutex
 
+		noneSharding atomic.Pointer[roaring64.Bitmap]
 		// allocate all shards which allocated in the current node
 		allocate atomic.Pointer[allocatedCache]
 		// read all shards which read in the current node
@@ -108,6 +110,7 @@ func NewService(
 
 	s.cache.read.Store(newReadCache())
 	s.cache.allocate.Store(newAllocatedCache())
+	s.cache.noneSharding.Store(roaring64.New())
 
 	for _, opt := range opts {
 		opt(s)
@@ -194,6 +197,39 @@ func (s *service) Delete(
 	}
 
 	return nil
+}
+
+func (s *service) GetShardInfo(
+	table uint64,
+) (uint64, pb.Policy, bool, error) {
+	old := s.cache.noneSharding.Load()
+	if old.Contains(table) {
+		return 0, 0, false, nil
+	}
+
+	r := s.getReadCache()
+	v, ok := r.shards[table]
+	if ok {
+		return table, v.metadata.Policy, true, nil
+	}
+
+	for tid, sc := range r.shards {
+		if sc.metadata.Policy != pb.Policy_Partition {
+			continue
+		}
+		for _, id := range sc.metadata.ShardIDs {
+			if id == table {
+				return tid, sc.metadata.Policy, true, nil
+			}
+		}
+	}
+
+	metadata, err := s.storage.Get(table)
+	if err != nil {
+		return 0, 0, false, err
+	}
+
+	return pb.ShardsMetadata{}, false, nil
 }
 
 func (s *service) removeReadCache(
