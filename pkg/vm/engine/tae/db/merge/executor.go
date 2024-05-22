@@ -191,7 +191,9 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 		}
 
 		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-			return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes)
+			task, err := jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes)
+			task.AddObserver(e)
+			return task, err
 		}
 		task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
 		if err != nil {
@@ -201,7 +203,6 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 			return
 		}
 		e.AddActiveTask(task.ID(), blkCnt, esize)
-		task.AddObserver(e)
 		logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
 	}
 
