@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"go.uber.org/zap"
 	"sync"
 	"time"
 )
@@ -195,10 +196,12 @@ func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
 func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	sm.Lock()
 	defer sm.Unlock()
-
+	now := time.Now()
+	defer func() {
+		logutil.Infof("[UpdateSnapshot] cost %v", time.Since(now))
+	}()
 	sm.updateTableInfo(data)
 	if sm.tid == 0 {
-		logutil.Infof("[update snapshot]mo_snapshots not found")
 		return sm
 	}
 	ins := data.GetObjectBatchs()
@@ -219,7 +222,6 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 			if !deleteTS.IsEmpty() {
 				continue
 			}
-			logutil.Infof("[update snapshot]insert object %s", objectStats.ObjectName().String())
 			sm.objects[objectStats.ObjectName().SegmentId()] = &objectInfo{
 				stats:    objectStats,
 				createAt: createTS,
@@ -229,7 +231,6 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		if deleteTS.IsEmpty() {
 			panic(any("deleteTS is empty"))
 		}
-		logutil.Infof("[update snapshot]delete object %s", objectStats.ObjectName().String())
 		delete(sm.objects, objectStats.ObjectName().SegmentId())
 	}
 	del, _, _, _ := data.GetBlkBatchs()
@@ -248,6 +249,10 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 }
 
 func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileService, mp *mpool.MPool) (map[uint32]containers.Vector, error) {
+	now := time.Now()
+	defer func() {
+		logutil.Infof("[GetSnapshot] cost %v", time.Since(now))
+	}()
 	sm.RLock()
 	objects := sm.objects
 	sm.RUnlock()
@@ -296,7 +301,8 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 						if err != nil {
 							return nil, err
 						}
-						logutil.Infof("GetSnapshot ts %v", snapTs.ToString())
+						logutil.Debug("[GetSnapshot] cluster snapshot",
+							common.OperationField(snapTs.ToString()))
 					}
 					continue
 				}
@@ -304,7 +310,9 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				if snapshotList[id] == nil {
 					snapshotList[id] = containers.MakeVector(types.T_TS.ToType(), mp)
 				}
-				logutil.Infof("GetSnapshot: id %d, ts %v", id, snapTs.ToString())
+				logutil.Debug("[GetSnapshot] snapshot",
+					zap.Uint32("account", id),
+					zap.String("snap ts", snapTs.ToString()))
 				err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), snapTs, false, mp)
 				if err != nil {
 					return nil, err

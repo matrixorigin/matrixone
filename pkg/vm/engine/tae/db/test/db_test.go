@@ -3963,8 +3963,8 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 db
 	datname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // datname column
 	require.NoError(t, err)
-	require.Equal(t, "todrop", datname.GetStringAt(0))
-	require.Equal(t, "db", datname.GetStringAt(1))
+	require.Equal(t, "todrop", datname.UnsafeGetStringAt(0))
+	require.Equal(t, "db", datname.UnsafeGetStringAt(1))
 
 	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 	require.Equal(t, fixedColCnt+1, len(resp.Commands[1].Bat.Vecs))
@@ -3985,8 +3985,8 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 tables
 	relname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // relname column
 	require.NoError(t, err)
-	require.Equal(t, schema.Name, relname.GetStringAt(0))
-	require.Equal(t, schema.Name, relname.GetStringAt(1))
+	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(0))
+	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(1))
 	close()
 
 	// get columns catalog change
@@ -6735,7 +6735,6 @@ func TestSnapshotGC(t *testing.T) {
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
-	db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
 	testutils.WaitExpect(5000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetMaxConsumed() == nil {
 			return false

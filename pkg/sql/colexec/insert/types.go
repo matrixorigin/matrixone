@@ -36,6 +36,9 @@ type container struct {
 	s3Writer           *colexec.S3Writer
 	partitionS3Writers []*colexec.S3Writer // The array is aligned with the partition number array
 	buf                *batch.Batch
+
+	source           engine.Relation
+	partitionSources []engine.Relation // Align array index with the partition number
 }
 
 type Argument struct {
@@ -80,14 +83,13 @@ func (arg *Argument) Release() {
 
 type InsertCtx struct {
 	// insert data into Rel.
-	Rel                   engine.Relation
+	Engine                engine.Engine
 	Ref                   *plan.ObjectRef
 	AddAffectedRows       bool
 	Attrs                 []string
-	PartitionTableIDs     []uint64          // Align array index with the partition number
-	PartitionTableNames   []string          // Align array index with the partition number
-	PartitionIndexInBatch int               // The array index position of the partition expression column
-	PartitionSources      []engine.Relation // Align array index with the partition number
+	PartitionTableIDs     []uint64 // Align array index with the partition number
+	PartitionTableNames   []string // Align array index with the partition number
+	PartitionIndexInBatch int      // The array index position of the partition expression column
 	TableDef              *plan.TableDef
 }
 

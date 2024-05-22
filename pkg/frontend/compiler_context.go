@@ -765,7 +765,10 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 	approxNumObjects := 0
 	if partitionInfo != nil {
 		for _, PartitionTableName := range partitionInfo.PartitionTableNames {
-			_, ptable, _ := tcc.getRelation(dbName, PartitionTableName, nil, snapshot)
+			_, ptable, err := tcc.getRelation(dbName, PartitionTableName, nil, snapshot)
+			if err != nil {
+				return nil, false
+			}
 			approxNumObjects += ptable.ApproxObjectsNum(ctx)
 		}
 	} else {
@@ -813,14 +816,14 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	}()
 	// cols
 	vec := bats[0].Vecs[0]
-	def := vec.GetStringAt(0)
+	def := vec.UnsafeGetStringAt(0)
 	r := &plan.ResultColDef{}
 	if err = r.Unmarshal([]byte(def)); err != nil {
 		return nil, "", err
 	}
 	// paths
 	vec = bats[0].Vecs[1]
-	str := vec.GetStringAt(0)
+	str := vec.UnsafeGetStringAt(0)
 	return r.ResultCols, str, nil
 }
 

@@ -433,7 +433,7 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 	case types.T_char, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		cols, area := vector.MustVarlenaRawData(vec)
-		return cols[rowIdx].GetString(area), nil
+		return cols[rowIdx].UnsafeGetString(area), nil
 	case types.T_array_float32:
 		cols, area := vector.MustVarlenaRawData(vec)
 		return types.ArrayToString[float32](types.GetArray[float32](&cols[rowIdx], area)), nil

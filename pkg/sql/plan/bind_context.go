@@ -193,6 +193,37 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, rig
 	return expr, err
 }
 
+func (bc *BindContext) addUsingColForCrossL2(col string, typ plan.Node_JoinType, left, right *BindContext) (*plan.Expr, error) {
+	leftBinding, ok := left.bindingByCol[col]
+	if ok {
+		leftPos := leftBinding.colIdByName[col]
+		return &plan.Expr{
+			Typ: *leftBinding.types[leftPos],
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: leftBinding.tag,
+					ColPos: leftPos,
+				},
+			},
+		}, nil
+	}
+
+	rightBinding, ok := right.bindingByCol[col]
+	if ok {
+		rightPos := rightBinding.colIdByName[col]
+		return &plan.Expr{
+			Typ: *rightBinding.types[rightPos],
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: rightBinding.tag,
+					ColPos: rightPos,
+				},
+			},
+		}, nil
+	}
+	return nil, moerr.NewInvalidInput(bc.binder.GetContext(), "column '%s' specified in USING clause does not exist in left or right table", col)
+}
+
 func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccount bool) ([]tree.SelectExpr, []string, error) {
 	if len(table) == 0 {
 		// unfold *

@@ -16,6 +16,7 @@ package mergedelete
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -24,11 +25,15 @@ import (
 var _ vm.Operator = new(Argument)
 
 type Argument struct {
-	AffectedRows uint64
+	AffectedRows        uint64
+	Ref                 *plan.ObjectRef
+	Engine              engine.Engine
+	PartitionTableNames []string
+
 	// 1. single table's delete (main table)
-	DelSource engine.Relation
+	delSource engine.Relation
 	// 2. partition sub tables
-	PartitionSources []engine.Relation
+	partitionSources []engine.Relation
 
 	vm.OperatorBase
 }
@@ -58,13 +63,18 @@ func NewArgument() *Argument {
 	return reuse.Alloc[Argument](nil)
 }
 
-func (arg *Argument) WithDelSource(delSource engine.Relation) *Argument {
-	arg.DelSource = delSource
+func (arg *Argument) WithObjectRef(ref *plan.ObjectRef) *Argument {
+	arg.Ref = ref
 	return arg
 }
 
-func (arg *Argument) WithPartitionSources(partitionSources []engine.Relation) *Argument {
-	arg.PartitionSources = partitionSources
+func (arg *Argument) WithParitionNames(names []string) *Argument {
+	arg.PartitionTableNames = append(arg.PartitionTableNames, names...)
+	return arg
+}
+
+func (arg *Argument) WithEngine(eng engine.Engine) *Argument {
+	arg.Engine = eng
 	return arg
 }
 
