@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -192,8 +193,12 @@ func (t *GCTable) SoftGC(
 				gc = append(gc, name)
 			}
 			// TODO: remove log
-			logutil.Infof("[soft GC] tombstone: %v, tombstone: %d, object: %d, same: %v, data: %d",
-				name, len(t.tombstones), len(tombstone.objects), sameName, len(objects))
+			logutil.Debug("[soft GC] Delete tombstone",
+				zap.String("tombstone", name),
+				zap.Int("tombstone", len(t.tombstones)),
+				zap.Int("object", len(tombstone.objects)),
+				zap.Bool("same", sameName),
+				zap.Int("data", len(objects)))
 			t.deleteTombstone(name)
 		}
 	}
@@ -337,10 +342,38 @@ func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []
 
 // SaveFullTable is to write data to s3
 func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, files []string) ([]objectio.BlockObject, error) {
-	bats := t.collectData(files)
+	now := time.Now()
+	var bats []*containers.Batch
+	var blocks []objectio.BlockObject
+	var err error
+	var writer *objectio.ObjectWriter
+	var collectCost, writeCost time.Duration
+	logutil.Info("[DiskCleaner]", zap.String("op", "SaveFullTable-Start"),
+		zap.String("max consumed :", start.ToString()+"-"+end.ToString()))
+	defer func() {
+		size := uint32(0)
+		objectCount := 0
+		tombstoneCount := 0
+		if len(blocks) > 0 && err == nil {
+			size = writer.GetObjectStats()[0].OriginSize()
+		}
+		if bats != nil {
+			objectCount = bats[ObjectList].Length()
+			tombstoneCount = bats[TombstoneList].Length()
+		}
+		logutil.Info("[DiskCleaner]", zap.String("op", "SaveFullTable-End"),
+			zap.String("collect cost :", collectCost.String()),
+			zap.String("write cost :", writeCost.String()),
+			zap.Uint32("gc table size :", size),
+			zap.Int("object count :", objectCount),
+			zap.Int("tombstone count :", tombstoneCount))
+	}()
+	bats = t.collectData(files)
+	collectCost = time.Since(now)
+	now = time.Now()
 	defer t.closeBatch(bats)
 	name := blockio.EncodeGCMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
+	writer, err = objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +383,8 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 		}
 	}
 
-	blocks, err := writer.WriteEnd(context.Background())
+	blocks, err = writer.WriteEnd(context.Background())
+	writeCost = time.Since(now)
 	return blocks, err
 }
 

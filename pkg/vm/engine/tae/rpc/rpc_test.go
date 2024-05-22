@@ -198,7 +198,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 			//RoleId:    ac.roleId,
 			EntryList: entries,
 		},
-		new(api.SyncLogTailResp),
+		nil,
 	)
 	assert.Nil(t, err)
 	//t.FailNow()
@@ -358,7 +358,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 			//RoleId:    ac.roleId,
 			EntryList: entries,
 		},
-		new(api.SyncLogTailResp),
+		nil,
 	)
 	assert.Nil(t, err)
 	//t.FailNow()
@@ -422,7 +422,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 			//RoleId:    ac.roleId,
 			EntryList: entries,
 		},
-		new(api.SyncLogTailResp),
+		nil,
 	)
 	assert.Nil(t, err)
 	//t.FailNow()
@@ -544,7 +544,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 			//RoleId:    ac.roleId,
 			EntryList: delApiEntries,
 		},
-		new(api.SyncLogTailResp),
+		nil,
 	)
 	assert.Nil(t, err)
 	_, err = handle.HandleCommit(context.TODO(), txn)
@@ -611,7 +611,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 			//RoleId:    ac.roleId,
 			EntryList: createDbEntries,
 		},
-		new(api.SyncLogTailResp),
+		nil,
 	)
 	assert.Nil(t, err)
 	_, err = handle.HandleCommit(context.TODO(), createDbTxn)
@@ -687,7 +687,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 			//RoleId:    ac.roleId,
 			EntryList: createTbEntries,
 		},
-		new(api.SyncLogTailResp))
+		nil)
 	assert.Nil(t, err)
 	_, err = handle.HandleCommit(context.TODO(), createTbTxn)
 	assert.Nil(t, err)
@@ -728,7 +728,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 			//RoleId:    ac.roleId,
 			EntryList: []*api.Entry{insertEntry},
 		},
-		new(api.SyncLogTailResp),
+		nil,
 	)
 	assert.NoError(t, err)
 	// TODO:: Dml delete
@@ -799,7 +799,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 			//RoleId:    ac.roleId,
 			EntryList: append([]*api.Entry{}, deleteEntry),
 		},
-		new(api.SyncLogTailResp),
+		nil,
 	)
 	assert.Nil(t, err)
 	_, err = handle.HandleCommit(context.TODO(), deleteTxn)
@@ -1882,7 +1882,7 @@ func TestApplyDeltaloc(t *testing.T) {
 		assert.NoError(t, err)
 
 		txn := mock1PCTxn(h.db)
-		err = h.HandlePreCommit(context.Background(), txn, &api.PrecommitWriteCmd{EntryList: []*api.Entry{insertEntry}}, new(api.SyncLogTailResp))
+		err = h.HandlePreCommit(context.Background(), txn, &api.PrecommitWriteCmd{EntryList: []*api.Entry{insertEntry}}, nil)
 		assert.NoError(t, err)
 		inMemoryDeleteTxns = append(inMemoryDeleteTxns, txn)
 	}
@@ -1932,7 +1932,7 @@ func TestApplyDeltaloc(t *testing.T) {
 	deleteS3Entry, err := makePBEntry(DELETE, dbID, tid, "db", schema.Name, "file", containers.ToCNBatch(delLocBat))
 	assert.NoError(t, err)
 	deleteS3Txn := mock1PCTxn(h.db)
-	err = h.HandlePreCommit(context.Background(), deleteS3Txn, &api.PrecommitWriteCmd{EntryList: []*api.Entry{deleteS3Entry}}, new(api.SyncLogTailResp))
+	err = h.HandlePreCommit(context.Background(), deleteS3Txn, &api.PrecommitWriteCmd{EntryList: []*api.Entry{deleteS3Entry}}, nil)
 	assert.NoError(t, err)
 	assert.NoError(t, txn0.Commit(context.Background()))
 
