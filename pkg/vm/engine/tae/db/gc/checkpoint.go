@@ -523,17 +523,18 @@ func (c *checkpointCleaner) getDeleteFile(
 			logutil.Info("[MergeCheckpoint]",
 				common.OperationField("GC checkpoint"),
 				common.OperandField(ckp.String()))
+			nameMeta := blockio.EncodeCheckpointMetadataFileName(
+				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
+				ckp.GetStart(), ckp.GetEnd())
 			locations, err := logtail.LoadCheckpointLocations(
 				c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+					deleteFiles = append(deleteFiles, nameMeta)
 					continue
 				}
 				return nil, err
 			}
-			nameMeta := blockio.EncodeCheckpointMetadataFileName(
-				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
-				ckp.GetStart(), ckp.GetEnd())
 			deleteFiles = append(deleteFiles, nameMeta)
 			if i == len(ckps)-1 {
 				c.updateCkpGC(&end)
