@@ -715,6 +715,8 @@ func (ses *Session) InvalidatePrivilegeCache() {
 
 // GetBackgroundExec generates a background executor
 func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
+	ses.EnterFPrint(99)
+	defer ses.ExitFPrint(99)
 	return NewBackgroundExec(
 		ctx,
 		ses,
@@ -724,6 +726,8 @@ func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
 // GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction.
 // newRawBatch denotes we need the raw batch instead of mysql result set.
 func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
+	ses.EnterFPrint(102)
+	defer ses.ExitFPrint(102)
 	var txnOp TxnOperator
 	if ses.GetTxnHandler() != nil {
 		txnOp = ses.GetTxnHandler().GetTxn()
@@ -769,6 +773,8 @@ var GetRawBatchBackgroundExec = func(ctx context.Context, ses *Session) Backgrou
 }
 
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec {
+	ses.EnterFPrint(100)
+	defer ses.ExitFPrint(100)
 	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, ses.GetTxnHandler().GetConnCtx(), nil)
 	backSes := &backSession{
 		feSessionImpl: feSessionImpl{
@@ -1775,6 +1781,8 @@ func newDBMigration(db string) *dbMigration {
 }
 
 func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
+	ses.EnterFPrint(90)
+	defer ses.ExitFPrint(90)
 	if d.db == "" {
 		return nil
 	}
@@ -1803,6 +1811,8 @@ func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepar
 }
 
 func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error {
+	ses.EnterFPrint(103)
+	defer ses.ExitFPrint(103)
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
 		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
 	}
@@ -1817,6 +1827,8 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 }
 
 func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
+	ses.EnterFPrint(89)
+	defer ses.ExitFPrint(89)
 	parameters := getGlobalPu().SV
 
 	//all offspring related to the request inherit the txnCtx
