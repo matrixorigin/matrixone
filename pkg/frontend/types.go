@@ -769,3 +769,61 @@ func (ses *Session) GetDebugString() string {
 	defer ses.mu.Unlock()
 	return ses.debugStr
 }
+
+type Responser interface {
+	RespPreMeta() error
+	RespResult(*batch.Batch) error
+	RespPostMeta() error
+	Close()
+}
+
+type MediaReader interface {
+	Request() (*Request, error)
+	Payload() ([]byte, error)
+}
+
+type MediaWriter interface {
+	Write(*batch.Batch) error
+	Close()
+}
+
+type MysqlWriter interface {
+	MediaWriter
+	WriteHandshake() error
+	WriteOK() error
+	WriteOKtWithEOF() error
+	WriteEOF() error
+	WriteEOFIF() error
+	WriteEOFOrOK() error
+	WriteERR() error
+	WriteLengthEncodedNumber() error
+	WriteColumnDef() error
+	WriteRow() error
+	WriteTextRow() error
+	WriteBinaryRow() error
+
+	Write(*batch.Batch) error
+}
+
+type MysqlPayloadWriter interface {
+	OpenRow() error
+	CloseRow(bool) error
+	OpenPayload() error
+	FillPayload() error
+	ClosePayload() error
+}
+
+type S3Writer interface {
+	MediaWriter
+}
+
+type CsvWriter interface {
+	MediaWriter
+}
+
+type MemWriter interface {
+	MediaWriter
+}
+
+type MemIOSession struct {
+}
