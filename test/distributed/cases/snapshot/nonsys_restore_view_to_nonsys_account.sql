@@ -511,9 +511,9 @@ drop view if exists employees_by_department_view;
 drop view if exists employees_by_salary_view;
 drop view if exists avg_salary_per_department_view;
 drop table employees;
-drop snapshot sp10;
 drop database test02;
 -- @bvt:issue
+drop snapshot sp10;
 
 
 
@@ -602,12 +602,11 @@ drop table departments;
 drop view employee_view;
 drop view department_view;
 drop view employee_with_department_view;
-drop snapshot sp100;
-drop snapshot sp101;
 drop database test03;
 drop database test04;
 drop database test05;
 -- @bvt:issue
 -- @session
-
+drop snapshot sp100;
+drop snapshot sp101;
 drop account acc01;

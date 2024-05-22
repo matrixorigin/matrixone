@@ -717,10 +717,10 @@ drop view if exists avg_salary_per_department_view;
 not connect to a database
 drop table employees;
 not connect to a database
-drop snapshot sp10;
 
 drop database test02;
 
+drop snapshot sp10;
 drop database if exists test03;
 drop database if exists test04;
 drop database if exists test05;
@@ -841,13 +841,11 @@ drop view department_view;
 not connect to a database
 drop view employee_with_department_view;
 not connect to a database
-drop snapshot sp100;
-
-drop snapshot sp101;
-
 drop database test03;
 Can't drop database 'test03'; database doesn't exist
 drop database test04;
 Can't drop database 'test04'; database doesn't exist
 drop database test05;
 Can't drop database 'test05'; database doesn't exist
+drop snapshot sp100;
+drop snapshot sp101;
