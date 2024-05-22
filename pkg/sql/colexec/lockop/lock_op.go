@@ -861,9 +861,6 @@ func (arg *Argument) getBatch(
 	if msg.Err != nil {
 		return nil, msg.Err
 	}
-	if msg.Batch == nil {
-		return nil, nil
-	}
 	anal.Input(msg.Batch, isFirst)
 	return msg.Batch, nil
 }

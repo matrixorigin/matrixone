@@ -527,7 +527,7 @@ func runLockBlockingOpTest(
 			require.NoError(t, arg.Prepare(proc))
 			arg.rt.batchFetchFunc = func(process.Analyze) *process.RegisterMessage {
 				if len(batches) == 0 {
-					return nil
+					return testutil.NewRegMsg(nil)
 				}
 				bat := batches[0]
 				batches = batches[1:]
