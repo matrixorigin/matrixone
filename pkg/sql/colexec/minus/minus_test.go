@@ -102,9 +102,9 @@ func newMinusTestCase(proc *process.Process, leftBatches, rightBatches []*batch.
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	{
-		c := make(chan *batch.Batch, len(leftBatches)+5)
+		c := make(chan *process.RegisterMessage, len(leftBatches)+5)
 		for i := range leftBatches {
-			c <- leftBatches[i]
+			c <- testutil.NewRegMsg(leftBatches[i])
 		}
 		c <- nil
 		proc.Reg.MergeReceivers[0] = &process.WaitRegister{
@@ -113,9 +113,9 @@ func newMinusTestCase(proc *process.Process, leftBatches, rightBatches []*batch.
 		}
 	}
 	{
-		c := make(chan *batch.Batch, len(rightBatches)+5)
+		c := make(chan *process.RegisterMessage, len(rightBatches)+5)
 		for i := range rightBatches {
-			c <- rightBatches[i]
+			c <- testutil.NewRegMsg(rightBatches[i])
 		}
 		c <- nil
 		proc.Reg.MergeReceivers[1] = &process.WaitRegister{
