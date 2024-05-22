@@ -89,15 +89,20 @@ func (m *MessageBoard) SetMultiCN(center *MessageCenter, stmtId uuid.UUID) *Mess
 	if ok {
 		return mb
 	}
+	m.RwMutex.Lock()
 	m.multiCN = true
 	m.stmtId = stmtId
 	m.MessageCenter = center
+	m.RwMutex.Unlock()
 	center.StmtIDToBoard[stmtId] = m
 	return m
 }
 
 func (m *MessageBoard) Reset() *MessageBoard {
 	if m.multiCN {
+		m.MessageCenter.RwMutex.Lock()
+		delete(m.MessageCenter.StmtIDToBoard, m.stmtId)
+		m.MessageCenter.RwMutex.Unlock()
 		return NewMessageBoard()
 	}
 	m.RwMutex.Lock()
