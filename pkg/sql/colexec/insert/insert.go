@@ -54,6 +54,16 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 			}
 			arg.ctr.s3Writer = s3Writer
 		}
+	} else {
+		ref := arg.InsertCtx.Ref
+		eng := arg.InsertCtx.Engine
+		partitionNames := arg.InsertCtx.PartitionTableNames
+		rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
+		if err != nil {
+			return err
+		}
+		arg.ctr.source = rel
+		arg.ctr.partitionSources = partitionRels
 	}
 	return nil
 }
@@ -189,7 +199,6 @@ func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) 
 		return result, nil
 	}
 	bat := result.Batch
-	insertCtx := arg.InsertCtx
 
 	if arg.ctr.buf != nil {
 		proc.PutBatch(arg.ctr.buf)
@@ -213,7 +222,7 @@ func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) 
 			return result, err
 		}
 		for i, partitionBat := range insertBatches {
-			err = arg.InsertCtx.PartitionSources[i].Write(proc.Ctx, partitionBat)
+			err = arg.ctr.partitionSources[i].Write(proc.Ctx, partitionBat)
 			if err != nil {
 				partitionBat.Clean(proc.Mp())
 				return result, err
@@ -222,7 +231,7 @@ func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) 
 		}
 	} else {
 		// insert into table, insertBat will be deeply copied into txn's workspace.
-		err := insertCtx.Rel.Write(proc.Ctx, arg.ctr.buf)
+		err := arg.ctr.source.Write(proc.Ctx, arg.ctr.buf)
 		if err != nil {
 			return result, err
 		}

@@ -67,7 +67,7 @@ type Handler interface {
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req *apipb.PrecommitWriteCmd,
-		resp *apipb.SyncLogTailResp,
+		resp *apipb.TNStringResponse,
 	) error
 
 	HandleFlushTable(
