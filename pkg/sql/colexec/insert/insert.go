@@ -54,16 +54,17 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 			}
 			arg.ctr.s3Writer = s3Writer
 		}
+	} else {
+		ref := arg.InsertCtx.Ref
+		eng := arg.InsertCtx.Engine
+		partitionNames := arg.InsertCtx.PartitionTableNames
+		rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
+		if err != nil {
+			return err
+		}
+		arg.ctr.source = rel
+		arg.ctr.partitionSources = partitionRels
 	}
-	ref := arg.InsertCtx.Ref
-	eng := arg.InsertCtx.Engine
-	partitionNames := arg.InsertCtx.PartitionTableNames
-	rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
-	if err != nil {
-		return err
-	}
-	arg.ctr.source = rel
-	arg.ctr.partitionSources = partitionRels
 	return nil
 }
 

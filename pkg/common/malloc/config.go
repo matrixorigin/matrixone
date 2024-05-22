@@ -14,6 +14,11 @@
 
 package malloc
 
+import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
+)
+
 type Config struct {
 	// CheckFraction controls the fraction of checked deallocations
 	// On average, 1 / fraction of deallocations will be checked for double free or missing free
@@ -24,4 +29,5 @@ var defaultConfig Config
 
 func SetDefaultConfig(c Config) {
 	defaultConfig = c
+	logutil.Info("malloc: set default config", zap.Any("config", c))
 }
