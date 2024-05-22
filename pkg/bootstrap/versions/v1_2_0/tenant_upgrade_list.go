@@ -52,7 +52,6 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_mo_catalog_mo_transactions,
 	upg_mo_catalog_mo_cache,
 	upg_mo_pub,
-	upg_mo_mysql_compatibility_mode1,
 }
 
 var UpgPrepareEntres = []versions.UpgradeEntry{
@@ -515,16 +514,5 @@ var upg_mo_pub = versions.UpgradeEntry{
 			return true, nil
 		}
 		return false, nil
-	},
-}
-
-var upg_mo_mysql_compatibility_mode1 = versions.UpgradeEntry{
-	Schema:    catalog.MO_CATALOG,
-	TableName: "mo_mysql_compatibility_mode",
-	UpgType:   versions.MODIFY_METADATA,
-	UpgSql:    "insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (current_account_id(), current_account_name(), 'keep_user_target_list_in_result', '1',  true)",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		sql := "select * from mo_catalog.mo_mysql_compatibility_mode where variable_name = 'keep_user_target_list_in_result'"
-		return versions.CheckTableDataExist(txn, accountId, sql)
 	},
 }
