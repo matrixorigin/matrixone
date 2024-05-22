@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
