@@ -74,7 +74,16 @@ func (entry *ObjectEntry) GetCompSize() int {
 	stats := entry.GetObjectStats()
 	return int(stats.Size())
 }
-
+func (entry *ObjectEntry) IsDeletesFlushedBefore(ts types.TS) bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
+	if tombstone == nil {
+		return true
+	}
+	persistedTS := tombstone.GetDeltaCommitedTSLocked()
+	return persistedTS.Less(&ts)
+}
 func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) string {
 	zonemapStr := "nil"
 	if z := entry.GetSortKeyZonemap(); z != nil {
@@ -99,9 +108,14 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 }
 
 func (entry *ObjectEntry) InMemoryDeletesExisted() bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.InMemoryDeletesExistedLocked()
+}
+func (entry *ObjectEntry) InMemoryDeletesExistedLocked() bool {
 	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
 	if tombstone != nil {
-		return tombstone.InMemoryDeletesExisted()
+		return tombstone.InMemoryDeletesExistedLocked()
 	}
 	return false
 }
@@ -158,7 +172,7 @@ func NewObjectEntryByMetaLocation(
 
 func NewReplayObjectEntry() *ObjectEntry {
 	e := &ObjectEntry{
-		BaseEntryImpl: NewReplayBaseEntry(
+		BaseEntryImpl: NewBaseEntry(
 			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
 	}
 	return e
@@ -568,6 +582,7 @@ func (entry *ObjectEntry) GetSchemaLocked() *Schema {
 // a block can be compacted:
 // 1. no uncommited node
 // 2. at least one committed node
+// Note: Soft deleted nobjects might have in memory deletes to be flushed.
 func (entry *ObjectEntry) PrepareCompact() bool {
 	entry.RLock()
 	defer entry.RUnlock()

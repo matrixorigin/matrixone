@@ -652,6 +652,10 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	}
 	rowsCount := bat.RowCount()
 
+	if rowsCount > 1 && len(bat.Vecs) > 0 && bat.Vecs[0].AllNull() {
+		return nil, nil
+	}
+
 	// colExprs will store the constant value expressions (or UUID value) for each primary key column by the order in insert value SQL
 	// that is, the key part of pkPosInValues, more info see the comment of func getPkOrderInValues
 	colExprs := make([][]*Expr, len(lmap.m))
