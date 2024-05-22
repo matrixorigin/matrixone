@@ -159,6 +159,9 @@ type Engine struct {
 	// globalStats is the global stats information, which is updated
 	// from logtail updates.
 	globalStats *GlobalStats
+
+	//for message on multiCN, use uuid to get the messageBoard
+	messageCenter *process.MessageCenter
 }
 
 // Transaction represents a transaction
