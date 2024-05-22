@@ -283,7 +283,8 @@ func (c *checkpointCleaner) replayCheckpoints() error {
 		return err
 	}
 	for _, dir := range dirs {
-		c.checkpointMetas.files[dir.Name] = struct{}{}
+		name := CKPMetaDir + "/" + dir.Name
+		c.checkpointMetas.files[name] = struct{}{}
 		logutil.Infof("replay checkpoint: %s", dir.Name)
 	}
 	return nil
@@ -641,12 +642,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		}
 		c.checkpointMetas.Lock()
 		for _, file := range deleteFiles {
-			if strings.Contains(file, checkpoint.PrefixMetadata) {
-				info := strings.Split(file, checkpoint.CheckpointDir+"/")
-				name := info[1]
-				logutil.Infof("[MergeCheckpoint] name %v", name)
-				delete(c.checkpointMetas.files, name)
-			}
+			delete(c.checkpointMetas.files, file)
 		}
 		c.checkpointMetas.Unlock()
 	}
