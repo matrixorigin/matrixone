@@ -15,7 +15,34 @@
 package v1_2_1
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-var clusterUpgEntries = []versions.UpgradeEntry{}
+var clusterUpgEntries = []versions.UpgradeEntry{
+	upg_system_logInfo,
+}
+
+// viewSystemLogInfoDDL113 = "CREATE VIEW IF NOT EXISTS `system`.`log_info` as select `trace_id`, `span_id`, `span_kind`, `node_uuid`, `node_type`, `timestamp`, `logger_name`, `level`, `caller`, `message`, `extra`, `stack` from `system`.`rawlog` where `raw_item` = \"log_info\""
+const viewSystemLogInfoDDL120 = "CREATE VIEW IF NOT EXISTS `system`.`log_info` as select `trace_id`, `span_id`, `span_kind`, `node_uuid`, `node_type`, `timestamp`, `logger_name`, `level`, `caller`, `message`, `extra`, `stack`, `session_id`, `statement_id` from `system`.`rawlog` where `raw_item` = \"log_info\""
+
+var upg_system_logInfo = versions.UpgradeEntry{
+	Schema:    catalog.MO_SYSTEM,
+	TableName: "log_info",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    viewSystemLogInfoDDL120,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_SYSTEM, "log_info")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == viewSystemLogInfoDDL120 {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_SYSTEM, "log_info"),
+}

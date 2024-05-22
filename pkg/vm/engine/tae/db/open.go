@@ -98,7 +98,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		Dir:          dirname,
 		Opts:         opts,
 		Closed:       new(atomic.Value),
-		usageMemo:    logtail.NewTNUsageMemo(),
+		usageMemo:    logtail.NewTNUsageMemo(nil),
 		CNMergeSched: merge.NewTaskServiceGetter(opts.TaskServiceGetter),
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
@@ -123,9 +123,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
 	)
+	catalog.DefaultTableDataFactory = dataFactory.MakeTableFactory()
 	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo); err != nil {
 		return
 	}
+	db.usageMemo.C = db.Catalog
 
 	// Init and start txn manager
 	txnStoreFactory := txnimpl.TxnStoreFactory(
@@ -197,6 +199,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
 	cleaner := gc2.NewCheckpointCleaner(opts.Ctx, fs, db.BGCheckpointRunner, opts.GCCfg.DisableGC)
+	cleaner.SetCheckGC(opts.GCCfg.CheckGC)
 	cleaner.AddChecker(
 		func(item any) bool {
 			checkpoint := item.(*checkpoint.CheckpointEntry)

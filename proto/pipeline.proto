@@ -137,18 +137,19 @@ message Map{
 message Deletion{
   uint64 AffectedRows = 1;
   bool RemoteDelete = 2;
+  uint32 IBucket = 3;
+  uint32 NBucket = 4;
   // DeleteCtx
-
-  int32 row_id_idx                      = 3;
-  repeated uint64 partition_table_ids   = 4;
-  repeated string partition_table_names = 5;
-  int32 partition_index_in_batch        = 6;
-  plan.ObjectRef ref                    = 7;
-  bool add_affected_rows                = 8;
-  map<string,int32> SegmentMap          = 9;
-  bool can_truncate                     = 10;
-  bool is_end                           = 11;
-  int32 primary_key_idx                 = 12;
+  int32 row_id_idx                      = 5;
+  repeated uint64 partition_table_ids   = 6;
+  repeated string partition_table_names = 7;
+  int32 partition_index_in_batch        = 8;
+  plan.ObjectRef ref                    = 9;
+  bool add_affected_rows                = 10;
+  map<string,int32> SegmentMap          = 11;
+  bool can_truncate                     = 12;
+  bool is_end                           = 13;
+  int32 primary_key_idx                 = 14;
 }
 
 message PreInsert {
