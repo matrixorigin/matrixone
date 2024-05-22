@@ -12,38 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package malloc
+package fileservice
 
 import (
-	"os"
-	"runtime"
-	"strings"
+	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
-func NewDefault(config *Config) Allocator {
-	if config == nil {
-		c := defaultConfig
-		config = &c
-		logutil.Info("malloc: new default using default config",
-			zap.Any("config", config),
-		)
-	}
+var initMallocAllocatorOnce sync.Once
 
-	switch strings.TrimSpace(strings.ToLower(os.Getenv("MO_MALLOC"))) {
+var _mallocAllocator malloc.Allocator
 
-	case "c":
-		return NewCAllocator()
-
-	default:
-		return NewShardedAllocator(
-			runtime.GOMAXPROCS(0),
-			func() Allocator {
-				return NewClassAllocator(config.CheckFraction)
-			},
-		)
-
-	}
+func getMallocAllocator() malloc.Allocator {
+	// delay initialization of global allocator
+	// ugly, but we tend to read malloc config from files instead of env vars
+	initMallocAllocatorOnce.Do(func() {
+		_mallocAllocator = malloc.NewDefault(nil)
+	})
+	return _mallocAllocator
 }

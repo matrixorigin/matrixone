@@ -15,35 +15,19 @@
 package malloc
 
 import (
-	"os"
-	"runtime"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
 
-func NewDefault(config *Config) Allocator {
-	if config == nil {
-		c := defaultConfig
-		config = &c
-		logutil.Info("malloc: new default using default config",
-			zap.Any("config", config),
-		)
-	}
+type Config struct {
+	// CheckFraction controls the fraction of checked deallocations
+	// On average, 1 / fraction of deallocations will be checked for double free or missing free
+	CheckFraction uint32 `toml:"check-fraction"`
+}
 
-	switch strings.TrimSpace(strings.ToLower(os.Getenv("MO_MALLOC"))) {
+var defaultConfig Config
 
-	case "c":
-		return NewCAllocator()
-
-	default:
-		return NewShardedAllocator(
-			runtime.GOMAXPROCS(0),
-			func() Allocator {
-				return NewClassAllocator(config.CheckFraction)
-			},
-		)
-
-	}
+func SetDefaultConfig(c Config) {
+	defaultConfig = c
+	logutil.Info("malloc: set default config", zap.Any("config", c))
 }

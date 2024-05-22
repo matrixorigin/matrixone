@@ -15,35 +15,37 @@
 package malloc
 
 import (
-	"os"
+	"fmt"
 	"runtime"
 	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
+	"testing"
 )
 
-func NewDefault(config *Config) Allocator {
-	if config == nil {
-		c := defaultConfig
-		config = &c
-		logutil.Info("malloc: new default using default config",
-			zap.Any("config", config),
-		)
-	}
+func TestCheckedDeallocator(t *testing.T) {
+	allocator := NewClassAllocator(1)
 
-	switch strings.TrimSpace(strings.ToLower(os.Getenv("MO_MALLOC"))) {
+	func() {
+		defer func() {
+			p := recover()
+			if p == nil {
+				t.Fatal("should panic")
+			}
+			msg := fmt.Sprintf("%v", p)
+			if !strings.Contains(msg, "double free") {
+				t.Fatalf("got %v", msg)
+			}
+		}()
+		ptr, dec := allocator.Allocate(42)
+		dec.Deallocate(ptr)
+		dec.Deallocate(ptr)
+	}()
 
-	case "c":
-		return NewCAllocator()
+	func() {
+		ptr, dec := allocator.Allocate(42)
+		_ = ptr
+		_ = dec
+		dec.Deallocate(ptr) // comment out this line to trigger memory leak panic
+	}()
+	runtime.GC()
 
-	default:
-		return NewShardedAllocator(
-			runtime.GOMAXPROCS(0),
-			func() Allocator {
-				return NewClassAllocator(config.CheckFraction)
-			},
-		)
-
-	}
 }
