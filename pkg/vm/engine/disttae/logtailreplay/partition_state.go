@@ -40,13 +40,8 @@ import (
 type PartitionState struct {
 	// also modify the Copy method if adding fields
 
-	//TODO:: remove it.
-	rows       *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
 	tombstones *btree.BTreeG[ObjTombstoneRowEntry]
-
-	//TODO:: remove it.
-	//primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
-	dataRows *btree.BTreeG[ObjDataRowEntry]
+	dataRows   *btree.BTreeG[ObjDataRowEntry]
 	//TODO::build a index for dataRows by timestamp for truncate entry by ts when handle object/block insert.
 	//dataRowsIndexByTS *btree.BTreeG[DataRowsIndexByTSEntry]
 
@@ -181,45 +176,6 @@ func (d DataRowEntry) Less(than DataRowEntry) bool {
 	//return false
 }
 
-// RowEntry represents a version of a row or tombstone.
-//type RowEntry struct {
-//	BlockID types.Blockid // we need to iter by block id, so put it first to allow faster iteration
-//	RowID   types.Rowid
-//	Time    types.TS
-//
-//	ID                int64 // a unique version id, for primary index building and validating
-//	Deleted           bool
-//	Batch             *batch.Batch
-//	Offset            int64
-//	PrimaryIndexBytes []byte
-//}
-//
-//func (r RowEntry) Less(than RowEntry) bool {
-//	// asc
-//	cmp := r.BlockID.Compare(than.BlockID)
-//	if cmp < 0 {
-//		return true
-//	}
-//	if cmp > 0 {
-//		return false
-//	}
-//	// asc
-//	if r.RowID.Less(than.RowID) {
-//		return true
-//	}
-//	if than.RowID.Less(r.RowID) {
-//		return false
-//	}
-//	// desc
-//	if than.Time.Less(&r.Time) {
-//		return true
-//	}
-//	if r.Time.Less(&than.Time) {
-//		return false
-//	}
-//	return false
-//}
-
 type BlockEntry struct {
 	objectio.BlockInfo
 
@@ -294,54 +250,6 @@ func (o ObjectInfo) StatsValid() bool {
 	return o.ObjectStats.Rows() != 0
 }
 
-//type ObjectIndexByCreateTSEntry struct {
-//	ObjectInfo
-//}
-//
-//func (o ObjectIndexByCreateTSEntry) Less(than ObjectIndexByCreateTSEntry) bool {
-//	//asc
-//	if o.CreateTime.Less(&than.CreateTime) {
-//
-//		return true
-//	}
-//	if than.CreateTime.Less(&o.CreateTime) {
-//		return false
-//	}
-//
-//	cmp := bytes.Compare(o.ObjectShortName()[:], than.ObjectShortName()[:])
-//	if cmp < 0 {
-//		return true
-//	}
-//	if cmp > 0 {
-//		return false
-//	}
-//	return false
-//}
-//
-//func (o *ObjectIndexByCreateTSEntry) Visible(ts types.TS) bool {
-//	return o.CreateTime.LessEq(&ts) &&
-//		(o.DeleteTime.IsEmpty() || ts.Less(&o.DeleteTime))
-//}
-
-//type PrimaryIndexEntry struct {
-//	Bytes      []byte
-//	RowEntryID int64
-//
-//	// fields for validating
-//	BlockID types.Blockid
-//	RowID   types.Rowid
-//	Time    types.TS
-//}
-//
-//func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
-//	if res := bytes.Compare(p.Bytes, than.Bytes); res < 0 {
-//		return true
-//	} else if res > 0 {
-//		return false
-//	}
-//	return p.RowEntryID < than.RowEntryID
-//}
-
 type ObjectIndexByTSEntry struct {
 	Time         types.TS // insert or delete time
 	ShortObjName objectio.ObjectNameShort
@@ -382,12 +290,10 @@ func NewPartitionState(noData bool) *PartitionState {
 		Degree: 64,
 	}
 	return &PartitionState{
-		noData: noData,
-		//rows:            btree.NewBTreeGOptions((RowEntry).Less, opts),
-		tombstones:  btree.NewBTreeGOptions((ObjTombstoneRowEntry).Less, opts),
-		dataObjects: btree.NewBTreeGOptions((ObjectEntry).Less, opts),
-		blockDeltas: btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
-		//primaryIndex:    btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
+		noData:          noData,
+		tombstones:      btree.NewBTreeGOptions((ObjTombstoneRowEntry).Less, opts),
+		dataObjects:     btree.NewBTreeGOptions((ObjectEntry).Less, opts),
+		blockDeltas:     btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
 		dataRows:        btree.NewBTreeGOptions((ObjDataRowEntry).Less, opts),
 		dirtyBlocks:     btree.NewBTreeGOptions((types.Blockid).Less, opts),
 		objectIndexByTS: btree.NewBTreeGOptions((ObjectIndexByTSEntry).Less, opts),
@@ -397,11 +303,9 @@ func NewPartitionState(noData bool) *PartitionState {
 
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
-		//rows:            p.rows.Copy(),
-		tombstones:  p.tombstones.Copy(),
-		dataObjects: p.dataObjects.Copy(),
-		blockDeltas: p.blockDeltas.Copy(),
-		//primaryIndex:    p.primaryIndex.Copy(),
+		tombstones:      p.tombstones.Copy(),
+		dataObjects:     p.dataObjects.Copy(),
+		blockDeltas:     p.blockDeltas.Copy(),
 		dataRows:        p.dataRows.Copy(),
 		noData:          p.noData,
 		dirtyBlocks:     p.dirtyBlocks.Copy(),
@@ -415,37 +319,6 @@ func (p *PartitionState) Copy() *PartitionState {
 		copy(state.checkpoints, p.checkpoints)
 	}
 	return &state
-}
-
-func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
-	iter := p.rows.Iter()
-	defer iter.Release()
-
-	blockID := rowID.CloneBlockID()
-	for ok := iter.Seek(RowEntry{
-		BlockID: blockID,
-		RowID:   rowID,
-		Time:    ts,
-	}); ok; ok = iter.Next() {
-		entry := iter.Item()
-		if entry.BlockID != blockID {
-			break
-		}
-		if entry.RowID != rowID {
-			break
-		}
-		if entry.Time.Greater(&ts) {
-			// not visible
-			continue
-		}
-		if entry.Deleted {
-			// deleted
-			return false
-		}
-		return true
-	}
-
-	return false
 }
 
 func (p *PartitionState) HandleLogtailEntry(
@@ -666,6 +539,7 @@ func (p *PartitionState) HandleRowsInsert(
 		}
 
 		rows, done := objEntry.MutateRows()
+
 		pivot := DataRowEntry{
 			PK:   primaryKeys[i],
 			Time: timeVector[i],
@@ -681,11 +555,8 @@ func (p *PartitionState) HandleRowsInsert(
 			entry.Offset = int64(i)
 		}
 		rows.Set(entry)
-		done()
 
-		//if !ok {
-		//	p.dataRows.Set(objEntry)
-		//}
+		done()
 
 	}
 
@@ -791,6 +662,7 @@ func (p *PartitionState) truncateDataRowsByBlk(
 	}
 
 	rows, done := objIter.Item().MutateRows()
+
 	iter := rows.Copy().Iter()
 	defer iter.Release()
 
@@ -804,30 +676,9 @@ func (p *PartitionState) truncateDataRowsByBlk(
 			numDeleted++
 		}
 	}
-	done()
-	//firstCalled := false
-	//for {
 
-	//	if !firstCalled {
-	//		if !iter.First() {
-	//			break
-	//		}
-	//		firstCalled = true
-	//	} else {
-	//		if !iter.Next() {
-	//			break
-	//		}
-	//	}
-	//	item := iter.Item()
-	//	if *item.RowID.BorrowBlockID() != bid {
-	//		continue
-	//	}
-	//	if item.Time.LessEq(&ts) {
-	//		rows.Delete(item)
-	//		numDeleted++
-	//	}
-	//}
-	//done()
+	done()
+
 	return
 }
 

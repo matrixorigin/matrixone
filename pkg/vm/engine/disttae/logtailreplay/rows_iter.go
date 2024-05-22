@@ -31,16 +31,10 @@ type RowsIter interface {
 }
 
 type RowEntry struct {
-	//BlockID types.Blockid // we need to iter by block id, so put it first to allow faster iteration
-	RowID types.Rowid
-	//PK    []byte
-	//Time    types.TS
-
-	//ID                int64 // a unique version id, for primary index building and validating
+	RowID   types.Rowid
 	Deleted bool
 	Batch   *batch.Batch
 	Offset  int64
-	//PrimaryIndexBytes []byte
 }
 
 type rowTombstoneIter struct {
@@ -51,7 +45,7 @@ type rowTombstoneIter struct {
 	firstIterated bool
 	tombstoneIter btree.IterG[TombstoneRowEntry]
 	curRow        RowEntry
-	//lastRowID    types.Rowid
+
 	checkBlockID bool
 	blockID      types.Blockid
 }
@@ -152,85 +146,144 @@ func (p *rowTombstoneIter) Close() error {
 }
 
 type rowsIter struct {
-	ts           types.TS
-	iter         btree.IterG[RowEntry]
-	firstCalled  bool
-	lastRowID    types.Rowid
-	checkBlockID bool
-	blockID      types.Blockid
-	iterDeleted  bool
+	ts                types.TS
+	objsDataRowIter   btree.IterG[ObjDataRowEntry]
+	objsTombstoneIter btree.IterG[ObjTombstoneRowEntry]
+
+	//for one object
+	firstIterated bool
+	dataRowsIter  btree.IterG[DataRowEntry]
+
+	firstCalled bool
+	curRow      RowEntry
 }
 
-// NewRowsIter creates a new iterator for data rows and tombstones.
+// NewRowsIter creates a new iterator for data rows
 func (p *PartitionState) NewRowsIter(ts types.TS) *rowsIter {
-	iter := p.rows.Copy().Iter()
 	ret := &rowsIter{
-		ts:          ts,
-		iter:        iter,
-		iterDeleted: iterDeleted,
+		ts:                ts,
+		objsDataRowIter:   p.dataRows.Copy().Iter(),
+		objsTombstoneIter: p.tombstones.Copy().Iter(),
 	}
-	if blockID != nil {
-		ret.checkBlockID = true
-		ret.blockID = *blockID
-	}
+
 	return ret
 }
 
 var _ RowsIter = new(rowsIter)
 
 func (p *rowsIter) Next() bool {
+
+	hasTombstone := false
+	objHasTombstone := func() {
+		ok := p.objsTombstoneIter.Seek(ObjTombstoneRowEntry{
+			ShortObjName: p.objsDataRowIter.Item().ShortObjName})
+		if ok {
+			item1 := p.objsTombstoneIter.Item()
+			item2 := p.objsDataRowIter.Item()
+			if bytes.Compare(item1.ShortObjName[:], item2.ShortObjName[:]) == 0 {
+				hasTombstone = true
+			}
+		}
+		hasTombstone = false
+	}
+
 	for {
 
-		if !p.firstCalled {
-			if p.checkBlockID {
-				if !p.iter.Seek(RowEntry{
-					BlockID: p.blockID,
-				}) {
+		for {
+
+			if !p.firstCalled {
+				if !p.objsDataRowIter.First() {
 					return false
 				}
-			} else {
-				if !p.iter.First() {
-					return false
+				p.firstCalled = true
+				p.dataRowsIter = p.objsDataRowIter.Item().DataRows.Load().Copy().Iter()
+				objHasTombstone()
+			}
+
+			for {
+
+				if !p.firstIterated {
+					if !p.dataRowsIter.First() {
+						break
+					}
+					p.firstIterated = true
+				} else {
+					if !p.dataRowsIter.Next() {
+						break
+					}
 				}
+
+				row := p.dataRowsIter.Item()
+
+				if row.Time.Greater(&p.ts) {
+					continue
+				}
+
+				rowEntry := RowEntry{
+					RowID:  row.RowID,
+					Batch:  row.Batch,
+					Offset: row.Offset,
+				}
+
+				if !hasTombstone {
+					p.curRow = rowEntry
+					return true
+				}
+
+				tombstoneIter := p.objsTombstoneIter.Item().
+					Tombstones.Load().Copy().Iter()
+				defer tombstoneIter.Release()
+
+				if ok := tombstoneIter.Seek(TombstoneRowEntry{
+					BlockID: row.RowID.CloneBlockID(),
+					Offset:  row.RowID.GetRowOffset(),
+				}); !ok {
+					p.curRow = rowEntry
+					return true
+				}
+
+				tombstone := tombstoneIter.Item()
+				if tombstone.BlockID.Compare(row.RowID.CloneBlockID()) != 0 ||
+					tombstone.Offset != row.RowID.GetRowOffset() {
+					p.curRow = rowEntry
+					return true
+				}
+
+				if tombstone.Time.LessEq(&p.ts) {
+					continue
+				}
+
+				p.curRow = rowEntry
+
+				return true
+
 			}
-			p.firstCalled = true
-		} else {
-			if !p.iter.Next() {
-				return false
-			}
+
+			break
 		}
 
-		entry := p.iter.Item()
+		p.dataRowsIter.Release()
 
-		if p.checkBlockID && entry.BlockID != p.blockID {
-			// no more
+		//handle the next object
+		if !p.objsDataRowIter.Next() {
 			return false
 		}
-		if entry.Time.Greater(&p.ts) {
-			// not visible
-			continue
-		}
-		if entry.RowID.Equal(p.lastRowID) {
-			// already met
-			continue
-		}
-		if entry.Deleted != p.iterDeleted {
-			// not wanted, skip to next row id
-			p.lastRowID = entry.RowID
-			continue
-		}
+		p.dataRowsIter = p.objsDataRowIter.Item().DataRows.Load().Copy().Iter()
+		p.firstIterated = false
+		p.objsTombstoneIter.First()
+		objHasTombstone()
 
-		p.lastRowID = entry.RowID
-		return true
 	}
+
 }
 
 func (p *rowsIter) Entry() RowEntry {
-	return p.iter.Item()
+	return p.curRow
 }
 
 func (p *rowsIter) Close() error {
-	p.iter.Release()
+	p.objsTombstoneIter.Release()
+	p.objsDataRowIter.Release()
 	return nil
 }
 
@@ -242,16 +295,10 @@ type primaryKeyIter struct {
 	objsRowIter  btree.IterG[ObjDataRowEntry]
 	objsTombIter btree.IterG[ObjTombstoneRowEntry]
 
-	//iter    btree.IterG[*PrimaryIndexEntry]
-
 	//data row iter for one object.
 	dataRowIter btree.IterG[DataRowEntry]
 	//data rows for one object.
 	dataRows *btree.BTreeG[DataRowEntry]
-
-	//rows       *btree.BTreeG[RowEntry]
-
-	//primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 
 	curRow RowEntry
 }
@@ -286,8 +333,6 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 				return false
 			}
 			return true
-			//item := p.dataRowIter.Item()
-			//return bytes.Equal(item.PK, key)
 		},
 	}
 }
@@ -317,8 +362,6 @@ func Prefix(prefix []byte) PrimaryKeyMatchSpec {
 				return false
 			}
 			return true
-			//item := p.dataRowIter.Item()
-			//return bytes.HasPrefix(item.PK, prefix)
 		},
 	}
 }
@@ -505,55 +548,6 @@ func (p *primaryKeyIter) Next() bool {
 
 }
 
-//func (p *primaryKeyIter) Next() bool {
-//	for {
-//		if !p.spec.Move(p) {
-//			return false
-//		}
-//
-//		entry := p.iter.Item()
-//
-//		// validate
-//		valid := false
-//		rowsIter := p.rows.Iter()
-//		for ok := rowsIter.Seek(RowEntry{
-//			BlockID: entry.BlockID,
-//			RowID:   entry.RowID,
-//			Time:    p.ts,
-//		}); ok; ok = rowsIter.Next() {
-//			row := rowsIter.Item()
-//			if row.BlockID != entry.BlockID {
-//				// no more
-//				break
-//			}
-//			if row.RowID != entry.RowID {
-//				// no more
-//				break
-//			}
-//			if row.Time.Greater(&p.ts) {
-//				// not visible
-//				continue
-//			}
-//			if row.Deleted {
-//				// visible and deleted, no longer valid
-//				break
-//			}
-//			valid = row.ID == entry.RowEntryID
-//			if valid {
-//				p.curRow = row
-//			}
-//			break
-//		}
-//		rowsIter.Release()
-//
-//		if !valid {
-//			continue
-//		}
-//
-//		return true
-//	}
-//}
-
 func (p *primaryKeyIter) Entry() RowEntry {
 	return p.curRow
 }
@@ -675,56 +669,3 @@ func (p *primaryKeyDelIter) Next() bool {
 	}
 
 }
-
-//func (p *primaryKeyDelIter) Next() bool {
-//	for {
-//		if !p.spec.Move(&p.primaryKeyIter) {
-//			return false
-//		}
-//
-//		entry := p.iter.Item()
-//
-//		if entry.BlockID.Compare(p.bid) != 0 {
-//			continue
-//		}
-//
-//		// validate
-//		valid := false
-//		rowsIter := p.rows.Iter()
-//		for ok := rowsIter.Seek(RowEntry{
-//			BlockID: entry.BlockID,
-//			RowID:   entry.RowID,
-//			Time:    p.ts,
-//		}); ok; ok = rowsIter.Next() {
-//			row := rowsIter.Item()
-//			if row.BlockID != entry.BlockID {
-//				// no more
-//				break
-//			}
-//			if row.RowID != entry.RowID {
-//				// no more
-//				break
-//			}
-//			if row.Time.Greater(&p.ts) {
-//				// not visible
-//				continue
-//			}
-//			if !row.Deleted {
-//				// skip not deleted
-//				continue
-//			}
-//			valid = row.ID == entry.RowEntryID
-//			if valid {
-//				p.curRow = row
-//			}
-//			break
-//		}
-//		rowsIter.Release()
-//
-//		if !valid {
-//			continue
-//		}
-//
-//		return true
-//	}
-//}
