@@ -31,6 +31,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/chaos"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -151,6 +152,9 @@ type Config struct {
 
 	// Goroutine goroutine config
 	Goroutine goroutine.Config `toml:"goroutine"`
+
+	// Malloc default config
+	Malloc malloc.Config `toml:"malloc"`
 }
 
 // NewConfig return Config with default values.

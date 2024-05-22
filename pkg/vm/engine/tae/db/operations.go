@@ -25,33 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
 	OpPreCommit  = uint32(apipb.OpCode_OpPreCommit)
 	OpGetLogTail = uint32(apipb.OpCode_OpGetLogTail)
 )
-
-type Request interface {
-	CreateDatabaseReq |
-		DropDatabaseReq |
-		CreateRelationReq |
-		DropOrTruncateRelationReq |
-		UpdateConstraintReq |
-		WriteReq |
-		apipb.SyncLogTailReq
-}
-
-type Response interface {
-	CreateDatabaseResp |
-		DropDatabaseResp |
-		CreateRelationResp |
-		DropOrTruncateRelationResp |
-		UpdateConstraintResp |
-		WriteResp |
-		apipb.SyncLogTailResp
-}
 
 type RelationType uint8
 
@@ -64,15 +43,6 @@ type AccessInfo struct {
 	AccountID uint32
 	UserID    uint32
 	RoleID    uint32
-}
-
-type CreateDatabaseReq struct {
-	AccessInfo AccessInfo
-	Name       string
-	CreateSql  string
-	DatTyp     string
-	//Global unique, allocated by CN .
-	DatabaseId uint64
 }
 
 type FlushTable struct {
@@ -147,60 +117,6 @@ func (m *FaultPoint) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
-type CreateDatabaseResp struct {
-	ID uint64
-}
-
-type DropDatabaseReq struct {
-	Name string
-	ID   uint64
-}
-
-type DropDatabaseResp struct {
-	ID uint64
-}
-
-type CreateRelationReq struct {
-	AccessInfo   AccessInfo
-	DatabaseID   uint64
-	DatabaseName string
-	Name         string
-	RelationId   uint64
-	Type         RelationType
-	Defs         []engine.TableDef
-}
-
-func (req *CreateRelationReq) String() string {
-	return fmt.Sprintf("%+v, %d-%s:%d-%s",
-		req.AccessInfo, req.DatabaseID, req.DatabaseName, req.RelationId, req.Name)
-}
-
-type UpdateConstraintReq struct {
-	TableId      uint64
-	TableName    string
-	DatabaseId   uint64
-	DatabaseName string
-	Constraint   []byte
-}
-
-type UpdateConstraintResp struct{}
-
-type CreateRelationResp struct {
-	ID uint64
-}
-
-type DropOrTruncateRelationReq struct {
-	IsDrop       bool
-	DatabaseID   uint64
-	DatabaseName string
-	Name         string
-	ID           uint64
-	NewId        uint64
-}
-
-type DropOrTruncateRelationResp struct {
-}
-
 type EntryType int32
 
 const (
@@ -245,9 +161,6 @@ type WriteReq struct {
 	JobRes []*tasks.JobResult
 	//load context cancel function
 	Cancel context.CancelFunc
-}
-
-type WriteResp struct {
 }
 
 type InspectResp struct {
@@ -316,7 +229,7 @@ func (t *TraceSpan) UnmarshalBinary(data []byte) error {
 }
 
 type StorageUsageReq struct {
-	AccIds []int32
+	AccIds []int64
 }
 
 func (s *StorageUsageReq) MarshalBinary() ([]byte, error) {
@@ -360,7 +273,7 @@ type StorageUsageResp_V0 struct {
 
 type StorageUsageResp struct {
 	Succeed bool
-	AccIds  []int32
+	AccIds  []int64
 	Sizes   []uint64
 	Magic   uint64
 }

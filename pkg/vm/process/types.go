@@ -56,6 +56,7 @@ type Analyze interface {
 	ChildrenCallStop(time.Time)
 	Start()
 	Alloc(int64)
+	InputBlock()
 	Input(*batch.Batch, bool)
 	Output(*batch.Batch, bool)
 	WaitStop(time.Time)
@@ -143,7 +144,8 @@ type AnalyzeInfo struct {
 	// WaitTimeConsumed, time taken by the node waiting for channel in milliseconds
 	WaitTimeConsumed int64
 	// InputSize, data size accepted by node
-	InputSize int64
+	InputSize   int64
+	InputBlocks int64
 	// OutputSize, data size output by node
 	OutputSize int64
 	// MemorySize, memory alloc by node

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"time"
 	"unsafe"
 
@@ -768,6 +769,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			AffectedRows: t.AffectedRows(),
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
+			IBucket:      t.IBucket,
+			NBucket:      t.Nbucket,
 			// deleteCtx
 			RowIdIdx:              int32(t.DeleteCtx.RowIdIdx),
 			PartitionTableIds:     t.DeleteCtx.PartitionTableIDs,
@@ -1130,6 +1133,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg := deletion.NewArgument()
 		arg.RemoteDelete = t.RemoteDelete
 		arg.SegmentMap = t.SegmentMap
+		arg.IBucket = t.IBucket
+		arg.Nbucket = t.NBucket
 		arg.DeleteCtx = &deletion.DeleteCtx{
 			CanTruncate:           t.CanTruncate,
 			RowIdIdx:              int(t.RowIdIdx),
@@ -1404,6 +1409,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Typs = convertToTypes(t.Types)
 		arg.IsShuffle = t.IsShuffle
 		v.Arg = arg
+	case vm.ProductL2:
+		t := opr.GetProductL2()
+		arg := productl2.NewArgument()
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.Typs = convertToTypes(t.Types)
+		arg.OnExpr = t.Expr
+		v.Arg = arg
 	case vm.Projection:
 		arg := projection.NewArgument()
 		arg.Es = opr.ProjectList
@@ -1637,6 +1649,7 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 
 func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 	a := &plan.AnalyzeInfo{
+		InputBlocks:      info.InputBlocks,
 		InputRows:        info.InputRows,
 		OutputRows:       info.OutputRows,
 		InputSize:        info.InputSize,

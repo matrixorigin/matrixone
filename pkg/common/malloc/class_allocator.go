@@ -47,14 +47,16 @@ type Class struct {
 	allocator *fixedSizeMmapAllocator
 }
 
-func NewClassAllocator() *ClassAllocator {
+func NewClassAllocator(
+	checkFraction uint32,
+) *ClassAllocator {
 	ret := &ClassAllocator{}
 
 	// init classes
 	for size := uint64(1); size <= maxClassSize; size *= 2 {
 		ret.classes = append(ret.classes, Class{
 			size:      size,
-			allocator: newFixedSizedAllocator(size),
+			allocator: newFixedSizedAllocator(size, checkFraction),
 		})
 	}
 
@@ -83,14 +85,18 @@ func (c *ClassAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator) {
 }
 
 type fixedSizeMmapAllocator struct {
-	size uint64
+	size          uint64
+	checkFraction uint32
 	// buffer1 buffers objects
 	buffer1 chan unsafe.Pointer
 	// buffer2 buffers MADV_DONTNEED objects
 	buffer2 chan unsafe.Pointer
 }
 
-func newFixedSizedAllocator(size uint64) *fixedSizeMmapAllocator {
+func newFixedSizedAllocator(
+	size uint64,
+	checkFraction uint32,
+) *fixedSizeMmapAllocator {
 	// if size is larger than smallClassCap, num1 will be zero, buffer1 will be empty
 	num1 := smallClassCap / size
 	if num1 > 256 {
@@ -100,16 +106,24 @@ func newFixedSizedAllocator(size uint64) *fixedSizeMmapAllocator {
 	// objects in buffer2 will be MADV_DONTNEED-advised and will not occupy RSS, so it's safe to use a large number
 	num2 := 1024
 	ret := &fixedSizeMmapAllocator{
-		size:    size,
-		buffer1: make(chan unsafe.Pointer, num1),
-		buffer2: make(chan unsafe.Pointer, num2),
+		size:          size,
+		checkFraction: checkFraction,
+		buffer1:       make(chan unsafe.Pointer, num1),
+		buffer2:       make(chan unsafe.Pointer, num2),
 	}
 	return ret
 }
 
 var _ Allocator = new(fixedSizeMmapAllocator)
 
-func (f *fixedSizeMmapAllocator) Allocate(_ uint64) (unsafe.Pointer, Deallocator) {
+func (f *fixedSizeMmapAllocator) Allocate(_ uint64) (ptr unsafe.Pointer, dec Deallocator) {
+	defer func() {
+		if f.checkFraction > 0 &&
+			fastrand()%f.checkFraction == 0 {
+			dec = newCheckedDeallocator(dec)
+		}
+	}()
+
 	select {
 
 	case ptr := <-f.buffer1:

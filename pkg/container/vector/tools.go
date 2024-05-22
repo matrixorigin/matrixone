@@ -65,11 +65,11 @@ func MustStrCol(v *Vector) []string {
 	}
 	varcol := MustFixedCol[types.Varlena](v)
 	if v.class == CONSTANT {
-		return []string{(&varcol[0]).GetString(v.area)}
+		return []string{(&varcol[0]).UnsafeGetString(v.area)}
 	} else {
 		ret := make([]string, v.length)
 		for i := range varcol {
-			ret[i] = (&varcol[i]).GetString(v.area)
+			ret[i] = (&varcol[i]).UnsafeGetString(v.area)
 		}
 		return ret
 	}
@@ -115,7 +115,7 @@ func ExpandStrCol(v *Vector) []string {
 		if len(v.data) > 0 {
 			var cols []types.Varlena
 			ToSlice(v, &cols)
-			ss := cols[0].GetString(v.area)
+			ss := cols[0].UnsafeGetString(v.area)
 			for i := range vs {
 				vs[i] = ss
 			}
