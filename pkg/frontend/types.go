@@ -771,9 +771,9 @@ func (ses *Session) GetDebugString() string {
 }
 
 type Responser interface {
-	RespPreMeta() error
-	RespResult(*batch.Batch) error
-	RespPostMeta() error
+	RespPreMeta(*ExecCtx, any) error
+	RespResult(*ExecCtx, *batch.Batch) error
+	RespPostMeta(*ExecCtx, any) error
 	Close()
 }
 
@@ -793,11 +793,11 @@ type MysqlWriter interface {
 	WriteOK() error
 	WriteOKtWithEOF() error
 	WriteEOF() error
-	WriteEOFIF() error
+	WriteEOFIF(warnings uint16, status uint16) error
 	WriteEOFOrOK() error
 	WriteERR() error
-	WriteLengthEncodedNumber() error
-	WriteColumnDef() error
+	WriteLengthEncodedNumber(int) error
+	WriteColumnDef(context.Context, Column, int) error
 	WriteRow() error
 	WriteTextRow() error
 	WriteBinaryRow() error
