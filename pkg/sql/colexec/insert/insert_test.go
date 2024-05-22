@@ -77,7 +77,6 @@ func TestInsertOperator(t *testing.T) {
 	batch1.SetRowCount(3)
 	argument1 := Argument{
 		InsertCtx: &InsertCtx{
-			Rel: &mockRelation{},
 			Ref: &plan.ObjectRef{
 				Obj:        0,
 				SchemaName: "testDb",
@@ -94,13 +93,14 @@ func TestInsertOperator(t *testing.T) {
 			},
 		},
 		ctr: &container{
-			state: vm.Build,
+			state:  vm.Build,
+			source: &mockRelation{},
 		},
 	}
 	resetChildren(&argument1, batch1)
-	err := argument1.Prepare(proc)
-	require.NoError(t, err)
-	_, err = argument1.Call(proc)
+	// err := argument1.Prepare(proc)
+	// require.NoError(t, err)
+	_, err := argument1.Call(proc)
 	require.NoError(t, err)
 	// result := argument1.InsertCtx.Rel.(*mockRelation).result
 	// require.Equal(t, result.Batch, batch.EmptyBatch)
