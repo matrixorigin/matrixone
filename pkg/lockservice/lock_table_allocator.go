@@ -225,7 +225,6 @@ func (l *lockTableAllocator) remainTxnInService(serviceID string) int32 {
 	if c == 0 {
 		b := l.getServiceBindsWithoutPrefix(serviceID)
 		if b == nil ||
-			!b.isStatus(pb.Status_ServiceCanRestart) ||
 			!b.isStatus(pb.Status_ServiceCanRestart) {
 			// -1 means can not get right remain txn in restart lock service
 			c = -1

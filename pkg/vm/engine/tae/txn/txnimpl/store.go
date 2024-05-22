@@ -21,15 +21,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -41,6 +38,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+
+	"go.uber.org/zap"
 )
 
 var (
@@ -426,22 +425,11 @@ func (store *txnStore) GetDatabaseByID(id uint64) (h handle.Database, err error)
 }
 
 func (store *txnStore) CreateDatabase(name, createSql, datTyp string) (h handle.Database, err error) {
-	meta, err := store.catalog.CreateDBEntry(name, createSql, datTyp, store.txn)
-	if err != nil {
-		return nil, err
-	}
-	var db *txnDB
-	if db, err = store.getOrSetDB(meta.GetID()); err != nil {
-		return
-	}
-	if err = db.SetCreateEntry(meta); err != nil {
-		return
-	}
-	h = buildDB(db)
-	return
+	id := store.catalog.NextDB()
+	return store.CreateDatabaseWithID(context.Background(), name, createSql, datTyp, id)
 }
 
-func (store *txnStore) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (h handle.Database, err error) {
+func (store *txnStore) CreateDatabaseWithID(ctx context.Context, name, createSql, datTyp string, id uint64) (h handle.Database, err error) {
 	meta, err := store.catalog.CreateDBEntryWithID(name, createSql, datTyp, id, store.txn)
 	if err != nil {
 		return nil, err
@@ -453,6 +441,11 @@ func (store *txnStore) CreateDatabaseWithID(name, createSql, datTyp string, id u
 	if err = db.SetCreateEntry(meta); err != nil {
 		return
 	}
+
+	// TODO(aptend): write ddl row
+	// if err = store.Append(ctx, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_DATABASE_ID, nil); err != nil {
+	// 	return
+	// }
 	h = buildDB(db)
 	return
 }

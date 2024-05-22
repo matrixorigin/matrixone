@@ -172,7 +172,7 @@ func NewObjectEntryByMetaLocation(
 
 func NewReplayObjectEntry() *ObjectEntry {
 	e := &ObjectEntry{
-		BaseEntryImpl: NewReplayBaseEntry(
+		BaseEntryImpl: NewBaseEntry(
 			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
 	}
 	return e
@@ -582,6 +582,7 @@ func (entry *ObjectEntry) GetSchemaLocked() *Schema {
 // a block can be compacted:
 // 1. no uncommited node
 // 2. at least one committed node
+// Note: Soft deleted nobjects might have in memory deletes to be flushed.
 func (entry *ObjectEntry) PrepareCompact() bool {
 	entry.RLock()
 	defer entry.RUnlock()

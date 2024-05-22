@@ -19,6 +19,8 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -28,14 +30,25 @@ const argName = "merge_limit"
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(argName)
 	ap := arg
-	buf.WriteString(fmt.Sprintf("mergeLimit(%d)", ap.Limit))
+	buf.WriteString(fmt.Sprintf("mergeLimit(%v)", ap.Limit))
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.seen = 0
-	ap.ctr.InitReceiver(proc, true)
+	arg.ctr = new(container)
+	arg.ctr.seen = 0
+	arg.ctr.InitReceiver(proc, true)
+	var err error
+	if arg.ctr.limitExecutor == nil {
+		arg.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, arg.Limit)
+		if err != nil {
+			return err
+		}
+	}
+	vec, err := arg.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	if err != nil {
+		return err
+	}
+	arg.ctr.limit = uint64(vector.MustFixedCol[int64](vec)[0])
 	return nil
 }
 
@@ -73,18 +86,18 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		anal.Input(arg.buf, arg.GetIsFirst())
-		if arg.ctr.seen >= arg.Limit {
+		if arg.ctr.seen >= arg.ctr.limit {
 			proc.PutBatch(arg.buf)
 			continue
 		}
 		newSeen := arg.ctr.seen + uint64(arg.buf.RowCount())
-		if newSeen < arg.Limit {
+		if newSeen < arg.ctr.limit {
 			arg.ctr.seen = newSeen
 			anal.Output(arg.buf, arg.GetIsLast())
 			result.Batch = arg.buf
 			return result, nil
 		} else {
-			num := int(newSeen - arg.Limit)
+			num := int(newSeen - arg.ctr.limit)
 			batch.SetLength(arg.buf, arg.buf.RowCount()-num)
 			arg.ctr.seen = newSeen
 			anal.Output(arg.buf, arg.GetIsLast())

@@ -808,7 +808,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 				Op:  vm.MergeLimit,
 				Idx: in.Idx,
 				Arg: mergelimit.NewArgument().
-					WithLimit(arg.Limit),
+					WithLimit(arg.LimitExpr),
 
 				CnAddr:      in.CnAddr,
 				OperatorID:  c.allocOperatorID(),
@@ -821,7 +821,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: limit.NewArgument().
-						WithLimit(arg.Limit),
+						WithLimit(arg.LimitExpr),
 
 					CnAddr:      in.CnAddr,
 					OperatorID:  in.OperatorID,
@@ -923,7 +923,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 				Op:  vm.MergeOffset,
 				Idx: in.Idx,
 				Arg: mergeoffset.NewArgument().
-					WithOffset(arg.Offset),
+					WithOffset(arg.OffsetExpr),
 
 				CnAddr:      in.CnAddr,
 				OperatorID:  c.allocOperatorID(),
@@ -936,7 +936,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: offset.NewArgument().
-						WithOffset(arg.Offset),
+						WithOffset(arg.OffsetExpr),
 
 					CnAddr:      in.CnAddr,
 					OperatorID:  in.OperatorID,

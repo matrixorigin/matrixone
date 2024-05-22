@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	plan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -64,6 +65,7 @@ func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
+		tc.arg.Free(tc.proc, false, nil)
 	}
 }
 
@@ -91,6 +93,7 @@ func TestOffset(t *testing.T) {
 				}
 			}
 		}
+		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -129,6 +132,8 @@ func BenchmarkOffset(b *testing.B) {
 				}
 			}
 
+			tc.arg.Free(tc.proc, false, nil)
+			tc.proc.FreeVectors()
 		}
 	}
 }
@@ -151,7 +156,7 @@ func newTestCase(offset uint64) offsetTestCase {
 			types.T_int8.ToType(),
 		},
 		arg: &Argument{
-			Offset: offset,
+			Offset: plan.MakePlan2Int64ConstExprWithType(int64(offset)),
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
