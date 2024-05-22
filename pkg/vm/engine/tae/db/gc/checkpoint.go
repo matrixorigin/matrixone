@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -282,8 +283,7 @@ func (c *checkpointCleaner) replayCheckpoints() error {
 		return err
 	}
 	for _, dir := range dirs {
-		name := CKPMetaDir + "/" + dir.Name
-		c.checkpointMetas.files[name] = struct{}{}
+		c.checkpointMetas.files[dir.Name] = struct{}{}
 		logutil.Infof("replay checkpoint: %s", dir.Name)
 	}
 	return nil
@@ -641,7 +641,12 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		}
 		c.checkpointMetas.Lock()
 		for _, file := range deleteFiles {
-			delete(c.checkpointMetas.files, file)
+			if strings.Contains(file, checkpoint.PrefixMetadata) {
+				info := strings.Split(file, checkpoint.CheckpointDir+"/")
+				name := info[1]
+				logutil.Infof("[MergeCheckpoint] name %v", name)
+				delete(c.checkpointMetas.files, name)
+			}
 		}
 		c.checkpointMetas.Unlock()
 	}

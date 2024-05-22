@@ -545,7 +545,8 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 		return
 	}
 	if r.helper != nil {
-		r.helper(name)
+		fileName := blockio.EncodeCheckpointMetadataFileNameWithoutDir(PrefixMetadata, start, end)
+		r.helper(fileName)
 	}
 	return
 }
