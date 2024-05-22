@@ -29,9 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
@@ -207,7 +209,7 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 	accCnt, dbCnt, tblCnt := 10, 10, 10
 	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
 
-	memo := logtail.NewTNUsageMemo()
+	memo := logtail.NewTNUsageMemo(nil)
 	memo.Clear()
 
 	sort.Slice(usages, func(i, j int) bool {
@@ -342,7 +344,7 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 	accCnt, dbCnt, tblCnt := 10, 10, 10
 	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
 
-	memo := logtail.NewTNUsageMemo()
+	memo := logtail.NewTNUsageMemo(nil)
 	memo.Clear()
 
 	gCollector := logtail.NewGlobalCollector(types.TS{}, time.Second)
@@ -452,13 +454,13 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 		vers = append(vers, logtail.CheckpointVersion11)
 	}
 
-	memo := logtail.NewTNUsageMemo()
+	memo := logtail.NewTNUsageMemo(nil)
 	memo.Clear()
 
 	memo.PrepareReplay(ckps, vers)
 	memo.EstablishFromCKPs(nil)
 
-	memoShadow := logtail.NewTNUsageMemo()
+	memoShadow := logtail.NewTNUsageMemo(nil)
 	for idx := range usageIns {
 		memoShadow.DeltaUpdate(usageIns[idx], false)
 	}
@@ -490,7 +492,7 @@ func Test_RemoveStaleAccounts(t *testing.T) {
 	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
 
 	gCollector := logtail.NewGlobalCollector(types.TS{}, time.Second)
-	gCollector.UsageMemo = logtail.NewTNUsageMemo()
+	gCollector.UsageMemo = logtail.NewTNUsageMemo(nil)
 	defer gCollector.Close()
 
 	for idx := range usages {
@@ -535,7 +537,7 @@ func mockCkpDataWithVersion(version uint32, cnt int) (ckpDats []*logtail.Checkpo
 
 func Test_UpdateDataFromOldVersion(t *testing.T) {
 
-	memo := logtail.NewTNUsageMemo()
+	memo := logtail.NewTNUsageMemo(nil)
 	ctlog := catalog.MockCatalog()
 	defer ctlog.Close()
 
@@ -660,4 +662,69 @@ func Test_UpdateDataFromOldVersion(t *testing.T) {
 			require.Equal(t, uint64(0), size)
 		}
 	}
+}
+
+func Test_GatherSpecialSize(t *testing.T) {
+	cc := catalog.MockCatalog()
+	memo := logtail.NewTNUsageMemo(cc)
+	memo.Clear()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	txnMgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(cc), catalog.MockTxnFactory(cc), types.NewMockHLCClock(1))
+	txnMgr.Start(context.Background())
+	defer txnMgr.Stop()
+
+	txn, _ := txnMgr.StartTxn(nil)
+
+	hdb, err := txn.GetDatabase(pkgcatalog.MO_CATALOG)
+	require.Nil(t, err)
+	require.NotNil(t, hdb)
+
+	stats := objectio.NewObjectStats()
+	objectio.SetObjectStatsSize(stats, 123*1024*1024)
+
+	var rel handle.Relation
+	var relId uint64 = 0x11235
+	{
+		ss := catalog.MockSchema(10, 0)
+		ss.Relkind = "cluster"
+		rel, err = hdb.CreateRelationWithID(ss, relId)
+		require.Nil(t, err)
+
+		vec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+		vec.Append(stats.Clone().Marshal(), false)
+
+		rel.AddObjsWithMetaLoc(ctx, vec)
+		vec.Close()
+	}
+
+	txn.Commit(ctx)
+
+	iCollector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs(), false)
+	iCollector.UsageMemo = memo
+	defer iCollector.Close()
+
+	size := uint64(1024 * 1024)
+	usages := []logtail.UsageData{
+		{AccId: uint64(pkgcatalog.System_Account), DbId: pkgcatalog.MO_CATALOG_ID, TblId: pkgcatalog.MO_TABLES_ID, Size: size},
+		{AccId: uint64(pkgcatalog.System_Account), DbId: pkgcatalog.MO_CATALOG_ID, TblId: pkgcatalog.MO_DATABASE_ID, Size: size},
+		{AccId: uint64(pkgcatalog.System_Account), DbId: pkgcatalog.MO_CATALOG_ID, TblId: pkgcatalog.MO_COLUMNS_ID, Size: size},
+		{AccId: uint64(pkgcatalog.System_Account), DbId: pkgcatalog.MO_CATALOG_ID, TblId: relId, Size: size},
+	}
+
+	expected := size * 4
+
+	_, _, ins := mockDeletesAndInserts(
+		usages, map[uint64]int{}, map[uint64]int{},
+		map[int]struct{}{}, map[int]struct{}{0: {}, 1: {}, 2: {}, 3: {}})
+
+	iCollector.Usage.ObjInserts = ins
+	logtail.FillUsageBatOfIncremental(iCollector)
+
+	actual := memo.GatherSpecialTableSize()
+
+	require.Equal(t, expected, actual)
+
 }
