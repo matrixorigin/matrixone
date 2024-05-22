@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -38,16 +39,22 @@ type Container struct {
 	mp map[int]*batch.Batch
 	// mp2 is used to store the normal data batches
 	mp2 map[int][]*batch.Batch
+
+	source           engine.Relation
+	partitionSources []engine.Relation
 }
 
 type Argument struct {
-	// 1. main table
-	Tbl engine.Relation
-	// 2. partition sub tables
-	PartitionSources []engine.Relation
-	AddAffectedRows  bool
-	affectedRows     uint64
-	container        *Container
+	// // 1. main table
+	// Tbl engine.Relation
+	// // 2. partition sub tables
+	// PartitionSources []engine.Relation
+	AddAffectedRows     bool
+	Engine              engine.Engine
+	Ref                 *plan.ObjectRef
+	PartitionTableNames []string
+	affectedRows        uint64
+	container           *Container
 
 	vm.OperatorBase
 }
@@ -77,13 +84,18 @@ func NewArgument() *Argument {
 	return reuse.Alloc[Argument](nil)
 }
 
-func (arg *Argument) WithTbl(tbl engine.Relation) *Argument {
-	arg.Tbl = tbl
+func (arg *Argument) WithObjectRef(ref *plan.ObjectRef) *Argument {
+	arg.Ref = ref
 	return arg
 }
 
-func (arg *Argument) WithPartitionSources(partitionSources []engine.Relation) *Argument {
-	arg.PartitionSources = partitionSources
+func (arg *Argument) WithEngine(eng engine.Engine) *Argument {
+	arg.Engine = eng
+	return arg
+}
+
+func (arg *Argument) WithParitionNames(names []string) *Argument {
+	arg.PartitionTableNames = append(arg.PartitionTableNames, names...)
 	return arg
 }
 
@@ -125,9 +137,9 @@ func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 	}
 
 	// If the target is a partition table
-	if len(arg.PartitionSources) > 0 {
+	if len(arg.container.partitionSources) > 0 {
 		// 'i' aligns with partition number
-		for i := range arg.PartitionSources {
+		for i := range arg.container.partitionSources {
 			bat := batch.NewWithSize(len(attrs))
 			bat.Attrs = attrs
 			bat.Cnt = 1

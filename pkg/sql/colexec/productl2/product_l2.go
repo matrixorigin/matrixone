@@ -187,7 +187,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			} else {
 				normalizeTblEmbeddingF32 = normalizeTblEmbeddingF32[:len(tblEmbeddingF32)]
 			}
-			normalizeTblEmbeddingF32, _ = moarray.NormalizeL2[float32](tblEmbeddingF32, &normalizeTblEmbeddingF32)
+			_ = moarray.NormalizeL2[float32](tblEmbeddingF32, normalizeTblEmbeddingF32)
 
 			for i = 0; i < buildCount; i++ {
 				clusterEmbeddingF32 = types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
@@ -210,7 +210,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			} else {
 				normalizeTblEmbeddingF64 = normalizeTblEmbeddingF64[:len(tblEmbeddingF64)]
 			}
-			normalizeTblEmbeddingF64, _ = moarray.NormalizeL2[float64](tblEmbeddingF64, &normalizeTblEmbeddingF64)
+			_ = moarray.NormalizeL2[float64](tblEmbeddingF64, normalizeTblEmbeddingF64)
 
 			for i = 0; i < buildCount; i++ {
 				clusterEmbeddingF64 = types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))

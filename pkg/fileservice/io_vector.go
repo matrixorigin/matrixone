@@ -30,6 +30,9 @@ func (i *IOVector) Release() {
 		if entry.CachedData != nil {
 			entry.CachedData.Release()
 		}
+		for _, fn := range entry.releaseFuncs {
+			fn()
+		}
 	}
 }
 
