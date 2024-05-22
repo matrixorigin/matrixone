@@ -17,7 +17,6 @@ package trace
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -899,8 +898,8 @@ func (s *service) RefreshTxnFilters() error {
 
 			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 				for i := 0; i < rows; i++ {
-					methods = append(methods, cols[0].GetStringAt(i))
-					values = append(values, cols[1].GetStringAt(i))
+					methods = append(methods, cols[0].UnsafeGetStringAt(i))
+					values = append(values, cols[1].UnsafeGetStringAt(i))
 				}
 				return true
 			})
@@ -948,7 +947,6 @@ func (s *service) RefreshTxnFilters() error {
 func (s *service) handleTxnEvents(ctx context.Context) {
 	s.handleEvent(
 		ctx,
-		s.txnCSVFile,
 		8,
 		EventTxnTable,
 		s.txnC,
@@ -958,19 +956,10 @@ func (s *service) handleTxnEvents(ctx context.Context) {
 func (s *service) handleTxnActionEvents(ctx context.Context) {
 	s.handleEvent(
 		ctx,
-		s.txnActionCSVFile,
 		9,
 		EventTxnActionTable,
 		s.txnActionC,
 	)
-}
-
-func (s *service) txnCSVFile() string {
-	return filepath.Join(s.dir, fmt.Sprintf("txn-%d.csv", s.seq.Add(1)))
-}
-
-func (s *service) txnActionCSVFile() string {
-	return filepath.Join(s.dir, fmt.Sprintf("txn-action-%d.csv", s.seq.Add(1)))
 }
 
 func addTxnFilterSQL(

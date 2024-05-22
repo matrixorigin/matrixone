@@ -45,7 +45,7 @@ func createRefresh(t *testing.T) TaskStorage {
 
 // TODO: move to cluster testing.
 // func createMysql(t *testing.T) TaskStorage {
-// 	storage, err := NewMysqlTaskStorage("root:root@tcp(127.0.0.1:12345)/", "mo_task")
+// 	storage, err := newMysqlTaskStorage("root:root@tcp(127.0.0.1:12345)/mo_task")
 // 	require.NoError(t, err)
 // 	return storage
 // }
