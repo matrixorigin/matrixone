@@ -18,7 +18,6 @@ create index idx6 using ivfflat on t6(b) lists=2 op_type "vector_l2_ops";
 select a, b from t6 order by l2_distance(b, "[1,0,0,0]") limit 4;
 a    b
 1    [1, 0, 0, 0]
-4    [1, 1, 0, 0]
 2    [2, 0, 0, 0]
 3    [3, 0, 0, 0]
 drop table if exists t1;
@@ -41,22 +40,21 @@ create index idx1 using ivfflat on t1(b) lists=3 op_type "vector_l2_ops";
 select a, b from t1 order by l2_distance(b, "[1,1,1,0]") limit 4;
 a    b
 7    [1, 1, 1, 0]
-4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
-2    [2, 0, 0, 0]
+8    [2, 2, 2, 0]
+9    [3, 3, 3, 0]
 insert into t1 values(10, "[4,4,4,0]", "10");
 select a, b from t1 order by l2_distance(b, "[1,1,1,0]") limit 4;
 a    b
 7    [1, 1, 1, 0]
-4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
-2    [2, 0, 0, 0]
+8    [2, 2, 2, 0]
+9    [3, 3, 3, 0]
+10    [4, 4, 4, 0]
 select a,b,c from t1 order by l2_distance(b, "[1,1,1,0]") limit 4;
 a    b    c
 7    [1, 1, 1, 0]    7
-4    [1, 1, 0, 0]    4
-1    [1, 0, 0, 0]    1
-2    [2, 0, 0, 0]    2
+8    [2, 2, 2, 0]    8
+9    [3, 3, 3, 0]    9
+10    [4, 4, 4, 0]    10
 insert into t1 values(11, "[1,1,1,1]", "11");
 insert into t1 values(12, "[2,2,2,2]", "12");
 insert into t1 values(13, "[3,3,3,3]", "13");
@@ -65,26 +63,23 @@ select a, b from t1 order by l2_distance(b, "[1,0,0,0]") limit 4;
 a    b
 1    [1, 0, 0, 0]
 2    [2, 0, 0, 0]
-4    [1, 1, 0, 0]
-7    [1, 1, 1, 0]
+3    [3, 0, 0, 0]
 select a, b from t1 order by l2_distance(b, "[1,1,0,0]") limit 4;
 a    b
 4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
-7    [1, 1, 1, 0]
-2    [2, 0, 0, 0]
+5    [2, 2, 0, 0]
+6    [3, 3, 0, 0]
 select a, b from t1 order by l2_distance(b, "[1,1,1,0]") limit 4;
 a    b
 7    [1, 1, 1, 0]
-11    [1, 1, 1, 1]
-4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
+8    [2, 2, 2, 0]
+9    [3, 3, 3, 0]
+10    [4, 4, 4, 0]
 select a, b from t1 order by l2_distance(b, "[1,1,1,1]") limit 4;
 a    b
 11    [1, 1, 1, 1]
-7    [1, 1, 1, 0]
-4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
+12    [2, 2, 2, 2]
+13    [3, 3, 3, 3]
 drop table if exists t3;
 create table t2(a int,b vecf32(4), c varchar(3), d int, primary key(a,d));
 insert into t2 values(1, "[1,0,0,0]" , "1", 1);
@@ -105,34 +100,32 @@ create index idx2 using ivfflat on t2(b) lists=3 op_type "vector_l2_ops";
 select b from t2 order by l2_distance(b, "[1,1,1,0]") limit 4; -- speed path (should output only 3 rows)
 b
 [1, 1, 1, 0]
-[1, 1, 0, 0]
-[1, 0, 0, 0]
-[2, 0, 0, 0]
+[2, 2, 2, 0]
+[3, 3, 3, 0]
 select a, b from t2 order by l2_distance(b, "[1,1,1,0]") limit 4; -- slow path
 a    b
 7    [1, 1, 1, 0]
-4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
-2    [2, 0, 0, 0]
+8    [2, 2, 2, 0]
+9    [3, 3, 3, 0]
 insert into t2 values(10, "[4,4,4,0]", "10", 10);
 select b from t2 order by l2_distance(b, "[1,1,1,0]") limit 4; -- speed path
 b
 [1, 1, 1, 0]
-[1, 1, 0, 0]
-[1, 0, 0, 0]
-[2, 0, 0, 0]
+[2, 2, 2, 0]
+[3, 3, 3, 0]
+[4, 4, 4, 0]
 select a, b from t2 order by l2_distance(b, "[1,1,1,0]") limit 4; -- slow path
 a    b
 7    [1, 1, 1, 0]
-4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
-2    [2, 0, 0, 0]
+8    [2, 2, 2, 0]
+9    [3, 3, 3, 0]
+10    [4, 4, 4, 0]
 select a,b,c from t2 order by l2_distance(b, "[1,1,1,0]") limit 4;
 a    b    c
 7    [1, 1, 1, 0]    7
-4    [1, 1, 0, 0]    4
-1    [1, 0, 0, 0]    1
-2    [2, 0, 0, 0]    2
+8    [2, 2, 2, 0]    8
+9    [3, 3, 3, 0]    9
+10    [4, 4, 4, 0]    10
 insert into t2 values(11, "[1,1,1,1]", "11", 11);
 insert into t2 values(12, "[2,2,2,2]", "12", 12);
 insert into t2 values(13, "[3,3,3,3]", "13", 13);
@@ -141,26 +134,23 @@ select a, b from t2 order by l2_distance(b, "[1,0,0,0]") limit 4;
 a    b
 1    [1, 0, 0, 0]
 2    [2, 0, 0, 0]
-4    [1, 1, 0, 0]
-7    [1, 1, 1, 0]
+3    [3, 0, 0, 0]
 select a, b from t2 order by l2_distance(b, "[1,1,0,0]") limit 4;
 a    b
 4    [1, 1, 0, 0]
-7    [1, 1, 1, 0]
-1    [1, 0, 0, 0]
-2    [2, 0, 0, 0]
+5    [2, 2, 0, 0]
+6    [3, 3, 0, 0]
 select a, b from t2 order by l2_distance(b, "[1,1,1,0]") limit 4;
 a    b
 7    [1, 1, 1, 0]
-11    [1, 1, 1, 1]
-4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
+8    [2, 2, 2, 0]
+9    [3, 3, 3, 0]
+10    [4, 4, 4, 0]
 select a, b from t2 order by l2_distance(b, "[1,1,1,1]") limit 4;
 a    b
 11    [1, 1, 1, 1]
-7    [1, 1, 1, 0]
-4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
+12    [2, 2, 2, 2]
+13    [3, 3, 3, 3]
 drop table if exists t3;
 create table t3(a int,b vecf32(4), c varchar(3));
 insert into t3 values(1, "[1,0,0,0]" , "1");
@@ -181,22 +171,21 @@ create index idx3 using ivfflat on t3(b) lists=3 op_type "vector_l2_ops";
 select a, b from t3 order by l2_distance(b, "[1,1,1,0]") limit 4;
 a    b
 7    [1, 1, 1, 0]
-4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
-2    [2, 0, 0, 0]
+8    [2, 2, 2, 0]
+9    [3, 3, 3, 0]
 insert into t3 values(10, "[4,4,4,0]", "10");
 select a, b from t3 order by l2_distance(b, "[1,1,1,0]") limit 4;
 a    b
 7    [1, 1, 1, 0]
-4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
-2    [2, 0, 0, 0]
+8    [2, 2, 2, 0]
+9    [3, 3, 3, 0]
+10    [4, 4, 4, 0]
 select a,b,c from t3 order by l2_distance(b, "[1,1,1,0]") limit 4;
 a    b    c
 7    [1, 1, 1, 0]    7
-4    [1, 1, 0, 0]    4
-1    [1, 0, 0, 0]    1
-2    [2, 0, 0, 0]    2
+8    [2, 2, 2, 0]    8
+9    [3, 3, 3, 0]    9
+10    [4, 4, 4, 0]    10
 insert into t3 values(11, "[1,1,1,1]", "11");
 insert into t3 values(12, "[2,2,2,2]", "12");
 insert into t3 values(13, "[3,3,3,3]", "13");
@@ -205,26 +194,23 @@ select a, b from t3 order by l2_distance(b, "[1,0,0,0]") limit 4;
 a    b
 1    [1, 0, 0, 0]
 2    [2, 0, 0, 0]
-4    [1, 1, 0, 0]
-7    [1, 1, 1, 0]
+3    [3, 0, 0, 0]
 select a, b from t3 order by l2_distance(b, "[1,1,0,0]") limit 4;
 a    b
 4    [1, 1, 0, 0]
-7    [1, 1, 1, 0]
-1    [1, 0, 0, 0]
-2    [2, 0, 0, 0]
+5    [2, 2, 0, 0]
+6    [3, 3, 0, 0]
 select a, b from t3 order by l2_distance(b, "[1,1,1,0]") limit 4;
 a    b
 7    [1, 1, 1, 0]
-11    [1, 1, 1, 1]
-4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
+8    [2, 2, 2, 0]
+9    [3, 3, 3, 0]
+10    [4, 4, 4, 0]
 select a, b from t3 order by l2_distance(b, "[1,1,1,1]") limit 4;
 a    b
 11    [1, 1, 1, 1]
-7    [1, 1, 1, 0]
-4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
+12    [2, 2, 2, 2]
+13    [3, 3, 3, 3]
 drop table if exists t4;
 create table t4(a int primary key,b vecf32(4), c varchar(3) );
 insert into t4 values(1, "[1,0,0,0]" , "1");
@@ -244,17 +230,14 @@ a    b
 create index idx4 using ivfflat on t4(b) lists=3 op_type "vector_l2_ops";
 select a, b from t4 order by l2_distance(b, "[1,1,1,0]") limit 4;
 a    b
-9    null
 7    [1, 1, 1, 0]
-4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
+8    [2, 2, 2, 0]
 insert into t4 values(10, "[4,4,4,0]", "10");
 select a, b from t4 order by l2_distance(b, "[1,1,1,0]") limit 4;
 a    b
-9    null
 7    [1, 1, 1, 0]
-4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
+8    [2, 2, 2, 0]
+10    [4, 4, 4, 0]
 drop table if exists t5;
 create table t5(a int primary key,b vecf32(4), c varchar(3) );
 insert into t5 values(1, "[1,0,0,0]" , "1");
@@ -277,16 +260,19 @@ select a, b from t5 order by l2_distance(b, "[1,1,1,0]") limit 7;
 a    b
 7    [1, 1, 1, 0]
 4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
-2    [2, 0, 0, 0]
-10    [0, 0, 0, 0]
+5    [2, 2, 0, 0]
+8    [2, 2, 2, 0]
+6    [3, 3, 0, 0]
+9    [3, 3, 3, 3]
 insert into t5 values(11, "[4,4,4,0]", "11");
 select a, b from t5 order by l2_distance(b, "[1,1,1,0]") limit 7;
 a    b
 7    [1, 1, 1, 0]
 4    [1, 1, 0, 0]
-1    [1, 0, 0, 0]
-2    [2, 0, 0, 0]
-10    [0, 0, 0, 0]
+5    [2, 2, 0, 0]
+8    [2, 2, 2, 0]
+6    [3, 3, 0, 0]
+9    [3, 3, 3, 3]
+11    [4, 4, 4, 0]
 SET GLOBAL experimental_ivf_index = 0;
 drop database vecdb3;
