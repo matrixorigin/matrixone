@@ -283,6 +283,7 @@ func (c *checkpointCleaner) replayCheckpoints() error {
 	}
 	for _, dir := range dirs {
 		c.checkpointMetas.files[dir.Name] = struct{}{}
+		logutil.Infof("replay checkpoint: %s", dir.Name)
 	}
 	return nil
 }
