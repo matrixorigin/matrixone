@@ -141,7 +141,19 @@ func ListSnapshotCheckpointWithMeta(
 		}
 		bat.AddVector(colNames[i], vec)
 	}
-	entries, maxGlobalEnd := replayCheckpointEntries(bat, 3)
+
+	var checkpointVersion int
+	// in version 1, checkpoint metadata doesn't contain 'version'.
+	vecLen := len(bats[0].Vecs)
+	if vecLen < CheckpointSchemaColumnCountV1 {
+		checkpointVersion = 1
+	} else if vecLen < CheckpointSchemaColumnCountV2 {
+		checkpointVersion = 2
+	} else {
+		checkpointVersion = 3
+	}
+
+	entries, maxGlobalEnd := replayCheckpointEntries(bat, checkpointVersion)
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].end.Less(&entries[j].end)
 	})
