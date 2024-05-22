@@ -122,6 +122,7 @@ func NewCheckpointCleaner(
 	cleaner.snapshotMeta = logtail.NewSnapshotMeta()
 	cleaner.option.enableGC = true
 	cleaner.mPool = common.DebugAllocator
+	cleaner.checkpointMetas.files = make(map[string]struct{})
 	return cleaner
 }
 
