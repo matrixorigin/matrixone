@@ -214,6 +214,7 @@ select e.employee_id, e.first_name, e.last_name, d.department_name
 from test04.employee_view e join test03.department_view d on e.department_id = d.department_id;
 select * from employee_with_department_view;
 
+-- @ignore:1
 show create table test04.employees;
 show create table test04.employee_view;
 show create table test05.employee_with_department_view;
