@@ -416,7 +416,16 @@ func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, 
 		// Case 2: send data as CSV
 		ses.writeCsvBytes.Load()
 	// mysql packet num + length(sql) / 16KiB + payload / 16 KiB
-	packets = ses.GetPacketCnt() + int64(len(ses.sql)>>14) + int64(ses.payloadCounter>>14)
+	mysqlTcpPkgCnt, tcpPkgCnt := ses.GetPacketCnt()
+	if t := ses.tenant; t != nil && (t.GetTenant() == "query_tae_table" || t.getTenantUnsafe() == "bvt_query_tcp") {
+		//"/*cloud_user*/select * from 32kb_8192row_int order by a;"
+		ses.Info(mp.ctx, "mysql/tcp packet",
+			zap.String("sql", ses.GetSql()),
+			zap.Int64("mysql-packet-cnt", mysqlTcpPkgCnt), zap.Int64("tcp-packet-cnt", tcpPkgCnt))
+	}
+	packets = tcpPkgCnt +
+		int64(len(ses.sql)>>14) + int64(ses.payloadCounter>>14) + /*payload calculated cnt*/
+		bytes>>12 /*ioBuf copy buffer size default = 4096*/
 	if reset {
 		ses.ResetPacketCounter()
 	}
@@ -2401,6 +2410,7 @@ func (mp *MysqlProtocolImpl) flushOutBuffer() error {
 		mp.writeBytes += uint64(mp.bytesInOutBuffer)
 		// FIXME: use a suitable timeout value
 		mp.incDebugCount(8)
+		mp.ses.CountTcpPacket(1)
 		err := mp.tcpConn.Flush(0)
 		mp.incDebugCount(9)
 		if err != nil {
@@ -2700,6 +2710,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte, _ bool) error {
 		var packet = append(header[:], payload[i:i+curLen]...)
 
 		mp.incDebugCount(4)
+		mp.ses.CountTcpPacket(1)
 		err := mp.tcpConn.Write(packet, goetty.WriteOptions{Flush: true})
 		mp.incDebugCount(5)
 		if err != nil {
@@ -2715,6 +2726,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte, _ bool) error {
 			header[2] = 0
 			header[3] = mp.GetSequenceId()
 			mp.incDebugCount(6)
+			mp.ses.CountTcpPacket(1)
 			//send header / zero-sized packet
 			err := mp.tcpConn.Write(header[:], goetty.WriteOptions{Flush: true})
 			mp.AddFlushBytes(uint64(len(header)))
