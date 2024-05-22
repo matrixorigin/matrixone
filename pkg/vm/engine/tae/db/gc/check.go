@@ -92,10 +92,7 @@ func (c *checker) Check() error {
 	}
 
 	// Collect all checkpoint files
-	ckpfiles, _, err := checkpoint.ListSnapshotMeta(c.cleaner.ctx, c.cleaner.fs.Service, entry.GetStart(), nil)
-	if err != nil {
-		return err
-	}
+	ckpfiles := c.cleaner.GetCheckpoints()
 	// The number of checkpoint files is ckpObjectCount
 	ckpObjectCount := len(ckpfiles) * 2
 	allCount := len(allObjects)
