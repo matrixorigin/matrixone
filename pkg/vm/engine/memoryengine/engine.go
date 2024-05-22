@@ -241,3 +241,7 @@ func getTNServices(cluster clusterservice.MOCluster) []metadata.TNService {
 		})
 	return values
 }
+
+func (e *Engine) GetMessageCenter() any {
+	return nil
+}

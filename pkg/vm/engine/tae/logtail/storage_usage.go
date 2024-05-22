@@ -20,7 +20,9 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -89,16 +91,27 @@ const (
 	UsageMAX
 )
 
+const cluster = "cluster"
 const StorageUsageMagic uint64 = 0x1A2B3C4D5E6F
+
+type triode int
+
+const (
+	unknown triode = 0
+	yeah    triode = 1
+	nope    triode = 2
+)
 
 type UsageData struct {
 	AccId uint64
 	DbId  uint64
 	TblId uint64
 	Size  uint64
+
+	special triode
 }
 
-var zeroUsageData UsageData = UsageData{math.MaxUint32, math.MaxUint64, math.MaxUint64, math.MaxInt64}
+var zeroUsageData UsageData = UsageData{math.MaxUint32, math.MaxUint64, math.MaxUint64, math.MaxInt64, unknown}
 
 // MockUsageData generates accCnt * dbCnt * tblCnt UsageDatas.
 // the accIds, dbIds and tblIds are random produced.
@@ -300,12 +313,15 @@ type TNUsageMemo struct {
 		vers    []uint32
 		delayed map[uint64]UsageData
 	}
+
+	C *catalog.Catalog
 }
 
-func NewTNUsageMemo() *TNUsageMemo {
+func NewTNUsageMemo(c *catalog.Catalog) *TNUsageMemo {
 	memo := new(TNUsageMemo)
 	memo.cache = NewStorageUsageCache()
 	memo.newAccCache = NewStorageUsageCache()
+	memo.C = c
 	return memo
 }
 
@@ -412,6 +428,90 @@ func (m *TNUsageMemo) GatherAccountSize(id uint64) (size uint64, exist bool) {
 	return m.gatherAccountSizeHelper(m.cache, id)
 }
 
+var specialNameRegexp = regexp.MustCompile(fmt.Sprintf("%s|%s|%s", pkgcatalog.MO_DATABASE, pkgcatalog.MO_TABLES, pkgcatalog.MO_COLUMNS))
+var indexNameRegexp = regexp.MustCompile("__mo_index.*")
+
+func (m *TNUsageMemo) checkSpecial(usage UsageData, tbl *catalog.TableEntry) triode {
+	if usage.special != unknown {
+		return usage.special
+	}
+
+	if tbl == nil {
+		return unknown
+	}
+
+	name := strings.ToLower(tbl.GetFullName())
+	if indexNameRegexp.MatchString(name) {
+		// we don't know if an index table is special or not
+		return nope
+	}
+
+	if specialNameRegexp.MatchString(name) {
+		return yeah
+	}
+
+	schema := tbl.GetLastestSchema()
+	if strings.ToLower(schema.Relkind) == cluster {
+		return yeah
+	}
+
+	return nope
+}
+
+func (m *TNUsageMemo) GatherSpecialTableSize() (size uint64) {
+	dbEntry, err := m.C.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	if err != nil {
+		logutil.Errorf("[storage]: get mo_catalog from catalog failed: %v", err)
+		return 0
+	}
+
+	usage := UsageData{AccId: uint64(pkgcatalog.System_Account), DbId: pkgcatalog.MO_CATALOG_ID}
+	iter := m.cache.Iter()
+
+	var updates []UsageData
+
+	ok := iter.Seek(usage)
+	for ok {
+		item := iter.Item()
+		if item.AccId != uint64(pkgcatalog.System_Account) || item.DbId != pkgcatalog.MO_CATALOG_ID {
+			break
+		}
+		//fmt.Println(item.String(), item.special)
+		var ret triode
+		if ret = m.checkSpecial(item, nil); ret != unknown {
+			if ret == yeah {
+				size += item.Size
+			}
+			ok = iter.Next()
+			continue
+		}
+
+		tbl, err := dbEntry.GetTableEntryByID(item.TblId)
+		if err != nil {
+			logutil.Errorf("[storage]: get table %d from db %s failed: %v", item.TblId, dbEntry.GetName(), err)
+			ok = iter.Next()
+			continue
+		}
+
+		if ret = m.checkSpecial(item, tbl); ret == yeah {
+			size += item.Size
+		}
+
+		item.special = ret
+		updates = append(updates, item)
+
+		ok = iter.Next()
+	}
+
+	iter.Release()
+
+	for _, item := range updates {
+		m.Replace(item)
+	}
+
+	return size
+}
+
 func (m *TNUsageMemo) GatherNewAccountSize(id uint64) (size uint64, exist bool) {
 	return m.gatherAccountSizeHelper(m.newAccCache, id)
 }
@@ -422,9 +522,12 @@ func (m *TNUsageMemo) GatherAllAccSize() (usages map[uint64]uint64) {
 
 func (m *TNUsageMemo) updateHelper(cache *StorageUsageCache, usage UsageData, del bool) {
 	size := uint64(0)
+	special := unknown
 	if old, found := cache.Get(usage); found {
 		size = old.Size
+		special = old.special
 	}
+	usage.special = special
 
 	if del {
 		if usage.Size > size {
@@ -474,7 +577,7 @@ func (m *TNUsageMemo) applyDeletes(
 		case *catalog.TableEntry:
 			piovt := UsageData{
 				uint64(e.GetDB().GetTenantID()),
-				e.GetDB().GetID(), e.GetID(), 0}
+				e.GetDB().GetID(), e.GetID(), 0, unknown}
 			if usage, exist := m.cache.Get(piovt); exist {
 				appendToStorageUsageBat(ckpData, usage, true, mp)
 				m.Delete(usage)
@@ -491,7 +594,7 @@ func (m *TNUsageMemo) applyDeletes(
 	usages := make([]UsageData, 0)
 	for _, db := range dbs {
 		iter := m.cache.Iter()
-		iter.Seek(UsageData{uint64(db.GetTenantID()), db.ID, 0, 0})
+		iter.Seek(UsageData{uint64(db.GetTenantID()), db.ID, 0, 0, unknown})
 
 		if !isSameDBFunc(iter.Item(), db) {
 			iter.Release()
@@ -586,7 +689,7 @@ func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, string
 
 func (m *TNUsageMemo) deleteAccount(accId uint64) (size uint64) {
 	trash := make([]UsageData, 0)
-	povit := UsageData{accId, 0, 0, 0}
+	povit := UsageData{accId, 0, 0, 0, unknown}
 
 	iter := m.cache.Iter()
 
@@ -665,7 +768,7 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 		var skip bool
 		var log string
 		for y := 0; y < len(accCol); y++ {
-			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y]}
+			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y], unknown}
 
 			// these ckps, older than version 11, haven't del bat, we need clear the
 			// usage data which belongs the deleted databases or tables.
@@ -702,7 +805,7 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 		accCol, dbCol, tblCol, sizeCol = getStorageUsageVectorCols(delVecs)
 
 		for y := 0; y < len(accCol); y++ {
-			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y]}
+			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y], unknown}
 			m.DeltaUpdate(usage, true)
 		}
 	}
@@ -917,6 +1020,41 @@ func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) string {
 	return log
 }
 
+// TODO(GHS) remove later when these special tables have their own objects
+func applyChangesForSpecial(collector *BaseCollector, memo *TNUsageMemo) {
+	if collector.data == nil {
+		return
+	}
+
+	moDatabaseBat := collector.data.bats[DBInsertIDX]
+	moTablesBat := collector.data.bats[TBLInsertIDX]
+	moColumnsBat := collector.data.bats[TBLColInsertIDX]
+
+	memo.applySegInserts([]UsageData{{
+		AccId:   uint64(pkgcatalog.System_Account),
+		DbId:    pkgcatalog.MO_CATALOG_ID,
+		TblId:   pkgcatalog.MO_DATABASE_ID,
+		Size:    uint64(moDatabaseBat.ApproxSize()),
+		special: yeah,
+	}}, collector.data, collector.Allocator())
+
+	memo.applySegInserts([]UsageData{{
+		AccId:   uint64(pkgcatalog.System_Account),
+		DbId:    pkgcatalog.MO_CATALOG_ID,
+		TblId:   pkgcatalog.MO_TABLES_ID,
+		Size:    uint64(moTablesBat.ApproxSize()),
+		special: yeah,
+	}}, collector.data, collector.Allocator())
+
+	memo.applySegInserts([]UsageData{{
+		AccId:   uint64(pkgcatalog.System_Account),
+		DbId:    pkgcatalog.MO_CATALOG_ID,
+		TblId:   pkgcatalog.MO_COLUMNS_ID,
+		Size:    uint64(moColumnsBat.ApproxSize()),
+		special: yeah,
+	}}, collector.data, collector.Allocator())
+}
+
 func doSummary(ckp string, fields ...zap.Field) {
 	defer func() {
 		summaryLog[0] = summaryLog[0][:0]
@@ -994,6 +1132,7 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 
 	log1 := applyChanges(collector.BaseCollector, collector.UsageMemo)
 	//log2 := applyTransfer(collector.BaseCollector, collector.UsageMemo)
+	applyChangesForSpecial(collector.BaseCollector, collector.UsageMemo)
 
 	memoryUsed = collector.UsageMemo.MemoryUsed()
 	doSummary("I",
@@ -1091,6 +1230,7 @@ func cnBatchToUsageDatas(bat *batch.Batch) []UsageData {
 			dbCol[idx],
 			tblCol[idx],
 			sizeCol[idx],
+			unknown,
 		})
 	}
 	return usages

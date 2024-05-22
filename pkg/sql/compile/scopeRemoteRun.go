@@ -340,6 +340,8 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 		return errEncodeProc
 	}
 
+	c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.StmtProfile.GetStmtId())
+
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
 	if err != nil {
@@ -769,6 +771,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			AffectedRows: t.AffectedRows(),
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
+			IBucket:      t.IBucket,
+			NBucket:      t.Nbucket,
 			// deleteCtx
 			RowIdIdx:              int32(t.DeleteCtx.RowIdIdx),
 			PartitionTableIds:     t.DeleteCtx.PartitionTableIDs,
@@ -1131,6 +1135,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg := deletion.NewArgument()
 		arg.RemoteDelete = t.RemoteDelete
 		arg.SegmentMap = t.SegmentMap
+		arg.IBucket = t.IBucket
+		arg.Nbucket = t.NBucket
 		arg.DeleteCtx = &deletion.DeleteCtx{
 			CanTruncate:           t.CanTruncate,
 			RowIdIdx:              int(t.RowIdIdx),

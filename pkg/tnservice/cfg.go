@@ -124,6 +124,7 @@ type Config struct {
 		GCTTL          toml.Duration `toml:"gc-ttl"`
 		ScanGCInterval toml.Duration `toml:"scan-gc-interval"`
 		DisableGC      bool          `toml:"disable-gc"`
+		CheckGC        bool          `toml:"check-gc"`
 	}
 
 	Merge struct {
