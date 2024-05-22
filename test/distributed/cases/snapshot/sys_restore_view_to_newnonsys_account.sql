@@ -686,3 +686,5 @@ drop database test05;
 drop snapshot sp100;
 drop snapshot sp101;
 -- @bvt:issue
+drop account acc01;
+drop account acc02;

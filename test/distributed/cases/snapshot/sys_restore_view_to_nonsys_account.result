@@ -701,4 +701,5 @@ drop database test03;
 drop database test04;
 
 drop database test05;
+drop account acc01;
 

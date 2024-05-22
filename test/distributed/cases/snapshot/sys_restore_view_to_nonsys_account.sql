@@ -656,3 +656,4 @@ drop database test04;
 drop database test05;
 -- @session
 -- @bvt:issue
+drop account acc01;
