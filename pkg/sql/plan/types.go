@@ -206,7 +206,6 @@ type OptimizerHints struct {
 	applyIndices               int
 	runtimeFilter              int
 	joinOrdering               int
-	forceOneCN                 int
 }
 
 type CTERef struct {
