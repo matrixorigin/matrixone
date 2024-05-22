@@ -18,10 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"time"
 
 	"github.com/google/shlex"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -92,7 +92,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		}
 	}
 
-	newIds := make([]uint32, 0)
+	newIds := make([]uint64, 0)
 	for _, id := range req.AccIds {
 		if usages != nil {
 			if size, exist := usages[uint64(id)]; exist {
@@ -104,7 +104,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 			}
 		}
 		// new account which haven't been collect
-		newIds = append(newIds, uint32(id))
+		newIds = append(newIds, uint64(id))
 	}
 
 	for accId, size := range usages {
@@ -113,7 +113,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		resp.Sizes = append(resp.Sizes, size)
 	}
 
-	var notReadyNewAcc []uint32
+	var notReadyNewAcc []uint64
 
 	// new accounts
 	traverseCatalogForNewAccounts(h.db.Catalog, memo, newIds)
