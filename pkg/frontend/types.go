@@ -76,6 +76,7 @@ type ComputationWrapper interface {
 	Plan() *plan.Plan
 	ResetPlanAndStmt(stmt tree.Statement)
 	Free()
+	ParamVals() []any
 }
 
 type ColumnInfo interface {
