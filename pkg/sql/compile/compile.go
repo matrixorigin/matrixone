@@ -150,20 +150,6 @@ func (c Compile) TypeName() string {
 	return "compile.Compile"
 }
 
-func (c *Compile) GetMessageCenter() *process.MessageCenter {
-	if c == nil || c.e == nil {
-		return nil
-	}
-	m := c.e.GetMessageCenter()
-	if m != nil {
-		mc, ok := m.(*process.MessageCenter)
-		if ok {
-			return mc
-		}
-	}
-	return nil
-}
-
 func (c *Compile) reset() {
 	if c.anal != nil {
 		c.anal.release()
@@ -175,7 +161,7 @@ func (c *Compile) reset() {
 		c.fuzzys[i].release()
 	}
 
-	c.MessageBoard = c.MessageBoard.Reset()
+	c.MessageBoard.Messages = c.MessageBoard.Messages[:0]
 	c.fuzzys = c.fuzzys[:0]
 	c.scope = c.scope[:0]
 	c.pn = nil
@@ -370,7 +356,10 @@ func (c *Compile) run(s *Scope) error {
 		if err != nil {
 			return err
 		}
-		c.setAffectedRows(s.Instructions[len(s.Instructions)-1].Arg.(*mergedelete.Argument).AffectedRows)
+		mergeArg := s.Instructions[len(s.Instructions)-1].Arg.(*mergedelete.Argument)
+		if mergeArg.AddAffectedRows {
+			c.addAffectedRows(mergeArg.AffectedRows)
+		}
 		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
@@ -606,6 +595,7 @@ func (c *Compile) canRetry(err error) bool {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
+	c.MessageBoard.Reset()
 	err := c.lockMetaTables()
 	if err != nil {
 		return err
@@ -1440,7 +1430,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				Arg: mergedelete.NewArgument().
 					WithObjectRef(arg.DeleteCtx.Ref).
 					WithParitionNames(arg.DeleteCtx.PartitionTableNames).
-					WithEngine(c.e),
+					WithEngine(c.e).
+					WithAddAffectedRows(arg.DeleteCtx.AddAffectedRows),
 			})
 			rs.Magic = MergeDelete
 			ss = []*Scope{rs}
