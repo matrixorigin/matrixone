@@ -209,6 +209,9 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		})
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
 	db.DiskCleaner.Start()
+	db.BGCheckpointRunner.AddHelper(func(name string) {
+		db.DiskCleaner.GetCleaner().AddCheckpoint(name)
+	})
 	// Init gc manager at last
 	// TODO: clean-try-gc requires configuration parameters
 	cronJobs := []func(*gc.Manager){

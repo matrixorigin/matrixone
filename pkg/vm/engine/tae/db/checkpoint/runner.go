@@ -230,9 +230,13 @@ type runner struct {
 
 	objMemSizeList []tableAndSize
 
+	helper DoCheckpointHelper
+
 	onceStart sync.Once
 	onceStop  sync.Once
 }
+
+type DoCheckpointHelper func(string)
 
 func NewRunner(
 	ctx context.Context,
@@ -294,6 +298,10 @@ func (r *runner) String() string {
 	_, _ = fmt.Fprintf(&buf, "checkpointSize=%v, ", r.options.checkpointSize)
 	_, _ = fmt.Fprintf(&buf, ">")
 	return buf.String()
+}
+
+func (r *runner) AddHelper(h DoCheckpointHelper) {
+	r.helper = h
 }
 
 // Only used in UT
@@ -533,6 +541,12 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 
 	// TODO: checkpoint entry should maintain the location
 	_, err = writer.WriteEnd(r.ctx)
+	if err != nil {
+		return
+	}
+	if r.helper != nil {
+		r.helper(name)
+	}
 	return
 }
 
