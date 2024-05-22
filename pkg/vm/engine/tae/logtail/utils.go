@@ -1560,12 +1560,8 @@ func (data *CNCheckpointData) closeVector(batIdx uint16, colIdx int, m *mpool.MP
 }
 
 func windowCNBatch(bat *batch.Batch, start, end uint64) {
-	var err error
 	for i, vec := range bat.Vecs {
-		bat.Vecs[i], err = vec.Window(int(start), int(end))
-		if err != nil {
-			panic(err)
-		}
+		bat.Vecs[i] = vec.Window(int(start), int(end))
 	}
 }
 

@@ -3103,9 +3103,9 @@ func vecToString[T types.FixedSizeT](v *Vector) string {
 // It selects a half-open range (i.e.[start, end)).
 // The returned object is NOT allowed to be modified (
 // TODO: Nulls are deep copied.
-func (v *Vector) Window(start, end int) (*Vector, error) {
+func (v *Vector) Window(start, end int) *Vector {
 	if v.IsConstNull() {
-		return NewConstNull(v.typ, end-start, nil), nil
+		return NewConstNull(v.typ, end-start, nil)
 	} else if v.IsConst() {
 		vec := NewVec(v.typ)
 		vec.class = v.class
@@ -3117,11 +3117,11 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 		vec.cantFreeArea = true
 		vec.cantFreeData = true
 		vec.sorted = v.sorted
-		return vec, nil
+		return vec
 	}
 	w := NewVec(v.typ)
 	if start == end {
-		return w, nil
+		return w
 	}
 	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
@@ -3132,7 +3132,7 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 	}
 	w.cantFreeData = true
 	w.cantFreeArea = true
-	return w, nil
+	return w
 }
 
 // CloneWindow Deep copies the content from start to end into another vector. Afterwise it's safe to destroy the original one.

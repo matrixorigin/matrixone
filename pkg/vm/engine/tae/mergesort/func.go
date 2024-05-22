@@ -81,11 +81,8 @@ func ReshapeBatches(
 			}
 
 			for vecIdx, vec := range batches[fromIdx].Vecs {
-				window, err := vec.Window(fromOffset, fromOffset+length)
-				if err != nil {
-					panic(err)
-				}
-				err = vector.GetUnionAllFunction(*vec.GetType(), vpool.GetMPool())(ret[i].Vecs[vecIdx], window)
+				window := vec.Window(fromOffset, fromOffset+length)
+				err := vector.GetUnionAllFunction(*vec.GetType(), vpool.GetMPool())(ret[i].Vecs[vecIdx], window)
 				if err != nil {
 					panic(err)
 				}

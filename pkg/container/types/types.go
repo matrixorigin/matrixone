@@ -15,11 +15,11 @@
 package types
 
 import (
+	"cmp"
 	"encoding/binary"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"golang.org/x/exp/constraints"
 )
 
 type T uint8
@@ -321,7 +321,7 @@ type BuiltinNumber interface {
 }
 
 type OrderedT interface {
-	constraints.Ordered
+	cmp.Ordered
 }
 
 type Decimal interface {
@@ -334,7 +334,7 @@ type FixedSizeT interface {
 }
 
 type RealNumbers interface {
-	constraints.Float
+	~float32 | ~float64
 }
 
 type FixedSizeTExceptStrType interface {

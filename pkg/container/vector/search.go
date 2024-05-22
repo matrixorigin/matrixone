@@ -92,7 +92,7 @@ func VarlenBinarySearchOffsetByValsFactoryNoMustBytesCol(vals *Vector) func(*Vec
 			upperBound := sort.Search(vals.Length(), func(i int) bool {
 				return bytes.Compare(vec.GetBytesAt(n1-1), vals.GetBytesAt(i)) < 0
 			})
-			subVals, _ = vals.Window(lowerBound, upperBound)
+			subVals = vals.Window(lowerBound, upperBound)
 		}
 
 		if subVals.Length() <= kMaxLenForBinarySearch {

@@ -1406,8 +1406,7 @@ func TestWindowWith(t *testing.T) {
 	AppendFixed(vec1, int32(3), false, mp)
 	require.False(t, vec1.NeedDup())
 
-	vec2, err := vec1.Window(0, vec1.Length())
-	require.NoError(t, err)
+	vec2 := vec1.Window(0, vec1.Length())
 
 	t.Log(vec2.String())
 	require.True(t, vec2.NeedDup())
@@ -1416,8 +1415,7 @@ func TestWindowWith(t *testing.T) {
 	require.Equal(t, int32(3), GetFixedAt[int32](vec2, 2))
 	vec2.Free(mp)
 
-	vec6, err := vec1.Window(1, vec1.Length())
-	require.NoError(t, err)
+	vec6 := vec1.Window(1, vec1.Length())
 
 	t.Log(vec6.String())
 	require.True(t, vec6.NeedDup())
@@ -1437,8 +1435,7 @@ func TestWindowWith(t *testing.T) {
 	AppendBytes(vec3, []byte("uuu"), false, mp)
 	require.False(t, vec3.NeedDup())
 
-	vec4, err := vec3.Window(0, vec3.Length())
-	require.NoError(t, err)
+	vec4 := vec3.Window(0, vec3.Length())
 
 	require.True(t, vec4.NeedDup())
 	require.Equal(t, "h", string(vec4.GetBytesAt(0)))
@@ -1446,8 +1443,7 @@ func TestWindowWith(t *testing.T) {
 	require.True(t, vec4.GetNulls().Contains(uint64(1)))
 	vec4.Free(mp)
 
-	vec5, err := vec3.Window(1, vec3.Length())
-	require.NoError(t, err)
+	vec5 := vec3.Window(1, vec3.Length())
 
 	require.True(t, vec5.NeedDup())
 	require.Equal(t, "uuu", string(vec5.GetBytesAt(1)))
@@ -1469,8 +1465,7 @@ func TestWindowWith(t *testing.T) {
 		AppendArray(vec7, []float32{3, 3, 3}, false, mp)
 		require.False(t, vec7.NeedDup())
 
-		vec8, err := vec7.Window(0, vec7.Length())
-		require.NoError(t, err)
+		vec8 := vec7.Window(0, vec7.Length())
 
 		require.True(t, vec8.NeedDup())
 		require.Equal(t, []float32{1, 1, 1}, GetArrayAt[float32](vec8, 0))
@@ -1478,8 +1473,7 @@ func TestWindowWith(t *testing.T) {
 		require.True(t, vec8.GetNulls().Contains(uint64(1)))
 		vec8.Free(mp)
 
-		vec9, err := vec7.Window(1, vec7.Length())
-		require.NoError(t, err)
+		vec9 := vec7.Window(1, vec7.Length())
 
 		require.True(t, vec9.NeedDup())
 		require.Equal(t, []float32{3, 3, 3}, GetArrayAt[float32](vec9, 1))
@@ -1502,8 +1496,7 @@ func TestWindowWith(t *testing.T) {
 		AppendArray(vec7, []float64{3, 3, 3}, false, mp)
 		require.False(t, vec7.NeedDup())
 
-		vec8, err := vec7.Window(0, vec7.Length())
-		require.NoError(t, err)
+		vec8 := vec7.Window(0, vec7.Length())
 
 		require.True(t, vec8.NeedDup())
 		require.Equal(t, []float64{1, 1, 1}, GetArrayAt[float64](vec8, 0))
@@ -1511,8 +1504,7 @@ func TestWindowWith(t *testing.T) {
 		require.True(t, vec8.GetNulls().Contains(uint64(1)))
 		vec8.Free(mp)
 
-		vec9, err := vec7.Window(1, vec7.Length())
-		require.NoError(t, err)
+		vec9 := vec7.Window(1, vec7.Length())
 
 		require.True(t, vec9.NeedDup())
 		require.Equal(t, []float64{3, 3, 3}, GetArrayAt[float64](vec9, 1))

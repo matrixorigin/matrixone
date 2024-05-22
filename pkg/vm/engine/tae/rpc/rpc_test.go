@@ -478,8 +478,8 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 	for _, view := range physicals {
 		bat := batch.New(true, []string{hideDef[0].Name, schema.GetPrimaryKey().GetName()})
-		bat.Vecs[0], _ = view.GetColumnData(2).GetDownstreamVector().Window(0, 5)
-		bat.Vecs[1], _ = view.GetColumnData(1).GetDownstreamVector().Window(0, 5)
+		bat.Vecs[0] = view.GetColumnData(2).GetDownstreamVector().Window(0, 5)
+		bat.Vecs[1] = view.GetColumnData(1).GetDownstreamVector().Window(0, 5)
 		_, err := writer.WriteTombstoneBatch(bat)
 		assert.Nil(t, err)
 	}
@@ -776,8 +776,8 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 
 	assert.NoError(t, txn.Commit(context.Background()))
 	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
-	delBat.Vecs[0], _ = cv.GetData().GetDownstreamVector().Window(0, 20)
-	delBat.Vecs[1], _ = pk.GetData().GetDownstreamVector().Window(0, 20)
+	delBat.Vecs[0] = cv.GetData().GetDownstreamVector().Window(0, 20)
+	delBat.Vecs[1] = pk.GetData().GetDownstreamVector().Window(0, 20)
 
 	//delete 20 rows
 	deleteTxn := mock1PCTxn(handle.db)

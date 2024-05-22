@@ -369,15 +369,10 @@ func (vec *vectorWrapper) tryCOW() {
 }
 
 func (vec *vectorWrapper) Window(offset, length int) Vector {
-	var err error
-	win := new(vectorWrapper)
-	win.mpool = vec.mpool
-	win.wrapped, err = vec.wrapped.Window(offset, offset+length)
-	if err != nil {
-		panic(err)
+	return &vectorWrapper{
+		mpool:   vec.mpool,
+		wrapped: vec.wrapped.Window(offset, offset+length),
 	}
-
-	return win
 }
 
 func (vec *vectorWrapper) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
