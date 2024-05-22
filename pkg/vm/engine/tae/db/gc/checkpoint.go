@@ -166,6 +166,10 @@ func (c *checkpointCleaner) isEnableCheckGC() bool {
 }
 
 func (c *checkpointCleaner) Replay() error {
+	err := c.replayCheckpoints()
+	if err != nil {
+		return err
+	}
 	dirs, err := c.fs.ListDir(GCMetaDir)
 	if err != nil {
 		return err
