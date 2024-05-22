@@ -26,6 +26,8 @@ import (
 
 func executeResultRowStmtInBack(backSes *backSession,
 	execCtx *ExecCtx) (err error) {
+	execCtx.ses.EnterFPrint(95)
+	defer execCtx.ses.ExitFPrint(95)
 	var columns []interface{}
 	mrs := backSes.GetMysqlResultSet()
 	// cw.Compile might rewrite sql, here we fetch the latest version
@@ -43,6 +45,9 @@ func executeResultRowStmtInBack(backSes *backSession,
 	if c, ok := execCtx.cw.(*TxnComputationWrapper); ok {
 		backSes.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
 	}
+
+	fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
+	setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 	runBegin := time.Now()
 	if _, err = execCtx.runner.Run(0); err != nil {
 		return

@@ -193,6 +193,13 @@ func WithSessionInfo(info string) TxnOption {
 	}
 }
 
+func WithBeginAutoCommit(begin, autocommit bool) TxnOption {
+	return func(tc *txnOperator) {
+		tc.options.ByBegin = begin
+		tc.options.Autocommit = autocommit
+	}
+}
+
 type txnOperator struct {
 	sender               rpc.TxnSender
 	waiter               *waiter
@@ -229,6 +236,7 @@ type txnOperator struct {
 	commitCounter   counter
 	rollbackCounter counter
 	runSqlCounter   counter
+	fprints         footPrints
 
 	waitActiveCost time.Duration
 }
@@ -1250,8 +1258,13 @@ func (tc *txnOperator) inRollback() bool {
 }
 
 func (tc *txnOperator) counter() string {
-	return fmt.Sprintf("commit: %s rollback: %s runSql: %s",
+	return fmt.Sprintf("commit: %s rollback: %s runSql: %s footPrints: %s",
 		tc.commitCounter.String(),
 		tc.rollbackCounter.String(),
-		tc.runSqlCounter.String())
+		tc.runSqlCounter.String(),
+		tc.fprints.String())
+}
+
+func (tc *txnOperator) SetFootPrints(prints [][2]uint32) {
+	tc.fprints.setFPrints(prints)
 }

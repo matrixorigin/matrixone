@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -667,7 +666,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 		ss[i] = newScope(Merge)
 		ss[i].NodeInfo = s.NodeInfo
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 2, c.anal.Nodes())
-		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
+		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *process.RegisterMessage, 10)
 	}
 	probe_scope, build_scope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
 	var err error
@@ -809,7 +808,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 				Op:  vm.MergeLimit,
 				Idx: in.Idx,
 				Arg: mergelimit.NewArgument().
-					WithLimit(arg.Limit),
+					WithLimit(arg.LimitExpr),
 
 				CnAddr:      in.CnAddr,
 				OperatorID:  c.allocOperatorID(),
@@ -822,7 +821,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: limit.NewArgument().
-						WithLimit(arg.Limit),
+						WithLimit(arg.LimitExpr),
 
 					CnAddr:      in.CnAddr,
 					OperatorID:  in.OperatorID,
@@ -924,7 +923,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 				Op:  vm.MergeOffset,
 				Idx: in.Idx,
 				Arg: mergeoffset.NewArgument().
-					WithOffset(arg.Offset),
+					WithOffset(arg.OffsetExpr),
 
 				CnAddr:      in.CnAddr,
 				OperatorID:  c.allocOperatorID(),
@@ -937,7 +936,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: offset.NewArgument().
-						WithOffset(arg.Offset),
+						WithOffset(arg.OffsetExpr),
 
 					CnAddr:      in.CnAddr,
 					OperatorID:  in.OperatorID,
@@ -1006,7 +1005,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		for i := 0; i < cnt; i++ {
 			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Ctx: s.Proc.Ctx,
-				Ch:  make(chan *batch.Batch, 1),
+				Ch:  make(chan *process.RegisterMessage, 1),
 			}
 		}
 	}
@@ -1107,7 +1106,7 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 	}
 }
 
-func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, forwardCh chan *batch.Batch) error {
+func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, forwardCh chan *process.RegisterMessage) error {
 	var val morpc.Message
 	var dataBuffer []byte
 	var ok bool
@@ -1161,12 +1160,13 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 				// used for delete
 				proc.SetInputBatch(bat)
 			} else {
+				msg := &process.RegisterMessage{Batch: bat}
 				select {
 				case <-proc.Ctx.Done():
 					bat.Clean(proc.Mp())
 					return nil
 
-				case forwardCh <- bat:
+				case forwardCh <- msg:
 				}
 			}
 			dataBuffer = nil

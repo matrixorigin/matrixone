@@ -319,7 +319,7 @@ col1    col2    col3
 2    2    2
 3    3    3
 4    4    4
-4    5    5
+5    5    5
 drop table t7;
 create table t8(a int, b int);
 load data infile '$resources/load_data/auto_increment_20.csv' into table t7 fields terminated by ',' set col2=nullif(col2, '1');
@@ -705,7 +705,6 @@ col1    col2
 @@ db"    -234242
    32423"    3283
 drop table test09;
-
 drop table if exists test10;
 create table test10(col1 text, col2 text);
 load data infile {'filepath'='$resources/load_data/text.csv.tar.gz', 'compression'='tar.gz'} into table test10 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
