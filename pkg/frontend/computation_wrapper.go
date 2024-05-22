@@ -104,6 +104,11 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.ses = nil
 	cwft.compile = nil
 	cwft.runResult = nil
+	cwft.paramVals = nil
+}
+
+func (cwft *TxnComputationWrapper) ParamVals() []any {
+	return cwft.paramVals
 }
 
 func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
