@@ -606,7 +606,7 @@ drop database test03;
 drop database test04;
 drop database test05;
 -- @bvt:issue
--- @session
 drop snapshot sp100;
 drop snapshot sp101;
+-- @session
 drop account acc01;
