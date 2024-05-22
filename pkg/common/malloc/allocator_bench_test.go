@@ -14,28 +14,36 @@
 
 package malloc
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
+
+var benchNs = []uint64{
+	64, 4096, 2 * MB,
+}
 
 func benchmarkAllocator(
 	b *testing.B,
 	newAllocator func() Allocator,
+	n uint64,
 ) {
 
-	b.Run("allocate", func(b *testing.B) {
+	b.Run(fmt.Sprintf("allocate: n %v", n), func(b *testing.B) {
 		allcator := newAllocator()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			ptr, dec := allcator.Allocate(4096)
+			ptr, dec := allcator.Allocate(n)
 			dec.Deallocate(ptr)
 		}
 	})
 
-	b.Run("parallel", func(b *testing.B) {
+	b.Run(fmt.Sprintf("parallel: n %v", n), func(b *testing.B) {
 		allcator := newAllocator()
 		b.ResetTimer()
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
-				ptr, dec := allcator.Allocate(4096)
+				ptr, dec := allcator.Allocate(n)
 				dec.Deallocate(ptr)
 			}
 		})

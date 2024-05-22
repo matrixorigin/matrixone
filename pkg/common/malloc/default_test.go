@@ -25,9 +25,11 @@ func TestDefaultAllocator(t *testing.T) {
 }
 
 func BenchmarkDefaultAllocator(b *testing.B) {
-	benchmarkAllocator(b, func() Allocator {
-		return NewDefault(nil)
-	})
+	for _, n := range benchNs {
+		benchmarkAllocator(b, func() Allocator {
+			return NewDefault(nil)
+		}, n)
+	}
 }
 
 func FuzzDefaultAllocator(f *testing.F) {
