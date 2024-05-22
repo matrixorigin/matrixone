@@ -200,12 +200,26 @@ func (s *service) handleRemoteLock(
 		return
 	}
 
+	var e error
+	// it needs to inc table bind ref when set restart cn
+	h := txn.getHoldLocksLocked(l.getBind().Group)
+	_, hasBind := h.tableBinds[l.getBind().Table]
+	defer func() {
+		if s.isStatus(pb.Status_ServiceLockEnable) ||
+			e != nil ||
+			hasBind {
+			return
+		}
+		s.incRef(l.getBind().Group, l.getBind().Table)
+	}()
+
 	l.lock(
 		ctx,
 		txn,
 		req.Lock.Rows,
 		LockOptions{LockOptions: req.Lock.Options, async: true},
 		func(result pb.Result, err error) {
+			e = err
 			resp.Lock.Result = result
 			writeResponse(ctx, cancel, resp, err, cs)
 		})
@@ -246,6 +260,19 @@ func (s *service) handleForwardLock(
 		return
 	}
 
+	var e error
+	// it needs to inc table bind ref when set restart cn
+	h := txn.getHoldLocksLocked(l.getBind().Group)
+	_, hasBind := h.tableBinds[l.getBind().Table]
+	defer func() {
+		if s.isStatus(pb.Status_ServiceLockEnable) ||
+			e != nil ||
+			hasBind {
+			return
+		}
+		s.incRef(l.getBind().Group, l.getBind().Table)
+	}()
+
 	l.lock(
 		ctx,
 		txn,
@@ -253,6 +280,7 @@ func (s *service) handleForwardLock(
 		LockOptions{LockOptions: req.Lock.Options, async: true},
 		func(result pb.Result, err error) {
 			txn.Unlock()
+			e = err
 			resp.Lock.Result = result
 			writeResponse(ctx, cancel, resp, err, cs)
 		})
