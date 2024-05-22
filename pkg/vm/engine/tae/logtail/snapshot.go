@@ -198,6 +198,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 
 	sm.updateTableInfo(data)
 	if sm.tid == 0 {
+		logutil.Infof("[update snapshot]mo_snapshots not found")
 		return sm
 	}
 	ins := data.GetObjectBatchs()
@@ -218,6 +219,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 			if !deleteTS.IsEmpty() {
 				continue
 			}
+			logutil.Infof("[update snapshot]insert object %s", objectStats.ObjectName().String())
 			sm.objects[objectStats.ObjectName().SegmentId()] = &objectInfo{
 				stats:    objectStats,
 				createAt: createTS,
@@ -227,6 +229,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		if deleteTS.IsEmpty() {
 			panic(any("deleteTS is empty"))
 		}
+		logutil.Infof("[update snapshot]delete object %s", objectStats.ObjectName().String())
 		delete(sm.objects, objectStats.ObjectName().SegmentId())
 	}
 	del, _, _, _ := data.GetBlkBatchs()
@@ -381,8 +384,10 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 		return 0, nil
 	}
 	bat := containers.NewBatch()
+	snapTableBat := containers.NewBatch()
 	for i, attr := range tableInfoSchemaAttr {
 		bat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
+		snapTableBat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
 	}
 	for _, entry := range sm.tables {
 		for _, table := range entry {
@@ -401,14 +406,36 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 			vector.AppendFixed[types.TS](
 				bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
 				table.deleteAt, false, common.DebugAllocator)
+
+			if table.tid == sm.tid {
+				vector.AppendFixed[uint32](
+					snapTableBat.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector(),
+					table.accID, false, common.DebugAllocator)
+				vector.AppendFixed[uint64](
+					snapTableBat.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector(),
+					table.dbID, false, common.DebugAllocator)
+				vector.AppendFixed[uint64](
+					snapTableBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+					table.tid, false, common.DebugAllocator)
+				vector.AppendFixed[types.TS](
+					snapTableBat.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector(),
+					table.createAt, false, common.DebugAllocator)
+				vector.AppendFixed[types.TS](
+					snapTableBat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
+					table.deleteAt, false, common.DebugAllocator)
+			}
 		}
 	}
 	defer bat.Close()
+	defer snapTableBat.Close()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
 	if err != nil {
 		return 0, err
 	}
 	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(bat)); err != nil {
+		return 0, err
+	}
+	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(snapTableBat)); err != nil {
 		return 0, err
 	}
 
@@ -445,6 +472,16 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 		sm.tables[accid][tid] = table
 		sm.acctIndexes[tid] = table
 	}
+}
+
+func (sm *SnapshotMeta) RebuildTid(ins *containers.Batch) {
+	insTIDs := vector.MustFixedCol[uint64](ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+	if ins.Length() != 1 {
+		logutil.Warnf("RebuildTid unexpected length %d", ins.Length())
+		return
+	}
+	logutil.Infof("RebuildTid tid %d", insTIDs[0])
+	sm.SetTid(insTIDs[0])
 }
 
 func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
@@ -566,24 +603,30 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 	for i := range tableInfoSchemaAttr {
 		idxes[i] = uint16(i)
 	}
-	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), common.DebugAllocator)
-	if err != nil {
-		return err
-	}
-	defer release()
-	bat := containers.NewBatch()
-	defer bat.Close()
-	for i := range tableInfoSchemaAttr {
-		pkgVec := mobat.Vecs[i]
-		var vec containers.Vector
-		if pkgVec.Length() == 0 {
-			vec = containers.MakeVector(objectInfoSchemaTypes[i], common.DebugAllocator)
-		} else {
-			vec = containers.ToTNVector(pkgVec, common.DebugAllocator)
+	for id, block := range bs {
+		mobat, release, err := reader.LoadColumns(ctx, idxes, nil, block.GetID(), common.DebugAllocator)
+		if err != nil {
+			return err
 		}
-		bat.AddVector(tableInfoSchemaAttr[i], vec)
+		defer release()
+		bat := containers.NewBatch()
+		defer bat.Close()
+		for i := range tableInfoSchemaAttr {
+			pkgVec := mobat.Vecs[i]
+			var vec containers.Vector
+			if pkgVec.Length() == 0 {
+				vec = containers.MakeVector(objectInfoSchemaTypes[i], common.DebugAllocator)
+			} else {
+				vec = containers.ToTNVector(pkgVec, common.DebugAllocator)
+			}
+			bat.AddVector(tableInfoSchemaAttr[i], vec)
+		}
+		if id == 0 {
+			sm.RebuildTableInfo(bat)
+		} else {
+			sm.RebuildTid(bat)
+		}
 	}
-	sm.RebuildTableInfo(bat)
 	return nil
 }
 
