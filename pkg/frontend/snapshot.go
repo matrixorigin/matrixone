@@ -630,7 +630,7 @@ func recreateTable(
 	}
 
 	// create table
-	getLogger().Info(fmt.Sprintf("[%s] start to create table: %v", snapshotName, tblInfo.tblName))
+	getLogger().Info(fmt.Sprintf("[%s] start to create table: %v, create table sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
 	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
 		return
 	}
