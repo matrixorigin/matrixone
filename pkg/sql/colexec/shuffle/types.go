@@ -34,7 +34,6 @@ type Argument struct {
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
 	RuntimeFilterSpec  *plan.RuntimeFilterSpec
-	msgReceiver        *process.MessageReceiver
 	vm.OperatorBase
 }
 
@@ -84,9 +83,6 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.RuntimeFilterSpec != nil {
 		arg.RuntimeFilterSpec.Handled = false
-	}
-	if arg.msgReceiver != nil {
-		arg.msgReceiver.Free()
 	}
 	if arg.ctr != nil {
 		for i := range arg.ctr.shufflePool {
