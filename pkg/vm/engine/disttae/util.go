@@ -50,15 +50,6 @@ func compPkCol(colName string, pkName string) bool {
 	return colName == pkName
 }
 
-func getPosInCompositPK(name string, pks []string) int {
-	for i, pk := range pks {
-		if compPkCol(name, pk) {
-			return i
-		}
-	}
-	return -1
-}
-
 func getColDefByName(name string, tableDef *plan.TableDef) *plan.ColDef {
 	idx := strings.Index(name, ".")
 	var pos int32
