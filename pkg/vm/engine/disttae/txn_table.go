@@ -17,9 +17,10 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"slices"
+	"go.uber.org/zap"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -45,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
-	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -704,6 +704,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 //     1>.Raw batch data resides in txn.writes,read by partitionReader.
 //     2>.CN blocks resides in S3, read by blockReader.
 
+var slowPathCounter atomic.Int64
+
 // rangesOnePart collect blocks which are visible to this txn,
 // include committed blocks and uncommitted blocks by CN writing S3.
 // notice that only clean blocks can be distributed into remote CNs.
@@ -725,6 +727,15 @@ func (tbl *txnTable) rangesOnePart(
 		return err
 	} else if done {
 		return nil
+	}
+
+	if slowPathCounter.Add(1) >= 1000 {
+		slowPathCounter.Store(0)
+		logutil.Info(
+			"SLOW-RANGES:",
+			zap.String("table", tbl.tableDef.Name),
+			zap.String("exprs", plan2.FormatExprs(exprs)),
+		)
 	}
 
 	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
@@ -962,68 +973,6 @@ func (tbl *txnTable) collectDirtyBlocks(
 	return dirtyBlks
 }
 
-func visitCPK(expr *plan.Expr, visit []any, pks []string) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		switch exprImpl.F.Func.ObjName {
-		case "and":
-			visitCPK(exprImpl.F.Args[0], visit, pks)
-			visitCPK(exprImpl.F.Args[1], visit, pks)
-
-		case "=":
-			var ok bool
-			var colExpr *plan.Expr_Col
-
-			if colExpr, ok = exprImpl.F.Args[0].Expr.(*plan.Expr_Col); !ok {
-				if colExpr, ok = exprImpl.F.Args[1].Expr.(*plan.Expr_Col); !ok {
-					return
-				}
-			}
-
-			if pos := getPosInCompositPK(colExpr.Col.Name, pks); pos != -1 {
-				visit[pos] = struct{}{}
-			}
-		}
-	}
-}
-
-func checkCompositePKSerialization(tbl *txnTable, exprs []*plan.Expr) {
-	if tbl.tableDef.Pkey.CompPkeyCol == nil {
-		return
-	}
-	visit := make([]any, len(tbl.tableDef.Pkey.Names))
-
-	for _, expr := range exprs {
-		visitCPK(expr, visit, tbl.tableDef.Pkey.Names)
-	}
-
-	// other case:
-	// nil,nil,nil,nil
-	// nil,b,c,d
-	// a,nil,c,d
-
-	// fully matched or prefix matched
-	// a,b,c,d
-	// a,b,c,nil
-	// a,b,nil,nil
-	// a,nil,nil,nil
-	idx := slices.Index(visit, nil)
-	if idx == 0 {
-		return
-	}
-	if idx != -1 {
-		if idx = slices.Index(visit[idx+1:], any(struct{}{})); idx != -1 {
-			return
-		}
-	}
-
-	logutil.Errorf("found unserial composite primary key, tbl: %s, tbldef: %v, exprs: %s",
-		tbl.tableName, tbl.tableDef, plan2.FormatExprs(exprs))
-	util2.EnableCoreDump()
-	util2.CoreDump()
-}
-
-// tryFastFilterBlocks is going to replace the tryFastRanges completely soon, in progress now.
 func (tbl *txnTable) tryFastFilterBlocks(
 	exprs []*plan.Expr,
 	snapshot *logtailreplay.PartitionState,
@@ -1031,7 +980,6 @@ func (tbl *txnTable) tryFastFilterBlocks(
 	dirtyBlocks map[types.Blockid]struct{},
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService) (done bool, err error) {
-	checkCompositePKSerialization(tbl, exprs)
 	return TryFastFilterBlocks(
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
