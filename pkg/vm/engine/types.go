@@ -721,8 +721,6 @@ type Engine interface {
 	// If sync is true, wait for the stats info to be updated, else,
 	// just return nil if the current stats info has not been initialized.
 	Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo
-
-	GetMessageCenter() any
 }
 
 type VectorPool interface {

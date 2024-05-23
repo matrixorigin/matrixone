@@ -129,10 +129,9 @@ SENDLAST:
 
 func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 	if arg.RuntimeFilterSpec != nil && !arg.RuntimeFilterSpec.Handled {
-		arg.msgReceiver = proc.NewMessageReceiver([]int32{arg.RuntimeFilterSpec.Tag}, process.AddrBroadCastOnCurrentCN())
-		msgs, ctxDone := arg.msgReceiver.ReceiveMessage(true, proc.Ctx)
+		msgReceiver := proc.NewMessageReceiver([]int32{arg.RuntimeFilterSpec.Tag}, process.AddrBroadCastOnCurrentCN())
+		msgs, ctxDone := msgReceiver.ReceiveMessage(true, proc.Ctx)
 		if ctxDone {
-			arg.RuntimeFilterSpec.Handled = true
 			return nil
 		}
 		for i := range msgs {
