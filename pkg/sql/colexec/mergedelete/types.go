@@ -25,6 +25,7 @@ import (
 var _ vm.Operator = new(Argument)
 
 type Argument struct {
+	AddAffectedRows     bool
 	AffectedRows        uint64
 	Ref                 *plan.ObjectRef
 	Engine              engine.Engine
@@ -75,6 +76,11 @@ func (arg *Argument) WithParitionNames(names []string) *Argument {
 
 func (arg *Argument) WithEngine(eng engine.Engine) *Argument {
 	arg.Engine = eng
+	return arg
+}
+
+func (arg *Argument) WithAddAffectedRows(addAffectedRows bool) *Argument {
+	arg.AddAffectedRows = addAffectedRows
 	return arg
 }
 
