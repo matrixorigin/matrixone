@@ -15,11 +15,12 @@
 package plan
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
-	"testing"
 )
 
 func Test_buildTestShowCreateTable(t *testing.T) {
@@ -188,7 +189,7 @@ func buildTestShowCreateTable(sql string) (string, error) {
 	}
 
 	snapshot := Snapshot{TS: &timestamp.Timestamp{}}
-	showSQL, err := ConstructCreateTableSQL(tableDef, snapshot, &mock.ctxt)
+	showSQL, err := ConstructCreateTableSQL(nil, tableDef, snapshot, &mock.ctxt)
 	if err != nil {
 		return "", err
 	}

@@ -28,10 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-func ReleaseIOEntry(entry *fileservice.IOEntry) {
-	entry.CachedData.Release()
-}
-
 func ReleaseIOVector(vector *fileservice.IOVector) {
 	vector.Release()
 }
@@ -62,7 +58,7 @@ func ReadExtent(
 	v := ioVec.Entries[0].CachedData.Bytes()
 	buf = make([]byte, len(v))
 	copy(buf, v)
-	ReleaseIOEntry(&ioVec.Entries[0])
+	ReleaseIOVector(ioVec)
 	return
 }
 
@@ -220,7 +216,7 @@ func ReadOneBlockWithMeta(
 				if err = vector.NewConstNull(typs[i], length, m).MarshalBinaryWithBuffer(buf); err != nil {
 					return
 				}
-				cacheData := fileservice.DefaultCacheDataAllocator.Alloc(buf.Len())
+				cacheData := fileservice.GetDefaultCacheDataAllocator().Alloc(buf.Len())
 				copy(cacheData.Bytes(), buf.Bytes())
 				filledEntries[i].CachedData = cacheData
 			}

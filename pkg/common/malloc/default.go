@@ -22,7 +22,7 @@ import (
 
 func NewDefault(config *Config) Allocator {
 	if config == nil {
-		c := defaultConfig
+		c := *defaultConfig.Load()
 		config = &c
 	}
 
@@ -30,6 +30,14 @@ func NewDefault(config *Config) Allocator {
 
 	case "c":
 		return NewCAllocator()
+
+	case "old":
+		return NewShardedAllocator(
+			runtime.GOMAXPROCS(0),
+			func() Allocator {
+				return NewPureGoClassAllocator(256 * MB)
+			},
+		)
 
 	default:
 		return NewShardedAllocator(

@@ -36,6 +36,10 @@ const (
 	// Classes with size larger than smallClassCap will always buffering MADV_DONTNEED-advised objects.
 	// MADV_DONTNEED-advised objects consume no memory.
 	maxClassSize = 32 * GB
+
+	maxBuffer1Cap = 256
+	// objects in buffer2 will be MADV_DONTNEED-advised and will not occupy RSS, so it's safe to use a large number
+	buffer2Cap = 1024
 )
 
 type ClassAllocator struct {
@@ -99,17 +103,15 @@ func newFixedSizedAllocator(
 ) *fixedSizeMmapAllocator {
 	// if size is larger than smallClassCap, num1 will be zero, buffer1 will be empty
 	num1 := smallClassCap / size
-	if num1 > 256 {
+	if num1 > maxBuffer1Cap {
 		// don't buffer too much, since chans with larger buffer consume more memory
-		num1 = 256
+		num1 = maxBuffer1Cap
 	}
-	// objects in buffer2 will be MADV_DONTNEED-advised and will not occupy RSS, so it's safe to use a large number
-	num2 := 1024
 	ret := &fixedSizeMmapAllocator{
 		size:          size,
 		checkFraction: checkFraction,
 		buffer1:       make(chan unsafe.Pointer, num1),
-		buffer2:       make(chan unsafe.Pointer, num2),
+		buffer2:       make(chan unsafe.Pointer, buffer2Cap),
 	}
 	return ret
 }
