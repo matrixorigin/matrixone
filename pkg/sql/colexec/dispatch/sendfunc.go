@@ -71,7 +71,7 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 			handleUnsent(proc, bat, refCountAdd, int64(i))
 			return true, nil
 
-		case reg.Ch <- bat:
+		case reg.Ch <- process.NewRegMsg(bat):
 		}
 	}
 	return false, nil
@@ -116,7 +116,7 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 				case <-reg.Ctx.Done():
 					return nil
 
-				case reg.Ch <- bat:
+				case reg.Ch <- process.NewRegMsg(bat):
 				}
 			}
 		}
@@ -161,7 +161,7 @@ func sendBatToLocalMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 				case <-reg.Ctx.Done():
 					return nil
 
-				case reg.Ch <- bat:
+				case reg.Ch <- process.NewRegMsg(bat):
 				}
 			}
 		}
@@ -184,7 +184,7 @@ func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 				case <-reg.Ctx.Done():
 					return nil
 
-				case reg.Ch <- bat:
+				case reg.Ch <- process.NewRegMsg(bat):
 				}
 			}
 		}
@@ -258,7 +258,7 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 				return true, nil
 			}
 
-		case reg.Ch <- bat:
+		case reg.Ch <- process.NewRegMsg(bat):
 			ap.ctr.sendCnt++
 			return false, nil
 		}

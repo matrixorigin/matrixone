@@ -340,6 +340,8 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 		return errEncodeProc
 	}
 
+	c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.StmtProfile.GetStmtId())
+
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
 	if err != nil {
@@ -732,7 +734,7 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 	}
 	if s.isShuffle() {
 		for _, rr := range s.Proc.Reg.MergeReceivers {
-			rr.Ch = make(chan *batch.Batch, 16)
+			rr.Ch = make(chan *process.RegisterMessage, 16)
 		}
 	}
 	return nil
