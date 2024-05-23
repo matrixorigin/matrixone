@@ -306,10 +306,6 @@ func (e *testEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	return nil
 }
 
-func (e *testEngine) GetMessageCenter() any {
-	return nil
-}
-
 func (e *testEngine) Rows(ctx context.Context, key pb.StatsInfoKey) uint64 {
 	return 0
 }
