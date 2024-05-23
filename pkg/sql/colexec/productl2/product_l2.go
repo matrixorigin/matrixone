@@ -16,20 +16,13 @@ package productl2
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-	"math"
-	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 )
 
 const argName = "product_l2"
@@ -57,7 +50,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	ctr := ap.ctr
 	result := vm.NewCallResult()
-	var err error
 	for {
 		switch ctr.state {
 		case Build:
