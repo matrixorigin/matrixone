@@ -8872,6 +8872,10 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	var currentRole uint32
 	var err error
 
+	configVar := make(map[tree.DatabaseConfig]string, 0)
+	configVar[tree.MYSQL_COMPATIBILITY_MODE] = "version_compatibility"
+	configVar[tree.UNIQUE_CHECK_ON_AUTOINCR] = "unique_check_on_autoincr"
+
 	dbName := ad.DbName
 	updateConfig := ad.UpdateConfig
 	configTyp := ad.ConfigType
@@ -8927,7 +8931,7 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 		// step2: update the databaseConfig of that database
 		switch configTyp {
 		case tree.MYSQL_COMPATIBILITY_MODE:
-			sql, rtnErr = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, updateConfig, accountName, dbName, "version_compatibility")
+			sql, rtnErr = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, updateConfig, accountName, dbName, configVar[configTyp])
 			if rtnErr != nil {
 				return rtnErr
 			}
@@ -8949,7 +8953,7 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 				return rtnErr
 			}
 
-			sql, rtnErr = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, updateConfig, accountName, dbName, "unique_check_on_autoincr")
+			sql, rtnErr = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, updateConfig, accountName, dbName, configVar[configTyp])
 			if rtnErr != nil {
 				return rtnErr
 			}
@@ -8965,12 +8969,15 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 		return err
 	}
 
-	// step3: update the session verison
+	// step3: update the session verison and session config
 	if len(ses.GetDatabaseName()) != 0 && ses.GetDatabaseName() == dbName {
 		err = changeVersion(ctx, ses, ses.GetDatabaseName())
 		if err != nil {
 			return err
 		}
+
+		// TODO : Need to check the isolation level of this variable configuration
+		ses.SetConfig(dbName, configVar[configTyp], updateConfig)
 	}
 
 	return err
@@ -9106,6 +9113,10 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 			return err
 		}
 	}
+
+	ses.SetConfig(dbName, variableName1, variableValue1)
+	ses.SetConfig(dbName, variableName2, variableValue2)
+
 	return nil
 
 }
@@ -9146,6 +9157,8 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 			return err
 		}
 	}
+	ses.DeleteConfig(ctx, datname, "version_compatibility")
+	ses.DeleteConfig(ctx, datname, "unique_check_on_autoincr")
 	return nil
 }
 
@@ -9189,7 +9202,7 @@ func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (
 	return resultConfig, err
 }
 
-func GetUniqueCheckOnAutoIncr(ctx context.Context, ses FeSession, dbName string) (ret string, err error) {
+func GetUniqueCheckOnAutoIncr(ctx context.Context, ses *Session, dbName string) (ret string, err error) {
 	var erArray []ExecResult
 	var sql string
 	var resultConfig string
