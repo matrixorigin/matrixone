@@ -80,14 +80,6 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	// mixin.columns.colNulls = make([]bool, len(cols))
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
-	compPKName2Pos := make(map[string]struct{})
-	positions := make(map[string]int)
-	if mixin.tableDef.Pkey != nil && mixin.tableDef.Pkey.CompPkeyCol != nil {
-		pk := mixin.tableDef.Pkey
-		for _, name := range pk.Names {
-			compPKName2Pos[name] = struct{}{}
-		}
-	}
 	for i, column := range cols {
 		if column == catalog.Row_ID {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
@@ -100,27 +92,11 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			colDef := mixin.tableDef.Cols[colIdx]
 			mixin.columns.seqnums[i] = uint16(colDef.Seqnum)
 
-			if _, ok := compPKName2Pos[column]; ok {
-				positions[column] = i
-			}
-
 			if mixin.tableDef.Pkey != nil && mixin.tableDef.Pkey.PkeyColName == column {
 				// primary key is in the cols
 				mixin.columns.pkPos = i
 			}
 			mixin.columns.colTypes[i] = types.T(colDef.Typ.Id).ToType()
-			// if colDef.Default != nil {
-			// 	mixin.columns.colNulls[i] = colDef.Default.NullAbility
-			// }
-		}
-	}
-	if len(positions) != 0 {
-		for _, name := range mixin.tableDef.Pkey.Names {
-			if pos, ok := positions[name]; !ok {
-				break
-			} else {
-				mixin.columns.compPKPositions = append(mixin.columns.compPKPositions, uint16(pos))
-			}
 		}
 	}
 }
@@ -138,10 +114,10 @@ func (mixin *withFilterMixin) getReadFilter(proc *process.Process, blkCnt int) (
 		mixin.filterState.filter = nil
 		return
 	}
-	return mixin.getNonCompositPKFilter(proc, blkCnt)
+	return mixin.getPKFilter(proc, blkCnt)
 }
 
-func (mixin *withFilterMixin) getNonCompositPKFilter(
+func (mixin *withFilterMixin) getPKFilter(
 	proc *process.Process, blkCnt int,
 ) blockio.ReadFilter {
 	// if no primary key is included in the columns or no filter expr is given,

@@ -743,8 +743,6 @@ type withFilterMixin struct {
 		colTypes []types.Type
 		// colNulls []bool
 
-		compPKPositions []uint16 // composite primary key pos in the columns
-
 		pkPos int // -1 means no primary key in columns
 
 		indexOfFirstSortedColumn int
