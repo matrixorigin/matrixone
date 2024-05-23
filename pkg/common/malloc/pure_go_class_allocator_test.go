@@ -15,37 +15,41 @@
 package malloc
 
 import (
-	"os"
 	"runtime"
-	"strings"
+	"testing"
 )
 
-func NewDefault(config *Config) Allocator {
-	if config == nil {
-		c := *defaultConfig.Load()
-		config = &c
-	}
-
-	switch strings.TrimSpace(strings.ToLower(os.Getenv("MO_MALLOC"))) {
-
-	case "c":
-		return NewCAllocator()
-
-	case "old":
+func TestPureGoClassAllocator(t *testing.T) {
+	testAllocator(t, func() Allocator {
 		return NewShardedAllocator(
 			runtime.GOMAXPROCS(0),
 			func() Allocator {
 				return NewPureGoClassAllocator(256 * MB)
 			},
 		)
+	})
+}
 
-	default:
+func BenchmarkPureGoClassAllocator(b *testing.B) {
+	for _, n := range benchNs {
+		benchmarkAllocator(b, func() Allocator {
+			return NewShardedAllocator(
+				runtime.GOMAXPROCS(0),
+				func() Allocator {
+					return NewPureGoClassAllocator(256 * MB)
+				},
+			)
+		}, n)
+	}
+}
+
+func FuzzPureGoClassAllocator(f *testing.F) {
+	fuzzAllocator(f, func() Allocator {
 		return NewShardedAllocator(
 			runtime.GOMAXPROCS(0),
 			func() Allocator {
-				return NewClassAllocator(config.CheckFraction)
+				return NewPureGoClassAllocator(256 * MB)
 			},
 		)
-
-	}
+	})
 }

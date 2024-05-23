@@ -119,11 +119,11 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 		switch arg.state {
 		case Build:
 
-			bat, _, err := arg.ReceiveFromSingleReg(1, anal)
-			if err != nil {
-				return result, err
+			msg := arg.ReceiveFromSingleReg(1, anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
-
+			bat := msg.Batch
 			if bat == nil {
 				arg.state = HandleRuntimeFilter
 				continue
@@ -157,11 +157,12 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 
 		case Probe:
 
-			bat, _, err := arg.ReceiveFromSingleReg(0, anal)
-			if err != nil {
-				return result, err
+			msg := arg.ReceiveFromSingleReg(0, anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
 
+			bat := msg.Batch
 			if bat == nil {
 				// fmt.Println("probe cnt = ", arg.probeCnt)
 				// this will happen in such case:create unique index from a table that unique col have no data
@@ -209,11 +210,12 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 		switch arg.state {
 		case Build:
 
-			bat, _, err := arg.ReceiveFromSingleReg(1, anal)
-			if err != nil {
-				return result, err
+			msg := arg.ReceiveFromSingleReg(1, anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
 
+			bat := msg.Batch
 			if bat == nil {
 				arg.state = HandleRuntimeFilter
 				continue
@@ -244,11 +246,12 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 
 		case Probe:
 
-			bat, _, err := arg.ReceiveFromSingleReg(0, anal)
-			if err != nil {
-				return result, err
+			msg := arg.ReceiveFromSingleReg(0, anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
 
+			bat := msg.Batch
 			if bat == nil {
 				// fmt.Println("probe cnt = ", arg.probeCnt)
 				result.Batch = arg.rbat
