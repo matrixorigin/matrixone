@@ -940,12 +940,12 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 
 		bat.Shrink(sels, false)
 		execCtx.proc.Mp().PutSels(sels)
-		v0 := vector.MustStrCol(bat.Vecs[0])
-		v1 := vector.MustStrCol(bat.Vecs[1])
+		v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
+		v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
 		rows = rows[:len(v0)]
 		for i := range v0 {
-			rows[i][0] = v0[i]
-			rows[i][1] = v1[i]
+			rows[i][0] = v0[i].UnsafeGetString(area0)
+			rows[i][1] = v1[i].UnsafeGetString(area1)
 		}
 		bat.Clean(execCtx.proc.Mp())
 	}
@@ -1675,22 +1675,22 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 
 		bat.Shrink(sels, false)
 		proc.Mp().PutSels(sels)
-		v0 := vector.MustStrCol(bat.Vecs[0])
-		v1 := vector.MustStrCol(bat.Vecs[1])
+		v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
+		v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
 		v2 := vector.MustFixedCol[int64](bat.Vecs[2])
-		v3 := vector.MustStrCol(bat.Vecs[3])
-		v4 := vector.MustStrCol(bat.Vecs[4])
+		v3, area3 := vector.MustVarlenaRawData(bat.Vecs[3])
+		v4, area4 := vector.MustVarlenaRawData(bat.Vecs[4])
 		v5 := vector.MustFixedCol[int32](bat.Vecs[5])
-		v6 := vector.MustStrCol(bat.Vecs[6])
+		v6, area6 := vector.MustVarlenaRawData(bat.Vecs[6])
 		rows = rows[:len(v0)]
 		for i := range v0 {
-			rows[i][0] = v0[i]
-			rows[i][1] = v1[i]
+			rows[i][0] = v0[i].UnsafeGetString(area0)
+			rows[i][1] = v1[i].UnsafeGetString(area1)
 			rows[i][2] = v2[i]
-			rows[i][3] = v3[i]
-			rows[i][4] = v4[i]
+			rows[i][3] = v3[i].UnsafeGetString(area3)
+			rows[i][4] = v4[i].UnsafeGetString(area4)
 			rows[i][5] = v5[i]
-			rows[i][6] = v6[i]
+			rows[i][6] = v6[i].UnsafeGetString(area6)
 		}
 	}
 

@@ -391,7 +391,7 @@ func getFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int) (cols [][]T)
 func getStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
 	cols = make([][]string, 0, len(bats))
 	for i := range bats {
-		cols = append(cols, vector.MustStrCol(bats[i].Vecs[idx]))
+		cols = append(cols, vector.InefficientMustStrCol(bats[i].Vecs[idx]))
 	}
 	return
 }
@@ -593,7 +593,7 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_nul
 	}
 	ovec := bat.GetVector(int32(sortIndex))
 	if ovec.GetType().IsVarlen() {
-		strCol = vector.MustStrCol(ovec)
+		strCol = vector.InefficientMustStrCol(ovec)
 	} else {
 		strCol = nil
 	}
