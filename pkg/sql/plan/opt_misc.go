@@ -775,6 +775,10 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 }
 
 func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
+	if builder.optimizerHints != nil && builder.optimizerHints.forceOneCN != 0 {
+		return
+	}
+
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		node.Stats.ForceOneCN = force
@@ -845,6 +849,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.runtimeFilter = value
 	case "joinOrdering":
 		builder.optimizerHints.joinOrdering = value
+	case "forceOneCN":
+		builder.optimizerHints.forceOneCN = value
 	}
 }
 
