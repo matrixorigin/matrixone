@@ -69,10 +69,29 @@ type Analyze interface {
 	AddInsertTime(t time.Time)
 }
 
+var (
+	NormalEndRegisterMessage = NewRegMsg(nil)
+)
+
+// RegisterMessage channel data
+// Err == nil means pipeline finish with error
+// Batch == nil means pipeline finish without error
+// Batch != nil means pipeline is running
+type RegisterMessage struct {
+	Batch *batch.Batch
+	Err   error
+}
+
+func NewRegMsg(bat *batch.Batch) *RegisterMessage {
+	return &RegisterMessage{
+		Batch: bat,
+	}
+}
+
 // WaitRegister channel
 type WaitRegister struct {
 	Ctx context.Context
-	Ch  chan *batch.Batch
+	Ch  chan *RegisterMessage
 }
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.

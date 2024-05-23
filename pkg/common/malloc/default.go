@@ -18,24 +18,26 @@ import (
 	"os"
 	"runtime"
 	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 )
 
 func NewDefault(config *Config) Allocator {
 	if config == nil {
-		c := defaultConfig
+		c := *defaultConfig.Load()
 		config = &c
-		logutil.Info("malloc: new default using default config",
-			zap.Any("config", config),
-		)
 	}
 
 	switch strings.TrimSpace(strings.ToLower(os.Getenv("MO_MALLOC"))) {
 
 	case "c":
 		return NewCAllocator()
+
+	case "old":
+		return NewShardedAllocator(
+			runtime.GOMAXPROCS(0),
+			func() Allocator {
+				return NewPureGoClassAllocator(256 * MB)
+			},
+		)
 
 	default:
 		return NewShardedAllocator(
