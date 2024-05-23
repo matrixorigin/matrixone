@@ -16,16 +16,13 @@ package productl2
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-	"math"
-	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 )
 
 const argName = "product_l2"
@@ -53,7 +50,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	ctr := ap.ctr
 	result := vm.NewCallResult()
-	var err error
 	for {
 		switch ctr.state {
 		case Build:
@@ -69,11 +65,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				return result, nil
 			}
-			ctr.inBat, _, err = ctr.ReceiveFromSingleReg(0, anal)
-			if err != nil {
-				return result, err
+			msg := ctr.ReceiveFromSingleReg(0, anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
 
+			ctr.inBat = msg.Batch
 			if ctr.inBat == nil {
 				ctr.state = End
 				continue
@@ -103,11 +100,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+	var err error
 	for {
-		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
-		if err != nil {
-			return err
+		msg := ctr.ReceiveFromSingleReg(1, anal)
+		if msg.Err != nil {
+			return msg.Err
 		}
+		bat := msg.Batch
 		if bat == nil {
 			break
 		}
@@ -120,20 +119,20 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	return nil
 }
 
-var (
-	arrayF32Pool = sync.Pool{
-		New: func() interface{} {
-			s := make([]float32, 0)
-			return &s
-		},
-	}
-	arrayF64Pool = sync.Pool{
-		New: func() interface{} {
-			s := make([]float64, 0)
-			return &s
-		},
-	}
-)
+//var (
+//	arrayF32Pool = sync.Pool{
+//		New: func() interface{} {
+//			s := make([]float32, 0)
+//			return &s
+//		},
+//	}
+//	arrayF64Pool = sync.Pool{
+//		New: func() interface{} {
+//			s := make([]float64, 0)
+//			return &s
+//		},
+//	}
+//)
 
 func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
 	if ctr.rbat != nil {
@@ -161,13 +160,13 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 
 	var clusterEmbeddingF32 []float32
 	var tblEmbeddingF32 []float32
-	var normalizeTblEmbeddingPtrF32 *[]float32
-	var normalizeTblEmbeddingF32 []float32
+	//var normalizeTblEmbeddingPtrF32 *[]float32
+	//var normalizeTblEmbeddingF32 []float32
 
 	var clusterEmbeddingF64 []float64
 	var tblEmbeddingF64 []float64
-	var normalizeTblEmbeddingPtrF64 *[]float64
-	var normalizeTblEmbeddingF64 []float64
+	//var normalizeTblEmbeddingPtrF64 *[]float64
+	//var normalizeTblEmbeddingF64 []float64
 
 	for j = ctr.probeIdx; j < probeCount; j++ {
 		leastClusterIndex = 0
@@ -179,49 +178,49 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 		case types.T_array_float32:
 			tblEmbeddingF32 = types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
 
-			// NOTE: make sure you normalize_l2 probe vector once.
-			normalizeTblEmbeddingPtrF32 = arrayF32Pool.Get().(*[]float32)
-			normalizeTblEmbeddingF32 = *normalizeTblEmbeddingPtrF32
-			if cap(normalizeTblEmbeddingF32) < len(tblEmbeddingF32) {
-				normalizeTblEmbeddingF32 = make([]float32, len(tblEmbeddingF32))
-			} else {
-				normalizeTblEmbeddingF32 = normalizeTblEmbeddingF32[:len(tblEmbeddingF32)]
-			}
-			_ = moarray.NormalizeL2[float32](tblEmbeddingF32, normalizeTblEmbeddingF32)
+			//// NOTE: make sure you normalize_l2 probe vector once.
+			//normalizeTblEmbeddingPtrF32 = arrayF32Pool.Get().(*[]float32)
+			//normalizeTblEmbeddingF32 = *normalizeTblEmbeddingPtrF32
+			//if cap(normalizeTblEmbeddingF32) < len(tblEmbeddingF32) {
+			//	normalizeTblEmbeddingF32 = make([]float32, len(tblEmbeddingF32))
+			//} else {
+			//	normalizeTblEmbeddingF32 = normalizeTblEmbeddingF32[:len(tblEmbeddingF32)]
+			//}
+			//_ = moarray.NormalizeL2[float32](tblEmbeddingF32, normalizeTblEmbeddingF32)
 
 			for i = 0; i < buildCount; i++ {
 				clusterEmbeddingF32 = types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				dist, _ := moarray.L2Distance[float32](clusterEmbeddingF32, normalizeTblEmbeddingF32)
+				dist, _ := moarray.L2Distance[float32](clusterEmbeddingF32, tblEmbeddingF32)
 				if dist < leastDistance {
 					leastDistance = dist
 					leastClusterIndex = i
 				}
 			}
-			// article:https://blog.mike.norgate.xyz/unlocking-go-slice-performance-navigating-sync-pool-for-enhanced-efficiency-7cb63b0b453e
-			*normalizeTblEmbeddingPtrF32 = normalizeTblEmbeddingF32
-			arrayF32Pool.Put(normalizeTblEmbeddingPtrF32)
+			//// article:https://blog.mike.norgate.xyz/unlocking-go-slice-performance-navigating-sync-pool-for-enhanced-efficiency-7cb63b0b453e
+			//*normalizeTblEmbeddingPtrF32 = normalizeTblEmbeddingF32
+			//arrayF32Pool.Put(normalizeTblEmbeddingPtrF32)
 		case types.T_array_float64:
 			tblEmbeddingF64 = types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
 
-			normalizeTblEmbeddingPtrF64 = arrayF64Pool.Get().(*[]float64)
-			normalizeTblEmbeddingF64 = *normalizeTblEmbeddingPtrF64
-			if cap(normalizeTblEmbeddingF64) < len(tblEmbeddingF64) {
-				normalizeTblEmbeddingF64 = make([]float64, len(tblEmbeddingF64))
-			} else {
-				normalizeTblEmbeddingF64 = normalizeTblEmbeddingF64[:len(tblEmbeddingF64)]
-			}
-			_ = moarray.NormalizeL2[float64](tblEmbeddingF64, normalizeTblEmbeddingF64)
+			//normalizeTblEmbeddingPtrF64 = arrayF64Pool.Get().(*[]float64)
+			//normalizeTblEmbeddingF64 = *normalizeTblEmbeddingPtrF64
+			//if cap(normalizeTblEmbeddingF64) < len(tblEmbeddingF64) {
+			//	normalizeTblEmbeddingF64 = make([]float64, len(tblEmbeddingF64))
+			//} else {
+			//	normalizeTblEmbeddingF64 = normalizeTblEmbeddingF64[:len(tblEmbeddingF64)]
+			//}
+			//_ = moarray.NormalizeL2[float64](tblEmbeddingF64, normalizeTblEmbeddingF64)
 
 			for i = 0; i < buildCount; i++ {
 				clusterEmbeddingF64 = types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				dist, _ := moarray.L2Distance[float64](clusterEmbeddingF64, normalizeTblEmbeddingF64)
+				dist, _ := moarray.L2Distance[float64](clusterEmbeddingF64, tblEmbeddingF64)
 				if dist < leastDistance {
 					leastDistance = dist
 					leastClusterIndex = i
 				}
 			}
-			*normalizeTblEmbeddingPtrF64 = normalizeTblEmbeddingF64
-			arrayF64Pool.Put(normalizeTblEmbeddingPtrF64)
+			//*normalizeTblEmbeddingPtrF64 = normalizeTblEmbeddingF64
+			//arrayF64Pool.Put(normalizeTblEmbeddingPtrF64)
 		}
 		for k, rp := range ap.Result {
 			if rp.Rel == 0 {

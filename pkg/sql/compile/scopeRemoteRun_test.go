@@ -146,7 +146,7 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 		streamSender: streamSender,
 		c:            c,
 	}
-	ch2 := make(chan *batch.Batch)
+	ch2 := make(chan *process.RegisterMessage)
 	ctx2, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	lastInstruction := vm.Instruction{
