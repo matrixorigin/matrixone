@@ -371,6 +371,16 @@ func TestCannotCommitTxnCanBeRemovedWithNotInActiveTxn(t *testing.T) {
 				},
 			})
 
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			ok, err := l1.IsOrphanTxn(ctx, []byte{1})
+			require.NoError(t, err)
+			require.True(t, ok)
+
+			ok, err = l1.IsOrphanTxn(ctx, []byte{2})
+			require.NoError(t, err)
+			require.False(t, ok)
+
 			// wait txn 3 removed
 			for {
 				v, ok := alloc.ctl.Load(l1.serviceID)

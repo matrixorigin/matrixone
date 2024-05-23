@@ -778,7 +778,7 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement) stri
 				if isNull {
 					paramValues[i] = "NULL"
 				} else {
-					paramValues[i] = vs[i].GetString(prepareStmt.params.GetArea())
+					paramValues[i] = vs[i].UnsafeGetString(prepareStmt.params.GetArea())
 				}
 			}
 			bb.WriteString(strings.Join(paramValues, " ; "))
