@@ -320,7 +320,6 @@ Drop database Projects;
 internal error: can not drop database. It has been referenced by foreign keys
 Drop database Payroll;
 restore account sys from snapshot snapshot_01;
-internal error: can not drop database. It has been referenced by foreign keys
 select * from Company.Departments;
 departmentid    name    managerid
 1    Research and Development    null
@@ -410,29 +409,42 @@ projectid    employeeid
 5    5
 6    6
 select * from Payroll.Salaries;
-invalid database payroll
+employeeid    monthlysalary
+1    10000.00
+2    20000.00
+3    30000.00
+4    40000.00
+5    50000.00
+6    60000.00
 select * from Payroll.ProjectBonuses;
-invalid database payroll
+projectid    employeeid    bonus
+1    1    1000.00
+2    2    2000.00
+3    3    3000.00
+4    4    4000.00
+5    5    5000.00
+6    6    6000.00
 select * from Payroll.DepartmentBudgets;
-invalid database payroll
-drop database if exists Company;
-internal error: can not drop database. It has been referenced by foreign keys
-drop database if exists Projects;
+departmentid    budget
+1    100000.00
+2    200000.00
+3    300000.00
+4    400000.00
+5    500000.00
+6    600000.00
 drop database if exists Payroll;
+drop database if exists Projects;
+drop database if exists Company;
 drop snapshot snapshot_01;
 CREATE DATABASE Company;
-database company already exists
 USE Company;
 drop table if exists Departments;
-internal error: can not drop table 'departments' referenced by some foreign key constraint
 CREATE TABLE Departments (
 DepartmentID INT AUTO_INCREMENT PRIMARY KEY,
 Name VARCHAR(100) NOT NULL,
 ManagerID INT NULL
 );
-table departments already exists
 drop table if exists Employees;
-internal error: can not drop table 'employees' referenced by some foreign key constraint
 CREATE TABLE Employees (
 EmployeeID INT AUTO_INCREMENT PRIMARY KEY,
 FirstName VARCHAR(100) NOT NULL,
@@ -441,16 +453,13 @@ BirthDate DATE NULL,
 DepartmentID INT NULL,
 FOREIGN KEY (DepartmentID) REFERENCES Departments(DepartmentID)
 );
-table employees already exists
 drop table if exists Positions;
-internal error: can not drop table 'positions' referenced by some foreign key constraint
 CREATE TABLE Positions (
 PositionID INT AUTO_INCREMENT PRIMARY KEY,
 Title VARCHAR(100) NOT NULL,
 DepartmentID INT NULL,
 FOREIGN KEY (DepartmentID) REFERENCES Departments(DepartmentID)
 );
-table positions already exists
 drop table if exists EmployeePositions;
 CREATE TABLE EmployeePositions (
 EmployeeID INT NOT NULL,
@@ -548,12 +557,6 @@ departmentid    name    managerid
 4    Marketing    null
 5    Finance    null
 6    Legal    null
-7    Research and Development    null
-8    Human Resources    null
-9    Sales    null
-10    Marketing    null
-11    Finance    null
-12    Legal    null
 select * from Employees;
 employeeid    firstname    lastname    birthdate    departmentid
 1    John    Doe    1980-01-01    1
@@ -562,12 +565,6 @@ employeeid    firstname    lastname    birthdate    departmentid
 4    Bob    Brown    1983-04-04    4
 5    Charlie    White    1984-05-05    5
 6    David    Black    1985-06-06    6
-7    John    Doe    1980-01-01    1
-8    Jane    Smith    1981-02-02    2
-9    Alice    Jones    1982-03-03    3
-10    Bob    Brown    1983-04-04    4
-11    Charlie    White    1984-05-05    5
-12    David    Black    1985-06-06    6
 select * from Positions;
 positionid    title    departmentid
 1    Software Engineer    1
@@ -576,12 +573,6 @@ positionid    title    departmentid
 4    Marketing Specialist    4
 5    Accountant    5
 6    Attorney    6
-7    Software Engineer    1
-8    HR Specialist    2
-9    Sales Associate    3
-10    Marketing Specialist    4
-11    Accountant    5
-12    Attorney    6
 select * from EmployeePositions;
 employeeid    positionid
 1    1
@@ -767,7 +758,6 @@ Drop database Company;
 internal error: can not drop database. It has been referenced by foreign keys
 Drop database Payroll;
 restore account sys from snapshot snapshot_01;
-internal error: can not drop database. It has been referenced by foreign keys
 select * from Company.Departments;
 departmentid    name    managerid
 1    Research and Development    null
@@ -776,12 +766,6 @@ departmentid    name    managerid
 4    Marketing    null
 5    Finance    null
 6    Legal    null
-7    Research and Development    null
-8    Human Resources    null
-9    Sales    null
-10    Marketing    null
-11    Finance    null
-12    Legal    null
 select * from Company.Employees;
 employeeid    firstname    lastname    birthdate    departmentid
 1    John    Doe    1980-01-01    1
@@ -790,12 +774,6 @@ employeeid    firstname    lastname    birthdate    departmentid
 4    Bob    Brown    1983-04-04    4
 5    Charlie    White    1984-05-05    5
 6    David    Black    1985-06-06    6
-7    John    Doe    1980-01-01    1
-8    Jane    Smith    1981-02-02    2
-9    Alice    Jones    1982-03-03    3
-10    Bob    Brown    1983-04-04    4
-11    Charlie    White    1984-05-05    5
-12    David    Black    1985-06-06    6
 select * from Company.Positions;
 positionid    title    departmentid
 1    Software Engineer    1
@@ -804,12 +782,6 @@ positionid    title    departmentid
 4    Marketing Specialist    4
 5    Accountant    5
 6    Attorney    6
-7    Software Engineer    1
-8    HR Specialist    2
-9    Sales Associate    3
-10    Marketing Specialist    4
-11    Accountant    5
-12    Attorney    6
 select * from Company.EmployeePositions;
 employeeid    positionid
 1    1
@@ -875,13 +847,30 @@ projectid    employeeid
 5    5
 6    6
 select * from Payroll.Salaries;
-invalid database payroll
+employeeid    monthlysalary
+1    10000.00
+2    20000.00
+3    30000.00
+4    40000.00
+5    50000.00
+6    60000.00
 select * from Payroll.ProjectBonuses;
-invalid database payroll
+projectid    employeeid    bonus
+1    1    1000.00
+2    2    2000.00
+3    3    3000.00
+4    4    4000.00
+5    5    5000.00
+6    6    6000.00
 select * from Payroll.DepartmentBudgets;
-invalid database payroll
-drop database if exists Company;
-internal error: can not drop database. It has been referenced by foreign keys
-drop database if exists Projects;
+departmentid    budget
+1    100000.00
+2    200000.00
+3    300000.00
+4    400000.00
+5    500000.00
+6    600000.00
 drop database if exists Payroll;
+drop database if exists Projects;
+drop database if exists Company;
 drop snapshot snapshot_01;

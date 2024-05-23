@@ -1,4 +1,3 @@
--- @bvt:issue#16348
 CREATE DATABASE Company;
 USE Company;
 
@@ -277,9 +276,9 @@ select * from Payroll.Salaries;
 select * from Payroll.ProjectBonuses;
 select * from Payroll.DepartmentBudgets;
 
-drop database if exists Company;
-drop database if exists Projects;
 drop database if exists Payroll;
+drop database if exists Projects;
+drop database if exists Company;
 drop snapshot snapshot_01;
 
 
@@ -561,8 +560,7 @@ select * from Payroll.Salaries;
 select * from Payroll.ProjectBonuses;
 select * from Payroll.DepartmentBudgets;
 
-drop database if exists Company;
-drop database if exists Projects;
 drop database if exists Payroll;
+drop database if exists Projects;
+drop database if exists Company;
 drop snapshot snapshot_01;
--- @bvt:issue
