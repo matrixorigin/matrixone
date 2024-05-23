@@ -95,7 +95,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}()
 	}
 
-	_, tableDef := ctx.Resolve(dbName, tblName, *snapshot)
+	tableObjRef, tableDef := ctx.Resolve(dbName, tblName, *snapshot)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -122,7 +122,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	// sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	// logutil.Info(sql)
 
-	ddlStr, err := ConstructCreateTableSQL(tableDef, *snapshot, ctx)
+	ddlStr, err := ConstructCreateTableSQL(tableObjRef, tableDef, *snapshot, ctx)
 	if err != nil {
 		return nil, err
 	}
