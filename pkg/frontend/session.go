@@ -161,11 +161,9 @@ type Session struct {
 	sentRows atomic.Int64
 	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
 	writeCsvBytes atomic.Int64
-	// packetCounter count the mysql packet communicated with client.
+	// packetCounter count the tcp packet send to client.
 	packetCounter atomic.Int64
-	// tcpPacketCounter count the tcp packet send to client.
-	tcpPacketCounter atomic.Int64
-	// payloadCounter count the payload send by `load data`
+	// payloadCounter count the payload send by `load data LOCAL infile`
 	payloadCounter int64
 
 	createdTime time.Time
@@ -396,24 +394,17 @@ func (ses *Session) CountPacket(delta int64) {
 	}
 	ses.packetCounter.Add(delta)
 }
-func (ses *Session) CountTcpPacket(delta int64) {
+func (ses *Session) GetPacketCnt() int64 {
 	if ses == nil {
-		return
+		return 0
 	}
-	ses.tcpPacketCounter.Add(delta)
-}
-func (ses *Session) GetPacketCnt() (int64, int64) {
-	if ses == nil {
-		return 0, 0
-	}
-	return ses.packetCounter.Load(), ses.tcpPacketCounter.Load()
+	return ses.packetCounter.Load()
 }
 func (ses *Session) ResetPacketCounter() {
 	if ses == nil {
 		return
 	}
 	ses.packetCounter.Store(0)
-	ses.tcpPacketCounter.Store(0)
 	ses.payloadCounter = 0
 }
 
