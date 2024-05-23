@@ -12,28 +12,13 @@ insert into t0(a) values (3);
 select * from t0 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-0
 delete from t0 where a=2;
 insert into t0(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t0(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t0 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t0 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t1;
@@ -45,28 +30,13 @@ insert into t1(a) values (3);
 select * from t1 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-5
 delete from t1 where a=2;
 insert into t1(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t1(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t1 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t1 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t2;
@@ -78,28 +48,13 @@ insert into t2(a) values (3);
 select * from t2 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-5
 delete from t2 where a=2;
 insert into t2(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t2(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t2 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t2 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t3;
@@ -111,94 +66,55 @@ insert into t3(a) values (3);
 select * from t3 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-5
 delete from t3 where a=2;
 insert into t3(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t3(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t3 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t3 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t4;
 create table t4(a tinyint auto_increment, b int, primary key(a));
 insert into t4(b) values (1), (2);
+Data truncation: data out of range: data type tinyint, value 10001
 begin;
 use insert_auto_pk2;
 insert into t4(a) values (3);
 select * from t4 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-5
 delete from t4 where a=2;
 insert into t4(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
+Data truncation: data out of range: data type tinyint, value 10002
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t4(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
+Data truncation: data out of range: data type tinyint, value 10003
 select * from t4 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t4 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t5;
 create table t5(a tinyint unsigned auto_increment , b int, primary key(a));
 insert into t5(b) values (1), (2);
+Data truncation: data out of range: data type tinyint unsigned, value 10001
 begin;
 use insert_auto_pk2;
 insert into t5(a) values (3);
 select * from t5 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-5
 delete from t5 where a=2;
 insert into t5(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
+Data truncation: data out of range: data type tinyint unsigned, value 10002
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t5(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
+Data truncation: data out of range: data type tinyint unsigned, value 10003
 select * from t5 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t5 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t6;
@@ -210,28 +126,13 @@ insert into t6(a, b) values (3, 3);
 select * from t6 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-5
 delete from t6 where a=2;
 insert into t6(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t6(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t6 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t6 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t7;
@@ -243,28 +144,13 @@ insert into t7(a, b) values (3, 3);
 select * from t7 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-5
 delete from t7 where a=2;
 insert into t7(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t7(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t7 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t7 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t8;
@@ -276,28 +162,13 @@ insert into t8(a, b) values (3, 3);
 select * from t8 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-5
 delete from t8 where a=2;
 insert into t8(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t8(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t8 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t8 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t9;
@@ -309,94 +180,55 @@ insert into t9(a, b) values (3, 3);
 select * from t9 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-5
 delete from t9 where a=2;
 insert into t9(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t9(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t9 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t9 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t10;
 create table t10(a tinyint auto_increment, b int, primary key(a, b));
 insert into t10(b) values (1), (2);
+Data truncation: data out of range: data type tinyint, value 10001
 begin;
 use insert_auto_pk2;
 insert into t10(a, b) values (3, 3);
 select * from t10 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-5
 delete from t10 where a=2;
 insert into t10(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
+Data truncation: data out of range: data type tinyint, value 10002
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t10(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
+Data truncation: data out of range: data type tinyint, value 10003
 select * from t10 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t10 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t11;
 create table t11(a tinyint unsigned auto_increment , b int, primary key(a, b));
 insert into t11(b) values (1), (2);
+Data truncation: data out of range: data type tinyint unsigned, value 10001
 begin;
 use insert_auto_pk2;
 insert into t11(a, b) values (3, 3);
 select * from t11 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-5
 delete from t11 where a=2;
 insert into t11(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
+Data truncation: data out of range: data type tinyint unsigned, value 10002
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t11(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
+Data truncation: data out of range: data type tinyint unsigned, value 10003
 select * from t11 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t11 group by a having count(*) > 1;
 a    count(*)
 alter database insert_auto_pk2 set unique_check_on_autoincr = "Check";
@@ -412,28 +244,13 @@ insert into t0(a) values (3);
 select * from t0 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-5
 delete from t0 where a=2;
 insert into t0(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t0(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t0 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t0 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t1;
@@ -445,28 +262,13 @@ insert into t1(a) values (3);
 select * from t1 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-5
 delete from t1 where a=2;
 insert into t1(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t1(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t1 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t1 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t2;
@@ -478,28 +280,13 @@ insert into t2(a) values (3);
 select * from t2 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-5
 delete from t2 where a=2;
 insert into t2(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t2(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t2 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t2 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t3;
@@ -511,94 +298,55 @@ insert into t3(a) values (3);
 select * from t3 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-5
 delete from t3 where a=2;
 insert into t3(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t3(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t3 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t3 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t4;
 create table t4(a tinyint auto_increment, b int, primary key(a));
 insert into t4(b) values (1), (2);
+Data truncation: data out of range: data type tinyint, value 10001
 begin;
 use insert_auto_pk2;
 insert into t4(a) values (3);
 select * from t4 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-5
 delete from t4 where a=2;
 insert into t4(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
+Data truncation: data out of range: data type tinyint, value 10002
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t4(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
+Data truncation: data out of range: data type tinyint, value 10003
 select * from t4 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t4 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t5;
 create table t5(a tinyint unsigned auto_increment , b int, primary key(a));
 insert into t5(b) values (1), (2);
+Data truncation: data out of range: data type tinyint unsigned, value 10001
 begin;
 use insert_auto_pk2;
 insert into t5(a) values (3);
 select * from t5 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-5
 delete from t5 where a=2;
 insert into t5(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
+Data truncation: data out of range: data type tinyint unsigned, value 10002
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t5(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
+Data truncation: data out of range: data type tinyint unsigned, value 10003
 select * from t5 where a = 3;
 a    b
 3    null
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t5 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t6;
@@ -610,28 +358,13 @@ insert into t6(a, b) values (3, 3);
 select * from t6 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-5
 delete from t6 where a=2;
 insert into t6(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t6(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t6 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t6 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t7;
@@ -643,28 +376,13 @@ insert into t7(a, b) values (3, 3);
 select * from t7 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-5
 delete from t7 where a=2;
 insert into t7(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t7(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t7 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t7 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t8;
@@ -676,28 +394,13 @@ insert into t8(a, b) values (3, 3);
 select * from t8 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-5
 delete from t8 where a=2;
 insert into t8(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t8(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t8 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t8 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t9;
@@ -709,94 +412,55 @@ insert into t9(a, b) values (3, 3);
 select * from t9 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-5
 delete from t9 where a=2;
 insert into t9(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t9(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
 select * from t9 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t9 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t10;
 create table t10(a tinyint auto_increment, b int, primary key(a, b));
 insert into t10(b) values (1), (2);
+Data truncation: data out of range: data type tinyint, value 10001
 begin;
 use insert_auto_pk2;
 insert into t10(a, b) values (3, 3);
 select * from t10 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-5
 delete from t10 where a=2;
 insert into t10(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
+Data truncation: data out of range: data type tinyint, value 10002
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t10(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
+Data truncation: data out of range: data type tinyint, value 10003
 select * from t10 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t10 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t11;
 create table t11(a tinyint unsigned auto_increment , b int, primary key(a, b));
 insert into t11(b) values (1), (2);
+Data truncation: data out of range: data type tinyint unsigned, value 10001
 begin;
 use insert_auto_pk2;
 insert into t11(a, b) values (3, 3);
 select * from t11 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-5
 delete from t11 where a=2;
 insert into t11(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-5
+Data truncation: data out of range: data type tinyint unsigned, value 10002
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t11(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-7
+Data truncation: data out of range: data type tinyint unsigned, value 10003
 select * from t11 where a = 3;
 a    b
 3    3
-select last_insert_id();
-last_insert_id()
-7
 select a, count(*) from t11 group by a having count(*) > 1;
 a    count(*)
 alter database insert_auto_pk2 set unique_check_on_autoincr = "Error";
@@ -812,28 +476,12 @@ insert into t0(a) values (3);
 invalid input: When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.
 select * from t0 where a = 3;
 a    b
-select last_insert_id();
-last_insert_id()
-5
 delete from t0 where a=2;
 insert into t0(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-4
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t0(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-6
 select * from t0 where a = 3;
 a    b
-3    1
-select last_insert_id();
-last_insert_id()
-6
 select a, count(*) from t0 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t1;
@@ -845,28 +493,12 @@ insert into t1(a) values (3);
 invalid input: When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.
 select * from t1 where a = 3;
 a    b
-select last_insert_id();
-last_insert_id()
-4
 delete from t1 where a=2;
 insert into t1(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-4
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t1(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-6
 select * from t1 where a = 3;
 a    b
-3    1
-select last_insert_id();
-last_insert_id()
-6
 select a, count(*) from t1 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t2;
@@ -878,28 +510,12 @@ insert into t2(a) values (3);
 invalid input: When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.
 select * from t2 where a = 3;
 a    b
-select last_insert_id();
-last_insert_id()
-4
 delete from t2 where a=2;
 insert into t2(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-4
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t2(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-6
 select * from t2 where a = 3;
 a    b
-3    1
-select last_insert_id();
-last_insert_id()
-6
 select a, count(*) from t2 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t3;
@@ -911,94 +527,52 @@ insert into t3(a) values (3);
 invalid input: When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.
 select * from t3 where a = 3;
 a    b
-select last_insert_id();
-last_insert_id()
-4
 delete from t3 where a=2;
 insert into t3(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-4
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t3(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-6
 select * from t3 where a = 3;
 a    b
-3    1
-select last_insert_id();
-last_insert_id()
-6
 select a, count(*) from t3 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t4;
 create table t4(a tinyint auto_increment, b int, primary key(a));
 insert into t4(b) values (1), (2);
+Data truncation: data out of range: data type tinyint, value 10001
 begin;
 use insert_auto_pk2;
 insert into t4(a) values (3);
 invalid input: When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.
 select * from t4 where a = 3;
 a    b
-select last_insert_id();
-last_insert_id()
-4
 delete from t4 where a=2;
 insert into t4(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-4
+Data truncation: data out of range: data type tinyint, value 10002
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t4(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-6
+Data truncation: data out of range: data type tinyint, value 10003
 select * from t4 where a = 3;
 a    b
-3    1
-select last_insert_id();
-last_insert_id()
-6
 select a, count(*) from t4 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t5;
 create table t5(a tinyint unsigned auto_increment , b int, primary key(a));
 insert into t5(b) values (1), (2);
+Data truncation: data out of range: data type tinyint unsigned, value 10001
 begin;
 use insert_auto_pk2;
 insert into t5(a) values (3);
 invalid input: When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.
 select * from t5 where a = 3;
 a    b
-select last_insert_id();
-last_insert_id()
-4
 delete from t5 where a=2;
 insert into t5(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-4
+Data truncation: data out of range: data type tinyint unsigned, value 10002
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t5(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-6
+Data truncation: data out of range: data type tinyint unsigned, value 10003
 select * from t5 where a = 3;
 a    b
-3    1
-select last_insert_id();
-last_insert_id()
-6
 select a, count(*) from t5 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t6;
@@ -1010,28 +584,12 @@ insert into t6(a, b) values (3, 3);
 invalid input: When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.
 select * from t6 where a = 3;
 a    b
-select last_insert_id();
-last_insert_id()
-4
 delete from t6 where a=2;
 insert into t6(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-4
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t6(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-6
 select * from t6 where a = 3;
 a    b
-3    1
-select last_insert_id();
-last_insert_id()
-6
 select a, count(*) from t6 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t7;
@@ -1043,28 +601,12 @@ insert into t7(a, b) values (3, 3);
 invalid input: When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.
 select * from t7 where a = 3;
 a    b
-select last_insert_id();
-last_insert_id()
-4
 delete from t7 where a=2;
 insert into t7(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-4
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t7(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-6
 select * from t7 where a = 3;
 a    b
-3    1
-select last_insert_id();
-last_insert_id()
-6
 select a, count(*) from t7 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t8;
@@ -1076,28 +618,12 @@ insert into t8(a, b) values (3, 3);
 invalid input: When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.
 select * from t8 where a = 3;
 a    b
-select last_insert_id();
-last_insert_id()
-4
 delete from t8 where a=2;
 insert into t8(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-4
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t8(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-6
 select * from t8 where a = 3;
 a    b
-3    1
-select last_insert_id();
-last_insert_id()
-6
 select a, count(*) from t8 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t9;
@@ -1109,94 +635,52 @@ insert into t9(a, b) values (3, 3);
 invalid input: When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.
 select * from t9 where a = 3;
 a    b
-select last_insert_id();
-last_insert_id()
-4
 delete from t9 where a=2;
 insert into t9(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-4
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t9(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-6
 select * from t9 where a = 3;
 a    b
-3    1
-select last_insert_id();
-last_insert_id()
-6
 select a, count(*) from t9 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t10;
 create table t10(a tinyint auto_increment, b int, primary key(a, b));
 insert into t10(b) values (1), (2);
+Data truncation: data out of range: data type tinyint, value 10001
 begin;
 use insert_auto_pk2;
 insert into t10(a, b) values (3, 3);
 invalid input: When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.
 select * from t10 where a = 3;
 a    b
-select last_insert_id();
-last_insert_id()
-4
 delete from t10 where a=2;
 insert into t10(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-4
+Data truncation: data out of range: data type tinyint, value 10002
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t10(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-6
+Data truncation: data out of range: data type tinyint, value 10003
 select * from t10 where a = 3;
 a    b
-3    1
-select last_insert_id();
-last_insert_id()
-6
 select a, count(*) from t10 group by a having count(*) > 1;
 a    count(*)
 drop table if exists t11;
 create table t11(a tinyint unsigned auto_increment , b int, primary key(a, b));
 insert into t11(b) values (1), (2);
+Data truncation: data out of range: data type tinyint unsigned, value 10001
 begin;
 use insert_auto_pk2;
 insert into t11(a, b) values (3, 3);
 invalid input: When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.
 select * from t11 where a = 3;
 a    b
-select last_insert_id();
-last_insert_id()
-4
 delete from t11 where a=2;
 insert into t11(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-4
+Data truncation: data out of range: data type tinyint unsigned, value 10002
 commit;
-select last_insert_id();
-last_insert_id()
-2
 insert into t11(b) values (1), (2);
-select last_insert_id();
-last_insert_id()
-6
+Data truncation: data out of range: data type tinyint unsigned, value 10003
 select * from t11 where a = 3;
 a    b
-3    1
-select last_insert_id();
-last_insert_id()
-6
 select a, count(*) from t11 group by a having count(*) > 1;
 a    count(*)
 drop database insert_auto_pk2;

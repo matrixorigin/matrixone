@@ -24,17 +24,17 @@ begin;
 use insert_auto_pk2;
 insert into t0(a) values (3);
 select * from t0 where a = 3;
-select last_insert_id();
+
 delete from t0 where a=2;
 insert into t0(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t0(b) values (1), (2);
-select last_insert_id();
+
 select * from t0 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t0 group by a having count(*) > 1;
 
 drop table if exists t1;
@@ -45,17 +45,17 @@ begin;
 use insert_auto_pk2;
 insert into t1(a) values (3);
 select * from t1 where a = 3;
-select last_insert_id();
+
 delete from t1 where a=2;
 insert into t1(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t1(b) values (1), (2);
-select last_insert_id();
+
 select * from t1 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t1 group by a having count(*) > 1;
 
 -- BIG INT / UINT
@@ -68,17 +68,17 @@ begin;
 use insert_auto_pk2;
 insert into t2(a) values (3);
 select * from t2 where a = 3;
-select last_insert_id();
+
 delete from t2 where a=2;
 insert into t2(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t2(b) values (1), (2);
-select last_insert_id();
+
 select * from t2 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t2 group by a having count(*) > 1;
 
 drop table if exists t3;
@@ -89,17 +89,17 @@ begin;
 use insert_auto_pk2;
 insert into t3(a) values (3);
 select * from t3 where a = 3;
-select last_insert_id();
+
 delete from t3 where a=2;
 insert into t3(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t3(b) values (1), (2);
-select last_insert_id();
+
 select * from t3 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t3 group by a having count(*) > 1;
 
 -- TINY INT / UINT
@@ -112,17 +112,17 @@ begin;
 use insert_auto_pk2;
 insert into t4(a) values (3);
 select * from t4 where a = 3;
-select last_insert_id();
+
 delete from t4 where a=2;
 insert into t4(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t4(b) values (1), (2);
-select last_insert_id();
+
 select * from t4 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t4 group by a having count(*) > 1;
 
 drop table if exists t5;
@@ -133,17 +133,17 @@ begin;
 use insert_auto_pk2;
 insert into t5(a) values (3);
 select * from t5 where a = 3;
-select last_insert_id();
+
 delete from t5 where a=2;
 insert into t5(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t5(b) values (1), (2);
-select last_insert_id();
+
 select * from t5 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t5 group by a having count(*) > 1;
 
 --
@@ -157,17 +157,17 @@ begin;
 use insert_auto_pk2;
 insert into t6(a, b) values (3, 3);
 select * from t6 where a = 3;
-select last_insert_id();
+
 delete from t6 where a=2;
 insert into t6(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t6(b) values (1), (2);
-select last_insert_id();
+
 select * from t6 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t6 group by a having count(*) > 1;
 
 drop table if exists t7;
@@ -178,17 +178,17 @@ begin;
 use insert_auto_pk2;
 insert into t7(a, b) values (3, 3);
 select * from t7 where a = 3;
-select last_insert_id();
+
 delete from t7 where a=2;
 insert into t7(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t7(b) values (1), (2);
-select last_insert_id();
+
 select * from t7 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t7 group by a having count(*) > 1;
 
 -- BIG INT / UINT
@@ -201,17 +201,17 @@ begin;
 use insert_auto_pk2;
 insert into t8(a, b) values (3, 3);
 select * from t8 where a = 3;
-select last_insert_id();
+
 delete from t8 where a=2;
 insert into t8(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t8(b) values (1), (2);
-select last_insert_id();
+
 select * from t8 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t8 group by a having count(*) > 1;
 
 drop table if exists t9;
@@ -222,17 +222,17 @@ begin;
 use insert_auto_pk2;
 insert into t9(a, b) values (3, 3);
 select * from t9 where a = 3;
-select last_insert_id();
+
 delete from t9 where a=2;
 insert into t9(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t9(b) values (1), (2);
-select last_insert_id();
+
 select * from t9 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t9 group by a having count(*) > 1;
 
 -- TINY INT / UINT
@@ -245,17 +245,17 @@ begin;
 use insert_auto_pk2;
 insert into t10(a, b) values (3, 3);
 select * from t10 where a = 3;
-select last_insert_id();
+
 delete from t10 where a=2;
 insert into t10(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t10(b) values (1), (2);
-select last_insert_id();
+
 select * from t10 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t10 group by a having count(*) > 1;
 
 drop table if exists t11;
@@ -266,17 +266,17 @@ begin;
 use insert_auto_pk2;
 insert into t11(a, b) values (3, 3);
 select * from t11 where a = 3;
-select last_insert_id();
+
 delete from t11 where a=2;
 insert into t11(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t11(b) values (1), (2);
-select last_insert_id();
+
 select * from t11 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t11 group by a having count(*) > 1;
 
 -- "Check" means that no dup check when there is no value for auto-pk col
@@ -294,17 +294,17 @@ begin;
 use insert_auto_pk2;
 insert into t0(a) values (3);
 select * from t0 where a = 3;
-select last_insert_id();
+
 delete from t0 where a=2;
 insert into t0(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t0(b) values (1), (2);
-select last_insert_id();
+
 select * from t0 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t0 group by a having count(*) > 1;
 
 drop table if exists t1;
@@ -315,17 +315,17 @@ begin;
 use insert_auto_pk2;
 insert into t1(a) values (3);
 select * from t1 where a = 3;
-select last_insert_id();
+
 delete from t1 where a=2;
 insert into t1(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t1(b) values (1), (2);
-select last_insert_id();
+
 select * from t1 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t1 group by a having count(*) > 1;
 
 -- BIG INT / UINT
@@ -338,17 +338,17 @@ begin;
 use insert_auto_pk2;
 insert into t2(a) values (3);
 select * from t2 where a = 3;
-select last_insert_id();
+
 delete from t2 where a=2;
 insert into t2(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t2(b) values (1), (2);
-select last_insert_id();
+
 select * from t2 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t2 group by a having count(*) > 1;
 
 drop table if exists t3;
@@ -359,17 +359,17 @@ begin;
 use insert_auto_pk2;
 insert into t3(a) values (3);
 select * from t3 where a = 3;
-select last_insert_id();
+
 delete from t3 where a=2;
 insert into t3(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t3(b) values (1), (2);
-select last_insert_id();
+
 select * from t3 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t3 group by a having count(*) > 1;
 
 -- TINY INT / UINT
@@ -382,17 +382,17 @@ begin;
 use insert_auto_pk2;
 insert into t4(a) values (3);
 select * from t4 where a = 3;
-select last_insert_id();
+
 delete from t4 where a=2;
 insert into t4(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t4(b) values (1), (2);
-select last_insert_id();
+
 select * from t4 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t4 group by a having count(*) > 1;
 
 drop table if exists t5;
@@ -403,17 +403,17 @@ begin;
 use insert_auto_pk2;
 insert into t5(a) values (3);
 select * from t5 where a = 3;
-select last_insert_id();
+
 delete from t5 where a=2;
 insert into t5(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t5(b) values (1), (2);
-select last_insert_id();
+
 select * from t5 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t5 group by a having count(*) > 1;
 
 --
@@ -427,17 +427,17 @@ begin;
 use insert_auto_pk2;
 insert into t6(a, b) values (3, 3);
 select * from t6 where a = 3;
-select last_insert_id();
+
 delete from t6 where a=2;
 insert into t6(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t6(b) values (1), (2);
-select last_insert_id();
+
 select * from t6 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t6 group by a having count(*) > 1;
 
 drop table if exists t7;
@@ -448,17 +448,17 @@ begin;
 use insert_auto_pk2;
 insert into t7(a, b) values (3, 3);
 select * from t7 where a = 3;
-select last_insert_id();
+
 delete from t7 where a=2;
 insert into t7(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t7(b) values (1), (2);
-select last_insert_id();
+
 select * from t7 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t7 group by a having count(*) > 1;
 
 -- BIG INT / UINT
@@ -471,17 +471,17 @@ begin;
 use insert_auto_pk2;
 insert into t8(a, b) values (3, 3);
 select * from t8 where a = 3;
-select last_insert_id();
+
 delete from t8 where a=2;
 insert into t8(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t8(b) values (1), (2);
-select last_insert_id();
+
 select * from t8 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t8 group by a having count(*) > 1;
 
 drop table if exists t9;
@@ -492,17 +492,17 @@ begin;
 use insert_auto_pk2;
 insert into t9(a, b) values (3, 3);
 select * from t9 where a = 3;
-select last_insert_id();
+
 delete from t9 where a=2;
 insert into t9(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t9(b) values (1), (2);
-select last_insert_id();
+
 select * from t9 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t9 group by a having count(*) > 1;
 
 -- TINY INT / UINT
@@ -515,17 +515,17 @@ begin;
 use insert_auto_pk2;
 insert into t10(a, b) values (3, 3);
 select * from t10 where a = 3;
-select last_insert_id();
+
 delete from t10 where a=2;
 insert into t10(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t10(b) values (1), (2);
-select last_insert_id();
+
 select * from t10 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t10 group by a having count(*) > 1;
 
 drop table if exists t11;
@@ -536,17 +536,17 @@ begin;
 use insert_auto_pk2;
 insert into t11(a, b) values (3, 3);
 select * from t11 where a = 3;
-select last_insert_id();
+
 delete from t11 where a=2;
 insert into t11(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t11(b) values (1), (2);
-select last_insert_id();
+
 select * from t11 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t11 group by a having count(*) > 1;
 
 -- "Error" means that no dup check when there is no value for auto-pk col
@@ -564,17 +564,17 @@ begin;
 use insert_auto_pk2;
 insert into t0(a) values (3);
 select * from t0 where a = 3;
-select last_insert_id();
+
 delete from t0 where a=2;
 insert into t0(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t0(b) values (1), (2);
-select last_insert_id();
+
 select * from t0 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t0 group by a having count(*) > 1;
 
 drop table if exists t1;
@@ -585,17 +585,17 @@ begin;
 use insert_auto_pk2;
 insert into t1(a) values (3);
 select * from t1 where a = 3;
-select last_insert_id();
+
 delete from t1 where a=2;
 insert into t1(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t1(b) values (1), (2);
-select last_insert_id();
+
 select * from t1 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t1 group by a having count(*) > 1;
 
 -- BIG INT / UINT
@@ -608,17 +608,17 @@ begin;
 use insert_auto_pk2;
 insert into t2(a) values (3);
 select * from t2 where a = 3;
-select last_insert_id();
+
 delete from t2 where a=2;
 insert into t2(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t2(b) values (1), (2);
-select last_insert_id();
+
 select * from t2 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t2 group by a having count(*) > 1;
 
 drop table if exists t3;
@@ -629,17 +629,17 @@ begin;
 use insert_auto_pk2;
 insert into t3(a) values (3);
 select * from t3 where a = 3;
-select last_insert_id();
+
 delete from t3 where a=2;
 insert into t3(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t3(b) values (1), (2);
-select last_insert_id();
+
 select * from t3 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t3 group by a having count(*) > 1;
 
 -- TINY INT / UINT
@@ -652,17 +652,17 @@ begin;
 use insert_auto_pk2;
 insert into t4(a) values (3);
 select * from t4 where a = 3;
-select last_insert_id();
+
 delete from t4 where a=2;
 insert into t4(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t4(b) values (1), (2);
-select last_insert_id();
+
 select * from t4 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t4 group by a having count(*) > 1;
 
 drop table if exists t5;
@@ -673,17 +673,17 @@ begin;
 use insert_auto_pk2;
 insert into t5(a) values (3);
 select * from t5 where a = 3;
-select last_insert_id();
+
 delete from t5 where a=2;
 insert into t5(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t5(b) values (1), (2);
-select last_insert_id();
+
 select * from t5 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t5 group by a having count(*) > 1;
 
 --
@@ -697,17 +697,17 @@ begin;
 use insert_auto_pk2;
 insert into t6(a, b) values (3, 3);
 select * from t6 where a = 3;
-select last_insert_id();
+
 delete from t6 where a=2;
 insert into t6(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t6(b) values (1), (2);
-select last_insert_id();
+
 select * from t6 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t6 group by a having count(*) > 1;
 
 drop table if exists t7;
@@ -718,17 +718,17 @@ begin;
 use insert_auto_pk2;
 insert into t7(a, b) values (3, 3);
 select * from t7 where a = 3;
-select last_insert_id();
+
 delete from t7 where a=2;
 insert into t7(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t7(b) values (1), (2);
-select last_insert_id();
+
 select * from t7 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t7 group by a having count(*) > 1;
 
 -- BIG INT / UINT
@@ -741,17 +741,17 @@ begin;
 use insert_auto_pk2;
 insert into t8(a, b) values (3, 3);
 select * from t8 where a = 3;
-select last_insert_id();
+
 delete from t8 where a=2;
 insert into t8(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t8(b) values (1), (2);
-select last_insert_id();
+
 select * from t8 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t8 group by a having count(*) > 1;
 
 drop table if exists t9;
@@ -762,17 +762,17 @@ begin;
 use insert_auto_pk2;
 insert into t9(a, b) values (3, 3);
 select * from t9 where a = 3;
-select last_insert_id();
+
 delete from t9 where a=2;
 insert into t9(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t9(b) values (1), (2);
-select last_insert_id();
+
 select * from t9 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t9 group by a having count(*) > 1;
 
 -- TINY INT / UINT
@@ -785,17 +785,17 @@ begin;
 use insert_auto_pk2;
 insert into t10(a, b) values (3, 3);
 select * from t10 where a = 3;
-select last_insert_id();
+
 delete from t10 where a=2;
 insert into t10(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t10(b) values (1), (2);
-select last_insert_id();
+
 select * from t10 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t10 group by a having count(*) > 1;
 
 drop table if exists t11;
@@ -806,17 +806,17 @@ begin;
 use insert_auto_pk2;
 insert into t11(a, b) values (3, 3);
 select * from t11 where a = 3;
-select last_insert_id();
+
 delete from t11 where a=2;
 insert into t11(b) values (1), (2);
-select last_insert_id();
+
 commit;
 -- @session}
-select last_insert_id();
+
 insert into t11(b) values (1), (2);
-select last_insert_id();
+
 select * from t11 where a = 3;
-select last_insert_id();
+
 select a, count(*) from t11 group by a having count(*) > 1;
 
 drop database insert_auto_pk2;
