@@ -99,3 +99,7 @@ func (e *EntireEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) 
 func (e *EntireEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return e.Engine.Stats(ctx, key, sync)
 }
+
+func (e *EntireEngine) GetMessageCenter() any {
+	return e.Engine.GetMessageCenter()
+}
