@@ -101,11 +101,11 @@ func newProcess() *process.Process {
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: proc.Ctx,
-		Ch:  make(chan *batch.Batch, 10),
+		Ch:  make(chan *process.RegisterMessage, 10),
 	}
 	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
 		Ctx: proc.Ctx,
-		Ch:  make(chan *batch.Batch, 3),
+		Ch:  make(chan *process.RegisterMessage, 3),
 	}
 	return proc
 }
@@ -138,7 +138,7 @@ func TestFuzzyFilter(t *testing.T) {
 			require.NoError(t, err)
 
 			bat := newBatch(tc.types, tc.proc, int64(r))
-			tc.proc.Reg.MergeReceivers[0].Ch <- bat
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(bat)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 
@@ -157,7 +157,7 @@ func TestFuzzyFilter(t *testing.T) {
 			require.NoError(t, err)
 
 			bat = newBatch(tc.types, tc.proc, int64(r))
-			tc.proc.Reg.MergeReceivers[0].Ch <- bat
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(bat)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 

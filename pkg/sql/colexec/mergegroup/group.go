@@ -50,19 +50,21 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
 			for {
-				bat, end, err := ctr.ReceiveFromAllRegs(anal)
-				if err != nil {
+				msg := ctr.ReceiveFromAllRegs(anal)
+				if msg.Err != nil {
 					result.Status = vm.ExecStop
 					return result, nil
 				}
 
-				if end {
+				if msg.Batch == nil {
 					break
 				}
+				bat := msg.Batch
 				anal.Input(bat, arg.GetIsFirst())
 				if err = ctr.process(bat, proc); err != nil {
 					bat.Clean(proc.Mp())
