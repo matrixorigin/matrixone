@@ -362,6 +362,7 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree
 func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo) (bool, map[string]bool, error) {
 	var err error
 	var syntaxHasColumnNames bool
+	var uniqueCheckOnAutoIncr string
 	var insertColumns []string
 	tableDef := info.tblInfo.tableDefs[0]
 	tableObjRef := info.tblInfo.objRef[0]
@@ -380,10 +381,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	if dbName == "" {
 		dbName = builder.compCtx.DefaultDatabase()
 	}
-	uniqueCheckOnAutoIncr, err := builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
-	if err != nil {
-		return false, nil, err
-	}
+
 	existAutoPkCol := false
 
 	insertWithoutUniqueKeyMap := make(map[string]bool)
@@ -526,19 +524,20 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// rewrite 'insert into t1(b) values (1)' to
 	// select 'select 0, _t.column_0 from (select * from values (1)) _t(column_0)
 	projectList := make([]*Expr, 0, len(tableDef.Cols))
+	pkCols := make(map[string]struct{})
+	for _, name := range tableDef.Pkey.Names {
+		pkCols[name] = struct{}{}
+	}
 	for _, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
 			projectList = append(projectList, oldExpr)
-
-			if col.Typ.AutoIncr && uniqueCheckOnAutoIncr == "Error" {
-				if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-					for _, name := range tableDef.Pkey.Names {
-						if col.Name == name {
-							return false, nil, moerr.NewInvalidInput(builder.GetContext(), "When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.")
-						}
+			if col.Typ.AutoIncr {
+				if _, ok := pkCols[col.Name]; ok {
+					uniqueCheckOnAutoIncr, err = builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
+					if err != nil {
+						return false, nil, err
 					}
-				} else {
-					if col.Name == tableDef.Pkey.PkeyColName {
+					if uniqueCheckOnAutoIncr == "Error" {
 						return false, nil, moerr.NewInvalidInput(builder.GetContext(), "When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.")
 					}
 				}
@@ -550,17 +549,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			}
 
 			if col.Typ.AutoIncr {
-				if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-					for _, name := range tableDef.Pkey.Names {
-						if col.Name == name {
-							existAutoPkCol = true
-							break
-						}
-					}
-				} else {
-					if col.Name == tableDef.Pkey.PkeyColName {
-						existAutoPkCol = true
-					}
+				if _, ok := pkCols[col.Name]; ok {
+					existAutoPkCol = true
 				}
 			}
 			projectList = append(projectList, defExpr)

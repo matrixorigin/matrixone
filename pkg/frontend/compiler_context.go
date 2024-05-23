@@ -221,12 +221,23 @@ func (tcc *TxnCompilerContext) GetDbLevelConfig(dbName string, varName string) (
 	case "unique_check_on_autoincr":
 		// check if the database is a system database
 		if _, ok := sysDatabases[dbName]; !ok {
-			return GetUniqueCheckOnAutoIncr(tcc.GetContext(), tcc.GetSession(), dbName)
+			ses := tcc.GetSession()
+			if _, ok := ses.(*backSession); ok {
+				return "None", nil
+			}
+			ret, err := ses.GetConfig(tcc.GetContext(), dbName, varName)
+			if err != nil {
+				return "", err
+			}
+			if ret != nil {
+				return ret.(string), nil
+			}
+			return "None", nil
 		}
-		return "None", nil
+		return "Check", nil
 	default:
-		return "", moerr.NewInternalError(tcc.GetContext(), "The variable '%s' is not a valid database level variable", varName)
 	}
+	return "", moerr.NewInternalError(tcc.GetContext(), "The variable '%s' is not a valid database level variable", varName)
 }
 
 // getRelation returns the context (maybe updated) and the relation

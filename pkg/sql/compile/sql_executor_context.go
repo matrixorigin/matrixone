@@ -189,7 +189,7 @@ func (c *compilerContext) GetDbLevelConfig(dbName string, varName string) (strin
 	switch varName {
 	// For scenarios that are background SQL, use the default configuration to avoid triggering background SQL again.
 	case "unique_check_on_autoincr":
-		return "None", nil
+		return "Check", nil
 	default:
 		return "", moerr.NewInternalError(c.GetContext(), "The variable '%s' is not a valid database level variable", varName)
 	}
