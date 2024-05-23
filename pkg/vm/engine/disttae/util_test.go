@@ -399,25 +399,6 @@ func mockStatsList(t *testing.T, statsCnt int) (statsList []objectio.ObjectStats
 	return
 }
 
-func TestNewStatsBlkIter(t *testing.T) {
-	stats := mockStatsList(t, 1)[0]
-	blks := UnfoldBlkInfoFromObjStats(&stats)
-
-	iter := NewStatsBlkIter(&stats, nil)
-	for iter.Next() {
-		actual := iter.Entry()
-		id := actual.BlockID.Sequence()
-		require.Equal(t, blks[id].BlockID, actual.BlockID)
-
-		loc1 := objectio.Location(blks[id].MetaLoc[:])
-		loc2 := objectio.Location(actual.MetaLoc[:])
-		require.Equal(t, loc1.Name(), loc2.Name())
-		require.Equal(t, loc1.Extent(), loc2.Extent())
-		require.Equal(t, loc1.ID(), loc2.ID())
-		require.Equal(t, loc1.Rows(), loc2.Rows())
-	}
-}
-
 func TestForeachBlkInObjStatsList(t *testing.T) {
 	statsList := mockStatsList(t, 100)
 
