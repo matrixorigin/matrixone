@@ -38,6 +38,12 @@ var (
 		"inner_product":   "vector_ip_ops",
 		"cosine_distance": "vector_cosine_ops",
 	}
+
+	distFuncInternalDistFunc = map[string]string{
+		"l2_distance":     "l2_distance_sq",
+		"inner_product":   "spherical_distance",
+		"cosine_distance": "spherical_distance",
+	}
 	textType = types.T_text.ToType() // return type of @probe_limit
 )
 
@@ -94,7 +100,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, p
 	//     Order By L2 Distance(centroids,	input_literal) ASC limit @probe_limit
 	metaForCurrVersion1, castMetaValueColToBigInt, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
 		idxTableDefs, idxObjRefs, idxTags, "meta")
-	centroidsForCurrVersionAndProbeLimit, _ := makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder,
+	centroidsForCurrVersionAndProbeLimit, _ := makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2Dist(builder,
 		builder.ctxByNode[nodeID], idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion1, distFnExpr, sortDirection, castMetaValueColToBigInt)
 
 	// 2.c Create Entries Node
@@ -216,7 +222,7 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 	return metaTableScanId, castMetaValueColToBigInt, nil
 }
 
-func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext,
+func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2Dist(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTags map[string]int32,
 	metaTableScanId int32, distFnExpr *plan.Function, sortDirection plan.OrderBySpec_OrderByFlag, castMetaValueColToBigInt *Expr) (int32, error) {
 
@@ -252,7 +258,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 	normalizeL2Lit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "normalize_l2", []*plan.Expr{
 		distFnExpr.Args[1],
 	})
-	distFnName := distFnExpr.Func.ObjName
+	distFnName := distFuncInternalDistFunc[distFnExpr.Func.ObjName]
 	l2DistanceLitNormalizeL2Col, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
 		centroidsCol,   // centroid
 		normalizeL2Lit, // normalize_l2(literal)
@@ -461,7 +467,7 @@ func makeEntriesOrderByL2Distance(builder *QueryBuilder, bindCtx *BindContext,
 	idxTableDefs []*TableDef, idxTags map[string]int32,
 	sortNode *plan.Node) int32 {
 
-	distFnName := fn.Func.ObjName
+	distFnName := distFuncInternalDistFunc[fn.Func.ObjName]
 	l2DistanceColLit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
 		{
 			Typ: idxTableDefs[2].Cols[3].Typ,
@@ -495,7 +501,7 @@ func makeInnerJoinOrderByL2Distance(builder *QueryBuilder, bindCtx *BindContext,
 	idxTableDefs []*TableDef, idxTags map[string]int32,
 	sortNode *plan.Node) int32 {
 
-	distFnName := fn.Func.ObjName
+	distFnName := distFuncInternalDistFunc[fn.Func.ObjName]
 	l2DistanceColLit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
 		{
 			Typ: idxTableDefs[2].Cols[3].Typ,
