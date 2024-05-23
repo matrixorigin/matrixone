@@ -865,15 +865,12 @@ func (arg *Argument) getBatch(
 		fn = arg.rt.ReceiveFromAllRegs
 	}
 
-	bat, end, err := fn(anal)
-	if err != nil {
-		return nil, err
+	msg := fn(anal)
+	if msg.Err != nil {
+		return nil, msg.Err
 	}
-	if end {
-		return nil, nil
-	}
-	anal.Input(bat, isFirst)
-	return bat, nil
+	anal.Input(msg.Batch, isFirst)
+	return msg.Batch, nil
 }
 
 func getRowsFilter(

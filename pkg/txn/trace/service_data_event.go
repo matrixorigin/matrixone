@@ -316,7 +316,7 @@ func (s *service) RefreshTableFilters() error {
 			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 				for i := 0; i < rows; i++ {
 					id := vector.MustFixedCol[uint64](cols[0])[i]
-					columns := cols[1].GetStringAt(i)
+					columns := cols[1].UnsafeGetStringAt(i)
 					filters = append(filters, NewKeepTableFilter(id, strings.Split(columns, ",")))
 				}
 				return true
