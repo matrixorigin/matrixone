@@ -890,7 +890,7 @@ func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileS
 		logutil.Errorf("close gzip write of %s failed. err:%v", profilePath, err)
 		return
 	}
-
+	logutil.Info("get profile done. save profiles ", zap.String("path", profilePath))
 	writeVec := fileservice.IOVector{
 		FilePath: profilePath,
 		Entries: []fileservice.IOEntry{
