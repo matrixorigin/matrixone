@@ -1694,10 +1694,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		// only pessimistic txn needs to block downstream operators.
 		if c.proc.TxnOperator.Txn().IsPessimistic() {
 			block = n.LockTargets[0].Block
-			if block {
-				ss = []*Scope{c.newMergeScope(ss)}
-			}
 		}
+		ss = []*Scope{c.newMergeScope(ss)}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			var lockOpArg *lockop.Argument

@@ -17,10 +17,11 @@ package plan
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"strings"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 
 	"github.com/google/uuid"
 
@@ -94,6 +95,8 @@ type dmlPlanCtx struct {
 	pkFilterExprs          []*Expr
 	isDeleteWithoutFilters bool
 	partitionInfos         map[uint64]*partSubTableInfo // key: Main Table Id, value: Partition sub table information
+
+	lockRows *plan.Expr // update t1 set a = 1 where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
 }
 
 type partSubTableInfo struct {
@@ -116,6 +119,8 @@ type deleteNodeInfo struct {
 	pkPos           int
 	pkTyp           plan.Type
 	lockTable       bool
+
+	lockRows *plan.Expr // delete from t1 where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
 }
 
 // buildInsertPlans  build insert plan.

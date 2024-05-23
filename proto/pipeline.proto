@@ -173,6 +173,7 @@ message LockTarget {
   bool lock_table               = 6;
   bool ChangeDef               = 7;
   lock.LockMode Mode         = 8;
+  plan.Expr lockRows         = 9;
 }
 
 message LockOp {

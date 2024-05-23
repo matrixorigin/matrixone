@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -68,6 +69,23 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	for idx := range arg.targets {
 		arg.rt.fetchers = append(arg.rt.fetchers,
 			GetFetchRowsFunc(arg.targets[idx].primaryColumnType))
+
+		if arg.targets[idx].lockRows != nil {
+			vec, err := colexec.EvalExpressionOnce(proc, arg.targets[idx].lockRows, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			if err != nil {
+				return err
+			}
+
+			bat := batch.NewWithSize(int(arg.targets[idx].primaryColumnIndexInBatch) + 1)
+			bat.Vecs[arg.targets[idx].primaryColumnIndexInBatch] = vec
+			bat.SetRowCount(vec.Length())
+			arg.rt.lockCount = uint64(vec.Length())
+
+			err = performLock(bat, proc, arg)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	arg.rt.parker = types.NewPacker(proc.Mp())
 	arg.rt.retryError = nil
@@ -116,6 +134,10 @@ func callNonBlocking(
 	defer anal.Stop()
 
 	if result.Batch == nil {
+		err := lockTalbeIfLockCountIsZero(proc, arg)
+		if err != nil {
+			return result, err
+		}
 		return result, arg.rt.retryError
 	}
 	bat := result.Batch
@@ -123,6 +145,7 @@ func callNonBlocking(
 		return result, err
 	}
 
+	arg.rt.lockCount += uint64(bat.RowCount())
 	if err := performLock(bat, proc, arg); err != nil {
 		return result, err
 	}
@@ -162,6 +185,7 @@ func callBlocking(
 				continue
 			}
 
+			arg.rt.lockCount += uint64(bat.RowCount())
 			if err := performLock(bat, proc, arg); err != nil {
 				return result, err
 			}
@@ -191,6 +215,10 @@ func callBlocking(
 	if arg.rt.step == stepEnd {
 		result.Status = vm.ExecStop
 		arg.cleanCachedBatch(proc)
+		err := lockTalbeIfLockCountIsZero(proc, arg)
+		if err != nil {
+			return result, err
+		}
 		return result, arg.rt.retryError
 	}
 
@@ -704,6 +732,7 @@ func (arg *Argument) CopyToPipelineTarget() []*pipeline.LockTarget {
 			LockTable:          target.lockTable,
 			ChangeDef:          target.changeDef,
 			Mode:               target.mode,
+			LockRows:           plan.DeepCopyExpr(target.lockRows),
 		}
 	}
 	return targets
@@ -903,4 +932,19 @@ func hasNewVersionInRange(
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
 	return rel.PrimaryKeysMayBeModified(proc.Ctx, fromTS, toTS, vec)
+}
+
+func lockTalbeIfLockCountIsZero(
+	proc *process.Process,
+	arg *Argument,
+) error {
+	if arg.rt.lockCount == 0 {
+		for idx := range arg.targets {
+			err := LockTable(arg.engine, proc, arg.targets[idx].tableID, arg.targets[idx].primaryColumnType, false)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
