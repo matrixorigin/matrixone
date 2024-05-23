@@ -102,7 +102,6 @@ restore account acc01 from snapshot snapshot_01;
 drop account acc01;
 drop snapshot snapshot_01;
 
--- @bvt:issue#16346
 CREATE DATABASE Company;
 USE Company;
 
@@ -385,4 +384,3 @@ drop database if exists Company;
 drop database if exists Projects;
 drop database if exists Payroll;
 drop snapshot snapshot_01;
--- @bvt:issue
