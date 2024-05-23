@@ -458,8 +458,12 @@ func restoreToDatabaseOrTable(
 	}
 
 	// if restore to table, expect only one table here
-	if restoreToTbl && len(tableInfos) != 1 {
-		return moerr.NewInternalError(ctx, "find %v tableInfos by name, expect 1", len(tableInfos))
+	if restoreToTbl {
+		if len(tableInfos) == 0 {
+			return moerr.NewInternalError(ctx, "table %s not exists at snapshot %s", tblName, snapshotName)
+		} else if len(tableInfos) != 1 {
+			return moerr.NewInternalError(ctx, "find %v tableInfos by name %s at snapshot %s, expect only 1", len(tableInfos), tblName, snapshotName)
+		}
 	}
 
 	for _, tblInfo := range tableInfos {
@@ -561,6 +565,7 @@ func restoreViews(
 			return err
 		}
 
+		compCtx.SetDatabase(view.dbName)
 		// build create sql to find dependent views
 		if _, err = plan.BuildPlan(compCtx, stmts[0], false); err != nil {
 			return err
@@ -625,7 +630,7 @@ func recreateTable(
 	}
 
 	// create table
-	getLogger().Info(fmt.Sprintf("[%s] start to create table: %v", snapshotName, tblInfo.tblName))
+	getLogger().Info(fmt.Sprintf("[%s] start to create table: %v, create table sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
 	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
 		return
 	}
