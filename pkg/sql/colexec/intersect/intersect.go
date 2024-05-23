@@ -91,10 +91,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 // build hash table
 func (c *container) buildHashTable(proc *process.Process, analyse process.Analyze, idx int, isFirst bool) error {
 	for {
-		btc, _, err := c.ReceiveFromSingleReg(idx, analyse)
-		if err != nil {
-			return err
+		msg := c.ReceiveFromSingleReg(idx, analyse)
+		if msg.Err != nil {
+			return msg.Err
 		}
+		btc := msg.Batch
 
 		// last batch of block
 		if btc == nil {
@@ -144,10 +145,11 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 
 func (c *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
 	for {
-		btc, _, err := c.ReceiveFromSingleReg(idx, analyze)
-		if err != nil {
-			return false, err
+		msg := c.ReceiveFromSingleReg(idx, analyze)
+		if msg.Err != nil {
+			return false, msg.Err
 		}
+		btc := msg.Batch
 
 		// last batch of block
 		if btc == nil {

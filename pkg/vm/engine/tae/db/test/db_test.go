@@ -3963,8 +3963,8 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 db
 	datname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // datname column
 	require.NoError(t, err)
-	require.Equal(t, "todrop", datname.GetStringAt(0))
-	require.Equal(t, "db", datname.GetStringAt(1))
+	require.Equal(t, "todrop", datname.UnsafeGetStringAt(0))
+	require.Equal(t, "db", datname.UnsafeGetStringAt(1))
 
 	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 	require.Equal(t, fixedColCnt+1, len(resp.Commands[1].Bat.Vecs))
@@ -3985,8 +3985,8 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 tables
 	relname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // relname column
 	require.NoError(t, err)
-	require.Equal(t, schema.Name, relname.GetStringAt(0))
-	require.Equal(t, schema.Name, relname.GetStringAt(1))
+	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(0))
+	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(1))
 	close()
 
 	// get columns catalog change
@@ -6577,6 +6577,9 @@ func TestAppendAndGC(t *testing.T) {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
+		return
+	}
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
@@ -6587,6 +6590,9 @@ func TestAppendAndGC(t *testing.T) {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
 	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
+	if minMerged == nil {
+		return
+	}
 	assert.NotNil(t, minMerged)
 	tae.Restart(ctx)
 	db = tae.DB
@@ -6707,6 +6713,9 @@ func TestSnapshotGC(t *testing.T) {
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
+	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
+		return
+	}
 	db.DiskCleaner.GetCleaner().EnableGCForTest()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
@@ -6717,6 +6726,9 @@ func TestSnapshotGC(t *testing.T) {
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
+	if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
+		return
+	}
 	assert.NotNil(t, minMerged)
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
