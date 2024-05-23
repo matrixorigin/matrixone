@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -711,10 +710,10 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
-	tableDef *plan.TableDef, // table definition (schema)
-	exprs []*plan.Expr, // filter expression
-	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
-	proc *process.Process, // process of this transaction
+	tableDef *plan.TableDef,             // table definition (schema)
+	exprs []*plan.Expr,                  // filter expression
+	outBlocks *objectio.BlockInfoSlice,  // output marshaled block list after filtering
+	proc *process.Process,               // process of this transaction
 ) (err error) {
 	uncommittedObjects := tbl.collectUnCommittedObjects()
 	dirtyBlks := tbl.collectDirtyBlocks(state, uncommittedObjects)
@@ -994,13 +993,8 @@ func checkCompositePKSerialization(tbl *txnTable, exprs []*plan.Expr) {
 	}
 	visit := make([]any, len(tbl.tableDef.Pkey.Names))
 
-	if len(exprs) == 1 {
-		visitCPK(exprs[0], visit, tbl.tableDef.Pkey.Names)
-	} else {
-		// each expr has a part of the cpk
-		for _, expr := range exprs {
-			visitCPK(expr, visit, tbl.tableDef.Pkey.Names)
-		}
+	for _, expr := range exprs {
+		visitCPK(expr, visit, tbl.tableDef.Pkey.Names)
 	}
 
 	// other case:
@@ -1008,7 +1002,7 @@ func checkCompositePKSerialization(tbl *txnTable, exprs []*plan.Expr) {
 	// nil,b,c,d
 	// a,nil,c,d
 
-	// full matched or prefix matched
+	// fully matched or prefix matched
 	// a,b,c,d
 	// a,b,c,nil
 	// a,b,nil,nil
@@ -1049,210 +1043,6 @@ func (tbl *txnTable) tryFastFilterBlocks(
 		fs,
 		tbl.proc.Load(),
 	)
-}
-
-// tryFastRanges only handle equal expression filter on zonemap and bloomfilter in tp scenario;
-// it filters out only a small number of blocks which should not be distributed to remote CNs.
-func (tbl *txnTable) tryFastRanges(
-	exprs []*plan.Expr,
-	snapshot *logtailreplay.PartitionState,
-	uncommittedObjects []objectio.ObjectStats,
-	dirtyBlocks map[types.Blockid]struct{},
-	outBlocks *objectio.BlockInfoSlice,
-	fs fileservice.FileService,
-) (done bool, err error) {
-	if tbl.primaryIdx == -1 || len(exprs) == 0 {
-		done = false
-		return
-	}
-
-	val, isVec := extractPKValueFromEqualExprs(
-		tbl.tableDef,
-		exprs,
-		tbl.primaryIdx,
-		tbl.proc.Load(),
-		tbl.getTxn().engine.packerPool,
-	)
-	if len(val) == 0 {
-		// TODO: refactor this code if composite key can be pushdown
-		return TryFastFilterBlocks(
-			tbl.db.op.SnapshotTS(),
-			tbl.tableDef,
-			exprs,
-			snapshot,
-			uncommittedObjects,
-			dirtyBlocks,
-			outBlocks,
-			fs,
-			tbl.proc.Load(),
-		)
-	}
-
-	var (
-		meta     objectio.ObjectDataMeta
-		bf       objectio.BloomFilter
-		blockCnt uint32
-		zmTotal  float64
-		zmHit    float64
-	)
-
-	var vec *vector.Vector
-	if isVec {
-		vec = vector.NewVec(types.T_any.ToType())
-		_ = vec.UnmarshalBinary(val)
-	}
-
-	hasDeletes := len(dirtyBlocks) > 0
-
-	if err = ForeachSnapshotObjects(
-		tbl.db.op.SnapshotTS(),
-		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
-			zmTotal++
-			blockCnt += obj.BlkCnt()
-			var zmCkecked bool
-			// if the object info contains a pk zonemap, fast-check with the zonemap
-			if !obj.ZMIsEmpty() {
-				if isVec {
-					if !obj.SortKeyZoneMap().AnyIn(vec) {
-						zmHit++
-						return
-					}
-				} else {
-					if !obj.SortKeyZoneMap().ContainsKey(val) {
-						zmHit++
-						return
-					}
-				}
-				zmCkecked = true
-			}
-
-			var objMeta objectio.ObjectMeta
-			location := obj.Location()
-
-			// load object metadata
-			if objMeta, err2 = objectio.FastLoadObjectMeta(
-				tbl.proc.Load().Ctx, &location, false, fs,
-			); err2 != nil {
-				return
-			}
-
-			// reset bloom filter to nil for each object
-			meta = objMeta.MustDataMeta()
-
-			// check whether the object is skipped by zone map
-			// If object zone map doesn't contains the pk value, we need to check bloom filter
-			if !zmCkecked {
-				if isVec {
-					if !meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyIn(vec) {
-						return
-					}
-				} else {
-					if !meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
-						return
-					}
-				}
-			}
-
-			bf = nil
-			if bf, err2 = objectio.LoadBFWithMeta(
-				tbl.proc.Load().Ctx, meta, location, fs,
-			); err2 != nil {
-				return
-			}
-
-			var blkIdx int
-			blockCnt := int(meta.BlockCount())
-			if !isVec {
-				blkIdx = sort.Search(blockCnt, func(j int) bool {
-					return meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyGEByValue(val)
-				})
-			}
-			if blkIdx >= blockCnt {
-				return
-			}
-			for ; blkIdx < blockCnt; blkIdx++ {
-				blkMeta := meta.GetBlockMeta(uint32(blkIdx))
-				zm := blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
-				if !isVec && !zm.AnyLEByValue(val) {
-					break
-				}
-				if isVec {
-					if !zm.AnyIn(vec) {
-						continue
-					}
-				} else {
-					if !zm.ContainsKey(val) {
-						continue
-					}
-				}
-
-				blkBf := bf.GetBloomFilter(uint32(blkIdx))
-				blkBfIdx := index.NewEmptyBinaryFuseFilter()
-				if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
-					return
-				}
-				var exist bool
-				if isVec {
-					lowerBound, upperBound := zm.SubVecIn(vec)
-					if exist = blkBfIdx.MayContainsAny(vec, lowerBound, upperBound); !exist {
-						continue
-					}
-				} else {
-					if exist, err2 = blkBfIdx.MayContainsKey(val); err2 != nil {
-						return
-					} else if !exist {
-						continue
-					}
-				}
-
-				name := obj.ObjectName()
-				loc := objectio.BuildLocation(name, obj.Extent(), blkMeta.GetRows(), uint16(blkIdx))
-				blk := objectio.BlockInfo{
-					BlockID:   *objectio.BuildObjectBlockid(name, uint16(blkIdx)),
-					SegmentID: name.SegmentId(),
-					MetaLoc:   objectio.ObjectLocation(loc),
-				}
-
-				blk.Sorted = obj.Sorted
-				blk.EntryState = obj.EntryState
-				blk.CommitTs = obj.CommitTS
-				if obj.HasDeltaLoc {
-					deltaLoc, commitTs, ok := snapshot.GetBockDeltaLoc(blk.BlockID)
-					if ok {
-						blk.DeltaLoc = deltaLoc
-						blk.CommitTs = commitTs
-					}
-				}
-
-				if hasDeletes {
-					if _, ok := dirtyBlocks[blk.BlockID]; !ok {
-						blk.CanRemote = true
-					}
-					blk.PartitionNum = -1
-					outBlocks.AppendBlockInfo(blk)
-					return
-				}
-				// store the block in ranges
-				blk.CanRemote = true
-				blk.PartitionNum = -1
-				outBlocks.AppendBlockInfo(blk)
-			}
-
-			return
-		},
-		snapshot,
-		uncommittedObjects...,
-	); err != nil {
-		return
-	}
-
-	done = true
-	bhit, btotal := outBlocks.Len()-1, int(blockCnt)
-	v2.TaskSelBlockTotal.Add(float64(btotal))
-	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
-	blockio.RecordBlockSelectivity(bhit, btotal)
-
-	return
 }
 
 // the return defs has no rowid column
