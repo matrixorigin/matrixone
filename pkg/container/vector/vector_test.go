@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"crypto/rand"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1910,5 +1911,122 @@ func BenchmarkMustFixedCol(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		MustFixedCol[int8](vec)
+	}
+}
+
+func BenchmarkTraverseFixedColByMustFixedCol(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int32.ToType())
+	for i := 0; i < 200; i++ {
+		require.NoError(b, AppendFixed[int32](vec, int32(i), false, mp))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sum := int32(0)
+		col := MustFixedCol[int32](vec)
+		for _, v := range col {
+			sum += v
+		}
+		require.Equal(b, int32(19900), sum)
+	}
+
+}
+
+func BenchmarkTraverseFixedColByGetFixedAt(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int32.ToType())
+	for i := 0; i < 200; i++ {
+		require.NoError(b, AppendFixed[int32](vec, int32(i), false, mp))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sum := int32(0)
+		length := vec.Length()
+		for j := 0; j < length; j++ {
+			sum += GetFixedAt[int32](vec, j)
+		}
+		require.Equal(b, int32(19900), sum)
+	}
+}
+
+func BenchmarkTraverseFixedColByMustStrCol(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int32.ToType())
+	for i := 0; i < 200; i++ {
+		require.NoError(b, AppendFixed[int32](vec, int32(i), false, mp))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sum := int32(0)
+		col := MustFixedCol[int32](vec)
+		for _, v := range col {
+			sum += v
+		}
+		require.Equal(b, int32(19900), sum)
+	}
+}
+
+func randBytes(t require.TestingT, s int) []byte {
+	bytes := make([]byte, s)
+	n, err := rand.Read(bytes)
+	require.Equal(t, s, n)
+	require.NoError(t, err)
+	return bytes
+}
+
+func BenchmarkTraverseVarlenColByMustStrCol(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	for i := 0; i < 8192; i++ {
+		require.NoError(b, AppendBytes(vec, randBytes(b, 100), false, mp))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		strLen := 0
+		col := InefficientMustStrCol(vec)
+		for _, v := range col {
+			strLen += len(v)
+		}
+		require.Equal(b, 8192*100, strLen)
+	}
+}
+
+func BenchmarkTraverseFixedColByUnsafeGetStringAt(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	for i := 0; i < 8192; i++ {
+		require.NoError(b, AppendBytes(vec, randBytes(b, 100), false, mp))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		strLen := 0
+		length := vec.Length()
+		for j := 0; j < length; j++ {
+			strLen += len(vec.UnsafeGetStringAt(j))
+		}
+		require.Equal(b, 8192*100, strLen)
+	}
+}
+
+func BenchmarkTraverseFixedColByUnsafeGetString(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	for i := 0; i < 8192; i++ {
+		require.NoError(b, AppendBytes(vec, randBytes(b, 100), false, mp))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		strLen := 0
+		col, area := MustVarlenaRawData(vec)
+		for _, v := range col {
+			strLen += len(v.UnsafeGetString(area))
+		}
+		require.Equal(b, 8192*100, strLen)
 	}
 }
