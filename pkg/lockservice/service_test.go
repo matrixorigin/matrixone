@@ -1323,6 +1323,62 @@ func TestReLockSuccWithLockTableBindChanged(t *testing.T) {
 	)
 }
 
+func TestIssue3288(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			l1.Close()
+
+			// should lock failed
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+
+			time.Sleep(time.Second * 3)
+
+			// should lock succ
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+		},
+		nil,
+	)
+}
+
 func TestIssue16121(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,

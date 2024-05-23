@@ -1120,6 +1120,7 @@ insert into alias01 values (1,2);
 insert into alias01 values (2,3);
 drop table if exists alias02;
 create table alias02 (NewCol int) as select * from alias01;
+show variables like 'lower_case_table_names';
 show create table alias02;
 select * from alias02;
 drop table alias01;

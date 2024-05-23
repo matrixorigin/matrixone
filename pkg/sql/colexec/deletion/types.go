@@ -129,7 +129,7 @@ type DeleteCtx struct {
 	// PartitionSources      []engine.Relation // Align array index with the partition number
 	// Source                engine.Relation
 	Ref             *plan.ObjectRef
-	AddAffectedRows bool
+	AddAffectedRows bool // for hidden table, should not update affect Rows
 	PrimaryKeyIdx   int
 
 	Engine engine.Engine

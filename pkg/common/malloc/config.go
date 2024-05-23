@@ -15,6 +15,8 @@
 package malloc
 
 import (
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
@@ -25,9 +27,13 @@ type Config struct {
 	CheckFraction uint32 `toml:"check-fraction"`
 }
 
-var defaultConfig Config
+var defaultConfig = func() *atomic.Pointer[Config] {
+	ret := new(atomic.Pointer[Config])
+	ret.Store(new(Config))
+	return ret
+}()
 
 func SetDefaultConfig(c Config) {
-	defaultConfig = c
+	defaultConfig.Store(&c)
 	logutil.Info("malloc: set default config", zap.Any("config", c))
 }
