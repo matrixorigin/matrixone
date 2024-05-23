@@ -42,6 +42,12 @@ func newAnalyzeInfo() *AnalyzeInfo {
 	return a
 }
 
+func (a *AnalyzeInfo) Reset() {
+	nodeId := a.NodeId
+	resetAnalyzeInfo(a)
+	a.NodeId = nodeId
+}
+
 func resetAnalyzeInfo(a *AnalyzeInfo) {
 	a.NodeId = 0
 	a.InputBlocks = 0
