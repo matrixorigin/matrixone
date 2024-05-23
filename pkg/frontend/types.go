@@ -19,6 +19,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -152,7 +153,7 @@ func (icfl *InternalCmdFieldList) Format(ctx *tree.FmtCtx) {
 }
 
 func (icfl *InternalCmdFieldList) StmtKind() tree.StmtKind {
-	return tree.MakeStmtKind(tree.OUTPUT_STATUS, tree.RESP_BY_SITUATION, tree.EXEC_IN_FRONTEND)
+	return tree.MakeStmtKind(tree.OUTPUT_STATUS, tree.RESP_STATUS, tree.EXEC_IN_FRONTEND)
 }
 
 func (icfl *InternalCmdFieldList) GetStatementType() string { return "InternalCmd" }
@@ -294,7 +295,7 @@ type FeSession interface {
 	GetStmtId() uuid.UUID
 	GetSqlOfStmt() string
 	updateLastCommitTS(ts timestamp.Timestamp)
-	GetMysqlProtocol() MysqlProtocol
+	GetResponser() Responser
 	GetTxnHandler() *TxnHandler
 	GetDatabaseName() string
 	SetDatabaseName(db string)
@@ -395,7 +396,8 @@ type ExecCtx struct {
 	//In the session migration, executeParamTypes for the EXECUTE stmt should be migrated
 	//from the old session to the new session.
 	executeParamTypes []byte
-	resp              Responser
+	resper            Responser
+	results           []ExecResult
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -408,8 +410,8 @@ type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch) error
 
 // TODO: shared component among the session implmentation
 type feSessionImpl struct {
-	pool          *mpool.MPool
-	proto         MysqlProtocol
+	pool *mpool.MPool
+	//proto         MysqlProtocol
 	buf           *buffer.Buffer
 	stmtProfile   process.StmtProfile
 	tenant        *TenantInfo
@@ -455,6 +457,7 @@ type feSessionImpl struct {
 	debugStr     string
 	disableTrace bool
 	fprints      footPrints
+	respr        Responser
 }
 
 func (ses *feSessionImpl) EnterFPrint(idx int) {
@@ -470,7 +473,7 @@ func (ses *feSessionImpl) ExitFPrint(idx int) {
 }
 
 func (ses *feSessionImpl) Close() {
-	ses.proto = nil
+	ses.respr.Close()
 	ses.mrs = nil
 	if ses.txnHandler != nil {
 		ses.txnHandler = nil
@@ -515,16 +518,16 @@ func (ses *feSessionImpl) GetFPrints() footPrints {
 }
 
 func (ses *feSessionImpl) SetDatabaseName(db string) {
-	ses.proto.SetDatabaseName(db)
+	ses.respr.SetDatabaseName(db)
 	ses.txnCompileCtx.SetDatabase(db)
 }
 
 func (ses *feSessionImpl) GetDatabaseName() string {
-	return ses.proto.GetDatabaseName()
+	return ses.respr.GetDatabaseName()
 }
 
 func (ses *feSessionImpl) GetUserName() string {
-	return ses.proto.GetUserName()
+	return ses.respr.GetUserName()
 }
 
 func (ses *feSessionImpl) DisableTrace() bool {
@@ -537,16 +540,6 @@ func (ses *feSessionImpl) SetMemPool(mp *mpool.MPool) {
 
 func (ses *feSessionImpl) GetMemPool() *mpool.MPool {
 	return ses.pool
-}
-
-func (ses *feSessionImpl) GetMysqlProtocol() MysqlProtocol {
-	return ses.proto
-}
-
-func (ses *feSessionImpl) ReplaceProtocol(proto MysqlProtocol) MysqlProtocol {
-	old := ses.proto
-	ses.proto = proto
-	return old
 }
 
 func (ses *feSessionImpl) GetBuffer() *buffer.Buffer {
@@ -765,6 +758,16 @@ func (ses *feSessionImpl) GetUUIDString() string {
 	return ses.uuid.String()
 }
 
+func (ses *feSessionImpl) ReplaceResponser(resper Responser) Responser {
+	old := ses.respr
+	ses.respr = resper
+	return old
+}
+
+func (ses *feSessionImpl) GetResponser() Responser {
+	return ses.respr
+}
+
 func (ses *Session) GetDebugString() string {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -776,6 +779,23 @@ type Responser interface {
 	RespResult(*ExecCtx, *batch.Batch) error
 	RespPostMeta(*ExecCtx, any) error
 	Close()
+	SetDatabaseName(string)
+	GetDatabaseName() string
+	GetUserName() string
+	ConnectionID() uint32
+	SetUserName(string)
+	Peer() string
+	sendLocalInfileRequest(filepath string) error
+	Read(options goetty.ReadOptions) (interface{}, error)
+	SetSequenceID(i any)
+	GetSequenceId() int
+	ResetStatistics()
+	ParseExecuteData(ctx context.Context, getProcess *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+	ParseSendLongData(ctx context.Context, getProcess *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+	GetCapability() uint32
+	SetCapability(uint32)
+	SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, count uint64) error
+	CalculateOutTrafficBytes(b bool) (int64, int64)
 }
 
 type MediaReader interface {
@@ -806,6 +826,12 @@ type MysqlWriter interface {
 	WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error
 
 	Write(*batch.Batch) error
+	ConnectionID() uint32
+	SetDatabaseName(s string)
+	GetDatabaseName() string
+	GetUserName() string
+	SetUserName(s string)
+	Peer() string
 }
 
 type MysqlPayloadWriter interface {

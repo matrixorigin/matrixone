@@ -322,7 +322,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 	case *tree.CallStmt:
 		ses.EnterFPrint(49)
 		defer ses.ExitFPrint(49)
-		if err = handleCallProcedure(ses, execCtx, st, execCtx.proc); err != nil {
+		if err = handleCallProcedure(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.Grant:

@@ -48,7 +48,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(64)
 		defer ses.ExitFPrint(64)
-		err = execCtx.resp.RespPreMeta(execCtx, columns)
+		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
 		}
@@ -86,7 +86,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(66)
 		defer ses.ExitFPrint(66)
-		err = execCtx.resp.RespPreMeta(execCtx, columns)
+		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
 		}
@@ -122,7 +122,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(68)
 		defer ses.ExitFPrint(68)
-		err = execCtx.resp.RespPreMeta(execCtx, columns)
+		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
 		}
@@ -156,7 +156,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	return
 }
 
-func (resp *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx, columns []any) (err error) {
+func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx, columns []any) (err error) {
 	if execCtx.skipRespClient {
 		return nil
 	}
@@ -170,7 +170,7 @@ func (resp *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx
 	*/
 	//send column count
 	colCnt := uint64(len(columns))
-	err = resp.mysqlWr.WriteLengthEncodedNumber(colCnt)
+	err = resper.mysqlWr.WriteLengthEncodedNumber(colCnt)
 	if err != nil {
 		return
 	}
@@ -183,7 +183,7 @@ func (resp *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx
 		/*
 			mysql COM_QUERY response: send the column definition per column
 		*/
-		err = resp.mysqlWr.WriteColumnDef(execCtx.reqCtx, mysqlc, int(cmd))
+		err = resper.mysqlWr.WriteColumnDef(execCtx.reqCtx, mysqlc, int(cmd))
 		if err != nil {
 			return
 		}
@@ -193,14 +193,14 @@ func (resp *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx
 		mysql COM_QUERY response: End after the column has been sent.
 		send EOF packet
 	*/
-	err = resp.mysqlWr.WriteEOFIF(0, ses.GetTxnHandler().GetServerStatus())
+	err = resper.mysqlWr.WriteEOFIF(0, ses.GetTxnHandler().GetServerStatus())
 	if err != nil {
 		return
 	}
 	return
 }
 
-func (resp *MysqlResp) respStreamResultRow(ses *Session,
+func (resper *MysqlResp) respStreamResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(70)
 	defer ses.ExitFPrint(70)
@@ -213,7 +213,7 @@ func (resp *MysqlResp) respStreamResultRow(ses *Session,
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
-		err2 := resp.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err2 := resper.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 		if err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -252,13 +252,13 @@ func (resp *MysqlResp) respStreamResultRow(ses *Session,
 			if err != nil {
 				return
 			}
-			err = resp.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+			err = resper.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 			if err != nil {
 				return
 			}
 		}
 	default:
-		err = resp.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err = resper.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 		if err != nil {
 			return
 		}
@@ -267,7 +267,7 @@ func (resp *MysqlResp) respStreamResultRow(ses *Session,
 	return
 }
 
-func (resp *MysqlResp) respPrebuildResultRow(ses *Session,
+func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(71)
 	defer ses.ExitFPrint(71)
@@ -276,13 +276,13 @@ func (resp *MysqlResp) respPrebuildResultRow(ses *Session,
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
 	res := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, execCtx.isLastStmt)
-	if err := resp.mysqlWr.WriteResponse(execCtx.reqCtx, res); err != nil {
+	if err := resper.mysqlWr.WriteResponse(execCtx.reqCtx, res); err != nil {
 		return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed, error: %v ", err)
 	}
 	return err
 }
 
-func (resp *MysqlResp) respMixedResultRow(ses *Session,
+func (resper *MysqlResp) respMixedResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(72)
 	defer ses.ExitFPrint(72)
@@ -292,16 +292,38 @@ func (resp *MysqlResp) respMixedResultRow(ses *Session,
 	//!!!the columnDef has been sent after the compiling ends. It should not be sent here again.
 	//only the result rows need to be sent.
 	mrs := ses.GetMysqlResultSet()
-	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
+	if err := ses.GetResponser().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
 		ses.Error(execCtx.reqCtx,
 			"Failed to handle 'SHOW TABLE STATUS'",
 			zap.Error(err))
 		return err
 	}
-	err = resp.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+	err = resper.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 	if err != nil {
 		return
 	}
 
 	return err
+}
+
+func (resper *MysqlResp) respBySituation(ses *Session,
+	execCtx *ExecCtx) (err error) {
+	defer func() {
+		execCtx.results = nil
+	}()
+	resp := NewGeneralOkResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus())
+	if len(execCtx.results) == 0 {
+		if err = resper.mysqlWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
+			return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err)
+		}
+	} else {
+		for i, result := range execCtx.results {
+			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
+			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i == len(execCtx.results)-1)
+			if err = resper.mysqlWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
+				return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err)
+			}
+		}
+	}
+	return
 }

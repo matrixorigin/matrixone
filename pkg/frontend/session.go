@@ -258,7 +258,7 @@ func (ses *Session) getNextProcessId() string {
 		temporary method:
 		routineId + sqlCount
 	*/
-	routineId := ses.GetMysqlProtocol().ConnectionID()
+	routineId := ses.GetResponser().ConnectionID()
 	return fmt.Sprintf("%d%d", routineId, ses.GetSqlCount())
 }
 
@@ -473,7 +473,6 @@ func NewSession(connCtx context.Context, proto MysqlProtocol, mp *mpool.MPool, g
 
 	ses := &Session{
 		feSessionImpl: feSessionImpl{
-			proto:      proto,
 			pool:       mp,
 			txnHandler: txnHandler,
 			//TODO:fix database name after the catalog is ready
@@ -553,7 +552,7 @@ func (ses *Session) Close() {
 	defer ses.mu.Unlock()
 	ses.feSessionImpl.Close()
 	ses.feSessionImpl.Clear()
-	ses.proto = nil
+	ses.respr = nil
 	ses.mrs = nil
 	ses.data = nil
 	ses.ep = nil
@@ -678,10 +677,10 @@ func (ses *Session) UpdateDebugString() {
 	defer ses.mu.Unlock()
 	sb := bytes.Buffer{}
 	//option connection id , ip
-	if ses.proto != nil {
-		sb.WriteString(fmt.Sprintf("connectionId %d", ses.proto.ConnectionID()))
+	if ses.respr != nil {
+		sb.WriteString(fmt.Sprintf("connectionId %d", ses.respr.ConnectionID()))
 		sb.WriteByte('|')
-		sb.WriteString(ses.proto.Peer())
+		sb.WriteString(ses.respr.Peer())
 	}
 	sb.WriteByte('|')
 	//account info
@@ -750,12 +749,11 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 	backSes := &backSession{
 		feSessionImpl: feSessionImpl{
 			pool:           ses.pool,
-			proto:          &FakeProtocol{},
 			buf:            buffer.New(),
 			stmtProfile:    process.StmtProfile{},
 			tenant:         nil,
 			txnHandler:     txnHandler,
-			txnCompileCtx:  InitTxnCompilerContext(ses.proto.GetDatabaseName()),
+			txnCompileCtx:  InitTxnCompilerContext(ses.respr.GetDatabaseName()),
 			mrs:            nil,
 			outputCallback: callback,
 			allResultSet:   nil,
@@ -786,7 +784,6 @@ func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExe
 	backSes := &backSession{
 		feSessionImpl: feSessionImpl{
 			pool:           ses.GetMemPool(),
-			proto:          &FakeProtocol{},
 			buf:            buffer.New(),
 			stmtProfile:    process.StmtProfile{},
 			tenant:         nil,
@@ -965,8 +962,8 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 		return prepareStmt, nil
 	}
 	var connID uint32
-	if ses.proto != nil {
-		connID = ses.proto.ConnectionID()
+	if ses.respr != nil {
+		connID = ses.respr.ConnectionID()
 	}
 	ses.Errorf(ctx, "prepared statement '%s' does not exist on connection %d", name, connID)
 	return nil, moerr.NewInvalidState(ctx, "prepared statement '%s' does not exist", name)
@@ -1132,11 +1129,11 @@ func (ses *Session) GetTxnInfo() string {
 }
 
 func (ses *Session) GetDatabaseName() string {
-	return ses.GetMysqlProtocol().GetDatabaseName()
+	return ses.GetResponser().GetDatabaseName()
 }
 
 func (ses *Session) SetDatabaseName(db string) {
-	ses.GetMysqlProtocol().SetDatabaseName(db)
+	ses.GetResponser().SetDatabaseName(db)
 	ses.GetTxnCompileCtx().SetDatabase(db)
 }
 
@@ -1145,13 +1142,13 @@ func (ses *Session) DatabaseNameIsEmpty() bool {
 }
 
 func (ses *Session) SetUserName(uname string) {
-	ses.GetMysqlProtocol().SetUserName(uname)
+	ses.GetResponser().SetUserName(uname)
 }
 
 func (ses *Session) GetConnectionID() uint32 {
-	protocol := ses.GetMysqlProtocol()
+	protocol := ses.GetResponser()
 	if protocol != nil {
-		return ses.GetMysqlProtocol().ConnectionID()
+		return ses.GetResponser().ConnectionID()
 	}
 	return 0
 }

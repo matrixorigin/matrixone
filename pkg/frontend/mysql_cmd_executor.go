@@ -214,7 +214,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.Account = tenant.GetTenant()
 	stm.RoleId = proc.SessionInfo.RoleId
 	stm.User = tenant.GetUser()
-	stm.Host = ses.proto.Peer()
+	stm.Host = ses.respr.Peer()
 	stm.Database = ses.GetDatabaseName()
 	stm.Statement = text
 	stm.StatementFingerprint = "" // fixme= (Reserved)
@@ -432,7 +432,6 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) erro
 	}
 
 	begin := time.Now()
-	proto := ses.GetMysqlProtocol()
 
 	ec := ses.GetExportConfig()
 	oq := NewOutputQueue(execCtx.reqCtx, ses, len(bat.Vecs), nil, nil)
@@ -482,14 +481,12 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) erro
 		"time of getDataFromPipeline : %s \n"+
 		"processBatchTime %v \n"+
 		"row2colTime %v \n"+
-		"restTime(=totalTime - row2colTime) %v \n"+
-		"protoStats %s",
+		"restTime(=totalTime - row2colTime) %v \n",
 		n,
 		tTime,
 		procBatchTime,
 		row2colTime,
-		tTime-row2colTime,
-		proto.GetStats())
+		tTime-row2colTime)
 
 	return nil
 }
@@ -611,19 +608,9 @@ handle cmd CMD_FIELD_LIST
 */
 func handleCmdFieldList(ses FeSession, execCtx *ExecCtx, icfl *InternalCmdFieldList) error {
 	var err error
-	proto := ses.GetMysqlProtocol()
 
 	ses.SetMysqlResultSet(nil)
 	err = doCmdFieldList(execCtx.reqCtx, ses.(*Session), icfl)
-	if err != nil {
-		return err
-	}
-
-	/*
-		mysql CMD_FIELD_LIST response: End after the column has been sent.
-		send EOF packet
-	*/
-	err = proto.sendEOFOrOkPacket(0, ses.GetTxnHandler().GetServerStatus())
 	if err != nil {
 		return err
 	}
@@ -1472,30 +1459,14 @@ func handleDropProcedure(ses FeSession, execCtx *ExecCtx, dp *tree.DropProcedure
 	return doDropProcedure(execCtx.reqCtx, ses.(*Session), dp)
 }
 
-func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt, proc *process.Process) error {
-	proto := ses.GetMysqlProtocol()
+func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt) error {
 	results, err := doInterpretCall(execCtx.reqCtx, ses.(*Session), call)
 	if err != nil {
 		return err
 	}
 
 	ses.SetMysqlResultSet(nil)
-
-	resp := NewGeneralOkResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus())
-
-	if len(results) == 0 {
-		if err := proto.SendResponse(execCtx.reqCtx, resp); err != nil {
-			return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err)
-		}
-	} else {
-		for i, result := range results {
-			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
-			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i == len(results)-1)
-			if err := proto.SendResponse(execCtx.reqCtx, resp); err != nil {
-				return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err)
-			}
-		}
-	}
+	execCtx.results = results
 	return nil
 }
 
@@ -2239,7 +2210,7 @@ func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeS
 }
 
 func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
-	proto := ses.GetMysqlProtocol()
+	resper := ses.GetResponser()
 	defer func() {
 		err2 := writer.Close()
 		if err == nil {
@@ -2250,15 +2221,15 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	if err != nil {
 		return
 	}
-	err = proto.sendLocalInfileRequest(param.Filepath)
+	err = resper.sendLocalInfileRequest(param.Filepath)
 	if err != nil {
 		return
 	}
 	start := time.Now()
 	var msg interface{}
-	msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
+	msg, err = resper.Read(goetty.ReadOptions{})
 	if err != nil {
-		proto.SetSequenceID(proto.GetSequenceId() + 1)
+		resper.SetSequenceID(resper.GetSequenceId() + 1)
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
 		}
@@ -2270,12 +2241,12 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 
 	packet, ok := msg.(*Packet)
 	if !ok {
-		proto.SetSequenceID(proto.GetSequenceId() + 1)
+		resper.SetSequenceID(resper.GetSequenceId() + 1)
 		err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
 		return
 	}
 
-	proto.SetSequenceID(uint8(packet.SequenceID + 1))
+	resper.SetSequenceID(uint8(packet.SequenceID + 1))
 	seq := uint8(packet.SequenceID + 1)
 	length := packet.Length
 	if length == 0 {
@@ -2300,11 +2271,11 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
 		readStart := time.Now()
-		msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
+		msg, err = resper.Read(goetty.ReadOptions{})
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 				seq += 1
-				proto.SetSequenceID(seq)
+				resper.SetSequenceID(seq)
 				err = nil
 			}
 			break
@@ -2320,11 +2291,11 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		if !ok {
 			err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
 			seq += 1
-			proto.SetSequenceID(seq)
+			resper.SetSequenceID(seq)
 			break
 		}
 		seq = uint8(packet.SequenceID + 1)
-		proto.SetSequenceID(seq)
+		resper.SetSequenceID(seq)
 		ses.CountPayload(len(packet.Payload))
 
 		writeStart := time.Now()
@@ -2729,7 +2700,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
 	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
-	proto := ses.GetMysqlProtocol()
+	resper := ses.GetResponser()
 	ses.SetSql(input.getSql())
 
 	//the ses.GetUserName returns the user_name with the account_name.
@@ -2757,7 +2728,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SessionInfo = process.SessionInfo{
 		User:                 ses.GetUserName(),
 		Host:                 getGlobalPu().SV.Host,
-		ConnectionID:         uint64(proto.ConnectionID()),
+		ConnectionID:         uint64(resper.ConnectionID()),
 		Database:             ses.GetDatabaseName(),
 		Version:              makeServerVersion(getGlobalPu(), serverVersion.Load().(string)),
 		TimeZone:             ses.GetTimeZone(),
@@ -2869,7 +2840,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		ses.sentRows.Store(int64(0))
 		ses.writeCsvBytes.Store(int64(0))
-		proto.ResetStatistics() // move from getDataFromPipeline, for record column fields' data
+		resper.ResetStatistics() // move from getDataFromPipeline, for record column fields' data
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
 		var err2 error
@@ -2925,7 +2896,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.sqlOfStmt = sqlRecord[i]
 		execCtx.cw = cw
 		execCtx.proc = proc
-		execCtx.proto = proto
+		execCtx.resper = resper
 		execCtx.ses = ses
 		execCtx.cws = cws
 		execCtx.input = input
@@ -3143,7 +3114,7 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 
 	sql := fmt.Sprintf("execute %s", stmtName)
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
-	err = ses.GetMysqlProtocol().ParseExecuteData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	err = ses.GetResponser().ParseExecuteData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
 		return "", nil, err
 	}
@@ -3168,7 +3139,7 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 	sql := fmt.Sprintf("send long data for stmt %s", stmtName)
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 
-	err = ses.GetMysqlProtocol().ParseSendLongData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	err = ses.GetResponser().ParseSendLongData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
 		return err
 	}
@@ -3491,7 +3462,7 @@ func handleSetOption(ses *Session, execCtx *ExecCtx, data []byte) (err error) {
 	if len(data) < 2 {
 		return moerr.NewInternalError(execCtx.reqCtx, "invalid cmd_set_option data length")
 	}
-	cap := ses.GetMysqlProtocol().GetCapability()
+	cap := ses.GetResponser().GetCapability()
 	switch binary.LittleEndian.Uint16(data[:2]) {
 	case 0:
 		// MO do not support CLIENT_MULTI_STATEMENTS in prepare, so do nothing here(Like MySQL)
@@ -3500,7 +3471,7 @@ func handleSetOption(ses *Session, execCtx *ExecCtx, data []byte) (err error) {
 
 	case 1:
 		cap &^= CLIENT_MULTI_STATEMENTS
-		ses.GetMysqlProtocol().SetCapability(cap)
+		ses.GetResponser().SetCapability(cap)
 
 	default:
 		return moerr.NewInternalError(execCtx.reqCtx, "invalid cmd_set_option data")

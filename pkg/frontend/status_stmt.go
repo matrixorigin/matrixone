@@ -176,7 +176,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	return
 }
 
-func (resp *MysqlResp) respStatus(ses *Session,
+func (resper *MysqlResp) respStatus(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(73)
 	defer ses.ExitFPrint(73)
@@ -197,21 +197,21 @@ func (resp *MysqlResp) respStatus(ses *Session,
 		ses.SetSeqLastValue(execCtx.proc)
 
 		res := setResponse(ses, execCtx.isLastStmt, rspLen)
-		if err2 := resp.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
+		if err2 := resper.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err
 		}
 	case *tree.PrepareStmt, *tree.PrepareString:
 		if ses.GetCmd() == COM_STMT_PREPARE {
-			if err2 := resp.mysqlWr.WritePrepareResponse(execCtx.reqCtx, execCtx.prepareStmt); err2 != nil {
+			if err2 := resper.mysqlWr.WritePrepareResponse(execCtx.reqCtx, execCtx.prepareStmt); err2 != nil {
 				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 				return err
 			}
 		} else {
 			res := setResponse(ses, execCtx.isLastStmt, rspLen)
-			if err2 := resp.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
+			if err2 := resper.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 				return err
@@ -222,7 +222,7 @@ func (resp *MysqlResp) respStatus(ses *Session,
 		//we will not send response in COM_STMT_CLOSE command
 		if ses.GetCmd() != COM_STMT_CLOSE {
 			res := setResponse(ses, execCtx.isLastStmt, rspLen)
-			if err2 := resp.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
+			if err2 := resper.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 				return err
@@ -238,7 +238,13 @@ func (resp *MysqlResp) respStatus(ses *Session,
 			ses.DeleteSeqValues(execCtx.proc)
 		}
 		_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
-		if err2 := resp.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
+		if err2 := resper.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
+			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
+			return err
+		}
+	case *InternalCmdFieldList:
+		if err2 := resper.mysqlWr.WriteEOFOrOK(0, ses.GetTxnHandler().GetServerStatus()); err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err
@@ -273,7 +279,7 @@ func (resp *MysqlResp) respStatus(ses *Session,
 			})
 		}
 
-		if err2 := resp.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
+		if err2 := resper.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err

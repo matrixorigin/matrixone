@@ -31,7 +31,7 @@ var _ outputPool = &fakeOutputQueue{}
 type outputQueue struct {
 	ses          *Session
 	ctx          context.Context
-	proto        MysqlProtocol
+	resper       Responser
 	mrs          *MysqlResultSet
 	rowIdx       uint64
 	length       uint64
@@ -65,7 +65,7 @@ func NewOutputQueue(ctx context.Context, ses *Session, columnCount int, mrs *Mys
 	return &outputQueue{
 		ctx:          ctx,
 		ses:          ses,
-		proto:        ses.GetMysqlProtocol(),
+		resper:       ses.GetResponser(),
 		mrs:          mrs,
 		rowIdx:       0,
 		length:       uint64(countOfResultSet),
@@ -119,7 +119,7 @@ func (oq *outputQueue) flush() error {
 			return nil
 		}
 
-		if err := oq.proto.SendResultSetTextBatchRowSpeedup(oq.mrs, oq.rowIdx); err != nil {
+		if err := oq.resper.SendResultSetTextBatchRowSpeedup(oq.mrs, oq.rowIdx); err != nil {
 			oq.ses.Error(oq.ctx,
 				"Flush error",
 				zap.Error(err))

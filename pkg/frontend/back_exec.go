@@ -211,9 +211,9 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	proc.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
 	proc.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:          backSes.proto.GetUserName(),
+		User:          backSes.respr.GetUserName(),
 		Host:          getGlobalPu().SV.Host,
-		Database:      backSes.proto.GetDatabaseName(),
+		Database:      backSes.respr.GetDatabaseName(),
 		Version:       makeServerVersion(getGlobalPu(), serverVersion.Load().(string)),
 		TimeZone:      backSes.GetTimeZone(),
 		StorageEngine: getGlobalPu().StorageEngine,
@@ -250,9 +250,9 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	execCtx.input = input
 
 	proc.SessionInfo.User = userNameOnly
-	cws, err := GetComputationWrapperInBack(execCtx, backSes.proto.GetDatabaseName(),
+	cws, err := GetComputationWrapperInBack(execCtx, backSes.respr.GetDatabaseName(),
 		input,
-		backSes.proto.GetUserName(),
+		backSes.respr.GetUserName(),
 		getGlobalPu().StorageEngine,
 		proc, backSes)
 
@@ -457,7 +457,6 @@ var NewBackgroundExec = func(
 	backSes := &backSession{
 		feSessionImpl: feSessionImpl{
 			pool:           mp,
-			proto:          &FakeProtocol{},
 			buf:            buffer.New(),
 			stmtProfile:    process.StmtProfile{},
 			tenant:         nil,
@@ -526,7 +525,7 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 	//2. replace protocol by FakeProtocol.
 	// Any response yielded during running query will be dropped by the FakeProtocol.
 	// The client will not receive any response from the FakeProtocol.
-	prevProto := ses.ReplaceProtocol(&FakeProtocol{})
+	prevProto := ses.ReplaceResponser(&NullResp{})
 	//3. replace the derived stmt
 	prevDerivedStmt := ses.ReplaceDerivedStmt(true)
 	// inherit database
@@ -542,7 +541,7 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 		ses.GetTxnHandler().SetOptionBits(prevOptionBits)
 		ses.GetTxnHandler().SetServerStatus(prevServerStatus)
 		ses.SetOutputCallback(getDataFromPipeline)
-		ses.ReplaceProtocol(prevProto)
+		ses.ReplaceResponser(prevProto)
 		if ses.GetTxnHandler() == nil {
 			panic("need txn handler 4")
 		}
@@ -678,7 +677,7 @@ func (backSes *backSession) getNextProcessId() string {
 		temporary method:
 		routineId + sqlCount
 	*/
-	routineId := backSes.GetMysqlProtocol().ConnectionID()
+	routineId := backSes.respr.ConnectionID()
 	return fmt.Sprintf("%d%d", routineId, backSes.GetSqlCount())
 }
 
