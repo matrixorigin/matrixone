@@ -72,8 +72,8 @@ func TestBuild(t *testing.T) {
 	for _, tc := range tcs[:1] {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		for {
 			ok, err := tc.arg.Call(tc.proc)
@@ -91,8 +91,8 @@ func TestBuild(t *testing.T) {
 
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		for {
 			ok, err := tc.arg.Call(tc.proc)
@@ -123,8 +123,8 @@ func BenchmarkBuild(b *testing.B) {
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			for {
 				ok, err := tc.arg.Call(tc.proc)
@@ -161,7 +161,7 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 10),
+		Ch:  make(chan *process.RegisterMessage, 10),
 	}
 	return buildTestCase{
 		types:  ts,

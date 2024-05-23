@@ -66,27 +66,28 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	var err error
-	var end bool
 	ctr := arg.ctr
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
 	var bat *batch.Batch
+	var msg *process.RegisterMessage
 
 	for {
 		switch ctr.status {
 		case receiveAll:
 			for {
-				bat, end, err = ctr.ReceiveFromAllRegs(anal)
-				if err != nil {
-					return result, err
+				msg = ctr.ReceiveFromAllRegs(anal)
+				if msg.Err != nil {
+					return result, msg.Err
 				}
 
-				if end {
+				if msg.Batch == nil {
 					ctr.status = eval
 					break
 				}
+				bat = msg.Batch
 				if ctr.bat == nil {
 					ctr.bat = bat
 					continue
@@ -102,15 +103,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.bat.AddRowCount(bat.RowCount())
 			}
 		case receive:
-			ctr.bat, end, err = ctr.ReceiveFromAllRegs(anal)
-			if err != nil {
-				return result, err
+			msg = ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
-			if end {
+			if msg.Batch == nil {
 				ctr.status = done
 			} else {
 				ctr.status = eval
 			}
+			ctr.bat = msg.Batch
 		case eval:
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
