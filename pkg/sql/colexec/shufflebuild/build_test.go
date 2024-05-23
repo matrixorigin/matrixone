@@ -88,7 +88,7 @@ func TestBuild(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
-		tc.proc.MessageBoard.Reset()
+		tc.proc.MessageBoard = tc.proc.MessageBoard.Reset()
 	}
 }
 
