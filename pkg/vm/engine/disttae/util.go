@@ -26,7 +26,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -71,73 +70,6 @@ func getColDefByName(name string, tableDef *plan.TableDef) *plan.ColDef {
 		pos = tableDef.Name2ColIndex[name]
 	}
 	return tableDef.Cols[pos]
-}
-
-func getValidCompositePKCnt(vals []*plan.Literal) int {
-	if len(vals) == 0 {
-		return 0
-	}
-	cnt := 0
-	for _, val := range vals {
-		if val == nil {
-			break
-		}
-		cnt++
-	}
-
-	return cnt
-}
-
-func getCompositPKVals(
-	expr *plan.Expr,
-	pks []string,
-	vals []*plan.Literal,
-	proc *process.Process,
-) (ok bool, hasNull bool) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		fname := exprImpl.F.Func.ObjName
-		switch fname {
-		case "and":
-			_, hasNull = getCompositPKVals(exprImpl.F.Args[0], pks, vals, proc)
-			if hasNull {
-				return false, true
-			}
-			return getCompositPKVals(exprImpl.F.Args[1], pks, vals, proc)
-
-		case "=":
-			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
-				if pos := getPosInCompositPK(leftExpr.Col.Name, pks); pos != -1 {
-					ret := getConstValueByExpr(exprImpl.F.Args[1], proc)
-					if ret == nil {
-						return false, false
-					} else if ret.Isnull {
-						return false, true
-					}
-					vals[pos] = ret
-					return true, false
-				}
-				return false, false
-			}
-			if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
-				if pos := getPosInCompositPK(rightExpr.Col.Name, pks); pos != -1 {
-					ret := getConstValueByExpr(exprImpl.F.Args[0], proc)
-					if ret == nil {
-						return false, false
-					} else if ret.Isnull {
-						return false, true
-					}
-					vals[pos] = ret
-					return true, false
-				}
-				return false, false
-			}
-			return false, false
-
-		case "in":
-		}
-	}
-	return false, false
 }
 
 func getPkExpr(
@@ -1249,53 +1181,6 @@ func EvalSelectedOnVarlenColumnFactory(
 				}
 			}
 		}
-	}
-}
-
-func serialTupleByConstExpr(expr *plan.Literal, packer *types.Packer) {
-	switch val := expr.Value.(type) {
-	case *plan.Literal_Bval:
-		packer.EncodeBool(val.Bval)
-	case *plan.Literal_I8Val:
-		packer.EncodeInt8(int8(val.I8Val))
-	case *plan.Literal_I16Val:
-		packer.EncodeInt16(int16(val.I16Val))
-	case *plan.Literal_I32Val:
-		packer.EncodeInt32(val.I32Val)
-	case *plan.Literal_I64Val:
-		packer.EncodeInt64(val.I64Val)
-	case *plan.Literal_U8Val:
-		packer.EncodeUint8(uint8(val.U8Val))
-	case *plan.Literal_U16Val:
-		packer.EncodeUint16(uint16(val.U16Val))
-	case *plan.Literal_U32Val:
-		packer.EncodeUint32(val.U32Val)
-	case *plan.Literal_U64Val:
-		packer.EncodeUint64(val.U64Val)
-	case *plan.Literal_Fval:
-		packer.EncodeFloat32(val.Fval)
-	case *plan.Literal_Dval:
-		packer.EncodeFloat64(val.Dval)
-	case *plan.Literal_Timeval:
-		packer.EncodeTime(types.Time(val.Timeval))
-	case *plan.Literal_Timestampval:
-		packer.EncodeTimestamp(types.Timestamp(val.Timestampval))
-	case *plan.Literal_Dateval:
-		packer.EncodeDate(types.Date(val.Dateval))
-	case *plan.Literal_Datetimeval:
-		packer.EncodeDatetime(types.Datetime(val.Datetimeval))
-	case *plan.Literal_Decimal64Val:
-		packer.EncodeDecimal64(types.Decimal64(val.Decimal64Val.A))
-	case *plan.Literal_Decimal128Val:
-		packer.EncodeDecimal128(types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)})
-	case *plan.Literal_Sval:
-		packer.EncodeStringType(util.UnsafeStringToBytes(val.Sval))
-	case *plan.Literal_Jsonval:
-		packer.EncodeStringType(util.UnsafeStringToBytes(val.Jsonval))
-	case *plan.Literal_EnumVal:
-		packer.EncodeEnum(types.Enum(val.EnumVal))
-	default:
-		panic(fmt.Sprintf("unexpected const expr %v", expr))
 	}
 }
 
