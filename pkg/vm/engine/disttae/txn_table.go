@@ -17,8 +17,10 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -702,6 +704,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 //     1>.Raw batch data resides in txn.writes,read by partitionReader.
 //     2>.CN blocks resides in S3, read by blockReader.
 
+var slowPathCounter atomic.Int64
+
 // rangesOnePart collect blocks which are visible to this txn,
 // include committed blocks and uncommitted blocks by CN writing S3.
 // notice that only clean blocks can be distributed into remote CNs.
@@ -723,6 +727,15 @@ func (tbl *txnTable) rangesOnePart(
 		return err
 	} else if done {
 		return nil
+	}
+
+	if slowPathCounter.Add(1) >= 1000 {
+		slowPathCounter.Store(0)
+		logutil.Info(
+			"SLOW-RANGES:",
+			zap.String("table", tbl.tableDef.Name),
+			zap.String("exprs", plan2.FormatExprs(exprs)),
+		)
 	}
 
 	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
