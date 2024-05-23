@@ -736,12 +736,13 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	var (
-		objMeta  objectio.ObjectMeta
-		zms      []objectio.ZoneMap
-		vecs     []*vector.Vector
-		skipObj  bool
-		auxIdCnt int32
-		s3BlkCnt uint32
+		objMeta    objectio.ObjectMeta
+		zms        []objectio.ZoneMap
+		vecs       []*vector.Vector
+		skipObj    bool
+		auxIdCnt   int32
+		loadObjCnt uint32
+		s3BlkCnt   uint32
 	)
 
 	defer func() {
@@ -776,8 +777,8 @@ func (tbl *txnTable) rangesOnePart(
 
 			s3BlkCnt += obj.BlkCnt()
 			if auxIdCnt > 0 {
-				v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 				location := obj.ObjectLocation()
+				loadObjCnt++
 				if objMeta, err2 = objectio.FastLoadObjectMeta(
 					errCtx, &location, false, tbl.getTxn().engine.fs,
 				); err2 != nil {
@@ -802,6 +803,7 @@ func (tbl *txnTable) rangesOnePart(
 			}
 
 			if obj.Rows() == 0 && meta.IsEmpty() {
+				loadObjCnt++
 				location := obj.ObjectLocation()
 				if objMeta, err2 = objectio.FastLoadObjectMeta(
 					errCtx, &location, false, tbl.getTxn().engine.fs,
@@ -871,8 +873,9 @@ func (tbl *txnTable) rangesOnePart(
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)
 	if btotal > 0 {
-		v2.TxnRangeSizeHistogram.Observe(float64(bhit))
-		v2.TxnRangesBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
+		v2.TxnRangesSlowPathLoadObjCntHistogram.Observe(float64(loadObjCnt))
+		v2.TxnRangesSlowPathSelectedBlockCntHistogram.Observe(float64(bhit))
+		v2.TxnRangesSlowPathBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
 	}
 	return
 }
@@ -1094,12 +1097,6 @@ func (tbl *txnTable) tryFastRanges(
 		zmHit    float64
 	)
 
-	defer func() {
-		if zmTotal > 0 {
-			v2.TxnFastRangesZMapSelectivityHistogram.Observe(zmHit / zmTotal)
-		}
-	}()
-
 	var vec *vector.Vector
 	if isVec {
 		vec = vector.NewVec(types.T_any.ToType())
@@ -1134,7 +1131,6 @@ func (tbl *txnTable) tryFastRanges(
 			location := obj.Location()
 
 			// load object metadata
-			v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 			if objMeta, err2 = objectio.FastLoadObjectMeta(
 				tbl.proc.Load().Ctx, &location, false, fs,
 			); err2 != nil {
@@ -1256,10 +1252,6 @@ func (tbl *txnTable) tryFastRanges(
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)
-	if btotal > 0 {
-		v2.TxnFastRangeSizeHistogram.Observe(float64(bhit))
-		v2.TxnFastRangesBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
-	}
 
 	return
 }
