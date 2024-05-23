@@ -138,9 +138,7 @@ func (c *CounterSet) IterFields(fn IterFieldsFunc) error {
 }
 
 func (c *CounterSet) Reset() {
-	c.FileService.Reset()
-	c.DistTAE.Reset()
-	c.TAE.Reset()
+	*c = CounterSet{}
 }
 
 func iterFields(v reflect.Value, path []string, fn IterFieldsFunc) error {
@@ -180,82 +178,4 @@ func iterFields(v reflect.Value, path []string, fn IterFieldsFunc) error {
 	}
 
 	return nil
-}
-
-func (f *FileServiceCounterSet) Reset() {
-	f.S3.List.Reset()
-	f.S3.Head.Reset()
-	f.S3.Put.Reset()
-	f.S3.Get.Reset()
-	f.S3.Delete.Reset()
-	f.S3.DeleteMulti.Reset()
-
-	f.Cache.Read.Reset()
-	f.Cache.Hit.Reset()
-
-	f.Cache.Memory.Read.Reset()
-	f.Cache.Memory.Hit.Reset()
-	f.Cache.Memory.Capacity.Reset()
-	f.Cache.Memory.Used.Reset()
-	f.Cache.Memory.Available.Reset()
-
-	f.Cache.Disk.Read.Reset()
-	f.Cache.Disk.Hit.Reset()
-	f.Cache.Disk.GetFileContent.Reset()
-	f.Cache.Disk.SetFileContent.Reset()
-	f.Cache.Disk.OpenIOEntryFile.Reset()
-	f.Cache.Disk.OpenFullFile.Reset()
-	f.Cache.Disk.CreateFile.Reset()
-	f.Cache.Disk.StatFile.Reset()
-	f.Cache.Disk.WriteFile.Reset()
-	f.Cache.Disk.Error.Reset()
-	f.Cache.Disk.Evict.Reset()
-	f.Cache.Disk.EvictPending.Reset()
-	f.Cache.Disk.EvictImmediately.Reset()
-
-	f.Cache.Remote.Read.Reset()
-	f.Cache.Remote.Hit.Reset()
-
-	f.Cache.LRU.Evict.Reset()
-	f.Cache.LRU.EvictWithZeroRead.Reset()
-
-	f.FileWithChecksum.Read.Reset()
-	f.FileWithChecksum.Write.Reset()
-	f.FileWithChecksum.UnderlyingRead.Reset()
-	f.FileWithChecksum.UnderlyingWrite.Reset()
-}
-
-func (d *DistTAECounterSet) Reset() {
-	d.Logtail.Entries.Reset()
-	d.Logtail.InsertEntries.Reset()
-	d.Logtail.MetadataInsertEntries.Reset()
-	d.Logtail.DeleteEntries.Reset()
-	d.Logtail.MetadataDeleteEntries.Reset()
-
-	d.Logtail.InsertRows.Reset()
-	d.Logtail.DeleteRows.Reset()
-	d.Logtail.ActiveRows.Reset()
-	d.Logtail.InsertBlocks.Reset()
-}
-
-func (t *TAECounterSet) Reset() {
-	t.LogTail.Entries.Reset()
-	t.LogTail.InsertEntries.Reset()
-	t.LogTail.DeleteEntries.Reset()
-
-	t.CheckPoint.DoGlobalCheckPoint.Reset()
-	t.CheckPoint.DoIncrementalCheckpoint.Reset()
-	t.CheckPoint.DeleteGlobalEntry.Reset()
-	t.CheckPoint.DeleteIncrementalEntry.Reset()
-
-	t.Object.Create.Reset()
-	t.Object.CreateNonAppendable.Reset()
-	t.Object.SoftDelete.Reset()
-	t.Object.MergeBlocks.Reset()
-	t.Object.CompactBlock.Reset()
-
-	t.Block.Create.Reset()
-	t.Block.CreateNonAppendable.Reset()
-	t.Block.SoftDelete.Reset()
-	t.Block.Flush.Reset()
 }
