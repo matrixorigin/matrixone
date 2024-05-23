@@ -182,6 +182,7 @@ func (p *rowsIter) Next() bool {
 			item2 := p.objsDataRowIter.Item()
 			if bytes.Compare(item1.ShortObjName[:], item2.ShortObjName[:]) == 0 {
 				hasTombstone = true
+				return
 			}
 		}
 		hasTombstone = false
