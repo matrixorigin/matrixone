@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -1021,6 +1022,30 @@ func ExecuteBlockFilter(
 	fs fileservice.FileService,
 	proc *process.Process,
 ) (err error) {
+	var (
+		totalBlocks                    float64
+		loadHit                        float64
+		objFilterTotal, objFilterHit   float64
+		blkFilterTotal, blkFilterHit   float64
+		fastFilterTotal, fastFilterHit float64
+	)
+
+	defer func() {
+		v2.TxnRangesFastPathLoadObjCntHistogram.Observe(loadHit)
+		v2.TxnRangesFastPathSelectedBlockCntHistogram.Observe(float64(outBlocks.Len() - 1))
+		if fastFilterTotal > 0 {
+			v2.TxnRangesFastPathObjSortKeyZMapSelectivityHistogram.Observe(fastFilterHit / fastFilterTotal)
+		}
+		if objFilterTotal > 0 {
+			v2.TxnRangesFastPathObjColumnZMapSelectivityHistogram.Observe(objFilterHit / objFilterTotal)
+		}
+		if blkFilterTotal > 0 {
+			v2.TxnRangesFastPathBlkColumnZMapSelectivityHistogram.Observe(blkFilterHit / blkFilterTotal)
+		}
+		if totalBlocks > 0 {
+			v2.TxnRangesFastPathBlkTotalSelectivityHistogram.Observe(float64(outBlocks.Len()-1) / totalBlocks)
+		}
+	}()
 
 	hasDeletes := len(dirtyBlocks) > 0
 	err = ForeachSnapshotObjects(
@@ -1028,8 +1053,11 @@ func ExecuteBlockFilter(
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
 			var ok bool
 			objStats := obj.ObjectStats
+			totalBlocks += float64(objStats.BlkCnt())
 			if fastFilterOp != nil {
+				fastFilterTotal++
 				if ok, err2 = fastFilterOp(objStats); err2 != nil || !ok {
+					fastFilterHit++
 					return
 				}
 			}
@@ -1038,6 +1066,7 @@ func ExecuteBlockFilter(
 				bf   objectio.BloomFilter
 			)
 			if loadOp != nil {
+				loadHit++
 				if meta, bf, err2 = loadOp(
 					proc.Ctx, objStats, meta, bf,
 				); err2 != nil {
@@ -1045,7 +1074,9 @@ func ExecuteBlockFilter(
 				}
 			}
 			if objectFilterOp != nil {
+				objFilterTotal++
 				if ok, err2 = objectFilterOp(meta, bf); err2 != nil || !ok {
+					objFilterHit++
 					return
 				}
 			}
@@ -1078,6 +1109,7 @@ func ExecuteBlockFilter(
 			for ; pos < blockCnt; pos++ {
 				var blkMeta objectio.BlockObject
 				if dataMeta != nil && blockFilterOp != nil {
+					blkFilterTotal++
 					var (
 						quickBreak, ok2 bool
 					)
@@ -1088,10 +1120,12 @@ func ExecuteBlockFilter(
 					}
 					// skip the following block checks
 					if quickBreak {
+						blkFilterHit++
 						break
 					}
 					// skip this block
 					if !ok2 {
+						blkFilterHit++
 						continue
 					}
 				}
