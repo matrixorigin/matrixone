@@ -73,11 +73,11 @@ func TestLimit(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			ok, err := tc.arg.Call(tc.proc)
@@ -85,15 +85,16 @@ func TestLimit(t *testing.T) {
 				break
 			}
 		}
+
 		tc.arg.Reset(tc.proc, false, nil)
 
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			ok, err := tc.arg.Call(tc.proc)
@@ -127,11 +128,11 @@ func BenchmarkLimit(b *testing.B) {
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, BenchmarkRows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, BenchmarkRows))
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(tc.types, tc.proc, BenchmarkRows)
-			tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
+			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, BenchmarkRows))
+			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
 				ok, err := tc.arg.Call(tc.proc)
@@ -141,9 +142,9 @@ func BenchmarkLimit(b *testing.B) {
 			}
 			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
 				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-					if bat != nil {
-						bat.Clean(tc.proc.Mp())
+					msg := <-tc.proc.Reg.MergeReceivers[i].Ch
+					if msg.Batch != nil {
+						msg.Batch.Clean(tc.proc.Mp())
 					}
 				}
 			}
@@ -159,11 +160,11 @@ func newTestCase(limit uint64) limitTestCase {
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
+		Ch:  make(chan *process.RegisterMessage, 3),
 	}
 	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
+		Ch:  make(chan *process.RegisterMessage, 3),
 	}
 	return limitTestCase{
 		proc: proc,
