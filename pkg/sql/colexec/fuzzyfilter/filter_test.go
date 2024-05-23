@@ -157,7 +157,7 @@ func TestFuzzyFilter(t *testing.T) {
 			require.NoError(t, err)
 
 			bat = newBatch(tc.types, tc.proc, int64(r))
-			tc.proc.Reg.MergeReceivers[0].Ch <- bat
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(bat)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 
