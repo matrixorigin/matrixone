@@ -115,7 +115,7 @@ func (p *rowTombstoneIter) Next() bool {
 					continue
 				}
 				p.curRow = RowEntry{
-					RowID:   types.BuildRowid(tombstone.BlockID, tombstone.Offset),
+					RowID:   *objectio.NewRowid(&tombstone.BlockID, tombstone.Offset),
 					Deleted: true,
 				}
 				return true

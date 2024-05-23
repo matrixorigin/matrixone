@@ -550,6 +550,8 @@ func (p *PartitionState) HandleRowsInsert(
 			numInserted++
 		}
 
+		entry.RowID = rowID
+
 		if !p.noData {
 			entry.Batch = batch
 			entry.Offset = int64(i)
