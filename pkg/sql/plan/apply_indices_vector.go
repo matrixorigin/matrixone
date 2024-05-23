@@ -94,7 +94,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, p
 	//     Order By L2 Distance(centroids,	input_literal) ASC limit @probe_limit
 	metaForCurrVersion1, castMetaValueColToBigInt, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
 		idxTableDefs, idxObjRefs, idxTags, "meta")
-	centroidsForCurrVersionAndProbeLimit, _ := makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder,
+	centroidsForCurrVersionAndProbeLimit, _ := makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2Dist(builder,
 		builder.ctxByNode[nodeID], idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion1, distFnExpr, sortDirection, castMetaValueColToBigInt)
 
 	// 2.c Create Entries Node
@@ -216,7 +216,7 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 	return metaTableScanId, castMetaValueColToBigInt, nil
 }
 
-func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext,
+func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2Dist(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTags map[string]int32,
 	metaTableScanId int32, distFnExpr *plan.Function, sortDirection plan.OrderBySpec_OrderByFlag, castMetaValueColToBigInt *Expr) (int32, error) {
 
@@ -239,7 +239,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 		OnList:   []*Expr{joinCond},
 	}, bindCtx)
 
-	// 3. Build Projection for l2_distance(centroid, normalize_l2(literal))
+	// 3. Build Projection for l2_distance(centroid, literal)
 	centroidsCol := &plan.Expr{
 		Typ: indexTableDefs[1].Cols[2].Typ,
 		Expr: &plan.Expr_Col{
@@ -249,16 +249,16 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 			},
 		},
 	}
-	normalizeL2Lit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "normalize_l2", []*plan.Expr{
-		distFnExpr.Args[1],
-	})
+	//normalizeL2Lit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "normalize_l2", []*plan.Expr{
+	//	distFnExpr.Args[1],
+	//})
 	distFnName := distFnExpr.Func.ObjName
-	l2DistanceLitNormalizeL2Col, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
-		centroidsCol,   // centroid
-		normalizeL2Lit, // normalize_l2(literal)
+	l2DistanceLitCol, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
+		centroidsCol,       // centroid
+		distFnExpr.Args[1], // lit
 	})
 
-	// 4. Sort by l2_distance(centroid, normalize_l2(literal)) limit @probe_limit
+	// 4. Sort by l2_distance(centroid, literal) limit @probe_limit
 	// 4.1 @probe_limit is a system variable
 	probeLimitValueExpr := &plan.Expr{
 		Typ: makePlan2Type(&textType), // T_text
@@ -305,7 +305,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 		Limit:    ifNullLimitExpr,
 		OrderBy: []*OrderBySpec{
 			{
-				Expr: l2DistanceLitNormalizeL2Col,
+				Expr: l2DistanceLitCol,
 				Flag: sortDirection,
 			},
 		},
