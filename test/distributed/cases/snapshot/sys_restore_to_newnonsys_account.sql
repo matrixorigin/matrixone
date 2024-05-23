@@ -1,4 +1,3 @@
--- @bvt:issue#16213
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop account if exists acc02;
@@ -90,10 +89,10 @@ create database acc_test02;
 use acc_test02;
 drop table if exists pri01;
 create table pri01(
-      deptno int unsigned comment '部门编号',
-      dname varchar(15) comment '部门名称',
-      loc varchar(50)  comment '部门所在位置',
-      primary key(deptno)
+                      deptno int unsigned comment '部门编号',
+                      dname varchar(15) comment '部门名称',
+                      loc varchar(50)  comment '部门所在位置',
+                      primary key(deptno)
 ) comment='部门表';
 
 insert into pri01 values (10,'ACCOUNTING','NEW YORK');
@@ -104,16 +103,16 @@ select count(*) from pri01;
 
 drop table if exists aff01;
 create table aff01(
-      empno int unsigned auto_increment COMMENT '雇员编号',
-      ename varchar(15) comment '雇员姓名',
-      job varchar(10) comment '雇员职位',
-      mgr int unsigned comment '雇员对应的领导的编号',
-      hiredate date comment '雇员的雇佣日期',
-      sal decimal(7,2) comment '雇员的基本工资',
-      comm decimal(7,2) comment '奖金',
-      deptno int unsigned comment '所在部门',
-      primary key(empno),
-      constraint `c1` foreign key (deptno) references pri01 (deptno)
+                      empno int unsigned auto_increment COMMENT '雇员编号',
+                      ename varchar(15) comment '雇员姓名',
+                      job varchar(10) comment '雇员职位',
+                      mgr int unsigned comment '雇员对应的领导的编号',
+                      hiredate date comment '雇员的雇佣日期',
+                      sal decimal(7,2) comment '雇员的基本工资',
+                      comm decimal(7,2) comment '奖金',
+                      deptno int unsigned comment '所在部门',
+                      primary key(empno),
+                      constraint `c1` foreign key (deptno) references pri01 (deptno)
 );
 
 insert into aff01 values (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
@@ -207,7 +206,9 @@ select count(*) from acc_test03.table03;
 select * from acc_test03.table04;
 show create table acc_test04.index03;
 -- @session
+
 restore account acc01 from snapshot sp04 to account acc02;
+
 -- @session:id=3&user=acc02:test_account&password=111
 show databases;
 select count(*) from acc_test02.pri01;
@@ -254,6 +255,7 @@ create snapshot sp08 for account acc01;
 show snapshots;
 
 restore account acc01 from snapshot sp07 to account acc02;
+
 restore account acc01 from snapshot sp08 to account acc02;
 
 -- @session:id=1&user=acc02:test_account&password=111
@@ -362,4 +364,3 @@ drop database test01;
 
 drop account acc01;
 drop account acc02;
--- @bvt:issue
