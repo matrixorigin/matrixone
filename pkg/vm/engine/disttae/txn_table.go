@@ -1755,62 +1755,35 @@ func (tbl *txnTable) NewReader(
 
 func (tbl *txnTable) tryExtractPKFilter(expr *plan.Expr) (retPKFilter PKFilter) {
 	pk := tbl.tableDef.Pkey
-	if pk != nil && expr != nil {
-		if pk.CompPkeyCol != nil {
-			pkVals := make([]*plan.Literal, len(pk.Names))
-			_, hasNull := getCompositPKVals(expr, pk.Names, pkVals, tbl.proc.Load())
-			if hasNull {
-				retPKFilter.SetNull()
-				return
-			}
-			cnt := getValidCompositePKCnt(pkVals)
-			if cnt != 0 {
-				var packer *types.Packer
-				put := tbl.getTxn().engine.packerPool.Get(&packer)
-				for i := 0; i < cnt; i++ {
-					serialTupleByConstExpr(pkVals[i], packer)
-				}
-				v := packer.Bytes()
-				packer.Reset()
-				pkValue := logtailreplay.EncodePrimaryKey(v, packer)
-				// TODO: hack: remove the last comma, need to fix this in the future
-				pkValue = pkValue[0 : len(pkValue)-1]
-				put.Put()
-				if cnt == len(pk.Names) {
-					retPKFilter.SetFullData(function.EQUAL, false, pkValue)
-				} else {
-					retPKFilter.SetFullData(function.PREFIX_EQ, false, pkValue)
-				}
-			}
-		} else {
-			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			retPKFilter = getPKFilterByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
-			if retPKFilter.isNull || !retPKFilter.isValid {
-				return
-			}
-
-			if !retPKFilter.isVec {
-				var packer *types.Packer
-				put := tbl.getTxn().engine.packerPool.Get(&packer)
-				val := logtailreplay.EncodePrimaryKey(retPKFilter.val, packer)
-				put.Put()
-				if retPKFilter.op == function.EQUAL {
-					retPKFilter.SetFullData(function.EQUAL, false, val)
-				} else {
-					// TODO: hack: remove the last comma, need to fix this in the future
-					// serial_full(secondary_index, primary_key|fake_pk) => varchar
-					// prefix_eq expression only has the prefix(secondary index) in it.
-					// there will have an extra zero after the `encodeStringType` done
-					// this will violate the rule of prefix_eq, so remove this redundant zero here.
-					//
-					val = val[0 : len(val)-1]
-					retPKFilter.SetFullData(function.PREFIX_EQ, false, val)
-				}
-			}
-
-		}
+	if expr == nil || pk == nil {
 		return
 	}
+
+	pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
+	retPKFilter = getPKFilterByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
+	if retPKFilter.isNull || !retPKFilter.isValid || retPKFilter.isVec {
+		return
+	}
+
+	var packer *types.Packer
+
+	put := tbl.getTxn().engine.packerPool.Get(&packer)
+	val := logtailreplay.EncodePrimaryKey(retPKFilter.val, packer)
+	put.Put()
+
+	if retPKFilter.op == function.EQUAL {
+		retPKFilter.SetFullData(function.EQUAL, false, val)
+	} else {
+		// TODO: hack: remove the last comma, need to fix this in the future
+		// serial_full(secondary_index, primary_key|fake_pk) => varchar
+		// prefix_eq expression only has the prefix(secondary index) in it.
+		// there will have an extra zero after the `encodeStringType` done
+		// this will violate the rule of prefix_eq, so remove this redundant zero here.
+		//
+		val = val[0 : len(val)-1]
+		retPKFilter.SetFullData(function.PREFIX_EQ, false, val)
+	}
+
 	return
 }
 
