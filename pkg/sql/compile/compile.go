@@ -507,6 +507,25 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 
 		c.fatalLog(retryTimes, err)
 		if !c.canRetry(err) {
+			if c.proc.TxnOperator.Txn().IsRCIsolation() &&
+				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				orphan, e := c.proc.LockService.IsOrphanTxn(
+					c.proc.Ctx,
+					c.proc.TxnOperator.Txn().ID,
+				)
+				if e != nil {
+					getLogger().Error("failed to convert dup to orphan txn error",
+						zap.String("txn", hex.EncodeToString(c.proc.TxnOperator.Txn().ID)),
+						zap.Error(err),
+					)
+				}
+				if e == nil && orphan {
+					getLogger().Warn("convert dup to orphan txn error",
+						zap.String("txn", hex.EncodeToString(c.proc.TxnOperator.Txn().ID)),
+					)
+					err = moerr.NewCannotCommitOrphan(c.proc.Ctx)
+				}
+			}
 			return nil, err
 		}
 
@@ -1078,12 +1097,12 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 			if c.anal.qry.LoadTag {
 				wr = &process.WaitRegister{
 					Ctx: c.ctx,
-					Ch:  make(chan *batch.Batch, ncpu),
+					Ch:  make(chan *process.RegisterMessage, ncpu),
 				}
 			} else {
 				wr = &process.WaitRegister{
 					Ctx: c.ctx,
-					Ch:  make(chan *batch.Batch, 1),
+					Ch:  make(chan *process.RegisterMessage, 1),
 				}
 			}
 			c.appendStepRegs(s, nodeId, wr)
@@ -1151,7 +1170,7 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 				for _, row := range colsData[i].Data {
 					if row.Pos >= 0 {
 						isNull := params.GetNulls().Contains(uint64(row.Pos - 1))
-						str := vs[row.Pos-1].GetString(params.GetArea())
+						str := vs[row.Pos-1].UnsafeGetString(params.GetArea())
 						if err := util.SetBytesToAnyVector(ctx, str, int(row.RowPos), isNull, bat.Vecs[i],
 							proc); err != nil {
 							return nil, err
@@ -1566,7 +1585,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				dataScope := c.newMergeScope(ss)
 				dataScope.IsEnd = true
 				if c.anal.qry.LoadTag {
-					dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, dataScope.NodeInfo.Mcpu) // reset the channel buffer of sink for load
+					dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, dataScope.NodeInfo.Mcpu) // reset the channel buffer of sink for load
 				}
 				parallelSize := c.getParallelSizeForExternalScan(n, dataScope.NodeInfo.Mcpu)
 				scopes := make([]*Scope, 0, parallelSize)
@@ -1578,7 +1597,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					scopes[i].Proc = process.NewFromProc(c.proc, c.ctx, 1)
 					if c.anal.qry.LoadTag {
 						for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
-							rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+							rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 						}
 					}
 					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
@@ -3348,7 +3367,7 @@ func (c *Compile) newScopeListForShuffleGroup(childrenCount int, blocks int) ([]
 		scopes := c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 			}
 		}
 		children = append(children, scopes...)
@@ -3499,7 +3518,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].BuildIdx = lnum
 			ss[i].ShuffleCnt = dop
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 			}
 		}
 		children = append(children, ss...)
@@ -3580,7 +3599,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	if ss == nil {
 		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *batch.Batch, shuffleChannelBufferSize),
+			Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
@@ -3613,7 +3632,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *batch.Batch, 1),
+			Ch:  make(chan *process.RegisterMessage, 1),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
