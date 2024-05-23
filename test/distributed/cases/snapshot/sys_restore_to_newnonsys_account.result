@@ -25,7 +25,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2024-05-13 03:34:34.860675    account    acc01
+sp01    2024-05-23 02:34:55.06264    account    acc01        
 use acc_test01;
 insert into s3t values (300001, 34, 23, 1);
 select count(*) from s3t;
@@ -345,7 +345,7 @@ col1    col2
 134    database
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\nUNIQUE KEY `col1` (`col1`)\n)
+table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 drop database test01;
 drop database test01;
 Can't drop database 'test01'; database doesn't exist
@@ -382,7 +382,7 @@ show create table table01;
 no such table test02.table01
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n`col1` INT DEFAULT null,\n`col2` VARCHAR(20) DEFAULT null,\n`new` DECIMAL(38,0) DEFAULT null,\nUNIQUE KEY `col1` (`col1`)\n)
+table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  `new` DECIMAL(38,0) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 select * from table02;
 col1    col2    new
 133    database    null

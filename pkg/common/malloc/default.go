@@ -22,7 +22,7 @@ import (
 
 func NewDefault(config *Config) Allocator {
 	if config == nil {
-		c := defaultConfig
+		c := *defaultConfig.Load()
 		config = &c
 	}
 

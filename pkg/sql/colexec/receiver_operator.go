@@ -18,7 +18,6 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -29,7 +28,7 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool)
 	r.proc = proc
 	if isMergeType {
 		r.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
-		r.chs = make([]chan *batch.Batch, r.aliveMergeReceiver)
+		r.chs = make([]chan *process.RegisterMessage, r.aliveMergeReceiver)
 		r.receiverListener = make([]reflect.SelectCase, r.aliveMergeReceiver+1)
 		r.receiverListener[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
 		for i, mr := range proc.Reg.MergeReceivers {
@@ -42,35 +41,36 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool)
 	}
 }
 
-func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Analyze) (*batch.Batch, bool, error) {
+func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Analyze) *process.RegisterMessage {
 	start := time.Now()
 	defer analyze.WaitStop(start)
 	select {
 	case <-r.proc.Ctx.Done():
-		return nil, true, nil
-	case bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
-		if !ok {
-			return nil, true, nil
+		return process.NormalEndRegisterMessage
+	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
+		if !ok || msg == nil {
+			return process.NormalEndRegisterMessage
 		}
-		return bat, false, nil
+
+		return msg
 	}
 }
 
-func (r *ReceiverOperator) ReceiveFromSingleRegNonBlock(regIdx int, analyze process.Analyze) (*batch.Batch, bool, error) {
-	start := time.Now()
-	defer analyze.WaitStop(start)
-	select {
-	case <-r.proc.Ctx.Done():
-		return nil, true, nil
-	case bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
-		if !ok || bat == nil {
-			return nil, true, nil
-		}
-		return bat, false, nil
-	default:
-		return nil, false, nil
-	}
-}
+// func (r *ReceiverOperator) ReceiveFromSingleRegNonBlock(regIdx int, analyze process.Analyze) (*process.RegisterMessage, bool, error) {
+// 	start := time.Now()
+// 	defer analyze.WaitStop(start)
+// 	select {
+// 	case <-r.proc.Ctx.Done():
+// 		return process.EmtpyRegisterMessage, true, nil
+// 	case msg, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
+// 		if !ok || msg == nil {
+// 			return process.EmtpyRegisterMessage, true, nil
+// 		}
+// 		return msg, false, msg.Err
+// 	default:
+// 		return process.EmtpyRegisterMessage, false, nil
+// 	}
+// }
 
 func (r *ReceiverOperator) FreeAllReg() {
 	for i := range r.proc.Reg.MergeReceivers {
@@ -85,35 +85,43 @@ func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
 
 // You MUST Init ReceiverOperator with Merge-Type
 // if you want to use this function
-func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.Batch, bool, error) {
+func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) *process.RegisterMessage {
 	for {
 		if r.aliveMergeReceiver == 0 {
-			return nil, true, nil
+			return process.NormalEndRegisterMessage
 		}
 
 		start := time.Now()
-		chosen, bat, ok := r.selectFromAllReg()
+		chosen, msg, ok := r.selectFromAllReg()
 		analyze.WaitStop(start)
 
 		// chosen == 0 means the info comes from proc context.Done
 		if chosen == 0 {
-			return nil, true, nil
+			return process.NormalEndRegisterMessage
 		}
 
 		if !ok {
-			return nil, true, nil
+			return process.NormalEndRegisterMessage
 		}
 
-		if bat == nil {
+		if msg == nil {
 			continue
 		}
 
-		if bat.IsEmpty() {
-			r.proc.PutBatch(bat)
+		if msg.Err != nil {
+			return msg
+		}
+
+		if msg.Batch == nil {
 			continue
 		}
 
-		return bat, false, nil
+		if msg.Batch.IsEmpty() {
+			r.proc.PutBatch(msg.Batch)
+			continue
+		}
+
+		return msg
 	}
 }
 
@@ -128,9 +136,9 @@ func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 	// Senders will never send more because the context is done.
 	for _, ch := range r.chs {
 		for len(ch) > 0 {
-			bat := <-ch
-			if bat != nil {
-				bat.Clean(mp)
+			msg := <-ch
+			if msg != nil && msg.Batch != nil {
+				msg.Batch.Clean(mp)
 			}
 		}
 	}
@@ -155,65 +163,65 @@ func (r *ReceiverOperator) DisableChosen(idx int) {
 	r.aliveMergeReceiver--
 }
 
-func (r *ReceiverOperator) selectFromAllReg() (int, *batch.Batch, bool) {
-	var bat *batch.Batch
+func (r *ReceiverOperator) selectFromAllReg() (int, *process.RegisterMessage, bool) {
+	var msg *process.RegisterMessage
 	chosen := 0
 	var ok bool
 	switch len(r.chs) {
 	case 1:
-		chosen, bat, ok = r.selectFrom1Reg()
+		chosen, msg, ok = r.selectFrom1Reg()
 	case 2:
-		chosen, bat, ok = r.selectFrom2Reg()
+		chosen, msg, ok = r.selectFrom2Reg()
 	case 3:
-		chosen, bat, ok = r.selectFrom3Reg()
+		chosen, msg, ok = r.selectFrom3Reg()
 	case 4:
-		chosen, bat, ok = r.selectFrom4Reg()
+		chosen, msg, ok = r.selectFrom4Reg()
 	case 5:
-		chosen, bat, ok = r.selectFrom5Reg()
+		chosen, msg, ok = r.selectFrom5Reg()
 	case 6:
-		chosen, bat, ok = r.selectFrom6Reg()
+		chosen, msg, ok = r.selectFrom6Reg()
 	case 7:
-		chosen, bat, ok = r.selectFrom7Reg()
+		chosen, msg, ok = r.selectFrom7Reg()
 	case 8:
-		chosen, bat, ok = r.selectFrom8Reg()
+		chosen, msg, ok = r.selectFrom8Reg()
 	case 9:
-		chosen, bat, ok = r.selectFrom9Reg()
+		chosen, msg, ok = r.selectFrom9Reg()
 	case 10:
-		chosen, bat, ok = r.selectFrom10Reg()
+		chosen, msg, ok = r.selectFrom10Reg()
 	case 11:
-		chosen, bat, ok = r.selectFrom11Reg()
+		chosen, msg, ok = r.selectFrom11Reg()
 	case 12:
-		chosen, bat, ok = r.selectFrom12Reg()
+		chosen, msg, ok = r.selectFrom12Reg()
 	case 13:
-		chosen, bat, ok = r.selectFrom13Reg()
+		chosen, msg, ok = r.selectFrom13Reg()
 	case 14:
-		chosen, bat, ok = r.selectFrom14Reg()
+		chosen, msg, ok = r.selectFrom14Reg()
 	case 15:
-		chosen, bat, ok = r.selectFrom15Reg()
+		chosen, msg, ok = r.selectFrom15Reg()
 	case 16:
-		chosen, bat, ok = r.selectFrom16Reg()
+		chosen, msg, ok = r.selectFrom16Reg()
 	case 32:
-		chosen, bat, ok = r.selectFrom32Reg()
+		chosen, msg, ok = r.selectFrom32Reg()
 	case 48:
-		chosen, bat, ok = r.selectFrom48Reg()
+		chosen, msg, ok = r.selectFrom48Reg()
 	case 64:
-		chosen, bat, ok = r.selectFrom64Reg()
+		chosen, msg, ok = r.selectFrom64Reg()
 	case 80:
-		chosen, bat, ok = r.selectFrom80Reg()
+		chosen, msg, ok = r.selectFrom80Reg()
 	default:
 		var value reflect.Value
 		chosen, value, ok = reflect.Select(r.receiverListener)
 		if chosen != 0 && ok {
-			bat = (*batch.Batch)(value.UnsafePointer())
+			msg = (*process.RegisterMessage)(value.UnsafePointer())
 		}
-		if !ok || bat == nil {
+		if !ok || msg == nil || msg.Batch == nil {
 			r.RemoveChosen(chosen)
 		}
-		return chosen, bat, ok
+		return chosen, msg, ok
 	}
 
-	if !ok || bat == nil {
+	if !ok || msg == nil || msg.Batch == nil {
 		r.DisableChosen(chosen)
 	}
-	return chosen, bat, ok
+	return chosen, msg, ok
 }

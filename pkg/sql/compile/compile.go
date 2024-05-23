@@ -150,7 +150,37 @@ func (c Compile) TypeName() string {
 	return "compile.Compile"
 }
 
-func (c *Compile) reset() {
+func (c *Compile) GetMessageCenter() *process.MessageCenter {
+	if c == nil || c.e == nil {
+		return nil
+	}
+	m := c.e.GetMessageCenter()
+	if m != nil {
+		mc, ok := m.(*process.MessageCenter)
+		if ok {
+			return mc
+		}
+	}
+	return nil
+}
+
+func (c *Compile) Reset(startAt time.Time) {
+	c.affectRows.Store(0)
+
+	for _, info := range c.anal.analInfos {
+		info.Reset()
+	}
+
+	c.MessageBoard = c.MessageBoard.Reset()
+	c.counterSet.Reset()
+
+	for _, f := range c.fuzzys {
+		f.reset()
+	}
+	c.startAt = startAt
+}
+
+func (c *Compile) clear() {
 	if c.anal != nil {
 		c.anal.release()
 	}
@@ -161,7 +191,7 @@ func (c *Compile) reset() {
 		c.fuzzys[i].release()
 	}
 
-	c.MessageBoard.Messages = c.MessageBoard.Messages[:0]
+	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
 	c.scope = c.scope[:0]
 	c.pn = nil
@@ -356,7 +386,10 @@ func (c *Compile) run(s *Scope) error {
 		if err != nil {
 			return err
 		}
-		c.setAffectedRows(s.Instructions[len(s.Instructions)-1].Arg.(*mergedelete.Argument).AffectedRows)
+		mergeArg := s.Instructions[len(s.Instructions)-1].Arg.(*mergedelete.Argument)
+		if mergeArg.AddAffectedRows {
+			c.addAffectedRows(mergeArg.AffectedRows)
+		}
 		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
@@ -592,7 +625,6 @@ func (c *Compile) canRetry(err error) bool {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
-	c.MessageBoard.Reset()
 	err := c.lockMetaTables()
 	if err != nil {
 		return err
@@ -652,16 +684,14 @@ func (c *Compile) runOnce() error {
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-	if len(c.fuzzys) > 0 {
-		for _, f := range c.fuzzys {
-			if f != nil && f.cnt > 0 {
-				if f.cnt > 10 {
-					c.proc.Warnf(c.ctx, "fuzzy filter cnt is %d, may be too high", f.cnt)
-				}
-				err = f.backgroundSQLCheck(c)
-				if err != nil {
-					return err
-				}
+	for _, f := range c.fuzzys {
+		if f != nil && f.cnt > 0 {
+			if f.cnt > 10 {
+				c.proc.Warnf(c.ctx, "fuzzy filter cnt is %d, may be too high", f.cnt)
+			}
+			err = f.backgroundSQLCheck(c)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -1084,12 +1114,12 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 			if c.anal.qry.LoadTag {
 				wr = &process.WaitRegister{
 					Ctx: c.ctx,
-					Ch:  make(chan *batch.Batch, ncpu),
+					Ch:  make(chan *process.RegisterMessage, ncpu),
 				}
 			} else {
 				wr = &process.WaitRegister{
 					Ctx: c.ctx,
-					Ch:  make(chan *batch.Batch, 1),
+					Ch:  make(chan *process.RegisterMessage, 1),
 				}
 			}
 			c.appendStepRegs(s, nodeId, wr)
@@ -1427,7 +1457,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				Arg: mergedelete.NewArgument().
 					WithObjectRef(arg.DeleteCtx.Ref).
 					WithParitionNames(arg.DeleteCtx.PartitionTableNames).
-					WithEngine(c.e),
+					WithEngine(c.e).
+					WithAddAffectedRows(arg.DeleteCtx.AddAffectedRows),
 			})
 			rs.Magic = MergeDelete
 			ss = []*Scope{rs}
@@ -1574,7 +1605,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				dataScope := c.newMergeScope(ss)
 				dataScope.IsEnd = true
 				if c.anal.qry.LoadTag {
-					dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, dataScope.NodeInfo.Mcpu) // reset the channel buffer of sink for load
+					dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, dataScope.NodeInfo.Mcpu) // reset the channel buffer of sink for load
 				}
 				parallelSize := c.getParallelSizeForExternalScan(n, dataScope.NodeInfo.Mcpu)
 				scopes := make([]*Scope, 0, parallelSize)
@@ -1586,7 +1617,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					scopes[i].Proc = process.NewFromProc(c.proc, c.ctx, 1)
 					if c.anal.qry.LoadTag {
 						for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
-							rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+							rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 						}
 					}
 					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
@@ -3380,7 +3411,7 @@ func (c *Compile) newScopeListForShuffleGroup(childrenCount int, blocks int) ([]
 		scopes := c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 			}
 		}
 		children = append(children, scopes...)
@@ -3531,7 +3562,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].BuildIdx = lnum
 			ss[i].ShuffleCnt = dop
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 			}
 		}
 		children = append(children, ss...)
@@ -3612,7 +3643,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	if ss == nil {
 		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *batch.Batch, shuffleChannelBufferSize),
+			Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
@@ -3645,7 +3676,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *batch.Batch, 1),
+			Ch:  make(chan *process.RegisterMessage, 1),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
@@ -3749,12 +3780,14 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	if len(n.RuntimeFilterProbeList) == 0 {
+	if c.pn.GetQuery().StmtType != plan.Query_SELECT && len(n.RuntimeFilterProbeList) == 0 {
 		return true
 	}
-	if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
+
+	if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 && !n.Stats.ForceOneCN {
 		return true
 	}
+
 	if n.AggList != nil { //need to handle partial results
 		return true
 	}

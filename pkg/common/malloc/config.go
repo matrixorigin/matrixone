@@ -14,14 +14,26 @@
 
 package malloc
 
+import (
+	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
+)
+
 type Config struct {
 	// CheckFraction controls the fraction of checked deallocations
 	// On average, 1 / fraction of deallocations will be checked for double free or missing free
 	CheckFraction uint32 `toml:"check-fraction"`
 }
 
-var defaultConfig Config
+var defaultConfig = func() *atomic.Pointer[Config] {
+	ret := new(atomic.Pointer[Config])
+	ret.Store(new(Config))
+	return ret
+}()
 
 func SetDefaultConfig(c Config) {
-	defaultConfig = c
+	defaultConfig.Store(&c)
+	logutil.Info("malloc: set default config", zap.Any("config", c))
 }

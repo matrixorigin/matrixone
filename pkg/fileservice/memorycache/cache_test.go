@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	cache "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/stretchr/testify/require"
 )
@@ -29,6 +30,7 @@ func TestCache(t *testing.T) {
 		func(key cache.CacheKey, value CacheData) {},
 		func(key cache.CacheKey, value CacheData) {},
 		func(key cache.CacheKey, value CacheData) {},
+		malloc.NewDefault(nil),
 	)
 	// test Alloc and Set
 	key := cache.CacheKey{Path: "x", Sz: 1}
