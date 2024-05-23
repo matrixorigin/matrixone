@@ -150,21 +150,22 @@ func (c Compile) TypeName() string {
 	return "compile.Compile"
 }
 
-func (c *Compile) GetMessageCenter() *process.MessageCenter {
-	if c == nil || c.e == nil {
-		return nil
+func (c *Compile) Reset(startAt time.Time) {
+	c.affectRows.Store(0)
+
+	for _, info := range c.anal.analInfos {
+		info.Reset()
 	}
-	m := c.e.GetMessageCenter()
-	if m != nil {
-		mc, ok := m.(*process.MessageCenter)
-		if ok {
-			return mc
-		}
+
+	c.counterSet.Reset()
+
+	for _, f := range c.fuzzys {
+		f.reset()
 	}
-	return nil
+	c.startAt = startAt
 }
 
-func (c *Compile) reset() {
+func (c *Compile) clear() {
 	if c.anal != nil {
 		c.anal.release()
 	}
@@ -175,7 +176,7 @@ func (c *Compile) reset() {
 		c.fuzzys[i].release()
 	}
 
-	c.MessageBoard = c.MessageBoard.Reset()
+	c.MessageBoard.Messages = c.MessageBoard.Messages[:0]
 	c.fuzzys = c.fuzzys[:0]
 	c.scope = c.scope[:0]
 	c.pn = nil
@@ -609,6 +610,7 @@ func (c *Compile) canRetry(err error) bool {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
+	c.MessageBoard.Reset()
 	err := c.lockMetaTables()
 	if err != nil {
 		return err
@@ -668,16 +670,14 @@ func (c *Compile) runOnce() error {
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-	if len(c.fuzzys) > 0 {
-		for _, f := range c.fuzzys {
-			if f != nil && f.cnt > 0 {
-				if f.cnt > 10 {
-					c.proc.Warnf(c.ctx, "fuzzy filter cnt is %d, may be too high", f.cnt)
-				}
-				err = f.backgroundSQLCheck(c)
-				if err != nil {
-					return err
-				}
+	for _, f := range c.fuzzys {
+		if f != nil && f.cnt > 0 {
+			if f.cnt > 10 {
+				c.proc.Warnf(c.ctx, "fuzzy filter cnt is %d, may be too high", f.cnt)
+			}
+			err = f.backgroundSQLCheck(c)
+			if err != nil {
+				return err
 			}
 		}
 	}
