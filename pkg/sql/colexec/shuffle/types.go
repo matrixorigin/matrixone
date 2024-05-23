@@ -85,9 +85,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	if arg.RuntimeFilterSpec != nil {
 		arg.RuntimeFilterSpec.Handled = false
 	}
-	if arg.msgReceiver != nil {
+	// can't free this
+	/*if arg.msgReceiver != nil {
 		arg.msgReceiver.Free()
-	}
+	}*/
 	if arg.ctr != nil {
 		for i := range arg.ctr.shufflePool {
 			if arg.ctr.shufflePool[i] != nil {
