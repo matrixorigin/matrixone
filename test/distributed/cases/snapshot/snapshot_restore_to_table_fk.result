@@ -527,9 +527,7 @@ departmentid    budget
 4    400000.00
 5    500000.00
 6    600000.00
-drop database if exists Company;
-internal error: can not drop database. It has been referenced by foreign keys
-drop database if exists Projects;
-internal error: can not drop database. It has been referenced by foreign keys
 drop database if exists Payroll;
+drop database if exists Projects;
+drop database if exists Company;
 drop snapshot snapshot_01;
