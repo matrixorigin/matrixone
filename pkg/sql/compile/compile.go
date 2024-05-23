@@ -150,7 +150,22 @@ func (c Compile) TypeName() string {
 	return "compile.Compile"
 }
 
-func (c *Compile) reset() {
+func (c *Compile) Reset(startAt time.Time) {
+	c.affectRows.Store(0)
+
+	for _, info := range c.anal.analInfos {
+		info.Reset()
+	}
+
+	c.counterSet.Reset()
+
+	for _, f := range c.fuzzys {
+		f.reset()
+	}
+	c.startAt = startAt
+}
+
+func (c *Compile) clear() {
 	if c.anal != nil {
 		c.anal.release()
 	}
@@ -356,7 +371,10 @@ func (c *Compile) run(s *Scope) error {
 		if err != nil {
 			return err
 		}
-		c.setAffectedRows(s.Instructions[len(s.Instructions)-1].Arg.(*mergedelete.Argument).AffectedRows)
+		mergeArg := s.Instructions[len(s.Instructions)-1].Arg.(*mergedelete.Argument)
+		if mergeArg.AddAffectedRows {
+			c.addAffectedRows(mergeArg.AffectedRows)
+		}
 		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
@@ -652,16 +670,14 @@ func (c *Compile) runOnce() error {
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-	if len(c.fuzzys) > 0 {
-		for _, f := range c.fuzzys {
-			if f != nil && f.cnt > 0 {
-				if f.cnt > 10 {
-					c.proc.Warnf(c.ctx, "fuzzy filter cnt is %d, may be too high", f.cnt)
-				}
-				err = f.backgroundSQLCheck(c)
-				if err != nil {
-					return err
-				}
+	for _, f := range c.fuzzys {
+		if f != nil && f.cnt > 0 {
+			if f.cnt > 10 {
+				c.proc.Warnf(c.ctx, "fuzzy filter cnt is %d, may be too high", f.cnt)
+			}
+			err = f.backgroundSQLCheck(c)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -1427,7 +1443,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				Arg: mergedelete.NewArgument().
 					WithObjectRef(arg.DeleteCtx.Ref).
 					WithParitionNames(arg.DeleteCtx.PartitionTableNames).
-					WithEngine(c.e),
+					WithEngine(c.e).
+					WithAddAffectedRows(arg.DeleteCtx.AddAffectedRows),
 			})
 			rs.Magic = MergeDelete
 			ss = []*Scope{rs}
