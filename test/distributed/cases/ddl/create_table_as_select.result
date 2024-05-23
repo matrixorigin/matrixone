@@ -1596,6 +1596,9 @@ insert into alias01 values (1,2);
 insert into alias01 values (2,3);
 drop table if exists alias02;
 create table alias02 (NewCol int) as select * from alias01;
+show variables like 'lower_case_table_names';
+Variable_name    Value
+lower_case_table_names    0
 show create table alias02;
 Table    Create Table
 alias02    CREATE TABLE `alias02` (\n  `NewCol` INT DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
