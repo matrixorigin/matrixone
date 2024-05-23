@@ -17,12 +17,13 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -720,10 +721,19 @@ func (tbl *txnTable) rangesOnePart(
 	uncommittedObjects := tbl.collectUnCommittedObjects()
 	dirtyBlks := tbl.collectDirtyBlocks(state, uncommittedObjects)
 
-	done, err := tbl.tryFastFilterBlocks(
-		exprs, state, uncommittedObjects, dirtyBlks, outBlocks,
-		tbl.getTxn().engine.fs)
-	if err != nil {
+	var done bool
+
+	if done, err = TryFastFilterBlocks(
+		tbl.db.op.SnapshotTS(),
+		tbl.tableDef,
+		exprs,
+		state,
+		uncommittedObjects,
+		dirtyBlks,
+		outBlocks,
+		tbl.getTxn().engine.fs,
+		tbl.proc.Load(),
+	); err != nil {
 		return err
 	} else if done {
 		return nil
@@ -971,26 +981,6 @@ func (tbl *txnTable) collectDirtyBlocks(
 		})
 
 	return dirtyBlks
-}
-
-func (tbl *txnTable) tryFastFilterBlocks(
-	exprs []*plan.Expr,
-	snapshot *logtailreplay.PartitionState,
-	uncommittedObjects []objectio.ObjectStats,
-	dirtyBlocks map[types.Blockid]struct{},
-	outBlocks *objectio.BlockInfoSlice,
-	fs fileservice.FileService) (done bool, err error) {
-	return TryFastFilterBlocks(
-		tbl.db.op.SnapshotTS(),
-		tbl.tableDef,
-		exprs,
-		snapshot,
-		uncommittedObjects,
-		dirtyBlocks,
-		outBlocks,
-		fs,
-		tbl.proc.Load(),
-	)
 }
 
 // the return defs has no rowid column
