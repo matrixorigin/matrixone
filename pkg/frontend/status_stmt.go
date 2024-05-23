@@ -176,7 +176,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	return
 }
 
-func respStatus(ses *Session,
+func (resp *MysqlResp) respStatus(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(73)
 	defer ses.ExitFPrint(73)
@@ -196,22 +196,22 @@ func respStatus(ses *Session,
 		}
 		ses.SetSeqLastValue(execCtx.proc)
 
-		resp := setResponse(ses, execCtx.isLastStmt, rspLen)
-		if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+		res := setResponse(ses, execCtx.isLastStmt, rspLen)
+		if err2 := resp.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err
 		}
 	case *tree.PrepareStmt, *tree.PrepareString:
 		if ses.GetCmd() == COM_STMT_PREPARE {
-			if err2 := ses.GetMysqlProtocol().SendPrepareResponse(execCtx.reqCtx, execCtx.prepareStmt); err2 != nil {
+			if err2 := resp.mysqlWr.WritePrepareResponse(execCtx.reqCtx, execCtx.prepareStmt); err2 != nil {
 				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 				return err
 			}
 		} else {
-			resp := setResponse(ses, execCtx.isLastStmt, rspLen)
-			if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+			res := setResponse(ses, execCtx.isLastStmt, rspLen)
+			if err2 := resp.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 				return err
@@ -221,8 +221,8 @@ func respStatus(ses *Session,
 	case *tree.Deallocate:
 		//we will not send response in COM_STMT_CLOSE command
 		if ses.GetCmd() != COM_STMT_CLOSE {
-			resp := setResponse(ses, execCtx.isLastStmt, rspLen)
-			if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+			res := setResponse(ses, execCtx.isLastStmt, rspLen)
+			if err2 := resp.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 				return err
@@ -233,18 +233,18 @@ func respStatus(ses *Session,
 		if st.IsAsSelect {
 			return nil
 		}
-		resp := setResponse(ses, execCtx.isLastStmt, rspLen)
+		res := setResponse(ses, execCtx.isLastStmt, rspLen)
 		if len(execCtx.proc.SessionInfo.SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
 		}
 		_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
-		if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+		if err2 := resp.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err
 		}
 	default:
-		resp := setResponse(ses, execCtx.isLastStmt, rspLen)
+		res := setResponse(ses, execCtx.isLastStmt, rspLen)
 
 		if len(execCtx.proc.SessionInfo.SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
@@ -252,7 +252,7 @@ func respStatus(ses *Session,
 
 		switch st := execCtx.stmt.(type) {
 		case *tree.Insert:
-			resp.lastInsertId = execCtx.proc.GetLastInsertID()
+			res.lastInsertId = execCtx.proc.GetLastInsertID()
 			if execCtx.proc.GetLastInsertID() != 0 {
 				ses.SetLastInsertID(execCtx.proc.GetLastInsertID())
 			}
@@ -273,7 +273,7 @@ func respStatus(ses *Session,
 			})
 		}
 
-		if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+		if err2 := resp.mysqlWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err

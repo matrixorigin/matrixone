@@ -48,7 +48,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(64)
 		defer ses.ExitFPrint(64)
-		err = respColumnDefsWithoutFlush(ses, execCtx, columns)
+		err = execCtx.resp.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
 		}
@@ -86,7 +86,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(66)
 		defer ses.ExitFPrint(66)
-		err = respColumnDefsWithoutFlush(ses, execCtx, columns)
+		err = execCtx.resp.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
 		}
@@ -122,7 +122,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(68)
 		defer ses.ExitFPrint(68)
-		err = respColumnDefsWithoutFlush(ses, execCtx, columns)
+		err = execCtx.resp.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
 		}
@@ -156,13 +156,13 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	return
 }
 
-func respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx, columns []any) (err error) {
+func (resp *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx, columns []any) (err error) {
 	if execCtx.skipRespClient {
 		return nil
 	}
 	//!!!carefully to use
-	execCtx.proto.DisableAutoFlush()
-	defer execCtx.proto.EnableAutoFlush()
+	//execCtx.proto.DisableAutoFlush()
+	//defer execCtx.proto.EnableAutoFlush()
 
 	mrs := ses.GetMysqlResultSet()
 	/*
@@ -170,7 +170,7 @@ func respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx, columns []any) (
 	*/
 	//send column count
 	colCnt := uint64(len(columns))
-	err = execCtx.proto.SendColumnCountPacket(colCnt)
+	err = resp.mysqlWr.WriteLengthEncodedNumber(colCnt)
 	if err != nil {
 		return
 	}
@@ -183,7 +183,7 @@ func respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx, columns []any) (
 		/*
 			mysql COM_QUERY response: send the column definition per column
 		*/
-		err = execCtx.proto.SendColumnDefinitionPacket(execCtx.reqCtx, mysqlc, int(cmd))
+		err = resp.mysqlWr.WriteColumnDef(execCtx.reqCtx, mysqlc, int(cmd))
 		if err != nil {
 			return
 		}
@@ -193,14 +193,14 @@ func respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx, columns []any) (
 		mysql COM_QUERY response: End after the column has been sent.
 		send EOF packet
 	*/
-	err = execCtx.proto.SendEOFPacketIf(0, ses.GetTxnHandler().GetServerStatus())
+	err = resp.mysqlWr.WriteEOFIF(0, ses.GetTxnHandler().GetServerStatus())
 	if err != nil {
 		return
 	}
 	return
 }
 
-func respStreamResultRow(ses *Session,
+func (resp *MysqlResp) respStreamResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(70)
 	defer ses.ExitFPrint(70)
@@ -213,7 +213,7 @@ func respStreamResultRow(ses *Session,
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
-		err2 := execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err2 := resp.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 		if err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -252,14 +252,13 @@ func respStreamResultRow(ses *Session,
 			if err != nil {
 				return
 			}
-
-			err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+			err = resp.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 			if err != nil {
 				return
 			}
 		}
 	default:
-		err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err = resp.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 		if err != nil {
 			return
 		}
@@ -268,7 +267,7 @@ func respStreamResultRow(ses *Session,
 	return
 }
 
-func respPrebuildResultRow(ses *Session,
+func (resp *MysqlResp) respPrebuildResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(71)
 	defer ses.ExitFPrint(71)
@@ -276,14 +275,14 @@ func respPrebuildResultRow(ses *Session,
 		return nil
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	resp := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, execCtx.isLastStmt)
-	if err := execCtx.proto.SendResponse(execCtx.reqCtx, resp); err != nil {
+	res := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, execCtx.isLastStmt)
+	if err := resp.mysqlWr.WriteResponse(execCtx.reqCtx, res); err != nil {
 		return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed, error: %v ", err)
 	}
 	return err
 }
 
-func respMixedResultRow(ses *Session,
+func (resp *MysqlResp) respMixedResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(72)
 	defer ses.ExitFPrint(72)
@@ -299,7 +298,7 @@ func respMixedResultRow(ses *Session,
 			zap.Error(err))
 		return err
 	}
-	err = execCtx.proto.sendEOFOrOkPacket(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+	err = resp.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 	if err != nil {
 		return
 	}

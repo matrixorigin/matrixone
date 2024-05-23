@@ -29,7 +29,7 @@ func respClientWhenSuccess(ses *Session,
 	if execCtx.skipRespClient {
 		return nil
 	}
-	err = respClientWithoutFlush(ses, execCtx)
+	err = execCtx.resp.RespPostMeta(execCtx, nil)
 	if err != nil {
 		return err
 	}
@@ -47,22 +47,22 @@ func respClientWhenSuccess(ses *Session,
 	return err
 }
 
-func respClientWithoutFlush(ses *Session,
+func (resp *MysqlResp) respClientWithoutFlush(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	if execCtx.skipRespClient {
 		return nil
 	}
 	switch execCtx.stmt.StmtKind().RespType() {
 	case tree.RESP_STREAM_RESULT_ROW:
-		err = respStreamResultRow(ses, execCtx)
+		err = resp.respStreamResultRow(ses, execCtx)
 	case tree.RESP_PREBUILD_RESULT_ROW:
-		err = respPrebuildResultRow(ses, execCtx)
+		err = resp.respPrebuildResultRow(ses, execCtx)
 	case tree.RESP_MIXED_RESULT_ROW:
-		err = respMixedResultRow(ses, execCtx)
+		err = resp.respMixedResultRow(ses, execCtx)
 	case tree.RESP_NOTHING:
 	case tree.RESP_BY_SITUATION:
 	case tree.RESP_STATUS:
-		err = respStatus(ses, execCtx)
+		err = resp.respStatus(ses, execCtx)
 	}
 	return err
 }

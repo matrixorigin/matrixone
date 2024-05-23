@@ -385,16 +385,17 @@ type ExecCtx struct {
 	runner          ComputationRunner
 	loadLocalWriter *io.PipeWriter
 	proc            *process.Process
-	proto           MysqlProtocol
-	ses             FeSession
-	txnOpt          FeTxnOption
-	cws             []ComputationWrapper
-	input           *UserInput
+	//proto           MysqlProtocol
+	ses    FeSession
+	txnOpt FeTxnOption
+	cws    []ComputationWrapper
+	input  *UserInput
 	//In the session migration, skip the response to the client
 	skipRespClient bool
 	//In the session migration, executeParamTypes for the EXECUTE stmt should be migrated
 	//from the old session to the new session.
 	executeParamTypes []byte
+	resp              Responser
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -794,13 +795,15 @@ type MysqlWriter interface {
 	WriteOKtWithEOF() error
 	WriteEOF() error
 	WriteEOFIF(warnings uint16, status uint16) error
-	WriteEOFOrOK() error
+	WriteEOFOrOK(warnings uint16, status uint16) error
 	WriteERR() error
-	WriteLengthEncodedNumber(int) error
+	WriteLengthEncodedNumber(uint64) error
 	WriteColumnDef(context.Context, Column, int) error
 	WriteRow() error
 	WriteTextRow() error
 	WriteBinaryRow() error
+	WriteResponse(context.Context, *Response) error
+	WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error
 
 	Write(*batch.Batch) error
 }
