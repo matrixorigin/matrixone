@@ -414,15 +414,6 @@ func (r *blockReader) Read(
 		policy = fileservice.SkipMemoryCacheWrites
 	}
 
-	//if strings.Contains(r.withFilterMixin.tableDef.Name, "__mo_index_unique_018fa97d-c33d-7df2-9bac-977ecf80956c") {
-	//	fmt.Println(
-	//		r.withFilterMixin.tableDef.Name,
-	//		r.withFilterMixin.tableDef.Pkey,
-	//		r.withFilterMixin.columns.pkPos,
-	//		blockInfo.Sorted, blockInfo.EntryState,
-	//		plan2.FormatExpr(r.withFilterMixin.filterState.expr))
-	//}
-
 	bat, err = blockio.BlockRead(
 		statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
