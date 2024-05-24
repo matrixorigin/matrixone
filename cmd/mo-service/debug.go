@@ -399,7 +399,9 @@ func saveProfilesLoop(sigs chan os.Signal) {
 	for {
 		select {
 		case <-tk.C:
+			logutil.GetGlobalLogger().Info("save profiles start")
 			saveProfiles()
+			logutil.GetGlobalLogger().Info("save profiles end")
 		case <-sigs:
 			quit = true
 		}
@@ -418,7 +420,8 @@ func saveProfiles() {
 
 func saveProfile(typ string) string {
 	name, _ := uuid.NewV7()
-	profilePath := catalog.BuildProfilePath(typ, name.String())
+	profilePath := catalog.BuildProfilePath(typ, name.String()) + ".gz"
+	logutil.GetGlobalLogger().Info("save profiles ", zap.String("path", profilePath))
 	cnservice.SaveProfile(profilePath, typ, globalEtlFS)
 	return profilePath
 }
