@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"os"
@@ -501,7 +502,9 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 		logDebug(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
 		err = nil // make sure: it is nil for EndStatement
 	} else {
-		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
+		txnId := ses.GetTxnId()
+		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx),
+			zap.String("txn_id", hex.EncodeToString(txnId[:])))
 	}
 
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
