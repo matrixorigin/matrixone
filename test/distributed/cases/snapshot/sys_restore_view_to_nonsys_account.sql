@@ -561,7 +561,7 @@ drop snapshot sp10;
 
 
 
--- @bvt:issue#16311
+
 -- multi db, multi table
 -- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test03;
@@ -644,16 +644,15 @@ select * from test04.employee_view;
 select * from test03.department_view;
 select * from test05.employee_with_department_view;
 
-drop table employees;
-drop table departments;
-drop view employee_view;
-drop view department_view;
-drop view employee_with_department_view;
-drop snapshot sp100;
-drop snapshot sp101;
+drop table test04.employees;
+drop table test03.departments;
+drop view test04.employee_view;
+drop view test03.department_view;
+drop view test05.employee_with_department_view;
 drop database test03;
 drop database test04;
 drop database test05;
 -- @session
--- @bvt:issue
+drop snapshot sp100;
+drop snapshot sp101;
 drop account acc01;
