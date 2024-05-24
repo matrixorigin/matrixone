@@ -59,7 +59,7 @@ func UnorderedVarlenLinearSearchOffsetByValFactory(vals [][]byte) func(*Vector) 
 		}
 		for x := 0; x < vecLen; x++ {
 			for y := range vals {
-				if bytes.Compare(vals[y], vector.GetBytesAt(x)) == 0 {
+				if bytes.Equal(vals[y], vector.GetBytesAt(x)) {
 					sels = append(sels, int32(x))
 					break
 				}
