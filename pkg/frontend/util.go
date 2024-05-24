@@ -203,7 +203,6 @@ func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient)
 	if err != nil {
 		return nil, err
 	}
-	sv.SetDefaultValues()
 	pu := mo_config.NewParameterUnit(sv, eng, txnClient, engine.Nodes{})
 
 	return pu, nil
