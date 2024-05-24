@@ -119,8 +119,6 @@ type deleteNodeInfo struct {
 	pkPos           int
 	pkTyp           plan.Type
 	lockTable       bool
-
-	lockRows *plan.Expr // delete from t1 where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
 }
 
 // buildInsertPlans  build insert plan.
@@ -3559,7 +3557,8 @@ func makePreUpdateDeletePlan(
 		PrimaryColIdxInBat: int32(pkPos),
 		PrimaryColTyp:      pkTyp,
 		RefreshTsIdxInBat:  -1,
-		LockTable:          false,
+		LockTable:          delCtx.lockTable,
+		LockRows:           delCtx.lockRows,
 	}
 	if delCtx.tableDef.Partition != nil {
 		lockTarget.IsPartitionTable = true
@@ -3648,7 +3647,8 @@ func makePreUpdateDeletePlan(
 			PrimaryColIdxInBat: newPkPos,
 			PrimaryColTyp:      pkTyp,
 			RefreshTsIdxInBat:  -1, //unsupport now
-			LockTable:          false,
+			LockTable:          delCtx.lockTable,
+			LockRows:           delCtx.lockRows,
 		}
 		if delCtx.tableDef.Partition != nil {
 			lockTarget.IsPartitionTable = true
