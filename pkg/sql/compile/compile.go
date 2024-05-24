@@ -2379,7 +2379,7 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 	filterExpr := colexec.RewriteFilterExprList(newFilters)
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Restrict,
+			Op:      vm.Filter,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
 			Arg:     constructRestrict(n, filterExpr),
