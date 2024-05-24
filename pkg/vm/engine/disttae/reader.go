@@ -141,7 +141,7 @@ func (mixin *withFilterMixin) getPKFilter(
 		mixin.tableDef.Pkey.PkeyColName,
 		proc,
 	)
-	if !ok || filter.Valid == false {
+	if !ok || !filter.Valid {
 		mixin.filterState.evaluated = true
 		mixin.filterState.filter = blockio.ReadFilter{}
 		mixin.filterState.hasNull = hasNull
