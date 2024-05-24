@@ -778,24 +778,10 @@ type Responser interface {
 	RespPreMeta(*ExecCtx, any) error
 	RespResult(*ExecCtx, *batch.Batch) error
 	RespPostMeta(*ExecCtx, any) error
+	GetProperty(string) any
+	SetProperty(string, any)
 	Close()
-	SetDatabaseName(string)
-	GetDatabaseName() string
-	GetUserName() string
-	ConnectionID() uint32
-	SetUserName(string)
-	Peer() string
-	sendLocalInfileRequest(filepath string) error
-	Read(options goetty.ReadOptions) (interface{}, error)
-	SetSequenceID(i any)
-	GetSequenceId() int
 	ResetStatistics()
-	ParseExecuteData(ctx context.Context, getProcess *process.Process, stmt *PrepareStmt, data []byte, pos int) error
-	ParseSendLongData(ctx context.Context, getProcess *process.Process, stmt *PrepareStmt, data []byte, pos int) error
-	GetCapability() uint32
-	SetCapability(uint32)
-	SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, count uint64) error
-	CalculateOutTrafficBytes(b bool) (int64, int64)
 }
 
 type MediaReader interface {
@@ -832,6 +818,16 @@ type MysqlWriter interface {
 	GetUserName() string
 	SetUserName(s string)
 	Peer() string
+	CalculateOutTrafficBytes(b bool) (int64, int64)
+	SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, count uint64) error
+	sendLocalInfileRequest(filepath string) error
+	Read(options goetty.ReadOptions) (interface{}, error)
+	SetSequenceID(i any)
+	GetSequenceId() int
+	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+	GetCapability() uint32
+	SetCapability(c uint32)
 }
 
 type MysqlPayloadWriter interface {

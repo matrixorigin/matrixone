@@ -15,12 +15,9 @@
 package frontend
 
 import (
-	"context"
-
-	"github.com/fagongzi/goetty/v2"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ Responser = &MysqlResp{}
@@ -32,71 +29,34 @@ type MysqlResp struct {
 	s3Wr    S3Writer
 }
 
-func (resper *MysqlResp) CalculateOutTrafficBytes(b bool) (int64, int64) {
-	//TODO implement me
-	panic("implement me")
+func (resper *MysqlResp) GetProperty(name string) any {
+	lname := strings.ToLower(name)
+	switch lname {
+	case "dbname", "databasename":
+		return resper.mysqlWr.GetDatabaseName()
+	case "uname", "username":
+		return resper.mysqlWr.GetUserName()
+	case "connid":
+		return resper.mysqlWr.ConnectionID()
+	case "peer":
+		return resper.mysqlWr.Peer()
+	default:
+		return nil
+	}
 }
 
-func (resper *MysqlResp) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, count uint64) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *MysqlResp) sendLocalInfileRequest(filepath string) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *MysqlResp) Read(options goetty.ReadOptions) (interface{}, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *MysqlResp) SetSequenceID(i any) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *MysqlResp) GetSequenceId() int {
-	//TODO implement me
-	panic("implement me")
+func (resper *MysqlResp) SetProperty(name string, val any) {
+	lname := strings.ToLower(name)
+	switch lname {
+	case "dbname", "databasename":
+		resper.mysqlWr.SetDatabaseName(val.(string))
+	case "uname", "username":
+		resper.mysqlWr.SetUserName(val.(string))
+	}
 }
 
 func (resper *MysqlResp) ResetStatistics() {
-	//TODO implement me
-	panic("implement me")
-}
 
-func (resper *MysqlResp) ParseExecuteData(ctx context.Context, getProcess *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *MysqlResp) ParseSendLongData(ctx context.Context, getProcess *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *MysqlResp) GetCapability() uint32 {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *MysqlResp) SetCapability(u uint32) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *MysqlResp) Peer() string {
-	return resper.mysqlWr.Peer()
-}
-
-func (resper *MysqlResp) SetUserName(s string) {
-	resper.mysqlWr.SetUserName(s)
-}
-
-func (resper *MysqlResp) ConnectionID() uint32 {
-	return resper.mysqlWr.ConnectionID()
 }
 
 func NewMysqlResp() *MysqlResp {
@@ -117,20 +77,10 @@ func (resper *MysqlResp) RespPostMeta(execCtx *ExecCtx, meta any) (err error) {
 	return resper.respClientWithoutFlush(execCtx.ses.(*Session), execCtx)
 }
 
-func (resper *MysqlResp) SetDatabaseName(s string) {
-	resper.mysqlWr.SetDatabaseName(s)
-}
-
-func (resper *MysqlResp) GetDatabaseName() string {
-	return resper.mysqlWr.GetDatabaseName()
-}
-
-func (resper *MysqlResp) GetUserName() string {
-	return resper.mysqlWr.GetUserName()
-}
-
 func (resper *MysqlResp) Close() {
-
+	resper.mysqlWr.Close()
+	resper.csvWr.Close()
+	resper.s3Wr.Close()
 }
 
 type NullResp struct {
@@ -138,71 +88,34 @@ type NullResp struct {
 	database string
 }
 
-func (resper *NullResp) CalculateOutTrafficBytes(b bool) (int64, int64) {
-	//TODO implement me
-	panic("implement me")
+func (resper *NullResp) GetProperty(name string) any {
+	lname := strings.ToLower(name)
+	switch lname {
+	case "dbname", "databasename":
+		return resper.database
+	case "uname", "username":
+		return resper.username
+	case "connid":
+		return fakeConnectionID
+	case "peer":
+		return "0.0.0.0:0"
+	default:
+		return nil
+	}
 }
 
-func (resper *NullResp) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, count uint64) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *NullResp) sendLocalInfileRequest(filepath string) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *NullResp) Read(options goetty.ReadOptions) (interface{}, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *NullResp) SetSequenceID(i any) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *NullResp) GetSequenceId() int {
-	//TODO implement me
-	panic("implement me")
+func (resper *NullResp) SetProperty(name string, val any) {
+	lname := strings.ToLower(name)
+	switch lname {
+	case "dbname", "databasename":
+		resper.database = val.(string)
+	case "uname", "username":
+		resper.username = val.(string)
+	}
 }
 
 func (resper *NullResp) ResetStatistics() {
-	//TODO implement me
-	panic("implement me")
-}
 
-func (resper *NullResp) ParseExecuteData(ctx context.Context, getProcess *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *NullResp) ParseSendLongData(ctx context.Context, getProcess *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *NullResp) GetCapability() uint32 {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *NullResp) SetCapability(u uint32) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (resper *NullResp) Peer() string {
-	return "0.0.0.0:0"
-}
-
-func (resper *NullResp) SetUserName(s string) {
-	resper.username = s
-}
-
-func (resper *NullResp) ConnectionID() uint32 {
-	return fakeConnectionID
 }
 
 func (resper *NullResp) RespPreMeta(ctx *ExecCtx, a any) error {
@@ -219,16 +132,4 @@ func (resper *NullResp) RespPostMeta(ctx *ExecCtx, a any) error {
 
 func (resper *NullResp) Close() {
 
-}
-
-func (resper *NullResp) SetDatabaseName(s string) {
-	resper.database = s
-}
-
-func (resper *NullResp) GetDatabaseName() string {
-	return resper.database
-}
-
-func (resper *NullResp) GetUserName() string {
-	return resper.username
 }

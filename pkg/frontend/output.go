@@ -119,7 +119,7 @@ func (oq *outputQueue) flush() error {
 			return nil
 		}
 
-		if err := oq.resper.SendResultSetTextBatchRowSpeedup(oq.mrs, oq.rowIdx); err != nil {
+		if err := oq.resper.(*MysqlResp).mysqlWr.SendResultSetTextBatchRowSpeedup(oq.mrs, oq.rowIdx); err != nil {
 			oq.ses.Error(oq.ctx,
 				"Flush error",
 				zap.Error(err))

@@ -2210,7 +2210,7 @@ func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeS
 }
 
 func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
-	resper := ses.GetResponser()
+	resper := ses.GetResponser().(*MysqlResp).mysqlWr
 	defer func() {
 		err2 := writer.Close()
 		if err == nil {
@@ -3114,7 +3114,7 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 
 	sql := fmt.Sprintf("execute %s", stmtName)
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
-	err = ses.GetResponser().ParseExecuteData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	err = ses.GetResponser().(*MysqlResp).mysqlWr.ParseExecuteData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
 		return "", nil, err
 	}
@@ -3139,7 +3139,7 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 	sql := fmt.Sprintf("send long data for stmt %s", stmtName)
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 
-	err = ses.GetResponser().ParseSendLongData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	err = ses.GetResponser().(*MysqlResp).mysqlWr.ParseSendLongData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
 		return err
 	}
@@ -3462,7 +3462,7 @@ func handleSetOption(ses *Session, execCtx *ExecCtx, data []byte) (err error) {
 	if len(data) < 2 {
 		return moerr.NewInternalError(execCtx.reqCtx, "invalid cmd_set_option data length")
 	}
-	cap := ses.GetResponser().GetCapability()
+	cap := ses.GetResponser().(*MysqlResp).mysqlWr.GetCapability()
 	switch binary.LittleEndian.Uint16(data[:2]) {
 	case 0:
 		// MO do not support CLIENT_MULTI_STATEMENTS in prepare, so do nothing here(Like MySQL)
@@ -3471,7 +3471,7 @@ func handleSetOption(ses *Session, execCtx *ExecCtx, data []byte) (err error) {
 
 	case 1:
 		cap &^= CLIENT_MULTI_STATEMENTS
-		ses.GetResponser().SetCapability(cap)
+		ses.GetResponser().(*MysqlResp).mysqlWr.SetCapability(cap)
 
 	default:
 		return moerr.NewInternalError(execCtx.reqCtx, "invalid cmd_set_option data")
