@@ -5,6 +5,7 @@ package status
 
 import (
 	fmt "fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	io "io"
 	math "math"
 	math_bits "math/bits"
@@ -391,6 +392,11 @@ func (m *Session) MarshalTo(dAtA []byte) (int, error) {
 }
 
 func (m *Session) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	defer func() {
+		if err := recover(); err != nil {
+			logutil.Fatalf("mp: %p, mv: %+v, data: %p, length: %d, err: %v", m, m, dAtA, len(dAtA), err)
+		}
+	}()
 	i := len(dAtA)
 	_ = i
 	var l int
