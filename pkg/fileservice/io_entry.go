@@ -18,11 +18,17 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func (i *IOEntry) setCachedData() error {
+	t0 := time.Now()
+	defer func() {
+		metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
+	}()
 	if i.ToCacheData == nil {
 		return nil
 	}
