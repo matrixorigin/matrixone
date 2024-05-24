@@ -568,6 +568,7 @@ show databases;
 -- @ignore:1
 show snapshots;
 
+-- @bvt:issue#16341
 -- drop exist database
 drop database if exists acc_test02;
 create database acc_test02;
@@ -873,3 +874,4 @@ drop snapshot if exists snapshot_01;
 show databases;
 -- @ignore:1
 show snapshots;
+-- @bvt:issue
