@@ -15,10 +15,11 @@
 package cnservice
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 
@@ -654,7 +655,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 				s.cfg.Txn.MaxActiveAges.Duration,
 				func(actives []client.ActiveTxn) {
 					name, _ := uuid.NewV7()
-					profPath := catalog.BuildProfilePath("routine", name.String())
+					profPath := catalog.BuildProfilePath("routine", name.String()) + ".gz"
 
 					for _, txn := range actives {
 						fields := []zap.Field{
@@ -872,28 +873,39 @@ func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileS
 	if len(profilePath) == 0 || len(profileType) == 0 || etlFS == nil {
 		return
 	}
-	reader, writer := io.Pipe()
-	go func() {
-		debug := 0
-		if profile.GOROUTINE == profileType {
-			debug = 2
-		}
-		_ = profile.ProfileRuntime(profileType, writer, debug)
-		_ = writer.Close()
-	}()
+
+	//gzip compress
+	buf := bytes.Buffer{}
+	gzWriter := gzip.NewWriter(&buf)
+
+	debug := 0
+	if profile.GOROUTINE == profileType {
+		debug = 2
+	}
+	err := profile.ProfileRuntime(profileType, gzWriter, debug)
+	if err != nil {
+		logutil.Errorf("get profile of %s failed. err:%v", profilePath, err)
+		return
+	}
+	err = gzWriter.Close()
+	if err != nil {
+		logutil.Errorf("close gzip write of %s failed. err:%v", profilePath, err)
+		return
+	}
+	logutil.Info("get profile done. save profiles ", zap.String("path", profilePath))
 	writeVec := fileservice.IOVector{
 		FilePath: profilePath,
 		Entries: []fileservice.IOEntry{
 			{
-				Offset:         0,
-				ReaderForWrite: reader,
-				Size:           -1,
+				Offset: 0,
+				Data:   buf.Bytes(),
+				Size:   int64(len(buf.Bytes())),
 			},
 		},
 	}
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*3)
 	defer cancel()
-	err := etlFS.Write(ctx, writeVec)
+	err = etlFS.Write(ctx, writeVec)
 	if err != nil {
 		logutil.Errorf("save profile %s failed. err:%v", profilePath, err)
 		return

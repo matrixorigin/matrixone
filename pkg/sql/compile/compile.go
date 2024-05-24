@@ -546,6 +546,25 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 
 		c.fatalLog(retryTimes, err)
 		if !c.canRetry(err) {
+			if c.proc.TxnOperator.Txn().IsRCIsolation() &&
+				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				orphan, e := c.proc.LockService.IsOrphanTxn(
+					c.proc.Ctx,
+					c.proc.TxnOperator.Txn().ID,
+				)
+				if e != nil {
+					getLogger().Error("failed to convert dup to orphan txn error",
+						zap.String("txn", hex.EncodeToString(c.proc.TxnOperator.Txn().ID)),
+						zap.Error(err),
+					)
+				}
+				if e == nil && orphan {
+					getLogger().Warn("convert dup to orphan txn error",
+						zap.String("txn", hex.EncodeToString(c.proc.TxnOperator.Txn().ID)),
+					)
+					err = moerr.NewCannotCommitOrphan(c.proc.Ctx)
+				}
+			}
 			return nil, err
 		}
 
@@ -2360,7 +2379,7 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 	filterExpr := colexec.RewriteFilterExprList(newFilters)
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Restrict,
+			Op:      vm.Filter,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
 			Arg:     constructRestrict(n, filterExpr),
