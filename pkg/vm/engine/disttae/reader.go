@@ -133,79 +133,17 @@ func (mixin *withFilterMixin) getReadFilter(proc *process.Process, blkCnt int) (
 		return
 	}
 	pk := mixin.tableDef.Pkey
-	if pk == nil {
+	if mixin.filterState.expr == nil || pk == nil {
 		mixin.filterState.evaluated = true
 		mixin.filterState.filter = nil
 		return
 	}
-	if pk.CompPkeyCol == nil {
-		return mixin.getNonCompositPKFilter(proc, blkCnt)
-	}
-	return mixin.getCompositPKFilter(proc, blkCnt)
+	return mixin.getNonCompositPKFilter(proc, blkCnt)
 }
 
-func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process, blkCnt int) (
-	filter blockio.ReadFilter,
-) {
-	// if no primary key is included in the columns or no filter expr is given,
-	// no filter is needed
-	if len(mixin.columns.compPKPositions) == 0 || mixin.filterState.expr == nil {
-		mixin.filterState.evaluated = true
-		mixin.filterState.filter = nil
-		return
-	}
-
-	// evaluate
-	pkNames := mixin.tableDef.Pkey.Names
-	pkVals := make([]*plan.Literal, len(pkNames))
-	ok, hasNull := getCompositPKVals(mixin.filterState.expr, pkNames, pkVals, proc)
-
-	if !ok || pkVals[0] == nil {
-		mixin.filterState.evaluated = true
-		mixin.filterState.filter = nil
-		mixin.filterState.hasNull = hasNull
-		return
-	}
-	cnt := getValidCompositePKCnt(pkVals)
-	pkVals = pkVals[:cnt]
-
-	filterFuncs := make([]func(*vector.Vector, []int32, *[]int32), len(pkVals))
-	for i := range filterFuncs {
-		filterFuncs[i] = getCompositeFilterFuncByExpr(pkVals[i], i == 0)
-	}
-
-	filter = func(vecs []*vector.Vector) []int32 {
-		var (
-			inputSels []int32
-		)
-		for i := range filterFuncs {
-			vec := vecs[i]
-			mixin.sels = mixin.sels[:0]
-			filterFuncs[i](vec, inputSels, &mixin.sels)
-			if len(mixin.sels) == 0 {
-				break
-			}
-			inputSels = mixin.sels
-		}
-		// logutil.Debugf("%s: %d/%d", mixin.tableDef.Name, len(res), vecs[0].Length())
-
-		return mixin.sels
-	}
-
-	mixin.filterState.evaluated = true
-	mixin.filterState.filter = filter
-	mixin.filterState.seqnums = make([]uint16, 0, len(mixin.columns.compPKPositions))
-	mixin.filterState.colTypes = make([]types.Type, 0, len(mixin.columns.compPKPositions))
-	for _, pos := range mixin.columns.compPKPositions {
-		mixin.filterState.seqnums = append(mixin.filterState.seqnums, mixin.columns.seqnums[pos])
-		mixin.filterState.colTypes = append(mixin.filterState.colTypes, mixin.columns.colTypes[pos])
-	}
-	// records how many blks one reader needs to read when having filter
-	objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
-	return
-}
-
-func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkCnt int) blockio.ReadFilter {
+func (mixin *withFilterMixin) getNonCompositPKFilter(
+	proc *process.Process, blkCnt int,
+) blockio.ReadFilter {
 	// if no primary key is included in the columns or no filter expr is given,
 	// no filter is needed
 	if mixin.columns.pkPos == -1 || mixin.filterState.expr == nil {
