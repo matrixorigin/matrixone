@@ -923,7 +923,7 @@ func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string,
 	if len(tblName) > 0 {
 		sql = fmt.Sprintf("show full tables from `%s` like '%s' {snapshot = '%s'}", dbName, tblName, snapshotName)
 	}
-
+	getLogger().Info(fmt.Sprintf("[%s] get table %v info sql: %s", snapshotName, tblName, sql))
 	// cols: table name, table type
 	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
 	if err != nil {
@@ -942,7 +942,7 @@ func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string,
 }
 
 func getTableInfos(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) ([]*tableInfo, error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to get table info: %v", snapshotName, dbName))
+	getLogger().Info(fmt.Sprintf("[%s] start to get table info: %v", snapshotName, tblName))
 	tableInfos, err := showFullTables(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
 		return nil, err
