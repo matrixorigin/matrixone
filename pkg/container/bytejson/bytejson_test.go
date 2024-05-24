@@ -610,37 +610,3 @@ func TestNormalizeToIntString(t *testing.T) {
 		})
 	}
 }
-
-func BenchmarkParse(b *testing.B) {
-	s := []byte(`{"a":{"b":{"c":{"d":[null,false,true,123,"abc",[1,2,3],{"a":1,"b":2,"c":3,"d":4,"e":5},123.456]}}}}`)
-
-	b.Run("segmentio-json", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			p := parser{
-				src:   s,
-				stack: make([]*Group, 0, 2),
-			}
-			p.do()
-		}
-	})
-
-	b.Run("goccy-json", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			p := parser2{
-				src:   s,
-				stack: make([]*Group, 0, 2),
-			}
-			p.do()
-		}
-	})
-
-	b.Run("std-json", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			p := parser0{
-				src:   s,
-				stack: make([]*Group, 0, 2),
-			}
-			p.do()
-		}
-	})
-}
