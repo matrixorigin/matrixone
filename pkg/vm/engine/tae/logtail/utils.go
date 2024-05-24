@@ -2243,8 +2243,8 @@ func (data *CheckpointData) PrefetchFrom(
 	var pref blockio.PrefetchParams
 	locations := make(map[string][]blockIdx)
 	checkpointSize := uint64(0)
-	for i, b := range blocks {
-		location := objectio.Location(b.GetByteSlice(area))
+	for i := range blocks {
+		location := objectio.Location(blocks[i].GetByteSlice(area))
 		if location.IsEmpty() {
 			continue
 		}

@@ -556,8 +556,8 @@ func (txn *Transaction) insertPosForCNBlock(
 	dbName string,
 	tbName string) error {
 	blks, area := vector.MustVarlenaRawData(vec)
-	for i, blk := range blks {
-		blkInfo := *objectio.DecodeBlockInfo(blk.GetByteSlice(area))
+	for i := range blks {
+		blkInfo := *objectio.DecodeBlockInfo(blks[i].GetByteSlice(area))
 		txn.cnBlkId_Pos[blkInfo.BlockID] = Pos{
 			bat:       b,
 			accountId: id,

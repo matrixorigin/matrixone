@@ -464,8 +464,8 @@ func (txn *Transaction) gcObjs(start int) error {
 		//3. Now, GC the s3 objects(data objects and tombstone objects) asynchronously.
 		if txn.writes[i].fileName != "" {
 			vs, area := vector.MustVarlenaRawData(txn.writes[i].bat.GetVector(0))
-			for _, s := range vs {
-				loc, _ := blockio.EncodeLocationFromString(s.UnsafeGetString(area))
+			for i := range vs {
+				loc, _ := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
 				if _, ok := objsToGC[loc.Name().String()]; !ok {
 					objsToGC[loc.Name().String()] = struct{}{}
 					objsName = append(objsName, loc.Name().String())

@@ -542,8 +542,8 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 	}
 	for _, bat := range bats {
 		vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
-		for _, deltaLoc := range vs {
-			location, err := blockio.EncodeLocationFromString(deltaLoc.UnsafeGetString(area))
+		for i := range vs {
+			location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
 			if err != nil {
 				return err
 			}
@@ -583,8 +583,8 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 		}
 		for _, bat := range bats {
 			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
-			for _, metalLoc := range vs {
-				location, err := blockio.EncodeLocationFromString(metalLoc.UnsafeGetString(area))
+			for i := range vs {
+				location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
 				if err != nil {
 					return err
 				}

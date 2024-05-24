@@ -724,10 +724,10 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64:
 		s, area := vector.MustVarlenaRawData(v)
-		ns := make([][]byte, 0, v.Length())
-		for i, b := range s {
+		ns := make([][]byte, 0, len(s))
+		for i := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
-				ns = append(ns, b.GetByteSlice(area))
+				ns = append(ns, s[i].GetByteSlice(area))
 			}
 		}
 		err = vector.AppendBytesList(vec, ns, nil, proc.Mp())
@@ -925,9 +925,9 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 		types.T_array_float32, types.T_array_float64:
 		s, area := vector.MustVarlenaRawData(v)
 		ns := make([][]byte, 0, len(s))
-		for i, b := range s {
+		for i := range s {
 			if !nulls.Contains(bitMap, uint64(i)) {
-				ns = append(ns, b.GetByteSlice(area))
+				ns = append(ns, s[i].GetByteSlice(area))
 			}
 		}
 		err = vector.AppendBytesList(vec, ns, nil, proc.Mp())
