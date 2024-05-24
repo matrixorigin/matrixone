@@ -135,7 +135,10 @@ type Session struct {
 
 	isNotBackgroundSession bool
 	lastInsertID           uint64
-	tStmt                  *motrace.StatementInfo
+
+	// tStmt is used only to record the StatementInfo
+	// QueryResult please use feSessionImpl.stmtProfile instead.
+	tStmt *motrace.StatementInfo
 
 	ast tree.Statement
 

@@ -149,6 +149,12 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			bb.WriteString(execSql)
 			text = SubStringFromBegin(bb.String(), int(getGlobalPu().SV.LengthOfQueryPrinted))
 		} else {
+			// ignore envStmt == ""
+			// case: exec `set @t = 2;` will trigger an internal query with the same session.
+			// If you need real sql, can try:
+			//	+ fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+			//	+ cw.GetAst().Format(fmtCtx)
+			//  + envStmt = fmtCtx.String()
 			text = SubStringFromBegin(envStmt, int(getGlobalPu().SV.LengthOfQueryPrinted))
 		}
 	} else {
@@ -169,6 +175,12 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !motrace.GetTracerProvider().IsEnable() {
 		return ctx, nil
 	}
+	if sqlType == constant.InternalSql && envStmt == "" {
+		// case: exec `set @t = 2;` will trigger an internal query with the same session, like: `select 2 from dual`
+		// ignore internal EMPTY query.
+		return ctx, nil
+	}
+
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
@@ -177,6 +189,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	// set TransactionID
 	var txn TxnOperator
 	var err error
+	// fixme: use ses.GetTxnId to simple.
 	if handler := ses.GetTxnHandler(); handler.InActiveTxn() {
 		txn = handler.GetTxn()
 		if err != nil {
@@ -186,13 +199,12 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	}
 	// set SessionID
 	copy(stm.SessionID[:], ses.GetUUID())
+	copy(stm.StatementID[:], stmID[:])
 	requestAt := envBegin
 	if !useEnv {
 		requestAt = time.Now()
 	}
 
-	copy(stm.StatementID[:], stmID[:])
-	// END> set StatementID
 	stm.Account = tenant.GetTenant()
 	stm.RoleId = proc.SessionInfo.RoleId
 	stm.User = tenant.GetUser()
@@ -217,7 +229,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stm.Report(ctx)
 	}
 	if stm.IsMoLogger() && stm.StatementType == "Load" && len(stm.Statement) > 128 {
-		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-45:]
+		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-70:]
 	}
 
 	return motrace.ContextWithStatement(ctx, stm), nil
