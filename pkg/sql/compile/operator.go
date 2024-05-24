@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -78,7 +79,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
@@ -281,9 +281,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg := projection.NewArgument()
 		arg.Es = t.Es
 		res.Arg = arg
-	case vm.Restrict:
-		t := sourceIns.Arg.(*restrict.Argument)
-		arg := restrict.NewArgument()
+	case vm.Filter:
+		t := sourceIns.Arg.(*filter.Argument)
+		arg := filter.NewArgument()
 		arg.E = t.E
 		res.Arg = arg
 	case vm.Semi:
@@ -501,8 +501,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	return res
 }
 
-func constructRestrict(n *plan.Node, filterExpr *plan2.Expr) *restrict.Argument {
-	arg := restrict.NewArgument()
+func constructRestrict(n *plan.Node, filterExpr *plan2.Expr) *filter.Argument {
+	arg := filter.NewArgument()
 	arg.E = filterExpr
 	arg.IsEnd = n.IsEnd
 	return arg
