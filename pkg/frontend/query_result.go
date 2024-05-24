@@ -48,13 +48,14 @@ func getPathOfQueryResultFile(fileName string) string {
 }
 
 func openSaveQueryResult(ctx context.Context, ses *Session) bool {
-	if ses.ast == nil || ses.tStmt == nil {
+	if ses.ast == nil {
 		return false
 	}
-	if ses.tStmt.SqlSourceType == constant.InternalSql {
+	stmtProfile := ses.GetStmtProfile()
+	if stmtProfile.GetSqlSourceType() == constant.InternalSql {
 		return false
 	}
-	if ses.tStmt.StatementType == "Select" && ses.tStmt.SqlSourceType != constant.CloudUserSql {
+	if stmtProfile.GetStmtType() == "Select" && stmtProfile.GetSqlSourceType() != constant.CloudUserSql {
 		return false
 	}
 	val, err := ses.GetGlobalVar(ctx, "save_query_result")
