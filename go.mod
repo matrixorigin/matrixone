@@ -29,6 +29,7 @@ require (
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/felixge/fgprof v0.9.3
 	github.com/go-sql-driver/mysql v1.8.1
+	github.com/goccy/go-json v0.10.3
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/mock v1.6.0
 	github.com/google/btree v1.1.2
@@ -54,6 +55,7 @@ require (
 	github.com/prometheus/client_model v0.4.1-0.20230718164431-9a2bf3000d16
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.38.1
+	github.com/segmentio/encoding v0.4.0
 	github.com/shirou/gopsutil/v3 v3.23.12
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/spf13/cobra v1.8.0
@@ -99,7 +101,7 @@ require (
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/rs/xid v1.5.0 // indirect
-	github.com/segmentio/encoding v0.3.6 // indirect
+	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/shoenig/go-m1cpu v0.1.6 // indirect
 	golang.org/x/crypto v0.21.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
