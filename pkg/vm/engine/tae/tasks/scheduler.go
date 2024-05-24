@@ -40,6 +40,7 @@ type TaskScheduler interface {
 	Scheduler
 	ScheduleTxnTask(ctx *Context, taskType TaskType, factory TxnTaskFactory) (Task, error)
 	ScheduleMultiScopedTxnTask(ctx *Context, taskType TaskType, scopes []common.ID, factory TxnTaskFactory) (Task, error)
+	ScheduleMultiScopedTxnTaskWithObserver(ctx *Context, taskType TaskType, scopes []common.ID, factory TxnTaskFactory, observers ...iops.Observer) (Task, error)
 	ScheduleMultiScopedFn(ctx *Context, taskType TaskType, scopes []common.ID, fn FuncT) (Task, error)
 	ScheduleFn(ctx *Context, taskType TaskType, fn func() error) (Task, error)
 	ScheduleScopedFn(ctx *Context, taskType TaskType, scope *common.ID, fn func() error) (Task, error)
