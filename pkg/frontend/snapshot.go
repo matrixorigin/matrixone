@@ -328,10 +328,16 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			return err
 		}
 	case tree.RESTORELEVELDATABASE:
+		if dbName == moCatalog {
+			return moerr.NewInternalError(ctx, "can't restore database %s", moCatalog)
+		}
 		if err = restoreToDatabase(ctx, bh, snapshotName, dbName, toAccountId, fkDeps, &fkTables, &views); err != nil {
 			return err
 		}
 	case tree.RESTORELEVELTABLE:
+		if dbName == moCatalog {
+			return moerr.NewInternalError(ctx, "can't restore database %s, table %s,", moCatalog, tblName)
+		}
 		if err = restoreToTable(ctx, bh, snapshotName, dbName, tblName, toAccountId, fkDeps, &fkTables, &views); err != nil {
 			return err
 		}
