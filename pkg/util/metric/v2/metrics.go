@@ -90,6 +90,7 @@ func initFileServiceMetrics() {
 
 	registry.MustRegister(ioMergerCounter)
 	registry.MustRegister(ioMergerDuration)
+	registry.MustRegister(fsReadDuration)
 }
 
 func initLogtailMetrics() {
