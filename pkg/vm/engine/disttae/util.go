@@ -551,31 +551,31 @@ func getNonCompositePKSearchFuncByExpr(
 			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int8{int8(val.I8Val)}, nil)
 		case *plan.Literal_I16Val:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]int16{int16(val.I16Val)})
-			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int8{int8(val.I16Val)}, nil)
+			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int16{int16(val.I16Val)}, nil)
 		case *plan.Literal_I32Val:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]int32{int32(val.I32Val)})
-			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int8{int8(val.I32Val)}, nil)
+			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int32{int32(val.I32Val)}, nil)
 		case *plan.Literal_I64Val:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]int64{val.I64Val})
-			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int8{int8(val.I64Val)}, nil)
+			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int64{val.I64Val}, nil)
 		case *plan.Literal_Fval:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]float32{val.Fval})
-			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int8{int8(val.Fval)}, nil)
+			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]float32{val.Fval}, nil)
 		case *plan.Literal_Dval:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]float64{val.Dval})
-			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int8{int8(val.Dval)}, nil)
+			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]float64{val.Dval}, nil)
 		case *plan.Literal_U8Val:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]uint8{uint8(val.U8Val)})
-			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int8{int8(val.U8Val)}, nil)
+			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]uint8{uint8(val.U8Val)}, nil)
 		case *plan.Literal_U16Val:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]uint16{uint16(val.U16Val)})
-			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int8{int8(val.U16Val)}, nil)
+			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]uint16{uint16(val.U16Val)}, nil)
 		case *plan.Literal_U32Val:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]uint32{uint32(val.U32Val)})
-			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int8{int8(val.U32Val)}, nil)
+			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]uint32{uint32(val.U32Val)}, nil)
 		case *plan.Literal_U64Val:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]uint64{val.U64Val})
-			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int8{int8(val.U64Val)}, nil)
+			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]uint64{val.U64Val}, nil)
 		case *plan.Literal_Dateval:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Date{types.Date(val.Dateval)})
 			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]types.Date{types.Date(val.Dateval)}, nil)
