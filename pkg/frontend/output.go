@@ -139,11 +139,7 @@ func (oq *outputQueue) flush() error {
 // For the background execution, we need to make a copy of the bytes. Because the data
 // has been saved in the session. Later the data will be used but then the batch.Batch has
 // been returned to the pipeline and may be reused and changed by the pipeline.
-func extractRowFromEveryVector(ctx context.Context, ses FeSession, dataSet *batch.Batch, j int, oq outputPool, needCopyBytes bool) ([]interface{}, error) {
-	row, err := oq.getEmptyRow()
-	if err != nil {
-		return nil, err
-	}
+func extractRowFromEveryVector(ctx context.Context, ses FeSession, dataSet *batch.Batch, j int, row []any) ([]any, error) {
 	var rowIndex = j
 	for i, vec := range dataSet.Vecs { //col index
 		rowIndexBackup := rowIndex
@@ -155,7 +151,7 @@ func extractRowFromEveryVector(ctx context.Context, ses FeSession, dataSet *batc
 			rowIndex = 0
 		}
 
-		err = extractRowFromVector(ctx, ses, vec, i, row, rowIndex, needCopyBytes)
+		err := extractRowFromVector(ctx, ses, vec, i, row, rowIndex)
 		if err != nil {
 			return nil, err
 		}
@@ -165,7 +161,7 @@ func extractRowFromEveryVector(ctx context.Context, ses FeSession, dataSet *batc
 }
 
 // extractRowFromVector gets the rowIndex row from the i vector
-func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector, i int, row []interface{}, rowIndex int, needCopyBytes bool) error {
+func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector, i int, row []any, rowIndex int) error {
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
 		row[i] = nil
 		return nil
@@ -173,7 +169,7 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 
 	switch vec.GetType().Oid { //get col
 	case types.T_json:
-		row[i] = types.DecodeJson(copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes))
+		row[i] = types.DecodeJson(copyBytes(vec.GetBytesAt(rowIndex), true))
 	case types.T_bool:
 		row[i] = vector.GetFixedAt[bool](vec, rowIndex)
 	case types.T_bit:
@@ -199,7 +195,7 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 	case types.T_float64:
 		row[i] = vector.GetFixedAt[float64](vec, rowIndex)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
-		row[i] = copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes)
+		row[i] = copyBytes(vec.GetBytesAt(rowIndex), true)
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
 		//+------------------------------+
@@ -237,7 +233,7 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 	case types.T_TS:
 		row[i] = vector.GetFixedAt[types.TS](vec, rowIndex)
 	case types.T_enum:
-		row[i] = copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes)
+		row[i] = copyBytes(vec.GetBytesAt(rowIndex), true)
 	default:
 		ses.Error(ctx,
 			"Failed to extract row from vector, unsupported type",

@@ -38,6 +38,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -211,6 +212,7 @@ type MysqlProtocol interface {
 }
 
 var _ MysqlProtocol = &MysqlProtocolImpl{}
+var _ MysqlWriter = &MysqlProtocolImpl{}
 
 type debugStats struct {
 	writeCount uint64
@@ -348,6 +350,121 @@ type MysqlProtocolImpl struct {
 	ses *Session
 
 	disableAutoFlush bool
+}
+
+func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
+	const countOfResultSet = 1
+	n := bat.Vecs[0].Length()
+	//TODO: remove this MRS here
+	//Create a new temporary result set per pipeline thread.
+	mrs := MysqlResultSet{}
+	//Warning: Don't change ResultColumns in this.
+	//Reference the shared ResultColumns of the session among multi-thread.
+	sesMrs := execCtx.ses.GetMysqlResultSet()
+	mrs.Columns = sesMrs.Columns
+	mrs.Name2Index = sesMrs.Name2Index
+
+	//group row
+	mrs.Data = make([][]interface{}, countOfResultSet)
+	for i := 0; i < countOfResultSet; i++ {
+		mrs.Data[i] = make([]interface{}, len(bat.Vecs))
+	}
+	for j := 0; j < n; j++ { //row index
+		_, err := extractRowFromEveryVector(execCtx.reqCtx, execCtx.ses, bat, j, mrs.Data[0])
+		if err != nil {
+			return err
+		}
+		//TODO: ShowTableStatus does not send anything here
+		////send group of row
+		//if oq.showStmtType == ShowTableStatus {
+		//	oq.rowIdx = 0
+		//	return nil
+		//}
+		if err = mp.SendResultSetTextBatchRowSpeedup(&mrs, 1); err != nil {
+			execCtx.ses.Error(execCtx.reqCtx,
+				"Flush error",
+				zap.Error(err))
+			return err
+		}
+		//if oq.showStmtType == ShowTableStatus {
+		//	row2 := make([]interface{}, len(row))
+		//	copy(row2, row)
+		//	ses.AppendData(row2)
+		//}
+	}
+	return nil
+}
+
+func (mp *MysqlProtocolImpl) Close() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (mp *MysqlProtocolImpl) WriteHandshake() error {
+	hsV10pkt := mp.makeHandshakeV10Payload()
+	return mp.writePackets(hsV10pkt, true)
+}
+
+func (mp *MysqlProtocolImpl) WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	return mp.sendOKPacket(affectedRows, lastInsertId, status, warnings, message)
+}
+
+func (mp *MysqlProtocolImpl) WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	return mp.sendOKPacketWithEof(affectedRows, lastInsertId, status, warnings, message)
+}
+
+func (mp *MysqlProtocolImpl) WriteEOF(warnings, status uint16) error {
+	return mp.sendEOFPacket(warnings, status)
+}
+
+func (mp *MysqlProtocolImpl) WriteEOFIF(warnings uint16, status uint16) error {
+	return mp.SendEOFPacketIf(warnings, status)
+}
+
+func (mp *MysqlProtocolImpl) WriteEOFOrOK(warnings uint16, status uint16) error {
+	return mp.sendEOFOrOkPacket(warnings, status)
+}
+
+func (mp *MysqlProtocolImpl) WriteERR(errorCode uint16, sqlState, errorMessage string) error {
+	return mp.sendErrPacket(errorCode, sqlState, errorMessage)
+}
+
+func (mp *MysqlProtocolImpl) WriteLengthEncodedNumber(u uint64) error {
+	return mp.SendColumnCountPacket(u)
+}
+
+func (mp *MysqlProtocolImpl) WriteColumnDef(ctx context.Context, column Column, i int) error {
+	return mp.SendColumnDefinitionPacket(ctx, column, i)
+}
+
+func (mp *MysqlProtocolImpl) WriteRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (mp *MysqlProtocolImpl) WriteTextRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (mp *MysqlProtocolImpl) WriteBinaryRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (mp *MysqlProtocolImpl) WriteResponse(ctx context.Context, response *Response) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (mp *MysqlProtocolImpl) WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (mp *MysqlProtocolImpl) Read(options goetty.ReadOptions) (interface{}, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (mp *MysqlProtocolImpl) GetSession() *Session {

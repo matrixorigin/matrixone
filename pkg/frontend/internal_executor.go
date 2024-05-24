@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -235,6 +236,7 @@ func (ie *internalExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions)
 // }
 
 var _ MysqlProtocol = &internalProtocol{}
+var _ MysqlWriter = &internalProtocol{}
 
 type internalProtocol struct {
 	sync.Mutex
@@ -242,6 +244,91 @@ type internalProtocol struct {
 	result      *internalExecResult
 	database    string
 	username    string
+}
+
+func (ip *internalProtocol) Write(ctx *ExecCtx, batch *batch.Batch) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) Close() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteHandshake() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteEOF(warnings, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteEOFIF(warnings uint16, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteEOFOrOK(warnings uint16, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteERR(errorCode uint16, sqlState, errorMessage string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteLengthEncodedNumber(u uint64) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteColumnDef(ctx context.Context, column Column, i int) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteTextRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteBinaryRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteResponse(ctx context.Context, response *Response) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) Read(options goetty.ReadOptions) (interface{}, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (ip *internalProtocol) UpdateCtx(ctx context.Context) {

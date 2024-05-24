@@ -279,8 +279,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 		pro.receiveExtraInfo(rs)
 	}
 
-	hsV10pkt := pro.makeHandshakeV10Payload()
-	err = pro.writePackets(hsV10pkt, true)
+	err = pro.WriteHandshake()
 	if err != nil {
 		pro.ses.Error(cancelCtx,
 			"Failed to handshake with server, quitting routine...",
@@ -399,7 +398,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	length := packet.Length
 	payload := packet.Payload
 	for uint32(length) == MaxPayloadSize {
-		msg, err = protocol.GetTcpConnection().Read(goetty.ReadOptions{})
+		msg, err = protocol.Read(goetty.ReadOptions{})
 		if err != nil {
 			ses.Error(ctx,
 				"Failed to read message",

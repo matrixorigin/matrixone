@@ -75,8 +75,10 @@ type MysqlResp struct {
 	s3Wr    S3Writer
 }
 
-func NewMysqlResp() *MysqlResp {
-	return &MysqlResp{}
+func NewMysqlResp(mysqlWr MysqlWriter) *MysqlResp {
+	return &MysqlResp{
+		mysqlWr: mysqlWr,
+	}
 }
 
 func (resper *MysqlResp) GetProperty(name string) any {
@@ -114,9 +116,17 @@ func (resper *MysqlResp) RespPreMeta(execCtx *ExecCtx, meta any) (err error) {
 	return resper.respColumnDefsWithoutFlush(execCtx.ses.(*Session), execCtx, columns)
 }
 
-func (resper *MysqlResp) RespResult(execCtx *ExecCtx, batch *batch.Batch) error {
+func (resper *MysqlResp) RespResult(execCtx *ExecCtx, bat *batch.Batch) (err error) {
+	ses := execCtx.ses.(*Session)
+	ec := ses.GetExportConfig()
 
-	return nil
+	if ec.needExportToFile() {
+		//TODO
+		err = resper.csvWr.Write(execCtx, bat)
+	} else {
+		err = resper.mysqlWr.Write(execCtx, bat)
+	}
+	return
 }
 
 func (resper *MysqlResp) RespPostMeta(execCtx *ExecCtx, meta any) (err error) {

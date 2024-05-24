@@ -410,8 +410,7 @@ type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch) error
 
 // TODO: shared component among the session implmentation
 type feSessionImpl struct {
-	pool *mpool.MPool
-	//proto         MysqlProtocol
+	pool          *mpool.MPool
 	buf           *buffer.Buffer
 	stmtProfile   process.StmtProfile
 	tenant        *TenantInfo
@@ -790,19 +789,19 @@ type MediaReader interface {
 }
 
 type MediaWriter interface {
-	Write(*batch.Batch) error
+	Write(*ExecCtx, *batch.Batch) error
 	Close()
 }
 
 type MysqlWriter interface {
 	MediaWriter
 	WriteHandshake() error
-	WriteOK() error
-	WriteOKtWithEOF() error
-	WriteEOF() error
+	WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error
+	WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error
+	WriteEOF(warnings, status uint16) error
 	WriteEOFIF(warnings uint16, status uint16) error
 	WriteEOFOrOK(warnings uint16, status uint16) error
-	WriteERR() error
+	WriteERR(errorCode uint16, sqlState, errorMessage string) error
 	WriteLengthEncodedNumber(uint64) error
 	WriteColumnDef(context.Context, Column, int) error
 	WriteRow() error
@@ -810,8 +809,6 @@ type MysqlWriter interface {
 	WriteBinaryRow() error
 	WriteResponse(context.Context, *Response) error
 	WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error
-
-	Write(*batch.Batch) error
 
 	ConnectionID() uint32
 	SetDatabaseName(s string)
@@ -830,6 +827,15 @@ type MysqlWriter interface {
 	GetCapability() uint32
 	SetCapability(c uint32)
 	ResetStatistics()
+	Quit()
+	UpdateCtx(ctx context.Context)
+	IsEstablished() bool
+	IsTlsEstablished() bool
+	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
+	SetTlsEstablished()
+	Authenticate(ctx context.Context) error
+	SetEstablished()
+	GetRequest(payload []byte) *Request
 }
 
 // MysqlPayloadWriter make final payload for the packet
