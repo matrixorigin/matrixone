@@ -108,6 +108,8 @@ enum Method {
   RemainTxnInService = 13;
   // canRestartService judge if can restart lock service
   CanRestartService  = 14;
+  // CheckOrphan check txn is orphan
+  CheckOrphan        = 15;
 }
 
 enum Status {
@@ -138,6 +140,7 @@ message Request {
   SetRestartServiceRequest   SetRestartService   = 14 [(gogoproto.nullable) = false];
   CanRestartServiceRequest   CanRestartService   = 15 [(gogoproto.nullable) = false];
   RemainTxnInServiceRequest  RemainTxnInService  = 16 [(gogoproto.nullable) = false];
+  CheckOrphanRequest         CheckOrphan         = 17 [(gogoproto.nullable) = false];
 }
 
 // Response response
@@ -162,6 +165,7 @@ message Response {
     SetRestartServiceResponse  SetRestartService    = 15 [(gogoproto.nullable) = false];
     CanRestartServiceResponse  CanRestartService    = 16 [(gogoproto.nullable) = false];
     RemainTxnInServiceResponse RemainTxnInService   = 17 [(gogoproto.nullable) = false];
+    CheckOrphanResponse        CheckOrphan          = 18 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
@@ -318,6 +322,16 @@ message GetActiveTxnResponse {
   bool         Valid = 1;
   repeated bytes Txn = 2;
 }
+
+message CheckOrphanRequest {
+  string ServiceID = 1;
+  bytes  Txn       = 2;
+}
+
+message CheckOrphanResponse {
+  bool  Orphan = 1;
+}
+
 
 message OrphanTxn {
   string     Service = 1;

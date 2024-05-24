@@ -18,16 +18,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"strings"
 )
 
 // ConstructCreateTableSQL used to build CREATE Table statement
-func ConstructCreateTableSQL(tableDef *plan.TableDef, snapshot Snapshot, ctx CompilerContext) (string, error) {
+func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDef, snapshot Snapshot, ctx CompilerContext) (string, error) {
 	var err error
 	var createStr string
 
@@ -198,15 +199,16 @@ func ConstructCreateTableSQL(tableDef *plan.TableDef, snapshot Snapshot, ctx Com
 		}
 
 		var fkTableDef *TableDef
-
+		var fkTableObjRef *ObjectRef
 		//fk self reference
 		if fk.ForeignTbl == 0 {
 			fkTableDef = tableDef
+			fkTableObjRef = tableObjRef
 		} else {
 			if ctx.GetQueryingSubscription() != nil {
-				_, fkTableDef = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
+				fkTableObjRef, fkTableDef = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
 			} else {
-				_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, snapshot)
+				fkTableObjRef, fkTableDef = ctx.ResolveById(fk.ForeignTbl, snapshot)
 			}
 		}
 
@@ -222,8 +224,14 @@ func ConstructCreateTableSQL(tableDef *plan.TableDef, snapshot Snapshot, ctx Com
 		if rowCount != 0 {
 			createStr += ",\n"
 		}
-		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
-			formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
+
+		if tableObjRef.SchemaName == fkTableObjRef.SchemaName {
+			createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
+				formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
+		} else {
+			createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s`.`%s` (`%s`) ON DELETE %s ON UPDATE %s",
+				formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableObjRef.SchemaName), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
+		}
 	}
 
 	if rowCount != 0 {

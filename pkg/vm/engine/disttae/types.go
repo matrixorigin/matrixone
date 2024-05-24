@@ -159,6 +159,9 @@ type Engine struct {
 	// globalStats is the global stats information, which is updated
 	// from logtail updates.
 	globalStats *GlobalStats
+
+	//for message on multiCN, use uuid to get the messageBoard
+	messageCenter *process.MessageCenter
 }
 
 // Transaction represents a transaction
@@ -742,8 +745,6 @@ type withFilterMixin struct {
 		seqnums  []uint16
 		colTypes []types.Type
 		// colNulls []bool
-
-		compPKPositions []uint16 // composite primary key pos in the columns
 
 		pkPos int // -1 means no primary key in columns
 

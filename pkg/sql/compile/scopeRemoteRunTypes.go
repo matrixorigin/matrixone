@@ -257,7 +257,7 @@ func (sender *messageSenderOnClient) close() {
 		sender.ctxCancel()
 	}
 	// XXX not a good way to deal it if close failed.
-	_ = sender.streamSender.Close(true)
+	_ = sender.streamSender.Close(false)
 }
 
 // messageReceiverOnServer is a structure
@@ -392,8 +392,9 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 
 	c := reuse.Alloc[Compile](nil)
 	c.proc = proc
-	c.proc.MessageBoard = c.MessageBoard
 	c.e = cnInfo.storeEngine
+	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.StmtProfile.GetStmtId())
+	c.proc.MessageBoard = c.MessageBoard
 	c.anal = newAnaylze()
 	c.anal.analInfos = proc.AnalInfos
 	c.addr = receiver.cnInformation.cnAddr

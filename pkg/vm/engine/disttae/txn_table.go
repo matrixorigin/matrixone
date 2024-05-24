@@ -17,13 +17,13 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -704,6 +705,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 //     1>.Raw batch data resides in txn.writes,read by partitionReader.
 //     2>.CN blocks resides in S3, read by blockReader.
 
+var slowPathCounter atomic.Int64
+
 // rangesOnePart collect blocks which are visible to this txn,
 // include committed blocks and uncommitted blocks by CN writing S3.
 // notice that only clean blocks can be distributed into remote CNs.
@@ -715,26 +718,34 @@ func (tbl *txnTable) rangesOnePart(
 	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
-
 	uncommittedObjects := tbl.collectUnCommittedObjects()
 	dirtyBlks := tbl.collectDirtyBlocks(state, uncommittedObjects)
 
-	done, err := tbl.tryFastFilterBlocks(
-		exprs, state, uncommittedObjects, dirtyBlks, outBlocks,
-		tbl.getTxn().engine.fs)
-	if err != nil {
+	var done bool
+
+	if done, err = TryFastFilterBlocks(
+		tbl.db.op.SnapshotTS(),
+		tbl.tableDef,
+		exprs,
+		state,
+		uncommittedObjects,
+		dirtyBlks,
+		outBlocks,
+		tbl.getTxn().engine.fs,
+		tbl.proc.Load(),
+	); err != nil {
 		return err
 	} else if done {
 		return nil
 	}
 
-	if done, err = tbl.tryFastRanges(
-		exprs, state, uncommittedObjects, dirtyBlks, outBlocks,
-		tbl.getTxn().engine.fs,
-	); err != nil {
-		return err
-	} else if done {
-		return nil
+	if slowPathCounter.Add(1) >= 1000 {
+		slowPathCounter.Store(0)
+		logutil.Info(
+			"SLOW-RANGES:",
+			zap.String("table", tbl.tableDef.Name),
+			zap.String("exprs", plan2.FormatExprs(exprs)),
+		)
 	}
 
 	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
@@ -744,12 +755,13 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	var (
-		objMeta  objectio.ObjectMeta
-		zms      []objectio.ZoneMap
-		vecs     []*vector.Vector
-		skipObj  bool
-		auxIdCnt int32
-		s3BlkCnt uint32
+		objMeta    objectio.ObjectMeta
+		zms        []objectio.ZoneMap
+		vecs       []*vector.Vector
+		skipObj    bool
+		auxIdCnt   int32
+		loadObjCnt uint32
+		s3BlkCnt   uint32
 	)
 
 	defer func() {
@@ -784,8 +796,8 @@ func (tbl *txnTable) rangesOnePart(
 
 			s3BlkCnt += obj.BlkCnt()
 			if auxIdCnt > 0 {
-				v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 				location := obj.ObjectLocation()
+				loadObjCnt++
 				if objMeta, err2 = objectio.FastLoadObjectMeta(
 					errCtx, &location, false, tbl.getTxn().engine.fs,
 				); err2 != nil {
@@ -810,6 +822,7 @@ func (tbl *txnTable) rangesOnePart(
 			}
 
 			if obj.Rows() == 0 && meta.IsEmpty() {
+				loadObjCnt++
 				location := obj.ObjectLocation()
 				if objMeta, err2 = objectio.FastLoadObjectMeta(
 					errCtx, &location, false, tbl.getTxn().engine.fs,
@@ -879,8 +892,9 @@ func (tbl *txnTable) rangesOnePart(
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)
 	if btotal > 0 {
-		v2.TxnRangeSizeHistogram.Observe(float64(bhit))
-		v2.TxnRangesBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
+		v2.TxnRangesSlowPathLoadObjCntHistogram.Observe(float64(loadObjCnt))
+		v2.TxnRangesSlowPathSelectedBlockCntHistogram.Observe(float64(bhit))
+		v2.TxnRangesSlowPathBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
 	}
 	return
 }
@@ -967,246 +981,6 @@ func (tbl *txnTable) collectDirtyBlocks(
 		})
 
 	return dirtyBlks
-}
-
-// tryFastFilterBlocks is going to replace the tryFastRanges completely soon, in progress now.
-func (tbl *txnTable) tryFastFilterBlocks(
-	exprs []*plan.Expr,
-	snapshot *logtailreplay.PartitionState,
-	uncommittedObjects []objectio.ObjectStats,
-	dirtyBlocks map[types.Blockid]struct{},
-	outBlocks *objectio.BlockInfoSlice,
-	fs fileservice.FileService) (done bool, err error) {
-	// TODO: refactor this code if composite key can be pushdown
-	if tbl.tableDef.Pkey.CompPkeyCol == nil {
-		return TryFastFilterBlocks(
-			tbl.db.op.SnapshotTS(),
-			tbl.tableDef,
-			exprs,
-			snapshot,
-			uncommittedObjects,
-			dirtyBlocks,
-			outBlocks,
-			fs,
-			tbl.proc.Load(),
-		)
-	}
-	return
-}
-
-// tryFastRanges only handle equal expression filter on zonemap and bloomfilter in tp scenario;
-// it filters out only a small number of blocks which should not be distributed to remote CNs.
-func (tbl *txnTable) tryFastRanges(
-	exprs []*plan.Expr,
-	snapshot *logtailreplay.PartitionState,
-	uncommittedObjects []objectio.ObjectStats,
-	dirtyBlocks map[types.Blockid]struct{},
-	outBlocks *objectio.BlockInfoSlice,
-	fs fileservice.FileService,
-) (done bool, err error) {
-	if tbl.primaryIdx == -1 || len(exprs) == 0 {
-		done = false
-		return
-	}
-
-	val, isVec := extractPKValueFromEqualExprs(
-		tbl.tableDef,
-		exprs,
-		tbl.primaryIdx,
-		tbl.proc.Load(),
-		tbl.getTxn().engine.packerPool,
-	)
-	if len(val) == 0 {
-		// TODO: refactor this code if composite key can be pushdown
-		return TryFastFilterBlocks(
-			tbl.db.op.SnapshotTS(),
-			tbl.tableDef,
-			exprs,
-			snapshot,
-			uncommittedObjects,
-			dirtyBlocks,
-			outBlocks,
-			fs,
-			tbl.proc.Load(),
-		)
-	}
-
-	var (
-		meta     objectio.ObjectDataMeta
-		bf       objectio.BloomFilter
-		blockCnt uint32
-		zmTotal  float64
-		zmHit    float64
-	)
-
-	defer func() {
-		if zmTotal > 0 {
-			v2.TxnFastRangesZMapSelectivityHistogram.Observe(zmHit / zmTotal)
-		}
-	}()
-
-	var vec *vector.Vector
-	if isVec {
-		vec = vector.NewVec(types.T_any.ToType())
-		_ = vec.UnmarshalBinary(val)
-	}
-
-	hasDeletes := len(dirtyBlocks) > 0
-
-	if err = ForeachSnapshotObjects(
-		tbl.db.op.SnapshotTS(),
-		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
-			zmTotal++
-			blockCnt += obj.BlkCnt()
-			var zmCkecked bool
-			// if the object info contains a pk zonemap, fast-check with the zonemap
-			if !obj.ZMIsEmpty() {
-				if isVec {
-					if !obj.SortKeyZoneMap().AnyIn(vec) {
-						zmHit++
-						return
-					}
-				} else {
-					if !obj.SortKeyZoneMap().ContainsKey(val) {
-						zmHit++
-						return
-					}
-				}
-				zmCkecked = true
-			}
-
-			var objMeta objectio.ObjectMeta
-			location := obj.Location()
-
-			// load object metadata
-			v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
-			if objMeta, err2 = objectio.FastLoadObjectMeta(
-				tbl.proc.Load().Ctx, &location, false, fs,
-			); err2 != nil {
-				return
-			}
-
-			// reset bloom filter to nil for each object
-			meta = objMeta.MustDataMeta()
-
-			// check whether the object is skipped by zone map
-			// If object zone map doesn't contains the pk value, we need to check bloom filter
-			if !zmCkecked {
-				if isVec {
-					if !meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyIn(vec) {
-						return
-					}
-				} else {
-					if !meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
-						return
-					}
-				}
-			}
-
-			bf = nil
-			if bf, err2 = objectio.LoadBFWithMeta(
-				tbl.proc.Load().Ctx, meta, location, fs,
-			); err2 != nil {
-				return
-			}
-
-			var blkIdx int
-			blockCnt := int(meta.BlockCount())
-			if !isVec {
-				blkIdx = sort.Search(blockCnt, func(j int) bool {
-					return meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyGEByValue(val)
-				})
-			}
-			if blkIdx >= blockCnt {
-				return
-			}
-			for ; blkIdx < blockCnt; blkIdx++ {
-				blkMeta := meta.GetBlockMeta(uint32(blkIdx))
-				zm := blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
-				if !isVec && !zm.AnyLEByValue(val) {
-					break
-				}
-				if isVec {
-					if !zm.AnyIn(vec) {
-						continue
-					}
-				} else {
-					if !zm.ContainsKey(val) {
-						continue
-					}
-				}
-
-				blkBf := bf.GetBloomFilter(uint32(blkIdx))
-				blkBfIdx := index.NewEmptyBinaryFuseFilter()
-				if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
-					return
-				}
-				var exist bool
-				if isVec {
-					lowerBound, upperBound := zm.SubVecIn(vec)
-					if exist = blkBfIdx.MayContainsAny(vec, lowerBound, upperBound); !exist {
-						continue
-					}
-				} else {
-					if exist, err2 = blkBfIdx.MayContainsKey(val); err2 != nil {
-						return
-					} else if !exist {
-						continue
-					}
-				}
-
-				name := obj.ObjectName()
-				loc := objectio.BuildLocation(name, obj.Extent(), blkMeta.GetRows(), uint16(blkIdx))
-				blk := objectio.BlockInfo{
-					BlockID:   *objectio.BuildObjectBlockid(name, uint16(blkIdx)),
-					SegmentID: name.SegmentId(),
-					MetaLoc:   objectio.ObjectLocation(loc),
-				}
-
-				blk.Sorted = obj.Sorted
-				blk.EntryState = obj.EntryState
-				blk.CommitTs = obj.CommitTS
-				if obj.HasDeltaLoc {
-					deltaLoc, commitTs, ok := snapshot.GetBockDeltaLoc(blk.BlockID)
-					if ok {
-						blk.DeltaLoc = deltaLoc
-						blk.CommitTs = commitTs
-					}
-				}
-
-				if hasDeletes {
-					if _, ok := dirtyBlocks[blk.BlockID]; !ok {
-						blk.CanRemote = true
-					}
-					blk.PartitionNum = -1
-					outBlocks.AppendBlockInfo(blk)
-					return
-				}
-				// store the block in ranges
-				blk.CanRemote = true
-				blk.PartitionNum = -1
-				outBlocks.AppendBlockInfo(blk)
-			}
-
-			return
-		},
-		snapshot,
-		uncommittedObjects...,
-	); err != nil {
-		return
-	}
-
-	done = true
-	bhit, btotal := outBlocks.Len()-1, int(blockCnt)
-	v2.TaskSelBlockTotal.Add(float64(btotal))
-	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
-	blockio.RecordBlockSelectivity(bhit, btotal)
-	if btotal > 0 {
-		v2.TxnFastRangeSizeHistogram.Observe(float64(bhit))
-		v2.TxnFastRangesBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
-	}
-
-	return
 }
 
 // the return defs has no rowid column
@@ -1971,62 +1745,35 @@ func (tbl *txnTable) NewReader(
 
 func (tbl *txnTable) tryExtractPKFilter(expr *plan.Expr) (retPKFilter PKFilter) {
 	pk := tbl.tableDef.Pkey
-	if pk != nil && expr != nil {
-		if !checkPrimaryKeyOnly && pk.CompPkeyCol != nil {
-			pkVals := make([]*plan.Literal, len(pk.Names))
-			_, hasNull := getCompositPKVals(expr, pk.Names, pkVals, tbl.proc.Load())
-			if hasNull {
-				retPKFilter.SetNull()
-				return
-			}
-			cnt := getValidCompositePKCnt(pkVals)
-			if cnt != 0 {
-				var packer *types.Packer
-				put := tbl.getTxn().engine.packerPool.Get(&packer)
-				for i := 0; i < cnt; i++ {
-					serialTupleByConstExpr(pkVals[i], packer)
-				}
-				v := packer.Bytes()
-				packer.Reset()
-				pkValue := logtailreplay.EncodePrimaryKey(v, packer)
-				// TODO: hack: remove the last comma, need to fix this in the future
-				pkValue = pkValue[0 : len(pkValue)-1]
-				put.Put()
-				if cnt == len(pk.Names) {
-					retPKFilter.SetFullData(function.EQUAL, false, pkValue)
-				} else {
-					retPKFilter.SetFullData(function.PREFIX_EQ, false, pkValue)
-				}
-			}
-		} else {
-			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			retPKFilter = getPKFilterByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
-			if retPKFilter.isNull || !retPKFilter.isValid {
-				return
-			}
-
-			if !retPKFilter.isVec {
-				var packer *types.Packer
-				put := tbl.getTxn().engine.packerPool.Get(&packer)
-				val := logtailreplay.EncodePrimaryKey(retPKFilter.val, packer)
-				put.Put()
-				if retPKFilter.op == function.EQUAL {
-					retPKFilter.SetFullData(function.EQUAL, false, val)
-				} else {
-					// TODO: hack: remove the last comma, need to fix this in the future
-					// serial_full(secondary_index, primary_key|fake_pk) => varchar
-					// prefix_eq expression only has the prefix(secondary index) in it.
-					// there will have an extra zero after the `encodeStringType` done
-					// this will violate the rule of prefix_eq, so remove this redundant zero here.
-					//
-					val = val[0 : len(val)-1]
-					retPKFilter.SetFullData(function.PREFIX_EQ, false, val)
-				}
-			}
-
-		}
+	if expr == nil || pk == nil {
 		return
 	}
+
+	pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
+	retPKFilter = getPKFilterByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
+	if retPKFilter.isNull || !retPKFilter.isValid || retPKFilter.isVec {
+		return
+	}
+
+	var packer *types.Packer
+
+	put := tbl.getTxn().engine.packerPool.Get(&packer)
+	val := logtailreplay.EncodePrimaryKey(retPKFilter.val, packer)
+	put.Put()
+
+	if retPKFilter.op == function.EQUAL {
+		retPKFilter.SetFullData(function.EQUAL, false, val)
+	} else {
+		// TODO: hack: remove the last comma, need to fix this in the future
+		// serial_full(secondary_index, primary_key|fake_pk) => varchar
+		// prefix_eq expression only has the prefix(secondary index) in it.
+		// there will have an extra zero after the `encodeStringType` done
+		// this will violate the rule of prefix_eq, so remove this redundant zero here.
+		//
+		val = val[0 : len(val)-1]
+		retPKFilter.SetFullData(function.PREFIX_EQ, false, val)
+	}
+
 	return
 }
 

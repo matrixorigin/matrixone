@@ -1109,6 +1109,20 @@ func (mr *MockEngineMockRecorder) Delete(ctx, databaseName, op interface{}) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockEngine)(nil).Delete), ctx, databaseName, op)
 }
 
+// GetMessageCenter mocks base method.
+func (m *MockEngine) GetMessageCenter() any {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetMessageCenter")
+	ret0, _ := ret[0].(any)
+	return ret0
+}
+
+// GetMessageCenter indicates an expected call of GetMessageCenter.
+func (mr *MockEngineMockRecorder) GetMessageCenter() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMessageCenter", reflect.TypeOf((*MockEngine)(nil).GetMessageCenter))
+}
+
 // GetNameById mocks base method.
 func (m *MockEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (string, string, error) {
 	m.ctrl.T.Helper()

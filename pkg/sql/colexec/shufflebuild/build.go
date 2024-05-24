@@ -194,15 +194,17 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var err error
 	var currentBatch *batch.Batch
+	var msg *process.RegisterMessage
 	for {
 		if ap.ctr.isMerge {
-			currentBatch, _, err = ctr.ReceiveFromAllRegs(anal)
+			msg = ctr.ReceiveFromAllRegs(anal)
 		} else {
-			currentBatch, _, err = ctr.ReceiveFromSingleReg(0, anal)
+			msg = ctr.ReceiveFromSingleReg(0, anal)
 		}
-		if err != nil {
-			return err
+		if msg.Err != nil {
+			return msg.Err
 		}
+		currentBatch = msg.Batch
 		if currentBatch == nil {
 			break
 		}

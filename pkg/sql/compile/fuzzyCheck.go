@@ -91,6 +91,11 @@ func (f fuzzyCheck) TypeName() string {
 }
 
 func (f *fuzzyCheck) reset() {
+	f.condition = ""
+	f.cnt = 0
+}
+
+func (f *fuzzyCheck) clear() {
 	f.db = ""
 	f.tbl = ""
 	f.attr = ""
