@@ -363,7 +363,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 }
 
 func deleteCurFkTables(ctx context.Context, bh BackgroundExec, dbName string, tblName string, toAccountId uint32) (err error) {
-	getLogger().Info(fmt.Sprintf("start to drop cur fk tables"))
+	getLogger().Info("start to drop cur fk tables")
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
