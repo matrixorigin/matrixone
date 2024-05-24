@@ -65,7 +65,7 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 		if expected.GetType().IsVarlen() {
 			v1, area1 := vector.MustVarlenaRawData(expected)
 			v2, area2 := vector.MustVarlenaRawData(got)
-			for i, v := range v1 {
+			for i := range v1 {
 				if nulls.Contains(expected.GetNulls(), uint64(i)) {
 					if !nulls.Contains(got.GetNulls(), uint64(i)) {
 						return false
@@ -74,7 +74,7 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 					if nulls.Contains(got.GetNulls(), uint64(i)) {
 						return false
 					}
-					if v.UnsafeGetString(area1) != v2[i].UnsafeGetString(area2) {
+					if v1[i].UnsafeGetString(area1) != v2[i].UnsafeGetString(area2) {
 						return false
 					}
 				}

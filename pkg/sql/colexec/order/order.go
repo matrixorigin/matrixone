@@ -114,7 +114,7 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 			nullCnt := firstVec.GetNulls().Count()
 			if nullCnt < firstVec.Length() {
 				if firstVec.GetType().IsVarlen() {
-					strCol = vector.InefficientMustStrCol(firstVec)
+					strCol = vector.MustStrCol(firstVec)
 				} else {
 					strCol = nil
 				}
@@ -139,7 +139,7 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 					nullCnt := vec.GetNulls().Count()
 					if nullCnt < vec.Length() {
 						if vec.GetType().IsVarlen() {
-							strCol = vector.InefficientMustStrCol(vec)
+							strCol = vector.MustStrCol(vec)
 						} else {
 							strCol = nil
 						}

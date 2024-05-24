@@ -43,11 +43,7 @@ func MustFixedCol[T any](v *Vector) (ret []T) {
 	return
 }
 
-// InefficientMustBytesCol
-// It should only be used for debugging purposes or in cases where performance is not a critical factor.
-// The function performs a potentially slow and memory-intensive operation to extract the byte representation of the column.
-// Avoid using this function in scenarios where speed is important.
-func InefficientMustBytesCol(v *Vector) [][]byte {
+func MustBytesCol(v *Vector) [][]byte {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -63,11 +59,7 @@ func InefficientMustBytesCol(v *Vector) [][]byte {
 	}
 }
 
-// InefficientMustStrCol
-// It should only be used for debugging purposes or in cases where performance is not a critical factor.
-// The function performs a potentially slow and memory-intensive operation to extract the byte representation of the column.
-// Avoid using this function in scenarios where speed is important.
-func InefficientMustStrCol(v *Vector) []string {
+func MustStrCol(v *Vector) []string {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -130,7 +122,7 @@ func ExpandStrCol(v *Vector) []string {
 		}
 		return vs
 	}
-	return InefficientMustStrCol(v)
+	return MustStrCol(v)
 }
 
 func ExpandBytesCol(v *Vector) [][]byte {
@@ -146,7 +138,7 @@ func ExpandBytesCol(v *Vector) [][]byte {
 		}
 		return vs
 	}
-	return InefficientMustBytesCol(v)
+	return MustBytesCol(v)
 }
 
 func MustVarlenaToInt64Slice(v *Vector) [][3]int64 {

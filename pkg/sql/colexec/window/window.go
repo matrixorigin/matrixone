@@ -456,7 +456,7 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 		nullCnt := ovec.GetNulls().Count()
 		if nullCnt < ovec.Length() {
 			if ovec.GetType().IsVarlen() {
-				strCol = vector.InefficientMustStrCol(ovec)
+				strCol = vector.MustStrCol(ovec)
 			} else {
 				strCol = nil
 			}
@@ -481,7 +481,7 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 			nullCnt := vec.GetNulls().Count()
 			if nullCnt < vec.Length() {
 				if vec.GetType().IsVarlen() {
-					strCol = vector.InefficientMustStrCol(vec)
+					strCol = vector.MustStrCol(vec)
 				} else {
 					strCol = nil
 				}

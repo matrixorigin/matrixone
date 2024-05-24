@@ -233,7 +233,7 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		}
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		if strCol == nil {
-			strCol = vector.InefficientMustStrCol(vec)
+			strCol = vector.MustStrCol(vec)
 		}
 		if !desc {
 			genericSort(strCol, os, genericLess[string])
