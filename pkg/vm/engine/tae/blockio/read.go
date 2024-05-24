@@ -140,10 +140,8 @@ func BlockRead(
 	var searchFunc ReadFilterSearchFuncType
 	if (filter.HasFakePK || !info.Sorted) && filter.UnSortedSearchFunc != nil {
 		searchFunc = filter.UnSortedSearchFunc
-		//fmt.Println("un sorted")
 	} else if info.Sorted && filter.SortedSearchFunc != nil {
 		searchFunc = filter.SortedSearchFunc
-		//fmt.Println("sorted")
 	}
 
 	if searchFunc != nil {

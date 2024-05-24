@@ -32,15 +32,15 @@ func UnOrderedLinearSearchOffsetByValFactory[T types.OrderedT | types.Decimal128
 		if len(rows) == 0 {
 			return sels
 		}
-
+		// sort the rows first maybe better if there has many vals
 		for x := range rows {
 			for y := range vals {
 				if (cmp != nil && cmp(rows[x], vals[y]) == 0) || (cmp == nil && rows[x] == vals[y]) {
 					sels = append(sels, int32(x))
+					break
 				}
 			}
 		}
-
 		return sels
 	}
 }
