@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
@@ -77,7 +78,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
@@ -338,7 +338,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 			Arg: &projection.Argument{},
 		},
 		{
-			Arg: &restrict.Argument{},
+			Arg: &filter.Argument{},
 		},
 		{
 			Arg: &semi.Argument{
@@ -464,7 +464,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Product), Product: &pipeline.Product{}},
 		{Op: int32(vm.ProductL2), ProductL2: &pipeline.ProductL2{}},
 		{Op: int32(vm.Projection), ProjectList: []*plan.Expr{}},
-		{Op: int32(vm.Restrict), Filter: &plan.Expr{}},
+		{Op: int32(vm.Filter), Filter: &plan.Expr{}},
 		{Op: int32(vm.Semi), SemiJoin: &pipeline.SemiJoin{}},
 		{Op: int32(vm.Single), SingleJoin: &pipeline.SingleJoin{}},
 		{Op: int32(vm.Mark), MarkJoin: &pipeline.MarkJoin{}},
