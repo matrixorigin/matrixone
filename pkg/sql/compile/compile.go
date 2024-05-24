@@ -1695,31 +1695,33 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if c.proc.TxnOperator.Txn().IsPessimistic() {
 			block = n.LockTargets[0].Block
 		}
-		ss = []*Scope{c.newMergeScope(ss)}
 		currentFirstFlag := c.anal.isFirst
-		for i := range ss {
-			var lockOpArg *lockop.Argument
-			lockOpArg, err = constructLockOp(n, c.e)
-			if err != nil {
-				return nil, err
+		var lockOpArg *lockop.Argument
+		lockOpArg, err = constructLockOp(n, c.e)
+		if err != nil {
+			return nil, err
+		}
+		lockOpArg.SetBlock(block)
+
+		if block {
+			ss = []*Scope{c.newMergeScope(ss)}
+			ss[0].Instructions[len(ss[0].Instructions)-1].Arg.Release()
+			ss[0].Instructions[len(ss[0].Instructions)-1] = vm.Instruction{
+				Op:      vm.LockOp,
+				Idx:     c.anal.curr,
+				IsFirst: currentFirstFlag,
+				Arg:     lockOpArg,
 			}
-			lockOpArg.SetBlock(block)
-			if block {
-				ss[i].Instructions[len(ss[i].Instructions)-1].Arg.Release()
-				ss[i].Instructions[len(ss[i].Instructions)-1] = vm.Instruction{
-					Op:      vm.LockOp,
-					Idx:     c.anal.curr,
-					IsFirst: currentFirstFlag,
-					Arg:     lockOpArg,
-				}
-			} else {
-				ss[i].appendInstruction(vm.Instruction{
-					Op:      vm.LockOp,
-					Idx:     c.anal.curr,
-					IsFirst: currentFirstFlag,
-					Arg:     lockOpArg,
-				})
+		} else {
+			if len(ss) > 1 {
+				ss = []*Scope{c.newMergeScope(ss)}
 			}
+			ss[0].appendInstruction(vm.Instruction{
+				Op:      vm.LockOp,
+				Idx:     c.anal.curr,
+				IsFirst: currentFirstFlag,
+				Arg:     lockOpArg,
+			})
 		}
 		ss = c.compileProjection(n, ss)
 		c.setAnalyzeCurrent(ss, curr)
