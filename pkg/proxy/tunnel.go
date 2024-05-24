@@ -255,11 +255,6 @@ func (t *tunnel) canStartTransfer(sync bool) bool {
 		return false
 	}
 
-	// Another transfer is already in progress.
-	if t.mu.inTransfer {
-		return false
-	}
-
 	csp, scp := t.mu.csp, t.mu.scp
 	csp.mu.Lock()
 	scp.mu.Lock()
@@ -278,8 +273,6 @@ func (t *tunnel) canStartTransfer(sync bool) bool {
 		return false
 	}
 
-	// Set the tunnel in transfer and the pipes paused directly.
-	t.mu.inTransfer = true
 	if !sync {
 		csp.mu.paused = true
 		scp.mu.paused = true
@@ -581,8 +574,6 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			if !p.mu.inTxn && p.tun.transferIntent.Load() && !rotated {
 				peer.wg.Add(1)
 				p.transferred = true
-			} else {
-				p.transferred = false
 			}
 			if len(buf) > 3 {
 				lastSeq = int16(buf[3])
@@ -628,6 +619,8 @@ func (p *pipe) handleTransferIntent(ctx context.Context, wg *sync.WaitGroup) err
 	// If it is not in a txn and transfer intent is true, transfer it sync.
 	if p.tun != nil && p.safeToTransfer() {
 		err := p.tun.transferSync(ctx)
+		// we have set transferred back to false, with "wg.Done()" together.
+		p.transferred = false
 		wg.Done()
 		return err
 	}
