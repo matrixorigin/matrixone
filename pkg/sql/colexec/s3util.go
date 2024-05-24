@@ -585,23 +585,17 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_nul
 				sortIndex, bat.Attrs[sortIndex])
 		}
 	}
-	var strCol []string
 	rowCount := bat.RowCount()
 	sels := make([]int64, rowCount)
 	for i := 0; i < rowCount; i++ {
 		sels[i] = int64(i)
 	}
 	ovec := bat.GetVector(int32(sortIndex))
-	if ovec.GetType().IsVarlen() {
-		strCol = vector.InefficientMustStrCol(ovec)
-	} else {
-		strCol = nil
-	}
 	if allow_null {
 		// null last
-		sort.Sort(false, true, hasNull, sels, ovec, strCol)
+		sort.Sort(false, true, hasNull, sels, ovec)
 	} else {
-		sort.Sort(false, false, hasNull, sels, ovec, strCol)
+		sort.Sort(false, false, hasNull, sels, ovec)
 	}
 	return bat.Shuffle(sels, m)
 }

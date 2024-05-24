@@ -940,12 +940,23 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 
 		bat.Shrink(sels, false)
 		execCtx.proc.Mp().PutSels(sels)
-		v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
-		v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
-		rows = rows[:len(v0)]
-		for i := range v0 {
-			rows[i][0] = v0[i].UnsafeGetString(area0)
-			rows[i][1] = v1[i].UnsafeGetString(area1)
+
+		v0 := vector.GenerateFunctionStrParameter(bat.Vecs[0])
+		v1 := vector.GenerateFunctionStrParameter(bat.Vecs[1])
+		rows = rows[:bat.Vecs[0].Length()]
+		for i := range rows {
+			s0, isNull := v0.GetStrValue(uint64(i))
+			if isNull {
+				rows[i][0] = ""
+			} else {
+				rows[i][0] = s0
+			}
+			s1, isNull := v1.GetStrValue(uint64(i))
+			if isNull {
+				rows[i][1] = ""
+			} else {
+				rows[i][1] = s1
+			}
 		}
 		bat.Clean(execCtx.proc.Mp())
 	}
@@ -966,11 +977,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 handle show variables
 */
 func handleShowVariables(ses FeSession, execCtx *ExecCtx, sv *tree.ShowVariables) error {
-	err := doShowVariables(ses.(*Session), execCtx, sv)
-	if err != nil {
-		return err
-	}
-	return err
+	return doShowVariables(ses.(*Session), execCtx, sv)
 }
 
 func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error) {
