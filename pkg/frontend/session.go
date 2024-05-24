@@ -258,7 +258,7 @@ func (ses *Session) getNextProcessId() string {
 		temporary method:
 		routineId + sqlCount
 	*/
-	routineId := ses.GetResponser().ConnectionID()
+	routineId := ses.GetResponser().GetProperty("connid")
 	return fmt.Sprintf("%d%d", routineId, ses.GetSqlCount())
 }
 
@@ -678,9 +678,9 @@ func (ses *Session) UpdateDebugString() {
 	sb := bytes.Buffer{}
 	//option connection id , ip
 	if ses.respr != nil {
-		sb.WriteString(fmt.Sprintf("connectionId %d", ses.respr.ConnectionID()))
+		sb.WriteString(fmt.Sprintf("connectionId %d", ses.respr.GetProperty("connid")))
 		sb.WriteByte('|')
-		sb.WriteString(ses.respr.Peer())
+		sb.WriteString(ses.respr.GetProperty("peer").(string))
 	}
 	sb.WriteByte('|')
 	//account info
@@ -753,7 +753,7 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 			stmtProfile:    process.StmtProfile{},
 			tenant:         nil,
 			txnHandler:     txnHandler,
-			txnCompileCtx:  InitTxnCompilerContext(ses.respr.GetDatabaseName()),
+			txnCompileCtx:  InitTxnCompilerContext(ses.respr.GetProperty("dbname").(string)),
 			mrs:            nil,
 			outputCallback: callback,
 			allResultSet:   nil,
@@ -963,7 +963,7 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 	}
 	var connID uint32
 	if ses.respr != nil {
-		connID = ses.respr.ConnectionID()
+		connID = ses.respr.GetProperty("connid").(uint32)
 	}
 	ses.Errorf(ctx, "prepared statement '%s' does not exist on connection %d", name, connID)
 	return nil, moerr.NewInvalidState(ctx, "prepared statement '%s' does not exist", name)
@@ -1129,11 +1129,11 @@ func (ses *Session) GetTxnInfo() string {
 }
 
 func (ses *Session) GetDatabaseName() string {
-	return ses.GetResponser().GetDatabaseName()
+	return ses.GetResponser().GetProperty("dbname").(string)
 }
 
 func (ses *Session) SetDatabaseName(db string) {
-	ses.GetResponser().SetDatabaseName(db)
+	ses.GetResponser().SetProperty("dbname", db)
 	ses.GetTxnCompileCtx().SetDatabase(db)
 }
 
@@ -1142,13 +1142,13 @@ func (ses *Session) DatabaseNameIsEmpty() bool {
 }
 
 func (ses *Session) SetUserName(uname string) {
-	ses.GetResponser().SetUserName(uname)
+	ses.GetResponser().SetProperty("username", uname)
 }
 
 func (ses *Session) GetConnectionID() uint32 {
 	protocol := ses.GetResponser()
 	if protocol != nil {
-		return ses.GetResponser().ConnectionID()
+		return ses.GetResponser().GetProperty("connid").(uint32)
 	}
 	return 0
 }

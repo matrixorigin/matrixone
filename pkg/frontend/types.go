@@ -518,16 +518,16 @@ func (ses *feSessionImpl) GetFPrints() footPrints {
 }
 
 func (ses *feSessionImpl) SetDatabaseName(db string) {
-	ses.respr.SetDatabaseName(db)
+	ses.respr.SetProperty("dbname", db)
 	ses.txnCompileCtx.SetDatabase(db)
 }
 
 func (ses *feSessionImpl) GetDatabaseName() string {
-	return ses.respr.GetDatabaseName()
+	return ses.respr.GetProperty("dbname").(string)
 }
 
 func (ses *feSessionImpl) GetUserName() string {
-	return ses.respr.GetUserName()
+	return ses.respr.GetProperty("uname").(string)
 }
 
 func (ses *feSessionImpl) DisableTrace() bool {
@@ -812,6 +812,7 @@ type MysqlWriter interface {
 	WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error
 
 	Write(*batch.Batch) error
+
 	ConnectionID() uint32
 	SetDatabaseName(s string)
 	GetDatabaseName() string
@@ -822,20 +823,22 @@ type MysqlWriter interface {
 	SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, count uint64) error
 	sendLocalInfileRequest(filepath string) error
 	Read(options goetty.ReadOptions) (interface{}, error)
-	SetSequenceID(i any)
-	GetSequenceId() int
+	SetSequenceID(i uint8)
+	GetSequenceId() uint8
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 	GetCapability() uint32
 	SetCapability(c uint32)
+	ResetStatistics()
 }
 
+// MysqlPayloadWriter make final payload for the packet
 type MysqlPayloadWriter interface {
 	OpenRow() error
-	CloseRow(bool) error
+	CloseRow() error
 	OpenPayload() error
 	FillPayload() error
-	ClosePayload() error
+	ClosePayload(bool) error
 }
 
 type S3Writer interface {

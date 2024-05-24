@@ -35,7 +35,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	}
 
 	if opts.Username != nil {
-		sess.respr.SetUserName(*opts.Username)
+		sess.respr.SetProperty("username", *opts.Username)
 	}
 
 	if opts.IsInternal != nil {
