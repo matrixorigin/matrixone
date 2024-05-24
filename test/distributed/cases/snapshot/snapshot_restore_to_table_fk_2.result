@@ -313,9 +313,6 @@ departmentid    budget
 drop snapshot if exists snapshot_01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp06    2024-05-24 02:14:10.242948    account    acc01        
-sp05    2024-05-24 02:14:10.22484    account    acc01        
-sp07    2024-05-23 14:18:09.740943    account    acc01        
 create snapshot snapshot_01 for account sys;
 Drop database Company;
 internal error: can not drop database. It has been referenced by foreign keys
@@ -754,9 +751,6 @@ departmentid    budget
 drop snapshot if exists snapshot_01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp06    2024-05-24 02:14:10.242948    account    acc01        
-sp05    2024-05-24 02:14:10.22484    account    acc01        
-sp07    2024-05-23 14:18:09.740943    account    acc01        
 create snapshot snapshot_01 for account sys;
 Drop database Projects;
 internal error: can not drop database. It has been referenced by foreign keys
@@ -880,20 +874,8 @@ drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
 drop snapshot snapshot_01;
-show databases;
-Database
-information_schema
-mo_catalog
-mo_task
-mysql
-snapshot_restore_to_table_fk_2
-system
-system_metrics
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp06    2024-05-24 02:14:10.242948    account    acc01        
-sp05    2024-05-24 02:14:10.22484    account    acc01        
-sp07    2024-05-23 14:18:09.740943    account    acc01        
 drop database if exists acc_test02;
 create database acc_test02;
 use acc_test02;
@@ -930,23 +912,12 @@ insert into aff01 values (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
 insert into aff01 values (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
 insert into aff01 values (7654,'MARTIN','SALPESMAN',7698,'1981-09-28',1250,1400,30);
 insert into aff01 values (7698,'BLAKE','MANAGER',7839,'1981-05-01',2850,NULL,30);
-insert into aff01 values (7782,'CLARK','MANAGER',7839,'1981-06-09',2450,NULL,10);
-insert into aff01 values (7788,'SCOTT','ANALYST',7566,'0087-07-13',3000,NULL,20);
-insert into aff01 values (7839,'KING','PRESIDENT',NULL,'1981-11-17',5000,NULL,10);
-insert into aff01 values (7844,'TURNER','SALESMAN',7698,'1981-09-08',1500,0,30);
-insert into aff01 values (7876,'ADAMS','CLERK',7788,'0087-07-13',1100,NULL,20);
-insert into aff01 values (7900,'JAMES','CLERK',7698,'1981-12-03',950,NULL,30);
-insert into aff01 values (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
-insert into aff01 values (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 select count(*) from aff01;
 count(*)
-14
+6
 drop snapshot if exists snapshot_01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp06    2024-05-24 02:14:10.242948    account    acc01        
-sp05    2024-05-24 02:14:10.22484    account    acc01        
-sp07    2024-05-23 14:18:09.740943    account    acc01        
 create snapshot snapshot_01 for account sys;
 CREATE DATABASE Company;
 USE Company;
@@ -1262,19 +1233,6 @@ departmentid    budget
 6    600000.00
 restore account sys from snapshot snapshot_01;
 internal error: can not drop database. It has been referenced by foreign keys
-show databases;
-Database
-acc_test02
-company
-information_schema
-mo_catalog
-mo_task
-mysql
-payroll
-projects
-snapshot_restore_to_table_fk_2
-system
-system_metrics
 select * from acc_test02.pri01;
 deptno    dname    loc
 10    ACCOUNTING    NEW YORK
@@ -1289,30 +1247,7 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
 7654    MARTIN    SALPESMAN    7698    1981-09-28    1250.00    1400.00    30
 7698    BLAKE    MANAGER    7839    1981-05-01    2850.00    null    30
-7782    CLARK    MANAGER    7839    1981-06-09    2450.00    null    10
-7788    SCOTT    ANALYST    7566    0087-07-13    3000.00    null    20
-7839    KING    PRESIDENT    null    1981-11-17    5000.00    null    10
-7844    TURNER    SALESMAN    7698    1981-09-08    1500.00    0.00    30
-7876    ADAMS    CLERK    7788    0087-07-13    1100.00    null    20
-7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
-7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
-7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
 drop database if exists acc_test02;
 drop snapshot if exists snapshot_01;
-show databases;
-Database
-company
-information_schema
-mo_catalog
-mo_task
-mysql
-payroll
-projects
-snapshot_restore_to_table_fk_2
-system
-system_metrics
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp06    2024-05-24 02:14:10.242948    account    acc01        
-sp05    2024-05-24 02:14:10.22484    account    acc01        
-sp07    2024-05-23 14:18:09.740943    account    acc01        

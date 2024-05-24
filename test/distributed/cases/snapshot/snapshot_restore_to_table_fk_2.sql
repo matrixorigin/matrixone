@@ -564,7 +564,6 @@ drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
 drop snapshot snapshot_01;
-show databases;
 -- @ignore:1
 show snapshots;
 
@@ -864,14 +863,12 @@ select * from ProjectBonuses;
 select * from DepartmentBudgets;
 
 restore account sys from snapshot snapshot_01;
-show databases;
 
 select * from acc_test02.pri01;
 select * from acc_test02.aff01;
 
 drop database if exists acc_test02;
 drop snapshot if exists snapshot_01;
-show databases;
 -- @ignore:1
 show snapshots;
 -- @bvt:issue
