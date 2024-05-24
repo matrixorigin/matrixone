@@ -2245,8 +2245,8 @@ func (tbl *txnTable) PKPersistedBetween(
 		return true, err
 	}
 
-	var filter blockio.ReadFilter
-	buildFilter := func() blockio.ReadFilter {
+	var filter blockio.ReadFilterSearchFuncType
+	buildFilter := func() blockio.ReadFilterSearchFuncType {
 		//keys must be sorted.
 		keys.InplaceSort()
 		bytes, _ := keys.MarshalBinary()
@@ -2262,11 +2262,11 @@ func (tbl *txnTable) PKPersistedBetween(
 			inExpr,
 			"pk",
 			tbl.proc.Load())
-		return filter
+		return filter.SortedSearchFunc
 	}
 
-	var unsortedFilter blockio.ReadFilter
-	buildUnsortedFilter := func() blockio.ReadFilter {
+	var unsortedFilter blockio.ReadFilterSearchFuncType
+	buildUnsortedFilter := func() blockio.ReadFilterSearchFuncType {
 		return getNonSortedPKSearchFuncByPKVec(keys)
 	}
 
@@ -2511,7 +2511,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		bat, err := blockio.BlockRead(
 			tbl.proc.Load().Ctx, &blk, nil, columns, colTypes,
 			tbl.db.op.SnapshotTS(),
-			nil, nil, nil,
+			nil, nil, blockio.ReadFilter{},
 			tbl.getTxn().engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(), fileservice.Policy(0),
 		)
 		if err != nil {
