@@ -329,8 +329,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2024-05-13 03:35:03.806089    account    acc01        
-sp07    2024-05-13 03:35:03.712779    account    acc01        
+sp08    2024-05-13 03:35:03.806089    account    acc01
+sp07    2024-05-13 03:35:03.712779    account    acc01
 restore account acc01 from snapshot sp07 to account acc02;
 restore account acc01 from snapshot sp08 to account acc02;
 use test01;
@@ -345,7 +345,7 @@ col1    col2
 134    database
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\nUNIQUE KEY `col1` (`col1`)\n)
+table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 drop database test01;
 drop database test01;
 Can't drop database 'test01'; database doesn't exist
@@ -382,7 +382,7 @@ show create table table01;
 no such table test02.table01
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n`col1` INT DEFAULT null,\n`col2` VARCHAR(20) DEFAULT null,\n`new` DECIMAL(38,0) DEFAULT null,\nUNIQUE KEY `col1` (`col1`)\n)
+table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  `new` DECIMAL(38,0) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 select * from table02;
 col1    col2    new
 133    database    null

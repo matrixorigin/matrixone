@@ -1073,10 +1073,16 @@ type topsort struct {
 }
 
 func (g *topsort) addVertex(v string) {
+	if _, ok := g.next[v]; ok {
+		return
+	}
 	g.next[v] = make([]string, 0)
 }
 
 func (g *topsort) addEdge(from, to string) {
+	if _, ok := g.next[from]; !ok {
+		g.next[from] = make([]string, 0)
+	}
 	g.next[from] = append(g.next[from], to)
 }
 

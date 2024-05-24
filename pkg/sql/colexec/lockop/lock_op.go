@@ -617,15 +617,23 @@ func doLock(
 	return true, result.TableDefChanged, snapshotTS, nil
 }
 
+const defaultWaitTimeOnRetryLock = time.Second
+
 func canRetryLock(txn client.TxnOperator, err error) bool {
 	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
-	if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
-		!moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
+	if txn.LockTableCount() > 0 {
 		return false
 	}
-	if txn.LockTableCount() == 0 {
+	if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
+		return true
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
+		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
 	return false
