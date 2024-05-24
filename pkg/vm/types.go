@@ -35,7 +35,7 @@ const (
 	Output
 	Offset
 	Product
-	Restrict
+	Filter
 	Dispatch
 	Connector
 	Projection
