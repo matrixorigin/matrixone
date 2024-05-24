@@ -282,8 +282,11 @@ func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 	op.workspace = tc.workspace.CloneSnapshotWS()
 	op.workspace.BindTxnOp(op)
 
+	tc.mu.Lock()
 	tc.children = append(tc.children, op)
 	op.parent.Store(tc)
+	tc.mu.Unlock()
+
 	return op
 }
 
