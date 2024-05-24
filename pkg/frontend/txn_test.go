@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -62,7 +61,6 @@ func newTestWorkspace() *testWorkspace {
 }
 
 func (txn *testWorkspace) StartStatement() {
-	fmt.Printf("StartStatement stmtId: %d, %p\n", txn.stmtId, txn)
 	if txn.start {
 		panic("BUG: StartStatement called twice")
 	}
@@ -71,7 +69,6 @@ func (txn *testWorkspace) StartStatement() {
 }
 
 func (txn *testWorkspace) EndStatement() {
-	fmt.Printf("EndStatement stmtId: %d, %p\n", txn.stmtId, txn)
 	if !txn.start {
 		panic("BUG: StartStatement not called")
 	}
