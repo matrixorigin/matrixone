@@ -257,7 +257,7 @@ func (exec *clusterCentersExec) Merge(next AggFuncExec, groupIdx1 int, groupIdx2
 		return nil
 	}
 
-	bts := vector.MustBytesCol(other.groupData[groupIdx2])
+	bts := vector.InefficientMustBytesCol(other.groupData[groupIdx2])
 	if err := vector.AppendBytesList(exec.groupData[groupIdx1], bts, nil, exec.ret.mp); err != nil {
 		return err
 	}
