@@ -68,7 +68,7 @@ MatrixOne is a hyper-converged cloud & edge native distributed database with a s
 ### 💥 **Hyper-converged Engine**
 
 <details>
-  <summary><b><font size=4>Monolithic Engine![Alt text](image.png)</b></font></summary>
+  <summary><b><font size=4>Monolithic Engine</b></font></summary>
           HTAP data engine that supports a mix of workloads such as TP, AP, time series, and machine learning within a single database.
 </details>
 
@@ -144,7 +144,7 @@ MatrixOne is a hyper-converged cloud & edge native distributed database with a s
      Currently, the architecture design across different infrastructures is complicated, causing new data silos between cloud and edge, cloud and on-premise. MatrixOne is designed with a unified architecture to support simplified data management and operations across different infrastructures.
 </details>
 <details>
-  <summary><b><font size=4>Extremely Fast Complex Query Performance</b></font></summary>  
+  <summary><b><font size=4>Extremely Fast Complex Query Performance</b></font></summary>
      Poor business agility results from slow, complex queries and redundant intermediate tables in current data warehousing solutions. MatrixOne supports blazing-fast experience even for star and snowflake schema queries, improving business agility with real-time analytics.
 </details>
 <details>
@@ -268,7 +268,7 @@ __Note__: The login account in the above code snippet is the initial account; pl
 
 ## 🙌 <a id="contributing">Contributing</a>
 
-Contributions to MatrixOne are welcome from everyone.  
+Contributions to MatrixOne are welcome from everyone.
  See [Contribution Guide](https://docs.matrixorigin.cn/en/1.1.3/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
 
 ### 👏 All contributors
