@@ -45,7 +45,7 @@ func (p *PartitionState) PKExistInMemBetween(
 			ShortObjName: objItem.ShortObjName})
 		if ret {
 			item := objTombstoneIter.Item()
-			if bytes.Compare(item.ShortObjName[:], objItem.ShortObjName[:]) == 0 {
+			if bytes.Equal(item.ShortObjName[:], objItem.ShortObjName[:]) {
 				hasTombstone = true
 			}
 		}

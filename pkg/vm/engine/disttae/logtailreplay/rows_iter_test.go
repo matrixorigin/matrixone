@@ -100,6 +100,21 @@ func TestPartitionStateIter(t *testing.T) {
 		require.Nil(t, iter.Close())
 	}
 
+	// primary key iter
+	for i := 0; i < num; i++ {
+		ts := types.BuildTS(int64(i), 0)
+		bs := EncodePrimaryKey(int64(i), packer)
+		iter := state.NewPrimaryKeyIter(ts, Exact(bs))
+		n := 0
+		for iter.Next() {
+			n++
+		}
+		require.Equal(t, 1, n)
+		require.Nil(t, iter.Close())
+		modified, _ := state.PKExistInMemBetween(ts.Prev(), ts.Next(), [][]byte{bs})
+		require.True(t, modified)
+	}
+
 	deleteAt := 1000
 	{
 		// delete number i at (deleteAt+i) with (i+1) row id
@@ -165,6 +180,31 @@ func TestPartitionStateIter(t *testing.T) {
 			require.Equal(t, 1, len(rowIDs))
 			require.Nil(t, iter.Close())
 		}
+
+		{
+			// primary key change detection
+			ts := types.BuildTS(int64(deleteAt+i), 0)
+			key := EncodePrimaryKey(int64(i), packer)
+			modified, _ := state.PKExistInMemBetween(
+				ts.Prev(),
+				ts.Next(),
+				[][]byte{key},
+			)
+			require.True(t, modified)
+		}
+
+		{
+			// primary key iter
+			key := EncodePrimaryKey(int64(i), packer)
+			iter := state.NewPrimaryKeyIter(types.BuildTS(int64(deleteAt+i+1), 0), Exact(key))
+			n := 0
+			for iter.Next() {
+				n++
+			}
+			iter.Close()
+			require.Equal(t, 0, n) // not visible
+		}
+
 	}
 
 	// primary key iter
@@ -327,15 +367,6 @@ func TestPartitionStateIter(t *testing.T) {
 	//		require.Nil(t, iter.Close())
 	//	}
 	//}
-
-}
-
-func TestPartitionStatePrimaryKeyIter(t *testing.T) {
-	//state := NewPartitionState(false)
-	//ctx := context.Background()
-	//pool := mpool.MustNewZero()
-	//packer := types.NewPacker(pool)
-	//defer packer.FreeMem()
 
 }
 
@@ -505,51 +536,6 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 		}
 		require.Equal(t, num, n)
 		require.Nil(t, iter.Close())
-	}
-
-	// should be detectable
-	for i := 0; i < num; i++ {
-		ts := types.BuildTS(int64(i), 0)
-		key := EncodePrimaryKey(int64(i), packer)
-		modified, _ := state.PKExistInMemBetween(ts.Prev(), ts.Next(), [][]byte{key})
-		require.True(t, modified)
-	}
-
-}
-
-func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
-	state := NewPartitionState(false)
-	ctx := context.Background()
-	pool := mpool.MustNewZero()
-	packer := types.NewPacker(pool)
-	defer packer.FreeMem()
-
-	const num = 128
-
-	sid := objectio.NewSegmentid()
-	buildRowID := func(i int) types.Rowid {
-		blk := objectio.NewBlockid(sid, uint16(i), 0)
-		return *objectio.NewRowid(blk, uint32(0))
-	}
-
-	{
-		// delete number i at time i with (i+1) row id
-		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-		tsVec := vector.NewVec(types.T_TS.ToType())
-		primaryKeyVec := vector.NewVec(types.T_int64.ToType())
-		for i := 0; i < num; i++ {
-			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
-			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)
-			vector.AppendFixed(primaryKeyVec, int64(i), false, pool)
-		}
-		state.HandleRowsDelete(ctx, &api.Batch{
-			Attrs: []string{"rowid", "time", "i"},
-			Vecs: []api.Vector{
-				mustVectorToProto(rowIDVec),
-				mustVectorToProto(tsVec),
-				mustVectorToProto(primaryKeyVec), // with primary key
-			},
-		}, packer)
 	}
 
 	// should be detectable

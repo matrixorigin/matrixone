@@ -81,7 +81,7 @@ func (p *rowTombstoneIter) Next() bool {
 
 			if p.checkBlockID {
 				obj := p.iter.Item().ShortObjName
-				if bytes.Compare(objectio.ShortName(&p.blockID)[:], obj[:]) != 0 {
+				if !bytes.Equal(objectio.ShortName(&p.blockID)[:], obj[:]) {
 					break
 				}
 			}
@@ -180,7 +180,7 @@ func (p *rowsIter) Next() bool {
 		if ok {
 			item1 := p.objsTombstoneIter.Item()
 			item2 := p.objsDataRowIter.Item()
-			if bytes.Compare(item1.ShortObjName[:], item2.ShortObjName[:]) == 0 {
+			if bytes.Equal(item1.ShortObjName[:], item2.ShortObjName[:]) {
 				hasTombstone = true
 				return
 			}
@@ -509,7 +509,7 @@ func (p *primaryKeyIter) Next() bool {
 				return true
 			}
 			item := p.objsTombIter.Item()
-			if bytes.Compare(item.ShortObjName[:], shortName[:]) != 0 {
+			if !bytes.Equal(item.ShortObjName[:], shortName[:]) {
 				p.curRow = rowEntry
 				return true
 			}
@@ -615,7 +615,7 @@ func (p *primaryKeyDelIter) Next() bool {
 
 			}
 			item := p.objsTombIter.Item()
-			if bytes.Compare(item.ShortObjName[:], shortName[:]) != 0 {
+			if !bytes.Equal(item.ShortObjName[:], shortName[:]) {
 				//the current object has no tombstones.
 				break
 			}

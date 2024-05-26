@@ -494,8 +494,6 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 	})
 }
 
-var nextRowEntryID = int64(1)
-
 func (p *PartitionState) HandleRowsInsert(
 	ctx context.Context,
 	input *api.Batch,
@@ -659,7 +657,7 @@ func (p *PartitionState) truncateDataRowsByBlk(
 		return
 	}
 	item := objIter.Item()
-	if bytes.Compare(item.ShortObjName[:], objPivot.ShortObjName[:]) != 0 {
+	if !bytes.Equal(item.ShortObjName[:], objPivot.ShortObjName[:]) {
 		return
 	}
 
@@ -701,7 +699,7 @@ func (p *PartitionState) truncateTombstonesByBlk(
 		return
 	}
 	item := objIter.Item()
-	if bytes.Compare(item.ShortObjName[:], objPivot.ShortObjName[:]) != 0 {
+	if !bytes.Equal(item.ShortObjName[:], objPivot.ShortObjName[:]) {
 		return
 	}
 
