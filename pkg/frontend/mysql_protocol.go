@@ -396,8 +396,6 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 }
 
 func (mp *MysqlProtocolImpl) Close() {
-	//TODO implement me
-	panic("implement me")
 }
 
 func (mp *MysqlProtocolImpl) WriteHandshake() error {
@@ -452,19 +450,16 @@ func (mp *MysqlProtocolImpl) WriteBinaryRow() error {
 	panic("implement me")
 }
 
-func (mp *MysqlProtocolImpl) WriteResponse(ctx context.Context, response *Response) error {
-	//TODO implement me
-	panic("implement me")
+func (mp *MysqlProtocolImpl) WriteResponse(ctx context.Context, resp *Response) error {
+	return mp.SendResponse(ctx, resp)
 }
 
 func (mp *MysqlProtocolImpl) WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
-	//TODO implement me
-	panic("implement me")
+	return mp.SendPrepareResponse(ctx, stmt)
 }
 
 func (mp *MysqlProtocolImpl) Read(options goetty.ReadOptions) (interface{}, error) {
-	//TODO implement me
-	panic("implement me")
+	return mp.tcpConn.Read(options)
 }
 
 func (mp *MysqlProtocolImpl) GetSession() *Session {

@@ -457,9 +457,8 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		return err
 	}
 
-	oq := newFakeOutputQueue(outputRS)
 	for _, b := range accInfosBatches {
-		if err = fillResultSet(ctx, oq, b, ses); err != nil {
+		if err = fillResultSet(ctx, b, ses, outputRS); err != nil {
 			return err
 		}
 	}

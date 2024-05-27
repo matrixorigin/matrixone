@@ -472,7 +472,9 @@ func (ses *feSessionImpl) ExitFPrint(idx int) {
 }
 
 func (ses *feSessionImpl) Close() {
-	ses.respr.Close()
+	if ses.respr != nil {
+		ses.respr.Close()
+	}
 	ses.mrs = nil
 	if ses.txnHandler != nil {
 		ses.txnHandler = nil

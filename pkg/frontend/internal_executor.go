@@ -252,53 +252,43 @@ func (ip *internalProtocol) Write(ctx *ExecCtx, batch *batch.Batch) error {
 }
 
 func (ip *internalProtocol) Close() {
-	//TODO implement me
-	panic("implement me")
+
 }
 
 func (ip *internalProtocol) WriteHandshake() error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (ip *internalProtocol) WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (ip *internalProtocol) WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (ip *internalProtocol) WriteEOF(warnings, status uint16) error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (ip *internalProtocol) WriteEOFIF(warnings uint16, status uint16) error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (ip *internalProtocol) WriteEOFOrOK(warnings uint16, status uint16) error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (ip *internalProtocol) WriteERR(errorCode uint16, sqlState, errorMessage string) error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (ip *internalProtocol) WriteLengthEncodedNumber(u uint64) error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (ip *internalProtocol) WriteColumnDef(ctx context.Context, column Column, i int) error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (ip *internalProtocol) WriteRow() error {
@@ -316,14 +306,12 @@ func (ip *internalProtocol) WriteBinaryRow() error {
 	panic("implement me")
 }
 
-func (ip *internalProtocol) WriteResponse(ctx context.Context, response *Response) error {
-	//TODO implement me
-	panic("implement me")
+func (ip *internalProtocol) WriteResponse(ctx context.Context, resp *Response) error {
+	return ip.SendResponse(ctx, resp)
 }
 
 func (ip *internalProtocol) WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
-	//TODO implement me
-	panic("implement me")
+	return ip.SendPrepareResponse(ctx, stmt)
 }
 
 func (ip *internalProtocol) Read(options goetty.ReadOptions) (interface{}, error) {

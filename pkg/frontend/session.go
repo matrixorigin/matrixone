@@ -763,6 +763,7 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 			gSysVars:       GSysVariables,
 			label:          make(map[string]string),
 			timeZone:       time.Local,
+			respr:          dumpResper,
 		},
 	}
 	backSes.uuid, _ = uuid.NewV7()
@@ -798,6 +799,7 @@ func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExe
 			gSysVars:       GSysVariables,
 			label:          make(map[string]string),
 			timeZone:       time.Local,
+			respr:          dumpResper,
 		},
 	}
 	backSes.uuid, _ = uuid.NewV7()

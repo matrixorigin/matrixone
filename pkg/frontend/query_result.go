@@ -573,10 +573,11 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 					break
 				}
 
-				_, err = extractRowFromEveryVector(ctx, ses, tmpBatch, j, oq, true)
-				if err != nil {
-					return err
-				}
+				panic("TODO: to fix")
+				//_, err = extractRowFromEveryVector(ctx, ses, tmpBatch, j, oq, true)
+				//if err != nil {
+				//	return err
+				//}
 			}
 		}
 	}

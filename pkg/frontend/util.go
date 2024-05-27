@@ -485,7 +485,14 @@ func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement,
 
 func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string, status statementStatus, err error) {
 	str := SubStringFromBegin(stmtStr, int(getGlobalPu().SV.LengthOfQueryPrinted))
-	outBytes, outPacket := ses.GetResponser().(*MysqlResp).mysqlWr.CalculateOutTrafficBytes(true)
+	var outBytes, outPacket int64
+	switch resper := ses.GetResponser().(type) {
+	case *MysqlResp:
+		outBytes, outPacket = resper.mysqlWr.CalculateOutTrafficBytes(true)
+	default:
+
+	}
+
 	if status == success {
 		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
 		err = nil // make sure: it is nil for EndStatement

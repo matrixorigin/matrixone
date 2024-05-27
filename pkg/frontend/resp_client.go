@@ -67,7 +67,7 @@ func (resper *MysqlResp) respClientWithoutFlush(ses *Session,
 }
 
 var _ Responser = &MysqlResp{}
-var _ Responser = &NullResp{}
+var dumpResper Responser = &NullResp{}
 
 type MysqlResp struct {
 	mysqlWr MysqlWriter
@@ -134,9 +134,15 @@ func (resper *MysqlResp) RespPostMeta(execCtx *ExecCtx, meta any) (err error) {
 }
 
 func (resper *MysqlResp) Close() {
-	resper.mysqlWr.Close()
-	resper.csvWr.Close()
-	resper.s3Wr.Close()
+	if resper.mysqlWr != nil {
+		resper.mysqlWr.Close()
+	}
+	if resper.csvWr != nil {
+		resper.csvWr.Close()
+	}
+	if resper.s3Wr != nil {
+		resper.s3Wr.Close()
+	}
 }
 
 type NullResp struct {

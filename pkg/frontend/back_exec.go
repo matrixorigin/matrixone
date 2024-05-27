@@ -470,6 +470,7 @@ var NewBackgroundExec = func(
 			gSysVars:       GSysVariables,
 			label:          make(map[string]string),
 			timeZone:       time.Local,
+			respr:          dumpResper,
 		},
 	}
 	backSes.uuid, _ = uuid.NewV7()
@@ -560,8 +561,7 @@ func fakeDataSetFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batc
 	}
 
 	back := handle.(*backSession)
-	oq := newFakeOutputQueue(back.mrs)
-	err := fillResultSet(execCtx.reqCtx, oq, dataSet, back)
+	err := fillResultSet(execCtx.reqCtx, dataSet, back, back.mrs)
 	if err != nil {
 		return err
 	}
@@ -569,18 +569,20 @@ func fakeDataSetFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batc
 	return nil
 }
 
-func fillResultSet(ctx context.Context, oq outputPool, dataSet *batch.Batch, ses FeSession) error {
+func fillResultSet(ctx context.Context, dataSet *batch.Batch, ses FeSession, mrs *MysqlResultSet) error {
 	n := dataSet.RowCount()
 	for j := 0; j < n; j++ { //row index
+		row := make([]any, mrs.GetColumnCount())
 		//needCopyBytes = true. we need to copy the bytes from the batch.Batch
 		//to avoid the data being changed after the batch.Batch returned to the
 		//pipeline.
-		_, err := extractRowFromEveryVector(ctx, ses, dataSet, j, oq, true)
+		_, err := extractRowFromEveryVector(ctx, ses, dataSet, j, row)
 		if err != nil {
 			return err
 		}
+		mrs.AddRow(row)
 	}
-	return oq.flush()
+	return nil
 }
 
 // batchFetcher2 gets the result batches from the pipeline and save the origin batches in the session.

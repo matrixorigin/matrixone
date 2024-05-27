@@ -835,6 +835,7 @@ func (writer *CsvExporter) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 		return err
 	}
 	go constructByte(execCtx.reqCtx, execCtx.ses, copied, writer.ep.Index.Load(), writer.ep.ByteChan, writer.ep)
+
 	return nil
 }
 
