@@ -151,8 +151,9 @@ type rowsIter struct {
 	objsTombstoneIter btree.IterG[ObjTombstoneRowEntry]
 
 	//for one object
-	firstIterated bool
-	dataRowsIter  btree.IterG[DataRowEntry]
+	firstIterated   bool
+	objHasTombstone bool
+	dataRowsIter    btree.IterG[DataRowEntry]
 
 	firstCalled bool
 	curRow      RowEntry
@@ -173,7 +174,6 @@ var _ RowsIter = new(rowsIter)
 
 func (p *rowsIter) Next() bool {
 
-	hasTombstone := false
 	objHasTombstone := func() {
 		ok := p.objsTombstoneIter.Seek(ObjTombstoneRowEntry{
 			ShortObjName: p.objsDataRowIter.Item().ShortObjName})
@@ -181,11 +181,10 @@ func (p *rowsIter) Next() bool {
 			item1 := p.objsTombstoneIter.Item()
 			item2 := p.objsDataRowIter.Item()
 			if bytes.Equal(item1.ShortObjName[:], item2.ShortObjName[:]) {
-				hasTombstone = true
+				p.objHasTombstone = true
 				return
 			}
 		}
-		hasTombstone = false
 	}
 
 	for {
@@ -226,7 +225,7 @@ func (p *rowsIter) Next() bool {
 					Offset: row.Offset,
 				}
 
-				if !hasTombstone {
+				if !p.objHasTombstone {
 					p.curRow = rowEntry
 					return true
 				}
@@ -235,14 +234,14 @@ func (p *rowsIter) Next() bool {
 					Tombstones.Load().Copy().Iter()
 				defer tombstoneIter.Release()
 
-				if ok := tombstoneIter.Seek(TombstoneRowEntry{
+				pivot := TombstoneRowEntry{
 					BlockID: row.RowID.CloneBlockID(),
 					Offset:  row.RowID.GetRowOffset(),
-				}); !ok {
+				}
+				if ok := tombstoneIter.Seek(pivot); !ok {
 					p.curRow = rowEntry
 					return true
 				}
-
 				tombstone := tombstoneIter.Item()
 				if tombstone.BlockID.Compare(row.RowID.CloneBlockID()) != 0 ||
 					tombstone.Offset != row.RowID.GetRowOffset() {
@@ -271,6 +270,7 @@ func (p *rowsIter) Next() bool {
 		}
 		p.dataRowsIter = p.objsDataRowIter.Item().DataRows.Load().Copy().Iter()
 		p.firstIterated = false
+		p.objHasTombstone = false
 		p.objsTombstoneIter.First()
 		objHasTombstone()
 
@@ -506,9 +506,11 @@ func (p *primaryKeyIter) Next() bool {
 			})
 			if !ok {
 				p.curRow = rowEntry
+				p.objsTombIter.First()
 				return true
 			}
 			item := p.objsTombIter.Item()
+			p.objsTombIter.First()
 			if !bytes.Equal(item.ShortObjName[:], shortName[:]) {
 				p.curRow = rowEntry
 				return true
@@ -611,10 +613,12 @@ func (p *primaryKeyDelIter) Next() bool {
 			})
 			if !ok {
 				//the current object has no tombstones.
+				p.objsTombIter.First()
 				break
 
 			}
 			item := p.objsTombIter.Item()
+			p.objsTombIter.First()
 			if !bytes.Equal(item.ShortObjName[:], shortName[:]) {
 				//the current object has no tombstones.
 				break

@@ -207,166 +207,114 @@ func TestPartitionStateIter(t *testing.T) {
 
 	}
 
-	// primary key iter
-	//for i := 0; i < num; i++ {
-	//	ts := types.BuildTS(int64(i), 0)
-	//	bs := EncodePrimaryKey(int64(i), packer)
-	//	iter := state.NewPrimaryKeyIter(ts, Exact(bs))
-	//	n := 0
-	//	for iter.Next() {
-	//		n++
-	//	}
-	//	require.Equal(t, 1, n)
-	//	require.Nil(t, iter.Close())
-	//	modified, _ := state.PKExistInMemBetween(ts.Prev(), ts.Next(), [][]byte{bs})
-	//	require.True(t, modified)
-	//}
+}
 
-	//{
-	//	// insert duplicated rows
-	//	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	//	tsVec := vector.NewVec(types.T_TS.ToType())
-	//	vec1 := vector.NewVec(types.T_int64.ToType())
-	//	for i := 0; i < num; i++ {
-	//		vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
-	//		vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)
-	//		vector.AppendFixed(vec1, int64(i), false, pool)
-	//	}
-	//	state.HandleRowsInsert(ctx, &api.Batch{
-	//		Attrs: []string{"rowid", "time", "a"},
-	//		Vecs: []api.Vector{
-	//			mustVectorToProto(rowIDVec),
-	//			mustVectorToProto(tsVec),
-	//			mustVectorToProto(vec1),
-	//		},
-	//	}, 0, packer)
-	//}
+func TestInsertAndDeleteRepeat(t *testing.T) {
+	state := NewPartitionState(false)
+	ctx := context.Background()
+	pool := mpool.MustNewZero()
+	packer := types.NewPacker(pool)
+	defer packer.FreeMem()
 
-	//// rows iter
-	//for i := 0; i < num; i++ {
-	//	iter := state.NewRowsIter(types.BuildTS(int64(i), 0))
-	//	n := 0
-	//	rowIDs := make(map[types.Rowid]bool)
-	//	for iter.Next() {
-	//		n++
-	//		entry := iter.Entry()
-	//		rowIDs[entry.RowID] = true
-	//	}
-	//	require.Equal(t, i+1, n)
-	//	require.Equal(t, i+1, len(rowIDs))
-	//	require.Nil(t, iter.Close())
-	//}
+	sid := objectio.NewSegmentid()
+	buildRowID := func(fnum int, offset int) types.Rowid {
+		blk := objectio.NewBlockid(sid, uint16(fnum), 0)
+		return *objectio.NewRowid(blk, uint32(offset))
+	}
 
-	//deleteAt := 1000
-	//{
-	//	// delete number i at (deleteAt+i) with (i+1) row id
-	//	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	//	tsVec := vector.NewVec(types.T_TS.ToType())
-	//	for i := 0; i < num; i++ {
-	//		vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
-	//		vector.AppendFixed(tsVec, types.BuildTS(int64(deleteAt+i), 1), false, pool)
-	//	}
-	//	state.HandleRowsDelete(ctx, &api.Batch{
-	//		Attrs: []string{"rowid", "time"},
-	//		Vecs: []api.Vector{
-	//			mustVectorToProto(rowIDVec),
-	//			mustVectorToProto(tsVec),
-	//		},
-	//	}, packer)
-	//}
+	{
+		//insert pk : 0, 1 into the same object.
+		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType())
+		vec1 := vector.NewVec(types.T_int64.ToType())
+		for i := 0; i < 2; i++ {
+			vector.AppendFixed(rowIDVec, buildRowID(0, i), false, pool)
+			vector.AppendFixed(tsVec, types.BuildTS(int64(0), 0), false, pool)
+			vector.AppendFixed(vec1, int64(i), false, pool)
+		}
+		state.HandleRowsInsert(ctx, &api.Batch{
+			Attrs: []string{"rowid", "time", "a"},
+			Vecs: []api.Vector{
+				mustVectorToProto(rowIDVec),
+				mustVectorToProto(tsVec),
+				mustVectorToProto(vec1),
+			},
+		}, 0, packer)
+	}
 
-	//for i := 0; i < num; i++ {
-	//	{
-	//		// rows iter
-	//		iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i), 0))
-	//		rowIDs := make(map[types.Rowid]bool)
-	//		n := 0
-	//		for iter.Next() {
-	//			n++
-	//			entry := iter.Entry()
-	//			rowIDs[entry.RowID] = true
-	//		}
-	//		require.Equal(t, num-i, n)
-	//		require.Equal(t, num-i, len(rowIDs))
-	//		require.Nil(t, iter.Close())
-	//	}
+	{
+		// delete pk =0, pk = 1
+		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType())
+		vec1 := vector.NewVec(types.T_int64.ToType())
 
-	//	{
-	//		// deleted rows iter
-	//		blockID, _ := buildRowID(i + 1).Decode()
-	//		iter := state.NewRowTombstoneIter(types.BuildTS(int64(deleteAt+i+1), 0), &blockID)
-	//		rowIDs := make(map[types.Rowid]bool)
-	//		n := 0
-	//		for iter.Next() {
-	//			n++
-	//			entry := iter.Entry()
-	//			rowIDs[entry.RowID] = true
-	//		}
-	//		require.Equal(t, 1, n, "num is %d", i)
-	//		require.Equal(t, 1, len(rowIDs))
-	//		require.Nil(t, iter.Close())
-	//	}
+		for i := 0; i < 2; i++ {
+			vector.AppendFixed(rowIDVec, buildRowID(0, i), false, pool)
+			vector.AppendFixed(tsVec, types.BuildTS(int64(0), 1), false, pool)
+			vector.AppendFixed(vec1, int64(i), false, pool)
+		}
+		state.HandleRowsDelete(ctx, &api.Batch{
+			Attrs: []string{"rowid", "time"},
+			Vecs: []api.Vector{
+				mustVectorToProto(rowIDVec),
+				mustVectorToProto(tsVec),
+				mustVectorToProto(vec1),
+			},
+		}, packer)
+	}
 
-	//	{
-	//		// primary key change detection
-	//		ts := types.BuildTS(int64(deleteAt+i), 0)
-	//		key := EncodePrimaryKey(int64(i), packer)
-	//		modified, _ := state.PKExistInMemBetween(
-	//			ts.Prev(),
-	//			ts.Next(),
-	//			[][]byte{key},
-	//		)
-	//		require.True(t, modified)
-	//	}
+	//read , should return empty.
+	{
+		// rows iter
+		iter := state.NewRowsIter(types.BuildTS(int64(0), 1))
+		rowIDs := make(map[types.Rowid]bool)
+		n := 0
+		for iter.Next() {
+			n++
+			entry := iter.Entry()
+			rowIDs[entry.RowID] = true
+		}
+		require.Equal(t, 0, n)
+		require.Equal(t, 0, len(rowIDs))
+		require.Nil(t, iter.Close())
+	}
 
-	//	{
-	//		// primary key iter
-	//		key := EncodePrimaryKey(int64(i), packer)
-	//		iter := state.NewPrimaryKeyIter(types.BuildTS(int64(deleteAt+i+1), 0), Exact(key))
-	//		n := 0
-	//		for iter.Next() {
-	//			n++
-	//		}
-	//		iter.Close()
-	//		require.Equal(t, 0, n) // not visible
-	//	}
+	// insert pk =0, 1 into the same object again.
+	{
+		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType())
+		vec1 := vector.NewVec(types.T_int64.ToType())
+		for i := 0; i < 2; i++ {
+			vector.AppendFixed(rowIDVec, buildRowID(0, i+2), false, pool)
+			vector.AppendFixed(tsVec, types.BuildTS(int64(0), 2), false, pool)
+			vector.AppendFixed(vec1, int64(i), false, pool)
+		}
+		state.HandleRowsInsert(ctx, &api.Batch{
+			Attrs: []string{"rowid", "time", "a"},
+			Vecs: []api.Vector{
+				mustVectorToProto(rowIDVec),
+				mustVectorToProto(tsVec),
+				mustVectorToProto(vec1),
+			},
+		}, 0, packer)
 
-	//}
+	}
 
-	//deleteAt = 2000
-	//{
-	//	// duplicate delete
-	//	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	//	tsVec := vector.NewVec(types.T_TS.ToType())
-	//	for i := 0; i < num; i++ {
-	//		vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
-	//		vector.AppendFixed(tsVec, types.BuildTS(int64(deleteAt+i), 1), false, pool)
-	//	}
-	//	state.HandleRowsDelete(ctx, &api.Batch{
-	//		Attrs: []string{"rowid", "time", "a"},
-	//		Vecs: []api.Vector{
-	//			mustVectorToProto(rowIDVec),
-	//			mustVectorToProto(tsVec),
-	//		},
-	//	}, packer)
-	//}
-
-	//for i := 0; i < num; i++ {
-	//	{
-	//		blockID, _ := buildRowID(i + 1).Decode()
-	//		iter := state.NewRowTombstoneIter(types.BuildTS(int64(deleteAt+i), 0), &blockID)
-	//		rowIDs := make(map[types.Rowid]bool)
-	//		n := 0
-	//		for iter.Next() {
-	//			n++
-	//			entry := iter.Entry()
-	//			rowIDs[entry.RowID] = true
-	//		}
-	//		require.Equal(t, 1, n)
-	//		require.Equal(t, 1, len(rowIDs))
-	//		require.Nil(t, iter.Close())
-	//	}
-	//}
+	//read again
+	{
+		// rows iter
+		iter := state.NewRowsIter(types.BuildTS(int64(0), 3))
+		rowIDs := make(map[types.Rowid]bool)
+		n := 0
+		for iter.Next() {
+			n++
+			entry := iter.Entry()
+			rowIDs[entry.RowID] = true
+		}
+		require.Equal(t, 2, n)
+		require.Equal(t, 2, len(rowIDs))
+		require.Nil(t, iter.Close())
+	}
 
 }
 

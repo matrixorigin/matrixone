@@ -21,6 +21,7 @@ import (
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/tidwall/btree"
@@ -344,7 +345,11 @@ func (p *PartitionState) HandleLogtailEntry(
 		} else if IsObjTable(entry.TableName) {
 			p.HandleObjectDelete(entry.TableId, entry.Bat)
 		} else {
+			start := time.Now()
 			p.HandleRowsDelete(ctx, entry.Bat, packer)
+			if entry.TableName == "bugt2" {
+				logutil.Infof("xxxx handle delete cost %v", time.Since(start))
+			}
 		}
 	default:
 		panic("unknown entry type")

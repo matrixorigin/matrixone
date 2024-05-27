@@ -18,10 +18,12 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -195,6 +197,9 @@ func (p *PartitionReader) Read(
 			}
 		}
 		// read rows from partitionState.rows.
+		if p.table.tableName == "bugt2" {
+			logutil.Infof("xxxx start to read from partition state")
+		}
 		for p.iter.Next() {
 			entry := p.iter.Entry()
 			if _, ok := p.deletes[entry.RowID]; ok {
@@ -244,6 +249,11 @@ func (p *PartitionReader) Read(
 				pool.PutBatch(result)
 			}
 			return nil, nil
+		}
+
+		if p.table.tableName == "bugt2" {
+			logutil.Infof("xxxx read from partition state, bat:%s, rows: %d",
+				common.MoBatchToString(result, 10), rows)
 		}
 
 		result.SetRowCount(rows)
