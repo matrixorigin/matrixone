@@ -1690,7 +1690,7 @@ func checkLockTableOrRows(isMulti bool, tableDef *TableDef, query *Query) (bool,
 	if len(tableDef.Pkey.Names) > 1 { //unsupport multi-column primary key
 		return false, nil
 	}
-	pkName := tableDef.Pkey.Names[0]
+	pkName := tableDef.Name + "." + tableDef.Pkey.Names[0]
 
 	checkIsPkColExpr := func(e *plan.Expr) bool {
 		if col_expr, ok := e.Expr.(*plan.Expr_Col); ok {
