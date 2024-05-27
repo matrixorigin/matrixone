@@ -106,6 +106,8 @@ type LockService interface {
 	// Unlock release all locks associated with the transaction. If commitTS is not empty, means
 	// the txn was committed.
 	Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation) error
+	// IsOrphanTxn check txn is orphan txn
+	IsOrphanTxn(context.Context, []byte) (bool, error)
 
 	// Close close the lock service.
 	Close() error
