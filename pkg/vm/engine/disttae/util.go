@@ -1159,9 +1159,11 @@ func (i *StatsBlkIter) Entry() objectio.BlockInfo {
 	}
 
 	// assume that all blks have DefaultBlockMaxRows, except the last one
-	if i.meta.IsEmpty() {
+	if i.meta == nil || i.meta.IsEmpty() {
 		if i.cur == int(i.blkCnt-1) {
 			i.curBlkRows = i.totalRows - i.accRows
+		} else {
+			i.curBlkRows = options.DefaultBlockMaxRows
 		}
 	} else {
 		i.curBlkRows = i.meta.GetBlockMeta(uint32(i.cur)).GetRows()

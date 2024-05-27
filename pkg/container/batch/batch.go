@@ -177,6 +177,10 @@ func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
 }
 
 func (bat *Batch) GetVector(pos int32) *vector.Vector {
+	if len(bat.Vecs) == 0 {
+		x := 0
+		x++
+	}
 	return bat.Vecs[pos]
 }
 

@@ -267,12 +267,13 @@ func (h *Handle) HandlePreCommitWrite(
 				PkCheck:      db.PKCheckType(pe.GetPkCheckByTn()),
 			}
 			if req.FileName != "" {
-				loc := req.Batch.Vecs[0]
+				//loc := req.Batch.Vecs[0]
 				for i := 0; i < req.Batch.RowCount(); i++ {
+					stats := objectio.ObjectStats(req.Batch.Vecs[0].GetBytesAt(i))
 					if req.Type == db.EntryInsert {
-						req.MetaLocs = append(req.MetaLocs, loc.GetStringAt(i))
+						req.MetaLocs = append(req.MetaLocs, stats.ObjectLocation().String())
 					} else {
-						req.DeltaLocs = append(req.DeltaLocs, loc.GetStringAt(i))
+						req.DeltaLocs = append(req.DeltaLocs, stats.ObjectLocation().String())
 					}
 				}
 			}
@@ -571,25 +572,25 @@ func (h *Handle) HandleWrite(
 	if req.Type == db.EntryInsert {
 		//Add blocks which had been bulk-loaded into S3 into table.
 		if req.FileName != "" {
-			metalocations := make(map[string]struct{})
-			for _, metLoc := range req.MetaLocs {
-				location, err := blockio.EncodeLocationFromString(metLoc)
-				if err != nil {
-					return err
-				}
-				metalocations[location.Name().String()] = struct{}{}
-			}
-			statsCNVec := req.Batch.Vecs[1]
+			//metalocations := make(map[string]struct{})
+			//for _, metLoc := range req.MetaLocs {
+			//	location, err := blockio.EncodeLocationFromString(metLoc)
+			//	if err != nil {
+			//		return err
+			//	}
+			//	metalocations[location.Name().String()] = struct{}{}
+			//}
+			statsCNVec := req.Batch.Vecs[0]
 			statsVec := containers.ToTNVector(statsCNVec, common.WorkspaceAllocator)
-			for i := 0; i < statsVec.Length(); i++ {
-				s := objectio.ObjectStats(statsVec.Get(i).([]byte))
-				delete(metalocations, s.ObjectName().String())
-			}
-			if len(metalocations) != 0 {
-				logutil.Warnf("tbl %v, not receive stats of following locations %v", req.TableName, metalocations)
-				err = moerr.NewInternalError(ctx, "object stats doesn't match meta locations")
-				return
-			}
+			//for i := 0; i < statsVec.Length(); i++ {
+			//	s := objectio.ObjectStats(statsVec.Get(i).([]byte))
+			//	delete(metalocations, s.ObjectName().String())
+			//}
+			//if len(metalocations) != 0 {
+			//	logutil.Warnf("tbl %v, not receive stats of following locations %v", req.TableName, metalocations)
+			//	err = moerr.NewInternalError(ctx, "object stats doesn't match meta locations")
+			//	return
+			//}
 			err = tb.AddObjsWithMetaLoc(ctx, statsVec)
 			return
 		}

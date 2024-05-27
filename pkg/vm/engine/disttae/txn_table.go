@@ -1495,10 +1495,12 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		return nil
 	}
 	// for writing S3 Block
-	if bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
+	if bat.Attrs[0] == catalog.ObjectMeta_ObjectStats {
 		tbl.getTxn().hasS3Op.Store(true)
 		//bocks maybe come from different S3 object, here we just need to make sure fileName is not Nil.
-		fileName := objectio.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
+		stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(0))
+		fileName := stats.ObjectName().String()
+		//fileName := objectio.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
 		return tbl.getTxn().WriteFile(
 			INSERT,
 			tbl.accountId,
@@ -1608,13 +1610,13 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 
 // TODO:: do prefetch read and parallel compaction
 func (tbl *txnTable) compaction(
-	compactedBlks map[objectio.ObjectLocation][]int64) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
+	compactedBlks map[objectio.ObjectLocation][]int64) ([]objectio.ObjectStats, error) {
 	s3writer := &colexec.S3Writer{}
 	s3writer.SetTableName(tbl.tableName)
 	s3writer.SetSchemaVer(tbl.version)
 	_, err := s3writer.GenerateWriter(tbl.getTxn().proc)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	tbl.ensureSeqnumsAndTypesExpectRowid()
 	s3writer.SetSeqnums(tbl.seqnums)
@@ -1630,7 +1632,7 @@ func (tbl *txnTable) compaction(
 			tbl.getTxn().engine.fs,
 			tbl.getTxn().proc.GetMPool())
 		if e != nil {
-			return nil, nil, e
+			return nil, e
 		}
 		if bat.RowCount() == 0 {
 			continue
@@ -1639,11 +1641,11 @@ func (tbl *txnTable) compaction(
 		bat.Clean(tbl.getTxn().proc.GetMPool())
 
 	}
-	createdBlks, stats, err := s3writer.WriteEndBlocks(tbl.getTxn().proc)
+	_, stats, err := s3writer.WriteEndBlocks(tbl.getTxn().proc)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return createdBlks, stats, nil
+	return stats, nil
 }
 
 func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) error {

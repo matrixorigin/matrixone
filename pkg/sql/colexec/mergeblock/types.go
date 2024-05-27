@@ -175,7 +175,7 @@ func splitObjectStats(arg *Argument, proc *process.Process,
 
 	objDataMeta := objectio.BuildObjectMeta(uint16(blkVec.Length()))
 	var objStats objectio.ObjectStats
-	statsVec := bat.Vecs[2]
+	statsVec := bat.Vecs[1]
 	statsIdx := 0
 
 	for idx := 0; idx < len(tblIdx); idx++ {
@@ -190,8 +190,8 @@ func splitObjectStats(arg *Argument, proc *process.Process,
 			continue
 		}
 
-		destVec := arg.container.mp[int(tblIdx[idx])].Vecs[1]
-
+		destVec := arg.container.mp[int(tblIdx[idx])].Vecs[0]
+		affectedRows := uint32(0)
 		if needLoad {
 			// comes from old version cn
 			objStats, objDataMeta, err = disttae.ConstructObjStatsByLoadObjMeta(proc.Ctx, blkInfo.MetaLocation(), fs)
@@ -199,12 +199,18 @@ func splitObjectStats(arg *Argument, proc *process.Process,
 				return err
 			}
 
+			affectedRows = objStats.Rows()
 			vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool())
 		} else {
 			// not comes from old version cn
 			vector.AppendBytes(destVec, statsVec.GetBytesAt(statsIdx), false, proc.GetMPool())
 			objDataMeta.BlockHeader().SetBlockID(&blkInfo.BlockID)
 			statsIdx++
+			affectedRows = uint32(0)
+		}
+
+		if arg.AddAffectedRows {
+			arg.affectedRows += uint64(affectedRows)
 		}
 	}
 
@@ -220,12 +226,12 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	hasObject := false
 	for i := range tblIdx { // append s3 writer returned blk info
 		if tblIdx[i] >= 0 {
-			if arg.AddAffectedRows {
-				blkInfo := objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
-				arg.affectedRows += uint64(blkInfo.MetaLocation().Rows())
-			}
-			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0],
-				blkInfosVec.GetBytesAt(i), false, proc.GetMPool())
+			//if arg.AddAffectedRows {
+			//	blkInfo := objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
+			//	arg.affectedRows += uint64(blkInfo.MetaLocation().Rows())
+			//}
+			//vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0],
+			//	blkInfosVec.GetBytesAt(i), false, proc.GetMPool())
 			hasObject = true
 		} else { // append data
 			idx := int(-(tblIdx[i] + 1))

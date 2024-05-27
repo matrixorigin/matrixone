@@ -37,6 +37,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	objStatsInfoBatTblIdxOffset = 0
+	objStatsInfoBatObjectOffset = 1
+)
+
 // S3Writer is used to write table data to S3 and package a series of `BlockWriter` write operations
 // Currently there are two scenarios will let cn write s3 directly
 // scenario 1 is insert operator directly go s3, when a one-time insert/load data volume is relatively large will trigger the scenario
@@ -56,8 +61,9 @@ type S3Writer struct {
 	lengths []uint64
 
 	// the third vector only has several rows, not aligns with the other two vectors.
-	blockInfoBat *batch.Batch
-
+	objStatsInfoBat *batch.Batch
+	// TODO(ghs) remove this later
+	//blkInfoBat *batch.Batch
 	// An intermediate cache after the merge sort of all `Bats` data
 	buffer *batch.Batch
 
@@ -87,9 +93,9 @@ const (
 )
 
 func (w *S3Writer) Free(proc *process.Process) {
-	if w.blockInfoBat != nil {
-		w.blockInfoBat.Clean(proc.Mp())
-		w.blockInfoBat = nil
+	if w.objStatsInfoBat != nil {
+		w.objStatsInfoBat.Clean(proc.Mp())
+		w.objStatsInfoBat = nil
 	}
 	if w.buffer != nil {
 		w.buffer.Clean(proc.Mp())
@@ -106,7 +112,7 @@ func (w *S3Writer) Free(proc *process.Process) {
 }
 
 func (w *S3Writer) GetBlockInfoBat() *batch.Batch {
-	return w.blockInfoBat
+	return w.objStatsInfoBat
 }
 
 func (w *S3Writer) SetSortIdx(sortIdx int) {
@@ -234,17 +240,21 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 	// A simple explanation of the two vectors held by metaLocBat
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
 	// vecs[1] store relative block metadata
-	if w.blockInfoBat != nil {
-		proc.PutBatch(w.blockInfoBat)
+	if w.objStatsInfoBat != nil {
+		proc.PutBatch(w.objStatsInfoBat)
 	}
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+	//attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.ObjectMeta_ObjectStats}
 	blockInfoBat := batch.NewWithSize(len(attrs))
 	blockInfoBat.Attrs = attrs
-	blockInfoBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
-	blockInfoBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
-	blockInfoBat.Vecs[2] = proc.GetVector(types.T_binary.ToType())
+	//objStatsInfoBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
+	blockInfoBat.Vecs[objStatsInfoBatTblIdxOffset] = proc.GetVector(types.T_int16.ToType())
+	blockInfoBat.Vecs[objStatsInfoBatObjectOffset] = proc.GetVector(types.T_binary.ToType())
 
-	w.blockInfoBat = blockInfoBat
+	w.objStatsInfoBat = blockInfoBat
+
+	//w.blkInfoBat = batch.NewWithSize(1)
+	//w.blkInfoBat.Vecs[0] = proc.GetVector(types.T_text.ToType())
 }
 
 //func (w *S3Writer) WriteEnd(proc *process.Process) {
@@ -255,18 +265,18 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 //}
 
 func (w *S3Writer) Output(proc *process.Process, result *vm.CallResult) error {
-	bat := batch.NewWithSize(len(w.blockInfoBat.Attrs))
-	bat.SetAttributes(w.blockInfoBat.Attrs)
+	bat := batch.NewWithSize(len(w.objStatsInfoBat.Attrs))
+	bat.SetAttributes(w.objStatsInfoBat.Attrs)
 
-	for i := range w.blockInfoBat.Attrs {
-		vec := proc.GetVector(*w.blockInfoBat.Vecs[i].GetType())
-		if err := vec.UnionBatch(w.blockInfoBat.Vecs[i], 0, w.blockInfoBat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
+	for i := range w.objStatsInfoBat.Attrs {
+		vec := proc.GetVector(*w.objStatsInfoBat.Vecs[i].GetType())
+		if err := vec.UnionBatch(w.objStatsInfoBat.Vecs[i], 0, w.objStatsInfoBat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
 			vec.Free(proc.Mp())
 			return err
 		}
 		bat.SetVector(int32(i), vec)
 	}
-	bat.SetRowCount(w.blockInfoBat.RowCount())
+	bat.SetRowCount(w.objStatsInfoBat.RowCount())
 	w.ResetBlockInfoBat(proc)
 	result.Batch = bat
 	return nil
@@ -291,12 +301,12 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 		if err := w.SortAndFlush(proc); err != nil {
 			return err
 		}
-		w.blockInfoBat.SetRowCount(w.blockInfoBat.Vecs[0].Length())
+		w.objStatsInfoBat.SetRowCount(w.objStatsInfoBat.Vecs[objStatsInfoBatTblIdxOffset].Length())
 		return nil
 	}
 	for _, bat := range w.Bats {
 		if err := vector.AppendFixed(
-			w.blockInfoBat.Vecs[0], -w.partitionIndex-1,
+			w.objStatsInfoBat.Vecs[objStatsInfoBatTblIdxOffset], -w.partitionIndex-1,
 			false, proc.GetMPool()); err != nil {
 			return err
 		}
@@ -305,12 +315,12 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 			return err
 		}
 		if err = vector.AppendBytes(
-			w.blockInfoBat.Vecs[1], bytes,
+			w.objStatsInfoBat.Vecs[objStatsInfoBatObjectOffset], bytes,
 			false, proc.GetMPool()); err != nil {
 			return err
 		}
 	}
-	w.blockInfoBat.SetRowCount(w.blockInfoBat.Vecs[0].Length())
+	w.objStatsInfoBat.SetRowCount(w.objStatsInfoBat.Vecs[objStatsInfoBatTblIdxOffset].Length())
 	return nil
 }
 
@@ -634,27 +644,27 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch, dataType ...objectio.DataMetaTyp
 }
 
 func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
-	blkInfos, stats, err := w.WriteEndBlocks(proc)
+	_, stats, err := w.WriteEndBlocks(proc)
 	if err != nil {
 		return err
 	}
-	for _, blkInfo := range blkInfos {
-		if err := vector.AppendFixed(
-			w.blockInfoBat.Vecs[0],
-			w.partitionIndex,
-			false,
-			proc.GetMPool()); err != nil {
-			return err
-		}
-		if err := vector.AppendBytes(
-			w.blockInfoBat.Vecs[1],
-			//[]byte(metaLoc),
-			objectio.EncodeBlockInfo(blkInfo),
-			false,
-			proc.GetMPool()); err != nil {
-			return err
-		}
-	}
+	//for _, blkInfo := range blkInfos {
+	//	if err := vector.AppendFixed(
+	//		w.objStatsInfoBat.Vecs[0],
+	//		w.partitionIndex,
+	//		false,
+	//		proc.GetMPool()); err != nil {
+	//		return err
+	//	}
+	//if err := vector.AppendBytes(
+	//	w.blkInfoBat.Vecs[0],
+	//	//[]byte(metaLoc),
+	//	objectio.EncodeBlockInfo(blkInfo),
+	//	false,
+	//	proc.GetMPool()); err != nil {
+	//	return err
+	//}
+	//}
 
 	// append the object stats to bat,
 	// at most one will append in
@@ -663,13 +673,18 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 			continue
 		}
 
-		if err = vector.AppendBytes(w.blockInfoBat.Vecs[2],
+		if err := vector.AppendFixed(w.objStatsInfoBat.Vecs[objStatsInfoBatTblIdxOffset],
+			w.partitionIndex, false, proc.GetMPool()); err != nil {
+			return err
+		}
+
+		if err = vector.AppendBytes(w.objStatsInfoBat.Vecs[objStatsInfoBatObjectOffset],
 			stats[idx].Marshal(), false, proc.GetMPool()); err != nil {
 			return err
 		}
 	}
 
-	w.blockInfoBat.SetRowCount(w.blockInfoBat.Vecs[0].Length())
+	w.objStatsInfoBat.SetRowCount(w.objStatsInfoBat.Vecs[objStatsInfoBatTblIdxOffset].Length())
 	return nil
 }
 

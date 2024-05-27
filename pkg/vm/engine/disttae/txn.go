@@ -491,18 +491,19 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		if err != nil {
 			return err
 		}
-		blockInfo := s3Writer.GetBlockInfoBat()
+		objStatsInfo := s3Writer.GetBlockInfoBat()
 
-		lenVecs := len(blockInfo.Attrs)
-		// only remain the metaLoc col and object stats
-		blockInfo.Vecs = blockInfo.Vecs[lenVecs-2:]
-		blockInfo.Attrs = blockInfo.Attrs[lenVecs-2:]
-		blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
+		lenVecs := len(objStatsInfo.Attrs)
+		// only remain the object stats
+		objStatsInfo.Vecs = objStatsInfo.Vecs[lenVecs-1:]
+		objStatsInfo.Attrs = objStatsInfo.Attrs[lenVecs-1:]
+		objStatsInfo.SetRowCount(objStatsInfo.Vecs[0].Length())
 
 		table := tbl.(*txnTable)
-		fileName := objectio.DecodeBlockInfo(
-			blockInfo.Vecs[0].GetBytesAt(0)).
-			MetaLocation().Name().String()
+
+		stats := objectio.ObjectStats(objStatsInfo.Vecs[0].GetBytesAt(0))
+		fileName := stats.ObjectName().String()
+
 		err = table.getTxn().WriteFileLocked(
 			INSERT,
 			table.accountId,
@@ -511,7 +512,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			table.db.databaseName,
 			table.tableName,
 			fileName,
-			blockInfo,
+			objStatsInfo,
 			table.getTxn().tnStores[0],
 		)
 		if err != nil {
@@ -566,16 +567,22 @@ func (txn *Transaction) insertPosForCNBlock(
 	b *batch.Batch,
 	dbName string,
 	tbName string) error {
-	blks, area := vector.MustVarlenaRawData(vec)
-	for i := range blks {
-		blkInfo := *objectio.DecodeBlockInfo(blks[i].GetByteSlice(area))
-		txn.cnBlkId_Pos[blkInfo.BlockID] = Pos{
+	//blks := vector.MustBytesCol(vec)
+	stats := objectio.ObjectStats(vec.GetBytesAt(0))
+	iter := NewStatsBlkIter(&stats, nil)
+
+	offset := int64(0)
+	for iter.Next() {
+		blk := iter.Entry()
+		txn.cnBlkId_Pos[blk.BlockID] = Pos{
 			bat:       b,
 			accountId: id,
 			dbName:    dbName,
 			tbName:    tbName,
-			offset:    int64(i),
-			blkInfo:   blkInfo}
+			offset:    offset,
+			blkInfo:   blk,
+		}
+		offset++
 	}
 	return nil
 }
@@ -594,24 +601,16 @@ func (txn *Transaction) WriteFileLocked(
 	newBat := bat
 	if typ == INSERT {
 		newBat = batch.NewWithSize(len(bat.Vecs))
-		newBat.SetAttributes([]string{catalog.BlockMeta_MetaLoc, catalog.ObjectMeta_ObjectStats})
+		newBat.SetAttributes([]string{catalog.ObjectMeta_ObjectStats})
 
 		for idx := 0; idx < newBat.VectorCount(); idx++ {
 			newBat.SetVector(int32(idx), vector.NewVec(*bat.Vecs[idx].GetType()))
 		}
 
-		blkInfosVec := bat.Vecs[0]
-		for idx := 0; idx < blkInfosVec.Length(); idx++ {
-			blkInfo := *objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(idx))
-			vector.AppendBytes(newBat.Vecs[0], []byte(blkInfo.MetaLocation().String()),
-				false, txn.proc.Mp())
-			colexec.Get().PutCnSegment(&blkInfo.SegmentID, colexec.CnBlockIdType)
-		}
-
 		// append obj stats, may multiple
-		statsListVec := bat.Vecs[1]
+		statsListVec := bat.Vecs[0]
 		for idx := 0; idx < statsListVec.Length(); idx++ {
-			vector.AppendBytes(newBat.Vecs[1], statsListVec.GetBytesAt(idx), false, txn.proc.Mp())
+			vector.AppendBytes(newBat.Vecs[0], statsListVec.GetBytesAt(idx), false, txn.proc.Mp())
 		}
 		newBat.SetRowCount(bat.Vecs[0].Length())
 
@@ -861,55 +860,63 @@ func (txn *Transaction) compactionBlksLocked() error {
 		}
 		//TODO::do parallel compaction for table
 		tbl := rel.(*txnTable)
-		createdBlks, stats, err := tbl.compaction(blks)
+		stats, err := tbl.compaction(blks)
 		if err != nil {
 			return err
 		}
-		if len(createdBlks) > 0 {
-			bat := batch.NewWithSize(2)
-			bat.Attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-			bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-			bat.SetVector(1, vector.NewVec(types.T_binary.ToType()))
-			for _, blkInfo := range createdBlks {
-				vector.AppendBytes(
-					bat.GetVector(0),
-					objectio.EncodeBlockInfo(blkInfo),
-					false,
-					tbl.getTxn().proc.GetMPool())
-			}
 
-			// append the object stats to bat
-			for idx := 0; idx < len(stats); idx++ {
-				if stats[idx].IsZero() {
-					continue
-				}
-				if err = vector.AppendBytes(bat.Vecs[1], stats[idx].Marshal(),
-					false, tbl.getTxn().proc.GetMPool()); err != nil {
-					return err
-				}
-			}
+		var objStats objectio.ObjectStats
+		if !stats[objectio.SchemaData].IsZero() {
+			objStats = stats[objectio.SchemaData]
+		} else {
+			objStats = stats[objectio.SchemaTombstone]
+		}
 
-			bat.SetRowCount(len(createdBlks))
-			defer func() {
-				bat.Clean(tbl.getTxn().proc.GetMPool())
-			}()
+		//if len(createdBlks) > 0 {
+		bat := batch.NewWithSize(1)
+		bat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+		//bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		bat.SetVector(0, vector.NewVec(types.T_binary.ToType()))
+		//for _, blkInfo := range createdBlks {
+		//	vector.AppendBytes(
+		//		bat.GetVector(0),
+		//		objectio.EncodeBlockInfo(blkInfo),
+		//		false,
+		//		tbl.getTxn().proc.GetMPool())
+		//}
 
-			err := txn.WriteFileLocked(
-				INSERT,
-				tbl.accountId,
-				tbl.db.databaseId,
-				tbl.tableId,
-				tbl.db.databaseName,
-				tbl.tableName,
-				createdBlks[0].MetaLocation().Name().String(),
-				bat,
-				tbl.getTxn().tnStores[0],
-			)
-			if err != nil {
-				return err
-			}
+		// append the object stats to bat
+		//for idx := 0; idx < len(stats); idx++ {
+		//	if stats[idx].IsZero() {
+		//		continue
+		//	}
+		if err = vector.AppendBytes(bat.Vecs[0], objStats.Marshal(),
+			false, tbl.getTxn().proc.GetMPool()); err != nil {
+			return err
+		}
+		//}
+
+		bat.SetRowCount(1)
+		defer func() {
+			bat.Clean(tbl.getTxn().proc.GetMPool())
+		}()
+
+		err = txn.WriteFileLocked(
+			INSERT,
+			tbl.accountId,
+			tbl.db.databaseId,
+			tbl.tableId,
+			tbl.db.databaseName,
+			tbl.tableName,
+			objStats.ObjectName().String(),
+			bat,
+			tbl.getTxn().tnStores[0],
+		)
+		if err != nil {
+			return err
 		}
 	}
+	//}
 
 	//compaction for txn.writes
 	for i, entry := range txn.writes {
@@ -922,7 +929,7 @@ func (txn *Transaction) compactionBlksLocked() error {
 		}
 
 		if entry.typ != INSERT ||
-			entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
+			entry.bat.Attrs[0] != catalog.ObjectMeta_ObjectStats {
 			continue
 		}
 		entry.bat.Shrink(compactedEntries[entry.bat], true)
