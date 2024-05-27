@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -219,6 +220,11 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 			} else {
 				fkTableObjRef, fkTableDef = ctx.ResolveById(fk.ForeignTbl, snapshot)
 			}
+		}
+
+		// fkTable may not exist in snapshot restoration
+		if fkTableObjRef == nil || fkTableDef == nil {
+			return "", moerr.NewInternalErrorNoCtx("can't find fkTable from fk %s.(%s) {%s}", tableDef.Name, strings.Join(colNames, ","), snapshot.String())
 		}
 
 		fkColIdToName := make(map[uint64]string)
