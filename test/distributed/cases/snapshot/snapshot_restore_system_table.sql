@@ -558,6 +558,46 @@ select user_name,authentication_string from mo_catalog.mo_user;
 drop account acc01;
 drop account acc02;
 drop account acc03;
+drop snapshot snapshot1;
+drop snapshot snapshot2;
+-- @ignore:1
+show snapshots;
+
 set global enable_privilege_cache = on;
 
+-- cluster table
+use mo_catalog;
+drop table if exists cluster_table_1;
+create cluster table cluster_table_1(a int, b int);
 
+drop account if exists test_account1;
+create account test_account1 admin_name = 'test_user' identified by '111';
+
+drop account if exists test_account2;
+create account test_account2 admin_name = 'test_user' identified by '111';
+
+insert into cluster_table_1 values(0,0,0),(1,1,0);
+insert into cluster_table_1 values(0,0,1),(1,1,1);
+select * from cluster_table_1;
+
+create snapshot snapshot1 for account sys;
+drop table if exists cluster_table_1;
+
+create cluster table cluster_table_2(a int, b int);
+insert into cluster_table_2 values(0,0,0),(1,1,0);
+insert into cluster_table_2 values(0,0,1),(1,1,1);
+select * from cluster_table_2;
+
+create snapshot snapshot2 for account sys;
+
+restore account sys from snapshot snapshot1;
+select * from mo_catalog.cluster_table_1;
+
+restore account sys from snapshot snapshot2;
+select * from mo_catalog.cluster_table_2;
+
+drop snapshot snapshot1;
+drop snapshot snapshot2;
+
+drop table if exists cluster_table_1;
+drop table if exists cluster_table_2;

@@ -13,40 +13,38 @@ name    db
 helloworld    db1
 helloworld5    db1
 create snapshot snapshot1 for account sys;
-internal error: snapshot snapshot1 already exists
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:35:44.225522    account    acc01        
-snapshot1    2024-05-27 08:35:44.179188    account    acc01        
+snapshot1    2024-05-27 09:53:09.896962    account    sys        
 drop function helloworld();
 select name, db from mo_catalog.mo_user_defined_function;
 name    db
 helloworld5    db1
 create snapshot snapshot2 for account sys;
-internal error: snapshot snapshot2 already exists
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:35:44.225522    account    acc01        
-snapshot1    2024-05-27 08:35:44.179188    account    acc01        
+snapshot2    2024-05-27 09:53:09.949    account    sys        
+snapshot1    2024-05-27 09:53:09.896962    account    sys        
 drop database db1;
 select name, db from mo_catalog.mo_user_defined_function;
 name    db
 restore account sys from snapshot snapshot1;
-internal error: accountName(sys) does not match snapshot.accountName(acc01)
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:35:44.225522    account    acc01        
-snapshot1    2024-05-27 08:35:44.179188    account    acc01        
+snapshot2    2024-05-27 09:53:09.949    account    sys        
+snapshot1    2024-05-27 09:53:09.896962    account    sys        
 select name, db from mo_catalog.mo_user_defined_function;
 name    db
+helloworld    db1
+helloworld5    db1
 restore account sys from snapshot snapshot2;
-internal error: accountName(sys) does not match snapshot.accountName(acc01)
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:35:44.225522    account    acc01        
-snapshot1    2024-05-27 08:35:44.179188    account    acc01        
+snapshot2    2024-05-27 09:53:09.949    account    sys        
+snapshot1    2024-05-27 09:53:09.896962    account    sys        
 select name, db from mo_catalog.mo_user_defined_function;
 name    db
+helloworld5    db1
 drop snapshot snapshot1;
 drop snapshot snapshot2;
 show snapshots;
@@ -76,7 +74,7 @@ my_ext_stage3    enabled
 create snapshot snapshot1 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot1    2024-05-27 08:55:17.816794    account    sys        
+snapshot1    2024-05-27 09:53:10.944515    account    sys        
 ALTER STAGE my_ext_stage4 SET URL='s3://load/files2/';
 internal error: the stage my_ext_stage4 not exists
 ALTER STAGE if exists my_ext_stage4 SET URL='s3://load/files2/';
@@ -87,8 +85,8 @@ ALTER STAGE my_ext_stage1 SET CREDENTIALS={'AWS_KEY_ID'='1a2b3d' ,'AWS_SECRET_KE
 create snapshot snapshot2 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:17.831279    account    sys        
-snapshot1    2024-05-27 08:55:17.816794    account    sys        
+snapshot2    2024-05-27 09:53:10.960316    account    sys        
+snapshot1    2024-05-27 09:53:10.944515    account    sys        
 DROP STAGE my_ext_stage5;
 internal error: the stage my_ext_stage5 not exists
 DROP STAGE if exists my_ext_stage5;
@@ -99,8 +97,8 @@ DROP STAGE my_ext_stage3;
 restore account sys from snapshot snapshot1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:17.831279    account    sys        
-snapshot1    2024-05-27 08:55:17.816794    account    sys        
+snapshot2    2024-05-27 09:53:10.960316    account    sys        
+snapshot1    2024-05-27 09:53:10.944515    account    sys        
 SELECT stage_name from mo_catalog.mo_stages;
 stage_name
 my_ext_stage
@@ -110,8 +108,8 @@ my_ext_stage3
 restore account sys from snapshot snapshot2;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:17.831279    account    sys        
-snapshot1    2024-05-27 08:55:17.816794    account    sys        
+snapshot2    2024-05-27 09:53:10.960316    account    sys        
+snapshot1    2024-05-27 09:53:10.944515    account    sys        
 SELECT stage_name from mo_catalog.mo_stages;
 stage_name
 my_ext_stage
@@ -154,7 +152,7 @@ test_if_hit_if
 create snapshot snapshot1 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot1    2024-05-27 08:55:18.552459    account    sys        
+snapshot1    2024-05-27 09:53:11.687656    account    sys        
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
 create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
@@ -169,13 +167,13 @@ test_if_hit_elseif_first_elseif
 create snapshot snapshot2 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:18.571892    account    sys        
-snapshot1    2024-05-27 08:55:18.552459    account    sys        
+snapshot2    2024-05-27 09:53:11.704449    account    sys        
+snapshot1    2024-05-27 09:53:11.687656    account    sys        
 restore account sys from snapshot snapshot1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:18.571892    account    sys        
-snapshot1    2024-05-27 08:55:18.552459    account    sys        
+snapshot2    2024-05-27 09:53:11.704449    account    sys        
+snapshot1    2024-05-27 09:53:11.687656    account    sys        
 select name from mo_catalog.mo_stored_procedure;
 name
 test_if_hit_if
@@ -187,8 +185,8 @@ id    val
 restore account sys from snapshot snapshot2;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:18.571892    account    sys        
-snapshot1    2024-05-27 08:55:18.552459    account    sys        
+snapshot2    2024-05-27 09:53:11.704449    account    sys        
+snapshot1    2024-05-27 09:53:11.687656    account    sys        
 select name from mo_catalog.mo_stored_procedure;
 name
 test_if_hit_elseif_first_elseif
@@ -217,7 +215,7 @@ u_d    *97D6A234F2882F45432E3C14150E6B9ACAB2255F
 create snapshot snapshot1 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot1    2024-05-27 08:55:19.146367    account    sys        
+snapshot1    2024-05-27 09:53:12.670267    account    sys        
 drop user if exists u_a, u_b, u_d;
 alter user u_c identified by 'c111111';
 select user_name,authentication_string from mo_catalog.mo_user;
@@ -228,13 +226,13 @@ u_c    *7F494961F862DCB97144C0E5D77CE4FCD30D8281
 create snapshot snapshot2 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:19.166091    account    sys        
-snapshot1    2024-05-27 08:55:19.146367    account    sys        
+snapshot2    2024-05-27 09:53:12.688623    account    sys        
+snapshot1    2024-05-27 09:53:12.670267    account    sys        
 restore account sys from snapshot snapshot1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:19.166091    account    sys        
-snapshot1    2024-05-27 08:55:19.146367    account    sys        
+snapshot2    2024-05-27 09:53:12.688623    account    sys        
+snapshot1    2024-05-27 09:53:12.670267    account    sys        
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
 root    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB
@@ -246,8 +244,8 @@ u_d    *97D6A234F2882F45432E3C14150E6B9ACAB2255F
 restore account sys from snapshot snapshot2;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:19.166091    account    sys        
-snapshot1    2024-05-27 08:55:19.146367    account    sys        
+snapshot2    2024-05-27 09:53:12.688623    account    sys        
+snapshot1    2024-05-27 09:53:12.670267    account    sys        
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
 root    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB
@@ -276,7 +274,7 @@ helloworld5    db1
 create snapshot snapshot1 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot1    2024-05-27 08:55:20.352814    account    acc01        
+snapshot1    2024-05-27 09:53:14.322241    account    acc01        
 drop function helloworld();
 select name, db from mo_catalog.mo_user_defined_function;
 name    db
@@ -284,16 +282,16 @@ helloworld5    db1
 create snapshot snapshot2 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:20.375009    account    acc01        
-snapshot1    2024-05-27 08:55:20.352814    account    acc01        
+snapshot2    2024-05-27 09:53:14.342342    account    acc01        
+snapshot1    2024-05-27 09:53:14.322241    account    acc01        
 drop database db1;
 select name, db from mo_catalog.mo_user_defined_function;
 name    db
 restore account acc01 from snapshot snapshot1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:20.375009    account    acc01        
-snapshot1    2024-05-27 08:55:20.352814    account    acc01        
+snapshot2    2024-05-27 09:53:14.342342    account    acc01        
+snapshot1    2024-05-27 09:53:14.322241    account    acc01        
 select name, db from mo_catalog.mo_user_defined_function;
 name    db
 helloworld    db1
@@ -301,8 +299,8 @@ helloworld5    db1
 restore account acc01 from snapshot snapshot2;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:20.375009    account    acc01        
-snapshot1    2024-05-27 08:55:20.352814    account    acc01        
+snapshot2    2024-05-27 09:53:14.342342    account    acc01        
+snapshot1    2024-05-27 09:53:14.322241    account    acc01        
 select name, db from mo_catalog.mo_user_defined_function;
 name    db
 helloworld5    db1
@@ -335,7 +333,7 @@ my_ext_stage3    enabled
 create snapshot snapshot1 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot1    2024-05-27 08:55:20.824396    account    acc01        
+snapshot1    2024-05-27 09:53:15.035261    account    acc01        
 ALTER STAGE my_ext_stage4 SET URL='s3://load/files2/';
 internal error: the stage my_ext_stage4 not exists
 ALTER STAGE if exists my_ext_stage4 SET URL='s3://load/files2/';
@@ -346,8 +344,8 @@ ALTER STAGE my_ext_stage1 SET CREDENTIALS={'AWS_KEY_ID'='1a2b3d' ,'AWS_SECRET_KE
 create snapshot snapshot2 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:20.839973    account    acc01        
-snapshot1    2024-05-27 08:55:20.824396    account    acc01        
+snapshot2    2024-05-27 09:53:15.050537    account    acc01        
+snapshot1    2024-05-27 09:53:15.035261    account    acc01        
 DROP STAGE my_ext_stage5;
 internal error: the stage my_ext_stage5 not exists
 DROP STAGE if exists my_ext_stage5;
@@ -358,8 +356,8 @@ DROP STAGE my_ext_stage3;
 restore account acc01 from snapshot snapshot1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:20.839973    account    acc01        
-snapshot1    2024-05-27 08:55:20.824396    account    acc01        
+snapshot2    2024-05-27 09:53:15.050537    account    acc01        
+snapshot1    2024-05-27 09:53:15.035261    account    acc01        
 SELECT stage_name from mo_catalog.mo_stages;
 stage_name
 my_ext_stage
@@ -369,8 +367,8 @@ my_ext_stage3
 restore account acc01 from snapshot snapshot2;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:20.839973    account    acc01        
-snapshot1    2024-05-27 08:55:20.824396    account    acc01        
+snapshot2    2024-05-27 09:53:15.050537    account    acc01        
+snapshot1    2024-05-27 09:53:15.035261    account    acc01        
 SELECT stage_name from mo_catalog.mo_stages;
 stage_name
 my_ext_stage
@@ -413,7 +411,7 @@ test_if_hit_if
 create snapshot snapshot1 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot1    2024-05-27 08:55:21.353187    account    acc01        
+snapshot1    2024-05-27 09:53:15.627307    account    acc01        
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
 create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
@@ -428,13 +426,13 @@ test_if_hit_elseif_first_elseif
 create snapshot snapshot2 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:21.372711    account    acc01        
-snapshot1    2024-05-27 08:55:21.353187    account    acc01        
+snapshot2    2024-05-27 09:53:15.65594    account    acc01        
+snapshot1    2024-05-27 09:53:15.627307    account    acc01        
 restore account acc01 from snapshot snapshot1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:21.372711    account    acc01        
-snapshot1    2024-05-27 08:55:21.353187    account    acc01        
+snapshot2    2024-05-27 09:53:15.65594    account    acc01        
+snapshot1    2024-05-27 09:53:15.627307    account    acc01        
 select name from mo_catalog.mo_stored_procedure;
 name
 test_if_hit_if
@@ -446,8 +444,8 @@ id    val
 restore account acc01 from snapshot snapshot2;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:21.372711    account    acc01        
-snapshot1    2024-05-27 08:55:21.353187    account    acc01        
+snapshot2    2024-05-27 09:53:15.65594    account    acc01        
+snapshot1    2024-05-27 09:53:15.627307    account    acc01        
 select name from mo_catalog.mo_stored_procedure;
 name
 test_if_hit_elseif_first_elseif
@@ -475,7 +473,7 @@ u_d    *97D6A234F2882F45432E3C14150E6B9ACAB2255F
 create snapshot snapshot1 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot1    2024-05-27 08:55:21.957572    account    acc01        
+snapshot1    2024-05-27 09:53:16.291073    account    acc01        
 drop user if exists u_a, u_b, u_d;
 alter user u_c identified by 'c111111';
 select user_name,authentication_string from mo_catalog.mo_user;
@@ -485,13 +483,13 @@ u_c    *7F494961F862DCB97144C0E5D77CE4FCD30D8281
 create snapshot snapshot2 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:21.977367    account    acc01        
-snapshot1    2024-05-27 08:55:21.957572    account    acc01        
+snapshot2    2024-05-27 09:53:16.313912    account    acc01        
+snapshot1    2024-05-27 09:53:16.291073    account    acc01        
 restore account acc01 from snapshot snapshot1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:21.977367    account    acc01        
-snapshot1    2024-05-27 08:55:21.957572    account    acc01        
+snapshot2    2024-05-27 09:53:16.313912    account    acc01        
+snapshot1    2024-05-27 09:53:16.291073    account    acc01        
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
 test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB
@@ -502,8 +500,8 @@ u_d    *97D6A234F2882F45432E3C14150E6B9ACAB2255F
 restore account acc01 from snapshot snapshot2;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot2    2024-05-27 08:55:21.977367    account    acc01        
-snapshot1    2024-05-27 08:55:21.957572    account    acc01        
+snapshot2    2024-05-27 09:53:16.313912    account    acc01        
+snapshot1    2024-05-27 09:53:16.291073    account    acc01        
 select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
 test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB
@@ -676,4 +674,53 @@ test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB
 drop account acc01;
 drop account acc02;
 drop account acc03;
+drop snapshot snapshot1;
+drop snapshot snapshot2;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 set global enable_privilege_cache = on;
+use mo_catalog;
+drop table if exists cluster_table_1;
+create cluster table cluster_table_1(a int, b int);
+drop account if exists test_account1;
+create account test_account1 admin_name = 'test_user' identified by '111';
+drop account if exists test_account2;
+create account test_account2 admin_name = 'test_user' identified by '111';
+insert into cluster_table_1 values(0,0,0),(1,1,0);
+insert into cluster_table_1 values(0,0,1),(1,1,1);
+select * from cluster_table_1;
+a    b    account_id
+0    0    0
+1    1    0
+0    0    1
+1    1    1
+create snapshot snapshot1 for account sys;
+drop table if exists cluster_table_1;
+create cluster table cluster_table_2(a int, b int);
+insert into cluster_table_2 values(0,0,0),(1,1,0);
+insert into cluster_table_2 values(0,0,1),(1,1,1);
+select * from cluster_table_2;
+a    b    account_id
+0    0    0
+1    1    0
+0    0    1
+1    1    1
+create snapshot snapshot2 for account sys;
+restore account sys from snapshot snapshot1;
+select * from mo_catalog.cluster_table_1;
+a    b    account_id
+0    0    0
+1    1    0
+0    0    1
+1    1    1
+restore account sys from snapshot snapshot2;
+select * from mo_catalog.cluster_table_2;
+a    b    account_id
+0    0    0
+1    1    0
+0    0    1
+1    1    1
+drop snapshot snapshot1;
+drop snapshot snapshot2;
+drop table if exists cluster_table_1;
+drop table if exists cluster_table_2;
