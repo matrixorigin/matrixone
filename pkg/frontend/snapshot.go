@@ -84,8 +84,8 @@ var (
 		"mo_user_defined_function":    0,
 		"mo_stored_procedure":         0,
 		"mo_mysql_compatibility_mode": 0,
-		"mo_pubs":                     0,
 		"mo_stages":                   0,
+		"mo_pubs":                     1,
 
 		"mo_sessions":       1,
 		"mo_configurations": 1,
@@ -741,13 +741,10 @@ func needSkipDb(dbName string) bool {
 
 func needSkipTable(dbName string, tblName string) bool {
 	// TODO determine which tables should be skipped
-
-	if dbName == "information_schema" {
-		return true
-	}
-
-	if dbName == "mo_catalog" {
-		return true
+	if dbName == moCatalog {
+		if needSkip, ok := needSkipTablesInMocatalog[tblName]; ok {
+			return needSkip == 1
+		}
 	}
 
 	return false
