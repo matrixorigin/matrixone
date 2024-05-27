@@ -620,84 +620,163 @@ func ParseNodeString(s string) (Node, error) {
 }
 
 func ParseNode(data []byte) (Node, error) {
-	p := parser{
-		src:   data,
-		stack: make([]*Group, 0, 2),
-	}
+	p := parser{src: data}
 	return p.do()
 }
 
 type parser struct {
 	src   []byte
 	stack []*Group
+	tz    *json2.Tokenizer
+	state func() int
+	top   *Node
 }
 
 func (p *parser) do() (Node, error) {
+	p.stack = make([]*Group, 0, 2)
+	p.tz = json2.NewTokenizer(p.src)
+	p.state = p.stateBeginValue
 	var z Node
-	tz := json2.NewTokenizer(p.src)
-	var n Node
-	for tz.Next() {
-		switch k := tz.Kind(); k.Class() {
-		case json2.Array, json2.Object:
-			p.openGroup(k)
-		case json2.Undefined:
-			if tz.Delim == ']' || tz.Delim == '}' {
-				g := p.closeGroup()
-				if g != nil {
-					n.V = g
-					break
-				}
-			}
-		case json2.String:
-			if len(p.stack) == 0 {
-				n.V = string(tz.String())
-				break
-			}
-			p.addString(tz)
-		case json2.Num:
-			if len(p.stack) == 0 {
-				n.V = json.Number(tz.Value)
-				break
-			}
-			p.appendToLastGroup(Node{json.Number(tz.Value)})
-		case json2.Bool:
-			if len(p.stack) == 0 {
-				n.V = tz.Bool()
-				break
-			}
-			p.appendToLastGroup(Node{tz.Bool()})
-		case json2.Null:
-			if len(p.stack) == 0 {
-				n.V = nil
-				break
-			}
-			p.appendToLastGroup(Node{nil})
-		}
-	}
-	if tz.Err == nil {
-		if len(p.stack) != 0 && tz.Remaining() == 0 {
-			return z, io.ErrUnexpectedEOF
-		}
-		if tz.Next() {
-			if g, ok := n.V.(*Group); ok {
+	for {
+		if !p.tz.Next() {
+			for _, g := range p.stack {
 				g.free()
 			}
-			return z, moerr.NewInvalidInputNoCtx("invalid json: %s", p.src)
+			return z, io.ErrUnexpectedEOF
 		}
-		return n, nil
+		switch p.state() {
+		case scanError:
+			for _, g := range p.stack {
+				g.free()
+			}
+			if errors.Is(p.tz.Err, io.EOF) {
+				return z, io.ErrUnexpectedEOF
+			}
+			var se *json.SyntaxError
+			if p.tz.Remaining() == 0 && errors.As(p.tz.Err, &se) {
+				return z, io.ErrUnexpectedEOF
+			}
+			return z, moerr.NewInternalErrorNoCtx("parse json: %v", p.tz.Err)
+		case scanEnd:
+			if p.tz.Next() {
+				if g, ok := p.top.V.(*Group); ok {
+					g.free()
+				}
+				return z, moerr.NewInvalidInputNoCtx("invalid json: %s", p.src)
+			}
+			if p.tz.Err != nil {
+				return z, moerr.NewInternalErrorNoCtx("parse json: %v", p.tz.Err)
+			}
+			return *p.top, nil
+		}
+	}
+}
+
+const (
+	scanContinue = iota
+	scanEnd      // top-level value ended *before* this byte; known to be first "stop" result
+	scanError    // hit an error, scanner.err.
+)
+
+func (p *parser) stateBeginValue() int {
+	k := p.tz.Kind()
+
+	switch k.Class() {
+	case json2.Array:
+		p.openGroup(k)
+		p.state = p.stateBeginValueOrEmpty
+		return scanContinue
+	case json2.Object:
+		p.openGroup(k)
+		p.state = p.stateObjectKeyOrEmpty
+		return scanContinue
 	}
 
-	for _, g := range p.stack {
-		g.free()
+	var n Node
+	switch k.Class() {
+	case json2.String:
+		n = Node{string(p.tz.String())}
+	case json2.Num:
+		n = Node{json.Number(p.tz.Value)}
+	case json2.Bool:
+		n = Node{p.tz.Bool()}
+	case json2.Null:
+		n = Node{nil}
+	default:
+		p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: looking for beginning of value")
+		return scanError
 	}
-	if errors.Is(tz.Err, io.EOF) {
-		return z, io.ErrUnexpectedEOF
+	if p.tz.Depth != 0 {
+		p.appendToLastGroup(n)
+		p.state = p.stateEndValue
+		return scanContinue
 	}
-	var se *json.SyntaxError
-	if tz.Remaining() == 0 && errors.As(tz.Err, &se) {
-		return z, io.ErrUnexpectedEOF
+
+	p.top = &n
+	p.state = nil
+	return scanEnd
+}
+
+func (p *parser) stateBeginValueOrEmpty() int {
+	if p.tz.Delim == ']' {
+		return p.stateEndValue()
 	}
-	return z, moerr.NewInternalErrorNoCtx("parse json: %v", tz.Err)
+
+	return p.stateBeginValue()
+}
+
+func (p *parser) stateObjectKey() int {
+	if p.tz.Kind().Class() != json2.String || !p.tz.IsKey {
+		p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: object key")
+		return scanError
+	}
+
+	g := p.stack[len(p.stack)-1]
+	g.Keys = append(g.Keys, string(p.tz.String()))
+	p.state = p.stateColon
+	return scanContinue
+}
+
+func (p *parser) stateObjectKeyOrEmpty() int {
+	if p.tz.Delim == '}' {
+		return p.stateEndValue()
+	}
+
+	return p.stateObjectKey()
+}
+
+func (p *parser) stateColon() int {
+	if p.tz.Delim != ':' {
+		p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: after object key")
+		return scanError
+	}
+	p.state = p.stateBeginValue
+	return scanContinue
+}
+
+func (p *parser) stateEndValue() int {
+	if p.tz.Delim == ']' || p.tz.Delim == '}' {
+		p.closeGroup()
+		if p.tz.Depth == 0 {
+			p.state = nil
+			return scanEnd
+		}
+		p.state = p.stateEndValue
+		return scanContinue
+	}
+
+	if p.tz.Delim == ',' {
+		g := p.stack[len(p.stack)-1]
+		if g.Obj {
+			p.state = p.stateObjectKey
+		} else {
+			p.state = p.stateBeginValue
+		}
+		return scanContinue
+	}
+
+	p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: end value")
+	return scanError
 }
 
 func (p *parser) openGroup(k json2.Kind) {
@@ -706,7 +785,7 @@ func (p *parser) openGroup(k json2.Kind) {
 	p.stack = append(p.stack, g)
 }
 
-func (p *parser) closeGroup() *Group {
+func (p *parser) closeGroup() {
 	n := len(p.stack) - 1
 	g := p.stack[n]
 	p.stack = p.stack[:n]
@@ -716,10 +795,10 @@ func (p *parser) closeGroup() *Group {
 	}
 
 	if len(p.stack) == 0 {
-		return g
+		p.top = &Node{g}
+		return
 	}
 	p.appendToLastGroup(Node{g})
-	return nil
 }
 
 func (p *parser) appendToLastGroup(n Node) {
@@ -739,15 +818,6 @@ func (p *parser) appendToLastGroup(n Node) {
 	old.Free()
 	g.Keys = g.Keys[:last]
 	g.Values[dupIdx] = n
-}
-
-func (p *parser) addString(tz *json2.Tokenizer) {
-	if tz.IsKey {
-		g := p.stack[len(p.stack)-1]
-		g.Keys = append(g.Keys, string(tz.String()))
-		return
-	}
-	p.appendToLastGroup(Node{string(tz.String())})
 }
 
 func init() {
