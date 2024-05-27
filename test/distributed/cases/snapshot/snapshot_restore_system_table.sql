@@ -158,6 +158,7 @@ show snapshots;
 
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
+drop database if exists procedure_test;
 
 
 -- user
@@ -361,7 +362,7 @@ show snapshots;
 
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
-
+drop database if exists procedure_test;
 
 -- user
 create user u_a identified by 'a111', u_b identified by 'b111' default role public lock;
@@ -601,3 +602,4 @@ drop snapshot snapshot2;
 
 drop table if exists cluster_table_1;
 drop table if exists cluster_table_2;
+drop database if exists procedure_test;

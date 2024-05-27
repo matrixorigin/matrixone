@@ -548,12 +548,6 @@ func restoreToDatabaseOrTable(
 	}
 
 	for _, tblInfo := range tableInfos {
-		if needSkipTable(dbName, tblInfo.tblName) {
-			// TODO skip tables which should not to be restored
-			getLogger().Info(fmt.Sprintf("[%s] skip table: %v.%v", snapshotName, dbName, tblInfo.tblName))
-			continue
-		}
-
 		key := genKey(dbName, tblInfo.tblName)
 
 		// skip table which is foreign key related
@@ -585,8 +579,13 @@ func restoreSystemDatabase(
 		return
 	}
 
+	curAccountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return
+	}
+
 	for _, tblInfo := range tableInfos {
-		if needSkipTable(moCatalog, tblInfo.tblName) {
+		if needSkipTable(curAccountId, moCatalog, tblInfo.tblName) {
 			// TODO skip tables which should not to be restored
 			getLogger().Info(fmt.Sprintf("[%s] skip restore system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
 			continue
@@ -739,14 +738,20 @@ func needSkipDb(dbName string) bool {
 	return slices.Contains(skipDbs, dbName)
 }
 
-func needSkipTable(dbName string, tblName string) bool {
+func needSkipTable(accountId uint32, dbName string, tblName string) bool {
 	// TODO determine which tables should be skipped
-	if dbName == moCatalog {
-		if needSkip, ok := needSkipTablesInMocatalog[tblName]; ok {
-			return needSkip == 1
+
+	if accountId == sysAccountID {
+		return dbName == moCatalog && needSkipTablesInMocatalog[tblName] == 1
+	} else {
+		if dbName == moCatalog {
+			if needSkip, ok := needSkipTablesInMocatalog[tblName]; ok {
+				return needSkip == 1
+			} else {
+				return true
+			}
 		}
 	}
-
 	return false
 }
 
@@ -1100,6 +1105,10 @@ func getTableInfoMap(
 	tblName string,
 	tblKeys []string) (tblInfoMap map[string]*tableInfo, err error) {
 	tblInfoMap = make(map[string]*tableInfo)
+	curAccountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return
+	}
 	for _, key := range tblKeys {
 		if _, ok := tblInfoMap[key]; ok {
 			return
@@ -1107,7 +1116,7 @@ func getTableInfoMap(
 
 		// filter by dbName and tblName
 		d, t := splitKey(key)
-		if needSkipDb(d) || needSkipTable(d, t) {
+		if needSkipDb(d) || needSkipTable(curAccountId, d, t) {
 			return
 		}
 		if dbName != "" && dbName != d {
