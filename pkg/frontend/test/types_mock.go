@@ -202,6 +202,20 @@ func (mr *MockComputationWrapperMockRecorder) GetUUID() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUUID", reflect.TypeOf((*MockComputationWrapper)(nil).GetUUID))
 }
 
+// ParamVals mocks base method.
+func (m *MockComputationWrapper) ParamVals() []any {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ParamVals")
+	ret0, _ := ret[0].([]any)
+	return ret0
+}
+
+// ParamVals indicates an expected call of ParamVals.
+func (mr *MockComputationWrapperMockRecorder) ParamVals() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ParamVals", reflect.TypeOf((*MockComputationWrapper)(nil).ParamVals))
+}
+
 // Plan mocks base method.
 func (m *MockComputationWrapper) Plan() *plan.Plan {
 	m.ctrl.T.Helper()
@@ -510,6 +524,20 @@ func (mr *MockBackgroundExecMockRecorder) Exec(arg0, arg1 interface{}) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Exec", reflect.TypeOf((*MockBackgroundExec)(nil).Exec), arg0, arg1)
 }
 
+// ExecRestore mocks base method.
+func (m *MockBackgroundExec) ExecRestore(arg0 context.Context, arg1 string, arg2, arg3 uint32) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ExecRestore", arg0, arg1, arg2, arg3)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ExecRestore indicates an expected call of ExecRestore.
+func (mr *MockBackgroundExecMockRecorder) ExecRestore(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecRestore", reflect.TypeOf((*MockBackgroundExec)(nil).ExecRestore), arg0, arg1, arg2, arg3)
+}
+
 // ExecStmt mocks base method.
 func (m *MockBackgroundExec) ExecStmt(arg0 context.Context, arg1 tree.Statement) error {
 	m.ctrl.T.Helper()
@@ -522,18 +550,6 @@ func (m *MockBackgroundExec) ExecStmt(arg0 context.Context, arg1 tree.Statement)
 func (mr *MockBackgroundExecMockRecorder) ExecStmt(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecStmt", reflect.TypeOf((*MockBackgroundExec)(nil).ExecStmt), arg0, arg1)
-}
-
-func (m *MockBackgroundExec) ExecRestore(arg0 context.Context, arg1 string, arg2 uint32, arg3 uint32) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ExecStmt", arg0, arg1, arg2, arg3)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-func (mr *MockBackgroundExecMockRecorder) ExecRestore(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecStmt", reflect.TypeOf((*MockBackgroundExec)(nil).ExecStmt), arg0, arg1, arg2, arg3)
 }
 
 // GetExecResultBatches mocks base method.
