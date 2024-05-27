@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type PartitionState struct {
@@ -359,16 +358,6 @@ func (p *PartitionState) HandleLogtailEntry(
 		} else if IsObjTable(entry.TableName) {
 			p.HandleObjectInsert(ctx, entry.Bat, fs)
 		} else {
-			if entry.TableId == 1 || entry.TableId == 2 || entry.TableId == 3 {
-				batch, err := batch.ProtoBatchToBatch(entry.Bat)
-				if err != nil {
-					panic(err)
-				}
-				logutil.Infof("xxxx HandleRowsInsert: tableId: %d, tableName: %s, "+
-					"primarySeqNum:%d, len:%d, bat:%s",
-					entry.TableId, entry.TableName,
-					primarySeqnum, len(entry.Bat.Vecs), common.MoBatchToString(batch, 10))
-			}
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
 	case api.Entry_Delete:
@@ -377,15 +366,6 @@ func (p *PartitionState) HandleLogtailEntry(
 		} else if IsObjTable(entry.TableName) {
 			p.HandleObjectDelete(entry.TableId, entry.Bat)
 		} else {
-			if entry.TableId == 1 || entry.TableId == 2 || entry.TableId == 3 {
-				batch, err := batch.ProtoBatchToBatch(entry.Bat)
-				if err != nil {
-					panic(err)
-				}
-				logutil.Infof("xxxx HandleRowsDelete: tableId: %d, tableName: %s, primarySeqNum:%d, len:%d, bat:%s",
-					entry.TableId, entry.TableName, primarySeqnum,
-					len(entry.Bat.Vecs), common.MoBatchToString(batch, 10))
-			}
 			p.HandleRowsDelete(ctx, entry.Bat, packer)
 		}
 	default:
