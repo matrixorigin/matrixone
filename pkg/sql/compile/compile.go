@@ -1674,54 +1674,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-
-		lockRows := make([]*plan.LockTarget, 0, len(n.LockTargets))
-		for _, tbl := range n.LockTargets {
-			if tbl.LockTable {
-				c.lockTables[tbl.TableId] = tbl
-			} else {
-				if _, ok := c.lockTables[tbl.TableId]; !ok {
-					lockRows = append(lockRows, tbl)
-				}
-			}
-		}
-		n.LockTargets = lockRows
-		if len(n.LockTargets) == 0 {
-			return ss, nil
-		}
-
-		block := false
-		// only pessimistic txn needs to block downstream operators.
-		if c.proc.TxnOperator.Txn().IsPessimistic() {
-			block = n.LockTargets[0].Block
-		}
-		currentFirstFlag := c.anal.isFirst
-		var lockOpArg *lockop.Argument
-		lockOpArg, err = constructLockOp(n, c.e)
+		ss, err = c.compileLockOp(n, ss)
 		if err != nil {
 			return nil, err
 		}
-		lockOpArg.SetBlock(block)
-
-		if block {
-			ss = []*Scope{c.newMergeScope(ss)}
-			ss[0].Instructions[len(ss[0].Instructions)-1].Arg.Release()
-			ss[0].Instructions[len(ss[0].Instructions)-1] = vm.Instruction{
-				Op:      vm.LockOp,
-				Idx:     c.anal.curr,
-				IsFirst: currentFirstFlag,
-				Arg:     lockOpArg,
-			}
-		} else {
-			ss = []*Scope{c.newMergeScope(ss)}
-			ss[0].appendInstruction(vm.Instruction{
-				Op:      vm.LockOp,
-				Idx:     c.anal.curr,
-				IsFirst: currentFirstFlag,
-				Arg:     lockOpArg,
-			})
-		}
-		ss = c.compileProjection(n, ss)
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_FUNCTION_SCAN:
@@ -2816,6 +2772,57 @@ func containBrokenNode(s *Scope) bool {
 		}
 	}
 	return false
+}
+
+func (c *Compile) compileLockOp(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	lockRows := make([]*plan.LockTarget, 0, len(n.LockTargets))
+	for _, tbl := range n.LockTargets {
+		if tbl.LockTable {
+			c.lockTables[tbl.TableId] = tbl
+		} else {
+			if _, ok := c.lockTables[tbl.TableId]; !ok {
+				lockRows = append(lockRows, tbl)
+			}
+		}
+	}
+	n.LockTargets = lockRows
+	if len(n.LockTargets) == 0 {
+		return ss, nil
+	}
+
+	block := false
+	// only pessimistic txn needs to block downstream operators.
+	if c.proc.TxnOperator.Txn().IsPessimistic() {
+		block = n.LockTargets[0].Block
+	}
+	currentFirstFlag := c.anal.isFirst
+	var lockOpArg *lockop.Argument
+	lockOpArg, err := constructLockOp(n, c.e)
+	if err != nil {
+		return nil, err
+	}
+	lockOpArg.SetBlock(block)
+
+	if block {
+		ss = []*Scope{c.newMergeScope(ss)}
+		ss[0].Instructions[len(ss[0].Instructions)-1].Arg.Release()
+		ss[0].Instructions[len(ss[0].Instructions)-1] = vm.Instruction{
+			Op:      vm.LockOp,
+			Idx:     c.anal.curr,
+			IsFirst: currentFirstFlag,
+			Arg:     lockOpArg,
+		}
+	} else {
+		ss = []*Scope{c.newMergeScope(ss)}
+		ss[0].appendInstruction(vm.Instruction{
+			Op:      vm.LockOp,
+			Idx:     c.anal.curr,
+			IsFirst: currentFirstFlag,
+			Arg:     lockOpArg,
+		})
+	}
+	ss = c.compileProjection(n, ss)
+	return ss, nil
 }
 
 func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
