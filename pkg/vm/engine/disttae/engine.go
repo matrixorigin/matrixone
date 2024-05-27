@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -538,7 +539,17 @@ func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error
 	return e.idGen.AllocateIDByKey(ctx, key)
 }
 
-func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
+func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) (err error) {
+	defer func() {
+		if err != nil {
+			if strings.Contains(name, "sysbench_db") {
+				logutil.Errorf("delete database %s failed: %v", name, err)
+				logutil.Errorf("stack: %s", stack.Callers(3))
+				logutil.Errorf("txnmeta %s", op.GetOverview().Meta)
+			}
+		}
+	}()
+
 	var databaseId uint64
 	var rowId types.Rowid
 	//var db *txnDatabase
