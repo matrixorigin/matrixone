@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 
+	json3 "github.com/goccy/go-json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -628,14 +629,14 @@ type parser struct {
 	src   []byte
 	stack []*Group
 	tz    *json2.Tokenizer
-	state func() int
+	state func(*parser) int
 	top   *Node
 }
 
 func (p *parser) do() (Node, error) {
 	p.stack = make([]*Group, 0, 2)
 	p.tz = json2.NewTokenizer(p.src)
-	p.state = p.stateBeginValue
+	p.state = (*parser).stateBeginValue
 	var z Node
 	for {
 		if !p.tz.Next() {
@@ -644,7 +645,7 @@ func (p *parser) do() (Node, error) {
 			}
 			return z, io.ErrUnexpectedEOF
 		}
-		switch p.state() {
+		switch p.state(p) {
 		case scanError:
 			for _, g := range p.stack {
 				g.free()
@@ -659,9 +660,7 @@ func (p *parser) do() (Node, error) {
 			return z, moerr.NewInternalErrorNoCtx("parse json: %v", p.tz.Err)
 		case scanEnd:
 			if p.tz.Next() {
-				if g, ok := p.top.V.(*Group); ok {
-					g.free()
-				}
+				p.top.Free()
 				return z, moerr.NewInvalidInputNoCtx("invalid json: %s", p.src)
 			}
 			if p.tz.Err != nil {
@@ -684,11 +683,11 @@ func (p *parser) stateBeginValue() int {
 	switch k.Class() {
 	case json2.Array:
 		p.openGroup(k)
-		p.state = p.stateBeginValueOrEmpty
+		p.state = (*parser).stateBeginValueOrEmpty
 		return scanContinue
 	case json2.Object:
 		p.openGroup(k)
-		p.state = p.stateObjectKeyOrEmpty
+		p.state = (*parser).stateObjectKeyOrEmpty
 		return scanContinue
 	}
 
@@ -708,7 +707,7 @@ func (p *parser) stateBeginValue() int {
 	}
 	if p.tz.Depth != 0 {
 		p.appendToLastGroup(n)
-		p.state = p.stateEndValue
+		p.state = (*parser).stateEndValue
 		return scanContinue
 	}
 
@@ -733,7 +732,7 @@ func (p *parser) stateObjectKey() int {
 
 	g := p.stack[len(p.stack)-1]
 	g.Keys = append(g.Keys, string(p.tz.String()))
-	p.state = p.stateColon
+	p.state = (*parser).stateColon
 	return scanContinue
 }
 
@@ -750,7 +749,7 @@ func (p *parser) stateColon() int {
 		p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: after object key")
 		return scanError
 	}
-	p.state = p.stateBeginValue
+	p.state = (*parser).stateBeginValue
 	return scanContinue
 }
 
@@ -761,16 +760,16 @@ func (p *parser) stateEndValue() int {
 			p.state = nil
 			return scanEnd
 		}
-		p.state = p.stateEndValue
+		p.state = (*parser).stateEndValue
 		return scanContinue
 	}
 
 	if p.tz.Delim == ',' {
 		g := p.stack[len(p.stack)-1]
 		if g.Obj {
-			p.state = p.stateObjectKey
+			p.state = (*parser).stateObjectKey
 		} else {
-			p.state = p.stateBeginValue
+			p.state = (*parser).stateBeginValue
 		}
 		return scanContinue
 	}
@@ -818,6 +817,226 @@ func (p *parser) appendToLastGroup(n Node) {
 	old.Free()
 	g.Keys = g.Keys[:last]
 	g.Values[dupIdx] = n
+}
+
+type parser0 struct {
+	src   []byte
+	stack []*Group
+}
+
+func (p *parser0) do() (Node, error) {
+	var z Node
+	de := json.NewDecoder(bytes.NewReader(p.src))
+	de.UseNumber()
+	checkEOF := func(v any) (Node, error) {
+		_, err := de.Token()
+		if !errors.Is(err, io.EOF) {
+			if g, ok := v.(*Group); ok {
+				g.free()
+			}
+			return z, moerr.NewInvalidInputNoCtx("invalid json: %s", p.src)
+		}
+		return Node{v}, nil
+	}
+	var tk json.Token
+	var err error
+	for {
+		tk, err = de.Token()
+		if err != nil {
+			break
+		}
+		switch tk := tk.(type) {
+		case json.Delim:
+			g := p.addDelim(tk)
+			if g != nil {
+				return checkEOF(g)
+			}
+		case string:
+			if len(p.stack) == 0 {
+				return checkEOF(tk)
+			}
+			p.addString(tk)
+		case json.Number, bool, nil:
+			if len(p.stack) == 0 {
+				return checkEOF(tk)
+			}
+			p.appendToLastGroup(Node{tk})
+		}
+	}
+
+	for _, g := range p.stack {
+		g.free()
+	}
+	if errors.Is(err, io.EOF) {
+		return z, io.ErrUnexpectedEOF
+	}
+	if strings.HasSuffix(err.Error(), "unexpected end of JSON input") {
+		return z, io.ErrUnexpectedEOF
+	}
+	return z, err
+}
+
+func (p *parser0) addDelim(r json.Delim) *Group {
+	switch r {
+	case '[', '{':
+		g := reuse.Alloc[Group](nil)
+		g.Obj = r == '{'
+		p.stack = append(p.stack, g)
+	case ']', '}':
+		n := len(p.stack) - 1
+		g := p.stack[n]
+		p.stack = p.stack[:n]
+
+		if g.Obj {
+			g.sortKeys()
+		}
+
+		if len(p.stack) == 0 {
+			return g
+		}
+		p.appendToLastGroup(Node{g})
+	default:
+		panic("unknown Delim " + string(r))
+	}
+	return nil
+}
+
+func (p *parser0) appendToLastGroup(n Node) {
+	g := p.stack[len(p.stack)-1]
+	if !g.Obj || len(g.Keys) <= 1 {
+		g.Values = append(g.Values, n)
+		return
+	}
+
+	last := len(g.Keys) - 1
+	dupIdx := slices.Index(g.Keys[:last], g.Keys[last])
+	if dupIdx < 0 {
+		g.Values = append(g.Values, n)
+		return
+	}
+	old := g.Values[dupIdx]
+	old.Free()
+	g.Keys = g.Keys[:last]
+	g.Values[dupIdx] = n
+}
+
+func (p *parser0) addString(s string) {
+	g := p.stack[len(p.stack)-1]
+	if g.Obj && len(g.Keys) <= len(g.Values) {
+		g.Keys = append(g.Keys, s)
+		return
+	}
+	p.appendToLastGroup(Node{s})
+}
+
+type parser2 struct {
+	src   []byte
+	stack []*Group
+}
+
+func (p *parser2) do() (Node, error) {
+	var z Node
+	de := json3.NewDecoder(bytes.NewReader(p.src))
+	de.UseNumber()
+	checkEOF := func(v any) (Node, error) {
+		_, err := de.Token()
+		if !errors.Is(err, io.EOF) {
+			if g, ok := v.(*Group); ok {
+				g.free()
+			}
+			return z, moerr.NewInvalidInputNoCtx("invalid json: %s", p.src)
+		}
+		return Node{v}, nil
+	}
+	var tk json.Token
+	var err error
+	for {
+		tk, err = de.Token()
+		if err != nil {
+			break
+		}
+		switch tk := tk.(type) {
+		case json.Delim:
+			g := p.addDelim(tk)
+			if g != nil {
+				return checkEOF(g)
+			}
+		case string:
+			if len(p.stack) == 0 {
+				return checkEOF(tk)
+			}
+			p.addString(tk)
+		case json.Number, bool, nil:
+			if len(p.stack) == 0 {
+				return checkEOF(tk)
+			}
+			p.appendToLastGroup(Node{tk})
+		}
+	}
+
+	for _, g := range p.stack {
+		g.free()
+	}
+	if errors.Is(err, io.EOF) {
+		return z, io.ErrUnexpectedEOF
+	}
+	if strings.HasSuffix(err.Error(), "unexpected end of JSON input") {
+		return z, io.ErrUnexpectedEOF
+	}
+	return z, err
+}
+
+func (p *parser2) addDelim(r json.Delim) *Group {
+	switch r {
+	case '[', '{':
+		g := reuse.Alloc[Group](nil)
+		g.Obj = r == '{'
+		p.stack = append(p.stack, g)
+	case ']', '}':
+		n := len(p.stack) - 1
+		g := p.stack[n]
+		p.stack = p.stack[:n]
+
+		if g.Obj {
+			g.sortKeys()
+		}
+
+		if len(p.stack) == 0 {
+			return g
+		}
+		p.appendToLastGroup(Node{g})
+	default:
+		panic("unknown Delim " + string(r))
+	}
+	return nil
+}
+
+func (p *parser2) appendToLastGroup(n Node) {
+	g := p.stack[len(p.stack)-1]
+	if !g.Obj || len(g.Keys) <= 1 {
+		g.Values = append(g.Values, n)
+		return
+	}
+
+	last := len(g.Keys) - 1
+	dupIdx := slices.Index(g.Keys[:last], g.Keys[last])
+	if dupIdx < 0 {
+		g.Values = append(g.Values, n)
+		return
+	}
+	old := g.Values[dupIdx]
+	old.Free()
+	g.Keys = g.Keys[:last]
+	g.Values[dupIdx] = n
+}
+
+func (p *parser2) addString(s string) {
+	g := p.stack[len(p.stack)-1]
+	if g.Obj && len(g.Keys) <= len(g.Values) {
+		g.Keys = append(g.Keys, s)
+		return
+	}
+	p.appendToLastGroup(Node{s})
 }
 
 func init() {
