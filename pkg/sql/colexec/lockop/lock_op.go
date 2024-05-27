@@ -67,6 +67,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	arg.rt = &state{}
 	arg.rt.fetchers = make([]FetchLockRowsFunc, 0, len(arg.targets))
 	arg.rt.parker = types.NewPacker(proc.Mp())
+	arg.rt.step = stepLock
 	for idx := range arg.targets {
 		arg.rt.fetchers = append(arg.rt.fetchers,
 			GetFetchRowsFunc(arg.targets[idx].primaryColumnType))
@@ -88,11 +89,13 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 			err = performLock(bat, proc, arg)
 			if err != nil {
 				return err
+			} else if arg.rt.retryError != nil {
+				return arg.rt.retryError
 			}
 		}
 	}
 	arg.rt.retryError = nil
-	arg.rt.step = stepLock
+	arg.rt.defChanged = false
 	if arg.block {
 		arg.rt.InitReceiver(proc, true)
 	}

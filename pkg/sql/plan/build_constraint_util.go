@@ -1690,6 +1690,9 @@ func checkLockTableOrRows(isMulti bool, tableDef *TableDef, query *Query) (bool,
 	if len(tableDef.Pkey.Names) > 1 { //unsupport multi-column primary key
 		return false, nil
 	}
+	if tableDef.Partition != nil { // unsupport partition table
+		return false, nil
+	}
 	pkName := tableDef.Name + "." + tableDef.Pkey.Names[0]
 
 	checkIsPkColExpr := func(e *plan.Expr) bool {
