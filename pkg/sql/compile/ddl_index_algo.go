@@ -166,7 +166,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	}
 	centroidParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
 	kmeansInitType := "kmeansplusplus"
-	kmeansNormalize := "true"
+	kmeansNormalize := "false"
 
 	// 1.b init centroids table with default centroid, if centroids are not enough.
 	// NOTE: we can run re-index to improve the centroid quality.

@@ -2474,6 +2474,9 @@ func executeStmtWithWorkspace(ses FeSession,
 
 	txnOp := ses.GetTxnHandler().GetTxn()
 
+	//refresh txn id
+	ses.SetTxnId(txnOp.Txn().ID)
+
 	//refresh proc txnOp
 	execCtx.proc.TxnOperator = txnOp
 

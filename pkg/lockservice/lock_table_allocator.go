@@ -707,6 +707,10 @@ func (l *lockTableAllocator) initHandler() {
 	l.server.RegisterMethodHandler(
 		pb.Method_CannotCommit,
 		l.handleCannotCommit)
+
+	l.server.RegisterMethodHandler(
+		pb.Method_CheckOrphan,
+		l.handleCheckOrphan)
 }
 
 func (l *lockTableAllocator) handleGetBind(
@@ -816,6 +820,18 @@ func (l *lockTableAllocator) handleCannotCommit(
 	writeResponse(ctx, cancel, resp, nil, cs)
 }
 
+func (l *lockTableAllocator) handleCheckOrphan(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	c := l.getCtl(req.CheckOrphan.ServiceID)
+	state, ok := c.getCtlState(util.UnsafeBytesToString(req.CheckOrphan.Txn))
+	resp.CheckOrphan.Orphan = ok && state == cannotCommitState
+	writeResponse(ctx, cancel, resp, nil, cs)
+}
+
 func (l *lockTableAllocator) getCtl(serviceID string) *commitCtl {
 	if v, ok := l.ctl.Load(serviceID); ok {
 		return v.(*commitCtl)
@@ -877,6 +893,16 @@ func (c *commitCtl) add(txnID string, state ctlState) ctlState {
 		return old.(ctlState)
 	}
 	return state
+}
+
+func (c *commitCtl) getCtlState(
+	txnID string,
+) (ctlState, bool) {
+	old, loaded := c.states.Load(txnID)
+	if loaded {
+		return old.(ctlState), true
+	}
+	return ctlState(0), false
 }
 
 func (c *commitCtl) disconnect() {
