@@ -447,6 +447,16 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 			}
 			return true
 		})
+
+		// When Rollback, the last mvcc has already removed
+		fullname := table.GetFullName()
+		nn := e.nameNodes[fullname]
+		if nn != nil {
+			nn.DeleteNode(table.ID)
+			if nn.Length() == 0 {
+				delete(e.nameNodes, fullname)
+			}
+		}
 		e.link.Delete(n)
 		delete(e.entries, table.ID)
 	}

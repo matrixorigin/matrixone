@@ -3510,6 +3510,38 @@ func TestDropCreated3(t *testing.T) {
 	tae.Restart(ctx)
 }
 
+func TestRollbackCreateTable(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	schema := catalog.MockSchemaAll(1, -1)
+	defer tae.Close()
+
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db", "sql", "")
+	db.CreateRelationWithID(schema.Clone(), uint64(27200))
+	txn.Commit(ctx)
+
+	for i := 0; i < 10; i += 2 {
+		tae.Catalog.GCByTS(ctx, tae.TxnMgr.Now())
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		db.DropRelationByID(uint64(i + 27200))
+		db.CreateRelationWithID(schema.Clone(), uint64(i+27200+1))
+		txn.Commit(ctx)
+
+		txn, _ = tae.StartTxn(nil)
+		db, _ = txn.GetDatabase("db")
+		db.DropRelationByID(uint64(i + 27200 + 1))
+		db.CreateRelationWithID(schema.Clone(), uint64(i+27200+2))
+		txn.Rollback(ctx)
+	}
+
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+
 func TestDropCreated4(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
