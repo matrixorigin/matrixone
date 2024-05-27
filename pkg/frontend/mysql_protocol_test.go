@@ -354,7 +354,7 @@ func TestKill(t *testing.T) {
 		var resultId int
 		logutil.Infof("conn1 sleep(30) 2")
 		connIdRow = conn1.QueryRowContext(ctx, sql6)
-		err = connIdRow.Scan(&resultId)
+		err := connIdRow.Scan(&resultId)
 		require.NoError(t, err)
 		logutil.Infof("conn1 sleep(30) 2 done")
 	}()
