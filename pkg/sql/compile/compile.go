@@ -990,14 +990,14 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		c.cnList = engine.Nodes{
 			engine.Node{
 				Addr: c.addr,
-				Mcpu: c.generateCPUNumber(ncpu, 1),
+				Mcpu: 1,
 			},
 		}
 	} else if c.execType == plan2.ExecTypeAP_ONECN {
 		c.cnList = engine.Nodes{
 			engine.Node{
 				Addr: c.addr,
-				Mcpu: c.generateCPUNumber(ncpu, ncpu),
+				Mcpu: ncpu,
 			},
 		}
 	} else {
