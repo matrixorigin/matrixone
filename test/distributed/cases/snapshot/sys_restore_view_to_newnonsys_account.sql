@@ -56,6 +56,7 @@ select * from v02;
 drop view v01;
 drop view v02;
 drop table table01;
+drop database test;
 -- @session
 
 -- @session:id=1&user=acc01:test_account&password=111
@@ -208,7 +209,7 @@ use test;
 select * from EmployeeDepartmentView;
 -- @session
 
--- @session:id=2&user=acc02:test_account&password=111
+-- @session:id=1&user=acc01:test_account&password=111
 drop view EmployeeDepartmentView;
 select * from EmployeeDepartmentView;
 -- @session
@@ -360,9 +361,13 @@ drop snapshot if exists sp06;
 create snapshot sp06 for account acc01;
 restore account acc01 from snapshot sp05 to account acc02;
 
--- @session:id=1&user=acc01:test_account&password=111
+-- @session:id=2&user=acc02:test_account&password=111
 use test;
 select * from view01;
+-- @session
+
+-- @session:id=1&user=acc01:test_account&password=111
+use test;
 drop table partition01;
 select * from view01;
 -- @session
@@ -378,8 +383,7 @@ drop database test;
 -- @session
 
 -- @session:id=1&user=acc01:test_account&password=111
-drop table partition01;
-drop table view01;
+drop database test;
 -- @session
 drop snapshot sp06;
 drop snapshot sp05;
@@ -398,12 +402,12 @@ create table EmployeeSalaries (
                                   EmployeeName VARCHAR(100),
                                   Salary DECIMAL(10, 2)
 );
-insert into EmployeeSalaries (EmployeeID, EmployeeName, Salary) VALUES
-                                                                    (1, 'Alice', 70000),
-                                                                    (2, 'Bob', 80000),
-                                                                    (3, 'Charlie', 90000),
-                                                                    (4, 'David', 65000),
-                                                                    (5, 'Eva', 75000);
+    insert into EmployeeSalaries (EmployeeID, EmployeeName, Salary) VALUES
+                                    (1, 'Alice', 70000),
+                                    (2, 'Bob', 80000),
+                                    (3, 'Charlie', 90000),
+                                    (4, 'David', 65000),
+                                    (5, 'Eva', 75000);
 drop view if exists EmployeeSalaryRanking;
 create view EmployeeSalaryRanking AS
 select
@@ -430,13 +434,12 @@ restore account acc01 from snapshot sp06 to account acc02;
 select * from test01.EmployeeSalaryRanking;
 drop database test01;
 -- @session
-
 drop snapshot sp06;
 
 
 
 
--- @bvt:issue#16306
+-- @bvt:issue#16346
 -- create table1 and view, create table2 and view, drop table1 then restore
 -- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test02;
@@ -529,13 +532,20 @@ drop table Enrollments;
 drop table students;
 drop table Courses;
 drop snapshot sp07;
+drop database test02;
 -- @session
+-- @session:id=1&user=acc01:test_account&password=111
+drop database test02;
+-- @session
+-- @bvt:issue
 
 
 
 
 -- single table, multi table
 -- @session:id=1&user=acc01:test_account&password=111
+drop database if exists test02;
+create database test02;
 use test02;
 drop table if exists employees;
 create table employees (
@@ -579,6 +589,12 @@ drop database test02;
 
 restore account acc01 from snapshot sp10 to account acc02;
 -- @session:id=2&user=acc02:test_account&password=111
+use test02;
+show create view employees_view;
+show create view it_employees_view;
+show create view employees_by_department_view;
+show create view employees_by_salary_view;
+show create view avg_salary_per_department_view;
 drop view if exists employees_view;
 drop view if exists it_employees_view;
 drop view if exists employees_by_department_view;
@@ -674,17 +690,13 @@ select * from test04.employee_view;
 select * from test03.department_view;
 select * from test05.employee_with_department_view;
 
-drop table employees;
-drop table departments;
-drop view employee_view;
-drop view department_view;
-drop view employee_with_department_view;
-drop database test03;
+drop view test03.department_view;
+drop view test05.employee_with_department_view;
 drop database test04;
+drop database test03;
 drop database test05;
 -- @session
 drop snapshot sp100;
 drop snapshot sp101;
--- @bvt:issue
 drop account acc01;
 drop account acc02;
