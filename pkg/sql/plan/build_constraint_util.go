@@ -377,10 +377,10 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	info.tblInfo.oldColPosMap = append(info.tblInfo.oldColPosMap, oldColPosMap)
 	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
 
-	dbName := string(stmt.Table.(*tree.TableName).SchemaName)
-	if dbName == "" {
-		dbName = builder.compCtx.DefaultDatabase()
-	}
+	// dbName := string(stmt.Table.(*tree.TableName).SchemaName)
+	// if dbName == "" {
+	// 	dbName = builder.compCtx.DefaultDatabase()
+	// }
 
 	existAutoPkCol := false
 
