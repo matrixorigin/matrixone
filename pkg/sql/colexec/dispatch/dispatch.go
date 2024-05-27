@@ -38,61 +38,60 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
 	ctr := new(container)
-	ap.ctr = ctr
-	ctr.localRegsCnt = len(ap.LocalRegs)
-	ctr.remoteRegsCnt = len(ap.RemoteRegs)
+	arg.ctr = ctr
+	ctr.localRegsCnt = len(arg.LocalRegs)
+	ctr.remoteRegsCnt = len(arg.RemoteRegs)
 	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt
 
-	switch ap.FuncId {
+	switch arg.FuncId {
 	case SendToAllFunc:
 		if ctr.remoteRegsCnt == 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAllFunc should include RemoteRegs")
 		}
-		if len(ap.LocalRegs) == 0 {
+		if len(arg.LocalRegs) == 0 {
 			ctr.sendFunc = sendToAllRemoteFunc
 		} else {
 			ctr.sendFunc = sendToAllFunc
 		}
-		return ap.prepareRemote(proc)
+		return arg.prepareRemote(proc)
 
 	case ShuffleToAllFunc:
-		ap.ctr.sendFunc = shuffleToAllFunc
-		if ap.ctr.remoteRegsCnt > 0 {
-			if err := ap.prepareRemote(proc); err != nil {
+		arg.ctr.sendFunc = shuffleToAllFunc
+		if arg.ctr.remoteRegsCnt > 0 {
+			if err := arg.prepareRemote(proc); err != nil {
 				return err
 			}
 		} else {
-			ap.prepareLocal()
+			arg.prepareLocal()
 		}
-		ap.ctr.batchCnt = make([]int, ctr.aliveRegCnt)
-		ap.ctr.rowCnt = make([]int, ctr.aliveRegCnt)
+		arg.ctr.batchCnt = make([]int, ctr.aliveRegCnt)
+		arg.ctr.rowCnt = make([]int, ctr.aliveRegCnt)
 
 	case SendToAnyFunc:
 		if ctr.remoteRegsCnt == 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAnyFunc should include RemoteRegs")
 		}
-		if len(ap.LocalRegs) == 0 {
+		if len(arg.LocalRegs) == 0 {
 			ctr.sendFunc = sendToAnyRemoteFunc
 		} else {
 			ctr.sendFunc = sendToAnyFunc
 		}
-		return ap.prepareRemote(proc)
+		return arg.prepareRemote(proc)
 
 	case SendToAllLocalFunc:
 		if ctr.remoteRegsCnt != 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAllLocalFunc should not send to remote")
 		}
 		ctr.sendFunc = sendToAllLocalFunc
-		ap.prepareLocal()
+		arg.prepareLocal()
 
 	case SendToAnyLocalFunc:
 		if ctr.remoteRegsCnt != 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAnyLocalFunc should not send to remote")
 		}
-		ap.ctr.sendFunc = sendToAnyLocalFunc
-		ap.prepareLocal()
+		arg.ctr.sendFunc = sendToAnyLocalFunc
+		arg.prepareLocal()
 
 	default:
 		return moerr.NewInternalError(proc.Ctx, "wrong sendFunc id for dispatch")

@@ -434,21 +434,23 @@ func TestNormalizeL2(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
+				res := make([]float32, len(tt.args.argF32))
 				if tt.wantErr {
-					if _, err := NormalizeL2[float32](tt.args.argF32); err == nil {
+					if err := NormalizeL2[float32](tt.args.argF32, res); err == nil {
 						t.Errorf("NormalizeL2() should throw error")
 					}
-				} else if gotRes, err := NormalizeL2[float32](tt.args.argF32); err != nil || !reflect.DeepEqual(tt.wantF32, gotRes) {
-					t.Errorf("NormalizeL2() = %v, want %v", gotRes, tt.wantF32)
+				} else if err := NormalizeL2[float32](tt.args.argF32, res); err != nil || !reflect.DeepEqual(tt.wantF32, res) {
+					t.Errorf("NormalizeL2() = %v, want %v", res, tt.wantF32)
 				}
 			}
 			if tt.args.argF64 != nil {
+				res := make([]float64, len(tt.args.argF64))
 				if tt.wantErr {
-					if _, err := NormalizeL2[float64](tt.args.argF64); err == nil {
+					if err := NormalizeL2[float64](tt.args.argF64, res); err == nil {
 						t.Errorf("NormalizeL2() should throw error")
 					}
-				} else if gotRes, err := NormalizeL2[float64](tt.args.argF64); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
-					t.Errorf("NormalizeL2() = %v, want %v", gotRes, tt.wantF64)
+				} else if err := NormalizeL2[float64](tt.args.argF64, res); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, res) {
+					t.Errorf("NormalizeL2() = %v, want %v", res, tt.wantF64)
 				}
 			}
 		})

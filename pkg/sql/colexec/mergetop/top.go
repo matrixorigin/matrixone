@@ -32,20 +32,18 @@ const argName = "merge_top"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(argName)
-	ap := arg
 	buf.WriteString(": mergetop([")
-	for i, f := range ap.Fs {
+	for i, f := range arg.Fs {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
 		buf.WriteString(f.String())
 	}
-	buf.WriteString(fmt.Sprintf("], %v)", ap.Limit))
+	buf.WriteString(fmt.Sprintf("], %v)", arg.Limit))
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
+	arg.ctr = new(container)
 	arg.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, arg.Limit)
 	if err != nil {
 		return err
@@ -55,18 +53,18 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 	arg.ctr.limit = vector.MustFixedCol[int64](vec)[0]
-	ap.ctr.InitReceiver(proc, true)
+	arg.ctr.InitReceiver(proc, true)
 	if arg.ctr.limit > 1024 {
-		ap.ctr.sels = make([]int64, 0, 1024)
+		arg.ctr.sels = make([]int64, 0, 1024)
 	} else {
-		ap.ctr.sels = make([]int64, 0, arg.ctr.limit)
+		arg.ctr.sels = make([]int64, 0, arg.ctr.limit)
 	}
-	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
+	arg.ctr.poses = make([]int32, 0, len(arg.Fs))
 
-	ctr := ap.ctr
-	ctr.executorsForOrderList = make([]colexec.ExpressionExecutor, len(ap.Fs))
+	ctr := arg.ctr
+	ctr.executorsForOrderList = make([]colexec.ExpressionExecutor, len(arg.Fs))
 	for i := range ctr.executorsForOrderList {
-		ctr.executorsForOrderList[i], err = colexec.NewExpressionExecutor(proc, ap.Fs[i].Expr)
+		ctr.executorsForOrderList[i], err = colexec.NewExpressionExecutor(proc, arg.Fs[i].Expr)
 		if err != nil {
 			return err
 		}
@@ -82,16 +80,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ap := arg
-	ctr := ap.ctr
+	ctr := arg.ctr
 	result := vm.NewCallResult()
-	if ap.ctr.limit == 0 {
+	if arg.ctr.limit == 0 {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 
-	if end, err := ctr.build(ap, proc, anal, arg.GetIsFirst()); err != nil {
+	if end, err := ctr.build(arg, proc, anal, arg.GetIsFirst()); err != nil {
 		return result, err
 	} else if end {
 		result.Status = vm.ExecStop
@@ -103,7 +100,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	err := ctr.eval(ap.ctr.limit, proc, anal, arg.GetIsLast(), &result)
+	err := ctr.eval(arg.ctr.limit, proc, anal, arg.GetIsLast(), &result)
 	if err == nil {
 		result.Status = vm.ExecStop
 		return result, nil
@@ -113,14 +110,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
 	for {
-		bat, end, err := ctr.ReceiveFromAllRegs(anal)
-		if err != nil {
-			return true, nil
+		msg := ctr.ReceiveFromAllRegs(anal)
+		if msg.Err != nil {
+			return true, msg.Err
 		}
-		if end {
+		if msg.Batch == nil {
 			return false, nil
 		}
 
+		bat := msg.Batch
 		anal.Input(bat, isFirst)
 
 		ctr.n = len(bat.Vecs)

@@ -29,9 +29,8 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, true)
 	return nil
 }
 
@@ -46,11 +45,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result := vm.NewCallResult()
 	for !arg.ctr.last {
-		bat, _, err := arg.ctr.ReceiveFromSingleReg(0, anal)
-		if err != nil {
+		msg := arg.ctr.ReceiveFromSingleReg(0, anal)
+		if msg.Err != nil {
 			result.Status = vm.ExecStop
-			return result, err
+			return result, msg.Err
 		}
+		bat := msg.Batch
 		if bat == nil || bat.End() {
 			result.Batch = nil
 			result.Status = vm.ExecStop

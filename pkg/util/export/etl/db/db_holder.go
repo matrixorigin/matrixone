@@ -19,7 +19,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/csv"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -40,7 +39,7 @@ var (
 	sqlWriterDBUser atomic.Value
 	dbAddressFunc   atomic.Value
 
-	db            atomic.Value
+	db            atomic.Pointer[sql.DB]
 	dbRefreshTime time.Time
 
 	dbMux sync.Mutex
@@ -95,11 +94,7 @@ func SetDBConn(conn *sql.DB) {
 }
 
 func CloseDBConn() {
-	dbVal := db.Load()
-	if dbVal == nil {
-		return
-	}
-	dbConn := dbVal.(*sql.DB)
+	dbConn := db.Load()
 	if dbConn != nil {
 		dbConn.Close()
 	}
@@ -125,16 +120,13 @@ func GetOrInitDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 			return err
 		}
 		dsn :=
-			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=10s&writeTimeout=15s&timeout=15s&maxAllowedPacket=0",
+			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=10s&writeTimeout=15s&timeout=15s&maxAllowedPacket=0&disable_txn_trace=1",
 				dbUser.UserName,
 				dbUser.Password,
 				dbAddress)
 		newDBConn, err := sql.Open("mysql", dsn)
 		if err != nil {
 			return err
-		}
-		if _, err := newDBConn.Exec("set session disable_txn_trace=1"); err != nil {
-			return errors.Join(err, newDBConn.Close())
 		}
 
 		//45s suggest by xzxiong
@@ -157,8 +149,7 @@ func GetOrInitDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 		}
 	}
 
-	dbConn := db.Load().(*sql.DB)
-	return dbConn, nil
+	return db.Load(), nil
 }
 
 func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration) (int, error) {
@@ -268,7 +259,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 
 	csvData := csvWriter.GetContent()
 
-	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s", csvData, tbl.Database, tbl.Table)
+	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s FIELDS TERMINATED BY ','", csvData, tbl.Database, tbl.Table)
 
 	// Use the transaction to execute the SQL command
 

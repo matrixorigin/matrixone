@@ -33,16 +33,12 @@ func IsRetryableError(err error) bool {
 		return true
 	}
 	// match sub-string
-	if strings.Contains(str, "unexpected EOF") {
-		return true
-	}
-	if strings.Contains(str, "connection reset by peer") {
-		return true
-	}
-	if strings.Contains(str, "connection timed out") {
-		return true
-	}
-	if strings.Contains(str, "dial tcp: lookup") {
+	if strings.Contains(str, "unexpected EOF") ||
+		strings.Contains(str, "connection reset by peer") ||
+		strings.Contains(str, "connection timed out") ||
+		strings.Contains(str, "dial tcp: lookup") ||
+		strings.Contains(str, "write: broken pipe") ||
+		strings.Contains(str, "use of closed network connection") {
 		return true
 	}
 	return false

@@ -27,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"go.uber.org/zap"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -84,6 +86,9 @@ type checkpointCleaner struct {
 	delWorker *GCWorker
 
 	disableGC bool
+
+	// checkGC is to check the correctness of GC
+	checkGC bool
 
 	option struct {
 		sync.RWMutex
@@ -144,6 +149,14 @@ func (c *checkpointCleaner) isEnableGC() bool {
 	c.option.Lock()
 	defer c.option.Unlock()
 	return c.option.enableGC
+}
+
+func (c *checkpointCleaner) SetCheckGC(enable bool) {
+	c.checkGC = enable
+}
+
+func (c *checkpointCleaner) isEnableCheckGC() bool {
+	return c.checkGC
 }
 
 func (c *checkpointCleaner) Replay() error {
@@ -311,6 +324,12 @@ func (c *checkpointCleaner) GetInputs() *GCTable {
 	return c.inputs.tables[0]
 }
 
+func (c *checkpointCleaner) GetGCTables() []*GCTable {
+	c.inputs.RLock()
+	defer c.inputs.RUnlock()
+	return c.inputs.tables
+}
+
 func (c *checkpointCleaner) SetMinMergeCountForTest(count int) {
 	c.minMergeCount.Lock()
 	defer c.minMergeCount.Unlock()
@@ -337,6 +356,14 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	if maxConsumed == nil {
 		return nil
 	}
+	now := time.Now()
+	logutil.Info("[DiskCleaner]",
+		zap.String("MergeGCFile-Start", maxConsumed.String()))
+	defer func() {
+		logutil.Info("[DiskCleaner]",
+			zap.String("MergeGCFile-End", maxConsumed.String()),
+			zap.String("cost :", time.Since(now).String()))
+	}()
 	maxSnapEnd := types.TS{}
 	maxAcctEnd := types.TS{}
 	var snapFile, acctFile string
@@ -410,9 +437,6 @@ func (c *checkpointCleaner) mergeGCFile() error {
 		mergeTable = c.inputs.tables[0]
 	}
 	c.inputs.RUnlock()
-	logutil.Info("[DiskCleaner]",
-		common.OperationField("MergeGCFile start"),
-		common.OperandField(maxConsumed.String()))
 	_, err = mergeTable.SaveFullTable(maxConsumed.GetStart(), maxConsumed.GetEnd(), c.fs, nil)
 	if err != nil {
 		logutil.Errorf("SaveTable failed: %v", err.Error())
@@ -424,62 +448,156 @@ func (c *checkpointCleaner) mergeGCFile() error {
 		return err
 	}
 	c.updateMinMerged(maxConsumed)
-	logutil.Info("[DiskCleaner]",
-		common.OperationField("MergeGCFile end"),
-		common.OperandField(maxConsumed.String()))
 	return nil
 }
 
-func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
+// getAllowedMergeFiles returns the files that can be merged.
+// files: all checkpoint meta files before snapshot.
+// idxes: idxes is the index of the global checkpoint in files,
+// and the merge file will only process the files in one global checkpoint interval each time.
+func getAllowedMergeFiles(
+	ctx context.Context,
+	fs fileservice.FileService,
+	snapshot types.TS,
+	listFunc checkpoint.GetCheckpointRange) (ok bool, files []*checkpoint.MetaFile, idxes []int, err error) {
+	var idx int
+	files, idx, err = checkpoint.ListSnapshotMeta(ctx, fs, snapshot, listFunc)
+	if err != nil {
+		return
+	}
+	if len(files) == 0 {
+		return
+	}
+	idxes = make([]int, 0)
+	for i := 0; i <= idx; i++ {
+		start := files[i].GetStart()
+		if start.IsEmpty() {
+			if i != 0 {
+				idxes = append(idxes, i-1)
+			}
+		}
+	}
+	if len(idxes) == 0 {
+		return
+	}
+	ok = true
+	return
+}
+
+func (c *checkpointCleaner) getDeleteFile(
+	ctx context.Context,
+	fs fileservice.FileService,
+	files []*checkpoint.MetaFile,
+	idx int,
+	ts, stage types.TS,
+	ckpSnapList []types.TS,
+) ([]string, error) {
+	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(ctx, fs, files, idx, ts, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(ckps) == 0 {
+		return nil, nil
+	}
+	deleteFiles := make([]string, 0)
+
+	for i := len(ckps) - 1; i >= 0; i-- {
+		// TODO: remove this log
+		logutil.Info("[MergeCheckpoint]",
+			common.OperationField("List Checkpoint"),
+			common.OperandField(ckps[i].String()))
+	}
+
+	for i := len(ckps) - 1; i >= 0; i-- {
+		ckp := ckps[i]
+		end := ckp.GetEnd()
+		if end.Less(&stage) {
+			if isSnapshotCKPRefers(ckp.GetStart(), ckp.GetEnd(), ckpSnapList) &&
+				ckp.GetType() != checkpoint.ET_Global {
+				// TODO: remove this log
+				logutil.Info("[MergeCheckpoint]",
+					common.OperationField("isSnapshotCKPRefers"),
+					common.OperandField(ckp.String()))
+				break
+			}
+			logutil.Info("[MergeCheckpoint]",
+				common.OperationField("GC checkpoint"),
+				common.OperandField(ckp.String()))
+			nameMeta := blockio.EncodeCheckpointMetadataFileName(
+				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
+				ckp.GetStart(), ckp.GetEnd())
+			locations, err := logtail.LoadCheckpointLocations(
+				c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
+			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+					deleteFiles = append(deleteFiles, nameMeta)
+					continue
+				}
+				return nil, err
+			}
+			deleteFiles = append(deleteFiles, nameMeta)
+			if i == len(ckps)-1 {
+				c.updateCkpGC(&end)
+			}
+			for name := range locations {
+				deleteFiles = append(deleteFiles, name)
+			}
+			deleteFiles = append(deleteFiles, ckp.GetTNLocation().Name().String())
+
+			if ckp.GetType() == checkpoint.ET_Global {
+				// After the global checkpoint is processed,
+				// subsequent checkpoints need to be processed in the next getDeleteFile
+				logutil.Info("[MergeCheckpoint]",
+					common.OperationField("GC Global checkpoint"),
+					common.OperandField(ckp.String()))
+				break
+			}
+		}
+	}
+	return deleteFiles, nil
+}
+
+func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList map[uint32][]types.TS) error {
 	if stage.IsEmpty() ||
 		(c.GeteCkpStage() != nil && c.GeteCkpStage().GreaterEq(&stage)) {
 		return nil
 	}
-	logutil.Infof("mergeCheckpointFiles stage: %v", stage.ToString())
-	files, idx, err := checkpoint.ListSnapshotMeta(c.ctx, c.fs.Service, stage, nil)
+	ok, files, idxes, err := getAllowedMergeFiles(c.ctx, c.fs.Service, stage, nil)
 	if err != nil {
 		return err
 	}
-	if len(files) == 0 {
+	if !ok {
+		c.updateCkpStage(&stage)
 		return nil
 	}
 	ckpGC := c.GeteCkpGC()
 	if ckpGC == nil {
 		ckpGC = new(types.TS)
 	}
-	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(c.ctx, c.fs.Service, files, idx, *ckpGC, true)
-	if err != nil {
-		return err
-	}
-	if len(ckps) == 0 {
-		return nil
-	}
 	deleteFiles := make([]string, 0)
-	for _, ckp := range ckps {
-		end := ckp.GetEnd()
-		if end.Less(&stage) {
-			logutil.Infof("GC checkpoint: %v, %v", ckp.GetStart().ToString(), end.ToString())
-			locations, err := logtail.LoadCheckpointLocations(c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
-			if err != nil {
-				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-					continue
-				}
-				return err
-			}
-			for name := range locations {
-				deleteFiles = append(deleteFiles, name)
-			}
-			deleteFiles = append(deleteFiles, ckp.GetTNLocation().Name().String())
+	ckpSnapList := make([]types.TS, 0)
+	for _, ts := range snapshotList {
+		ckpSnapList = append(ckpSnapList, ts...)
+	}
+	sort.Slice(ckpSnapList, func(i, j int) bool {
+		return ckpSnapList[i].Less(&ckpSnapList[j])
+	})
+	for _, idx := range idxes {
+		logutil.Info("[MergeCheckpoint]",
+			common.OperationField("MergeCheckpointFiles"),
+			common.OperandField(stage.ToString()),
+			common.OperandField(idx))
+		delFiles, err := c.getDeleteFile(c.ctx, c.fs.Service, files, idx, *ckpGC, stage, ckpSnapList)
+		if err != nil {
+			return err
 		}
+		ckpGC = new(types.TS)
+		deleteFiles = append(deleteFiles, delFiles...)
+	}
 
-	}
-	for i := 0; i < idx+1; i++ {
-		end := files[i].GetEnd()
-		if end.Less(&stage) {
-			deleteFiles = append(deleteFiles, CKPMetaDir+files[i].GetName())
-		}
-	}
-	logutil.Infof("CKP GC: %v", deleteFiles)
+	logutil.Info("[MergeCheckpoint]",
+		common.OperationField("CKP GC"),
+		common.OperandField(deleteFiles))
 	if !c.disableGC {
 		err = c.fs.DelFiles(c.ctx, deleteFiles)
 		if err != nil {
@@ -488,7 +606,6 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS) error {
 		}
 	}
 	c.updateCkpStage(&stage)
-	c.updateCkpGC(&stage)
 	return nil
 }
 
@@ -536,33 +653,54 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 		return nil
 	}
 	defer logtail.CloseSnapshotList(snapshots)
-	gc := c.softGC(gcTable, gckp, snapshots)
+	gc, snapshotList := c.softGC(gcTable, gckp, snapshots)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
 	err = c.delWorker.ExecDelete(c.ctx, gc, c.disableGC)
 	if err != nil {
 		return err
 	}
+	err = c.mergeCheckpointFiles(c.ckpClient.GetStage(), snapshotList)
+
+	if err != nil {
+		// TODO: Error handle
+		logutil.Errorf("[DiskCleaner] mergeCheckpointFiles failed: %v", err.Error())
+		return err
+	}
 	return nil
 }
 
-func (c *checkpointCleaner) softGC(t *GCTable, gckp *checkpoint.CheckpointEntry, snapshots map[uint32]containers.Vector) []string {
+func (c *checkpointCleaner) softGC(
+	t *GCTable,
+	gckp *checkpoint.CheckpointEntry,
+	snapshots map[uint32]containers.Vector,
+) ([]string, map[uint32][]types.TS) {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
+	now := time.Now()
+	var softCost, mergeCost time.Duration
+	defer func() {
+		logutil.Info("[DiskCleaner] softGC cost",
+			zap.String("soft-gc cost", softCost.String()),
+			zap.String("merge-table cost", mergeCost.String()))
+	}()
 	if len(c.inputs.tables) == 0 {
-		return nil
+		return nil, nil
 	}
 	mergeTable := NewGCTable()
 	for _, table := range c.inputs.tables {
 		mergeTable.Merge(table)
 	}
 	gc, snapList := mergeTable.SoftGC(t, gckp.GetEnd(), snapshots, c.snapshotMeta)
+	softCost = time.Since(now)
+	now = time.Now()
 	c.inputs.tables = make([]*GCTable, 0)
 	c.inputs.tables = append(c.inputs.tables, mergeTable)
 	c.updateMaxCompared(gckp)
 	c.snapshotMeta.MergeTableInfo(snapList)
+	mergeCost = time.Since(now)
 	//logutil.Infof("SoftGC is %v, merge table: %v", gc, mergeTable.String())
-	return gc
+	return gc, snapList
 }
 
 func (c *checkpointCleaner) createDebugInput(
@@ -662,6 +800,12 @@ func (c *checkpointCleaner) Process() {
 		return
 	}
 
+	now := time.Now()
+	defer func() {
+		logutil.Info("[DiskCleaner]",
+			zap.String("Process costs", time.Since(now).String()))
+
+	}()
 	maxConsumed := c.maxConsumed.Load()
 	if maxConsumed != nil {
 		ts = maxConsumed.GetEnd()
@@ -726,12 +870,13 @@ func (c *checkpointCleaner) Process() {
 		return
 	}
 
-	err = c.mergeCheckpointFiles(c.ckpClient.GetStage())
-
-	if err != nil {
-		// TODO: Error handle
+	if !c.isEnableCheckGC() {
 		return
 	}
+	ck := checker{
+		cleaner: c,
+	}
+	ck.Check()
 }
 
 func (c *checkpointCleaner) checkExtras(item any) bool {
@@ -755,16 +900,18 @@ func (c *checkpointCleaner) createNewInput(
 	ckps []*checkpoint.CheckpointEntry) (input *GCTable, err error) {
 	now := time.Now()
 	var snapSize, tableSize uint32
-	logutil.Info("[DiskCleaner]", common.OperationField("Consume-Start"),
-		common.AnyField("entry count :", len(ckps)))
-	defer func() {
-		logutil.Info("[DiskCleaner]", common.OperationField("Consume-End"),
-			common.AnyField("cost :", time.Since(now).String()),
-			common.AnyField("snap meta size :", snapSize),
-			common.AnyField("table meta size :", tableSize),
-			common.OperandField(c.snapshotMeta.String()))
-	}()
 	input = NewGCTable()
+	logutil.Info("[DiskCleaner]", zap.String("op", "Consume-Start"),
+		zap.Int("entry count :", len(ckps)))
+	defer func() {
+		logutil.Info("[DiskCleaner]", zap.String("op", "Consume-End"),
+			zap.String("cost :", time.Since(now).String()),
+			zap.Uint32("snap meta size :", snapSize),
+			zap.Uint32("table meta size :", tableSize),
+			zap.Int("objects :", len(input.objects)),
+			zap.Int("tombstones :", len(input.tombstones)),
+			zap.String("snapshots", c.snapshotMeta.String()))
+	}()
 	var data *logtail.CheckpointData
 	for _, candidate := range ckps {
 		data, err = c.collectCkpData(candidate)
@@ -812,4 +959,25 @@ func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
 
 func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {
 	return c.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, c.mPool)
+}
+
+func isSnapshotCKPRefers(start, end types.TS, snapVec []types.TS) bool {
+	if len(snapVec) == 0 {
+		return false
+	}
+	left, right := 0, len(snapVec)-1
+	for left <= right {
+		mid := left + (right-left)/2
+		snapTS := snapVec[mid]
+		if snapTS.GreaterEq(&start) && snapTS.Less(&end) {
+			logutil.Debugf("isSnapshotRefers: %s, create %v, drop %v",
+				snapTS.ToString(), start.ToString(), end.ToString())
+			return true
+		} else if snapTS.Less(&start) {
+			left = mid + 1
+		} else {
+			right = mid - 1
+		}
+	}
+	return false
 }

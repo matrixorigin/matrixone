@@ -670,14 +670,14 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 
 	case *plan.DataDefinition_AlterTable:
 		AlterTable := &plan.AlterTable{
-			Database:       df.AlterTable.Database,
-			TableDef:       DeepCopyTableDef(df.AlterTable.TableDef, true),
-			CopyTableDef:   DeepCopyTableDef(df.AlterTable.CopyTableDef, true),
-			IsClusterTable: df.AlterTable.IsClusterTable,
-			AlgorithmType:  df.AlterTable.AlgorithmType,
-			CreateTableSql: df.AlterTable.CreateTableSql,
-			InsertDataSql:  df.AlterTable.InsertDataSql,
-			Actions:        make([]*plan.AlterTable_Action, len(df.AlterTable.Actions)),
+			Database:          df.AlterTable.Database,
+			TableDef:          DeepCopyTableDef(df.AlterTable.TableDef, true),
+			CopyTableDef:      DeepCopyTableDef(df.AlterTable.CopyTableDef, true),
+			IsClusterTable:    df.AlterTable.IsClusterTable,
+			AlgorithmType:     df.AlterTable.AlgorithmType,
+			CreateTmpTableSql: df.AlterTable.CreateTmpTableSql,
+			InsertTmpDataSql:  df.AlterTable.InsertTmpDataSql,
+			Actions:           make([]*plan.AlterTable_Action, len(df.AlterTable.Actions)),
 		}
 		for i, action := range df.AlterTable.Actions {
 			switch act := action.Action.(type) {
@@ -821,6 +821,19 @@ func DeepCopyFkey(fkey *ForeignKeyDef) *ForeignKeyDef {
 	copy(def.Cols, fkey.Cols)
 	copy(def.ForeignCols, fkey.ForeignCols)
 	return def
+}
+
+func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSpec {
+	if rf == nil {
+		return nil
+	}
+	return &plan.RuntimeFilterSpec{
+		Tag:         rf.Tag,
+		MatchPrefix: rf.MatchPrefix,
+		UpperLimit:  rf.UpperLimit,
+		Expr:        DeepCopyExpr(rf.Expr),
+		Handled:     false,
+	}
 }
 
 func DeepCopyExpr(expr *Expr) *Expr {
@@ -1045,6 +1058,7 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 	}
 
 	return &plan.AnalyzeInfo{
+		InputBlocks:            analyzeinfo.GetInputBlocks(),
 		InputRows:              analyzeinfo.GetInputRows(),
 		OutputRows:             analyzeinfo.GetOutputRows(),
 		InputSize:              analyzeinfo.GetInputSize(),

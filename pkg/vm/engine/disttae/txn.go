@@ -243,7 +243,7 @@ func checkPKDup(
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		for i := start; i < start+count; i++ {
-			v := pk.GetStringAt(i)
+			v := pk.UnsafeGetStringAt(i)
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, []byte(v), false)
 				return true, entry
@@ -293,9 +293,7 @@ func (txn *Transaction) checkDup() error {
 		if e.fileName != "" {
 			continue
 		}
-		if (e.typ == DELETE || e.typ == DELETE_TXN || e.typ == UPDATE) &&
-			e.databaseId == catalog.MO_CATALOG_ID &&
-			e.tableId == catalog.MO_COLUMNS_ID {
+		if e.isCatalog() {
 			continue
 		}
 
@@ -980,7 +978,6 @@ func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, of
 // getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
 // Before it gets the cached table, it checks whether the table is deleted by another
 // transaction by go through the delete tables slice, and advance its cachedIndex.
-// TODO::get snapshot table from cache for snapshot read
 func (txn *Transaction) getCachedTable(
 	ctx context.Context,
 	k tableKey,

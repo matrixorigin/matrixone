@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"go.uber.org/zap"
 	"sync"
 	"time"
 )
@@ -195,7 +196,10 @@ func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
 func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	sm.Lock()
 	defer sm.Unlock()
-
+	now := time.Now()
+	defer func() {
+		logutil.Infof("[UpdateSnapshot] cost %v", time.Since(now))
+	}()
 	sm.updateTableInfo(data)
 	if sm.tid == 0 {
 		return sm
@@ -245,6 +249,10 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 }
 
 func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileService, mp *mpool.MPool) (map[uint32]containers.Vector, error) {
+	now := time.Now()
+	defer func() {
+		logutil.Infof("[GetSnapshot] cost %v", time.Since(now))
+	}()
 	sm.RLock()
 	objects := sm.objects
 	sm.RUnlock()
@@ -293,6 +301,8 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 						if err != nil {
 							return nil, err
 						}
+						logutil.Debug("[GetSnapshot] cluster snapshot",
+							common.OperationField(snapTs.ToString()))
 					}
 					continue
 				}
@@ -300,7 +310,9 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				if snapshotList[id] == nil {
 					snapshotList[id] = containers.MakeVector(types.T_TS.ToType(), mp)
 				}
-				logutil.Infof("GetSnapshot: id %d, ts %v", id, snapTs.ToString())
+				logutil.Debug("[GetSnapshot] snapshot",
+					zap.Uint32("account", id),
+					zap.String("snap ts", snapTs.ToString()))
 				err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), snapTs, false, mp)
 				if err != nil {
 					return nil, err
@@ -380,8 +392,10 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 		return 0, nil
 	}
 	bat := containers.NewBatch()
+	snapTableBat := containers.NewBatch()
 	for i, attr := range tableInfoSchemaAttr {
 		bat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
+		snapTableBat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
 	}
 	for _, entry := range sm.tables {
 		for _, table := range entry {
@@ -400,14 +414,36 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 			vector.AppendFixed[types.TS](
 				bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
 				table.deleteAt, false, common.DebugAllocator)
+
+			if table.tid == sm.tid {
+				vector.AppendFixed[uint32](
+					snapTableBat.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector(),
+					table.accID, false, common.DebugAllocator)
+				vector.AppendFixed[uint64](
+					snapTableBat.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector(),
+					table.dbID, false, common.DebugAllocator)
+				vector.AppendFixed[uint64](
+					snapTableBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+					table.tid, false, common.DebugAllocator)
+				vector.AppendFixed[types.TS](
+					snapTableBat.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector(),
+					table.createAt, false, common.DebugAllocator)
+				vector.AppendFixed[types.TS](
+					snapTableBat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
+					table.deleteAt, false, common.DebugAllocator)
+			}
 		}
 	}
 	defer bat.Close()
+	defer snapTableBat.Close()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
 	if err != nil {
 		return 0, err
 	}
 	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(bat)); err != nil {
+		return 0, err
+	}
+	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(snapTableBat)); err != nil {
 		return 0, err
 	}
 
@@ -444,6 +480,16 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 		sm.tables[accid][tid] = table
 		sm.acctIndexes[tid] = table
 	}
+}
+
+func (sm *SnapshotMeta) RebuildTid(ins *containers.Batch) {
+	insTIDs := vector.MustFixedCol[uint64](ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+	if ins.Length() != 1 {
+		logutil.Warnf("RebuildTid unexpected length %d", ins.Length())
+		return
+	}
+	logutil.Infof("RebuildTid tid %d", insTIDs[0])
+	sm.SetTid(insTIDs[0])
 }
 
 func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
@@ -565,24 +611,30 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 	for i := range tableInfoSchemaAttr {
 		idxes[i] = uint16(i)
 	}
-	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), common.DebugAllocator)
-	if err != nil {
-		return err
-	}
-	defer release()
-	bat := containers.NewBatch()
-	defer bat.Close()
-	for i := range tableInfoSchemaAttr {
-		pkgVec := mobat.Vecs[i]
-		var vec containers.Vector
-		if pkgVec.Length() == 0 {
-			vec = containers.MakeVector(objectInfoSchemaTypes[i], common.DebugAllocator)
-		} else {
-			vec = containers.ToTNVector(pkgVec, common.DebugAllocator)
+	for id, block := range bs {
+		mobat, release, err := reader.LoadColumns(ctx, idxes, nil, block.GetID(), common.DebugAllocator)
+		if err != nil {
+			return err
 		}
-		bat.AddVector(tableInfoSchemaAttr[i], vec)
+		defer release()
+		bat := containers.NewBatch()
+		defer bat.Close()
+		for i := range tableInfoSchemaAttr {
+			pkgVec := mobat.Vecs[i]
+			var vec containers.Vector
+			if pkgVec.Length() == 0 {
+				vec = containers.MakeVector(objectInfoSchemaTypes[i], common.DebugAllocator)
+			} else {
+				vec = containers.ToTNVector(pkgVec, common.DebugAllocator)
+			}
+			bat.AddVector(tableInfoSchemaAttr[i], vec)
+		}
+		if id == 0 {
+			sm.RebuildTableInfo(bat)
+		} else {
+			sm.RebuildTid(bat)
+		}
 	}
-	sm.RebuildTableInfo(bat)
 	return nil
 }
 

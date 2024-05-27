@@ -33,10 +33,9 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
 	var err error
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, true)
 	if arg.ctr.offsetExecutor == nil {
 		arg.ctr.offsetExecutor, err = colexec.NewExpressionExecutor(proc, arg.Offset)
 		if err != nil {
@@ -49,7 +48,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	}
 	arg.ctr.offset = uint64(vector.MustFixedCol[int64](vec)[0])
 
-	ap.ctr.seen = 0
+	arg.ctr.seen = 0
 	return nil
 }
 
@@ -63,27 +62,27 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
-	var end bool
-	var err error
+	var msg *process.RegisterMessage
 	if arg.buf != nil {
 		proc.PutBatch(arg.buf)
 		arg.buf = nil
 	}
 
 	for {
-		arg.buf, end, err = arg.ctr.ReceiveFromAllRegs(anal)
-		if err != nil {
+		msg = arg.ctr.ReceiveFromAllRegs(anal)
+		if msg.Err != nil {
 			// WTF, nil?
 			result.Status = vm.ExecStop
-			return result, nil
+			return result, msg.Err
 		}
 
-		if end {
+		if msg.Batch == nil {
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
 
+		arg.buf = msg.Batch
 		anal.Input(arg.buf, arg.GetIsFirst())
 		if arg.ctr.seen > arg.ctr.offset {
 			anal.Output(arg.buf, arg.GetIsLast())

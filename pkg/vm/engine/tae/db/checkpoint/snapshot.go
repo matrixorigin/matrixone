@@ -18,6 +18,7 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -92,6 +93,11 @@ func ListSnapshotMeta(
 		return metaFiles[i].end.Less(&metaFiles[j].end)
 	})
 
+	for i, file := range metaFiles {
+		// TODO: remove log
+		logutil.Infof("metaFiles[%d]: %v", i, file.String())
+	}
+
 	if listFunc == nil {
 		listFunc = AllAfterAndGCheckpoint
 	}
@@ -135,7 +141,19 @@ func ListSnapshotCheckpointWithMeta(
 		}
 		bat.AddVector(colNames[i], vec)
 	}
-	entries, maxGlobalEnd := replayCheckpointEntries(bat, 3)
+
+	var checkpointVersion int
+	// in version 1, checkpoint metadata doesn't contain 'version'.
+	vecLen := len(bats[0].Vecs)
+	if vecLen < CheckpointSchemaColumnCountV1 {
+		checkpointVersion = 1
+	} else if vecLen < CheckpointSchemaColumnCountV2 {
+		checkpointVersion = 2
+	} else {
+		checkpointVersion = 3
+	}
+
+	entries, maxGlobalEnd := replayCheckpointEntries(bat, checkpointVersion)
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].end.Less(&entries[j].end)
 	})

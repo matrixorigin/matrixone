@@ -33,19 +33,18 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
-	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, false)
+	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 
-	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
-	ap.ctr.executorForVecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, ap.Conditions[0])
+	arg.ctr.vecs = make([]*vector.Vector, len(arg.Conditions[0]))
+	arg.ctr.executorForVecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Conditions[0])
 	if err != nil {
 		return err
 	}
 
-	if ap.Cond != nil {
-		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	if arg.Cond != nil {
+		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
 	}
 	return err
 }
@@ -71,11 +70,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if ap.bat == nil {
-				bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
-				if err != nil {
-					return result, err
+				msg := ctr.ReceiveFromSingleReg(0, anal)
+				if msg.Err != nil {
+					return result, msg.Err
 				}
 
+				bat := msg.Batch
 				if bat == nil {
 					ctr.state = End
 					continue
@@ -113,10 +113,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
-	if err != nil {
-		return err
+	msg := ctr.ReceiveFromSingleReg(1, anal)
+	if msg.Err != nil {
+		return msg.Err
 	}
+	bat := msg.Batch
 	if bat != nil && bat.AuxData != nil {
 		ctr.mp = bat.DupJmAuxData()
 		ctr.hasNull = ctr.mp.HasNull()
@@ -127,10 +128,11 @@ func (ctr *container) receiveHashMap(anal process.Analyze) error {
 
 func (ctr *container) receiveBatch(anal process.Analyze) error {
 	for {
-		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
-		if err != nil {
-			return err
+		msg := ctr.ReceiveFromSingleReg(1, anal)
+		if msg.Err != nil {
+			return msg.Err
 		}
+		bat := msg.Batch
 		if bat != nil {
 			ctr.batchRowCount += bat.RowCount()
 			ctr.batches = append(ctr.batches, bat)

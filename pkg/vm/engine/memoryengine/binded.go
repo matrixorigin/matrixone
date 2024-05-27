@@ -102,3 +102,7 @@ func (b *BindedEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) 
 func (b *BindedEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return b.engine.Stats(ctx, key, sync)
 }
+
+func (b *BindedEngine) GetMessageCenter() any {
+	return nil
+}

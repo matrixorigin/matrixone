@@ -107,6 +107,11 @@ type StorageTxnOperator struct {
 	meta     txn.TxnMeta
 }
 
+func (s *StorageTxnOperator) SetFootPrints(prints [][2]uint32) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (s *StorageTxnOperator) IsSnapOp() bool {
 	panic("unimplemented")
 }
@@ -326,6 +331,10 @@ func (s *StorageTxnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock
 }
 
 func (s *StorageTxnOperator) RemoveWaitLock(key uint64) {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) LockTableCount() int32 {
 	panic("should not call")
 }
 

@@ -20,20 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var andFn = generalFunctionTemplateFactor[bool, bool](
-	func(v1 bool) (bool, bool) { return false, v1 }, false,
-	func(v2 bool) (bool, bool) { return false, v2 }, false,
-	func(v1, v2 bool) (bool, bool) { return v1 && v2, false }, true,
-	nil, true, true,
-)
-
-var orFn = generalFunctionTemplateFactor[bool, bool](
-	func(v1 bool) (bool, bool) { return v1, !v1 }, false,
-	func(v2 bool) (bool, bool) { return v2, !v2 }, false,
-	func(v1, v2 bool) (bool, bool) { return v1 || v2, false }, true,
-	nil, true, true,
-)
-
 var xorFn = generalFunctionTemplateFactor[bool, bool](
 	nil, true,
 	nil, true,

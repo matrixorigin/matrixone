@@ -35,6 +35,7 @@ type StorageCfg struct {
 
 type CheckpointCfg struct {
 	FlushInterval             time.Duration `toml:"flush-inerterval"`
+	MetadataCheckInterval     time.Duration `toml:"metadata-check-inerterval"`
 	MinCount                  int64         `toml:"checkpoint-min-count"`
 	ScanInterval              time.Duration `toml:"scan-interval"`
 	IncrementalInterval       time.Duration `toml:"checkpoint-incremental-interval"`
@@ -56,6 +57,7 @@ type GCCfg struct {
 	GCTTL          time.Duration `toml:"gc-ttl"`
 	ScanGCInterval time.Duration `toml:"scan-gc-interval"`
 	DisableGC      bool          `toml:"disable-gc"`
+	CheckGC        bool          `toml:"check-gc"`
 }
 
 type CatalogCfg struct {

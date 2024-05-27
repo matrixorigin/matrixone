@@ -50,13 +50,6 @@ type BaseEntryImpl[T BaseNode[T]] struct {
 	*txnbase.MVCCChain[*MVCCNode[T]]
 }
 
-func NewReplayBaseEntry[T BaseNode[T]](factory func() T) *BaseEntryImpl[T] {
-	be := &BaseEntryImpl[T]{
-		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory), nil),
-	}
-	return be
-}
-
 func NewBaseEntry[T BaseNode[T]](factory func() T) *BaseEntryImpl[T] {
 	return &BaseEntryImpl[T]{
 		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory), nil),

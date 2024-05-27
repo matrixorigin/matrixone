@@ -17,6 +17,7 @@ package memorycache
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache"
 	cache "github.com/matrixorigin/matrixone/pkg/pb/query"
 )
@@ -26,6 +27,7 @@ func NewCache(
 	postSet func(key cache.CacheKey, value CacheData),
 	postGet func(key cache.CacheKey, value CacheData),
 	postEvict func(key cache.CacheKey, value CacheData),
+	allocator malloc.Allocator,
 ) *Cache {
 	var c Cache
 
@@ -60,11 +62,12 @@ func NewCache(
 		}
 	}
 	c.l = lrucache.New(capacity, setFunc, getFunc, evictFunc)
+	c.allocator = allocator
 	return &c
 }
 
 func (c *Cache) Alloc(n int) CacheData {
-	d := newData(n, &c.size)
+	d := newData(c.allocator, n, &c.size)
 	return RCBytes{d: d, size: &c.size}
 }
 

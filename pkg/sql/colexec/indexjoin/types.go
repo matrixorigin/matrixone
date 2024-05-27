@@ -76,10 +76,15 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		ctr.FreeAllReg()
+		arg.ctr = nil
 	}
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())

@@ -32,12 +32,11 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
-	ap.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
-	ap.ctr.curNodeCnt = ap.ctr.nodeCnt
-	ap.ctr.status = sendInitial
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, true)
+	arg.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
+	arg.ctr.curNodeCnt = arg.ctr.nodeCnt
+	arg.ctr.status = sendInitial
 	return nil
 }
 
@@ -49,8 +48,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	var end bool
-	var err error
+	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
 	if arg.buf != nil {
 		proc.PutBatch(arg.buf)
@@ -58,11 +56,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	switch arg.ctr.status {
 	case sendInitial:
-		arg.buf, _, err = arg.ctr.ReceiveFromSingleReg(0, anal)
-		if err != nil {
+		msg = arg.ctr.ReceiveFromSingleReg(0, anal)
+		if msg.Err != nil {
 			result.Status = vm.ExecStop
-			return result, err
+			return result, msg.Err
 		}
+		arg.buf = msg.Batch
 		if arg.buf == nil {
 			arg.ctr.status = sendLastTag
 		}
@@ -75,12 +74,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	case sendRecursive:
 		for {
-			arg.buf, end, _ = arg.ctr.ReceiveFromAllRegs(anal)
-			if arg.buf == nil || end {
+			msg = arg.ctr.ReceiveFromAllRegs(anal)
+			if msg.Batch == nil {
 				result.Batch = nil
 				result.Status = vm.ExecStop
 				return result, nil
 			}
+			arg.buf = msg.Batch
 			if !arg.buf.Last() {
 				break
 			}

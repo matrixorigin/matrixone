@@ -172,7 +172,8 @@ func TestKill(t *testing.T) {
 	//ion method: mysql -h 127.0.0.1 -P 6001 -udump -p
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	var conn1, conn2 *sql.DB
+	var dbConnPool *sql.DB
+	var conn1, conn2 *sql.Conn
 	var err error
 	var connIdRow *sql.Row
 
@@ -187,6 +188,7 @@ func TestKill(t *testing.T) {
 	txnOp.EXPECT().GetWorkspace().Return(wp).AnyTimes()
 	txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOp, nil).AnyTimes()
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
@@ -272,22 +274,27 @@ func TestKill(t *testing.T) {
 		echoServer(getGlobalRtMgr().Handler, getGlobalRtMgr(), NewSqlCodec())
 	}()
 
+	dbConnPool, err = openDbConn(t, 6001)
+	require.NoError(t, err)
+	dbConnPool.SetConnMaxLifetime(time.Minute * 3)
+	dbConnPool.SetMaxIdleConns(2)
+	dbConnPool.SetMaxOpenConns(2)
 	logutil.Infof("open conn1")
 	time.Sleep(time.Second * 2)
-	conn1, err = openDbConn(t, 6001)
+	conn1, err = dbConnPool.Conn(ctx)
 	require.NoError(t, err)
 	logutil.Infof("open conn1 done")
 
 	logutil.Infof("open conn2")
 	time.Sleep(time.Second * 2)
-	conn2, err = openDbConn(t, 6001)
+	conn2, err = dbConnPool.Conn(ctx)
 	require.NoError(t, err)
 	logutil.Infof("open conn2 done")
 
 	logutil.Infof("get the connection id of conn1")
 	//get the connection id of conn1
 	var conn1Id uint64
-	connIdRow = conn1.QueryRow(sql1)
+	connIdRow = conn1.QueryRowContext(ctx, sql1)
 	err = connIdRow.Scan(&conn1Id)
 	require.NoError(t, err)
 	logutil.Infof("get the connection id of conn1 done")
@@ -295,7 +302,7 @@ func TestKill(t *testing.T) {
 	logutil.Infof("get the connection id of conn2")
 	//get the connection id of conn2
 	var conn2Id uint64
-	connIdRow = conn2.QueryRow(sql1)
+	connIdRow = conn2.QueryRowContext(ctx, sql1)
 	err = connIdRow.Scan(&conn2Id)
 	require.NoError(t, err)
 	logutil.Infof("get the connection id of conn2 done")
@@ -310,7 +317,7 @@ func TestKill(t *testing.T) {
 		defer wgSleep.Done()
 		var resultId int
 		logutil.Infof("conn1 sleep(30)")
-		connIdRow = conn1.QueryRow(sql5)
+		connIdRow = conn1.QueryRowContext(ctx, sql5)
 		//find race on err here
 		err := connIdRow.Scan(&resultId)
 		require.NoError(t, err)
@@ -324,7 +331,7 @@ func TestKill(t *testing.T) {
 	//conn2 kills the query
 	sql3 = fmt.Sprintf("kill query %d;", conn1Id)
 	noResultSet[sql3] = true
-	_, err = conn2.Exec(sql3)
+	_, err = conn2.ExecContext(ctx, sql3)
 	require.NoError(t, err)
 	logutil.Infof("conn2 kill query on conn1: KILL query done")
 
@@ -343,7 +350,7 @@ func TestKill(t *testing.T) {
 		defer wgSleep2.Done()
 		var resultId int
 		logutil.Infof("conn1 sleep(30) 2")
-		connIdRow = conn1.QueryRow(sql6)
+		connIdRow = conn1.QueryRowContext(ctx, sql6)
 		err = connIdRow.Scan(&resultId)
 		require.NoError(t, err)
 		logutil.Infof("conn1 sleep(30) 2 done")
@@ -356,7 +363,7 @@ func TestKill(t *testing.T) {
 	//conn2 kills the connection 1
 	sql2 = fmt.Sprintf("kill %d;", conn1Id)
 	noResultSet[sql2] = true
-	_, err = conn2.Exec(sql2)
+	_, err = conn2.ExecContext(ctx, sql2)
 	require.NoError(t, err)
 	logutil.Infof("conn2 kill conn1 : KILL connection done")
 
@@ -370,7 +377,7 @@ func TestKill(t *testing.T) {
 	//==============================
 	//conn 1 is killed by conn2
 	//check conn1 is disconnected or not
-	err = conn1.Ping()
+	err = conn1.PingContext(ctx)
 	require.Error(t, err)
 	logutil.Infof("conn1 test itself after being killed done")
 
@@ -380,7 +387,7 @@ func TestKill(t *testing.T) {
 	//conn2 kills itself
 	sql4 = fmt.Sprintf("kill %d;", conn2Id)
 	noResultSet[sql4] = true
-	_, err = conn2.Exec(sql4)
+	_, err = conn2.ExecContext(ctx, sql4)
 	require.NoError(t, err)
 	logutil.Infof("conn2 kill itself done")
 
@@ -391,8 +398,9 @@ func TestKill(t *testing.T) {
 
 	logutil.Infof("close conn1,conn2")
 	//close the connection
-	closeDbConn(t, conn1)
-	closeDbConn(t, conn2)
+	require.NoError(t, conn1.Close())
+	require.NoError(t, conn2.Close())
+	require.NoError(t, dbConnPool.Close())
 	logutil.Infof("close conn1,conn2 done")
 }
 

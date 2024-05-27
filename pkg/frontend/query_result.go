@@ -102,13 +102,13 @@ func initQueryResulConfig(ctx context.Context, ses *Session) error {
 func saveQueryResult(ctx context.Context, ses *Session, bat *batch.Batch) error {
 	s := ses.curResultSize + float64(bat.Size())/(1024*1024)
 	if s > ses.limitResultSize {
-		logInfo(ses, ses.GetDebugString(), "open save query result", zap.Float64("current result size:", s))
+		ses.Info(ctx, "open save query result", zap.Float64("current result size:", s))
 		return nil
 	}
 	fs := getGlobalPu().FileService
 	// write query result
 	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), ses.GetIncBlockIdx())
-	logInfo(ses, ses.GetDebugString(), "open save query result", zap.String("statemant id is:", uuid.UUID(ses.tStmt.StatementID).String()), zap.String("fileservice name is:", fs.Name()), zap.String("write path is:", path), zap.Float64("current result size:", s))
+	ses.Info(ctx, "open save query result", zap.String("statemant id is:", uuid.UUID(ses.tStmt.StatementID).String()), zap.String("fileservice name is:", fs.Name()), zap.String("write path is:", path), zap.Float64("current result size:", s))
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterQueryResult, path, fs)
 	if err != nil {
 		return err
@@ -279,12 +279,12 @@ func checkPrivilege(uuids []string, reqCtx context.Context, ses *Session) error 
 			}
 		}()
 		bat := bats[0]
-		p := bat.Vecs[0].GetStringAt(0)
+		p := bat.Vecs[0].UnsafeGetStringAt(0)
 		pn := &plan.Plan{}
 		if err = pn.Unmarshal([]byte(p)); err != nil {
 			return err
 		}
-		a := bat.Vecs[1].GetStringAt(0)
+		a := bat.Vecs[1].UnsafeGetStringAt(0)
 		var ast tree.Statement
 		if ast, err = simpleAstUnmarshal([]byte(a)); err != nil {
 			return err
@@ -622,7 +622,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 		}
 	}()
 	vec := bats[0].Vecs[0]
-	def := vec.GetStringAt(0)
+	def := vec.UnsafeGetStringAt(0)
 	r := &plan.ResultColDef{}
 	if err = r.Unmarshal([]byte(def)); err != nil {
 		return nil, err

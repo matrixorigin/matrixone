@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
-func newData(size int, counter *atomic.Int64) *Data {
+func newData(allocator malloc.Allocator, size int, counter *atomic.Int64) *Data {
 	if size == 0 {
 		return nil
 	}
@@ -29,9 +29,8 @@ func newData(size int, counter *atomic.Int64) *Data {
 	data := &Data{
 		size: size,
 	}
-	ptr, handle := malloc.Alloc(size)
-	data.bufHandle = handle
-	data.buf = unsafe.Slice((*byte)(ptr), size)
+	data.ptr, data.deallocator = allocator.Allocate(uint64(size))
+	data.buf = unsafe.Slice((*byte)(data.ptr), size)
 	data.ref.init(1)
 	return data
 }
@@ -39,5 +38,5 @@ func newData(size int, counter *atomic.Int64) *Data {
 func (d *Data) free(counter *atomic.Int64) {
 	counter.Add(-int64(d.size))
 	d.buf = nil
-	d.bufHandle.Free()
+	d.deallocator.Deallocate(d.ptr)
 }

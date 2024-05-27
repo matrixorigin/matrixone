@@ -241,6 +241,7 @@ type Config struct {
 			Dir           string        `toml:"dir"`
 			Enable        bool          `toml:"enable"`
 			Tables        []uint64      `toml:"tables"`
+			LoadToMO      bool          `toml:"load-to-mo"`
 		} `toml:"trace"`
 	} `toml:"txn"`
 
@@ -252,6 +253,9 @@ type Config struct {
 
 	// PrimaryKeyCheck
 	PrimaryKeyCheck bool `toml:"primary-key-check"`
+
+	// LargestEntryLimit is the max size for reading file to buf
+	LargestEntryLimit int `toml:"largest-entry-limit"`
 
 	// MaxPreparedStmtCount
 	MaxPreparedStmtCount int `toml:"max_prepared_stmt_count"`
@@ -389,6 +393,10 @@ func (c *Config) Validate() error {
 		config.CNPrimaryCheck = true
 	} else {
 		config.CNPrimaryCheck = false
+	}
+
+	if c.LargestEntryLimit > 0 {
+		config.LargestEntryLimit = c.LargestEntryLimit
 	}
 
 	if c.MaxPreparedStmtCount > 0 {

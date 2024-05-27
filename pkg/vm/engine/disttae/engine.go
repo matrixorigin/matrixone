@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/panjf2000/ants/v2"
 	_ "go.uber.org/automaxprocs"
 
@@ -122,6 +124,11 @@ func New(
 	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
 		WithLogtailUpdateStatsThreshold(threshold),
 	)
+
+	e.messageCenter = &process.MessageCenter{
+		StmtIDToBoard: make(map[uuid.UUID]*process.MessageBoard, 64),
+		RwMutex:       &sync.Mutex{},
+	}
 
 	if err := e.init(ctx); err != nil {
 		panic(err)
@@ -273,9 +280,6 @@ func (e *Engine) Database(ctx context.Context, name string,
 	if !txn.op.IsSnapOp() {
 		catalog = e.getLatestCatalogCache()
 	} else {
-		if name == "test" {
-			logutil.Infof("xxxx Database-getOrCreateSnapCatalogCache: txn:%s", txn.op.Txn().DebugString())
-		}
 		catalog, err = e.getOrCreateSnapCatalogCache(
 			ctx,
 			types.TimestampToTS(txn.op.SnapshotTS()))
@@ -820,4 +824,8 @@ func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error 
 
 func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return e.globalStats.Get(ctx, key, sync)
+}
+
+func (e *Engine) GetMessageCenter() any {
+	return e.messageCenter
 }

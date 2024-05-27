@@ -36,7 +36,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		arg.ctr = new(container)
 		arg.ctr.InitReceiver(proc, false)
 		arg.ctr.bat = nil
-		arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp())
+		arg.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
 		if err != nil {
 			return err
 		}
@@ -100,10 +100,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 // buildHashTable use all batches from proc.Reg.MergeReceiver[index] to build the hash map.
 func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze, index int, isFirst bool) error {
 	for {
-		bat, _, err := ctr.ReceiveFromSingleReg(index, ana)
-		if err != nil {
-			return err
+		msg := ctr.ReceiveFromSingleReg(index, ana)
+		if msg.Err != nil {
+			return msg.Err
 		}
+		bat := msg.Batch
 
 		// the last batch of pipeline.
 		if bat == nil {
@@ -143,10 +144,11 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 	restoreInserted := make([]uint8, hashmap.UnitLimit)
 
 	for {
-		bat, _, err := ctr.ReceiveFromSingleReg(index, ana)
-		if err != nil {
-			return false, err
+		msg := ctr.ReceiveFromSingleReg(index, ana)
+		if msg.Err != nil {
+			return false, msg.Err
 		}
+		bat := msg.Batch
 
 		// the last batch of block.
 		if bat == nil {

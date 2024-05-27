@@ -82,7 +82,9 @@ type Argument struct {
 	Nbucket      uint32
 	ctr          *container
 
-	resBat *batch.Batch
+	resBat           *batch.Batch
+	source           engine.Relation
+	partitionSources []engine.Relation // Align array index with the partition number
 
 	vm.OperatorBase
 }
@@ -120,15 +122,21 @@ func (arg *Argument) Release() {
 
 type DeleteCtx struct {
 	CanTruncate           bool
-	RowIdIdx              int               // The array index position of the rowid column
-	PartitionTableIDs     []uint64          // Align array index with the partition number
-	PartitionTableNames   []string          // Align array index with the partition number
-	PartitionIndexInBatch int               // The array index position of the partition expression column
-	PartitionSources      []engine.Relation // Align array index with the partition number
-	Source                engine.Relation
-	Ref                   *plan.ObjectRef
-	AddAffectedRows       bool
-	PrimaryKeyIdx         int
+	RowIdIdx              int      // The array index position of the rowid column
+	PartitionTableIDs     []uint64 // Align array index with the partition number
+	PartitionTableNames   []string // Align array index with the partition number
+	PartitionIndexInBatch int      // The array index position of the partition expression column
+	// PartitionSources      []engine.Relation // Align array index with the partition number
+	// Source                engine.Relation
+	Ref             *plan.ObjectRef
+	AddAffectedRows bool // for hidden table, should not update affect Rows
+	PrimaryKeyIdx   int
+
+	Engine engine.Engine
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
 }
 
 // delete from t1 using t1 join t2 on t1.a = t2.a;
@@ -155,12 +163,16 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			arg.ctr.partitionId_blockId_deltaLoc = nil
 			arg.ctr.blockId_type = nil
 			arg.ctr.pool = nil
+
+			arg.ctr = nil
 		}
 	}
 	if arg.resBat != nil {
 		arg.resBat.Clean(proc.Mp())
 		arg.resBat = nil
 	}
+	arg.partitionSources = nil
+	arg.source = nil
 }
 
 func (arg *Argument) AffectedRows() uint64 {
@@ -170,7 +182,7 @@ func (arg *Argument) AffectedRows() uint64 {
 func (arg *Argument) SplitBatch(proc *process.Process, srcBat *batch.Batch) error {
 	delCtx := arg.DeleteCtx
 	// If the target table is a partition table, group and split the batch data
-	if len(delCtx.PartitionSources) > 0 {
+	if len(arg.partitionSources) > 0 {
 		delBatches, err := colexec.GroupByPartitionForDelete(proc, srcBat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, len(delCtx.PartitionTableIDs), delCtx.PrimaryKeyIdx)
 		if err != nil {
 			return err

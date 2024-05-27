@@ -177,7 +177,7 @@ func checkSysExistsOrNotWithTxn(ctx context.Context, txn executor.TxnExecutor) (
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
 				count += i
-				tableName := cols[0].GetStringAt(i)
+				tableName := cols[0].UnsafeGetStringAt(i)
 				// if there is at least one catalog table, it denotes the sys tenant exists.
 				if _, ok := sysWantedTables[tableName]; ok {
 					sysTenantExists = true

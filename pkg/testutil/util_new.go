@@ -868,3 +868,10 @@ func NewArrayVector[T types.RealNumbers](n int, typ types.Type, m *mpool.MPool, 
 	}
 	return vec
 }
+
+func NewRegMsg(bat *batch.Batch) *process.RegisterMessage {
+	return &process.RegisterMessage{
+		Batch: bat,
+		Err:   nil,
+	}
+}

@@ -31,9 +31,12 @@ import (
 	_ "time/tzdata"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -54,8 +57,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"go.uber.org/zap"
 )
 
 var (
@@ -65,6 +68,7 @@ var (
 	daemon       = flag.Bool("daemon", false, "run mo-service in daemon mode")
 	withProxy    = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
 	maxProcessor = flag.Int("max-processor", 0, "set max processor for go runtime")
+	globalEtlFS  fileservice.FileService
 )
 
 func main() {
@@ -122,10 +126,18 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) {
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
 
+	go saveProfilesLoop(sigchan)
+
 	detail := "Starting shutdown..."
 	select {
 	case sig := <-sigchan:
 		detail += "signal: " + sig.String()
+		//dump heap profile before stopping services
+		heapProfilePath := saveProfile(profile.HEAP)
+		detail += ". heap profile: " + heapProfilePath
+		//dump goroutine before stopping services
+		routineProfilePath := saveProfile(profile.GOROUTINE)
+		detail += " routine profile: " + routineProfilePath
 	case <-shutdownC:
 		// waiting, give a chance let all log stores and tn stores to get
 		// shutdown cmd from ha keeper
@@ -157,6 +169,8 @@ func startService(
 		return err
 	}
 	setupProcessLevelRuntime(cfg, stopper)
+
+	malloc.SetDefaultConfig(cfg.Malloc)
 
 	setupStatusServer(runtime.ProcessLevelRuntime())
 
@@ -200,6 +214,10 @@ func startService(
 	}
 	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, uuid); err != nil {
 		return err
+	}
+
+	if globalEtlFS == nil {
+		globalEtlFS = etlFS
 	}
 
 	switch st {
