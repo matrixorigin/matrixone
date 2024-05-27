@@ -1713,9 +1713,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				Arg:     lockOpArg,
 			}
 		} else {
-			if len(ss) > 1 {
-				ss = []*Scope{c.newMergeScope(ss)}
-			}
+			ss = []*Scope{c.newMergeScope(ss)}
 			ss[0].appendInstruction(vm.Instruction{
 				Op:      vm.LockOp,
 				Idx:     c.anal.curr,
