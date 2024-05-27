@@ -962,9 +962,12 @@ func getTableInfos(ctx context.Context, bh BackgroundExec, snapshotName string, 
 		return nil, err
 	}
 
-	for _, tblInfo := range tableInfos {
-		if tblInfo.createSql, err = getCreateTableSql(ctx, bh, snapshotName, dbName, tblInfo.tblName); err != nil {
-			return nil, err
+	// only recreate snapshoted table need create sql
+	if snapshotName != "" {
+		for _, tblInfo := range tableInfos {
+			if tblInfo.createSql, err = getCreateTableSql(ctx, bh, snapshotName, dbName, tblInfo.tblName); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return tableInfos, nil
