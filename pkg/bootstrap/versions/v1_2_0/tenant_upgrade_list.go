@@ -52,7 +52,6 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_mo_catalog_mo_transactions,
 	upg_mo_catalog_mo_cache,
 	upg_mo_pub,
-	upg_information_schema_files,
 }
 
 var UpgPrepareEntres = []versions.UpgradeEntry{
@@ -515,15 +514,5 @@ var upg_mo_pub = versions.UpgradeEntry{
 			return true, nil
 		}
 		return false, nil
-	},
-}
-
-var upg_information_schema_files = versions.UpgradeEntry{
-	Schema:    sysview.InformationDBConst,
-	TableName: "files",
-	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql:    sysview.InformationSchemaFilesDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		return versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "files")
 	},
 }
