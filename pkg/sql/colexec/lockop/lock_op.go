@@ -70,16 +70,19 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		arg.rt.fetchers = append(arg.rt.fetchers,
 			GetFetchRowsFunc(arg.targets[idx].primaryColumnType))
 
-		if arg.targets[idx].lockRows != nil {
+		if idx == 0 && arg.targets[idx].lockRows != nil {
 			vec, err := colexec.EvalExpressionOnce(proc, arg.targets[idx].lockRows, []*batch.Batch{batch.EmptyForConstFoldBatch})
 			if err != nil {
 				return err
 			}
 
 			bat := batch.NewWithSize(int(arg.targets[idx].primaryColumnIndexInBatch) + 1)
+			defer func() {
+				proc.PutBatch(bat)
+			}()
 			bat.Vecs[arg.targets[idx].primaryColumnIndexInBatch] = vec
 			bat.SetRowCount(vec.Length())
-			arg.rt.lockCount = uint64(vec.Length())
+			arg.rt.lockCount = int64(vec.Length())
 
 			err = performLock(bat, proc, arg)
 			if err != nil {
@@ -145,7 +148,7 @@ func callNonBlocking(
 		return result, err
 	}
 
-	arg.rt.lockCount += uint64(bat.RowCount())
+	arg.rt.lockCount += int64(bat.RowCount())
 	if err := performLock(bat, proc, arg); err != nil {
 		return result, err
 	}
@@ -185,7 +188,7 @@ func callBlocking(
 				continue
 			}
 
-			arg.rt.lockCount += uint64(bat.RowCount())
+			arg.rt.lockCount += int64(bat.RowCount())
 			if err := performLock(bat, proc, arg); err != nil {
 				return result, err
 			}
@@ -875,6 +878,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	arg.rt.retryError = nil
 	arg.cleanCachedBatch(proc)
 	arg.rt.FreeMergeTypeOperator(pipelineFailed)
+	arg.rt.lockCount = 0
 }
 
 func (arg *Argument) cleanCachedBatch(_ *process.Process) {
@@ -946,6 +950,9 @@ func lockTalbeIfLockCountIsZero(
 	proc *process.Process,
 	arg *Argument,
 ) error {
+	if arg.rt.lockCount < 0 {
+		return nil
+	}
 	if arg.rt.lockCount == 0 {
 		for idx := range arg.targets {
 			err := LockTable(arg.engine, proc, arg.targets[idx].tableID, arg.targets[idx].primaryColumnType, false)
@@ -953,6 +960,7 @@ func lockTalbeIfLockCountIsZero(
 				return err
 			}
 		}
+		arg.rt.lockCount = -1 //only run lock table one time
 	}
 	return nil
 }

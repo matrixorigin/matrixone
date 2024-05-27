@@ -140,7 +140,7 @@ type state struct {
 	cachedBatches        []*batch.Batch
 	batchFetchFunc       func(process.Analyze) *process.RegisterMessage
 	hasNewVersionInRange hasNewVersionInRangeFunc
-	lockCount            uint64
+	lockCount            int64
 }
 
 const (
