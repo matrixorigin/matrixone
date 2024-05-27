@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -60,6 +61,41 @@ var (
 	restoreTableDataFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {snapshot = '%s'}"
 
 	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", "mo_catalog"}
+
+	needSkipTablesInMocatalog = map[string]int8{
+		"mo_database":         1,
+		"mo_tables":           1,
+		"mo_columns":          1,
+		"mo_table_partitions": 1,
+		"mo_foreign_keys":     1,
+		"mo_indexes":          1,
+		"mo_account":          1,
+
+		catalog.MOVersionTable:       1,
+		catalog.MOUpgradeTable:       1,
+		catalog.MOUpgradeTenantTable: 1,
+		catalog.MOAutoIncrTable:      1,
+
+		"mo_user":                     0,
+		"mo_role":                     0,
+		"mo_user_grant":               0,
+		"mo_role_grant":               0,
+		"mo_role_privs":               0,
+		"mo_user_defined_function":    0,
+		"mo_stored_procedure":         0,
+		"mo_mysql_compatibility_mode": 0,
+		"mo_pubs":                     0,
+		"mo_stages":                   0,
+
+		"mo_sessions":       1,
+		"mo_configurations": 1,
+		"mo_locks":          1,
+		"mo_variables":      1,
+		"mo_transactions":   1,
+		"mo_cache":          1,
+
+		"mo_snapshots": 1,
+	}
 )
 
 type snapshotRecord struct {
@@ -304,6 +340,10 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 	}
 
+	if needSkipDb(dbName) {
+		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
+	}
+
 	// restore as a txn
 	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return err
@@ -430,6 +470,11 @@ func restoreToAccount(
 			return
 		}
 	}
+
+	// restore system db
+	if err = restoreSystemDatabase(ctx, bh, snapshotName, toAccountId); err != nil {
+		return
+	}
 	return
 }
 
@@ -522,6 +567,32 @@ func restoreToDatabaseOrTable(
 			continue
 		}
 
+		if err = recreateTable(ctx, bh, snapshotName, tblInfo, toAccountId); err != nil {
+			return
+		}
+	}
+	return
+}
+
+func restoreSystemDatabase(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshotName string,
+	toAccountId uint32) (err error) {
+	getLogger().Info(fmt.Sprintf("[%s] start to restore system database: %s", snapshotName, moCatalog))
+	tableInfos, err := getTableInfos(ctx, bh, snapshotName, moCatalog, "")
+	if err != nil {
+		return
+	}
+
+	for _, tblInfo := range tableInfos {
+		if needSkipTable(moCatalog, tblInfo.tblName) {
+			// TODO skip tables which should not to be restored
+			getLogger().Info(fmt.Sprintf("[%s] skip restore system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
+			continue
+		}
+
+		getLogger().Info(fmt.Sprintf("[%s] start to restore system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
 		if err = recreateTable(ctx, bh, snapshotName, tblInfo, toAccountId); err != nil {
 			return
 		}
