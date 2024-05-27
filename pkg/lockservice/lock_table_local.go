@@ -90,15 +90,6 @@ func (l *localLockTable) lock(
 func (l *localLockTable) doLock(
 	c *lockContext,
 	blocked bool) {
-	// deadlock detected, return
-	if c.txn.deadlockFound {
-		if c.w != nil {
-			c.w.disableNotify()
-			c.w.close()
-		}
-		c.done(ErrDeadLockDetected)
-		return
-	}
 	var old *waiter
 	var err error
 	table := l.bind.Table
@@ -156,7 +147,8 @@ func (l *localLockTable) doLock(
 			!bytes.Equal(c.w.txn.TxnID, oldTxnID)) {
 			e = ErrTxnNotFound
 		}
-		if e != nil {
+		if e != nil ||
+			c.txn.deadlockFound {
 			c.closed = true
 			if e != ErrTxnNotFound {
 				c.txn.closeBlockWaiters()
