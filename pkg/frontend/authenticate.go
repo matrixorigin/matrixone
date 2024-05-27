@@ -8874,6 +8874,7 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 
 	dbName := ad.DbName
 	updateConfig := ad.UpdateConfig
+	configTyp := ad.ConfigType
 	tenantInfo := ses.GetTenantInfo()
 	accountName = tenantInfo.GetTenant()
 	currentRole = tenantInfo.GetDefaultRoleID()
@@ -8923,15 +8924,38 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 			}
 		}
 
-		// step2: update the mo_mysql_compatibility_mode of that database
-		sql, rtnErr = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, updateConfig, accountName, dbName, "version_compatibility")
-		if rtnErr != nil {
-			return rtnErr
-		}
+		// step2: update the databaseConfig of that database
+		switch configTyp {
+		case tree.MYSQL_COMPATIBILITY_MODE:
+			sql, rtnErr = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, updateConfig, accountName, dbName, "version_compatibility")
+			if rtnErr != nil {
+				return rtnErr
+			}
 
-		rtnErr = bh.Exec(ctx, sql)
-		if rtnErr != nil {
-			return rtnErr
+			rtnErr = bh.Exec(ctx, sql)
+		case tree.UNIQUE_CHECK_ON_AUTOINCR:
+			valueCheck := func(value string) error {
+				switch value {
+				case "None":
+				case "Check":
+				case "Error":
+				default:
+					return moerr.NewBadConfig(ctx, "unique_check_on_autoincr %s", value)
+				}
+				return nil
+			}
+
+			if rtnErr = valueCheck(updateConfig); rtnErr != nil {
+				return rtnErr
+			}
+
+			sql, rtnErr = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, updateConfig, accountName, dbName, "unique_check_on_autoincr")
+			if rtnErr != nil {
+				return rtnErr
+			}
+			rtnErr = bh.Exec(ctx, sql)
+		default:
+			panic("unknown database config type")
 		}
 		return rtnErr
 	}
@@ -9023,8 +9047,11 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 	var accountName string
 	var dbName string
 	var err error
-	variableName := "version_compatibility"
-	variableValue := getVariableValue(ses.GetSysVar("version"))
+	variableName1 := "version_compatibility"
+	variableValue1 := getVariableValue(ses.GetSysVar("version"))
+
+	variableName2 := "unique_check_on_autoincr"
+	variableValue2 := "None"
 
 	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
 		dbName = string(createDatabaseStmt.Name)
@@ -9059,7 +9086,14 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 			}
 
 			//step 3: insert the record
-			sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, accountId, accountName, dbName, variableName, variableValue, false)
+			sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, accountId, accountName, dbName, variableName1, variableValue1, false)
+
+			rtnErr = bh.Exec(ctx, sql)
+			if rtnErr != nil {
+				return rtnErr
+			}
+
+			sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, accountId, accountName, dbName, variableName2, variableValue2, false)
 
 			rtnErr = bh.Exec(ctx, sql)
 			if rtnErr != nil {
@@ -9121,6 +9155,46 @@ func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (
 	var resultConfig string
 	defaultConfig := "0.7"
 	variableName := "version_compatibility"
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return defaultConfig, err
+	}
+
+	sql = getSqlForGetSystemVariableValueWithDatabase(dbName, variableName)
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return defaultConfig, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return defaultConfig, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		resultConfig, err = erArray[0].GetString(ctx, 0, 0)
+		if err != nil {
+			return defaultConfig, err
+		}
+	}
+
+	return resultConfig, err
+}
+
+func GetUniqueCheckOnAutoIncr(ctx context.Context, ses FeSession, dbName string) (ret string, err error) {
+	var erArray []ExecResult
+	var sql string
+	var resultConfig string
+	defaultConfig := "None"
+	variableName := "unique_check_on_autoincr"
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
