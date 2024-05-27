@@ -1128,6 +1128,13 @@ func (txn *Transaction) transferDeletesLocked(commit bool) error {
 			//statementID > 1
 			ts = txn.timestamps[txn.statementID-2]
 		}
+
+		latestTs := txn.op.LatestTS()
+		if commit &&
+			latestTs.PhysicalTime-ts.PhysicalTime < time.Second.Nanoseconds()*5 {
+			return nil
+		}
+
 		return txn.forEachTableHasDeletesLocked(func(tbl *txnTable) error {
 			ctx := tbl.proc.Load().Ctx
 			state, err := tbl.getPartitionState(ctx)
@@ -1136,7 +1143,7 @@ func (txn *Transaction) transferDeletesLocked(commit bool) error {
 			}
 			var endTs timestamp.Timestamp
 			if commit {
-				endTs = txn.op.LatestTS()
+				endTs = latestTs
 			} else {
 				endTs = tbl.db.op.SnapshotTS()
 			}
