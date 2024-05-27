@@ -70,7 +70,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	isDeleteWithoutFilters := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
 	needLockTable := isDeleteWithoutFilters
 
-	lockTable, lockRowsExpr := checkLockTableOrRows(tblInfo.isMulti, query)
+	lockTable, lockRowsExpr := checkLockTableOrRows(tblInfo.isMulti, tblInfo.tableDefs[0], query)
 	if lockTable {
 		needLockTable = true
 	}

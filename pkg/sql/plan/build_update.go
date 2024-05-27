@@ -51,7 +51,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
-	needLockTable, lockRowsExpr := checkLockTableOrRows(len(updatePlanCtxs) > 1, query)
+	needLockTable, lockRowsExpr := checkLockTableOrRows(len(updatePlanCtxs) > 1, tblInfo.tableDefs[0], query)
 	if lockRowsExpr != nil {
 		updatePlanCtxs[0].lockRows = lockRowsExpr
 	}

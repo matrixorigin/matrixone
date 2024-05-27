@@ -1680,10 +1680,27 @@ func appendPrimaryConstrantPlan(
 	return nil
 }
 
-func checkLockTableOrRows(isMulti bool, query *Query) (bool, *Expr) {
+func checkLockTableOrRows(isMulti bool, tableDef *TableDef, query *Query) (bool, *Expr) {
 	if isMulti {
 		return true, nil
 	}
+	if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		return false, nil
+	}
+	if len(tableDef.Pkey.Names) > 1 { //unsupport multi-column primary key
+		return false, nil
+	}
+	pkName := tableDef.Pkey.Names[0]
+
+	checkIsPkColExpr := func(e *plan.Expr) bool {
+		if col_expr, ok := e.Expr.(*plan.Expr_Col); ok {
+			if col_expr.Col.Name == pkName {
+				return true
+			}
+		}
+		return false
+	}
+
 	var lockRows *Expr
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_TABLE_SCAN {
@@ -1695,18 +1712,18 @@ func checkLockTableOrRows(isMulti bool, query *Query) (bool, *Expr) {
 					if e.F.Func.GetObjName() == "=" {
 						//update t1 set a = 1 where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
 						//delete from where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
-						if rule.IsConstant(e.F.Args[0], true) && !rule.IsConstant(e.F.Args[1], true) {
-							lockRows = e.F.Args[0]
-						} else if !rule.IsConstant(e.F.Args[0], true) && rule.IsConstant(e.F.Args[1], true) {
+						if checkIsPkColExpr(e.F.Args[0]) && rule.IsConstant(e.F.Args[1], true) {
 							lockRows = e.F.Args[1]
+						} else if checkIsPkColExpr(e.F.Args[1]) && rule.IsConstant(e.F.Args[0], true) {
+							lockRows = e.F.Args[0]
 						}
 					} else if e.F.Func.GetObjName() == "in" {
 						//update t1 set a = 1 where pk in (1,2); then we allays lock rows pk in (1,2), even pk=1 is not exists
 						//delete from where pk in (1,2); then we allays lock rows pk in (1,2), even pk in (1,2) is not exists
-						if rule.IsConstant(e.F.Args[0], true) && !rule.IsConstant(e.F.Args[1], true) {
-							lockRows = e.F.Args[0]
-						} else if !rule.IsConstant(e.F.Args[0], true) && rule.IsConstant(e.F.Args[1], true) {
+						if checkIsPkColExpr(e.F.Args[0]) && rule.IsConstant(e.F.Args[1], true) {
 							lockRows = e.F.Args[1]
+						} else if checkIsPkColExpr(e.F.Args[1]) && rule.IsConstant(e.F.Args[0], true) {
+							lockRows = e.F.Args[0]
 						}
 					}
 				}

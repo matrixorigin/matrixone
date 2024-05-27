@@ -66,6 +66,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 func (arg *Argument) Prepare(proc *process.Process) error {
 	arg.rt = &state{}
 	arg.rt.fetchers = make([]FetchLockRowsFunc, 0, len(arg.targets))
+	arg.rt.parker = types.NewPacker(proc.Mp())
 	for idx := range arg.targets {
 		arg.rt.fetchers = append(arg.rt.fetchers,
 			GetFetchRowsFunc(arg.targets[idx].primaryColumnType))
@@ -90,7 +91,6 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 			}
 		}
 	}
-	arg.rt.parker = types.NewPacker(proc.Mp())
 	arg.rt.retryError = nil
 	arg.rt.step = stepLock
 	if arg.block {
@@ -754,13 +754,15 @@ func (arg *Argument) AddLockTarget(
 	tableID uint64,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
-	refreshTimestampIndexInBatch int32) *Argument {
+	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr) *Argument {
 	return arg.AddLockTargetWithMode(
 		tableID,
 		lock.LockMode_Exclusive,
 		primaryColumnIndexInBatch,
 		primaryColumnType,
-		refreshTimestampIndexInBatch)
+		refreshTimestampIndexInBatch,
+		lockRows)
 }
 
 // AddLockTargetWithMode add lock target with lock mode
@@ -769,13 +771,15 @@ func (arg *Argument) AddLockTargetWithMode(
 	mode lock.LockMode,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
-	refreshTimestampIndexInBatch int32) *Argument {
+	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr) *Argument {
 	arg.targets = append(arg.targets, lockTarget{
 		tableID:                      tableID,
 		primaryColumnIndexInBatch:    primaryColumnIndexInBatch,
 		primaryColumnType:            primaryColumnType,
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
 		mode:                         mode,
+		lockRows:                     lockRows,
 	})
 	return arg
 }
@@ -821,6 +825,7 @@ func (arg *Argument) AddLockTargetWithPartition(
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr,
 	partitionTableIDMappingInBatch int32) *Argument {
 	return arg.AddLockTargetWithPartitionAndMode(
 		tableIDs,
@@ -828,6 +833,7 @@ func (arg *Argument) AddLockTargetWithPartition(
 		primaryColumnIndexInBatch,
 		primaryColumnType,
 		refreshTimestampIndexInBatch,
+		lockRows,
 		partitionTableIDMappingInBatch)
 }
 
@@ -839,6 +845,7 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr,
 	partitionTableIDMappingInBatch int32) *Argument {
 	if len(tableIDs) == 0 {
 		panic("invalid partition table ids")
@@ -850,6 +857,7 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 			primaryColumnIndexInBatch,
 			primaryColumnType,
 			refreshTimestampIndexInBatch,
+			lockRows,
 		)
 	}
 
@@ -862,6 +870,7 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 			filter:                       getRowsFilter(tableID, tableIDs),
 			filterColIndexInBatch:        partitionTableIDMappingInBatch,
 			mode:                         mode,
+			lockRows:                     lockRows,
 		})
 	}
 	return arg
