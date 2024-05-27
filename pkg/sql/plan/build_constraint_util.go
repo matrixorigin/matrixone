@@ -531,17 +531,17 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	for _, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
 			projectList = append(projectList, oldExpr)
-			if col.Typ.AutoIncr {
-				// if _, ok := pkCols[col.Name]; ok {
-				// 	uniqueCheckOnAutoIncr, err = builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
-				// 	if err != nil {
-				// 		return false, nil, err
-				// 	}
-				// 	if uniqueCheckOnAutoIncr == "Error" {
-				// 		return false, nil, moerr.NewInvalidInput(builder.GetContext(), "When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.")
-				// 	}
-				// }
-			}
+			// if col.Typ.AutoIncr {
+			// if _, ok := pkCols[col.Name]; ok {
+			// 	uniqueCheckOnAutoIncr, err = builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
+			// 	if err != nil {
+			// 		return false, nil, err
+			// 	}
+			// 	if uniqueCheckOnAutoIncr == "Error" {
+			// 		return false, nil, moerr.NewInvalidInput(builder.GetContext(), "When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.")
+			// 	}
+			// }
+			// }
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
