@@ -369,12 +369,10 @@ func (mp *MysqlProtocolImpl) SetCapability(cap uint32) {
 }
 
 func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
-	mp.ses.CountPacket(int64(a))
 	mp.sequenceId.Add(uint32(a))
 }
 
 func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
-	mp.ses.CountPacket(1)
 	mp.sequenceId.Store(uint32(value))
 }
 
@@ -408,15 +406,27 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 		mp.String())
 }
 
+const bit4TcpWriteCopy = 12 // 1<<12 == 4096
+
 // CalculateOutTrafficBytes calculate the bytes of the last out traffic, the number of mysql packets
+// packet cnt has 3 part:
+// 1st part: flush op cnt.
+// 2nd part: upload part, calculation = payload / 16KiB
+// 3rd part: response part, calculation = sendByte / 4KiB
+//   - ioCopyBufferSize currently is 4096 Byte, which is the option for goetty_buf.ByteBuf, set by goetty_buf.WithIOCopyBufferSize(...).
+//     goetty_buf.ByteBuf.WriteTo(...) will call by io.CopyBuffer(...) if do baseIO.Flush().
+//   - If ioCopyBufferSize is changed, you should see the calling of goetty.NewApplicationWithListenAddress(...) in NewMOServer()
 func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
 	ses := mp.GetSession()
 	// Case 1: send data as ResultSet
-	bytes = int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
-		// Case 2: send data as CSV
-		ses.writeCsvBytes.Load()
-	// mysql packet num + length(sql) / 16KiB + payload / 16 KiB
-	packets = ses.GetPacketCnt() + int64(len(ses.sql)>>14) + int64(ses.payloadCounter>>14)
+	resultSetPart := int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer)
+	// Case 2: send data as CSV
+	csvPart := ses.writeCsvBytes.Load()
+	bytes = resultSetPart + csvPart
+	tcpPkgCnt := ses.GetPacketCnt()
+	packets = tcpPkgCnt /*1st part*/ +
+		int64(len(ses.sql)>>14) + int64(ses.payloadCounter>>14) + /*2nd part*/
+		resultSetPart>>bit4TcpWriteCopy + int64((csvPart>>20)/getGlobalPu().SV.ExportDataDefaultFlushSize) /*3rd part*/
 	if reset {
 		ses.ResetPacketCounter()
 	}
@@ -2401,6 +2411,7 @@ func (mp *MysqlProtocolImpl) flushOutBuffer() error {
 		mp.writeBytes += uint64(mp.bytesInOutBuffer)
 		// FIXME: use a suitable timeout value
 		mp.incDebugCount(8)
+		mp.ses.CountPacket(1)
 		err := mp.tcpConn.Flush(0)
 		mp.incDebugCount(9)
 		if err != nil {
@@ -2700,6 +2711,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte, _ bool) error {
 		var packet = append(header[:], payload[i:i+curLen]...)
 
 		mp.incDebugCount(4)
+		mp.ses.CountPacket(1)
 		err := mp.tcpConn.Write(packet, goetty.WriteOptions{Flush: true})
 		mp.incDebugCount(5)
 		if err != nil {
@@ -2715,6 +2727,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte, _ bool) error {
 			header[2] = 0
 			header[3] = mp.GetSequenceId()
 			mp.incDebugCount(6)
+			mp.ses.CountPacket(1)
 			//send header / zero-sized packet
 			err := mp.tcpConn.Write(header[:], goetty.WriteOptions{Flush: true})
 			mp.AddFlushBytes(uint64(len(header)))
