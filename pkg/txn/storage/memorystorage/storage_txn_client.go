@@ -120,6 +120,10 @@ func (s *StorageTxnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) clien
 	panic("unimplemented")
 }
 
+func (s *StorageTxnOperator) LatestTS() timestamp.Timestamp {
+	panic("unimplemented")
+}
+
 func (s *StorageTxnOperator) EnterRunSql() {
 	//TODO implement me
 	panic("implement me")

@@ -362,6 +362,10 @@ func (o *testOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) client.TxnO
 	panic("should not call")
 }
 
+func (s *testOperator) LatestTS() timestamp.Timestamp {
+	panic("should not call")
+}
+
 func (o *testOperator) PKDedupCount() int {
 	panic("should not call")
 }

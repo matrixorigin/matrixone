@@ -287,6 +287,10 @@ func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 	return op
 }
 
+func (tc *txnOperator) LatestTS() timestamp.Timestamp {
+	return tc.timestampWaiter.LatestTS()
+}
+
 func newTxnOperatorWithSnapshot(
 	sender rpc.TxnSender,
 	snapshot []byte) (*txnOperator, error) {

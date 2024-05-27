@@ -17,10 +17,11 @@ package logtailreplay
 import (
 	"bytes"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/tidwall/btree"
 )
 
 type ObjectsIter interface {
@@ -126,6 +127,9 @@ func (p *PartitionState) GetChangedObjsBetween(
 	deleted map[objectio.ObjectNameShort]struct{},
 	inserted map[objectio.ObjectNameShort]struct{},
 ) {
+	if end.Less(&begin) {
+		return
+	}
 	inserted = make(map[objectio.ObjectNameShort]struct{})
 	deleted = make(map[objectio.ObjectNameShort]struct{})
 

@@ -1118,7 +1118,7 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 	return txn.snapshotWriteOffset
 }
 
-func (txn *Transaction) transferDeletesLocked() error {
+func (txn *Transaction) transferDeletesLocked(commit bool) error {
 	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
 	if txn.statementID > 0 && txn.op.Txn().IsRCIsolation() {
 		var ts timestamp.Timestamp
@@ -1134,8 +1134,15 @@ func (txn *Transaction) transferDeletesLocked() error {
 			if err != nil {
 				return err
 			}
-			deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(ts),
-				types.TimestampToTS(tbl.db.op.SnapshotTS()))
+			var endTs timestamp.Timestamp
+			if commit {
+				endTs = txn.op.LatestTS()
+			} else {
+				endTs = tbl.db.op.SnapshotTS()
+			}
+			deleteObjs, createObjs := state.GetChangedObjsBetween(
+				types.TimestampToTS(ts),
+				types.TimestampToTS(endTs))
 
 			trace.GetService().ApplyFlush(
 				tbl.db.op.Txn().ID,
