@@ -993,6 +993,13 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 				Mcpu: c.generateCPUNumber(ncpu, 1),
 			},
 		}
+	} else if c.execType == plan2.ExecTypeAP_ONECN {
+		c.cnList = engine.Nodes{
+			engine.Node{
+				Addr: c.addr,
+				Mcpu: c.generateCPUNumber(ncpu, ncpu),
+			},
+		}
 	} else {
 		c.cnList, err = c.getCNList()
 		if err != nil {
