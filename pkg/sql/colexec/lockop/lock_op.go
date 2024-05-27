@@ -90,6 +90,9 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 			if err != nil {
 				return err
 			} else if arg.rt.retryError != nil {
+				if arg.rt.defChanged {
+					arg.rt.retryError = retryWithDefChangedError
+				}
 				return arg.rt.retryError
 			}
 		}
@@ -972,7 +975,7 @@ func lockTalbeIfLockCountIsZero(
 				return err
 			}
 		}
-		arg.rt.lockCount = -1 //only run lock table one time
 	}
+	arg.rt.lockCount = -1 //only run lock table one time
 	return nil
 }
