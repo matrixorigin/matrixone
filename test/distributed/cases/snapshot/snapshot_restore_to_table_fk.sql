@@ -59,45 +59,35 @@ select count(*) from acc_test02.aff01;
 -- @session
 
 restore account acc01 from snapshot snapshot_01;
+-- @session:id=2&user=acc01:test_account&password=111
+show tables from acc_test02;
+select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys where db_name = 'acc_test02';
+-- @session
+
 restore account acc01 from snapshot snapshot_01;
+-- @session:id=2&user=acc01:test_account&password=111
+show tables from acc_test02;
+select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys where db_name = 'acc_test02';
+-- @session
+
 restore account acc01 from snapshot snapshot_01;
+-- @session:id=2&user=acc01:test_account&password=111
+show tables from acc_test02;
+select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys where db_name = 'acc_test02';
+-- @session
+
 restore account acc01 from snapshot snapshot_01;
+-- @session:id=2&user=acc01:test_account&password=111
+show tables from acc_test02;
+select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys where db_name = 'acc_test02';
+-- @session
+
 restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
-restore account acc01 from snapshot snapshot_01;
+-- @session:id=2&user=acc01:test_account&password=111
+show tables from acc_test02;
+select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys where db_name = 'acc_test02';
+-- @session
+
 
 drop account acc01;
 drop snapshot snapshot_01;
