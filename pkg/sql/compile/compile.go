@@ -317,12 +317,6 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, fill func(*batch.B
 	c.fill = fill
 
 	c.pn = pn
-	// get execute related information
-	// about ap or tp, what and how many compute resource we can use.
-	c.info = plan2.GetExecTypeFromPlan(pn)
-	if pn.IsPrepare {
-		c.info.Typ = plan2.ExecTypeTP
-	}
 
 	// Compile may exec some function that need engine.Engine.
 	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
@@ -912,17 +906,6 @@ func (c *Compile) lockTable() error {
 	return nil
 }
 
-func (c *Compile) cnListStrategy() {
-	if len(c.cnList) == 0 {
-		c.cnList = append(c.cnList, engine.Node{
-			Addr: c.addr,
-			Mcpu: ncpu,
-		})
-	} else if len(c.cnList) > c.info.CnNumbers {
-		c.cnList = c.cnList[:c.info.CnNumbers]
-	}
-}
-
 // func (c *Compile) compileAttachedScope(ctx context.Context, attachedPlan *plan.Plan) ([]*Scope, error) {
 // 	query := attachedPlan.Plan.(*plan.Plan_Query)
 // 	attachedScope, err := c.compileQuery(ctx, query.Query)
@@ -1001,88 +984,23 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	defer func() {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
-	c.cnList, err = c.getCNList()
-	if err != nil {
-		return nil, err
-	}
-	// sort by addr to get fixed order of CN list
-	sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
 
-	if c.info.Typ == plan2.ExecTypeAP {
-		c.removeUnavailableCN()
-	}
-
-	c.info.CnNumbers = len(c.cnList)
-	blkNum := 0
-	cost := float64(0.0)
-	for _, n := range qry.Nodes {
-		if n.Stats == nil {
-			continue
-		}
-		if n.NodeType == plan.Node_TABLE_SCAN {
-			blkNum += int(n.Stats.BlockNum)
-		}
-		if n.NodeType == plan.Node_INSERT {
-			cost += n.Stats.GetCost()
-		}
-	}
-	switch qry.StmtType {
-	case plan.Query_INSERT:
-		if cost*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= plan2.BlockNumForceOneCN {
-			c.cnListStrategy()
-		} else {
-			c.cnList = engine.Nodes{
-				engine.Node{
-					Addr: c.addr,
-					Mcpu: c.generateCPUNumber(ncpu, blkNum),
-				},
-			}
-		}
-		// insertNode := qry.Nodes[qry.Steps[0]]
-		// nodeStats := qry.Nodes[insertNode.Children[0]].Stats
-		// if nodeStats.GetCost()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
-		// 	if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-		// 		c.cnList = engine.Nodes{
-		// 			engine.Node{
-		// 				Addr: c.addr,
-		// 				Mcpu: c.generateCPUNumber(1, blkNum)},
-		// 		}
-		// 	} else {
-		// 		c.cnListStrategy()
-		// 	}
-		// } else {
-		// 	if len(insertNode.InsertCtx.OnDuplicateIdx) > 0 {
-		// 		c.cnList = engine.Nodes{
-		// 			engine.Node{
-		// 				Addr: c.addr,
-		// 				Mcpu: c.generateCPUNumber(1, blkNum)},
-		// 		}
-		// 	} else {
-		// 		c.cnList = engine.Nodes{engine.Node{
-		// 			Addr: c.addr,
-		// 			Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)},
-		// 		}
-		// 	}
-		// }
-	default:
-		if blkNum < plan2.BlockNumForceOneCN {
-			c.cnList = engine.Nodes{
-				engine.Node{
-					Addr: c.addr,
-					Mcpu: c.generateCPUNumber(ncpu, blkNum),
-				},
-			}
-		} else {
-			c.cnListStrategy()
-		}
-	}
-	if c.info.Typ == plan2.ExecTypeTP && len(c.cnList) > 1 {
+	c.execType = plan2.GetExecType(c.pn.GetQuery())
+	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
 		c.cnList = engine.Nodes{
 			engine.Node{
 				Addr: c.addr,
-				Mcpu: c.generateCPUNumber(ncpu, blkNum),
+				Mcpu: c.generateCPUNumber(ncpu, 1),
 			},
 		}
+	} else {
+		c.cnList, err = c.getCNList()
+		if err != nil {
+			return nil, err
+		}
+		c.removeUnavailableCN()
+		// sort by addr to get fixed order of CN list
+		sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
 	}
 
 	c.initAnalyze(qry)

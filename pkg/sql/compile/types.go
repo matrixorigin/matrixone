@@ -223,8 +223,9 @@ func (a *anaylze) release() {
 type Compile struct {
 	scope []*Scope
 
-	pn   *plan.Plan
-	info plan2.ExecInfo
+	pn *plan.Plan
+
+	execType plan2.ExecType
 
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.
