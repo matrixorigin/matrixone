@@ -178,7 +178,7 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot plan2.Snapsh
 	ses := tcc.GetSession()
 	_, err = tcc.GetTxnHandler().GetStorage().Database(tempCtx, name, txn)
 	if err != nil {
-		logError(ses, ses.GetDebugString(),
+		ses.Error(tempCtx,
 			"Failed to get database",
 			zap.String("databaseName", name),
 			zap.Error(err))
@@ -260,7 +260,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	//open database
 	db, err := tcc.GetTxnHandler().GetStorage().Database(tempCtx, dbName, txn)
 	if err != nil {
-		logError(ses, ses.GetDebugString(),
+		ses.Error(tempCtx,
 			"Failed to get database",
 			zap.String("databaseName", dbName),
 			zap.Error(err))
@@ -278,7 +278,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	if err != nil {
 		tmpTable, e := tcc.getTmpRelation(tempCtx, engine.GetTempTableName(dbName, tableName))
 		if e != nil {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(tempCtx,
 				"Failed to get table",
 				zap.String("tableName", tableName),
 				zap.Error(err))
@@ -295,7 +295,7 @@ func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName str
 	txn := tcc.execCtx.ses.GetTxnHandler().GetTxn()
 	db, err := e.Database(ctx, defines.TEMPORARY_DBNAME, txn)
 	if err != nil {
-		logError(tcc.execCtx.ses, tcc.execCtx.ses.GetDebugString(),
+		tcc.execCtx.ses.Error(ctx,
 			"Failed to get temp database",
 			zap.Error(err))
 		return nil, err

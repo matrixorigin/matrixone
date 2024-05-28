@@ -1161,8 +1161,8 @@ func TestTopsort(t *testing.T) {
 		g.addEdge("3", "4")
 		g.addEdge("3", "5")
 
-		ans, ok := g.sort()
-		cvey.So(ok, cvey.ShouldBeTrue)
+		ans, err := g.sort()
+		cvey.So(err, cvey.ShouldBeNil)
 
 		sort.StringSlice(ans[:2]).Sort()
 		cvey.So(ans[:2], cvey.ShouldResemble, []string{"0", "1"})
@@ -1179,8 +1179,8 @@ func TestTopsort(t *testing.T) {
 		g.addVertex("2")
 
 		// can be in any order
-		_, ok := g.sort()
-		cvey.So(ok, cvey.ShouldBeTrue)
+		_, err := g.sort()
+		cvey.So(err, cvey.ShouldBeNil)
 	})
 
 	cvey.Convey("create graph", t, func() {
@@ -1193,7 +1193,7 @@ func TestTopsort(t *testing.T) {
 		g.addEdge("2", "0")
 
 		// has a cycle
-		_, ok := g.sort()
-		cvey.So(ok, cvey.ShouldBeFalse)
+		_, err := g.sort()
+		cvey.So(err, cvey.ShouldNotBeNil)
 	})
 }
