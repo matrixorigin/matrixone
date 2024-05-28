@@ -644,20 +644,6 @@ func (mr *MockTxnOperatorMockRecorder) IsSnapOp() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsSnapOp", reflect.TypeOf((*MockTxnOperator)(nil).IsSnapOp))
 }
 
-// LatestTS mocks base method.
-func (m *MockTxnOperator) LatestTS() timestamp.Timestamp {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "LatestTS")
-	ret0, _ := ret[0].(timestamp.Timestamp)
-	return ret0
-}
-
-// LatestTS indicates an expected call of LatestTS.
-func (mr *MockTxnOperatorMockRecorder) LatestTS() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LatestTS", reflect.TypeOf((*MockTxnOperator)(nil).LatestTS))
-}
-
 // LockSkipped mocks base method.
 func (m *MockTxnOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
 	m.ctrl.T.Helper()
