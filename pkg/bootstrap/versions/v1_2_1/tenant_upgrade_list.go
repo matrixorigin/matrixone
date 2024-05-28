@@ -18,10 +18,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_mo_mysql_compatibility_mode1,
+	upg_information_schema_files,
 }
 
 var upg_mo_mysql_compatibility_mode1 = versions.UpgradeEntry{
@@ -32,5 +34,15 @@ var upg_mo_mysql_compatibility_mode1 = versions.UpgradeEntry{
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		sql := "select * from mo_catalog.mo_mysql_compatibility_mode where variable_name = 'keep_user_target_list_in_result'"
 		return versions.CheckTableDataExist(txn, accountId, sql)
+	},
+}
+
+var upg_information_schema_files = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "files",
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    sysview.InformationSchemaFilesDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "files")
 	},
 }
