@@ -157,9 +157,9 @@ type Session struct {
 	sentRows atomic.Int64
 	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
 	writeCsvBytes atomic.Int64
-	// packetCounter count the packet communicated with client.
+	// packetCounter count the tcp packet send to client.
 	packetCounter atomic.Int64
-	// payloadCounter count the payload send by `load data`
+	// payloadCounter count the payload send by `load data LOCAL infile`
 	payloadCounter int64
 
 	createdTime time.Time
