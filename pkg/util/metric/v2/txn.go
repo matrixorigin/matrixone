@@ -72,14 +72,6 @@ var (
 	TxnLockTotalCounter       = txnLockCounter.WithLabelValues("total")
 	TxnLocalLockTotalCounter  = txnLockCounter.WithLabelValues("local")
 	TxnRemoteLockTotalCounter = txnLockCounter.WithLabelValues("remote")
-
-	TxnRangesLoadedObjectMetaTotalCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "txn",
-			Name:      "ranges_loaded_object_meta_total",
-			Help:      "Total number of ranges loaded object meta.",
-		})
 )
 
 var (
@@ -247,17 +239,19 @@ var (
 			Buckets:   getDurationBuckets(),
 		})
 
-	txnTableRangeSizeHistogram = prometheus.NewHistogramVec(
+	txnTableRangeTotalHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
-			Name:      "ranges_duration_size",
-			Help:      "Bucketed histogram of txn table ranges size.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 20),
+			Name:      "ranges_selected_block_cnt_total",
+			Help:      "Bucketed histogram of txn table ranges selected block cnt.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 15),
 		}, []string{"type"})
 
-	TxnRangeSizeHistogram     = txnTableRangeSizeHistogram.WithLabelValues("ranges_len")
-	TxnFastRangeSizeHistogram = txnTableRangeSizeHistogram.WithLabelValues("fast_ranges_len")
+	TxnRangesSlowPathSelectedBlockCntHistogram = txnTableRangeTotalHistogram.WithLabelValues("slow_path_selected_block_cnt")
+	TxnRangesFastPathSelectedBlockCntHistogram = txnTableRangeTotalHistogram.WithLabelValues("fast_path_selected_block_cnt")
+	TxnRangesFastPathLoadObjCntHistogram       = txnTableRangeTotalHistogram.WithLabelValues("fast_path_load_obj_cnt")
+	TxnRangesSlowPathLoadObjCntHistogram       = txnTableRangeTotalHistogram.WithLabelValues("slow_path_load_obj_cnt")
 
 	txnTNSideDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -307,9 +301,11 @@ var (
 			Subsystem: "txn",
 			Name:      "ranges_selectivity_percentage",
 			Help:      "Bucketed histogram of fast ranges selectivity percentage.",
-			Buckets:   prometheus.LinearBuckets(0, 0.05, 21),
+			Buckets:   prometheus.ExponentialBucketsRange(0.001, 1, 21),
 		}, []string{"type"})
-	TxnRangesBlockSelectivityHistogram     = txnRangesSelectivityHistogram.WithLabelValues("block_selectivity")
-	TxnFastRangesBlockSelectivityHistogram = txnRangesSelectivityHistogram.WithLabelValues("fast_block_selectivity")
-	TxnFastRangesZMapSelectivityHistogram  = txnRangesSelectivityHistogram.WithLabelValues("fast_zm_selectivity")
+	TxnRangesSlowPathBlockSelectivityHistogram          = txnRangesSelectivityHistogram.WithLabelValues("slow_path_block_selectivity")
+	TxnRangesFastPathBlkTotalSelectivityHistogram       = txnRangesSelectivityHistogram.WithLabelValues("fast_path_block_selectivity")
+	TxnRangesFastPathObjSortKeyZMapSelectivityHistogram = txnRangesSelectivityHistogram.WithLabelValues("fast_path_obj_sort_key_zm_selectivity")
+	TxnRangesFastPathObjColumnZMapSelectivityHistogram  = txnRangesSelectivityHistogram.WithLabelValues("fast_path_obj_column_zm_selectivity")
+	TxnRangesFastPathBlkColumnZMapSelectivityHistogram  = txnRangesSelectivityHistogram.WithLabelValues("fast_path_blk_column_zm_selectivity")
 )
