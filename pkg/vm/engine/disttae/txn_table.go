@@ -1972,7 +1972,7 @@ func (tbl *txnTable) NewReader(
 func (tbl *txnTable) tryExtractPKFilter(expr *plan.Expr) (retPKFilter PKFilter) {
 	pk := tbl.tableDef.Pkey
 	if pk != nil && expr != nil {
-		if pk.CompPkeyCol != nil {
+		if !checkPrimaryKeyOnly && pk.CompPkeyCol != nil {
 			pkVals := make([]*plan.Literal, len(pk.Names))
 			_, hasNull := getCompositPKVals(expr, pk.Names, pkVals, tbl.proc.Load())
 			if hasNull {
