@@ -35,7 +35,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	switch st := execCtx.stmt.(type) {
 	case *tree.Select:
 		if ep.needExportToFile() {
-
+			defer ep.Close()
 			columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 			if err != nil {
 				ses.Error(execCtx.reqCtx,
@@ -55,6 +55,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				return
 			}
 
+			ep.init()
 			fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
 			setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 			runBegin := time.Now()
@@ -72,8 +73,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 			}
 
-			oq := NewOutputQueue(execCtx.reqCtx, ses, 0, nil, nil)
-			if err = exportAllData(oq); err != nil {
+			if err = exportAllData(ep); err != nil {
 				return
 			}
 			if err = ep.Writer.Flush(); err != nil {

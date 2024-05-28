@@ -106,7 +106,8 @@ func (oq *outputQueue) flush() error {
 		return nil
 	}
 	if oq.ep.needExportToFile() {
-		if err := exportDataToCSVFile(oq); err != nil {
+		//TODO:
+		if err := exportDataToCSVFile(nil); err != nil {
 			oq.ses.Error(oq.ctx,
 				"Error occurred while exporting to CSV file",
 				zap.Error(err))

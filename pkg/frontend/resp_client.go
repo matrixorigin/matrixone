@@ -71,7 +71,6 @@ var dumpResper Responser = &NullResp{}
 
 type MysqlResp struct {
 	mysqlWr MysqlWriter
-	csvWr   CsvWriter
 	s3Wr    S3Writer
 }
 
@@ -121,8 +120,7 @@ func (resper *MysqlResp) RespResult(execCtx *ExecCtx, bat *batch.Batch) (err err
 	ec := ses.GetExportConfig()
 
 	if ec.needExportToFile() {
-		//TODO
-		err = resper.csvWr.Write(execCtx, bat)
+		err = ec.Write(execCtx, bat)
 	} else {
 		err = resper.mysqlWr.Write(execCtx, bat)
 	}
@@ -136,9 +134,6 @@ func (resper *MysqlResp) RespPostMeta(execCtx *ExecCtx, meta any) (err error) {
 func (resper *MysqlResp) Close() {
 	if resper.mysqlWr != nil {
 		resper.mysqlWr.Close()
-	}
-	if resper.csvWr != nil {
-		resper.csvWr.Close()
 	}
 	if resper.s3Wr != nil {
 		resper.s3Wr.Close()
