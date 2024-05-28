@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -181,16 +182,18 @@ func TestKill(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second * 10}).AnyTimes()
-	wp := newTestWorkspace()
 
-	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-	txnOp.EXPECT().GetWorkspace().Return(wp).AnyTimes()
-	txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
-	txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
-	txnOp.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOp, nil).AnyTimes()
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, commitTS any, options ...any) (client.TxnOperator, error) {
+		wp := newTestWorkspace()
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		txnOp.EXPECT().GetWorkspace().Return(wp).AnyTimes()
+		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOp.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		return txnOp, nil
+	}).AnyTimes()
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
@@ -351,7 +354,7 @@ func TestKill(t *testing.T) {
 		var resultId int
 		logutil.Infof("conn1 sleep(30) 2")
 		connIdRow = conn1.QueryRowContext(ctx, sql6)
-		err = connIdRow.Scan(&resultId)
+		err := connIdRow.Scan(&resultId)
 		require.NoError(t, err)
 		logutil.Infof("conn1 sleep(30) 2 done")
 	}()

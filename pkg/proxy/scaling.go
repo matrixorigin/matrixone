@@ -38,20 +38,20 @@ type scaling struct {
 	connManager *connManager
 	// mc is MO-Cluster instance, which is used to get CN servers.
 	mc clusterservice.MOCluster
-	// queue is the transfer queue, which is the same queue as rebalancer.
-	queue chan *tunnel
+	// tunnelDeliver is used to deliver tunnel to the queue.
+	tunnelDeliver TunnelDeliver
 }
 
 func newScaling(
-	cm *connManager, queue chan *tunnel, mc clusterservice.MOCluster, logger *log.MOLogger, disabled bool,
+	cm *connManager, tunnelDeliver TunnelDeliver, mc clusterservice.MOCluster, logger *log.MOLogger, disabled bool,
 ) *scaling {
 	return &scaling{
-		interval:    defaultScalingInterval,
-		logger:      logger,
-		disabled:    disabled,
-		connManager: cm,
-		queue:       queue,
-		mc:          mc,
+		interval:      defaultScalingInterval,
+		logger:        logger,
+		disabled:      disabled,
+		connManager:   cm,
+		mc:            mc,
+		tunnelDeliver: tunnelDeliver,
 	}
 }
 
@@ -91,16 +91,8 @@ func (s *scaling) doScaling() {
 			zap.Int("tunnel number", len(tuns)),
 			zap.String("CN ID", cn),
 		)
-		for _, tun := range tuns {
-			tun.setTransferType(transferByScaling)
-			select {
-			case s.queue <- tun:
-			default:
-				// Reset the transfer type to default value.
-				tun.setTransferType(transferByRebalance)
-
-				s.logger.Info("rebalance queue is full")
-			}
+		for _, t := range tuns {
+			s.tunnelDeliver.Deliver(t, transferByScaling)
 		}
 	}
 }

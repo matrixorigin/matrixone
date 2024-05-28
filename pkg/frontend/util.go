@@ -203,6 +203,7 @@ func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient)
 	if err != nil {
 		return nil, err
 	}
+	sv.SetDefaultValues()
 	pu := mo_config.NewParameterUnit(sv, eng, txnClient, engine.Nodes{})
 
 	return pu, nil
@@ -490,7 +491,9 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
 		err = nil // make sure: it is nil for EndStatement
 	} else {
-		ses.Error(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
+		txnId := ses.GetTxnId()
+		ses.Error(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err),
+			logutil.TxnIdField(hex.EncodeToString(txnId[:])))
 	}
 
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
@@ -519,15 +522,18 @@ func initLogger() {
 }
 
 // appendSessionField append session id, transaction id and statement id to the fields
+// history:
+// #15877, discard ses.GetTxnInfo(), it need ses.Lock(). may cause deadlock: locked by itself.
+// #16028, depend on ses.GetStmtProfile() itself do the log. get rid of StatementInfo.
 func appendSessionField(fields []zap.Field, ses FeSession) []zap.Field {
 	if ses != nil {
 		fields = append(fields, logutil.SessionIdField(uuid.UUID(ses.GetUUID()).String()))
-		if ses.GetStmtInfo() != nil {
-			fields = append(fields, logutil.StatementIdField(uuid.UUID(ses.GetStmtInfo().StatementID).String()))
-			// discard ses.GetTxnInfo(), it need ses.Lock(). may cause deadlock: locked by itself.
-			if !ses.GetStmtInfo().IsZeroTxnID() {
-				fields = append(fields, logutil.TxnIdField(hex.EncodeToString(ses.GetStmtInfo().TransactionID[:])))
-			}
+		p := ses.GetStmtProfile()
+		if p.GetStmtId() != dumpUUID {
+			fields = append(fields, logutil.StatementIdField(uuid.UUID(p.GetStmtId()).String()))
+		}
+		if txnId := p.GetTxnId(); txnId != dumpUUID {
+			fields = append(fields, logutil.TxnIdField(hex.EncodeToString(txnId[:])))
 		}
 	}
 	return fields
@@ -1010,8 +1016,18 @@ func updateTempEngine(storage engine.Engine, te *memoryengine.Engine) {
 	}
 }
 
+const KeySep = "#"
+
 func genKey(dbName, tblName string) string {
-	return fmt.Sprintf("%s#%s", dbName, tblName)
+	return fmt.Sprintf("%s%s%s", dbName, KeySep, tblName)
+}
+
+func splitKey(key string) (string, string) {
+	parts := strings.Split(key, KeySep)
+	if len(parts) >= 2 {
+		return parts[0], parts[1]
+	}
+	return parts[0], ""
 }
 
 type topsort struct {
@@ -1032,7 +1048,7 @@ func (g *topsort) addEdge(from, to string) {
 	g.next[from] = append(g.next[from], to)
 }
 
-func (g *topsort) sort() (ans []string, ok bool) {
+func (g *topsort) sort() (ans []string, err error) {
 	inDegree := make(map[string]uint)
 	for u := range g.next {
 		inDegree[u] = 0
@@ -1065,8 +1081,8 @@ func (g *topsort) sort() (ans []string, ok bool) {
 		}
 	}
 
-	if len(ans) == len(inDegree) {
-		ok = true
+	if len(ans) != len(inDegree) {
+		err = moerr.NewInternalErrorNoCtx("There is a cycle in dependency graph")
 	}
 	return
 }
