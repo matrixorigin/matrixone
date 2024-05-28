@@ -583,7 +583,7 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 	}
 	s := StatementFromContext(ctx)
 	if s == nil {
-		panic(moerr.NewInternalError(ctx, "no statement info in context"))
+		return
 	}
 	s.mux.Lock()
 	defer s.mux.Unlock()
