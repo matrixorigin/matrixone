@@ -539,13 +539,13 @@ func initLogger() {
 // #16028, depend on ses.GetStmtProfile() itself do the log. get rid of StatementInfo.
 func appendSessionField(fields []zap.Field, ses FeSession) []zap.Field {
 	if ses != nil {
-		fields = append(fields, logutil.SessionIdField(uuid.UUID(ses.GetUUID()).String()))
+		fields = append(fields, zap.String(sessionId, uuid.UUID(ses.GetUUID()).String()))
 		p := ses.GetStmtProfile()
 		if p.GetStmtId() != dumpUUID {
-			fields = append(fields, logutil.StatementIdField(uuid.UUID(p.GetStmtId()).String()))
+			fields = append(fields, zap.String(statementId, uuid.UUID(p.GetStmtId()).String()))
 		}
-		if txnId := p.GetTxnId(); txnId != dumpUUID {
-			fields = append(fields, logutil.TxnIdField(hex.EncodeToString(txnId[:])))
+		if tid := p.GetTxnId(); tid != dumpUUID {
+			fields = append(fields, zap.String(txnId, hex.EncodeToString(tid[:])))
 		}
 	}
 	return fields
