@@ -212,7 +212,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		s = appendWriteBackOperator(c, s)
 		s.SetContextRecursively(c.ctx)
 
-		err = s.ParallelRun(c, s.IsRemote)
+		err = s.ParallelRun(c)
 		if err == nil {
 			// record the number of s3 requests
 			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
