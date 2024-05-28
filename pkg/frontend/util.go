@@ -1101,7 +1101,7 @@ func (g *topsort) addEdge(from, to string) {
 }
 
 func (g *topsort) sort() (ans []string, err error) {
-	inDegree := make(map[string]uint)
+	inDegree := make(map[string]uint, len(g.next))
 	for u := range g.next {
 		inDegree[u] = 0
 	}

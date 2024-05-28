@@ -536,7 +536,7 @@ func restoreTablesWithFk(
 	sortedFkTbls []string,
 	fkTableMap map[string]*tableInfo,
 	toAccountId uint32) (err error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to drop fk related tables", snapshotName))
+	getLogger().Info(fmt.Sprintf("[%s] start to restore tables with fk", snapshotName))
 
 	// recreate tables as topo order
 	for _, key := range sortedFkTbls {
@@ -1043,7 +1043,7 @@ func getTableInfoMap(
 		// filter by dbName and tblName
 		d, t := splitKey(key)
 		if needSkipDb(d) || needSkipTable(d, t) {
-			return
+			continue
 		}
 		if dbName != "" && dbName != d {
 			return
