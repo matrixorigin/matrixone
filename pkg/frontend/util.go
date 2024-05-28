@@ -1011,8 +1011,18 @@ func updateTempEngine(storage engine.Engine, te *memoryengine.Engine) {
 	}
 }
 
+const KeySep = "#"
+
 func genKey(dbName, tblName string) string {
-	return fmt.Sprintf("%s#%s", dbName, tblName)
+	return fmt.Sprintf("%s%s%s", dbName, KeySep, tblName)
+}
+
+func splitKey(key string) (string, string) {
+	parts := strings.Split(key, KeySep)
+	if len(parts) >= 2 {
+		return parts[0], parts[1]
+	}
+	return parts[0], ""
 }
 
 type topsort struct {
@@ -1033,8 +1043,8 @@ func (g *topsort) addEdge(from, to string) {
 	g.next[from] = append(g.next[from], to)
 }
 
-func (g *topsort) sort() (ans []string, ok bool) {
-	inDegree := make(map[string]uint)
+func (g *topsort) sort() (ans []string, err error) {
+	inDegree := make(map[string]uint, len(g.next))
 	for u := range g.next {
 		inDegree[u] = 0
 	}
@@ -1066,8 +1076,8 @@ func (g *topsort) sort() (ans []string, ok bool) {
 		}
 	}
 
-	if len(ans) == len(inDegree) {
-		ok = true
+	if len(ans) != len(inDegree) {
+		err = moerr.NewInternalErrorNoCtx("There is a cycle in dependency graph")
 	}
 	return
 }
