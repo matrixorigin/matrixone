@@ -1,0 +1,24 @@
+drop database if exists testdb;
+create database testdb;
+use testdb;
+
+create table t1(a int, b int, index(b));
+insert into t1 select *, * from generate_series(1, 8192000)g;
+select mo_ctl("dn", "flush", "testdb.t1");
+mo_ctl(dn, checkpoint, )
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select a from t1 where b = 1;
+a
+1
+select a from t1 where b between 1 and 3;
+a
+1
+2
+3
+select a from t1 where b in (1,2,3);
+a
+1
+2
+3
+drop table t1;
+drop database testdb;
