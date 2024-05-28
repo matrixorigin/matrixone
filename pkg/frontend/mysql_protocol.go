@@ -369,28 +369,25 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 	for i := 0; i < countOfResultSet; i++ {
 		mrs.Data[i] = make([]interface{}, len(bat.Vecs))
 	}
+	ses := execCtx.ses.(*Session)
+	isShowTableStatus := ses.GetShowStmtType() == ShowTableStatus
 	for j := 0; j < n; j++ { //row index
 		_, err := extractRowFromEveryVector(execCtx.reqCtx, execCtx.ses, bat, j, mrs.Data[0])
 		if err != nil {
 			return err
 		}
-		//TODO: ShowTableStatus does not send anything here
-		////send group of row
-		//if oq.showStmtType == ShowTableStatus {
-		//	oq.rowIdx = 0
-		//	return nil
-		//}
-		if err = mp.SendResultSetTextBatchRowSpeedup(&mrs, 1); err != nil {
-			execCtx.ses.Error(execCtx.reqCtx,
-				"Flush error",
-				zap.Error(err))
-			return err
+		if isShowTableStatus {
+			row2 := make([]interface{}, len(mrs.Data[0]))
+			copy(row2, mrs.Data[0])
+			ses.AppendData(row2)
+		} else {
+			if err = mp.SendResultSetTextBatchRowSpeedup(&mrs, 1); err != nil {
+				execCtx.ses.Error(execCtx.reqCtx,
+					"Flush error",
+					zap.Error(err))
+				return err
+			}
 		}
-		//if oq.showStmtType == ShowTableStatus {
-		//	row2 := make([]interface{}, len(row))
-		//	copy(row2, row)
-		//	ses.AppendData(row2)
-		//}
 	}
 	return nil
 }

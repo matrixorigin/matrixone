@@ -433,29 +433,14 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) erro
 
 	begin := time.Now()
 
-	//oq := NewOutputQueue(execCtx.reqCtx, ses, len(bat.Vecs), nil, nil)
 	row2colTime := time.Duration(0)
 	procBatchBegin := time.Now()
 	n := bat.Vecs[0].Length()
-
-	//if ses.GetExportConfig().needExportToFile() {
-	//	initExportFirst(oq)
-	//}
 
 	err := ses.GetResponser().RespResult(execCtx, bat)
 	if err != nil {
 		return err
 	}
-
-	//if ec.needExportToFile() {
-	//	oq.rowIdx = uint64(n)
-	//	bat2 := preCopyBat(obj, bat)
-	//	go constructByte(execCtx.reqCtx, obj, bat2, oq.ep.Index, oq.ep.ByteChan, oq)
-	//}
-	//err = oq.flush()
-	//if err != nil {
-	//	return err
-	//}
 
 	procBatchTime := time.Since(procBatchBegin)
 	tTime := time.Since(begin)
