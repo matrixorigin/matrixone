@@ -243,18 +243,15 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 	if w.objStatsInfoBat != nil {
 		proc.PutBatch(w.objStatsInfoBat)
 	}
-	//attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.ObjectMeta_ObjectStats}
 	blockInfoBat := batch.NewWithSize(len(attrs))
 	blockInfoBat.Attrs = attrs
-	//objStatsInfoBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
+
 	blockInfoBat.Vecs[objStatsInfoBatTblIdxOffset] = proc.GetVector(types.T_int16.ToType())
 	blockInfoBat.Vecs[objStatsInfoBatObjectOffset] = proc.GetVector(types.T_binary.ToType())
 
 	w.objStatsInfoBat = blockInfoBat
-
-	//w.blkInfoBat = batch.NewWithSize(1)
-	//w.blkInfoBat.Vecs[0] = proc.GetVector(types.T_text.ToType())
 }
 
 //func (w *S3Writer) WriteEnd(proc *process.Process) {
@@ -648,26 +645,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	//for _, blkInfo := range blkInfos {
-	//	if err := vector.AppendFixed(
-	//		w.objStatsInfoBat.Vecs[0],
-	//		w.partitionIndex,
-	//		false,
-	//		proc.GetMPool()); err != nil {
-	//		return err
-	//	}
-	//if err := vector.AppendBytes(
-	//	w.blkInfoBat.Vecs[0],
-	//	//[]byte(metaLoc),
-	//	objectio.EncodeBlockInfo(blkInfo),
-	//	false,
-	//	proc.GetMPool()); err != nil {
-	//	return err
-	//}
-	//}
 
-	// append the object stats to bat,
-	// at most one will append in
 	for idx := 0; idx < len(stats); idx++ {
 		if stats[idx].IsZero() {
 			continue

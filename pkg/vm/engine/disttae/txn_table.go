@@ -1500,7 +1500,6 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		//bocks maybe come from different S3 object, here we just need to make sure fileName is not Nil.
 		stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(0))
 		fileName := stats.ObjectName().String()
-		//fileName := objectio.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
 		return tbl.getTxn().WriteFile(
 			INSERT,
 			tbl.accountId,

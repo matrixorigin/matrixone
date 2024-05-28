@@ -572,25 +572,8 @@ func (h *Handle) HandleWrite(
 	if req.Type == db.EntryInsert {
 		//Add blocks which had been bulk-loaded into S3 into table.
 		if req.FileName != "" {
-			//metalocations := make(map[string]struct{})
-			//for _, metLoc := range req.MetaLocs {
-			//	location, err := blockio.EncodeLocationFromString(metLoc)
-			//	if err != nil {
-			//		return err
-			//	}
-			//	metalocations[location.Name().String()] = struct{}{}
-			//}
 			statsCNVec := req.Batch.Vecs[0]
 			statsVec := containers.ToTNVector(statsCNVec, common.WorkspaceAllocator)
-			//for i := 0; i < statsVec.Length(); i++ {
-			//	s := objectio.ObjectStats(statsVec.Get(i).([]byte))
-			//	delete(metalocations, s.ObjectName().String())
-			//}
-			//if len(metalocations) != 0 {
-			//	logutil.Warnf("tbl %v, not receive stats of following locations %v", req.TableName, metalocations)
-			//	err = moerr.NewInternalError(ctx, "object stats doesn't match meta locations")
-			//	return
-			//}
 			err = tb.AddObjsWithMetaLoc(ctx, statsVec)
 			return
 		}

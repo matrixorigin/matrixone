@@ -138,6 +138,7 @@ func (txn *Transaction) WriteBatch(
 		tnStore:      tnStore,
 		truncate:     truncate,
 	}
+
 	txn.writes = append(txn.writes, e)
 	txn.pkCount += bat.RowCount()
 
@@ -633,6 +634,7 @@ func (txn *Transaction) WriteFileLocked(
 		bat:          newBat,
 		tnStore:      tnStore,
 	}
+
 	txn.writes = append(txn.writes, entry)
 	return nil
 }

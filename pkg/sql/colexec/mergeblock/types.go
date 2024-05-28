@@ -226,12 +226,6 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	hasObject := false
 	for i := range tblIdx { // append s3 writer returned blk info
 		if tblIdx[i] >= 0 {
-			//if arg.AddAffectedRows {
-			//	blkInfo := objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
-			//	arg.affectedRows += uint64(blkInfo.MetaLocation().Rows())
-			//}
-			//vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0],
-			//	blkInfosVec.GetBytesAt(i), false, proc.GetMPool())
 			hasObject = true
 		} else { // append data
 			idx := int(-(tblIdx[i] + 1))
