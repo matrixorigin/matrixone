@@ -15,16 +15,14 @@
 package frontend
 
 import (
-	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 // executeStatusStmt run the statement that responses status t
@@ -40,7 +38,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 			columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 			if err != nil {
-				logError(ses, ses.GetDebugString(),
+				ses.Error(execCtx.reqCtx,
 					"Failed to get columns from computation handler",
 					zap.Error(err))
 				return
@@ -71,7 +69,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 			// only log if run time is longer than 1s
 			if time.Since(runBegin) > time.Second {
-				logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+				ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 			}
 
 			oq := NewOutputQueue(execCtx.reqCtx, ses, 0, nil, nil)
@@ -97,7 +95,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		}
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 		// execute insert sql if this is a `create table as select` stmt
@@ -143,13 +141,13 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if loadLocalErrGroup != nil { // release resources
 				err2 := execCtx.proc.LoadLocalReader.Close()
 				if err2 != nil {
-					logError(ses, ses.GetDebugString(),
+					ses.Error(execCtx.reqCtx,
 						"processLoadLocal goroutine failed",
 						zap.Error(err2))
 				}
 				err2 = loadLocalErrGroup.Wait() // executor failed, but processLoadLocal is still running, wait for it
 				if err2 != nil {
-					logError(ses, ses.GetDebugString(),
+					ses.Error(execCtx.reqCtx,
 						"processLoadLocal goroutine failed",
 						zap.Error(err2))
 				}
@@ -165,12 +163,12 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 		echoTime := time.Now()
 
-		logDebug(ses, ses.GetDebugString(), fmt.Sprintf("time of SendResponse %s", time.Since(echoTime).String()))
+		ses.Debugf(execCtx.reqCtx, "time of SendResponse %s", time.Since(echoTime).String())
 	}
 
 	return
