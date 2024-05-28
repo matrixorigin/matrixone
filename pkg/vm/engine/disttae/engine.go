@@ -545,7 +545,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 			if strings.Contains(name, "sysbench_db") {
 				logutil.Errorf("delete database %s failed: %v", name, err)
 				logutil.Errorf("stack: %s", stack.Callers(3))
-				logutil.Errorf("txnmeta %v", op.GetOverview().Meta)
+				logutil.Errorf("txnmeta %v", op.Txn().DebugString())
 			}
 		}
 	}()
