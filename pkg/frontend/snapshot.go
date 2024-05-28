@@ -885,7 +885,7 @@ func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string,
 	if len(snapshotName) > 0 {
 		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
 	}
-
+	getLogger().Info(fmt.Sprintf("[%s] get table %v info sql: %s", snapshotName, tblName, sql))
 	// cols: table name, table type
 	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
 	if err != nil {
@@ -904,15 +904,18 @@ func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string,
 }
 
 func getTableInfos(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) ([]*tableInfo, error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to get table info: %v", snapshotName, dbName))
+	getLogger().Info(fmt.Sprintf("[%s] start to get table info: %v", snapshotName, tblName))
 	tableInfos, err := showFullTables(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, tblInfo := range tableInfos {
-		if tblInfo.createSql, err = getCreateTableSql(ctx, bh, snapshotName, dbName, tblInfo.tblName); err != nil {
-			return nil, err
+	// only recreate snapshoted table need create sql
+	if snapshotName != "" {
+		for _, tblInfo := range tableInfos {
+			if tblInfo.createSql, err = getCreateTableSql(ctx, bh, snapshotName, dbName, tblInfo.tblName); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return tableInfos, nil
