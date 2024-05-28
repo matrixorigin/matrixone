@@ -1118,7 +1118,8 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 	return txn.snapshotWriteOffset
 }
 
-func (txn *Transaction) transferDeletesLocked(commit bool) error {
+func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) error {
+	var latestTs timestamp.Timestamp
 	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
 	if txn.statementID > 0 && txn.op.Txn().IsRCIsolation() {
 		var ts timestamp.Timestamp
@@ -1129,10 +1130,19 @@ func (txn *Transaction) transferDeletesLocked(commit bool) error {
 			ts = txn.timestamps[txn.statementID-2]
 		}
 
-		latestTs := txn.op.LatestTS()
-		if commit &&
-			latestTs.PhysicalTime-ts.PhysicalTime < time.Second.Nanoseconds()*5 {
-			return nil
+		//if commit &&
+		//	latestTs.PhysicalTime-ts.PhysicalTime < time.Second.Nanoseconds()*5 {
+		//	return nil
+		//}
+
+		if commit {
+			if err := txn.op.UpdateSnapshot(
+				ctx,
+				timestamp.Timestamp{}); err != nil {
+				return err
+			}
+			latestTs = txn.op.SnapshotTS()
+			txn.resetSnapshot()
 		}
 
 		return txn.forEachTableHasDeletesLocked(func(tbl *txnTable) error {
