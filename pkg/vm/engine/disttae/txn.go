@@ -755,7 +755,8 @@ func (txn *Transaction) deleteTableWrites(
 		}
 		// for 3 and 4 above.
 		if e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc ||
-			e.bat.Attrs[0] == catalog.BlockMeta_DeltaLoc {
+			e.bat.Attrs[0] == catalog.BlockMeta_DeltaLoc ||
+			e.bat.Attrs[0] == catalog.ObjectMeta_ObjectStats {
 			continue
 		}
 		sels = sels[:0]
