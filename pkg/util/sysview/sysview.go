@@ -64,6 +64,7 @@ var (
 		InformationSchemaCollationsDDL,
 		InformationSchemaTableConstraintsDDL,
 		InformationSchemaEventsDDL,
+		InformationSchemaFilesDDL,
 		informationSchemaKeywordsData,
 	}
 )
