@@ -142,6 +142,10 @@ func (vec *vectorWrapper) Get(i int) any {
 		return nil
 	}
 	if vec.GetType().IsVarlen() {
+		if vec.IsNull(i) {
+			var val []byte
+			return val
+		}
 		bs := vec.ShallowGet(i).([]byte)
 		ret := make([]byte, len(bs))
 		copy(ret, bs)
