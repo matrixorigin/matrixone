@@ -1,100 +1,125 @@
 set global enable_privilege_cache = off;
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop account if exists acc02;
+create account acc02 admin_name = 'test_account' identified by '111';
 
 -- create udf, create snapshot, drop udf, restore
+-- @session:id=1&user=acc01:test_account&password=111
 drop database if exists udf_db;
 create database udf_db;
 use udf_db;
 select name, db from mo_catalog.mo_user_defined_function;
 -- function add
 create function `addab`(x int, y int) returns int
-language sql as
+    language sql as
 '$1 + $2';
 select addab(10, 5);
 select name, db from mo_catalog.mo_user_defined_function;
+-- @session
 
 drop snapshot if exists udf_dsp01;
-create snapshot udf_dsp01 for account sys;
+create snapshot udf_dsp01 for account acc01;
 -- @ignore:1
 show snapshots;
 
+-- @session:id=1&user=acc01:test_account&password=111
 -- function concatenate
-create function `concatenate`(str1 varchar(255), str2 varchar(255)) returns varchar(255)
-language sql as
+create function`concatenate`(str1 varchar(255), str2 varchar(255)) returns varchar(255)
+    language sql as
 '$1 + $2';
 select concatenate('Hello, ', 'World!');
+-- @session
 
 drop snapshot if exists udf_dsp02;
-create snapshot udf_dsp02 for account sys;
+create snapshot udf_dsp02 for account acc01;
 -- @ignore:1
 show snapshots;
 
+-- @session:id=1&user=acc01:test_account&password=111
 -- function sub_diff
 drop database if exists udf_db2;
 create database udf_db2;
 use udf_db2;
-create function `subab`(x int, y int) returns int
-language sql as
+create function `subAB`(x int, y int) returns int
+    language sql as
 '$1 - $2';
-select subab(10, 5);
+select subAB(10, 5);
 select name, db from mo_catalog.mo_user_defined_function;
+-- @session
 
 drop snapshot if exists udf_dsp03;
-create snapshot udf_dsp03 for account sys;
+create snapshot udf_dsp03 for account acc01;
 -- @ignore:1
 show snapshots;
 
+-- @session:id=1&user=acc01:test_account&password=111
 -- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
-
 drop function subab(x int,y int);
 drop function udf_db.concatenate(str1 varchar(255), str2 varchar(255));
+-- @session
 
-restore account sys from snapshot udf_dsp03;
+restore account acc01 from snapshot udf_dsp03 to account acc02;
+
+-- @session:id=2&user=acc02:test_account&password=111
 -- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
--- @ignore:1
-show snapshots;
+-- @session
 
-restore account sys from snapshot udf_dsp02;
+restore account acc01 from snapshot udf_dsp02 to account acc02;
+-- @session:id=2&user=acc02:test_account&password=111
 -- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
--- @ignore:1
-show snapshots;
+drop database udf_db;
+-- @session
 
 drop snapshot udf_dsp01;
 drop snapshot udf_dsp02;
 drop snapshot udf_dsp03;
+
+-- @session:id=1&user=acc01:test_account&password=111
+drop database udf_db2;
 drop database udf_db;
+-- @session
 
 
 
 
 -- create udf, drop db, restore
+-- @session:id=1&user=acc01:test_account&password=111
 drop database if exists udf_db2;
 create database udf_db2;
 use udf_db2;
-create function `addab`(x int, y int) returns int
-language sql as
+create function `addAB`(x int, y int) returns int
+    language sql as
 '$1 + $2';
--- @ignore:9,10
+-- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
+-- @session
 
 drop snapshot if exists udf_sp04;
-create snapshot udf_sp04 for account sys;
+create snapshot udf_sp04 for account acc01;
 
+-- @session:id=1&user=acc01:test_account&password=111
 drop database udf_db2;
 select * from mo_catalog.mo_user_defined_function;
+-- @session
 
-restore account sys from snapshot udf_sp04;
--- @ignore:9,10
+restore account acc01 from snapshot udf_sp04 to account acc02;
+
+-- @session:id=2&user=acc02:test_account&password=111
+-- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
 drop database udf_db2;
+-- @session
 drop snapshot udf_sp04;
 
 
 
 
 -- create procedure, create snapshot, drop procedure, restore
+-- @session:id=1&user=acc01:test_account&password=111
 drop database if exists procedure_test;
 create database procedure_test;
 use procedure_test;
@@ -119,28 +144,37 @@ create procedure test_if_hit_if() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 T
 call test_if_hit_if();
 -- @ignore:7,8
 select * from mo_catalog.mo_stored_procedure;
+-- @session
 
 drop snapshot if exists sp_sp05;
-create snapshot sp_sp05 for account sys;
+create snapshot sp_sp05 for account acc01;
 
+-- @session:id=1&user=acc01:test_account&password=111
 drop procedure test_if_hit_elseif_first_elseif;
 drop procedure test_if_hit_if;
+-- @session
 
-restore account sys from snapshot sp_sp05;
+restore account acc01 from snapshot sp_sp05 to account acc02;
 
+-- @session:id=2&user=acc02:test_account&password=111
 -- @ignore:7,8
 select * from mo_catalog.mo_stored_procedure;
-call test_if_hit_elseif_first_elseif();
-call test_if_hit_if();
-drop snapshot sp_sp05;
+call procedure_test.test_if_hit_elseif_first_elseif();
+call procedure_test.test_if_hit_if();
 drop procedure test_if_hit_elseif_first_elseif;
 drop procedure test_if_hit_if;
 drop database procedure_test;
+-- @session
+-- @session:id=1&user=acc01:test_account&password=111
+drop database procedure_test;
+-- @session
+drop snapshot sp_sp05;
 
 
 
 
 -- create procedure, create snapshot, drop table, restore
+-- @session:id=1&user=acc01:test_account&password=111
 drop database if exists procedure_test;
 create database procedure_test;
 use procedure_test;
@@ -165,59 +199,67 @@ create procedure test_if_hit_else() 'begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5
 call test_if_hit_else();
 -- @ignore:7,8
 select * from mo_catalog.mo_stored_procedure;
+-- @session
 
 drop snapshot if exists sp_sp06;
-create snapshot sp_sp06 for account sys;
+create snapshot sp_sp06 for account acc01;
 
+-- @session:id=1&user=acc01:test_account&password=111
 drop table tbh1;
 drop table tbh2;
 drop procedure test_if_hit_second_elseif;
 -- @ignore:7,8
 select * from mo_catalog.mo_stored_procedure;
+-- @session
 
-restore account sys from snapshot sp_sp06;
+restore account acc01 from snapshot sp_sp06 to account acc02;
 
-call test_if_hit_else();
-call test_if_hit_second_elseif();
+-- @session:id=2&user=acc02:test_account&password=111
+call procedure_test.test_if_hit_else();
+call procedure_test.test_if_hit_second_elseif();
 -- @ignore:7,8
 select * from mo_catalog.mo_stored_procedure;
-
-drop snapshot sp_sp06;
-drop procedure test_if_hit_second_elseif;
-drop procedure test_if_hit_else;
+drop procedure procedure_test.test_if_hit_second_elseif;
+drop procedure procedure_test.test_if_hit_else;
 drop database procedure_test;
+-- @session
+drop snapshot sp_sp06;
 
 
 
 
 -- restore mo_stage
+-- @session:id=1&user=acc01:test_account&password=111
 drop stage if exists my_ext_stage;
 create stage my_ext_stage URL='s3://load/files/';
 drop stage if exists my_ext_stage1;
 create stage my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
 -- @ignore:5
 select * from mo_catalog.mo_stages;
+-- @session
 
 drop snapshot if exists stage_sp01;
-create snapshot stage_sp01 for account sys;
+create snapshot stage_sp01 for account acc01;
 
+-- @session:id=1&user=acc01:test_account&password=111
 alter stage my_ext_stage1 SET URL='s3://load/files2/';
--- @ignore:5
-select * from mo_catalog.mo_stages;
 drop stage my_ext_stage;
--- @ignore:5
-select * from mo_catalog.mo_stages;
+-- @session
 
-restore account sys from snapshot stage_sp01;
+restore account acc01 from snapshot stage_sp01 to account acc02;
+
+-- @session:id=2&user=acc02:test_account&password=111
 -- @ignore:5
 select * from mo_catalog.mo_stages;
-drop snapshot stage_sp01;
 drop stage my_ext_stage;
 drop stage my_ext_stage1;
+-- @session
+drop snapshot stage_sp01;
 
 
 
 
+-- @session:id=1&user=acc01:test_account&password=111
 -- restore mo_user
 drop user if exists userx;
 create user userx identified by '111';
@@ -225,32 +267,46 @@ drop user if exists usery;
 create user usery identified by '222';
 -- @ignore:3,5
 select * from mo_catalog.mo_user;
+-- @session
 
 drop snapshot if exists user_sp01;
-create snapshot user_sp01 for account sys;
+create snapshot user_sp01 for account acc01;
 
+-- @session:id=1&user=acc01:test_account&password=111
 drop user if exists userz;
 create user userz identified by '111';
+-- @session
 
 drop snapshot if exists user_sp02;
-create snapshot user_sp02 for account sys;
+create snapshot user_sp02 for account acc01;
+restore account acc01 from snapshot user_sp01 to account acc02;
 
-restore account sys from snapshot user_sp01;
+-- @session:id=2&user=acc02:test_account&password=111
 -- @ignore:3,5
-select * from mo_catalog.mo_user;
+select * from mo_catalog.mo_user order by user_id;
+-- @session
 
-restore account sys from snapshot user_sp02;
+restore account acc01 from snapshot user_sp02 to account acc02;
+
+-- @session:id=2&user=acc02:test_account&password=111
 -- @ignore:3,5
 select * from mo_catalog.mo_user;
 drop user userx;
 drop user usery;
 drop user userz;
+-- @session
+-- @session:id=1&user=acc01:test_account&password=111
+drop user userx;
+drop user usery;
+drop user userz;
+-- @session
 drop snapshot user_sp01;
 drop snapshot user_sp02;
 
 
 
 
+-- @session:id=1&user=acc01:test_account&password=111
 -- restore mo_role
 drop role if exists role1;
 drop role if exists role2;
@@ -258,26 +314,31 @@ create role role1;
 create role role2;
 -- @ignore:4
 select * from mo_catalog.mo_role order by role_id;
-drop snapshot if exists role_sp01;
-create snapshot role_sp01 for account sys;
+-- @session
 
+drop snapshot if exists role_sp01;
+create snapshot role_sp01 for account acc01;
+
+-- @session:id=1&user=acc01:test_account&password=111
 drop role role1;
 drop role role2;
+-- @session
 
-restore account sys from snapshot role_sp01;
+restore account acc01 from snapshot role_sp01 to account acc02;
 
+-- @session:id=2&user=acc02:test_account&password=111
 -- @ignore:4
 select * from mo_catalog.mo_role order by role_id;
-drop snapshot role_sp01;
 drop role role1;
 drop role role2;
+-- @session
+drop snapshot role_sp01;
 
 
 
 
 -- grant privs role
-drop database if exists grant_db;
-create database testdb;
+-- @session:id=1&user=acc01:test_account&password=111
 drop role if exists test_role;
 create role test_role;
 
@@ -286,34 +347,43 @@ grant all on account * to test_role;
 grant ownership on database *.* to test_role;
 grant ownership on table *.* to test_role;
 
+-- @ignore:3,5
+select * from mo_catalog.mo_user;
 -- @ignore:4
-select * from mo_catalog.mo_role order by role_id;
--- @ignore:3,8
+select * from mo_catalog.mo_role;
+-- @ignore:8
 select * from mo_catalog.mo_role_privs where role_name='test_role';
+-- @ignore:2
+select * from mo_catalog.mo_user_grant;
+-- @session
 
 drop snapshot if exists prvis_sp01;
-create snapshot prvis_sp01 for account sys;
+create snapshot prvis_sp01 for account acc01;
 
+-- @session:id=1&user=acc01:test_account&password=111
 drop role test_role;
 -- @ignore:4
 select * from mo_catalog.mo_role;
--- @ignore:3,8
+-- @ignore:8
 select * from mo_catalog.mo_role_privs where role_name='test_role';
+-- @session
 
-restore account sys from snapshot prvis_sp01;
+restore account acc01 from snapshot prvis_sp01 to account acc02;
 
+-- @session:id=2&user=acc02:test_account&password=111
 -- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:3,8
+select * from mo_catalog.mo_role order by role_id;
+-- @ignore:8
 select * from mo_catalog.mo_role_privs where role_name='test_role';
-
-drop database testdb;
 drop role test_role;
+-- @session
+
 drop snapshot prvis_sp01;
 
 
 
 
+-- @session:id=1&user=acc01:test_account&password=111
 -- grant role to user
 drop user if exists user_grant_2;
 create user if not exists user_grant_2 identified by '123456';
@@ -331,15 +401,19 @@ select * from mo_catalog.mo_role;
 select * from mo_catalog.mo_role_privs where role_name='role_account_priv_1';
 -- @ignore:2
 select * from mo_catalog.mo_user_grant;
+-- @session
 
 drop snapshot if exists grant_sp01;
-create snapshot grant_sp01 for account sys;
+create snapshot grant_sp01 for account acc01;
 
+-- @session:id=1&user=acc01:test_account&password=111
 drop user user_grant_2;
 drop role 'role_account_priv_1';
+-- @session
 
-restore account sys from snapshot grant_sp01;
+restore account acc01 from snapshot grant_sp01 to account acc02;
 
+-- @session:id=2&user=acc02:test_account&password=111
 -- @ignore:3,5
 select * from mo_catalog.mo_user;
 -- @ignore:4
@@ -351,19 +425,18 @@ select * from mo_catalog.mo_user_grant;
 
 drop user user_grant_2;
 drop role role_account_priv_1;
+-- @session
 drop snapshot grant_sp01;
 
 
 
 
 -- create user, role, snapshot, grant role to user, restore
+-- @session:id=1&user=acc01:test_account&password=111
 drop user if exists user_grant_3;
 create user if not exists user_grant_3 identified by '123456';
 drop role if exists role_account_priv_3;
 create role 'role_account_priv_3';
-drop snapshot if exists grant_sp02;
-create snapshot grant_sp02 for account sys;
-
 -- @ignore:3,5
 select * from mo_catalog.mo_user;
 -- @ignore:4
@@ -372,7 +445,12 @@ select * from mo_catalog.mo_role;
 select * from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
 -- @ignore:2
 select * from mo_catalog.mo_user_grant;
+-- @session
 
+drop snapshot if exists grant_sp02;
+create snapshot grant_sp02 for account acc01;
+
+-- @session:id=1&user=acc01:test_account&password=111
 grant create user, drop user, alter user, create role, drop role, create database,drop database,show databases,connect,manage grants on account *  to role_account_priv_3 with grant option;
 grant select on table *.* to role_account_priv_3;
 grant role_account_priv_3 to user_grant_3;
@@ -385,11 +463,13 @@ select * from mo_catalog.mo_role;
 select * from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
 -- @ignore:2
 select * from mo_catalog.mo_user_grant;
+-- @session
 
-restore account sys from snapshot grant_sp02;
+restore account acc01 from snapshot grant_sp02 to account acc02;
 
+-- @session:id=2&user=acc02:test_account&password=111
 -- @ignore:3,5
-select * from mo_catalog.mo_user;
+select * from mo_catalog.mo_user order by user_id;
 -- @ignore:4
 select * from mo_catalog.mo_role;
 -- @ignore:8
@@ -399,46 +479,54 @@ select * from mo_catalog.mo_user_grant;
 
 drop user user_grant_3;
 drop role role_account_priv_3;
+-- @session
 drop snapshot grant_sp02;
 
 
 
 
+-- @session:id=1&user=acc01:test_account&password=111
 -- multiple permissions are granted to multiple roles
 drop role if exists r1,r2,r3,r4,r5,r6,r7,r8,r9,r10;
 create role r1,r2,r3,r4,r5,r6,r7,r8,r9,r10;
-grant select,insert,update on table *.* to r1,r2,r3,r4,r5;
-
+grant select,insert ,update on table *.* to r1,r2,r3,r4,r5;
 -- @ignore:4
 select * from mo_catalog.mo_role;
 -- @ignore:8
 select * from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
+-- @session
 
 drop snapshot if exists sp01;
-create snapshot sp01 for account sys;
+create snapshot sp01 for account acc01;
 
+-- @session:id=1&user=acc01:test_account&password=111
 drop role r1,r2,r3,r4,r5;
 -- @ignore:4
 select * from mo_catalog.mo_role;
 -- @ignore:8
 select * from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
+-- @session
 
-restore account sys from snapshot sp01;
+restore account acc01 from snapshot sp01 to account acc02;
 
+-- @session:id=2&user=acc02:test_account&password=111
 -- @ignore:4
 select * from mo_catalog.mo_role;
 -- @ignore:8
 select * from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
-
+-- @session
+-- @session:id=1&user=acc01:test_account&password=111
+drop role r6,r7,r8,r9,r10;
+-- @session
 drop snapshot sp01;
-drop role r1,r2,r3,r4,r5,r6,r7,r8,r9,r10;
 
 
 
 
---multi role grant to multi role
-drop role if exists r1, r2, r6, r7;
-create role r1, r2, r6, r7;
+-- multi role grant to multi role
+-- @session:id=1&user=acc01:test_account&password=111
+drop role if exists r1, r2, r6,r7;
+create role r1, r2, r6,r7;
 grant select ,insert ,update on table *.* to r1,r2 with grant option;
 grant r1,r2 to r6,r7;
 select mr.role_name,mp.role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_role_grant mg,mo_catalog.mo_role mr ,mo_catalog.mo_role_privs mp where  mg.grantee_id=mr.role_id and mg.granted_id = mp.role_id and mr.role_name in ('r6','r7');
@@ -446,30 +534,39 @@ select mr.role_name,mp.role_name,obj_type,privilege_name,privilege_level from mo
 select * from mo_catalog.mo_role;
 -- @ignore:8
 select * from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
+-- @session
 
 drop snapshot if exists sp02;
-create snapshot sp02 for account sys;
+create snapshot sp02 for account acc01;
 
+-- @session:id=1&user=acc01:test_account&password=111
 drop role r1, r2;
 -- @ignore:4
 select * from mo_catalog.mo_role;
 -- @ignore:8
 select * from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
+-- @session
 
-restore account sys from snapshot sp02;
+restore account acc01 from snapshot sp02 to account acc02;
 
+-- @session:id=2&user=acc02:test_account&password=111
 -- @ignore:4
 select * from mo_catalog.mo_role;
 -- @ignore:8
 select * from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
+drop role r1, r2;
+-- @session
 
+-- @session:id=2&user=acc02:test_account&password=111
+drop role  r6, r7;
+-- @session
 drop snapshot sp02;
-drop role r1, r2, r6, r7;
 
 
 
 
 -- single role grant to multi users
+-- @session:id=1&user=acc01:test_account&password=111
 drop role if exists r5;
 create role r5;
 drop user if exists user01, user02, user03, user04, user05;
@@ -489,12 +586,14 @@ select * from mo_catalog.mo_role;
 select * from mo_catalog.mo_role_privs where role_name in ('r5');
 -- @ignore:2
 select * from mo_catalog.mo_user_grant;
+-- @session
 
 drop snapshot if exists sp03;
-create snapshot sp03 for account sys;
+create snapshot sp03 for account acc01;
+
+-- @session:id=1&user=acc01:test_account&password=111
 drop role r5;
 drop user user01, user02, user03;
-
 select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_user_grant,mo_catalog.mo_user,mo_catalog.mo_role_privs where mo_user_grant.user_id=mo_user.user_id and mo_role_privs.role_id=mo_user_grant.role_id and role_name in ('r5');
 -- @ignore:3,5
 select * from mo_catalog.mo_user;
@@ -504,9 +603,11 @@ select * from mo_catalog.mo_role;
 select * from mo_catalog.mo_role_privs where role_name in ('r5');
 -- @ignore:2
 select * from mo_catalog.mo_user_grant;
+-- @session
 
-restore account sys from snapshot sp03;
+restore account acc01 from snapshot sp03 to account acc02;
 
+-- @session:id=2&user=acc02:test_account&password=111
 -- @ignore:3,5
 select * from mo_catalog.mo_user;
 -- @ignore:4
@@ -515,45 +616,9 @@ select * from mo_catalog.mo_role;
 select * from mo_catalog.mo_role_privs where role_name in ('r5');
 -- @ignore:2
 select * from mo_catalog.mo_user_grant;
-
 drop user user01, user02, user03, user04, user05;
 drop role r5;
+-- @session
 drop snapshot sp03;
-
-
-
-
--- grant, create snapshot, revoke, restore
-drop role if exists role_r1,role_r2,role_r3;
-create role role_r1,role_r2,role_r3;
-drop user if exists role_u1, role_u2, role_u3;
-create user role_u1 identified by '111', role_u2 identified by '111', role_u3 identified by '111';
-grant role_r1 to role_u1;
-grant role_r1,role_r2,role_r3 to role_u1,role_u2,role_u2;
-grant role_r1 to role_r2;
-grant role_r2 to role_r3;
--- @ignore:3,5
-select * from mo_catalog.mo_user;
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name in ('role_r1','role_r2');
--- @ignore:2
-select * from mo_catalog.mo_user_grant;
--- @ignore:4
-select * from mo_catalog.mo_role_grant;
-
-drop snapshot if exists sp01;
-create snapshot sp01 for account sys;
-
-revoke role_r2 from role_r3;
-revoke role_r1 from role_r2;
-
--- @ignore:4
-select * from mo_catalog.mo_role_grant;
-restore account sys from snapshot sp01;
--- @ignore:4
-select * from mo_catalog.mo_role_grant;
-drop snapshot sp01;
-drop role role_r1, role_r2, role_r3;
-drop user role_u1, role_u2, role_u3;
+drop account acc01;
+drop account acc02;
