@@ -1118,24 +1118,47 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 	return txn.snapshotWriteOffset
 }
 
-func (txn *Transaction) transferDeletesLocked() error {
+func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) error {
+	var latestTs timestamp.Timestamp
 	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
 	if txn.statementID > 0 && txn.op.Txn().IsRCIsolation() {
 		var ts timestamp.Timestamp
 		if txn.statementID == 1 {
 			ts = txn.timestamps[0]
+			txn.start = time.Now()
 		} else {
 			//statementID > 1
 			ts = txn.timestamps[txn.statementID-2]
 		}
+		if commit {
+			if time.Since(txn.start) < time.Second*5 {
+				return nil
+			}
+			//It's important to push the snapshot ts to the latest ts
+			if err := txn.op.UpdateSnapshot(
+				ctx,
+				timestamp.Timestamp{}); err != nil {
+				return err
+			}
+			latestTs = txn.op.SnapshotTS()
+			txn.resetSnapshot()
+		}
+
 		return txn.forEachTableHasDeletesLocked(func(tbl *txnTable) error {
 			ctx := tbl.proc.Load().Ctx
 			state, err := tbl.getPartitionState(ctx)
 			if err != nil {
 				return err
 			}
-			deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(ts),
-				types.TimestampToTS(tbl.db.op.SnapshotTS()))
+			var endTs timestamp.Timestamp
+			if commit {
+				endTs = latestTs
+			} else {
+				endTs = tbl.db.op.SnapshotTS()
+			}
+			deleteObjs, createObjs := state.GetChangedObjsBetween(
+				types.TimestampToTS(ts),
+				types.TimestampToTS(endTs))
 
 			trace.GetService().ApplyFlush(
 				tbl.db.op.Txn().ID,
