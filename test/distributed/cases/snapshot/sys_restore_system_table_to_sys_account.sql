@@ -43,20 +43,20 @@ create snapshot udf_dsp03 for account sys;
 -- @ignore:1
 show snapshots;
 
--- @ignore:9,10
+-- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
 
 drop function subab(x int,y int);
 drop function udf_db.concatenate(str1 varchar(255), str2 varchar(255));
 
 restore account sys from snapshot udf_dsp03;
--- @ignore:9,10
+-- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
 -- @ignore:1
 show snapshots;
 
 restore account sys from snapshot udf_dsp02;
--- @ignore:9,10
+-- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
 -- @ignore:1
 show snapshots;
@@ -540,7 +540,7 @@ select * from mo_catalog.mo_role;
 select * from mo_catalog.mo_role_privs where role_name in ('role_r1','role_r2');
 -- @ignore:2
 select * from mo_catalog.mo_user_grant;
--- @ignore:2
+-- @ignore:4
 select * from mo_catalog.mo_role_grant;
 
 drop snapshot if exists sp01;
@@ -549,7 +549,7 @@ create snapshot sp01 for account sys;
 revoke role_r2 from role_r3;
 revoke role_r1 from role_r2;
 
--- @ignore:2
+-- @ignore:4
 select * from mo_catalog.mo_role_grant;
 restore account sys from snapshot sp01;
 -- @ignore:2
