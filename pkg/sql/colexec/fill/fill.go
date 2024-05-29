@@ -129,10 +129,11 @@ func processValue(ctr *container, ap *Argument, proc *process.Process, anal proc
 		proc.PutBatch(ctr.buf)
 		ctr.buf = nil
 	}
-	ctr.buf, _, err = ctr.ReceiveFromAllRegs(anal)
-	if err != nil {
-		return result, err
+	msg := ctr.ReceiveFromAllRegs(anal)
+	if msg.Err != nil {
+		return result, msg.Err
 	}
+	ctr.buf = msg.Batch
 	if ctr.buf == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop
@@ -255,10 +256,11 @@ func processPrev(ctr *container, ap *Argument, proc *process.Process, anal proce
 		proc.PutBatch(ctr.buf)
 		ctr.buf = nil
 	}
-	ctr.buf, _, err = ctr.ReceiveFromAllRegs(anal)
-	if err != nil {
-		return result, err
+	msg := ctr.ReceiveFromAllRegs(anal)
+	if msg.Err != nil {
+		return result, msg.Err
 	}
+	ctr.buf = msg.Batch
 	if ctr.buf == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop
@@ -429,14 +431,14 @@ func processNext(ctr *container, ap *Argument, proc *process.Process, anal proce
 		return result, nil
 	}
 	for {
-		bat, end, err := ctr.ReceiveFromAllRegs(anal)
-		if err != nil {
-			return result, err
+		msg := ctr.ReceiveFromAllRegs(anal)
+		if msg.Err != nil {
+			return result, msg.Err
 		}
-		if end {
+		if msg.Batch == nil {
 			break
 		}
-		ctr.bats = append(ctr.bats, bat)
+		ctr.bats = append(ctr.bats, msg.Batch)
 	}
 	if len(ctr.bats) == 0 {
 		result.Batch = nil
@@ -470,14 +472,14 @@ func processLinear(ctr *container, ap *Argument, proc *process.Process, anal pro
 		return result, nil
 	}
 	for {
-		bat, end, err := ctr.ReceiveFromAllRegs(anal)
-		if err != nil {
-			return result, err
+		msg := ctr.ReceiveFromAllRegs(anal)
+		if msg.Err != nil {
+			return result, msg.Err
 		}
-		if end {
+		if msg.Batch == nil {
 			break
 		}
-		ctr.bats = append(ctr.bats, bat)
+		ctr.bats = append(ctr.bats, msg.Batch)
 	}
 	if len(ctr.bats) == 0 {
 		result.Batch = nil
@@ -497,16 +499,16 @@ func processLinear(ctr *container, ap *Argument, proc *process.Process, anal pro
 }
 
 func processDefault(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
-	var err error
 	result := vm.NewCallResult()
 	if ctr.buf != nil {
 		proc.PutBatch(ctr.buf)
 		ctr.buf = nil
 	}
-	ctr.buf, _, err = ctr.ReceiveFromAllRegs(anal)
-	if err != nil {
-		return result, err
+	msg := ctr.ReceiveFromAllRegs(anal)
+	if msg.Err != nil {
+		return result, msg.Err
 	}
+	ctr.buf = msg.Batch
 	if ctr.buf == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop

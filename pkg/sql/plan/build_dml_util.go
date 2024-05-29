@@ -109,7 +109,7 @@ type deleteNodeInfo struct {
 	partitionIdx    int      // The array index position of the partition expression column
 	indexTableNames []string
 	foreignTbl      []uint64
-	addAffectedRows bool
+	addAffectedRows bool // for hidden table, should not update affect Rows, e.g. delete 1 row from table t with schema like a int, b unique key, c key, affact rows should be 1 instead of 3
 	pkPos           int
 	pkTyp           plan.Type
 	lockTable       bool

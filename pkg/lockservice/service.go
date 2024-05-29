@@ -230,6 +230,24 @@ func (s *service) Unlock(
 	return nil
 }
 
+func (s *service) IsOrphanTxn(
+	ctx context.Context,
+	txn []byte,
+) (bool, error) {
+	req := acquireRequest()
+	req.Method = pb.Method_CheckOrphan
+	req.CheckOrphan.ServiceID = s.serviceID
+	req.CheckOrphan.Txn = txn
+
+	resp, err := s.remote.client.Send(ctx, req)
+	if err != nil {
+		return false, err
+	}
+	defer releaseResponse(resp)
+
+	return resp.CheckOrphan.Orphan, nil
+}
+
 func (s *service) reduceCanMoveGroupTables(txn *activeTxn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -248,7 +248,7 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 	}
 
 	if shouldCreateNewObj() {
-		space.nobj, err = space.table.CreateNonAppendableObject(true, new(objectio.CreateObjOpt).WithId(sid))
+		space.nobj, err = space.table.CreateNonAppendableObject(false, new(objectio.CreateObjOpt).WithId(sid))
 		if err != nil {
 			return
 		}

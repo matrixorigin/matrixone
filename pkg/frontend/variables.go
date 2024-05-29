@@ -75,6 +75,7 @@ func getErrorConvertFromStringToNullFailed(str string) error {
 	return moerr.NewInternalError(context.Background(), errorConvertFromStringToNullFailedFormat, str)
 }
 
+func errorConfigDoesNotExist() string         { return "the config variable does not exist" }
 func errorSystemVariableDoesNotExist() string { return "the system variable does not exist" }
 func errorSystemVariableIsSession() string    { return "the system variable is session" }
 func errorSystemVariableSessionEmpty() string {
