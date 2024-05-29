@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"sync"
 
@@ -504,8 +503,6 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		err = th.txnOp.Commit(ctx2)
 		if err != nil {
-			txnId := execCtx.ses.GetTxnId()
-			err = errors.Join(err, moerr.NewInternalErrorNoCtx("txnId %v", hex.EncodeToString(txnId[:])))
 			th.invalidateTxnUnsafe()
 		}
 		execCtx.ses.updateLastCommitTS(commitTs)
@@ -610,8 +607,6 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		err = th.txnOp.Rollback(ctx2)
 		if err != nil {
-			txnId := execCtx.ses.GetTxnId()
-			err = errors.Join(err, moerr.NewInternalErrorNoCtx("txnId %v", hex.EncodeToString(txnId[:])))
 			th.invalidateTxnUnsafe()
 		}
 	}
