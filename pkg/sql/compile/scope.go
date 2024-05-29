@@ -480,11 +480,13 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 	// If this was a remote-run pipeline. Reader should be generated from Engine.
 	case s.IsRemote:
+		// this cannot use c.ctx directly, please refer to `default case`.
+		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
-			c.ctx = defines.AttachAccountId(c.ctx, catalog.System_Account)
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 		if s.DataSource.AccountId != nil {
-			c.ctx = defines.AttachAccountId(c.ctx, uint32(s.DataSource.AccountId.GetTenantId()))
+			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
 
 		// determined how many cpus we should use.
@@ -492,7 +494,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len())
 
 		readers, err = c.e.NewBlockReader(
-			c.ctx, scanUsedCpuNumber,
+			ctx, scanUsedCpuNumber,
 			s.DataSource.Timestamp, s.DataSource.FilterExpr, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
 		if err != nil {
 			return nil, err
@@ -522,8 +524,13 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	// Should get relation first to generate Reader.
 	// FIXME:: s.NodeInfo.Rel == nil, partition table? -- this is an old comment, I just do a copy here.
 	default:
+		// This cannot modify the c.ctx here, but I don't know why.
+		// Maybe there are some account related things stores in the context (using the context.WithValue),
+		// and modify action will change the account.
+		ctx := c.ctx
+
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
-			c.ctx = defines.AttachAccountId(c.ctx, catalog.System_Account)
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 
 		var db engine.Database
@@ -540,23 +547,23 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 					txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 					if n.ScanSnapshot.Tenant != nil {
-						c.ctx = context.WithValue(c.ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
+						ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
 					}
 				}
 			}
 
-			db, err = c.e.Database(c.ctx, s.DataSource.SchemaName, txnOp)
+			db, err = c.e.Database(ctx, s.DataSource.SchemaName, txnOp)
 			if err != nil {
 				return nil, err
 			}
-			rel, err = db.Relation(c.ctx, s.DataSource.RelationName, c.proc)
+			rel, err = db.Relation(ctx, s.DataSource.RelationName, c.proc)
 			if err != nil {
 				var e error // avoid contamination of error messages
-				db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
+				db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
 				if e != nil {
 					return nil, e
 				}
-				rel, e = db.Relation(c.ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName), c.proc)
+				rel, e = db.Relation(ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName), c.proc)
 				if e != nil {
 					return nil, err
 				}
@@ -579,7 +586,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 		if rel.GetEngineType() == engine.Memory || s.DataSource.PartitionRelationNames == nil {
 			mainRds, err1 := rel.NewReader(
-				c.ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, s.NodeInfo.Data, len(s.DataSource.OrderBy) > 0)
+				ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, s.NodeInfo.Data, len(s.DataSource.OrderBy) > 0)
 			if err1 != nil {
 				return nil, err1
 			}
@@ -607,7 +614,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			if len(cleanRanges) > 0 {
 				// create readers for reading clean blocks from the main table.
 				mainRds, err1 := rel.NewReader(
-					c.ctx,
+					ctx,
 					scanUsedCpuNumber, s.DataSource.FilterExpr, cleanRanges, len(s.DataSource.OrderBy) > 0)
 				if err1 != nil {
 					return nil, err1
@@ -616,11 +623,11 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			}
 			// create readers for reading dirty blocks from partition table.
 			for num, relName := range s.DataSource.PartitionRelationNames {
-				subRel, err1 := db.Relation(c.ctx, relName, c.proc)
+				subRel, err1 := db.Relation(ctx, relName, c.proc)
 				if err1 != nil {
 					return nil, err1
 				}
-				memRds, err2 := subRel.NewReader(c.ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, dirtyRanges[num], len(s.DataSource.OrderBy) > 0)
+				memRds, err2 := subRel.NewReader(ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, dirtyRanges[num], len(s.DataSource.OrderBy) > 0)
 				if err2 != nil {
 					return nil, err2
 				}
