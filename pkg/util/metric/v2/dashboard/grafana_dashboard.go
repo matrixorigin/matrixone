@@ -441,7 +441,6 @@ func (c *DashboardCreator) initLocalFilterOptions() {
 			query.Multiple(),
 			query.Label("instance"),
 			query.Request("label_values(instance)"),
-			query.Refresh(query.TimeChange),
 		))
 }
 
