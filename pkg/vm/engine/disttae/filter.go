@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"sort"
 )
 
 type FastFilterOp func(objectio.ObjectStats) (bool, error)
@@ -1006,12 +1007,6 @@ func TryFastFilterBlocks(
 	if !ok {
 		return false, nil
 	}
-
-	//if highSelectivityHint {
-	//	fmt.Println("has high selectivity", tbl.tableName, plan2.FormatExprs(exprs))
-	//} else {
-	//	fmt.Println("has not high selectivity", tbl.tableName, plan2.FormatExprs(exprs))
-	//}
 
 	err = ExecuteBlockFilter(
 		ctx,
