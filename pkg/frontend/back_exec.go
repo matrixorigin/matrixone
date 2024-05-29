@@ -656,6 +656,10 @@ func (backSes *backSession) SendRows() int64 {
 	return 0
 }
 
+func (backSes *backSession) GetConfig(ctx context.Context, dbName, varName string) (any, error) {
+	return nil, moerr.NewInternalError(ctx, "do not support get config in background exec")
+}
+
 func (backSes *backSession) GetTxnInfo() string {
 	txnH := backSes.GetTxnHandler()
 	if txnH == nil {
