@@ -17,23 +17,30 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
@@ -45,17 +52,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -211,15 +211,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 		scope := s.PreScopes[i]
 		errSubmit := ants.Submit(func() {
 			defer func() {
-				if e := recover(); e != nil {
-					err := moerr.ConvertPanicError(c.ctx, e)
-					c.proc.Error(c.ctx, "panic in merge run run",
-						zap.String("sql", c.sql),
-						zap.String("error", err.Error()))
-					errChan <- err
-				}
 				wg.Done()
 			}()
+
 			switch scope.Magic {
 			case Normal:
 				errChan <- scope.Run(c)
@@ -228,7 +222,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 			case Remote:
 				errChan <- scope.RemoteRun(c)
 			case Parallel:
-				errChan <- scope.ParallelRun(c, scope.IsRemote)
+				errChan <- scope.ParallelRun(c)
+			default:
+				errChan <- moerr.NewInternalError(c.ctx, "unexpected scope Magic %d", scope.Magic)
 			}
 		})
 		if errSubmit != nil {
@@ -292,7 +288,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
 	if !s.canRemote(c, true) || !cnclient.IsCNClientReady() {
-		return s.ParallelRun(c, s.IsRemote)
+		return s.ParallelRun(c)
 	}
 
 	runtime.ProcessLevelRuntime().Logger().
@@ -315,7 +311,381 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	}
 }
 
-func DeterminRuntimeDOP(cpunum, blocks int) int {
+// ParallelRun run a pipeline in parallel.
+func (s *Scope) ParallelRun(c *Compile) (err error) {
+	var parallelScope *Scope
+
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
+			c.proc.Error(c.ctx, "panic in scope run",
+				zap.String("sql", c.sql),
+				zap.String("error", err.Error()))
+		}
+
+		// if codes run here, it means some error happens during build the parallel scope.
+		// we should do clean work for source-scope to avoid receiver hung.
+		if parallelScope == nil {
+			pipeline.NewMerge(s.Instructions, s.Reg).Cleanup(s.Proc, true, err)
+		}
+	}()
+
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
+
+	switch {
+	// probability 1: it's a JOIN pipeline.
+	case s.IsJoin:
+		parallelScope, err = buildJoinParallelRun(s, c)
+
+	// probability 2: it's a LOAD pipeline.
+	case s.IsLoad:
+		parallelScope, err = buildLoadParallelRun(s, c)
+
+	// probability 3: it's a SCAN pipeline.
+	case s.DataSource != nil:
+		parallelScope, err = buildScanParallelRun(s, c)
+
+	// others.
+	default:
+		parallelScope, err = s, nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if parallelScope.Magic == Normal {
+		return parallelScope.Run(c)
+	}
+	return parallelScope.MergeRun(c)
+}
+
+// buildJoinParallelRun deal one case of scope.ParallelRun.
+// this function will create a pipeline to run a join in parallel.
+func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
+	mcpu := s.NodeInfo.Mcpu
+	if mcpu <= 1 { // no need to parallel
+		buildScope := c.newJoinBuildScope(s, nil)
+		s.PreScopes = append(s.PreScopes, buildScope)
+		if s.BuildIdx > 1 {
+			probeScope := c.newJoinProbeScope(s, nil)
+			s.PreScopes = append(s.PreScopes, probeScope)
+		}
+		return s, nil
+	}
+
+	isRight := s.isRight()
+
+	chp := s.PreScopes
+	for i := range chp {
+		chp[i].IsEnd = true
+	}
+
+	ss := make([]*Scope, mcpu)
+	for i := 0; i < mcpu; i++ {
+		ss[i] = newScope(Merge)
+		ss[i].NodeInfo = s.NodeInfo
+		ss[i].Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 2, c.anal.Nodes())
+		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *process.RegisterMessage, 10)
+	}
+	probeScope, buildScope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
+
+	ns, err := newParallelScope(c, s, ss)
+	if err != nil {
+		ReleaseScopes(ss)
+		return nil, err
+	}
+
+	if isRight {
+		channel := make(chan *bitmap.Bitmap, mcpu)
+		for i := range ns.PreScopes {
+			switch arg := ns.PreScopes[i].Instructions[0].Arg.(type) {
+			case *right.Argument:
+				arg.Channel = channel
+				arg.NumCPU = uint64(mcpu)
+				if i == 0 {
+					arg.IsMerger = true
+				}
+
+			case *rightsemi.Argument:
+				arg.Channel = channel
+				arg.NumCPU = uint64(mcpu)
+				if i == 0 {
+					arg.IsMerger = true
+				}
+
+			case *rightanti.Argument:
+				arg.Channel = channel
+				arg.NumCPU = uint64(mcpu)
+				if i == 0 {
+					arg.IsMerger = true
+				}
+			}
+		}
+	}
+	ns.PreScopes = append(ns.PreScopes, chp...)
+	ns.PreScopes = append(ns.PreScopes, buildScope)
+	ns.PreScopes = append(ns.PreScopes, probeScope)
+
+	return ns, nil
+}
+
+// buildLoadParallelRun deal one case of scope.ParallelRun.
+// this function will create a pipeline to load in parallel.
+func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
+	mcpu := s.NodeInfo.Mcpu
+	ss := make([]*Scope, mcpu)
+	for i := 0; i < mcpu; i++ {
+		ss[i] = newScope(Normal)
+		ss[i].NodeInfo = s.NodeInfo
+		ss[i].DataSource = &Source{
+			isConst: true,
+		}
+		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
+		if err := ss[i].initDataSource(c); err != nil {
+			return nil, err
+		}
+	}
+
+	ns, err := newParallelScope(c, s, ss)
+	if err != nil {
+		ReleaseScopes(ss)
+		return nil, err
+	}
+
+	return ns, nil
+}
+
+// buildScanParallelRun deal one case of scope.ParallelRun.
+// this function will create a pipeline which will get data from n scan-pipeline and output it as a while to the outside.
+// return true if this was just one scan but not mergeScan.
+func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
+	// unexpected case.
+	if s.IsRemote && len(s.DataSource.OrderBy) > 0 {
+		return nil, moerr.NewInternalError(c.ctx, "ordered scan cannot run in remote.")
+	}
+
+	// receive runtime filter and optimized the datasource.
+	if err := s.handleRuntimeFilter(c); err != nil {
+		return nil, err
+	}
+
+	maxProvidedCpuNumber := goruntime.GOMAXPROCS(0)
+
+	var scanUsedCpuNumber int
+	var readers []engine.Reader
+	var err error
+
+	switch {
+
+	// If this was a remote-run pipeline. Reader should be generated from Engine.
+	case s.IsRemote:
+		// this cannot use c.ctx directly, please refer to `default case`.
+		ctx := c.ctx
+		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+		}
+		if s.DataSource.AccountId != nil {
+			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
+		}
+
+		// determined how many cpus we should use.
+		blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
+		scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len())
+
+		readers, err = c.e.NewBlockReader(
+			ctx, scanUsedCpuNumber,
+			s.DataSource.Timestamp, s.DataSource.FilterExpr, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
+		if err != nil {
+			return nil, err
+		}
+
+	// Reader can be generated from local relation.
+	case s.NodeInfo.Rel != nil:
+		switch s.NodeInfo.Rel.GetEngineType() {
+		case engine.Disttae:
+			blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
+			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len())
+		case engine.Memory:
+			idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
+			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, idSlice.Len())
+		default:
+			scanUsedCpuNumber = 1
+		}
+		if len(s.DataSource.OrderBy) > 0 {
+			scanUsedCpuNumber = 1
+		}
+
+		readers, err = s.NodeInfo.Rel.NewReader(c.ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, s.NodeInfo.Data, len(s.DataSource.OrderBy) > 0)
+		if err != nil {
+			return nil, err
+		}
+
+	// Should get relation first to generate Reader.
+	// FIXME:: s.NodeInfo.Rel == nil, partition table? -- this is an old comment, I just do a copy here.
+	default:
+		// This cannot modify the c.ctx here, but I don't know why.
+		// Maybe there are some account related things stores in the context (using the context.WithValue),
+		// and modify action will change the account.
+		ctx := c.ctx
+
+		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+		}
+
+		var db engine.Database
+		var rel engine.Relation
+		// todo:
+		//  these following codes were very likely to `compile.go:compileTableScanDataSource `.
+		//  I kept the old codes here without any modify. I don't know if there is one `GetRelation(txn, scanNode, scheme, table)`
+		{
+			n := s.DataSource.node
+			txnOp := s.Proc.TxnOperator
+			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
+				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+					n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+
+					txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+					if n.ScanSnapshot.Tenant != nil {
+						ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
+					}
+				}
+			}
+
+			db, err = c.e.Database(ctx, s.DataSource.SchemaName, txnOp)
+			if err != nil {
+				return nil, err
+			}
+			rel, err = db.Relation(ctx, s.DataSource.RelationName, c.proc)
+			if err != nil {
+				var e error // avoid contamination of error messages
+				db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
+				if e != nil {
+					return nil, e
+				}
+				rel, e = db.Relation(ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName), c.proc)
+				if e != nil {
+					return nil, err
+				}
+			}
+		}
+
+		switch rel.GetEngineType() {
+		case engine.Disttae:
+			blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
+			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len())
+		case engine.Memory:
+			idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
+			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, idSlice.Len())
+		default:
+			scanUsedCpuNumber = 1
+		}
+		if len(s.DataSource.OrderBy) > 0 {
+			scanUsedCpuNumber = 1
+		}
+
+		if rel.GetEngineType() == engine.Memory || s.DataSource.PartitionRelationNames == nil {
+			mainRds, err1 := rel.NewReader(
+				ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, s.NodeInfo.Data, len(s.DataSource.OrderBy) > 0)
+			if err1 != nil {
+				return nil, err1
+			}
+			readers = append(readers, mainRds...)
+		} else {
+			// handle the partition table.
+			blkArray := objectio.BlockInfoSlice(s.NodeInfo.Data)
+			dirtyRanges := make(map[int]objectio.BlockInfoSlice)
+			cleanRanges := make(objectio.BlockInfoSlice, 0, blkArray.Len())
+			ranges := objectio.BlockInfoSlice(blkArray.Slice(1, blkArray.Len()))
+			for i := 0; i < ranges.Len(); i++ {
+				blkInfo := ranges.Get(i)
+				if !blkInfo.CanRemote {
+					if _, ok := dirtyRanges[blkInfo.PartitionNum]; !ok {
+						newRanges := make(objectio.BlockInfoSlice, 0, objectio.BlockInfoSize)
+						newRanges = append(newRanges, objectio.EmptyBlockInfoBytes...)
+						dirtyRanges[blkInfo.PartitionNum] = newRanges
+					}
+					dirtyRanges[blkInfo.PartitionNum] = append(dirtyRanges[blkInfo.PartitionNum], ranges.GetBytes(i)...)
+					continue
+				}
+				cleanRanges = append(cleanRanges, ranges.GetBytes(i)...)
+			}
+
+			if len(cleanRanges) > 0 {
+				// create readers for reading clean blocks from the main table.
+				mainRds, err1 := rel.NewReader(
+					ctx,
+					scanUsedCpuNumber, s.DataSource.FilterExpr, cleanRanges, len(s.DataSource.OrderBy) > 0)
+				if err1 != nil {
+					return nil, err1
+				}
+				readers = append(readers, mainRds...)
+			}
+			// create readers for reading dirty blocks from partition table.
+			for num, relName := range s.DataSource.PartitionRelationNames {
+				subRel, err1 := db.Relation(ctx, relName, c.proc)
+				if err1 != nil {
+					return nil, err1
+				}
+				memRds, err2 := subRel.NewReader(ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, dirtyRanges[num], len(s.DataSource.OrderBy) > 0)
+				if err2 != nil {
+					return nil, err2
+				}
+				readers = append(readers, memRds...)
+			}
+		}
+	}
+	// just for quick GC.
+	s.NodeInfo.Data = nil
+
+	// need some merge to make sure it is only scanUsedCpuNumber reader.
+	// partition table and read from memory will cause len(readers) > scanUsedCpuNumber.
+	if len(readers) != scanUsedCpuNumber {
+		newReaders := make([]engine.Reader, 0, scanUsedCpuNumber)
+		step := len(readers) / scanUsedCpuNumber
+		for i := 0; i < len(readers); i += step {
+			newReaders = append(newReaders, disttae.NewMergeReader(readers[i:i+step]))
+		}
+		readers = newReaders
+	}
+
+	// only one scan reader, it can just run without any merge.
+	if scanUsedCpuNumber == 1 {
+		s.Magic = Normal
+		s.DataSource.R = readers[0]
+		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
+		return s, nil
+	}
+
+	if len(s.DataSource.OrderBy) > 0 {
+		return nil, moerr.NewInternalError(c.ctx, "ordered scan must run in only one parallel.")
+	}
+
+	// return a pipeline which merge result from scanUsedCpuNumber scan.
+	readerScopes := make([]*Scope, scanUsedCpuNumber)
+	for i := 0; i < scanUsedCpuNumber; i++ {
+		readerScopes[i] = newScope(Normal)
+		readerScopes[i].NodeInfo = s.NodeInfo
+		readerScopes[i].DataSource = &Source{
+			R:            readers[i],
+			SchemaName:   s.DataSource.SchemaName,
+			RelationName: s.DataSource.RelationName,
+			Attributes:   s.DataSource.Attributes,
+			AccountId:    s.DataSource.AccountId,
+		}
+		readerScopes[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
+	}
+
+	mergeFromParallelScanScope, errNew := newParallelScope(c, s, readerScopes)
+	if errNew != nil {
+		ReleaseScopes(readerScopes)
+		return nil, err
+	}
+	mergeFromParallelScanScope.SetContextRecursively(s.Proc.Ctx)
+	return mergeFromParallelScanScope, nil
+}
+
+func DetermineRuntimeDOP(cpunum, blocks int) int {
 	if cpunum <= 0 || blocks <= 16 {
 		return 1
 	}
@@ -433,296 +803,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	return nil
 }
 
-// ParallelRun try to execute the scope in parallel way.
-func (s *Scope) ParallelRun(c *Compile, remote bool) error {
-	var rds []engine.Reader
-	var err error
-
-	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
-	if s.IsJoin {
-		return s.JoinRun(c)
-	}
-	if s.IsLoad {
-		return s.LoadRun(c)
-	}
-	if s.DataSource == nil {
-		return s.MergeRun(c)
-	}
-
-	err = s.handleRuntimeFilter(c)
-	if err != nil {
-		return err
-	}
-
-	numCpu := goruntime.GOMAXPROCS(0)
-	var mcpu int
-
-	switch {
-	case remote:
-		if len(s.DataSource.OrderBy) > 0 {
-			panic("ordered scan can't run on remote CN!")
-		}
-		ctx := c.ctx
-		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
-			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-
-		}
-		if s.DataSource.AccountId != nil {
-			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
-		}
-		blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
-		mcpu = DeterminRuntimeDOP(numCpu, blkSlice.Len())
-		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.FilterExpr,
-			s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
-		if err != nil {
-			return err
-		}
-		s.NodeInfo.Data = nil
-
-	case s.NodeInfo.Rel != nil:
-		switch s.NodeInfo.Rel.GetEngineType() {
-		case engine.Disttae:
-			blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
-			mcpu = DeterminRuntimeDOP(numCpu, blkSlice.Len())
-		case engine.Memory:
-			idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
-			mcpu = DeterminRuntimeDOP(numCpu, idSlice.Len())
-		default:
-			mcpu = 1
-		}
-		if len(s.DataSource.OrderBy) > 0 {
-			// ordered scan must run on only one parallel!
-			mcpu = 1
-		}
-		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.FilterExpr, s.NodeInfo.Data, len(s.DataSource.OrderBy) > 0); err != nil {
-			return err
-		}
-		s.NodeInfo.Data = nil
-
-	// FIXME:: s.NodeInfo.Rel == nil, partition table?
-	default:
-		var db engine.Database
-		var rel engine.Relation
-		n := s.DataSource.node
-
-		ctx := c.ctx
-		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
-			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-		}
-
-		txnOp := s.Proc.TxnOperator
-		if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
-			if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-				n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-				txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
-
-				if n.ScanSnapshot.Tenant != nil {
-					ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
-				}
-			}
-		}
-		db, err = c.e.Database(ctx, s.DataSource.SchemaName, txnOp)
-		if err != nil {
-			return err
-		}
-		rel, err = db.Relation(ctx, s.DataSource.RelationName, c.proc)
-		if err != nil {
-			var e error // avoid contamination of error messages
-			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
-			if e != nil {
-				return e
-			}
-			rel, e = db.Relation(c.ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName), c.proc)
-			if e != nil {
-				return err
-			}
-		}
-		switch rel.GetEngineType() {
-		case engine.Disttae:
-			blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
-			mcpu = DeterminRuntimeDOP(numCpu, blkSlice.Len())
-		case engine.Memory:
-			idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
-			mcpu = DeterminRuntimeDOP(numCpu, idSlice.Len())
-		default:
-			mcpu = 1
-		}
-		if len(s.DataSource.OrderBy) > 0 {
-			// ordered scan must run on only one parallel!
-			mcpu = 1
-		}
-		if rel.GetEngineType() == engine.Memory ||
-			s.DataSource.PartitionRelationNames == nil {
-			mainRds, err := rel.NewReader(
-				ctx,
-				mcpu,
-				s.DataSource.FilterExpr,
-				s.NodeInfo.Data,
-				len(s.DataSource.OrderBy) > 0)
-			if err != nil {
-				return err
-			}
-			rds = append(rds, mainRds...)
-		} else {
-			// handle partition table.
-			blkArray := objectio.BlockInfoSlice(s.NodeInfo.Data)
-			dirtyRanges := make(map[int]objectio.BlockInfoSlice, 0)
-			cleanRanges := make(objectio.BlockInfoSlice, 0, blkArray.Len())
-			ranges := objectio.BlockInfoSlice(blkArray.Slice(1, blkArray.Len()))
-			for i := 0; i < ranges.Len(); i++ {
-				blkInfo := ranges.Get(i)
-				if !blkInfo.CanRemote {
-					if _, ok := dirtyRanges[blkInfo.PartitionNum]; !ok {
-						newRanges := make(objectio.BlockInfoSlice, 0, objectio.BlockInfoSize)
-						newRanges = append(newRanges, objectio.EmptyBlockInfoBytes...)
-						dirtyRanges[blkInfo.PartitionNum] = newRanges
-					}
-					dirtyRanges[blkInfo.PartitionNum] = append(dirtyRanges[blkInfo.PartitionNum], ranges.GetBytes(i)...)
-					continue
-				}
-				cleanRanges = append(cleanRanges, ranges.GetBytes(i)...)
-			}
-
-			if len(cleanRanges) > 0 {
-				// create readers for reading clean blocks from main table.
-				mainRds, err := rel.NewReader(
-					ctx,
-					mcpu,
-					s.DataSource.FilterExpr,
-					cleanRanges,
-					len(s.DataSource.OrderBy) > 0)
-				if err != nil {
-					return err
-				}
-				rds = append(rds, mainRds...)
-
-			}
-			// create readers for reading dirty blocks from partition table.
-			for num, relName := range s.DataSource.PartitionRelationNames {
-				subrel, err := db.Relation(ctx, relName, c.proc)
-				if err != nil {
-					return err
-				}
-				memRds, err := subrel.NewReader(ctx, mcpu, s.DataSource.FilterExpr, dirtyRanges[num], len(s.DataSource.OrderBy) > 0)
-				if err != nil {
-					return err
-				}
-				rds = append(rds, memRds...)
-			}
-		}
-		s.NodeInfo.Data = nil
-	}
-
-	if len(rds) != mcpu {
-		newRds := make([]engine.Reader, 0, mcpu)
-		step := len(rds) / mcpu
-		for i := 0; i < len(rds); i += step {
-			m := disttae.NewMergeReader(rds[i : i+step])
-			newRds = append(newRds, m)
-		}
-		rds = newRds
-	}
-
-	if mcpu == 1 {
-		s.Magic = Normal
-		s.DataSource.R = rds[0] // rds's length is equal to mcpu so it is safe to do it
-		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
-		return s.Run(c)
-	}
-
-	if len(s.DataSource.OrderBy) > 0 {
-		panic("ordered scan must run on only one parallel!")
-	}
-	ss := make([]*Scope, mcpu)
-	for i := 0; i < mcpu; i++ {
-		ss[i] = newScope(Normal)
-		ss[i].NodeInfo = s.NodeInfo
-		ss[i].DataSource = &Source{
-			R:            rds[i],
-			SchemaName:   s.DataSource.SchemaName,
-			RelationName: s.DataSource.RelationName,
-			Attributes:   s.DataSource.Attributes,
-			AccountId:    s.DataSource.AccountId,
-		}
-		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
-	}
-	newScope, err := newParallelScope(c, s, ss)
-	if err != nil {
-		ReleaseScopes(ss)
-		return err
-	}
-	newScope.SetContextRecursively(s.Proc.Ctx)
-	return newScope.MergeRun(c)
-}
-
-func (s *Scope) JoinRun(c *Compile) error {
-	mcpu := s.NodeInfo.Mcpu
-	if mcpu <= 1 { // no need to parallel
-		buildScope := c.newJoinBuildScope(s, nil)
-		s.PreScopes = append(s.PreScopes, buildScope)
-		if s.BuildIdx > 1 {
-			probeScope := c.newJoinProbeScope(s, nil)
-			s.PreScopes = append(s.PreScopes, probeScope)
-		}
-		return s.MergeRun(c)
-	}
-
-	isRight := s.isRight()
-
-	chp := s.PreScopes
-	for i := range chp {
-		chp[i].IsEnd = true
-	}
-
-	ss := make([]*Scope, mcpu)
-	for i := 0; i < mcpu; i++ {
-		ss[i] = newScope(Merge)
-		ss[i].NodeInfo = s.NodeInfo
-		ss[i].Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 2, c.anal.Nodes())
-		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *process.RegisterMessage, 10)
-	}
-	probe_scope, build_scope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
-	var err error
-	s, err = newParallelScope(c, s, ss)
-	if err != nil {
-		ReleaseScopes(ss)
-		return err
-	}
-
-	if isRight {
-		channel := make(chan *bitmap.Bitmap, mcpu)
-		for i := range s.PreScopes {
-			switch arg := s.PreScopes[i].Instructions[0].Arg.(type) {
-			case *right.Argument:
-				arg.Channel = channel
-				arg.NumCPU = uint64(mcpu)
-				if i == 0 {
-					arg.IsMerger = true
-				}
-
-			case *rightsemi.Argument:
-				arg.Channel = channel
-				arg.NumCPU = uint64(mcpu)
-				if i == 0 {
-					arg.IsMerger = true
-				}
-
-			case *rightanti.Argument:
-				arg.Channel = channel
-				arg.NumCPU = uint64(mcpu)
-				if i == 0 {
-					arg.IsMerger = true
-				}
-			}
-		}
-	}
-	s.PreScopes = append(s.PreScopes, chp...)
-	s.PreScopes = append(s.PreScopes, build_scope)
-	s.PreScopes = append(s.PreScopes, probe_scope)
-
-	return s.MergeRun(c)
-}
-
 func (s *Scope) isShuffle() bool {
 	// the pipeline is merge->group->xxx
 	if s != nil && len(s.Instructions) > 1 && (s.Instructions[1].Op == vm.Group) {
@@ -734,30 +814,6 @@ func (s *Scope) isShuffle() bool {
 
 func (s *Scope) isRight() bool {
 	return s != nil && (s.Instructions[0].Op == vm.Right || s.Instructions[0].Op == vm.RightSemi || s.Instructions[0].Op == vm.RightAnti)
-}
-
-func (s *Scope) LoadRun(c *Compile) error {
-	mcpu := s.NodeInfo.Mcpu
-	ss := make([]*Scope, mcpu)
-	for i := 0; i < mcpu; i++ {
-		ss[i] = newScope(Normal)
-		ss[i].NodeInfo = s.NodeInfo
-		ss[i].DataSource = &Source{
-			isConst: true,
-		}
-		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
-		err := ss[i].initDataSource(c)
-		if err != nil {
-			return err
-		}
-	}
-	newScope, err := newParallelScope(c, s, ss)
-	if err != nil {
-		ReleaseScopes(ss)
-		return err
-	}
-
-	return newScope.MergeRun(c)
 }
 
 func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
