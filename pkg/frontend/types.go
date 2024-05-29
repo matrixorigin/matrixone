@@ -784,6 +784,7 @@ type Responser interface {
 	ResetStatistics()
 }
 
+// TODO:refine
 type MediaReader interface {
 	Request() (*Request, error)
 	Payload() ([]byte, error)
@@ -792,6 +793,24 @@ type MediaReader interface {
 type MediaWriter interface {
 	Write(*ExecCtx, *batch.Batch) error
 	Close()
+}
+
+// TODO: design property interface for connid,xxxName,peer,etc.
+type Property interface {
+	Get(string) any
+	Set(string, any)
+	GetStr(string) string
+	SetStr(string, string)
+	SetU32(string, uint32)
+	GetU32(string) uint32
+	SetU8(string, uint8)
+	GetU8(string) uint8
+	SetBool(string, bool)
+	GetBool(string) bool
+}
+
+// TODO: refine
+type MysqlReader interface {
 }
 
 type MysqlWriter interface {
@@ -808,8 +827,10 @@ type MysqlWriter interface {
 	WriteRow() error
 	WriteTextRow() error
 	WriteBinaryRow() error
+	WriteResultSetRow(mrs *MysqlResultSet, count uint64) error
 	WriteResponse(context.Context, *Response) error
 	WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error
+	WriteLocalInfileRequest(filepath string) error
 
 	ConnectionID() uint32
 	SetDatabaseName(s string)
@@ -817,18 +838,15 @@ type MysqlWriter interface {
 	GetUserName() string
 	SetUserName(s string)
 	Peer() string
-	CalculateOutTrafficBytes(b bool) (int64, int64)
-	SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, count uint64) error
-	sendLocalInfileRequest(filepath string) error
-	Read(options goetty.ReadOptions) (interface{}, error)
 	SetSequenceID(i uint8)
 	GetSequenceId() uint8
-	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
-	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 	GetCapability() uint32
 	SetCapability(c uint32)
+	CalculateOutTrafficBytes(b bool) (int64, int64)
+	Read(options goetty.ReadOptions) (interface{}, error)
+	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 	ResetStatistics()
-	Quit()
 	UpdateCtx(ctx context.Context)
 	IsEstablished() bool
 	IsTlsEstablished() bool
@@ -836,7 +854,6 @@ type MysqlWriter interface {
 	SetTlsEstablished()
 	Authenticate(ctx context.Context) error
 	SetEstablished()
-	GetRequest(payload []byte) *Request
 }
 
 // MysqlPayloadWriter make final payload for the packet
@@ -858,7 +875,4 @@ type CsvWriter interface {
 
 type MemWriter interface {
 	MediaWriter
-}
-
-type MemIOSession struct {
 }

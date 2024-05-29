@@ -2189,7 +2189,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	if err != nil {
 		return
 	}
-	err = resper.sendLocalInfileRequest(param.Filepath)
+	err = resper.WriteLocalInfileRequest(param.Filepath)
 	if err != nil {
 		return
 	}

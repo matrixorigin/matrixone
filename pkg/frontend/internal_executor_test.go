@@ -67,11 +67,10 @@ func TestIeProto(t *testing.T) {
 	p := executor.proto
 	assert.True(t, p.IsEstablished())
 	p.SetEstablished()
-	p.Quit()
+	p.Close()
 	p.ResetStatistics()
 	_ = p.ConnectionID()
 	ctx := context.TODO()
-	assert.Panics(t, func() { p.GetRequest([]byte{1}) })
 	assert.Nil(t, p.WriteColumnDef(ctx, nil, 1))
 	assert.Nil(t, p.WriteLengthEncodedNumber(1))
 	assert.Nil(t, p.WriteEOFIF(0, 1))
@@ -99,7 +98,7 @@ func TestIeProto(t *testing.T) {
 	assert.Equal(t, 42, v.(int))
 
 	p.ResetStatistics()
-	assert.NoError(t, p.SendResultSetTextBatchRowSpeedup(mockResultSet(), 1))
+	assert.NoError(t, p.WriteResultSetRow(mockResultSet(), 1))
 	r := p.swapOutResult()
 	v, e := r.Value(ctx, 0, 0)
 	assert.NoError(t, e)

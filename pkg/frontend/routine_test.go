@@ -116,7 +116,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 					res.resultX.Store(contextCancel)
 				}
 			}
-			err = proto.SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount())
+			err = proto.WriteResultSetRow(mrs, mrs.GetRowCount())
 			if err != nil {
 				logutil.Errorf("flush error %v", err)
 				return nil, err

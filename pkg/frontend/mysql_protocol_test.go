@@ -2398,7 +2398,7 @@ func Test_resultset(t *testing.T) {
 
 		res := make9ColumnsResultSet()
 
-		err = proto.SendResultSetTextBatchRowSpeedup(res, uint64(len(res.Data)))
+		err = proto.WriteResultSetRow(res, uint64(len(res.Data)))
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -2470,7 +2470,7 @@ func Test_resultset(t *testing.T) {
 
 		res := make9ColumnsResultSet()
 
-		err = proto.SendResultSetTextBatchRowSpeedup(res, 0)
+		err = proto.WriteResultSetRow(res, 0)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -2843,7 +2843,7 @@ func TestMysqlProtocolImpl_Close(t *testing.T) {
 	}
 
 	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-	proto.Quit()
+	proto.Close()
 	assert.Nil(t, proto.GetSalt())
 	assert.Nil(t, proto.strconvBuffer)
 	assert.Nil(t, proto.lenEncBuffer)
@@ -2860,11 +2860,6 @@ type testMysqlWriter struct {
 }
 
 func (fp *testMysqlWriter) Write(ctx *ExecCtx, batch *batch.Batch) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (fp *testMysqlWriter) Close() {
 	//TODO implement me
 	panic("implement me")
 }
@@ -2986,7 +2981,7 @@ func (fp *testMysqlWriter) ParseExecuteData(ctx context.Context, proc *process.P
 	return nil
 }
 
-func (fp *testMysqlWriter) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, cnt uint64) error {
+func (fp *testMysqlWriter) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) error {
 	return nil
 }
 
@@ -2999,10 +2994,6 @@ func (fp *testMysqlWriter) IsEstablished() bool {
 }
 
 func (fp *testMysqlWriter) SetEstablished() {}
-
-func (fp *testMysqlWriter) GetRequest(payload []byte) *Request {
-	return nil
-}
 
 func (fp *testMysqlWriter) ConnectionID() uint32 {
 	return fakeConnectionID
@@ -3028,9 +3019,9 @@ func (fp *testMysqlWriter) SetUserName(s string) {
 	fp.username = s
 }
 
-func (fp *testMysqlWriter) Quit() {}
+func (fp *testMysqlWriter) Close() {}
 
-func (fp *testMysqlWriter) sendLocalInfileRequest(filename string) error {
+func (fp *testMysqlWriter) WriteLocalInfileRequest(filename string) error {
 	return nil
 }
 

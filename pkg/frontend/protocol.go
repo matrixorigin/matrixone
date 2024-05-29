@@ -238,15 +238,6 @@ func (mp *MysqlProtocolImpl) Peer() string {
 	return tcp.RemoteAddress()
 }
 
-func (mp *MysqlProtocolImpl) GetRequest(payload []byte) *Request {
-	req := &Request{
-		cmd:  CommandType(payload[0]),
-		data: payload[1:],
-	}
-
-	return req
-}
-
 func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) error {
 	//move here to prohibit potential recursive lock
 	var attachAbort string
@@ -300,7 +291,7 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 		return mp.sendResultSet(ctx, mer.Mrs(), resp.cmd, mer.Warnings(), uint16(resp.status))
 	case LocalInfileRequest:
 		s, _ := resp.data.(string)
-		return mp.sendLocalInfileRequest(s)
+		return mp.WriteLocalInfileRequest(s)
 	default:
 		return moerr.NewInternalError(ctx, "unsupported response:%d ", resp.category)
 	}

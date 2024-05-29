@@ -1115,3 +1115,12 @@ func (fprints *footPrints) addExit(idx int) {
 		fprints.prints[idx][1]++
 	}
 }
+
+func GetRequest(payload []byte) *Request {
+	req := &Request{
+		cmd:  CommandType(payload[0]),
+		data: payload[1:],
+	}
+
+	return req
+}

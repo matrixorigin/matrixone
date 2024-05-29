@@ -335,7 +335,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 		//close the network connection
 		proto := rt.getProtocol()
 		if proto != nil {
-			proto.Quit()
+			proto.Close()
 		}
 	}
 
@@ -383,7 +383,7 @@ func (rt *Routine) killConnection(killMyself bool) {
 			//If it is not in processing the request, just close the network
 			proto := rt.protocol
 			if proto != nil {
-				proto.Quit()
+				proto.Close()
 			}
 		}
 
@@ -427,7 +427,7 @@ func (rt *Routine) cleanup() {
 		rt.releaseRoutineCtx()
 
 		//step D: clean protocol
-		rt.protocol.Quit()
+		rt.protocol.Close()
 		rt.protocol = nil
 
 		//step E: release the resources related to the session

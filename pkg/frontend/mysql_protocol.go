@@ -260,6 +260,7 @@ func (rh *rowHandler) resetStartOffset() {
 type MysqlProtocolImpl struct {
 	m sync.Mutex
 
+	//TODO: make it global
 	io IOPackage
 
 	tcpConn goetty.IOSession
@@ -366,7 +367,7 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 			copy(row2, mrs.Data[0])
 			ses.AppendData(row2)
 		} else {
-			if err = mp.SendResultSetTextBatchRowSpeedup(&mrs, 1); err != nil {
+			if err = mp.WriteResultSetRow(&mrs, 1); err != nil {
 				execCtx.ses.Error(execCtx.reqCtx,
 					"Flush error",
 					zap.Error(err))
@@ -375,9 +376,6 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 		}
 	}
 	return nil
-}
-
-func (mp *MysqlProtocolImpl) Close() {
 }
 
 func (mp *MysqlProtocolImpl) WriteHandshake() error {
@@ -529,7 +527,7 @@ func (mp *MysqlProtocolImpl) GetConnectAttrs() map[string]string {
 	return mp.connectAttrs
 }
 
-func (mp *MysqlProtocolImpl) Quit() {
+func (mp *MysqlProtocolImpl) Close() {
 	mp.m.Lock()
 	defer mp.m.Unlock()
 	mp.safeQuit()
@@ -1848,7 +1846,7 @@ func (mp *MysqlProtocolImpl) makeLocalInfileRequestPayload(filename string) []by
 	return data[:pos]
 }
 
-func (mp *MysqlProtocolImpl) sendLocalInfileRequest(filename string) error {
+func (mp *MysqlProtocolImpl) WriteLocalInfileRequest(filename string) error {
 	req := mp.makeLocalInfileRequestPayload(filename)
 	return mp.writePackets(req, true)
 }
@@ -2423,7 +2421,7 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt 
 	return err
 }
 
-func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, cnt uint64) error {
+func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) error {
 	if cnt == 0 {
 		return nil
 	}

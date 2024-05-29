@@ -249,10 +249,6 @@ func (ip *internalProtocol) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 	return fillResultSet(execCtx.reqCtx, bat, execCtx.ses, execCtx.ses.GetMysqlResultSet())
 }
 
-func (ip *internalProtocol) Close() {
-
-}
-
 func (ip *internalProtocol) WriteHandshake() error {
 	return nil
 }
@@ -377,10 +373,6 @@ func (ip *internalProtocol) ParseExecuteData(ctx context.Context, proc *process.
 
 func (ip *internalProtocol) SetEstablished() {}
 
-func (ip *internalProtocol) GetRequest(payload []byte) *Request {
-	panic("not impl")
-}
-
 // ConnectionID the identity of the client
 func (ip *internalProtocol) ConnectionID() uint32 {
 	return 74751101
@@ -407,7 +399,7 @@ func (ip *internalProtocol) SetUserName(username string) {
 	ip.username = username
 }
 
-func (ip *internalProtocol) Quit() {}
+func (ip *internalProtocol) Close() {}
 
 func (ip *internalProtocol) sendRows(mrs *MysqlResultSet, cnt uint64) error {
 	if ip.stashResult {
@@ -448,7 +440,7 @@ func (ip *internalProtocol) swapOutResult() *internalExecResult {
 	return ret
 }
 
-func (ip *internalProtocol) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, cnt uint64) error {
+func (ip *internalProtocol) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) error {
 	ip.Lock()
 	defer ip.Unlock()
 	return ip.sendRows(mrs, cnt)
@@ -463,6 +455,6 @@ func (ip *internalProtocol) ResetStatistics() {
 
 func (ip *internalProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
-func (ip *internalProtocol) sendLocalInfileRequest(filename string) error {
+func (ip *internalProtocol) WriteLocalInfileRequest(filename string) error {
 	return nil
 }
