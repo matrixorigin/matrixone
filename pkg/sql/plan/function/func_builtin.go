@@ -524,7 +524,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 		v2, null2 := p2.GetValue(i)
 		// fixme: should we need to support null date?
 		if null1 || null2 {
-			rs.Append(uint8(1), true)
+			rs.AppendBytes(nil, true)
 			continue
 		}
 
