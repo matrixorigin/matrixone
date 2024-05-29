@@ -74,9 +74,9 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 			MaxParallel: ins[i].MaxParallel,
 		}
 		switch ins[i].Op {
-		case HashBuild, ShuffleBuild, IndexBuild, Restrict, MergeGroup, MergeOrder:
+		case HashBuild, ShuffleBuild, IndexBuild, Filter, MergeGroup, MergeOrder:
 			isMinor := true
-			if ins[i].Op == Restrict {
+			if ins[i].Op == Filter {
 				if ins[0].Op != TableScan && ins[0].Op != External {
 					isMinor = false // restrict operator is minor only for scan
 				}

@@ -313,9 +313,18 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}()
 
 	// drop foreign key related tables first
-	fkTableMap := make(map[string]*tableInfo)
-	var sortedFkTbls []string
-	if sortedFkTbls, err = deleteFkRelatedTables(ctx, bh, snapshotName, dbName, tblName, toAccountId, fkTableMap); err != nil {
+	if err = deleteCurFkTables(ctx, bh, dbName, tblName, toAccountId); err != nil {
+		return
+	}
+
+	// get topo sorted tables with foreign key
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName)
+	if err != nil {
+		return
+	}
+	// get foreign key table infos
+	fkTableMap, err := getTableInfoMap(ctx, bh, snapshotName, dbName, tblName, sortedFkTbls)
+	if err != nil {
 		return
 	}
 
@@ -353,78 +362,28 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	return
 }
 
-func deleteFkRelatedTables(
-	ctx context.Context,
-	bh BackgroundExec,
-	snapshotName string,
-	dbName string,
-	tblName string,
-	toAccountId uint32,
-	fkTableMap map[string]*tableInfo) (sortedTbls []string, err error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to drop fk related tables", snapshotName))
+func deleteCurFkTables(ctx context.Context, bh BackgroundExec, dbName string, tblName string, toAccountId uint32) (err error) {
+	getLogger().Info("start to drop cur fk tables")
 
-	// get tableInfo
-	updateFkTableMap := func(key string) (err error) {
-		if _, ok := fkTableMap[key]; ok {
-			return
-		}
+	ctx = defines.AttachAccountId(ctx, toAccountId)
 
-		d, t := splitKey(key)
-		if needSkipDb(d) || needSkipTable(d, t) {
-			return
-		}
-		if dbName != "" && dbName != d {
-			return
-		}
-		if tblName != "" && tblName != t {
-			return
-		}
-
-		fkTableMap[key], err = getTableInfo(ctx, bh, snapshotName, d, t)
-		return
-	}
-
-	// collect foreign key info
-	fkDeps, err := getFkDeps(ctx, bh, snapshotName, dbName, tblName)
+	// get topo sorted tables with foreign key
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, "", dbName, tblName)
 	if err != nil {
 		return
 	}
-	// get all tableInfos
-	for key, deps := range fkDeps {
-		if err = updateFkTableMap(key); err != nil {
-			return
-		}
-
-		for _, depKey := range deps {
-			if err = updateFkTableMap(depKey); err != nil {
-				return
-			}
-		}
-	}
-
-	// topsort
-	g := topsort{next: make(map[string][]string)}
-	for key := range fkTableMap {
-		g.addVertex(key)
-		for _, depTbl := range fkDeps[key] {
-			// exclude self dep
-			if key != depTbl {
-				g.addEdge(depTbl, key)
-			}
-		}
-	}
-
-	if sortedTbls, err = g.sort(); err != nil {
+	// collect table infos which need to be dropped in current state; snapshotName must set to empty
+	curFkTableMap, err := getTableInfoMap(ctx, bh, "", dbName, tblName, sortedFkTbls)
+	if err != nil {
 		return
 	}
 
 	// drop tables as anti-topo order
-	toCtx := defines.AttachAccountId(ctx, toAccountId)
-	for i := len(sortedTbls) - 1; i >= 0; i-- {
-		key := sortedTbls[i]
-		if tblInfo := fkTableMap[key]; tblInfo != nil {
-			getLogger().Info(fmt.Sprintf("[%s] start to drop table: %v", snapshotName, tblInfo.tblName))
-			if err = bh.Exec(toCtx, fmt.Sprintf("drop table if exists %s.%s", tblInfo.dbName, tblInfo.tblName)); err != nil {
+	for i := len(sortedFkTbls) - 1; i >= 0; i-- {
+		key := sortedFkTbls[i]
+		if tblInfo := curFkTableMap[key]; tblInfo != nil {
+			getLogger().Info(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
+			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s.%s", tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -577,14 +536,14 @@ func restoreTablesWithFk(
 	sortedFkTbls []string,
 	fkTableMap map[string]*tableInfo,
 	toAccountId uint32) (err error) {
+	getLogger().Info(fmt.Sprintf("[%s] start to drop fk related tables", snapshotName))
 
-	// create tables
+	// recreate tables as topo order
 	for _, key := range sortedFkTbls {
 		// if tblInfo is nil, means that table is not in this restoration task, ignore
-		// e.g. t1.pk <- t2.fk, we only want to restore t2, but fkTableMap[t1.key] is nil, ignore t1
+		// e.g. t1.pk <- t2.fk, we only want to restore t2, fkTableMap[t1.key] is nil, ignore t1
 		if tblInfo := fkTableMap[key]; tblInfo != nil {
 			getLogger().Info(fmt.Sprintf("[%s] start to restore table with fk: %v", snapshotName, tblInfo.tblName))
-
 			if err = recreateTable(ctx, bh, snapshotName, tblInfo, toAccountId); err != nil {
 				return
 			}
@@ -919,11 +878,14 @@ func showDatabases(ctx context.Context, bh BackgroundExec, snapshotName string) 
 }
 
 func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) ([]*tableInfo, error) {
-	sql := fmt.Sprintf("show full tables from `%s` {snapshot = '%s'}", dbName, snapshotName)
+	sql := fmt.Sprintf("show full tables from `%s`", dbName)
 	if len(tblName) > 0 {
-		sql = fmt.Sprintf("show full tables from `%s` like '%s' {snapshot = '%s'}", dbName, tblName, snapshotName)
+		sql += fmt.Sprintf(" like '%s'", tblName)
 	}
-
+	if len(snapshotName) > 0 {
+		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
+	}
+	getLogger().Info(fmt.Sprintf("[%s] get table %v info sql: %s", snapshotName, tblName, sql))
 	// cols: table name, table type
 	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
 	if err != nil {
@@ -942,15 +904,18 @@ func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string,
 }
 
 func getTableInfos(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) ([]*tableInfo, error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to get table info: %v", snapshotName, dbName))
+	getLogger().Info(fmt.Sprintf("[%s] start to get table info: %v", snapshotName, tblName))
 	tableInfos, err := showFullTables(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, tblInfo := range tableInfos {
-		if tblInfo.createSql, err = getCreateTableSql(ctx, bh, snapshotName, dbName, tblInfo.tblName); err != nil {
-			return nil, err
+	// only recreate snapshoted table need create sql
+	if snapshotName != "" {
+		for _, tblInfo := range tableInfos {
+			if tblInfo.createSql, err = getCreateTableSql(ctx, bh, snapshotName, dbName, tblInfo.tblName); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return tableInfos, nil
@@ -962,14 +927,19 @@ func getTableInfo(ctx context.Context, bh BackgroundExec, snapshotName string, d
 		return nil, err
 	}
 
-	if len(tableInfos) != 1 {
-		return nil, moerr.NewInternalError(ctx, "find %v tableInfos by name %s at snapshot %s, expect only 1", len(tableInfos), tblName, snapshotName)
+	// if table doesn't exist, return nil
+	if len(tableInfos) == 0 {
+		return nil, nil
 	}
 	return tableInfos[0], nil
 }
 
 func getCreateTableSql(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (string, error) {
-	sql := fmt.Sprintf("show create table `%s`.`%s` {snapshot = '%s'}", dbName, tblName, snapshotName)
+	sql := fmt.Sprintf("show create table `%s`.`%s`", dbName, tblName)
+	if len(snapshotName) > 0 {
+		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
+	}
+
 	// cols: table_name, create_sql
 	colsList, err := getStringColsList(ctx, bh, sql, 1)
 	if err != nil {
@@ -1010,11 +980,14 @@ func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) (u
 }
 
 func getFkDeps(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (ans map[string][]string, err error) {
-	sql := fmt.Sprintf("select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys {snapshot = '%s'}", snapshotName)
+	sql := "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+	if len(snapshotName) > 0 {
+		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
+	}
 	if len(dbName) > 0 {
-		sql = fmt.Sprintf("%s where db_name = '%s'", sql, dbName)
+		sql += fmt.Sprintf(" where db_name = '%s'", dbName)
 		if len(tblName) > 0 {
-			sql = fmt.Sprintf("%s and table_name = '%s'", sql, tblName)
+			sql += fmt.Sprintf(" and table_name = '%s'", tblName)
 		}
 	}
 
@@ -1051,5 +1024,58 @@ func getFkDeps(ctx context.Context, bh BackgroundExec, snapshotName string, dbNa
 			ans[u] = append(ans[u], v)
 		}
 	}
+	return
+}
+
+func getTableInfoMap(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshotName string,
+	dbName string,
+	tblName string,
+	tblKeys []string) (tblInfoMap map[string]*tableInfo, err error) {
+	tblInfoMap = make(map[string]*tableInfo)
+	for _, key := range tblKeys {
+		if _, ok := tblInfoMap[key]; ok {
+			return
+		}
+
+		// filter by dbName and tblName
+		d, t := splitKey(key)
+		if needSkipDb(d) || needSkipTable(d, t) {
+			return
+		}
+		if dbName != "" && dbName != d {
+			return
+		}
+		if tblName != "" && tblName != t {
+			return
+		}
+
+		if tblInfoMap[key], err = getTableInfo(ctx, bh, snapshotName, d, t); err != nil {
+			return
+		}
+	}
+	return
+}
+
+func fkTablesTopoSort(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (sortedTbls []string, err error) {
+	// get foreign key deps from mo_catalog.mo_foreign_keys
+	fkDeps, err := getFkDeps(ctx, bh, snapshotName, dbName, tblName)
+	if err != nil {
+		return
+	}
+
+	g := topsort{next: make(map[string][]string)}
+	for key, deps := range fkDeps {
+		g.addVertex(key)
+		for _, depTbl := range deps {
+			// exclude self dep
+			if key != depTbl {
+				g.addEdge(depTbl, key)
+			}
+		}
+	}
+	sortedTbls, err = g.sort()
 	return
 }

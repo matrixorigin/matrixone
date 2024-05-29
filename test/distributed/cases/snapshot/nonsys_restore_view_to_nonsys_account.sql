@@ -367,11 +367,9 @@ drop database test01;
 select * from test01.EmployeeSalaryRanking;
 select * from test01.EmployeeSalaryRanking{snapshot = 'sp06'};
 
--- @bvt:issue#16297
 restore account acc01 from snapshot sp06;
 select * from test01.EmployeeSalaryRanking{snapshot = 'sp06'};
 select * from test01.EmployeeSalaryRanking;
--- @bvt:issue
 drop snapshot sp06;
 drop database test01;
 
@@ -503,7 +501,6 @@ create snapshot sp10 for account acc01;
 
 drop database test02;
 
--- @bvt:issue#16306
 restore account acc01 from snapshot sp10;
 drop view if exists employees_view;
 drop view if exists it_employees_view;
@@ -512,7 +509,6 @@ drop view if exists employees_by_salary_view;
 drop view if exists avg_salary_per_department_view;
 drop table employees;
 drop database test02;
--- @bvt:issue
 drop snapshot sp10;
 
 
@@ -591,21 +587,19 @@ select * from test05.employee_with_department_view;
 select * from test04.employee_view {snapshot = 'sp100'};
 select * from test03.department_view {snapshot = 'sp100'};
 select * from test05.employee_with_department_view {snapshot = 'sp100'};
--- @bvt:issue#16297
 restore account acc01 from snapshot sp100;
 select * from test04.employee_view;
 select * from test03.department_view;
 select * from test05.employee_with_department_view;
 
-drop table employees;
-drop table departments;
-drop view employee_view;
-drop view department_view;
-drop view employee_with_department_view;
-drop database test03;
+drop table test04.employees;
+drop table test03.departments;
+drop view test04.employee_view;
+drop view test03.department_view;
+drop view test05.employee_with_department_view;
 drop database test04;
+drop database test03;
 drop database test05;
--- @bvt:issue
 drop snapshot sp100;
 drop snapshot sp101;
 -- @session
