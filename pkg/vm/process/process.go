@@ -16,13 +16,13 @@ package process
 
 import (
 	"context"
+	"encoding/hex"
+	"fmt"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -32,10 +32,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 const DefaultBatchSize = 8192
@@ -72,6 +79,7 @@ func New(
 		QueryClient:    queryClient,
 		Hakeeper:       hakeeper,
 		UdfService:     udfService,
+		logger:         util.GetLogger(), // TODO: set by input
 	}
 }
 
@@ -110,6 +118,8 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 
 	proc.prepareParams = p.prepareParams
 	proc.resolveVariableFunc = p.resolveVariableFunc
+
+	proc.logger = p.logger
 
 	// reg and cancel
 	proc.Ctx = newctx
@@ -396,4 +406,82 @@ func (vp *vectorPool) getVector(typ types.Type) *vector.Vector {
 		return vec
 	}
 	return nil
+}
+
+// log do logging.
+// just for Info/Error/Warn/Debug/Fatal
+func (proc *Process) log(ctx context.Context, level zapcore.Level, msg string, fields ...zap.Field) {
+	if proc.SessionInfo.LogLevel.Enabled(level) {
+		fields = appendSessionField(fields, proc)
+		fields = appendTraceField(fields, ctx)
+		proc.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
+	}
+}
+
+func (proc *Process) logf(ctx context.Context, level zapcore.Level, msg string, args ...any) {
+	if proc.SessionInfo.LogLevel.Enabled(level) {
+		fields := make([]zap.Field, 0, 5)
+		fields = appendSessionField(fields, proc)
+		fields = appendTraceField(fields, ctx)
+		proc.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
+	}
+}
+
+func (proc *Process) Info(ctx context.Context, msg string, fields ...zap.Field) {
+	proc.log(ctx, zap.InfoLevel, msg, fields...)
+}
+
+func (proc *Process) Error(ctx context.Context, msg string, fields ...zap.Field) {
+	proc.log(ctx, zap.ErrorLevel, msg, fields...)
+}
+
+func (proc *Process) Warn(ctx context.Context, msg string, fields ...zap.Field) {
+	proc.log(ctx, zap.WarnLevel, msg, fields...)
+}
+
+func (proc *Process) Fatal(ctx context.Context, msg string, fields ...zap.Field) {
+	proc.log(ctx, zap.FatalLevel, msg, fields...)
+}
+
+func (proc *Process) Debug(ctx context.Context, msg string, fields ...zap.Field) {
+	proc.log(ctx, zap.DebugLevel, msg, fields...)
+}
+
+func (proc *Process) Infof(ctx context.Context, msg string, args ...any) {
+	proc.logf(ctx, zap.InfoLevel, msg, args...)
+}
+
+func (proc *Process) Errorf(ctx context.Context, msg string, args ...any) {
+	proc.logf(ctx, zap.ErrorLevel, msg, args...)
+}
+
+func (proc *Process) Warnf(ctx context.Context, msg string, args ...any) {
+	proc.logf(ctx, zap.WarnLevel, msg, args...)
+}
+
+func (proc *Process) Fatalf(ctx context.Context, msg string, args ...any) {
+	proc.logf(ctx, zap.FatalLevel, msg, args...)
+}
+
+func (proc *Process) Debugf(ctx context.Context, msg string, args ...any) {
+	proc.logf(ctx, zap.DebugLevel, msg, args...)
+}
+
+// appendSessionField append session id, transaction id and statement id to the fields
+func appendSessionField(fields []zap.Field, proc *Process) []zap.Field {
+	if proc != nil {
+		fields = append(fields, logutil.SessionIdField(uuid.UUID(proc.SessionInfo.SessionId).String()))
+		if p := proc.StmtProfile; p != nil {
+			fields = append(fields, logutil.StatementIdField(uuid.UUID(p.stmtId).String()))
+			fields = append(fields, logutil.TxnIdField(hex.EncodeToString(p.txnId[:])))
+		}
+	}
+	return fields
+}
+
+func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
+	if sc := trace.SpanFromContext(ctx).SpanContext(); !sc.IsEmpty() {
+		fields = append(fields, trace.ContextField(ctx))
+	}
+	return fields
 }
