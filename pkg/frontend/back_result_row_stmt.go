@@ -41,9 +41,8 @@ func executeResultRowStmtInBack(backSes *backSession,
 		mysqlc := c.(Column)
 		mrs.AddColumn(mysqlc)
 	}
-	if c, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-		backSes.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
-	}
+
+	backSes.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan())}
 
 	fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
 	setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
