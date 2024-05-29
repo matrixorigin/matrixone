@@ -1707,7 +1707,7 @@ func checkLockTableOrRows(isMulti bool, tableDef *TableDef, query *Query) (bool,
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_TABLE_SCAN {
 			if lockRows != nil {
-				return true, nil //lock table if we get more than one table scan
+				return false, nil //unsupport multi table scan
 			}
 			for _, expr := range node.FilterList {
 				if e, ok := expr.Expr.(*plan.Expr_F); ok {

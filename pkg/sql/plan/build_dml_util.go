@@ -3558,7 +3558,7 @@ func makePreUpdateDeletePlan(
 		RefreshTsIdxInBat:  -1,
 		LockTable:          delCtx.lockTable,
 		LockRows:           delCtx.lockRows,
-		LockTableAtTheEnd:  true,
+		LockTableAtTheEnd:  getLockTableAtTheEnd(delCtx.tableDef),
 	}
 	if delCtx.tableDef.Partition != nil {
 		lockTarget.IsPartitionTable = true
@@ -3649,7 +3649,7 @@ func makePreUpdateDeletePlan(
 			RefreshTsIdxInBat:  -1, //unsupport now
 			LockTable:          delCtx.lockTable,
 			LockRows:           delCtx.lockRows,
-			LockTableAtTheEnd:  true,
+			LockTableAtTheEnd:  getLockTableAtTheEnd(delCtx.tableDef),
 		}
 		if delCtx.tableDef.Partition != nil {
 			lockTarget.IsPartitionTable = true
@@ -3741,7 +3741,7 @@ func appendLockNode(
 		RefreshTsIdxInBat:  -1, //unsupport now
 		LockTable:          lockTable,
 		Block:              block,
-		LockTableAtTheEnd:  !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix),
+		LockTableAtTheEnd:  getLockTableAtTheEnd(tableDef),
 	}
 
 	if !lockTable && tableDef.Partition != nil {
@@ -4203,4 +4203,8 @@ func IsForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
 	} else {
 		return false, moerr.NewInternalError(ctx.GetContext(), "invalid  %v ", value)
 	}
+}
+
+func getLockTableAtTheEnd(tableDef *TableDef) bool {
+	return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
 }
