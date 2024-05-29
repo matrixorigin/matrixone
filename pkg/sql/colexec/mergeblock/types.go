@@ -14,6 +14,7 @@
 package mergeblock
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -159,24 +160,49 @@ func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 	}
 }
 
-func splitObjectStats(arg *Argument, proc *process.Process,
-	bat *batch.Batch, blkVec *vector.Vector, tblIdx []int16,
-) error {
-	// bat comes from old CN, no object stats vec in it.
+func splitObjectStats(arg *Argument, proc *process.Process, bat *batch.Batch) error {
+	var (
+		err         error
+		fs          fileservice.FileService
+		needLoad    bool
+		statsIdx    int
+		objStats    objectio.ObjectStats
+		blkVec      *vector.Vector
+		tblIdx      []int16
+		statsVec    *vector.Vector
+		batLen      = len(bat.Attrs)
+		objDataMeta objectio.ObjectDataMeta
+	)
+
+	tblIdx = vector.MustFixedCol[int16](bat.GetVector(0))
+
+	// bat comes from old CN, may has not object stats vec in it.
 	// to ensure all bats the TN received contain the object stats column, we should
 	// construct the object stats from block info here.
-	needLoad := bat.Attrs[len(bat.Attrs)-1] != catalog.ObjectMeta_ObjectStats
-
-	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
-	if err != nil {
-		logutil.Error("get fs failed when split object stats. ", zap.Error(err))
-		return err
+	//
+	// bat comes from different version:
+	// V1		[table index | blk info]
+	// V2		[table index | blk info | object stats ]
+	// V3		[table index | object stats]
+	// only V1 need to construct the object stats from block info
+	//
+	if bat.Attrs[batLen-1] == catalog.ObjectMeta_ObjectStats {
+		// V2, V3
+		statsVec = bat.GetVector(int32(batLen - 1))
+	} else if bat.Attrs[batLen-1] == catalog.BlockMeta_MetaLoc {
+		// V1
+		needLoad = true
+		blkVec = bat.GetVector(int32(batLen - 1))
+		objDataMeta = objectio.BuildObjectMeta(uint16(blkVec.Length()))
+		fs, err = fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+		if err != nil {
+			logutil.Error("get fs failed when split object stats. ", zap.Error(err))
+			return err
+		}
+	} else {
+		panic(fmt.Sprintf("splitObjectStats got wrong bat: [attrs=%s, rows=%d, cnt=%d]\n",
+			bat.Attrs, bat.RowCount(), bat.Cnt))
 	}
-
-	objDataMeta := objectio.BuildObjectMeta(uint16(blkVec.Length()))
-	var objStats objectio.ObjectStats
-	statsVec := bat.Vecs[1]
-	statsIdx := 0
 
 	for idx := 0; idx < len(tblIdx); idx++ {
 		if tblIdx[idx] < 0 {
@@ -185,15 +211,15 @@ func splitObjectStats(arg *Argument, proc *process.Process,
 			continue
 		}
 
-		blkInfo := objectio.DecodeBlockInfo(blkVec.GetBytesAt(idx))
-		if objectio.IsSameObjectLocVsMeta(blkInfo.MetaLocation(), objDataMeta) {
-			continue
-		}
-
-		destVec := arg.container.mp[int(tblIdx[idx])].Vecs[0]
 		affectedRows := uint32(0)
+		destVec := arg.container.mp[int(tblIdx[idx])].Vecs[0]
+		// comes from old version cn without object stats
 		if needLoad {
-			// comes from old version cn
+			blkInfo := objectio.DecodeBlockInfo(blkVec.GetBytesAt(idx))
+			if objectio.IsSameObjectLocVsMeta(blkInfo.MetaLocation(), objDataMeta) {
+				continue
+			}
+
 			objStats, objDataMeta, err = disttae.ConstructObjStatsByLoadObjMeta(proc.Ctx, blkInfo.MetaLocation(), fs)
 			if err != nil {
 				return err
@@ -202,11 +228,12 @@ func splitObjectStats(arg *Argument, proc *process.Process,
 			affectedRows = objStats.Rows()
 			vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool())
 		} else {
+			// with object stats in it
 			// not comes from old version cn
-			vector.AppendBytes(destVec, statsVec.GetBytesAt(statsIdx), false, proc.GetMPool())
-			objDataMeta.BlockHeader().SetBlockID(&blkInfo.BlockID)
+			stats := objectio.ObjectStats(statsVec.GetBytesAt(statsIdx))
+			vector.AppendBytes(destVec, stats.Marshal(), false, proc.GetMPool())
 			statsIdx++
-			affectedRows = uint32(0)
+			affectedRows = uint32(stats.Rows())
 		}
 
 		if arg.AddAffectedRows {
@@ -243,7 +270,7 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 
 	// exist blk info, split it
 	if hasObject {
-		if err := splitObjectStats(arg, proc, bat, blkInfosVec, tblIdx); err != nil {
+		if err := splitObjectStats(arg, proc, bat); err != nil {
 			return err
 		}
 	}
