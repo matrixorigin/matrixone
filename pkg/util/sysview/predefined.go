@@ -536,4 +536,45 @@ var (
 		"COLLATION_CONNECTION varchar(64) NOT NULL," +
 		"DATABASE_COLLATION varchar(64) NOT NULL" +
 		")"
+
+	InformationSchemaFilesDDL = "CREATE TABLE information_schema.FILES (" +
+		"FILE_ID  bigint NOT NULL," +
+		"FILE_NAME  text NOT NULL," +
+		"FILE_TYPE  varchar(256)," +
+		"TABLESPACE_NAME  varchar(268) NOT NULL," +
+		"TABLE_CATALOG  char(0) NOT NULL," +
+		"TABLE_SCHEMA  binary(0)," +
+		"TABLE_NAME  binary(0)," +
+		"LOGFILE_GROUP_NAME  varchar(256)," +
+		"LOGFILE_GROUP_NUMBER  bigint," +
+		"ENGINE  varchar(64) NOT NULL," +
+		"FULLTEXT_KEYS  binary(0)," +
+		"DELETED_ROWS  binary(0)," +
+		"UPDATE_COUNT  binary(0)," +
+		"FREE_EXTENTS  bigint," +
+		"TOTAL_EXTENTS  bigint," +
+		"EXTENT_SIZE  bigint," +
+		"INITIAL_SIZE  bigint," +
+		"MAXIMUM_SIZE  bigint," +
+		"AUTOEXTEND_SIZE  bigint," +
+		"CREATION_TIME  binary(0)," +
+		"LAST_UPDATE_TIME  binary(0)," +
+		"LAST_ACCESS_TIME  binary(0)," +
+		"RECOVER_TIME  binary(0)," +
+		"TRANSACTION_COUNTER  binary(0)," +
+		"VERSION  bigint," +
+		"ROW_FORMAT  varchar(256)," +
+		"TABLE_ROWS  binary(0)," +
+		"AVG_ROW_LENGTH  binary(0)," +
+		"DATA_LENGTH  binary(0)," +
+		"MAX_DATA_LENGTH  binary(0)," +
+		"INDEX_LENGTH  binary(0)," +
+		"DATA_FREE  bigint," +
+		"CREATE_TIME  binary(0)," +
+		"UPDATE_TIME  binary(0)," +
+		"CHECK_TIME  binary(0)," +
+		"CHECKSUM  binary(0)," +
+		"STATUS  varchar(256)," +
+		"EXTRA  varchar(256)" +
+		")"
 )
