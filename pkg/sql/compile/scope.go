@@ -211,15 +211,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 		scope := s.PreScopes[i]
 		errSubmit := ants.Submit(func() {
 			defer func() {
-				if e := recover(); e != nil {
-					err := moerr.ConvertPanicError(c.ctx, e)
-					getLogger().Error("panic in merge run run",
-						zap.String("sql", c.sql),
-						zap.String("error", err.Error()))
-					errChan <- err
-				}
 				wg.Done()
 			}()
+
 			switch scope.Magic {
 			case Normal:
 				errChan <- scope.Run(c)
@@ -229,6 +223,8 @@ func (s *Scope) MergeRun(c *Compile) error {
 				errChan <- scope.RemoteRun(c)
 			case Parallel:
 				errChan <- scope.ParallelRun(c)
+			default:
+				errChan <- moerr.NewInternalError(c.ctx, "unexpected scope Magic %d", scope.Magic)
 			}
 		})
 		if errSubmit != nil {
@@ -316,44 +312,52 @@ func (s *Scope) RemoteRun(c *Compile) error {
 }
 
 // ParallelRun run a pipeline in parallel.
-func (s *Scope) ParallelRun(c *Compile) error {
-	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
-	// probability 1: it's a JOIN pipeline.
-	if isJoinPipeline := s.IsJoin; isJoinPipeline {
-		parallelScope, err := buildJoinParallelRun(s, c)
-		if err != nil {
-			pipeline.NewMerge(s.Instructions, s.Reg).Cleanup(s.Proc, true, err)
-			return err
+func (s *Scope) ParallelRun(c *Compile) (err error) {
+	var parallelScope *Scope
+
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
+			getLogger().Error("panic in scope run",
+				zap.String("sql", c.sql),
+				zap.String("error", err.Error()))
 		}
-		return parallelScope.MergeRun(c)
-	}
+
+		// if codes run here, it means some error happens during build the parallel scope.
+		// we should do clean work for source-scope to avoid receiver hung.
+		if parallelScope == nil {
+			pipeline.NewMerge(s.Instructions, s.Reg).Cleanup(s.Proc, true, err)
+		}
+	}()
+
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
+
+	switch {
+	// probability 1: it's a JOIN pipeline.
+	case s.IsJoin:
+		parallelScope, err = buildJoinParallelRun(s, c)
 
 	// probability 2: it's a LOAD pipeline.
-	if isLoadPipeline := s.IsLoad; isLoadPipeline {
-		parallelScope, err := buildLoadParallelRun(s, c)
-		if err != nil {
-			pipeline.NewMerge(s.Instructions, s.Reg).Cleanup(s.Proc, true, err)
-			return err
-		}
-		return parallelScope.MergeRun(c)
-	}
+	case s.IsLoad:
+		parallelScope, err = buildLoadParallelRun(s, c)
 
 	// probability 3: it's a SCAN pipeline.
-	if s.DataSource != nil {
-		parallelScope, err := buildScanParallelRun(s, c)
-		if err != nil {
-			pipeline.New(0, nil, s.Instructions, s.Reg).Cleanup(s.Proc, true, err)
-			return err
-		}
-
-		if parallelScope.Magic == Normal {
-			return parallelScope.Run(c)
-		}
-		return parallelScope.MergeRun(c)
-	}
+	case s.DataSource != nil:
+		parallelScope, err = buildScanParallelRun(s, c)
 
 	// others.
-	return s.MergeRun(c)
+	default:
+		parallelScope, err = s, nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if parallelScope.Magic == Normal {
+		return parallelScope.Run(c)
+	}
+	return parallelScope.MergeRun(c)
 }
 
 // buildJoinParallelRun deal one case of scope.ParallelRun.
