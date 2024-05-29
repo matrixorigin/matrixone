@@ -321,15 +321,15 @@ func CompileFilterExpr(
 				exprImpl.F.Args[0], proc, tableDef, fs,
 			)
 			if !leftCan {
-				return nil, nil, nil, nil, nil, false, leftHSH
+				return nil, nil, nil, nil, nil, false, false
 			}
 			rightFastOp, rightLoadOp, rightObjectOp, rightBlockOp, rightSeekOp, rightCan, rightHSH := CompileFilterExpr(
 				exprImpl.F.Args[1], proc, tableDef, fs,
 			)
 			if !rightCan {
-				return nil, nil, nil, nil, nil, false, rightHSH
+				return nil, nil, nil, nil, nil, false, false
 			}
-			highSelectivityHint = leftHSH || rightHSH
+			highSelectivityHint = leftHSH && rightHSH
 
 			if leftFastOp != nil || rightFastOp != nil {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
@@ -423,15 +423,15 @@ func CompileFilterExpr(
 				exprImpl.F.Args[0], proc, tableDef, fs,
 			)
 			if !leftCan {
-				return nil, nil, nil, nil, nil, false, leftHSH
+				return nil, nil, nil, nil, nil, false, false
 			}
 			rightFastOp, rightLoadOp, rightObjectOp, rightBlockOp, rightSeekOp, rightCan, rightHSH := CompileFilterExpr(
 				exprImpl.F.Args[1], proc, tableDef, fs,
 			)
 			if !rightCan {
-				return nil, nil, nil, nil, nil, false, rightHSH
+				return nil, nil, nil, nil, nil, false, false
 			}
-			highSelectivityHint = leftHSH || rightHSH
+			highSelectivityHint = leftHSH && rightHSH
 
 			if leftFastOp != nil || rightFastOp != nil {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
@@ -676,7 +676,7 @@ func CompileFilterExpr(
 				return
 			}
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
-			_, isSorted := isSortedKey(colDef)
+			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
@@ -686,7 +686,7 @@ func CompileFilterExpr(
 				}
 			}
 
-			highSelectivityHint = isSorted
+			highSelectivityHint = isPK
 
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
@@ -927,7 +927,7 @@ func CompileFilterExpr(
 				loadOp = loadMetadataOnlyOpFactory(fs)
 			}
 
-			highSelectivityHint = isSorted
+			highSelectivityHint = isPK
 
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
@@ -1007,12 +1007,15 @@ func TryFastFilterBlocks(
 		return false, nil
 	}
 
-	if highSelectivityHint {
-		*dirtyBlocks = tbl.collectDirtyBlocks(snapshot, uncommittedObjects)
-	}
+	//if highSelectivityHint {
+	//	fmt.Println("has high selectivity", tbl.tableName, plan2.FormatExprs(exprs))
+	//} else {
+	//	fmt.Println("has not high selectivity", tbl.tableName, plan2.FormatExprs(exprs))
+	//}
 
 	err = ExecuteBlockFilter(
 		ctx,
+		tbl,
 		snapshotTS,
 		fastFilterOp,
 		loadOp,
@@ -1021,16 +1024,18 @@ func TryFastFilterBlocks(
 		seekOp,
 		snapshot,
 		uncommittedObjects,
-		*dirtyBlocks,
+		dirtyBlocks,
 		outBlocks,
 		fs,
 		proc,
+		highSelectivityHint,
 	)
 	return true, err
 }
 
 func ExecuteBlockFilter(
 	ctx context.Context,
+	tbl *txnTable,
 	snapshotTS timestamp.Timestamp,
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
@@ -1039,10 +1044,11 @@ func ExecuteBlockFilter(
 	seekOp SeekFirstBlockOp,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	dirtyBlocks map[types.Blockid]struct{},
+	dirtyBlocks *map[types.Blockid]struct{},
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 	proc *process.Process,
+	highSelectivityHint bool,
 ) (err error) {
 	var (
 		totalBlocks                    float64
@@ -1069,7 +1075,10 @@ func ExecuteBlockFilter(
 		}
 	}()
 
-	hasDeletes := dirtyBlocks != nil
+	if !highSelectivityHint {
+		*dirtyBlocks = tbl.collectDirtyBlocks(snapshot, uncommittedObjects)
+	}
+
 	err = ForeachSnapshotObjects(
 		snapshotTS,
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
@@ -1182,16 +1191,19 @@ func ExecuteBlockFilter(
 					}
 				}
 
-				if hasDeletes {
-					if _, ok := dirtyBlocks[blk.BlockID]; !ok {
+				if len(*dirtyBlocks) > 0 { // may have deletes, check
+					if _, ok = (*dirtyBlocks)[blk.BlockID]; !ok {
 						blk.CanRemote = true
 					}
-					blk.PartitionNum = -1
-					outBlocks.AppendBlockInfo(blk)
-					continue
+					blk.CanRemote = false
+
+				} else if highSelectivityHint { // not collect dirty blocks, cannot judge
+					blk.CanRemote = false
+
+				} else { // collected but no deletes
+					blk.CanRemote = true
 				}
-				// store the block in ranges
-				blk.CanRemote = false
+
 				blk.PartitionNum = -1
 				outBlocks.AppendBlockInfo(blk)
 			}
