@@ -168,7 +168,14 @@ func (f *FileServices) PrefetchFile(ctx context.Context, filePath string) error 
 }
 
 func (f *FileServices) Cost() *CostAttr {
-	return &CostAttr{
-		List: CostHigh,
+	attr := &CostAttr{
+		List: CostLow,
 	}
+	for _, fs := range f.mappings {
+		cost := fs.Cost()
+		if cost.List > attr.List {
+			attr.List = cost.List
+		}
+	}
+	return attr
 }
