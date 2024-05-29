@@ -153,20 +153,6 @@ type ViewData struct {
 	DefaultDatabase string
 }
 
-type ExecType int
-
-const (
-	ExecTypeAP ExecType = iota
-	ExecTypeTP
-)
-
-type ExecInfo struct {
-	Typ        ExecType
-	WithGPU    bool
-	WithBigMem bool
-	CnNumbers  int
-}
-
 type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
