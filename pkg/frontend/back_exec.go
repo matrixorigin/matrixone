@@ -799,8 +799,8 @@ func (backSes *backSession) GetDebugString() string {
 }
 
 func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
-	backSes.EnterFPrint(102)
-	defer backSes.ExitFPrint(102)
+	backSes.EnterFPrint(116)
+	defer backSes.ExitFPrint(116)
 	var txnOp TxnOperator
 	if backSes.GetTxnHandler() != nil {
 		txnOp = backSes.GetTxnHandler().GetTxn()
