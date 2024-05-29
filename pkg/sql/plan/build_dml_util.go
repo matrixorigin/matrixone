@@ -1648,7 +1648,8 @@ func makeOneDeletePlan(
 				PrimaryColTyp:      delNodeInfo.pkTyp,
 				RefreshTsIdxInBat:  -1, //unsupport now
 				// FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
-				LockTable: delNodeInfo.lockTable,
+				LockTable:         delNodeInfo.lockTable,
+				LockTableAtTheEnd: false,
 			}
 			// if delNodeInfo.tableDef.Partition != nil {
 			// 	lockTarget.IsPartitionTable = true
@@ -3557,6 +3558,7 @@ func makePreUpdateDeletePlan(
 		RefreshTsIdxInBat:  -1,
 		LockTable:          delCtx.lockTable,
 		LockRows:           delCtx.lockRows,
+		LockTableAtTheEnd:  true,
 	}
 	if delCtx.tableDef.Partition != nil {
 		lockTarget.IsPartitionTable = true
@@ -3647,6 +3649,7 @@ func makePreUpdateDeletePlan(
 			RefreshTsIdxInBat:  -1, //unsupport now
 			LockTable:          delCtx.lockTable,
 			LockRows:           delCtx.lockRows,
+			LockTableAtTheEnd:  true,
 		}
 		if delCtx.tableDef.Partition != nil {
 			lockTarget.IsPartitionTable = true
@@ -3738,6 +3741,7 @@ func appendLockNode(
 		RefreshTsIdxInBat:  -1, //unsupport now
 		LockTable:          lockTable,
 		Block:              block,
+		LockTableAtTheEnd:  !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix),
 	}
 
 	if !lockTable && tableDef.Partition != nil {

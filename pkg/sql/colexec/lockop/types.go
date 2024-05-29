@@ -116,6 +116,7 @@ type lockTarget struct {
 	changeDef                    bool
 	mode                         lock.LockMode
 	lockRows                     *plan.Expr
+	lockTableAtTheEnd            bool
 }
 
 // RowsFilter used to filter row from primary vector. The row will not lock if filter return false.

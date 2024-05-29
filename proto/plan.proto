@@ -879,6 +879,7 @@ message LockTarget {
 	bool                block   = 9;
 	lock.LockMode Mode  = 10;
 	Expr lock_rows = 11;
+    bool lock_table_at_the_end = 12;
 }
 
 message PreInsertUkCtx {

@@ -760,14 +760,16 @@ func (arg *Argument) AddLockTarget(
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
-	lockRows *plan.Expr) *Argument {
+	lockRows *plan.Expr,
+	lockTableAtTheEnd bool) *Argument {
 	return arg.AddLockTargetWithMode(
 		tableID,
 		lock.LockMode_Exclusive,
 		primaryColumnIndexInBatch,
 		primaryColumnType,
 		refreshTimestampIndexInBatch,
-		lockRows)
+		lockRows,
+		lockTableAtTheEnd)
 }
 
 // AddLockTargetWithMode add lock target with lock mode
@@ -777,7 +779,8 @@ func (arg *Argument) AddLockTargetWithMode(
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
-	lockRows *plan.Expr) *Argument {
+	lockRows *plan.Expr,
+	lockTableAtTheEnd bool) *Argument {
 	arg.targets = append(arg.targets, lockTarget{
 		tableID:                      tableID,
 		primaryColumnIndexInBatch:    primaryColumnIndexInBatch,
@@ -785,6 +788,7 @@ func (arg *Argument) AddLockTargetWithMode(
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
 		mode:                         mode,
 		lockRows:                     lockRows,
+		lockTableAtTheEnd:            lockTableAtTheEnd,
 	})
 	return arg
 }
@@ -831,6 +835,7 @@ func (arg *Argument) AddLockTargetWithPartition(
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
 	lockRows *plan.Expr,
+	lockTableAtTheEnd bool,
 	partitionTableIDMappingInBatch int32) *Argument {
 	return arg.AddLockTargetWithPartitionAndMode(
 		tableIDs,
@@ -839,6 +844,7 @@ func (arg *Argument) AddLockTargetWithPartition(
 		primaryColumnType,
 		refreshTimestampIndexInBatch,
 		lockRows,
+		lockTableAtTheEnd,
 		partitionTableIDMappingInBatch)
 }
 
@@ -851,6 +857,7 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
 	lockRows *plan.Expr,
+	lockTableAtTheEnd bool,
 	partitionTableIDMappingInBatch int32) *Argument {
 	if len(tableIDs) == 0 {
 		panic("invalid partition table ids")
@@ -863,6 +870,7 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 			primaryColumnType,
 			refreshTimestampIndexInBatch,
 			lockRows,
+			lockTableAtTheEnd,
 		)
 	}
 
@@ -876,6 +884,7 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 			filterColIndexInBatch:        partitionTableIDMappingInBatch,
 			mode:                         mode,
 			lockRows:                     lockRows,
+			lockTableAtTheEnd:            lockTableAtTheEnd,
 		})
 	}
 	return arg
