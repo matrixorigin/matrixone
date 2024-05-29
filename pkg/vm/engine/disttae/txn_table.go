@@ -718,19 +718,21 @@ func (tbl *txnTable) rangesOnePart(
 	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
-	uncommittedObjects := tbl.collectUnCommittedObjects()
-	dirtyBlks := tbl.collectDirtyBlocks(state, uncommittedObjects)
 
 	var done bool
+	// collect dirty blocks lazily
+	var dirtyBlks map[types.Blockid]struct{}
+	uncommittedObjects := tbl.collectUnCommittedObjects()
 
 	if done, err = TryFastFilterBlocks(
 		ctx,
+		tbl,
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
 		exprs,
 		state,
 		uncommittedObjects,
-		dirtyBlks,
+		&dirtyBlks,
 		outBlocks,
 		tbl.getTxn().engine.fs,
 		tbl.proc.Load(),
@@ -747,6 +749,10 @@ func (tbl *txnTable) rangesOnePart(
 			zap.String("table", tbl.tableDef.Name),
 			zap.String("exprs", plan2.FormatExprs(exprs)),
 		)
+	}
+
+	if dirtyBlks == nil {
+		tbl.collectDirtyBlocks(state, uncommittedObjects)
 	}
 
 	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
