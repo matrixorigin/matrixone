@@ -761,3 +761,60 @@ role_id    user_id    granted_time    with_grant_option
 drop user user01, user02, user03, user04, user05;
 drop role r5;
 drop snapshot sp03;
+drop role if exists role_r1,role_r2,role_r3;
+create role role_r1,role_r2,role_r3;
+drop user if exists role_u1, role_u2, role_u3;
+create user role_u1 identified by '111', role_u2 identified by '111', role_u3 identified by '111';
+grant role_r1 to role_u1;
+grant role_r1,role_r2,role_r3 to role_u1,role_u2,role_u2;
+grant role_r1 to role_r2;
+grant role_r2 to role_r3;
+select * from mo_catalog.mo_user;
+user_id    user_host    user_name    authentication_string    status    created_time    expired_time    login_type    creator    owner    default_role
+0    localhost    root    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    2024-05-29 08:09:47    null    PASSWORD    0    0    0
+1    localhost    dump    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    2024-05-29 08:09:47    null    PASSWORD    0    0    0
+7    localhost    role_u1    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    2024-05-29 08:10:49    null    PASSWORD    1    0    1
+8    localhost    role_u2    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    2024-05-29 08:10:49    null    PASSWORD    1    0    1
+9    localhost    role_u3    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    2024-05-29 08:10:49    null    PASSWORD    1    0    1
+select * from mo_catalog.mo_role;
+role_id    role_name    creator    owner    created_time    comments
+0    moadmin    0    0    2024-05-29 08:09:47    
+1    public    0    0    2024-05-29 08:09:47    
+22    role_r1    1    0    2024-05-29 08:10:49    
+23    role_r2    1    0    2024-05-29 08:10:49    
+24    role_r3    1    0    2024-05-29 08:10:49    
+select * from mo_catalog.mo_role_privs where role_name in ('role_r1','role_r2');
+role_id    role_name    obj_type    obj_id    privilege_id    privilege_name    privilege_level    operation_user_id    granted_time    with_grant_option
+select * from mo_catalog.mo_user_grant;
+role_id    user_id    granted_time    with_grant_option
+0    0    2024-05-29 08:09:47    false
+1    0    2024-05-29 08:09:47    false
+0    1    2024-05-29 08:09:47    false
+1    1    2024-05-29 08:09:47    false
+1    7    2024-05-29 08:10:49    true
+1    8    2024-05-29 08:10:49    true
+1    9    2024-05-29 08:10:49    true
+22    7    2024-05-29 08:10:49    false
+22    8    2024-05-29 08:10:49    false
+23    7    2024-05-29 08:10:49    false
+23    8    2024-05-29 08:10:49    false
+24    7    2024-05-29 08:10:49    false
+24    8    2024-05-29 08:10:49    false
+select * from mo_catalog.mo_role_grant;
+granted_id    grantee_id    operation_role_id    operation_user_id    granted_time    with_grant_option
+22    23    0    1    2024-05-29 08:10:49    false
+23    24    0    1    2024-05-29 08:10:49    false
+drop snapshot if exists sp01;
+create snapshot sp01 for account sys;
+revoke role_r2 from role_r3;
+revoke role_r1 from role_r2;
+select * from mo_catalog.mo_role_grant;
+granted_id    grantee_id    operation_role_id    operation_user_id    granted_time    with_grant_option
+restore account sys from snapshot sp01;
+select * from mo_catalog.mo_role_grant;
+granted_id    grantee_id    operation_role_id    operation_user_id    granted_time    with_grant_option
+22    23    0    1    2024-05-29 08:10:49    false
+23    24    0    1    2024-05-29 08:10:49    false
+drop snapshot sp01;
+drop role role_r1, role_r2, role_r3;
+drop user role_u1, role_u2, role_u3;
