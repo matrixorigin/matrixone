@@ -11063,7 +11063,7 @@ func TestUpload(t *testing.T) {
 		setGlobalPu(pu)
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
-				proto: proto,
+				respr: NewMysqlResp(proto),
 			},
 			proc: proc,
 		}

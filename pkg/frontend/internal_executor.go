@@ -235,7 +235,6 @@ func (ie *internalExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions)
 // 	logutil.Infof("[Metric] called: %s", callFunc.Name())
 // }
 
-var _ MysqlProtocol = &internalProtocol{}
 var _ MysqlWriter = &internalProtocol{}
 
 type internalProtocol struct {

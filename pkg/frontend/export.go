@@ -395,17 +395,6 @@ func preCopyBat(obj interface{}, bat *batch.Batch) *batch.Batch {
 	return bat2
 }
 
-func initExportFirst(oq *outputQueue) {
-	if !oq.ep.First {
-		oq.ep.First = true
-		oq.ep.ByteChan = make(chan *BatchByte, 10)
-		oq.ep.BatchMap = make(map[int32][]byte)
-		oq.ep.Index.Store(0)
-		oq.ep.WriteIndex.Store(0)
-	}
-	oq.ep.Index.Add(1)
-}
-
 func formatJsonString(str string, flag bool, terminatedBy string) string {
 	if len(str) < 2 {
 		return "\"" + str + "\""
@@ -582,8 +571,6 @@ func exportDataToCSVFile(oq *ExportConfig) error {
 	if !oq.OutTofile {
 		return exportDataToCSVFile2(oq)
 	}
-	//TODO:
-	panic("TODO fix mrs here")
 	oq.LineSize = 0
 
 	symbol := oq.Symbol

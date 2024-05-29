@@ -505,11 +505,10 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	}
 	exportParam := &ExportConfig{
 		userConfig: eParam,
+		mrs:        mrs,
 	}
 	//prepare output queue
-	oq := NewOutputQueue(ctx, ses, columnCount, mrs, exportParam)
-	oq.reset()
-	oq.ep.OutTofile = true
+	exportParam.OutTofile = true
 	//prepare export param
 	exportParam.DefaultBufSize = getGlobalPu().SV.ExportDataDefaultFlushSize
 	exportParam.UseFileService = true
@@ -573,18 +572,16 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 					break
 				}
 
-				panic("TODO: to fix")
-				//_, err = extractRowFromEveryVector(ctx, ses, tmpBatch, j, oq, true)
-				//if err != nil {
-				//	return err
-				//}
+				_, err = extractRowFromEveryVector(ctx, ses, tmpBatch, j, mrs.Data[0])
+				if err != nil {
+					return err
+				}
+				err = exportDataToCSVFile(exportParam)
+				if err != nil {
+					return err
+				}
 			}
 		}
-	}
-
-	err = oq.flush()
-	if err != nil {
-		return err
 	}
 
 	err = Close(exportParam)

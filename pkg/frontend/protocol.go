@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/fagongzi/goetty/v2"
@@ -410,7 +411,7 @@ func (mp *MysqlProtocolImpl) Flush() error {
 	return nil
 }
 
-var _ MysqlProtocol = &FakeProtocol{}
+var _ MysqlWriter = &FakeProtocol{}
 
 const (
 	fakeConnectionID uint32 = math.MaxUint32
@@ -421,6 +422,90 @@ type FakeProtocol struct {
 	username string
 	database string
 	ioses    goetty.IOSession
+}
+
+func (fp *FakeProtocol) Write(ctx *ExecCtx, batch *batch.Batch) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) Close() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) WriteHandshake() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) WriteEOF(warnings, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) WriteEOFIF(warnings uint16, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) WriteEOFOrOK(warnings uint16, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) WriteERR(errorCode uint16, sqlState, errorMessage string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) WriteLengthEncodedNumber(u uint64) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) WriteColumnDef(ctx context.Context, column Column, i int) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) WriteRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) WriteTextRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) WriteBinaryRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) WriteResponse(ctx context.Context, response *Response) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *FakeProtocol) Read(options goetty.ReadOptions) (interface{}, error) {
+	return fp.ioses.Read(options)
 }
 
 func (fp *FakeProtocol) UpdateCtx(ctx context.Context) {
