@@ -216,7 +216,10 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 
 			for i = 0; i < buildCount; i++ {
 				clusterEmbeddingF64 = types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				dist, _ := moarray.L2DistanceSq[float64](clusterEmbeddingF64, tblEmbeddingF64)
+				dist, err := moarray.L2DistanceSq[float64](clusterEmbeddingF64, tblEmbeddingF64)
+				if err != nil {
+					return err
+				}
 				if dist < leastDistance {
 					leastDistance = dist
 					leastClusterIndex = i
