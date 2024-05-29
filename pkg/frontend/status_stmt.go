@@ -100,10 +100,8 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		// execute insert sql if this is a `create table as select` stmt
 		if st.IsAsSelect {
-			if txw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-				insertSql := txw.plan.GetDdl().GetDefinition().(*plan.DataDefinition_CreateTable).CreateTable.CreateAsSelectSql
-				ses.createAsSelectSql = insertSql
-			}
+			insertSql := execCtx.cw.Plan().GetDdl().GetDefinition().(*plan.DataDefinition_CreateTable).CreateTable.CreateAsSelectSql
+			ses.createAsSelectSql = insertSql
 			return
 		}
 
