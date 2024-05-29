@@ -66,10 +66,25 @@ func (s *MemShardStorage) Unsubscribe(
 
 func (s *MemShardStorage) Get(
 	table uint64,
-) (pb.ShardsMetadata, error) {
+) (uint64, pb.ShardsMetadata, error) {
 	s.RLock()
 	defer s.RUnlock()
-	return s.committed[table], nil
+	m, ok := s.committed[table]
+	if ok {
+		return table, m, nil
+	}
+
+	for tid, m := range s.uncommittedAdd {
+		if m.Policy != pb.Policy_Partition {
+			continue
+		}
+		for _, sid := range m.ShardIDs {
+			if sid == table {
+				return tid, m, nil
+			}
+		}
+	}
+	return 0, pb.ShardsMetadata{}, nil
 }
 
 func (s *MemShardStorage) GetChanged(
@@ -164,7 +179,8 @@ func (s *MemShardStorage) WaitLogAppliedAt(
 
 func (s *MemShardStorage) Read(
 	ctx context.Context,
-	table uint64,
+	shard pb.TableShard,
+	method int,
 	payload []byte,
 	ts timestamp.Timestamp,
 ) ([]byte, error) {

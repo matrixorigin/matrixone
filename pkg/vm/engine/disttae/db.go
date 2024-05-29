@@ -472,7 +472,11 @@ func (e *Engine) getOrCreateSnapPart(
 		if err != nil {
 			return nil, err
 		}
-		return e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId), nil
+		part, _ := e.getOrCreateLatestPart(
+			tbl.db.databaseId,
+			tbl.tableId,
+		)
+		return part, nil
 	}
 	if ts.Less(&start) {
 		return nil, moerr.NewInternalErrorNoCtx(
@@ -487,7 +491,7 @@ func (e *Engine) getOrCreateSnapPart(
 
 func (e *Engine) getOrCreateLatestPart(
 	databaseId,
-	tableId uint64) *logtailreplay.Partition {
+	tableId uint64) (*logtailreplay.Partition, bool) {
 	e.Lock()
 	defer e.Unlock()
 	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
@@ -495,13 +499,18 @@ func (e *Engine) getOrCreateLatestPart(
 		partition = logtailreplay.NewPartition()
 		e.partitions[[2]uint64{databaseId, tableId}] = partition
 	}
-	return partition
+	return partition, !ok
 }
 
 func (e *Engine) lazyLoadLatestCkp(
 	ctx context.Context,
-	tbl *txnTable) (*logtailreplay.Partition, error) {
-	part := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
+	databaseID uint64,
+	databaseName string,
+	tableID uint64,
+	tableName string,
+	primarySeqnum int,
+) (*logtailreplay.Partition, error) {
+	part, _ := e.getOrCreateLatestPart(databaseID, tableID)
 	cache := e.getLatestCatalogCache()
 
 	if err := part.ConsumeCheckpoints(
@@ -510,12 +519,12 @@ func (e *Engine) lazyLoadLatestCkp(
 			entries, closeCBs, err := logtail.LoadCheckpointEntries(
 				ctx,
 				checkpoint,
-				tbl.tableId,
-				tbl.tableName,
-				tbl.db.databaseId,
-				tbl.db.databaseName,
-				tbl.getTxn().engine.mp,
-				tbl.getTxn().engine.fs)
+				tableID,
+				tableName,
+				databaseID,
+				databaseName,
+				e.mp,
+				e.fs)
 			if err != nil {
 				return err
 			}
@@ -525,7 +534,7 @@ func (e *Engine) lazyLoadLatestCkp(
 				}
 			}()
 			for _, entry := range entries {
-				if err = consumeEntry(ctx, tbl.primarySeqnum, e, cache, state, entry); err != nil {
+				if err = consumeEntry(ctx, primarySeqnum, e, cache, state, entry); err != nil {
 					return err
 				}
 			}

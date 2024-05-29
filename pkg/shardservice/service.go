@@ -212,7 +212,6 @@ func (s *service) GetShardInfo(
 	if ok {
 		return table, v.metadata.Policy, true, nil
 	}
-
 	for tid, sc := range r.shards {
 		if sc.metadata.Policy != pb.Policy_Partition {
 			continue
@@ -224,12 +223,18 @@ func (s *service) GetShardInfo(
 		}
 	}
 
-	metadata, err := s.storage.Get(table)
+	tid, metadata, err := s.storage.Get(table)
 	if err != nil {
 		return 0, 0, false, err
 	}
+	if !metadata.IsEmpty() {
+		return tid, metadata.Policy, true, nil
+	}
 
-	return pb.ShardsMetadata{}, false, nil
+	new := old.Clone()
+	new.Add(table)
+	s.cache.noneSharding.CompareAndSwap(old, new)
+	return 0, 0, false, nil
 }
 
 func (s *service) removeReadCache(
@@ -258,7 +263,7 @@ func (s *service) getShards(
 	defer s.cache.Unlock()
 
 	fn := func() (pb.ShardsMetadata, []pb.TableShard, error) {
-		metadata, err := s.storage.Get(table)
+		_, metadata, err := s.storage.Get(table)
 		if err != nil {
 			return pb.ShardsMetadata{}, nil, err
 		}
@@ -522,7 +527,7 @@ func (s *service) handleDeleteAll(
 func (s *service) handleCreateTable(
 	tableID uint64,
 ) error {
-	metadata, err := s.storage.Get(tableID)
+	_, metadata, err := s.storage.Get(tableID)
 	if err != nil {
 		return err
 	}

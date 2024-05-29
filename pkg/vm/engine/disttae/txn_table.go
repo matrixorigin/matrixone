@@ -23,8 +23,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,7 +35,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -115,7 +115,11 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 			partitionsTableDef = append(partitionsTableDef, partitionTable.(*txnTable).tableDef)
 			var ps *logtailreplay.PartitionState
 			if !tbl.db.op.IsSnapOp() {
-				ps = e.getOrCreateLatestPart(tbl.db.databaseId, partitionTable.(*txnTable).tableId).Snapshot()
+				part, _ := e.getOrCreateLatestPart(
+					tbl.db.databaseId,
+					partitionTable.(*txnTable).tableId,
+				)
+				ps = part.Snapshot()
 			} else {
 				p, err := e.getOrCreateSnapPart(
 					ctx,
@@ -664,6 +668,28 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		v2.TxnTableRangeDurationHistogram.Observe(cost.Seconds())
 	}()
 
+	// For a sharded table, the decision on how to get ranges is based on the sharding policy.
+	// 1. Partition
+	//    For a partitioned table, you need to get the ranges at the cn where the partition shard
+	//    is located.
+	// 2. Hash
+	//    For the hash approach, you need to fetch all the partitions where the shards are located,
+	//    and then merge them together.
+	sharding, err := tbl.isShardingTable()
+	if err != nil {
+		return nil, err
+	}
+	uncommitted, err := tbl.isUncommitted(ctx)
+	if err != nil || uncommitted {
+		return nil, err
+	}
+
+	if !uncommitted &&
+		sharding &&
+		tbl.shardInfo.shardPolicy == shard.Policy_Partition {
+		return tbl.readShardingRanges(ctx, exprs)
+	}
+
 	var blocks objectio.BlockInfoSlice
 	ranges = &blocks
 
@@ -713,6 +739,7 @@ func (tbl *txnTable) rangesOnePart(
 	tableDef *plan.TableDef, // table definition (schema)
 	exprs []*plan.Expr, // filter expression
 	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
+	ts timestamp.Timestamp,
 	proc *process.Process, // process of this transaction
 ) (err error) {
 
@@ -2310,8 +2337,11 @@ func (tbl *txnTable) getPartitionState(
 			if err := tbl.updateLogtail(ctx); err != nil {
 				return nil, err
 			}
-			tbl._partState.Store(tbl.getTxn().engine.
-				getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot())
+			part, _ := tbl.getTxn().engine.getOrCreateLatestPart(
+				tbl.db.databaseId,
+				tbl.tableId,
+			)
+			tbl._partState.Store(part.Snapshot())
 		}
 		return tbl._partState.Load(), nil
 	}
@@ -2342,14 +2372,10 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 		return
 	}
 
-	// if the table is created in this txn, skip
-	accountId, err := defines.GetAccountId(ctx)
-	if err != nil {
+	// skip uncommitted table
+	uncommitted, err := tbl.isUncommitted(ctx)
+	if err != nil || uncommitted {
 		return err
-	}
-	if _, created := tbl.getTxn().createMap.Load(
-		genTableKey(accountId, tbl.tableName, tbl.db.databaseId)); created {
-		return
 	}
 
 	tableId := tbl.tableId
@@ -2385,7 +2411,14 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 		tbl.db.op.SnapshotTS()); err != nil {
 		return
 	}
-	if _, err = tbl.getTxn().engine.lazyLoadLatestCkp(ctx, tbl); err != nil {
+	if _, err = tbl.getTxn().engine.lazyLoadLatestCkp(
+		ctx,
+		tbl.db.databaseId,
+		tbl.db.databaseName,
+		tbl.tableId,
+		tbl.tableName,
+		tbl.primarySeqnum,
+	); err != nil {
 		return
 	}
 
@@ -2574,7 +2607,14 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
-	part, err := tbl.getTxn().engine.lazyLoadLatestCkp(ctx, tbl)
+	part, err := tbl.getTxn().engine.lazyLoadLatestCkp(
+		ctx,
+		tbl.db.databaseId,
+		tbl.db.databaseName,
+		tbl.tableId,
+		tbl.tableName,
+		tbl.primarySeqnum,
+	)
 	if err != nil {
 		return false, err
 	}
@@ -2964,4 +3004,19 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 
 	taskHost.commitEntry.Booking = nil
 	return
+}
+
+func (tbl *txnTable) isUncommitted(
+	ctx context.Context,
+) (bool, error) {
+	// if the table is created in this txn, skip
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return false, err
+	}
+	if _, created := tbl.getTxn().createMap.Load(
+		genTableKey(accountId, tbl.tableName, tbl.db.databaseId)); created {
+		return true, nil
+	}
+	return false, nil
 }

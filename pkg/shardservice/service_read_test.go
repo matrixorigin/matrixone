@@ -68,10 +68,12 @@ func TestRead(t *testing.T) {
 				var values [][]byte
 				err := s.Read(
 					ctx,
-					table,
-					k,
-					func(b []byte) {
-						values = append(values, b)
+					ReadRequest{
+						TableID: table,
+						Data:    k,
+						Apply: func(b []byte) {
+							values = append(values, b)
+						},
 					},
 					DefaultOptions.ReadAt(ts),
 				)
@@ -144,10 +146,12 @@ func TestReadWithSpecialShard(t *testing.T) {
 			) {
 				err := s.Read(
 					ctx,
-					table,
-					k,
-					func(b []byte) {
-						require.Equal(t, expect, b)
+					ReadRequest{
+						TableID: table,
+						Data:    k,
+						Apply: func(b []byte) {
+							require.Equal(t, expect, b)
+						},
 					},
 					DefaultOptions.ReadAt(ts).Shard(shardID),
 				)
@@ -208,11 +212,13 @@ func TestReadWithSpecialShardAndPartitionPolicy(t *testing.T) {
 				n := 0
 				err := s.Read(
 					ctx,
-					table,
-					k,
-					func(b []byte) {
-						n++
-						require.Equal(t, expect, b)
+					ReadRequest{
+						TableID: table,
+						Data:    k,
+						Apply: func(b []byte) {
+							n++
+							require.Equal(t, expect, b)
+						},
 					},
 					DefaultOptions.ReadAt(ts).Shard(shardID),
 				)
@@ -253,9 +259,9 @@ func TestReadWithStaleReplica(t *testing.T) {
 				return unwrapError(
 					s1.Read(
 						ctx,
-						table,
-						nil,
-						nil,
+						ReadRequest{
+							TableID: table,
+						},
 						DefaultOptions.Shard(2).Adjust(
 							func(src *shard.TableShard) {
 								*src = src.Clone()
@@ -317,10 +323,12 @@ func TestReadWithLazyCreateShards(t *testing.T) {
 				var values [][]byte
 				err := s.Read(
 					ctx,
-					table,
-					k,
-					func(b []byte) {
-						values = append(values, b)
+					ReadRequest{
+						TableID: table,
+						Data:    k,
+						Apply: func(b []byte) {
+							values = append(values, b)
+						},
 					},
 					DefaultOptions.ReadAt(ts),
 				)
@@ -384,10 +392,12 @@ func TestReadWithNewShard(t *testing.T) {
 
 			err := s1.Read(
 				ctx,
-				table,
-				k,
-				func(b []byte) {
-					require.Equal(t, value, b)
+				ReadRequest{
+					TableID: table,
+					Data:    k,
+					Apply: func(b []byte) {
+						require.Equal(t, value, b)
+					},
 				},
 				DefaultOptions.ReadAt(newTestTimestamp(2)).Shard(2),
 			)

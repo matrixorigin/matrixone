@@ -167,3 +167,7 @@ func (m Response) UnwrapError() error {
 	}
 	return err
 }
+
+func (m ShardsMetadata) IsEmpty() bool {
+	return m.ShardsCount == 0
+}

@@ -24,33 +24,31 @@ import (
 
 func (s *service) Read(
 	ctx context.Context,
-	table uint64,
-	payload []byte,
-	apply func([]byte),
+	req ReadRequest,
 	opts ReadOptions,
 ) error {
 	var cache *readCache
 	var err error
 	for {
-		cache, err = s.getShards(table)
+		cache, err = s.getShards(req.TableID)
 		if err != nil {
 			return err
 		}
 		if opts.shardID == 0 ||
-			cache.hasShard(table, opts.shardID) {
+			cache.hasShard(req.TableID, opts.shardID) {
 			break
 		}
 
 		// remove old read cache
-		s.removeReadCache(table)
+		s.removeReadCache(req.TableID)
 
 		// shards updated, create new allocated
-		s.createC <- table
+		s.createC <- req.TableID
 
 		// wait shard created
 		err = s.waitShardCreated(
 			ctx,
-			table,
+			req.TableID,
 			opts.shardID,
 		)
 		if err != nil {
@@ -62,7 +60,7 @@ func (s *service) Read(
 	defer selected.close()
 
 	cache.selectReplicas(
-		table,
+		req.TableID,
 		func(
 			metadata pb.ShardsMetadata,
 			shard pb.TableShard,
@@ -92,7 +90,8 @@ func (s *service) Read(
 			ctx,
 			s.newReadRequest(
 				shard,
-				payload,
+				req.Method,
+				req.Data,
 				opts.readAt,
 			),
 		)
@@ -112,12 +111,14 @@ func (s *service) Read(
 			ctx,
 			selected.values[i],
 			opts.readAt,
-			payload,
+			req.Method,
+			req.Data,
 		)
 		if e == nil {
-			apply(v)
+			req.Apply(v)
+			continue
 		}
-		s.maybeRemoveReadCache(table, e)
+		s.maybeRemoveReadCache(req.TableID, e)
 		err = errors.Join(err, e)
 		continue
 	}
@@ -130,10 +131,10 @@ func (s *service) Read(
 			resp, e = s.unwrapError(resp, e)
 		}
 		if e == nil {
-			apply(resp.ShardRead.Payload)
+			req.Apply(resp.ShardRead.Payload)
 			s.remote.pool.ReleaseResponse(resp)
 		} else {
-			s.maybeRemoveReadCache(table, e)
+			s.maybeRemoveReadCache(req.TableID, e)
 			err = errors.Join(err, e)
 		}
 
@@ -146,6 +147,7 @@ func (s *service) doRead(
 	ctx context.Context,
 	shard pb.TableShard,
 	readAt timestamp.Timestamp,
+	method int,
 	payload []byte,
 ) ([]byte, error) {
 	if err := s.validReplica(
@@ -164,7 +166,8 @@ func (s *service) doRead(
 
 	return s.storage.Read(
 		ctx,
-		shard.TableID,
+		shard,
+		method,
 		payload,
 		readAt,
 	)

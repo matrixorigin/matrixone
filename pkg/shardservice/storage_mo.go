@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 var (
@@ -41,7 +42,8 @@ var (
 
 	ShardsTableSQL = fmt.Sprintf(`create table %s.%s(
 		table_id 		  bigint unsigned     not null,
-		shard_id          bigint unsigned     not null  
+		shard_id          bigint unsigned     not null,
+		policy            varchar(50)         not null
 	)`, catalog.MO_CATALOG, catalog.MOShards)
 
 	InitSQLs = []string{
@@ -54,58 +56,86 @@ type storage struct {
 	clock    clock.Clock
 	executor executor.SQLExecutor
 	waiter   client.TimestampWaiter
+	handles  map[int]ReadFunc
+	engine   engine.Engine
 }
 
 func NewShardStorage(
 	clock clock.Clock,
 	executor executor.SQLExecutor,
 	waiter client.TimestampWaiter,
+	handles map[int]ReadFunc,
+	engine engine.Engine,
 ) ShardStorage {
 	return &storage{
 		clock:    clock,
 		executor: executor,
 		waiter:   waiter,
+		handles:  handles,
+		engine:   engine,
 	}
 }
 
 func (s *storage) Get(
 	table uint64,
-) (pb.ShardsMetadata, error) {
+) (uint64, pb.ShardsMetadata, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 
 	now, _ := s.clock.Now()
 	var metadata pb.ShardsMetadata
+	shardTableID := table
 	err := s.executor.ExecTxn(
 		ctx,
 		func(
 			txn executor.TxnExecutor,
 		) error {
 			if err := readMetadata(
-				table,
+				shardTableID,
 				txn,
 				&metadata,
 			); err != nil {
 				return err
 			}
 
-			if err := readShards(
-				table,
-				txn,
-				&metadata,
-			); err != nil {
-				return err
+			if metadata.IsEmpty() {
+				// maybe the shard table is partition, and the table id is the
+				// shard id.
+				v, err := getTableIDByShardID(
+					table,
+					pb.Policy_Partition.String(),
+					txn,
+				)
+				if err != nil || v == 0 {
+					return err
+				}
+				shardTableID = v
+
+				if err := readMetadata(
+					shardTableID,
+					txn,
+					&metadata,
+				); err != nil {
+					return err
+				}
+			}
+
+			if !metadata.IsEmpty() {
+				return readShards(
+					shardTableID,
+					txn,
+					&metadata,
+				)
 			}
 
 			return nil
 		},
 		executor.Options{}.WithMinCommittedTS(now),
 	)
-
 	if err != nil {
-		return pb.ShardsMetadata{}, err
+		return 0, pb.ShardsMetadata{}, err
 	}
-	return metadata, nil
+	return shardTableID, metadata, nil
 }
 
 func (s *storage) GetChanged(
@@ -268,7 +298,8 @@ func (s *storage) WaitLogAppliedAt(
 
 func (s *storage) Read(
 	ctx context.Context,
-	table uint64,
+	shard pb.TableShard,
+	method int,
 	payload []byte,
 	ts timestamp.Timestamp,
 ) ([]byte, error) {
@@ -339,6 +370,33 @@ func readShards(
 	)
 	metadata.ShardIDs = shardIDs
 	return nil
+}
+
+func getTableIDByShardID(
+	shardID uint64,
+	policy string,
+	txn executor.TxnExecutor,
+) (uint64, error) {
+	res, err := txn.Exec(
+		getTableIDByShardSQL(shardID, policy),
+		executor.StatementOption{},
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+
+	var tableID uint64
+	res.ReadRows(
+		func(
+			rows int,
+			cols []*vector.Vector,
+		) bool {
+			tableID = executor.GetFixedRows[uint64](cols[0])[0]
+			return true
+		},
+	)
+	return tableID, nil
 }
 
 func readPartitionIDs(
@@ -445,6 +503,19 @@ func getShardsSQL(
 	)
 }
 
+func getTableIDByShardSQL(
+	shardID uint64,
+	policy string,
+) string {
+	return fmt.Sprintf(
+		"select table_id from %s.%s where shard_id = %d and policy = '%s'",
+		catalog.MO_CATALOG,
+		catalog.MOShards,
+		shardID,
+		policy,
+	)
+}
+
 func getDeleteShardsSQL(
 	table uint64,
 ) string {
@@ -504,11 +575,12 @@ func getCreateSQLs(
 	for _, id := range metadata.ShardIDs {
 		values = append(values,
 			fmt.Sprintf(
-				"insert into %s.%s (table_id, shard_id) values (%d, %d)",
+				"insert into %s.%s (table_id, shard_id, policy) values (%d, %d, '%s')",
 				catalog.MO_CATALOG,
 				catalog.MOShards,
 				table,
 				id,
+				metadata.Policy.String(),
 			),
 		)
 	}

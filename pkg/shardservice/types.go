@@ -22,6 +22,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
@@ -61,10 +62,10 @@ type ShardServer interface {
 // ShardService.
 type ShardService interface {
 	// Read read data from shards.
-	Read(ctx context.Context, table uint64, payload []byte, apply func([]byte), opts ReadOptions) error
+	Read(ctx context.Context, req ReadRequest, opts ReadOptions) error
 
 	// GetShardInfo returns the metadata of the shards corresponding to the table.
-	GetShardInfo(table uint64, txnOp client.TxnOperator) (pb.ShardsMetadata, bool, error)
+	GetShardInfo(table uint64) (uint64, pb.Policy, bool, error)
 	// Create creates table shards metadata in current txn. And create shard
 	// binds after txn committed asynchronously. Nothing happened if txn aborted.
 	//
@@ -97,11 +98,19 @@ type filter interface {
 	filter(r *rt, cn []*cn) []*cn
 }
 
+type ReadFunc func(
+	ctx context.Context,
+	shard pb.TableShard,
+	engine engine.Engine,
+	payload []byte,
+	ts timestamp.Timestamp,
+) ([]byte, error)
+
 // ShardStorage is used to store metadata for Table Shards, handle read operations for
 // shards, and Log tail subscriptions.
 type ShardStorage interface {
 	// Get returns the latest metadata of the shards corresponding to the table.
-	Get(table uint64) (pb.ShardsMetadata, error)
+	Get(table uint64) (uint64, pb.ShardsMetadata, error)
 	// GetChanged returns the table ids of the shards that have been changed.
 	GetChanged(tables map[uint64]uint32, applyDeleted func(uint64), applyChanged func(uint64)) error
 	// Create creates the metadata for the sharding corresponding to the table with the given
@@ -116,7 +125,7 @@ type ShardStorage interface {
 	// Ensure that subsequent reads have full log tail data.
 	WaitLogAppliedAt(ctx context.Context, ts timestamp.Timestamp) error
 	// Read read data with the given timestamp
-	Read(ctx context.Context, table uint64, payload []byte, ts timestamp.Timestamp) ([]byte, error)
+	Read(ctx context.Context, shard pb.TableShard, method int, payload []byte, ts timestamp.Timestamp) ([]byte, error)
 }
 
 var (
@@ -128,4 +137,18 @@ type ReadOptions struct {
 	readAt  timestamp.Timestamp
 	shardID uint64
 	adjust  func(*pb.TableShard)
+}
+
+const (
+	ReadData   = 0
+	ReadRanges = 1
+	ReadStats  = 2
+	ReadRows   = 3
+)
+
+type ReadRequest struct {
+	TableID uint64
+	Method  int
+	Data    []byte
+	Apply   func([]byte)
 }

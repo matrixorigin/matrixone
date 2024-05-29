@@ -113,6 +113,7 @@ func (s *service) handleRemoteRead(
 		ctx,
 		req.ShardRead.Shard,
 		req.ShardRead.ReadAt,
+		int(req.ShardRead.Method),
 		req.ShardRead.Payload,
 	)
 	if err != nil {
@@ -176,12 +177,14 @@ func (s *service) unwrapError(
 
 func (s *service) newReadRequest(
 	shard pb.TableShard,
+	method int,
 	payload []byte,
 	readAt timestamp.Timestamp,
 ) *pb.Request {
 	req := s.remote.pool.AcquireRequest()
 	req.RPCMethod = pb.Method_ShardRead
 	req.ShardRead.Shard = shard
+	req.ShardRead.Method = uint32(method)
 	req.ShardRead.Payload = payload
 	req.ShardRead.CN = shard.Replicas[0].CN
 	req.ShardRead.ReadAt = readAt

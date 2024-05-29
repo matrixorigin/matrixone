@@ -976,6 +976,7 @@ func CompileFilterExpr(
 }
 
 func TryFastFilterBlocks(
+	ctx context.Context,
 	snapshotTS timestamp.Timestamp,
 	tableDef *plan.TableDef,
 	exprs []*plan.Expr,
@@ -984,13 +985,13 @@ func TryFastFilterBlocks(
 	dirtyBlocks map[types.Blockid]struct{},
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
-	proc *process.Process,
 ) (ok bool, err error) {
 	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, ok := CompileFilterExprs(exprs, proc, tableDef, fs)
 	if !ok {
 		return false, nil
 	}
 	err = ExecuteBlockFilter(
+		ctx,
 		snapshotTS,
 		fastFilterOp,
 		loadOp,
@@ -1002,12 +1003,12 @@ func TryFastFilterBlocks(
 		dirtyBlocks,
 		outBlocks,
 		fs,
-		proc,
 	)
 	return true, err
 }
 
 func ExecuteBlockFilter(
+	ctx context.Context,
 	snapshotTS timestamp.Timestamp,
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
@@ -1019,7 +1020,6 @@ func ExecuteBlockFilter(
 	dirtyBlocks map[types.Blockid]struct{},
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
-	proc *process.Process,
 ) (err error) {
 
 	hasDeletes := len(dirtyBlocks) > 0
@@ -1039,7 +1039,7 @@ func ExecuteBlockFilter(
 			)
 			if loadOp != nil {
 				if meta, bf, err2 = loadOp(
-					proc.Ctx, objStats, meta, bf,
+					ctx, objStats, meta, bf,
 				); err2 != nil {
 					return
 				}

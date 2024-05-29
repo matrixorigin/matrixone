@@ -183,10 +183,11 @@ message GetShardsResponse {
 }
 
 message ShardReadRequest {
-    TableShard          Shard    = 1 [(gogoproto.nullable) = false];
-    string              CN       = 2;
-    bytes               Payload  = 3;
-    timestamp.Timestamp ReadAt   = 4 [(gogoproto.nullable) = false];
+    TableShard          Shard      = 1 [(gogoproto.nullable) = false];
+    string              CN         = 2;
+    uint32              Method     = 3;
+    bytes               Payload    = 4;
+    timestamp.Timestamp ReadAt     = 5 [(gogoproto.nullable) = false];
 }
 
 message ShardReadResponse {
