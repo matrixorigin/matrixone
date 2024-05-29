@@ -183,7 +183,19 @@ func (resper *NullResp) RespResult(ctx *ExecCtx, b *batch.Batch) error {
 	return nil
 }
 
-func (resper *NullResp) RespPostMeta(ctx *ExecCtx, a any) error {
+func (resper *NullResp) RespPostMeta(execCtx *ExecCtx, a any) error {
+	//for sequence, "set @var = nextval('xxxx')" need
+	//refresh the sequence values.
+	if ses, ok := execCtx.ses.(*Session); ok && execCtx.stmt != nil {
+		switch execCtx.stmt.(type) {
+		case *tree.Select:
+			if len(execCtx.proc.SessionInfo.SeqAddValues) != 0 {
+				ses.AddSeqValues(execCtx.proc)
+			}
+			ses.SetSeqLastValue(execCtx.proc)
+		}
+	}
+
 	return nil
 }
 
