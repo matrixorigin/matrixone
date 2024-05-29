@@ -190,13 +190,18 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 
 			for i = 0; i < buildCount; i++ {
 				clusterEmbeddingF32 = types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				dist, err := moarray.L2DistanceSq[float32](clusterEmbeddingF32, tblEmbeddingF32)
-				if err != nil {
-					return err
-				}
-				if dist < leastDistance {
-					leastDistance = dist
+				if len(tblEmbeddingF32) == 0 || len(clusterEmbeddingF32) == 0 {
+					leastDistance = 0
 					leastClusterIndex = i
+				} else {
+					dist, err := moarray.L2DistanceSq[float32](clusterEmbeddingF32, tblEmbeddingF32)
+					if err != nil {
+						return err
+					}
+					if dist < leastDistance {
+						leastDistance = dist
+						leastClusterIndex = i
+					}
 				}
 			}
 			//// article:https://blog.mike.norgate.xyz/unlocking-go-slice-performance-navigating-sync-pool-for-enhanced-efficiency-7cb63b0b453e
@@ -216,13 +221,18 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 
 			for i = 0; i < buildCount; i++ {
 				clusterEmbeddingF64 = types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				dist, err := moarray.L2DistanceSq[float64](clusterEmbeddingF64, tblEmbeddingF64)
-				if err != nil {
-					return err
-				}
-				if dist < leastDistance {
-					leastDistance = dist
+				if len(tblEmbeddingF64) == 0 || len(clusterEmbeddingF64) == 0 {
+					leastDistance = 0
 					leastClusterIndex = i
+				} else {
+					dist, err := moarray.L2DistanceSq[float64](clusterEmbeddingF64, tblEmbeddingF64)
+					if err != nil {
+						return err
+					}
+					if dist < leastDistance {
+						leastDistance = dist
+						leastClusterIndex = i
+					}
 				}
 			}
 			//*normalizeTblEmbeddingPtrF64 = normalizeTblEmbeddingF64
