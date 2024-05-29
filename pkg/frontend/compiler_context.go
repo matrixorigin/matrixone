@@ -52,7 +52,7 @@ type TxnCompilerContext struct {
 	snapshot             *plan2.Snapshot
 	views                []string
 	//for support explain analyze
-	tcw     *TxnComputationWrapper
+	tcw     ComputationWrapper
 	execCtx *ExecCtx
 	mu      sync.Mutex
 }
@@ -90,7 +90,7 @@ func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
 }
 
 func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
-	p, st, _, err := replacePlan(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw, execPlan)
+	p, st, _, err := replacePlan(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan)
 	return p, st, err
 }
 

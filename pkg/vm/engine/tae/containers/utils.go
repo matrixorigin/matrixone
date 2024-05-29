@@ -768,13 +768,18 @@ func ForeachWindowVarlen(
 	slice = slice[start : start+length]
 	if sels.IsEmpty() {
 		for i, v := range slice {
+			var val []byte
+			isNull := vec.IsNull(uint64(i + start))
+			if !isNull {
+				val = v.GetByteSlice(area)
+			}
 			if op != nil {
-				if err = op(v.GetByteSlice(area), vec.IsNull(uint64(i+start)), i+start); err != nil {
+				if err = op(val, isNull, i+start); err != nil {
 					break
 				}
 			}
 			if opAny != nil {
-				if err = opAny(v.GetByteSlice(area), vec.IsNull(uint64(i+start)), i+start); err != nil {
+				if err = opAny(val, isNull, i+start); err != nil {
 					break
 				}
 			}
@@ -790,13 +795,18 @@ func ForeachWindowVarlen(
 				break
 			}
 			v := slice[int(idx)-start]
+			var val []byte
+			isNull := vec.IsNull(uint64(idx))
+			if !isNull {
+				val = v.GetByteSlice(area)
+			}
 			if op != nil {
-				if err = op(v.GetByteSlice(area), vec.IsNull(uint64(idx)), int(idx)); err != nil {
+				if err = op(val, isNull, int(idx)); err != nil {
 					break
 				}
 			}
 			if opAny != nil {
-				if err = opAny(v.GetByteSlice(area), vec.IsNull(uint64(idx)), int(idx)); err != nil {
+				if err = opAny(val, isNull, int(idx)); err != nil {
 					break
 				}
 			}
