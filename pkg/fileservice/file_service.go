@@ -170,7 +170,7 @@ type CostItem uint8
 
 const (
 	CostLow CostItem = iota
-	CostHugh
+	CostHigh
 )
 
 type CostAttr struct {

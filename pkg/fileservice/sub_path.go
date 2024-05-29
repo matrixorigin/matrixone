@@ -139,7 +139,5 @@ func (s *subPathFS) PrefetchFile(ctx context.Context, filePath string) error {
 }
 
 func (s *subPathFS) Cost() *CostAttr {
-	return &CostAttr{
-		List: CostLow,
-	}
+	return s.upstream.Cost()
 }

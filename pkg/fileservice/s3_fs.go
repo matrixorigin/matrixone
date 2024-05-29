@@ -828,7 +828,7 @@ func (s *S3FS) SetAsyncUpdate(b bool) {
 
 func (s *S3FS) Cost() *CostAttr {
 	return &CostAttr{
-		List: CostHugh,
+		List: CostHigh,
 	}
 }
 
