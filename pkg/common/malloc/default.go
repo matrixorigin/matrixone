@@ -20,22 +20,36 @@ import (
 	"strings"
 )
 
-func NewDefault(config *Config) Allocator {
+func NewDefault(config *Config) (allocator Allocator) {
 	if config == nil {
 		c := *defaultConfig.Load()
 		config = &c
 	}
 
+	var metrics Metrics
+	if config.EnableMetrics {
+		go metrics.startExport()
+	}
+
 	switch strings.TrimSpace(strings.ToLower(os.Getenv("MO_MALLOC"))) {
 
 	case "c":
-		return NewCAllocator()
+		allocator = NewCAllocator()
+		if config.EnableMetrics {
+			allocator = NewMetricsAllocator(allocator, &metrics)
+		}
+		return allocator
 
 	case "old":
 		return NewShardedAllocator(
 			runtime.GOMAXPROCS(0),
 			func() Allocator {
-				return NewPureGoClassAllocator(256 * MB)
+				var ret Allocator
+				ret = NewPureGoClassAllocator(256 * MB)
+				if config.EnableMetrics {
+					ret = NewMetricsAllocator(ret, &metrics)
+				}
+				return ret
 			},
 		)
 
@@ -43,7 +57,12 @@ func NewDefault(config *Config) Allocator {
 		return NewShardedAllocator(
 			runtime.GOMAXPROCS(0),
 			func() Allocator {
-				return NewClassAllocator(config.CheckFraction)
+				var ret Allocator
+				ret = NewClassAllocator(config.CheckFraction)
+				if config.EnableMetrics {
+					ret = NewMetricsAllocator(ret, &metrics)
+				}
+				return ret
 			},
 		)
 
