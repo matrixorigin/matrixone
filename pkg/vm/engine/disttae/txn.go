@@ -144,10 +144,10 @@ func (txn *Transaction) WriteBatch(
 	return nil
 }
 
-func (txn *Transaction) dumpBatch(offset int) error {
+func (txn *Transaction) dumpBatch(ctx context.Context, offset int) error {
 	txn.Lock()
 	defer txn.Unlock()
-	return txn.dumpBatchLocked(offset)
+	return txn.dumpBatchLocked(ctx, offset)
 }
 
 func checkPKDupGeneric[T comparable](
@@ -275,7 +275,7 @@ func checkPKDup(
 }
 
 // checkDup check whether the txn.writes has duplicate pk entry
-func (txn *Transaction) checkDup() error {
+func (txn *Transaction) checkDup(ctx context.Context) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnCheckPKDupDurationHistogram.Observe(time.Since(start).Seconds())
@@ -312,7 +312,7 @@ func (txn *Transaction) checkDup() error {
 				if err != nil {
 					return err
 				}
-				tablesDef[e.tableId] = tbl.GetTableDef(txn.proc.Ctx)
+				tablesDef[e.tableId] = tbl.GetTableDef(ctx)
 			}
 			tableDef := tablesDef[e.tableId]
 			if _, ok := pkIndex[e.tableId]; !ok {
@@ -388,7 +388,7 @@ func (txn *Transaction) checkDup() error {
 // dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
 // start from write offset.   Pass in offset -1 to dump all.   Note that dump all will
 // modify txn.writes, so it can only be called right before txn.commit.
-func (txn *Transaction) dumpBatchLocked(offset int) error {
+func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	var size uint64
 	var pkCount int
 	if txn.workspaceSize < WorkspaceThreshold {
@@ -473,7 +473,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			return err
 		}
 
-		tableDef := tbl.GetTableDef(txn.proc.Ctx)
+		tableDef := tbl.GetTableDef(ctx)
 
 		s3Writer, err := colexec.AllocS3Writer(txn.proc, tableDef)
 		if err != nil {
@@ -801,7 +801,7 @@ func (txn *Transaction) genRowId() types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
-func (txn *Transaction) mergeTxnWorkspaceLocked() error {
+func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	if len(txn.batchSelectList) > 0 {
 		for _, e := range txn.writes {
 			if sels, ok := txn.batchSelectList[e.bat]; ok {
@@ -810,11 +810,11 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 			}
 		}
 	}
-	return txn.compactionBlksLocked()
+	return txn.compactionBlksLocked(ctx)
 }
 
 // CN blocks compaction for txn
-func (txn *Transaction) compactionBlksLocked() error {
+func (txn *Transaction) compactionBlksLocked(ctx context.Context) error {
 	compactedBlks := make(map[tableKey]map[objectio.ObjectLocation][]int64)
 	compactedEntries := make(map[*batch.Batch][]int64)
 	defer func() {
@@ -850,7 +850,7 @@ func (txn *Transaction) compactionBlksLocked() error {
 		}
 		//TODO::do parallel compaction for table
 		tbl := rel.(*txnTable)
-		createdBlks, stats, err := tbl.compaction(blks)
+		createdBlks, stats, err := tbl.compaction(ctx, blks)
 		if err != nil {
 			return err
 		}
@@ -1022,10 +1022,10 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if txn.readOnly.Load() {
 		return nil, nil
 	}
-	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
+	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
 		return nil, err
 	}
-	if err := txn.dumpBatchLocked(-1); err != nil {
+	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
 		return nil, err
 	}
 
@@ -1033,7 +1033,7 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 
 	if !txn.hasS3Op.Load() &&
 		txn.op.TxnOptions().CheckDupEnabled() {
-		if err := txn.checkDup(); err != nil {
+		if err := txn.checkDup(ctx); err != nil {
 			return nil, err
 		}
 	}

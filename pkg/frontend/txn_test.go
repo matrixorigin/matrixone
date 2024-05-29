@@ -118,7 +118,7 @@ func (t *testWorkspace) WriteOffset() uint64 {
 	panic("implement me")
 }
 
-func (t *testWorkspace) Adjust(writeOffset uint64) error {
+func (t *testWorkspace) Adjust(_ context.Context, _ uint64) error {
 	//TODO implement me
 	panic("implement me")
 }

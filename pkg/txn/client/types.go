@@ -254,7 +254,7 @@ type Workspace interface {
 	GetSnapshotWriteOffset() int
 
 	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
-	Adjust(writeOffset uint64) error
+	Adjust(ctx context.Context, writeOffset uint64) error
 
 	Commit(ctx context.Context) ([]txn.TxnRequest, error)
 	Rollback(ctx context.Context) error

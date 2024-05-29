@@ -356,11 +356,11 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 		delete(txn.toFreeBatches, key)
 	}
 	//merge writes for the last statement
-	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
+	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
 		return err
 	}
 	// dump batch to s3, starting from 0 (begining of the workspace)
-	if err := txn.dumpBatchLocked(0); err != nil {
+	if err := txn.dumpBatchLocked(ctx, 0); err != nil {
 		return err
 	}
 	txn.offsets = append(txn.offsets, len(txn.writes))
@@ -377,7 +377,7 @@ func (txn *Transaction) WriteOffset() uint64 {
 }
 
 // Adjust adjust writes order after the current statement finished.
-func (txn *Transaction) Adjust(writeOffset uint64) error {
+func (txn *Transaction) Adjust(ctx context.Context, writeOffset uint64) error {
 	start := time.Now()
 	seq := txn.op.NextSequence()
 	trace.GetService().AddTxnDurationAction(
@@ -404,7 +404,7 @@ func (txn *Transaction) Adjust(writeOffset uint64) error {
 	}
 	//FIXME:: Do merge the workspace here, is it a must ?
 	//        since it has been called already in IncrStatementID.
-	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
+	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
 		return err
 	}
 
