@@ -15,10 +15,11 @@
 package function
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func Test_Operator_Unary_Tilde(t *testing.T) {
@@ -325,7 +326,7 @@ func Test_Operator_And(t *testing.T) {
 				[]bool{true, false, false, false, false, false, false, false, false},
 				[]bool{false, false, true, false, false, false, true, false, true}),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, andFn)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, opMultiAnd)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -353,7 +354,7 @@ func Test_Operator_Or(t *testing.T) {
 				[]bool{true, true, true, true, false, false, true, false, false},
 				[]bool{false, false, false, false, false, true, false, true, true}),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, orFn)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, opMultiOr)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}

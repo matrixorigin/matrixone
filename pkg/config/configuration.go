@@ -582,7 +582,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		SelectAggrThreshold:                toml.Duration{},
 		EnableStmtMerge:                    false,
 		LabelSelector:                      map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal}, /*role=logging_cn*/
-		TCPPacket:                          false,
+		TCPPacket:                          true,
 		CU:                                 *NewOBCUConfig(),
 		CUv1:                               *NewOBCUConfig(),
 		OBCollectorConfig:                  *NewOBCollectorConfig(),

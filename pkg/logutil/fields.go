@@ -30,6 +30,10 @@ func StatusField(val string) zap.Field       { return zap.String("status", val) 
 func TableField(val string) zap.Field        { return zap.String("table", val) } // table name
 func PathField(val string) zap.Field         { return zap.String("path", val) }
 
+func SessionIdField(val string) zap.Field   { return zap.String("session_id", val) }
+func TxnIdField(val string) zap.Field       { return zap.String("txn_id", val) }
+func StatementIdField(val string) zap.Field { return zap.String("statement_id", val) }
+
 func NoReportFiled() zap.Field { return zap.Bool(MOInternalFiledKeyNoopReport, true) }
 func Discardable() zap.Field   { return zap.Bool(MOInternalFiledKeyDiscardable, true) }
 

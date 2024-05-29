@@ -28,35 +28,27 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-
-	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
-	"github.com/BurntSushi/toml"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 type CloseFlag struct {
@@ -211,6 +203,7 @@ func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient)
 	if err != nil {
 		return nil, err
 	}
+	sv.SetDefaultValues()
 	pu := mo_config.NewParameterUnit(sv, eng, txnClient, engine.Nodes{})
 
 	return pu, nil
@@ -465,10 +458,6 @@ type statementStatus int
 const (
 	success statementStatus = iota
 	fail
-	sessionId = "session_id"
-
-	txnId       = "txn_id"
-	statementId = "statement_id"
 )
 
 func (s statementStatus) String() string {
@@ -484,7 +473,7 @@ func (s statementStatus) String() string {
 // logStatementStatus prints the status of the statement into the log.
 func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement, status statementStatus, err error) {
 	var stmtStr string
-	stm := motrace.StatementFromContext(ctx)
+	stm := ses.GetStmtInfo()
 	if stm == nil {
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
 		stmt.Format(fmtCtx)
@@ -499,19 +488,17 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	str := SubStringFromBegin(stmtStr, int(getGlobalPu().SV.LengthOfQueryPrinted))
 	outBytes, outPacket := ses.GetMysqlProtocol().CalculateOutTrafficBytes(true)
 	if status == success {
-		logDebug(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
+		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
 		err = nil // make sure: it is nil for EndStatement
 	} else {
-		txnId := ses.GetTxnId()
-		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx),
-			zap.String("txn_id", hex.EncodeToString(txnId[:])))
+		ses.Error(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
 	}
 
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
 	if !ses.IsBackgroundSession() {
-		motrace.EndStatement(ctx, err, ses.SendRows(), outBytes, outPacket)
+		stmt := ses.GetStmtInfo()
+		stmt.EndStatement(ctx, err, ses.SendRows(), outBytes, outPacket)
 	}
-
 	// need just below EndStatement
 	ses.SetTStmt(nil)
 }
@@ -532,62 +519,22 @@ func initLogger() {
 	logger = rt.Logger().Named("frontend")
 }
 
+// appendSessionField append session id, transaction id and statement id to the fields
+// history:
+// #15877, discard ses.GetTxnInfo(), it need ses.Lock(). may cause deadlock: locked by itself.
+// #16028, depend on ses.GetStmtProfile() itself do the log. get rid of StatementInfo.
 func appendSessionField(fields []zap.Field, ses FeSession) []zap.Field {
 	if ses != nil {
-		if ses.GetStmtInfo() != nil {
-			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.GetStmtInfo().SessionID).String()))
-			fields = append(fields, zap.String(statementId, uuid.UUID(ses.GetStmtInfo().StatementID).String()))
-			txnInfo := ses.GetTxnInfo()
-			if txnInfo != "" {
-				fields = append(fields, zap.String(txnId, txnInfo))
-			}
-		} else {
-			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.GetUUID()).String()))
+		fields = append(fields, logutil.SessionIdField(uuid.UUID(ses.GetUUID()).String()))
+		p := ses.GetStmtProfile()
+		if p.GetStmtId() != dumpUUID {
+			fields = append(fields, logutil.StatementIdField(uuid.UUID(p.GetStmtId()).String()))
+		}
+		if txnId := p.GetTxnId(); txnId != dumpUUID {
+			fields = append(fields, logutil.TxnIdField(hex.EncodeToString(txnId[:])))
 		}
 	}
 	return fields
-}
-
-func logInfo(ses FeSession, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().GetUser() == db_holder.MOLoggerUser {
-		return
-	}
-	fields = append(fields, zap.String("session_info", info))
-	fields = appendSessionField(fields, ses)
-	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
-}
-
-func logInfof(info string, msg string, fields ...zap.Field) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
-		fields = append(fields, zap.String("session_info", info))
-		getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
-	}
-}
-
-func logDebug(ses FeSession, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().GetUser() == db_holder.MOLoggerUser {
-		return
-	}
-	fields = append(fields, zap.String("session_info", info))
-	fields = appendSessionField(fields, ses)
-	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
-}
-
-func logError(ses FeSession, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().GetUser() == db_holder.MOLoggerUser {
-		return
-	}
-	fields = append(fields, zap.String("session_info", info))
-	fields = appendSessionField(fields, ses)
-	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
-}
-
-// todo: remove this function after all the logDebugf are replaced by logDebug
-func logDebugf(info string, msg string, fields ...interface{}) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		fields = append(fields, info)
-		logutil.Debugf(msg+" %s", fields...)
-	}
 }
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
@@ -1067,8 +1014,18 @@ func updateTempEngine(storage engine.Engine, te *memoryengine.Engine) {
 	}
 }
 
+const KeySep = "#"
+
 func genKey(dbName, tblName string) string {
-	return fmt.Sprintf("%s#%s", dbName, tblName)
+	return fmt.Sprintf("%s%s%s", dbName, KeySep, tblName)
+}
+
+func splitKey(key string) (string, string) {
+	parts := strings.Split(key, KeySep)
+	if len(parts) >= 2 {
+		return parts[0], parts[1]
+	}
+	return parts[0], ""
 }
 
 type topsort struct {
@@ -1089,8 +1046,8 @@ func (g *topsort) addEdge(from, to string) {
 	g.next[from] = append(g.next[from], to)
 }
 
-func (g *topsort) sort() (ans []string, ok bool) {
-	inDegree := make(map[string]uint)
+func (g *topsort) sort() (ans []string, err error) {
+	inDegree := make(map[string]uint, len(g.next))
 	for u := range g.next {
 		inDegree[u] = 0
 	}
@@ -1122,8 +1079,8 @@ func (g *topsort) sort() (ans []string, ok bool) {
 		}
 	}
 
-	if len(ans) == len(inDegree) {
-		ok = true
+	if len(ans) != len(inDegree) {
+		err = moerr.NewInternalErrorNoCtx("There is a cycle in dependency graph")
 	}
 	return
 }

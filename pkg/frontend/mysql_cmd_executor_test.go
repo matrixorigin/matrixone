@@ -63,8 +63,6 @@ func init() {
 }
 
 func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
-	stm := &motrace.StatementInfo{}
-	ctx = motrace.ContextWithStatement(ctx, stm)
 	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time, string, string, bool) (context.Context, error) {
 		return ctx, nil
 	})
@@ -134,7 +132,7 @@ func Test_mce(t *testing.T) {
 		create_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 		create_1.EXPECT().Clear().AnyTimes()
 		create_1.EXPECT().Free().AnyTimes()
-		create_1.EXPECT().Plan().Return(nil).AnyTimes()
+		create_1.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
 
 		select_1 := mock_frontend.NewMockComputationWrapper(ctrl)
 		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from A", 1, 0)
@@ -149,7 +147,7 @@ func Test_mce(t *testing.T) {
 		select_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 		select_1.EXPECT().Clear().AnyTimes()
 		select_1.EXPECT().Free().AnyTimes()
-		select_1.EXPECT().Plan().Return(nil).AnyTimes()
+		select_1.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
 
 		cola := &MysqlColumn{}
 		cola.SetName("a")
@@ -230,7 +228,7 @@ func Test_mce(t *testing.T) {
 			select_2.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 			select_2.EXPECT().Clear().AnyTimes()
 			select_2.EXPECT().Free().AnyTimes()
-			select_2.EXPECT().Plan().Return(nil).AnyTimes()
+			select_2.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
 			cws = append(cws, select_2)
 		}
 
@@ -1012,7 +1010,7 @@ func TestSerializePlanToJson(t *testing.T) {
 		stm := &motrace.StatementInfo{StatementID: uid, Statement: sql, RequestAt: time.Now()}
 		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan)
 		json := h.Marshal(mock.CurrentContext().GetContext())
-		_, stats := h.Stats(mock.CurrentContext().GetContext())
+		_, stats := h.Stats(mock.CurrentContext().GetContext(), nil)
 		require.Equal(t, int64(0), stats.RowsRead)
 		require.Equal(t, int64(0), stats.BytesScan)
 		t.Logf("SQL plan to json : %s\n", string(json))
@@ -1295,15 +1293,11 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 	}
 
 	motrace.GetTracerProvider().SetEnable(true)
-	ctx, err := RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), nil, nil, moerr.NewInternalErrorNoCtx("test"))
+	_, err := RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), nil, nil, moerr.NewInternalErrorNoCtx("test"))
 	assert.Nil(t, err)
-	si := motrace.StatementFromContext(ctx)
-	require.NotNil(t, si)
 
-	ctx, err = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{constant.ExternSql, constant.ExternSql}, moerr.NewInternalErrorNoCtx("test"))
+	_, err = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{constant.ExternSql, constant.ExternSql}, moerr.NewInternalErrorNoCtx("test"))
 	assert.Nil(t, err)
-	si = motrace.StatementFromContext(ctx)
-	require.NotNil(t, si)
 
 }
 
