@@ -1,8 +1,8 @@
 drop database if exists test;
 create database test;
-select `variable_value` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test";
+select `variable_value` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test" and variable_name = 'version_compatibility';
 alter database test set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.7.0';
-select `variable_value` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test";
+select `variable_value` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test" and variable_name = 'version_compatibility';
 drop database test;
 
 drop database if exists test;

@@ -52,7 +52,7 @@ type TxnCompilerContext struct {
 	snapshot             *plan2.Snapshot
 	views                []string
 	//for support explain analyze
-	tcw     *TxnComputationWrapper
+	tcw     ComputationWrapper
 	execCtx *ExecCtx
 	mu      sync.Mutex
 }
@@ -90,7 +90,7 @@ func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
 }
 
 func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
-	p, st, _, err := replacePlan(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw, execPlan)
+	p, st, _, err := replacePlan(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan)
 	return p, st, err
 }
 
@@ -214,6 +214,30 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot plan2.Snaps
 		return 0, moerr.NewInternalError(tempCtx, "The databaseid of '%s' is not a valid number", dbName)
 	}
 	return databaseId, nil
+}
+
+func (tcc *TxnCompilerContext) GetDbLevelConfig(dbName string, varName string) (string, error) {
+	switch varName {
+	case "unique_check_on_autoincr":
+		// check if the database is a system database
+		if _, ok := sysDatabases[dbName]; !ok {
+			ses := tcc.GetSession()
+			if _, ok := ses.(*backSession); ok {
+				return "None", nil
+			}
+			ret, err := ses.GetConfig(tcc.GetContext(), dbName, varName)
+			if err != nil {
+				return "", err
+			}
+			if ret != nil {
+				return ret.(string), nil
+			}
+			return "None", nil
+		}
+		return "Check", nil
+	default:
+	}
+	return "", moerr.NewInternalError(tcc.GetContext(), "The variable '%s' is not a valid database level variable", varName)
 }
 
 // getRelation returns the context (maybe updated) and the relation

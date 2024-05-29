@@ -139,6 +139,7 @@ column_privileges
 columns
 engines
 events
+files
 key_column_usage
 keywords
 parameters
