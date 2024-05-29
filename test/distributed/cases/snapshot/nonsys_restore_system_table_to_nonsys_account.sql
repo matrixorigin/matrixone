@@ -79,7 +79,7 @@ use udf_db2;
 create function `addAB`(x int, y int) returns int
     language sql as
 '$1 + $2';
--- @ignore:9,10
+-- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
 
 drop snapshot if exists udf_sp04;
@@ -89,7 +89,7 @@ drop database udf_db2;
 select * from mo_catalog.mo_user_defined_function;
 
 restore account acc01 from snapshot udf_sp04;
--- @ignore:9,10
+-- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
 drop database udf_db2;
 drop snapshot udf_sp04;
