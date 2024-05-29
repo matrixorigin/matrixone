@@ -25,6 +25,9 @@ type Config struct {
 	// CheckFraction controls the fraction of checked deallocations
 	// On average, 1 / fraction of deallocations will be checked for double free or missing free
 	CheckFraction uint32 `toml:"check-fraction"`
+
+	// EnableMetrics indicates whether to expose metrics to prometheus
+	EnableMetrics bool `toml:"enable-metrics"`
 }
 
 var defaultConfig = func() *atomic.Pointer[Config] {
