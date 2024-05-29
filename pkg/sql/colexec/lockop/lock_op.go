@@ -978,6 +978,9 @@ func lockTalbeIfLockCountIsZero(
 	}
 	if arg.rt.lockCount == 0 {
 		for idx := range arg.targets {
+			if !arg.targets[idx].lockTableAtTheEnd {
+				continue
+			}
 			if idx == 0 && arg.targets[idx].lockRows != nil {
 				vec, err := colexec.EvalExpressionOnce(proc, arg.targets[idx].lockRows, []*batch.Batch{batch.EmptyForConstFoldBatch})
 				if err != nil {
