@@ -932,7 +932,7 @@ func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
 }
 
 // TODO:: refactor in next PR, to make it more efficient and include persisted deletes in S3
-func (txn *Transaction) forEachTableHasDeletesLocked(f func(tbl *txnTable) error) error {
+func (txn *Transaction) forEachTableHasDeletesLocked(ctx context.Context, f func(tbl *txnTable) error) error {
 	tables := make(map[uint64]*txnTable)
 	for i := 0; i < len(txn.writes); i++ {
 		e := txn.writes[i]
@@ -942,11 +942,11 @@ func (txn *Transaction) forEachTableHasDeletesLocked(f func(tbl *txnTable) error
 		if _, ok := tables[e.tableId]; ok {
 			continue
 		}
-		db, err := txn.engine.Database(txn.proc.Ctx, e.databaseName, txn.op)
+		db, err := txn.engine.Database(ctx, e.databaseName, txn.op)
 		if err != nil {
 			return err
 		}
-		rel, err := db.Relation(txn.proc.Ctx, e.tableName, nil)
+		rel, err := db.Relation(ctx, e.tableName, nil)
 		if err != nil {
 			return err
 		}
@@ -1144,7 +1144,7 @@ func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) 
 			txn.resetSnapshot()
 		}
 
-		return txn.forEachTableHasDeletesLocked(func(tbl *txnTable) error {
+		return txn.forEachTableHasDeletesLocked(ctx, func(tbl *txnTable) error {
 			ctx := tbl.proc.Load().Ctx
 			state, err := tbl.getPartitionState(ctx)
 			if err != nil {
