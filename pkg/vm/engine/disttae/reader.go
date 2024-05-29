@@ -19,6 +19,8 @@ import (
 	"sort"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 // -----------------------------------------------------------------
@@ -559,7 +560,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 
 	r.tryUpdateColumns(cols)
 	// load deletes from txn.blockId_dn_delete_metaLoc_batch
-	err := r.table.LoadDeletesForBlock(info.BlockID, &r.buffer)
+	err := r.table.LoadDeletesForBlock(ctx, info.BlockID, &r.buffer)
 	if err != nil {
 		return err
 	}

@@ -19,9 +19,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -64,7 +65,7 @@ func (p *PartitionReader) Close() error {
 	return p.iter.Close()
 }
 
-func (p *PartitionReader) prepare() error {
+func (p *PartitionReader) prepare(ctx context.Context) error {
 	txn := p.table.getTxn()
 	var inserts []*batch.Batch
 	var deletes map[types.Rowid]uint8
@@ -107,7 +108,7 @@ func (p *PartitionReader) prepare() error {
 			})
 		//deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
 		// so, here only load deletes which don't belong to PartitionState.blks.
-		if err := p.table.LoadDeletesForMemBlocksIn(p.table._partState.Load(), deletes); err != nil {
+		if err := p.table.LoadDeletesForMemBlocksIn(ctx, p.table._partState.Load(), deletes); err != nil {
 			return err
 		}
 		p.inserts = inserts
@@ -118,7 +119,7 @@ func (p *PartitionReader) prepare() error {
 }
 
 func (p *PartitionReader) Read(
-	_ context.Context,
+	ctx context.Context,
 	colNames []string,
 	_ *plan.Expr,
 	mp *mpool.MPool,
@@ -127,7 +128,7 @@ func (p *PartitionReader) Read(
 		return
 	}
 	// prepare the data for read.
-	if err = p.prepare(); err != nil {
+	if err = p.prepare(ctx); err != nil {
 		return nil, err
 	}
 

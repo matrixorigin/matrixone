@@ -533,7 +533,7 @@ func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionState) 
 	return dirtyBlks
 }
 
-func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (err error) {
+func (tbl *txnTable) LoadDeletesForBlock(ctx context.Context, bid types.Blockid, offsets *[]int64) (err error) {
 	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
 	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
 
@@ -549,7 +549,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 				return err
 			}
 			rowIdBat, release, err := blockio.LoadTombstoneColumns(
-				tbl.getTxn().proc.Ctx,
+				ctx,
 				[]uint16{0},
 				nil,
 				tbl.getTxn().engine.fs,
@@ -571,6 +571,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 
 // LoadDeletesForMemBlocksIn loads deletes for memory blocks whose data resides in PartitionState.rows
 func (tbl *txnTable) LoadDeletesForMemBlocksIn(
+	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deletesRowId map[types.Rowid]uint8) error {
 
@@ -590,7 +591,7 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 					return err
 				}
 				rowIdBat, release, err := blockio.LoadTombstoneColumns(
-					tbl.getTxn().proc.Ctx,
+					ctx,
 					[]uint16{0},
 					nil,
 					tbl.getTxn().engine.fs,
@@ -1536,7 +1537,7 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 // |  blk_id   |   batch.Marshal(uint32 offset)    |  CNBlockOffset | CN Block
 // |  blk_id   |   batch.Marshal(rowId)            |  RawRowIdBatch | TN Blcok
 // |  blk_id   |   batch.Marshal(uint32 offset)    | RawBatchOffset | RawBatch (in txn workspace)
-func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
+func (tbl *txnTable) EnhanceDelete(ctx context.Context, bat *batch.Batch, name string) error {
 	blkId, typ_str := objectio.Str2Blockid(name[:len(name)-2]), string(name[len(name)-1])
 	typ, err := strconv.ParseInt(typ_str, 10, 64)
 	if err != nil {
@@ -1572,7 +1573,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		if bat.RowCount() == 0 {
 			return nil
 		}
-		tbl.writeTnPartition(tbl.getTxn().proc.Ctx, bat)
+		tbl.writeTnPartition(ctx, bat)
 	default:
 		tbl.getTxn().hasS3Op.Store(true)
 		panic(moerr.NewInternalErrorNoCtx("Unsupport type for table delete %d", typ))
@@ -1642,7 +1643,7 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	}
 	//for S3 delete
 	if name != catalog.Row_ID {
-		return tbl.EnhanceDelete(bat, name)
+		return tbl.EnhanceDelete(ctx, bat, name)
 	}
 	bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.RowCount() == 0 {
