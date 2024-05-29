@@ -185,6 +185,16 @@ func (c *compilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (
 	return databaseId, nil
 }
 
+func (c *compilerContext) GetDbLevelConfig(dbName string, varName string) (string, error) {
+	switch varName {
+	// For scenarios that are background SQL, use the default configuration to avoid triggering background SQL again.
+	case "unique_check_on_autoincr":
+		return "Check", nil
+	default:
+		return "", moerr.NewInternalError(c.GetContext(), "The variable '%s' is not a valid database level variable", varName)
+	}
+}
+
 func (c *compilerContext) DefaultDatabase() string {
 	return c.defaultDB
 }
