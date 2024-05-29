@@ -239,6 +239,7 @@ type Transaction struct {
 	offsets []int
 	//for RC isolation, the txn's snapshot TS for each statement.
 	timestamps []timestamp.Timestamp
+	start      time.Time
 
 	hasS3Op              atomic.Bool
 	removed              bool
