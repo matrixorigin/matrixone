@@ -78,6 +78,7 @@ type ComputationWrapper interface {
 	Plan() *plan.Plan
 	ResetPlanAndStmt(stmt tree.Statement)
 	Free()
+	ParamVals() []any
 }
 
 type ColumnInfo interface {
@@ -280,6 +281,7 @@ type FeSession interface {
 	GetSql() string
 	GetAccountId() uint32
 	GetTenantInfo() *TenantInfo
+	GetConfig(ctx context.Context, dbName, varName string) (any, error)
 	GetBackgroundExec(ctx context.Context) BackgroundExec
 	GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec
 	GetGlobalSystemVariableValue(ctx context.Context, name string) (interface{}, error)

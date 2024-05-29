@@ -228,12 +228,20 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		// append project node to make batch like update logic, not insert
 		updateColLength := 0
 		updateColPosMap := make(map[string]int)
+		updatePkCol := false
 		var insertColPos []int
 		var projectProjection []*Expr
 		tableDef = DeepCopyTableDef(tableDef, true)
 		tableDef.Cols = append(tableDef.Cols, MakeRowIdColDef())
 		colLength := len(tableDef.Cols)
 		rowIdPos := colLength - 1
+		if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+			for _, name := range tableDef.Pkey.Names {
+				if _, ok := rewriteInfo.onDuplicateExpr[name]; ok {
+					updatePkCol = true
+				}
+			}
+		}
 		for _, col := range tableDef.Cols {
 			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 				continue
@@ -288,6 +296,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		upPlanCtx.rowIdPos = rowIdPos
 		upPlanCtx.insertColPos = insertColPos
 		upPlanCtx.updateColPosMap = updateColPosMap
+		upPlanCtx.updatePkCol = updatePkCol
 
 		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, true)
 		if err != nil {
