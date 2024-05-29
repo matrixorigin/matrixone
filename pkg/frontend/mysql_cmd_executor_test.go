@@ -1086,7 +1086,7 @@ func TestProcessLoadLocal(t *testing.T) {
 			return
 		}).AnyTimes()
 		ioses.EXPECT().Close().AnyTimes()
-		proto := &FakeProtocol{
+		proto := &testMysqlWriter{
 			ioses: ioses,
 		}
 

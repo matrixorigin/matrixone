@@ -27,6 +27,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -169,49 +170,6 @@ const (
 	DefaultMySQLState string = "HY000"
 )
 
-type MysqlProtocol interface {
-	Protocol
-	//the server send group row of the result set as an independent packet thread safe
-	SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt uint64) error
-
-	SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, cnt uint64) error
-
-	//SendColumnDefinitionPacket the server send the column definition to the client
-	SendColumnDefinitionPacket(ctx context.Context, column Column, cmd int) error
-
-	//SendColumnCountPacket makes the column count packet
-	SendColumnCountPacket(count uint64) error
-
-	SendResponse(ctx context.Context, resp *Response) error
-
-	SendEOFPacketIf(warnings uint16, status uint16) error
-
-	//send OK packet to the client
-	sendOKPacket(affectedRows uint64, lastInsertId uint64, status uint16, warnings uint16, message string) error
-
-	//the OK or EOF packet thread safe
-	sendEOFOrOkPacket(warnings uint16, status uint16) error
-
-	sendLocalInfileRequest(filename string) error
-
-	ResetStatistics()
-
-	GetStats() string
-
-	// CalculateOutTrafficBytes return bytes, mysql packet num send back to client
-	// reset marks Do reset counter after calculation or not.
-	CalculateOutTrafficBytes(reset bool) (int64, int64)
-
-	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
-
-	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
-
-	DisableAutoFlush()
-	EnableAutoFlush()
-	Flush() error
-}
-
-var _ MysqlProtocol = &MysqlProtocolImpl{}
 var _ MysqlWriter = &MysqlProtocolImpl{}
 
 type debugStats struct {
@@ -300,7 +258,34 @@ func (rh *rowHandler) resetStartOffset() {
 }
 
 type MysqlProtocolImpl struct {
-	ProtocolImpl
+	m sync.Mutex
+
+	io IOPackage
+
+	tcpConn goetty.IOSession
+
+	quit atomic.Bool
+
+	//random bytes
+	salt []byte
+
+	//the id of the connection
+	connectionID uint32
+
+	// whether the handshake succeeded
+	established atomic.Bool
+
+	// whether the tls handshake succeeded
+	tlsEstablished atomic.Bool
+
+	//The sequence-id is incremented with each packet and may wrap around.
+	//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
+	sequenceId atomic.Uint32
+
+	//for debug
+	debugCount [16]uint64
+
+	ctx context.Context
 
 	//joint capability shared by the server and the client
 	capability uint32
@@ -547,7 +532,7 @@ func (mp *MysqlProtocolImpl) GetConnectAttrs() map[string]string {
 func (mp *MysqlProtocolImpl) Quit() {
 	mp.m.Lock()
 	defer mp.m.Unlock()
-	mp.ProtocolImpl.Quit()
+	mp.safeQuit()
 	if mp.strconvBuffer != nil {
 		mp.strconvBuffer = nil
 	}
@@ -2975,12 +2960,10 @@ func generate_salt(n int) []byte {
 func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
 	salt := generate_salt(20)
 	mysql := &MysqlProtocolImpl{
-		ProtocolImpl: ProtocolImpl{
-			io:           NewIOPackage(true),
-			tcpConn:      tcp,
-			salt:         salt,
-			connectionID: connectionID,
-		},
+		io:               NewIOPackage(true),
+		tcpConn:          tcp,
+		salt:             salt,
+		connectionID:     connectionID,
 		charset:          "utf8mb4",
 		capability:       DefaultCapability,
 		strconvBuffer:    make([]byte, 0, 16*1024),

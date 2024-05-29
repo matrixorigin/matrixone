@@ -386,11 +386,10 @@ type ExecCtx struct {
 	runner          ComputationRunner
 	loadLocalWriter *io.PipeWriter
 	proc            *process.Process
-	//proto           MysqlProtocol
-	ses    FeSession
-	txnOpt FeTxnOption
-	cws    []ComputationWrapper
-	input  *UserInput
+	ses             FeSession
+	txnOpt          FeTxnOption
+	cws             []ComputationWrapper
+	input           *UserInput
 	//In the session migration, skip the response to the client
 	skipRespClient bool
 	//In the session migration, executeParamTypes for the EXECUTE stmt should be migrated

@@ -40,6 +40,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -2847,4 +2848,192 @@ func TestMysqlProtocolImpl_Close(t *testing.T) {
 	assert.Nil(t, proto.strconvBuffer)
 	assert.Nil(t, proto.lenEncBuffer)
 	assert.Nil(t, proto.binaryNullBuffer)
+}
+
+var _ MysqlWriter = &testMysqlWriter{}
+
+// testMysqlWriter works for the background transaction that does not use the network protocol.
+type testMysqlWriter struct {
+	username string
+	database string
+	ioses    goetty.IOSession
+}
+
+func (fp *testMysqlWriter) Write(ctx *ExecCtx, batch *batch.Batch) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) Close() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteHandshake() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteEOF(warnings, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteEOFIF(warnings uint16, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteEOFOrOK(warnings uint16, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteERR(errorCode uint16, sqlState, errorMessage string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteLengthEncodedNumber(u uint64) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteColumnDef(ctx context.Context, column Column, i int) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteTextRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteBinaryRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteResponse(ctx context.Context, response *Response) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) Read(options goetty.ReadOptions) (interface{}, error) {
+	return fp.ioses.Read(options)
+}
+
+func (fp *testMysqlWriter) UpdateCtx(ctx context.Context) {
+
+}
+
+func (fp *testMysqlWriter) GetCapability() uint32 {
+	return DefaultCapability
+}
+
+func (fp *testMysqlWriter) SetCapability(uint32) {
+
+}
+
+func (fp *testMysqlWriter) IsTlsEstablished() bool {
+	return true
+}
+
+func (fp *testMysqlWriter) SetTlsEstablished() {
+
+}
+
+func (fp *testMysqlWriter) HandleHandshake(ctx context.Context, payload []byte) (bool, error) {
+	return false, nil
+}
+
+func (fp *testMysqlWriter) Authenticate(ctx context.Context) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) GetSequenceId() uint8 {
+	return 0
+}
+
+func (fp *testMysqlWriter) SetSequenceID(value uint8) {
+}
+
+func (fp *testMysqlWriter) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, cnt uint64) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) ResetStatistics() {}
+
+func (fp *testMysqlWriter) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
+
+func (fp *testMysqlWriter) IsEstablished() bool {
+	return true
+}
+
+func (fp *testMysqlWriter) SetEstablished() {}
+
+func (fp *testMysqlWriter) GetRequest(payload []byte) *Request {
+	return nil
+}
+
+func (fp *testMysqlWriter) ConnectionID() uint32 {
+	return fakeConnectionID
+}
+
+func (fp *testMysqlWriter) Peer() string {
+	return "0.0.0.0:0"
+}
+
+func (fp *testMysqlWriter) GetDatabaseName() string {
+	return fp.database
+}
+
+func (fp *testMysqlWriter) SetDatabaseName(s string) {
+	fp.database = s
+}
+
+func (fp *testMysqlWriter) GetUserName() string {
+	return fp.username
+}
+
+func (fp *testMysqlWriter) SetUserName(s string) {
+	fp.username = s
+}
+
+func (fp *testMysqlWriter) Quit() {}
+
+func (fp *testMysqlWriter) sendLocalInfileRequest(filename string) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) Flush() error {
+	return nil
 }

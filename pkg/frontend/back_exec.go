@@ -524,8 +524,8 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 	// you can get the result batch by calling GetResultBatches()
 	ses.SetOutputCallback(batchFetcher)
 	//2. replace protocol by FakeProtocol.
-	// Any response yielded during running query will be dropped by the FakeProtocol.
-	// The client will not receive any response from the FakeProtocol.
+	// Any response yielded during running query will be dropped by the NullResp.
+	// The client will not receive any response from the NullResp.
 	prevProto := ses.ReplaceResponser(&NullResp{})
 	//3. replace the derived stmt
 	prevDerivedStmt := ses.ReplaceDerivedStmt(true)

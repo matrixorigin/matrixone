@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"math"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -139,6 +140,10 @@ func (resper *MysqlResp) Close() {
 		resper.s3Wr.Close()
 	}
 }
+
+const (
+	fakeConnectionID uint32 = math.MaxUint32
+)
 
 type NullResp struct {
 	username string

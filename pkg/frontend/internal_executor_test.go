@@ -69,18 +69,17 @@ func TestIeProto(t *testing.T) {
 	p.SetEstablished()
 	p.Quit()
 	p.ResetStatistics()
-	_ = p.GetStats()
 	_ = p.ConnectionID()
 	ctx := context.TODO()
 	assert.Panics(t, func() { p.GetRequest([]byte{1}) })
-	assert.Nil(t, p.SendColumnDefinitionPacket(ctx, nil, 1))
-	assert.Nil(t, p.SendColumnCountPacket(1))
-	assert.Nil(t, p.SendEOFPacketIf(0, 1))
-	assert.Nil(t, p.sendOKPacket(1, 1, 0, 0, ""))
-	assert.Nil(t, p.sendEOFOrOkPacket(0, 1))
+	assert.Nil(t, p.WriteColumnDef(ctx, nil, 1))
+	assert.Nil(t, p.WriteLengthEncodedNumber(1))
+	assert.Nil(t, p.WriteEOFIF(0, 1))
+	assert.Nil(t, p.WriteOK(1, 1, 0, 0, ""))
+	assert.Nil(t, p.WriteEOFOrOK(0, 1))
 
 	p.stashResult = true
-	p.SendResponse(ctx, &Response{
+	p.WriteResponse(ctx, &Response{
 		category:     OkResponse,
 		status:       0,
 		affectedRows: 1,
@@ -88,7 +87,7 @@ func TestIeProto(t *testing.T) {
 	})
 	assert.Nil(t, nil, p.result.resultSet)
 	assert.Equal(t, uint64(1), p.result.affectedRows)
-	p.SendResponse(ctx, &Response{
+	p.WriteResponse(ctx, &Response{
 		category: ResultResponse,
 		status:   0,
 		data: &MysqlExecutionResult{
@@ -105,13 +104,6 @@ func TestIeProto(t *testing.T) {
 	v, e := r.Value(ctx, 0, 0)
 	assert.NoError(t, e)
 	assert.Equal(t, 42, v.(int))
-	p.ResetStatistics()
-	assert.NoError(t, p.SendResultSetTextBatchRow(mockResultSet(), 1))
-	r = p.swapOutResult()
-	v, e = r.Value(ctx, 0, 0)
-	assert.NoError(t, e)
-	assert.Equal(t, 42, v.(int))
-	assert.Equal(t, uint64(1), r.affectedRows)
 	p.ResetStatistics()
 
 	r = p.swapOutResult()
