@@ -173,9 +173,14 @@ func (f *FileServices) Cost() *CostAttr {
 	}
 	for _, fs := range f.mappings {
 		cost := fs.Cost()
-		if cost.List > attr.List {
-			attr.List = cost.List
-		}
+		attr = maxCost(attr, cost)
 	}
 	return attr
+}
+
+func maxCost(a, b *CostAttr) *CostAttr {
+	if a.List < b.List {
+		return b
+	}
+	return a
 }
