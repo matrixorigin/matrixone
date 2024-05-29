@@ -1130,8 +1130,10 @@ func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) 
 			//statementID > 1
 			ts = txn.timestamps[txn.statementID-2]
 		}
-
-		if commit && time.Since(txn.start) > time.Second*5 {
+		if commit {
+			if time.Since(txn.start) < time.Second*5 {
+				return nil
+			}
 			//It's important to push the snapshot ts to the latest ts
 			if err := txn.op.UpdateSnapshot(
 				ctx,
