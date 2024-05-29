@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -38,7 +37,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 		if err != nil {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from computation handler",
 				zap.Error(err))
 			return
@@ -69,14 +68,14 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 	case *tree.ExplainAnalyze:
 		explainColName := "QUERY PLAN"
 		colDefs, columns, err = GetExplainColumns(execCtx.reqCtx, explainColName)
 		if err != nil {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from ExplainColumns handler",
 				zap.Error(err))
 			return
@@ -103,13 +102,13 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 	default:
 		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 		if err != nil {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from computation handler",
 				zap.Error(err))
 			return
@@ -147,7 +146,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 	}
 	return
@@ -291,7 +290,7 @@ func respMixedResultRow(ses *Session,
 	//only the result rows need to be sent.
 	mrs := ses.GetMysqlResultSet()
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
-		logError(ses, ses.GetDebugString(),
+		ses.Error(execCtx.reqCtx,
 			"Failed to handle 'SHOW TABLE STATUS'",
 			zap.Error(err))
 		return err
