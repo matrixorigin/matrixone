@@ -578,7 +578,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	result.AffectRows = runC.getAffectedRows()
 
 	if c.proc.TxnOperator != nil {
-		return result, c.proc.TxnOperator.GetWorkspace().Adjust(writeOffset)
+		return result, c.proc.TxnOperator.GetWorkspace().Adjust(c.proc.Ctx, writeOffset)
 	}
 	return result, nil
 }
