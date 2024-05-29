@@ -1,0 +1,442 @@
+drop database if exists db1;
+create database db1;
+use db1;
+create table t1(a int);
+insert into t1 values (1),(2),(3);
+create account test_tenant_1 admin_name 'test_account' identified by '111';
+create publication pubname1 database db1 account test_tenant_1 comment 'publish db1 database';
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+pubname1    db1    2024-05-29 09:49:04    null    test_tenant_1    publish db1 database
+show databases like 'db1';
+Database
+db1
+create database sub_db1 from sys publication pubname1;
+show databases;
+Database
+information_schema
+mo_catalog
+mysql
+sub_db1
+system
+system_metrics
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t1
+select * from t1;
+a
+1
+2
+3
+create snapshot snapshot2 for account sys;
+drop publication pubname1;
+drop database db1;
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+show databases like 'db1';
+Database
+show databases like 'sub_db1';
+Database
+sub_db1
+use sub_db1;
+internal error: there is no publication pubname1
+show tables;
+internal error: there is no publication pubname1
+restore account sys from snapshot snapshot2;
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+pubname1    db1    2024-05-29 09:49:04    null    test_tenant_1    publish db1 database
+show databases like 'db1';
+Database
+db1
+show databases like 'sub_db1';
+Database
+sub_db1
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t1
+drop snapshot snapshot2;
+drop account test_tenant_1;
+drop publication if exists pubname1;
+drop database if exists db1;
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+show databases like 'db1';
+Database
+create database db1;
+use db1;
+create table t1(a int);
+insert into t1 values (1),(2),(3);
+create account test_tenant_1 admin_name 'test_account' identified by '111';
+create publication pubname1 database db1 account test_tenant_1 comment 'publish db1 database';
+create database db2;
+use db2;
+create table t2(a int);
+insert into t2 values (1),(2),(3);
+create account test_tenant_2 admin_name 'test_account' identified by '111';
+create publication pubname2 database db2 account all comment 'publish db2 database';
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+pubname2    db2    2024-05-29 09:49:06    null    *    publish db2 database
+pubname1    db1    2024-05-29 09:49:05    null    test_tenant_1    publish db1 database
+show databases like 'db%';
+Database
+db1
+db2
+create database sub_db1 from sys publication pubname1;
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t1
+select * from t1;
+a
+1
+2
+3
+create database sub_db2 from sys publication pubname2;
+use sub_db2;
+show tables;
+Tables_in_sub_db2
+t2
+select * from t2;
+a
+1
+2
+3
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pubname2    sys    db2    2024-05-29 09:49:06    sub_db2    2024-05-29 09:49:06
+pubname1    sys    db1    2024-05-29 09:49:05    sub_db1    2024-05-29 09:49:06
+create database sub_db2 from sys publication pubname2;
+use sub_db2;
+show tables;
+Tables_in_sub_db2
+t2
+select * from t2;
+a
+1
+2
+3
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pubname2    sys    db2    2024-05-29 09:49:06    sub_db2    2024-05-29 09:49:06
+create snapshot snapshot3 for account sys;
+drop publication pubname1;
+drop publication pubname2;
+drop database db1;
+drop database db2;
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+show databases like 'db%';
+Database
+show databases like 'sub_db1';
+Database
+sub_db1
+use sub_db1;
+internal error: there is no publication pubname1
+show tables;
+internal error: there is no publication pubname2
+show databases like 'sub_db2';
+Database
+sub_db2
+use sub_db2;
+internal error: there is no publication pubname2
+show tables;
+internal error: there is no publication pubname2
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+show databases like 'sub_db2';
+Database
+sub_db2
+use sub_db2;
+internal error: there is no publication pubname2
+show tables;
+internal error: there is no publication pubname2
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+restore account sys from snapshot snapshot3;
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+pubname2    db2    2024-05-29 09:49:06    null    *    publish db2 database
+pubname1    db1    2024-05-29 09:49:05    null    test_tenant_1    publish db1 database
+show databases like 'db%';
+Database
+db1
+db2
+show databases like 'sub_db1';
+Database
+sub_db1
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t1
+show databases like 'sub_db2';
+Database
+sub_db2
+use sub_db2;
+show tables;
+Tables_in_sub_db2
+t2
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pubname2    sys    db2    2024-05-29 09:49:06    sub_db2    2024-05-29 09:49:06
+pubname1    sys    db1    2024-05-29 09:49:05    sub_db1    2024-05-29 09:49:06
+show databases like 'sub_db2';
+Database
+sub_db2
+use sub_db2;
+show tables;
+Tables_in_sub_db2
+t2
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pubname2    sys    db2    2024-05-29 09:49:06    sub_db2    2024-05-29 09:49:06
+drop snapshot snapshot3;
+drop account test_tenant_1;
+drop account test_tenant_2;
+drop publication if exists pubname1;
+drop publication if exists pubname2;
+drop database if exists db1;
+drop database if exists db2;
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+show databases like 'db%';
+Database
+create snapshot snapshot4 for account sys;
+create database db1;
+use db1;
+create table t1(a int);
+insert into t1 values (1),(2),(3);
+create account test_tenant_1 admin_name 'test_account' identified by '111';
+create publication pubname1 database db1 account test_tenant_1 comment 'publish db1 database';
+create database db2;
+use db2;
+create table t2(a int);
+insert into t2 values (1),(2),(3);
+create account test_tenant_2 admin_name 'test_account' identified by '111';
+create publication pubname2 database db2 account all comment 'publish db2 database';
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+pubname2    db2    2024-05-29 09:49:08    null    *    publish db2 database
+pubname1    db1    2024-05-29 09:49:07    null    test_tenant_1    publish db1 database
+show databases like 'db%';
+Database
+db1
+db2
+create database sub_db1 from sys publication pubname1;
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t1
+select * from t1;
+a
+1
+2
+3
+create database sub_db2 from sys publication pubname2;
+use sub_db2;
+show tables;
+Tables_in_sub_db2
+t2
+select * from t2;
+a
+1
+2
+3
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pubname2    sys    db2    2024-05-29 09:49:08    sub_db2    2024-05-29 09:49:08
+pubname1    sys    db1    2024-05-29 09:49:07    sub_db1    2024-05-29 09:49:08
+create database sub_db2 from sys publication pubname2;
+use sub_db2;
+show tables;
+Tables_in_sub_db2
+t2
+select * from t2;
+a
+1
+2
+3
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pubname2    sys    db2    2024-05-29 09:49:08    sub_db2    2024-05-29 09:49:08
+restore account sys from snapshot snapshot4;
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+show databases like 'db%';
+Database
+show databases like 'sub_db1';
+Database
+sub_db1
+use sub_db1;
+internal error: there is no publication pubname1
+show tables;
+internal error: there is no publication pubname2
+show databases like 'sub_db2';
+Database
+sub_db2
+use sub_db2;
+internal error: there is no publication pubname2
+show tables;
+internal error: there is no publication pubname2
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+show databases like 'sub_db2';
+Database
+sub_db2
+use sub_db2;
+internal error: there is no publication pubname2
+show tables;
+internal error: there is no publication pubname2
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+drop snapshot snapshot4;
+drop account test_tenant_1;
+drop account test_tenant_2;
+drop publication if exists pubname1;
+drop publication if exists pubname2;
+drop database if exists db1;
+drop database if exists db2;
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+show databases like 'db%';
+Database
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+create snapshot snapshot5 for account sys;
+create database db1;
+use db1;
+create table t1(a int);
+create account test_tenant_1 admin_name 'test_account' identified by '111';
+create publication pubname1 database db1 account test_tenant_1 comment 'publish db1 database';
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+pubname1    db1    2024-05-29 09:49:09    null    test_tenant_1    publish db1 database
+show databases like 'db%';
+Database
+db1
+create database sub_db1 from sys publication pubname1;
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t1
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pubname1    sys    db1    2024-05-29 09:49:09    sub_db1    2024-05-29 09:49:09
+create snapshot snapshot6 for account sys;
+drop publication pubname1;
+drop database db1;
+create database db2;
+use db2;
+create table t2(a int);
+insert into t2 values (1),(2),(3);
+create account test_tenant_2 admin_name 'test_account' identified by '111';
+create publication pubname2 database db2 account all comment 'publish db2 database';
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+pubname2    db2    2024-05-29 09:49:10    null    *    publish db2 database
+show databases like 'db%';
+Database
+db2
+create database sub_db2 from sys publication pubname2;
+use sub_db2;
+show tables;
+Tables_in_sub_db2
+t2
+select * from t2;
+a
+1
+2
+3
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pubname2    sys    db2    2024-05-29 09:49:10    sub_db2    2024-05-29 09:49:10
+create database sub_db2 from sys publication pubname2;
+use sub_db2;
+show tables;
+Tables_in_sub_db2
+t2
+select * from t2;
+a
+1
+2
+3
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pubname2    sys    db2    2024-05-29 09:49:10    sub_db2    2024-05-29 09:49:10
+restore account sys from snapshot snapshot6;
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+pubname1    db1    2024-05-29 09:49:09    null    test_tenant_1    publish db1 database
+show databases like 'db%';
+Database
+db1
+show databases like 'sub_db1';
+Database
+sub_db1
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t1
+show databases like 'sub_db2';
+Database
+sub_db2
+use sub_db2;
+internal error: there is no publication pubname2
+show tables;
+Tables_in_sub_db1
+t1
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pubname1    sys    db1    2024-05-29 09:49:09    sub_db1    2024-05-29 09:49:09
+show databases like 'sub_db2';
+Database
+sub_db2
+use sub_db2;
+internal error: there is no publication pubname2
+show tables;
+internal error: there is no publication pubname2
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+restore account sys from snapshot snapshot5;
+show databases like 'sub_db1';
+Database
+sub_db1
+use sub_db1;
+internal error: there is no publication pubname1
+show tables;
+internal error: there is no publication pubname1
+show databases like 'sub_db2';
+Database
+sub_db2
+use sub_db2;
+internal error: there is no publication pubname2
+show tables;
+internal error: there is no publication pubname1
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+show databases like 'sub_db2';
+Database
+sub_db2
+use sub_db2;
+internal error: there is no publication pubname2
+show tables;
+internal error: there is no publication pubname2
+show subscriptions;
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+drop snapshot snapshot5;
+drop snapshot snapshot6;
+drop account test_tenant_1;
+drop account test_tenant_2;
+drop publication if exists pubname1;
+drop publication if exists pubname2;
+drop database if exists db1;
+drop database if exists db2;
+show publications;
+publication    database    create_time    update_time    sub_account    comments
+show databases like 'db%';
+Database
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

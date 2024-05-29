@@ -346,6 +346,7 @@ type FeSession interface {
 	ResetFPrints()
 	EnterFPrint(idx int)
 	ExitFPrint(idx int)
+	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	SessionLogger
 }
 
