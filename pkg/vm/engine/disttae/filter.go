@@ -977,6 +977,7 @@ func CompileFilterExpr(
 }
 
 func TryFastFilterBlocks(
+	ctx context.Context,
 	snapshotTS timestamp.Timestamp,
 	tableDef *plan.TableDef,
 	exprs []*plan.Expr,
@@ -992,6 +993,7 @@ func TryFastFilterBlocks(
 		return false, nil
 	}
 	err = ExecuteBlockFilter(
+		ctx,
 		snapshotTS,
 		fastFilterOp,
 		loadOp,
@@ -1009,6 +1011,7 @@ func TryFastFilterBlocks(
 }
 
 func ExecuteBlockFilter(
+	ctx context.Context,
 	snapshotTS timestamp.Timestamp,
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
@@ -1068,7 +1071,7 @@ func ExecuteBlockFilter(
 			if loadOp != nil {
 				loadHit++
 				if meta, bf, err2 = loadOp(
-					proc.Ctx, objStats, meta, bf,
+					ctx, objStats, meta, bf,
 				); err2 != nil {
 					return
 				}
