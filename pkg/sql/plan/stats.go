@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -38,10 +39,22 @@ import (
 )
 
 const DefaultBlockMaxRows = 8192
-const BlockNumForceOneCN = 200
+const blockThresholdForTpQuery = 32
+const costThresholdForTpQuery = 160000
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
+
+var BlockThresholdForOneCN = runtime.GOMAXPROCS(0) * blockThresholdForTpQuery
+var costThresholdForOneCN = runtime.GOMAXPROCS(0) * costThresholdForTpQuery
+
+type ExecType int
+
+const (
+	ExecTypeTP ExecType = iota
+	ExecTypeAP_ONECN
+	ExecTypeAP_MULTICN
+)
 
 type StatsCache struct {
 	cache map[uint64]*pb.StatsInfo
@@ -1222,16 +1235,18 @@ func orSelectivity(s1, s2 float64) float64 {
 	}
 }
 
-const blockThresholdForTpQuery = 16
-
-func IsTpQuery(qry *plan.Query) bool {
+func GetExecType(qry *plan.Query) ExecType {
+	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		stats := node.Stats
-		if stats == nil || stats.BlockNum > blockThresholdForTpQuery {
-			return false
+		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
+			return ExecTypeAP_MULTICN
+		}
+		if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
+			ret = ExecTypeAP_ONECN
 		}
 	}
-	return true
+	return ret
 }
 
 func ReCalcQueryStats(builder *QueryBuilder, query *plan.Query) {
