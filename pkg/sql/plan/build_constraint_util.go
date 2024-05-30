@@ -1433,6 +1433,7 @@ func appendPrimaryConstrantPlan(
 					},
 				}
 				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt), buildExpr)}
+				recalcStatsByRuntimeFilter(scanNode, fuzzyFilterNode, builder)
 			}
 
 			lastNodeId = builder.appendNode(fuzzyFilterNode, bindCtx)
@@ -1553,6 +1554,7 @@ func appendPrimaryConstrantPlan(
 					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt), buildExpr)},
 				}
 				lastNodeId = builder.appendNode(joinNode, bindCtx)
+				recalcStatsByRuntimeFilter(scanNode, joinNode, builder)
 
 				// append agg node.
 				aggGroupBy := []*Expr{
