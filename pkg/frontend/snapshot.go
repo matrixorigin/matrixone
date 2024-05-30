@@ -545,13 +545,13 @@ func restoreToDatabaseOrTable(
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 	restoreToTbl := tblName != ""
 
-	// // if restore to db, delete the same name db first
-	// if !restoreToTbl {
-	// 	getLogger().Info(fmt.Sprintf("[%s] start to drop database: %v", snapshotName, dbName))
-	// 	if err = bh.Exec(toCtx, "drop database if exists "+dbName); err != nil {
-	// 		return
-	// 	}
-	// }
+	// if restore to db, delete the same name db first
+	if !restoreToTbl {
+		getLogger().Info(fmt.Sprintf("[%s] start to drop database: %v", snapshotName, dbName))
+		if err = bh.Exec(toCtx, "drop database if exists "+dbName); err != nil {
+			return
+		}
+	}
 
 	getLogger().Info(fmt.Sprintf("[%s] start to create database: %v", snapshotName, dbName))
 	if err = bh.Exec(toCtx, "create database if not exists "+dbName); err != nil {
