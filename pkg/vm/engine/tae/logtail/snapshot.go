@@ -72,20 +72,10 @@ var (
 	objectDeltaSchemaAttr = []string{
 		catalog2.BlockMeta_ID,
 		catalog2.BlockMeta_DeltaLoc,
-	}
-
-	objectDeltaSchemaTypes = []types.Type{
-		types.New(types.T_Blockid, 0, 0),
-		types.New(types.T_varchar, types.MaxVarcharLen, 0),
-	}
-
-	objectDeltaSchemaAttrV2 = []string{
-		catalog2.BlockMeta_ID,
-		catalog2.BlockMeta_DeltaLoc,
 		SnapshotAttr_TID,
 	}
 
-	objectDeltaSchemaTypesV2 = []types.Type{
+	objectDeltaSchemaTypes = []types.Type{
 		types.New(types.T_Blockid, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_uint64, 0, 0),
