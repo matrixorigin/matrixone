@@ -8223,6 +8223,13 @@ table_snapshot_opt:
             Expr: tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char),
         }
     }
+|   '{' SNAPSHOT '=' STRING '}'
+    {
+        $$ = &tree.AtTimeStamp{
+           Type: tree.ATTIMESTAMPSNAPSHOT,
+          Expr: tree.NewNumValWithType(constant.MakeString($4), $4, false, tree.P_char),
+        }
+    }
 |   '{' MO_TS '=' expression '}'
     {
         $$ = &tree.AtTimeStamp{
