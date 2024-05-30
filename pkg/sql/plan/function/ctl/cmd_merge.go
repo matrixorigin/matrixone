@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
@@ -65,10 +66,13 @@ func parseArgs(arg string) (arguments, error) {
 
 	// Parse db and table
 	dbtbl := strings.Split(args[0], ".")
-	if len(dbtbl) != 2 {
+	if len(dbtbl) == 1 {
+		a.tbl = args[0]
+	} else if len(dbtbl) == 2 {
+		a.db, a.tbl = dbtbl[0], dbtbl[1]
+	} else {
 		return arguments{}, moerr.NewInternalErrorNoCtx("handleMerge: invalid db.table format")
 	}
-	a.db, a.tbl = dbtbl[0], dbtbl[1]
 
 	// Parse objects
 	if len(args) != 1 && args[1] != "all" {
@@ -156,15 +160,31 @@ func handleMerge() handleFunc {
 					err = nil
 				}
 			}()
-			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, a.db, txnOp)
-			if err != nil {
-				logutil.Errorf("mergeblocks err on cn, db %s, err %s", a.db, err.Error())
-				return nil, err
-			}
-			rel, err := database.Relation(proc.Ctx, a.tbl, nil)
-			if err != nil {
-				logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.db, err.Error())
-				return nil, err
+			var rel engine.Relation
+			if a.db == "" {
+				var tblId uint64
+				// input is table id
+				tblId, err = strconv.ParseUint(a.tbl, 10, 64)
+				if err != nil {
+					logutil.Errorf("mergeblocks err on cn, tblId %s, err %s", a.tbl, err.Error())
+					return nil, err
+				}
+				_, _, rel, err = proc.SessionInfo.StorageEngine.GetRelationById(proc.Ctx, txnOp, tblId)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				var database engine.Database
+				database, err = proc.SessionInfo.StorageEngine.Database(proc.Ctx, a.db, txnOp)
+				if err != nil {
+					logutil.Errorf("mergeblocks err on cn, db %s, err %s", a.db, err.Error())
+					return nil, err
+				}
+				rel, err = database.Relation(proc.Ctx, a.tbl, nil)
+				if err != nil {
+					logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.db, err.Error())
+					return nil, err
+				}
 			}
 			entry, err := rel.MergeObjects(proc.Ctx, a.objs, a.filter, uint32(a.targetObjSize))
 			if err != nil {
