@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -423,6 +424,14 @@ func (e *Engine) getOrCreateSnapPart(
 	if err != nil {
 		return nil, err
 	}
+	for _, ckp := range ckps {
+		s := ckp.String()
+		logutil.Infof("xxxx getOrCreateSnapPart: table:%s,snapOp:%s, ckp:%s",
+			tbl.tableName,
+			tbl.db.op.Txn().DebugString(),
+			s)
+	}
+
 	snap.ConsumeSnapCkps(ctx, ckps, func(
 		checkpoint *checkpoint.CheckpointEntry,
 		state *logtailreplay.PartitionState) error {
@@ -477,8 +486,8 @@ func (e *Engine) getOrCreateSnapPart(
 	if ts.Less(&start) {
 		return nil, moerr.NewInternalErrorNoCtx(
 			"No valid checkpoints for snapshot read,maybe snapshot is too old, "+
-				"snapshot:%s, start:%s, end:%s",
-			ts.ToTimestamp().DebugString(),
+				"snapshot op:%s, start:%s, end:%s",
+			tbl.db.op.Txn().DebugString(),
 			start.ToTimestamp().DebugString(),
 			end.ToTimestamp().DebugString())
 	}
