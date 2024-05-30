@@ -1347,7 +1347,7 @@ func TestLockSuccWithKeepBindTimeout(t *testing.T) {
 		t,
 		zapcore.DebugLevel,
 		[]string{"s1"},
-		time.Second*1,
+		time.Millisecond,
 		func(alloc *lockTableAllocator, s []*service) {
 			l := s[0]
 
@@ -1369,13 +1369,10 @@ func TestLockSuccWithKeepBindTimeout(t *testing.T) {
 				option)
 			require.NoError(t, err)
 
-			err = l.remote.keeper.Close()
-			require.NoError(t, err)
-
-			time.Sleep(time.Second * 3)
-
-			p := alloc.GetLatest(0, 0)
-			require.True(t, p.Valid)
+			for i := 0; i < 10; i++ {
+				p := alloc.GetLatest(0, 0)
+				require.True(t, p.Valid)
+			}
 		},
 		nil,
 	)
@@ -1628,14 +1625,17 @@ func TestReLockSuccWithReStartCN(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
 
-			l1.mu.Lock()
-			l1.serviceID = getServiceIdentifier("s1", time.Now().UnixNano())
-			l1.mu.Unlock()
-			l1.tableGroups.removeWithFilter(
-				func(table uint64, lt lockTable) bool {
-					return true
-				})
-			time.Sleep(time.Second * 5)
+			alloc.setRestartService("s1")
+			for {
+				if l1.isStatus(pb.Status_ServiceCanRestart) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
 
 			// should lock succ
 			_, err = l2.Lock(
@@ -1645,6 +1645,7 @@ func TestReLockSuccWithReStartCN(t *testing.T) {
 				[]byte("txn2"),
 				option)
 			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
 		},
 		nil,
 	)
@@ -1655,7 +1656,7 @@ func TestReLockSuccWithKeepBindTimeout(t *testing.T) {
 		t,
 		zapcore.DebugLevel,
 		[]string{"s1", "s2"},
-		time.Second*1,
+		time.Millisecond,
 		func(alloc *lockTableAllocator, s []*service) {
 			l1 := s[0]
 			l2 := s[1]
@@ -1678,11 +1679,6 @@ func TestReLockSuccWithKeepBindTimeout(t *testing.T) {
 				option)
 			require.NoError(t, err)
 			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
-
-			err = l1.remote.keeper.Close()
-			require.NoError(t, err)
-
-			time.Sleep(time.Second * 3)
 
 			p := alloc.GetLatest(0, 0)
 			require.True(t, p.Valid)
