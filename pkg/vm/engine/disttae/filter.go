@@ -432,7 +432,7 @@ func CompileFilterExpr(
 			if !rightCan {
 				return nil, nil, nil, nil, nil, false, false
 			}
-			highSelectivityHint = leftHSH && rightHSH
+			highSelectivityHint = leftHSH || rightHSH
 
 			if leftFastOp != nil || rightFastOp != nil {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
@@ -677,7 +677,7 @@ func CompileFilterExpr(
 				return
 			}
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
-			_, isSorted := isSortedKey(colDef)
+			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
@@ -686,6 +686,7 @@ func CompileFilterExpr(
 					return obj.SortKeyZoneMap().PrefixEq(vals[0]), nil
 				}
 			}
+			highSelectivityHint = isPK
 
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
@@ -777,7 +778,7 @@ func CompileFilterExpr(
 			vec := vector.NewVec(types.T_any.ToType())
 			_ = vec.UnmarshalBinary(val)
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
-			_, isSorted := isSortedKey(colDef)
+			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
@@ -786,7 +787,7 @@ func CompileFilterExpr(
 					return obj.SortKeyZoneMap().PrefixIn(vec), nil
 				}
 			}
-
+			highSelectivityHint = isPK && vec.Length() <= 10
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
@@ -871,6 +872,8 @@ func CompileFilterExpr(
 			} else {
 				loadOp = loadMetadataOnlyOpFactory(fs)
 			}
+
+			highSelectivityHint = isPK && vec.Length() <= 10
 
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
