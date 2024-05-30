@@ -8215,11 +8215,12 @@ table_snapshot_opt:
             Expr: $4,
         }
     }
-|   '{' SNAPSHOT '=' expression '}'
+|   '{' SNAPSHOT '=' ident '}'
     {
+        var Str = $4.Compare()
         $$ = &tree.AtTimeStamp{
             Type: tree.ATTIMESTAMPSNAPSHOT,
-            Expr: $4,
+            Expr: tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char),
         }
     }
 |   '{' MO_TS '=' expression '}'
