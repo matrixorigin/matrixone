@@ -81,30 +81,49 @@ func NewMysqlResp(mysqlWr MysqlWriter) *MysqlResp {
 	}
 }
 
-func (resper *MysqlResp) GetProperty(name string) any {
+func (resper *MysqlResp) SetStr(name string, val string) {
+	lname := strings.ToLower(name)
+	switch lname {
+	case "dbname", "databasename":
+		resper.mysqlWr.SetDatabaseName(val)
+	case "uname", "username":
+		resper.mysqlWr.SetUserName(val)
+	}
+}
+
+func (resper *MysqlResp) GetStr(name string) string {
 	lname := strings.ToLower(name)
 	switch lname {
 	case "dbname", "databasename":
 		return resper.mysqlWr.GetDatabaseName()
 	case "uname", "username":
 		return resper.mysqlWr.GetUserName()
-	case "connid":
-		return resper.mysqlWr.ConnectionID()
 	case "peer":
 		return resper.mysqlWr.Peer()
 	default:
-		return nil
+		return ""
 	}
 }
 
-func (resper *MysqlResp) SetProperty(name string, val any) {
+func (resper *MysqlResp) SetU32(string, uint32) {}
+
+func (resper *MysqlResp) GetU32(name string) uint32 {
 	lname := strings.ToLower(name)
 	switch lname {
-	case "dbname", "databasename":
-		resper.mysqlWr.SetDatabaseName(val.(string))
-	case "uname", "username":
-		resper.mysqlWr.SetUserName(val.(string))
+	case "connid":
+		return resper.mysqlWr.ConnectionID()
+	default:
+		return math.MaxUint32
 	}
+}
+
+func (resper *MysqlResp) SetU8(string, uint8) {}
+func (resper *MysqlResp) GetU8(string) uint8 {
+	return 0
+}
+func (resper *MysqlResp) SetBool(string, bool) {}
+func (resper *MysqlResp) GetBool(string) bool {
+	return false
 }
 
 func (resper *MysqlResp) ResetStatistics() {
@@ -150,30 +169,47 @@ type NullResp struct {
 	database string
 }
 
-func (resper *NullResp) GetProperty(name string) any {
+func (resper *NullResp) GetStr(name string) string {
 	lname := strings.ToLower(name)
 	switch lname {
 	case "dbname", "databasename":
 		return resper.database
 	case "uname", "username":
 		return resper.username
-	case "connid":
-		return fakeConnectionID
 	case "peer":
 		return "0.0.0.0:0"
 	default:
-		return nil
+		return ""
 	}
 }
-
-func (resper *NullResp) SetProperty(name string, val any) {
+func (resper *NullResp) SetStr(name string, val string) {
 	lname := strings.ToLower(name)
 	switch lname {
 	case "dbname", "databasename":
-		resper.database = val.(string)
+		resper.database = val
 	case "uname", "username":
-		resper.username = val.(string)
+		resper.username = val
+	default:
+
 	}
+}
+func (resper *NullResp) SetU32(string, uint32) {}
+func (resper *NullResp) GetU32(name string) uint32 {
+	lname := strings.ToLower(name)
+	switch lname {
+	case "connid":
+		return fakeConnectionID
+	default:
+		return 0
+	}
+}
+func (resper *NullResp) SetU8(string, uint8) {}
+func (resper *NullResp) GetU8(string) uint8 {
+	return 0
+}
+func (resper *NullResp) SetBool(string, bool) {}
+func (resper *NullResp) GetBool(string) bool {
+	return false
 }
 
 func (resper *NullResp) ResetStatistics() {

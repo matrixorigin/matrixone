@@ -518,16 +518,16 @@ func (ses *feSessionImpl) GetFPrints() footPrints {
 }
 
 func (ses *feSessionImpl) SetDatabaseName(db string) {
-	ses.respr.SetProperty("dbname", db)
+	ses.respr.SetStr("dbname", db)
 	ses.txnCompileCtx.SetDatabase(db)
 }
 
 func (ses *feSessionImpl) GetDatabaseName() string {
-	return ses.respr.GetProperty("dbname").(string)
+	return ses.respr.GetStr("dbname")
 }
 
 func (ses *feSessionImpl) GetUserName() string {
-	return ses.respr.GetProperty("uname").(string)
+	return ses.respr.GetStr("uname")
 }
 
 func (ses *feSessionImpl) DisableTrace() bool {
@@ -774,12 +774,23 @@ func (ses *Session) GetDebugString() string {
 	return ses.debugStr
 }
 
+// TODO: design property interface for connid,xxxName,peer,etc.
+type Property interface {
+	GetStr(string) string
+	SetStr(string, string)
+	SetU32(string, uint32)
+	GetU32(string) uint32
+	SetU8(string, uint8)
+	GetU8(string) uint8
+	SetBool(string, bool)
+	GetBool(string) bool
+}
+
 type Responser interface {
+	Property
 	RespPreMeta(*ExecCtx, any) error
 	RespResult(*ExecCtx, *batch.Batch) error
 	RespPostMeta(*ExecCtx, any) error
-	GetProperty(string) any
-	SetProperty(string, any)
 	Close()
 	ResetStatistics()
 }
@@ -793,20 +804,6 @@ type MediaReader interface {
 type MediaWriter interface {
 	Write(*ExecCtx, *batch.Batch) error
 	Close()
-}
-
-// TODO: design property interface for connid,xxxName,peer,etc.
-type Property interface {
-	Get(string) any
-	Set(string, any)
-	GetStr(string) string
-	SetStr(string, string)
-	SetU32(string, uint32)
-	GetU32(string) uint32
-	SetU8(string, uint8)
-	GetU8(string) uint8
-	SetBool(string, bool)
-	GetBool(string) bool
 }
 
 // TODO: refine
