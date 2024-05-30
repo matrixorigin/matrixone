@@ -143,14 +143,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
-	if arg.roaringFilter != nil {
-		return arg.filterByRoaring(proc, anal)
-	} else {
-		return arg.filterByBloom(proc, anal)
-	}
-}
-
-func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	for {
 		switch arg.state {
@@ -174,15 +166,12 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 
 			pkCol := bat.GetVector(0)
 			arg.appendPassToRuntimeFilter(pkCol, proc)
-			arg.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
-				if exist {
-					if arg.collisionCnt < maxCheckDupCount {
-						arg.appendCollisionKey(proc, i, bat)
-						return
-					}
-					logutil.Warnf("too many collision for fuzzy filter")
-				}
-			})
+
+			err := arg.handleBuild(proc, pkCol)
+			if err != nil {
+				proc.PutBatch(bat)
+				return result, err
+			}
 
 			proc.PutBatch(bat)
 			continue
@@ -225,96 +214,14 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 			pkCol := bat.GetVector(0)
 
 			// arg.probeCnt += pkCol.Length()
-
-			arg.bloomFilter.Test(pkCol, func(exist bool, i int) {
-				if exist {
-					if arg.collisionCnt < maxCheckDupCount {
-						arg.appendCollisionKey(proc, i, bat)
-					}
-				}
-			})
-			proc.PutBatch(bat)
-			continue
-		case End:
-			result.Status = vm.ExecStop
-			return result, nil
-		}
-	}
-}
-
-func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
-	result := vm.NewCallResult()
-	for {
-		switch arg.state {
-		case Build:
-
-			msg := arg.ReceiveFromSingleReg(1, anal)
-			if msg.Err != nil {
-				return result, msg.Err
-			}
-
-			bat := msg.Batch
-			if bat == nil {
-				arg.state = HandleRuntimeFilter
-				continue
-			}
-
-			if bat.IsEmpty() {
+			err := arg.handleProbe(proc, pkCol)
+			if err != nil {
 				proc.PutBatch(bat)
-				continue
-			}
-
-			pkCol := bat.GetVector(0)
-			arg.appendPassToRuntimeFilter(pkCol, proc)
-
-			idx, dupVal := arg.roaringFilter.testAndAddFunc(arg.roaringFilter, pkCol)
-			proc.PutBatch(bat)
-
-			if idx == -1 {
-				continue
-			} else {
-				return result, moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
-			}
-
-		case HandleRuntimeFilter:
-			if err := arg.handleRuntimeFilter(proc); err != nil {
 				return result, err
 			}
-			arg.state = Probe
-
-		case Probe:
-
-			msg := arg.ReceiveFromSingleReg(0, anal)
-			if msg.Err != nil {
-				return result, msg.Err
-			}
-
-			bat := msg.Batch
-			if bat == nil {
-				// fmt.Println("probe cnt = ", arg.probeCnt)
-				result.Batch = arg.rbat
-				result.Status = vm.ExecStop
-				arg.state = End
-				return result, nil
-			}
-
-			if bat.IsEmpty() {
-				proc.PutBatch(bat)
-				continue
-			}
-
-			pkCol := bat.GetVector(0)
-
-			// arg.probeCnt += pkCol.Length()
-
-			idx, dupVal := arg.roaringFilter.testFunc(arg.roaringFilter, pkCol)
+			
 			proc.PutBatch(bat)
-
-			if idx == -1 {
-				continue
-			} else {
-				return result, moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
-			}
+			continue
 		case End:
 			result.Status = vm.ExecStop
 			return result, nil
@@ -325,34 +232,47 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 // =========================================================================
 // utils functions
 
-func (arg *Argument) appendPassToRuntimeFilter(v *vector.Vector, proc *process.Process) {
-	if arg.pass2RuntimeFilter != nil && arg.RuntimeFilterSpec != nil {
-		el := arg.pass2RuntimeFilter.Length()
-		al := v.Length()
-
-		if int64(el)+int64(al) <= int64(arg.RuntimeFilterSpec.UpperLimit) {
-			arg.pass2RuntimeFilter.UnionMulti(v, 0, al, proc.Mp())
+func (arg *Argument) handleBuild(proc *process.Process, pkCol *vector.Vector) error {
+	if arg.roaringFilter != nil {
+		idx, dupVal := arg.roaringFilter.testAndAddFunc(arg.roaringFilter, pkCol)
+		if idx == -1 {
+			return nil
 		} else {
-			proc.PutVector(arg.pass2RuntimeFilter)
-			arg.pass2RuntimeFilter = nil
+			return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
 		}
+	} else {
+		arg.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
+			if exist {
+				if arg.collisionCnt < maxCheckDupCount {
+					arg.appendCollisionKey(proc, i, pkCol)
+					return
+				}
+				logutil.Warnf("too many collision for fuzzy filter")
+			}
+		})
 	}
-}
 
-// appendCollisionKey will append collision key into rbat
-func (arg *Argument) appendCollisionKey(proc *process.Process, idx int, bat *batch.Batch) {
-	pkCol := bat.GetVector(0)
-	arg.rbat.GetVector(0).UnionOne(pkCol, int64(idx), proc.GetMPool())
-	arg.collisionCnt++
-}
-
-// rbat will contain the keys that have hash collisions
-func (arg *Argument) generate(proc *process.Process) error {
-	rbat := batch.NewWithSize(1)
-	rbat.SetVector(0, proc.GetVector(plan.MakeTypeByPlan2Type(arg.PkTyp)))
-	arg.pass2RuntimeFilter = proc.GetVector(plan.MakeTypeByPlan2Type(arg.PkTyp))
-	arg.rbat = rbat
 	return nil
+}
+
+func (arg *Argument) handleProbe(proc *process.Process, pkCol *vector.Vector) error {
+	if arg.roaringFilter != nil {
+		idx, dupVal := arg.roaringFilter.testFunc(arg.roaringFilter, pkCol)
+		if idx == -1 {
+			return nil
+		} else {
+			return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
+		}
+	} else {
+		arg.bloomFilter.Test(pkCol, func(exist bool, i int) {
+			if exist {
+				if arg.collisionCnt < maxCheckDupCount {
+					arg.appendCollisionKey(proc, i, pkCol)
+				}
+			}
+		})
+		return nil
+	}
 }
 
 func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
@@ -388,5 +308,33 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 	runtimeFilter.Data = data
 	proc.SendRuntimeFilter(runtimeFilter, ctr.RuntimeFilterSpec)
 	return nil
+}
 
+func (arg *Argument) appendPassToRuntimeFilter(v *vector.Vector, proc *process.Process) {
+	if arg.pass2RuntimeFilter != nil && arg.RuntimeFilterSpec != nil {
+		el := arg.pass2RuntimeFilter.Length()
+		al := v.Length()
+
+		if int64(el)+int64(al) <= int64(arg.RuntimeFilterSpec.UpperLimit) {
+			arg.pass2RuntimeFilter.UnionMulti(v, 0, al, proc.Mp())
+		} else {
+			proc.PutVector(arg.pass2RuntimeFilter)
+			arg.pass2RuntimeFilter = nil
+		}
+	}
+}
+
+// appendCollisionKey will append collision key into rbat
+func (arg *Argument) appendCollisionKey(proc *process.Process, idx int, pkCol *vector.Vector) {
+	arg.rbat.GetVector(0).UnionOne(pkCol, int64(idx), proc.GetMPool())
+	arg.collisionCnt++
+}
+
+// rbat will contain the keys that have hash collisions
+func (arg *Argument) generate(proc *process.Process) error {
+	rbat := batch.NewWithSize(1)
+	rbat.SetVector(0, proc.GetVector(plan.MakeTypeByPlan2Type(arg.PkTyp)))
+	arg.pass2RuntimeFilter = proc.GetVector(plan.MakeTypeByPlan2Type(arg.PkTyp))
+	arg.rbat = rbat
+	return nil
 }
