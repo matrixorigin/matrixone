@@ -50,13 +50,13 @@ drop function subab(x int,y int);
 drop function udf_db.concatenate(str1 varchar(255), str2 varchar(255));
 
 restore account sys from snapshot udf_dsp03;
--- @ignore:0,0,9,10
+-- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
 -- @ignore:0,1
 show snapshots;
 
 restore account sys from snapshot udf_dsp02;
--- @ignore:0,0,9,10
+-- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
 -- @ignore:0,1
 show snapshots;

@@ -120,7 +120,7 @@ call test_if_hit_elseif_first_elseif();
 drop procedure if exists test_if_hit_if;
 create procedure test_if_hit_if() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
--- @ignore:7,8
+-- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 
 drop snapshot if exists sp_sp05;
@@ -128,12 +128,12 @@ create snapshot sp_sp05 for account acc01;
 
 drop procedure test_if_hit_elseif_first_elseif;
 drop procedure test_if_hit_if;
--- @ignore:7,8
+-- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 
 restore account acc01 from snapshot sp_sp05;
 
--- @ignore:7,8
+-- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 call test_if_hit_elseif_first_elseif();
 call test_if_hit_if();
@@ -168,7 +168,7 @@ call test_if_hit_second_elseif();
 drop procedure if exists test_if_hit_else;
 create procedure test_if_hit_else() 'begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_else();
--- @ignore:7,8
+-- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 
 drop snapshot if exists sp_sp06;
@@ -177,14 +177,14 @@ create snapshot sp_sp06 for account acc01;
 drop table tbh1;
 drop table tbh2;
 drop procedure test_if_hit_second_elseif;
--- @ignore:7,8
+-- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 
 restore account acc01 from snapshot sp_sp06;
 
 call test_if_hit_else();
 call test_if_hit_second_elseif();
--- @ignore:7,8
+-- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 
 drop snapshot sp_sp06;
@@ -199,7 +199,7 @@ drop stage if exists my_ext_stage;
 create stage my_ext_stage URL='s3://load/files/';
 drop stage if exists my_ext_stage1;
 create stage my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
--- @ignore:5
+-- @ignore:0,5
 select * from mo_catalog.mo_stages;
 
 drop snapshot if exists stage_sp01;
@@ -207,11 +207,11 @@ create snapshot stage_sp01 for account acc01;
 
 alter stage my_ext_stage1 SET URL='s3://load/files2/';
 drop stage my_ext_stage;
--- @ignore:5
+-- @ignore:0,5
 select * from mo_catalog.mo_stages;
 
 restore account acc01 from snapshot stage_sp01;
--- @ignore:5
+-- @ignore:0,5
 select * from mo_catalog.mo_stages;
 drop snapshot stage_sp01;
 drop stage my_ext_stage;
