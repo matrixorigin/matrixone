@@ -1016,6 +1016,7 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 		scanNode.Stats.Cost = 1
 	}
 	scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/2) + 1
+	scanNode.Stats.Selectivity = andSelectivity(scanNode.Stats.Selectivity, runtimeFilterSel)
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
