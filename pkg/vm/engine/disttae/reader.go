@@ -49,7 +49,7 @@ import (
 
 func (mixin *withFilterMixin) reset() {
 	mixin.filterState.evaluated = false
-	mixin.filterState.filter = nil
+	mixin.filterState.filter = blockio.ReadFilter{}
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
@@ -111,7 +111,7 @@ func (mixin *withFilterMixin) getReadFilter(proc *process.Process, blkCnt int) (
 	pk := mixin.tableDef.Pkey
 	if mixin.filterState.expr == nil || pk == nil {
 		mixin.filterState.evaluated = true
-		mixin.filterState.filter = nil
+		mixin.filterState.filter = blockio.ReadFilter{}
 		return
 	}
 	return mixin.getPKFilter(proc, blkCnt)
@@ -124,8 +124,8 @@ func (mixin *withFilterMixin) getPKFilter(
 	// no filter is needed
 	if mixin.columns.pkPos == -1 || mixin.filterState.expr == nil {
 		mixin.filterState.evaluated = true
-		mixin.filterState.filter = nil
-		return nil
+		mixin.filterState.filter = blockio.ReadFilter{}
+		return blockio.ReadFilter{}
 	}
 
 	// evaluate the search function for the filter
@@ -136,16 +136,16 @@ func (mixin *withFilterMixin) getPKFilter(
 	// C: {A|B} and {A|B}
 	// D: {A|B|C} [and {A|B|C}]*
 	// for other patterns, no filter is needed
-	ok, hasNull, searchFunc := getNonCompositePKSearchFuncByExpr(
+	ok, hasNull, filter := getNonCompositePKSearchFuncByExpr(
 		mixin.filterState.expr,
 		mixin.tableDef.Pkey.PkeyColName,
 		proc,
 	)
-	if !ok || searchFunc == nil {
+	if !ok || !filter.Valid {
 		mixin.filterState.evaluated = true
-		mixin.filterState.filter = nil
+		mixin.filterState.filter = blockio.ReadFilter{}
 		mixin.filterState.hasNull = hasNull
-		return nil
+		return blockio.ReadFilter{}
 	}
 
 	// here we will select the primary key column from the vectors, and
@@ -153,13 +153,13 @@ func (mixin *withFilterMixin) getPKFilter(
 	// it returns the offset of the primary key in the pk vector.
 	// if the primary key is not found, it returns empty slice
 	mixin.filterState.evaluated = true
-	mixin.filterState.filter = searchFunc
+	mixin.filterState.filter = filter
 	mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[mixin.columns.pkPos]}
 	mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
 
 	// records how many blks one reader needs to read when having filter
 	objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
-	return searchFunc
+	return filter
 }
 
 // -----------------------------------------------------------------
@@ -388,7 +388,7 @@ func (r *blockReader) Read(
 		for len(r.steps) > 0 && r.steps[0] == r.currentStep {
 			// always true for now, will optimize this in the future
 			prefetchFile := r.scanType == SMALL || r.scanType == LARGE || r.scanType == NORMAL
-			if filter != nil && blockInfo.Sorted {
+			if filter.Valid && blockInfo.Sorted {
 				err = blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 			} else {
 				err = blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
@@ -402,7 +402,7 @@ func (r *blockReader) Read(
 	}
 
 	statsCtx, numRead, numHit := r.ctx, int64(0), int64(0)
-	if filter != nil {
+	if filter.Valid {
 		// try to store the blkReadStats CounterSet into ctx, so that
 		// it can record the mem cache hit stats when call MemCache.Read() later soon.
 		statsCtx, numRead, numHit = r.prepareGatherStats()
@@ -413,6 +413,7 @@ func (r *blockReader) Read(
 	if r.scanType == LARGE || r.scanType == NORMAL {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
+
 	bat, err = blockio.BlockRead(
 		statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
@@ -424,7 +425,7 @@ func (r *blockReader) Read(
 		return nil, err
 	}
 
-	if filter != nil {
+	if filter.Valid {
 		// we collect mem cache hit related statistics info for blk read here
 		r.gatherStats(numRead, numHit)
 	}
@@ -573,7 +574,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	}
 	ts := types.TimestampToTS(r.ts)
 
-	if filter != nil && info.Sorted && len(r.pkVal) > 0 {
+	if filter.Valid && info.Sorted && len(r.pkVal) > 0 {
 		iter := state.NewPrimaryKeyDelIter(
 			ts,
 			logtailreplay.Prefix(r.pkVal),
