@@ -1059,7 +1059,7 @@ func dispatchSubscribeResponse(
 			return err
 		}
 		if len(lt.CkpLocation) == 0 {
-			p, _ := e.getOrCreateLatestPart(tbl.DbId, tbl.TbId)
+			p := e.getOrCreateLatestPart(tbl.DbId, tbl.TbId)
 			p.UpdateDuration(types.TS{}, types.MaxTs())
 			c := e.getLatestCatalogCache()
 			c.UpdateDuration(types.TS{}, types.MaxTs())
@@ -1340,7 +1340,7 @@ func updatePartitionOfPush(
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
 	t0 := time.Now()
-	partition, _ := e.getOrCreateLatestPart(dbId, tblId)
+	partition := e.getOrCreateLatestPart(dbId, tblId)
 	v2.LogtailUpdatePartitonGetPartitionDurationHistogram.Observe(time.Since(t0).Seconds())
 
 	t0 = time.Now()

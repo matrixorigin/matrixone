@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -706,13 +705,6 @@ type txnTable struct {
 	proc atomic.Pointer[process.Process]
 
 	createByStatementID int
-
-	shardInfo struct {
-		init         sync.Once
-		sharding     bool
-		shardTableID uint64
-		shardPolicy  shard.Policy
-	}
 }
 
 type column struct {
