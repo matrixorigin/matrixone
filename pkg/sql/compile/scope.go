@@ -768,19 +768,32 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	}
 
 	if s.NodeInfo.NeedExpandRanges {
-		if s.DataSource.node == nil {
+		isPartitionTable := false
+
+		scanNode := s.DataSource.node
+		if scanNode == nil {
 			panic("can not expand ranges on remote pipeline!")
 		}
+
+		if scanNode.TableDef.Partition != nil {
+			isPartitionTable = true
+		}
+
 		newExprList := plan2.DeepCopyExprList(inExprList)
 		if len(s.DataSource.node.BlockFilterList) > 0 {
 			newExprList = append(newExprList, s.DataSource.node.BlockFilterList...)
 		}
+
 		ranges, err := c.expandRanges(s.DataSource.node, s.NodeInfo.Rel, newExprList)
 		if err != nil {
 			return err
 		}
 		s.NodeInfo.Data = append(s.NodeInfo.Data, ranges.GetAllBytes()...)
 		s.NodeInfo.NeedExpandRanges = false
+
+		if isPartitionTable {
+			s.NodeInfo.Rel = nil
+		}
 	} else if len(inExprList) > 0 {
 		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
 		if err != nil {
