@@ -270,6 +270,10 @@ type Config struct {
 	// to trigger stats updating.
 	LogtailUpdateStatsThreshold int `toml:"logtail-update-stats-threshold"`
 
+	// LogtailUpdateStatsMaxLatency is the maximum latency threshold
+	// for updating stats.
+	LogtailUpdateStatsMaxLatency toml.Duration `toml:"logtail-update-stats-max-latency"`
+
 	// Whether to automatically upgrade when system startup
 	AutomaticUpgrade       bool `toml:"auto-upgrade"`
 	UpgradeTenantBatchSize int  `toml:"upgrade-tenant-batch"`

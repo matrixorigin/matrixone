@@ -42,6 +42,9 @@ const (
 	// logtail entries to trigger to update stats info.
 	defaultLogtailUpdateStatsThreshold = 1000
 
+	// defaultLogtailUpdateStatsMaxLatency is the maximum latency to update stats info.
+	defaultLogtailUpdateStatsMaxLatency = 5 * time.Minute
+
 	// MinUpdateInterval is the minimal interval to update stats info as it
 	// is necessary to update stats every time.
 	MinUpdateInterval = time.Second * 30
@@ -101,7 +104,8 @@ func newLogtailUpdate() *logtailUpdate {
 }
 
 type GlobalStatsConfig struct {
-	LogtailUpdateStatsThreshold int
+	LogtailUpdateStatsThreshold  int
+	LogtailUpdateStatsMaxLatency time.Duration
 }
 
 type GlobalStatsOption func(s *GlobalStats)
@@ -112,9 +116,13 @@ func WithLogtailUpdateStatsThreshold(v int) GlobalStatsOption {
 	}
 }
 
-type GlobalStats struct {
-	ctx context.Context
+func WithLogtailUpdateStatsMaxLatency(v time.Duration) GlobalStatsOption {
+	return func(s *GlobalStats) {
+		s.cfg.LogtailUpdateStatsMaxLatency = v
+	}
+}
 
+type GlobalStats struct {
 	cfg GlobalStatsConfig
 
 	// engine is the global Engine instance.
@@ -158,7 +166,6 @@ func NewGlobalStats(
 	ctx context.Context, e *Engine, keyRouter client.KeyRouter[pb.StatsInfoKey], opts ...GlobalStatsOption,
 ) *GlobalStats {
 	s := &GlobalStats{
-		ctx:                 ctx,
 		engine:              e,
 		tailC:               make(chan *logtail.TableLogtail, 10000),
 		updateC:             make(chan pb.StatsInfoKey, 1000),
@@ -180,6 +187,9 @@ func NewGlobalStats(
 func (gs *GlobalStats) fillConfig() {
 	if gs.cfg.LogtailUpdateStatsThreshold == 0 {
 		gs.cfg.LogtailUpdateStatsThreshold = defaultLogtailUpdateStatsThreshold
+	}
+	if gs.cfg.LogtailUpdateStatsMaxLatency == 0 {
+		gs.cfg.LogtailUpdateStatsMaxLatency = defaultLogtailUpdateStatsMaxLatency
 	}
 }
 
@@ -240,6 +250,9 @@ func (gs *GlobalStats) enqueue(tail *logtail.TableLogtail) {
 }
 
 func (gs *GlobalStats) consumeWorker(ctx context.Context) {
+	ticker := time.NewTicker(gs.cfg.LogtailUpdateStatsMaxLatency)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -247,6 +260,12 @@ func (gs *GlobalStats) consumeWorker(ctx context.Context) {
 
 		case tail := <-gs.tailC:
 			gs.consumeLogtail(tail)
+
+		case <-ticker.C:
+			for key := range gs.tableLogtailCounter {
+				delete(gs.tableLogtailCounter, key)
+				gs.triggerUpdate(key)
+			}
 		}
 	}
 }
@@ -258,7 +277,7 @@ func (gs *GlobalStats) updateWorker(ctx context.Context) {
 			return
 
 		case key := <-gs.updateC:
-			go gs.updateTableStats(key)
+			go gs.updateTableStats(ctx, key)
 		}
 	}
 }
@@ -289,13 +308,9 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 				break
 			}
 		}
-		if _, ok := gs.tableLogtailCounter[key]; !ok {
-			gs.tableLogtailCounter[key] = 1
-		} else {
-			gs.tableLogtailCounter[key]++
-		}
+		gs.tableLogtailCounter[key]++
 		if !triggered && gs.tableLogtailCounter[key] > gs.cfg.LogtailUpdateStatsThreshold {
-			gs.tableLogtailCounter[key] = 0
+			delete(gs.tableLogtailCounter, key)
 			gs.triggerUpdate(key)
 		}
 	}
@@ -316,7 +331,7 @@ func (gs *GlobalStats) notifyLogtailUpdate(tid uint64) {
 	}
 }
 
-func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
+func (gs *GlobalStats) waitLogtailUpdated(ctx context.Context, tid uint64) {
 	gs.logtailUpdate.mu.Lock()
 	_, ok := gs.logtailUpdate.mu.updated[tid]
 	gs.logtailUpdate.mu.Unlock()
@@ -335,7 +350,7 @@ func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
 			return
 		}
 		select {
-		case <-gs.ctx.Done():
+		case <-ctx.Done():
 			return
 
 		case i := <-gs.logtailUpdate.c:
@@ -346,9 +361,9 @@ func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
 	}
 }
 
-func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
+func (gs *GlobalStats) updateTableStats(ctx context.Context, key pb.StatsInfoKey) {
 	// wait until the table's logtail has been updated.
-	gs.waitLogtailUpdated(key.TableID)
+	gs.waitLogtailUpdated(ctx, key.TableID)
 
 	ts, ok := gs.statsUpdated.Load(key)
 	if ok && time.Since(ts.(time.Time)) < MinUpdateInterval {
@@ -431,7 +446,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		approxObjectNum,
 		stats,
 	)
-	if err := UpdateStats(gs.ctx, req); err != nil {
+	if err := UpdateStats(ctx, req); err != nil {
 		logutil.Errorf("failed to init stats info for table %v", key)
 		return
 	}
