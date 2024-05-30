@@ -71,30 +71,6 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	for idx := range arg.targets {
 		arg.rt.fetchers = append(arg.rt.fetchers,
 			GetFetchRowsFunc(arg.targets[idx].primaryColumnType))
-		// if idx == 0 && arg.targets[idx].lockRows != nil {
-		// 	vec, err := colexec.EvalExpressionOnce(proc, arg.targets[idx].lockRows, []*batch.Batch{batch.EmptyForConstFoldBatch})
-		// 	if err != nil {
-		// 		return err
-		// 	}
-
-		// 	bat := batch.NewWithSize(int(arg.targets[idx].primaryColumnIndexInBatch) + 1)
-		// 	defer func() {
-		// 		proc.PutBatch(bat)
-		// 	}()
-		// 	bat.Vecs[arg.targets[idx].primaryColumnIndexInBatch] = vec
-		// 	bat.SetRowCount(vec.Length())
-		// 	arg.rt.lockCount = int64(vec.Length())
-
-		// 	err = performLock(bat, proc, arg)
-		// 	if err != nil {
-		// 		return err
-		// 	} else if arg.rt.retryError != nil {
-		// 		if arg.rt.defChanged {
-		// 			arg.rt.retryError = retryWithDefChangedError
-		// 		}
-		// 		return arg.rt.retryError
-		// 	}
-		// }
 	}
 	arg.rt.retryError = nil
 	arg.rt.defChanged = false
