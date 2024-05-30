@@ -234,7 +234,7 @@ drop stage if exists my_ext_stage;
 create stage my_ext_stage URL='s3://load/files/';
 drop stage if exists my_ext_stage1;
 create stage my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
--- @ignore:5
+-- @ignore:0,5
 select * from mo_catalog.mo_stages;
 -- @session
 
@@ -249,7 +249,7 @@ drop stage my_ext_stage;
 restore account acc01 from snapshot stage_sp01 to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
--- @ignore:5
+-- @ignore:0,5
 select * from mo_catalog.mo_stages;
 drop stage my_ext_stage;
 drop stage my_ext_stage1;
@@ -351,9 +351,9 @@ grant ownership on table *.* to test_role;
 select * from mo_catalog.mo_user;
 -- @ignore:0,4
 select * from mo_catalog.mo_role;
--- @ignore:0,8
+-- @ignore:0,3,8
 select * from mo_catalog.mo_role_privs where role_name='test_role';
--- @ignore:2
+-- @ignore:0,2
 select * from mo_catalog.mo_user_grant;
 -- @session
 
@@ -399,7 +399,7 @@ select * from mo_catalog.mo_user;
 select * from mo_catalog.mo_role;
 -- @ignore:0,3,8
 select * from mo_catalog.mo_role_privs where role_name='role_account_priv_1';
--- @ignore:2
+-- @ignore:0,2
 select * from mo_catalog.mo_user_grant;
 -- @session
 
@@ -420,7 +420,7 @@ select * from mo_catalog.mo_user;
 select * from mo_catalog.mo_role;
 -- @ignore:0,3,8
 select * from mo_catalog.mo_role_privs where role_name='role_account_priv_1';
--- @ignore:2
+-- @ignore:0,2
 select * from mo_catalog.mo_user_grant;
 
 drop user user_grant_2;
@@ -443,7 +443,7 @@ select * from mo_catalog.mo_user;
 select * from mo_catalog.mo_role;
 -- @ignore:0,3,8
 select * from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
--- @ignore:2
+-- @ignore:0,2
 select * from mo_catalog.mo_user_grant;
 -- @session
 
@@ -461,7 +461,7 @@ select * from mo_catalog.mo_user;
 select * from mo_catalog.mo_role;
 -- @ignore:0,3,8
 select * from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
--- @ignore:2
+-- @ignore:0,2
 select * from mo_catalog.mo_user_grant;
 -- @session
 
@@ -474,7 +474,7 @@ select * from mo_catalog.mo_user order by user_id;
 select * from mo_catalog.mo_role;
 -- @ignore:0,3,8
 select * from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
--- @ignore:2
+-- @ignore:0,2
 select * from mo_catalog.mo_user_grant;
 
 drop user user_grant_3;
@@ -584,7 +584,7 @@ select * from mo_catalog.mo_user;
 select * from mo_catalog.mo_role;
 -- @ignore:0,3,8
 select * from mo_catalog.mo_role_privs where role_name in ('r5');
--- @ignore:2
+-- @ignore:0,2
 select * from mo_catalog.mo_user_grant;
 -- @session
 
@@ -601,7 +601,7 @@ select * from mo_catalog.mo_user;
 select * from mo_catalog.mo_role;
 -- @ignore:0,3,8
 select * from mo_catalog.mo_role_privs where role_name in ('r5');
--- @ignore:2
+-- @ignore:0,2
 select * from mo_catalog.mo_user_grant;
 -- @session
 
@@ -614,7 +614,7 @@ select * from mo_catalog.mo_user;
 select * from mo_catalog.mo_role;
 -- @ignore:0,3,8
 select * from mo_catalog.mo_role_privs where role_name in ('r5');
--- @ignore:2
+-- @ignore:0,2
 select * from mo_catalog.mo_user_grant;
 drop user user01, user02, user03, user04, user05;
 drop role r5;
