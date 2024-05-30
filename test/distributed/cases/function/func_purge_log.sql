@@ -8,10 +8,12 @@ select purge_log('rawlog', '2023-06-30') a;
 -- @session
 
 -- check valid args
-select purge_log('rawlog', '2023-06-30') a;
-select purge_log('statement_info', '2023-06-30') a;
-select purge_log('metric', '2023-06-30') a;
-select purge_log('rawlog,statement_info,metric', '2023-06-30') a;
+-- replace all numeric as x, to check
+select REGEXP_REPLACE(a, '[0-9]+', '*') a from (select mo_ctl('dn', 'inspect', 'objprune -t system_metrics.metric -d 2021h') a) a;
+select REGEXP_REPLACE(a, '[0-9]+', '*') a from (select purge_log('rawlog', '2021-02-01') a) a;
+select REGEXP_REPLACE(a, '[0-9]+', '*') a from (select purge_log('statement_info', '2021-02-01') a) a;
+select REGEXP_REPLACE(a, '[0-9]+', '*') a from (select purge_log('metric', '2021-02-01') a) a;
+select purge_log('rawlog,statement_info,metric', '2021-02-01') a;
 
 -- check invalid args
 select purge_log('rawlog_not_exist', '2023-06-30') a;
