@@ -68,6 +68,7 @@ func New(
 	hakeeper logservice.CNHAKeeperClient,
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
 	threshold int,
+	maxLatency time.Duration,
 ) *Engine {
 	cluster := clusterservice.GetMOCluster()
 	services := cluster.GetAllTNServices()
@@ -122,6 +123,7 @@ func New(
 
 	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
 		WithLogtailUpdateStatsThreshold(threshold),
+		WithLogtailUpdateStatsMaxLatency(maxLatency),
 	)
 
 	if err := e.init(ctx); err != nil {
