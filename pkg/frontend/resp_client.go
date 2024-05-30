@@ -67,35 +67,35 @@ func (resper *MysqlResp) respClientWithoutFlush(ses *Session,
 }
 
 var _ Responser = &MysqlResp{}
-var dumpResper Responser = &NullResp{}
+var nullResper Responser = &NullResp{}
 
 type MysqlResp struct {
-	mysqlWr MysqlRrWr
-	s3Wr    S3Writer
+	mysqlRrWr MysqlRrWr
+	s3Wr      S3Writer
 }
 
 func (resper *MysqlResp) MysqlRrWr() MysqlRrWr {
-	return resper.mysqlWr
+	return resper.mysqlRrWr
 }
 
 func NewMysqlResp(mysqlWr MysqlRrWr) *MysqlResp {
 	return &MysqlResp{
-		mysqlWr: mysqlWr,
+		mysqlRrWr: mysqlWr,
 	}
 }
 
 func (resper *MysqlResp) SetStr(id PropertyID, val string) {
-	resper.mysqlWr.SetStr(id, val)
+	resper.mysqlRrWr.SetStr(id, val)
 }
 
 func (resper *MysqlResp) GetStr(id PropertyID) string {
-	return resper.mysqlWr.GetStr(id)
+	return resper.mysqlRrWr.GetStr(id)
 }
 
 func (resper *MysqlResp) SetU32(PropertyID, uint32) {}
 
 func (resper *MysqlResp) GetU32(id PropertyID) uint32 {
-	return resper.mysqlWr.GetU32(id)
+	return resper.mysqlRrWr.GetU32(id)
 }
 
 func (resper *MysqlResp) SetU8(PropertyID, uint8) {}
@@ -108,7 +108,7 @@ func (resper *MysqlResp) GetBool(PropertyID) bool {
 }
 
 func (resper *MysqlResp) ResetStatistics() {
-	resper.mysqlWr.ResetStatistics()
+	resper.mysqlRrWr.ResetStatistics()
 }
 
 func (resper *MysqlResp) RespPreMeta(execCtx *ExecCtx, meta any) (err error) {
@@ -123,7 +123,7 @@ func (resper *MysqlResp) RespResult(execCtx *ExecCtx, bat *batch.Batch) (err err
 	if ec.needExportToFile() {
 		err = ec.Write(execCtx, bat)
 	} else {
-		err = resper.mysqlWr.Write(execCtx, bat)
+		err = resper.mysqlRrWr.Write(execCtx, bat)
 	}
 	return
 }
@@ -133,8 +133,8 @@ func (resper *MysqlResp) RespPostMeta(execCtx *ExecCtx, meta any) (err error) {
 }
 
 func (resper *MysqlResp) Close() {
-	if resper.mysqlWr != nil {
-		resper.mysqlWr.Close()
+	if resper.mysqlRrWr != nil {
+		resper.mysqlRrWr.Close()
 	}
 	if resper.s3Wr != nil {
 		resper.s3Wr.Close()

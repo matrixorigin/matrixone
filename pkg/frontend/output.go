@@ -26,15 +26,7 @@ import (
 )
 
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
-// needCopyBytes : true -- make a copy of the bytes. else not.
-// Case 1: needCopyBytes = false.
-// For responding the client, we do not make a copy of the bytes. Because the data
-// has been written into the tcp conn before the batch.Batch returned to the pipeline.
-// Case 2: needCopyBytes = true.
-// For the background execution, we need to make a copy of the bytes. Because the data
-// has been saved in the session. Later the data will be used but then the batch.Batch has
-// been returned to the pipeline and may be reused and changed by the pipeline.
-func extractRowFromEveryVector(ctx context.Context, ses FeSession, dataSet *batch.Batch, j int, row []any) ([]any, error) {
+func extractRowFromEveryVector(ctx context.Context, ses FeSession, dataSet *batch.Batch, j int, row []any) error {
 	var rowIndex = j
 	for i, vec := range dataSet.Vecs { //col index
 		rowIndexBackup := rowIndex
@@ -48,11 +40,11 @@ func extractRowFromEveryVector(ctx context.Context, ses FeSession, dataSet *batc
 
 		err := extractRowFromVector(ctx, ses, vec, i, row, rowIndex)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		rowIndex = rowIndexBackup
 	}
-	return row, nil
+	return nil
 }
 
 // extractRowFromVector gets the rowIndex row from the i vector

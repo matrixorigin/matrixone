@@ -488,7 +488,7 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	var outBytes, outPacket int64
 	switch resper := ses.GetResponser().(type) {
 	case *MysqlResp:
-		outBytes, outPacket = resper.mysqlWr.CalculateOutTrafficBytes(true)
+		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
 	default:
 
 	}

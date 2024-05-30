@@ -470,7 +470,7 @@ var NewBackgroundExec = func(
 			gSysVars:       GSysVariables,
 			label:          make(map[string]string),
 			timeZone:       time.Local,
-			respr:          dumpResper,
+			respr:          nullResper,
 		},
 	}
 	backSes.uuid, _ = uuid.NewV7()
@@ -573,10 +573,7 @@ func fillResultSet(ctx context.Context, dataSet *batch.Batch, ses FeSession, mrs
 	n := dataSet.RowCount()
 	for j := 0; j < n; j++ { //row index
 		row := make([]any, mrs.GetColumnCount())
-		//needCopyBytes = true. we need to copy the bytes from the batch.Batch
-		//to avoid the data being changed after the batch.Batch returned to the
-		//pipeline.
-		_, err := extractRowFromEveryVector(ctx, ses, dataSet, j, row)
+		err := extractRowFromEveryVector(ctx, ses, dataSet, j, row)
 		if err != nil {
 			return err
 		}

@@ -419,7 +419,7 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 	ses := execCtx.ses.(*Session)
 	isShowTableStatus := ses.GetShowStmtType() == ShowTableStatus
 	for j := 0; j < n; j++ { //row index
-		_, err := extractRowFromEveryVector(execCtx.reqCtx, execCtx.ses, bat, j, mrs.Data[0])
+		err := extractRowFromEveryVector(execCtx.reqCtx, execCtx.ses, bat, j, mrs.Data[0])
 		if err != nil {
 			return err
 		}

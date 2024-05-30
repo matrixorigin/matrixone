@@ -170,7 +170,7 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 	*/
 	//send column count
 	colCnt := uint64(len(columns))
-	err = resper.mysqlWr.WriteLengthEncodedNumber(colCnt)
+	err = resper.mysqlRrWr.WriteLengthEncodedNumber(colCnt)
 	if err != nil {
 		return
 	}
@@ -183,7 +183,7 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 		/*
 			mysql COM_QUERY response: send the column definition per column
 		*/
-		err = resper.mysqlWr.WriteColumnDef(execCtx.reqCtx, mysqlc, int(cmd))
+		err = resper.mysqlRrWr.WriteColumnDef(execCtx.reqCtx, mysqlc, int(cmd))
 		if err != nil {
 			return
 		}
@@ -193,7 +193,7 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 		mysql COM_QUERY response: End after the column has been sent.
 		send EOF packet
 	*/
-	err = resper.mysqlWr.WriteEOFIF(0, ses.GetTxnHandler().GetServerStatus())
+	err = resper.mysqlRrWr.WriteEOFIF(0, ses.GetTxnHandler().GetServerStatus())
 	if err != nil {
 		return
 	}
@@ -213,7 +213,7 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
-		err2 := resper.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 		if err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -252,13 +252,13 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 			if err != nil {
 				return
 			}
-			err = resper.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+			err = resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 			if err != nil {
 				return
 			}
 		}
 	default:
-		err = resper.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err = resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 		if err != nil {
 			return
 		}
@@ -276,7 +276,7 @@ func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
 	res := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, execCtx.isLastStmt)
-	if err := resper.mysqlWr.WriteResponse(execCtx.reqCtx, res); err != nil {
+	if err := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err != nil {
 		return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed, error: %v ", err)
 	}
 	return err
@@ -298,7 +298,7 @@ func (resper *MysqlResp) respMixedResultRow(ses *Session,
 			zap.Error(err))
 		return err
 	}
-	err = resper.mysqlWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+	err = resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
 	if err != nil {
 		return
 	}
@@ -313,14 +313,14 @@ func (resper *MysqlResp) respBySituation(ses *Session,
 	}()
 	resp := NewGeneralOkResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus())
 	if len(execCtx.results) == 0 {
-		if err = resper.mysqlWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
+		if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 			return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 		}
 	} else {
 		for i, result := range execCtx.results {
 			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
 			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i == len(execCtx.results)-1)
-			if err = resper.mysqlWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
+			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 				return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 			}
 		}
