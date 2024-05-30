@@ -32,12 +32,23 @@ const maxCheckDupCount = 2000
 
 /*
 This operator is used to implement a way to ensure primary keys/unique keys are not duplicate in `INSERT` and `LOAD` statements,
- You can think of it as a special type of join, but it saves more memory and is generally faster.
+You can think of it as a special type of join, but it saves more memory and is generally faster.
 
 the BIG idea is to store
     pk columns to be loaded
     pk columns already exist
 both in a bitmap-like data structure, let's say bloom filter below
+
+An intuitive way to understand this Join, please refer to the following code snippet:
+
+	Fuzzy filter:
+		<- Build on Sink scan
+			Test and add
+		<- Probe on Table scan
+			Test
+
+Sink scan needs Test_and_Add because we can't be sure if the data passed in by the sink scan itself is duplicated (whereas table scan data is certainly not duplicated).
+
 
 if the final bloom filter claim that
     case 1: have no duplicate keys
@@ -45,7 +56,8 @@ if the final bloom filter claim that
     case 2: Not sure if there are duplicate keys because of hash collision
         start a background SQL to double check
 
-Note:
+
+opt:
 1. backgroud SQL may slow, so some optimizations could be applied
 	Using statistical information, when the data to be loaded is larger, the allowed false positive probability is lower,
 		avoiding too much content that needs to be checked.
@@ -55,6 +67,8 @@ Note:
 
 2. there is a corner case that no need to run background SQL
     on duplicate key update
+
+3. see the comment of func arg.Call
 */
 
 const argName = "fuzzy_filter"
@@ -101,6 +115,29 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
+/*
+opt3 : As mentioned before, you should think of fuzzy as a special kind of join, which also has a Build phase and a Probe phase.
+
+The previous pseudo-code has no problem with correctness, but the memory overhead in some scenarios can be significant,
+
+	especially when the sink scan has much larger data than the table scan.
+
+# Flow of optimized pseudo-code
+
+if Stats(Table Scan) > Stats(Sink Scan)
+
+	Build on Sink scan
+		Test and Add
+	Probe on Table scan
+		Test
+
+else
+
+	Build on Table scan
+		Add
+	Probe on Sink scan
+		Test and Add
+*/
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
@@ -123,6 +160,7 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 			if msg.Err != nil {
 				return result, msg.Err
 			}
+
 			bat := msg.Batch
 			if bat == nil {
 				arg.state = HandleRuntimeFilter
