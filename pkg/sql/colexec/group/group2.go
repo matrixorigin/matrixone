@@ -41,15 +41,6 @@ func (ctr *container) processGroupByAndAgg(
 					return result, err
 				}
 				if result.Batch == nil {
-
-					// `select agg(col) from empty` should return 0 or null but not empty set.
-					// so we should generate the result here is it was just empty.
-					if len(ap.Exprs) == 0 && (ctr.bat == nil || ctr.bat.IsEmpty()) {
-						if err = ctr.initResultOfEmptySet(ap, proc); err != nil {
-							return result, err
-						}
-					}
-
 					ctr.state = vm.Eval
 					break
 				}
@@ -188,9 +179,18 @@ func (ctr *container) initResultAndHashTable(proc *process.Process, config *Argu
 	}
 
 	// init the agg.
-	ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(ctr.aggVecs))
+	ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(config.Aggs))
 	if err = ctr.generateAggStructures(proc, config); err != nil {
 		return err
+	}
+	// if no group by, the group number must be 1.
+	if len(ctr.groupVecs.Vec) == 0 {
+		for _, ag := range ctr.bat.Aggs {
+			if err = ag.GroupGrow(1); err != nil {
+				return err
+			}
+		}
+		ctr.bat.SetRowCount(1)
 	}
 
 	// init the hashmap.
@@ -216,22 +216,5 @@ func (ctr *container) initResultAndHashTable(proc *process.Process, config *Argu
 		}
 	}
 
-	return nil
-}
-
-func (ctr *container) initResultOfEmptySet(config *Argument, proc *process.Process) (err error) {
-	ctr.bat = batch.NewWithSize(0)
-	ctr.bat.SetRowCount(1)
-
-	ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(config.Aggs))
-	if err = ctr.generateAggStructures(proc, config); err != nil {
-		return err
-	}
-
-	for _, ag := range ctr.bat.Aggs {
-		if err = ag.GroupGrow(1); err != nil {
-			return err
-		}
-	}
 	return nil
 }
