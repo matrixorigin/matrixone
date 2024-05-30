@@ -189,56 +189,6 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	return nil
 }
 
-func (e *Engine) DatabaseByAccountID(
-	accountID uint32,
-	name string,
-	op client.TxnOperator) (engine.Database, error) {
-	logDebugf(op.Txn(), "Engine.DatabaseByAccountID %s", name)
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
-		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
-	}
-	if v, ok := txn.databaseMap.Load(databaseKey{name: name, accountId: accountID}); ok {
-		return v.(*txnDatabase), nil
-	}
-	if name == catalog.MO_CATALOG {
-		db := &txnDatabase{
-			op:           op,
-			databaseId:   catalog.MO_CATALOG_ID,
-			databaseName: name,
-		}
-		return db, nil
-	}
-	key := &cache.DatabaseItem{
-		Name:      name,
-		AccountId: accountID,
-		Ts:        txn.op.SnapshotTS(),
-	}
-	var catalog *cache.CatalogCache
-	var err error
-	if !txn.op.IsSnapOp() {
-		catalog = e.getLatestCatalogCache()
-	} else {
-		catalog, err = e.getOrCreateSnapCatalogCache(
-			context.Background(),
-			types.TimestampToTS(txn.op.SnapshotTS()))
-		if err != nil {
-			return nil, err
-		}
-	}
-	if ok := catalog.GetDatabase(key); !ok {
-		return nil, moerr.GetOkExpectedEOB()
-	}
-	return &txnDatabase{
-		op:                op,
-		databaseName:      name,
-		databaseId:        key.Id,
-		rowId:             key.Rowid,
-		databaseType:      key.Typ,
-		databaseCreateSql: key.CreateSql,
-	}, nil
-}
-
 func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
 	logDebugf(op.Txn(), "Engine.Database %s", name)
