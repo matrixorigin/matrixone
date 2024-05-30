@@ -519,6 +519,49 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 		return moerr.NewNotSupported(proc.Ctx, "only support sys account")
 	}
 
+	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
+	}
+	exec := v.(executor.SQLExecutor)
+
+	deleteTable := func(tbl *table.Table, dateStr string) error {
+		sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
+			tbl.Database, tbl.Table, tbl.TimestampColumn.Name, dateStr)
+		opts := executor.Options{}.WithDatabase(tbl.Database).
+			WithTxn(proc.TxnOperator).
+			WithTimeZone(proc.SessionInfo.TimeZone)
+		if proc.TxnOperator != nil {
+			opts = opts.WithDisableIncrStatement() // this option always with WithTxn()
+		}
+		res, err := exec.Exec(proc.Ctx, sql, opts)
+		if err != nil {
+			return err
+		}
+		res.Close()
+		return nil
+	}
+	pruneObj := func(tbl *table.Table, hours time.Duration) (string, error) {
+		var result string
+		// Tips: NO Txn guarantee
+		opts := executor.Options{}.WithDatabase(tbl.Database).
+			WithTimeZone(proc.SessionInfo.TimeZone)
+		// fixme: hours should > 24 * time.Hour
+		runPruneSql := fmt.Sprintf(`select mo_ctl('dn', 'inspect', 'objprune -t %s.%s -d %s -f')`, tbl.Database, tbl.Table, hours)
+		res, err := exec.Exec(proc.Ctx, runPruneSql, opts)
+		if err != nil {
+			return "", err
+		}
+		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				result += executor.GetStringRows(cols[0])[i]
+			}
+			return true
+		})
+		res.Close()
+		return result, nil
+	}
+
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
@@ -528,52 +571,13 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 			continue
 		}
 
-		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
-		if !ok {
-			return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
-		}
-
-		exec := v.(executor.SQLExecutor)
-
-		deleteTable := func(tbl *table.Table, dateStr string) error {
-			sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
-				tbl.Database, tbl.Table, tbl.TimestampColumn.Name, dateStr)
-			opts := executor.Options{}.WithDatabase(tbl.Database).
-				WithTxn(proc.TxnOperator).
-				WithTimeZone(proc.SessionInfo.TimeZone)
-			if proc.TxnOperator != nil {
-				opts = opts.WithDisableIncrStatement() // this option always with WithTxn()
-			}
-			res, err := exec.Exec(proc.Ctx, sql, opts)
-			if err != nil {
-				return err
-			}
-			res.Close()
-			return nil
-		}
-		pruneObj := func(tbl *table.Table, hours time.Duration) (string, error) {
-			var result string
-			// Tips: NO Txn guarantee
-			opts := executor.Options{}.WithDatabase(tbl.Database).
-				WithTimeZone(proc.SessionInfo.TimeZone)
-			// fixme: hours should > 24 * time.Hour
-			runPruneSql := fmt.Sprintf(`select mo_ctl('dn', 'inspect', 'objprune -t %s.%s -d %s -f')`, tbl.Database, tbl.Table, hours)
-			res, err := exec.Exec(proc.Ctx, runPruneSql, opts)
-			if err != nil {
-				return "", err
-			}
-			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-				for i := 0; i < rows; i++ {
-					result += executor.GetStringRows(cols[0])[i]
-				}
-				return true
-			})
-			res.Close()
-			return result, nil
+		tblName := strings.TrimSpace(util.UnsafeBytesToString(v1))
+		// not allow purge multi table in one call.
+		if strings.Contains(tblName, ",") {
+			return moerr.NewNotSupported(proc.Ctx, "table name contains comma.")
 		}
 
 		now := time.Now()
-		tblName := strings.TrimSpace(util.UnsafeBytesToString(v1))
 		found := false
 		tables := table.GetAllTables()
 		for _, tbl := range tables {
