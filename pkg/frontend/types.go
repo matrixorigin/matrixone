@@ -527,7 +527,7 @@ func (ses *feSessionImpl) GetDatabaseName() string {
 }
 
 func (ses *feSessionImpl) GetUserName() string {
-	return ses.respr.GetStr(DBNAME)
+	return ses.respr.GetStr(USERNAME)
 }
 
 func (ses *feSessionImpl) DisableTrace() bool {
