@@ -114,7 +114,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		resp.Sizes = append(resp.Sizes, size)
 	}
 
-	var notReadyNewAcc []uint64
+	//var notReadyNewAcc []uint64
 
 	// new accounts
 	traverseCatalogForNewAccounts(h.db.Catalog, memo, newIds)
@@ -124,9 +124,10 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 			resp.AccIds = append(resp.AccIds, int64(newIds[idx]))
 			resp.Sizes = append(resp.Sizes, size)
 			memo.AddReqTrace(uint64(newIds[idx]), size, start, "new, ready")
-		} else {
-			notReadyNewAcc = append(notReadyNewAcc, newIds[idx])
 		}
+		//else {
+		//	notReadyNewAcc = append(notReadyNewAcc, newIds[idx])
+		//}
 	}
 
 	memo.ClearNewAccCache()
