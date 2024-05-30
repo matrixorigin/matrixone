@@ -590,6 +590,12 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 				}
 				rs.AppendMustBytesValue(util.UnsafeStringToBytes(result))
 			} else {
+				// try prune obj 24 hours before
+				_, err := pruneObj(tbl, rpc.AllowPruneDuration+time.Second)
+				if err != nil {
+					return err
+				}
+				// do the delete job
 				if err := deleteTable(tbl, v2.String()); err != nil {
 					return err
 				}
