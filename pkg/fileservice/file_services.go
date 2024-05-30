@@ -179,8 +179,11 @@ func (f *FileServices) Cost() *CostAttr {
 }
 
 func maxCost(a, b *CostAttr) *CostAttr {
-	if a.List < b.List {
-		return b
+	attr := &CostAttr{
+		List: a.List,
 	}
-	return a
+	if attr.List < b.List {
+		attr.List = b.List
+	}
+	return attr
 }
