@@ -234,6 +234,11 @@ func (db *txnDatabase) RelationByAccountID(
 			name,
 			accountID,
 			db.databaseId)
+		logutil.Infof("xxxx RelationByAccountID table %s dose not exist, is-snapshot-op:%v, txnop:%s",
+			name,
+			db.op.IsSnapOp(),
+			db.op.Txn().DebugString())
+
 		return nil, moerr.NewParseError(context.Background(), "table %q does not exist", name)
 	}
 
