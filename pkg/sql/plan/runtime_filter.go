@@ -180,8 +180,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			},
 		}
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, inLimit, buildExpr))
-
-		recalcStatsByRuntimeFilter(leftChild, node, rightChild.Stats.Selectivity)
+		recalcStatsByRuntimeFilter(leftChild, node, builder)
 		return
 	}
 
@@ -258,5 +257,5 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	buildExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", buildArgs)
 
 	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt), buildExpr))
-	recalcStatsByRuntimeFilter(leftChild, node, rightChild.Stats.Selectivity)
+	recalcStatsByRuntimeFilter(leftChild, node, builder)
 }

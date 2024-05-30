@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -536,12 +537,22 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	return nil
 }
 
-func (txn *Transaction) getTable(id uint32, dbName string, tbName string) (engine.Relation, error) {
-	database, err := txn.engine.DatabaseByAccountID(id, dbName, txn.proc.TxnOperator)
+func (txn *Transaction) getTable(
+	id uint32,
+	dbName string,
+	tbName string,
+) (engine.Relation, error) {
+	ctx := context.WithValue(
+		context.Background(),
+		defines.TenantIDKey{},
+		id,
+	)
+
+	database, err := txn.engine.Database(ctx, dbName, txn.proc.TxnOperator)
 	if err != nil {
 		return nil, err
 	}
-	tbl, err := database.(*txnDatabase).RelationByAccountID(id, tbName, nil)
+	tbl, err := database.Relation(ctx, tbName, nil)
 	if err != nil {
 		return nil, err
 	}

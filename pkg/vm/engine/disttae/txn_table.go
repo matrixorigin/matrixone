@@ -23,8 +23,6 @@ import (
 	"time"
 	"unsafe"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -58,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -718,19 +717,21 @@ func (tbl *txnTable) rangesOnePart(
 	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
-	uncommittedObjects := tbl.collectUnCommittedObjects()
-	dirtyBlks := tbl.collectDirtyBlocks(state, uncommittedObjects)
 
 	var done bool
+	// collect dirty blocks lazily
+	var dirtyBlks map[types.Blockid]struct{}
+	uncommittedObjects := tbl.collectUnCommittedObjects()
 
 	if done, err = TryFastFilterBlocks(
 		ctx,
+		tbl,
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
 		exprs,
 		state,
 		uncommittedObjects,
-		dirtyBlks,
+		&dirtyBlks,
 		outBlocks,
 		tbl.getTxn().engine.fs,
 		tbl.proc.Load(),
@@ -747,6 +748,10 @@ func (tbl *txnTable) rangesOnePart(
 			zap.String("table", tbl.tableDef.Name),
 			zap.String("exprs", plan2.FormatExprs(exprs)),
 		)
+	}
+
+	if dirtyBlks == nil {
+		tbl.collectDirtyBlocks(state, uncommittedObjects)
 	}
 
 	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
@@ -2246,8 +2251,8 @@ func (tbl *txnTable) PKPersistedBetween(
 		return true, err
 	}
 
-	var filter blockio.ReadFilter
-	buildFilter := func() blockio.ReadFilter {
+	var filter blockio.ReadFilterSearchFuncType
+	buildFilter := func() blockio.ReadFilterSearchFuncType {
 		//keys must be sorted.
 		keys.InplaceSort()
 		bytes, _ := keys.MarshalBinary()
@@ -2263,11 +2268,11 @@ func (tbl *txnTable) PKPersistedBetween(
 			inExpr,
 			"pk",
 			tbl.proc.Load())
-		return filter
+		return filter.SortedSearchFunc
 	}
 
-	var unsortedFilter blockio.ReadFilter
-	buildUnsortedFilter := func() blockio.ReadFilter {
+	var unsortedFilter blockio.ReadFilterSearchFuncType
+	buildUnsortedFilter := func() blockio.ReadFilterSearchFuncType {
 		return getNonSortedPKSearchFuncByPKVec(keys)
 	}
 
@@ -2512,7 +2517,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		bat, err := blockio.BlockRead(
 			tbl.proc.Load().Ctx, &blk, nil, columns, colTypes,
 			tbl.db.op.SnapshotTS(),
-			nil, nil, nil,
+			nil, nil, blockio.ReadFilter{},
 			tbl.getTxn().engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(), fileservice.Policy(0),
 		)
 		if err != nil {
