@@ -212,17 +212,6 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 //	tableInfos map[string][]ColumnInfo
 //}
 
-// outputPool outputs the data
-type outputPool interface {
-	resetLineStr()
-
-	reset()
-
-	getEmptyRow() ([]interface{}, error)
-
-	flush() error
-}
-
 func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.params != nil {
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
@@ -869,7 +858,7 @@ type MysqlPayloadWriter interface {
 	ClosePayload(bool) error
 }
 
-type S3Writer interface {
+type QueryResultWriter interface {
 	MediaWriter
 }
 

@@ -682,3 +682,17 @@ func getFileSize(files []fileservice.DirEntry, fileName string) int64 {
 	}
 	return -1
 }
+
+// TODO:
+var _ QueryResultWriter = &QueryResult{}
+
+type QueryResult struct {
+}
+
+func (result *QueryResult) Write(ctx *ExecCtx, b *batch.Batch) error {
+	return nil
+}
+
+func (result *QueryResult) Close() {
+
+}

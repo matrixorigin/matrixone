@@ -71,7 +71,7 @@ var nullResper Responser = &NullResp{}
 
 type MysqlResp struct {
 	mysqlRrWr MysqlRrWr
-	s3Wr      S3Writer
+	s3Wr      QueryResultWriter
 }
 
 func (resper *MysqlResp) MysqlRrWr() MysqlRrWr {
@@ -119,6 +119,11 @@ func (resper *MysqlResp) RespPreMeta(execCtx *ExecCtx, meta any) (err error) {
 func (resper *MysqlResp) RespResult(execCtx *ExecCtx, bat *batch.Batch) (err error) {
 	ses := execCtx.ses.(*Session)
 	ec := ses.GetExportConfig()
+
+	//err = resper.s3Wr.Write(execCtx, bat)
+	//if err != nil {
+	//	return err
+	//}
 
 	if ec.needExportToFile() {
 		err = ec.Write(execCtx, bat)
