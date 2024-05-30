@@ -292,7 +292,7 @@ func (resper *MysqlResp) respMixedResultRow(ses *Session,
 	//!!!the columnDef has been sent after the compiling ends. It should not be sent here again.
 	//only the result rows need to be sent.
 	mrs := ses.GetMysqlResultSet()
-	if err := ses.GetResponser().(*MysqlResp).mysqlWr.WriteResultSetRow(mrs, mrs.GetRowCount()); err != nil {
+	if err := ses.GetResponser().MysqlRrWr().WriteResultSetRow(mrs, mrs.GetRowCount()); err != nil {
 		ses.Error(execCtx.reqCtx,
 			"Failed to handle 'SHOW TABLE STATUS'",
 			zap.Error(err))

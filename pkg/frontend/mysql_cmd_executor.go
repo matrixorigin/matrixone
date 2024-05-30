@@ -2178,7 +2178,7 @@ func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeS
 }
 
 func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
-	resper := ses.GetResponser().(*MysqlResp).mysqlWr
+	mysqlRrWr := ses.GetResponser().MysqlRrWr()
 	defer func() {
 		err2 := writer.Close()
 		if err == nil {
@@ -2189,15 +2189,15 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	if err != nil {
 		return
 	}
-	err = resper.WriteLocalInfileRequest(param.Filepath)
+	err = mysqlRrWr.WriteLocalInfileRequest(param.Filepath)
 	if err != nil {
 		return
 	}
 	start := time.Now()
 	var msg interface{}
-	msg, err = resper.Read(goetty.ReadOptions{})
+	msg, err = mysqlRrWr.Read(goetty.ReadOptions{})
 	if err != nil {
-		resper.SetU8(SEQUENCEID, resper.GetU8(SEQUENCEID)+1)
+		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
 		}
@@ -2209,12 +2209,12 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 
 	packet, ok := msg.(*Packet)
 	if !ok {
-		resper.SetU8(SEQUENCEID, resper.GetU8(SEQUENCEID)+1)
+		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
 		err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
 		return
 	}
 
-	resper.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
+	mysqlRrWr.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
 	seq := uint8(packet.SequenceID + 1)
 	length := packet.Length
 	if length == 0 {
@@ -2239,11 +2239,11 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
 		readStart := time.Now()
-		msg, err = resper.Read(goetty.ReadOptions{})
+		msg, err = mysqlRrWr.Read(goetty.ReadOptions{})
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 				seq += 1
-				resper.SetU8(SEQUENCEID, seq)
+				mysqlRrWr.SetU8(SEQUENCEID, seq)
 				err = nil
 			}
 			break
@@ -2259,11 +2259,11 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		if !ok {
 			err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
 			seq += 1
-			resper.SetU8(SEQUENCEID, seq)
+			mysqlRrWr.SetU8(SEQUENCEID, seq)
 			break
 		}
 		seq = uint8(packet.SequenceID + 1)
-		resper.SetU8(SEQUENCEID, seq)
+		mysqlRrWr.SetU8(SEQUENCEID, seq)
 		ses.CountPayload(len(packet.Payload))
 
 		writeStart := time.Now()
@@ -3082,7 +3082,7 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 
 	sql := fmt.Sprintf("execute %s", stmtName)
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
-	err = ses.GetResponser().(*MysqlResp).mysqlWr.ParseExecuteData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	err = ses.GetResponser().MysqlRrWr().ParseExecuteData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
 		return "", nil, err
 	}
@@ -3107,7 +3107,7 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 	sql := fmt.Sprintf("send long data for stmt %s", stmtName)
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 
-	err = ses.GetResponser().(*MysqlResp).mysqlWr.ParseSendLongData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	err = ses.GetResponser().MysqlRrWr().ParseSendLongData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
 		return err
 	}
@@ -3430,7 +3430,7 @@ func handleSetOption(ses *Session, execCtx *ExecCtx, data []byte) (err error) {
 	if len(data) < 2 {
 		return moerr.NewInternalError(execCtx.reqCtx, "invalid cmd_set_option data length")
 	}
-	cap := ses.GetResponser().(*MysqlResp).mysqlWr.GetU32(CAPABILITY)
+	cap := ses.GetResponser().MysqlRrWr().GetU32(CAPABILITY)
 	switch binary.LittleEndian.Uint16(data[:2]) {
 	case 0:
 		// MO do not support CLIENT_MULTI_STATEMENTS in prepare, so do nothing here(Like MySQL)
@@ -3439,7 +3439,7 @@ func handleSetOption(ses *Session, execCtx *ExecCtx, data []byte) (err error) {
 
 	case 1:
 		cap &^= CLIENT_MULTI_STATEMENTS
-		ses.GetResponser().(*MysqlResp).mysqlWr.SetU32(CAPABILITY, cap)
+		ses.GetResponser().MysqlRrWr().SetU32(CAPABILITY, cap)
 
 	default:
 		return moerr.NewInternalError(execCtx.reqCtx, "invalid cmd_set_option data")

@@ -512,7 +512,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		return nil
 	}
 
-	req := GetRequest(payload)
+	req := ToRequest(payload)
 	req.seq = seq
 
 	//handle request

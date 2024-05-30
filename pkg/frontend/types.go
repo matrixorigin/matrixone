@@ -807,14 +807,12 @@ type Responser interface {
 	RespPreMeta(*ExecCtx, any) error
 	RespResult(*ExecCtx, *batch.Batch) error
 	RespPostMeta(*ExecCtx, any) error
+	MysqlRrWr() MysqlRrWr
 	Close()
 	ResetStatistics()
 }
 
-// TODO:refine
 type MediaReader interface {
-	Request() (*Request, error)
-	Payload() ([]byte, error)
 }
 
 type MediaWriter interface {
@@ -822,13 +820,19 @@ type MediaWriter interface {
 	Close()
 }
 
-// TODO: refine
 type MysqlReader interface {
+	MediaReader
+	Property
+	Read(options goetty.ReadOptions) (interface{}, error)
+	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
+	Authenticate(ctx context.Context) error
+	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 }
 
 type MysqlWriter interface {
-	Property
 	MediaWriter
+	Property
 	WriteHandshake() error
 	WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error
 	WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error
@@ -847,13 +851,13 @@ type MysqlWriter interface {
 	WriteLocalInfileRequest(filepath string) error
 
 	CalculateOutTrafficBytes(b bool) (int64, int64)
-	Read(options goetty.ReadOptions) (interface{}, error)
-	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
-	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 	ResetStatistics()
 	UpdateCtx(ctx context.Context)
-	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
-	Authenticate(ctx context.Context) error
+}
+
+type MysqlRrWr interface {
+	MysqlReader
+	MysqlWriter
 }
 
 // MysqlPayloadWriter make final payload for the packet

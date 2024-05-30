@@ -70,11 +70,15 @@ var _ Responser = &MysqlResp{}
 var dumpResper Responser = &NullResp{}
 
 type MysqlResp struct {
-	mysqlWr MysqlWriter
+	mysqlWr MysqlRrWr
 	s3Wr    S3Writer
 }
 
-func NewMysqlResp(mysqlWr MysqlWriter) *MysqlResp {
+func (resper *MysqlResp) MysqlRrWr() MysqlRrWr {
+	return resper.mysqlWr
+}
+
+func NewMysqlResp(mysqlWr MysqlRrWr) *MysqlResp {
 	return &MysqlResp{
 		mysqlWr: mysqlWr,
 	}
@@ -144,6 +148,11 @@ const (
 type NullResp struct {
 	username string
 	database string
+}
+
+func (resper *NullResp) MysqlRrWr() MysqlRrWr {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (resper *NullResp) GetStr(id PropertyID) string {

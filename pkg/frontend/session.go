@@ -458,7 +458,7 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(connCtx context.Context, proto MysqlWriter, mp *mpool.MPool, gSysVars *GlobalSystemVariables, isNotBackgroundSession bool, sharedTxnHandler *TxnHandler) *Session {
+func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool, gSysVars *GlobalSystemVariables, isNotBackgroundSession bool, sharedTxnHandler *TxnHandler) *Session {
 	//if the sharedTxnHandler exists,we use its txnCtx and txnOperator in this session.
 	//Currently, we only use the sharedTxnHandler in the background session.
 	var txnOp TxnOperator

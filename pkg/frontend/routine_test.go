@@ -106,7 +106,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	uuid, _ := uuid.NewV7()
 	runner := mock_frontend.NewMockComputationRunner(ctrl)
 	runner.EXPECT().Run(gomock.Any()).DoAndReturn(func(uint64) (*util.RunResult, error) {
-		proto := ses.GetResponser().(*MysqlResp).mysqlWr
+		proto := ses.GetResponser().MysqlRrWr()
 		if mrs != nil {
 			if res.isSleepSql {
 				select {

@@ -2850,7 +2850,7 @@ func TestMysqlProtocolImpl_Close(t *testing.T) {
 	assert.Nil(t, proto.binaryNullBuffer)
 }
 
-var _ MysqlWriter = &testMysqlWriter{}
+var _ MysqlRrWr = &testMysqlWriter{}
 
 // testMysqlWriter works for the background transaction that does not use the network protocol.
 type testMysqlWriter struct {

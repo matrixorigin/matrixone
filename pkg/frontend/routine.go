@@ -40,7 +40,7 @@ import (
 // use the executor to handle requests, and response them.
 type Routine struct {
 	//protocol layer
-	protocol MysqlWriter
+	protocol MysqlRrWr
 
 	cancelRoutineCtx  context.Context
 	cancelRoutineFunc context.CancelFunc
@@ -143,7 +143,7 @@ func (rt *Routine) getCancelRoutineCtx() context.Context {
 	return rt.cancelRoutineCtx
 }
 
-func (rt *Routine) getProtocol() MysqlWriter {
+func (rt *Routine) getProtocol() MysqlRrWr {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	return rt.protocol
@@ -465,7 +465,7 @@ func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) er
 	return nil
 }
 
-func NewRoutine(ctx context.Context, protocol MysqlWriter, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {
+func NewRoutine(ctx context.Context, protocol MysqlRrWr, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {
 	ctx = trace.Generate(ctx) // fill span{trace_id} in ctx
 	cancelRoutineCtx, cancelRoutineFunc := context.WithCancel(ctx)
 	ri := &Routine{

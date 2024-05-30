@@ -170,7 +170,7 @@ const (
 	DefaultMySQLState string = "HY000"
 )
 
-var _ MysqlWriter = &MysqlProtocolImpl{}
+var _ MysqlRrWr = &MysqlProtocolImpl{}
 
 type debugStats struct {
 	writeCount uint64
