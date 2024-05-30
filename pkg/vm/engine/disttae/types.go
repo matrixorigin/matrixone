@@ -239,6 +239,7 @@ type Transaction struct {
 	offsets []int
 	//for RC isolation, the txn's snapshot TS for each statement.
 	timestamps []timestamp.Timestamp
+	start      time.Time
 
 	hasS3Op              atomic.Bool
 	removed              bool
@@ -588,10 +589,7 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		txn.resetSnapshot()
 	}
 	//Transfer row ids for deletes in RC isolation
-	if !commit {
-		return txn.transferDeletesLocked()
-	}
-	return nil
+	return txn.transferDeletesLocked(ctx, commit)
 }
 
 // Entry represents a delete/insert
@@ -742,8 +740,6 @@ type withFilterMixin struct {
 		seqnums  []uint16
 		colTypes []types.Type
 		// colNulls []bool
-
-		compPKPositions []uint16 // composite primary key pos in the columns
 
 		pkPos int // -1 means no primary key in columns
 
