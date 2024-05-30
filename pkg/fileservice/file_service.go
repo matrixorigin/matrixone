@@ -138,8 +138,6 @@ type IOEntry struct {
 	fromCache IOVectorCache
 
 	allocator CacheDataAllocator
-
-	releaseFuncs []func()
 }
 
 func (i IOEntry) String() string {
