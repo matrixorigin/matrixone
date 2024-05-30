@@ -455,7 +455,7 @@ func restoreToAccount(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
 	snapshotTs int64) (err error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to restore account: %v, restore ts : %d", snapshotName, toAccountId, snapshotTs))
+	getLogger().Info(fmt.Sprintf("[%s] start to restore account: %v, restore timestamp : %d", snapshotName, toAccountId, snapshotTs))
 
 	var dbNames []string
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
@@ -509,7 +509,7 @@ func restoreToDatabase(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
 	snapshotTs int64) (err error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to restore db: %v, restore ts: %d", snapshotName, dbName, snapshotTs))
+	getLogger().Info(fmt.Sprintf("[%s] start to restore db: %v, restore timestamp: %d", snapshotName, dbName, snapshotTs))
 	return restoreToDatabaseOrTable(ctx, bh, snapshotName, dbName, "", toAccountId, fkTableMap, viewMap, snapshotTs)
 }
 
@@ -523,7 +523,7 @@ func restoreToTable(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
 	snapshotTs int64) (err error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to restore table: %v, restore ts: %d", snapshotName, tblName, snapshotTs))
+	getLogger().Info(fmt.Sprintf("[%s] start to restore table: %v, restore timestamp: %d", snapshotName, tblName, snapshotTs))
 	return restoreToDatabaseOrTable(ctx, bh, snapshotName, dbName, tblName, toAccountId, fkTableMap, viewMap, snapshotTs)
 }
 
