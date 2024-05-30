@@ -84,7 +84,8 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		memo.LeaveProcessing()
 	}()
 
-	specialSize := memo.GatherSpecialTableSize()
+	//specialSize := memo.GatherSpecialTableSize()
+	specialSize := uint64(0)
 	usages := memo.GatherAllAccSize()
 	for accId := range usages {
 		if accId != uint64(catalog.System_Account) {
@@ -130,11 +131,11 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 
 	memo.ClearNewAccCache()
 
-	for idx := range notReadyNewAcc {
-		resp.AccIds = append(resp.AccIds, int64(notReadyNewAcc[idx]))
-		resp.Sizes = append(resp.Sizes, specialSize)
-		memo.AddReqTrace(uint64(newIds[idx]), specialSize, start, " new, not ready, only special")
-	}
+	//for idx := range notReadyNewAcc {
+	//	resp.AccIds = append(resp.AccIds, int64(notReadyNewAcc[idx]))
+	//	resp.Sizes = append(resp.Sizes, specialSize)
+	//	memo.AddReqTrace(uint64(newIds[idx]), specialSize, start, "new, not ready, only special")
+	//}
 
 	resp.Succeed = true
 
