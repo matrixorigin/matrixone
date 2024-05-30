@@ -35,7 +35,8 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 
 	newFilterList := builder.doMergeFiltersOnCompositeKey(node.TableDef, node.BindingTags[0], node.FilterList...)
 	node.FilterList = newFilterList
-	calcScanStats(node, builder)
+	node.Stats = calcScanStats(node, builder)
+	resetHashMapStats(node.Stats)
 }
 
 func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDef, tableTag int32, filters ...*plan.Expr) []*plan.Expr {
