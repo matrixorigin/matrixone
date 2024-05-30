@@ -260,6 +260,9 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		blockID := delBlockIDs[i]
 		tableID := delTableIDs[i]
 		deltaLoc := objectio.Location(del.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
+		if _, ok := sm.tides[tableID]; !ok {
+			continue
+		}
 		if sm.objects[tableID] == nil {
 			panic(any(fmt.Sprintf("tableID %d not found", tableID)))
 		}
