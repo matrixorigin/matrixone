@@ -783,6 +783,12 @@ const (
 	CONNID
 	//Peer address
 	PEER
+	//Seqeunce id
+	SEQUENCEID
+	//capability bits
+	CAPABILITY
+	ESTABLISHED
+	TLS_ESTABLISHED
 )
 
 type Property interface {
@@ -840,24 +846,14 @@ type MysqlWriter interface {
 	WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error
 	WriteLocalInfileRequest(filepath string) error
 
-	SetUserName(s string)
-	Peer() string
-	SetSequenceID(i uint8)
-	GetSequenceId() uint8
-	GetCapability() uint32
-	SetCapability(c uint32)
 	CalculateOutTrafficBytes(b bool) (int64, int64)
 	Read(options goetty.ReadOptions) (interface{}, error)
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 	ResetStatistics()
 	UpdateCtx(ctx context.Context)
-	IsEstablished() bool
-	IsTlsEstablished() bool
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
-	SetTlsEstablished()
 	Authenticate(ctx context.Context) error
-	SetEstablished()
 }
 
 // MysqlPayloadWriter make final payload for the packet

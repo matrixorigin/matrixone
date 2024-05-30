@@ -363,12 +363,39 @@ func (mp *MysqlProtocolImpl) GetU32(id PropertyID) uint32 {
 	}
 	return math.MaxUint32
 }
-func (mp *MysqlProtocolImpl) SetU8(PropertyID, uint8) {}
-func (mp *MysqlProtocolImpl) GetU8(PropertyID) uint8 {
+func (mp *MysqlProtocolImpl) SetU8(id PropertyID, val uint8) {
+	switch id {
+	case SEQUENCEID:
+		mp.SetSequenceID(val)
+	}
+}
+
+func (mp *MysqlProtocolImpl) GetU8(id PropertyID) uint8 {
+	switch id {
+	case SEQUENCEID:
+		return mp.GetSequenceId()
+	}
 	return 0
 }
-func (mp *MysqlProtocolImpl) SetBool(PropertyID, bool) {}
-func (mp *MysqlProtocolImpl) GetBool(PropertyID) bool {
+func (mp *MysqlProtocolImpl) SetBool(id PropertyID, val bool) {
+	switch id {
+	case ESTABLISHED:
+		if val {
+			mp.SetEstablished()
+		}
+	case TLS_ESTABLISHED:
+		if val {
+			mp.SetTlsEstablished()
+		}
+	}
+}
+func (mp *MysqlProtocolImpl) GetBool(id PropertyID) bool {
+	switch id {
+	case ESTABLISHED:
+		return mp.IsEstablished()
+	case TLS_ESTABLISHED:
+		return mp.IsTlsEstablished()
+	}
 	return false
 }
 
