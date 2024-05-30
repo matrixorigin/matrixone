@@ -993,16 +993,21 @@ func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error
 	return nil
 }
 
-func recalcStatsByRuntimeFilter(node *plan.Node, joinNode *plan.Node, runtimeFilterSel float64) {
-	if node.NodeType != plan.Node_TABLE_SCAN {
+func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builder *QueryBuilder) {
+	if scanNode.NodeType != plan.Node_TABLE_SCAN {
 		return
 	}
-	node.Stats.Cost *= runtimeFilterSel
-	node.Stats.Outcnt *= runtimeFilterSel
-	if node.Stats.Cost < 1 {
-		node.Stats.Cost = 1
+	if joinNode.NodeType != plan.Node_JOIN && joinNode.NodeType != plan.Node_FUZZY_FILTER {
+		return
 	}
-	node.Stats.BlockNum = int32(node.Stats.Outcnt/2) + 1
+	runtimeFilterSel := builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity
+	scanNode.Stats.Cost *= runtimeFilterSel
+	scanNode.Stats.Outcnt *= runtimeFilterSel
+	if scanNode.Stats.Cost < 1 {
+		scanNode.Stats.Cost = 1
+	}
+	scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/2) + 1
+	scanNode.Stats.Selectivity = andSelectivity(scanNode.Stats.Selectivity, runtimeFilterSel)
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
