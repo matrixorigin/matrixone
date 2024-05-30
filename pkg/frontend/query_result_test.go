@@ -72,6 +72,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 	ioses.EXPECT().Ref().AnyTimes()
+	ioses.EXPECT().Disconnect().AnyTimes()
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	testutil.SetupAutoIncrService()
