@@ -151,7 +151,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			text = SubStringFromBegin(bb.String(), int(getGlobalPu().SV.LengthOfQueryPrinted))
 		} else {
 			// ignore envStmt == ""
-			// case: exec `set @ t= 2;` will trigger an internal query with the same session.
+			// case: exec `set @t = 2;` will trigger an internal query with the same session.
 			// If you need real sql, can try:
 			//	+ fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 			//	+ cw.GetAst().Format(fmtCtx)
@@ -187,6 +187,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		// ignore internal EMPTY query.
 		return ctx, nil
 	}
+
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal") // pls task care of mce.GetDoQueryFunc() call case.
@@ -195,6 +196,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	// set TransactionID
 	var txn TxnOperator
 	var err error
+	// fixme: use ses.GetTxnId to simple.
 	if handler := ses.GetTxnHandler(); handler.InActiveTxn() {
 		txn = handler.GetTxn()
 		if err != nil {
@@ -204,13 +206,12 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	}
 	// set SessionID
 	copy(stm.SessionID[:], ses.GetUUID())
+	copy(stm.StatementID[:], stmID[:])
 	requestAt := envBegin
 	if !useEnv {
 		requestAt = time.Now()
 	}
 
-	copy(stm.StatementID[:], stmID[:])
-	// END> set StatementID
 	stm.Account = tenant.GetTenant()
 	stm.RoleId = proc.SessionInfo.RoleId
 	stm.User = tenant.GetUser()
@@ -229,7 +230,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stm.User = ""
 	}
 	if stm.IsMoLogger() && stm.StatementType == "Load" && len(stm.Statement) > 128 {
-		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-45:]
+		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-70:]
 	}
 	stm.Report(ctx) // pls keep it simple: Only call Report twice at most.
 	ses.SetTStmt(stm)
@@ -1086,7 +1087,7 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 		}
 
 		exPlan = replaced
-		paramVals := ses.GetTxnCompileCtx().tcw.paramVals
+		paramVals := ses.GetTxnCompileCtx().tcw.ParamVals()
 		if len(paramVals) > 0 {
 			//replace the param var in the plan by the param value
 			exPlan, err = plan2.FillValuesOfParamsInPlan(reqCtx, exPlan, paramVals)
@@ -2476,6 +2477,7 @@ func executeStmtWithWorkspace(ses FeSession,
 
 	//refresh txn id
 	ses.SetTxnId(txnOp.Txn().ID)
+	ses.SetStaticTxnId(txnOp.Txn().ID)
 
 	//refresh proc txnOp
 	execCtx.proc.TxnOperator = txnOp
@@ -2576,9 +2578,7 @@ func executeStmt(ses *Session,
 ) (err error) {
 	ses.EnterFPrint(8)
 	defer ses.ExitFPrint(8)
-	if txw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-		ses.GetTxnCompileCtx().tcw = txw
-	}
+	ses.GetTxnCompileCtx().tcw = execCtx.cw
 
 	// record goroutine info when ddl stmt run timeout
 	switch execCtx.stmt.(type) {
@@ -2658,9 +2658,7 @@ func executeStmt(ses *Session,
 
 	defer func() {
 		// Serialize the execution plan as json
-		if cwft, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(execCtx.reqCtx)
-		}
+		_ = execCtx.cw.RecordExecPlan(execCtx.reqCtx)
 	}()
 
 	cmpBegin = time.Now()
@@ -2858,15 +2856,13 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 
 	for i, cw := range cws {
-		if cwft, ok := cw.(*TxnComputationWrapper); ok {
-			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
-				cwft.stmt.GetQueryType() == tree.QueryTypeOth ||
-				cwft.stmt.GetQueryType() == tree.QueryTypeTCL {
-				if _, ok := cwft.stmt.(*tree.SetVar); !ok {
-					ses.cleanCache()
-				}
-				canCache = false
+		if cw.GetAst().GetQueryType() == tree.QueryTypeDDL || cw.GetAst().GetQueryType() == tree.QueryTypeDCL ||
+			cw.GetAst().GetQueryType() == tree.QueryTypeOth ||
+			cw.GetAst().GetQueryType() == tree.QueryTypeTCL {
+			if _, ok := cw.GetAst().(*tree.SetVar); !ok {
+				ses.cleanCache()
 			}
+			canCache = false
 		}
 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
@@ -2944,13 +2940,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		plans := make([]*plan.Plan, len(cws))
 		stmts := make([]tree.Statement, len(cws))
 		for i, cw := range cws {
-			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				if checkNodeCanCache(cwft.plan) {
-					plans[i] = cwft.plan
-					stmts[i] = cwft.stmt
-				} else {
-					return nil
-				}
+			if checkNodeCanCache(cw.Plan()) {
+				plans[i] = cw.Plan()
+				stmts[i] = cw.GetAst()
+			} else {
+				return nil
 			}
 			cw.Clear()
 		}

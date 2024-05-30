@@ -656,6 +656,10 @@ func (backSes *backSession) SendRows() int64 {
 	return 0
 }
 
+func (backSes *backSession) GetConfig(ctx context.Context, dbName, varName string) (any, error) {
+	return nil, moerr.NewInternalError(ctx, "do not support get config in background exec")
+}
+
 func (backSes *backSession) GetTxnInfo() string {
 	txnH := backSes.GetTxnHandler()
 	if txnH == nil {
@@ -792,6 +796,45 @@ func (backSes *backSession) GetDebugString() string {
 		return backSes.upstream.GetDebugString()
 	}
 	return ""
+}
+
+func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
+	backSes.EnterFPrint(116)
+	defer backSes.ExitFPrint(116)
+	var txnOp TxnOperator
+	if backSes.GetTxnHandler() != nil {
+		txnOp = backSes.GetTxnHandler().GetTxn()
+	}
+
+	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, backSes.GetTxnHandler().GetConnCtx(), txnOp)
+	callback := fakeDataSetFetcher2
+
+	newbackSes := &backSession{
+		feSessionImpl: feSessionImpl{
+			pool:           backSes.pool,
+			proto:          &FakeProtocol{},
+			buf:            buffer.New(),
+			stmtProfile:    process.StmtProfile{},
+			tenant:         nil,
+			txnHandler:     txnHandler,
+			txnCompileCtx:  InitTxnCompilerContext(backSes.proto.GetDatabaseName()),
+			mrs:            nil,
+			outputCallback: callback,
+			allResultSet:   nil,
+			resultBatches:  nil,
+			derivedStmt:    false,
+			gSysVars:       GSysVariables,
+			label:          make(map[string]string),
+			timeZone:       time.Local,
+		},
+	}
+	newbackSes.uuid, _ = uuid.NewV7()
+	bh := &backExec{
+		backSes: newbackSes,
+	}
+	//the derived statement execute in a shared transaction in background session
+	bh.backSes.ReplaceDerivedStmt(true)
+	return bh
 }
 
 func (backSes *backSession) GetUserDefinedVar(name string) (SystemVariableType, *UserDefinedVar, error) {

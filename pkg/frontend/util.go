@@ -203,6 +203,7 @@ func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient)
 	if err != nil {
 		return nil, err
 	}
+	sv.SetDefaultValues()
 	pu := mo_config.NewParameterUnit(sv, eng, txnClient, engine.Nodes{})
 
 	return pu, nil
@@ -490,7 +491,7 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
 		err = nil // make sure: it is nil for EndStatement
 	} else {
-		txnId := ses.GetTxnId()
+		txnId := ses.GetStaticTxnId()
 		ses.Error(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err),
 			logutil.TxnIdField(hex.EncodeToString(txnId[:])))
 	}
@@ -521,15 +522,18 @@ func initLogger() {
 }
 
 // appendSessionField append session id, transaction id and statement id to the fields
+// history:
+// #15877, discard ses.GetTxnInfo(), it need ses.Lock(). may cause deadlock: locked by itself.
+// #16028, depend on ses.GetStmtProfile() itself do the log. get rid of StatementInfo.
 func appendSessionField(fields []zap.Field, ses FeSession) []zap.Field {
 	if ses != nil {
 		fields = append(fields, logutil.SessionIdField(uuid.UUID(ses.GetUUID()).String()))
-		if ses.GetStmtInfo() != nil {
-			fields = append(fields, logutil.StatementIdField(uuid.UUID(ses.GetStmtInfo().StatementID).String()))
-			// discard ses.GetTxnInfo(), it need ses.Lock(). may cause deadlock: locked by itself.
-			if !ses.GetStmtInfo().IsZeroTxnID() {
-				fields = append(fields, logutil.TxnIdField(hex.EncodeToString(ses.GetStmtInfo().TransactionID[:])))
-			}
+		p := ses.GetStmtProfile()
+		if p.GetStmtId() != dumpUUID {
+			fields = append(fields, logutil.StatementIdField(uuid.UUID(p.GetStmtId()).String()))
+		}
+		if txnId := p.GetTxnId(); txnId != dumpUUID {
+			fields = append(fields, logutil.TxnIdField(hex.EncodeToString(txnId[:])))
 		}
 	}
 	return fields

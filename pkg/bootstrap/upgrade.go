@@ -31,6 +31,14 @@ func (s *service) getFinalVersionHandle() VersionHandle {
 	return s.handles[len(s.handles)-1]
 }
 
+// Get the original version of the upgrade framework
+func (s *service) getFounderVersionHandle() VersionHandle {
+	if len(s.handles) == 0 {
+		panic("Waring: no upgrade version handles available, please check the code")
+	}
+	return s.handles[0]
+}
+
 // GetFinalVersion Get mo final version
 func (s *service) GetFinalVersion() string {
 	return s.handles[len(s.handles)-1].Metadata().Version

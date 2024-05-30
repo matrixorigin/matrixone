@@ -222,20 +222,6 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	}
 }
 
-// GetExecType get executor will execute base AP or TP
-func GetExecTypeFromPlan(pn *Plan) ExecInfo {
-	defInfo := ExecInfo{
-		Typ:        ExecTypeAP,
-		WithGPU:    false,
-		WithBigMem: false,
-		CnNumbers:  2,
-	}
-	if IsTpQuery(pn.GetQuery()) {
-		defInfo.Typ = ExecTypeTP
-	}
-	return defInfo
-}
-
 // GetResultColumnsFromPlan
 func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
