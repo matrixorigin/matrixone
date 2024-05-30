@@ -677,7 +677,7 @@ func CompileFilterExpr(
 				return
 			}
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
-			isPK, isSorted := isSortedKey(colDef)
+			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
@@ -686,8 +686,6 @@ func CompileFilterExpr(
 					return obj.SortKeyZoneMap().PrefixEq(vals[0]), nil
 				}
 			}
-
-			highSelectivityHint = isPK
 
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
@@ -788,7 +786,7 @@ func CompileFilterExpr(
 					return obj.SortKeyZoneMap().PrefixIn(vec), nil
 				}
 			}
-			highSelectivityHint = isSorted
+
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
@@ -873,8 +871,6 @@ func CompileFilterExpr(
 			} else {
 				loadOp = loadMetadataOnlyOpFactory(fs)
 			}
-
-			highSelectivityHint = isSorted
 
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
