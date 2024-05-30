@@ -258,7 +258,7 @@ func (ses *Session) getNextProcessId() string {
 		temporary method:
 		routineId + sqlCount
 	*/
-	routineId := ses.GetResponser().GetU32("connid")
+	routineId := ses.GetResponser().GetU32(CONNID)
 	return fmt.Sprintf("%d%d", routineId, ses.GetSqlCount())
 }
 
@@ -476,7 +476,7 @@ func NewSession(connCtx context.Context, proto MysqlWriter, mp *mpool.MPool, gSy
 			pool:       mp,
 			txnHandler: txnHandler,
 			//TODO:fix database name after the catalog is ready
-			txnCompileCtx:  InitTxnCompilerContext(proto.GetDatabaseName()),
+			txnCompileCtx:  InitTxnCompilerContext(proto.GetStr(DBNAME)),
 			gSysVars:       gSysVars,
 			outputCallback: getDataFromPipeline,
 			timeZone:       time.Local,
@@ -679,9 +679,9 @@ func (ses *Session) UpdateDebugString() {
 	sb := bytes.Buffer{}
 	//option connection id , ip
 	if ses.respr != nil {
-		sb.WriteString(fmt.Sprintf("connectionId %d", ses.respr.GetU32("connid")))
+		sb.WriteString(fmt.Sprintf("connectionId %d", ses.respr.GetU32(CONNID)))
 		sb.WriteByte('|')
-		sb.WriteString(ses.respr.GetStr("peer"))
+		sb.WriteString(ses.respr.GetStr(PEER))
 	}
 	sb.WriteByte('|')
 	//account info
@@ -754,7 +754,7 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 			stmtProfile:    process.StmtProfile{},
 			tenant:         nil,
 			txnHandler:     txnHandler,
-			txnCompileCtx:  InitTxnCompilerContext(ses.respr.GetStr("dbname")),
+			txnCompileCtx:  InitTxnCompilerContext(ses.respr.GetStr(DBNAME)),
 			mrs:            nil,
 			outputCallback: callback,
 			allResultSet:   nil,
@@ -966,7 +966,7 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 	}
 	var connID uint32
 	if ses.respr != nil {
-		connID = ses.respr.GetU32("connid")
+		connID = ses.respr.GetU32(CONNID)
 	}
 	ses.Errorf(ctx, "prepared statement '%s' does not exist on connection %d", name, connID)
 	return nil, moerr.NewInvalidState(ctx, "prepared statement '%s' does not exist", name)
@@ -1132,11 +1132,11 @@ func (ses *Session) GetTxnInfo() string {
 }
 
 func (ses *Session) GetDatabaseName() string {
-	return ses.GetResponser().GetStr("dbname")
+	return ses.GetResponser().GetStr(DBNAME)
 }
 
 func (ses *Session) SetDatabaseName(db string) {
-	ses.GetResponser().SetStr("dbname", db)
+	ses.GetResponser().SetStr(DBNAME, db)
 	ses.GetTxnCompileCtx().SetDatabase(db)
 }
 
@@ -1145,13 +1145,13 @@ func (ses *Session) DatabaseNameIsEmpty() bool {
 }
 
 func (ses *Session) SetUserName(uname string) {
-	ses.GetResponser().SetStr("username", uname)
+	ses.GetResponser().SetStr(USERNAME, uname)
 }
 
 func (ses *Session) GetConnectionID() uint32 {
 	protocol := ses.GetResponser()
 	if protocol != nil {
-		return ses.GetResponser().GetU32("connid")
+		return ses.GetResponser().GetU32(CONNID)
 	}
 	return 0
 }

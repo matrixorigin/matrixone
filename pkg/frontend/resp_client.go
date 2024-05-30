@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"math"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -81,48 +80,26 @@ func NewMysqlResp(mysqlWr MysqlWriter) *MysqlResp {
 	}
 }
 
-func (resper *MysqlResp) SetStr(name string, val string) {
-	lname := strings.ToLower(name)
-	switch lname {
-	case "dbname", "databasename":
-		resper.mysqlWr.SetDatabaseName(val)
-	case "uname", "username":
-		resper.mysqlWr.SetUserName(val)
-	}
+func (resper *MysqlResp) SetStr(id PropertyID, val string) {
+	resper.mysqlWr.SetStr(id, val)
 }
 
-func (resper *MysqlResp) GetStr(name string) string {
-	lname := strings.ToLower(name)
-	switch lname {
-	case "dbname", "databasename":
-		return resper.mysqlWr.GetDatabaseName()
-	case "uname", "username":
-		return resper.mysqlWr.GetUserName()
-	case "peer":
-		return resper.mysqlWr.Peer()
-	default:
-		return ""
-	}
+func (resper *MysqlResp) GetStr(id PropertyID) string {
+	return resper.mysqlWr.GetStr(id)
 }
 
-func (resper *MysqlResp) SetU32(string, uint32) {}
+func (resper *MysqlResp) SetU32(PropertyID, uint32) {}
 
-func (resper *MysqlResp) GetU32(name string) uint32 {
-	lname := strings.ToLower(name)
-	switch lname {
-	case "connid":
-		return resper.mysqlWr.ConnectionID()
-	default:
-		return math.MaxUint32
-	}
+func (resper *MysqlResp) GetU32(id PropertyID) uint32 {
+	return resper.mysqlWr.GetU32(id)
 }
 
-func (resper *MysqlResp) SetU8(string, uint8) {}
-func (resper *MysqlResp) GetU8(string) uint8 {
+func (resper *MysqlResp) SetU8(PropertyID, uint8) {}
+func (resper *MysqlResp) GetU8(PropertyID) uint8 {
 	return 0
 }
-func (resper *MysqlResp) SetBool(string, bool) {}
-func (resper *MysqlResp) GetBool(string) bool {
+func (resper *MysqlResp) SetBool(PropertyID, bool) {}
+func (resper *MysqlResp) GetBool(PropertyID) bool {
 	return false
 }
 
@@ -169,46 +146,43 @@ type NullResp struct {
 	database string
 }
 
-func (resper *NullResp) GetStr(name string) string {
-	lname := strings.ToLower(name)
-	switch lname {
-	case "dbname", "databasename":
+func (resper *NullResp) GetStr(id PropertyID) string {
+	switch id {
+	case DBNAME:
 		return resper.database
-	case "uname", "username":
+	case USERNAME:
 		return resper.username
-	case "peer":
+	case PEER:
 		return "0.0.0.0:0"
 	default:
 		return ""
 	}
 }
-func (resper *NullResp) SetStr(name string, val string) {
-	lname := strings.ToLower(name)
-	switch lname {
-	case "dbname", "databasename":
+func (resper *NullResp) SetStr(id PropertyID, val string) {
+	switch id {
+	case DBNAME:
 		resper.database = val
-	case "uname", "username":
+	case USERNAME:
 		resper.username = val
 	default:
 
 	}
 }
-func (resper *NullResp) SetU32(string, uint32) {}
-func (resper *NullResp) GetU32(name string) uint32 {
-	lname := strings.ToLower(name)
-	switch lname {
-	case "connid":
+func (resper *NullResp) SetU32(PropertyID, uint32) {}
+func (resper *NullResp) GetU32(id PropertyID) uint32 {
+	switch id {
+	case CONNID:
 		return fakeConnectionID
 	default:
 		return 0
 	}
 }
-func (resper *NullResp) SetU8(string, uint8) {}
-func (resper *NullResp) GetU8(string) uint8 {
+func (resper *NullResp) SetU8(PropertyID, uint8) {}
+func (resper *NullResp) GetU8(PropertyID) uint8 {
 	return 0
 }
-func (resper *NullResp) SetBool(string, bool) {}
-func (resper *NullResp) GetBool(string) bool {
+func (resper *NullResp) SetBool(PropertyID, bool) {}
+func (resper *NullResp) GetBool(PropertyID) bool {
 	return false
 }
 

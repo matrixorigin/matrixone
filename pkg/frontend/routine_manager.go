@@ -504,7 +504,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			ts[TSCheckDbNameEnd].Sub(ts[TSCheckDbNameStart]).String(),
 			ts[TSInitGlobalSysVarEnd].Sub(ts[TSInitGlobalSysVarStart]).String()))
 
-		dbName := protocol.GetDatabaseName()
+		dbName := protocol.GetStr(DBNAME)
 		if dbName != "" {
 			ses.SetDatabaseName(dbName)
 		}

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"math"
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
@@ -36,7 +37,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	}
 
 	if opts.Username != nil {
-		sess.respr.SetStr("username", *opts.Username)
+		sess.respr.SetStr(USERNAME, *opts.Username)
 	}
 
 	if opts.IsInternal != nil {
@@ -245,14 +246,39 @@ type internalProtocol struct {
 	username    string
 }
 
-func (ip *internalProtocol) GetStr(string) string  {}
-func (ip *internalProtocol) SetStr(string, string) {}
-func (ip *internalProtocol) SetU32(string, uint32) {}
-func (ip *internalProtocol) GetU32(string) uint32  {}
-func (ip *internalProtocol) SetU8(string, uint8)   {}
-func (ip *internalProtocol) GetU8(string) uint8    {}
-func (ip *internalProtocol) SetBool(string, bool)  {}
-func (ip *internalProtocol) GetBool(string) bool   {}
+func (ip *internalProtocol) GetStr(id PropertyID) string {
+	switch id {
+	case USERNAME:
+		return ip.GetUserName()
+	case DBNAME:
+		return ip.GetDatabaseName()
+	}
+	return ""
+}
+func (ip *internalProtocol) SetStr(id PropertyID, val string) {
+	switch id {
+	case USERNAME:
+		ip.SetUserName(val)
+	case DBNAME:
+		ip.SetDatabaseName(val)
+	}
+}
+func (ip *internalProtocol) SetU32(PropertyID, uint32) {}
+func (ip *internalProtocol) GetU32(id PropertyID) uint32 {
+	switch id {
+	case CONNID:
+		return ip.ConnectionID()
+	}
+	return math.MaxUint32
+}
+func (ip *internalProtocol) SetU8(PropertyID, uint8) {}
+func (ip *internalProtocol) GetU8(PropertyID) uint8 {
+	return 0
+}
+func (ip *internalProtocol) SetBool(PropertyID, bool) {}
+func (ip *internalProtocol) GetBool(PropertyID) bool {
+	return false
+}
 
 func (ip *internalProtocol) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 	return fillResultSet(execCtx.reqCtx, bat, execCtx.ses, execCtx.ses.GetMysqlResultSet())

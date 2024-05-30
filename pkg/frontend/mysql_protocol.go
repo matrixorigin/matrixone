@@ -338,14 +338,39 @@ type MysqlProtocolImpl struct {
 	disableAutoFlush bool
 }
 
-func (mp *MysqlProtocolImpl) GetStr(string) string  {}
-func (mp *MysqlProtocolImpl) SetStr(string, string) {}
-func (mp *MysqlProtocolImpl) SetU32(string, uint32) {}
-func (mp *MysqlProtocolImpl) GetU32(string) uint32  {}
-func (mp *MysqlProtocolImpl) SetU8(string, uint8)   {}
-func (mp *MysqlProtocolImpl) GetU8(string) uint8    {}
-func (mp *MysqlProtocolImpl) SetBool(string, bool)  {}
-func (mp *MysqlProtocolImpl) GetBool(string) bool   {}
+func (mp *MysqlProtocolImpl) GetStr(id PropertyID) string {
+	switch id {
+	case USERNAME:
+		return mp.GetUserName()
+	case DBNAME:
+		return mp.GetDatabaseName()
+	}
+	return ""
+}
+func (mp *MysqlProtocolImpl) SetStr(id PropertyID, val string) {
+	switch id {
+	case USERNAME:
+		mp.SetUserName(val)
+	case DBNAME:
+		mp.SetDatabaseName(val)
+	}
+}
+func (mp *MysqlProtocolImpl) SetU32(PropertyID, uint32) {}
+func (mp *MysqlProtocolImpl) GetU32(id PropertyID) uint32 {
+	switch id {
+	case CONNID:
+		return mp.ConnectionID()
+	}
+	return math.MaxUint32
+}
+func (mp *MysqlProtocolImpl) SetU8(PropertyID, uint8) {}
+func (mp *MysqlProtocolImpl) GetU8(PropertyID) uint8 {
+	return 0
+}
+func (mp *MysqlProtocolImpl) SetBool(PropertyID, bool) {}
+func (mp *MysqlProtocolImpl) GetBool(PropertyID) bool {
+	return false
+}
 
 func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 	const countOfResultSet = 1

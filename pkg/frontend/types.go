@@ -518,16 +518,16 @@ func (ses *feSessionImpl) GetFPrints() footPrints {
 }
 
 func (ses *feSessionImpl) SetDatabaseName(db string) {
-	ses.respr.SetStr("dbname", db)
+	ses.respr.SetStr(DBNAME, db)
 	ses.txnCompileCtx.SetDatabase(db)
 }
 
 func (ses *feSessionImpl) GetDatabaseName() string {
-	return ses.respr.GetStr("dbname")
+	return ses.respr.GetStr(DBNAME)
 }
 
 func (ses *feSessionImpl) GetUserName() string {
-	return ses.respr.GetStr("uname")
+	return ses.respr.GetStr(DBNAME)
 }
 
 func (ses *feSessionImpl) DisableTrace() bool {
@@ -774,15 +774,26 @@ func (ses *Session) GetDebugString() string {
 	return ses.debugStr
 }
 
+type PropertyID int
+
+const (
+	USERNAME PropertyID = iota + 1
+	DBNAME
+	//Connection id
+	CONNID
+	//Peer address
+	PEER
+)
+
 type Property interface {
-	GetStr(string) string
-	SetStr(string, string)
-	SetU32(string, uint32)
-	GetU32(string) uint32
-	SetU8(string, uint8)
-	GetU8(string) uint8
-	SetBool(string, bool)
-	GetBool(string) bool
+	GetStr(PropertyID) string
+	SetStr(PropertyID, string)
+	SetU32(PropertyID, uint32)
+	GetU32(PropertyID) uint32
+	SetU8(PropertyID, uint8)
+	GetU8(PropertyID) uint8
+	SetBool(PropertyID, bool)
+	GetBool(PropertyID) bool
 }
 
 type Responser interface {
@@ -810,6 +821,7 @@ type MysqlReader interface {
 }
 
 type MysqlWriter interface {
+	Property
 	MediaWriter
 	WriteHandshake() error
 	WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error
@@ -828,10 +840,6 @@ type MysqlWriter interface {
 	WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error
 	WriteLocalInfileRequest(filepath string) error
 
-	ConnectionID() uint32
-	SetDatabaseName(s string)
-	GetDatabaseName() string
-	GetUserName() string
 	SetUserName(s string)
 	Peer() string
 	SetSequenceID(i uint8)

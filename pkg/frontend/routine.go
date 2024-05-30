@@ -150,7 +150,7 @@ func (rt *Routine) getProtocol() MysqlWriter {
 }
 
 func (rt *Routine) getConnectionID() uint32 {
-	return rt.getProtocol().ConnectionID()
+	return rt.getProtocol().GetU32(CONNID)
 }
 
 func (rt *Routine) updateGoroutineId() {

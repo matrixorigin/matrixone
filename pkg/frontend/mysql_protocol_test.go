@@ -2859,14 +2859,22 @@ type testMysqlWriter struct {
 	ioses    goetty.IOSession
 }
 
-func (fp *testMysqlWriter) GetStr(string) string  {}
-func (fp *testMysqlWriter) SetStr(string, string) {}
-func (fp *testMysqlWriter) SetU32(string, uint32) {}
-func (fp *testMysqlWriter) GetU32(string) uint32  {}
-func (fp *testMysqlWriter) SetU8(string, uint8)   {}
-func (fp *testMysqlWriter) GetU8(string) uint8    {}
-func (fp *testMysqlWriter) SetBool(string, bool)  {}
-func (fp *testMysqlWriter) GetBool(string) bool   {}
+func (fp *testMysqlWriter) GetStr(PropertyID) string {
+	return ""
+}
+func (fp *testMysqlWriter) SetStr(PropertyID, string) {}
+func (fp *testMysqlWriter) SetU32(PropertyID, uint32) {}
+func (fp *testMysqlWriter) GetU32(PropertyID) uint32 {
+	return 0
+}
+func (fp *testMysqlWriter) SetU8(PropertyID, uint8) {}
+func (fp *testMysqlWriter) GetU8(PropertyID) uint8 {
+	return 0
+}
+func (fp *testMysqlWriter) SetBool(PropertyID, bool) {}
+func (fp *testMysqlWriter) GetBool(PropertyID) bool {
+	return false
+}
 
 func (fp *testMysqlWriter) Write(ctx *ExecCtx, batch *batch.Batch) error {
 	//TODO implement me

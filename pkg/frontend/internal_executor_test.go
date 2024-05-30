@@ -49,7 +49,7 @@ func TestIe(t *testing.T) {
 	executor := newIe()
 	executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
 	sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
-	assert.Equal(t, "dump", sess.GetResponser().GetStr("uname"))
+	assert.Equal(t, "dump", sess.GetResponser().GetStr(USERNAME))
 
 	err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
 	assert.Error(t, err)

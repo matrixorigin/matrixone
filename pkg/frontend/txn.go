@@ -355,7 +355,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	userName := ""
 	connectionID := uint32(0)
 	if execCtx.resper != nil {
-		connectionID = execCtx.resper.GetU32("connid")
+		connectionID = execCtx.resper.GetU32(CONNID)
 	}
 	if execCtx.ses.GetTenantInfo() != nil {
 		accountID = execCtx.ses.GetTenantInfo().TenantID

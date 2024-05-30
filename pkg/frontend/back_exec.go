@@ -211,9 +211,9 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	proc.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
 	proc.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:          backSes.respr.GetStr("username"),
+		User:          backSes.respr.GetStr(USERNAME),
 		Host:          getGlobalPu().SV.Host,
-		Database:      backSes.respr.GetStr("dbname"),
+		Database:      backSes.respr.GetStr(DBNAME),
 		Version:       makeServerVersion(getGlobalPu(), serverVersion.Load().(string)),
 		TimeZone:      backSes.GetTimeZone(),
 		StorageEngine: getGlobalPu().StorageEngine,
@@ -250,9 +250,9 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	execCtx.input = input
 
 	proc.SessionInfo.User = userNameOnly
-	cws, err := GetComputationWrapperInBack(execCtx, backSes.respr.GetStr("dbname"),
+	cws, err := GetComputationWrapperInBack(execCtx, backSes.respr.GetStr(DBNAME),
 		input,
-		backSes.respr.GetStr("uname"),
+		backSes.respr.GetStr(USERNAME),
 		getGlobalPu().StorageEngine,
 		proc, backSes)
 
@@ -679,7 +679,7 @@ func (backSes *backSession) getNextProcessId() string {
 		temporary method:
 		routineId + sqlCount
 	*/
-	routineId := backSes.respr.GetU32("connid")
+	routineId := backSes.respr.GetU32(CONNID)
 	return fmt.Sprintf("%d%d", routineId, backSes.GetSqlCount())
 }
 

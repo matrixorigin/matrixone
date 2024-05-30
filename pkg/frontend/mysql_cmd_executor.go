@@ -214,8 +214,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.Account = tenant.GetTenant()
 	stm.RoleId = proc.SessionInfo.RoleId
 	stm.User = tenant.GetUser()
-	stm.Host = ses.respr.GetStr("peer")
-	stm.Database = ses.GetDatabaseName()
+	stm.Host = ses.respr.GetStr(PEER)
+	stm.Database = ses.respr.GetStr(DBNAME)
 	stm.Statement = text
 	stm.StatementFingerprint = "" // fixme= (Reserved)
 	stm.StatementTag = ""         // fixme= (Reserved)
@@ -2696,7 +2696,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SessionInfo = process.SessionInfo{
 		User:                 ses.GetUserName(),
 		Host:                 getGlobalPu().SV.Host,
-		ConnectionID:         uint64(resper.GetU32("connid")),
+		ConnectionID:         uint64(resper.GetU32(CONNID)),
 		Database:             ses.GetDatabaseName(),
 		Version:              makeServerVersion(getGlobalPu(), serverVersion.Load().(string)),
 		TimeZone:             ses.GetTimeZone(),
