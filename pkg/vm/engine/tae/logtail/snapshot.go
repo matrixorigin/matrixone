@@ -166,6 +166,7 @@ func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
 		name := string(insTableNames[i].GetByteSlice(insTableArea))
 		if name == "mo_snapshots" {
 			if sm.tid == 0 {
+				//for ut
 				sm.SetTid(tid)
 			}
 			sm.tides[tid] = struct{}{}
@@ -330,7 +331,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 							if err != nil {
 								return nil, err
 							}
-							logutil.Debug("[GetSnapshot] cluster snapshot",
+							logutil.Info("[GetSnapshot] cluster snapshot",
 								common.OperationField(snapTs.ToString()))
 						}
 						continue
@@ -339,7 +340,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 					if snapshotList[id] == nil {
 						snapshotList[id] = containers.MakeVector(types.T_TS.ToType(), mp)
 					}
-					logutil.Debug("[GetSnapshot] snapshot",
+					logutil.Info("[GetSnapshot] snapshot",
 						zap.Uint32("account", id),
 						zap.String("snap ts", snapTs.ToString()))
 					err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), snapTs, false, mp)
