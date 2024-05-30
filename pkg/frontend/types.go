@@ -774,7 +774,6 @@ func (ses *Session) GetDebugString() string {
 	return ses.debugStr
 }
 
-// TODO: design property interface for connid,xxxName,peer,etc.
 type Property interface {
 	GetStr(string) string
 	SetStr(string, string)

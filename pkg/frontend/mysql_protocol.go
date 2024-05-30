@@ -338,6 +338,15 @@ type MysqlProtocolImpl struct {
 	disableAutoFlush bool
 }
 
+func (mp *MysqlProtocolImpl) GetStr(string) string  {}
+func (mp *MysqlProtocolImpl) SetStr(string, string) {}
+func (mp *MysqlProtocolImpl) SetU32(string, uint32) {}
+func (mp *MysqlProtocolImpl) GetU32(string) uint32  {}
+func (mp *MysqlProtocolImpl) SetU8(string, uint8)   {}
+func (mp *MysqlProtocolImpl) GetU8(string) uint8    {}
+func (mp *MysqlProtocolImpl) SetBool(string, bool)  {}
+func (mp *MysqlProtocolImpl) GetBool(string) bool   {}
+
 func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 	const countOfResultSet = 1
 	n := bat.Vecs[0].Length()

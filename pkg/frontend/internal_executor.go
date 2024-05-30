@@ -245,6 +245,15 @@ type internalProtocol struct {
 	username    string
 }
 
+func (ip *internalProtocol) GetStr(string) string  {}
+func (ip *internalProtocol) SetStr(string, string) {}
+func (ip *internalProtocol) SetU32(string, uint32) {}
+func (ip *internalProtocol) GetU32(string) uint32  {}
+func (ip *internalProtocol) SetU8(string, uint8)   {}
+func (ip *internalProtocol) GetU8(string) uint8    {}
+func (ip *internalProtocol) SetBool(string, bool)  {}
+func (ip *internalProtocol) GetBool(string) bool   {}
+
 func (ip *internalProtocol) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 	return fillResultSet(execCtx.reqCtx, bat, execCtx.ses, execCtx.ses.GetMysqlResultSet())
 }
