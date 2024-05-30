@@ -541,7 +541,7 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 	return arg
 }
 
-func constructFuzzyFilter(n, right *plan.Node) *fuzzyfilter.Argument {
+func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.Argument {
 	pkName := n.TableDef.Pkey.PkeyColName
 	var pkTyp plan.Type
 	if pkName == catalog.CPrimaryKeyColName {
@@ -558,7 +558,14 @@ func constructFuzzyFilter(n, right *plan.Node) *fuzzyfilter.Argument {
 	arg := fuzzyfilter.NewArgument()
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
-	arg.N = right.Stats.Outcnt
+	
+	if sinkScan.Stats.Outcnt > tableScan.Stats.Outcnt {
+		arg.N = tableScan.Stats.Outcnt
+	} else {
+		arg.N = sinkScan.Stats.Outcnt
+	}
+
+	arg.N = sinkScan.Stats.Outcnt
 	if len(n.RuntimeFilterBuildList) > 0 {
 		arg.RuntimeFilterSpec = n.RuntimeFilterBuildList[0]
 	}

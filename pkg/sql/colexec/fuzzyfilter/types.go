@@ -35,14 +35,9 @@ const (
 	End
 )
 
-type Argument struct {
+type container struct {
 	state int
 	colexec.ReceiverOperator
-
-	// Estimates of the number of data items obtained from statistical information
-	N      float64
-	PkName string
-	PkTyp  plan.Type
 
 	bloomFilter   *bloomfilter.BloomFilter
 	roaringFilter *roaringFilter
@@ -54,7 +49,17 @@ type Argument struct {
 
 	// about runtime filter
 	pass2RuntimeFilter *vector.Vector
-	RuntimeFilterSpec  *plan.RuntimeFilterSpec
+}
+
+type Argument struct {
+	ctr *container
+
+	// Estimates of the number of data items obtained from statistical information
+	N      float64
+	PkName string
+	PkTyp  plan.Type
+
+	RuntimeFilterSpec *plan.RuntimeFilterSpec
 	vm.OperatorBase
 }
 
@@ -95,23 +100,23 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
-	if arg.bloomFilter != nil {
-		arg.bloomFilter.Clean()
-		arg.bloomFilter = nil
+	if arg.ctr.bloomFilter != nil {
+		arg.ctr.bloomFilter.Clean()
+		arg.ctr.bloomFilter = nil
 	}
-	if arg.roaringFilter != nil {
-		arg.roaringFilter = nil
+	if arg.ctr.roaringFilter != nil {
+		arg.ctr.roaringFilter = nil
 	}
-	if arg.rbat != nil {
-		arg.rbat.Clean(proc.GetMPool())
-		arg.rbat = nil
+	if arg.ctr.rbat != nil {
+		arg.ctr.rbat.Clean(proc.GetMPool())
+		arg.ctr.rbat = nil
 	}
-	if arg.pass2RuntimeFilter != nil {
-		arg.pass2RuntimeFilter.Free(proc.GetMPool())
-		arg.pass2RuntimeFilter = nil
+	if arg.ctr.pass2RuntimeFilter != nil {
+		arg.ctr.pass2RuntimeFilter.Free(proc.GetMPool())
+		arg.ctr.pass2RuntimeFilter = nil
 	}
 
-	arg.FreeAllReg()
+	arg.ctr.FreeAllReg()
 }
 
 func IfCanUseRoaringFilter(t types.T) bool {

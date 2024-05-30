@@ -79,7 +79,9 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.InitReceiver(proc, false)
+	ctr := new(container)
+	arg.ctr = ctr
+	ctr.InitReceiver(proc, false)
 	rowCount := int64(arg.N)
 	if rowCount < 1000 {
 		rowCount = 1000
@@ -92,24 +94,24 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	useRoaring := IfCanUseRoaringFilter(types.T(arg.PkTyp.Id))
 
 	if useRoaring {
-		arg.roaringFilter = newroaringFilter(types.T(arg.PkTyp.Id))
+		ctr.roaringFilter = newroaringFilter(types.T(arg.PkTyp.Id))
 	} else {
 		//@see https://hur.st/bloomfilter/
 		var probability float64
-		if rowCount < 100001 {
+		if rowCount < 10_0001 {
 			probability = 0.00001
-		} else if rowCount < 1000001 {
+		} else if rowCount < 100_0001 {
 			probability = 0.000003
-		} else if rowCount < 10000001 {
+		} else if rowCount < 1000_0001 {
 			probability = 0.000001
-		} else if rowCount < 100000001 {
+		} else if rowCount < 1_0000_0001 {
 			probability = 0.0000005
-		} else if rowCount < 1000000001 {
+		} else if rowCount < 10_0000_0001 {
 			probability = 0.0000002
 		} else {
 			probability = 0.0000001
 		}
-		arg.bloomFilter = bloomfilter.New(rowCount, probability)
+		ctr.bloomFilter = bloomfilter.New(rowCount, probability)
 	}
 
 	return nil
@@ -118,9 +120,9 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 /*
 opt3 : As mentioned before, you should think of fuzzy as a special kind of join, which also has a Build phase and a Probe phase.
 
-The previous pseudo-code has no problem with correctness, but the memory overhead in some scenarios can be significant,
+The previous pseudo-code has no problem with correctness, but the memory overhead in some scenarios can be significant, especially when the sink scan has much LARGER data than the table scan.
 
-	especially when the sink scan has much larger data than the table scan.
+	Therefore, build stage also needs to be built on smaller children.
 
 # Flow of optimized pseudo-code
 
@@ -144,18 +146,19 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
+	ctr := arg.ctr
 	for {
-		switch arg.state {
+		switch ctr.state {
 		case Build:
 
-			msg := arg.ReceiveFromSingleReg(1, anal)
+			msg := ctr.ReceiveFromSingleReg(1, anal)
 			if msg.Err != nil {
 				return result, msg.Err
 			}
 
 			bat := msg.Batch
 			if bat == nil {
-				arg.state = HandleRuntimeFilter
+				ctr.state = HandleRuntimeFilter
 				continue
 			}
 
@@ -180,11 +183,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := arg.handleRuntimeFilter(proc); err != nil {
 				return result, err
 			}
-			arg.state = Probe
+			ctr.state = Probe
 
 		case Probe:
 
-			msg := arg.ReceiveFromSingleReg(0, anal)
+			msg := ctr.ReceiveFromSingleReg(0, anal)
 			if msg.Err != nil {
 				return result, msg.Err
 			}
@@ -193,16 +196,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if bat == nil {
 				// fmt.Println("probe cnt = ", arg.probeCnt)
 				// this will happen in such case:create unique index from a table that unique col have no data
-				if arg.rbat == nil || arg.collisionCnt == 0 {
+				if ctr.rbat == nil || ctr.collisionCnt == 0 {
 					result.Status = vm.ExecStop
 					return result, nil
 				}
 
 				// send collisionKeys to output operator to run background SQL
-				arg.rbat.SetRowCount(arg.rbat.Vecs[0].Length())
-				result.Batch = arg.rbat
+				ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
+				result.Batch = ctr.rbat
 				result.Status = vm.ExecStop
-				arg.state = End
+				ctr.state = End
 				return result, nil
 			}
 
@@ -219,7 +222,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				proc.PutBatch(bat)
 				return result, err
 			}
-			
+
 			proc.PutBatch(bat)
 			continue
 		case End:
@@ -233,17 +236,18 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 // utils functions
 
 func (arg *Argument) handleBuild(proc *process.Process, pkCol *vector.Vector) error {
-	if arg.roaringFilter != nil {
-		idx, dupVal := arg.roaringFilter.testAndAddFunc(arg.roaringFilter, pkCol)
+	ctr := arg.ctr
+	if ctr.roaringFilter != nil {
+		idx, dupVal := ctr.roaringFilter.testAndAddFunc(ctr.roaringFilter, pkCol)
 		if idx == -1 {
 			return nil
 		} else {
 			return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
 		}
 	} else {
-		arg.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
+		ctr.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
 			if exist {
-				if arg.collisionCnt < maxCheckDupCount {
+				if ctr.collisionCnt < maxCheckDupCount {
 					arg.appendCollisionKey(proc, i, pkCol)
 					return
 				}
@@ -256,17 +260,18 @@ func (arg *Argument) handleBuild(proc *process.Process, pkCol *vector.Vector) er
 }
 
 func (arg *Argument) handleProbe(proc *process.Process, pkCol *vector.Vector) error {
-	if arg.roaringFilter != nil {
-		idx, dupVal := arg.roaringFilter.testFunc(arg.roaringFilter, pkCol)
+	ctr := arg.ctr
+	if ctr.roaringFilter != nil {
+		idx, dupVal := ctr.roaringFilter.testFunc(ctr.roaringFilter, pkCol)
 		if idx == -1 {
 			return nil
 		} else {
 			return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
 		}
 	} else {
-		arg.bloomFilter.Test(pkCol, func(exist bool, i int) {
+		ctr.bloomFilter.Test(pkCol, func(exist bool, i int) {
 			if exist {
-				if arg.collisionCnt < maxCheckDupCount {
+				if ctr.collisionCnt < maxCheckDupCount {
 					arg.appendCollisionKey(proc, i, pkCol)
 				}
 			}
@@ -276,7 +281,7 @@ func (arg *Argument) handleProbe(proc *process.Process, pkCol *vector.Vector) er
 }
 
 func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
-	ctr := arg
+	ctr := arg.ctr
 
 	if arg.RuntimeFilterSpec == nil {
 		return nil
@@ -286,9 +291,9 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 	runtimeFilter.Tag = arg.RuntimeFilterSpec.Tag
 
 	//                                                 the number of data insert is greater than inFilterCardLimit
-	if arg.RuntimeFilterSpec.Expr == nil || arg.pass2RuntimeFilter == nil {
+	if arg.RuntimeFilterSpec.Expr == nil || ctr.pass2RuntimeFilter == nil {
 		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ctr.RuntimeFilterSpec)
+		proc.SendRuntimeFilter(runtimeFilter, arg.RuntimeFilterSpec)
 		return nil
 	}
 
@@ -298,43 +303,46 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 	//	bloomFilterCardLimit = v.(int64)
 	//}
 
-	arg.pass2RuntimeFilter.InplaceSort()
-	data, err := arg.pass2RuntimeFilter.MarshalBinary()
+	ctr.pass2RuntimeFilter.InplaceSort()
+	data, err := ctr.pass2RuntimeFilter.MarshalBinary()
 	if err != nil {
 		return err
 	}
 
 	runtimeFilter.Typ = process.RuntimeFilter_IN
 	runtimeFilter.Data = data
-	proc.SendRuntimeFilter(runtimeFilter, ctr.RuntimeFilterSpec)
+	proc.SendRuntimeFilter(runtimeFilter, arg.RuntimeFilterSpec)
 	return nil
 }
 
 func (arg *Argument) appendPassToRuntimeFilter(v *vector.Vector, proc *process.Process) {
-	if arg.pass2RuntimeFilter != nil && arg.RuntimeFilterSpec != nil {
-		el := arg.pass2RuntimeFilter.Length()
+	ctr := arg.ctr
+	if ctr.pass2RuntimeFilter != nil && arg.RuntimeFilterSpec != nil {
+		el := ctr.pass2RuntimeFilter.Length()
 		al := v.Length()
 
 		if int64(el)+int64(al) <= int64(arg.RuntimeFilterSpec.UpperLimit) {
-			arg.pass2RuntimeFilter.UnionMulti(v, 0, al, proc.Mp())
+			ctr.pass2RuntimeFilter.UnionMulti(v, 0, al, proc.Mp())
 		} else {
-			proc.PutVector(arg.pass2RuntimeFilter)
-			arg.pass2RuntimeFilter = nil
+			proc.PutVector(ctr.pass2RuntimeFilter)
+			ctr.pass2RuntimeFilter = nil
 		}
 	}
 }
 
 // appendCollisionKey will append collision key into rbat
 func (arg *Argument) appendCollisionKey(proc *process.Process, idx int, pkCol *vector.Vector) {
-	arg.rbat.GetVector(0).UnionOne(pkCol, int64(idx), proc.GetMPool())
-	arg.collisionCnt++
+	ctr := arg.ctr
+	ctr.rbat.GetVector(0).UnionOne(pkCol, int64(idx), proc.GetMPool())
+	ctr.collisionCnt++
 }
 
 // rbat will contain the keys that have hash collisions
 func (arg *Argument) generate(proc *process.Process) error {
+	ctr := arg.ctr
 	rbat := batch.NewWithSize(1)
 	rbat.SetVector(0, proc.GetVector(plan.MakeTypeByPlan2Type(arg.PkTyp)))
-	arg.pass2RuntimeFilter = proc.GetVector(plan.MakeTypeByPlan2Type(arg.PkTyp))
-	arg.rbat = rbat
+	ctr.pass2RuntimeFilter = proc.GetVector(plan.MakeTypeByPlan2Type(arg.PkTyp))
+	ctr.rbat = rbat
 	return nil
 }
