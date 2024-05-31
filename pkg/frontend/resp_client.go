@@ -71,7 +71,7 @@ var nullResper Responser = &NullResp{}
 
 type MysqlResp struct {
 	mysqlRrWr MysqlRrWr
-	s3Wr      QueryResultWriter
+	binWr     BinaryWriter
 }
 
 func (resper *MysqlResp) MysqlRrWr() MysqlRrWr {
@@ -81,6 +81,7 @@ func (resper *MysqlResp) MysqlRrWr() MysqlRrWr {
 func NewMysqlResp(mysqlWr MysqlRrWr) *MysqlResp {
 	return &MysqlResp{
 		mysqlRrWr: mysqlWr,
+		binWr:     defResultSaver,
 	}
 }
 
@@ -117,13 +118,21 @@ func (resper *MysqlResp) RespPreMeta(execCtx *ExecCtx, meta any) (err error) {
 }
 
 func (resper *MysqlResp) RespResult(execCtx *ExecCtx, bat *batch.Batch) (err error) {
+	if resper.binWr != nil {
+		//write batch into fileservice
+		err = resper.binWr.Write(execCtx, bat)
+		if err != nil {
+			return err
+		}
+	}
+
+	//!!!NOTE: after that above
+	if bat == nil {
+		return nil
+	}
+
 	ses := execCtx.ses.(*Session)
 	ec := ses.GetExportConfig()
-
-	//err = resper.s3Wr.Write(execCtx, bat)
-	//if err != nil {
-	//	return err
-	//}
 
 	if ec.needExportToFile() {
 		err = ec.Write(execCtx, bat)
@@ -141,8 +150,8 @@ func (resper *MysqlResp) Close() {
 	if resper.mysqlRrWr != nil {
 		resper.mysqlRrWr.Close()
 	}
-	if resper.s3Wr != nil {
-		resper.s3Wr.Close()
+	if resper.binWr != nil {
+		resper.binWr.Close()
 	}
 }
 

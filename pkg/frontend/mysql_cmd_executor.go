@@ -416,45 +416,23 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) erro
 	_, task := gotrace.NewTask(context.TODO(), "frontend.WriteDataToClient")
 	defer task.End()
 	ses := obj.(*Session)
-	if openSaveQueryResult(execCtx.reqCtx, ses) {
-		if bat == nil {
-			if err := saveQueryResultMeta(execCtx.reqCtx, ses); err != nil {
-				return err
-			}
-		} else {
-			if err := saveQueryResult(execCtx.reqCtx, ses, bat); err != nil {
-				return err
-			}
-		}
-	}
-	if bat == nil {
-		return nil
-	}
 
 	begin := time.Now()
-
-	row2colTime := time.Duration(0)
-	procBatchBegin := time.Now()
-	n := bat.Vecs[0].Length()
-
 	err := ses.GetResponser().RespResult(execCtx, bat)
 	if err != nil {
 		return err
 	}
-
-	procBatchTime := time.Since(procBatchBegin)
 	tTime := time.Since(begin)
-	ses.sentRows.Add(int64(n))
+	n := 0
+	if bat != nil && bat.Vecs[0] != nil {
+		n = bat.Vecs[0].Length()
+		ses.sentRows.Add(int64(n))
+	}
+
 	ses.Debugf(execCtx.reqCtx, "rowCount %v \n"+
-		"time of getDataFromPipeline : %s \n"+
-		"processBatchTime %v \n"+
-		"row2colTime %v \n"+
-		"restTime(=totalTime - row2colTime) %v \n",
+		"time of getDataFromPipeline : %s \n",
 		n,
-		tTime,
-		procBatchTime,
-		row2colTime,
-		tTime-row2colTime)
+		tTime)
 
 	return nil
 }
@@ -914,6 +892,8 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		mrs.AddRow(row)
 	}
 
+	//TODO: to save query result
+
 	return err
 }
 
@@ -1081,21 +1061,18 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	}
 	ses.rs = mysqlColDef2PlanResultColDef(mrs)
 
-	if openSaveQueryResult(reqCtx, ses) {
-		//3. fill the batch for saving the query result
-		bat, err := fillQueryBatch(ses, explainColName, buffer.Lines)
-		defer bat.Clean(ses.GetMemPool())
-		if err != nil {
-			return err
-		}
-
-		// save query result
-		err = maySaveQueryResult(reqCtx, ses, bat)
-		if err != nil {
-
-			return err
-		}
-	}
+	err = saveQueryResult(reqCtx, ses,
+		func() ([]*batch.Batch, error) {
+			//3. fill the batch for saving the query result
+			bat, err := fillQueryBatch(ses, explainColName, buffer.Lines)
+			return []*batch.Batch{bat}, err
+		},
+		func(data []*batch.Batch) {
+			for _, item := range data {
+				item.Clean(ses.GetMemPool())
+			}
+		},
+	)
 	return nil
 }
 
@@ -1651,14 +1628,12 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 	ses.rs = mysqlColDef2PlanResultColDef(mrs)
 
 	// save query result
-	if openSaveQueryResult(execCtx.reqCtx, ses) {
-		if err := saveQueryResult(execCtx.reqCtx, ses, bat); err != nil {
-			return err
-		}
-		if err := saveQueryResultMeta(execCtx.reqCtx, ses); err != nil {
-			return err
-		}
-	}
+	err = saveQueryResult(execCtx.reqCtx, ses,
+		func() ([]*batch.Batch, error) {
+			return []*batch.Batch{bat}, nil
+		},
+		nil,
+	)
 
 	return err
 }
@@ -1746,6 +1721,8 @@ func doShowBackendServers(ses *Session) error {
 	} else {
 		route.RouteForCommonTenant(se, nil, appendFn)
 	}
+
+	//TODO: save query result
 	return nil
 }
 

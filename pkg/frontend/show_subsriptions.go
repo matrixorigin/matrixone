@@ -332,5 +332,8 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 		rs.AddRow([]interface{}{pub.pubName, pub.pubAccount, pub.pubDatabase, pub.pubTime, subName, subTime})
 	}
 	ses.SetMysqlResultSet(rs)
+
+	//TODO: save query result
+
 	return nil
 }

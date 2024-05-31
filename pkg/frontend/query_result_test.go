@@ -174,7 +174,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	ses.ast = asts[0]
 	ses.p = &plan.Plan{}
 
-	yes := openSaveQueryResult(ctx, ses)
+	yes := canSaveQueryResult(ctx, ses)
 	assert.True(t, yes)
 
 	//result string
@@ -183,12 +183,12 @@ func Test_saveQueryResultMeta(t *testing.T) {
 
 	for i := 0; i < blockCnt; i++ {
 		data := newBatch(typs, blockCnt, proc)
-		err = saveQueryResult(ctx, ses, data)
+		err = saveBatch(ctx, ses, data)
 		assert.Nil(t, err)
 	}
 
 	//save result meta
-	err = saveQueryResultMeta(ctx, ses)
+	err = saveMeta(ctx, ses)
 	assert.Nil(t, err)
 
 	retColDef, err = openResultMeta(ctx, ses, testUUID.String())

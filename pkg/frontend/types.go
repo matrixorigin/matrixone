@@ -809,6 +809,7 @@ type MediaWriter interface {
 	Close()
 }
 
+// MysqlReader read packet using mysql format
 type MysqlReader interface {
 	MediaReader
 	Property
@@ -819,6 +820,7 @@ type MysqlReader interface {
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 }
 
+// MysqlWriter write batch & control packets using mysql protocol format
 type MysqlWriter interface {
 	MediaWriter
 	Property
@@ -858,14 +860,17 @@ type MysqlPayloadWriter interface {
 	ClosePayload(bool) error
 }
 
-type QueryResultWriter interface {
+// BinaryWriter write batch into fileservice
+type BinaryWriter interface {
 	MediaWriter
 }
 
+// CsvWriter write batch into csv file
 type CsvWriter interface {
 	MediaWriter
 }
 
+// MemWriter write batch into memory pool
 type MemWriter interface {
 	MediaWriter
 }
