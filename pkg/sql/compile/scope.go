@@ -20,6 +20,7 @@ import (
 	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"go.uber.org/automaxprocs/maxprocs"
@@ -1251,6 +1252,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 func (s *Scope) replace(c *Compile) error {
 	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
 	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
+	rewriteFromOnDuplicateKey := s.Plan.GetQuery().Nodes[0].ReplaceCtx.RewriteFromOnDuplicateKey
 
 	delAffectedRows := uint64(0)
 	if deleteCond != "" {
@@ -1260,7 +1262,14 @@ func (s *Scope) replace(c *Compile) error {
 		}
 		delAffectedRows = result.AffectedRows
 	}
-	result, err := c.runSqlWithResult("insert " + c.sql[7:])
+	var sql string
+	if rewriteFromOnDuplicateKey {
+		idx := strings.Index(strings.ToLower(c.sql), "on duplicate key update")
+		sql = c.sql[:idx]
+	} else {
+		sql = "insert " + c.sql[7:]
+	}
+	result, err := c.runSqlWithResult(sql)
 	if err != nil {
 		return err
 	}

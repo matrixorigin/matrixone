@@ -100,7 +100,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 	replaceStmt := getRewriteToReplaceStmt(tableDef, stmt, rewriteInfo)
 	if replaceStmt != nil {
-		return buildReplace(replaceStmt, ctx, isPrepareStmt)
+		return buildReplace(replaceStmt, ctx, isPrepareStmt, true)
 	}
 	lastNodeId := rewriteInfo.rootId
 	sourceStep := builder.appendStep(lastNodeId)
@@ -909,14 +909,41 @@ func getRewriteToReplaceStmt(tableDef *TableDef, stmt *tree.Insert, info *dmlSel
 	if len(info.onDuplicateIdx) == 0 {
 		return nil
 	}
-	if len(info.onDuplicateExpr) != len(tableDef.Cols) {
+	if _, ok := stmt.Rows.Select.(*tree.ValuesClause); !ok {
+		return nil
+	}
+	canUpdateCols := make([]string, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col.Hidden {
+			continue
+		}
+		canUpdateCols = append(canUpdateCols, col.Name)
+	}
+	if len(info.onDuplicateExpr) != len(canUpdateCols) {
 		return nil
 	}
 
-	updateAllColByValues := false
-
-	if updateAllColByValues {
-		return nil
+	for colName, colExpr := range info.onDuplicateExpr {
+		isUpdateSelf := false
+		if expr, ok := colExpr.Expr.(*plan.Expr_F); ok {
+			if expr.F.Func.GetObjName() == "values" {
+				if cExpr, ok := expr.F.Args[0].Expr.(*plan.Expr_Col); ok {
+					if cExpr.Col.Name == colName {
+						isUpdateSelf = true
+					}
+				}
+			}
+		}
+		if !isUpdateSelf {
+			return nil
+		}
 	}
-	return nil
+
+	replaceStmt := &tree.Replace{
+		Table:          stmt.Table,
+		PartitionNames: stmt.PartitionNames,
+		Columns:        stmt.Columns,
+		Rows:           stmt.Rows,
+	}
+	return replaceStmt
 }
