@@ -72,6 +72,8 @@ select * from cluster01;
 drop snapshot if exists `binary`;
 create snapshot `binary` for account sys;
 select count(*) from mo_catalog.mo_tables{snapshot = `binary`} where reldatabase = 'mo_catalog';
+drop snapshot if exists `binary`;
+
 
 create table cluster01(col1 int,col2 bigint);
 insert into cluster01 values(1,2,0);
@@ -80,3 +82,4 @@ select * from cluster01;
 drop snapshot if exists `_binary`;
 create snapshot `_binary` for account sys;
 select count(*) from mo_catalog.mo_tables{snapshot = `_binary`} where reldatabase = 'mo_catalog';
+drop snapshot if exists `_binary`;
