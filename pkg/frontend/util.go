@@ -765,9 +765,22 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_varchar:
 			vData := make([]string, cnt)
 			for rowIdx, row := range rows {
-				vData[rowIdx] = row[colIdx].(string)
+				if val, ok := row[colIdx].(string); ok {
+					vData[rowIdx] = val
+				} else {
+					vData[rowIdx] = fmt.Sprintf("%v", row[colIdx])
+				}
 			}
 			err := vector.AppendStringList(bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_int16:
+			vData := make([]int16, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(int16)
+			}
+			err := vector.AppendFixedList[int16](bat.Vecs[colIdx], vData, nil, pool)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -844,7 +857,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				return nil, nil, err
 			}
 		default:
-			return nil, nil, moerr.NewInternalErrorNoCtx("unsupported mysql type %d", cols[colIdx].ColumnType())
+			return nil, nil, moerr.NewInternalErrorNoCtx("unsupported type %d", typ.Oid)
 		}
 	}
 	return bat, planColDefs, nil

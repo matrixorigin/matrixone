@@ -1225,8 +1225,12 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 		mrs.AddRow(row)
 		for j := 0; j < len(mrs.Columns); j++ {
 			switch mrs.Columns[j].ColumnType() {
+			case defines.MYSQL_TYPE_VARCHAR:
+				row[j] = "def"
 			case defines.MYSQL_TYPE_VAR_STRING:
 				row[j] = "abc"
+			case defines.MYSQL_TYPE_SHORT:
+				row[j] = int32(math.MaxInt16)
 			case defines.MYSQL_TYPE_LONG:
 				row[j] = int32(math.MaxInt32)
 			case defines.MYSQL_TYPE_LONGLONG:
