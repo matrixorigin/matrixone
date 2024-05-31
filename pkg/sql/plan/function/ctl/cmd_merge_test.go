@@ -49,6 +49,14 @@ func TestParseArgs(t *testing.T) {
 			r: arguments{db: "db1", tbl: "table1", accountId: 1, filter: "small", targetObjSize: common.Const1MBytes},
 		},
 		{
+			s: ".10000",
+			r: arguments{tbl: "10000", accountId: math.MaxUint64, targetObjSize: defaultTargetObjectSize},
+		},
+		{
+			s: ".10000.1",
+			r: arguments{tbl: "10000", accountId: 1, targetObjSize: defaultTargetObjectSize},
+		},
+		{
 			s: "db1.table1:018f27b6-c6e1-7bef-a1e8-0f639ddedeef_0,018f27b6-c6e1-7bef-a1e8-0f639ddede00_0",
 			r: arguments{db: "db1", tbl: "table1", accountId: math.MaxUint64, objs: []objectio.ObjectStats{
 				{

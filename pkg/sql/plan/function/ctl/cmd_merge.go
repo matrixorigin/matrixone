@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
@@ -49,6 +50,7 @@ type arguments struct {
 //
 //	"dbName.tableName[.accountId][:obj1,obj2,...:targetObjSize]"
 //	"dbName.tableName[.accountId][:all:filter:targetObjSize]"
+//	".tableId[.accountId][...]"
 //
 // filter: "overlap", "small"
 // filter default: "basic"
@@ -173,16 +175,29 @@ func handleMerge() handleFunc {
 			if a.accountId != math.MaxUint64 {
 				proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(a.accountId))
 			}
-			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, a.db, txnOp)
-			if err != nil {
-				logutil.Errorf("mergeblocks err on cn, db %s, err %s", a.db, err.Error())
-				return nil, err
+
+			var rel engine.Relation
+			tblId, err1 := strconv.ParseUint(a.tbl, 10, 64)
+			if err1 == nil {
+				_, _, rel, err = proc.SessionInfo.StorageEngine.GetRelationById(proc.Ctx, txnOp, tblId)
+				if err != nil {
+					logutil.Errorf("mergeblocks err on cn, tblId %d, err %s", tblId, err.Error())
+					return nil, err
+				}
+			} else {
+				var database engine.Database
+				database, err = proc.SessionInfo.StorageEngine.Database(proc.Ctx, a.db, txnOp)
+				if err != nil {
+					logutil.Errorf("mergeblocks err on cn, db %s, err %s", a.db, err.Error())
+					return nil, err
+				}
+				rel, err = database.Relation(proc.Ctx, a.tbl, nil)
+				if err != nil {
+					logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.db, err.Error())
+					return nil, err
+				}
 			}
-			rel, err := database.Relation(proc.Ctx, a.tbl, nil)
-			if err != nil {
-				logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.db, err.Error())
-				return nil, err
-			}
+
 			entry, err := rel.MergeObjects(proc.Ctx, a.objs, a.filter, uint32(a.targetObjSize))
 			if err != nil {
 				merge.CleanUpUselessFiles(entry, proc.FileService)

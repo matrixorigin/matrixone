@@ -35,15 +35,28 @@ func handleFlush() handleFunc {
 			return nil, nil
 		},
 		func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
-			// parameter should be "DbName.TableName[.AccountId]"
+			// parameter should be "DbName.TableName[.AccountId]" or "TableId"
 			parameters := strings.Split(parameter, ".")
-			if len(parameters) != 2 && len(parameters) != 3 {
-				return nil, moerr.NewInternalErrorNoCtx("handleFlush: expected \"DbName.TableName[.AccountId]\"")
+			if len(parameters) == 0 || len(parameters) > 3 {
+				return nil, moerr.NewInternalErrorNoCtx("handleFlush: expected \"TableId\" or \"DbName.TableName[.AccountId]\" ")
 			}
 			txnOp := proc.TxnOperator
 			if proc.TxnOperator == nil {
 				return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: txn operator is nil")
 			}
+
+			if len(parameters) == 1 {
+				tblId, err := strconv.ParseUint(parameters[0], 10, 64)
+				if err != nil {
+					return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: table id parse fail")
+				}
+				payload, err := types.Encode(&db.FlushTable{TableID: tblId})
+				if err != nil {
+					return nil, moerr.NewInternalError(proc.Ctx, "payload encode err")
+				}
+				return payload, nil
+			}
+
 			if len(parameters) == 3 {
 				accId, err := strconv.ParseUint(parameters[2], 0, 32)
 				if err != nil {
@@ -51,6 +64,7 @@ func handleFlush() handleFunc {
 				}
 				proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(accId))
 			}
+
 			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, parameters[0], txnOp)
 			if err != nil {
 				return nil, err
@@ -59,21 +73,7 @@ func handleFlush() handleFunc {
 			if err != nil {
 				return nil, err
 			}
-			dId := database.GetDatabaseId(proc.Ctx)
-			tableId := rel.GetTableID(proc.Ctx)
-			dbId, err := strconv.Atoi(dId)
-			if err != nil {
-				return nil, err
-			}
-			payload, err := types.Encode(&db.FlushTable{
-				DatabaseID: uint64(dbId),
-				TableID:    tableId,
-				AccessInfo: db.AccessInfo{
-					AccountID: proc.SessionInfo.AccountId,
-					UserID:    proc.SessionInfo.UserId,
-					RoleID:    proc.SessionInfo.RoleId,
-				},
-			})
+			payload, err := types.Encode(&db.FlushTable{TableID: rel.GetTableID(proc.Ctx)})
 			if err != nil {
 				return nil, moerr.NewInternalError(proc.Ctx, "payload encode err")
 			}
