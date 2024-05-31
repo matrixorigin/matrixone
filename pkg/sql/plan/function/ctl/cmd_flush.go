@@ -15,12 +15,14 @@
 package ctl
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -33,11 +35,21 @@ func handleFlush() handleFunc {
 			return nil, nil
 		},
 		func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
-			// parameter should be "DbName.TableName"
+			// parameter should be "DbName.TableName[.AccountId]"
 			parameters := strings.Split(parameter, ".")
+			if len(parameters) != 2 && len(parameters) != 3 {
+				return nil, moerr.NewInternalErrorNoCtx("handleFlush: expected \"DbName.TableName[.AccountId]\"")
+			}
 			txnOp := proc.TxnOperator
 			if proc.TxnOperator == nil {
 				return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: txn operator is nil")
+			}
+			if len(parameters) == 3 {
+				accId, err := strconv.ParseUint(parameters[2], 0, 32)
+				if err != nil {
+					return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: invalid account id")
+				}
+				proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(accId))
 			}
 			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, parameters[0], txnOp)
 			if err != nil {
