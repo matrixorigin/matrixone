@@ -39,7 +39,7 @@ type Shard struct {
 var (
 	bufferedObjectsPerClass = func() int {
 		n := maxBufferSize / numShards / classSumSize
-		logutil.Info("malloc",
+		logutil.Debug("malloc",
 			zap.Any("max buffer size", maxBufferSize),
 			zap.Any("num shards", numShards),
 			zap.Any("classes", len(classSizes)),
