@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"go.uber.org/automaxprocs/maxprocs"
 	"math"
 	"net"
 	"runtime"
@@ -31,7 +32,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/panjf2000/ants/v2"
-	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -88,6 +88,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func init() {
+	maxprocs.Set(maxprocs.Logger(func(string, ...interface{}) {}))
+}
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
 // The current insertion of around 200,000 rows triggers cn to write s3 directly
@@ -1423,7 +1427,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 
 		n.NotCacheable = true
-		nodeStats := ns[n.Children[0]].Stats
 
 		var arg *deletion.Argument
 		arg, err = constructDeletion(n, c.e, c.proc)
@@ -1431,7 +1434,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			return nil, err
 		}
 
-		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) >
+		if n.Stats.GetCost()*float64(SingleLineSizeEstimate) >
 			float64(DistributedThreshold) &&
 			!arg.DeleteCtx.CanTruncate {
 			c.proc.Infof(c.ctx, "delete of '%s' write s3\n", c.sql)
