@@ -1,21 +1,14 @@
 use mo_catalog;
-[unknown result because it is related to issue#16150]
 create cluster table clu01(col1 int, col2 decimal);
-[unknown result because it is related to issue#16150]
 insert into clu01 values(1,2,0);
-[unknown result because it is related to issue#16150]
 drop snapshot if exists sp01;
-[unknown result because it is related to issue#16150]
 create snapshot sp01 for account sys;
-[unknown result because it is related to issue#16150]
 insert into clu01 values(2,3,0);
-[unknown result because it is related to issue#16150]
 restore account sys from snapshot sp01;
-[unknown result because it is related to issue#16150]
 select * from clu01;
-[unknown result because it is related to issue#16150]
+col1    col2    account_id
+1    2    0
 drop table clu01;
-[unknown result because it is related to issue#16150]
 drop database if exists test;
 create database test;
 use test;
@@ -69,7 +62,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275510    test01    def    create database test01    0    1    2024-05-15 14:06:07    0
+273354    test01    def    create database test01    0    1    2024-05-30 15:09:06    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 __mo_fake_pk_col
@@ -209,7 +202,7 @@ count(*)
 use mo_catalog;
 select count(*) from cluster01;
 count(*)
-4
+2
 drop table cluster01;
 use test02;
 drop table rs02;
