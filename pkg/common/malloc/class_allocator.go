@@ -119,12 +119,13 @@ func newFixedSizedAllocator(
 var _ Allocator = new(fixedSizeMmapAllocator)
 
 func (f *fixedSizeMmapAllocator) Allocate(_ uint64) (ptr unsafe.Pointer, dec Deallocator) {
-	defer func() {
-		if f.checkFraction > 0 &&
-			fastrand()%f.checkFraction == 0 {
-			dec = newCheckedDeallocator(dec)
-		}
-	}()
+	if f.checkFraction > 0 {
+		defer func() {
+			if fastrand()%f.checkFraction == 0 {
+				dec = newCheckedDeallocator(dec)
+			}
+		}()
+	}
 
 	select {
 
@@ -165,6 +166,18 @@ func (f *fixedSizeMmapAllocator) Allocate(_ uint64) (ptr unsafe.Pointer, dec Dea
 var _ Deallocator = new(fixedSizeMmapAllocator)
 
 func (f *fixedSizeMmapAllocator) Deallocate(ptr unsafe.Pointer) {
+
+	if f.checkFraction > 0 &&
+		fastrand()%f.checkFraction == 0 {
+		// do not reuse to detect use-after-free
+		if err := unix.Munmap(
+			unsafe.Slice((*byte)(ptr), f.size),
+		); err != nil {
+			panic(err)
+		}
+		return
+	}
+
 	select {
 
 	case f.buffer1 <- ptr:
