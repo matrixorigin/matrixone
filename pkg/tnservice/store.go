@@ -399,6 +399,10 @@ func (s *store) initLockTableAllocator() error {
 }
 
 func (s *store) initShardServer() error {
+	if !s.cfg.ShardService.Enable {
+		return nil
+	}
+
 	s.cfg.ShardService.RPC = s.cfg.RPC
 	s.cfg.ShardService.ListenAddress = s.shardServiceListenAddr()
 	s.shardServer = shardservice.NewShardServer(s.cfg.ShardService)

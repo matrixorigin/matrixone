@@ -37,6 +37,8 @@ type Config struct {
 	// RPC rpc config
 	RPC morpc.Config `toml:"-"`
 
+	// Enable enable shard service
+	Enable bool `toml:"enable"`
 	// ListenAddress shard service listen address for receiving lock requests
 	ListenAddress string `toml:"listen-address"`
 	// ServiceAddress service address for communication, if this address is not set, use

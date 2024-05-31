@@ -735,10 +735,16 @@ func (s *service) initLockService() {
 
 func (s *service) initShardService() {
 	cfg := s.getShardServiceConfig()
+	if !cfg.Enable {
+		return
+	}
+
 	store := shardservice.NewShardStorage(
 		runtime.ProcessLevelRuntime().Clock(),
 		s.sqlExecutor,
 		s.timestampWaiter,
+		nil,
+		s.storeEngine,
 	)
 	s.shardService = shardservice.NewService(
 		cfg,
