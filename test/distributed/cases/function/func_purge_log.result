@@ -7,10 +7,10 @@ a
 \nmsg: success. arg prune: table *-metric, *h*m*s ago, cacheLen *\n\ntotal: *, stale: *, selected: *, no valid objs to prune
 select REGEXP_REPLACE(a, '[0-9]+', '*') a from (select purge_log('rawlog', '2021-02-01') a) a;
 a
-\nmsg: success. arg prune: table *-metric, *h*m*s ago, cacheLen *\n\ntotal: *, stale: *, selected: *, no valid objs to prune
+\nmsg: success. arg prune: table *-rawlog, *h*m*s ago, cacheLen *\n\ntotal: *, stale: *, selected: *, no valid objs to prune
 select REGEXP_REPLACE(a, '[0-9]+', '*') a from (select purge_log('statement_info', '2021-02-01') a) a;
 a
-\nmsg: success. arg prune: table *-metric, *h*m*s ago, cacheLen *\n\ntotal: *, stale: *, selected: *, no valid objs to prune
+\nmsg: success. arg prune: table *-statement_info, *h*m*s ago, cacheLen *\n\ntotal: *, stale: *, selected: *, no valid objs to prune
 select REGEXP_REPLACE(a, '[0-9]+', '*') a from (select purge_log('metric', '2021-02-01') a) a;
 a
 \nmsg: success. arg prune: table *-metric, *h*m*s ago, cacheLen *\n\ntotal: *, stale: *, selected: *, no valid objs to prune
