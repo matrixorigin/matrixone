@@ -41,7 +41,11 @@ func TestParseArgs(t *testing.T) {
 		},
 		{
 			s: "db1",
-			e: true,
+			r: arguments{tbl: "db1", filter: "", targetObjSize: defaultTargetObjectSize},
+		},
+		{
+			s: "100000:all:small:1M",
+			r: arguments{tbl: "100000", filter: "small", targetObjSize: common.Const1MBytes},
 		},
 		{
 			s: "db1.table1:018f27b6-c6e1-7bef-a1e8-0f639ddedeef_0,018f27b6-c6e1-7bef-a1e8-0f639ddede00_0",
