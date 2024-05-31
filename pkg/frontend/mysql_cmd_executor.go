@@ -841,7 +841,8 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 	}
 
 	if sv.Where != nil {
-		bat, err := constructVarBatch(ses, rows)
+		bat, _, err := convertRowsIntoBatch(execCtx.proc.Mp(), mrs.Columns, rows)
+		defer cleanBatch(execCtx.proc.Mp(), bat)
 		if err != nil {
 			return err
 		}
@@ -879,7 +880,6 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			rows[i][0] = v0[i]
 			rows[i][1] = v1[i]
 		}
-		bat.Clean(execCtx.proc.Mp())
 	}
 
 	//sort by name
@@ -903,64 +903,6 @@ func handleShowVariables(ses FeSession, execCtx *ExecCtx, sv *tree.ShowVariables
 		return err
 	}
 	return err
-}
-
-func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error) {
-	bat := batch.New(true, []string{"Variable_name", "Value"})
-	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
-	cnt := len(rows)
-	bat.SetRowCount(cnt)
-	v0 := make([]string, cnt)
-	v1 := make([]string, cnt)
-	for i, row := range rows {
-		v0[i] = row[0].(string)
-		v1[i] = fmt.Sprintf("%v", row[1])
-	}
-	bat.Vecs[0] = vector.NewVec(typ)
-	vector.AppendStringList(bat.Vecs[0], v0, nil, ses.GetMemPool())
-	bat.Vecs[1] = vector.NewVec(typ)
-	vector.AppendStringList(bat.Vecs[1], v1, nil, ses.GetMemPool())
-	return bat, nil
-}
-
-func constructCollationBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error) {
-	bat := batch.New(true, []string{"Collation", "Charset", "Id", "Default", "Compiled", "Sortlen", "Pad_attribute"})
-	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
-	longlongTyp := types.New(types.T_int64, 0, 0)
-	longTyp := types.New(types.T_int32, 0, 0)
-	cnt := len(rows)
-	bat.SetRowCount(cnt)
-	v0 := make([]string, cnt)
-	v1 := make([]string, cnt)
-	v2 := make([]int64, cnt)
-	v3 := make([]string, cnt)
-	v4 := make([]string, cnt)
-	v5 := make([]int32, cnt)
-	v6 := make([]string, cnt)
-	for i, row := range rows {
-		v0[i] = row[0].(string)
-		v1[i] = row[1].(string)
-		v2[i] = row[2].(int64)
-		v3[i] = row[3].(string)
-		v4[i] = row[4].(string)
-		v5[i] = row[5].(int32)
-		v6[i] = row[6].(string)
-	}
-	bat.Vecs[0] = vector.NewVec(typ)
-	vector.AppendStringList(bat.Vecs[0], v0, nil, ses.GetMemPool())
-	bat.Vecs[1] = vector.NewVec(typ)
-	vector.AppendStringList(bat.Vecs[1], v1, nil, ses.GetMemPool())
-	bat.Vecs[2] = vector.NewVec(longlongTyp)
-	vector.AppendFixedList[int64](bat.Vecs[2], v2, nil, ses.GetMemPool())
-	bat.Vecs[3] = vector.NewVec(typ)
-	vector.AppendStringList(bat.Vecs[3], v3, nil, ses.GetMemPool())
-	bat.Vecs[4] = vector.NewVec(typ)
-	vector.AppendStringList(bat.Vecs[4], v4, nil, ses.GetMemPool())
-	bat.Vecs[5] = vector.NewVec(longTyp)
-	vector.AppendFixedList[int32](bat.Vecs[5], v5, nil, ses.GetMemPool())
-	bat.Vecs[6] = vector.NewVec(typ)
-	vector.AppendStringList(bat.Vecs[6], v6, nil, ses.GetMemPool())
-	return bat, nil
 }
 
 func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) error {
