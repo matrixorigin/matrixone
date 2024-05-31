@@ -139,7 +139,7 @@ type IOEntry struct {
 
 	allocator CacheDataAllocator
 
-	releaseFuncs []func()
+	releaseFunc func()
 }
 
 func (i IOEntry) String() string {

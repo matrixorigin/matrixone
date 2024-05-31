@@ -462,7 +462,9 @@ func (l *LocalETLFS) Delete(ctx context.Context, filePaths ...string) error {
 	return nil
 }
 
-func (l *LocalETLFS) deleteSingle(ctx context.Context, filePath string) error {
+func (l *LocalETLFS) deleteSingle(
+	_ context.Context, // ctx is not used
+	filePath string) error {
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return err

@@ -53,9 +53,10 @@ func (i *IOEntry) ReadFromOSFile(file *os.File) error {
 	if cap(i.Data) < int(i.Size) {
 		ptr, dec := getMallocAllocator().Allocate(uint64(i.Size))
 		i.Data = unsafe.Slice((*byte)(ptr), i.Size)
-		i.releaseFuncs = append(i.releaseFuncs, func() {
-			dec.Deallocate(ptr)
-		})
+		if i.releaseFunc != nil {
+			i.releaseFunc()
+		}
+		i.releaseFunc = func() { dec.Deallocate(ptr) }
 	} else {
 		i.Data = i.Data[:i.Size]
 	}

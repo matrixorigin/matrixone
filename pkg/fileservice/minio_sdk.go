@@ -474,7 +474,7 @@ func (a *MinioSDK) putObject(
 	key string,
 	r io.Reader,
 	size int64,
-	expire *time.Time,
+	_ *time.Time, // expire not used
 ) (minio.UploadInfo, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.putObject")
 	defer task.End()
@@ -493,7 +493,10 @@ func (a *MinioSDK) putObject(
 	)
 }
 
-func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
+func (a *MinioSDK) getObject(
+	ctx context.Context, key string, min *int64,
+	_ *int64, // max not used
+) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.getObject")
 	defer task.End()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {

@@ -386,7 +386,7 @@ func (a *AliyunSDK) putObject(
 	ctx context.Context,
 	key string,
 	r io.Reader,
-	size int64,
+	_ int64, // size is not used
 	expire *time.Time,
 ) (err error) {
 	defer catch(&err)
@@ -512,7 +512,7 @@ func (a *AliyunSDK) is404(err error) bool {
 }
 
 func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
-	ctx context.Context,
+	_ context.Context, // ctx is not used
 ) (ret oss.CredentialsProvider, err error) {
 
 	defer func() {

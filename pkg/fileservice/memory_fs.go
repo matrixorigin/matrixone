@@ -331,7 +331,9 @@ func (m *MemoryFS) Delete(ctx context.Context, filePaths ...string) error {
 	return nil
 }
 
-func (m *MemoryFS) deleteSingle(ctx context.Context, filePath string) error {
+func (m *MemoryFS) deleteSingle(
+	_ context.Context, // ctx not used
+	filePath string) error {
 
 	path, err := ParsePathAtService(filePath, m.name)
 	if err != nil {
