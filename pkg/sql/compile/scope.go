@@ -17,6 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
+	"go.uber.org/automaxprocs/maxprocs"
+	"hash/crc32"
+	goruntime "runtime"
+	"runtime/debug"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -28,10 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"hash/crc32"
-	goruntime "runtime"
-	"runtime/debug"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -60,10 +62,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/panjf2000/ants/v2"
-	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
 )
 
+func init() {
+	maxprocs.Set(maxprocs.Logger(func(string, ...interface{}) {}))
+}
 func newScope(magic magicType) *Scope {
 	s := reuse.Alloc[Scope](nil)
 	s.Magic = magic
