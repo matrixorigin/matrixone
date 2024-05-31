@@ -242,6 +242,17 @@ func (c *cluster) AddCN(s metadata.CNService) {
 	c.services.Store(new)
 }
 
+func (c *cluster) UpdateCN(s metadata.CNService) {
+	new := c.copyServices()
+	for i := range new.cn {
+		if new.cn[i].ServiceID == s.ServiceID {
+			new.cn[i] = s
+			break
+		}
+	}
+	c.services.Store(new)
+}
+
 func (c *cluster) waitReady() {
 	<-c.readyC
 }

@@ -24,10 +24,24 @@ import (
 // balanceSchedule makes a decision to migrate a replica from one CN to another, and
 // when the state of the target CN's replica is running, it can remove the From replica.
 type replicaScheduler struct {
+	freezeFilter  *freezeFilter
+	excludeFilter *excludeFilter
+	pausedCNs     map[string]struct{}
+	filters       []filter
+	filterCount   int
 }
 
-func newReplicaScheduler() scheduler {
-	return &replicaScheduler{}
+func newReplicaScheduler(
+	freezeFilter *freezeFilter,
+) scheduler {
+	s := &replicaScheduler{
+		freezeFilter:  freezeFilter,
+		excludeFilter: newExcludeFilter(),
+		pausedCNs:     make(map[string]struct{}),
+	}
+	s.filters = append(s.filters, s.freezeFilter, s.excludeFilter)
+	s.filterCount = len(s.filters)
+	return s
 }
 
 func (s *replicaScheduler) schedule(
@@ -37,8 +51,9 @@ func (s *replicaScheduler) schedule(
 	r.Lock()
 	defer r.Unlock()
 
+	r.getPausedCNLocked(s.pausedCNs)
 	for _, t := range r.tables {
-		s.doSchedule(r, t)
+		s.doSchedule(r, t, filters...)
 	}
 	return nil
 }
@@ -46,19 +61,97 @@ func (s *replicaScheduler) schedule(
 func (s *replicaScheduler) doSchedule(
 	r *rt,
 	t *table,
+	filters ...filter,
 ) {
-	i, j, ok := t.getMovingCompletedReplica()
+	s.scheduleMoveCompleted(
+		r,
+		t,
+		filters...,
+	)
+	s.scheduleMovePauseCNReplicas(
+		r,
+		t,
+		filters...,
+	)
+}
+
+func (s *replicaScheduler) scheduleMoveCompleted(
+	r *rt,
+	t *table,
+	_ ...filter,
+) {
+	i, j, ok := t.getMoveCompletedReplica()
 	if !ok {
 		return
 	}
-	getLogger().Info("remove moved replica",
+	getLogger().Info("remove move completed replica",
 		zap.Uint64("table", t.id),
 		zap.String("replica", t.shards[i].Replicas[j].String()),
 	)
+
+	// replica will removed on the next heartbeat
 	t.shards[i].Replicas[j].State = pb.ReplicaState_Tombstone
 	replica := t.shards[i].Replicas[j]
 	r.addOpLocked(
 		replica.CN,
 		newDeleteReplicaOp(t.shards[i], replica),
 	)
+}
+
+func (s *replicaScheduler) scheduleMovePauseCNReplicas(
+	r *rt,
+	t *table,
+	filters ...filter,
+) {
+	if len(s.pausedCNs) == 0 {
+		return
+	}
+	s.filters = s.filters[:s.filterCount]
+	s.filters = append(s.filters, filters...)
+
+	cns := r.getAvailableCNsLocked(t, s.filters...)
+	if len(cns) == 0 {
+		return
+	}
+
+	has := false
+	for cn := range s.pausedCNs {
+		if !r.env.Available(t.metadata.AccountID, cn) {
+			continue
+		}
+		has = true
+		break
+	}
+
+	if !has {
+		return
+	}
+
+	fromCN := ""
+	toCN := ""
+	shard, new, ok := t.move(
+		func(from string) bool {
+			_, ok := s.pausedCNs[from]
+			if ok {
+				s.excludeFilter.add(from)
+				fromCN = from
+			}
+			return ok
+		},
+		func(from string) string {
+			cns = r.filterCN(cns, s.filters...)
+			if len(cns) == 0 {
+				return ""
+			}
+			toCN = cns[0].id
+			return cns[0].id
+		},
+	)
+	if !ok {
+		return
+	}
+
+	s.excludeFilter.reset()
+	s.freezeFilter.add(fromCN, toCN)
+	r.addOpLocked(toCN, newAddReplicaOp(shard, new))
 }

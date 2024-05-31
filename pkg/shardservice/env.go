@@ -65,6 +65,28 @@ func (e *env) Available(
 	return false
 }
 
+func (e *env) Draining(
+	cn string,
+) bool {
+	value, ok := e.getCN(cn)
+	if !ok {
+		return false
+	}
+	return value.WorkState == metadata.WorkState_Draining
+}
+
+func (e *env) UpdateState(
+	serviceID string,
+	state metadata.WorkState,
+) {
+	cn, ok := e.getCN(serviceID)
+	if !ok {
+		panic("cannot found cn: " + serviceID)
+	}
+	cn.WorkState = state
+	e.cluster.UpdateCN(cn)
+}
+
 func (e *env) getCN(serviceID string) (metadata.CNService, bool) {
 	var cn metadata.CNService
 	ok := false

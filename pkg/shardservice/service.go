@@ -24,6 +24,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -54,6 +55,7 @@ func withDisableAppendCreateCallback() Option {
 }
 
 type service struct {
+	logger  *log.MOLogger
 	cfg     Config
 	storage ShardStorage
 
@@ -97,14 +99,16 @@ func NewService(
 	storage ShardStorage,
 	opts ...Option,
 ) ShardService {
+	logger := getLogger().With(zap.String("service", cfg.ServiceID))
 	s := &service{
+		logger:  logger,
 		cfg:     cfg,
 		storage: storage,
 		createC: make(chan uint64, 16),
 		deleteC: make(chan uint64, 16),
 		stopper: stopper.NewStopper(
 			"shard-service",
-			stopper.WithLogger(getLogger().RawLogger()),
+			stopper.WithLogger(logger.RawLogger()),
 		),
 	}
 
@@ -293,7 +297,7 @@ OUT:
 
 		metadata, shards, err := fn()
 		if err != nil || len(shards) == 0 {
-			getLogger().Error("failed to get table shards",
+			s.logger.Error("failed to get table shards",
 				zap.Error(err),
 				zap.Int("shards", len(shards)))
 			time.Sleep(time.Second)
@@ -301,7 +305,7 @@ OUT:
 		}
 		for _, shard := range shards {
 			if !shard.HasReplicaWithState(pb.ReplicaState_Running) {
-				getLogger().Warn("shard is not running",
+				s.logger.Warn("shard is not running",
 					zap.String("shard", shard.String()))
 				time.Sleep(time.Second)
 				continue OUT
@@ -361,25 +365,25 @@ func (s *service) doTask(
 			return
 		case <-timer.C:
 			if err := s.doHeartbeat(m); err != nil {
-				getLogger().Error("failed to heartbeat",
+				s.logger.Error("failed to heartbeat",
 					zap.Error(err))
 			}
 			timer.Reset(s.cfg.HeartbeatDuration.Duration)
 		case table := <-s.createC:
 			if err := s.handleCreateTable(table); err != nil {
-				getLogger().Error("failed to create table shards",
+				s.logger.Error("failed to create table shards",
 					zap.Uint64("table", table),
 					zap.Error(err))
 			}
 		case table := <-s.deleteC:
 			if err := s.handleDeleteTable(table); err != nil {
-				getLogger().Error("failed to delete table shards",
+				s.logger.Error("failed to delete table shards",
 					zap.Uint64("table", table),
 					zap.Error(err))
 			}
 		case <-checkChangedTimer.C:
 			if err := s.handleCheckChanged(); err != nil {
-				getLogger().Error("failed to check table shards changed",
+				s.logger.Error("failed to check table shards changed",
 					zap.Error(err))
 			}
 			checkChangedTimer.Reset(s.cfg.CheckChangedDuration.Duration)
@@ -410,7 +414,7 @@ func (s *service) doHeartbeat(
 		return nil
 	}
 
-	getLogger().Info(
+	s.logger.Info(
 		"receive new heartbeat operator",
 		zap.Int("count", len(ops)),
 	)
@@ -419,7 +423,7 @@ func (s *service) doHeartbeat(
 	for _, op := range ops {
 		switch op.Type {
 		case pb.OpType_AddReplica:
-			getLogger().Info(
+			s.logger.Info(
 				"handle add replica",
 				zap.String("replica", op.Replica.String()),
 			)
@@ -430,7 +434,7 @@ func (s *service) doHeartbeat(
 				op.Replica,
 			)
 		case pb.OpType_DeleteReplica:
-			getLogger().Info(
+			s.logger.Info(
 				"handle delete replica",
 				zap.String("replica", op.Replica.String()),
 			)
@@ -441,7 +445,7 @@ func (s *service) doHeartbeat(
 				op.Replica,
 			)
 		case pb.OpType_DeleteAll:
-			getLogger().Info(
+			s.logger.Info(
 				"handle delete all replicas",
 			)
 
@@ -449,8 +453,9 @@ func (s *service) doHeartbeat(
 				newShards,
 			)
 		case pb.OpType_CreateTable:
-			getLogger().Info(
+			s.logger.Info(
 				"handle create shards",
+				zap.String("service", s.cfg.ServiceID),
 				zap.Uint64("table", op.TableID),
 			)
 
@@ -474,7 +479,7 @@ func (s *service) doHeartbeat(
 				m[op] = true
 				break
 			}
-			getLogger().Error("failed to unsubscribe",
+			s.logger.Error("failed to unsubscribe",
 				zap.Uint64("table", op),
 				zap.Error(err),
 			)
@@ -546,7 +551,7 @@ func (s *service) handleCreateTable(
 	}
 	s.remote.pool.ReleaseResponse(resp)
 
-	getLogger().Info("table shards created",
+	s.logger.Info("table shards created",
 		zap.Uint64("table", tableID),
 		zap.String("shards", metadata.String()))
 	return nil

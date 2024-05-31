@@ -52,7 +52,7 @@ func TestScheduleReplicas(t *testing.T) {
 			require.Equal(t, pb.ReplicaState_Running, t1.shards[0].Replicas[1].State)
 			require.Equal(t, pb.ReplicaState_Running, t1.shards[0].Replicas[2].State)
 
-			require.NoError(t, newReplicaScheduler().schedule(r))
+			require.NoError(t, newReplicaScheduler(newFreezeFilter(time.Second)).schedule(r))
 			require.Equal(t, pb.ReplicaState_Tombstone, t1.shards[0].Replicas[0].State)
 			require.Equal(t, pb.ReplicaState_Running, t1.shards[0].Replicas[1].State)
 			require.Equal(t, pb.ReplicaState_Running, t1.shards[0].Replicas[2].State)

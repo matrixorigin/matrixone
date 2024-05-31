@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
@@ -500,6 +501,47 @@ func TestForceUnsubscribe(t *testing.T) {
 		},
 		func(c *Config) []Option {
 			c.FreezeCNTimeout.Duration = time.Millisecond * 10
+			if c.ServiceID != "cn1" {
+				return []Option{withDisableHeartbeat()}
+			}
+			return nil
+		},
+	)
+}
+
+func TestMoveReplicaFromPauseCN(t *testing.T) {
+	runServicesTest(
+		t,
+		"cn1,cn2,cn3",
+		func(
+			ctx context.Context,
+			server *server,
+			services []*service,
+		) {
+			s1 := services[0]
+			s2 := services[1]
+			s3 := services[2]
+			table := uint64(1)
+			shards := uint32(6)
+			mustAddTestShards(t, ctx, s1, table, shards, 1, s2, s3)
+			waitReplicaCount(table, s1, 6)
+
+			s2.options.disableHeartbeat.Store(false)
+			s3.options.disableHeartbeat.Store(false)
+			waitReplicaCount(table, s1, 2)
+			waitReplicaCount(table, s2, 2)
+			waitReplicaCount(table, s3, 2)
+
+			// make cn1 pause
+			server.env.UpdateState("cn1", metadata.WorkState_Draining)
+
+			waitReplicaCount(table, s1, 0)
+			waitReplicaCount(table, s2, 3)
+			waitReplicaCount(table, s3, 3)
+		},
+		func(c *Config) []Option {
+			c.FreezeCNTimeout.Duration = time.Millisecond * 10
+
 			if c.ServiceID != "cn1" {
 				return []Option{withDisableHeartbeat()}
 			}

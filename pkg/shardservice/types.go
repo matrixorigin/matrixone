@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -91,6 +92,9 @@ type scheduler interface {
 type Env interface {
 	HasCN(serviceID string) bool
 	Available(accountID uint64, cn string) bool
+	Draining(cn string) bool
+
+	UpdateState(cn string, state metadata.WorkState)
 }
 
 // filter is used to filter out or select certain CNs when selecting CNs for ShardBalance.

@@ -103,18 +103,21 @@ func (OpType) EnumDescriptor() ([]byte, []int) {
 type CNState int32
 
 const (
-	CNState_Up   CNState = 0
-	CNState_Down CNState = 1
+	CNState_Up    CNState = 0
+	CNState_Pause CNState = 1
+	CNState_Down  CNState = 2
 )
 
 var CNState_name = map[int32]string{
 	0: "Up",
-	1: "Down",
+	1: "Pause",
+	2: "Down",
 }
 
 var CNState_value = map[string]int32{
-	"Up":   0,
-	"Down": 1,
+	"Up":    0,
+	"Pause": 1,
+	"Down":  2,
 }
 
 func (x CNState) String() string {
@@ -163,11 +166,13 @@ func (ReplicaState) EnumDescriptor() ([]byte, []int) {
 type Method int32
 
 const (
-	Method_Heartbeat    Method = 0
-	Method_CreateShards Method = 1
-	Method_DeleteShards Method = 2
-	Method_GetShards    Method = 3
-	Method_ShardRead    Method = 4
+	Method_Heartbeat     Method = 0
+	Method_CreateShards  Method = 1
+	Method_DeleteShards  Method = 2
+	Method_GetShards     Method = 3
+	Method_ShardRead     Method = 4
+	Method_PauseCN       Method = 5
+	Method_GetCNReplicas Method = 6
 )
 
 var Method_name = map[int32]string{
@@ -176,14 +181,18 @@ var Method_name = map[int32]string{
 	2: "DeleteShards",
 	3: "GetShards",
 	4: "ShardRead",
+	5: "PauseCN",
+	6: "GetCNReplicas",
 }
 
 var Method_value = map[string]int32{
-	"Heartbeat":    0,
-	"CreateShards": 1,
-	"DeleteShards": 2,
-	"GetShards":    3,
-	"ShardRead":    4,
+	"Heartbeat":     0,
+	"CreateShards":  1,
+	"DeleteShards":  2,
+	"GetShards":     3,
+	"ShardRead":     4,
+	"PauseCN":       5,
+	"GetCNReplicas": 6,
 }
 
 func (x Method) String() string {
@@ -450,16 +459,18 @@ func (m *ShardReplica) GetVersion() uint64 {
 }
 
 type Request struct {
-	RequestID            uint64              `protobuf:"varint,1,opt,name=RequestID,proto3" json:"RequestID,omitempty"`
-	RPCMethod            Method              `protobuf:"varint,2,opt,name=RPCMethod,proto3,enum=shard.Method" json:"RPCMethod,omitempty"`
-	CreateShards         CreateShardsRequest `protobuf:"bytes,3,opt,name=CreateShards,proto3" json:"CreateShards"`
-	DeleteShards         DeleteShardsRequest `protobuf:"bytes,4,opt,name=DeleteShards,proto3" json:"DeleteShards"`
-	Heartbeat            HeartbeatRequest    `protobuf:"bytes,5,opt,name=Heartbeat,proto3" json:"Heartbeat"`
-	GetShards            GetShardsRequest    `protobuf:"bytes,6,opt,name=GetShards,proto3" json:"GetShards"`
-	ShardRead            ShardReadRequest    `protobuf:"bytes,7,opt,name=ShardRead,proto3" json:"ShardRead"`
-	XXX_NoUnkeyedLiteral struct{}            `json:"-"`
-	XXX_unrecognized     []byte              `json:"-"`
-	XXX_sizecache        int32               `json:"-"`
+	RequestID            uint64               `protobuf:"varint,1,opt,name=RequestID,proto3" json:"RequestID,omitempty"`
+	RPCMethod            Method               `protobuf:"varint,2,opt,name=RPCMethod,proto3,enum=shard.Method" json:"RPCMethod,omitempty"`
+	CreateShards         CreateShardsRequest  `protobuf:"bytes,3,opt,name=CreateShards,proto3" json:"CreateShards"`
+	DeleteShards         DeleteShardsRequest  `protobuf:"bytes,4,opt,name=DeleteShards,proto3" json:"DeleteShards"`
+	Heartbeat            HeartbeatRequest     `protobuf:"bytes,5,opt,name=Heartbeat,proto3" json:"Heartbeat"`
+	GetShards            GetShardsRequest     `protobuf:"bytes,6,opt,name=GetShards,proto3" json:"GetShards"`
+	ShardRead            ShardReadRequest     `protobuf:"bytes,7,opt,name=ShardRead,proto3" json:"ShardRead"`
+	PauseCN              PauseCNRequest       `protobuf:"bytes,8,opt,name=PauseCN,proto3" json:"PauseCN"`
+	GetCNReplicas        GetCNReplicasRequest `protobuf:"bytes,9,opt,name=GetCNReplicas,proto3" json:"GetCNReplicas"`
+	XXX_NoUnkeyedLiteral struct{}             `json:"-"`
+	XXX_unrecognized     []byte               `json:"-"`
+	XXX_sizecache        int32                `json:"-"`
 }
 
 func (m *Request) Reset()         { *m = Request{} }
@@ -544,20 +555,36 @@ func (m *Request) GetShardRead() ShardReadRequest {
 	return ShardReadRequest{}
 }
 
+func (m *Request) GetPauseCN() PauseCNRequest {
+	if m != nil {
+		return m.PauseCN
+	}
+	return PauseCNRequest{}
+}
+
+func (m *Request) GetGetCNReplicas() GetCNReplicasRequest {
+	if m != nil {
+		return m.GetCNReplicas
+	}
+	return GetCNReplicasRequest{}
+}
+
 type Response struct {
 	RequestID uint64 `protobuf:"varint,1,opt,name=RequestID,proto3" json:"RequestID,omitempty"`
 	RPCMethod Method `protobuf:"varint,2,opt,name=RPCMethod,proto3,enum=shard.Method" json:"RPCMethod,omitempty"`
 	// Error we use this field to send moerr from service to another cn. Set with
 	// moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore moerr.
-	Error                []byte               `protobuf:"bytes,3,opt,name=Error,proto3" json:"Error,omitempty"`
-	CreateShards         CreateShardsResponse `protobuf:"bytes,4,opt,name=CreateShards,proto3" json:"CreateShards"`
-	DeleteShards         DeleteShardsResponse `protobuf:"bytes,5,opt,name=DeleteShards,proto3" json:"DeleteShards"`
-	Heartbeat            HeartbeatResponse    `protobuf:"bytes,6,opt,name=Heartbeat,proto3" json:"Heartbeat"`
-	GetShards            GetShardsResponse    `protobuf:"bytes,7,opt,name=GetShards,proto3" json:"GetShards"`
-	ShardRead            ShardReadResponse    `protobuf:"bytes,8,opt,name=ShardRead,proto3" json:"ShardRead"`
-	XXX_NoUnkeyedLiteral struct{}             `json:"-"`
-	XXX_unrecognized     []byte               `json:"-"`
-	XXX_sizecache        int32                `json:"-"`
+	Error                []byte                `protobuf:"bytes,3,opt,name=Error,proto3" json:"Error,omitempty"`
+	CreateShards         CreateShardsResponse  `protobuf:"bytes,4,opt,name=CreateShards,proto3" json:"CreateShards"`
+	DeleteShards         DeleteShardsResponse  `protobuf:"bytes,5,opt,name=DeleteShards,proto3" json:"DeleteShards"`
+	Heartbeat            HeartbeatResponse     `protobuf:"bytes,6,opt,name=Heartbeat,proto3" json:"Heartbeat"`
+	GetShards            GetShardsResponse     `protobuf:"bytes,7,opt,name=GetShards,proto3" json:"GetShards"`
+	ShardRead            ShardReadResponse     `protobuf:"bytes,8,opt,name=ShardRead,proto3" json:"ShardRead"`
+	PauseCN              PauseCNResponse       `protobuf:"bytes,9,opt,name=PauseCN,proto3" json:"PauseCN"`
+	GetCNReplicas        GetCNReplicasResponse `protobuf:"bytes,10,opt,name=GetCNReplicas,proto3" json:"GetCNReplicas"`
+	XXX_NoUnkeyedLiteral struct{}              `json:"-"`
+	XXX_unrecognized     []byte                `json:"-"`
+	XXX_sizecache        int32                 `json:"-"`
 }
 
 func (m *Response) Reset()         { *m = Response{} }
@@ -647,6 +674,20 @@ func (m *Response) GetShardRead() ShardReadResponse {
 		return m.ShardRead
 	}
 	return ShardReadResponse{}
+}
+
+func (m *Response) GetPauseCN() PauseCNResponse {
+	if m != nil {
+		return m.PauseCN
+	}
+	return PauseCNResponse{}
+}
+
+func (m *Response) GetGetCNReplicas() GetCNReplicasResponse {
+	if m != nil {
+		return m.GetCNReplicas
+	}
+	return GetCNReplicasResponse{}
 }
 
 // Operator is a description of a command that needs to be sent down to CN for execution.
@@ -1234,6 +1275,186 @@ func (m *ShardReadResponse) GetPayload() []byte {
 	return nil
 }
 
+type PauseCNRequest struct {
+	ID                   string   `protobuf:"bytes,1,opt,name=ID,proto3" json:"ID,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *PauseCNRequest) Reset()         { *m = PauseCNRequest{} }
+func (m *PauseCNRequest) String() string { return proto.CompactTextString(m) }
+func (*PauseCNRequest) ProtoMessage()    {}
+func (*PauseCNRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_319ea41e44cdc364, []int{16}
+}
+func (m *PauseCNRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *PauseCNRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_PauseCNRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *PauseCNRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_PauseCNRequest.Merge(m, src)
+}
+func (m *PauseCNRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *PauseCNRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_PauseCNRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_PauseCNRequest proto.InternalMessageInfo
+
+func (m *PauseCNRequest) GetID() string {
+	if m != nil {
+		return m.ID
+	}
+	return ""
+}
+
+type PauseCNResponse struct {
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *PauseCNResponse) Reset()         { *m = PauseCNResponse{} }
+func (m *PauseCNResponse) String() string { return proto.CompactTextString(m) }
+func (*PauseCNResponse) ProtoMessage()    {}
+func (*PauseCNResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_319ea41e44cdc364, []int{17}
+}
+func (m *PauseCNResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *PauseCNResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_PauseCNResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *PauseCNResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_PauseCNResponse.Merge(m, src)
+}
+func (m *PauseCNResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *PauseCNResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_PauseCNResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_PauseCNResponse proto.InternalMessageInfo
+
+type GetCNReplicasRequest struct {
+	ID                   string   `protobuf:"bytes,1,opt,name=ID,proto3" json:"ID,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *GetCNReplicasRequest) Reset()         { *m = GetCNReplicasRequest{} }
+func (m *GetCNReplicasRequest) String() string { return proto.CompactTextString(m) }
+func (*GetCNReplicasRequest) ProtoMessage()    {}
+func (*GetCNReplicasRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_319ea41e44cdc364, []int{18}
+}
+func (m *GetCNReplicasRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *GetCNReplicasRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_GetCNReplicasRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *GetCNReplicasRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_GetCNReplicasRequest.Merge(m, src)
+}
+func (m *GetCNReplicasRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *GetCNReplicasRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_GetCNReplicasRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_GetCNReplicasRequest proto.InternalMessageInfo
+
+func (m *GetCNReplicasRequest) GetID() string {
+	if m != nil {
+		return m.ID
+	}
+	return ""
+}
+
+type GetCNReplicasResponse struct {
+	Replicas             []ShardReplica `protobuf:"bytes,1,rep,name=Replicas,proto3" json:"Replicas"`
+	XXX_NoUnkeyedLiteral struct{}       `json:"-"`
+	XXX_unrecognized     []byte         `json:"-"`
+	XXX_sizecache        int32          `json:"-"`
+}
+
+func (m *GetCNReplicasResponse) Reset()         { *m = GetCNReplicasResponse{} }
+func (m *GetCNReplicasResponse) String() string { return proto.CompactTextString(m) }
+func (*GetCNReplicasResponse) ProtoMessage()    {}
+func (*GetCNReplicasResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_319ea41e44cdc364, []int{19}
+}
+func (m *GetCNReplicasResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *GetCNReplicasResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_GetCNReplicasResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *GetCNReplicasResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_GetCNReplicasResponse.Merge(m, src)
+}
+func (m *GetCNReplicasResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *GetCNReplicasResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_GetCNReplicasResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_GetCNReplicasResponse proto.InternalMessageInfo
+
+func (m *GetCNReplicasResponse) GetReplicas() []ShardReplica {
+	if m != nil {
+		return m.Replicas
+	}
+	return nil
+}
+
 func init() {
 	proto.RegisterEnum("shard.Policy", Policy_name, Policy_value)
 	proto.RegisterEnum("shard.OpType", OpType_name, OpType_value)
@@ -1256,77 +1477,89 @@ func init() {
 	proto.RegisterType((*GetShardsResponse)(nil), "shard.GetShardsResponse")
 	proto.RegisterType((*ShardReadRequest)(nil), "shard.ShardReadRequest")
 	proto.RegisterType((*ShardReadResponse)(nil), "shard.ShardReadResponse")
+	proto.RegisterType((*PauseCNRequest)(nil), "shard.PauseCNRequest")
+	proto.RegisterType((*PauseCNResponse)(nil), "shard.PauseCNResponse")
+	proto.RegisterType((*GetCNReplicasRequest)(nil), "shard.GetCNReplicasRequest")
+	proto.RegisterType((*GetCNReplicasResponse)(nil), "shard.GetCNReplicasResponse")
 }
 
 func init() { proto.RegisterFile("shard.proto", fileDescriptor_319ea41e44cdc364) }
 
 var fileDescriptor_319ea41e44cdc364 = []byte{
-	// 1036 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xac, 0x56, 0xdd, 0x6e, 0xe3, 0x44,
-	0x14, 0xee, 0x38, 0x8e, 0x93, 0x9c, 0xf4, 0xc7, 0x9d, 0x2d, 0x8b, 0xd5, 0x45, 0x25, 0x58, 0x5a,
-	0x29, 0x74, 0xd5, 0x46, 0x4a, 0x85, 0xf6, 0x82, 0x5e, 0xd0, 0x4d, 0x2a, 0x5a, 0xa1, 0x76, 0x2b,
-	0xb7, 0x8b, 0x04, 0x48, 0x48, 0x93, 0x64, 0x48, 0x2d, 0x52, 0x8f, 0xb1, 0x27, 0xb0, 0xbd, 0xe4,
-	0x29, 0x78, 0x10, 0x84, 0xe0, 0x11, 0xf6, 0x72, 0xef, 0xb8, 0x43, 0xd0, 0x27, 0x41, 0xf3, 0xe3,
-	0xc9, 0xd8, 0x0d, 0x15, 0x17, 0x7b, 0xe7, 0xf3, 0x9d, 0xdf, 0x39, 0xdf, 0x99, 0x33, 0x86, 0x76,
-	0x7e, 0x4d, 0xb2, 0xc9, 0x7e, 0x9a, 0x31, 0xce, 0x70, 0x5d, 0x0a, 0xdb, 0x7b, 0xd3, 0x98, 0x5f,
-	0xcf, 0x47, 0xfb, 0x63, 0x76, 0xd3, 0x9b, 0xb2, 0x29, 0xeb, 0x49, 0xed, 0x68, 0xfe, 0x9d, 0x94,
-	0xa4, 0x20, 0xbf, 0x94, 0xd7, 0xf6, 0x06, 0x8f, 0x6f, 0x68, 0xce, 0xc9, 0x4d, 0xaa, 0x80, 0xf0,
-	0x4f, 0x04, 0xeb, 0x97, 0x22, 0x52, 0x7e, 0x46, 0x39, 0x99, 0x10, 0x4e, 0xf0, 0x53, 0xf0, 0x2e,
-	0xd8, 0x2c, 0x1e, 0xdf, 0x06, 0xa8, 0x83, 0xba, 0xeb, 0xfd, 0xb5, 0x7d, 0x95, 0x57, 0x81, 0x91,
-	0x56, 0xe2, 0x0e, 0xb4, 0x95, 0xe3, 0x80, 0xcd, 0x13, 0x1e, 0x38, 0x1d, 0xd4, 0x5d, 0x8b, 0x6c,
-	0x08, 0x07, 0xd0, 0xf8, 0x92, 0x66, 0x79, 0xcc, 0x92, 0xa0, 0x26, 0xb5, 0x85, 0x88, 0x3f, 0x80,
-	0xd6, 0xd1, 0x78, 0x2c, 0x8c, 0x4e, 0x87, 0x81, 0xdb, 0x41, 0x5d, 0x37, 0x5a, 0x00, 0xb8, 0x0b,
-	0x1b, 0x67, 0xe4, 0x75, 0x44, 0xd3, 0x59, 0x3c, 0x26, 0x2a, 0x7a, 0x5d, 0xfa, 0x57, 0x61, 0xbc,
-	0x0d, 0x4d, 0x99, 0xf0, 0x74, 0x98, 0x07, 0x5e, 0xa7, 0xd6, 0x75, 0x23, 0x23, 0x87, 0x7f, 0x20,
-	0x80, 0x2b, 0x32, 0x9a, 0x51, 0x89, 0x88, 0x62, 0xa4, 0x74, 0x3a, 0x94, 0xc7, 0x72, 0xa3, 0x42,
-	0x14, 0x1a, 0xed, 0x24, 0x0f, 0xe1, 0x46, 0x85, 0x68, 0x75, 0xa2, 0xf6, 0x50, 0x27, 0xac, 0x73,
-	0xba, 0xe5, 0x73, 0x7e, 0x02, 0x4d, 0x5d, 0x6f, 0x1e, 0xd4, 0x3b, 0xb5, 0x6e, 0xbb, 0xff, 0x48,
-	0x87, 0x90, 0x29, 0xb4, 0xee, 0x85, 0xfb, 0xe6, 0xaf, 0x0f, 0x57, 0x22, 0x63, 0x1a, 0xfe, 0x8c,
-	0x60, 0xd5, 0x36, 0x10, 0xfd, 0xd2, 0x9f, 0xa6, 0xfc, 0x05, 0x80, 0x3f, 0x86, 0xfa, 0x25, 0x27,
-	0x9c, 0xca, 0xf2, 0xd7, 0x4d, 0x0a, 0x6d, 0x20, 0x55, 0x91, 0xb2, 0xc0, 0xeb, 0xe0, 0x0c, 0xce,
-	0xe5, 0x69, 0x5a, 0x91, 0x33, 0x38, 0xaf, 0x96, 0xee, 0x9a, 0xd2, 0xc3, 0x5f, 0x6a, 0xd0, 0x88,
-	0xe8, 0x0f, 0x73, 0x9a, 0x73, 0x95, 0x5e, 0x7e, 0xda, 0xe9, 0x35, 0x80, 0x9f, 0x41, 0x2b, 0xba,
-	0x18, 0x9c, 0x51, 0x7e, 0xcd, 0x26, 0xba, 0x84, 0xa2, 0x51, 0x0a, 0x8c, 0x16, 0x7a, 0x3c, 0x84,
-	0xd5, 0x41, 0x46, 0x09, 0x57, 0xac, 0xe4, 0xb2, 0x94, 0x76, 0x7f, 0x5b, 0xdb, 0xdb, 0x2a, 0x9d,
-	0x40, 0x37, 0xa7, 0xe4, 0x25, 0xa2, 0x0c, 0xe9, 0x8c, 0x9a, 0x28, 0x6e, 0x29, 0x8a, 0xad, 0xaa,
-	0x44, 0xb1, 0x55, 0xf8, 0x53, 0x68, 0x9d, 0x50, 0x92, 0xf1, 0x11, 0x25, 0x6a, 0xc2, 0xda, 0xfd,
-	0xf7, 0x75, 0x08, 0x83, 0x97, 0xfd, 0x17, 0xf6, 0xc2, 0xf9, 0x73, 0xca, 0x75, 0x7e, 0xaf, 0xe4,
-	0x6c, 0xf0, 0x8a, 0xb3, 0xc1, 0x85, 0xb3, 0xe6, 0x97, 0x4c, 0x82, 0x46, 0xc9, 0xd9, 0xe0, 0x15,
-	0x67, 0x83, 0x87, 0xbf, 0xd6, 0xc4, 0x54, 0xe5, 0x29, 0x4b, 0x72, 0xfa, 0x2e, 0xa9, 0xd9, 0x82,
-	0xfa, 0x71, 0x96, 0xb1, 0x4c, 0x72, 0xb2, 0x1a, 0x29, 0x01, 0x1f, 0x57, 0x08, 0x53, 0xad, 0x7e,
-	0xb2, 0x94, 0x30, 0x55, 0xd3, 0x52, 0xc6, 0x8e, 0x2b, 0x8c, 0xd5, 0x4b, 0x61, 0xca, 0x8c, 0x95,
-	0xc3, 0x94, 0x28, 0x3b, 0xb4, 0x29, 0x53, 0x5d, 0x0f, 0xee, 0x53, 0x56, 0x0a, 0x60, 0x71, 0x76,
-	0x68, 0x73, 0xd6, 0x28, 0x79, 0x5b, 0x9c, 0x95, 0xbd, 0x17, 0xa4, 0x1d, 0xda, 0xa4, 0x35, 0x4b,
-	0xde, 0x16, 0x69, 0x65, 0xef, 0x05, 0x6b, 0xbf, 0x21, 0x68, 0xbe, 0x4c, 0x69, 0x46, 0x38, 0xcb,
-	0xf0, 0x47, 0xe0, 0x5e, 0xdd, 0xa6, 0xb4, 0xb2, 0x60, 0x5f, 0xa6, 0x02, 0x8c, 0xa4, 0x0a, 0x3f,
-	0xb7, 0xb7, 0x97, 0xe4, 0xae, 0xdd, 0xdf, 0xd4, 0x86, 0x0b, 0x85, 0xce, 0x63, 0x2f, 0xba, 0x03,
-	0x71, 0x6f, 0xe5, 0xcd, 0xd7, 0x97, 0xeb, 0x81, 0x95, 0x53, 0x58, 0xda, 0xdb, 0xd1, 0x2d, 0x6d,
-	0xc7, 0xf0, 0x5b, 0x78, 0xb4, 0xe4, 0x56, 0x8a, 0x45, 0x62, 0x06, 0xce, 0x39, 0x1d, 0xe2, 0xe7,
-	0xd0, 0x2c, 0x1e, 0x10, 0x5d, 0xec, 0x7b, 0x76, 0x5a, 0xf3, 0xba, 0x14, 0xbb, 0xae, 0x90, 0xc3,
-	0xc7, 0xb0, 0xb5, 0x6c, 0x88, 0xc2, 0xa7, 0xf0, 0x68, 0xc9, 0x3d, 0xae, 0xe6, 0x15, 0xee, 0xcb,
-	0x86, 0x27, 0xbc, 0x04, 0xbf, 0x7a, 0x87, 0xf5, 0xf2, 0x43, 0x66, 0xf9, 0xf5, 0xc0, 0xd3, 0xb3,
-	0xe0, 0xc8, 0xdd, 0xfc, 0x9f, 0xed, 0xd5, 0x66, 0xe1, 0x09, 0x6c, 0xde, 0x9b, 0x32, 0x7c, 0x00,
-	0xad, 0x82, 0xd7, 0x3c, 0x40, 0x32, 0xd0, 0x86, 0x21, 0x54, 0xe1, 0xc5, 0x34, 0x18, 0xbb, 0xf0,
-	0x1b, 0xf0, 0xab, 0x5b, 0xe2, 0xdd, 0xb5, 0x74, 0x08, 0x9b, 0xf7, 0xc6, 0xd9, 0x3a, 0x2c, 0xfa,
-	0x7f, 0x87, 0xfd, 0x1d, 0x81, 0x5f, 0x5d, 0x46, 0x78, 0x0f, 0xea, 0x6a, 0x20, 0xd1, 0xc3, 0x03,
-	0xa9, 0xac, 0x74, 0xc7, 0x1d, 0xd3, 0xf1, 0xc7, 0xe0, 0xe9, 0x65, 0xa4, 0x7e, 0x08, 0xb4, 0x24,
-	0xc6, 0xef, 0x82, 0xdc, 0xce, 0x18, 0x99, 0xc8, 0xf1, 0x5b, 0x8d, 0x0a, 0x11, 0xf7, 0xc1, 0x13,
-	0xf9, 0x8f, 0x8a, 0x05, 0xbd, 0xb5, 0xbf, 0xf8, 0x83, 0xb9, 0x2a, 0xbe, 0x8a, 0xca, 0x95, 0x65,
-	0xb8, 0x07, 0x9b, 0xf7, 0x2e, 0xa4, 0x9d, 0x02, 0x95, 0x52, 0xec, 0x3e, 0x2b, 0x5e, 0x79, 0xdc,
-	0x04, 0xf7, 0x9c, 0x25, 0xd4, 0x5f, 0xc1, 0x6b, 0xd0, 0xba, 0x20, 0x19, 0x8f, 0x79, 0xcc, 0x12,
-	0x1f, 0x09, 0xc5, 0x09, 0xc9, 0xaf, 0x7d, 0x67, 0xf7, 0x0b, 0xf0, 0xd4, 0x35, 0xc5, 0xeb, 0x00,
-	0x47, 0x93, 0xe2, 0x3e, 0xf9, 0x2b, 0x78, 0x13, 0xd6, 0xd4, 0x24, 0x16, 0x10, 0x12, 0x51, 0x14,
-	0x74, 0x34, 0x9b, 0xf9, 0x0e, 0xde, 0x80, 0xb6, 0x1a, 0x75, 0xd9, 0x2e, 0xbf, 0xb6, 0xfb, 0x04,
-	0x1a, 0x83, 0x73, 0xf5, 0x30, 0x7b, 0xe0, 0xbc, 0x4a, 0xfd, 0x15, 0x91, 0x69, 0xc8, 0x7e, 0x4a,
-	0x7c, 0xb4, 0xfb, 0x0a, 0x56, 0xed, 0x17, 0x5c, 0xe6, 0x9b, 0xcd, 0xd8, 0x98, 0xf0, 0x38, 0x99,
-	0xaa, 0x12, 0xb5, 0x4c, 0x27, 0x3e, 0xc2, 0x6d, 0x68, 0x44, 0xf3, 0x24, 0x11, 0x3a, 0x07, 0x03,
-	0x78, 0x67, 0xec, 0x47, 0xf1, 0x5d, 0x13, 0x76, 0x57, 0xec, 0x66, 0x94, 0x73, 0x71, 0x32, 0x77,
-	0xf7, 0xab, 0x82, 0x02, 0xa1, 0x30, 0xd3, 0xec, 0xaf, 0x60, 0xbf, 0xbc, 0xe8, 0x7d, 0x24, 0x10,
-	0xfb, 0x6e, 0xf9, 0x8e, 0x70, 0x31, 0x93, 0xa5, 0x42, 0x9b, 0x46, 0xfb, 0xee, 0x8b, 0xcf, 0xde,
-	0xfe, 0xb3, 0x83, 0xde, 0xdc, 0xed, 0xa0, 0xb7, 0x77, 0x3b, 0xe8, 0xef, 0xbb, 0x1d, 0xf4, 0xf5,
-	0xbe, 0xf5, 0x77, 0x7a, 0x43, 0x78, 0x16, 0xbf, 0x66, 0x59, 0x3c, 0x8d, 0x93, 0x42, 0x48, 0x68,
-	0x2f, 0xfd, 0x7e, 0xda, 0x4b, 0x47, 0x3d, 0x39, 0x47, 0x23, 0x4f, 0xfe, 0x94, 0x1e, 0xfc, 0x1b,
-	0x00, 0x00, 0xff, 0xff, 0xfd, 0xb1, 0x96, 0x0c, 0xea, 0x0a, 0x00, 0x00,
+	// 1156 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xac, 0x57, 0xcb, 0x6e, 0xdb, 0x46,
+	0x17, 0xf6, 0x50, 0xd4, 0xed, 0xc8, 0x96, 0xa9, 0xf1, 0xe5, 0x27, 0xfc, 0x07, 0xae, 0x4a, 0x20,
+	0x81, 0xea, 0xc0, 0x16, 0x20, 0x23, 0xcd, 0xa2, 0x5e, 0xd4, 0x91, 0x0c, 0xdb, 0x28, 0xac, 0x18,
+	0xb4, 0xd3, 0x45, 0x0b, 0x14, 0xa0, 0xa4, 0xa9, 0x4c, 0x54, 0x26, 0x55, 0x92, 0x6a, 0xe3, 0x65,
+	0x9f, 0xa2, 0x4f, 0x52, 0xb4, 0x8f, 0x90, 0x65, 0x76, 0xdd, 0x15, 0xad, 0x9f, 0xa4, 0x98, 0x2b,
+	0x67, 0x68, 0xd5, 0xc8, 0x22, 0x3b, 0x9e, 0xcb, 0x77, 0xce, 0x99, 0x39, 0xdf, 0x9c, 0x19, 0x42,
+	0x23, 0xbd, 0x09, 0x92, 0xc9, 0xc1, 0x3c, 0x89, 0xb3, 0x18, 0x97, 0x99, 0xb0, 0xb3, 0x3f, 0x0d,
+	0xb3, 0x9b, 0xc5, 0xe8, 0x60, 0x1c, 0xdf, 0x76, 0xa7, 0xf1, 0x34, 0xee, 0x32, 0xeb, 0x68, 0xf1,
+	0x3d, 0x93, 0x98, 0xc0, 0xbe, 0x38, 0x6a, 0x67, 0x3d, 0x0b, 0x6f, 0x49, 0x9a, 0x05, 0xb7, 0x73,
+	0xae, 0xf0, 0xfe, 0x44, 0xd0, 0xbc, 0xa2, 0x91, 0xd2, 0x0b, 0x92, 0x05, 0x93, 0x20, 0x0b, 0xf0,
+	0x53, 0xa8, 0x5c, 0xc6, 0xb3, 0x70, 0x7c, 0xe7, 0xa2, 0x36, 0xea, 0x34, 0x7b, 0x6b, 0x07, 0x3c,
+	0x2f, 0x57, 0xfa, 0xc2, 0x88, 0xdb, 0xd0, 0xe0, 0xc0, 0x7e, 0xbc, 0x88, 0x32, 0xd7, 0x6a, 0xa3,
+	0xce, 0x9a, 0xaf, 0xab, 0xb0, 0x0b, 0xd5, 0xaf, 0x49, 0x92, 0x86, 0x71, 0xe4, 0x96, 0x98, 0x55,
+	0x8a, 0xf8, 0x09, 0xd4, 0x8f, 0xc7, 0x63, 0xea, 0x74, 0x3e, 0x70, 0xed, 0x36, 0xea, 0xd8, 0x7e,
+	0xae, 0xc0, 0x1d, 0x58, 0xbf, 0x08, 0xde, 0xfa, 0x64, 0x3e, 0x0b, 0xc7, 0x01, 0x8f, 0x5e, 0x66,
+	0xf8, 0xa2, 0x1a, 0xef, 0x40, 0x8d, 0x25, 0x3c, 0x1f, 0xa4, 0x6e, 0xa5, 0x5d, 0xea, 0xd8, 0xbe,
+	0x92, 0xbd, 0x3f, 0x10, 0xc0, 0x75, 0x30, 0x9a, 0x11, 0xa6, 0xa1, 0xc5, 0x30, 0xe9, 0x7c, 0xc0,
+	0x96, 0x65, 0xfb, 0x52, 0xa4, 0x16, 0x01, 0x62, 0x8b, 0xb0, 0x7d, 0x29, 0x6a, 0x3b, 0x51, 0x7a,
+	0x6c, 0x27, 0xb4, 0x75, 0xda, 0xe6, 0x3a, 0x5f, 0x40, 0x4d, 0xd4, 0x9b, 0xba, 0xe5, 0x76, 0xa9,
+	0xd3, 0xe8, 0x6d, 0x88, 0x10, 0x2c, 0x85, 0xb0, 0xbd, 0xb2, 0xdf, 0xfd, 0xf5, 0xc9, 0x8a, 0xaf,
+	0x5c, 0xbd, 0x5f, 0x10, 0xac, 0xea, 0x0e, 0x74, 0xbf, 0xc4, 0xa7, 0x2a, 0x3f, 0x57, 0xe0, 0xcf,
+	0xa0, 0x7c, 0x95, 0x05, 0x19, 0x61, 0xe5, 0x37, 0x55, 0x0a, 0xe1, 0xc0, 0x4c, 0x3e, 0xf7, 0xc0,
+	0x4d, 0xb0, 0xfa, 0x43, 0xb6, 0x9a, 0xba, 0x6f, 0xf5, 0x87, 0xc5, 0xd2, 0x6d, 0x55, 0xba, 0xf7,
+	0xab, 0x0d, 0x55, 0x9f, 0xfc, 0xb8, 0x20, 0x69, 0xc6, 0xd3, 0xb3, 0x4f, 0x3d, 0xbd, 0x50, 0xe0,
+	0xe7, 0x50, 0xf7, 0x2f, 0xfb, 0x17, 0x24, 0xbb, 0x89, 0x27, 0xa2, 0x04, 0xb9, 0x51, 0x5c, 0xe9,
+	0xe7, 0x76, 0x3c, 0x80, 0xd5, 0x7e, 0x42, 0x82, 0x8c, 0x77, 0x25, 0x65, 0xa5, 0x34, 0x7a, 0x3b,
+	0xc2, 0x5f, 0x37, 0x89, 0x04, 0x62, 0x73, 0x0c, 0x14, 0x8d, 0x32, 0x20, 0x33, 0xa2, 0xa2, 0xd8,
+	0x46, 0x14, 0xdd, 0x54, 0x88, 0xa2, 0x9b, 0xf0, 0x17, 0x50, 0x3f, 0x23, 0x41, 0x92, 0x8d, 0x48,
+	0xc0, 0x19, 0xd6, 0xe8, 0xfd, 0x4f, 0x84, 0x50, 0x7a, 0x13, 0x9f, 0xfb, 0x53, 0xf0, 0x29, 0xc9,
+	0x44, 0xfe, 0x8a, 0x01, 0x56, 0xfa, 0x02, 0x58, 0xe9, 0x29, 0x58, 0xf4, 0x37, 0x98, 0xb8, 0x55,
+	0x03, 0xac, 0xf4, 0x05, 0xb0, 0xd2, 0xe3, 0x17, 0x50, 0xbd, 0x0c, 0x16, 0x29, 0xe9, 0x0f, 0xdd,
+	0x1a, 0x83, 0x6e, 0x49, 0x5a, 0x72, 0xad, 0x09, 0x94, 0xbe, 0xf8, 0x14, 0xd6, 0x4e, 0x49, 0x46,
+	0xcd, 0x82, 0x90, 0x75, 0x06, 0xfe, 0x7f, 0x5e, 0x74, 0x6e, 0x33, 0x43, 0x98, 0x38, 0xef, 0x37,
+	0x9b, 0xb2, 0x3a, 0x9d, 0xc7, 0x51, 0x4a, 0x3e, 0x26, 0x35, 0x36, 0xa1, 0x7c, 0x92, 0x24, 0x71,
+	0xc2, 0x38, 0xb1, 0xea, 0x73, 0x01, 0x9f, 0x14, 0x08, 0x63, 0x1b, 0x55, 0x9b, 0x84, 0xe1, 0x35,
+	0x2d, 0x65, 0xcc, 0x49, 0x81, 0x31, 0x65, 0x23, 0x8c, 0xc9, 0x18, 0x33, 0x8c, 0x41, 0x99, 0x23,
+	0x9d, 0x32, 0xbc, 0xeb, 0xee, 0x43, 0xca, 0x18, 0x01, 0x34, 0xce, 0x1c, 0xe9, 0x9c, 0xa9, 0x1a,
+	0x68, 0x8d, 0x33, 0x26, 0x3a, 0x27, 0xcd, 0x91, 0x4e, 0x9a, 0x9a, 0x81, 0xd6, 0x48, 0x63, 0xa2,
+	0x73, 0xd6, 0x7c, 0x9e, 0xb3, 0x86, 0x37, 0x7e, 0xbb, 0xc8, 0x1a, 0x03, 0xa9, 0x68, 0x73, 0x56,
+	0xa4, 0x0d, 0x30, 0xf4, 0x93, 0xe5, 0xb4, 0x31, 0x62, 0x14, 0x79, 0x83, 0xa0, 0xf6, 0x7a, 0x4e,
+	0x92, 0x20, 0x8b, 0x13, 0xfc, 0x29, 0xd8, 0xd7, 0x77, 0x73, 0x52, 0xb8, 0x62, 0x5e, 0xcf, 0xa9,
+	0xd2, 0x67, 0x26, 0xfc, 0x52, 0x9f, 0xdf, 0x8c, 0x3d, 0x8d, 0x5e, 0x4b, 0x38, 0xe6, 0x06, 0x91,
+	0x4b, 0x1f, 0xf5, 0x87, 0x74, 0x72, 0xb1, 0xa4, 0x62, 0xbc, 0x3c, 0x32, 0x74, 0xa5, 0xa7, 0x7e,
+	0x3f, 0xd8, 0xc6, 0xfd, 0xe0, 0x7d, 0x07, 0x1b, 0x4b, 0xe6, 0x12, 0x1d, 0xa5, 0x8a, 0xf2, 0xd6,
+	0xf9, 0x00, 0xbf, 0x84, 0x9a, 0xbc, 0x42, 0x45, 0xb1, 0x5b, 0x7a, 0x5a, 0x75, 0xbf, 0xca, 0x69,
+	0x2f, 0x65, 0x6f, 0x1b, 0x36, 0x97, 0xd1, 0xd8, 0x7b, 0x0a, 0x1b, 0x4b, 0x26, 0x59, 0x31, 0x2f,
+	0x85, 0x2f, 0xa3, 0xaf, 0x77, 0x05, 0x4e, 0x71, 0x8a, 0x89, 0xf1, 0x8f, 0xd4, 0xf8, 0xef, 0x42,
+	0x45, 0xb0, 0xd1, 0x62, 0xb7, 0xd3, 0x7f, 0x6e, 0xaf, 0x70, 0xf3, 0xce, 0xa0, 0xf5, 0x80, 0xe7,
+	0xf8, 0x10, 0xea, 0xb2, 0xaf, 0xa9, 0x8b, 0x58, 0xa0, 0x75, 0xd5, 0x50, 0xae, 0x97, 0x7c, 0x54,
+	0x7e, 0xde, 0xb7, 0xe0, 0x14, 0xe7, 0xe4, 0xc7, 0xdb, 0xd2, 0x01, 0xb4, 0x1e, 0x1c, 0x28, 0x6d,
+	0xb1, 0xe8, 0xc3, 0x16, 0xfb, 0x3b, 0x02, 0xa7, 0x38, 0x8e, 0xf1, 0x3e, 0x94, 0x39, 0x21, 0xd1,
+	0xe3, 0x84, 0xe4, 0x5e, 0x62, 0xc7, 0x2d, 0xb5, 0xe3, 0xdb, 0x50, 0x11, 0xe3, 0x90, 0x3f, 0x89,
+	0x84, 0x44, 0xe9, 0x77, 0x19, 0xdc, 0xcd, 0xe2, 0x60, 0xc2, 0xe8, 0xb7, 0xea, 0x4b, 0x11, 0xf7,
+	0xa0, 0x42, 0xf3, 0x1f, 0xcb, 0x2b, 0x6a, 0xf3, 0x20, 0x7f, 0xc3, 0x5d, 0xcb, 0x2f, 0x59, 0x39,
+	0xf7, 0xf4, 0xf6, 0xa1, 0xf5, 0x60, 0x24, 0xe8, 0x29, 0x90, 0x91, 0xc2, 0x6b, 0x43, 0xd3, 0xbc,
+	0x3b, 0xb4, 0x4e, 0xd4, 0x19, 0xc9, 0x5a, 0xb0, 0x5e, 0x98, 0x13, 0xde, 0x33, 0xd8, 0x5c, 0x76,
+	0x67, 0x3c, 0x80, 0x0e, 0x61, 0x6b, 0xe9, 0x90, 0x30, 0x1e, 0x47, 0xe8, 0x83, 0x1f, 0x47, 0x7b,
+	0xcf, 0xe5, 0xa3, 0x0c, 0xd7, 0xc0, 0x1e, 0xc6, 0x11, 0x71, 0x56, 0xf0, 0x1a, 0xd4, 0x2f, 0x83,
+	0x24, 0x0b, 0xb3, 0x30, 0x8e, 0x1c, 0x44, 0x0d, 0x67, 0x41, 0x7a, 0xe3, 0x58, 0x7b, 0x5f, 0x41,
+	0x85, 0xcf, 0x14, 0xdc, 0x04, 0x38, 0x9e, 0xc8, 0xa0, 0xce, 0x0a, 0x6e, 0xc1, 0x1a, 0x3f, 0x36,
+	0x52, 0x85, 0x68, 0x14, 0xae, 0x3a, 0x9e, 0xcd, 0x1c, 0x0b, 0xaf, 0x43, 0x83, 0x9f, 0x4b, 0xd6,
+	0x5b, 0xa7, 0xb4, 0xf7, 0x0c, 0xaa, 0xfd, 0x21, 0x7f, 0x47, 0x55, 0xc0, 0x7a, 0x33, 0x77, 0x56,
+	0x70, 0x1d, 0xca, 0x6c, 0x5f, 0x78, 0xd2, 0x41, 0xfc, 0x73, 0xe4, 0x58, 0x7b, 0x6f, 0x60, 0x55,
+	0x7f, 0x7b, 0xb1, 0xd4, 0xb3, 0x59, 0x3c, 0x0e, 0xb2, 0x30, 0x9a, 0xf2, 0x6a, 0x85, 0x4c, 0x26,
+	0x0e, 0xc2, 0x0d, 0xa8, 0xfa, 0x8b, 0x28, 0xa2, 0x36, 0x0b, 0x03, 0x54, 0x2e, 0xe2, 0x9f, 0xe8,
+	0x77, 0x89, 0xfa, 0x5d, 0xc7, 0xb7, 0xa3, 0x34, 0xa3, 0x8b, 0xb4, 0xf7, 0xee, 0x24, 0x75, 0xa8,
+	0x41, 0x9d, 0x42, 0x67, 0x05, 0x3b, 0xe6, 0x15, 0xe9, 0x20, 0xaa, 0xd1, 0x67, 0x82, 0x63, 0x51,
+	0x88, 0x3a, 0x11, 0x3c, 0xb4, 0x22, 0x88, 0x63, 0xd3, 0x12, 0x44, 0x7b, 0x9d, 0x32, 0xdd, 0x19,
+	0xa3, 0x61, 0x4e, 0xe5, 0xd5, 0x97, 0xef, 0xff, 0xd9, 0x45, 0xef, 0xee, 0x77, 0xd1, 0xfb, 0xfb,
+	0x5d, 0xf4, 0xf7, 0xfd, 0x2e, 0xfa, 0xe6, 0x40, 0xfb, 0xef, 0xb8, 0x0d, 0xb2, 0x24, 0x7c, 0x1b,
+	0x27, 0xe1, 0x34, 0x8c, 0xa4, 0x10, 0x91, 0xee, 0xfc, 0x87, 0x69, 0x77, 0x3e, 0xea, 0xb2, 0x96,
+	0x8e, 0x2a, 0xec, 0x77, 0xe3, 0xf0, 0xdf, 0x00, 0x00, 0x00, 0xff, 0xff, 0x2f, 0xc4, 0xc4, 0x25,
+	0xc4, 0x0c, 0x00, 0x00,
 }
 
 func (m *ShardsMetadata) Marshal() (dAtA []byte, err error) {
@@ -1534,6 +1767,26 @@ func (m *Request) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	{
+		size, err := m.GetCNReplicas.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintShard(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x4a
+	{
+		size, err := m.PauseCN.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintShard(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x42
+	{
 		size, err := m.ShardRead.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
 			return 0, err
@@ -1620,6 +1873,26 @@ func (m *Response) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	{
+		size, err := m.GetCNReplicas.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintShard(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x52
+	{
+		size, err := m.PauseCN.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintShard(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x4a
 	{
 		size, err := m.ShardRead.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
@@ -2147,6 +2420,142 @@ func (m *ShardReadResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *PauseCNRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *PauseCNRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *PauseCNRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.ID) > 0 {
+		i -= len(m.ID)
+		copy(dAtA[i:], m.ID)
+		i = encodeVarintShard(dAtA, i, uint64(len(m.ID)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *PauseCNResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *PauseCNResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *PauseCNResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *GetCNReplicasRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *GetCNReplicasRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *GetCNReplicasRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.ID) > 0 {
+		i -= len(m.ID)
+		copy(dAtA[i:], m.ID)
+		i = encodeVarintShard(dAtA, i, uint64(len(m.ID)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *GetCNReplicasResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *GetCNReplicasResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *GetCNReplicasResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.Replicas) > 0 {
+		for iNdEx := len(m.Replicas) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Replicas[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintShard(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0xa
+		}
+	}
+	return len(dAtA) - i, nil
+}
+
 func encodeVarintShard(dAtA []byte, offset int, v uint64) int {
 	offset -= sovShard(v)
 	base := offset
@@ -2269,6 +2678,10 @@ func (m *Request) Size() (n int) {
 	n += 1 + l + sovShard(uint64(l))
 	l = m.ShardRead.Size()
 	n += 1 + l + sovShard(uint64(l))
+	l = m.PauseCN.Size()
+	n += 1 + l + sovShard(uint64(l))
+	l = m.GetCNReplicas.Size()
+	n += 1 + l + sovShard(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -2300,6 +2713,10 @@ func (m *Response) Size() (n int) {
 	l = m.GetShards.Size()
 	n += 1 + l + sovShard(uint64(l))
 	l = m.ShardRead.Size()
+	n += 1 + l + sovShard(uint64(l))
+	l = m.PauseCN.Size()
+	n += 1 + l + sovShard(uint64(l))
+	l = m.GetCNReplicas.Size()
 	n += 1 + l + sovShard(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -2496,6 +2913,68 @@ func (m *ShardReadResponse) Size() (n int) {
 	l = len(m.Payload)
 	if l > 0 {
 		n += 1 + l + sovShard(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *PauseCNRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.ID)
+	if l > 0 {
+		n += 1 + l + sovShard(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *PauseCNResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *GetCNReplicasRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.ID)
+	if l > 0 {
+		n += 1 + l + sovShard(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *GetCNReplicasResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if len(m.Replicas) > 0 {
+		for _, e := range m.Replicas {
+			l = e.Size()
+			n += 1 + l + sovShard(uint64(l))
+		}
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -3264,6 +3743,72 @@ func (m *Request) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 8:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field PauseCN", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowShard
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthShard
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthShard
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.PauseCN.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 9:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field GetCNReplicas", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowShard
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthShard
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthShard
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.GetCNReplicas.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipShard(dAtA[iNdEx:])
@@ -3549,6 +4094,72 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if err := m.ShardRead.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 9:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field PauseCN", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowShard
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthShard
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthShard
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.PauseCN.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 10:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field GetCNReplicas", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowShard
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthShard
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthShard
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.GetCNReplicas.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -4657,6 +5268,308 @@ func (m *ShardReadResponse) Unmarshal(dAtA []byte) error {
 			m.Payload = append(m.Payload[:0], dAtA[iNdEx:postIndex]...)
 			if m.Payload == nil {
 				m.Payload = []byte{}
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipShard(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthShard
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *PauseCNRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowShard
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: PauseCNRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: PauseCNRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ID", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowShard
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthShard
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthShard
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ID = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipShard(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthShard
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *PauseCNResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowShard
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: PauseCNResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: PauseCNResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		default:
+			iNdEx = preIndex
+			skippy, err := skipShard(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthShard
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *GetCNReplicasRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowShard
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: GetCNReplicasRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: GetCNReplicasRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ID", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowShard
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthShard
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthShard
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ID = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipShard(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthShard
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *GetCNReplicasResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowShard
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: GetCNReplicasResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: GetCNReplicasResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Replicas", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowShard
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthShard
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthShard
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Replicas = append(m.Replicas, ShardReplica{})
+			if err := m.Replicas[len(m.Replicas)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
 			}
 			iNdEx = postIndex
 		default:

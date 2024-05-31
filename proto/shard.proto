@@ -52,7 +52,8 @@ enum OpType {
 
 enum CNState {
     Up      = 0;
-    Down    = 1;
+    Pause   = 1;
+    Down    = 2;
 }
 
 enum ReplicaState {
@@ -113,6 +114,8 @@ enum Method {
     DeleteShards  = 2;
     GetShards     = 3;
     ShardRead     = 4;
+    PauseCN       = 5;
+    GetCNReplicas = 6;
 }
 
 message Request {
@@ -123,6 +126,8 @@ message Request {
   HeartbeatRequest           Heartbeat           = 5 [(gogoproto.nullable) = false];
   GetShardsRequest           GetShards           = 6 [(gogoproto.nullable) = false];
   ShardReadRequest           ShardRead           = 7 [(gogoproto.nullable) = false];
+  PauseCNRequest             PauseCN             = 8 [(gogoproto.nullable) = false];
+  GetCNReplicasRequest       GetCNReplicas       = 9 [(gogoproto.nullable) = false];
 }
 
 message Response {
@@ -136,6 +141,8 @@ message Response {
     HeartbeatResponse          Heartbeat            = 6 [(gogoproto.nullable) = false];
     GetShardsResponse          GetShards            = 7 [(gogoproto.nullable) = false];
     ShardReadResponse          ShardRead            = 8 [(gogoproto.nullable) = false];
+    PauseCNResponse            PauseCN              = 9 [(gogoproto.nullable) = false];
+    GetCNReplicasResponse      GetCNReplicas        = 10 [(gogoproto.nullable) = false];
 }
 
 // Operator is a description of a command that needs to be sent down to CN for execution.
@@ -193,3 +200,19 @@ message ShardReadRequest {
 message ShardReadResponse {
     bytes      Payload  = 1;
 }
+
+message PauseCNRequest {
+    string          ID               = 1;
+}
+
+message PauseCNResponse {
+}
+
+message GetCNReplicasRequest {
+    string          ID               = 1;
+}
+
+message GetCNReplicasResponse {
+    repeated ShardReplica  Replicas = 1 [(gogoproto.nullable) = false];
+}
+

@@ -283,7 +283,7 @@ func TestMove(t *testing.T) {
 			expect.CN = "cn1"
 			expect.State = pb.ReplicaState_Moving
 
-			_, new := t1.moveLocked("cn1", "cn2")
+			_, new, _ := t1.move(func(s string) bool { return s == "cn1" }, func(_ string) string { return "cn2" })
 
 			require.Equal(t, expect, t1.shards[0].Replicas[0])
 

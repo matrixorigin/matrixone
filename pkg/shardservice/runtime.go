@@ -197,10 +197,18 @@ func (r *rt) getAvailableCNsLocked(
 ) []*cn {
 	var cns []*cn
 	for _, cn := range r.cns {
-		if cn.available(t.metadata.AccountID, r.env) {
+		if cn.available(t.metadata.AccountID, r.env) &&
+			!cn.isPause() {
 			cns = append(cns, cn)
 		}
 	}
+	return r.filterCN(cns, filters...)
+}
+
+func (r *rt) filterCN(
+	cns []*cn,
+	filters ...filter,
+) []*cn {
 	sort.Slice(cns, func(i, j int) bool {
 		return cns[i].id < cns[j].id
 	})
@@ -247,6 +255,21 @@ func (r *rt) getDownCNsLocked(downCNs map[string]struct{}) {
 		cn.down()
 		delete(r.cns, cn.id)
 		downCNs[cn.id] = struct{}{}
+	}
+}
+
+func (r *rt) getPausedCNLocked(cns map[string]struct{}) {
+	for _, cn := range r.cns {
+		if cn.isPause() {
+			cns[cn.id] = struct{}{}
+			continue
+		}
+
+		if r.env.Draining(cn.id) {
+			cn.pause()
+			cns[cn.id] = struct{}{}
+			continue
+		}
 	}
 }
 
@@ -330,7 +353,7 @@ func (t *table) needAllocate() bool {
 	return false
 }
 
-func (t *table) getMovingCompletedReplica() (int, int, bool) {
+func (t *table) getMoveCompletedReplica() (int, int, bool) {
 	for i, s := range t.shards {
 		if t.metadata.MaxReplicaCount >= uint32(len(s.Replicas)) {
 			continue
@@ -401,21 +424,25 @@ func (t *table) valid(
 	return false
 }
 
-func (t *table) moveLocked(
-	from,
-	to string,
-) (pb.TableShard, pb.ShardReplica) {
+func (t *table) move(
+	from func(string) bool,
+	to func(string) string,
+) (pb.TableShard, pb.ShardReplica, bool) {
 	for i := range t.shards {
 		for j := range t.shards[i].Replicas {
-			if t.shards[i].Replicas[j].CN == from &&
+			if from(t.shards[i].Replicas[j].CN) &&
 				t.shards[i].Replicas[j].State == pb.ReplicaState_Running {
 				t.shards[i].Replicas[j].State = pb.ReplicaState_Moving
-				r := t.addReplica(i, to, t.shards[i].Replicas[j].Version)
-				return t.shards[i], r
+				r := t.addReplica(
+					i,
+					to(t.shards[i].Replicas[j].CN),
+					t.shards[i].Replicas[j].Version,
+				)
+				return t.shards[i], r, true
 			}
 		}
 	}
-	panic("cannot find running shard replica")
+	return pb.TableShard{}, pb.ShardReplica{}, false
 }
 
 func (t *table) addReplica(
@@ -495,6 +522,14 @@ func (c *cn) isDown() bool {
 func (c *cn) down() {
 	c.state = pb.CNState_Down
 	c.incompleteOps = c.incompleteOps[:0]
+}
+
+func (c *cn) pause() {
+	c.state = pb.CNState_Pause
+}
+
+func (c *cn) isPause() bool {
+	return c.state == pb.CNState_Pause
 }
 
 func (c *cn) addOps(

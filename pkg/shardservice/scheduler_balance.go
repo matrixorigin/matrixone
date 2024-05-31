@@ -16,7 +16,6 @@ package shardservice
 
 import (
 	"sort"
-	"time"
 
 	"go.uber.org/zap"
 )
@@ -174,7 +173,18 @@ func (s *balanceScheduler) doBalance(
 	// We cannot directly remove the migrated replica, because we need to still provide
 	// the service during the migration process. The old replica can only be removed when
 	// the new replica is running. See replicaScheduler for delete logic.
-	shard, new := t.moveLocked(from, to)
+	shard, new, ok := t.move(
+		func(s string) bool {
+			return s == from
+		},
+		func(_ string) string {
+			return to
+		},
+	)
+	if !ok {
+		panic("cannot find running shard replica")
+	}
+
 	r.addOpLocked(to, newAddReplicaOp(shard, new))
 
 	getLogger().Info(
@@ -187,8 +197,6 @@ func (s *balanceScheduler) doBalance(
 		zap.String("new-replica", new.String()),
 	)
 
-	now := time.Now()
-	s.freezeFilter.freeze[from] = now
-	s.freezeFilter.freeze[to] = now
+	s.freezeFilter.add(from, to)
 	return true, nil
 }

@@ -30,6 +30,13 @@ func newFreezeFilter(maxFreezeTime time.Duration) *freezeFilter {
 	}
 }
 
+func (f *freezeFilter) add(cns ...string) {
+	now := time.Now()
+	for _, cn := range cns {
+		f.freeze[cn] = now
+	}
+}
+
 func (f *freezeFilter) filter(
 	r *rt,
 	cns []*cn,
@@ -69,4 +76,42 @@ func (f *stateFilter) filter(
 		}
 	}
 	return values
+}
+
+type excludeFilter struct {
+	values map[string]struct{}
+}
+
+func newExcludeFilter() *excludeFilter {
+	return &excludeFilter{
+		values: make(map[string]struct{}),
+	}
+}
+
+func (f *excludeFilter) filter(
+	r *rt,
+	cns []*cn,
+) []*cn {
+	if len(cns) == 0 {
+		return cns
+	}
+	values := cns[:0]
+	for _, c := range cns {
+		if _, ok := f.values[(c.id)]; !ok {
+			values = append(values, c)
+		}
+	}
+	return values
+}
+
+func (f *excludeFilter) add(cns ...string) {
+	for _, cn := range cns {
+		f.values[cn] = struct{}{}
+	}
+}
+
+func (f *excludeFilter) reset() {
+	for k := range f.values {
+		delete(f.values, k)
+	}
 }

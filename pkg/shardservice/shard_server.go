@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
@@ -88,7 +89,9 @@ func (s *server) initSchedulers() {
 			s.cfg.MaxScheduleTables,
 			freezeFilter,
 		),
-		newReplicaScheduler(),
+		newReplicaScheduler(
+			freezeFilter,
+		),
 	)
 }
 
@@ -135,6 +138,11 @@ func (s *server) initHandlers() {
 	s.rpc.RegisterMethod(
 		uint32(pb.Method_GetShards),
 		s.handleGetShards,
+		true,
+	)
+	s.rpc.RegisterMethod(
+		uint32(pb.Method_PauseCN),
+		s.handlePauseCN,
 		true,
 	)
 }
@@ -193,6 +201,22 @@ func (s *server) handleGetShards(
 		return nil
 	}
 	resp.GetShards.Shards = shards
+	return nil
+}
+
+func (s *server) handlePauseCN(
+	ctx context.Context,
+	req *pb.Request,
+	resp *pb.Response,
+) error {
+	s.r.Lock()
+	defer s.r.Unlock()
+
+	cn, ok := s.r.cns[req.PauseCN.ID]
+	if !ok {
+		return moerr.NewNotFoundNoCtx()
+	}
+	cn.pause()
 	return nil
 }
 
