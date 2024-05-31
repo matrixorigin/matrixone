@@ -681,6 +681,7 @@ func runServicesTest(
 	cns, tn := initTestCluster(cluster)
 
 	cfg := Config{
+		Enable:        true,
 		ServiceID:     tn.ServiceID,
 		ListenAddress: tn.ShardServiceAddress,
 	}
@@ -697,6 +698,7 @@ func runServicesTest(
 		}
 
 		cfg := Config{
+			Enable:        true,
 			ServiceID:     cn.ServiceID,
 			ListenAddress: cn.ShardServiceAddress,
 		}
