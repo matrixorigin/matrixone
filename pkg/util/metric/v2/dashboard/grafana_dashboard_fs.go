@@ -179,8 +179,8 @@ func (c *DashboardCreator) initFSIOMergerDurationRow() dashboard.Option {
 				"wait",
 				"initiate",
 			},
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
+			[]float64{0.50, 0.8, 0.90, 0.99, 1},
+			[]float32{3, 3, 3, 3, 3},
 			axis.Unit("seconds"),
 			axis.Min(0))...,
 	)
@@ -220,8 +220,8 @@ func (c *DashboardCreator) initFSReadDurationRow() dashboard.Option {
 				"set-cached-data",
 				"disk-cache-set-file",
 			},
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
+			[]float64{0.50, 0.8, 0.90, 0.99, 1},
+			[]float32{3, 3, 3, 3, 3},
 			axis.Unit("seconds"),
 			axis.Min(0))...,
 	)
