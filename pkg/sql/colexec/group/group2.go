@@ -41,6 +41,9 @@ func (ctr *container) processGroupByAndAgg(
 					return result, err
 				}
 				if result.Batch == nil {
+					if err = ctr.aggWithoutGroupByCannotEmptySet(proc, ap); err != nil {
+						return result, err
+					}
 					ctr.state = vm.Eval
 					break
 				}
@@ -179,18 +182,15 @@ func (ctr *container) initResultAndHashTable(proc *process.Process, config *Argu
 	}
 
 	// init the agg.
-	ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(config.Aggs))
-	if err = ctr.generateAggStructures(proc, config); err != nil {
-		return err
-	}
-	// if no group by, the group number must be 1.
 	if len(ctr.groupVecs.Vec) == 0 {
-		for _, ag := range ctr.bat.Aggs {
-			if err = ag.GroupGrow(1); err != nil {
-				return err
-			}
+		if err = ctr.aggWithoutGroupByCannotEmptySet(proc, config); err != nil {
+			return err
 		}
-		ctr.bat.SetRowCount(1)
+	} else {
+		ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(config.Aggs))
+		if err = ctr.generateAggStructures(proc, config); err != nil {
+			return err
+		}
 	}
 
 	// init the hashmap.
@@ -213,6 +213,36 @@ func (ctr *container) initResultAndHashTable(proc *process.Process, config *Argu
 			if err = ctr.strHashMap.PreAlloc(config.PreAllocSize, proc.Mp()); err != nil {
 				return err
 			}
+		}
+	}
+
+	return nil
+}
+
+func (ctr *container) aggWithoutGroupByCannotEmptySet(proc *process.Process, config *Argument) (err error) {
+	if len(ctr.groupVecs.Vec) != 0 {
+		return nil
+	}
+
+	// if this was a query like `select agg(a) from t`, and t is empty.
+	// agg(a) should return 0 for count, and return null for other agg.
+	if ctr.bat == nil {
+		ctr.bat = batch.NewWithSize(0)
+	}
+	if len(ctr.bat.Aggs) == 0 {
+		// init the agg.
+		ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(config.Aggs))
+		if err = ctr.generateAggStructures(proc, config); err != nil {
+			return err
+		}
+		// if no group by, the group number must be 1.
+		if len(ctr.groupVecs.Vec) == 0 {
+			for _, ag := range ctr.bat.Aggs {
+				if err = ag.GroupGrow(1); err != nil {
+					return err
+				}
+			}
+			ctr.bat.SetRowCount(1)
 		}
 	}
 
