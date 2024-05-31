@@ -239,9 +239,9 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 				createAt: createTS,
 			}
 			logutil.Info("[UpdateSnapshot] Add object",
-				zap.Uint32("table id", table),
+				zap.Uint64("table id", table),
 				zap.String("object name", objectStats.ObjectName().String()),
-				zap.String("create at", createTS.toString()))
+				zap.String("create at", createTS.ToString()))
 
 			continue
 		}
@@ -249,7 +249,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 			panic(any("deleteTS is empty"))
 		}
 		logutil.Info("[UpdateSnapshot] Delete object",
-			zap.Uint32("table id", table),
+			zap.Uint64("table id", table),
 			zap.String("object name", objectStats.ObjectName().String()))
 		delete(sm.objects[table], objectStats.ObjectName().SegmentId())
 	}
@@ -546,7 +546,10 @@ func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
 			}
 			sm.SetTid(tid)
 		}
-		sm.tides[tid] = struct{}{}
+		if _, ok := sm.tides[tid]; !ok {
+			sm.tides[tid] = struct{}{}
+			logutil.Info("[RebuildSnapTable]", zap.Uint64("tid", tid))
+		}
 		if sm.objects[tid] == nil {
 			sm.objects[tid] = make(map[objectio.Segmentid]*objectInfo)
 		}
@@ -555,6 +558,10 @@ func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
 				stats:    objectStats,
 				createAt: createTS,
 			}
+			logutil.Info("[RebuildSnapshot] Add object",
+				zap.Uint64("table id", tid),
+				zap.String("object name", objectStats.ObjectName().String()),
+				zap.String("create at", createTS.ToString()))
 			continue
 		}
 	}
@@ -725,6 +732,7 @@ func (sm *SnapshotMeta) MergeTableInfo(SnapshotList map[uint32][]types.TS) error
 		if SnapshotList[accID] == nil {
 			for _, table := range tables {
 				if !table.deleteAt.IsEmpty() {
+					logutil.Infof("MergeTableInfo delete table %d", table.tid)
 					delete(sm.tables[accID], table.tid)
 					delete(sm.acctIndexes, table.tid)
 					if sm.objects[table.tid] != nil {
@@ -736,6 +744,7 @@ func (sm *SnapshotMeta) MergeTableInfo(SnapshotList map[uint32][]types.TS) error
 		}
 		for _, table := range tables {
 			if !table.deleteAt.IsEmpty() && !isSnapshotRefers(table, SnapshotList[accID]) {
+				logutil.Infof("MergeTableInfo delete table %d", table.tid)
 				delete(sm.tables[accID], table.tid)
 				delete(sm.acctIndexes, table.tid)
 				if sm.objects[table.tid] != nil {
