@@ -588,6 +588,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 			found = true
 			targetTime := v2.ToDatetime().ConvertToGoTime(time.Local)
 			if d := now.Sub(targetTime); d > rpc.AllowPruneDuration {
+				d = d / time.Second * time.Second
 				result, err := pruneObj(tbl, d)
 				if err != nil {
 					return err
