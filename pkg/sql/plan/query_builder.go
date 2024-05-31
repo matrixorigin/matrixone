@@ -4162,7 +4162,6 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
 				return
 			}
-
 			snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: lit.I64Val}, Tenant: tenant}
 		} else if tsExpr.Type == tree.ATMOTIMESTAMP {
 			if lit.I64Val <= 0 {
