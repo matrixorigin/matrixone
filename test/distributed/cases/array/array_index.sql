@@ -1,9 +1,12 @@
+-- @session:id=1
+SET GLOBAL experimental_ivf_index = 1;
+-- @session
+
+-- @session:id=2
 -- pre
 drop database if exists vecdb2;
 create database vecdb2;
 use vecdb2;
-SET GLOBAL experimental_ivf_index = 1;
-
 
 -- create table
 drop table if exists t1;
@@ -715,3 +718,4 @@ select * from vector_index_08;
 -- post
 SET GLOBAL experimental_ivf_index = 0;
 drop database vecdb2;
+-- @session
