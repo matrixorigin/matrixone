@@ -317,8 +317,6 @@ func newMockErrSession3(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
 
-	var gSys GlobalSystemVariables
-	InitGlobalSystemVariables(&gSys)
 	ses := newTestSession(t, ctrl)
 	getGlobalPu().TxnClient = txnClient
 	getGlobalPu().StorageEngine = eng
