@@ -146,7 +146,7 @@ func (s *storage) GetChanged(
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 
-	var targets []string
+	targets := make([]string, 0, len(tables))
 	for table := range tables {
 		targets = append(targets, fmt.Sprintf("%d", table))
 	}
