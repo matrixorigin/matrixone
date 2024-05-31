@@ -1317,7 +1317,7 @@ func TestWaiterAwakeOnDeadLock(t *testing.T) {
 					}
 					t2.Unlock()
 
-					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 					for {
 						t3 := lt.txnHolder.getActiveTxn(txn3, false, "")
 						t3.Lock()
@@ -1368,6 +1368,7 @@ func TestLockSuccWithKeepBindTimeout(t *testing.T) {
 				[]byte("txn1"),
 				option)
 			require.NoError(t, err)
+			require.NoError(t, l.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
 
 			for i := 0; i < 10; i++ {
 				p := alloc.GetLatest(0, 0)
