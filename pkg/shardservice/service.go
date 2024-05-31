@@ -147,6 +147,10 @@ func (s *service) Create(
 	table uint64,
 	txnOp client.TxnOperator,
 ) error {
+	if !s.cfg.Enable {
+		return nil
+	}
+
 	created, err := s.storage.Create(
 		ctx,
 		table,
@@ -181,6 +185,10 @@ func (s *service) Delete(
 	table uint64,
 	txnOp client.TxnOperator,
 ) error {
+	if !s.cfg.Enable {
+		return nil
+	}
+
 	deleted, err := s.storage.Delete(ctx, table, txnOp)
 	if err != nil || !deleted {
 		s.atomic.skip.Add(1)

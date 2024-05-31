@@ -33,7 +33,7 @@ const (
 func GetService() ShardService {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ShardService)
 	if !ok {
-		panic("shard service not found")
+		return &service{}
 	}
 	return v.(ShardService)
 }
