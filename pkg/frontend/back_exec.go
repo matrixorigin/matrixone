@@ -816,31 +816,9 @@ func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRa
 		txnOp = backSes.GetTxnHandler().GetTxn()
 	}
 
-	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, backSes.GetTxnHandler().GetConnCtx(), txnOp)
-	callback := fakeDataSetFetcher2
-
-	newbackSes := &backSession{
-		feSessionImpl: feSessionImpl{
-			pool:           backSes.pool,
-			proto:          &FakeProtocol{},
-			buf:            buffer.New(),
-			stmtProfile:    process.StmtProfile{},
-			tenant:         nil,
-			txnHandler:     txnHandler,
-			txnCompileCtx:  InitTxnCompilerContext(backSes.proto.GetDatabaseName()),
-			mrs:            nil,
-			outputCallback: callback,
-			allResultSet:   nil,
-			resultBatches:  nil,
-			derivedStmt:    false,
-			gSysVars:       GSysVariables,
-			label:          make(map[string]string),
-			timeZone:       time.Local,
-		},
-	}
-	newbackSes.uuid, _ = uuid.NewV7()
+	newBackSes := newBackSession(backSes, txnOp, backSes.proto.GetDatabaseName(), fakeDataSetFetcher2)
 	bh := &backExec{
-		backSes: newbackSes,
+		backSes: newBackSes,
 	}
 	//the derived statement execute in a shared transaction in background session
 	bh.backSes.ReplaceDerivedStmt(true)
