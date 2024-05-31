@@ -380,13 +380,13 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.DisableTrace() {
 		opts = append(opts, client.WithDisableTrace(true))
 	} else {
-		varVal, err := execCtx.ses.GetSessionVar(execCtx.reqCtx, "disable_txn_trace")
+		varVal, err := execCtx.ses.GetSessionSysVar("disable_txn_trace")
 		if err != nil {
 			return err
 		}
-		if gsv, ok := GSysVariables.GetDefinitionOfSysVar("disable_txn_trace"); ok {
-			if svbt, ok2 := gsv.GetType().(SystemVariableBoolType); ok2 {
-				if svbt.IsTrue(varVal) {
+		if def, ok := gSysVarsDefs["disable_txn_trace"]; ok {
+			if boolType, ok := def.GetType().(SystemVariableBoolType); ok {
+				if boolType.IsTrue(varVal) {
 					opts = append(opts, client.WithDisableTrace(true))
 				}
 			}
@@ -471,7 +471,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
-	val, e := execCtx.ses.GetSessionVar(execCtx.reqCtx, "mo_pk_check_by_dn")
+	val, e := execCtx.ses.GetSessionSysVar("mo_pk_check_by_dn")
 	if e != nil {
 		return e
 	}

@@ -1,4 +1,8 @@
+-- @session:id=1
 SET GLOBAL experimental_master_index = 1;
+-- @session
+
+-- @session:id=2
 drop database if exists d1;
 create database d1;
 use d1;
@@ -65,3 +69,4 @@ select mo_ctl('dn','flush','d1.t1');
 select * from t1 where b in (1,2) for update;
 drop database if exists d1;
 SET GLOBAL experimental_master_index = 0;
+-- @session

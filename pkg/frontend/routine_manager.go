@@ -257,7 +257,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(cancelCtx, routine.getProtocol(), nil, GSysVariables, true, nil)
+	ses := NewSession(cancelCtx, routine.getProtocol(), nil)
 	ses.SetFromRealUser(true)
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
