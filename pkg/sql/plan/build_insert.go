@@ -98,6 +98,10 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if err != nil {
 		return nil, err
 	}
+	replaceStmt := getRewriteToReplaceStmt(tableDef, stmt, rewriteInfo)
+	if replaceStmt != nil {
+		return buildReplace(replaceStmt, ctx, isPrepareStmt)
+	}
 	lastNodeId := rewriteInfo.rootId
 	sourceStep := builder.appendStep(lastNodeId)
 	query, err := builder.createQuery()
@@ -899,4 +903,20 @@ func remapPartExprColRef(expr *Expr, colMap map[int]int, tableDef *TableDef) boo
 		}
 	}
 	return true
+}
+
+func getRewriteToReplaceStmt(tableDef *TableDef, stmt *tree.Insert, info *dmlSelectInfo) *tree.Replace {
+	if len(info.onDuplicateIdx) == 0 {
+		return nil
+	}
+	if len(info.onDuplicateExpr) != len(tableDef.Cols) {
+		return nil
+	}
+
+	updateAllColByValues := false
+
+	if updateAllColByValues {
+		return nil
+	}
+	return nil
 }
