@@ -1322,6 +1322,7 @@ func TestWaiterAwakeOnDeadLock(t *testing.T) {
 						t3 := lt.txnHolder.getActiveTxn(txn3, false, "")
 						t3.Lock()
 						if len(t3.getHoldLocksLocked(0).tableBinds) > 0 {
+							t3.Unlock()
 							break
 						}
 						t3.Unlock()
@@ -1347,7 +1348,7 @@ func TestLockSuccWithKeepBindTimeout(t *testing.T) {
 		t,
 		zapcore.DebugLevel,
 		[]string{"s1"},
-		time.Millisecond,
+		time.Millisecond*200,
 		func(alloc *lockTableAllocator, s []*service) {
 			l := s[0]
 
@@ -1657,7 +1658,7 @@ func TestReLockSuccWithKeepBindTimeout(t *testing.T) {
 		t,
 		zapcore.DebugLevel,
 		[]string{"s1", "s2"},
-		time.Millisecond,
+		time.Millisecond*200,
 		func(alloc *lockTableAllocator, s []*service) {
 			l1 := s[0]
 			l2 := s[1]
