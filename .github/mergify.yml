@@ -22,7 +22,7 @@ pull_request_rules:
         commit_message_template: |
           {{ title }} (#{{ number }})
 
-          {{ body | get_section("## What this PR does / why we need it:") }}
+          {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
 
           Approved by: @{{ approved_reviews_by | join(', @') }}
 
@@ -39,7 +39,7 @@ pull_request_rules:
         commit_message_template: |
           {{ title }} (#{{ number }})
 
-          {{ body | get_section("## What this PR does / why we need it:") }}
+          {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
 
           Approved by: @{{ approved_reviews_by | join(', @') }}
 
@@ -56,7 +56,7 @@ pull_request_rules:
         commit_message_template: |
           {{ title }} (#{{ number }})
 
-          {{ body | get_section("## What this PR does / why we need it:") }}
+          {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
 
           Approved by: @{{ approved_reviews_by | join(', @') }}
 

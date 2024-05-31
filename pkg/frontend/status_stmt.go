@@ -122,10 +122,6 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			ses.InvalidatePrivilegeCache()
 		}
 		runBegin := time.Now()
-		/*
-			Step 1: Start
-		*/
-
 		if st, ok := execCtx.stmt.(*tree.Load); ok {
 			if st.Local {
 				loadLocalErrGroup = new(errgroup.Group)
@@ -165,10 +161,6 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		if time.Since(runBegin) > time.Second {
 			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
-
-		echoTime := time.Now()
-
-		ses.Debugf(execCtx.reqCtx, "time of SendResponse %s", time.Since(echoTime).String())
 	}
 
 	return

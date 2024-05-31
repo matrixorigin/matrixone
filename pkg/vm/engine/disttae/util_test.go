@@ -473,7 +473,7 @@ func TestGetNonCompositePKSerachFuncByExpr(t *testing.T) {
 		inExpr,
 		"pk",
 		proc)
-	sels := filter(bat.Vecs)
+	sels := filter.SortedSearchFunc(bat.Vecs)
 	require.Equal(t, 3, len(sels))
 	require.True(t, sels[0] == 1)
 	require.True(t, sels[1] == 2)
