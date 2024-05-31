@@ -120,7 +120,7 @@ call test_if_hit_elseif_first_elseif();
 drop procedure if exists test_if_hit_if;
 create procedure test_if_hit_if() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
--- @ignore:7,8
+-- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 
 drop snapshot if exists sp_sp05;
@@ -128,12 +128,12 @@ create snapshot sp_sp05 for account acc01;
 
 drop procedure test_if_hit_elseif_first_elseif;
 drop procedure test_if_hit_if;
--- @ignore:7,8
+-- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 
 restore account acc01 from snapshot sp_sp05;
 
--- @ignore:7,8
+-- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 call test_if_hit_elseif_first_elseif();
 call test_if_hit_if();
@@ -168,7 +168,7 @@ call test_if_hit_second_elseif();
 drop procedure if exists test_if_hit_else;
 create procedure test_if_hit_else() 'begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_else();
--- @ignore:7,8
+-- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 
 drop snapshot if exists sp_sp06;
@@ -177,14 +177,14 @@ create snapshot sp_sp06 for account acc01;
 drop table tbh1;
 drop table tbh2;
 drop procedure test_if_hit_second_elseif;
--- @ignore:7,8
+-- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 
 restore account acc01 from snapshot sp_sp06;
 
 call test_if_hit_else();
 call test_if_hit_second_elseif();
--- @ignore:7,8
+-- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 
 drop snapshot sp_sp06;
@@ -199,7 +199,7 @@ drop stage if exists my_ext_stage;
 create stage my_ext_stage URL='s3://load/files/';
 drop stage if exists my_ext_stage1;
 create stage my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
--- @ignore:5
+-- @ignore:0,5
 select * from mo_catalog.mo_stages;
 
 drop snapshot if exists stage_sp01;
@@ -207,11 +207,11 @@ create snapshot stage_sp01 for account acc01;
 
 alter stage my_ext_stage1 SET URL='s3://load/files2/';
 drop stage my_ext_stage;
--- @ignore:5
+-- @ignore:0,5
 select * from mo_catalog.mo_stages;
 
 restore account acc01 from snapshot stage_sp01;
--- @ignore:5
+-- @ignore:0,5
 select * from mo_catalog.mo_stages;
 drop snapshot stage_sp01;
 drop stage my_ext_stage;
@@ -225,8 +225,7 @@ drop user if exists userx;
 create user userx identified by '111';
 drop user if exists usery;
 create user usery identified by '222';
--- @ignore:3,5
-select * from mo_catalog.mo_user;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 
 drop snapshot if exists user_sp01;
 create snapshot user_sp01 for account acc01;
@@ -238,12 +237,10 @@ drop snapshot if exists user_sp02;
 create snapshot user_sp02 for account acc01;
 
 restore account acc01 from snapshot user_sp01;
--- @ignore:3,5
-select * from mo_catalog.mo_user;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 
 restore account acc01 from snapshot user_sp02;
--- @ignore:3,5
-select * from mo_catalog.mo_user;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 drop user userx;
 drop user usery;
 drop user userz;
@@ -258,8 +255,7 @@ drop role if exists role1;
 drop role if exists role2;
 create role role1;
 create role role2;
--- @ignore:4
-select * from mo_catalog.mo_role;
+select role_name, creator, owner from mo_catalog.mo_role;
 drop snapshot if exists role_sp01;
 create snapshot role_sp01 for account acc01;
 
@@ -267,8 +263,7 @@ drop role role1;
 drop role role2;
 
 restore account acc01 from snapshot role_sp01;
--- @ignore:4
-select * from mo_catalog.mo_role;
+select role_name, creator, owner from mo_catalog.mo_role;
 drop snapshot role_sp01;
 drop role role1;
 drop role role2;
@@ -287,28 +282,20 @@ grant all on account * to test_role;
 grant ownership on database *.* to test_role;
 grant ownership on table *.* to test_role;
 
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:3,8
-select * from mo_catalog.mo_role_privs where role_name='test_role';
--- @ignore:2
-select * from mo_catalog.mo_user_grant;
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
 
 drop snapshot if exists prvis_sp01;
 create snapshot prvis_sp01 for account acc01;
 
 drop role test_role;
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name='test_role';
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
 
 restore account acc01 from snapshot prvis_sp01;
 
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:3,8
-select * from mo_catalog.mo_role_privs where role_name='test_role';
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
 drop database testdb;
 drop role test_role;
 
@@ -324,14 +311,9 @@ grant create user, drop user, alter user, create role, drop role, create databas
 grant select on table *.* to role_account_priv_1;
 grant role_account_priv_1 to user_grant_2;
 
--- @ignore:3,5
-select * from mo_catalog.mo_user;
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name='role_account_priv_1';
--- @ignore:2
-select * from mo_catalog.mo_user_grant;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_1';
 
 drop snapshot if exists grant_sp01;
 create snapshot grant_sp01 for account acc01;
@@ -341,14 +323,9 @@ drop role 'role_account_priv_1';
 
 restore account acc01 from snapshot grant_sp01;
 
--- @ignore:3,5
-select * from mo_catalog.mo_user;
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name='role_account_priv_1';
--- @ignore:2
-select * from mo_catalog.mo_user_grant;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_1';
 
 drop user user_grant_2;
 drop role role_account_priv_1;
@@ -365,38 +342,23 @@ create role 'role_account_priv_3';
 drop snapshot if exists grant_sp02;
 create snapshot grant_sp02 for account acc01;
 
--- @ignore:3,5
-select * from mo_catalog.mo_user;
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
--- @ignore:2
-select * from mo_catalog.mo_user_grant;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
 
 grant create user, drop user, alter user, create role, drop role, create database,drop database,show databases,connect,manage grants on account *  to role_account_priv_3 with grant option;
 grant select on table *.* to role_account_priv_3;
 grant role_account_priv_3 to user_grant_3;
 
--- @ignore:3,5
-select * from mo_catalog.mo_user;
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
--- @ignore:2
-select * from mo_catalog.mo_user_grant;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
 
 restore account acc01 from snapshot grant_sp02;
 
--- @ignore:3,5
-select * from mo_catalog.mo_user;
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
--- @ignore:2
-select * from mo_catalog.mo_user_grant;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_3' ;
 
 drop user user_grant_3;
 drop role role_account_priv_3;
@@ -410,26 +372,20 @@ drop role if exists r1,r2,r3,r4,r5,r6,r7,r8,r9,r10;
 create role r1,r2,r3,r4,r5,r6,r7,r8,r9,r10;
 grant select,insert ,update on table *.* to r1,r2,r3,r4,r5;
 
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
 
 drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 
 drop role r1,r2,r3,r4,r5;
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
 
 restore account acc01 from snapshot sp01;
 
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
 
 drop snapshot sp01;
 drop role r1,r2,r3,r4,r5,r6,r7,r8,r9,r10;
@@ -443,26 +399,20 @@ create role r1, r2, r6, r7;
 grant select ,insert ,update on table *.* to r1,r2 with grant option;
 grant r1,r2 to r6,r7;
 select mr.role_name,mp.role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_role_grant mg,mo_catalog.mo_role mr ,mo_catalog.mo_role_privs mp where  mg.grantee_id=mr.role_id and mg.granted_id = mp.role_id and mr.role_name in ('r6','r7');
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
 
 drop snapshot if exists sp02;
 create snapshot sp02 for account acc01;
 
 drop role r1, r2;
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
 
 restore account acc01 from snapshot sp02;
 
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
 
 drop snapshot sp02;
 drop role r1, r2, r6, r7;
@@ -482,14 +432,9 @@ create user user05 identified by '123456';
 grant create role on account * to r5;
 grant r5 to user01, user02, user03, user04, user05;
 select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_user_grant,mo_catalog.mo_user,mo_catalog.mo_role_privs where mo_user_grant.user_id=mo_user.user_id and mo_role_privs.role_id=mo_user_grant.role_id and role_name in ('r5');
--- @ignore:3,5
-select * from mo_catalog.mo_user;
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name in ('r5');
--- @ignore:2
-select * from mo_catalog.mo_user_grant;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r5');
 
 drop snapshot if exists sp03;
 create snapshot sp03 for account acc01;
@@ -497,21 +442,13 @@ drop role r5;
 drop user user01, user02, user03;
 
 select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_user_grant,mo_catalog.mo_user,mo_catalog.mo_role_privs where mo_user_grant.user_id=mo_user.user_id and mo_role_privs.role_id=mo_user_grant.role_id and role_name in ('r5');
--- @ignore:3,5
-select * from mo_catalog.mo_user;
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name in ('r5');
--- @ignore:2
-select * from mo_catalog.mo_user_grant;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r5');
 
 restore account acc01 from snapshot sp03;
 
--- @ignore:8
-select * from mo_catalog.mo_role_privs where role_name in ('r5');
--- @ignore:2
-select * from mo_catalog.mo_user_grant;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r5');
 drop user user01, user02, user03, user04, user05;
 drop role r5;
 drop snapshot sp03;
@@ -533,16 +470,10 @@ grant role_r1,role_r2,role_r3 to role_u1,role_u2,role_u2;
 grant role_r1 to role_r2;
 grant role_r2 to role_r3;
 grant select,insert,update on table test.* to role_r1 with grant option;
--- @ignore:3,5
-select * from mo_catalog.mo_user;
--- @ignore:4
-select * from mo_catalog.mo_role;
--- @ignore:3,8
-select * from mo_catalog.mo_role_privs where role_name in ('role_r1','role_r2');
--- @ignore:2
-select * from mo_catalog.mo_user_grant;
--- @ignore:4
-select * from mo_catalog.mo_role_grant;
+select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
+select role_name, creator, owner from mo_catalog.mo_role;
+select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('role_r1','role_r2');
+select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 
 drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
@@ -550,11 +481,9 @@ create snapshot sp01 for account acc01;
 revoke role_r2 from role_r3;
 revoke role_r1 from role_r2;
 
--- @ignore:2
-select * from mo_catalog.mo_role_grant;
+select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 restore account acc01 from snapshot sp01;
--- @ignore:4
-select * from mo_catalog.mo_role_grant;
+select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 drop snapshot sp01;
 drop role role_r1, role_r2, role_r3;
 drop user role_u1, role_u2, role_u3;
