@@ -159,6 +159,7 @@ func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
 				//for ut
 				sm.SetTid(tid)
 			}
+			logutil.Info("[UpdateSnapTable]", zap.Uint64("tid", tid))
 			sm.tides[tid] = struct{}{}
 		}
 		accID := insAccIDs[i]
@@ -237,11 +238,19 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 				stats:    objectStats,
 				createAt: createTS,
 			}
+			logutil.Info("[UpdateSnapshot] Add object",
+				zap.Uint32("table id", table),
+				zap.String("object name", objectStats.ObjectName().String()),
+				zap.String("create at", createTS.toString()))
+
 			continue
 		}
 		if deleteTS.IsEmpty() {
 			panic(any("deleteTS is empty"))
 		}
+		logutil.Info("[UpdateSnapshot] Delete object",
+			zap.Uint32("table id", table),
+			zap.String("object name", objectStats.ObjectName().String()))
 		delete(sm.objects[table], objectStats.ObjectName().SegmentId())
 	}
 	del, delTxn, _, _ := data.GetBlkBatchs()
@@ -537,6 +546,7 @@ func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
 			}
 			sm.SetTid(tid)
 		}
+		sm.tides[tid] = struct{}{}
 		if sm.objects[tid] == nil {
 			sm.objects[tid] = make(map[objectio.Segmentid]*objectInfo)
 		}
