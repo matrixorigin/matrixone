@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"sort"
 	"time"
 
@@ -33,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"

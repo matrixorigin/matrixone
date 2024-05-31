@@ -1756,7 +1756,7 @@ func (tbl *txnTable) tryExtractPKFilter(expr *plan.Expr) (retPKFilter PKFilter) 
 	}
 
 	pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-	retPKFilter = getPKFilterByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
+	retPKFilter = getPKFilterByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl)
 	if retPKFilter.isNull || !retPKFilter.isValid || retPKFilter.isVec {
 		return
 	}
