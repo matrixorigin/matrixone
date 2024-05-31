@@ -82,7 +82,7 @@ var upg_system_statementInto_comment = versions.UpgradeEntry{
 	Schema:    catalog.MO_SYSTEM,
 	TableName: catalog.MO_STATEMENT,
 	UpgType:   versions.MODIFY_TABLE_COMMENT,
-	UpgSql:    getDDLAlterComment(catalog.MO_SYSTEM, catalog.MO_RAWLOG, systemStatementInfoComment121),
+	UpgSql:    getDDLAlterComment(catalog.MO_SYSTEM, catalog.MO_STATEMENT, systemStatementInfoComment121),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, comment, err := versions.CheckTableComment(txn, accountId, catalog.MO_SYSTEM, catalog.MO_STATEMENT)
 		if err != nil {
@@ -99,7 +99,7 @@ var upg_systemMetric_metric_comment = versions.UpgradeEntry{
 	Schema:    catalog.MO_SYSTEM_METRICS,
 	TableName: catalog.MO_METRIC,
 	UpgType:   versions.MODIFY_TABLE_COMMENT,
-	UpgSql:    getDDLAlterComment(catalog.MO_SYSTEM, catalog.MO_RAWLOG, systemMetricComment121),
+	UpgSql:    getDDLAlterComment(catalog.MO_SYSTEM_METRICS, catalog.MO_METRIC, systemMetricComment121),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, comment, err := versions.CheckTableComment(txn, accountId, catalog.MO_SYSTEM_METRICS, catalog.MO_METRIC)
 		if err != nil {
