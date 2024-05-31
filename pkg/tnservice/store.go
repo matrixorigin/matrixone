@@ -234,8 +234,12 @@ func (s *store) Start() error {
 func (s *store) Close() error {
 	s.stopper.Stop()
 	s.moCluster.Close()
-	err := errors.Join(
-		s.shardServer.Close(),
+
+	var err error
+	if !s.cfg.ShardService.Enable {
+		err = s.shardServer.Close()
+	}
+	err = errors.Join(
 		s.hakeeperClient.Close(),
 		s.sender.Close(),
 		s.server.Close(),
