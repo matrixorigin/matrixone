@@ -973,11 +973,9 @@ func (c *Compile) getCNList() (engine.Nodes, error) {
 			return cnList, nil
 		}
 	}
-	cnList = append(cnList, engine.Node{
-		Id:   cnID,
-		Addr: c.addr,
-		Mcpu: ncpu,
-	})
+	n := getEngineNode(c)
+	n.Id = cnID
+	cnList = append(cnList, n)
 	return cnList, nil
 }
 
@@ -990,20 +988,9 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	}()
 
 	c.execType = plan2.GetExecType(c.pn.GetQuery())
+	n := getEngineNode(c)
 	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
-		c.cnList = engine.Nodes{
-			engine.Node{
-				Addr: c.addr,
-				Mcpu: 1,
-			},
-		}
-	} else if c.execType == plan2.ExecTypeAP_ONECN {
-		c.cnList = engine.Nodes{
-			engine.Node{
-				Addr: c.addr,
-				Mcpu: ncpu,
-			},
-		}
+		c.cnList = engine.Nodes{n}
 	} else {
 		c.cnList, err = c.getCNList()
 		if err != nil {
@@ -1037,7 +1024,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		if err != nil {
 			return nil, err
 		}
-		scope, err = c.compileApQuery(qry, scopes, qry.Steps[i])
+		scope, err = c.compileSteps(qry, scopes, qry.Steps[i])
 		if err != nil {
 			return nil, err
 		}
@@ -1076,7 +1063,7 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 	return nil
 }
 
-func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope, step int32) (*Scope, error) {
+func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope, error) {
 	if qry.Nodes[step].NodeType == plan.Node_SINK {
 		return ss[0], nil
 	}
@@ -1089,7 +1076,11 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope, step int32) (*Sco
 	case plan.Query_UPDATE:
 		return ss[0], nil
 	default:
-		rs = c.newMergeScope(ss)
+		if c.execType == plan2.ExecTypeTP {
+			rs = ss[len(ss)-1]
+		} else {
+			rs = c.newMergeScope(ss)
+		}
 		updateScopesLastFlag([]*Scope{rs})
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
@@ -1712,7 +1703,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			}
 		}
 		rs := newScope(Merge)
-		rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
+		rs.NodeInfo = getEngineNode(c)
 		rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes())
 		rs.Instructions = []vm.Instruction{{Op: vm.Merge, Arg: merge.NewArgument().WithSinkScan(true)}}
 		for _, r := range receivers {
@@ -1749,7 +1740,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			}
 		}
 		rs := newScope(Merge)
-		rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
+		rs.NodeInfo = getEngineNode(c)
 		rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, len(receivers), c.anal.Nodes())
 		rs.Instructions = []vm.Instruction{{Op: vm.MergeCTE, Arg: mergecte.NewArgument()}}
 
@@ -1802,7 +1793,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	if parallel {
 		ds.Magic = Remote
 	}
-	ds.NodeInfo = engine.Node{Addr: addr, Mcpu: ncpu}
+	ds.NodeInfo = getEngineNode(c)
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 	c.proc.LoadTag = c.anal.qry.LoadTag
 	ds.Proc.LoadTag = true
@@ -1845,7 +1836,7 @@ func (c *Compile) compileSourceScan(ctx context.Context, n *plan.Node) ([]*Scope
 	ss := make([]*Scope, len(ps))
 	for i := range ss {
 		ss[i] = newScope(Normal)
-		ss[i].NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
+		ss[i].NodeInfo = getEngineNode(c)
 		ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Source,
@@ -3278,7 +3269,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := newScope(Merge)
-	rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
+	rs.NodeInfo = getEngineNode(c)
 	rs.PreScopes = ss
 	cnt := 0
 	for _, s := range ss {
@@ -3664,7 +3655,7 @@ func regTransplant(source, target *Scope, sourceIdx, targetIdx int) {
 }
 
 func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
-	if cpunum <= 0 || blocks <= 0 {
+	if cpunum <= 0 || blocks <= 0 || c.execType == plan2.ExecTypeTP {
 		return 1
 	}
 
@@ -4774,4 +4765,12 @@ func runDetectFkReferToDBSql(c *Compile, sql string) error {
 		}
 	}
 	return nil
+}
+
+func getEngineNode(c *Compile) engine.Node {
+	if c.execType == plan2.ExecTypeTP {
+		return engine.Node{Addr: c.addr, Mcpu: 1}
+	} else {
+		return engine.Node{Addr: c.addr, Mcpu: ncpu}
+	}
 }
