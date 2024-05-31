@@ -321,6 +321,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 							if err != nil {
 								return nil, err
 							}
+							// TODO: info to debug
 							logutil.Info("[GetSnapshot] cluster snapshot",
 								common.OperationField(snapTs.ToString()))
 						}
@@ -330,6 +331,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 					if snapshotList[id] == nil {
 						snapshotList[id] = containers.MakeVector(types.T_TS.ToType(), mp)
 					}
+					// TODO: info to debug
 					logutil.Info("[GetSnapshot] snapshot",
 						zap.Uint32("account", id),
 						zap.String("snap ts", snapTs.ToString()))
