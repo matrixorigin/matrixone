@@ -236,6 +236,9 @@ func saveQueryResult(ctx context.Context, ses *Session,
 			return err
 		}
 		err = saveBatches(ctx, ses, data)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

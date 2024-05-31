@@ -777,7 +777,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		return moerr.NewSyntaxError(execCtx.reqCtx, "like clause and where clause cannot exist at the same time")
 	}
 
-	var err error = nil
+	var err error
 
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -999,20 +999,6 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	}
 
 	return trySaveQueryResult(reqCtx, ses, mrs)
-}
-
-func fillQueryBatch(ses *Session, explainColName string, lines []string) (*batch.Batch, error) {
-	bat := batch.New(true, []string{explainColName})
-	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
-
-	cnt := len(lines)
-	bat.SetRowCount(cnt)
-	bat.Vecs[0] = vector.NewVec(typ)
-	err := vector.AppendStringList(bat.Vecs[0], lines, nil, ses.GetMemPool())
-	if err != nil {
-		return nil, err
-	}
-	return bat, nil
 }
 
 // Note: for pass the compile quickly. We will remove the comments in the future.

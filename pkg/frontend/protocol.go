@@ -143,14 +143,6 @@ func (mp *MysqlProtocolImpl) incDebugCount(i int) {
 	}
 }
 
-func (mp *MysqlProtocolImpl) resetDebugCount() []uint64 {
-	ret := make([]uint64, len(mp.debugCount))
-	for i := 0; i < len(mp.debugCount); i++ {
-		ret[i] = atomic.LoadUint64(&mp.debugCount[i])
-	}
-	return ret
-}
-
 func (mp *MysqlProtocolImpl) setQuit(b bool) bool {
 	return mp.quit.Swap(b)
 }

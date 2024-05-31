@@ -385,16 +385,6 @@ func appendBytes(writeByte, tmp, symbol []byte, enclosed byte, flag bool) []byte
 	return writeByte
 }
 
-func preCopyBat(obj interface{}, bat *batch.Batch) *batch.Batch {
-	ses := obj.(*Session)
-	bat2 := batch.NewWithSize(len(bat.Vecs))
-	for i, vec := range bat.Vecs {
-		bat2.Vecs[i], _ = vec.Dup(ses.GetMemPool())
-	}
-	bat2.SetRowCount(bat.RowCount())
-	return bat2
-}
-
 func formatJsonString(str string, flag bool, terminatedBy string) string {
 	if len(str) < 2 {
 		return "\"" + str + "\""
@@ -808,25 +798,25 @@ func exportAllData(ep *ExportConfig) error {
 
 var _ CsvWriter = &ExportConfig{}
 
-func (writer *ExportConfig) init() {
-	writer.ByteChan = make(chan *BatchByte, 10)
-	writer.BatchMap = make(map[int32][]byte)
-	writer.Index.Store(0)
-	writer.WriteIndex.Store(0)
+func (ec *ExportConfig) init() {
+	ec.ByteChan = make(chan *BatchByte, 10)
+	ec.BatchMap = make(map[int32][]byte)
+	ec.Index.Store(0)
+	ec.WriteIndex.Store(0)
 }
 
-func (writer *ExportConfig) resetLineStr() {
-	writer.lineStr = writer.lineStr[:0]
+func (ec *ExportConfig) resetLineStr() {
+	ec.lineStr = ec.lineStr[:0]
 }
 
-func (writer *ExportConfig) Write(execCtx *ExecCtx, bat *batch.Batch) error {
-	writer.Index.Add(1)
+func (ec *ExportConfig) Write(execCtx *ExecCtx, bat *batch.Batch) error {
+	ec.Index.Add(1)
 	copied, err := bat.Dup(execCtx.ses.GetMemPool())
 	if err != nil {
 		return err
 	}
-	go constructByte(execCtx.reqCtx, execCtx.ses, copied, writer.Index.Load(), writer.ByteChan, writer)
-	if err = exportDataToCSVFile(writer); err != nil {
+	go constructByte(execCtx.reqCtx, execCtx.ses, copied, ec.Index.Load(), ec.ByteChan, ec)
+	if err = exportDataToCSVFile(ec); err != nil {
 		execCtx.ses.Error(execCtx.reqCtx,
 			"Error occurred while exporting to CSV file",
 			zap.Error(err))
@@ -835,10 +825,10 @@ func (writer *ExportConfig) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 	return nil
 }
 
-func (writer *ExportConfig) Close() {
-	if writer != nil {
-		writer.mrs = nil
-		writer.lineStr = nil
-		writer.ctx = nil
+func (ec *ExportConfig) Close() {
+	if ec != nil {
+		ec.mrs = nil
+		ec.lineStr = nil
+		ec.ctx = nil
 	}
 }
