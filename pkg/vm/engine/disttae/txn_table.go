@@ -687,6 +687,12 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset i
 	); err != nil {
 		return
 	}
+	if tbl.db.op.IsSnapOp() && tbl.db.databaseName == "tpch" {
+		logutil.Infof("xxx Ranges, table:%s, len:%d, snapshot op:%s",
+			tbl.tableName,
+			blocks.Len(),
+			tbl.db.op.Txn().DebugString())
+	}
 
 	return
 }
@@ -2107,6 +2113,12 @@ func (tbl *txnTable) getPartitionState(
 			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
 		if err != nil {
 			return nil, err
+		}
+		if tbl.db.databaseName == "tpch" {
+			logutil.Infof("xxxx getPartitionState, table:%s, snapshot op :%s, snap:%p",
+				tbl.tableName,
+				tbl.db.op.Txn().DebugString(),
+				p)
 		}
 		tbl._partState.Store(p.Snapshot())
 	}
