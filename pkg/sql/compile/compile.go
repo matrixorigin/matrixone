@@ -986,7 +986,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	}()
 
 	c.execType = plan2.GetExecType(c.pn.GetQuery())
-	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
+	if c.execType == plan2.ExecTypeTP {
 		c.cnList = engine.Nodes{
 			engine.Node{
 				Addr: c.addr,
@@ -1033,7 +1033,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		if err != nil {
 			return nil, err
 		}
-		scope, err = c.compileApQuery(qry, scopes, qry.Steps[i])
+		scope, err = c.compileSteps(qry, scopes, qry.Steps[i])
 		if err != nil {
 			return nil, err
 		}
@@ -1072,7 +1072,7 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 	return nil
 }
 
-func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope, step int32) (*Scope, error) {
+func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope, error) {
 	if qry.Nodes[step].NodeType == plan.Node_SINK {
 		return ss[0], nil
 	}
@@ -1085,7 +1085,11 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope, step int32) (*Sco
 	case plan.Query_UPDATE:
 		return ss[0], nil
 	default:
-		rs = c.newMergeScope(ss)
+		if c.execType == plan2.ExecTypeTP {
+			rs = ss[len(ss)-1]
+		} else {
+			rs = c.newMergeScope(ss)
+		}
 		updateScopesLastFlag([]*Scope{rs})
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
