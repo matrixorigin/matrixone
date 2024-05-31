@@ -1,0 +1,210 @@
+select count(*) from tpch.customer;
+count(*)
+150
+select count(*) from tpch.customer;
+count(*)
+150
+select count(*) from tpch.customer;
+count(*)
+150
+select count(*) from tpch.customer;
+count(*)
+150
+select count(*) from tpch.customer;
+count(*)
+150
+select count(*) from tpch.lineitem;
+count(*)
+6005
+select count(*) from tpch.lineitem;
+count(*)
+6005
+select count(*) from tpch.lineitem;
+count(*)
+6005
+select count(*) from tpch.lineitem;
+count(*)
+6005
+select count(*) from tpch.lineitem;
+count(*)
+6005
+select count(*) from tpch.nation;
+count(*)
+25
+select count(*) from tpch.nation;
+count(*)
+25
+select count(*) from tpch.nation;
+count(*)
+25
+select count(*) from tpch.nation;
+count(*)
+25
+select count(*) from tpch.nation;
+count(*)
+25
+select count(*) from tpch.orders;
+count(*)
+1500
+select count(*) from tpch.orders;
+count(*)
+1500
+select count(*) from tpch.orders;
+count(*)
+1500
+select count(*) from tpch.orders;
+count(*)
+1500
+select count(*) from tpch.orders;
+count(*)
+1500
+select count(*) from tpch.part;
+count(*)
+200
+select count(*) from tpch.part;
+count(*)
+200
+select count(*) from tpch.part;
+count(*)
+200
+select count(*) from tpch.part;
+count(*)
+200
+select count(*) from tpch.part;
+count(*)
+200
+select count(*) from tpch.partsupp;
+count(*)
+800
+select count(*) from tpch.partsupp;
+count(*)
+800
+select count(*) from tpch.partsupp;
+count(*)
+800
+select count(*) from tpch.partsupp;
+count(*)
+800
+select count(*) from tpch.partsupp;
+count(*)
+800
+select count(*) from tpch.supplier;
+count(*)
+10
+select count(*) from tpch.supplier;
+count(*)
+10
+select count(*) from tpch.supplier;
+count(*)
+10
+select count(*) from tpch.supplier;
+count(*)
+10
+select count(*) from tpch.supplier;
+count(*)
+10
+select count(*) from tpch.customer;
+count(*)
+150
+select count(*) from tpch.customer;
+count(*)
+150
+select count(*) from tpch.customer;
+count(*)
+150
+select count(*) from tpch.customer;
+count(*)
+150
+select count(*) from tpch.customer;
+count(*)
+150
+select count(*) from tpch.lineitem;
+count(*)
+6005
+select count(*) from tpch.lineitem;
+count(*)
+6005
+select count(*) from tpch.lineitem;
+count(*)
+6005
+select count(*) from tpch.lineitem;
+count(*)
+6005
+select count(*) from tpch.lineitem;
+count(*)
+6005
+select count(*) from tpch.nation;
+count(*)
+25
+select count(*) from tpch.nation;
+count(*)
+25
+select count(*) from tpch.nation;
+count(*)
+25
+select count(*) from tpch.nation;
+count(*)
+25
+select count(*) from tpch.nation;
+count(*)
+25
+select count(*) from tpch.orders;
+count(*)
+1500
+select count(*) from tpch.orders;
+count(*)
+1500
+select count(*) from tpch.orders;
+count(*)
+1500
+select count(*) from tpch.orders;
+count(*)
+1500
+select count(*) from tpch.orders;
+count(*)
+1500
+select count(*) from tpch.part;
+count(*)
+200
+select count(*) from tpch.part;
+count(*)
+200
+select count(*) from tpch.part;
+count(*)
+200
+select count(*) from tpch.part;
+count(*)
+200
+select count(*) from tpch.part;
+count(*)
+200
+select count(*) from tpch.partsupp;
+count(*)
+800
+select count(*) from tpch.partsupp;
+count(*)
+800
+select count(*) from tpch.partsupp;
+count(*)
+800
+select count(*) from tpch.partsupp;
+count(*)
+800
+select count(*) from tpch.partsupp;
+count(*)
+800
+select count(*) from tpch.supplier;
+count(*)
+10
+select count(*) from tpch.supplier;
+count(*)
+10
+select count(*) from tpch.supplier;
+count(*)
+10
+select count(*) from tpch.supplier;
+count(*)
+10
+select count(*) from tpch.supplier;
+count(*)
+10
