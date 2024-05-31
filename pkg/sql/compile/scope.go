@@ -17,11 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"go.uber.org/automaxprocs/maxprocs"
 	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
 	"sync"
+
+	"go.uber.org/automaxprocs/maxprocs"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
