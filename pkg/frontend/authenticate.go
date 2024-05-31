@@ -1632,7 +1632,7 @@ func getSqlForCheckRoleExists(ctx context.Context, roleID int, roleName string) 
 
 func getSqlForRoleNameOfRoleId(roleId int64) string {
 	return fmt.Sprintf(roleNameOfRoleIdFormat, roleId)
-	pkg/frontend/authenticate.go}
+}
 
 func getSqlForRoleIdOfRole(ctx context.Context, roleName string) (string, error) {
 	err := inputNameIsInvalid(ctx, roleName)
@@ -8855,7 +8855,8 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 }
 
 func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
-	var sql string var accountId uint32
+	var sql string
+	var accountId uint32
 	var accountName string
 	var dbName string
 	var err error
