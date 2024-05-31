@@ -159,6 +159,9 @@ type Engine struct {
 	// globalStats is the global stats information, which is updated
 	// from logtail updates.
 	globalStats *GlobalStats
+
+	//for message on multiCN, use uuid to get the messageBoard
+	messageCenter *process.MessageCenter
 }
 
 // Transaction represents a transaction
@@ -239,6 +242,8 @@ type Transaction struct {
 	offsets []int
 	//for RC isolation, the txn's snapshot TS for each statement.
 	timestamps []timestamp.Timestamp
+	//the start time of first statement in a txn.
+	start time.Time
 
 	hasS3Op              atomic.Bool
 	removed              bool
@@ -588,10 +593,7 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		txn.resetSnapshot()
 	}
 	//Transfer row ids for deletes in RC isolation
-	if !commit {
-		return txn.transferDeletesLocked()
-	}
-	return nil
+	return txn.transferDeletesLocked(ctx, commit)
 }
 
 // Entry represents a delete/insert
@@ -742,8 +744,6 @@ type withFilterMixin struct {
 		seqnums  []uint16
 		colTypes []types.Type
 		// colNulls []bool
-
-		compPKPositions []uint16 // composite primary key pos in the columns
 
 		pkPos int // -1 means no primary key in columns
 

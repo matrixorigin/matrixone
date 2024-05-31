@@ -48,13 +48,14 @@ func getPathOfQueryResultFile(fileName string) string {
 }
 
 func canSaveQueryResult(ctx context.Context, ses *Session) bool {
-	if ses.ast == nil || ses.tStmt == nil {
+	if ses.ast == nil {
 		return false
 	}
-	if ses.tStmt.SqlSourceType == constant.InternalSql {
+	stmtProfile := ses.GetStmtProfile()
+	if stmtProfile.GetSqlSourceType() == constant.InternalSql {
 		return false
 	}
-	if ses.tStmt.StatementType == "Select" && ses.tStmt.SqlSourceType != constant.CloudUserSql {
+	if stmtProfile.GetStmtType() == "Select" && stmtProfile.GetSqlSourceType() != constant.CloudUserSql {
 		return false
 	}
 	val, err := ses.GetGlobalVar(ctx, "save_query_result")
@@ -107,8 +108,8 @@ func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
 	}
 	fs := getGlobalPu().FileService
 	// write query result
-	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), ses.GetIncBlockIdx())
-	ses.Info(ctx, "open save query result", zap.String("statemant id is:", uuid.UUID(ses.tStmt.StatementID).String()), zap.String("fileservice name is:", fs.Name()), zap.String("write path is:", path), zap.Float64("current result size:", s))
+	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.GetStmtId()).String(), ses.GetIncBlockIdx())
+	ses.Info(ctx, "open save query result", zap.String("statemant id is:", uuid.UUID(ses.GetStmtId()).String()), zap.String("fileservice name is:", fs.Name()), zap.String("write path is:", path), zap.Float64("current result size:", s))
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterQueryResult, path, fs)
 	if err != nil {
 		return err
@@ -147,7 +148,7 @@ func saveMeta(ctx context.Context, ses *Session) error {
 		ses.p = nil
 		// TIPs: Session.SetTStmt() do reset the tStmt while query is DONE.
 		// Be careful, if you want to do async op.
-		ses.tStmt = nil
+		// ses.tStmt = nil /* #16028: QueryResult independent of ses.tStmt */
 		ses.curResultSize = 0
 	}()
 	fs := getGlobalPu().FileService
@@ -166,7 +167,7 @@ func saveMeta(ctx context.Context, ses *Session) error {
 		if i > 1 {
 			buf.WriteString(prefix)
 		}
-		buf.WriteString(catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), i))
+		buf.WriteString(catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.GetStmtId()).String(), i))
 	}
 
 	var sp []byte
@@ -182,10 +183,10 @@ func saveMeta(ctx context.Context, ses *Session) error {
 		return err
 	}
 	m := &catalog.Meta{
-		QueryId:     ses.tStmt.StatementID,
-		Statement:   ses.tStmt.Statement,
+		QueryId:     ses.GetStmtId(),
+		Statement:   ses.GetSql(),
 		AccountId:   ses.GetTenantInfo().GetTenantID(),
-		RoleId:      ses.tStmt.RoleId,
+		RoleId:      ses.proc.SessionInfo.RoleId,
 		ResultPath:  buf.String(),
 		CreateTime:  types.UnixToTimestamp(ses.createdTime.Unix()),
 		ResultSize:  ses.curResultSize,
@@ -201,7 +202,7 @@ func saveMeta(ctx context.Context, ses *Session) error {
 	if err != nil {
 		return err
 	}
-	metaPath := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String())
+	metaPath := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.GetStmtId()).String())
 	metaWriter, err := objectio.NewObjectWriterSpecial(objectio.WriterQueryResult, metaPath, fs)
 	if err != nil {
 		return err

@@ -19,10 +19,11 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"go.uber.org/zap"
 )
 
 var (
@@ -101,12 +102,16 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			// First version as a genesis version, always need to be PREPARE.
 			// Because the first version need to init upgrade framework tables.
 			if !created {
+				// Get the founder version of the upgrade framework
+				founder := s.getFounderVersionHandle().Metadata()
 				getUpgradeLogger().Info("init upgrade framework",
+					zap.String("founder-version", founder.Version),
 					zap.String("final-version", final.Version))
 
 				// create new upgrade framework tables for the first time,
 				// which means using v1.2.0 for the first time
-				err = s.getFinalVersionHandle().HandleCreateFrameworkDeps(txn)
+				//err = s.getFinalVersionHandle().HandleCreateFrameworkDeps(txn)
+				err = s.getFounderVersionHandle().HandleCreateFrameworkDeps(txn)
 				if err != nil {
 					getLogger().Error("execute pre dependencies error when creating a new upgrade framework", zap.Error(err))
 					return err
@@ -114,7 +119,9 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 
 				// Many cn maybe create framework tables parallel, only one can create success.
 				// Just return error, and upgrade framework will retry.
-				err = createFrameworkTables(txn, final)
+
+				//err = createFrameworkTables(txn, final)
+				err = createFrameworkTables(txn, founder)
 				if err != nil {
 					getLogger().Error("create upgrade framework tables error", zap.Error(err))
 					return err
@@ -182,7 +189,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 					return err
 				}
 
-				getUpgradeLogger().Error("final version added",
+				getUpgradeLogger().Info("final version added",
 					zap.String("final", final.Version))
 
 				latest, err := versions.MustGetLatestReadyVersion(txn)

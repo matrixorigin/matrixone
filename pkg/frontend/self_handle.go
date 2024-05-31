@@ -42,20 +42,27 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		ses.EnterFPrint(12)
 		defer ses.ExitFPrint(12)
 		var v interface{}
+		var uniqueCheckOnAuto string
 		v, err = ses.GetGlobalVar(execCtx.reqCtx, "lower_case_table_names")
 		if err != nil {
 			return
 		}
 		st.Name.SetConfig(v.(int64))
+		dbName := st.Name.Compare()
 		//use database
-		err = handleChangeDB(ses, execCtx, st.Name.Compare())
+		err = handleChangeDB(ses, execCtx, dbName)
 		if err != nil {
 			return
 		}
-		err = changeVersion(execCtx.reqCtx, ses, st.Name.Compare())
+		err = changeVersion(execCtx.reqCtx, ses, dbName)
 		if err != nil {
 			return
 		}
+		uniqueCheckOnAuto, err = GetUniqueCheckOnAutoIncr(execCtx.reqCtx, ses, dbName)
+		if err != nil {
+			return
+		}
+		ses.SetConfig(dbName, "unique_check_on_autoincr", uniqueCheckOnAuto)
 	case *tree.MoDump:
 
 		//dump

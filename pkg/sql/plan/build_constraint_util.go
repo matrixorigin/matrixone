@@ -362,6 +362,7 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree
 func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo) (bool, map[string]bool, error) {
 	var err error
 	var syntaxHasColumnNames bool
+	// var uniqueCheckOnAutoIncr string
 	var insertColumns []string
 	tableDef := info.tblInfo.tableDefs[0]
 	tableObjRef := info.tblInfo.objRef[0]
@@ -376,7 +377,13 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	info.tblInfo.oldColPosMap = append(info.tblInfo.oldColPosMap, oldColPosMap)
 	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
 
-	ifExistAutoPkCol := false
+	// dbName := string(stmt.Table.(*tree.TableName).SchemaName)
+	// if dbName == "" {
+	// 	dbName = builder.compCtx.DefaultDatabase()
+	// }
+
+	existAutoPkCol := false
+
 	insertWithoutUniqueKeyMap := make(map[string]bool)
 
 	if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), stmt, tableDef); err != nil {
@@ -517,17 +524,34 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// rewrite 'insert into t1(b) values (1)' to
 	// select 'select 0, _t.column_0 from (select * from values (1)) _t(column_0)
 	projectList := make([]*Expr, 0, len(tableDef.Cols))
+	pkCols := make(map[string]struct{})
+	for _, name := range tableDef.Pkey.Names {
+		pkCols[name] = struct{}{}
+	}
 	for _, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
 			projectList = append(projectList, oldExpr)
+			// if col.Typ.AutoIncr {
+			// if _, ok := pkCols[col.Name]; ok {
+			// 	uniqueCheckOnAutoIncr, err = builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
+			// 	if err != nil {
+			// 		return false, nil, err
+			// 	}
+			// 	if uniqueCheckOnAutoIncr == "Error" {
+			// 		return false, nil, moerr.NewInvalidInput(builder.GetContext(), "When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.")
+			// 	}
+			// }
+			// }
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
 				return false, nil, err
 			}
 
-			if col.Typ.AutoIncr && col.Name == tableDef.Pkey.PkeyColName {
-				ifExistAutoPkCol = true
+			if col.Typ.AutoIncr {
+				if _, ok := pkCols[col.Name]; ok {
+					existAutoPkCol = true
+				}
 			}
 
 			projectList = append(projectList, defExpr)
@@ -727,7 +751,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		}
 	}
 
-	return ifExistAutoPkCol, insertWithoutUniqueKeyMap, nil
+	return existAutoPkCol, insertWithoutUniqueKeyMap, nil
 }
 
 func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, error) {
@@ -1409,6 +1433,7 @@ func appendPrimaryConstrantPlan(
 					},
 				}
 				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt), buildExpr)}
+				recalcStatsByRuntimeFilter(scanNode, fuzzyFilterNode, builder)
 			}
 
 			lastNodeId = builder.appendNode(fuzzyFilterNode, bindCtx)
@@ -1529,6 +1554,7 @@ func appendPrimaryConstrantPlan(
 					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt), buildExpr)},
 				}
 				lastNodeId = builder.appendNode(joinNode, bindCtx)
+				recalcStatsByRuntimeFilter(scanNode, joinNode, builder)
 
 				// append agg node.
 				aggGroupBy := []*Expr{

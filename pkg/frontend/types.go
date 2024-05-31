@@ -79,6 +79,7 @@ type ComputationWrapper interface {
 	Plan() *plan.Plan
 	ResetPlanAndStmt(stmt tree.Statement)
 	Free()
+	ParamVals() []any
 }
 
 type ColumnInfo interface {
@@ -270,6 +271,7 @@ type FeSession interface {
 	GetSql() string
 	GetAccountId() uint32
 	GetTenantInfo() *TenantInfo
+	GetConfig(ctx context.Context, dbName, varName string) (any, error)
 	GetBackgroundExec(ctx context.Context) BackgroundExec
 	GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec
 	GetGlobalSystemVariableValue(ctx context.Context, name string) (interface{}, error)
@@ -334,6 +336,9 @@ type FeSession interface {
 	ResetFPrints()
 	EnterFPrint(idx int)
 	ExitFPrint(idx int)
+	SetStaticTxnId(id []byte)
+	GetStaticTxnId() uuid.UUID
+	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	SessionLogger
 }
 
@@ -445,6 +450,8 @@ type feSessionImpl struct {
 	disableTrace bool
 	fprints      footPrints
 	respr        Responser
+	//refreshed once
+	staticTxnId uuid.UUID
 }
 
 func (ses *feSessionImpl) EnterFPrint(idx int) {
@@ -755,6 +762,13 @@ func (ses *feSessionImpl) ReplaceResponser(resper Responser) Responser {
 
 func (ses *feSessionImpl) GetResponser() Responser {
 	return ses.respr
+}
+
+func (ses *feSessionImpl) SetStaticTxnId(id []byte) {
+	copy(ses.staticTxnId[:], id)
+}
+func (ses *feSessionImpl) GetStaticTxnId() uuid.UUID {
+	return ses.staticTxnId
 }
 
 func (ses *Session) GetDebugString() string {

@@ -252,7 +252,6 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 			zap.String("lock", lockDetail),
 			zap.String("txn", hex.EncodeToString(v.txn.TxnID)))
 		v.lt.mu.RUnlock()
-		return
 	}
 
 	holders := func() []pb.WaitTxn {
@@ -276,6 +275,8 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 		// When you have determined that a remote transaction is an orphaned transaction, you
 		// can release the lock that the remote transaction has placed on the current cn.
 		if !mw.txnHolder.isValidRemoteTxn(h) {
+			getLogger().Warn("found orphans txns",
+				bytesArrayField("txns", [][]byte{h.TxnID}))
 			// ignore error. If failed will retry until lock removed
 			_ = mw.unlock(context.Background(), h.TxnID, timestamp.Timestamp{})
 		}

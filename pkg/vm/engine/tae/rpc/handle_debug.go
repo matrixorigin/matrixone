@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/shlex"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -83,14 +84,16 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		memo.LeaveProcessing()
 	}()
 
-	if !memo.HasUpdate() {
-		resp.Succeed = true
-		return nil, nil
+	//specialSize := memo.GatherSpecialTableSize()
+	specialSize := uint64(0)
+	usages := memo.GatherAllAccSize()
+	for accId := range usages {
+		if accId != uint64(catalog.System_Account) {
+			usages[accId] += specialSize
+		}
 	}
 
-	usages := memo.GatherAllAccSize()
-
-	newIds := make([]uint32, 0)
+	newIds := make([]uint64, 0)
 	for _, id := range req.AccIds {
 		if usages != nil {
 			if size, exist := usages[uint64(id)]; exist {
@@ -102,7 +105,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 			}
 		}
 		// new account which haven't been collect
-		newIds = append(newIds, uint32(id))
+		newIds = append(newIds, uint64(id))
 	}
 
 	for accId, size := range usages {
@@ -111,18 +114,29 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		resp.Sizes = append(resp.Sizes, size)
 	}
 
+	//var notReadyNewAcc []uint64
+
 	// new accounts
 	traverseCatalogForNewAccounts(h.db.Catalog, memo, newIds)
-
 	for idx := range newIds {
 		if size, exist := memo.GatherNewAccountSize(uint64(newIds[idx])); exist {
+			size += specialSize
 			resp.AccIds = append(resp.AccIds, int64(newIds[idx]))
 			resp.Sizes = append(resp.Sizes, size)
-			memo.AddReqTrace(uint64(newIds[idx]), size, start, "new")
+			memo.AddReqTrace(uint64(newIds[idx]), size, start, "new, ready")
 		}
+		//else {
+		//	notReadyNewAcc = append(notReadyNewAcc, newIds[idx])
+		//}
 	}
 
 	memo.ClearNewAccCache()
+
+	//for idx := range notReadyNewAcc {
+	//	resp.AccIds = append(resp.AccIds, int64(notReadyNewAcc[idx]))
+	//	resp.Sizes = append(resp.Sizes, specialSize)
+	//	memo.AddReqTrace(uint64(newIds[idx]), specialSize, start, "new, not ready, only special")
+	//}
 
 	resp.Succeed = true
 

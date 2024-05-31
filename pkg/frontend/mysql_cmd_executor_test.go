@@ -132,7 +132,7 @@ func Test_mce(t *testing.T) {
 		create_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 		create_1.EXPECT().Clear().AnyTimes()
 		create_1.EXPECT().Free().AnyTimes()
-		create_1.EXPECT().Plan().Return(nil).AnyTimes()
+		create_1.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
 
 		select_1 := mock_frontend.NewMockComputationWrapper(ctrl)
 		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from A", 1, 0)
@@ -147,7 +147,7 @@ func Test_mce(t *testing.T) {
 		select_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 		select_1.EXPECT().Clear().AnyTimes()
 		select_1.EXPECT().Free().AnyTimes()
-		select_1.EXPECT().Plan().Return(nil).AnyTimes()
+		select_1.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
 
 		cola := &MysqlColumn{}
 		cola.SetName("a")
@@ -228,7 +228,7 @@ func Test_mce(t *testing.T) {
 			select_2.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 			select_2.EXPECT().Clear().AnyTimes()
 			select_2.EXPECT().Free().AnyTimes()
-			select_2.EXPECT().Plan().Return(nil).AnyTimes()
+			select_2.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
 			cws = append(cws, select_2)
 		}
 

@@ -83,14 +83,14 @@ func TestConnector(t *testing.T) {
 		}*/
 		_, _ = tc.arg.Call(tc.proc)
 		for len(tc.arg.Reg.Ch) > 0 {
-			bat := <-tc.arg.Reg.Ch
-			if bat == nil {
+			msg := <-tc.arg.Reg.Ch
+			if msg == nil {
 				break
 			}
-			if bat.IsEmpty() {
+			if msg.Batch.IsEmpty() {
 				continue
 			}
-			bat.Clean(tc.proc.Mp())
+			msg.Batch.Clean(tc.proc.Mp())
 		}
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 
@@ -98,7 +98,7 @@ func TestConnector(t *testing.T) {
 
 		tc.arg.Reg = &process.WaitRegister{
 			Ctx: tc.arg.Reg.Ctx,
-			Ch:  make(chan *batch.Batch, 3),
+			Ch:  make(chan *process.RegisterMessage, 3),
 		}
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -116,14 +116,14 @@ func TestConnector(t *testing.T) {
 		}*/
 		_, _ = tc.arg.Call(tc.proc)
 		for len(tc.arg.Reg.Ch) > 0 {
-			bat := <-tc.arg.Reg.Ch
-			if bat == nil {
+			msg := <-tc.arg.Reg.Ch
+			if msg == nil {
 				break
 			}
-			if bat.IsEmpty() {
+			if msg.Batch.IsEmpty() {
 				continue
 			}
-			bat.Clean(tc.proc.Mp())
+			msg.Batch.Clean(tc.proc.Mp())
 		}
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
@@ -142,7 +142,7 @@ func newTestCase() connectorTestCase {
 		arg: &Argument{
 			Reg: &process.WaitRegister{
 				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 3),
+				Ch:  make(chan *process.RegisterMessage, 3),
 			},
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
