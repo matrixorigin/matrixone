@@ -1383,15 +1383,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 
 		n.NotCacheable = true
-		nodeStats := ns[n.Children[0]].Stats
-
 		var arg *deletion.Argument
 		arg, err = constructDeletion(n, c.e)
 		if err != nil {
 			return nil, err
 		}
 
-		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) >
+		if n.Stats.Cost*float64(SingleLineSizeEstimate) >
 			float64(DistributedThreshold) &&
 			!arg.DeleteCtx.CanTruncate {
 			c.proc.Infof(c.ctx, "delete of '%s' write s3\n", c.sql)

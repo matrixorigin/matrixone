@@ -315,10 +315,11 @@ var TaskCache = &objsPruneTask{
 }
 
 type objectPruneArg struct {
-	ctx *inspectContext
-	tbl *catalog.TableEntry
-	ago time.Duration
-	ack int
+	ctx   *inspectContext
+	tbl   *catalog.TableEntry
+	ago   time.Duration
+	force bool // dedicated for prune_log
+	ack   int
 }
 
 func (c *objectPruneArg) PrepareCommand() *cobra.Command {
@@ -330,7 +331,8 @@ func (c *objectPruneArg) PrepareCommand() *cobra.Command {
 	objectPruneCmd.Flags().StringP("target", "t", "*", "format: db.table")
 	objectPruneCmd.Flags().DurationP("duration", "d", 72*time.Hour, "prune objects older than duration")
 	objectPruneCmd.Flags().IntP("ack", "a", -1, "execute task by ack")
-
+	objectPruneCmd.Flags().BoolP("force", "f", false, "force to prune")
+	objectPruneCmd.Flags().MarkHidden("force")
 	return objectPruneCmd
 }
 
@@ -347,6 +349,7 @@ func (c *objectPruneArg) FromCommand(cmd *cobra.Command) (err error) {
 	address, _ := cmd.Flags().GetString("target")
 	c.ack, _ = cmd.Flags().GetInt("ack")
 	c.ago, _ = cmd.Flags().GetDuration("duration")
+	c.force, _ = cmd.Flags().GetBool("force")
 	if c.ago < 24*time.Hour {
 		return moerr.NewInvalidInputNoCtx("pruning objects within 24h is not supported")
 	}
@@ -354,12 +357,23 @@ func (c *objectPruneArg) FromCommand(cmd *cobra.Command) (err error) {
 	if err != nil {
 		return err
 	}
+	if c.ack == -1 && c.tbl == nil {
+		return moerr.NewInvalidInputNoCtx("need table target")
+	}
 	return nil
 }
 
 func (c *objectPruneArg) Run() error {
 	if c.ack != -1 {
-		if err := c.executePrune(); err != nil {
+		TaskCache.Lock()
+		task, ok := TaskCache.memos[c.ack]
+		delete(TaskCache.memos, c.ack)
+		TaskCache.Unlock()
+		if !ok {
+			c.ctx.resp.Payload = []byte("task not found")
+			return nil
+		}
+		if err := c.executePrune(task.objs); err != nil {
 			return err
 		}
 		return nil
@@ -431,46 +445,48 @@ func (c *objectPruneArg) Run() error {
 		))
 		return nil
 	}
-
-	TaskCache.Lock()
-	var id int
-	for {
-		id = rand.Intn(100)
-		if _, ok := TaskCache.memos[id]; ok {
-			continue
+	id := -1
+	if c.force {
+		if err := c.executePrune(selectedObjs); err != nil {
+			return err
 		}
-		TaskCache.memos[id] = pruneTask{
-			objs:     selectedObjs,
-			insertAt: time.Now(),
+	} else {
+		TaskCache.Lock()
+		for {
+			id = rand.Intn(100)
+			if _, ok := TaskCache.memos[id]; ok {
+				continue
+			}
+			TaskCache.memos[id] = pruneTask{
+				objs:     selectedObjs,
+				insertAt: time.Now(),
+			}
+			break
 		}
-		break
+		TaskCache.Unlock()
 	}
-	TaskCache.Unlock()
 
-	c.ctx.resp.Payload = []byte(fmt.Sprintf(
-		"total: %d, stale: %d, selected: %d, minR: %d, maxR: %d, avgR: %d, minS: %v, maxS: %v, avgS: %v, taskid: %d",
+	pad := ""
+	if len(c.ctx.resp.Payload) > 0 {
+		pad = "\n"
+	}
+	c.ctx.resp.Payload = append(c.ctx.resp.Payload, []byte(fmt.Sprintf(
+		"%vtotal: %d, stale: %d, selected: %d, minR: %d, maxR: %d, avgR: %d, minS: %v, maxS: %v, avgS: %v, taskid: %d",
+		pad,
 		total, stale, selected, minR, maxR, totalR/selected,
 		common.HumanReadableBytes(minS),
 		common.HumanReadableBytes(maxS),
 		common.HumanReadableBytes(totalS/selected),
 		id,
-	))
+	))...)
 
 	return nil
 }
 
-func (c *objectPruneArg) executePrune() error {
-	TaskCache.Lock()
-	task, ok := TaskCache.memos[c.ack]
-	delete(TaskCache.memos, c.ack)
-	TaskCache.Unlock()
-	if !ok {
-		c.ctx.resp.Payload = []byte("task not found")
-		return nil
-	}
+func (c *objectPruneArg) executePrune(objs []*catalog.ObjectEntry) error {
 	txn, _ := c.ctx.db.StartTxn(nil)
-	tid := task.objs[0].GetTable().ID
-	did := task.objs[0].GetTable().GetDB().ID
+	tid := objs[0].GetTable().ID
+	did := objs[0].GetTable().GetDB().ID
 	dbHdl, err := txn.GetDatabaseByID(uint64(did))
 	if err != nil {
 		return err
@@ -481,7 +497,7 @@ func (c *objectPruneArg) executePrune() error {
 	}
 	notfound := 0
 	w := &bytes.Buffer{}
-	for _, obj := range task.objs {
+	for _, obj := range objs {
 		if err := tblHdl.SoftDeleteObject(&obj.ID); err != nil {
 			logutil.Errorf("objprune: del obj %s: %v", obj.ID.String(), err)
 			return err
@@ -494,7 +510,12 @@ func (c *objectPruneArg) executePrune() error {
 	}
 
 	logutil.Infof("objprune done: %v", w.String())
-	c.ctx.resp.Payload = []byte(fmt.Sprintf("prunes total: %d, notfound: %d", len(task.objs), notfound))
+	pad := ""
+	if len(c.ctx.resp.Payload) > 0 {
+		pad = "\n"
+	}
+	c.ctx.resp.Payload = append(c.ctx.resp.Payload,
+		[]byte(fmt.Sprintf("%vdone. prunes total: %d, notfound: %d", pad, len(objs), notfound))...)
 	return nil
 }
 
