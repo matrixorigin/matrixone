@@ -34,8 +34,9 @@ import (
 )
 
 type PartitionReader struct {
-	table    *txnTable
-	prepared bool
+	table     *txnTable
+	txnOffset int
+	prepared  bool
 	// inserted rows comes from txn.writes.
 	inserts []*batch.Batch
 	//deleted rows comes from txn.writes or partitionState.rows.
@@ -74,7 +75,7 @@ func (p *PartitionReader) prepare() error {
 		deletes = make(map[types.Rowid]uint8)
 		//load inserts and deletes from txn.writes.
 		p.table.getTxn().forEachTableWrites(p.table.db.databaseId, p.table.tableId,
-			p.table.getTxn().GetSnapshotWriteOffset(), func(entry Entry) {
+			p.txnOffset, func(entry Entry) {
 				if entry.typ == INSERT || entry.typ == INSERT_TXN {
 					if entry.bat == nil || entry.bat.IsEmpty() {
 						return

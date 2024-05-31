@@ -992,6 +992,8 @@ func CompileFilterExpr(
 func TryFastFilterBlocks(
 	ctx context.Context,
 	tbl *txnTable,
+	txnOffset int,
+	fromSnapshot bool,
 	snapshotTS timestamp.Timestamp,
 	tableDef *plan.TableDef,
 	exprs []*plan.Expr,
@@ -1010,6 +1012,8 @@ func TryFastFilterBlocks(
 	err = ExecuteBlockFilter(
 		ctx,
 		tbl,
+		txnOffset,
+		fromSnapshot,
 		snapshotTS,
 		fastFilterOp,
 		loadOp,
@@ -1030,6 +1034,8 @@ func TryFastFilterBlocks(
 func ExecuteBlockFilter(
 	ctx context.Context,
 	tbl *txnTable,
+	txnOffset int,
+	fromSnapshot bool,
 	snapshotTS timestamp.Timestamp,
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
@@ -1070,7 +1076,7 @@ func ExecuteBlockFilter(
 	}()
 
 	if !highSelectivityHint {
-		*dirtyBlocks = tbl.collectDirtyBlocks(snapshot, uncommittedObjects)
+		*dirtyBlocks = tbl.collectDirtyBlocks(snapshot, uncommittedObjects, txnOffset, fromSnapshot)
 	}
 
 	err = ForeachSnapshotObjects(

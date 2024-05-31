@@ -122,6 +122,8 @@ type Scope struct {
 	PreScopes []*Scope
 	// NodeInfo contains the information about the remote node.
 	NodeInfo engine.Node
+	// TxnOffset read offset position within the transaction during the execute current statement
+	TxnOffset int
 	// Instructions contains command list of this scope.
 	Instructions vm.Instructions
 	// Proc contains the execution context.
@@ -251,6 +253,8 @@ type Compile struct {
 	ctx context.Context
 	// proc stores the execution context.
 	proc *process.Process
+	// TxnOffset read offset position within the transaction during the execute current statement
+	TxnOffset int
 
 	MessageBoard *process.MessageBoard
 

@@ -475,11 +475,13 @@ func newBlockMergeReader(
 	ts timestamp.Timestamp,
 	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
+	txnOffset int,
 	fs fileservice.FileService,
 	proc *process.Process,
 ) *blockMergeReader {
 	r := &blockMergeReader{
-		table: txnTable,
+		table:     txnTable,
+		txnOffset: txnOffset,
 		blockReader: newBlockReader(
 			ctx,
 			txnTable.GetTableDef(ctx),
@@ -606,7 +608,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	r.table.getTxn().forEachTableWrites(
 		r.table.db.databaseId,
 		r.table.tableId,
-		r.table.getTxn().GetSnapshotWriteOffset(), func(entry Entry) {
+		r.txnOffset, func(entry Entry) {
 			if entry.isGeneratedByTruncate() {
 				return
 			}

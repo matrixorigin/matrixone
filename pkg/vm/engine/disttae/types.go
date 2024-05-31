@@ -793,7 +793,8 @@ type blockReader struct {
 
 type blockMergeReader struct {
 	*blockReader
-	table *txnTable
+	table     *txnTable
+	txnOffset int
 
 	pkVal []byte
 

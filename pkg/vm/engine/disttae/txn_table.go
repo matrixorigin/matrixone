@@ -630,7 +630,7 @@ func (tbl *txnTable) resetSnapshot() {
 }
 
 // return all unmodified blocks
-func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges engine.Ranges, err error) {
+func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset int, fromSnapshot bool) (ranges engine.Ranges, err error) {
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
 	trace.GetService().AddTxnDurationAction(
@@ -682,6 +682,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		exprs,
 		&blocks,
 		tbl.proc.Load(),
+		txnOffset,
+		fromSnapshot,
 	); err != nil {
 		return
 	}
@@ -716,16 +718,19 @@ func (tbl *txnTable) rangesOnePart(
 	exprs []*plan.Expr, // filter expression
 	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
+	txnOffset int,
+	fromSnapshot bool,
 ) (err error) {
-
 	var done bool
 	// collect dirty blocks lazily
 	var dirtyBlks map[types.Blockid]struct{}
-	uncommittedObjects := tbl.collectUnCommittedObjects()
+	uncommittedObjects := tbl.collectUnCommittedObjects(txnOffset, fromSnapshot)
 
 	if done, err = TryFastFilterBlocks(
 		ctx,
 		tbl,
+		txnOffset,
+		fromSnapshot,
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
 		exprs,
@@ -751,7 +756,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if dirtyBlks == nil {
-		tbl.collectDirtyBlocks(state, uncommittedObjects)
+		tbl.collectDirtyBlocks(state, uncommittedObjects, txnOffset, fromSnapshot)
 	}
 
 	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
@@ -905,12 +910,18 @@ func (tbl *txnTable) rangesOnePart(
 	return
 }
 
-func (tbl *txnTable) collectUnCommittedObjects() []objectio.ObjectStats {
+func (tbl *txnTable) collectUnCommittedObjects(txnOffset int, fromSnapshot bool) []objectio.ObjectStats {
 	var unCommittedObjects []objectio.ObjectStats
+
+	writeOffset := txnOffset
+	if fromSnapshot {
+		writeOffset = tbl.getTxn().GetSnapshotWriteOffset()
+	}
+
 	tbl.getTxn().forEachTableWrites(
 		tbl.db.databaseId,
 		tbl.tableId,
-		tbl.getTxn().GetSnapshotWriteOffset(),
+		writeOffset,
 		func(entry Entry) {
 			stats := objectio.ObjectStats{}
 			if entry.bat == nil || entry.bat.IsEmpty() {
@@ -935,7 +946,9 @@ func (tbl *txnTable) collectUnCommittedObjects() []objectio.ObjectStats {
 
 func (tbl *txnTable) collectDirtyBlocks(
 	state *logtailreplay.PartitionState,
-	uncommittedObjects []objectio.ObjectStats) map[types.Blockid]struct{} {
+	uncommittedObjects []objectio.ObjectStats,
+	txnOffset int,
+	fromSnapshot bool) map[types.Blockid]struct{} {
 	dirtyBlks := make(map[types.Blockid]struct{})
 	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
 	{
@@ -963,10 +976,15 @@ func (tbl *txnTable) collectDirtyBlocks(
 		}, uncommittedObjects...)
 	}
 
+	writeOffset := txnOffset
+	if fromSnapshot {
+		writeOffset = tbl.getTxn().GetSnapshotWriteOffset()
+	}
+
 	tbl.getTxn().forEachTableWrites(
 		tbl.db.databaseId,
 		tbl.tableId,
-		tbl.getTxn().GetSnapshotWriteOffset(),
+		writeOffset,
 		func(entry Entry) {
 			// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
 			// TODO Adjustments will be made here in the future
@@ -1691,7 +1709,12 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 }
 
 func (tbl *txnTable) NewReader(
-	ctx context.Context, num int, expr *plan.Expr, ranges []byte, orderedScan bool,
+	ctx context.Context,
+	num int,
+	expr *plan.Expr,
+	ranges []byte,
+	orderedScan bool,
+	txnOffset int,
 ) ([]engine.Reader, error) {
 	pkFilter := tbl.tryExtractPKFilter(expr)
 	blkArray := objectio.BlockInfoSlice(ranges)
@@ -1699,10 +1722,10 @@ func (tbl *txnTable) NewReader(
 		return []engine.Reader{new(emptyReader)}, nil
 	}
 	if blkArray.Len() == 0 {
-		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil)
+		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil, txnOffset)
 	}
 	if blkArray.Len() == 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
-		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil)
+		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil, txnOffset)
 	}
 	if blkArray.Len() > 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
 		rds := make([]engine.Reader, num)
@@ -1719,7 +1742,7 @@ func (tbl *txnTable) NewReader(
 			}
 			dirtyBlks = append(dirtyBlks, blkInfo)
 		}
-		rds0, err := tbl.newMergeReader(ctx, num, expr, pkFilter, dirtyBlks)
+		rds0, err := tbl.newMergeReader(ctx, num, expr, pkFilter, dirtyBlks, txnOffset)
 		if err != nil {
 			return nil, err
 		}
@@ -1789,6 +1812,7 @@ func (tbl *txnTable) newMergeReader(
 	expr *plan.Expr,
 	pkFilter PKFilter,
 	dirtyBlks []*objectio.BlockInfo,
+	txnOffset int,
 ) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
@@ -1797,7 +1821,8 @@ func (tbl *txnTable) newMergeReader(
 		num,
 		pkFilter,
 		expr,
-		dirtyBlks)
+		dirtyBlks,
+		txnOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -1937,6 +1962,7 @@ func (tbl *txnTable) newReader(
 	pkFilter PKFilter,
 	expr *plan.Expr,
 	dirtyBlks []*objectio.BlockInfo,
+	txnOffset int,
 ) ([]engine.Reader, error) {
 	txn := tbl.getTxn()
 	ts := txn.op.SnapshotTS()
@@ -1978,10 +2004,11 @@ func (tbl *txnTable) newReader(
 	}
 
 	partReader := &PartitionReader{
-		table:    tbl,
-		iter:     iter,
-		seqnumMp: seqnumMp,
-		typsMap:  mp,
+		table:     tbl,
+		txnOffset: txnOffset,
+		iter:      iter,
+		seqnumMp:  seqnumMp,
+		typsMap:   mp,
 	}
 
 	//tbl.Lock()
@@ -2001,6 +2028,7 @@ func (tbl *txnTable) newReader(
 					ts,
 					[]*objectio.BlockInfo{dirtyBlks[i]},
 					expr,
+					txnOffset,
 					fs,
 					proc,
 				),
@@ -2018,6 +2046,7 @@ func (tbl *txnTable) newReader(
 				ts,
 				[]*objectio.BlockInfo{dirtyBlks[i]},
 				expr,
+				txnOffset,
 				fs,
 				proc,
 			)
@@ -2047,6 +2076,7 @@ func (tbl *txnTable) newReader(
 		bmr := &blockMergeReader{
 			blockReader: blockReaders[i],
 			table:       tbl,
+			txnOffset:   txnOffset,
 			pkVal:       pkVal,
 			deletaLocs:  make(map[string][]objectio.Location),
 		}

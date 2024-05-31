@@ -434,7 +434,8 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				return err
 			}
 
-			ranges, err := rel.Ranges(ctx, nil)
+			//ranges, err := rel.Ranges(ctx, nil)
+			ranges, err := rel.Ranges(ctx, nil, 0, true)
 			if err != nil {
 				return err
 			}

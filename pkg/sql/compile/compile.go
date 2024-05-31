@@ -135,6 +135,9 @@ func NewCompile(
 	c.disableRetry = false
 	if c.proc.TxnOperator != nil {
 		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+		c.TxnOffset = c.proc.TxnOperator.GetWorkspace().GetSnapshotWriteOffset()
+	} else {
+		c.TxnOffset = -1
 	}
 	return c
 }
@@ -2185,6 +2188,7 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Scope, error) {
 	s := newScope(Remote)
 	s.NodeInfo = node
+	s.TxnOffset = c.TxnOffset
 	s.DataSource = &Source{
 		node: n,
 	}
@@ -3746,6 +3750,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 	//-----------------------------------------------------------------------------------------------------
 	ctx := c.ctx
 	txnOp = c.proc.TxnOperator
+	fromSnapshot := false
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 			n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
@@ -3754,6 +3759,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 			if n.ScanSnapshot.Tenant != nil {
 				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
 			}
+			fromSnapshot = true
 		}
 	}
 	//-----------------------------------------------------------------------------------------------------
@@ -3772,7 +3778,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 	if err != nil {
 		return nil, err
 	}
-	ranges, err = rel.Ranges(ctx, blockFilterList)
+	ranges, err = rel.Ranges(ctx, blockFilterList, c.TxnOffset, fromSnapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -3785,7 +3791,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 				if err != nil {
 					return nil, err
 				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset, fromSnapshot)
 				if err != nil {
 					return nil, err
 				}
@@ -3807,7 +3813,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 				if err != nil {
 					return nil, err
 				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset, fromSnapshot)
 				if err != nil {
 					return nil, err
 				}
