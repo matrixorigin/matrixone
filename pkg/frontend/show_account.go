@@ -466,12 +466,18 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	ses.SetMysqlResultSet(outputRS)
 
 	ses.rs = columnDef
-	err = saveQueryResult(ctx, ses,
-		func() ([]*batch.Batch, error) {
-			return accInfosBatches, nil
-		},
-		nil,
-	)
+
+	if canSaveQueryResult(ctx, ses) {
+		err = saveQueryResult(ctx, ses,
+			func() ([]*batch.Batch, error) {
+				return accInfosBatches, nil
+			},
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+	}
 
 	return err
 }

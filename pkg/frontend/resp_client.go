@@ -67,7 +67,7 @@ func (resper *MysqlResp) respClientWithoutFlush(ses *Session,
 }
 
 var _ Responser = &MysqlResp{}
-var nullResper Responser = &NullResp{}
+var defResper Responser = &NullResp{}
 
 type MysqlResp struct {
 	mysqlRrWr MysqlRrWr

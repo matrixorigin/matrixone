@@ -333,7 +333,5 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 	}
 	ses.SetMysqlResultSet(rs)
 
-	//TODO: save query result
-
-	return nil
+	return trySaveQueryResult(ctx, ses, rs)
 }

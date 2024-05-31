@@ -731,8 +731,7 @@ func handleSetVar(ses FeSession, execCtx *ExecCtx, sv *tree.SetVar, sql string) 
 	return nil
 }
 
-func doShowErrors(ses *Session) error {
-	var err error
+func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 
 	levelCol := new(MysqlColumn)
 	levelCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -761,12 +760,11 @@ func doShowErrors(ses *Session) error {
 		row[2] = info.msgs[i]
 		mrs.AddRow(row)
 	}
-
-	return err
+	return trySaveQueryResult(execCtx.reqCtx, ses, mrs)
 }
 
-func handleShowErrors(ses FeSession) error {
-	err := doShowErrors(ses.(*Session))
+func handleShowErrors(ses FeSession, execCtx *ExecCtx) error {
+	err := doShowErrors(ses.(*Session), execCtx)
 	if err != nil {
 		return err
 	}
@@ -892,9 +890,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		mrs.AddRow(row)
 	}
 
-	//TODO: to save query result
-
-	return err
+	return trySaveQueryResult(execCtx.reqCtx, ses, mrs)
 }
 
 /*
@@ -1047,11 +1043,10 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	}
 
 	//2. fill the result set
-	explainColName := "QUERY PLAN"
 	//column
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	col1.SetName(explainColName)
+	col1.SetName("QUERY PLAN")
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
@@ -1059,21 +1054,8 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	for _, line := range buffer.Lines {
 		mrs.AddRow([]any{line})
 	}
-	ses.rs = mysqlColDef2PlanResultColDef(mrs)
 
-	err = saveQueryResult(reqCtx, ses,
-		func() ([]*batch.Batch, error) {
-			//3. fill the batch for saving the query result
-			bat, err := fillQueryBatch(ses, explainColName, buffer.Lines)
-			return []*batch.Batch{bat}, err
-		},
-		func(data []*batch.Batch) {
-			for _, item := range data {
-				item.Clean(ses.GetMemPool())
-			}
-		},
-	)
-	return nil
+	return trySaveQueryResult(reqCtx, ses, mrs)
 }
 
 func fillQueryBatch(ses *Session, explainColName string, lines []string) (*batch.Batch, error) {
@@ -1557,8 +1539,8 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 		rows = append(rows, row)
 	}
 
-	bat, err = constructCollationBatch(ses, rows)
-	defer bat.Clean(proc.Mp())
+	bat, _, err = convertRowsIntoBatch(ses.GetMemPool(), mrs.Columns, rows)
+	defer cleanBatch(ses.GetMemPool(), bat)
 	if err != nil {
 		return err
 	}
@@ -1619,21 +1601,26 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 		mrs.AddRow(row)
 	}
 
-	// oq := newFakeOutputQueue(mrs)
-	// if err = fillResultSet(oq, bat, ses); err != nil {
-	// 	return err
-	// }
-
 	ses.SetMysqlResultSet(mrs)
-	ses.rs = mysqlColDef2PlanResultColDef(mrs)
 
-	// save query result
-	err = saveQueryResult(execCtx.reqCtx, ses,
-		func() ([]*batch.Batch, error) {
-			return []*batch.Batch{bat}, nil
-		},
-		nil,
-	)
+	if canSaveQueryResult(execCtx.reqCtx, ses) {
+		//already have the batch
+		ses.rs, _, _, err = mysqlColDef2PlanResultColDef(mrs.Columns)
+		if err != nil {
+			return err
+		}
+
+		// save query result
+		err = saveQueryResult(execCtx.reqCtx, ses,
+			func() ([]*batch.Batch, error) {
+				return []*batch.Batch{bat}, nil
+			},
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+	}
 
 	return err
 }
@@ -1646,7 +1633,7 @@ func handleShowSubscriptions(ses FeSession, execCtx *ExecCtx, ss *tree.ShowSubsc
 	return err
 }
 
-func doShowBackendServers(ses *Session) error {
+func doShowBackendServers(ses *Session, execCtx *ExecCtx) error {
 	// Construct the columns.
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -1722,13 +1709,12 @@ func doShowBackendServers(ses *Session) error {
 		route.RouteForCommonTenant(se, nil, appendFn)
 	}
 
-	//TODO: save query result
-	return nil
+	return trySaveQueryResult(execCtx.reqCtx, ses, mrs)
 }
 
 func handleShowBackendServers(ses FeSession, execCtx *ExecCtx) error {
 	var err error
-	if err := doShowBackendServers(ses.(*Session)); err != nil {
+	if err := doShowBackendServers(ses.(*Session), execCtx); err != nil {
 		return err
 	}
 	return err

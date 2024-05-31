@@ -470,7 +470,7 @@ var NewBackgroundExec = func(
 			gSysVars:       GSysVariables,
 			label:          make(map[string]string),
 			timeZone:       time.Local,
-			respr:          nullResper,
+			respr:          defResper,
 		},
 	}
 	backSes.uuid, _ = uuid.NewV7()

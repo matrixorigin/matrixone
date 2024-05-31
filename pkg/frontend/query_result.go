@@ -226,7 +226,7 @@ func saveQueryResult(ctx context.Context, ses *Session,
 	genData func() ([]*batch.Batch, error),
 	cleanData func([]*batch.Batch),
 ) error {
-	if canSaveQueryResult(ctx, ses) && genData != nil {
+	if genData != nil {
 		data, err := genData()
 		if cleanData != nil {
 			defer cleanData(data)
@@ -254,6 +254,26 @@ func saveQueryResult2(execCtx *ExecCtx, bat *batch.Batch) error {
 		}
 	}
 	return nil
+}
+
+func trySaveQueryResult(ctx context.Context, ses *Session, mrs *MysqlResultSet) (err error) {
+	if canSaveQueryResult(ctx, ses) {
+		var data *batch.Batch
+		data, ses.rs, err = convertRowsIntoBatch(ses.GetMemPool(), mrs.Columns, mrs.Data)
+		defer cleanBatch(ses.GetMemPool(), data)
+		if err != nil {
+			return err
+		}
+		err = saveQueryResult(ctx, ses, func() ([]*batch.Batch, error) {
+			return []*batch.Batch{data}, nil
+		},
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return
 }
 
 func buildColumnMap(ctx context.Context, rs *plan.ResultColDef) (string, error) {

@@ -159,7 +159,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 	case *tree.ShowErrors, *tree.ShowWarnings:
 		ses.EnterFPrint(25)
 		defer ses.ExitFPrint(25)
-		err = handleShowErrors(ses)
+		err = handleShowErrors(ses, execCtx)
 		if err != nil {
 			return
 		}

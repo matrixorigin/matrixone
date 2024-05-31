@@ -34,6 +34,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -742,60 +743,183 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement) stri
 	return bb.String()
 }
 
-func mysqlColDef2PlanResultColDef(mr *MysqlResultSet) *plan.ResultColDef {
-	if mr == nil {
-		return nil
+func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batch.Batch, *plan.ResultColDef, error) {
+	planColDefs, colTyps, colNames, err := mysqlColDef2PlanResultColDef(cols)
+	if err != nil {
+		return nil, nil, err
+	}
+	//1. make vector type
+	bat := batch.New(true, colNames)
+	//2. make batch
+	cnt := len(rows)
+	bat.SetRowCount(cnt)
+	for colIdx, typ := range colTyps {
+		bat.Vecs[colIdx] = vector.NewVec(typ)
+		switch typ.Oid {
+		case types.T_varchar:
+			vData := make([]string, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(string)
+			}
+			err := vector.AppendStringList(bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_int32:
+			vData := make([]int32, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(int32)
+			}
+			err := vector.AppendFixedList[int32](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_int64:
+			vData := make([]int64, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(int64)
+			}
+			err := vector.AppendFixedList[int64](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_float64:
+			vData := make([]float64, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(float64)
+			}
+			err := vector.AppendFixedList[float64](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_float32:
+			vData := make([]float32, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(float32)
+			}
+			err := vector.AppendFixedList[float32](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_date:
+			vData := make([]types.Date, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(types.Date)
+			}
+			err := vector.AppendFixedList[types.Date](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_time:
+			vData := make([]types.Time, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(types.Time)
+			}
+			err := vector.AppendFixedList[types.Time](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_datetime:
+			vData := make([]types.Datetime, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(types.Datetime)
+			}
+			err := vector.AppendFixedList[types.Datetime](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_timestamp:
+			vData := make([]types.Timestamp, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(types.Timestamp)
+			}
+			err := vector.AppendFixedList[types.Timestamp](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		default:
+			return nil, nil, moerr.NewInternalErrorNoCtx("unsupported mysql type %d", cols[colIdx].ColumnType())
+		}
+	}
+	return bat, planColDefs, nil
+}
+
+func cleanBatch(pool *mpool.MPool, data ...*batch.Batch) {
+	for _, item := range data {
+		item.Clean(pool)
+	}
+}
+
+func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Type, []string, error) {
+	if len(cols) == 0 {
+		return nil, nil, nil, nil
 	}
 
-	resultCols := make([]*plan.ColDef, len(mr.Columns))
-	for i, col := range mr.Columns {
+	resultCols := make([]*plan.ColDef, len(cols))
+	resultColTypes := make([]types.Type, len(cols))
+	resultColNames := make([]string, len(cols))
+	for i, col := range cols {
+		resultColNames[i] = col.Name()
 		resultCols[i] = &plan.ColDef{
 			Name: col.Name(),
 		}
+		var pType plan.Type
+		var tType types.Type
 		switch col.ColumnType() {
 		case defines.MYSQL_TYPE_VAR_STRING:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_varchar),
 			}
+			tType = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 		case defines.MYSQL_TYPE_LONG:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_int32),
 			}
+			tType = types.New(types.T_int32, 0, 0)
 		case defines.MYSQL_TYPE_LONGLONG:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_int64),
 			}
+			tType = types.New(types.T_int64, 0, 0)
 		case defines.MYSQL_TYPE_DOUBLE:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_float64),
 			}
+			tType = types.New(types.T_float64, 0, 0)
 		case defines.MYSQL_TYPE_FLOAT:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_float32),
 			}
+			tType = types.New(types.T_float32, 0, 0)
 		case defines.MYSQL_TYPE_DATE:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_date),
 			}
+			tType = types.New(types.T_date, 0, 0)
 		case defines.MYSQL_TYPE_TIME:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_time),
 			}
+			tType = types.New(types.T_time, 0, 0)
 		case defines.MYSQL_TYPE_DATETIME:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_datetime),
 			}
+			tType = types.New(types.T_datetime, 0, 0)
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_timestamp),
 			}
+			tType = types.New(types.T_timestamp, 0, 0)
 		default:
-			panic(fmt.Sprintf("unsupported mysql type %d", col.ColumnType()))
+			return nil, nil, nil, moerr.NewInternalErrorNoCtx("unsupported mysql type %d", col.ColumnType())
 		}
+		resultCols[i].Typ = pType
+		resultColTypes[i] = tType
 	}
 	return &plan.ResultColDef{
 		ResultCols: resultCols,
-	}
+	}, resultColTypes, resultColNames, nil
 }
 
 // errCodeRollbackWholeTxn denotes that the error code
