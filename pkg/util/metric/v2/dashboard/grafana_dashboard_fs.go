@@ -172,8 +172,8 @@ func (c *DashboardCreator) initFSIOMergerDurationRow() dashboard.Option {
 		"FileService io merger duration",
 		c.getMultiHistogram(
 			[]string{
-				c.getMetricWithFilter(`mo_fs_io_merger_duration_seconds`, `type="wait"`),
-				c.getMetricWithFilter(`mo_fs_io_merger_duration_seconds`, `type="initiate"`),
+				c.getMetricWithFilter(`mo_fs_io_merger_duration_seconds_bucket`, `type="wait"`),
+				c.getMetricWithFilter(`mo_fs_io_merger_duration_seconds_bucket`, `type="initiate"`),
 			},
 			[]string{
 				"wait",
@@ -191,19 +191,19 @@ func (c *DashboardCreator) initFSReadDurationRow() dashboard.Option {
 		"FileService read duration",
 		c.getMultiHistogram(
 			[]string{
-				c.getMetricWithFilter(`mo_fs_read_duration`, `type="read-vector-cache"`),
-				c.getMetricWithFilter(`mo_fs_read_duration`, `type="update-vector-cache"`),
-				c.getMetricWithFilter(`mo_fs_read_duration`, `type="read-memory-cache"`),
-				c.getMetricWithFilter(`mo_fs_read_duration`, `type="update-memory-cache"`),
-				c.getMetricWithFilter(`mo_fs_read_duration`, `type="read-disk-cache"`),
-				c.getMetricWithFilter(`mo_fs_read_duration`, `type="update-disk-cache"`),
-				c.getMetricWithFilter(`mo_fs_read_duration`, `type="read-remote-cache"`),
-				c.getMetricWithFilter(`mo_fs_read_duration`, `type="get-reader"`),
-				c.getMetricWithFilter(`mo_fs_read_duration`, `type="get-content"`),
-				c.getMetricWithFilter(`mo_fs_read_duration`, `type="get-entry-data "`),
-				c.getMetricWithFilter(`mo_fs_read_duration`, `type="write-to-writer"`),
-				c.getMetricWithFilter(`mo_fs_read_duration`, `type="set-cached-data"`),
-				c.getMetricWithFilter(`mo_fs_read_duration`, `type="disk-cache-set-file"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="read-vector-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="update-vector-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="read-memory-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="update-memory-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="read-disk-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="update-disk-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="read-remote-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="get-reader"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="get-content"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="get-entry-data "`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="write-to-writer"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="set-cached-data"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="disk-cache-set-file"`),
 			},
 			[]string{
 				"read-vector-cache",
