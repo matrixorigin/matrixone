@@ -21,8 +21,9 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/automaxprocs/maxprocs"
+
 	"github.com/panjf2000/ants/v2"
-	_ "go.uber.org/automaxprocs"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -56,6 +57,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func init() {
+	maxprocs.Set(maxprocs.Logger(func(string, ...interface{}) {}))
+}
 
 var _ engine.Engine = new(Engine)
 var ncpu = runtime.GOMAXPROCS(0)
