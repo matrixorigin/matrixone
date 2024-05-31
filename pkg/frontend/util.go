@@ -852,7 +852,9 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 
 func cleanBatch(pool *mpool.MPool, data ...*batch.Batch) {
 	for _, item := range data {
-		item.Clean(pool)
+		if item != nil {
+			item.Clean(pool)
+		}
 	}
 }
 
@@ -872,11 +874,16 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 		var pType plan.Type
 		var tType types.Type
 		switch col.ColumnType() {
-		case defines.MYSQL_TYPE_VAR_STRING:
+		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
 			pType = plan.Type{
 				Id: int32(types.T_varchar),
 			}
 			tType = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+		case defines.MYSQL_TYPE_SHORT:
+			pType = plan.Type{
+				Id: int32(types.T_int16),
+			}
+			tType = types.New(types.T_int16, 0, 0)
 		case defines.MYSQL_TYPE_LONG:
 			pType = plan.Type{
 				Id: int32(types.T_int32),
