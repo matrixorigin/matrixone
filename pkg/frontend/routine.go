@@ -176,6 +176,9 @@ func (rt *Routine) setSession(ses *Session) {
 }
 
 func (rt *Routine) getSession() *Session {
+	if rt == nil {
+		return nil
+	}
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	return rt.ses
