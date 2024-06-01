@@ -138,7 +138,7 @@ func NewCompile(
 		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
 		c.TxnOffset = c.proc.TxnOperator.GetWorkspace().GetSnapshotWriteOffset()
 	} else {
-		c.TxnOffset = -1
+		c.TxnOffset = 0
 	}
 	return c
 }
