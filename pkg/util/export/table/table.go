@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -447,7 +446,7 @@ func (tbl *Table) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 	}
 	sb.WriteString("\n)")
 
-	if len(tbl.Comment) > 0 && slices.Contains([]string{"statement_info", "rawlog"}, tbl.Table) {
+	if len(tbl.Comment) > 0 && tbl.Engine != ExternalTableEngine {
 		sb.WriteString(fmt.Sprintf(" COMMENT %q ", tbl.Comment))
 	}
 	// cluster by
