@@ -47,7 +47,7 @@ func getPathOfQueryResultFile(fileName string) string {
 	return fmt.Sprintf("%s/%s", getQueryResultDir(), fileName)
 }
 
-func openSaveQueryResult(ctx context.Context, ses *Session) bool {
+func canSaveQueryResult(ctx context.Context, ses *Session) bool {
 	if ses.ast == nil {
 		return false
 	}
@@ -100,7 +100,7 @@ func initQueryResulConfig(ctx context.Context, ses *Session) error {
 	return err
 }
 
-func saveQueryResult(ctx context.Context, ses *Session, bat *batch.Batch) error {
+func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
 	s := ses.curResultSize + float64(bat.Size())/(1024*1024)
 	if s > ses.limitResultSize {
 		ses.Info(ctx, "open save query result", zap.Float64("current result size:", s))
@@ -130,7 +130,19 @@ func saveQueryResult(ctx context.Context, ses *Session, bat *batch.Batch) error 
 	return err
 }
 
-func saveQueryResultMeta(ctx context.Context, ses *Session) error {
+func saveBatches(ctx context.Context, ses *Session, data []*batch.Batch) error {
+	for _, b := range data {
+		if err := saveBatch(ctx, ses, b); err != nil {
+			return err
+		}
+	}
+	if err := saveMeta(ctx, ses); err != nil {
+		return err
+	}
+	return nil
+}
+
+func saveMeta(ctx context.Context, ses *Session) error {
 	defer func() {
 		ses.ResetBlockIdx()
 		ses.p = nil
@@ -208,6 +220,64 @@ func saveQueryResultMeta(ctx context.Context, ses *Session) error {
 		return err
 	}
 	return err
+}
+
+// saveQueryResult saves the data composited by hand
+func saveQueryResult(ctx context.Context, ses *Session,
+	genData func() ([]*batch.Batch, error),
+	cleanData func([]*batch.Batch),
+) error {
+	if genData != nil {
+		data, err := genData()
+		if cleanData != nil {
+			defer cleanData(data)
+		}
+		if err != nil {
+			return err
+		}
+		err = saveBatches(ctx, ses, data)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// saveQueryResult2 saves the data from the engine.
+func saveQueryResult2(execCtx *ExecCtx, bat *batch.Batch) error {
+	ses := execCtx.ses.(*Session)
+	if canSaveQueryResult(execCtx.reqCtx, ses) {
+		if bat == nil {
+			if err := saveMeta(execCtx.reqCtx, ses); err != nil {
+				return err
+			}
+		} else {
+			if err := saveBatch(execCtx.reqCtx, ses, bat); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func trySaveQueryResult(ctx context.Context, ses *Session, mrs *MysqlResultSet) (err error) {
+	if canSaveQueryResult(ctx, ses) {
+		var data *batch.Batch
+		data, ses.rs, err = convertRowsIntoBatch(ses.GetMemPool(), mrs.Columns, mrs.Data)
+		defer cleanBatch(ses.GetMemPool(), data)
+		if err != nil {
+			return err
+		}
+		err = saveQueryResult(ctx, ses, func() ([]*batch.Batch, error) {
+			return []*batch.Batch{data}, nil
+		},
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return
 }
 
 func buildColumnMap(ctx context.Context, rs *plan.ResultColDef) (string, error) {
@@ -291,18 +361,6 @@ func checkPrivilege(uuids []string, reqCtx context.Context, ses *Session) error 
 			return err
 		}
 		if err = authenticateCanExecuteStatementAndPlan(reqCtx, ses, ast, pn); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func maySaveQueryResult(ctx context.Context, ses *Session, bat *batch.Batch) error {
-	if openSaveQueryResult(ctx, ses) {
-		if err := saveQueryResult(ctx, ses, bat); err != nil {
-			return err
-		}
-		if err := saveQueryResultMeta(ctx, ses); err != nil {
 			return err
 		}
 	}
@@ -506,11 +564,10 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	}
 	exportParam := &ExportConfig{
 		userConfig: eParam,
+		mrs:        mrs,
 	}
 	//prepare output queue
-	oq := NewOutputQueue(ctx, ses, columnCount, mrs, exportParam)
-	oq.reset()
-	oq.ep.OutTofile = true
+	exportParam.OutTofile = true
 	//prepare export param
 	exportParam.DefaultBufSize = getGlobalPu().SV.ExportDataDefaultFlushSize
 	exportParam.UseFileService = true
@@ -574,17 +631,16 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 					break
 				}
 
-				_, err = extractRowFromEveryVector(ctx, ses, tmpBatch, j, oq, true)
+				err = extractRowFromEveryVector(ctx, ses, tmpBatch, j, mrs.Data[0])
+				if err != nil {
+					return err
+				}
+				err = exportDataToCSVFile(exportParam)
 				if err != nil {
 					return err
 				}
 			}
 		}
-	}
-
-	err = oq.flush()
-	if err != nil {
-		return err
 	}
 
 	err = Close(exportParam)
@@ -684,4 +740,17 @@ func getFileSize(files []fileservice.DirEntry, fileName string) int64 {
 		}
 	}
 	return -1
+}
+
+var defResultSaver BinaryWriter = &QueryResult{}
+
+type QueryResult struct {
+}
+
+func (result *QueryResult) Write(execCtx *ExecCtx, bat *batch.Batch) error {
+	return saveQueryResult2(execCtx, bat)
+}
+
+func (result *QueryResult) Close() {
+
 }
