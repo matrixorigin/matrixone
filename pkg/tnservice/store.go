@@ -236,7 +236,7 @@ func (s *store) Close() error {
 	s.moCluster.Close()
 
 	var err error
-	if !s.cfg.ShardService.Enable {
+	if s.cfg.ShardService.Enable {
 		err = s.shardServer.Close()
 	}
 	err = errors.Join(
