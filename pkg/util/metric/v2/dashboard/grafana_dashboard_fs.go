@@ -37,6 +37,7 @@ func (c *DashboardCreator) initFileServiceDashboard() error {
 			c.initFSS3ConnDurationRow(),
 			c.initFSIOMergerDurationRow(),
 			c.initFSReadDurationRow(),
+			c.initFSMallocRow(),
 		)...)
 	if err != nil {
 		return err
@@ -224,5 +225,25 @@ func (c *DashboardCreator) initFSReadDurationRow() dashboard.Option {
 			[]float32{3, 3, 3, 3, 3},
 			axis.Unit("seconds"),
 			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initFSMallocRow() dashboard.Option {
+	return dashboard.Row(
+		"malloc stats",
+
+		c.withMultiGraph(
+			"active objects",
+			3,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="io_entry_data"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="bytes"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="memory_cache"`) + `)`,
+			},
+			[]string{
+				"io_entry_data",
+				"bytes",
+				"memory_cache",
+			}),
 	)
 }

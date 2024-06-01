@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/spf13/cobra"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,8 +39,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/spf13/cobra"
 )
 
 type inspectContext struct {
@@ -344,13 +344,15 @@ func (c *objectPruneArg) String() string {
 	}
 }
 
+const AllowPruneDuration = 24 * time.Hour
+
 func (c *objectPruneArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	address, _ := cmd.Flags().GetString("target")
 	c.ack, _ = cmd.Flags().GetInt("ack")
 	c.ago, _ = cmd.Flags().GetDuration("duration")
 	c.force, _ = cmd.Flags().GetBool("force")
-	if c.ago < 24*time.Hour {
+	if c.ago < AllowPruneDuration {
 		return moerr.NewInvalidInputNoCtx("pruning objects within 24h is not supported")
 	}
 	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
