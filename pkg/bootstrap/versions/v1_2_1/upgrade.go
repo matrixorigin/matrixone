@@ -71,7 +71,7 @@ func (v *versionHandle) HandleTenantUpgrade(
 		duration := time.Since(start)
 		getLogger().Info("tenant upgrade entry complete",
 			zap.String("upgrade entry", upgEntry.String()),
-			zap.Int64("time cost", duration.Milliseconds()),
+			zap.Int64("time cost(ms)", duration.Milliseconds()),
 			zap.Int32("tenantId", tenantID),
 			zap.String("toVersion", v.Metadata().Version))
 	}
