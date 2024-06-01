@@ -615,11 +615,17 @@ func mustAddTestShards(
 	require.NoError(t, s.Create(context.TODO(), table, txnOp))
 	require.NoError(t, txnOp.Commit(ctx))
 
+	store := s.storage.(*MemShardStorage)
+	store.RLock()
 	for _, o := range others {
-		for k, m := range s.storage.(*MemShardStorage).committed {
-			o.storage.(*MemShardStorage).committed[k] = m
+		store2 := o.storage.(*MemShardStorage)
+		store2.Lock()
+		for k, m := range store.committed {
+			store2.committed[k] = m
 		}
+		store2.Unlock()
 	}
+	store.RUnlock()
 }
 
 func mustAddTestPartitionShards(
