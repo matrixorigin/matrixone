@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"regexp"
 	"runtime"
 	gotrace "runtime/trace"
 	"sort"
@@ -467,6 +468,18 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		c.proc.CleanValueScanBatchs()
 		c.proc.SetPrepareBatch(nil)
 		c.proc.SetPrepareExprList(nil)
+	}()
+
+	defer func() {
+		if c.proc.SessionInfo.User != "mo_logger" && txnOp != nil {
+			if regexp.MustCompile(`.*select count\(\*\) from tpch\.orders \{snapshot.*`).MatchString(sql) {
+				//if regexp.MustCompile(`.*from tpch\.orders \{snapshot.*`).MatchString(sql) {
+				logutil.Infof("xxxx txn: %s run sql:%s, err:%v",
+					txnOp.Txn().DebugString(),
+					sql,
+					err)
+			}
+		}
 	}()
 
 	var writeOffset uint64
@@ -969,11 +982,9 @@ func (c *Compile) getCNList() (engine.Nodes, error) {
 			return cnList, nil
 		}
 	}
-	cnList = append(cnList, engine.Node{
-		Id:   cnID,
-		Addr: c.addr,
-		Mcpu: ncpu,
-	})
+	n := getEngineNode(c)
+	n.Id = cnID
+	cnList = append(cnList, n)
 	return cnList, nil
 }
 
@@ -986,20 +997,9 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	}()
 
 	c.execType = plan2.GetExecType(c.pn.GetQuery())
+	n := getEngineNode(c)
 	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
-		c.cnList = engine.Nodes{
-			engine.Node{
-				Addr: c.addr,
-				Mcpu: 1,
-			},
-		}
-	} else if c.execType == plan2.ExecTypeAP_ONECN {
-		c.cnList = engine.Nodes{
-			engine.Node{
-				Addr: c.addr,
-				Mcpu: ncpu,
-			},
-		}
+		c.cnList = engine.Nodes{n}
 	} else {
 		c.cnList, err = c.getCNList()
 		if err != nil {
@@ -1033,7 +1033,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		if err != nil {
 			return nil, err
 		}
-		scope, err = c.compileApQuery(qry, scopes, qry.Steps[i])
+		scope, err = c.compileSteps(qry, scopes, qry.Steps[i])
 		if err != nil {
 			return nil, err
 		}
@@ -1072,7 +1072,7 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 	return nil
 }
 
-func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope, step int32) (*Scope, error) {
+func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope, error) {
 	if qry.Nodes[step].NodeType == plan.Node_SINK {
 		return ss[0], nil
 	}
@@ -1085,7 +1085,11 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope, step int32) (*Sco
 	case plan.Query_UPDATE:
 		return ss[0], nil
 	default:
-		rs = c.newMergeScope(ss)
+		if c.execType == plan2.ExecTypeTP {
+			rs = ss[len(ss)-1]
+		} else {
+			rs = c.newMergeScope(ss)
+		}
 		updateScopesLastFlag([]*Scope{rs})
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
@@ -1383,15 +1387,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 
 		n.NotCacheable = true
-		nodeStats := ns[n.Children[0]].Stats
-
 		var arg *deletion.Argument
 		arg, err = constructDeletion(n, c.e)
 		if err != nil {
 			return nil, err
 		}
 
-		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) >
+		if n.Stats.Cost*float64(SingleLineSizeEstimate) >
 			float64(DistributedThreshold) &&
 			!arg.DeleteCtx.CanTruncate {
 			c.proc.Infof(c.ctx, "delete of '%s' write s3\n", c.sql)
@@ -1710,7 +1712,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			}
 		}
 		rs := newScope(Merge)
-		rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
+		rs.NodeInfo = getEngineNode(c)
 		rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes())
 		rs.Instructions = []vm.Instruction{{Op: vm.Merge, Arg: merge.NewArgument().WithSinkScan(true)}}
 		for _, r := range receivers {
@@ -1747,7 +1749,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			}
 		}
 		rs := newScope(Merge)
-		rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
+		rs.NodeInfo = getEngineNode(c)
 		rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, len(receivers), c.anal.Nodes())
 		rs.Instructions = []vm.Instruction{{Op: vm.MergeCTE, Arg: mergecte.NewArgument()}}
 
@@ -1800,7 +1802,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	if parallel {
 		ds.Magic = Remote
 	}
-	ds.NodeInfo = engine.Node{Addr: addr, Mcpu: ncpu}
+	ds.NodeInfo = getEngineNode(c)
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 	c.proc.LoadTag = c.anal.qry.LoadTag
 	ds.Proc.LoadTag = true
@@ -1843,7 +1845,7 @@ func (c *Compile) compileSourceScan(ctx context.Context, n *plan.Node) ([]*Scope
 	ss := make([]*Scope, len(ps))
 	for i := range ss {
 		ss[i] = newScope(Normal)
-		ss[i].NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
+		ss[i].NodeInfo = getEngineNode(c)
 		ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Source,
@@ -2280,6 +2282,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.Timestamp = ts
 	s.DataSource.Attributes = attrs
 	s.DataSource.TableDef = tblDef
+	s.DataSource.Rel = rel
 	s.DataSource.RelationName = n.TableDef.Name
 	s.DataSource.PartitionRelationNames = partitionRelNames
 	s.DataSource.SchemaName = n.ObjRef.SchemaName
@@ -3275,7 +3278,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := newScope(Merge)
-	rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
+	rs.NodeInfo = getEngineNode(c)
 	rs.PreScopes = ss
 	cnt := 0
 	for _, s := range ss {
@@ -3661,7 +3664,7 @@ func regTransplant(source, target *Scope, sourceIdx, targetIdx int) {
 }
 
 func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
-	if cpunum <= 0 || blocks <= 0 {
+	if cpunum <= 0 || blocks <= 0 || c.execType == plan2.ExecTypeTP {
 		return 1
 	}
 
@@ -3850,12 +3853,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		}
 	}
 	//-------------------------------------------------------------------------------------------------------------
-
-	isPartitionTable := false
-	if n.TableDef.Partition != nil {
-		isPartitionTable = true
-	}
-
 	//ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -3867,36 +3864,34 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 
-	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
-	if err != nil {
-		if txnOp.IsSnapOp() {
-			return nil, nil, nil, err
-		}
-		var e error // avoid contamination of error messages
-		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
-		if e != nil {
-			return nil, nil, nil, err
-		}
-
-		// if temporary table, just scan at local cn.
-		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
-		if e != nil {
-			return nil, nil, nil, err
-		}
-		c.cnList = engine.Nodes{
-			engine.Node{
-				Addr: c.addr,
-				Rel:  rel,
-				Mcpu: 1,
-			},
-		}
-	}
-
 	if c.determinExpandRanges(n) {
+		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
+		if err != nil {
+			if txnOp.IsSnapOp() {
+				return nil, nil, nil, err
+			}
+			var e error // avoid contamination of error messages
+			db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
+			if e != nil {
+				return nil, nil, nil, err
+			}
+
+			// if temporary table, just scan at local cn.
+			rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
+			if e != nil {
+				return nil, nil, nil, err
+			}
+			c.cnList = engine.Nodes{
+				engine.Node{
+					Addr: c.addr,
+					Mcpu: 1,
+				},
+			}
+		}
 		ranges, err = c.expandRanges(n, rel, n.BlockFilterList)
 		if err != nil {
 			return nil, nil, nil, err
@@ -3905,7 +3900,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		// add current CN
 		nodes = append(nodes, engine.Node{
 			Addr: c.addr,
-			Rel:  rel,
 			Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 		})
 		nodes[0].NeedExpandRanges = true
@@ -4292,44 +4286,32 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	if ranges.Len() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
-			if isPartitionTable {
-				nodes[i] = engine.Node{
-					Id:   node.Id,
-					Addr: node.Addr,
-					Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
-				}
-			} else {
-				nodes[i] = engine.Node{
-					Rel:  rel,
-					Id:   node.Id,
-					Addr: node.Addr,
-					Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
-				}
+			nodes[i] = engine.Node{
+				Id:   node.Id,
+				Addr: node.Addr,
+				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
 			}
 		}
 		return nodes, partialResults, partialResultTypes, nil
 	}
 
 	engineType := rel.GetEngineType()
-	if isPartitionTable {
-		rel = nil
-	}
 	// for multi cn in launch mode, put all payloads in current CN, maybe delete this in the future
 	// for an ordered scan, put all paylonds in current CN
 	// or sometimes force on one CN
 	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || ranges.Len() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
-		return putBlocksInCurrentCN(c, ranges.GetAllBytes(), rel, n), partialResults, partialResultTypes, nil
+		return putBlocksInCurrentCN(c, ranges.GetAllBytes(), n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
-		nodes, err := shuffleBlocksToMultiCN(c, ranges.(*objectio.BlockInfoSlice), rel, n)
+		nodes, err := shuffleBlocksToMultiCN(c, ranges.(*objectio.BlockInfoSlice), n)
 		return nodes, partialResults, partialResultTypes, err
 	}
 	// maybe temp table on memengine , just put payloads in average
-	return putBlocksInAverage(c, ranges, rel, n), partialResults, partialResultTypes, nil
+	return putBlocksInAverage(c, ranges, n), partialResults, partialResultTypes, nil
 }
 
-func putBlocksInAverage(c *Compile, ranges engine.Ranges, rel engine.Relation, n *plan.Node) engine.Nodes {
+func putBlocksInAverage(c *Compile, ranges engine.Ranges, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
 	step := (ranges.Len() + len(c.cnList) - 1) / len(c.cnList)
 	for i := 0; i < ranges.Len(); i += step {
@@ -4339,14 +4321,12 @@ func putBlocksInAverage(c *Compile, ranges engine.Ranges, rel engine.Relation, n
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
 						Addr: c.addr,
-						Rel:  rel,
 						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 					})
 				}
 				nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, ranges.Len())...)
 			} else {
 				nodes = append(nodes, engine.Node{
-					Rel:  rel,
 					Id:   c.cnList[j].Id,
 					Addr: c.cnList[j].Addr,
 					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
@@ -4357,7 +4337,6 @@ func putBlocksInAverage(c *Compile, ranges engine.Ranges, rel engine.Relation, n
 			if isSameCN(c.cnList[j].Addr, c.addr) {
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
-						Rel:  rel,
 						Addr: c.addr,
 						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 					})
@@ -4365,7 +4344,6 @@ func putBlocksInAverage(c *Compile, ranges engine.Ranges, rel engine.Relation, n
 				nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, i+step)...)
 			} else {
 				nodes = append(nodes, engine.Node{
-					Rel:  rel,
 					Id:   c.cnList[j].Id,
 					Addr: c.cnList[j].Addr,
 					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
@@ -4377,12 +4355,11 @@ func putBlocksInAverage(c *Compile, ranges engine.Ranges, rel engine.Relation, n
 	return nodes
 }
 
-func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, rel engine.Relation, n *plan.Node) (engine.Nodes, error) {
+func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, n *plan.Node) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	// add current CN
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
-		Rel:  rel,
 		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 	})
 	// add memory table block
@@ -4411,7 +4388,6 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, rel eng
 	for i := range c.cnList {
 		if c.cnList[i].Addr != c.addr {
 			nodes = append(nodes, engine.Node{
-				Rel:  rel,
 				Id:   c.cnList[i].Id,
 				Addr: c.cnList[i].Addr,
 				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
@@ -4515,12 +4491,11 @@ func shuffleBlocksByRange(c *Compile, ranges objectio.BlockInfoSlice, n *plan.No
 	return nil
 }
 
-func putBlocksInCurrentCN(c *Compile, ranges []byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+func putBlocksInCurrentCN(c *Compile, ranges []byte, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
 	// add current CN
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
-		Rel:  rel,
 		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 	})
 	nodes[0].Data = append(nodes[0].Data, ranges...)
@@ -4799,4 +4774,12 @@ func runDetectFkReferToDBSql(c *Compile, sql string) error {
 		}
 	}
 	return nil
+}
+
+func getEngineNode(c *Compile) engine.Node {
+	if c.execType == plan2.ExecTypeTP {
+		return engine.Node{Addr: c.addr, Mcpu: 1}
+	} else {
+		return engine.Node{Addr: c.addr, Mcpu: ncpu}
+	}
 }
