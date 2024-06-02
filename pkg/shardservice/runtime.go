@@ -162,6 +162,10 @@ func (r *rt) get(
 
 	shards := make([]pb.TableShard, 0, len(table.shards))
 	shards = append(shards, table.shards...)
+	for i, s := range shards {
+		shards[i].Replicas = make([]pb.ShardReplica, 0, len(s.Replicas))
+		shards[i].Replicas = append(shards[i].Replicas, s.Replicas...)
+	}
 	return shards
 }
 

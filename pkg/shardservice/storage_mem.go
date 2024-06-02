@@ -122,6 +122,9 @@ func (s *MemShardStorage) Create(
 	txnOp.AppendEventCallback(
 		client.ClosedEvent,
 		func(txn client.TxnEvent) {
+			s.Lock()
+			defer s.Unlock()
+
 			if txn.Committed() {
 				s.committed[table] = v
 			}
@@ -152,6 +155,9 @@ func (s *MemShardStorage) Delete(
 	txnOp.AppendEventCallback(
 		client.ClosedEvent,
 		func(txn client.TxnEvent) {
+			s.Lock()
+			defer s.Unlock()
+
 			if txn.Committed() {
 				delete(s.committed, table)
 			}
