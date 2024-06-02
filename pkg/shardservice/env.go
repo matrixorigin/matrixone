@@ -72,7 +72,8 @@ func (e *env) Draining(
 	if !ok {
 		return false
 	}
-	return value.WorkState == metadata.WorkState_Draining
+	return value.WorkState == metadata.WorkState_Draining ||
+		value.WorkState == metadata.WorkState_Drained
 }
 
 func (e *env) UpdateState(

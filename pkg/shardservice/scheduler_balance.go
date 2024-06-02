@@ -194,6 +194,7 @@ func (s *balanceScheduler) doBalance(
 		zap.Int("from-count", max),
 		zap.String("to", to),
 		zap.Int("to-count", min),
+		zap.String("shard", shard.String()),
 		zap.String("new-replica", new.String()),
 	)
 

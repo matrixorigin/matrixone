@@ -55,6 +55,9 @@ func (s *replicaScheduler) schedule(
 	for _, t := range r.tables {
 		s.doSchedule(r, t, filters...)
 	}
+	for k := range s.pausedCNs {
+		delete(s.pausedCNs, k)
+	}
 	return nil
 }
 
@@ -86,6 +89,7 @@ func (s *replicaScheduler) scheduleMoveCompleted(
 	}
 	getLogger().Info("remove move completed replica",
 		zap.Uint64("table", t.id),
+		zap.String("shard", t.shards[i].String()),
 		zap.String("replica", t.shards[i].Replicas[j].String()),
 	)
 
@@ -153,5 +157,11 @@ func (s *replicaScheduler) scheduleMovePauseCNReplicas(
 
 	s.excludeFilter.reset()
 	s.freezeFilter.add(fromCN, toCN)
+	getLogger().Info("move replica out of paused CN",
+		zap.String("from", fromCN),
+		zap.String("to", toCN),
+		zap.String("shard", shard.String()),
+		zap.String("new-replica", new.String()),
+	)
 	r.addOpLocked(toCN, newAddReplicaOp(shard, new))
 }

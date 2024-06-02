@@ -433,6 +433,7 @@ func (s *service) doHeartbeat(
 		case pb.OpType_AddReplica:
 			s.logger.Info(
 				"handle add replica",
+				zap.String("shard", op.TableShard.String()),
 				zap.String("replica", op.Replica.String()),
 			)
 
@@ -444,6 +445,7 @@ func (s *service) doHeartbeat(
 		case pb.OpType_DeleteReplica:
 			s.logger.Info(
 				"handle delete replica",
+				zap.String("shard", op.TableShard.String()),
 				zap.String("replica", op.Replica.String()),
 			)
 

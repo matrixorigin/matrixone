@@ -97,6 +97,12 @@ func (r *rt) heartbeat(
 		},
 	)
 
+	if c.isPause() &&
+		len(shards) == 0 &&
+		!r.env.Draining(cn) {
+		c.resume()
+	}
+
 	var ops []pb.Operator
 	for _, s := range shards {
 		if t, ok := r.tables[s.TableID]; ok {
@@ -530,6 +536,10 @@ func (c *cn) down() {
 
 func (c *cn) pause() {
 	c.state = pb.CNState_Pause
+}
+
+func (c *cn) resume() {
+	c.state = pb.CNState_Up
 }
 
 func (c *cn) isPause() bool {

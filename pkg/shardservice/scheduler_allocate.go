@@ -14,6 +14,10 @@
 
 package shardservice
 
+import (
+	"go.uber.org/zap"
+)
+
 // allocateScheduler is a scheduler that allocates shards to CNs.
 // Shards that meet one of the following 2 conditions will be assigned a CN:
 // 1. shard.cn == "", means the shard is new created.
@@ -64,6 +68,10 @@ func (s *allocateScheduler) doAllocate(
 			if t.shards[i].Replicas[j].CN == "" {
 				cn := getCN()
 				t.allocate(cn, i, j)
+				getLogger().Info("allocate shard",
+					zap.String("shard", t.shards[i].String()),
+					zap.String("replica", t.shards[i].Replicas[j].String()),
+				)
 				r.addOpLocked(
 					cn,
 					newAddReplicaOp(t.shards[i], t.shards[i].Replicas[j]),

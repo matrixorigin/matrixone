@@ -538,6 +538,12 @@ func TestMoveReplicaFromPauseCN(t *testing.T) {
 			waitReplicaCount(table, s1, 0)
 			waitReplicaCount(table, s2, 3)
 			waitReplicaCount(table, s3, 3)
+
+			// make cn1 work
+			server.env.UpdateState("cn1", metadata.WorkState_Working)
+			waitReplicaCount(table, s1, 2)
+			waitReplicaCount(table, s2, 2)
+			waitReplicaCount(table, s3, 2)
 		},
 		func(c *Config) []Option {
 			c.FreezeCNTimeout.Duration = time.Millisecond * 10
