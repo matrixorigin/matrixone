@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func newData(allocator malloc.Allocator, size int, counter *atomic.Int64) *Data {
@@ -30,6 +31,7 @@ func newData(allocator malloc.Allocator, size int, counter *atomic.Int64) *Data 
 		size: size,
 	}
 	data.ptr, data.deallocator = allocator.Allocate(uint64(size))
+	metric.FSMallocLiveObjectsMemoryCache.Inc()
 	data.buf = unsafe.Slice((*byte)(data.ptr), size)
 	data.ref.init(1)
 	return data
@@ -39,4 +41,5 @@ func (d *Data) free(counter *atomic.Int64) {
 	counter.Add(-int64(d.size))
 	d.buf = nil
 	d.deallocator.Deallocate(d.ptr)
+	metric.FSMallocLiveObjectsMemoryCache.Dec()
 }

@@ -16,12 +16,14 @@ package frontend
 
 import (
 	"context"
+	"math"
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -35,7 +37,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	}
 
 	if opts.Username != nil {
-		sess.GetMysqlProtocol().SetUserName(*opts.Username)
+		sess.respr.SetStr(USERNAME, *opts.Username)
 	}
 
 	if opts.IsInternal != nil {
@@ -234,7 +236,7 @@ func (ie *internalExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions)
 // 	logutil.Infof("[Metric] called: %s", callFunc.Name())
 // }
 
-var _ MysqlProtocol = &internalProtocol{}
+var _ MysqlRrWr = &internalProtocol{}
 
 type internalProtocol struct {
 	sync.Mutex
@@ -242,6 +244,120 @@ type internalProtocol struct {
 	result      *internalExecResult
 	database    string
 	username    string
+}
+
+func (ip *internalProtocol) GetStr(id PropertyID) string {
+	switch id {
+	case USERNAME:
+		return ip.GetUserName()
+	case DBNAME:
+		return ip.GetDatabaseName()
+	}
+	return ""
+}
+func (ip *internalProtocol) SetStr(id PropertyID, val string) {
+	switch id {
+	case USERNAME:
+		ip.SetUserName(val)
+	case DBNAME:
+		ip.SetDatabaseName(val)
+	}
+}
+func (ip *internalProtocol) SetU32(PropertyID, uint32) {}
+func (ip *internalProtocol) GetU32(id PropertyID) uint32 {
+	switch id {
+	case CONNID:
+		return ip.ConnectionID()
+	}
+	return math.MaxUint32
+}
+func (ip *internalProtocol) SetU8(PropertyID, uint8) {}
+func (ip *internalProtocol) GetU8(PropertyID) uint8 {
+	return 0
+}
+func (ip *internalProtocol) SetBool(PropertyID, bool) {}
+func (ip *internalProtocol) GetBool(PropertyID) bool {
+	return false
+}
+
+func (ip *internalProtocol) Write(execCtx *ExecCtx, bat *batch.Batch) error {
+	return fillResultSet(execCtx.reqCtx, bat, execCtx.ses, execCtx.ses.GetMysqlResultSet())
+}
+
+func (ip *internalProtocol) WriteHandshake() error {
+	return nil
+}
+
+func (ip *internalProtocol) WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	ip.result.affectedRows = affectedRows
+	return nil
+}
+
+func (ip *internalProtocol) WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	return nil
+}
+
+func (ip *internalProtocol) WriteEOF(warnings, status uint16) error {
+	return nil
+}
+
+func (ip *internalProtocol) WriteEOFIF(warnings uint16, status uint16) error {
+	return nil
+}
+
+func (ip *internalProtocol) WriteEOFOrOK(warnings uint16, status uint16) error {
+	return nil
+}
+
+func (ip *internalProtocol) WriteERR(errorCode uint16, sqlState, errorMessage string) error {
+	return nil
+}
+
+func (ip *internalProtocol) WriteLengthEncodedNumber(u uint64) error {
+	return nil
+}
+
+func (ip *internalProtocol) WriteColumnDef(ctx context.Context, column Column, i int) error {
+	return nil
+}
+
+func (ip *internalProtocol) WriteRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteTextRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteBinaryRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) WriteResponse(ctx context.Context, resp *Response) error {
+	ip.Lock()
+	defer ip.Unlock()
+	ip.ResetStatistics()
+	if resp.category == ResultResponse {
+		if mer := resp.data.(*MysqlExecutionResult); mer != nil && mer.Mrs() != nil {
+			ip.sendRows(mer.Mrs(), mer.mrs.GetRowCount())
+		}
+	} else {
+		// OkResponse. this is NOT ErrorResponse because error will be returned by doComQuery
+		ip.result.affectedRows = resp.affectedRows
+	}
+	return nil
+}
+
+func (ip *internalProtocol) WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
+	return nil
+}
+
+func (ip *internalProtocol) Read(options goetty.ReadOptions) (interface{}, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (ip *internalProtocol) UpdateCtx(ctx context.Context) {
@@ -271,20 +387,8 @@ func (ip *internalProtocol) Authenticate(ctx context.Context) error {
 	return nil
 }
 
-func (ip *internalProtocol) GetTcpConnection() goetty.IOSession {
-	return nil
-}
-
-func (ip *internalProtocol) GetDebugString() string {
-	return "internal protocol"
-}
-
 func (ip *internalProtocol) GetSequenceId() uint8 {
 	return 0
-}
-
-func (ip *internalProtocol) GetConnectAttrs() map[string]string {
-	return nil
 }
 
 func (ip *internalProtocol) SetSequenceID(value uint8) {
@@ -302,15 +406,7 @@ func (ip *internalProtocol) ParseExecuteData(ctx context.Context, proc *process.
 	return nil
 }
 
-func (ip *internalProtocol) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
-	return nil
-}
-
 func (ip *internalProtocol) SetEstablished() {}
-
-func (ip *internalProtocol) GetRequest(payload []byte) *Request {
-	panic("not impl")
-}
 
 // ConnectionID the identity of the client
 func (ip *internalProtocol) ConnectionID() uint32 {
@@ -338,7 +434,7 @@ func (ip *internalProtocol) SetUserName(username string) {
 	ip.username = username
 }
 
-func (ip *internalProtocol) Quit() {}
+func (ip *internalProtocol) Close() {}
 
 func (ip *internalProtocol) sendRows(mrs *MysqlResultSet, cnt uint64) error {
 	if ip.stashResult {
@@ -379,59 +475,10 @@ func (ip *internalProtocol) swapOutResult() *internalExecResult {
 	return ret
 }
 
-// the server send group row of the result set as an independent packet thread safe
-func (ip *internalProtocol) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt uint64) error {
+func (ip *internalProtocol) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) error {
 	ip.Lock()
 	defer ip.Unlock()
 	return ip.sendRows(mrs, cnt)
-}
-
-func (ip *internalProtocol) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, cnt uint64) error {
-	ip.Lock()
-	defer ip.Unlock()
-	return ip.sendRows(mrs, cnt)
-}
-
-// SendColumnDefinitionPacket the server send the column definition to the client
-func (ip *internalProtocol) SendColumnDefinitionPacket(ctx context.Context, column Column, cmd int) error {
-	return nil
-}
-
-// SendColumnCountPacket makes the column count packet
-func (ip *internalProtocol) SendColumnCountPacket(count uint64) error {
-	return nil
-}
-
-// SendResponse sends a response to the client for the application request
-func (ip *internalProtocol) SendResponse(ctx context.Context, resp *Response) error {
-	ip.Lock()
-	defer ip.Unlock()
-	ip.ResetStatistics()
-	if resp.category == ResultResponse {
-		if mer := resp.data.(*MysqlExecutionResult); mer != nil && mer.Mrs() != nil {
-			ip.sendRows(mer.Mrs(), mer.mrs.GetRowCount())
-		}
-	} else {
-		// OkResponse. this is NOT ErrorResponse because error will be returned by doComQuery
-		ip.result.affectedRows = resp.affectedRows
-	}
-	return nil
-}
-
-// SendEOFPacketIf ends the sending of columns definations
-func (ip *internalProtocol) SendEOFPacketIf(warnings uint16, status uint16) error {
-	return nil
-}
-
-// sendOKPacket sends OK packet to the client, used in the end of sql like use <database>
-func (ip *internalProtocol) sendOKPacket(affectedRows uint64, lastInsertId uint64, status uint16, warnings uint16, message string) error {
-	ip.result.affectedRows = affectedRows
-	return nil
-}
-
-// sendEOFOrOkPacket sends the OK or EOF packet thread safe, and ends the sending of result set
-func (ip *internalProtocol) sendEOFOrOkPacket(warnings uint16, status uint16) error {
-	return nil
 }
 
 func (ip *internalProtocol) ResetStatistics() {
@@ -441,26 +488,8 @@ func (ip *internalProtocol) ResetStatistics() {
 	ip.result.resultSet = nil
 }
 
-func (ip *internalProtocol) GetStats() string { return "internal unknown stats" }
-
 func (ip *internalProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
-func (ip *internalProtocol) sendLocalInfileRequest(filename string) error {
-	return nil
-}
-
-func (ip *internalProtocol) incDebugCount(int) {}
-
-func (ip *internalProtocol) resetDebugCount() []uint64 {
-	return nil
-}
-
-func (ip *internalProtocol) DisableAutoFlush() {
-}
-
-func (ip *internalProtocol) EnableAutoFlush() {
-}
-
-func (ip *internalProtocol) Flush() error {
+func (ip *internalProtocol) WriteLocalInfileRequest(filename string) error {
 	return nil
 }
