@@ -831,7 +831,7 @@ func evalLiteralExpr(expr *plan.Literal, oid types.T) (canEval bool, val any) {
 type PKFilter struct {
 	op      uint8
 	val     any
-	data    []byte
+	packed  [][]byte
 	isVec   bool
 	isValid bool
 	isNull  bool
@@ -841,7 +841,7 @@ func (f *PKFilter) String() string {
 	var buf bytes.Buffer
 	buf.WriteString(
 		fmt.Sprintf("PKFilter{op: %d, isVec: %v, isValid: %v, isNull: %v, val: %v, data(len=%d)",
-			f.op, f.isVec, f.isValid, f.isNull, f.val, len(f.data),
+			f.op, f.isVec, f.isValid, f.isNull, f.val, len(f.packed),
 		))
 	return buf.String()
 }
@@ -851,8 +851,8 @@ func (f *PKFilter) SetNull() {
 	f.isValid = false
 }
 
-func (f *PKFilter) SetFullData(op uint8, isVec bool, val []byte) {
-	f.data = val
+func (f *PKFilter) SetFullData(op uint8, isVec bool, val ...[]byte) {
+	f.packed = append(f.packed, val...)
 	f.op = op
 	f.isVec = isVec
 	f.isValid = true
@@ -871,9 +871,9 @@ func getPKFilterByExpr(
 	expr *plan.Expr,
 	pkName string,
 	oid types.T,
-	proc *process.Process,
+	tbl *txnTable,
 ) (retFilter PKFilter) {
-	valExpr := getPkExpr(expr, pkName, proc)
+	valExpr := getPkExpr(expr, pkName, tbl.proc.Load())
 	if valExpr == nil {
 		return
 	}
@@ -891,7 +891,17 @@ func getPKFilterByExpr(
 		retFilter.SetVal(function.EQUAL, false, val)
 		return
 	case *plan.Expr_Vec:
-		retFilter.SetFullData(function.IN, true, exprImpl.Vec.Data)
+		var packed [][]byte
+		var packer *types.Packer
+
+		vec := vector.NewVec(types.T_any.ToType())
+		vec.UnmarshalBinary(exprImpl.Vec.Data)
+
+		put := tbl.getTxn().engine.packerPool.Get(&packer)
+		packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
+		put.Put()
+
+		retFilter.SetFullData(function.IN, true, packed...)
 		return
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {

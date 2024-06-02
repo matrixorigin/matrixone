@@ -429,5 +429,52 @@ select * from m_user;
 m_id    m_name
 111    aaaa
 deallocate prepare stmt1;
+CREATE TABLE `storage` (
+`collecttime` DATETIME NOT NULL,
+`value` DOUBLE NOT NULL,
+`account` VARCHAR(128) NOT NULL,
+`interval` INT NOT NULL,
+PRIMARY KEY (`collecttime`,`account`)
+);
+set @value1 = '2024-05-14 09:34:00';
+set @value2 = 1359.036876;
+set @value3 = '1af94fff_9a6c_4008_a946_4d15036618e1';
+set @value4 = 1;
+set @value5 = '2024-05-14 09:34:00';
+set @value6 = 0.011262;
+set @value7 = '4fb01180_5286_48fe_bde7_a77cf16a6e4e';
+set @value8 = 11;
+set @value9 = '2024-05-14 09:34:00';
+set @value10 = 1492.753363;
+set @value11 = 'be8f7e22_6bc1_41c3_b510_0ef1ed98dab1';
+set @value12 = 1;
+set @value13 = '2024-05-14 09:34:00';
+set @value14 = 0.011261;
+set @value15 = 'ef945ec6_21d5_4758_bd72_7effe814500b';
+set @value16 = 1;
+set @value17 = '2024-05-14 09:34:00';
+set @value18 = 0.011315;
+set @value19 = '018ee4e0_35b8_781a_b208_4735dce1378b';
+set @value20 = 1;
+set @value21 = '2024-05-14 09:34:00';
+set @value22 = 0.011274;
+set @value23 = '018f7506_e13b_7333_abdd_107ba823a778';
+set @value24 = 1;
+set @value25 = '2024-05-14 09:34:00';
+set @value26 = 0.011274;
+set @value27 = '018f7528_f9a0_75c5_b88f_1fbda12e34ea';
+set @value28 = 1;
+prepare stmt1 from 'INSERT INTO storage VALUES (?,?,?,?),(?,?,?,?),(?,?,?,?),(?,?,?,?),(?,?,?,?),(?,?,?,?),(?,?,?,?)';
+EXECUTE stmt1 USING  @value1, @value2, @value3, @value4, @value5, @value6, @value7, @value8, @value9, @value10,@value11,@value12,@value13,@value14,@value15,@value16,@value17,@value18,@value19,@value20,@value21,@value22,@value23,@value24,@value25,@value26,@value27,@value28;
+deallocate prepare stmt1;
+select * from storage;
+collecttime    value    account    interval
+2024-05-14 09:34:00    1359.036876    1af94fff_9a6c_4008_a946_4d15036618e1    1
+2024-05-14 09:34:00    0.011262    4fb01180_5286_48fe_bde7_a77cf16a6e4e    11
+2024-05-14 09:34:00    1492.753363    be8f7e22_6bc1_41c3_b510_0ef1ed98dab1    1
+2024-05-14 09:34:00    0.011261    ef945ec6_21d5_4758_bd72_7effe814500b    1
+2024-05-14 09:34:00    0.011315    018ee4e0_35b8_781a_b208_4735dce1378b    1
+2024-05-14 09:34:00    0.011274    018f7506_e13b_7333_abdd_107ba823a778    1
+2024-05-14 09:34:00    0.011274    018f7528_f9a0_75c5_b88f_1fbda12e34ea    1
 drop table m_user;
 drop database prepare_test;
