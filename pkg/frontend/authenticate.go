@@ -4026,7 +4026,11 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 		return err
 	}
 	if !execResultArrayHasData(erArray) {
-		return moerr.NewInternalError(ctx, "publication '%s' does not exist", dp.Name)
+		if !dp.IfExists {
+			return moerr.NewInternalError(ctx, "publication '%s' does not exist", dp.Name)
+		} else {
+			return err
+		}
 	}
 
 	sql, err = getSqlForDropPubInfo(ctx, string(dp.Name), false)
