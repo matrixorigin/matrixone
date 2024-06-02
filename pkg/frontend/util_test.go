@@ -645,7 +645,7 @@ func TestGetExprValue(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setGlobalPu(pu)
-		ses := NewSession(ctx, &FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
+		ses := NewSession(ctx, &testMysqlWriter{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
 		ses.SetDatabaseName("db")
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
@@ -756,7 +756,7 @@ func TestGetExprValue(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setGlobalPu(pu)
-		ses := NewSession(ctx, &FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
+		ses := NewSession(ctx, &testMysqlWriter{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
 		assert.Nil(t, err)
@@ -911,7 +911,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	ctx := context.TODO()
 	pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 	setGlobalPu(pu)
-	ses1 := NewSession(ctx, &FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true,
+	ses1 := NewSession(ctx, &testMysqlWriter{}, testutil.NewProc().Mp(), GSysVariables, true,
 		nil)
 
 	ses1.SetUserDefinedVar("var2", "val2", "set var2 = val2")
@@ -1196,4 +1196,96 @@ func TestTopsort(t *testing.T) {
 		_, err := g.sort()
 		cvey.So(err, cvey.ShouldNotBeNil)
 	})
+}
+
+func Test_convertRowsIntoBatch(t *testing.T) {
+	colMysqlTyps := []defines.MysqlType{
+		defines.MYSQL_TYPE_VAR_STRING,
+		defines.MYSQL_TYPE_LONG,
+		defines.MYSQL_TYPE_LONGLONG,
+		defines.MYSQL_TYPE_DOUBLE,
+		defines.MYSQL_TYPE_FLOAT,
+		defines.MYSQL_TYPE_DATE,
+		defines.MYSQL_TYPE_TIME,
+		defines.MYSQL_TYPE_DATETIME,
+		defines.MYSQL_TYPE_TIMESTAMP,
+	}
+	colNames := make([]string, len(colMysqlTyps))
+	mrs := &MysqlResultSet{}
+	cnt := 5
+	for colIdx, mysqlTyp := range colMysqlTyps {
+		col := new(MysqlColumn)
+		col.SetColumnType(mysqlTyp)
+		col.SetName(colNames[colIdx])
+		mrs.AddColumn(col)
+	}
+
+	for i := 0; i < cnt; i++ {
+		row := make([]any, len(mrs.Columns))
+		mrs.AddRow(row)
+		for j := 0; j < len(mrs.Columns); j++ {
+			switch mrs.Columns[j].ColumnType() {
+			case defines.MYSQL_TYPE_VARCHAR:
+				row[j] = "def"
+			case defines.MYSQL_TYPE_VAR_STRING:
+				row[j] = "abc"
+			case defines.MYSQL_TYPE_SHORT:
+				row[j] = int32(math.MaxInt16)
+			case defines.MYSQL_TYPE_LONG:
+				row[j] = int32(math.MaxInt32)
+			case defines.MYSQL_TYPE_LONGLONG:
+				row[j] = int64(math.MaxInt64)
+			case defines.MYSQL_TYPE_DOUBLE:
+				row[j] = float64(math.MaxFloat64)
+			case defines.MYSQL_TYPE_FLOAT:
+				row[j] = float32(math.MaxFloat32)
+			case defines.MYSQL_TYPE_DATE:
+				row[j] = types.Date(0)
+			case defines.MYSQL_TYPE_TIME:
+				row[j] = types.Time(0)
+			case defines.MYSQL_TYPE_DATETIME:
+				row[j] = types.Datetime(0)
+			case defines.MYSQL_TYPE_TIMESTAMP:
+				row[j] = types.Timestamp(0)
+			default:
+				assert.True(t, false)
+			}
+		}
+	}
+
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	assert.Equal(t, len(mrs.Columns), len(pColDefs.ResultCols))
+	assert.NotNil(t, data)
+	assert.Equal(t, len(data.Vecs), len(mrs.Columns))
+
+	ses := &Session{}
+	ses.SetTimeZone(time.UTC)
+	for i := 0; i < cnt; i++ {
+		row := make([]any, len(data.Vecs))
+		for j := 0; j < len(data.Vecs); j++ {
+			err = extractRowFromVector(context.TODO(), ses, data.Vecs[j], j, row, i)
+			assert.NoError(t, err)
+			switch data.Vecs[j].GetType().Oid {
+			case types.T_varchar:
+				row[j] = string(row[j].([]uint8))
+			case types.T_date:
+				assert.Equal(t, mrs.Data[i][j].(types.Date), row[j])
+				continue
+			case types.T_time:
+				assert.Equal(t, mrs.Data[i][j].(types.Time).String(), row[j])
+				continue
+			case types.T_datetime:
+				assert.Equal(t, mrs.Data[i][j].(types.Datetime).String(), row[j])
+				continue
+			case types.T_timestamp:
+				assert.Equal(t, mrs.Data[i][j].(types.Timestamp).String2(time.UTC, 0), row[j])
+				continue
+			}
+			assert.Equal(t, mrs.Data[i][j], row[j])
+		}
+
+	}
 }
