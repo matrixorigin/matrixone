@@ -494,6 +494,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.N = t.N
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
+		arg.BuildIdx = t.BuildIdx
 		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -558,16 +559,24 @@ func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.Argume
 	arg := fuzzyfilter.NewArgument()
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
-	
-	if sinkScan.Stats.Outcnt > tableScan.Stats.Outcnt {
-		arg.N = tableScan.Stats.Outcnt
+
+	if tableScan.Stats.Outcnt < sinkScan.Stats.Outcnt {
+		arg.BuildIdx = 0 // build on tableScan
+		arg.N = sinkScan.Stats.Outcnt + tableScan.Stats.Outcnt
 	} else {
+		arg.BuildIdx = 1 // build on sinkScan
 		arg.N = sinkScan.Stats.Outcnt
 	}
 
-	arg.N = sinkScan.Stats.Outcnt
-	if len(n.RuntimeFilterBuildList) > 0 {
-		arg.RuntimeFilterSpec = n.RuntimeFilterBuildList[0]
+	// currently can not build runtime filter on table scan and probe it on sink scan
+	// so only use runtime filter when build on sink scan
+	if arg.BuildIdx == 1 {
+		if len(n.RuntimeFilterBuildList) > 0 {
+			arg.RuntimeFilterSpec = n.RuntimeFilterBuildList[0]
+		}
+	} else {
+		tableScan.RuntimeFilterProbeList = nil
+		n.RuntimeFilterBuildList = nil
 	}
 	return arg
 }

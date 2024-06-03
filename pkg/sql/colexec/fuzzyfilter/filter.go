@@ -151,14 +151,20 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.state {
 		case Build:
 
-			msg := ctr.ReceiveFromSingleReg(1, anal)
+			buildIdx := arg.BuildIdx
+
+			msg := ctr.ReceiveFromSingleReg(buildIdx, anal)
 			if msg.Err != nil {
 				return result, msg.Err
 			}
 
 			bat := msg.Batch
 			if bat == nil {
-				ctr.state = HandleRuntimeFilter
+				if arg.ifBuildOnSink() {
+					ctr.state = HandleRuntimeFilter
+				} else {
+					ctr.state = Probe
+				}
 				continue
 			}
 
@@ -187,7 +193,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 
-			msg := ctr.ReceiveFromSingleReg(0, anal)
+			probeIdx := arg.getProbeIdx()
+
+			msg := ctr.ReceiveFromSingleReg(probeIdx, anal)
 			if msg.Err != nil {
 				return result, msg.Err
 			}
@@ -237,23 +245,33 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (arg *Argument) handleBuild(proc *process.Process, pkCol *vector.Vector) error {
 	ctr := arg.ctr
-	if ctr.roaringFilter != nil {
-		idx, dupVal := ctr.roaringFilter.testAndAddFunc(ctr.roaringFilter, pkCol)
-		if idx == -1 {
-			return nil
-		} else {
-			return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
-		}
-	} else {
-		ctr.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
-			if exist {
-				if ctr.collisionCnt < maxCheckDupCount {
-					arg.appendCollisionKey(proc, i, pkCol)
-					return
-				}
-				logutil.Warnf("too many collision for fuzzy filter")
+	buildOnSink := arg.ifBuildOnSink()
+
+	if buildOnSink {
+		if ctr.roaringFilter != nil {
+			idx, dupVal := ctr.roaringFilter.testAndAddFunc(ctr.roaringFilter, pkCol)
+			if idx == -1 {
+				return nil
+			} else {
+				return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
 			}
-		})
+		} else {
+			ctr.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
+				if exist {
+					if ctr.collisionCnt < maxCheckDupCount {
+						arg.appendCollisionKey(proc, i, pkCol)
+						return
+					}
+					logutil.Warnf("too many collision for fuzzy filter")
+				}
+			})
+		}
+	} else { // build on table scan
+		if ctr.roaringFilter != nil {
+			ctr.roaringFilter.addFunc(ctr.roaringFilter, pkCol)
+		} else {
+			ctr.bloomFilter.Add(pkCol)
+		}
 	}
 
 	return nil
@@ -261,23 +279,47 @@ func (arg *Argument) handleBuild(proc *process.Process, pkCol *vector.Vector) er
 
 func (arg *Argument) handleProbe(proc *process.Process, pkCol *vector.Vector) error {
 	ctr := arg.ctr
-	if ctr.roaringFilter != nil {
-		idx, dupVal := ctr.roaringFilter.testFunc(ctr.roaringFilter, pkCol)
-		if idx == -1 {
-			return nil
-		} else {
-			return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
-		}
-	} else {
-		ctr.bloomFilter.Test(pkCol, func(exist bool, i int) {
-			if exist {
-				if ctr.collisionCnt < maxCheckDupCount {
-					arg.appendCollisionKey(proc, i, pkCol)
-				}
+	buildOnSink := arg.ifBuildOnSink()
+
+	if buildOnSink {
+		if ctr.roaringFilter != nil { // probe on table scan
+			idx, dupVal := ctr.roaringFilter.testFunc(ctr.roaringFilter, pkCol)
+			if idx == -1 {
+				return nil
+			} else {
+				return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
 			}
-		})
-		return nil
+		} else {
+			ctr.bloomFilter.Test(pkCol, func(exist bool, i int) {
+				if exist {
+					if ctr.collisionCnt < maxCheckDupCount {
+						arg.appendCollisionKey(proc, i, pkCol)
+					}
+				}
+			})
+		}
+	} else { // probe on sink scan
+		if ctr.roaringFilter != nil {
+			idx, dupVal := ctr.roaringFilter.testAndAddFunc(ctr.roaringFilter, pkCol)
+			if idx == -1 {
+				return nil
+			} else {
+				return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
+			}
+		} else {
+			ctr.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
+				if exist {
+					if ctr.collisionCnt < maxCheckDupCount {
+						arg.appendCollisionKey(proc, i, pkCol)
+						return
+					}
+					logutil.Warnf("too many collision for fuzzy filter")
+				}
+			})
+		}
 	}
+
+	return nil
 }
 
 func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {

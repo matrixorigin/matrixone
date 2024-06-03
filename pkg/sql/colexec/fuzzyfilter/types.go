@@ -55,9 +55,10 @@ type Argument struct {
 	ctr *container
 
 	// Estimates of the number of data items obtained from statistical information
-	N      float64
-	PkName string
-	PkTyp  plan.Type
+	N        float64
+	PkName   string
+	PkTyp    plan.Type
+	BuildIdx int
 
 	RuntimeFilterSpec *plan.RuntimeFilterSpec
 	vm.OperatorBase
@@ -92,6 +93,14 @@ func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
+}
+
+func (arg *Argument) ifBuildOnSink() bool {
+	return arg.BuildIdx == 1
+}
+
+func (arg *Argument) getProbeIdx() int {
+	return 1 - arg.BuildIdx
 }
 
 func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
