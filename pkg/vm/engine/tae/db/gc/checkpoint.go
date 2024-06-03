@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"go.uber.org/zap"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -85,6 +86,9 @@ type checkpointCleaner struct {
 	delWorker *GCWorker
 
 	disableGC bool
+
+	// checkGC is to check the correctness of GC
+	checkGC bool
 
 	option struct {
 		sync.RWMutex
@@ -145,6 +149,14 @@ func (c *checkpointCleaner) isEnableGC() bool {
 	c.option.Lock()
 	defer c.option.Unlock()
 	return c.option.enableGC
+}
+
+func (c *checkpointCleaner) SetCheckGC(enable bool) {
+	c.checkGC = enable
+}
+
+func (c *checkpointCleaner) isEnableCheckGC() bool {
+	return c.checkGC
 }
 
 func (c *checkpointCleaner) Replay() error {
@@ -312,6 +324,12 @@ func (c *checkpointCleaner) GetInputs() *GCTable {
 	return c.inputs.tables[0]
 }
 
+func (c *checkpointCleaner) GetGCTables() []*GCTable {
+	c.inputs.RLock()
+	defer c.inputs.RUnlock()
+	return c.inputs.tables
+}
+
 func (c *checkpointCleaner) SetMinMergeCountForTest(count int) {
 	c.minMergeCount.Lock()
 	defer c.minMergeCount.Unlock()
@@ -338,6 +356,14 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	if maxConsumed == nil {
 		return nil
 	}
+	now := time.Now()
+	logutil.Info("[DiskCleaner]",
+		zap.String("MergeGCFile-Start", maxConsumed.String()))
+	defer func() {
+		logutil.Info("[DiskCleaner]",
+			zap.String("MergeGCFile-End", maxConsumed.String()),
+			zap.String("cost :", time.Since(now).String()))
+	}()
 	maxSnapEnd := types.TS{}
 	maxAcctEnd := types.TS{}
 	var snapFile, acctFile string
@@ -411,9 +437,6 @@ func (c *checkpointCleaner) mergeGCFile() error {
 		mergeTable = c.inputs.tables[0]
 	}
 	c.inputs.RUnlock()
-	logutil.Info("[DiskCleaner]",
-		common.OperationField("MergeGCFile start"),
-		common.OperandField(maxConsumed.String()))
 	_, err = mergeTable.SaveFullTable(maxConsumed.GetStart(), maxConsumed.GetEnd(), c.fs, nil)
 	if err != nil {
 		logutil.Errorf("SaveTable failed: %v", err.Error())
@@ -425,9 +448,6 @@ func (c *checkpointCleaner) mergeGCFile() error {
 		return err
 	}
 	c.updateMinMerged(maxConsumed)
-	logutil.Info("[DiskCleaner]",
-		common.OperationField("MergeGCFile end"),
-		common.OperandField(maxConsumed.String()))
 	return nil
 }
 
@@ -625,14 +645,22 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 	if !c.delWorker.Start() {
 		return nil
 	}
+	var err error
+	var snapshots map[uint32]containers.Vector
+	defer func() {
+		if err != nil {
+			logutil.Errorf("[DiskCleaner] tryGC failed: %v", err.Error())
+			c.delWorker.Idle()
+		}
+		logtail.CloseSnapshotList(snapshots)
+	}()
 	gcTable := NewGCTable()
 	gcTable.UpdateTable(data)
-	snapshots, err := c.GetSnapshots()
+	snapshots, err = c.GetSnapshots()
 	if err != nil {
 		logutil.Errorf("[DiskCleaner] GetSnapshots failed: %v", err.Error())
 		return nil
 	}
-	defer logtail.CloseSnapshotList(snapshots)
 	gc, snapshotList := c.softGC(gcTable, gckp, snapshots)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
@@ -657,6 +685,13 @@ func (c *checkpointCleaner) softGC(
 ) ([]string, map[uint32][]types.TS) {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
+	now := time.Now()
+	var softCost, mergeCost time.Duration
+	defer func() {
+		logutil.Info("[DiskCleaner] softGC cost",
+			zap.String("soft-gc cost", softCost.String()),
+			zap.String("merge-table cost", mergeCost.String()))
+	}()
 	if len(c.inputs.tables) == 0 {
 		return nil, nil
 	}
@@ -665,10 +700,13 @@ func (c *checkpointCleaner) softGC(
 		mergeTable.Merge(table)
 	}
 	gc, snapList := mergeTable.SoftGC(t, gckp.GetEnd(), snapshots, c.snapshotMeta)
+	softCost = time.Since(now)
+	now = time.Now()
 	c.inputs.tables = make([]*GCTable, 0)
 	c.inputs.tables = append(c.inputs.tables, mergeTable)
 	c.updateMaxCompared(gckp)
 	c.snapshotMeta.MergeTableInfo(snapList)
+	mergeCost = time.Since(now)
 	//logutil.Infof("SoftGC is %v, merge table: %v", gc, mergeTable.String())
 	return gc, snapList
 }
@@ -770,6 +808,12 @@ func (c *checkpointCleaner) Process() {
 		return
 	}
 
+	now := time.Now()
+	defer func() {
+		logutil.Info("[DiskCleaner]",
+			zap.String("Process costs", time.Since(now).String()))
+
+	}()
 	maxConsumed := c.maxConsumed.Load()
 	if maxConsumed != nil {
 		ts = maxConsumed.GetEnd()
@@ -833,6 +877,14 @@ func (c *checkpointCleaner) Process() {
 		// TODO: Error handle
 		return
 	}
+
+	if !c.isEnableCheckGC() {
+		return
+	}
+	ck := checker{
+		cleaner: c,
+	}
+	ck.Check()
 }
 
 func (c *checkpointCleaner) checkExtras(item any) bool {
@@ -856,16 +908,18 @@ func (c *checkpointCleaner) createNewInput(
 	ckps []*checkpoint.CheckpointEntry) (input *GCTable, err error) {
 	now := time.Now()
 	var snapSize, tableSize uint32
-	logutil.Info("[DiskCleaner]", common.OperationField("Consume-Start"),
-		common.AnyField("entry count :", len(ckps)))
-	defer func() {
-		logutil.Info("[DiskCleaner]", common.OperationField("Consume-End"),
-			common.AnyField("cost :", time.Since(now).String()),
-			common.AnyField("snap meta size :", snapSize),
-			common.AnyField("table meta size :", tableSize),
-			common.OperandField(c.snapshotMeta.String()))
-	}()
 	input = NewGCTable()
+	logutil.Info("[DiskCleaner]", zap.String("op", "Consume-Start"),
+		zap.Int("entry count :", len(ckps)))
+	defer func() {
+		logutil.Info("[DiskCleaner]", zap.String("op", "Consume-End"),
+			zap.String("cost :", time.Since(now).String()),
+			zap.Uint32("snap meta size :", snapSize),
+			zap.Uint32("table meta size :", tableSize),
+			zap.Int("objects :", len(input.objects)),
+			zap.Int("tombstones :", len(input.tombstones)),
+			zap.String("snapshots", c.snapshotMeta.String()))
+	}()
 	var data *logtail.CheckpointData
 	for _, candidate := range ckps {
 		data, err = c.collectCkpData(candidate)
