@@ -730,6 +730,11 @@ func Test_handleShowVariables(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 		ses.mrs = &MysqlResultSet{}
 		ses.SetDatabaseName("t")
+
+		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
+		defer sysVarStubs.Reset()
+		_ = ses.InitSystemVariables(ctx)
+
 		proto.SetSession(ses)
 		ec := newTestExecCtx(ctx, ctrl)
 

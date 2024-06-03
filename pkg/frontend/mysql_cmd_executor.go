@@ -811,15 +811,14 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			}
 		}
 
-		row := []interface{}{name, value}
-		if svbt, ok := def.GetType().(SystemVariableBoolType); ok {
-			if svbt.IsTrue(value) {
-				row[1] = "on"
+		if boolType, ok := def.GetType().(SystemVariableBoolType); ok {
+			if boolType.IsTrue(value) {
+				value = "on"
 			} else {
-				row[1] = "off"
+				value = "off"
 			}
 		}
-		rows = append(rows, row)
+		rows = append(rows, []interface{}{name, value})
 	}
 
 	if sv.Where != nil {

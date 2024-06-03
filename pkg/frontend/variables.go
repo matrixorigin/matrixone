@@ -75,7 +75,8 @@ func getErrorConvertFromStringToNullFailed(str string) error {
 	return moerr.NewInternalError(context.Background(), errorConvertFromStringToNullFailedFormat, str)
 }
 
-func errorConfigDoesNotExist() string         { return "the config variable does not exist" }
+func errorConfigDoesNotExist() string { return "the config variable does not exist" }
+
 func errorSystemVariableDoesNotExist() string { return "the system variable does not exist" }
 
 func errorSystemVariableIsSession() string { return "the system variable is session" }
@@ -297,7 +298,6 @@ func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{},
 		return nil, getErrorConvertFromStringToBoolFailed(value)
 	}
 	return int8(convertVal), nil
-
 }
 
 type SystemVariableIntType struct {
@@ -660,7 +660,7 @@ func (svet SystemVariableEnumType) ConvertFromString(value string) (interface{},
 	if val, ok := svet.tagName2Id[lowerName]; !ok {
 		return nil, getErrorConvertFromStringToEnumFailed(value)
 	} else {
-		return val, nil
+		return svet.id2TagName[val], nil
 	}
 }
 
@@ -1826,7 +1826,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Default:           int64(84),
 	},
 	"ft_min_word_len": {
-		Name:              "ft_max_word_len",
+		Name:              "ft_min_word_len",
 		Scope:             ScopeGlobal,
 		Dynamic:           false,
 		SetVarHintApplies: false,
