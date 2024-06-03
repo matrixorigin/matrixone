@@ -33,7 +33,14 @@ import (
 	"go.uber.org/zap"
 )
 
-type ReadFilter = func([]*vector.Vector) []int32
+type ReadFilterSearchFuncType func([]*vector.Vector) []int32
+
+type ReadFilter struct {
+	HasFakePK          bool
+	Valid              bool
+	SortedSearchFunc   ReadFilterSearchFuncType
+	UnSortedSearchFunc ReadFilterSearchFuncType
+}
 
 func ReadByFilter(
 	ctx context.Context,
@@ -42,7 +49,7 @@ func ReadByFilter(
 	columns []uint16,
 	colTypes []types.Type,
 	ts types.TS,
-	filter ReadFilter,
+	searchFunc ReadFilterSearchFuncType,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 ) (sels []int32, err error) {
@@ -90,7 +97,7 @@ func ReadByFilter(
 		deleteMask.Add(uint64(row))
 	}
 
-	sels = filter(bat.Vecs)
+	sels = searchFunc(bat.Vecs)
 
 	// deslect deleted rows from sels
 	if !deleteMask.IsEmpty() {
@@ -130,10 +137,17 @@ func BlockRead(
 		err  error
 	)
 
-	if filter != nil && info.Sorted {
+	var searchFunc ReadFilterSearchFuncType
+	if (filter.HasFakePK || !info.Sorted) && filter.UnSortedSearchFunc != nil {
+		searchFunc = filter.UnSortedSearchFunc
+	} else if info.Sorted && filter.SortedSearchFunc != nil {
+		searchFunc = filter.SortedSearchFunc
+	}
+
+	if searchFunc != nil {
 		if sels, err = ReadByFilter(
 			ctx, info, inputDeletes, filterSeqnums, filterColTypes,
-			types.TimestampToTS(ts), filter, fs, mp,
+			types.TimestampToTS(ts), searchFunc, fs, mp,
 		); err != nil {
 			return nil, err
 		}

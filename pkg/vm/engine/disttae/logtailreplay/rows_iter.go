@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/tidwall/btree"
 )
@@ -344,13 +345,14 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 	spec PrimaryKeyMatchSpec,
 	bid types.Blockid,
 ) *primaryKeyDelIter {
-	iter := p.primaryIndex.Copy().Iter()
+	index := p.primaryIndex.Copy()
 	return &primaryKeyDelIter{
 		primaryKeyIter: primaryKeyIter{
-			ts:   ts,
-			spec: spec,
-			iter: iter,
-			rows: p.rows.Copy(),
+			ts:           ts,
+			spec:         spec,
+			primaryIndex: index,
+			iter:         index.Iter(),
+			rows:         p.rows.Copy(),
 		},
 		bid: bid,
 	}

@@ -34,6 +34,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -486,12 +487,19 @@ func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement,
 
 func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string, status statementStatus, err error) {
 	str := SubStringFromBegin(stmtStr, int(getGlobalPu().SV.LengthOfQueryPrinted))
-	outBytes, outPacket := ses.GetMysqlProtocol().CalculateOutTrafficBytes(true)
+	var outBytes, outPacket int64
+	switch resper := ses.GetResponser().(type) {
+	case *MysqlResp:
+		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
+	default:
+
+	}
+
 	if status == success {
 		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
 		err = nil // make sure: it is nil for EndStatement
 	} else {
-		txnId := ses.GetTxnId()
+		txnId := ses.GetStaticTxnId()
 		ses.Error(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err),
 			logutil.TxnIdField(hex.EncodeToString(txnId[:])))
 	}
@@ -741,60 +749,203 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement) stri
 	return bb.String()
 }
 
-func mysqlColDef2PlanResultColDef(mr *MysqlResultSet) *plan.ResultColDef {
-	if mr == nil {
-		return nil
+func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batch.Batch, *plan.ResultColDef, error) {
+	planColDefs, colTyps, colNames, err := mysqlColDef2PlanResultColDef(cols)
+	if err != nil {
+		return nil, nil, err
+	}
+	//1. make vector type
+	bat := batch.New(true, colNames)
+	//2. make batch
+	cnt := len(rows)
+	bat.SetRowCount(cnt)
+	for colIdx, typ := range colTyps {
+		bat.Vecs[colIdx] = vector.NewVec(typ)
+		switch typ.Oid {
+		case types.T_varchar:
+			vData := make([]string, cnt)
+			for rowIdx, row := range rows {
+				if val, ok := row[colIdx].(string); ok {
+					vData[rowIdx] = val
+				} else {
+					vData[rowIdx] = fmt.Sprintf("%v", row[colIdx])
+				}
+			}
+			err := vector.AppendStringList(bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_int16:
+			vData := make([]int16, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(int16)
+			}
+			err := vector.AppendFixedList[int16](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_int32:
+			vData := make([]int32, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(int32)
+			}
+			err := vector.AppendFixedList[int32](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_int64:
+			vData := make([]int64, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(int64)
+			}
+			err := vector.AppendFixedList[int64](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_float64:
+			vData := make([]float64, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(float64)
+			}
+			err := vector.AppendFixedList[float64](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_float32:
+			vData := make([]float32, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(float32)
+			}
+			err := vector.AppendFixedList[float32](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_date:
+			vData := make([]types.Date, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(types.Date)
+			}
+			err := vector.AppendFixedList[types.Date](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_time:
+			vData := make([]types.Time, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(types.Time)
+			}
+			err := vector.AppendFixedList[types.Time](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_datetime:
+			vData := make([]types.Datetime, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(types.Datetime)
+			}
+			err := vector.AppendFixedList[types.Datetime](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_timestamp:
+			vData := make([]types.Timestamp, cnt)
+			for rowIdx, row := range rows {
+				vData[rowIdx] = row[colIdx].(types.Timestamp)
+			}
+			err := vector.AppendFixedList[types.Timestamp](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		default:
+			return nil, nil, moerr.NewInternalErrorNoCtx("unsupported type %d", typ.Oid)
+		}
+	}
+	return bat, planColDefs, nil
+}
+
+func cleanBatch(pool *mpool.MPool, data ...*batch.Batch) {
+	for _, item := range data {
+		if item != nil {
+			item.Clean(pool)
+		}
+	}
+}
+
+func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Type, []string, error) {
+	if len(cols) == 0 {
+		return nil, nil, nil, nil
 	}
 
-	resultCols := make([]*plan.ColDef, len(mr.Columns))
-	for i, col := range mr.Columns {
+	resultCols := make([]*plan.ColDef, len(cols))
+	resultColTypes := make([]types.Type, len(cols))
+	resultColNames := make([]string, len(cols))
+	for i, col := range cols {
+		resultColNames[i] = col.Name()
 		resultCols[i] = &plan.ColDef{
 			Name: col.Name(),
 		}
+		var pType plan.Type
+		var tType types.Type
 		switch col.ColumnType() {
-		case defines.MYSQL_TYPE_VAR_STRING:
-			resultCols[i].Typ = plan.Type{
+		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
+			pType = plan.Type{
 				Id: int32(types.T_varchar),
 			}
+			tType = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+		case defines.MYSQL_TYPE_SHORT:
+			pType = plan.Type{
+				Id: int32(types.T_int16),
+			}
+			tType = types.New(types.T_int16, 0, 0)
 		case defines.MYSQL_TYPE_LONG:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_int32),
 			}
+			tType = types.New(types.T_int32, 0, 0)
 		case defines.MYSQL_TYPE_LONGLONG:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_int64),
 			}
+			tType = types.New(types.T_int64, 0, 0)
 		case defines.MYSQL_TYPE_DOUBLE:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_float64),
 			}
+			tType = types.New(types.T_float64, 0, 0)
 		case defines.MYSQL_TYPE_FLOAT:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_float32),
 			}
+			tType = types.New(types.T_float32, 0, 0)
 		case defines.MYSQL_TYPE_DATE:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_date),
 			}
+			tType = types.New(types.T_date, 0, 0)
 		case defines.MYSQL_TYPE_TIME:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_time),
 			}
+			tType = types.New(types.T_time, 0, 0)
 		case defines.MYSQL_TYPE_DATETIME:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_datetime),
 			}
+			tType = types.New(types.T_datetime, 0, 0)
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			resultCols[i].Typ = plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_timestamp),
 			}
+			tType = types.New(types.T_timestamp, 0, 0)
 		default:
-			panic(fmt.Sprintf("unsupported mysql type %d", col.ColumnType()))
+			return nil, nil, nil, moerr.NewInternalErrorNoCtx("unsupported mysql type %d", col.ColumnType())
 		}
+		resultCols[i].Typ = pType
+		resultColTypes[i] = tType
 	}
 	return &plan.ResultColDef{
 		ResultCols: resultCols,
-	}
+	}, resultColTypes, resultColNames, nil
 }
 
 // errCodeRollbackWholeTxn denotes that the error code
@@ -1129,4 +1280,13 @@ func (fprints *footPrints) addExit(idx int) {
 	if idx >= 0 && idx < len(fprints.prints) {
 		fprints.prints[idx][1]++
 	}
+}
+
+func ToRequest(payload []byte) *Request {
+	req := &Request{
+		cmd:  CommandType(payload[0]),
+		data: payload[1:],
+	}
+
+	return req
 }
