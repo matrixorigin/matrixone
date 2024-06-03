@@ -210,9 +210,8 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
 	db.DiskCleaner.Start()
 	db.BGCheckpointRunner.AddHelper(
-		func(name any) bool {
+		func(name any) {
 			cleaner.AddCheckpoint(name.(string))
-			return true
 		})
 	// Init gc manager at last
 	// TODO: clean-try-gc requires configuration parameters
