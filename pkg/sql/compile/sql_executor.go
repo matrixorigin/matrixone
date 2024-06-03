@@ -256,6 +256,10 @@ func (exec *txnExecutor) Exec(
 
 	receiveAt := time.Now()
 
+	logutil.Info("Received SQL execute request",
+		zap.String("sql", sql),
+		zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)))
+
 	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1, 0)
 	defer func() {
 		for _, stmt := range stmts {
