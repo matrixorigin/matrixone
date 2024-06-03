@@ -98,12 +98,13 @@ func (c *checker) Check() error {
 
 	// Collect all checkpoint files
 	ckpfiles := c.cleaner.GetCheckpoints()
+	logutil.Infof("ckpfiles: %d", len(ckpfiles))
 	checkFiles, _, err := checkpoint.ListSnapshotMeta(c.cleaner.ctx, c.cleaner.fs.Service, entry.GetStart(), nil)
 	if err != nil {
 		return err
 	}
 	// The number of checkpoint files is ckpObjectCount
-	ckpObjectCount := len(ckpfiles) * 2
+	ckpObjectCount := len(checkFiles) * 2
 	allCount := len(allObjects)
 	for name := range allObjects {
 		isfound := false
@@ -129,8 +130,8 @@ func (c *checker) Check() error {
 	}
 
 	for _, ckp := range checkFiles {
-		if name, ok := ckpfiles[ckp.GetName()]; !ok {
-			logutil.Errorf("[Check GC]lost checkpoint file %s,", name)
+		if _, ok := ckpfiles[ckp.GetName()]; !ok {
+			logutil.Errorf("[Check GC]lost checkpoint file %s,", ckp.GetName())
 			continue
 		}
 		delete(ckpfiles, ckp.GetName())
