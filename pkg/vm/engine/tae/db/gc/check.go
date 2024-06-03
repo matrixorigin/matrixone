@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"time"
 )
@@ -97,6 +98,10 @@ func (c *checker) Check() error {
 
 	// Collect all checkpoint files
 	ckpfiles := c.cleaner.GetCheckpoints()
+	checkFiles, _, err := checkpoint.ListSnapshotMeta(c.cleaner.ctx, c.cleaner.fs.Service, entry.GetStart(), nil)
+	if err != nil {
+		return err
+	}
 	// The number of checkpoint files is ckpObjectCount
 	ckpObjectCount := len(ckpfiles) * 2
 	allCount := len(allObjects)
@@ -120,6 +125,19 @@ func (c *checker) Check() error {
 		}
 		if isfound {
 			delete(allObjects, name)
+		}
+	}
+
+	for _, ckp := range checkFiles {
+		if name, ok := ckpfiles[ckp.GetName()]; !ok {
+			logutil.Errorf("[Check GC]lost checkpoint file %s,", name)
+			continue
+		}
+		delete(ckpfiles, ckp.GetName())
+	}
+	if len(ckpfiles) != 0 {
+		for name := range ckpfiles {
+			logutil.Errorf("[Check GC]not deleted checkpoint file %s,", name)
 		}
 	}
 
@@ -185,6 +203,7 @@ func (c *checker) Check() error {
 		logutil.Infof("[Check GC]Check end!!! const: %v, all objects: %d, not found: %d",
 			time.Since(now), allCount, len(allObjects)-ckpObjectCount)
 	}
+
 	return nil
 }
 
