@@ -125,6 +125,10 @@ type Session struct {
 	sysVars         map[string]interface{}
 	userDefinedVars map[string]*UserDefinedVar
 
+	// db/tbl level config store in mo_mysql_compatibility_mode, need to read and write through SQL
+	// this map is maintained at the session level to cache configuration results.
+	configs map[string]interface{}
+
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
 
@@ -138,11 +142,15 @@ type Session struct {
 
 	cache *privilegeCache
 
-	mu sync.Mutex
+	mu   sync.Mutex
+	rwmu sync.RWMutex
 
 	isNotBackgroundSession bool
 	lastInsertID           uint64
-	tStmt                  *motrace.StatementInfo
+
+	// tStmt is used only to record the StatementInfo
+	// QueryResult please use feSessionImpl.stmtProfile instead.
+	tStmt *motrace.StatementInfo
 
 	ast tree.Statement
 
@@ -161,9 +169,9 @@ type Session struct {
 	sentRows atomic.Int64
 	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
 	writeCsvBytes atomic.Int64
-	// packetCounter count the packet communicated with client.
+	// packetCounter count the tcp packet send to client.
 	packetCounter atomic.Int64
-	// payloadCounter count the payload send by `load data`
+	// payloadCounter count the payload send by `load data LOCAL infile`
 	payloadCounter int64
 
 	createdTime time.Time
@@ -499,6 +507,7 @@ func NewSession(connCtx context.Context, proto MysqlProtocol, mp *mpool.MPool, g
 	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
 		ses.userDefinedVars = make(map[string]*UserDefinedVar)
+		ses.configs = make(map[string]interface{})
 		ses.prepareStmts = make(map[string]*PrepareStmt)
 		// For seq init values.
 		ses.seqCurValues = make(map[uint64]string)
@@ -1116,6 +1125,40 @@ func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, *UserDef
 		return SystemVariableNullType{}, nil, nil
 	}
 	return InitSystemVariableStringType(name), val, nil
+}
+
+// SetUserDefinedVar sets the config to the value in session
+func (ses *Session) SetConfig(dbName, varName string, valValue any) error {
+	ses.rwmu.Lock()
+	defer ses.rwmu.Unlock()
+
+	// TODO : validate the config name and value
+	ses.configs[dbName+"-"+varName] = valValue
+	return nil
+}
+
+// GetUserDefinedVar gets value of the config
+func (ses *Session) GetConfig(ctx context.Context, dbName, varName string) (any, error) {
+	ses.rwmu.RLock()
+	defer ses.rwmu.RUnlock()
+	if val, ok := ses.configs[dbName+"-"+varName]; ok {
+		return val, nil
+	}
+	if varName == "unique_check_on_autoincr" {
+		ret, err := GetUniqueCheckOnAutoIncr(ctx, ses, dbName)
+		if err != nil {
+			return nil, err
+		}
+		ses.configs[dbName+"-"+varName] = ret
+		return ret, nil
+	}
+	return nil, moerr.NewInternalError(ctx, errorConfigDoesNotExist())
+}
+
+func (ses *Session) DeleteConfig(ctx context.Context, dbName, varName string) {
+	ses.rwmu.Lock()
+	defer ses.rwmu.Unlock()
+	delete(ses.configs, dbName+"-"+varName)
 }
 
 func (ses *Session) GetTxnInfo() string {

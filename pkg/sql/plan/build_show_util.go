@@ -21,8 +21,10 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -67,6 +69,14 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 			accountId != catalog.System_Account {
 			continue
 		}
+
+		if util.IsClusterTableAttribute(colName) &&
+			isClusterTable &&
+			accountId == catalog.System_Account &&
+			!snapshot.TS.Equal(timestamp.Timestamp{}) {
+			continue
+		}
+
 		//-------------------------------------------------------------------------------------------------------------
 		buf := bytes.NewBuffer(make([]byte, 0, 64))
 
@@ -210,6 +220,11 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 			} else {
 				fkTableObjRef, fkTableDef = ctx.ResolveById(fk.ForeignTbl, snapshot)
 			}
+		}
+
+		// fkTable may not exist in snapshot restoration
+		if fkTableObjRef == nil || fkTableDef == nil {
+			return "", moerr.NewInternalErrorNoCtx("can't find fkTable from fk %s.(%s) {%s}", tableDef.Name, strings.Join(colNames, ","), snapshot.String())
 		}
 
 		fkColIdToName := make(map[uint64]string)

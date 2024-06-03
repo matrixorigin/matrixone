@@ -110,18 +110,30 @@ func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos 
 func (m *merger[T]) merge(ctx context.Context) error {
 	for i := 0; i < m.objCnt; i++ {
 		if ok, err := m.loadBlk(ctx, uint32(i)); !ok {
+			if err == nil {
+				continue
+			}
 			return errors.Join(moerr.NewInternalError(ctx, "failed to load first blk"), err)
 		}
 
 		heapPush(m.heap, heapElem[T]{
-			data:   m.cols[i][m.rowIdx[i]],
-			isNull: m.nulls[i].Contains(uint64(m.rowIdx[i])),
+			data:   m.cols[i][0],
+			isNull: m.nulls[i].Contains(0),
 			src:    uint32(i),
 		})
 	}
 
 	var releaseF func()
-	m.buffer, releaseF = getSimilarBatch(m.bats[0].bat, int(m.rowPerBlk), m.host)
+	for i := 0; i < m.objCnt; i++ {
+		if m.bats[i].bat != nil {
+			m.buffer, releaseF = getSimilarBatch(m.bats[i].bat, int(m.rowPerBlk), m.host)
+			break
+		}
+	}
+	// all batches are empty.
+	if m.buffer == nil {
+		return nil
+	}
 	defer releaseF()
 
 	objCnt := 0
@@ -244,6 +256,16 @@ func (m *merger[T]) loadBlk(ctx context.Context, objIdx uint32) (bool, error) {
 			return false, nil
 		}
 		return false, err
+	}
+	for nextBatch.RowCount() == 0 {
+		releaseF()
+		nextBatch, del, releaseF, err = m.host.LoadNextBatch(ctx, objIdx)
+		if err != nil {
+			if errors.Is(err, ErrNoMoreBlocks) {
+				return false, nil
+			}
+			return false, err
+		}
 	}
 
 	m.bats[objIdx] = releasableBatch{bat: nextBatch, releaseF: releaseF}

@@ -100,10 +100,8 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		// execute insert sql if this is a `create table as select` stmt
 		if st.IsAsSelect {
-			if txw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-				insertSql := txw.plan.GetDdl().GetDefinition().(*plan.DataDefinition_CreateTable).CreateTable.CreateAsSelectSql
-				ses.createAsSelectSql = insertSql
-			}
+			insertSql := execCtx.cw.Plan().GetDdl().GetDefinition().(*plan.DataDefinition_CreateTable).CreateTable.CreateAsSelectSql
+			ses.createAsSelectSql = insertSql
 			return
 		}
 
@@ -124,10 +122,6 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			ses.InvalidatePrivilegeCache()
 		}
 		runBegin := time.Now()
-		/*
-			Step 1: Start
-		*/
-
 		if st, ok := execCtx.stmt.(*tree.Load); ok {
 			if st.Local {
 				loadLocalErrGroup = new(errgroup.Group)
@@ -167,10 +161,6 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		if time.Since(runBegin) > time.Second {
 			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
-
-		echoTime := time.Now()
-
-		ses.Debugf(execCtx.reqCtx, "time of SendResponse %s", time.Since(echoTime).String())
 	}
 
 	return
