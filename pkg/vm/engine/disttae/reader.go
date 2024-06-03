@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"sort"
 	"time"
 
@@ -572,6 +574,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 		return err
 	}
 	ts := types.TimestampToTS(r.ts)
+	rowids := ""
 
 	if filter != nil && info.Sorted && len(r.pkVal) > 0 {
 		iter := state.NewPrimaryKeyDelIter(
@@ -586,6 +589,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 			}
 			_, offset := entry.RowID.Decode()
 			r.buffer = append(r.buffer, int64(offset))
+			rowids = fmt.Sprintf("%s[%s]", rowids, entry.RowID.String())
 		}
 		iter.Close()
 	} else {
@@ -595,10 +599,21 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 			entry := iter.Entry()
 			_, offset := entry.RowID.Decode()
 			r.buffer = append(r.buffer, int64(offset))
+			rowids = fmt.Sprintf("%s[%s]", rowids, entry.RowID.String())
 		}
 		v2.TaskLoadMemDeletesPerBlockHistogram.Observe(float64(len(r.buffer) - currlen))
 		iter.Close()
 	}
+
+	if regexp.MustCompile(`.*sbtest.*`).MatchString(r.table.tableName) && rowids != "" {
+		logutil.Infof("xxxx txn:%s table:%s, "+
+			"block merge reader load deletes %s from partitionState.rows",
+			r.table.db.op.Txn().DebugString(),
+			r.table.tableName,
+			rowids)
+	}
+
+	rowids = ""
 
 	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
 	//load deletes from txn.writes for the specified block
@@ -615,10 +630,19 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 					id, offset := v.Decode()
 					if id == info.BlockID {
 						r.buffer = append(r.buffer, int64(offset))
+						rowids = fmt.Sprintf("%s[%s]", rowids, v.String())
 					}
 				}
 			}
 		})
+
+	if regexp.MustCompile(`.*sbtest.*`).MatchString(r.table.tableName) && rowids != "" {
+		logutil.Infof("xxxx txn:%s table:%s, "+
+			"block merge reader load deletes %s from worksapce",
+			r.table.db.op.Txn().DebugString(),
+			r.table.tableName,
+			rowids)
+	}
 	//load deletes from txn.deletedBlocks.
 	txn := r.table.getTxn()
 	txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID, &r.buffer)

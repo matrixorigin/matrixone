@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -685,6 +686,25 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		tbl.proc.Load(),
 	); err != nil {
 		return
+	}
+
+	if regexp.MustCompile(`.*sbtest.*`).MatchString(tbl.tableName) {
+		blkstr := ""
+		for i := 1; i < blocks.Len(); i++ {
+			blk := blocks.Get(i)
+			blkstr = fmt.Sprintf("%s, [%s,%v,%v]",
+				blkstr,
+				blk.BlockID.String(),
+				blk.EntryState,
+				blk.CanRemote)
+		}
+		if blkstr == "" {
+			blkstr = "no blocks"
+		}
+		logutil.Infof("xxxx table:%s txn:%s call ranges return blks:%s",
+			tbl.tableName,
+			tbl.db.op.Txn().DebugString(),
+			blkstr)
 	}
 
 	return
@@ -1642,6 +1662,10 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	}
 	//for S3 delete
 	if name != catalog.Row_ID {
+		if regexp.MustCompile(`.*sbtest.*`).MatchString(tbl.tableName) {
+			logutil.Fatalf("xxxx sbtest delete should not go S3, table:%s, txn:%s",
+				tbl.tableName, tbl.db.op.Txn().DebugString())
+		}
 		return tbl.EnhanceDelete(bat, name)
 	}
 	bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
