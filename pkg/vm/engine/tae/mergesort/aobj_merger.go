@@ -58,7 +58,7 @@ func MergeAObj(
 	var merger AObjMerger
 	typ := batches[0].Vecs[sortKeyPos].GetType()
 	if typ.IsVarlen() {
-		merger = newAObjMerger(vpool, batches, sort.GenericLess[string], sortKeyPos, vector.MustStrCol, rowPerBlk, resultBlkCnt)
+		merger = newAObjMerger(vpool, batches, sort.GenericLess[string], sortKeyPos, vector.InefficientMustStrCol, rowPerBlk, resultBlkCnt)
 	} else {
 		switch typ.Oid {
 		case types.T_bool:
