@@ -111,12 +111,9 @@ func getAccountIdNames(ctx context.Context, ses *Session, bh BackgroundExec, lik
 	var accountIds []int32
 	var accountNames []string
 	for _, batch := range bh.GetExecResultBatches() {
-		mrs := &MysqlResultSet{
-			Columns: make([]Column, len(batch.Vecs)),
-		}
-		oq := newFakeOutputQueue(mrs)
+		row := make([]any, len(batch.Vecs))
 		for i := 0; i < batch.RowCount(); i++ {
-			row, err := extractRowFromEveryVector(ctx, ses, batch, i, oq, true)
+			err := extractRowFromEveryVector(ctx, ses, batch, i, row)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -156,12 +153,9 @@ func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int
 
 	var pubs []*published
 	for _, batch := range bh.GetExecResultBatches() {
-		mrs := &MysqlResultSet{
-			Columns: make([]Column, len(batch.Vecs)),
-		}
-		oq := newFakeOutputQueue(mrs)
+		row := make([]any, len(batch.Vecs))
 		for i := 0; i < batch.RowCount(); i++ {
-			row, err := extractRowFromEveryVector(ctx, ses, batch, i, oq, true)
+			err := extractRowFromEveryVector(ctx, ses, batch, i, row)
 			if err != nil {
 				return nil, err
 			}
@@ -218,12 +212,9 @@ func getSubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId uin
 
 	var subs []*subscribed
 	for _, batch := range bh.GetExecResultBatches() {
-		mrs := &MysqlResultSet{
-			Columns: make([]Column, len(batch.Vecs)),
-		}
-		oq := newFakeOutputQueue(mrs)
+		row := make([]any, len(batch.Vecs))
 		for i := 0; i < batch.RowCount(); i++ {
-			row, err := extractRowFromEveryVector(ctx, ses, batch, i, oq, true)
+			err := extractRowFromEveryVector(ctx, ses, batch, i, row)
 			if err != nil {
 				return nil, err
 			}
@@ -341,5 +332,6 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 		rs.AddRow([]interface{}{pub.pubName, pub.pubAccount, pub.pubDatabase, pub.pubTime, subName, subTime})
 	}
 	ses.SetMysqlResultSet(rs)
-	return nil
+
+	return trySaveQueryResult(ctx, ses, rs)
 }

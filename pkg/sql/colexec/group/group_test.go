@@ -106,10 +106,17 @@ func TestGroup(t *testing.T) {
 			newBatch(tc.arg.Types, tc.proc, Rows),
 			newBatch(tc.arg.Types, tc.proc, Rows),
 			batch.EmptyBatch,
+			nil,
 		}
 		resetChildren(tc.arg, bats)
-		_, err = tc.arg.Call(tc.proc)
-		require.NoError(t, err)
+		for {
+			result, err1 := tc.arg.Call(tc.proc)
+			require.NoError(t, err1)
+			if result.Status == vm.ExecStop || result.Batch == nil {
+				break
+			}
+			result.Batch.Clean(tc.proc.Mp())
+		}
 
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.arg.Reset(tc.proc, false, nil)
@@ -120,10 +127,19 @@ func TestGroup(t *testing.T) {
 			newBatch(tc.arg.Types, tc.proc, Rows),
 			newBatch(tc.arg.Types, tc.proc, Rows),
 			batch.EmptyBatch,
+			nil,
 		}
 		resetChildren(tc.arg, bats)
-		_, err = tc.arg.Call(tc.proc)
-		require.NoError(t, err)
+
+		for {
+			result, err1 := tc.arg.Call(tc.proc)
+			require.NoError(t, err1)
+			if result.Status == vm.ExecStop || result.Batch == nil {
+				break
+			}
+			result.Batch.Clean(tc.proc.Mp())
+		}
+
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
@@ -145,10 +161,17 @@ func BenchmarkGroup(b *testing.B) {
 				newBatch(tc.arg.Types, tc.proc, BenchmarkRows),
 				newBatch(tc.arg.Types, tc.proc, BenchmarkRows),
 				batch.EmptyBatch,
+				nil,
 			}
 			resetChildren(tc.arg, bats)
-			_, err = tc.arg.Call(tc.proc)
-			require.NoError(t, err)
+			for {
+				result, err1 := tc.arg.Call(tc.proc)
+				require.NoError(t, err1)
+				if result.Status == vm.ExecStop || result.Batch == nil {
+					break
+				}
+				result.Batch.Clean(tc.proc.Mp())
+			}
 
 			tc.arg.Free(tc.proc, false, nil)
 			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
