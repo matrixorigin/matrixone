@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -68,6 +69,41 @@ var (
 	restorePubDbDataFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {snapshot = '%s'} WHERE  DATABASE_NAME = '%s'"
 
 	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", "mo_catalog"}
+
+	needSkipTablesInMocatalog = map[string]int8{
+		"mo_database":         1,
+		"mo_tables":           1,
+		"mo_columns":          1,
+		"mo_table_partitions": 1,
+		"mo_foreign_keys":     1,
+		"mo_indexes":          1,
+		"mo_account":          1,
+
+		catalog.MOVersionTable:       1,
+		catalog.MOUpgradeTable:       1,
+		catalog.MOUpgradeTenantTable: 1,
+		catalog.MOAutoIncrTable:      1,
+
+		"mo_user":                     0,
+		"mo_role":                     0,
+		"mo_user_grant":               0,
+		"mo_role_grant":               0,
+		"mo_role_privs":               0,
+		"mo_user_defined_function":    0,
+		"mo_stored_procedure":         0,
+		"mo_mysql_compatibility_mode": 0,
+		"mo_stages":                   0,
+		"mo_pubs":                     1,
+
+		"mo_sessions":       1,
+		"mo_configurations": 1,
+		"mo_locks":          1,
+		"mo_variables":      1,
+		"mo_transactions":   1,
+		"mo_cache":          1,
+
+		"mo_snapshots": 1,
+	}
 )
 
 func getSqlForGetDbPubCountWithSnapshot(ctx context.Context, snapshot string, dbName string) (string, error) {
@@ -320,6 +356,10 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 	}
 
+	if needSkipDb(dbName) {
+		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
+	}
+
 	// restore as a txn
 	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return err
@@ -451,6 +491,11 @@ func restoreToAccount(
 			return
 		}
 	}
+
+	// restore system db
+	if err = restoreSystemDatabase(ctx, bh, snapshotName, toAccountId); err != nil {
+		return
+	}
 	return
 }
 
@@ -530,12 +575,6 @@ func restoreToDatabaseOrTable(
 	}
 
 	for _, tblInfo := range tableInfos {
-		if needSkipTable(dbName, tblInfo.tblName) {
-			// TODO skip tables which should not to be restored
-			getLogger().Info(fmt.Sprintf("[%s] skip table: %v.%v", snapshotName, dbName, tblInfo.tblName))
-			continue
-		}
-
 		key := genKey(dbName, tblInfo.tblName)
 
 		// skip table which is foreign key related
@@ -549,6 +588,37 @@ func restoreToDatabaseOrTable(
 			continue
 		}
 
+		if err = recreateTable(ctx, bh, snapshotName, tblInfo, toAccountId); err != nil {
+			return
+		}
+	}
+	return
+}
+
+func restoreSystemDatabase(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshotName string,
+	toAccountId uint32) (err error) {
+	getLogger().Info(fmt.Sprintf("[%s] start to restore system database: %s", snapshotName, moCatalog))
+	tableInfos, err := getTableInfos(ctx, bh, snapshotName, moCatalog, "")
+	if err != nil {
+		return
+	}
+
+	curAccountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return
+	}
+
+	for _, tblInfo := range tableInfos {
+		if needSkipTable(curAccountId, moCatalog, tblInfo.tblName) {
+			// TODO skip tables which should not to be restored
+			getLogger().Info(fmt.Sprintf("[%s] skip restore system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
+			continue
+		}
+
+		getLogger().Info(fmt.Sprintf("[%s] start to restore system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
 		if err = recreateTable(ctx, bh, snapshotName, tblInfo, toAccountId); err != nil {
 			return
 		}
@@ -695,17 +765,20 @@ func needSkipDb(dbName string) bool {
 	return slices.Contains(skipDbs, dbName)
 }
 
-func needSkipTable(dbName string, tblName string) bool {
+func needSkipTable(accountId uint32, dbName string, tblName string) bool {
 	// TODO determine which tables should be skipped
 
-	if dbName == "information_schema" {
-		return true
+	if accountId == sysAccountID {
+		return dbName == moCatalog && needSkipTablesInMocatalog[tblName] == 1
+	} else {
+		if dbName == moCatalog {
+			if needSkip, ok := needSkipTablesInMocatalog[tblName]; ok {
+				return needSkip == 1
+			} else {
+				return true
+			}
+		}
 	}
-
-	if dbName == "mo_catalog" {
-		return true
-	}
-
 	return false
 }
 
@@ -912,7 +985,7 @@ func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string,
 	if len(snapshotName) > 0 {
 		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
 	}
-
+	getLogger().Info(fmt.Sprintf("[%s] get table %v info sql: %s", snapshotName, tblName, sql))
 	// cols: table name, table type
 	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
 	if err != nil {
@@ -931,7 +1004,7 @@ func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string,
 }
 
 func getTableInfos(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) ([]*tableInfo, error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to get table info: %v", snapshotName, dbName))
+	getLogger().Info(fmt.Sprintf("[%s] start to get table info: %v", snapshotName, tblName))
 	tableInfos, err := showFullTables(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
 		return nil, err
@@ -1062,6 +1135,10 @@ func getTableInfoMap(
 	tblName string,
 	tblKeys []string) (tblInfoMap map[string]*tableInfo, err error) {
 	tblInfoMap = make(map[string]*tableInfo)
+	curAccountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return
+	}
 	for _, key := range tblKeys {
 		if _, ok := tblInfoMap[key]; ok {
 			return
@@ -1069,7 +1146,7 @@ func getTableInfoMap(
 
 		// filter by dbName and tblName
 		d, t := splitKey(key)
-		if needSkipDb(d) || needSkipTable(d, t) {
+		if needSkipDb(d) || needSkipTable(curAccountId, d, t) {
 			continue
 		}
 		if dbName != "" && dbName != d {

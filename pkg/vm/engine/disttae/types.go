@@ -239,6 +239,7 @@ type Transaction struct {
 	offsets []int
 	//for RC isolation, the txn's snapshot TS for each statement.
 	timestamps []timestamp.Timestamp
+	start      time.Time
 
 	hasS3Op              atomic.Bool
 	removed              bool
@@ -588,10 +589,7 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		txn.resetSnapshot()
 	}
 	//Transfer row ids for deletes in RC isolation
-	if !commit {
-		return txn.transferDeletesLocked()
-	}
-	return nil
+	return txn.transferDeletesLocked(ctx, commit)
 }
 
 // Entry represents a delete/insert
@@ -791,10 +789,8 @@ type blockReader struct {
 
 type blockMergeReader struct {
 	*blockReader
-	table *txnTable
-
-	pkVal []byte
-
+	table    *txnTable
+	pkFilter PKFilter
 	//for perfetch deletes
 	loaded     bool
 	pkidx      int

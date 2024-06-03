@@ -24,6 +24,109 @@ import (
 const kMinLenForSubVector = 4
 const kMaxLenForBinarySearch = 64
 
+func UnOrderedLinearSearchOffsetByValFactory[T types.OrderedT | types.Decimal128 | types.Decimal64](
+	vals []T, cmp func(T, T) int) func(*Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		rows := MustFixedCol[T](vector)
+		if len(rows) == 0 {
+			return sels
+		}
+		// sort the rows first maybe better if there has many vals
+		for x := range rows {
+			for y := range vals {
+				if (cmp != nil && cmp(rows[x], vals[y]) == 0) || (cmp == nil && rows[x] == vals[y]) {
+					sels = append(sels, int32(x))
+					break
+				}
+			}
+		}
+		return sels
+	}
+}
+
+func UnOrderedFixedSizeLinearSearchOffsetByValFactory[T types.Decimal128 | types.Decimal64](
+	vals []T, cmp func(T, T) int) func(*Vector) []int32 {
+	return UnOrderedLinearSearchOffsetByValFactory(vals, cmp)
+}
+
+func UnorderedVarlenLinearSearchOffsetByValFactory(vals [][]byte) func(*Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		vecLen := vector.Length()
+		if vecLen == 0 {
+			return sels
+		}
+		for x := 0; x < vecLen; x++ {
+			for y := range vals {
+				if bytes.Equal(vals[y], vector.GetBytesAt(x)) {
+					sels = append(sels, int32(x))
+					break
+				}
+			}
+		}
+		return sels
+	}
+}
+
+func UnOrderedCollectOffsetsByPrefixEqFactory(val []byte) func(*Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		vecLen := vector.Length()
+		if vecLen == 0 {
+			return sels
+		}
+		col, area := MustVarlenaRawData(vector)
+		for x := 0; x < vecLen; x++ {
+			if bytes.HasPrefix(col[x].GetByteSlice(area), val) {
+				sels = append(sels, int32(x))
+			}
+		}
+		return sels
+	}
+}
+
+func UnOrderedCollectOffsetsByPrefixBetweenFactory(lb, ub []byte) func(*Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		vecLen := vector.Length()
+		if vecLen == 0 {
+			return sels
+		}
+		col, area := MustVarlenaRawData(vector)
+		for x := 0; x < vecLen; x++ {
+			bb := col[x].GetByteSlice(area)
+			if types.PrefixCompare(bb, lb) >= 0 && types.PrefixCompare(bb, ub) <= 0 {
+				sels = append(sels, int32(x))
+			}
+		}
+		return sels
+	}
+}
+func UnOrderedCollectOffsetsByPrefixInFactory(rvec *Vector) func(*Vector) []int32 {
+	return func(lvec *Vector) []int32 {
+		var sels []int32
+		lvecLen := lvec.Length()
+		rvecLen := rvec.Length()
+		if lvecLen == 0 || rvecLen == 0 {
+			return sels
+		}
+		lcol, larea := MustVarlenaRawData(lvec)
+		rcol, rarea := MustVarlenaRawData(rvec)
+
+		for x := 0; x < lvecLen; x++ {
+			bb := lcol[x].GetByteSlice(larea)
+			for y := 0; y < rvecLen; y++ {
+				if types.PrefixCompare(bb, rcol[y].GetByteSlice(rarea)) == 0 {
+					sels = append(sels, int32(x))
+					break
+				}
+			}
+		}
+		return sels
+	}
+}
+
 func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](vals []T) func(*Vector) []int32 {
 	return func(vec *Vector) []int32 {
 		var sels []int32

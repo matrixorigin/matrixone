@@ -4029,7 +4029,11 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 		return err
 	}
 	if !execResultArrayHasData(erArray) {
-		return moerr.NewInternalError(ctx, "publication '%s' does not exist", dp.Name)
+		if !dp.IfExists {
+			return moerr.NewInternalError(ctx, "publication '%s' does not exist", dp.Name)
+		} else {
+			return err
+		}
 	}
 
 	sql, err = getSqlForDropPubInfo(ctx, string(dp.Name), false)
@@ -7618,9 +7622,7 @@ func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, f
 	//Note: it is special here. The connection ctx here is ctx also.
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
 	upstream := &Session{
-		feSessionImpl: feSessionImpl{
-			proto: &FakeProtocol{},
-		},
+		feSessionImpl: feSessionImpl{},
 
 		seqCurValues: make(map[uint64]string),
 		seqLastValue: new(string),
