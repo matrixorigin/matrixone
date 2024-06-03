@@ -107,7 +107,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	uuid, _ := uuid.NewV7()
 	runner := mock_frontend.NewMockComputationRunner(ctrl)
 	runner.EXPECT().Run(gomock.Any()).DoAndReturn(func(uint64) (*util.RunResult, error) {
-		proto := ses.GetMysqlProtocol()
+		proto := ses.GetResponser().MysqlRrWr()
 		if mrs != nil {
 			if res.isSleepSql {
 				select {
@@ -117,7 +117,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 					res.resultX.Store(contextCancel)
 				}
 			}
-			err = proto.SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount())
+			err = proto.WriteResultSetRow(mrs, mrs.GetRowCount())
 			if err != nil {
 				logutil.Errorf("flush error %v", err)
 				return nil, err

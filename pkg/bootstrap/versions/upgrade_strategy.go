@@ -74,6 +74,7 @@ const (
 	MODIFY_COLUMN
 	RENAME_COLUMN
 	ALTER_COLUMN_DEFAULT
+	MODIFY_TABLE_COMMENT
 	ADD_INDEX
 	DROP_INDEX
 	ALTER_INDEX_VISIBLE
@@ -322,6 +323,39 @@ func CheckTableDefinition(txn executor.TxnExecutor, accountId uint32, schema str
 	})
 
 	return loaded, nil
+}
+
+// CheckTableComment is used to check if the specified table definition exists in the specified database. If it exists,
+// return true; otherwise, return false.
+func CheckTableComment(txn executor.TxnExecutor, accountId uint32, schema string, tableName string) (bool, string, error) {
+	if schema == "" || tableName == "" {
+		return false, "", moerr.NewInternalErrorNoCtx("schema name or table name is empty")
+	}
+
+	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id, rel_comment FROM mo_catalog.mo_tables tbl
+                              WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
+                              AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
+	if accountId == catalog.System_Account {
+		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id, rel_comment FROM mo_catalog.mo_tables tbl
+                                  WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition'
+                                  AND account_id = 0 AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
+	}
+
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
+	if err != nil {
+		return false, "", err
+	}
+	defer res.Close()
+
+	loaded := false
+	comment := ""
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		loaded = true
+		comment = cols[3].UnsafeGetStringAt(0)
+		return false
+	})
+
+	return loaded, comment, nil
 }
 
 // CheckDatabaseDefinition This function is used to check if the database definition exists.
