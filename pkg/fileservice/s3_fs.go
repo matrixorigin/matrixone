@@ -826,6 +826,12 @@ func (s *S3FS) SetAsyncUpdate(b bool) {
 	s.asyncUpdate = b
 }
 
+func (s *S3FS) Cost() *CostAttr {
+	return &CostAttr{
+		List: CostHigh,
+	}
+}
+
 type tracePoint struct {
 	start             time.Time
 	dnsStart          time.Time
