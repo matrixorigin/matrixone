@@ -230,7 +230,7 @@ type runner struct {
 
 	objMemSizeList []tableAndSize
 
-	helpers []DoCheckpointHelper
+	helpers []*DoCheckpointHelper
 
 	onceStart sync.Once
 	onceStop  sync.Once
@@ -301,7 +301,7 @@ func (r *runner) String() string {
 }
 
 func (r *runner) AddHelper(h DoCheckpointHelper) {
-	r.helpers = append(r.helpers, h)
+	r.helpers = append(r.helpers, &h)
 }
 
 // Only used in UT
@@ -546,7 +546,7 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 	}
 	for i := range r.helpers {
 		fileName := blockio.EncodeCheckpointMetadataFileNameWithoutDir(PrefixMetadata, start, end)
-		r.helpers[i](fileName)
+		(*r.helpers[i])(fileName)
 	}
 	return
 }
