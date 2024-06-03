@@ -15,7 +15,8 @@ commit;
 create database db1;
 use db1;
 create table t1(a int, b varchar);
-insert into t1 values (1, 'a'),(1, 'b'),(3, 'c'),(4,'d'),(5,'e');
+-- issue 16,530: ensure 'insert into t1 ...' and 'insert into t2 ...' NOT Aggred.
+/* cloud_user */insert into t1 values (1, 'a'),(1, 'b'),(3, 'c'),(4,'d'),(5,'e');
 update t1 set b='xx' where a=5;
 update t1 set b='yy' where a=1;
 select * from t1;

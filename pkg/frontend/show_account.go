@@ -457,9 +457,8 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		return err
 	}
 
-	oq := newFakeOutputQueue(outputRS)
 	for _, b := range accInfosBatches {
-		if err = fillResultSet(ctx, oq, b, ses); err != nil {
+		if err = fillResultSet(ctx, b, ses, outputRS); err != nil {
 			return err
 		}
 	}
@@ -467,23 +466,20 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	ses.SetMysqlResultSet(outputRS)
 
 	ses.rs = columnDef
-	if openSaveQueryResult(ctx, ses) {
-		err = saveResult(ctx, ses, accInfosBatches)
-	}
 
-	return err
-}
-
-func saveResult(ctx context.Context, ses *Session, outputBatch []*batch.Batch) error {
-	for _, b := range outputBatch {
-		if err := saveQueryResult(ctx, ses, b); err != nil {
+	if canSaveQueryResult(ctx, ses) {
+		err = saveQueryResult(ctx, ses,
+			func() ([]*batch.Batch, error) {
+				return accInfosBatches, nil
+			},
+			nil,
+		)
+		if err != nil {
 			return err
 		}
 	}
-	if err := saveQueryResultMeta(ctx, ses); err != nil {
-		return err
-	}
-	return nil
+
+	return err
 }
 
 func initOutputRs(dest *MysqlResultSet, src *MysqlResultSet, ctx context.Context) error {
