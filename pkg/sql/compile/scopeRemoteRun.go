@@ -311,7 +311,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 // 1. Message with error information
 // 2. Message with an end flag and analysis result
 // 3. Batch Message with batch data
-func (s *Scope) remoteRun(c *Compile) (err error) {
+func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
@@ -328,10 +328,10 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 
 	if lastInstruction.Op == vm.Connector || lastInstruction.Op == vm.Dispatch {
 		if err = lastInstruction.Arg.Prepare(s.Proc); err != nil {
-			return err
+			return nil, err
 		}
 	} else {
-		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
+		return nil, moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
 
 	for _, ins := range s.Instructions[lastIdx+1:] {
@@ -341,32 +341,31 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 	s.Instructions = s.Instructions[:lastIdx]
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
-		return errEncode
+		return nil, errEncode
 	}
 	s.appendInstruction(lastInstruction)
 
 	// encode the process related information
 	pData, errEncodeProc := encodeProcessInfo(s.Proc, c.sql)
 	if errEncodeProc != nil {
-		return errEncodeProc
+		return nil, errEncodeProc
 	}
 
 	c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.StmtProfile.GetStmtId())
 
 	// new sender and do send work.
-	sender, err := newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
+	sender, err = newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
 	if err != nil {
 		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
 			c.sql, c.proc.TxnOperator.Txn().DebugString(), err)
-		return err
+		return nil, err
 	}
-	defer sender.close()
 
 	if err = sender.send(sData, pData, pipeline.Method_PipelineMessage); err != nil {
-		return err
+		return sender, err
 	}
 	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
-	return err
+	return sender, err
 }
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.

@@ -298,18 +298,25 @@ func (s *Scope) RemoteRun(c *Compile) error {
 			zap.String("remote-address", s.NodeInfo.Addr))
 
 	p := pipeline.New(0, nil, s.Instructions, s.Reg)
-	err := s.remoteRun(c)
+	sender, err := s.remoteRun(c)
+
+	runErr := err
 	select {
 	case <-s.Proc.Ctx.Done():
 		// this clean-up action shouldn't be called before context check.
 		// because the clean-up action will cancel the context, and error will be suppressed.
 		p.Cleanup(s.Proc, err != nil, err)
-		return nil
+		runErr = nil
 
 	default:
 		p.Cleanup(s.Proc, err != nil, err)
-		return err
 	}
+
+	// sender should be closed after cleanup (tell the sub-pipeline that query was done).
+	if sender != nil {
+		sender.close()
+	}
+	return runErr
 }
 
 // ParallelRun run a pipeline in parallel.
