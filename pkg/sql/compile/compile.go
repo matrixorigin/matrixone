@@ -29,8 +29,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/automaxprocs/maxprocs"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
@@ -93,10 +91,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-func init() {
-	maxprocs.Set(maxprocs.Logger(func(string, ...interface{}) {}))
-}
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
 // The current insertion of around 200,000 rows triggers cn to write s3 directly

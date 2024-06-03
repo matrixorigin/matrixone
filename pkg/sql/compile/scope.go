@@ -22,8 +22,6 @@ import (
 	"runtime/debug"
 	"sync"
 
-	"go.uber.org/automaxprocs/maxprocs"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -66,9 +64,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func init() {
-	maxprocs.Set(maxprocs.Logger(func(string, ...interface{}) {}))
-}
 func newScope(magic magicType) *Scope {
 	s := reuse.Alloc[Scope](nil)
 	s.Magic = magic
