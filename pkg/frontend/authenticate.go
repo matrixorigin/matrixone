@@ -7619,9 +7619,7 @@ func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, f
 	//Note: it is special here. The connection ctx here is ctx also.
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
 	upstream := &Session{
-		feSessionImpl: feSessionImpl{
-			proto: &FakeProtocol{},
-		},
+		feSessionImpl: feSessionImpl{},
 
 		seqCurValues: make(map[uint64]string),
 		seqLastValue: new(string),
