@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
@@ -105,6 +106,7 @@ type store struct {
 	fileService         fileservice.FileService
 	metadataFileService fileservice.ReplaceableFileService
 	lockTableAllocator  lockservice.LockTableAllocator
+	shardServer         shardservice.ShardServer
 	moCluster           clusterservice.MOCluster
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
@@ -191,6 +193,9 @@ func NewService(
 	if err := s.initLockTableAllocator(); err != nil {
 		return nil, err
 	}
+	if err := s.initShardServer(); err != nil {
+		return nil, err
+	}
 	if err := s.initTxnSender(); err != nil {
 		return nil, err
 	}
@@ -229,7 +234,12 @@ func (s *store) Start() error {
 func (s *store) Close() error {
 	s.stopper.Stop()
 	s.moCluster.Close()
-	err := errors.Join(
+
+	var err error
+	if s.cfg.ShardService.Enable {
+		err = s.shardServer.Close()
+	}
+	err = errors.Join(
 		s.hakeeperClient.Close(),
 		s.sender.Close(),
 		s.server.Close(),
@@ -389,6 +399,17 @@ func (s *store) initLockTableAllocator() error {
 		s.lockServiceListenAddr(),
 		s.cfg.LockService.KeepBindTimeout.Duration,
 		s.cfg.RPC)
+	return nil
+}
+
+func (s *store) initShardServer() error {
+	if !s.cfg.ShardService.Enable {
+		return nil
+	}
+
+	s.cfg.ShardService.RPC = s.cfg.RPC
+	s.cfg.ShardService.ListenAddress = s.shardServiceListenAddr()
+	s.shardServer = shardservice.NewShardServer(s.cfg.ShardService)
 	return nil
 }
 
