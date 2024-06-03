@@ -998,6 +998,12 @@ func (l *LocalFS) SetAsyncUpdate(b bool) {
 	l.asyncUpdate = b
 }
 
+func (l *LocalFS) Cost() *CostAttr {
+	return &CostAttr{
+		List: CostLow,
+	}
+}
+
 func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
 	if entry.IsDir() {
 		return true, nil
