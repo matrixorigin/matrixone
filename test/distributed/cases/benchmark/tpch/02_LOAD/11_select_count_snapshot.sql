@@ -58,6 +58,7 @@ select count(*) from supplier {snapshot = 'tpch_snapshot'};
 select count(*) from supplier {snapshot = 'tpch_snapshot'};
 select count(*) from supplier {snapshot = 'tpch_snapshot'};
 select count(*) from supplier {snapshot = 'tpch_snapshot'};
+-- @bvt:issue
 
 -- restore
 restore account sys database tpch from snapshot tpch_snapshot;
@@ -92,6 +93,7 @@ select count(*) from supplier;
 drop database tpch;
 select sleep(10);
 
+-- @bvt:issue#16501
 select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
 select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
 select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
@@ -133,6 +135,7 @@ select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
 select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
 select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
 select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
+-- @bvt:issue
 
 restore account sys database tpch from snapshot tpch_snapshot;
 
@@ -166,6 +169,7 @@ select count(*) from tpch.supplier;
 
 drop snapshot tpch_snapshot;
 
+-- @bvt:issue#16501
 select count(*) from tpch.customer {snapshot = 'tpch_cluster'};
 select count(*) from tpch.customer {snapshot = 'tpch_cluster'};
 select count(*) from tpch.customer {snapshot = 'tpch_cluster'};
@@ -207,6 +211,7 @@ select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
+-- @bvt:issue
 
 drop snapshot tpch_cluster;
 -- @bvt:issue
