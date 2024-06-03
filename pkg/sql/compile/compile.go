@@ -472,7 +472,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 
 	defer func() {
 		if c.proc.SessionInfo.User != "mo_logger" && txnOp != nil {
-			if regexp.MustCompile(`.*select count\(\*\) from tpch\.orders \{snapshot.*`).MatchString(sql) {
+			if regexp.MustCompile(`.*select count\(\*\) from tpch\..*\{snapshot.*`).MatchString(sql) {
 				//if regexp.MustCompile(`.*from tpch\.orders \{snapshot.*`).MatchString(sql) {
 				logutil.Infof("xxxx txn: %s run sql:%s, err:%v",
 					txnOp.Txn().DebugString(),
