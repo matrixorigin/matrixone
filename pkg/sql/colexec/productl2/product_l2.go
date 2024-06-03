@@ -176,6 +176,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 		// find the nearest cluster center from the build table.
 		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
 		case types.T_array_float32:
+			tblEmbeddingF32IsNull := ctr.inBat.Vecs[tblColPos].IsNull(uint64(j))
 			tblEmbeddingF32 = types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
 
 			//// NOTE: make sure you normalize_l2 probe vector once.
@@ -189,8 +190,9 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			//_ = moarray.NormalizeL2[float32](tblEmbeddingF32, normalizeTblEmbeddingF32)
 
 			for i = 0; i < buildCount; i++ {
+				clusterEmbeddingF32IsNull := ctr.bat.Vecs[centroidColPos].IsNull(uint64(i))
 				clusterEmbeddingF32 = types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				if len(tblEmbeddingF32) == 0 || len(clusterEmbeddingF32) == 0 {
+				if tblEmbeddingF32IsNull || clusterEmbeddingF32IsNull {
 					leastDistance = 0
 					leastClusterIndex = i
 				} else {
@@ -208,6 +210,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			//*normalizeTblEmbeddingPtrF32 = normalizeTblEmbeddingF32
 			//arrayF32Pool.Put(normalizeTblEmbeddingPtrF32)
 		case types.T_array_float64:
+			tblEmbeddingF64IsNull := ctr.inBat.Vecs[tblColPos].IsNull(uint64(j))
 			tblEmbeddingF64 = types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
 
 			//normalizeTblEmbeddingPtrF64 = arrayF64Pool.Get().(*[]float64)
@@ -220,8 +223,9 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			//_ = moarray.NormalizeL2[float64](tblEmbeddingF64, normalizeTblEmbeddingF64)
 
 			for i = 0; i < buildCount; i++ {
+				clusterEmbeddingF64IsNull := ctr.bat.Vecs[centroidColPos].IsNull(uint64(i))
 				clusterEmbeddingF64 = types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				if len(tblEmbeddingF64) == 0 || len(clusterEmbeddingF64) == 0 {
+				if tblEmbeddingF64IsNull || clusterEmbeddingF64IsNull {
 					leastDistance = 0
 					leastClusterIndex = i
 				} else {
