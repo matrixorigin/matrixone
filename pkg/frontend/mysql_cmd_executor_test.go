@@ -505,6 +505,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		batchCase1 := genBatch()
 		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
 
 		err = getDataFromPipeline(ses, ec, batchCase1)
 		convey.So(err, convey.ShouldBeNil)
@@ -547,6 +548,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ses.mrs = &MysqlResultSet{}
 		proto.ses = ses
 		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
 
 		convey.So(getDataFromPipeline(ses, ec, nil), convey.ShouldBeNil)
 
@@ -916,15 +918,6 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 	})
 }
 
-func Test_fakeoutput(t *testing.T) {
-	convey.Convey("fake outout", t, func() {
-		mrs := &MysqlResultSet{}
-		fo := newFakeOutputQueue(mrs)
-		_, _ = fo.getEmptyRow()
-		_ = fo.flush()
-	})
-}
-
 func Test_statement_type(t *testing.T) {
 	convey.Convey("statement", t, func() {
 		type kase struct {
@@ -1077,13 +1070,13 @@ func TestProcessLoadLocal(t *testing.T) {
 			return
 		}).AnyTimes()
 		ioses.EXPECT().Close().AnyTimes()
-		proto := &FakeProtocol{
+		proto := &testMysqlWriter{
 			ioses: ioses,
 		}
 
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
-				proto: proto,
+				respr: NewMysqlResp(proto),
 			},
 		}
 		buffer := make([]byte, 4096)
@@ -1176,9 +1169,8 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	ses := NewSession(ctx, proto, nil)
-	ses.GetMysqlProtocol()
 	proto.SetSession(ses)
-	ses.proto = proto
+	//ses.proto = proto
 
 	convey.Convey("no labels", t, func() {
 		ses.mrs = &MysqlResultSet{}

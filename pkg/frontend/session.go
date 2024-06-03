@@ -271,7 +271,7 @@ func (ses *Session) getNextProcessId() string {
 		temporary method:
 		routineId + sqlCount
 	*/
-	routineId := ses.GetMysqlProtocol().ConnectionID()
+	routineId := ses.GetResponser().GetU32(CONNID)
 	return fmt.Sprintf("%d%d", routineId, ses.GetSqlCount())
 }
 
@@ -471,7 +471,7 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(connCtx context.Context, proto MysqlProtocol, mp *mpool.MPool) *Session {
+func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool) *Session {
 	//if the sharedTxnHandler exists,we use its txnCtx and txnOperator in this session.
 	//Currently, we only use the sharedTxnHandler in the background session.
 	var txnOp TxnOperator
@@ -480,13 +480,13 @@ func NewSession(connCtx context.Context, proto MysqlProtocol, mp *mpool.MPool) *
 
 	ses := &Session{
 		feSessionImpl: feSessionImpl{
-			proto:      proto,
 			pool:       mp,
 			txnHandler: txnHandler,
 			//TODO:fix database name after the catalog is ready
-			txnCompileCtx:  InitTxnCompilerContext(proto.GetDatabaseName()),
+			txnCompileCtx:  InitTxnCompilerContext(proto.GetStr(DBNAME)),
 			outputCallback: getDataFromPipeline,
 			timeZone:       time.Local,
+			respr:          NewMysqlResp(proto),
 		},
 		errInfo: &errInfo{
 			codes:  make([]uint16, 0, MoDefaultErrorCount),
@@ -556,7 +556,7 @@ func (ses *Session) Close() {
 	defer ses.mu.Unlock()
 	ses.feSessionImpl.Close()
 	ses.feSessionImpl.Clear()
-	ses.proto = nil
+	ses.respr = nil
 	ses.mrs = nil
 	ses.data = nil
 	ses.ep = nil
@@ -678,10 +678,10 @@ func (ses *Session) UpdateDebugString() {
 	defer ses.mu.Unlock()
 	sb := bytes.Buffer{}
 	//option connection id , ip
-	if ses.proto != nil {
-		sb.WriteString(fmt.Sprintf("connectionId %d", ses.proto.ConnectionID()))
+	if ses.respr != nil {
+		sb.WriteString(fmt.Sprintf("connectionId %d", ses.respr.GetU32(CONNID)))
 		sb.WriteByte('|')
-		sb.WriteString(ses.proto.Peer())
+		sb.WriteString(ses.respr.GetStr(PEER))
 	}
 	sb.WriteByte('|')
 	//account info
@@ -744,7 +744,7 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 		callback = fakeDataSetFetcher2
 	}
 
-	backSes := newBackSession(ses, txnOp, ses.proto.GetDatabaseName(), callback)
+	backSes := newBackSession(ses, txnOp, ses.respr.GetStr(DBNAME), callback)
 	bh := &backExec{
 		backSes: backSes,
 	}
@@ -924,8 +924,8 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 		return prepareStmt, nil
 	}
 	var connID uint32
-	if ses.proto != nil {
-		connID = ses.proto.ConnectionID()
+	if ses.respr != nil {
+		connID = ses.respr.GetU32(CONNID)
 	}
 	ses.Errorf(ctx, "prepared statement '%s' does not exist on connection %d", name, connID)
 	return nil, moerr.NewInvalidState(ctx, "prepared statement '%s' does not exist", name)
@@ -1017,11 +1017,11 @@ func (ses *Session) GetTxnInfo() string {
 }
 
 func (ses *Session) GetDatabaseName() string {
-	return ses.GetMysqlProtocol().GetDatabaseName()
+	return ses.GetResponser().GetStr(DBNAME)
 }
 
 func (ses *Session) SetDatabaseName(db string) {
-	ses.GetMysqlProtocol().SetDatabaseName(db)
+	ses.GetResponser().SetStr(DBNAME, db)
 	ses.GetTxnCompileCtx().SetDatabase(db)
 }
 
@@ -1030,13 +1030,13 @@ func (ses *Session) DatabaseNameIsEmpty() bool {
 }
 
 func (ses *Session) SetUserName(uname string) {
-	ses.GetMysqlProtocol().SetUserName(uname)
+	ses.GetResponser().SetStr(USERNAME, uname)
 }
 
 func (ses *Session) GetConnectionID() uint32 {
-	protocol := ses.GetMysqlProtocol()
+	protocol := ses.GetResponser()
 	if protocol != nil {
-		return ses.GetMysqlProtocol().ConnectionID()
+		return ses.GetResponser().GetU32(CONNID)
 	}
 	return 0
 }

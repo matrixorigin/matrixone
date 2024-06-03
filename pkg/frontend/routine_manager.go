@@ -279,8 +279,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 		pro.receiveExtraInfo(rs)
 	}
 
-	hsV10pkt := pro.makeHandshakeV10Payload()
-	err = pro.writePackets(hsV10pkt, true)
+	err = pro.WriteHandshake()
 	if err != nil {
 		pro.ses.Error(cancelCtx,
 			"Failed to handshake with server, quitting routine...",
@@ -383,8 +382,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	protocol := routine.getProtocol()
 	packet, ok := msg.(*Packet)
 
-	protocol.SetSequenceID(uint8(packet.SequenceID + 1))
-	var seq = protocol.GetSequenceId()
+	protocol.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
+	var seq = protocol.GetU8(SEQUENCEID)
 	if !ok {
 		err = moerr.NewInternalError(ctx, "message is not Packet")
 		routine.ses.Error(ctx,
@@ -399,7 +398,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	length := packet.Length
 	payload := packet.Payload
 	for uint32(length) == MaxPayloadSize {
-		msg, err = protocol.GetTcpConnection().Read(goetty.ReadOptions{})
+		msg, err = protocol.Read(goetty.ReadOptions{})
 		if err != nil {
 			ses.Error(ctx,
 				"Failed to read message",
@@ -416,14 +415,14 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			return err
 		}
 
-		protocol.SetSequenceID(uint8(packet.SequenceID + 1))
-		seq = protocol.GetSequenceId()
+		protocol.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
+		seq = protocol.GetU8(SEQUENCEID)
 		payload = append(payload, packet.Payload...)
 		length = packet.Length
 	}
 
 	// finish handshake process
-	if !protocol.IsEstablished() {
+	if !protocol.GetBool(ESTABLISHED) {
 		tempCtx, tempCancel := context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
 		defer tempCancel()
 		ts[TSEstablishStart] = time.Now()
@@ -433,7 +432,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			di := MakeDebugInfo(payload,80,8)
 			logutil.Infof("RP[%v] Payload80[%v]",rs.RemoteAddr(),di)
 		*/
-		if protocol.GetCapability()&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
+		if protocol.GetU32(CAPABILITY)&CLIENT_SSL != 0 && !protocol.GetBool(TLS_ESTABLISHED) {
 			ses.Debugf(tempCtx, "setup ssl")
 			isTlsHeader, err = protocol.HandleHandshake(tempCtx, payload)
 			if err != nil {
@@ -465,7 +464,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				ses.Debugf(tempCtx, "TLS handshake finished")
 
 				// tls upgradeOk
-				protocol.SetTlsEstablished()
+				protocol.SetBool(TLS_ESTABLISHED, true)
 				ts[TSUpgradeTLSEnd] = time.Now()
 				v2.UpgradeTLSDurationHistogram.Observe(ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).Seconds())
 			} else {
@@ -473,8 +472,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				if err := protocol.Authenticate(tempCtx); err != nil {
 					return err
 				}
-				protocol.SetTlsEstablished()
-				protocol.SetEstablished()
+				protocol.SetBool(TLS_ESTABLISHED, true)
+				protocol.SetBool(ESTABLISHED, true)
 			}
 		} else {
 			ses.Debugf(tempCtx, "handleHandshake")
@@ -488,7 +487,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			if err = protocol.Authenticate(tempCtx); err != nil {
 				return err
 			}
-			protocol.SetEstablished()
+			protocol.SetBool(ESTABLISHED, true)
 		}
 		ts[TSEstablishEnd] = time.Now()
 		v2.EstablishDurationHistogram.Observe(ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).Seconds())
@@ -505,7 +504,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			ts[TSCheckDbNameEnd].Sub(ts[TSCheckDbNameStart]).String(),
 			ts[TSInitGlobalSysVarEnd].Sub(ts[TSInitGlobalSysVarStart]).String()))
 
-		dbName := protocol.GetDatabaseName()
+		dbName := protocol.GetStr(DBNAME)
 		if dbName != "" {
 			ses.SetDatabaseName(dbName)
 		}
@@ -513,7 +512,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		return nil
 	}
 
-	req := protocol.GetRequest(payload)
+	req := ToRequest(payload)
 	req.seq = seq
 
 	//handle request

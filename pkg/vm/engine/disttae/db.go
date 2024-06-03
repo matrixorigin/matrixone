@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -411,6 +412,14 @@ func (e *Engine) getOrCreateSnapPart(
 	defer tblSnaps.Unlock()
 	for _, snap := range tblSnaps.snaps {
 		if snap.CanServe(ts) {
+			if tbl.db.databaseName == "tpch" {
+				logutil.Infof("xxxx getOrCreateSnapPart reuse snapshot partition state, "+
+					"db:%s, table:%s, snapshot op :%s, snap:%p",
+					tbl.db.databaseName,
+					tbl.tableName,
+					tbl.db.op.Txn().DebugString(),
+					snap)
+			}
 			return snap, nil
 		}
 	}
@@ -462,6 +471,13 @@ func (e *Engine) getOrCreateSnapPart(
 	})
 	if snap.CanServe(ts) {
 		tblSnaps.snaps = append(tblSnaps.snaps, snap)
+		if tbl.db.databaseName == "tpch" {
+			logutil.Infof("xxxx getOrCreateSnapPart load ckps, db:%s, table:%s, snapshot op :%s, snap:%p",
+				tbl.db.databaseName,
+				tbl.tableName,
+				tbl.db.op.Txn().DebugString(),
+				snap)
+		}
 		return snap, nil
 	}
 
@@ -472,13 +488,23 @@ func (e *Engine) getOrCreateSnapPart(
 		if err != nil {
 			return nil, err
 		}
-		return e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId), nil
+		p := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
+		if tbl.db.databaseName == "tpch" {
+			logutil.Infof("xxxx getOrCreateSnapPart reuse latest partiiton state, "+
+				"db:%s, table:%s, snapshot op :%s, snap:%p",
+				tbl.db.databaseName,
+				tbl.tableName,
+				tbl.db.op.Txn().DebugString(),
+				p)
+
+		}
+		return p, nil
 	}
 	if ts.Less(&start) {
 		return nil, moerr.NewInternalErrorNoCtx(
 			"No valid checkpoints for snapshot read,maybe snapshot is too old, "+
-				"snapshot:%s, start:%s, end:%s",
-			ts.ToTimestamp().DebugString(),
+				"snapshot op:%s, start:%s, end:%s",
+			tbl.db.op.Txn().DebugString(),
 			start.ToTimestamp().DebugString(),
 			end.ToTimestamp().DebugString())
 	}

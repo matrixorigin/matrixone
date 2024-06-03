@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -153,7 +154,7 @@ func (icfl *InternalCmdFieldList) Format(ctx *tree.FmtCtx) {
 }
 
 func (icfl *InternalCmdFieldList) StmtKind() tree.StmtKind {
-	return tree.MakeStmtKind(tree.OUTPUT_STATUS, tree.RESP_BY_SITUATION, tree.EXEC_IN_FRONTEND)
+	return tree.MakeStmtKind(tree.OUTPUT_STATUS, tree.RESP_STATUS, tree.EXEC_IN_FRONTEND)
 }
 
 func (icfl *InternalCmdFieldList) GetStatementType() string { return "InternalCmd" }
@@ -211,17 +212,6 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 //	db         string
 //	tableInfos map[string][]ColumnInfo
 //}
-
-// outputPool outputs the data
-type outputPool interface {
-	resetLineStr()
-
-	reset()
-
-	getEmptyRow() ([]interface{}, error)
-
-	flush() error
-}
 
 func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.params != nil {
@@ -298,7 +288,7 @@ type FeSession interface {
 	GetStmtId() uuid.UUID
 	GetSqlOfStmt() string
 	updateLastCommitTS(ts timestamp.Timestamp)
-	GetMysqlProtocol() MysqlProtocol
+	GetResponser() Responser
 	GetTxnHandler() *TxnHandler
 	GetDatabaseName() string
 	SetDatabaseName(db string)
@@ -391,7 +381,6 @@ type ExecCtx struct {
 	runner          ComputationRunner
 	loadLocalWriter *io.PipeWriter
 	proc            *process.Process
-	proto           MysqlProtocol
 	ses             FeSession
 	txnOpt          FeTxnOption
 	cws             []ComputationWrapper
@@ -401,6 +390,8 @@ type ExecCtx struct {
 	//In the session migration, executeParamTypes for the EXECUTE stmt should be migrated
 	//from the old session to the new session.
 	executeParamTypes []byte
+	resper            Responser
+	results           []ExecResult
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -414,7 +405,6 @@ type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch) error
 // TODO: shared component among the session implmentation
 type feSessionImpl struct {
 	pool          *mpool.MPool
-	proto         MysqlProtocol
 	buf           *buffer.Buffer
 	stmtProfile   process.StmtProfile
 	tenant        *TenantInfo
@@ -464,7 +454,8 @@ type feSessionImpl struct {
 	debugStr     string
 	disableTrace bool
 	fprints      footPrints
-	//refreshed onc
+	respr        Responser
+	//refreshed once
 	staticTxnId uuid.UUID
 }
 
@@ -481,7 +472,9 @@ func (ses *feSessionImpl) ExitFPrint(idx int) {
 }
 
 func (ses *feSessionImpl) Close() {
-	ses.proto = nil
+	if ses.respr != nil {
+		ses.respr.Close()
+	}
 	ses.mrs = nil
 	if ses.txnHandler != nil {
 		ses.txnHandler = nil
@@ -527,16 +520,16 @@ func (ses *feSessionImpl) GetFPrints() footPrints {
 }
 
 func (ses *feSessionImpl) SetDatabaseName(db string) {
-	ses.proto.SetDatabaseName(db)
+	ses.respr.SetStr(DBNAME, db)
 	ses.txnCompileCtx.SetDatabase(db)
 }
 
 func (ses *feSessionImpl) GetDatabaseName() string {
-	return ses.proto.GetDatabaseName()
+	return ses.respr.GetStr(DBNAME)
 }
 
 func (ses *feSessionImpl) GetUserName() string {
-	return ses.proto.GetUserName()
+	return ses.respr.GetStr(USERNAME)
 }
 
 func (ses *feSessionImpl) DisableTrace() bool {
@@ -549,16 +542,6 @@ func (ses *feSessionImpl) SetMemPool(mp *mpool.MPool) {
 
 func (ses *feSessionImpl) GetMemPool() *mpool.MPool {
 	return ses.pool
-}
-
-func (ses *feSessionImpl) GetMysqlProtocol() MysqlProtocol {
-	return ses.proto
-}
-
-func (ses *feSessionImpl) ReplaceProtocol(proto MysqlProtocol) MysqlProtocol {
-	old := ses.proto
-	ses.proto = proto
-	return old
 }
 
 func (ses *feSessionImpl) GetBuffer() *buffer.Buffer {
@@ -860,6 +843,16 @@ func (ses *feSessionImpl) GetUUIDString() string {
 	return ses.uuid.String()
 }
 
+func (ses *feSessionImpl) ReplaceResponser(resper Responser) Responser {
+	old := ses.respr
+	ses.respr = resper
+	return old
+}
+
+func (ses *feSessionImpl) GetResponser() Responser {
+	return ses.respr
+}
+
 func (ses *feSessionImpl) SetStaticTxnId(id []byte) {
 	copy(ses.staticTxnId[:], id)
 }
@@ -871,4 +864,116 @@ func (ses *Session) GetDebugString() string {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.debugStr
+}
+
+type PropertyID int
+
+const (
+	USERNAME PropertyID = iota + 1
+	DBNAME
+	//Connection id
+	CONNID
+	//Peer address
+	PEER
+	//Seqeunce id
+	SEQUENCEID
+	//capability bits
+	CAPABILITY
+	ESTABLISHED
+	TLS_ESTABLISHED
+)
+
+type Property interface {
+	GetStr(PropertyID) string
+	SetStr(PropertyID, string)
+	SetU32(PropertyID, uint32)
+	GetU32(PropertyID) uint32
+	SetU8(PropertyID, uint8)
+	GetU8(PropertyID) uint8
+	SetBool(PropertyID, bool)
+	GetBool(PropertyID) bool
+}
+
+type Responser interface {
+	Property
+	RespPreMeta(*ExecCtx, any) error
+	RespResult(*ExecCtx, *batch.Batch) error
+	RespPostMeta(*ExecCtx, any) error
+	MysqlRrWr() MysqlRrWr
+	Close()
+	ResetStatistics()
+}
+
+type MediaReader interface {
+}
+
+type MediaWriter interface {
+	Write(*ExecCtx, *batch.Batch) error
+	Close()
+}
+
+// MysqlReader read packet using mysql format
+type MysqlReader interface {
+	MediaReader
+	Property
+	Read(options goetty.ReadOptions) (interface{}, error)
+	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
+	Authenticate(ctx context.Context) error
+	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+}
+
+// MysqlWriter write batch & control packets using mysql protocol format
+type MysqlWriter interface {
+	MediaWriter
+	Property
+	WriteHandshake() error
+	WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error
+	WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error
+	WriteEOF(warnings, status uint16) error
+	WriteEOFIF(warnings uint16, status uint16) error
+	WriteEOFOrOK(warnings uint16, status uint16) error
+	WriteERR(errorCode uint16, sqlState, errorMessage string) error
+	WriteLengthEncodedNumber(uint64) error
+	WriteColumnDef(context.Context, Column, int) error
+	WriteRow() error
+	WriteTextRow() error
+	WriteBinaryRow() error
+	WriteResultSetRow(mrs *MysqlResultSet, count uint64) error
+	WriteResponse(context.Context, *Response) error
+	WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error
+	WriteLocalInfileRequest(filepath string) error
+
+	CalculateOutTrafficBytes(b bool) (int64, int64)
+	ResetStatistics()
+	UpdateCtx(ctx context.Context)
+}
+
+type MysqlRrWr interface {
+	MysqlReader
+	MysqlWriter
+}
+
+// MysqlPayloadWriter make final payload for the packet
+type MysqlPayloadWriter interface {
+	OpenRow() error
+	CloseRow() error
+	OpenPayload() error
+	FillPayload() error
+	ClosePayload(bool) error
+}
+
+// BinaryWriter write batch into fileservice
+type BinaryWriter interface {
+	MediaWriter
+}
+
+// CsvWriter write batch into csv file
+type CsvWriter interface {
+	MediaWriter
+}
+
+// MemWriter write batch into memory pool
+type MemWriter interface {
+	MediaWriter
 }
