@@ -21,6 +21,7 @@ import (
 	"math"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,13 +41,14 @@ import (
 
 const DefaultBlockMaxRows = 8192
 const blockThresholdForTpQuery = 32
-const costThresholdForTpQuery = 160000
+const costThresholdForTpQuery = 240000
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
 
-var BlockThresholdForOneCN = runtime.GOMAXPROCS(0) * blockThresholdForTpQuery
-var costThresholdForOneCN = runtime.GOMAXPROCS(0) * costThresholdForTpQuery
+var ncpu = runtime.GOMAXPROCS(0)
+var BlockThresholdForOneCN = ncpu * blockThresholdForTpQuery
+var costThresholdForOneCN = ncpu * costThresholdForTpQuery
 
 type ExecType int
 
@@ -1252,6 +1254,18 @@ func GetExecType(qry *plan.Query) ExecType {
 		}
 	}
 	return ret
+}
+
+func GetPlanTitle(qry *plan.Query) string {
+	switch GetExecType(qry) {
+	case ExecTypeTP:
+		return "TP QURERY PLAN"
+	case ExecTypeAP_ONECN:
+		return "AP QUERY PLAN ON ONE CN(" + strconv.Itoa(ncpu) + " core)"
+	case ExecTypeAP_MULTICN:
+		return "AP QUERY PLAN ON MULTICN(" + strconv.Itoa(ncpu) + " core)"
+	}
+	return "QUERY PLAN"
 }
 
 func ReCalcQueryStats(builder *QueryBuilder, query *plan.Query) {
