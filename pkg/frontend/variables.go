@@ -80,10 +80,6 @@ func errorSystemVariableDoesNotExist() string { return "the system variable does
 
 func errorSystemVariableIsSession() string { return "the system variable is session" }
 
-func errorSystemVariableSessionEmpty() string {
-	return "the value of the system variable with scope session is empty"
-}
-
 func errorSystemVariableIsGlobal() string { return "the system variable is global" }
 
 func errorSystemVariableIsReadOnly() string { return "the system variable is read only" }

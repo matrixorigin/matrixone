@@ -31,10 +31,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tidwall/btree"
-	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -57,6 +53,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+	"github.com/tidwall/btree"
+	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 type TenantInfo struct {
@@ -872,12 +871,6 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 }
 
 var (
-	sysWantedDatabases = map[string]int8{
-		"mo_catalog":         0,
-		"information_schema": 0,
-		"system":             0,
-		"system_metrics":     0,
-	}
 	sysDatabases = map[string]int8{
 		"mo_catalog":         0,
 		"information_schema": 0,
@@ -7514,68 +7507,6 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsMoAdminRole(), nil
 		case *tree.BackupStart:
 			return checkBackUpStartPrivilege()
-		}
-	}
-
-	return false, nil
-}
-
-// checkSysExistsOrNot checks the SYS tenant exists or not.
-func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec) (bool, error) {
-	var erArray []ExecResult
-	var err error
-	var tableNames []string
-	var tableName string
-
-	dbSql := "show databases;"
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, dbSql)
-	if err != nil {
-		return false, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return false, err
-	}
-	if len(erArray) != 1 {
-		return false, moerr.NewInternalError(ctx, "it must have result set")
-	}
-
-	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		_, err = erArray[0].GetString(ctx, i, 0)
-		if err != nil {
-			return false, err
-		}
-	}
-
-	sql := "show tables from mo_catalog;"
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return false, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return false, err
-	}
-	if len(erArray) != 1 {
-		return false, moerr.NewInternalError(ctx, "it must have result set")
-	}
-
-	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		tableName, err = erArray[0].GetString(ctx, i, 0)
-		if err != nil {
-			return false, err
-		}
-		tableNames = append(tableNames, tableName)
-	}
-
-	//if there is at least one catalog table, it denotes the sys tenant exists.
-	for _, name := range tableNames {
-		if _, ok := sysWantedTables[name]; ok {
-			return true, nil
 		}
 	}
 

@@ -26,32 +26,27 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/fagongzi/goetty/v2"
-	"github.com/stretchr/testify/assert"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/require"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetTenantInfo(t *testing.T) {
@@ -6577,7 +6572,7 @@ func TestGetGlobalSysVar(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, 6001)
 		// err when get from a ScopeSession var
-		value, err = ses.GetGlobalSysVar("debug_sync")
+		_, err = ses.GetGlobalSysVar("debug_sync")
 		convey.So(err, convey.ShouldNotBeNil)
 		_, err = ses.GetGlobalSysVar("not exists sys var")
 		convey.So(err, convey.ShouldNotBeNil)
