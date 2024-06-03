@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
-	"go.uber.org/zap"
 )
 
 const (
@@ -60,9 +59,6 @@ func fillRuntimeOptions(opts *options.Options) {
 	if opts.MergeCfg.CNStandaloneTake {
 		common.ShouldStandaloneCNTakeOver.Store(true)
 	}
-	w := &bytes.Buffer{}
-	toml.NewEncoder(w).Encode(opts.MergeCfg)
-	logutil.Info("mergeblocks options", zap.String("toml", w.String()), zap.Bool("standalone", opts.IsStandalone))
 }
 
 func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
@@ -88,6 +84,10 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	opts = opts.FillDefaults(dirname)
 	fillRuntimeOptions(opts)
 
+	wbuf := &bytes.Buffer{}
+	werr := toml.NewEncoder(wbuf).Encode(opts)
+	logutil.Info("open-tae", common.OperationField("Config"),
+		common.AnyField("toml", wbuf.String()), common.ErrorField(werr))
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
 		// TODO:fileservice needs to be passed in as a parameter
@@ -98,7 +98,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		Dir:          dirname,
 		Opts:         opts,
 		Closed:       new(atomic.Value),
-		usageMemo:    logtail.NewTNUsageMemo(),
+		usageMemo:    logtail.NewTNUsageMemo(nil),
 		CNMergeSched: merge.NewTaskServiceGetter(opts.TaskServiceGetter),
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
@@ -123,9 +123,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
 	)
+	catalog.DefaultTableDataFactory = dataFactory.MakeTableFactory()
 	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo); err != nil {
 		return
 	}
+	db.usageMemo.C = db.Catalog
 
 	// Init and start txn manager
 	txnStoreFactory := txnimpl.TxnStoreFactory(
@@ -197,6 +199,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
 	cleaner := gc2.NewCheckpointCleaner(opts.Ctx, fs, db.BGCheckpointRunner, opts.GCCfg.DisableGC)
+	cleaner.SetCheckGC(opts.GCCfg.CheckGC)
 	cleaner.AddChecker(
 		func(item any) bool {
 			checkpoint := item.(*checkpoint.CheckpointEntry)
@@ -208,7 +211,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.DiskCleaner.Start()
 	// Init gc manager at last
 	// TODO: clean-try-gc requires configuration parameters
-	db.GCManager = gc.NewManager(
+	cronJobs := []func(*gc.Manager){
 		gc.WithCronJob(
 			"clean-transfer-table",
 			opts.CheckpointCfg.FlushInterval,
@@ -266,8 +269,18 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				}
 				return nil
 			},
-		),
-	)
+		)}
+	if opts.CheckpointCfg.MetadataCheckInterval != 0 {
+		cronJobs = append(cronJobs,
+			gc.WithCronJob(
+				"metadata-check",
+				opts.CheckpointCfg.MetadataCheckInterval,
+				func(ctx context.Context) error {
+					db.Catalog.CheckMetadata()
+					return nil
+				}))
+	}
+	db.GCManager = gc.NewManager(cronJobs...)
 
 	db.GCManager.Start()
 

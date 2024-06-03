@@ -84,11 +84,11 @@ func TestOrder(t *testing.T) {
 	for tci, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newIntBatch(tc.types, tc.proc, Rows, tc.arg.OrderBySpecs)
-		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newIntBatch(tc.types, tc.proc, Rows, tc.arg.OrderBySpecs))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newIntBatch(tc.types, tc.proc, Rows, tc.arg.OrderBySpecs)
-		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newIntBatch(tc.types, tc.proc, Rows, tc.arg.OrderBySpecs))
+		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
@@ -137,9 +137,9 @@ func TestOrder(t *testing.T) {
 		}
 		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
 			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-				if bat != nil {
-					bat.Clean(tc.proc.Mp())
+				msg := <-tc.proc.Reg.MergeReceivers[i].Ch
+				if msg.Batch != nil {
+					msg.Batch.Clean(tc.proc.Mp())
 				}
 			}
 		}
@@ -159,11 +159,11 @@ func BenchmarkOrder(b *testing.B) {
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newRandomBatch(tc.types, tc.proc, BenchmarkRows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newRandomBatch(tc.types, tc.proc, BenchmarkRows))
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- newRandomBatch(tc.types, tc.proc, BenchmarkRows)
-			tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
+			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newRandomBatch(tc.types, tc.proc, BenchmarkRows))
+			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
 				ok, err := tc.arg.Call(tc.proc)
@@ -173,9 +173,9 @@ func BenchmarkOrder(b *testing.B) {
 			}
 			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
 				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-					if bat != nil {
-						bat.Clean(tc.proc.Mp())
+					msg := <-tc.proc.Reg.MergeReceivers[i].Ch
+					if msg.Batch != nil {
+						msg.Batch.Clean(tc.proc.Mp())
 					}
 				}
 			}
@@ -189,11 +189,11 @@ func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
+		Ch:  make(chan *process.RegisterMessage, 3),
 	}
 	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
+		Ch:  make(chan *process.RegisterMessage, 3),
 	}
 	return orderTestCase{
 		types: ts,

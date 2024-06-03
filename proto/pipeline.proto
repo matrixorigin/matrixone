@@ -67,6 +67,7 @@ message Shuffle{
   int32 AliveRegCnt = 5;
   repeated uint64 shuffle_ranges_uint64 = 6;
   repeated int64 shuffle_ranges_int64=7;
+  plan.RuntimeFilterSpec runtimeFilterSpec = 8;
 }
 
 message Dispatch {
@@ -101,16 +102,14 @@ message Aggregate {
 
 message Group {
   bool need_eval = 1;
-  uint64 ibucket = 2;
-  uint64 nbucket = 3;
-  repeated plan.Expr  exprs = 4;
-  repeated plan.Type  types = 5 [(gogoproto.nullable) = false];
-  repeated Aggregate  aggs = 6;
-  repeated MultiArguemnt MultiAggs = 7;
-  bool isShuffle = 8;
-  uint64 preAllocSize = 9;
-  bytes PartialResults = 11;
-  repeated uint32 PartialResultTypes = 10;
+  repeated plan.Expr  exprs = 2;
+  repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
+  repeated Aggregate  aggs = 4;
+  repeated MultiArguemnt MultiAggs = 5;
+  bool isShuffle = 6;
+  uint64 preAllocSize = 7;
+  bytes PartialResults = 8;
+  repeated uint32 PartialResultTypes = 9;
 }
 
 message Insert{
@@ -141,7 +140,6 @@ message Deletion{
   uint32 IBucket = 3;
   uint32 NBucket = 4;
   // DeleteCtx
-
   int32 row_id_idx                      = 5;
   repeated uint64 partition_table_ids   = 6;
   repeated string partition_table_names = 7;
@@ -155,12 +153,13 @@ message Deletion{
 }
 
 message PreInsert {
-  string schema_name      = 1;
-  plan.TableDef table_def = 2;
-  repeated int32 idx      = 3;
-  repeated string attrs   = 4;
-  bool has_auto_col       = 5;
-  bool is_update          = 6;
+  string schema_name         = 1;
+  plan.TableDef table_def    = 2;
+  repeated int32 idx         = 3;
+  repeated string attrs      = 4;
+  bool has_auto_col          = 5;
+  bool is_update             = 6;
+  int64 estimated_row_count  = 7;
 }
 
 message LockTarget {
@@ -223,6 +222,7 @@ message AntiJoin{
   repeated plan.Expr right_cond = 5;
   bool hash_on_pk = 6;
   bool is_shuffle = 7;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
 }
 
 message LeftJoin {
@@ -313,6 +313,13 @@ message Product {
   bool is_shuffle =4;
 }
 
+message ProductL2 {
+  repeated int32 rel_list = 1;
+  repeated int32 col_list = 2;
+  repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
+  plan.Expr  expr = 4;
+}
+
 message IndexJoin {
   repeated int32 result = 1;
   repeated plan.Type  types = 2 [(gogoproto.nullable) = false];
@@ -325,18 +332,6 @@ message TableFunction {
   repeated plan.Expr args = 3;
   bytes params = 4;
   string name = 5;
-}
-
-message HashBuild {
-  bool need_expr = 1;
-  bool need_hash = 2;
-  uint64 ibucket = 3;
-  uint64 nbucket = 4;
-  repeated plan.Type types = 5 [(gogoproto.nullable) = false];
-  repeated plan.Expr conds = 6;
-  bool hash_on_pk = 7;
-  bool need_merged_batch = 8;
-  bool need_allocate_sels = 9;
 }
 
 message ExternalName2ColIndex {
@@ -394,7 +389,6 @@ message Instruction{
   Join    join = 12;
   Product    product = 13;
   TableFunction table_function = 14;
-  HashBuild hash_build = 15;
   ExternalScan external_scan = 16;
   Insert insert = 17;
   OnDuplicateKey on_duplicate_key = 18;
@@ -403,8 +397,8 @@ message Instruction{
   repeated plan.OrderBySpec order_by = 21;
   repeated plan.Expr    project_list = 22;
   plan.Expr    filter = 23;
-  uint64    limit = 24;
-  uint64    offset = 25;
+  plan.Expr    limit = 24;
+  plan.Expr    offset = 25;
   // isFirst identifies whether it is the first instruction of analyzeInfo corresponding to idx
   bool isFirst = 26;
   // isLast identifies whether it is the last instruction of analyzeInfo corresponding to idx
@@ -428,6 +422,7 @@ message Instruction{
   int32 parallel_id = 41;
   int32 max_parallel = 42;
   IndexJoin index_join = 43;
+  ProductL2 product_l2 = 44;
 }
 
 message AnalysisList {
@@ -472,6 +467,7 @@ message ProcessInfo {
   string snapshot = 6;
   SessionInfo session_info = 7;
   repeated int32 analysis_node_list = 8;
+  SessionLoggerInfo session_logger = 9;
 }
 
 message SessionInfo {
@@ -484,6 +480,22 @@ message SessionInfo {
   bytes  time_zone = 7;
   string  account = 8;
   repeated string query_id = 9;
+}
+
+message SessionLoggerInfo {
+  enum LogLevel{
+    Debug = 0;
+    Info = 1;
+    Warn = 2;
+    Error = 3;
+    Panic = 4;
+    Fatal = 5;
+  }
+
+  bytes sess_id = 1;
+  bytes stmt_id = 2;
+  bytes txn_id = 3;
+  LogLevel log_level = 4;
 }
 
 message Pipeline {

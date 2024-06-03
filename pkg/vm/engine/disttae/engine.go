@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/panjf2000/ants/v2"
 	_ "go.uber.org/automaxprocs"
 
@@ -49,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -123,6 +126,11 @@ func New(
 		WithLogtailUpdateStatsThreshold(threshold),
 	)
 
+	e.messageCenter = &process.MessageCenter{
+		StmtIDToBoard: make(map[uuid.UUID]*process.MessageBoard, 64),
+		RwMutex:       &sync.Mutex{},
+	}
+
 	if err := e.init(ctx); err != nil {
 		panic(err)
 	}
@@ -182,56 +190,6 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	return nil
 }
 
-func (e *Engine) DatabaseByAccountID(
-	accountID uint32,
-	name string,
-	op client.TxnOperator) (engine.Database, error) {
-	logDebugf(op.Txn(), "Engine.DatabaseByAccountID %s", name)
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
-		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
-	}
-	if v, ok := txn.databaseMap.Load(databaseKey{name: name, accountId: accountID}); ok {
-		return v.(*txnDatabase), nil
-	}
-	if name == catalog.MO_CATALOG {
-		db := &txnDatabase{
-			op:           op,
-			databaseId:   catalog.MO_CATALOG_ID,
-			databaseName: name,
-		}
-		return db, nil
-	}
-	key := &cache.DatabaseItem{
-		Name:      name,
-		AccountId: accountID,
-		Ts:        txn.op.SnapshotTS(),
-	}
-	var catalog *cache.CatalogCache
-	var err error
-	if !txn.op.IsSnapOp() {
-		catalog = e.getLatestCatalogCache()
-	} else {
-		catalog, err = e.getOrCreateSnapCatalogCache(
-			context.Background(),
-			types.TimestampToTS(txn.op.SnapshotTS()))
-		if err != nil {
-			return nil, err
-		}
-	}
-	if ok := catalog.GetDatabase(key); !ok {
-		return nil, moerr.GetOkExpectedEOB()
-	}
-	return &txnDatabase{
-		op:                op,
-		databaseName:      name,
-		databaseId:        key.Id,
-		rowId:             key.Rowid,
-		databaseType:      key.Typ,
-		databaseCreateSql: key.CreateSql,
-	}, nil
-}
-
 func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
 	logDebugf(op.Txn(), "Engine.Database %s", name)
@@ -273,9 +231,6 @@ func (e *Engine) Database(ctx context.Context, name string,
 	if !txn.op.IsSnapOp() {
 		catalog = e.getLatestCatalogCache()
 	} else {
-		if name == "test" {
-			logutil.Infof("xxxx Database-getOrCreateSnapCatalogCache: txn:%s", txn.op.Txn().DebugString())
-		}
 		catalog, err = e.getOrCreateSnapCatalogCache(
 			ctx,
 			types.TimestampToTS(txn.op.SnapshotTS()))
@@ -342,7 +297,11 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 			return nil, err
 		}
 	}
-	dbs = append(dbs, catalog.Databases(accountId, txn.op.SnapshotTS())...)
+	dbsInCatalog := catalog.Databases(accountId, txn.op.SnapshotTS())
+	dbsExceptDelete := removeIf[string](dbsInCatalog, func(t string) bool {
+		return find[string](deleteDatabases, t)
+	})
+	dbs = append(dbs, dbsExceptDelete...)
 	return dbs, nil
 }
 
@@ -388,7 +347,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 		}
 	}
 	if tblName == "" {
-		dbNames := catalog.Databases(accountId, txn.op.SnapshotTS())
+		dbNames := getDatabasesExceptDeleted(accountId, catalog, txn)
 		for _, databaseName := range dbNames {
 			db, err = e.Database(noRepCtx, databaseName, op)
 			if err != nil {
@@ -486,7 +445,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		}
 	}
 	if rel == nil {
-		dbNames := catache.Databases(accountId, txn.op.SnapshotTS())
+		dbNames := getDatabasesExceptDeleted(accountId, catache, txn)
 		fn := func(dbName string) error {
 			db, err = e.Database(noRepCtx, dbName, op)
 			if err != nil {
@@ -530,7 +489,17 @@ func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error
 	return e.idGen.AllocateIDByKey(ctx, key)
 }
 
-func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
+func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) (err error) {
+	defer func() {
+		if err != nil {
+			if strings.Contains(name, "sysbench_db") {
+				logutil.Errorf("delete database %s failed: %v", name, err)
+				logutil.Errorf("stack: %s", stack.Callers(3))
+				logutil.Errorf("txnmeta %v", op.Txn().DebugString())
+			}
+		}
+	}()
+
 	var databaseId uint64
 	var rowId types.Rowid
 	//var db *txnDatabase
@@ -816,4 +785,8 @@ func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error 
 
 func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return e.globalStats.Get(ctx, key, sync)
+}
+
+func (e *Engine) GetMessageCenter() any {
+	return e.messageCenter
 }

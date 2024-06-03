@@ -19,7 +19,6 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -988,6 +987,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		}, builder.ctxByNode[nodeID])
 
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, len(condIdx) < numParts, GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt), rfBuildExpr))
+		recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
 
 		pkIdx := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{

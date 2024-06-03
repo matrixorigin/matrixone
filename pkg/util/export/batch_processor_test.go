@@ -213,11 +213,6 @@ func TestNewMOCollector_Stop(t *testing.T) {
 	ctx := context.Background()
 	ch := make(chan string, 3)
 
-	errorCnt := 0
-	errutil.SetErrorReporter(func(ctx context.Context, err error, i int) {
-		errorCnt++
-	})
-
 	collector := NewMOCollector(ctx)
 	collector.Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector.Start()
@@ -228,8 +223,9 @@ func TestNewMOCollector_Stop(t *testing.T) {
 		collector.Collect(ctx, newDummy(int64(i)))
 	}
 	length := len(collector.awakeCollect)
-	t.Logf("channal len: %d, errorCnt: %d, totalElem: %d", length, errorCnt, N)
-	require.Equal(t, N, errorCnt+length)
+	dropCnt := collector.stopDrop.Load()
+	t.Logf("channal len: %d, dropCnt: %d, totalElem: %d", length, dropCnt, N)
+	require.Equal(t, N, int(dropCnt)+length)
 }
 
 func TestNewMOCollector_BufferCnt(t *testing.T) {

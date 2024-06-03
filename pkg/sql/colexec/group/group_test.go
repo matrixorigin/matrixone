@@ -16,8 +16,9 @@ package group
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
@@ -101,15 +102,43 @@ func TestGroup(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-
 		bats := []*batch.Batch{
 			newBatch(tc.arg.Types, tc.proc, Rows),
 			newBatch(tc.arg.Types, tc.proc, Rows),
 			batch.EmptyBatch,
+			nil,
 		}
 		resetChildren(tc.arg, bats)
-		_, err = tc.arg.Call(tc.proc)
+		for {
+			result, err1 := tc.arg.Call(tc.proc)
+			require.NoError(t, err1)
+			if result.Status == vm.ExecStop || result.Batch == nil {
+				break
+			}
+			result.Batch.Clean(tc.proc.Mp())
+		}
+
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.arg.Reset(tc.proc, false, nil)
+
+		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
+		bats = []*batch.Batch{
+			newBatch(tc.arg.Types, tc.proc, Rows),
+			newBatch(tc.arg.Types, tc.proc, Rows),
+			batch.EmptyBatch,
+			nil,
+		}
+		resetChildren(tc.arg, bats)
+
+		for {
+			result, err1 := tc.arg.Call(tc.proc)
+			require.NoError(t, err1)
+			if result.Status == vm.ExecStop || result.Batch == nil {
+				break
+			}
+			result.Batch.Clean(tc.proc.Mp())
+		}
 
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
@@ -132,10 +161,17 @@ func BenchmarkGroup(b *testing.B) {
 				newBatch(tc.arg.Types, tc.proc, BenchmarkRows),
 				newBatch(tc.arg.Types, tc.proc, BenchmarkRows),
 				batch.EmptyBatch,
+				nil,
 			}
 			resetChildren(tc.arg, bats)
-			_, err = tc.arg.Call(tc.proc)
-			require.NoError(t, err)
+			for {
+				result, err1 := tc.arg.Call(tc.proc)
+				require.NoError(t, err1)
+				if result.Status == vm.ExecStop || result.Batch == nil {
+					break
+				}
+				result.Batch.Clean(tc.proc.Mp())
+			}
 
 			tc.arg.Free(tc.proc, false, nil)
 			tc.arg.GetChildren(0).Free(tc.proc, false, nil)

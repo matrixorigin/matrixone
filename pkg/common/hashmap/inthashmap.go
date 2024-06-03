@@ -28,7 +28,7 @@ func init() {
 	zeroUint32 = make([]uint32, UnitLimit)
 }
 
-func NewIntHashMap(hasNull bool, ibucket, nbucket uint64, m *mpool.MPool) (*IntHashMap, error) {
+func NewIntHashMap(hasNull bool, m *mpool.MPool) (*IntHashMap, error) {
 	mp := &hashtable.Int64HashMap{}
 	if err := mp.Init(m); err != nil {
 		return nil, err
@@ -37,8 +37,6 @@ func NewIntHashMap(hasNull bool, ibucket, nbucket uint64, m *mpool.MPool) (*IntH
 		m:       m,
 		rows:    0,
 		hasNull: hasNull,
-		ibucket: ibucket,
-		nbucket: nbucket,
 		keys:    make([]uint64, UnitLimit),
 		keyOffs: make([]uint32, UnitLimit),
 		values:  make([]uint64, UnitLimit),
@@ -50,10 +48,8 @@ func NewIntHashMap(hasNull bool, ibucket, nbucket uint64, m *mpool.MPool) (*IntH
 
 func (m *IntHashMap) NewIterator() *intHashMapIterator {
 	return &intHashMapIterator{
-		mp:      m,
-		m:       m.m,
-		ibucket: m.ibucket,
-		nbucket: m.nbucket,
+		mp: m,
+		m:  m.m,
 	}
 }
 
@@ -124,9 +120,6 @@ func (m *IntHashMap) Dup(pool *mpool.MPool) *IntHashMap {
 		values:  make([]uint64, len(m.values)),
 		zValues: make([]int64, len(m.zValues)),
 		hashes:  make([]uint64, len(m.hashes)),
-
-		ibucket: m.ibucket,
-		nbucket: m.nbucket,
 
 		m: pool,
 	}

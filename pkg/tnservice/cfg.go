@@ -117,12 +117,14 @@ type Config struct {
 		GlobalMinCount         int64         `toml:"global-min-count"`
 		ReservedWALEntryCount  uint64        `toml:"reserved-WAL-entry-count"`
 		OverallFlushMemControl uint64        `toml:"overall-flush-mem-control"`
+		MetadataCheckInterval  toml.Duration `toml:"metadata-check-interval"`
 	}
 
 	GCCfg struct {
 		GCTTL          toml.Duration `toml:"gc-ttl"`
 		ScanGCInterval toml.Duration `toml:"scan-gc-interval"`
 		DisableGC      bool          `toml:"disable-gc"`
+		CheckGC        bool          `toml:"check-gc"`
 	}
 
 	Merge struct {

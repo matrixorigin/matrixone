@@ -19,6 +19,8 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -27,10 +29,23 @@ const argName = "limit"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(argName)
-	buf.WriteString(fmt.Sprintf("limit(%v)", arg.Limit))
+	buf.WriteString(fmt.Sprintf("limit(%v)", arg.LimitExpr))
 }
 
-func (arg *Argument) Prepare(_ *process.Process) error {
+func (arg *Argument) Prepare(proc *process.Process) error {
+	var err error
+	if arg.limitExecutor == nil {
+		arg.limitExecutor, err = colexec.NewExpressionExecutor(proc, arg.LimitExpr)
+		if err != nil {
+			return err
+		}
+	}
+	vec, err := arg.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	if err != nil {
+		return err
+	}
+	arg.limit = uint64(vector.MustFixedCol[int64](vec)[0])
+
 	return nil
 }
 
@@ -40,9 +55,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	ap := arg
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	if ap.Limit == 0 {
+	if arg.limit == 0 {
 		result := vm.NewCallResult()
 		result.Batch = nil
 		result.Status = vm.ExecStop
@@ -63,22 +77,22 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	bat := result.Batch
 	anal.Input(bat, arg.GetIsFirst())
 
-	if ap.Seen >= ap.Limit {
+	if arg.Seen >= arg.limit {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 	length := bat.RowCount()
-	newSeen := ap.Seen + uint64(length)
-	if newSeen >= ap.Limit { // limit - seen
-		batch.SetLength(bat, int(ap.Limit-ap.Seen))
-		ap.Seen = newSeen
+	newSeen := arg.Seen + uint64(length)
+	if newSeen >= arg.limit { // limit - seen
+		batch.SetLength(bat, int(arg.limit-arg.Seen))
+		arg.Seen = newSeen
 		anal.Output(bat, arg.GetIsLast())
 
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 	anal.Output(bat, arg.GetIsLast())
-	ap.Seen = newSeen
+	arg.Seen = newSeen
 	return result, nil
 }

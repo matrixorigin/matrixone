@@ -285,7 +285,7 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 }
 
 // ApplyCommit Gc in memory deletes and update table compact status
-func (entry *flushTableTailEntry) ApplyCommit() (err error) {
+func (entry *flushTableTailEntry) ApplyCommit(_ string) (err error) {
 	for _, blk := range entry.ablksMetas {
 		_ = blk.GetObjectData().TryUpgrade()
 		blk.GetObjectData().UpgradeAllDeleteChain()

@@ -44,6 +44,7 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_debug_eventTxnActionTable,
 	upg_mo_debug_featuresTables,
 	upg_mo_account,
+	upg_system_logInfo,
 }
 
 var upg_sys_modify_async_task = versions.UpgradeEntry{
@@ -143,16 +144,7 @@ var upg_mo_debug_eventTxnTable = versions.UpgradeEntry{
 	Schema:    trace.DebugDB,
 	TableName: trace.EventTxnTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql: fmt.Sprintf(`create table %s.%s(
-			ts 			          bigint       not null,
-			txn_id                varchar(50)  not null,
-			cn                    varchar(100) not null,
-			event_type            varchar(50)  not null,
-			txn_status			  varchar(10),
-			snapshot_ts           varchar(50),
-			commit_ts             varchar(50),
-			info                  varchar(1000)
-		)`, trace.DebugDB, trace.EventTxnTable),
+	UpgSql:    trace.EventTxnTableSQL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.EventTxnTable)
 	},
@@ -163,17 +155,7 @@ var upg_mo_debug_eventDataTable = versions.UpgradeEntry{
 	Schema:    trace.DebugDB,
 	TableName: trace.EventDataTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql: fmt.Sprintf(`create table %s.%s(
-			ts 			          bigint          not null,
-			cn                    varchar(100)    not null,
-			event_type            varchar(50)     not null,
-			entry_type			  varchar(50)     not null,
-			table_id 	          bigint UNSIGNED not null,
-			txn_id                varchar(50),
-			row_data              varchar(500)    not null, 
-			committed_ts          varchar(50),
-			snapshot_ts           varchar(50)
-		)`, trace.DebugDB, trace.EventDataTable),
+	UpgSql:    trace.EventDataTableSQL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.EventDataTable)
 	},
@@ -184,12 +166,7 @@ var upg_mo_debug_traceTableFilterTable = versions.UpgradeEntry{
 	Schema:    trace.DebugDB,
 	TableName: trace.TraceTableFilterTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql: fmt.Sprintf(`create table %s.%s(
-			id                    bigint UNSIGNED primary key auto_increment,
-			table_id			  bigint UNSIGNED not null,
-			table_name            varchar(50)     not null,
-			columns               varchar(200)
-		)`, trace.DebugDB, trace.TraceTableFilterTable),
+	UpgSql:    trace.TraceTableFilterTableSQL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.TraceTableFilterTable)
 	},
@@ -200,11 +177,7 @@ var upg_mo_debug_traceTxnFilterTable = versions.UpgradeEntry{
 	Schema:    trace.DebugDB,
 	TableName: trace.TraceTxnFilterTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql: fmt.Sprintf(`create table %s.%s(
-			id             bigint UNSIGNED primary key auto_increment,
-			method         varchar(50)     not null,
-			value          varchar(500)    not null
-		)`, trace.DebugDB, trace.TraceTxnFilterTable),
+	UpgSql:    trace.TraceTxnFilterTableSQL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.TraceTxnFilterTable)
 	},
@@ -215,11 +188,7 @@ var upg_mo_debug_traceStatementFilterTable = versions.UpgradeEntry{
 	Schema:    trace.DebugDB,
 	TableName: trace.TraceStatementFilterTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql: fmt.Sprintf(`create table %s.%s(
-			id             bigint UNSIGNED primary key auto_increment,
-			method         varchar(50)     not null,
-			value          varchar(500)    not null
-		)`, trace.DebugDB, trace.TraceStatementFilterTable),
+	UpgSql:    trace.TraceStatementFilterTableSQL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.TraceStatementFilterTable)
 	},
@@ -230,11 +199,7 @@ var upg_mo_debug_eventErrorTable = versions.UpgradeEntry{
 	Schema:    trace.DebugDB,
 	TableName: trace.EventErrorTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql: fmt.Sprintf(`create table %s.%s(
-			ts 			          bigint          not null,
-			txn_id                varchar(50)     not null,
-			error_info            varchar(1000)   not null
-		)`, trace.DebugDB, trace.EventErrorTable),
+	UpgSql:    trace.EventErrorTableSQL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.EventErrorTable)
 	},
@@ -245,12 +210,7 @@ var upg_mo_debug_traceStatementTable = versions.UpgradeEntry{
 	Schema:    trace.DebugDB,
 	TableName: trace.TraceStatementTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql: fmt.Sprintf(`create table %s.%s(
-			ts 			   bigint          not null,
-			txn_id         varchar(50)     not null,
-			sql            varchar(1000)   not null,
-			cost_us        bigint          not null
-		)`, trace.DebugDB, trace.TraceStatementTable),
+	UpgSql:    trace.TraceStatementTableSQL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.TraceStatementTable)
 	},
@@ -261,17 +221,7 @@ var upg_mo_debug_eventTxnActionTable = versions.UpgradeEntry{
 	Schema:    trace.DebugDB,
 	TableName: trace.EventTxnActionTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql: fmt.Sprintf(`create table %s.%s(
-			ts 			          bigint          not null,
-			txn_id                varchar(50)     not null,
-			cn                    varchar(50)     not null,
-			table_id              bigint UNSIGNED,
-			action                varchar(100)    not null,
-			action_sequence       bigint UNSIGNED not null,
-			value                 bigint,
-			unit                  varchar(10),
-			err                   varchar(100) 
-		)`, trace.DebugDB, trace.EventTxnActionTable),
+	UpgSql:    trace.EventTxnActionTableSQL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.EventTxnActionTable)
 	},
@@ -282,10 +232,7 @@ var upg_mo_debug_featuresTables = versions.UpgradeEntry{
 	Schema:    trace.DebugDB,
 	TableName: trace.FeaturesTables,
 	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql: fmt.Sprintf(`create table %s.%s(
-			name    varchar(50) not null primary key,
-			state   varchar(20) not null
-		)`, trace.DebugDB, trace.FeaturesTables),
+	UpgSql:    trace.FeaturesTablesSQL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.FeaturesTables)
 	},
@@ -312,4 +259,26 @@ var upg_mo_account = versions.UpgradeEntry{
 		return colInfo.IsExits, nil
 	},
 	PostSql: "update mo_account set admin_name = mo_admin_name(account_id)",
+}
+
+// viewSystemLogInfoDDL113 = "CREATE VIEW IF NOT EXISTS `system`.`log_info` as select `trace_id`, `span_id`, `span_kind`, `node_uuid`, `node_type`, `timestamp`, `logger_name`, `level`, `caller`, `message`, `extra`, `stack` from `system`.`rawlog` where `raw_item` = \"log_info\""
+const viewSystemLogInfoDDL120 = "CREATE VIEW IF NOT EXISTS `system`.`log_info` as select `trace_id`, `span_id`, `span_kind`, `node_uuid`, `node_type`, `timestamp`, `logger_name`, `level`, `caller`, `message`, `extra`, `stack`, `session_id`, `statement_id` from `system`.`rawlog` where `raw_item` = \"log_info\""
+
+var upg_system_logInfo = versions.UpgradeEntry{
+	Schema:    catalog.MO_SYSTEM,
+	TableName: "log_info",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    viewSystemLogInfoDDL120,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_SYSTEM, "log_info")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == viewSystemLogInfoDDL120 {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_SYSTEM, "log_info"),
 }

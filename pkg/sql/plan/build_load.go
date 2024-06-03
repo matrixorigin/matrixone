@@ -90,10 +90,18 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 	bindCtx := NewBindContext(builder, nil)
 	terminated := ","
-	enclosedBy := []byte{0}
+	enclosedBy := []byte("\"")
+	escapedBy := []byte{0}
 	if stmt.Param.Tail.Fields != nil {
 		if stmt.Param.Tail.Fields.EnclosedBy != nil {
-			enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy.Value}
+			if stmt.Param.Tail.Fields.EnclosedBy.Value != 0 {
+				enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy.Value}
+			}
+		}
+		if stmt.Param.Tail.Fields.EscapedBy != nil {
+			if stmt.Param.Tail.Fields.EscapedBy.Value != 0 {
+				escapedBy = []byte{stmt.Param.Tail.Fields.EscapedBy.Value}
+			}
 		}
 		if stmt.Param.Tail.Fields.Terminated != nil {
 			terminated = stmt.Param.Tail.Fields.Terminated.Value
@@ -113,6 +121,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 			IgnoredLines: uint64(stmt.Param.Tail.IgnoredLines),
 			EnclosedBy:   enclosedBy,
 			Terminated:   terminated,
+			EscapedBy:    escapedBy,
 			JsonType:     stmt.Param.JsonData,
 		},
 	}
@@ -137,18 +146,19 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	builder.qry.LoadTag = true
 
 	//append lock node
-	// if lockNodeId, ok := appendLockNode(
-	// 	builder,
-	// 	bindCtx,
-	// 	lastNodeId,
-	// 	tableDef,
-	// 	true,
-	// 	true,
-	// 	-1,
-	// 	nil,
-	// ); ok {
-	// 	lastNodeId = lockNodeId
-	// }
+	if lockNodeId, ok := appendLockNode(
+		builder,
+		bindCtx,
+		lastNodeId,
+		tableDef,
+		true,
+		false,
+		-1,
+		nil,
+		false,
+	); ok {
+		lastNodeId = lockNodeId
+	}
 
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(tableDef, true)

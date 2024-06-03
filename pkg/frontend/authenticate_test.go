@@ -11042,7 +11042,7 @@ func TestUpload(t *testing.T) {
 			cnt++
 			return
 		}).AnyTimes()
-		proto := &FakeProtocol{
+		proto := &testMysqlWriter{
 			ioses: ioses,
 		}
 		fs, err := fileservice.NewLocalFS(context.TODO(), defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
@@ -11063,7 +11063,7 @@ func TestUpload(t *testing.T) {
 		setGlobalPu(pu)
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
-				proto: proto,
+				respr: NewMysqlResp(proto),
 			},
 			proc: proc,
 		}
@@ -11845,7 +11845,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 }
 
 func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
-	convey.Convey("doResolveSnapshotTsWithSnapShotName success", t, func() {
+	convey.Convey("doResolveSnapshotWithSnapshotName success", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -11884,7 +11884,7 @@ func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
 		mrs := newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, err := doResolveSnapshotTsWithSnapShotName(ctx, ses, "test_sp")
+		_, err := doResolveSnapshotWithSnapshotName(ctx, ses, "test_sp")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }

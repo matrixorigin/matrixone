@@ -1,5 +1,4 @@
 -- create snapshot success
--- @bvt:issue#14784
 create snapshot snapshot_01 for cluster;
 create account default_1 ADMIN_NAME admin IDENTIFIED BY '111111';
 create snapshot snapshot_02 for account default_1;
@@ -65,4 +64,27 @@ drop snapshot if exists snapshot_09;
 drop snapshot if exists snapshot_10;
 drop account default_1;
 drop account default_2;
--- @bvt:issue
+
+create table cluster01(col1 int,col2 bigint);
+insert into cluster01 values(1,2);
+insert into cluster01 values(2,3);
+select * from cluster01;
+drop snapshot if exists `binary`;
+create snapshot `binary` for account sys;
+select count(*) from cluster01{snapshot = `binary`};
+restore account sys from snapshot `binary`;
+select count(*) from cluster01{snapshot = `binary`};
+drop snapshot if exists `binary`;
+
+drop table if exists cluster01;
+create table cluster01(col1 int,col2 bigint);
+insert into cluster01 values(1,2);
+insert into cluster01 values(2,3);
+select * from cluster01;
+drop snapshot if exists `_binary`;
+create snapshot `_binary` for account sys;
+select count(*) from cluster01{snapshot = `_binary`};
+restore account sys from snapshot `_binary`;
+select count(*) from cluster01{snapshot = `_binary`};
+drop snapshot if exists `_binary`;
+drop table if exists cluster01;

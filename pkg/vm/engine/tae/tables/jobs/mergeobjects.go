@@ -139,6 +139,10 @@ func (task *mergeObjectsTask) GetBlockMaxRows() uint32 {
 	return task.schema.BlockMaxRows
 }
 
+func (task *mergeObjectsTask) GetObjectMaxBlocks() uint16 {
+	return task.schema.ObjectMaxBlocks
+}
+
 func (task *mergeObjectsTask) GetTargetObjSize() uint32 {
 	return task.targetObjSize
 }

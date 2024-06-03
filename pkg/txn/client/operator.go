@@ -193,6 +193,13 @@ func WithSessionInfo(info string) TxnOption {
 	}
 }
 
+func WithBeginAutoCommit(begin, autocommit bool) TxnOption {
+	return func(tc *txnOperator) {
+		tc.options.ByBegin = begin
+		tc.options.Autocommit = autocommit
+	}
+}
+
 type txnOperator struct {
 	sender               rpc.TxnSender
 	waiter               *waiter
@@ -209,9 +216,7 @@ type txnOperator struct {
 	lockService          lockservice.LockService
 	sequence             atomic.Uint64
 	createTs             timestamp.Timestamp
-	//read-only txn operators for supporting snapshot read feature.
-	children []*txnOperator
-	parent   atomic.Pointer[txnOperator]
+	parent               atomic.Pointer[txnOperator]
 
 	mu struct {
 		sync.RWMutex
@@ -224,11 +229,14 @@ type txnOperator struct {
 		retry        bool
 		lockSeq      uint64
 		waitLocks    map[uint64]Lock
+		//read-only txn operators for supporting snapshot read feature.
+		children []*txnOperator
 	}
 
 	commitCounter   counter
 	rollbackCounter counter
 	runSqlCounter   counter
+	fprints         footPrints
 
 	waitActiveCost time.Duration
 }
@@ -274,7 +282,10 @@ func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 	op.workspace = tc.workspace.CloneSnapshotWS()
 	op.workspace.BindTxnOp(op)
 
-	tc.children = append(tc.children, op)
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.children = append(tc.mu.children, op)
+
 	op.parent.Store(tc)
 	return op
 }
@@ -1139,6 +1150,15 @@ func (tc *txnOperator) RemoveWaitLock(key uint64) {
 	delete(tc.mu.waitLocks, key)
 }
 
+func (tc *txnOperator) LockTableCount() int32 {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	if tc.mu.txn.Mode != txn.TxnMode_Pessimistic {
+		panic("lock in optimistic mode")
+	}
+	return int32(len(tc.mu.lockTables))
+}
+
 func (tc *txnOperator) GetOverview() TxnOverview {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
@@ -1241,8 +1261,13 @@ func (tc *txnOperator) inRollback() bool {
 }
 
 func (tc *txnOperator) counter() string {
-	return fmt.Sprintf("commit: %s rollback: %s runSql: %s",
+	return fmt.Sprintf("commit: %s rollback: %s runSql: %s footPrints: %s",
 		tc.commitCounter.String(),
 		tc.rollbackCounter.String(),
-		tc.runSqlCounter.String())
+		tc.runSqlCounter.String(),
+		tc.fprints.String())
+}
+
+func (tc *txnOperator) SetFootPrints(prints [][2]uint32) {
+	tc.fprints.setFPrints(prints)
 }

@@ -1062,6 +1062,9 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 // todo: remove this in the future
 func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
 	if tableDef.Pkey != nil {
+		if colName == tableDef.Pkey.PkeyColName {
+			return 0
+		}
 		pkNames := tableDef.Pkey.Names
 		for i := range pkNames {
 			if pkNames[i] == colName {
@@ -1095,6 +1098,10 @@ func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsCo
 }
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
+	if expr.Typ.Id == int32(types.T_interval) {
+		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
+	}
+
 	// If it is Expr_List, perform constant folding on its elements
 	if elist := expr.GetList(); elist != nil {
 		exprList := elist.List
@@ -2014,10 +2021,12 @@ func MakeIntervalExpr(num int64, str string) *Expr {
 }
 
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
+	rightType := plan.Type{Id: int32(types.T_tuple)}
+	if matchPrefix {
+		rightType = left.Typ
+	}
 	rightArg := &plan.Expr{
-		Typ: plan.Type{
-			Id: int32(types.T_tuple),
-		},
+		Typ: rightType,
 		Expr: &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
 				Len:  length,

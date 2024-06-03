@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -36,36 +37,43 @@ const argName = "top"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(argName)
-	ap := arg
 	buf.WriteString(": top([")
-	for i, f := range ap.Fs {
+	for i, f := range arg.Fs {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
 		buf.WriteString(f.String())
 	}
-	buf.WriteString(fmt.Sprintf("], %v)", ap.Limit))
+	buf.WriteString(fmt.Sprintf("], %v)", arg.Limit))
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	if ap.Limit > 1024 {
-		ap.ctr.sels = make([]int64, 0, 1024)
-	} else {
-		ap.ctr.sels = make([]int64, 0, ap.Limit)
+	arg.ctr = new(container)
+	arg.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, arg.Limit)
+	if err != nil {
+		return err
 	}
-	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
+	vec, err := arg.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	if err != nil {
+		return err
+	}
+	arg.ctr.limit = vector.MustFixedCol[int64](vec)[0]
+	if arg.ctr.limit > 1024 {
+		arg.ctr.sels = make([]int64, 0, 1024)
+	} else {
+		arg.ctr.sels = make([]int64, 0, arg.ctr.limit)
+	}
+	arg.ctr.poses = make([]int32, 0, len(arg.Fs))
 
-	ctr := ap.ctr
-	ctr.executorsForOrderColumn = make([]colexec.ExpressionExecutor, len(ap.Fs))
+	ctr := arg.ctr
+	ctr.executorsForOrderColumn = make([]colexec.ExpressionExecutor, len(arg.Fs))
 	for i := range ctr.executorsForOrderColumn {
-		ctr.executorsForOrderColumn[i], err = colexec.NewExpressionExecutor(proc, ap.Fs[i].Expr)
+		ctr.executorsForOrderColumn[i], err = colexec.NewExpressionExecutor(proc, arg.Fs[i].Expr)
 		if err != nil {
 			return err
 		}
 	}
-	typ := ap.Fs[0].Expr.Typ
+	typ := arg.Fs[0].Expr.Typ
 	if arg.TopValueTag > 0 {
 		ctr.desc = arg.Fs[0].Flag&plan.OrderBySpec_DESC != 0
 		ctr.topValueZM = objectio.NewZM(types.T(typ.Id), typ.Scale)
@@ -87,7 +95,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		anal.Stop()
 	}()
 
-	if ap.Limit == 0 {
+	if arg.ctr.limit == 0 {
 		result := vm.NewCallResult()
 		result.Status = vm.ExecStop
 		return result, nil
@@ -121,7 +129,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if ctr.state == vm.Eval {
 		ctr.state = vm.End
 		if ctr.bat != nil {
-			err := ctr.eval(ap.Limit, proc, &result)
+			err := ctr.eval(ctr.limit, proc, &result)
 			if err != nil {
 				return result, err
 			}
@@ -187,7 +195,7 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 			ctr.cmps[i] = compare.New(*bat.Vecs[i].GetType(), desc, nullsLast)
 		}
 	}
-	err := ctr.processBatch(ap.Limit, bat, proc)
+	err := ctr.processBatch(ap.ctr.limit, bat, proc)
 	return err
 }
 
@@ -292,7 +300,7 @@ func (arg *Argument) updateTopValueZM() bool {
 func (arg *Argument) getTopValue() ([]byte, bool) {
 	ctr := arg.ctr
 	// not enough items in the heap.
-	if int64(len(ctr.sels)) < arg.Limit {
+	if int64(len(ctr.sels)) < arg.ctr.limit {
 		return nil, false
 	}
 	x := int(ctr.sels[0])

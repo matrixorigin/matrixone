@@ -30,9 +30,8 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, true)
 	return nil
 }
 
@@ -44,7 +43,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	var end bool
+	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
 	if arg.buf != nil {
 		proc.PutBatch(arg.buf)
@@ -52,12 +51,17 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	for {
-		arg.buf, end, _ = arg.ctr.ReceiveFromAllRegs(anal)
-		if end {
+		msg = arg.ctr.ReceiveFromAllRegs(anal)
+		if msg.Err != nil {
+			result.Status = vm.ExecStop
+			return result, msg.Err
+		}
+		if msg.Batch == nil {
 			result.Status = vm.ExecStop
 			return result, nil
 		}
 
+		arg.buf = msg.Batch
 		if arg.buf.Last() && arg.SinkScan {
 			proc.PutBatch(arg.buf)
 			continue

@@ -16,11 +16,12 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"hash/crc32"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -46,8 +47,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -77,7 +78,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
@@ -146,7 +146,7 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 		streamSender: streamSender,
 		c:            c,
 	}
-	ch2 := make(chan *batch.Batch)
+	ch2 := make(chan *process.RegisterMessage)
 	ctx2, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	lastInstruction := vm.Instruction{
@@ -338,7 +338,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 			Arg: &projection.Argument{},
 		},
 		{
-			Arg: &restrict.Argument{},
+			Arg: &filter.Argument{},
 		},
 		{
 			Arg: &semi.Argument{
@@ -394,9 +394,10 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		{
 			Arg: &table_function.Argument{},
 		},
-		{
-			Arg: &hashbuild.Argument{},
-		},
+		//hashbuild operator dont need to serialize
+		//{
+		//	Arg: &hashbuild.Argument{},
+		//},
 		{
 			Arg: &external.Argument{
 				Es: &external.ExternalParam{
@@ -451,22 +452,23 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Right), RightJoin: &pipeline.RightJoin{}},
 		{Op: int32(vm.RightSemi), RightSemiJoin: &pipeline.RightSemiJoin{}},
 		{Op: int32(vm.RightAnti), RightAntiJoin: &pipeline.RightAntiJoin{}},
-		{Op: int32(vm.Limit), Limit: 1},
+		{Op: int32(vm.Limit), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
 		{Op: int32(vm.LoopAnti), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.LoopJoin), Join: &pipeline.Join{}},
 		{Op: int32(vm.LoopLeft), LeftJoin: &pipeline.LeftJoin{}},
 		{Op: int32(vm.LoopSemi), SemiJoin: &pipeline.SemiJoin{}},
 		{Op: int32(vm.LoopSingle), SingleJoin: &pipeline.SingleJoin{}},
 		{Op: int32(vm.LoopMark), MarkJoin: &pipeline.MarkJoin{}},
-		{Op: int32(vm.Offset), Offset: 0},
+		{Op: int32(vm.Offset), Offset: plan.MakePlan2Int64ConstExprWithType(0)},
 		{Op: int32(vm.Order), OrderBy: []*plan.OrderBySpec{}},
 		{Op: int32(vm.Product), Product: &pipeline.Product{}},
+		{Op: int32(vm.ProductL2), ProductL2: &pipeline.ProductL2{}},
 		{Op: int32(vm.Projection), ProjectList: []*plan.Expr{}},
-		{Op: int32(vm.Restrict), Filter: &plan.Expr{}},
+		{Op: int32(vm.Filter), Filter: &plan.Expr{}},
 		{Op: int32(vm.Semi), SemiJoin: &pipeline.SemiJoin{}},
 		{Op: int32(vm.Single), SingleJoin: &pipeline.SingleJoin{}},
 		{Op: int32(vm.Mark), MarkJoin: &pipeline.MarkJoin{}},
-		{Op: int32(vm.Top), Limit: 1},
+		{Op: int32(vm.Top), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
 		{Op: int32(vm.Intersect), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.IntersectAll), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.Minus), Anti: &pipeline.AntiJoin{}},
@@ -474,12 +476,12 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Merge)},
 		{Op: int32(vm.MergeRecursive)},
 		{Op: int32(vm.MergeGroup), Agg: &pipeline.Group{}},
-		{Op: int32(vm.MergeLimit), Limit: 1},
-		{Op: int32(vm.MergeOffset), Offset: 0},
-		{Op: int32(vm.MergeTop), Limit: 1},
+		{Op: int32(vm.MergeLimit), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
+		{Op: int32(vm.MergeOffset), Offset: plan.MakePlan2Int64ConstExprWithType(0)},
+		{Op: int32(vm.MergeTop), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
 		{Op: int32(vm.MergeOrder), OrderBy: []*plan.OrderBySpec{}},
 		{Op: int32(vm.TableFunction), TableFunction: &pipeline.TableFunction{}},
-		{Op: int32(vm.HashBuild), HashBuild: &pipeline.HashBuild{}},
+		//{Op: int32(vm.HashBuild), HashBuild: &pipeline.HashBuild{}},
 		{Op: int32(vm.External), ExternalScan: &pipeline.ExternalScan{}},
 		{Op: int32(vm.Source), StreamScan: &pipeline.StreamScan{}},
 	}

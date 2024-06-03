@@ -16,12 +16,13 @@ package mergegroup
 
 import (
 	"bytes"
+	"runtime"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"runtime"
 )
 
 const argName = "merge_group"
@@ -32,11 +33,10 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
-	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
-	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, true)
+	arg.ctr.inserted = make([]uint8, hashmap.UnitLimit)
+	arg.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 	return nil
 }
 
@@ -45,25 +45,26 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	ap := arg
-	ctr := ap.ctr
+	ctr := arg.ctr
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
 			for {
-				bat, end, err := ctr.ReceiveFromAllRegs(anal)
-				if err != nil {
+				msg := ctr.ReceiveFromAllRegs(anal)
+				if msg.Err != nil {
 					result.Status = vm.ExecStop
 					return result, nil
 				}
 
-				if end {
+				if msg.Batch == nil {
 					break
 				}
+				bat := msg.Batch
 				anal.Input(bat, arg.GetIsFirst())
 				if err = ctr.process(bat, proc); err != nil {
 					bat.Clean(proc.Mp())
@@ -74,10 +75,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Eval:
 			if ctr.bat != nil {
-				if ap.NeedEval {
+				if arg.NeedEval {
 					for i, agg := range ctr.bat.Aggs {
-						if len(ap.PartialResults) > i && ap.PartialResults[i] != nil {
-							if err := agg.SetExtraInformation(ap.PartialResults[i], 0); err != nil {
+						if len(arg.PartialResults) > i && arg.PartialResults[i] != nil {
+							if err := agg.SetExtraInformation(arg.PartialResults[i], 0); err != nil {
 								return result, err
 							}
 						}
@@ -157,12 +158,12 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 
 		case keyWidth <= 8:
 			ctr.typ = H8
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(groupVecsNullable, 0, 0, proc.Mp()); err != nil {
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(groupVecsNullable, proc.Mp()); err != nil {
 				return err
 			}
 		default:
 			ctr.typ = HStr
-			if ctr.strHashMap, err = hashmap.NewStrMap(groupVecsNullable, 0, 0, proc.Mp()); err != nil {
+			if ctr.strHashMap, err = hashmap.NewStrMap(groupVecsNullable, proc.Mp()); err != nil {
 				return err
 			}
 		}

@@ -143,3 +143,44 @@ var (
 	IOMergerDurationInitiate = ioMergerDuration.WithLabelValues("initiate")
 	IOMergerDurationWait     = ioMergerDuration.WithLabelValues("wait")
 )
+
+var (
+	fsReadDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "read_duration",
+			Help:      "read duration",
+			Buckets:   getDurationBuckets(),
+		},
+		[]string{"type"},
+	)
+	FSReadDurationReadVectorCache   = fsReadDuration.WithLabelValues("read-vector-cache")
+	FSReadDurationUpdateVectorCache = fsReadDuration.WithLabelValues("update-vector-cache")
+	FSReadDurationReadMemoryCache   = fsReadDuration.WithLabelValues("read-memory-cache")
+	FSReadDurationUpdateMemoryCache = fsReadDuration.WithLabelValues("update-memory-cache")
+	FSReadDurationReadDiskCache     = fsReadDuration.WithLabelValues("read-disk-cache")
+	FSReadDurationUpdateDiskCache   = fsReadDuration.WithLabelValues("update-disk-cache")
+	FSReadDurationReadRemoteCache   = fsReadDuration.WithLabelValues("read-remote-cache")
+	FSReadDurationGetReader         = fsReadDuration.WithLabelValues("get-reader")
+	FSReadDurationGetContent        = fsReadDuration.WithLabelValues("get-content")
+	FSReadDurationGetEntryData      = fsReadDuration.WithLabelValues("get-entry-data")
+	FSReadDurationWriteToWriter     = fsReadDuration.WithLabelValues("write-to-writer")
+	FSReadDurationSetCachedData     = fsReadDuration.WithLabelValues("set-cached-data")
+	FSReadDurationDiskCacheSetFile  = fsReadDuration.WithLabelValues("disk-cache-set-file")
+)
+
+var (
+	fsMallocLiveObjects = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "malloc_live_objects",
+			Help:      "malloc live objects",
+		},
+		[]string{"type"},
+	)
+	FSMallocLiveObjectsIOEntryData = fsMallocLiveObjects.WithLabelValues("io_entry_data")
+	FSMallocLiveObjectsBytes       = fsMallocLiveObjects.WithLabelValues("bytes")
+	FSMallocLiveObjectsMemoryCache = fsMallocLiveObjects.WithLabelValues("memory_cache")
+)

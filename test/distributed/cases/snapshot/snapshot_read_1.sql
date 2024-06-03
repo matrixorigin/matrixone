@@ -1,4 +1,3 @@
--- @bvt:issue#14784
 create snapshot snapshot_01 for account sys;
 create database if not exists snapshot_read;
 use snapshot_read;
@@ -54,4 +53,3 @@ drop database snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read{snapshot = 'snapshot_01'};
 drop database if exists snapshot_read;
 drop snapshot snapshot_01;
--- @bvt:issue

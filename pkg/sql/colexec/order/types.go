@@ -82,6 +82,10 @@ type container struct {
 	flatFn           []func(v, w *vector.Vector) error // method to flat const vector
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, _ bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
@@ -102,5 +106,7 @@ func (arg *Argument) Free(proc *process.Process, _ bool, err error) {
 			ctr.rbat = nil
 		}
 		ctr.resultOrderList = nil
+
+		arg.ctr = nil
 	}
 }

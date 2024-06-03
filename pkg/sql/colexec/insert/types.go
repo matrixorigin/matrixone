@@ -36,6 +36,9 @@ type container struct {
 	s3Writer           *colexec.S3Writer
 	partitionS3Writers []*colexec.S3Writer // The array is aligned with the partition number array
 	buf                *batch.Batch
+
+	source           engine.Relation
+	partitionSources []engine.Relation // Align array index with the partition number
 }
 
 type Argument struct {
@@ -80,15 +83,18 @@ func (arg *Argument) Release() {
 
 type InsertCtx struct {
 	// insert data into Rel.
-	Rel                   engine.Relation
+	Engine                engine.Engine
 	Ref                   *plan.ObjectRef
-	AddAffectedRows       bool
+	AddAffectedRows       bool // for hidden table, should not update affect Rows
 	Attrs                 []string
-	PartitionTableIDs     []uint64          // Align array index with the partition number
-	PartitionTableNames   []string          // Align array index with the partition number
-	PartitionIndexInBatch int               // The array index position of the partition expression column
-	PartitionSources      []engine.Relation // Align array index with the partition number
+	PartitionTableIDs     []uint64 // Align array index with the partition number
+	PartitionTableNames   []string // Align array index with the partition number
+	PartitionIndexInBatch int      // The array index position of the partition expression column
 	TableDef              *plan.TableDef
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
 }
 
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
@@ -112,6 +118,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			arg.ctr.buf.Clean(proc.Mp())
 			arg.ctr.buf = nil
 		}
+
+		arg.ctr = nil
 	}
 }
 

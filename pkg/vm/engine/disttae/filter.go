@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -191,6 +192,7 @@ func CompileFilterExprs(
 	blockFilterOp BlockFilterOp,
 	seekOp SeekFirstBlockOp,
 	canCompile bool,
+	highSelectivityHint bool,
 ) {
 	canCompile = true
 	if len(exprs) == 0 {
@@ -206,9 +208,9 @@ func CompileFilterExprs(
 	ops5 := make([]SeekFirstBlockOp, 0, len(exprs))
 
 	for _, expr := range exprs {
-		expr_op1, expr_op2, expr_op3, expr_op4, expr_op5, can := CompileFilterExpr(expr, proc, tableDef, fs)
+		expr_op1, expr_op2, expr_op3, expr_op4, expr_op5, can, hsh := CompileFilterExpr(expr, proc, tableDef, fs)
 		if !can {
-			return nil, nil, nil, nil, nil, false
+			return nil, nil, nil, nil, nil, false, false
 		}
 		if expr_op1 != nil {
 			ops1 = append(ops1, expr_op1)
@@ -225,6 +227,7 @@ func CompileFilterExprs(
 		if expr_op5 != nil {
 			ops5 = append(ops5, expr_op5)
 		}
+		highSelectivityHint = highSelectivityHint || hsh
 	}
 	fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 		for _, op := range ops1 {
@@ -303,6 +306,7 @@ func CompileFilterExpr(
 	blockFilterOp BlockFilterOp,
 	seekOp SeekFirstBlockOp,
 	canCompile bool,
+	highSelectivityHint bool,
 ) {
 	canCompile = true
 	if expr == nil {
@@ -314,18 +318,20 @@ func CompileFilterExpr(
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "or":
-			leftFastOp, leftLoadOp, leftObjectOp, leftBlockOp, leftSeekOp, leftCan := CompileFilterExpr(
+			leftFastOp, leftLoadOp, leftObjectOp, leftBlockOp, leftSeekOp, leftCan, leftHSH := CompileFilterExpr(
 				exprImpl.F.Args[0], proc, tableDef, fs,
 			)
 			if !leftCan {
-				return nil, nil, nil, nil, nil, false
+				return nil, nil, nil, nil, nil, false, false
 			}
-			rightFastOp, rightLoadOp, rightObjectOp, rightBlockOp, rightSeekOp, rightCan := CompileFilterExpr(
+			rightFastOp, rightLoadOp, rightObjectOp, rightBlockOp, rightSeekOp, rightCan, rightHSH := CompileFilterExpr(
 				exprImpl.F.Args[1], proc, tableDef, fs,
 			)
 			if !rightCan {
-				return nil, nil, nil, nil, nil, false
+				return nil, nil, nil, nil, nil, false, false
 			}
+			highSelectivityHint = leftHSH && rightHSH
+
 			if leftFastOp != nil || rightFastOp != nil {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if leftFastOp != nil {
@@ -414,18 +420,20 @@ func CompileFilterExpr(
 				}
 			}
 		case "and":
-			leftFastOp, leftLoadOp, leftObjectOp, leftBlockOp, leftSeekOp, leftCan := CompileFilterExpr(
+			leftFastOp, leftLoadOp, leftObjectOp, leftBlockOp, leftSeekOp, leftCan, leftHSH := CompileFilterExpr(
 				exprImpl.F.Args[0], proc, tableDef, fs,
 			)
 			if !leftCan {
-				return nil, nil, nil, nil, nil, false
+				return nil, nil, nil, nil, nil, false, false
 			}
-			rightFastOp, rightLoadOp, rightObjectOp, rightBlockOp, rightSeekOp, rightCan := CompileFilterExpr(
+			rightFastOp, rightLoadOp, rightObjectOp, rightBlockOp, rightSeekOp, rightCan, rightHSH := CompileFilterExpr(
 				exprImpl.F.Args[1], proc, tableDef, fs,
 			)
 			if !rightCan {
-				return nil, nil, nil, nil, nil, false
+				return nil, nil, nil, nil, nil, false, false
 			}
+			highSelectivityHint = leftHSH || rightHSH
+
 			if leftFastOp != nil || rightFastOp != nil {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if leftFastOp != nil {
@@ -669,7 +677,7 @@ func CompileFilterExpr(
 				return
 			}
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
-			_, isSorted := isSortedKey(colDef)
+			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
@@ -678,6 +686,8 @@ func CompileFilterExpr(
 					return obj.SortKeyZoneMap().PrefixEq(vals[0]), nil
 				}
 			}
+			highSelectivityHint = isPK
+
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
@@ -768,7 +778,7 @@ func CompileFilterExpr(
 			vec := vector.NewVec(types.T_any.ToType())
 			_ = vec.UnmarshalBinary(val)
 			colDef := getColDefByName(colExpr.Col.Name, tableDef)
-			_, isSorted := isSortedKey(colDef)
+			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
@@ -777,8 +787,8 @@ func CompileFilterExpr(
 					return obj.SortKeyZoneMap().PrefixIn(vec), nil
 				}
 			}
+			highSelectivityHint = isPK && vec.Length() <= 10
 			loadOp = loadMetadataOnlyOpFactory(fs)
-
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isSorted {
@@ -863,6 +873,8 @@ func CompileFilterExpr(
 				loadOp = loadMetadataOnlyOpFactory(fs)
 			}
 
+			highSelectivityHint = isPK && vec.Length() <= 10
+
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isSorted {
@@ -914,6 +926,8 @@ func CompileFilterExpr(
 			} else {
 				loadOp = loadMetadataOnlyOpFactory(fs)
 			}
+
+			highSelectivityHint = isPK
 
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
@@ -976,21 +990,26 @@ func CompileFilterExpr(
 }
 
 func TryFastFilterBlocks(
+	ctx context.Context,
+	tbl *txnTable,
 	snapshotTS timestamp.Timestamp,
 	tableDef *plan.TableDef,
 	exprs []*plan.Expr,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	dirtyBlocks map[types.Blockid]struct{},
+	dirtyBlocks *map[types.Blockid]struct{},
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 	proc *process.Process,
 ) (ok bool, err error) {
-	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, ok := CompileFilterExprs(exprs, proc, tableDef, fs)
+	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, ok, highSelectivityHint := CompileFilterExprs(exprs, proc, tableDef, fs)
 	if !ok {
 		return false, nil
 	}
+
 	err = ExecuteBlockFilter(
+		ctx,
+		tbl,
 		snapshotTS,
 		fastFilterOp,
 		loadOp,
@@ -1003,11 +1022,14 @@ func TryFastFilterBlocks(
 		outBlocks,
 		fs,
 		proc,
+		highSelectivityHint,
 	)
 	return true, err
 }
 
 func ExecuteBlockFilter(
+	ctx context.Context,
+	tbl *txnTable,
 	snapshotTS timestamp.Timestamp,
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
@@ -1016,20 +1038,51 @@ func ExecuteBlockFilter(
 	seekOp SeekFirstBlockOp,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	dirtyBlocks map[types.Blockid]struct{},
+	dirtyBlocks *map[types.Blockid]struct{},
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 	proc *process.Process,
+	highSelectivityHint bool,
 ) (err error) {
+	var (
+		totalBlocks                    float64
+		loadHit                        float64
+		objFilterTotal, objFilterHit   float64
+		blkFilterTotal, blkFilterHit   float64
+		fastFilterTotal, fastFilterHit float64
+	)
 
-	hasDeletes := len(dirtyBlocks) > 0
+	defer func() {
+		v2.TxnRangesFastPathLoadObjCntHistogram.Observe(loadHit)
+		v2.TxnRangesFastPathSelectedBlockCntHistogram.Observe(float64(outBlocks.Len() - 1))
+		if fastFilterTotal > 0 {
+			v2.TxnRangesFastPathObjSortKeyZMapSelectivityHistogram.Observe(fastFilterHit / fastFilterTotal)
+		}
+		if objFilterTotal > 0 {
+			v2.TxnRangesFastPathObjColumnZMapSelectivityHistogram.Observe(objFilterHit / objFilterTotal)
+		}
+		if blkFilterTotal > 0 {
+			v2.TxnRangesFastPathBlkColumnZMapSelectivityHistogram.Observe(blkFilterHit / blkFilterTotal)
+		}
+		if totalBlocks > 0 {
+			v2.TxnRangesFastPathBlkTotalSelectivityHistogram.Observe(float64(outBlocks.Len()-1) / totalBlocks)
+		}
+	}()
+
+	if !highSelectivityHint {
+		*dirtyBlocks = tbl.collectDirtyBlocks(snapshot, uncommittedObjects)
+	}
+
 	err = ForeachSnapshotObjects(
 		snapshotTS,
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
 			var ok bool
 			objStats := obj.ObjectStats
+			totalBlocks += float64(objStats.BlkCnt())
 			if fastFilterOp != nil {
+				fastFilterTotal++
 				if ok, err2 = fastFilterOp(objStats); err2 != nil || !ok {
+					fastFilterHit++
 					return
 				}
 			}
@@ -1038,14 +1091,17 @@ func ExecuteBlockFilter(
 				bf   objectio.BloomFilter
 			)
 			if loadOp != nil {
+				loadHit++
 				if meta, bf, err2 = loadOp(
-					proc.Ctx, objStats, meta, bf,
+					ctx, objStats, meta, bf,
 				); err2 != nil {
 					return
 				}
 			}
 			if objectFilterOp != nil {
+				objFilterTotal++
 				if ok, err2 = objectFilterOp(meta, bf); err2 != nil || !ok {
+					objFilterHit++
 					return
 				}
 			}
@@ -1078,6 +1134,7 @@ func ExecuteBlockFilter(
 			for ; pos < blockCnt; pos++ {
 				var blkMeta objectio.BlockObject
 				if dataMeta != nil && blockFilterOp != nil {
+					blkFilterTotal++
 					var (
 						quickBreak, ok2 bool
 					)
@@ -1088,10 +1145,12 @@ func ExecuteBlockFilter(
 					}
 					// skip the following block checks
 					if quickBreak {
+						blkFilterHit++
 						break
 					}
 					// skip this block
 					if !ok2 {
+						blkFilterHit++
 						continue
 					}
 				}
@@ -1126,16 +1185,19 @@ func ExecuteBlockFilter(
 					}
 				}
 
-				if hasDeletes {
-					if _, ok := dirtyBlocks[blk.BlockID]; !ok {
+				if len(*dirtyBlocks) > 0 { // may have deletes, check
+					if _, ok = (*dirtyBlocks)[blk.BlockID]; !ok {
 						blk.CanRemote = true
 					}
-					blk.PartitionNum = -1
-					outBlocks.AppendBlockInfo(blk)
-					continue
+					blk.CanRemote = false
+
+				} else if highSelectivityHint { // not collect dirty blocks, cannot judge
+					blk.CanRemote = false
+
+				} else { // collected but no deletes
+					blk.CanRemote = true
 				}
-				// store the block in ranges
-				blk.CanRemote = true
+
 				blk.PartitionNum = -1
 				outBlocks.AppendBlockInfo(blk)
 			}

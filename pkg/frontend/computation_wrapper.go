@@ -38,66 +38,13 @@ import (
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var (
 	_ ComputationWrapper = &TxnComputationWrapper{}
-	_ ComputationWrapper = &NullComputationWrapper{}
 )
-
-type NullComputationWrapper struct {
-	*TxnComputationWrapper
-}
-
-func InitNullComputationWrapper(ses *Session, stmt tree.Statement, proc *process.Process) *NullComputationWrapper {
-	return &NullComputationWrapper{
-		TxnComputationWrapper: InitTxnComputationWrapper(ses, stmt, proc),
-	}
-}
-
-func (ncw *NullComputationWrapper) GetAst() tree.Statement {
-	return ncw.stmt
-}
-
-func (ncw *NullComputationWrapper) GetColumns(context.Context) ([]interface{}, error) {
-	return []interface{}{}, nil
-}
-
-func (ncw *NullComputationWrapper) Compile(any any, fill func(*batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
-func (ncw *NullComputationWrapper) RecordExecPlan(ctx context.Context) error {
-	return nil
-}
-
-func (ncw *NullComputationWrapper) GetUUID() []byte {
-	return ncw.uuid[:]
-}
-
-func (ncw *NullComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
-	return nil, nil
-}
-
-func (ncw *NullComputationWrapper) GetLoadTag() bool {
-	return false
-}
-func (ncw *NullComputationWrapper) Clear() {
-
-}
-func (ncw *NullComputationWrapper) Plan() *plan.Plan {
-	return nil
-}
-func (ncw *NullComputationWrapper) ResetPlanAndStmt(tree.Statement) {
-
-}
-
-func (ncw *NullComputationWrapper) Free() {
-	ncw.Clear()
-}
 
 type TxnComputationWrapper struct {
 	stmt      tree.Statement
@@ -129,6 +76,7 @@ func (cwft *TxnComputationWrapper) Plan() *plan.Plan {
 
 func (cwft *TxnComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
 	cwft.plan = nil
+	cwft.freeStmt()
 	cwft.stmt = stmt
 }
 
@@ -137,13 +85,17 @@ func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
 }
 
 func (cwft *TxnComputationWrapper) Free() {
+	cwft.freeStmt()
+	cwft.Clear()
+}
+
+func (cwft *TxnComputationWrapper) freeStmt() {
 	if cwft.stmt != nil {
 		if !cwft.ifIsExeccute {
 			cwft.stmt.Free()
 			cwft.stmt = nil
 		}
 	}
-	cwft.Clear()
 }
 
 func (cwft *TxnComputationWrapper) Clear() {
@@ -152,6 +104,11 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.ses = nil
 	cwft.compile = nil
 	cwft.runResult = nil
+	cwft.paramVals = nil
+}
+
+func (cwft *TxnComputationWrapper) ParamVals() []any {
+	return cwft.paramVals
 }
 
 func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
@@ -387,7 +344,7 @@ func updateTempStorageInCtx(execCtx *ExecCtx, proc *process.Process, tempStorage
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
-	if stm := motrace.StatementFromContext(ctx); stm != nil {
+	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		waitActiveCost := time.Duration(0)
 		if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
 			txn := handler.GetTxn()
@@ -395,7 +352,7 @@ func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 				waitActiveCost = txn.GetWaitActiveCost()
 			}
 		}
-		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.plan, WithWaitActiveCost(waitActiveCost)))
+		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, WithWaitActiveCost(waitActiveCost)))
 	}
 	return nil
 }

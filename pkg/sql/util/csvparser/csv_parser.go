@@ -25,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/spkg/bom"
 )
 
@@ -34,8 +35,6 @@ var (
 	errUnexpectedQuoteField          = moerr.NewInvalidInputNoCtx("csvParser error: cannot have consecutive fields without separator")
 	BufferSizeScale                  = int64(5)
 	ReadBlockSize              int64 = 64 * 1024
-	// LargestEntryLimit is the max size for reading file to buf
-	LargestEntryLimit = 10 * 1024 * 1024
 )
 
 type Field struct {
@@ -504,7 +503,7 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 	var buf []byte
 	for {
 		buf = append(buf, parser.buf...)
-		if len(buf) > LargestEntryLimit {
+		if len(buf) > config.LargestEntryLimit {
 			return buf, 0, moerr.NewInternalErrorNoCtx("size of row cannot exceed the max value of txn-entry-size-limit")
 		}
 		parser.buf = nil

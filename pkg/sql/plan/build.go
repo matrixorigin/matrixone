@@ -32,13 +32,20 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
 	}()
+
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt)
 	bindCtx := NewBindContext(builder, nil)
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		bindCtx.snapshot = ctx.GetSnapshot()
+	}
+
 	rootId, err := builder.buildSelect(stmt, bindCtx, true)
-	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	if err != nil {
 		return nil, err
 	}
+	ctx.SetViews(bindCtx.views)
+
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
@@ -213,20 +220,6 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	default:
 		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
-}
-
-// GetExecType get executor will execute base AP or TP
-func GetExecTypeFromPlan(pn *Plan) ExecInfo {
-	defInfo := ExecInfo{
-		Typ:        ExecTypeAP,
-		WithGPU:    false,
-		WithBigMem: false,
-		CnNumbers:  2,
-	}
-	if IsTpQuery(pn.GetQuery()) {
-		defInfo.Typ = ExecTypeTP
-	}
-	return defInfo
 }
 
 // GetResultColumnsFromPlan
