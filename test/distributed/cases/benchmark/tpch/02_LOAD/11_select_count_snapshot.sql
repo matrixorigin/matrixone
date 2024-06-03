@@ -214,4 +214,3 @@ select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 -- @bvt:issue
 
 drop snapshot tpch_cluster;
--- @bvt:issue
