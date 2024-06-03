@@ -292,6 +292,7 @@ func (c *checkpointCleaner) replayCheckpoints() error {
 func (c *checkpointCleaner) AddCheckpoint(name string) {
 	c.checkpointMetas.Lock()
 	defer c.checkpointMetas.Unlock()
+	logutil.Infof("add checkpoint: %s, file is %d", name, len(c.checkpointMetas.files))
 	c.checkpointMetas.files[name] = struct{}{}
 }
 
