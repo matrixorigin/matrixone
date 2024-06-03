@@ -61,6 +61,9 @@ type FileService interface {
 	// PrefetchFile prefetches a file
 	PrefetchFile(ctx context.Context, filePath string) error
 
+	// Cost returns the cost attr of the file service
+	Cost() *CostAttr
+
 	Close()
 }
 
@@ -160,4 +163,16 @@ type DirEntry struct {
 	Name  string
 	IsDir bool
 	Size  int64
+}
+
+type CostItem uint8
+
+const (
+	CostLow CostItem = iota
+	CostHigh
+)
+
+type CostAttr struct {
+	// List is the cost of List from FileService
+	List CostItem
 }
