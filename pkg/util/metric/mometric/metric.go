@@ -17,27 +17,28 @@ package mometric
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	prom "github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	dto "github.com/prometheus/client_model/go"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	prom "github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	dto "github.com/prometheus/client_model/go"
 )
 
 const (
@@ -438,7 +439,7 @@ var SingleMetricTable = &table.Table{
 	PrimaryKeyColumn: []table.Column{},
 	ClusterBy:        []table.Column{metricCollectTimeColumn, metricNameColumn, metricAccountColumn},
 	Engine:           table.NormalTableEngine,
-	Comment:          `metric data`,
+	Comment:          `metric data` + catalog.MO_COMMENT_NO_DEL_HINT,
 	PathBuilder:      table.NewAccountDatePathBuilder(),
 	AccountColumn:    &metricAccountColumn,
 	// TimestampColumn

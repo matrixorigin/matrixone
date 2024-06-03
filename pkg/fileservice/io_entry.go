@@ -47,19 +47,10 @@ func (i *IOEntry) setCachedData() error {
 	return nil
 }
 
-func (i *IOEntry) ReadFromOSFile(file *os.File) error {
+func (i *IOEntry) ReadFromOSFile(file *os.File) (err error) {
+	finally := i.prepareData()
+	defer finally(&err)
 	r := io.LimitReader(file, i.Size)
-
-	if cap(i.Data) < int(i.Size) {
-		ptr, dec := getMallocAllocator().Allocate(uint64(i.Size))
-		i.Data = unsafe.Slice((*byte)(ptr), i.Size)
-		i.releaseFuncs = append(i.releaseFuncs, func() {
-			dec.Deallocate(ptr)
-		})
-	} else {
-		i.Data = i.Data[:i.Size]
-	}
-
 	n, err := io.ReadFull(r, i.Data)
 	if err != nil {
 		return err
@@ -96,3 +87,32 @@ func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (
 	copy(cacheData.Bytes(), data)
 	return
 }
+
+func (i *IOEntry) prepareData() (finally func(err *error)) {
+	if cap(i.Data) < int(i.Size) {
+		ptr, dec := getMallocAllocator().Allocate(uint64(i.Size))
+		metric.FSMallocLiveObjectsIOEntryData.Inc()
+		i.Data = unsafe.Slice((*byte)(ptr), i.Size)
+		if i.releaseData != nil {
+			i.releaseData()
+		}
+		i.releaseData = func() {
+			dec.Deallocate(ptr)
+			metric.FSMallocLiveObjectsIOEntryData.Dec()
+		}
+		finally = func(err *error) {
+			if err != nil && *err != nil {
+				dec.Deallocate(ptr)
+				metric.FSMallocLiveObjectsIOEntryData.Dec()
+			}
+		}
+
+	} else {
+		i.Data = i.Data[:i.Size]
+		finally = noopFinally
+	}
+
+	return
+}
+
+func noopFinally(*error) {}

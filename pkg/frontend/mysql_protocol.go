@@ -27,6 +27,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -38,6 +39,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -168,49 +170,7 @@ const (
 	DefaultMySQLState string = "HY000"
 )
 
-type MysqlProtocol interface {
-	Protocol
-	//the server send group row of the result set as an independent packet thread safe
-	SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt uint64) error
-
-	SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, cnt uint64) error
-
-	//SendColumnDefinitionPacket the server send the column definition to the client
-	SendColumnDefinitionPacket(ctx context.Context, column Column, cmd int) error
-
-	//SendColumnCountPacket makes the column count packet
-	SendColumnCountPacket(count uint64) error
-
-	SendResponse(ctx context.Context, resp *Response) error
-
-	SendEOFPacketIf(warnings uint16, status uint16) error
-
-	//send OK packet to the client
-	sendOKPacket(affectedRows uint64, lastInsertId uint64, status uint16, warnings uint16, message string) error
-
-	//the OK or EOF packet thread safe
-	sendEOFOrOkPacket(warnings uint16, status uint16) error
-
-	sendLocalInfileRequest(filename string) error
-
-	ResetStatistics()
-
-	GetStats() string
-
-	// CalculateOutTrafficBytes return bytes, mysql packet num send back to client
-	// reset marks Do reset counter after calculation or not.
-	CalculateOutTrafficBytes(reset bool) (int64, int64)
-
-	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
-
-	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
-
-	DisableAutoFlush()
-	EnableAutoFlush()
-	Flush() error
-}
-
-var _ MysqlProtocol = &MysqlProtocolImpl{}
+var _ MysqlRrWr = &MysqlProtocolImpl{}
 
 type debugStats struct {
 	writeCount uint64
@@ -298,7 +258,35 @@ func (rh *rowHandler) resetStartOffset() {
 }
 
 type MysqlProtocolImpl struct {
-	ProtocolImpl
+	m sync.Mutex
+
+	//TODO: make it global
+	io IOPackage
+
+	tcpConn goetty.IOSession
+
+	quit atomic.Bool
+
+	//random bytes
+	salt []byte
+
+	//the id of the connection
+	connectionID uint32
+
+	// whether the handshake succeeded
+	established atomic.Bool
+
+	// whether the tls handshake succeeded
+	tlsEstablished atomic.Bool
+
+	//The sequence-id is incremented with each packet and may wrap around.
+	//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
+	sequenceId atomic.Uint32
+
+	//for debug
+	debugCount [16]uint64
+
+	ctx context.Context
 
 	//joint capability shared by the server and the client
 	capability uint32
@@ -348,6 +336,171 @@ type MysqlProtocolImpl struct {
 	ses *Session
 
 	disableAutoFlush bool
+}
+
+func (mp *MysqlProtocolImpl) GetStr(id PropertyID) string {
+	switch id {
+	case USERNAME:
+		return mp.GetUserName()
+	case DBNAME:
+		return mp.GetDatabaseName()
+	}
+	return ""
+}
+func (mp *MysqlProtocolImpl) SetStr(id PropertyID, val string) {
+	switch id {
+	case USERNAME:
+		mp.SetUserName(val)
+	case DBNAME:
+		mp.SetDatabaseName(val)
+	}
+}
+func (mp *MysqlProtocolImpl) SetU32(PropertyID, uint32) {}
+func (mp *MysqlProtocolImpl) GetU32(id PropertyID) uint32 {
+	switch id {
+	case CONNID:
+		return mp.ConnectionID()
+	}
+	return math.MaxUint32
+}
+func (mp *MysqlProtocolImpl) SetU8(id PropertyID, val uint8) {
+	switch id {
+	case SEQUENCEID:
+		mp.SetSequenceID(val)
+	}
+}
+
+func (mp *MysqlProtocolImpl) GetU8(id PropertyID) uint8 {
+	switch id {
+	case SEQUENCEID:
+		return mp.GetSequenceId()
+	}
+	return 0
+}
+func (mp *MysqlProtocolImpl) SetBool(id PropertyID, val bool) {
+	switch id {
+	case ESTABLISHED:
+		if val {
+			mp.SetEstablished()
+		}
+	case TLS_ESTABLISHED:
+		if val {
+			mp.SetTlsEstablished()
+		}
+	}
+}
+func (mp *MysqlProtocolImpl) GetBool(id PropertyID) bool {
+	switch id {
+	case ESTABLISHED:
+		return mp.IsEstablished()
+	case TLS_ESTABLISHED:
+		return mp.IsTlsEstablished()
+	}
+	return false
+}
+
+func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
+	const countOfResultSet = 1
+	n := bat.Vecs[0].Length()
+	//TODO: remove this MRS here
+	//Create a new temporary result set per pipeline thread.
+	mrs := MysqlResultSet{}
+	//Warning: Don't change ResultColumns in this.
+	//Reference the shared ResultColumns of the session among multi-thread.
+	sesMrs := execCtx.ses.GetMysqlResultSet()
+	mrs.Columns = sesMrs.Columns
+	mrs.Name2Index = sesMrs.Name2Index
+
+	//group row
+	mrs.Data = make([][]interface{}, countOfResultSet)
+	for i := 0; i < countOfResultSet; i++ {
+		mrs.Data[i] = make([]interface{}, len(bat.Vecs))
+	}
+	ses := execCtx.ses.(*Session)
+	isShowTableStatus := ses.GetShowStmtType() == ShowTableStatus
+	for j := 0; j < n; j++ { //row index
+		err := extractRowFromEveryVector(execCtx.reqCtx, execCtx.ses, bat, j, mrs.Data[0])
+		if err != nil {
+			return err
+		}
+		if isShowTableStatus {
+			row2 := make([]interface{}, len(mrs.Data[0]))
+			copy(row2, mrs.Data[0])
+			ses.AppendData(row2)
+		} else {
+			if err = mp.WriteResultSetRow(&mrs, 1); err != nil {
+				execCtx.ses.Error(execCtx.reqCtx,
+					"Flush error",
+					zap.Error(err))
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (mp *MysqlProtocolImpl) WriteHandshake() error {
+	hsV10pkt := mp.makeHandshakeV10Payload()
+	return mp.writePackets(hsV10pkt, true)
+}
+
+func (mp *MysqlProtocolImpl) WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	return mp.sendOKPacket(affectedRows, lastInsertId, status, warnings, message)
+}
+
+func (mp *MysqlProtocolImpl) WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	return mp.sendOKPacketWithEof(affectedRows, lastInsertId, status, warnings, message)
+}
+
+func (mp *MysqlProtocolImpl) WriteEOF(warnings, status uint16) error {
+	return mp.sendEOFPacket(warnings, status)
+}
+
+func (mp *MysqlProtocolImpl) WriteEOFIF(warnings uint16, status uint16) error {
+	return mp.SendEOFPacketIf(warnings, status)
+}
+
+func (mp *MysqlProtocolImpl) WriteEOFOrOK(warnings uint16, status uint16) error {
+	return mp.sendEOFOrOkPacket(warnings, status)
+}
+
+func (mp *MysqlProtocolImpl) WriteERR(errorCode uint16, sqlState, errorMessage string) error {
+	return mp.sendErrPacket(errorCode, sqlState, errorMessage)
+}
+
+func (mp *MysqlProtocolImpl) WriteLengthEncodedNumber(u uint64) error {
+	return mp.SendColumnCountPacket(u)
+}
+
+func (mp *MysqlProtocolImpl) WriteColumnDef(ctx context.Context, column Column, i int) error {
+	return mp.SendColumnDefinitionPacket(ctx, column, i)
+}
+
+func (mp *MysqlProtocolImpl) WriteRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (mp *MysqlProtocolImpl) WriteTextRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (mp *MysqlProtocolImpl) WriteBinaryRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (mp *MysqlProtocolImpl) WriteResponse(ctx context.Context, resp *Response) error {
+	return mp.SendResponse(ctx, resp)
+}
+
+func (mp *MysqlProtocolImpl) WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
+	return mp.SendPrepareResponse(ctx, stmt)
+}
+
+func (mp *MysqlProtocolImpl) Read(options goetty.ReadOptions) (interface{}, error) {
+	return mp.tcpConn.Read(options)
 }
 
 func (mp *MysqlProtocolImpl) GetSession() *Session {
@@ -445,10 +598,10 @@ func (mp *MysqlProtocolImpl) GetConnectAttrs() map[string]string {
 	return mp.connectAttrs
 }
 
-func (mp *MysqlProtocolImpl) Quit() {
+func (mp *MysqlProtocolImpl) Close() {
 	mp.m.Lock()
 	defer mp.m.Unlock()
-	mp.ProtocolImpl.Quit()
+	mp.safeQuit()
 	if mp.strconvBuffer != nil {
 		mp.strconvBuffer = nil
 	}
@@ -1764,7 +1917,7 @@ func (mp *MysqlProtocolImpl) makeLocalInfileRequestPayload(filename string) []by
 	return data[:pos]
 }
 
-func (mp *MysqlProtocolImpl) sendLocalInfileRequest(filename string) error {
+func (mp *MysqlProtocolImpl) WriteLocalInfileRequest(filename string) error {
 	req := mp.makeLocalInfileRequestPayload(filename)
 	return mp.writePackets(req, true)
 }
@@ -2339,7 +2492,7 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt 
 	return err
 }
 
-func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, cnt uint64) error {
+func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) error {
 	if cnt == 0 {
 		return nil
 	}
@@ -2879,12 +3032,10 @@ func generate_salt(n int) []byte {
 func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
 	salt := generate_salt(20)
 	mysql := &MysqlProtocolImpl{
-		ProtocolImpl: ProtocolImpl{
-			io:           NewIOPackage(true),
-			tcpConn:      tcp,
-			salt:         salt,
-			connectionID: connectionID,
-		},
+		io:               NewIOPackage(true),
+		tcpConn:          tcp,
+		salt:             salt,
+		connectionID:     connectionID,
 		charset:          "utf8mb4",
 		capability:       DefaultCapability,
 		strconvBuffer:    make([]byte, 0, 16*1024),

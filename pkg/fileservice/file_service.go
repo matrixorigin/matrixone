@@ -108,7 +108,8 @@ type IOEntry struct {
 
 	// raw content
 	// when reading, if len(Data) < Size, a new Size-lengthed byte slice will be allocated
-	Data []byte
+	Data        []byte
+	releaseData func()
 
 	// when reading, if Writer is not nil, write data to it instead of setting Data field
 	WriterForRead io.Writer
@@ -141,8 +142,6 @@ type IOEntry struct {
 	fromCache IOVectorCache
 
 	allocator CacheDataAllocator
-
-	releaseFuncs []func()
 }
 
 func (i IOEntry) String() string {

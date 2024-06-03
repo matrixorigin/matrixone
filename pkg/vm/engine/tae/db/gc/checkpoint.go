@@ -645,14 +645,22 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 	if !c.delWorker.Start() {
 		return nil
 	}
+	var err error
+	var snapshots map[uint32]containers.Vector
+	defer func() {
+		if err != nil {
+			logutil.Errorf("[DiskCleaner] tryGC failed: %v", err.Error())
+			c.delWorker.Idle()
+		}
+		logtail.CloseSnapshotList(snapshots)
+	}()
 	gcTable := NewGCTable()
 	gcTable.UpdateTable(data)
-	snapshots, err := c.GetSnapshots()
+	snapshots, err = c.GetSnapshots()
 	if err != nil {
 		logutil.Errorf("[DiskCleaner] GetSnapshots failed: %v", err.Error())
 		return nil
 	}
-	defer logtail.CloseSnapshotList(snapshots)
 	gc, snapshotList := c.softGC(gcTable, gckp, snapshots)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
