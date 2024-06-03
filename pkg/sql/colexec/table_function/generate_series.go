@@ -107,16 +107,13 @@ func resetGenerateSeriesState(proc *process.Process, arg *Argument) error {
 			if stepVec == nil {
 				return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime must specify step")
 			}
-			stepSlice := vector.MustStrCol(stepVec)
-			arg.generateSeries.step = stepSlice[0]
+			arg.generateSeries.step = stepVec.UnsafeGetStringAt(0)
 		case types.T_varchar:
 			if stepVec == nil {
 				return moerr.NewInvalidInput(proc.Ctx, "generate_series must specify step")
 			}
-			startSlice := vector.MustStrCol(startVec)
-			endSlice := vector.MustStrCol(endVec)
-			startStr := startSlice[0]
-			endStr := endSlice[0]
+			startStr := startVec.UnsafeGetStringAt(0)
+			endStr := endVec.UnsafeGetStringAt(0)
 			scale := int32(findScale(startStr, endStr))
 			startTmp, err := types.ParseDatetime(startStr, scale)
 			if err != nil {
@@ -140,8 +137,7 @@ func resetGenerateSeriesState(proc *process.Process, arg *Argument) error {
 			arg.generateSeries.start = newStartSlice[0]
 			arg.generateSeries.end = newEndSlice[0]
 			arg.generateSeries.last = newEndSlice[0]
-			stepSlice := vector.MustStrCol(stepVec)
-			arg.generateSeries.step = stepSlice[0]
+			arg.generateSeries.step = stepVec.UnsafeGetStringAt(0)
 		default:
 			return moerr.NewNotSupported(proc.Ctx, "generate_series not support type %s", arg.generateSeries.startVecType.Oid.String())
 

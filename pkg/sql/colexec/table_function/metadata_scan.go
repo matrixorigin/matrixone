@@ -70,7 +70,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 		return false, err
 	}
 
-	dbname, tablename, colname, err := handleDatasource(vector.MustStrCol(source), vector.MustStrCol(col))
+	dbname, tablename, colname, err := handleDataSource(source, col)
 	logutil.Infof("db: %s, table: %s, col: %s in metadataScan", dbname, tablename, colname)
 	if err != nil {
 		return false, err
@@ -101,16 +101,15 @@ func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 	return false, nil
 }
 
-func handleDatasource(first []string, second []string) (string, string, string, error) {
-	if len(first) != 1 || len(second) != 1 {
+func handleDataSource(source, col *vector.Vector) (string, string, string, error) {
+	if source.Length() != 1 || col.Length() != 1 {
 		return "", "", "", moerr.NewInternalErrorNoCtx("wrong input len")
 	}
-	s := first[0]
-	strs := strings.Split(s, ".")
+	strs := strings.Split(source.UnsafeGetStringAt(0), ".")
 	if len(strs) != 2 {
 		return "", "", "", moerr.NewInternalErrorNoCtx("wrong len of db and tbl input")
 	}
-	return strs[0], strs[1], second[0], nil
+	return strs[0], strs[1], col.UnsafeGetStringAt(0), nil
 }
 
 func genRetBatch(proc process.Process, arg *Argument, metaInfos []*plan.MetadataScanInfo) (*batch.Batch, error) {
