@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"regexp"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type PartitionReader struct {
@@ -100,8 +102,19 @@ func (p *PartitionReader) prepare() error {
 					//deletes in txn.Write maybe comes from PartitionState.Rows ,
 					// PartitionReader need to skip them.
 					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+                    log := false
 					for _, v := range vs {
 						deletes[v] = 0
+						if regexp.MustCompile(`.*sbtest.*`).MatchString(p.table.tableName) {
+							if !log {
+								logutil.Infof("xxxx txn:%s table:%s, "+
+									"partition reader load deletes from workspace,deletes:%s",
+									p.table.db.op.Txn().DebugString(),
+									p.table.tableName,
+									common.MoBatchToString(entry.bat, 10))
+								log = true
+							}
+						}
 					}
 				}
 			})
@@ -123,6 +136,26 @@ func (p *PartitionReader) Read(
 	_ *plan.Expr,
 	mp *mpool.MPool,
 	pool engine.VectorPool) (result *batch.Batch, err error) {
+
+	defer func() {
+		if regexp.MustCompile(`.*sbtest.*`).MatchString(p.table.tableName) {
+			bat := ""
+			len := 0
+			if result != nil {
+				bat = common.MoBatchToString(result, 10)
+				len = result.RowCount()
+			}
+			logutil.Infof("xxxx partititonReader reads:"+
+				"txn:%s, table:%s, batch:%s, len:%d, err:%v",
+				p.table.db.op.Txn().DebugString(),
+				p.table.tableName,
+				bat,
+				len,
+				err)
+		}
+
+	}()
+
 	if p == nil {
 		return
 	}
