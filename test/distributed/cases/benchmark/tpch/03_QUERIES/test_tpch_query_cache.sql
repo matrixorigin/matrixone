@@ -726,3 +726,6 @@ order by
     cntrycode
 ;
 select * from result_scan(last_query_id()) as u;
+
+# reset to default(off)
+set save_query_result = off;

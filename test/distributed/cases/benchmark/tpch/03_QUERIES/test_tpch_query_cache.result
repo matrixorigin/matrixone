@@ -1093,3 +1093,4 @@ cntrycode    numcust    totacctbal
 19    2    17120.35
 20    1    9091.82
 26    1    7354.23
+set save_query_result = off;

@@ -131,3 +131,6 @@ drop table if exists t1;
 create table t1(a int);
 show columns from t1;
 select * from result_scan(last_query_id()) as t;
+
+# reset to default(off)
+set save_query_result = off;

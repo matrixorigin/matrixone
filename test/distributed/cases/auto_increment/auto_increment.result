@@ -704,3 +704,4 @@ select * from auto_increment17;
 col1
 100
 drop table auto_increment17;
+set auto_increment_offset = 1;
