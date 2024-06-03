@@ -989,7 +989,7 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	//column
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	col1.SetName("QUERY PLAN")
+	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan))
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
