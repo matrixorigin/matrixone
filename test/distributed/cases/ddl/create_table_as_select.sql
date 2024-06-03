@@ -1110,8 +1110,6 @@ drop account acc0;
 drop publication sys_pub_1;
 
 -- alias
-show variables like 'lower_case_table_names';
-set @@global.lower_case_table_names = 0;
 -- @session:id=24&user=sys:dump&password=111
 use test;
 drop table if exists alias01;
@@ -1120,7 +1118,6 @@ insert into alias01 values (1,2);
 insert into alias01 values (2,3);
 drop table if exists alias02;
 create table alias02 (NewCol int) as select * from alias01;
-show variables like 'lower_case_table_names';
 show create table alias02;
 select * from alias02;
 drop table alias01;
@@ -1337,4 +1334,3 @@ drop table t2;
 drop role role_r1;
 drop user role_u1;
 drop database db7;
-set @@global.lower_case_table_names = 1;
