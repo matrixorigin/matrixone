@@ -1585,10 +1585,6 @@ internal error: cannot create table in subscription database
 drop database sub1;
 drop account acc0;
 drop publication sys_pub_1;
-show variables like 'lower_case_table_names';
-Variable_name    Value
-lower_case_table_names    1
-set @@global.lower_case_table_names = 0;
 use test;
 drop table if exists alias01;
 create table alias01 (col1 int, col2 decimal);
@@ -1596,14 +1592,11 @@ insert into alias01 values (1,2);
 insert into alias01 values (2,3);
 drop table if exists alias02;
 create table alias02 (NewCol int) as select * from alias01;
-show variables like 'lower_case_table_names';
-Variable_name    Value
-lower_case_table_names    0
 show create table alias02;
 Table    Create Table
-alias02    CREATE TABLE `alias02` (\n  `NewCol` INT DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+alias02    CREATE TABLE `alias02` (\n  `newcol` INT DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
 select * from alias02;
-NewCol    col1    col2
+newcol    col1    col2
 null    1    2
 null    2    3
 drop table alias01;
@@ -1809,4 +1802,3 @@ no such table db7.t2
 drop role role_r1;
 drop user role_u1;
 drop database db7;
-set @@global.lower_case_table_names = 1;

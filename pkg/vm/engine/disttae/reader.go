@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -471,7 +472,7 @@ func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
 func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
-	pkVal []byte,
+	pkFilter PKFilter,
 	ts timestamp.Timestamp,
 	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
@@ -491,7 +492,7 @@ func newBlockMergeReader(
 			fs,
 			proc,
 		),
-		pkVal:      pkVal,
+		pkFilter:   pkFilter,
 		deletaLocs: make(map[string][]objectio.Location),
 	}
 	return r
@@ -568,7 +569,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	}
 
 	// load deletes from partition state for the specified block
-	filter := r.getReadFilter(r.proc, len(r.blks))
+	//filter := r.getReadFilter(r.proc, len(r.blks))
 
 	state, err := r.table.getPartitionState(ctx)
 	if err != nil {
@@ -576,12 +577,17 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	}
 	ts := types.TimestampToTS(r.ts)
 
-	if filter.Valid && info.Sorted && len(r.pkVal) > 0 {
-		iter := state.NewPrimaryKeyDelIter(
-			ts,
-			logtailreplay.Prefix(r.pkVal),
-			info.BlockID,
-		)
+	var iter logtailreplay.RowsIter
+	if !r.pkFilter.isNull && r.pkFilter.isValid {
+		switch r.pkFilter.op {
+		case function.EQUAL, function.PREFIX_EQ:
+			iter = state.NewPrimaryKeyDelIter(ts, logtailreplay.Prefix(r.pkFilter.packed[0]), info.BlockID)
+		case function.IN:
+			iter = state.NewPrimaryKeyDelIter(ts, logtailreplay.ExactIn(r.pkFilter.packed), info.BlockID)
+		}
+	}
+
+	if iter != nil {
 		for iter.Next() {
 			entry := iter.Entry()
 			if !entry.Deleted {
@@ -590,9 +596,8 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 			_, offset := entry.RowID.Decode()
 			r.buffer = append(r.buffer, int64(offset))
 		}
-		iter.Close()
 	} else {
-		iter := state.NewRowsIter(ts, &info.BlockID, true)
+		iter = state.NewRowsIter(ts, &info.BlockID, true)
 		currlen := len(r.buffer)
 		for iter.Next() {
 			entry := iter.Entry()
@@ -600,8 +605,9 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 			r.buffer = append(r.buffer, int64(offset))
 		}
 		v2.TaskLoadMemDeletesPerBlockHistogram.Observe(float64(len(r.buffer) - currlen))
-		iter.Close()
 	}
+
+	iter.Close()
 
 	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
 	//load deletes from txn.writes for the specified block
