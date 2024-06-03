@@ -1804,6 +1804,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 		ds.Magic = Remote
 	}
 	ds.NodeInfo = getEngineNode(c)
+	ds.NodeInfo.Addr = addr
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 	c.proc.LoadTag = c.anal.qry.LoadTag
 	ds.Proc.LoadTag = true
