@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 func reshape(ctx context.Context, host MergeTaskHost) error {
@@ -35,9 +34,12 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		initTransferMapping(host.GetCommitEntry(), totalBlkCnt)
 	}
 
+	stats := mergeStats{
+		totalRowCnt:   host.GetTotalRowCnt(),
+		rowSize:       host.GetTotalSize() / host.GetTotalRowCnt(),
+		targetObjSize: host.GetTargetObjSize(),
+	}
 	originalObjCnt := host.GetObjectCnt()
-	totalRowCnt := host.GetTotalRowCnt()
-	rowSize := host.GetTotalSize() / totalRowCnt
 	maxRowCnt := host.GetBlockMaxRows()
 	accObjBlkCnts := host.GetAccBlkCnts()
 	commitEntry := host.GetCommitEntry()
@@ -50,12 +52,6 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 			releaseF()
 		}
 	}()
-
-	blkRowCnt := 0
-	objRowCnt := 0
-	objBlkCnt := 0
-	mergedRowCnt := 0
-	objCnt := 0
 
 	for i := 0; i < originalObjCnt; i++ {
 		loadedBlkCnt := 0
@@ -79,17 +75,17 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 
 				if host.DoTransfer() {
 					commitEntry.Booking.Mappings[accObjBlkCnts[i]+loadedBlkCnt-1].M[int32(j)] = api.TransDestPos{
-						ObjIdx: int32(objCnt),
-						BlkIdx: int32(uint32(objBlkCnt)),
-						RowIdx: int32(blkRowCnt),
+						ObjIdx: int32(stats.objCnt),
+						BlkIdx: int32(uint32(stats.objBlkCnt)),
+						RowIdx: int32(stats.blkRowCnt),
 					}
 				}
 
-				blkRowCnt++
-				objRowCnt++
-				mergedRowCnt++
+				stats.blkRowCnt++
+				stats.objRowCnt++
+				stats.mergedRowCnt++
 
-				if blkRowCnt == int(maxRowCnt) {
+				if stats.blkRowCnt == int(maxRowCnt) {
 					if writer == nil {
 						writer = host.PrepareNewWriter()
 					}
@@ -98,20 +94,20 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 						return err
 					}
 
-					blkRowCnt = 0
-					objBlkCnt++
+					stats.blkRowCnt = 0
+					stats.objBlkCnt++
 
 					buffer.CleanOnlyData()
 
-					if needNewObject(objBlkCnt, objRowCnt, totalRowCnt, uint32(mergedRowCnt), rowSize, host.GetTargetObjSize()) {
+					if stats.needNewObject() {
 						if err := syncObject(ctx, writer, commitEntry); err != nil {
 							return err
 						}
 						writer = nil
 
-						objRowCnt = 0
-						objBlkCnt = 0
-						objCnt++
+						stats.objRowCnt = 0
+						stats.objBlkCnt = 0
+						stats.objCnt++
 					}
 				}
 			}
@@ -124,8 +120,8 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		}
 	}
 	// write remain data
-	if blkRowCnt > 0 {
-		objBlkCnt++
+	if stats.blkRowCnt > 0 {
+		stats.objBlkCnt++
 
 		if writer == nil {
 			writer = host.PrepareNewWriter()
@@ -135,7 +131,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		}
 		buffer.CleanOnlyData()
 	}
-	if objBlkCnt > 0 {
+	if stats.objBlkCnt > 0 {
 		if err := syncObject(ctx, writer, commitEntry); err != nil {
 			return err
 		}
@@ -154,15 +150,4 @@ func syncObject(ctx context.Context, writer *blockio.BlockWriter, commitEntry *a
 		commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobj.Clone().Marshal())
 	}
 	return nil
-}
-
-func needNewObject(objBlkCnt, objRowCnt int, totalRowCnt, mergedRowCnt, rowSize, targetObjSize uint32) bool {
-	if targetObjSize == 0 {
-		return objBlkCnt == int(options.DefaultBlocksPerObject)
-	}
-
-	if uint32(objRowCnt)*rowSize > targetObjSize {
-		return (totalRowCnt-mergedRowCnt)*rowSize > targetObjSize
-	}
-	return false
 }
