@@ -559,18 +559,18 @@ func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, policyName, targ
 }
 
 // NewReader mocks base method.
-func (m *MockRelation) NewReader(arg0 context.Context, arg1 int, arg2 *plan.Expr, arg3 []byte, arg4 bool, arg5 int) ([]engine.Reader, error) {
+func (m *MockRelation) NewReader(arg0 context.Context, arg1 int, arg2 *plan.Expr, arg3 []byte, arg4 bool, arg5 int, arg6 bool) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewReader", arg0, arg1, arg2, arg3, arg4, arg5)
+	ret := m.ctrl.Call(m, "NewReader", arg0, arg1, arg2, arg3, arg4, arg5, arg6)
 	ret0, _ := ret[0].([]engine.Reader)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // NewReader indicates an expected call of NewReader.
-func (mr *MockRelationMockRecorder) NewReader(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) NewReader(arg0, arg1, arg2, arg3, arg4, arg5, arg6 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewReader", reflect.TypeOf((*MockRelation)(nil).NewReader), arg0, arg1, arg2, arg3, arg4, arg5)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewReader", reflect.TypeOf((*MockRelation)(nil).NewReader), arg0, arg1, arg2, arg3, arg4, arg5, arg6)
 }
 
 // PrimaryKeysMayBeModified mocks base method.

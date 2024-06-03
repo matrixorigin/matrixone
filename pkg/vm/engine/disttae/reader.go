@@ -477,12 +477,14 @@ func newBlockMergeReader(
 	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
 	txnOffset int,
+	fromSnapshot bool,
 	fs fileservice.FileService,
 	proc *process.Process,
 ) *blockMergeReader {
 	r := &blockMergeReader{
-		table:     txnTable,
-		txnOffset: txnOffset,
+		table:        txnTable,
+		txnOffset:    txnOffset,
+		fromSnapshot: fromSnapshot,
 		blockReader: newBlockReader(
 			ctx,
 			txnTable.GetTableDef(ctx),
@@ -609,12 +611,17 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 
 	iter.Close()
 
+	txnOffset := r.txnOffset
+	if r.fromSnapshot {
+		txnOffset = r.table.getTxn().GetSnapshotWriteOffset()
+	}
+
 	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
 	//load deletes from txn.writes for the specified block
 	r.table.getTxn().forEachTableWrites(
 		r.table.db.databaseId,
 		r.table.tableId,
-		r.txnOffset, func(entry Entry) {
+		txnOffset, func(entry Entry) {
 			if entry.isGeneratedByTruncate() {
 				return
 			}

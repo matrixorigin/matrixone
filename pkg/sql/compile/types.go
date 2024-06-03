@@ -124,6 +124,8 @@ type Scope struct {
 	NodeInfo engine.Node
 	// TxnOffset read offset position within the transaction during the execute current statement
 	TxnOffset int
+	// FromSnapshot Identify whether table_scan data comes from snapshot
+	FromSnapshot bool
 	// Instructions contains command list of this scope.
 	Instructions vm.Instructions
 	// Proc contains the execution context.

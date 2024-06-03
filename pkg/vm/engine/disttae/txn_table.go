@@ -721,10 +721,10 @@ var slowPathCounter atomic.Int64
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
-	tableDef *plan.TableDef,             // table definition (schema)
-	exprs []*plan.Expr,                  // filter expression
-	outBlocks *objectio.BlockInfoSlice,  // output marshaled block list after filtering
-	proc *process.Process,               // process of this transaction
+	tableDef *plan.TableDef, // table definition (schema)
+	exprs []*plan.Expr, // filter expression
+	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
+	proc *process.Process, // process of this transaction
 	txnOffset int,
 	fromSnapshot bool,
 ) (err error) {
@@ -1722,6 +1722,7 @@ func (tbl *txnTable) NewReader(
 	ranges []byte,
 	orderedScan bool,
 	txnOffset int,
+	fromSnapshot bool,
 ) ([]engine.Reader, error) {
 	pkFilter := tbl.tryExtractPKFilter(expr)
 	blkArray := objectio.BlockInfoSlice(ranges)
@@ -1729,10 +1730,10 @@ func (tbl *txnTable) NewReader(
 		return []engine.Reader{new(emptyReader)}, nil
 	}
 	if blkArray.Len() == 0 {
-		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil, txnOffset)
+		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil, txnOffset, fromSnapshot)
 	}
 	if blkArray.Len() == 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
-		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil, txnOffset)
+		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil, txnOffset, fromSnapshot)
 	}
 	if blkArray.Len() > 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
 		rds := make([]engine.Reader, num)
@@ -1749,7 +1750,7 @@ func (tbl *txnTable) NewReader(
 			}
 			dirtyBlks = append(dirtyBlks, blkInfo)
 		}
-		rds0, err := tbl.newMergeReader(ctx, num, expr, pkFilter, dirtyBlks, txnOffset)
+		rds0, err := tbl.newMergeReader(ctx, num, expr, pkFilter, dirtyBlks, txnOffset, fromSnapshot)
 		if err != nil {
 			return nil, err
 		}
@@ -1820,6 +1821,7 @@ func (tbl *txnTable) newMergeReader(
 	pkFilter PKFilter,
 	dirtyBlks []*objectio.BlockInfo,
 	txnOffset int,
+	fromSnapshot bool,
 ) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
@@ -1829,7 +1831,8 @@ func (tbl *txnTable) newMergeReader(
 		pkFilter,
 		expr,
 		dirtyBlks,
-		txnOffset)
+		txnOffset,
+		fromSnapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -1941,6 +1944,7 @@ func (tbl *txnTable) newReader(
 	expr *plan.Expr,
 	dirtyBlks []*objectio.BlockInfo,
 	txnOffset int,
+	fromSnapshot bool,
 ) ([]engine.Reader, error) {
 	txn := tbl.getTxn()
 	ts := txn.op.SnapshotTS()
@@ -1981,11 +1985,12 @@ func (tbl *txnTable) newReader(
 	}
 
 	partReader := &PartitionReader{
-		table:     tbl,
-		txnOffset: txnOffset,
-		iter:      iter,
-		seqnumMp:  seqnumMp,
-		typsMap:   mp,
+		table:        tbl,
+		txnOffset:    txnOffset,
+		fromSnapshot: fromSnapshot,
+		iter:         iter,
+		seqnumMp:     seqnumMp,
+		typsMap:      mp,
 	}
 
 	//tbl.Lock()
@@ -2006,6 +2011,7 @@ func (tbl *txnTable) newReader(
 					[]*objectio.BlockInfo{dirtyBlks[i]},
 					expr,
 					txnOffset,
+					fromSnapshot,
 					fs,
 					proc,
 				),
@@ -2024,6 +2030,7 @@ func (tbl *txnTable) newReader(
 				[]*objectio.BlockInfo{dirtyBlks[i]},
 				expr,
 				txnOffset,
+				fromSnapshot,
 				fs,
 				proc,
 			)
@@ -2051,11 +2058,12 @@ func (tbl *txnTable) newReader(
 		steps)
 	for i := range blockReaders {
 		bmr := &blockMergeReader{
-			blockReader: blockReaders[i],
-			table:       tbl,
-			txnOffset:   txnOffset,
-			pkFilter:    pkFilter,
-			deletaLocs:  make(map[string][]objectio.Location),
+			blockReader:  blockReaders[i],
+			table:        tbl,
+			txnOffset:    txnOffset,
+			fromSnapshot: fromSnapshot,
+			pkFilter:     pkFilter,
+			deletaLocs:   make(map[string][]objectio.Location),
 		}
 		readers[i+1] = bmr
 	}

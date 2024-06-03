@@ -793,9 +793,10 @@ type blockReader struct {
 
 type blockMergeReader struct {
 	*blockReader
-	table    *txnTable
-	txnOffset int
-	pkFilter PKFilter
+	table        *txnTable
+	txnOffset    int
+	fromSnapshot bool
+	pkFilter     PKFilter
 	//for perfetch deletes
 	loaded     bool
 	pkidx      int

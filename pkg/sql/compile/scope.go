@@ -522,7 +522,8 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
 			len(s.DataSource.OrderBy) > 0,
-			s.TxnOffset)
+			s.TxnOffset,
+			s.FromSnapshot)
 		if err != nil {
 			return nil, err
 		}
@@ -596,7 +597,8 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 				s.DataSource.FilterExpr,
 				s.NodeInfo.Data,
 				len(s.DataSource.OrderBy) > 0,
-				s.TxnOffset)
+				s.TxnOffset,
+				s.FromSnapshot)
 			if err1 != nil {
 				return nil, err1
 			}
@@ -628,7 +630,8 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 					s.DataSource.FilterExpr,
 					cleanRanges,
 					len(s.DataSource.OrderBy) > 0,
-					s.TxnOffset)
+					s.TxnOffset,
+					s.FromSnapshot)
 				if err1 != nil {
 					return nil, err1
 				}
@@ -645,7 +648,8 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 					s.DataSource.FilterExpr,
 					dirtyRanges[num],
 					len(s.DataSource.OrderBy) > 0,
-					s.TxnOffset)
+					s.TxnOffset,
+					s.FromSnapshot)
 				if err2 != nil {
 					return nil, err2
 				}
@@ -692,6 +696,8 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			AccountId:    s.DataSource.AccountId,
 		}
 		readerScopes[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
+		readerScopes[i].TxnOffset = s.TxnOffset
+		readerScopes[i].FromSnapshot = s.FromSnapshot
 	}
 
 	mergeFromParallelScanScope, errNew := newParallelScope(c, s, readerScopes)
