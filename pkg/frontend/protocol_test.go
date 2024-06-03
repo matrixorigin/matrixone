@@ -41,7 +41,7 @@ func Test_protocol(t *testing.T) {
 		res.SetCategory(2)
 		convey.So(res.GetCategory(), convey.ShouldEqual, 2)
 
-		cpi := &ProtocolImpl{}
+		cpi := &MysqlProtocolImpl{}
 		io := goetty.NewIOSession(goetty.WithSessionCodec(simple.NewStringCodec()))
 		cpi.tcpConn = io
 

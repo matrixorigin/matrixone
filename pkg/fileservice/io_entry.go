@@ -91,16 +91,19 @@ func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (
 func (i *IOEntry) prepareData() (finally func(err *error)) {
 	if cap(i.Data) < int(i.Size) {
 		ptr, dec := getMallocAllocator().Allocate(uint64(i.Size))
+		metric.FSMallocLiveObjectsIOEntryData.Inc()
 		i.Data = unsafe.Slice((*byte)(ptr), i.Size)
 		if i.releaseData != nil {
 			i.releaseData()
 		}
 		i.releaseData = func() {
 			dec.Deallocate(ptr)
+			metric.FSMallocLiveObjectsIOEntryData.Dec()
 		}
 		finally = func(err *error) {
 			if err != nil && *err != nil {
 				dec.Deallocate(ptr)
+				metric.FSMallocLiveObjectsIOEntryData.Dec()
 			}
 		}
 

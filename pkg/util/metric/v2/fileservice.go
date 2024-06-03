@@ -169,3 +169,18 @@ var (
 	FSReadDurationSetCachedData     = fsReadDuration.WithLabelValues("set-cached-data")
 	FSReadDurationDiskCacheSetFile  = fsReadDuration.WithLabelValues("disk-cache-set-file")
 )
+
+var (
+	fsMallocLiveObjects = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "malloc_live_objects",
+			Help:      "malloc live objects",
+		},
+		[]string{"type"},
+	)
+	FSMallocLiveObjectsIOEntryData = fsMallocLiveObjects.WithLabelValues("io_entry_data")
+	FSMallocLiveObjectsBytes       = fsMallocLiveObjects.WithLabelValues("bytes")
+	FSMallocLiveObjectsMemoryCache = fsMallocLiveObjects.WithLabelValues("memory_cache")
+)
