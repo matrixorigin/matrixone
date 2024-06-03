@@ -249,6 +249,7 @@ func (m *merger[T]) loadBlk(ctx context.Context, objIdx uint32) (bool, error) {
 	nextBatch, del, releaseF, err := m.host.LoadNextBatch(ctx, objIdx)
 	if m.bats[objIdx].bat != nil {
 		m.bats[objIdx].releaseF()
+		m.bats[objIdx].releaseF = nil
 	}
 	if err != nil {
 		if errors.Is(err, ErrNoMoreBlocks) {
