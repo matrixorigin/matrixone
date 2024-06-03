@@ -131,14 +131,14 @@ func (c *checker) Check() error {
 
 	for _, ckp := range checkFiles {
 		if _, ok := ckpfiles[ckp.GetName()]; !ok {
-			logutil.Errorf("[Check GC]lost checkpoint file %s,", ckp.GetName())
+			logutil.Errorf("[Check GC]lost checkpoint file %s", ckp.GetName())
 			continue
 		}
 		delete(ckpfiles, ckp.GetName())
 	}
 	if len(ckpfiles) != 0 {
 		for name := range ckpfiles {
-			logutil.Errorf("[Check GC]not deleted checkpoint file %s,", name)
+			logutil.Errorf("[Check GC]not deleted checkpoint file %s", name)
 		}
 	}
 
