@@ -206,15 +206,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
-
+	var err error
 	for {
 		switch ctr.status {
 		case receiving:
-			bat, end, err := ctr.ReceiveFromAllRegs(anal)
-			if err != nil {
-				return result, err
+			msg := ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
-			if end {
+			if msg.Batch == nil {
 				// if number of block is less than 2, no need to do merge sort.
 				ctr.status = normalSending
 
@@ -231,6 +231,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
+			bat := msg.Batch
 			if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
 				return result, err
 			}

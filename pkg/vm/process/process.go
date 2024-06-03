@@ -115,6 +115,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.Aicm = p.Aicm
 	proc.LoadTag = p.LoadTag
 	proc.MessageBoard = p.MessageBoard
+	proc.StmtProfile = p.StmtProfile
 
 	proc.prepareParams = p.prepareParams
 	proc.resolveVariableFunc = p.resolveVariableFunc
@@ -128,7 +129,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	for i := 0; i < regNumber; i++ {
 		proc.Reg.MergeReceivers[i] = &WaitRegister{
 			Ctx: newctx,
-			Ch:  make(chan *batch.Batch, 1),
+			Ch:  make(chan *RegisterMessage, 1),
 		}
 	}
 	proc.DispatchNotifyCh = make(chan WrapCs)
@@ -139,9 +140,9 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 
 func (wreg *WaitRegister) CleanChannel(m *mpool.MPool) {
 	for len(wreg.Ch) > 0 {
-		bat := <-wreg.Ch
-		if bat != nil {
-			bat.Clean(m)
+		msg := <-wreg.Ch
+		if msg != nil && msg.Batch != nil {
+			msg.Batch.Clean(m)
 		}
 	}
 }

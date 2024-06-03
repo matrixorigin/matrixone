@@ -75,6 +75,7 @@ func getErrorConvertFromStringToNullFailed(str string) error {
 	return moerr.NewInternalError(context.Background(), errorConvertFromStringToNullFailedFormat, str)
 }
 
+func errorConfigDoesNotExist() string         { return "the config variable does not exist" }
 func errorSystemVariableDoesNotExist() string { return "the system variable does not exist" }
 func errorSystemVariableIsSession() string    { return "the system variable is session" }
 func errorSystemVariableSessionEmpty() string {
@@ -3570,7 +3571,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("keep_user_target_list_in_result", 0, 2, false),
-		Default:           int64(0),
+		Default:           int64(1),
 	},
 	"experimental_ivf_index": {
 		Name:              "experimental_ivf_index",

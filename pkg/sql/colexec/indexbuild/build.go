@@ -82,19 +82,21 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var err error
+	var msg *process.RegisterMessage
 	var currentBatch *batch.Batch
 	for {
 		if ap.ctr.isMerge {
-			currentBatch, _, err = ctr.ReceiveFromAllRegs(anal)
+			msg = ctr.ReceiveFromAllRegs(anal)
 		} else {
-			currentBatch, _, err = ctr.ReceiveFromSingleReg(0, anal)
+			msg = ctr.ReceiveFromSingleReg(0, anal)
 		}
-		if err != nil {
-			return err
+		if msg.Err != nil {
+			return msg.Err
 		}
-		if currentBatch == nil {
+		if msg.Batch == nil {
 			break
 		}
+		currentBatch = msg.Batch
 		if currentBatch.IsEmpty() {
 			proc.PutBatch(currentBatch)
 			continue

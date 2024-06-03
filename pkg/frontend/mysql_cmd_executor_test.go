@@ -132,7 +132,7 @@ func Test_mce(t *testing.T) {
 		create_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 		create_1.EXPECT().Clear().AnyTimes()
 		create_1.EXPECT().Free().AnyTimes()
-		create_1.EXPECT().Plan().Return(nil).AnyTimes()
+		create_1.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
 
 		select_1 := mock_frontend.NewMockComputationWrapper(ctrl)
 		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from A", 1, 0)
@@ -147,7 +147,7 @@ func Test_mce(t *testing.T) {
 		select_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 		select_1.EXPECT().Clear().AnyTimes()
 		select_1.EXPECT().Free().AnyTimes()
-		select_1.EXPECT().Plan().Return(nil).AnyTimes()
+		select_1.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
 
 		cola := &MysqlColumn{}
 		cola.SetName("a")
@@ -228,7 +228,7 @@ func Test_mce(t *testing.T) {
 			select_2.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 			select_2.EXPECT().Clear().AnyTimes()
 			select_2.EXPECT().Free().AnyTimes()
-			select_2.EXPECT().Plan().Return(nil).AnyTimes()
+			select_2.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
 			cws = append(cws, select_2)
 		}
 
@@ -500,6 +500,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		batchCase1 := genBatch()
 		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
 
 		err = getDataFromPipeline(ses, ec, batchCase1)
 		convey.So(err, convey.ShouldBeNil)
@@ -545,6 +546,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ses.mrs = &MysqlResultSet{}
 		proto.ses = ses
 		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
 
 		convey.So(getDataFromPipeline(ses, ec, nil), convey.ShouldBeNil)
 
@@ -932,15 +934,6 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 	})
 }
 
-func Test_fakeoutput(t *testing.T) {
-	convey.Convey("fake outout", t, func() {
-		mrs := &MysqlResultSet{}
-		fo := newFakeOutputQueue(mrs)
-		_, _ = fo.getEmptyRow()
-		_ = fo.flush()
-	})
-}
-
 func Test_statement_type(t *testing.T) {
 	convey.Convey("statement", t, func() {
 		type kase struct {
@@ -1093,13 +1086,13 @@ func TestProcessLoadLocal(t *testing.T) {
 			return
 		}).AnyTimes()
 		ioses.EXPECT().Close().AnyTimes()
-		proto := &FakeProtocol{
+		proto := &testMysqlWriter{
 			ioses: ioses,
 		}
 
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
-				proto: proto,
+				respr: NewMysqlResp(proto),
 			},
 		}
 		buffer := make([]byte, 4096)
@@ -1194,9 +1187,8 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 	InitGlobalSystemVariables(&gSys)
 	ses := NewSession(ctx, proto, nil, &gSys, true, nil)
 
-	ses.GetMysqlProtocol()
 	proto.SetSession(ses)
-	ses.proto = proto
+	//ses.proto = proto
 
 	convey.Convey("no labels", t, func() {
 		ses.mrs = &MysqlResultSet{}

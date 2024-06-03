@@ -36,12 +36,12 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu             int
-	Id               string `json:"id"`
-	Addr             string `json:"address"`
-	Header           objectio.InfoHeader
-	Data             []byte   `json:"payload"`
-	Rel              Relation // local relation
+	Mcpu   int
+	Id     string `json:"id"`
+	Addr   string `json:"address"`
+	Header objectio.InfoHeader
+	Data   []byte `json:"payload"`
+	// Rel              Relation // local relation
 	NeedExpandRanges bool
 }
 
@@ -721,6 +721,8 @@ type Engine interface {
 	// If sync is true, wait for the stats info to be updated, else,
 	// just return nil if the current stats info has not been initialized.
 	Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo
+
+	GetMessageCenter() any
 }
 
 type VectorPool interface {

@@ -36,6 +36,8 @@ func (c *DashboardCreator) initFileServiceDashboard() error {
 			c.initFSS3ConnOverviewRow(),
 			c.initFSS3ConnDurationRow(),
 			c.initFSIOMergerDurationRow(),
+			c.initFSReadDurationRow(),
+			c.initFSMallocRow(),
 		)...)
 	if err != nil {
 		return err
@@ -171,16 +173,77 @@ func (c *DashboardCreator) initFSIOMergerDurationRow() dashboard.Option {
 		"FileService io merger duration",
 		c.getMultiHistogram(
 			[]string{
-				c.getMetricWithFilter(`mo_fs_io_merger_duration`, `type="wait"`),
-				c.getMetricWithFilter(`mo_fs_io_merger_duration`, `type="initiate"`),
+				c.getMetricWithFilter(`mo_fs_io_merger_duration_seconds_bucket`, `type="wait"`),
+				c.getMetricWithFilter(`mo_fs_io_merger_duration_seconds_bucket`, `type="initiate"`),
 			},
 			[]string{
 				"wait",
 				"initiate",
 			},
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
+			[]float64{0.50, 0.8, 0.90, 0.99, 1},
+			[]float32{3, 3, 3, 3, 3},
 			axis.Unit("seconds"),
 			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initFSReadDurationRow() dashboard.Option {
+	return dashboard.Row(
+		"FileService read duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="read-vector-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="update-vector-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="read-memory-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="update-memory-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="read-disk-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="update-disk-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="read-remote-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="get-reader"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="get-content"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="get-entry-data "`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="write-to-writer"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="set-cached-data"`),
+				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="disk-cache-set-file"`),
+			},
+			[]string{
+				"read-vector-cache",
+				"update-vector-cache",
+				"read-memory-cache",
+				"update-memory-cache",
+				"read-disk-cache",
+				"update-disk-cache",
+				"read-remote-cache",
+				"get-reader",
+				"get-content",
+				"get-entry-data ",
+				"write-to-writer",
+				"set-cached-data",
+				"disk-cache-set-file",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99, 1},
+			[]float32{3, 3, 3, 3, 3},
+			axis.Unit("seconds"),
+			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initFSMallocRow() dashboard.Option {
+	return dashboard.Row(
+		"malloc stats",
+
+		c.withMultiGraph(
+			"active objects",
+			3,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="io_entry_data"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="bytes"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="memory_cache"`) + `)`,
+			},
+			[]string{
+				"io_entry_data",
+				"bytes",
+				"memory_cache",
+			}),
 	)
 }

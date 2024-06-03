@@ -251,7 +251,7 @@ Table    Create Table
 user    CREATE TABLE `user` (\n  `host` CHAR(255) NOT NULL DEFAULT '',\n  `user` CHAR(32) NOT NULL DEFAULT '',\n  `select_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `insert_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `update_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `delete_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `drop_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `reload_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `shutdown_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `process_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `file_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `grant_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `references_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `index_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `alter_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `show_db_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `super_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_tmp_table_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `lock_tables_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `execute_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `repl_slave_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `repl_client_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_view_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `show_view_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_routine_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `alter_routine_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_user_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `event_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `trigger_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_tablespace_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `ssl_type` VARCHAR(10) NOT NULL DEFAULT '',\n  `ssl_cipher` BLOB NOT NULL,\n  `x509_issuer` BLOB NOT NULL,\n  `x509_subject` BLOB NOT NULL,\n  `max_questions` INT UNSIGNED NOT NULL DEFAULT '0',\n  `max_updates` INT UNSIGNED NOT NULL DEFAULT '0',\n  `max_connections` INT UNSIGNED NOT NULL DEFAULT '0',\n  `max_user_connections` INT UNSIGNED NOT NULL DEFAULT '0',\n  `plugin` CHAR(64) NOT NULL DEFAULT 'caching_sha2_password',\n  `authentication_string` TEXT DEFAULT NULL,\n  `password_expired` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `password_last_changed` TIMESTAMP NULL DEFAULT NULL,\n  `password_lifetime` SMALLINT UNSIGNED DEFAULT NULL,\n  `account_locked` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_role_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `drop_role_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `password_reuse_history` SMALLINT UNSIGNED DEFAULT NULL,\n  `password_reuse_time` SMALLINT UNSIGNED DEFAULT NULL,\n  `password_require_current` VARCHAR(10) DEFAULT NULL,\n  `user_attributes` JSON DEFAULT NULL,\n  PRIMARY KEY (`host`,`user`)\n)
 SHOW CREATE TABLE system_metrics.metric;
 Table    Create Table
-metric    CREATE TABLE `metric` (\n  `metric_name` VARCHAR(1024) DEFAULT 'sys' COMMENT 'metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...',\n  `collecttime` DATETIME(6) NOT NULL COMMENT 'metric data collect time',\n  `value` DOUBLE DEFAULT '0.0' COMMENT 'metric value',\n  `node` VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node uuid',\n  `role` VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',\n  `account` VARCHAR(1024) DEFAULT 'sys' COMMENT 'account name',\n  `type` VARCHAR(1024) NOT NULL COMMENT 'sql type, like: insert, select, ...'\n) CLUSTER BY (`collecttime`, `metric_name`, `account`)
+metric    CREATE TABLE `metric` (\n  `metric_name` VARCHAR(1024) DEFAULT 'sys' COMMENT 'metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...',\n  `collecttime` DATETIME(6) NOT NULL COMMENT 'metric data collect time',\n  `value` DOUBLE DEFAULT '0.0' COMMENT 'metric value',\n  `node` VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node uuid',\n  `role` VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',\n  `account` VARCHAR(1024) DEFAULT 'sys' COMMENT 'account name',\n  `type` VARCHAR(1024) NOT NULL COMMENT 'sql type, like: insert, select, ...'\n) COMMENT='metric data[mo_no_del_hint]' CLUSTER BY (`collecttime`, `metric_name`, `account`)
 SHOW CREATE TABLE system_metrics.server_connections;
 View    Create View    character_set_client    collation_connection
 server_connections    CREATE VIEW IF NOT EXISTS `system_metrics`.`server_connections` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_connections"    utf8mb4    utf8mb4_general_ci
@@ -589,7 +589,7 @@ count(*)
 0
 SELECT datname AS name, IF (table_cnt IS NULL, 0, table_cnt) AS tables, role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x LEFT JOIN(SELECT count(*) AS table_cnt, reldatabase_id FROM mo_catalog.mo_tables WHERE relkind IN ('r','v','e','cluster') GROUP BY reldatabase_id) AS y ON x.dat_id = y.reldatabase_id order by name;
 name    tables    owner
-information_schema    23    accountadmin
+information_schema    24    accountadmin
 mo_catalog    23    -
 mo_mo    0    accountadmin
 mysql    6    accountadmin
@@ -604,6 +604,7 @@ information_schema    column_privileges    r    accountadmin
 information_schema    columns    v    accountadmin
 information_schema    engines    r    accountadmin
 information_schema    events    r    accountadmin
+information_schema    files    r    accountadmin
 information_schema    key_column_usage    r    accountadmin
 information_schema    keywords    r    accountadmin
 information_schema    parameters    r    accountadmin
@@ -703,6 +704,7 @@ column_privileges    0    0    accountadmin
 collations    0    0    accountadmin
 table_constraints    0    0    accountadmin
 events    0    0    accountadmin
+files    0    0    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mo_sample_data_tpch_sf1';
 name    rows    size    owner
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mysql';

@@ -18,9 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -44,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
@@ -78,7 +80,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
@@ -211,7 +212,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		s = appendWriteBackOperator(c, s)
 		s.SetContextRecursively(c.ctx)
 
-		err = s.ParallelRun(c, s.IsRemote)
+		err = s.ParallelRun(c)
 		if err == nil {
 			// record the number of s3 requests
 			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
@@ -310,6 +311,15 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 // 2. Message with an end flag and analysis result
 // 3. Batch Message with batch data
 func (s *Scope) remoteRun(c *Compile) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
+			c.proc.Error(c.ctx, "panic in scope remoteRun",
+				zap.String("sql", c.sql),
+				zap.String("error", err.Error()))
+		}
+	}()
+
 	// encode the scope but without the last operator.
 	// the last operator will be executed on the current node for receiving the result and send them to the next pipeline.
 	lastIdx := len(s.Instructions) - 1
@@ -340,6 +350,8 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 		return errEncodeProc
 	}
 
+	c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.StmtProfile.GetStmtId())
+
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
 	if err != nil {
@@ -348,12 +360,12 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 		return err
 	}
 	defer sender.close()
-	err = sender.send(sData, pData, pipeline.Method_PipelineMessage)
-	if err != nil {
+
+	if err = sender.send(sData, pData, pipeline.Method_PipelineMessage); err != nil {
 		return err
 	}
-
-	return receiveMessageFromCnServer(c, s, sender, lastInstruction)
+	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
+	return err
 }
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
@@ -732,7 +744,7 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 	}
 	if s.isShuffle() {
 		for _, rr := range s.Proc.Reg.MergeReceivers {
-			rr.Ch = make(chan *batch.Batch, 16)
+			rr.Ch = make(chan *process.RegisterMessage, 16)
 		}
 	}
 	return nil
@@ -1000,7 +1012,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *projection.Argument:
 		in.ProjectList = t.Es
-	case *restrict.Argument:
+	case *filter.Argument:
 		in.Filter = t.E
 	case *semi.Argument:
 		in.SemiJoin = &pipeline.SemiJoin{
@@ -1420,8 +1432,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg := projection.NewArgument()
 		arg.Es = opr.ProjectList
 		v.Arg = arg
-	case vm.Restrict:
-		arg := restrict.NewArgument()
+	case vm.Filter:
+		arg := filter.NewArgument()
 		arg.E = opr.Filter
 		v.Arg = arg
 	case vm.Semi:
