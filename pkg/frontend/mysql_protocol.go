@@ -400,6 +400,7 @@ func (mp *MysqlProtocolImpl) GetBool(id PropertyID) bool {
 }
 
 func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
+	var needPrintTxnId bool
 	const countOfResultSet = 1
 	n := bat.Vecs[0].Length()
 	//TODO: remove this MRS here
@@ -418,10 +419,22 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 	}
 	ses := execCtx.ses.(*Session)
 	isShowTableStatus := ses.GetShowStmtType() == ShowTableStatus
+	sql := execCtx.input.getSql()
+	if len(sql) > 0 && strings.Contains(sql, "select count(*) from tpch.") {
+		needPrintTxnId = true
+	}
 	for j := 0; j < n; j++ { //row index
 		err := extractRowFromEveryVector(execCtx.reqCtx, execCtx.ses, bat, j, mrs.Data[0])
 		if err != nil {
 			return err
+		}
+		if needPrintTxnId {
+			// if data is 0, then print txn id
+			if len(mrs.Data[0]) == 1 {
+				if rs := (mrs.Data[0][0]).(int64); rs == int64(0) {
+					logutil.Infof("txn id: %v, sql: %s", ses.feSessionImpl.staticTxnId, sql)
+				}
+			}
 		}
 		if isShowTableStatus {
 			row2 := make([]interface{}, len(mrs.Data[0]))
