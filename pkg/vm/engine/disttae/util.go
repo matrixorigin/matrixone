@@ -551,8 +551,8 @@ func getNonCompositePKSearchFuncByExpr(
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]int16{int16(val.I16Val)})
 			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int16{int16(val.I16Val)}, nil)
 		case *plan.Literal_I32Val:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]int32{int32(val.I32Val)})
-			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int32{int32(val.I32Val)}, nil)
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]int32{val.I32Val})
+			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int32{val.I32Val}, nil)
 		case *plan.Literal_I64Val:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]int64{val.I64Val})
 			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]int64{val.I64Val}, nil)
@@ -569,8 +569,8 @@ func getNonCompositePKSearchFuncByExpr(
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]uint16{uint16(val.U16Val)})
 			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]uint16{uint16(val.U16Val)}, nil)
 		case *plan.Literal_U32Val:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]uint32{uint32(val.U32Val)})
-			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]uint32{uint32(val.U32Val)}, nil)
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]uint32{val.U32Val})
+			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]uint32{val.U32Val}, nil)
 		case *plan.Literal_U64Val:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]uint64{val.U64Val})
 			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory([]uint64{val.U64Val}, nil)
@@ -682,8 +682,8 @@ func getNonCompositePKSearchFuncByExpr(
 			unSortedSearchFunc = vector.UnOrderedFixedSizeLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Decimal128](vec), types.CompareDecimal128)
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 			types.T_array_float32, types.T_array_float64:
-			sortedSearchFunc = vector.VarlenBinarySearchOffsetByValFactory(vector.MustBytesCol(vec))
-			unSortedSearchFunc = vector.UnorderedVarlenLinearSearchOffsetByValFactory(vector.MustBytesCol(vec))
+			sortedSearchFunc = vector.VarlenBinarySearchOffsetByValFactory(vector.InefficientMustBytesCol(vec))
+			unSortedSearchFunc = vector.UnorderedVarlenLinearSearchOffsetByValFactory(vector.InefficientMustBytesCol(vec))
 		case types.T_enum:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Enum](vec))
 			unSortedSearchFunc = vector.UnOrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Enum](vec), nil)
@@ -714,10 +714,10 @@ func evalLiteralExpr2(expr *plan.Literal, oid types.T) (ret []byte, can bool) {
 		i16 := int16(val.I16Val)
 		ret = types.EncodeInt16(&i16)
 	case *plan.Literal_I32Val:
-		i32 := int32(val.I32Val)
+		i32 := val.I32Val
 		ret = types.EncodeInt32(&i32)
 	case *plan.Literal_I64Val:
-		i64 := int64(val.I64Val)
+		i64 := val.I64Val
 		ret = types.EncodeInt64(&i64)
 	case *plan.Literal_Dval:
 		if oid == types.T_float32 {
@@ -738,10 +738,10 @@ func evalLiteralExpr2(expr *plan.Literal, oid types.T) (ret []byte, can bool) {
 		u16 := uint16(val.U16Val)
 		ret = types.EncodeUint16(&u16)
 	case *plan.Literal_U32Val:
-		u32 := uint32(val.U32Val)
+		u32 := val.U32Val
 		ret = types.EncodeUint32(&u32)
 	case *plan.Literal_U64Val:
-		u64 := uint64(val.U64Val)
+		u64 := val.U64Val
 		ret = types.EncodeUint64(&u64)
 	case *plan.Literal_Fval:
 		if oid == types.T_float32 {
@@ -861,8 +861,8 @@ func (f *PKFilter) SetFullData(op uint8, isVec bool, val ...[]byte) {
 func (f *PKFilter) SetVal(op uint8, isVec bool, val any) {
 	f.op = op
 	f.val = val
+	f.isVec = isVec
 	f.isValid = true
-	f.isVec = false
 	f.isNull = false
 }
 
