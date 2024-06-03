@@ -31,9 +31,7 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 			return got.IsConstNull()
 		} else {
 			if expected.GetType().IsVarlen() {
-				v1 := vector.MustStrCol(expected)
-				v2 := vector.MustStrCol(got)
-				return reflect.DeepEqual(v1[0], v2[0])
+				return reflect.DeepEqual(expected.UnsafeGetStringAt(0), got.UnsafeGetStringAt(0))
 			} else {
 				return bytes.Equal(expected.UnsafeGetRawData(), got.UnsafeGetRawData())
 			}
@@ -65,9 +63,9 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 		}
 
 		if expected.GetType().IsVarlen() {
-			v1 := vector.MustStrCol(expected)
-			v2 := vector.MustStrCol(got)
-			for i, v := range v1 {
+			v1, area1 := vector.MustVarlenaRawData(expected)
+			v2, area2 := vector.MustVarlenaRawData(got)
+			for i := range v1 {
 				if nulls.Contains(expected.GetNulls(), uint64(i)) {
 					if !nulls.Contains(got.GetNulls(), uint64(i)) {
 						return false
@@ -76,8 +74,7 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 					if nulls.Contains(got.GetNulls(), uint64(i)) {
 						return false
 					}
-					vv := v2[i]
-					if v != vv {
+					if v1[i].UnsafeGetString(area1) != v2[i].UnsafeGetString(area2) {
 						return false
 					}
 				}
