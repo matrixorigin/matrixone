@@ -72,11 +72,13 @@ var (
 	objectDeltaSchemaAttr = []string{
 		catalog2.BlockMeta_ID,
 		catalog2.BlockMeta_DeltaLoc,
+		SnapshotAttr_TID,
 	}
 
 	objectDeltaSchemaTypes = []types.Type{
 		types.New(types.T_Blockid, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_uint64, 0, 0),
 	}
 
 	tableInfoSchemaAttr = []string{
@@ -116,10 +118,11 @@ type objectInfo struct {
 
 type SnapshotMeta struct {
 	sync.RWMutex
-	objects     map[objectio.Segmentid]*objectInfo
+	objects     map[uint64]map[objectio.Segmentid]*objectInfo
 	tid         uint64
 	tables      map[uint32]map[uint64]*TableInfo
 	acctIndexes map[uint64]*TableInfo
+	tides       map[uint64]struct{}
 }
 
 type TableInfo struct {
@@ -132,9 +135,10 @@ type TableInfo struct {
 
 func NewSnapshotMeta() *SnapshotMeta {
 	return &SnapshotMeta{
-		objects:     make(map[objectio.Segmentid]*objectInfo),
+		objects:     make(map[uint64]map[objectio.Segmentid]*objectInfo),
 		tables:      make(map[uint32]map[uint64]*TableInfo),
 		acctIndexes: make(map[uint64]*TableInfo),
+		tides:       make(map[uint64]struct{}),
 	}
 }
 
@@ -144,14 +148,19 @@ func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
 	insTIDs := vector.MustFixedCol[uint64](insTable.GetVectorByName(catalog2.SystemRelAttr_ID).GetDownstreamVector())
 	insDBIDs := vector.MustFixedCol[uint64](insTable.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector())
 	insCreateAts := vector.MustFixedCol[types.Timestamp](insTable.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector())
+	insTableNameVec := insTable.GetVectorByName(catalog2.SystemRelAttr_Name).GetDownstreamVector()
+	insTableArea := insTableNameVec.GetArea()
+	insTableNames := vector.MustFixedCol[types.Varlena](insTableNameVec)
 	for i := 0; i < insTable.Length(); i++ {
 		tid := insTIDs[i]
-		if sm.tid == 0 {
-			tableName := string(insTable.GetVectorByName(catalog2.SystemRelAttr_Name).Get(i).([]byte))
-			if tableName == "mo_snapshots" {
-				logutil.Infof("mo_snapshots: %d", tid)
+		name := string(insTableNames[i].GetByteSlice(insTableArea))
+		if name == "mo_snapshots" {
+			if sm.tid == 0 {
+				//for ut
 				sm.SetTid(tid)
 			}
+			logutil.Info("[UpdateSnapTable]", zap.Uint64("tid", tid))
+			sm.tides[tid] = struct{}{}
 		}
 		accID := insAccIDs[i]
 		if sm.tables[accID] == nil {
@@ -210,7 +219,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	insTableIDs := vector.MustFixedCol[uint64](ins.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
 	for i := 0; i < ins.Length(); i++ {
 		table := insTableIDs[i]
-		if table != sm.tid {
+		if _, ok := sm.tides[table]; !ok {
 			continue
 		}
 		var objectStats objectio.ObjectStats
@@ -218,31 +227,50 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		objectStats.UnMarshal(buf)
 		deleteTS := insDeleteTSs[i]
 		createTS := insCreateTSs[i]
-		if sm.objects[objectStats.ObjectName().SegmentId()] == nil {
+		if sm.objects[table] == nil {
+			sm.objects[table] = make(map[objectio.Segmentid]*objectInfo)
+		}
+		if sm.objects[table][objectStats.ObjectName().SegmentId()] == nil {
 			if !deleteTS.IsEmpty() {
 				continue
 			}
-			sm.objects[objectStats.ObjectName().SegmentId()] = &objectInfo{
+			sm.objects[table][objectStats.ObjectName().SegmentId()] = &objectInfo{
 				stats:    objectStats,
 				createAt: createTS,
 			}
+			logutil.Info("[UpdateSnapshot] Add object",
+				zap.Uint64("table id", table),
+				zap.String("object name", objectStats.ObjectName().String()),
+				zap.String("create at", createTS.ToString()))
+
 			continue
 		}
 		if deleteTS.IsEmpty() {
 			panic(any("deleteTS is empty"))
 		}
-		delete(sm.objects, objectStats.ObjectName().SegmentId())
+		logutil.Info("[UpdateSnapshot] Delete object",
+			zap.Uint64("table id", table),
+			zap.String("object name", objectStats.ObjectName().String()))
+		delete(sm.objects[table], objectStats.ObjectName().SegmentId())
 	}
-	del, _, _, _ := data.GetBlkBatchs()
+	del, delTxn, _, _ := data.GetBlkBatchs()
 	delBlockIDs := vector.MustFixedCol[types.Blockid](del.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector())
+	delTableIDs := vector.MustFixedCol[uint64](delTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
 	for i := 0; i < del.Length(); i++ {
 		blockID := delBlockIDs[i]
+		tableID := delTableIDs[i]
 		deltaLoc := objectio.Location(del.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
-		if sm.objects[*blockID.Segment()] != nil {
-			if sm.objects[*blockID.Segment()].deltaLocation == nil {
-				sm.objects[*blockID.Segment()].deltaLocation = make(map[uint32]*objectio.Location)
+		if _, ok := sm.tides[tableID]; !ok {
+			continue
+		}
+		if sm.objects[tableID] == nil {
+			panic(any(fmt.Sprintf("tableID %d not found", tableID)))
+		}
+		if sm.objects[tableID][*blockID.Segment()] != nil {
+			if sm.objects[tableID][*blockID.Segment()].deltaLocation == nil {
+				sm.objects[tableID][*blockID.Segment()].deltaLocation = make(map[uint32]*objectio.Location)
 			}
-			sm.objects[*blockID.Segment()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
+			sm.objects[tableID][*blockID.Segment()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
 		}
 	}
 	return nil
@@ -263,59 +291,63 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 		snapshotSchemaTypes[ColLevel],
 		snapshotSchemaTypes[ColObjId],
 	}
-	for _, object := range objects {
-		location := object.stats.ObjectLocation()
-		name := object.stats.ObjectName()
-		for i := uint32(0); i < object.stats.BlkCnt(); i++ {
-			loc := objectio.BuildLocation(name, location.Extent(), 0, uint16(i))
-			blk := objectio.BlockInfo{
-				BlockID:   *objectio.BuildObjectBlockid(name, uint16(i)),
-				SegmentID: name.SegmentId(),
-				MetaLoc:   objectio.ObjectLocation(loc),
-			}
-			if object.deltaLocation[i] != nil {
-				logutil.Infof("deltaLoc: %v, id is %d", object.deltaLocation[i].String(), i)
-				blk.DeltaLoc = objectio.ObjectLocation(*object.deltaLocation[i])
-			}
-			checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-			bat, err := blockio.BlockRead(ctx, &blk, nil, idxes, colTypes, checkpointTS.ToTimestamp(),
-				nil, nil, blockio.ReadFilter{}, fs, mp, nil, fileservice.Policy(0))
-			if err != nil {
-				return nil, err
-			}
-			defer bat.Clean(mp)
-			tsList := vector.MustFixedCol[int64](bat.Vecs[0])
-			typeList := vector.MustFixedCol[types.Enum](bat.Vecs[1])
-			acctList := vector.MustFixedCol[uint64](bat.Vecs[2])
-			for r := 0; r < bat.Vecs[0].Length(); r++ {
-				ts := tsList[r]
-				snapTs := types.BuildTS(ts, 0)
-				acct := acctList[r]
-				snapshotType := typeList[r]
-				if snapshotType == SnapshotTypeCluster {
-					for account := range sm.tables {
-						if snapshotList[account] == nil {
-							snapshotList[account] = containers.MakeVector(types.T_TS.ToType(), mp)
-						}
-						err = vector.AppendFixed[types.TS](snapshotList[account].GetDownstreamVector(), snapTs, false, mp)
-						if err != nil {
-							return nil, err
-						}
-						logutil.Debug("[GetSnapshot] cluster snapshot",
-							common.OperationField(snapTs.ToString()))
-					}
-					continue
+	for _, objectMap := range objects {
+		for _, object := range objectMap {
+			location := object.stats.ObjectLocation()
+			name := object.stats.ObjectName()
+			for i := uint32(0); i < object.stats.BlkCnt(); i++ {
+				loc := objectio.BuildLocation(name, location.Extent(), 0, uint16(i))
+				blk := objectio.BlockInfo{
+					BlockID:   *objectio.BuildObjectBlockid(name, uint16(i)),
+					SegmentID: name.SegmentId(),
+					MetaLoc:   objectio.ObjectLocation(loc),
 				}
-				id := uint32(acct)
-				if snapshotList[id] == nil {
-					snapshotList[id] = containers.MakeVector(types.T_TS.ToType(), mp)
+				if object.deltaLocation[i] != nil {
+					logutil.Infof("deltaLoc: %v, id is %d", object.deltaLocation[i].String(), i)
+					blk.DeltaLoc = objectio.ObjectLocation(*object.deltaLocation[i])
 				}
-				logutil.Debug("[GetSnapshot] snapshot",
-					zap.Uint32("account", id),
-					zap.String("snap ts", snapTs.ToString()))
-				err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), snapTs, false, mp)
+				checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+				bat, err := blockio.BlockRead(ctx, &blk, nil, idxes, colTypes, checkpointTS.ToTimestamp(),
+					nil, nil, blockio.ReadFilter{}, fs, mp, nil, fileservice.Policy(0))
 				if err != nil {
 					return nil, err
+				}
+				defer bat.Clean(mp)
+				tsList := vector.MustFixedCol[int64](bat.Vecs[0])
+				typeList := vector.MustFixedCol[types.Enum](bat.Vecs[1])
+				acctList := vector.MustFixedCol[uint64](bat.Vecs[2])
+				for r := 0; r < bat.Vecs[0].Length(); r++ {
+					ts := tsList[r]
+					snapTs := types.BuildTS(ts, 0)
+					acct := acctList[r]
+					snapshotType := typeList[r]
+					if snapshotType == SnapshotTypeCluster {
+						for account := range sm.tables {
+							if snapshotList[account] == nil {
+								snapshotList[account] = containers.MakeVector(types.T_TS.ToType(), mp)
+							}
+							err = vector.AppendFixed[types.TS](snapshotList[account].GetDownstreamVector(), snapTs, false, mp)
+							if err != nil {
+								return nil, err
+							}
+							// TODO: info to debug
+							logutil.Info("[GetSnapshot] cluster snapshot",
+								common.OperationField(snapTs.ToString()))
+						}
+						continue
+					}
+					id := uint32(acct)
+					if snapshotList[id] == nil {
+						snapshotList[id] = containers.MakeVector(types.T_TS.ToType(), mp)
+					}
+					// TODO: info to debug
+					logutil.Info("[GetSnapshot] snapshot",
+						zap.Uint32("account", id),
+						zap.String("snap ts", snapTs.ToString()))
+					err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), snapTs, false, mp)
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
 		}
@@ -342,26 +374,31 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 	for i, attr := range objectDeltaSchemaAttr {
 		deltaBat.AddVector(attr, containers.MakeVector(objectDeltaSchemaTypes[i], common.DebugAllocator))
 	}
-	for _, entry := range sm.objects {
-		vector.AppendBytes(
-			bat.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),
-			entry.stats[:], false, common.DebugAllocator)
-		vector.AppendFixed[types.TS](
-			bat.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector(),
-			entry.createAt, false, common.DebugAllocator)
-		vector.AppendFixed[types.TS](
-			bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
-			entry.deleteAt, false, common.DebugAllocator)
-		for id, delta := range entry.deltaLocation {
-			blockID := objectio.BuildObjectBlockid(entry.stats.ObjectName(), uint16(id))
-			vector.AppendFixed[types.Blockid](deltaBat.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector(),
-				*blockID, false, common.DebugAllocator)
-			vector.AppendBytes(deltaBat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).GetDownstreamVector(),
-				[]byte(*delta), false, common.DebugAllocator)
+	for tid, objectMap := range sm.objects {
+		for _, entry := range objectMap {
+			vector.AppendBytes(
+				bat.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),
+				entry.stats[:], false, common.DebugAllocator)
+			vector.AppendFixed[types.TS](
+				bat.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector(),
+				entry.createAt, false, common.DebugAllocator)
+			vector.AppendFixed[types.TS](
+				bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
+				entry.deleteAt, false, common.DebugAllocator)
+			for id, delta := range entry.deltaLocation {
+				blockID := objectio.BuildObjectBlockid(entry.stats.ObjectName(), uint16(id))
+				vector.AppendFixed[types.Blockid](deltaBat.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector(),
+					*blockID, false, common.DebugAllocator)
+				vector.AppendBytes(deltaBat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).GetDownstreamVector(),
+					[]byte(*delta), false, common.DebugAllocator)
+				vector.AppendFixed[uint64](
+					deltaBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+					tid, false, common.DebugAllocator)
+			}
+			vector.AppendFixed[uint64](
+				bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+				tid, false, common.DebugAllocator)
 		}
-		vector.AppendFixed[uint64](
-			bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
-			sm.tid, false, common.DebugAllocator)
 	}
 	defer bat.Close()
 	defer deltaBat.Close()
@@ -496,23 +533,35 @@ func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
 	sm.Lock()
 	defer sm.Unlock()
 	insCreateTSs := vector.MustFixedCol[types.TS](ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector())
+	insTides := vector.MustFixedCol[uint64](ins.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
 	for i := 0; i < ins.Length(); i++ {
 		var objectStats objectio.ObjectStats
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
 		createTS := insCreateTSs[i]
+		tid := insTides[i]
 		if sm.tid == 0 {
-			tid := ins.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 			if tid == 0 {
 				panic("tid is 0")
 			}
 			sm.SetTid(tid)
 		}
-		if sm.objects[objectStats.ObjectName().SegmentId()] == nil {
-			sm.objects[objectStats.ObjectName().SegmentId()] = &objectInfo{
+		if _, ok := sm.tides[tid]; !ok {
+			sm.tides[tid] = struct{}{}
+			logutil.Info("[RebuildSnapTable]", zap.Uint64("tid", tid))
+		}
+		if sm.objects[tid] == nil {
+			sm.objects[tid] = make(map[objectio.Segmentid]*objectInfo)
+		}
+		if sm.objects[tid][objectStats.ObjectName().SegmentId()] == nil {
+			sm.objects[tid][objectStats.ObjectName().SegmentId()] = &objectInfo{
 				stats:    objectStats,
 				createAt: createTS,
 			}
+			logutil.Info("[RebuildSnapshot] Add object",
+				zap.Uint64("table id", tid),
+				zap.String("object name", objectStats.ObjectName().String()),
+				zap.String("create at", createTS.ToString()))
 			continue
 		}
 	}
@@ -522,17 +571,22 @@ func (sm *SnapshotMeta) RebuildDelta(ins *containers.Batch) {
 	sm.Lock()
 	defer sm.Unlock()
 	insBlockIDs := vector.MustFixedCol[types.Blockid](ins.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector())
+	insTides := vector.MustFixedCol[uint64](ins.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
 	for i := 0; i < ins.Length(); i++ {
 		blockID := insBlockIDs[i]
+		tid := insTides[i]
 		deltaLoc := objectio.Location(ins.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
-		if sm.objects[*blockID.Segment()] != nil {
-			if sm.objects[*blockID.Segment()].deltaLocation == nil {
-				sm.objects[*blockID.Segment()].deltaLocation = make(map[uint32]*objectio.Location)
+		if sm.objects[tid] == nil {
+			panic(any(fmt.Sprintf("tableID %d not found", tid)))
+		}
+		if sm.objects[tid][*blockID.Segment()] != nil {
+			if sm.objects[tid][*blockID.Segment()].deltaLocation == nil {
+				sm.objects[tid][*blockID.Segment()].deltaLocation = make(map[uint32]*objectio.Location)
 			}
 			logutil.Infof("RebuildDelta: %v, loc is %v", blockID.String(), deltaLoc.String())
-			sm.objects[*blockID.Segment()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
+			sm.objects[tid][*blockID.Segment()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
 		} else {
-			panic("blockID not found")
+			panic(any(fmt.Sprintf("blockID %s not found", blockID.String())))
 		}
 	}
 }
@@ -678,16 +732,24 @@ func (sm *SnapshotMeta) MergeTableInfo(SnapshotList map[uint32][]types.TS) error
 		if SnapshotList[accID] == nil {
 			for _, table := range tables {
 				if !table.deleteAt.IsEmpty() {
+					logutil.Infof("MergeTableInfo delete table %d", table.tid)
 					delete(sm.tables[accID], table.tid)
 					delete(sm.acctIndexes, table.tid)
+					if sm.objects[table.tid] != nil {
+						delete(sm.objects, table.tid)
+					}
 				}
 			}
 			continue
 		}
 		for _, table := range tables {
 			if !table.deleteAt.IsEmpty() && !isSnapshotRefers(table, SnapshotList[accID]) {
+				logutil.Infof("MergeTableInfo delete table %d", table.tid)
 				delete(sm.tables[accID], table.tid)
 				delete(sm.acctIndexes, table.tid)
+				if sm.objects[table.tid] != nil {
+					delete(sm.objects, table.tid)
+				}
 			}
 		}
 	}
