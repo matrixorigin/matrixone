@@ -11042,7 +11042,7 @@ func TestUpload(t *testing.T) {
 			cnt++
 			return
 		}).AnyTimes()
-		proto := &FakeProtocol{
+		proto := &testMysqlWriter{
 			ioses: ioses,
 		}
 		fs, err := fileservice.NewLocalFS(context.TODO(), defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
@@ -11063,7 +11063,7 @@ func TestUpload(t *testing.T) {
 		setGlobalPu(pu)
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
-				proto: proto,
+				respr: NewMysqlResp(proto),
 			},
 			proc: proc,
 		}
