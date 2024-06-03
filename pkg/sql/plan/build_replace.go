@@ -27,7 +27,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-func buildReplace(stmt *tree.Replace, ctx CompilerContext, isPrepareStmt bool) (p *Plan, err error) {
+func buildReplace(stmt *tree.Replace, ctx CompilerContext, isPrepareStmt bool, rewriteFromOnDuplicateKey bool) (p *Plan, err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildReplaceHistogram.Observe(time.Since(start).Seconds())
@@ -78,7 +78,7 @@ func buildReplace(stmt *tree.Replace, ctx CompilerContext, isPrepareStmt bool) (
 			Query: &plan.Query{
 				StmtType: plan.Query_REPLACE,
 				Nodes: []*plan.Node{
-					{NodeType: plan.Node_REPLACE, ReplaceCtx: &plan.ReplaceCtx{TableDef: tableDef, DeleteCond: deleteCond}},
+					{NodeType: plan.Node_REPLACE, ReplaceCtx: &plan.ReplaceCtx{TableDef: tableDef, DeleteCond: deleteCond, RewriteFromOnDuplicateKey: rewriteFromOnDuplicateKey}},
 				},
 			},
 		},
