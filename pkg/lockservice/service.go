@@ -164,6 +164,18 @@ func (s *service) Lock(
 		return pb.Result{}, ErrDeadLockDetected
 	}
 
+	// it needs to inc table bind ref when set restart cn
+	h := txn.getHoldLocksLocked(l.getBind().Group)
+	_, hasBind := h.tableBinds[l.getBind().Table]
+	defer func() {
+		if s.isStatus(pb.Status_ServiceLockEnable) ||
+			err != nil ||
+			hasBind {
+			return
+		}
+		s.incRef(l.getBind().Group, l.getBind().Table)
+	}()
+
 	var result pb.Result
 	l.lock(
 		ctx,
@@ -218,6 +230,24 @@ func (s *service) Unlock(
 	return nil
 }
 
+func (s *service) IsOrphanTxn(
+	ctx context.Context,
+	txn []byte,
+) (bool, error) {
+	req := acquireRequest()
+	req.Method = pb.Method_CheckOrphan
+	req.CheckOrphan.ServiceID = s.serviceID
+	req.CheckOrphan.Txn = txn
+
+	resp, err := s.remote.client.Send(ctx, req)
+	if err != nil {
+		return false, err
+	}
+	defer releaseResponse(resp)
+
+	return resp.CheckOrphan.Orphan, nil
+}
+
 func (s *service) reduceCanMoveGroupTables(txn *activeTxn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -268,6 +298,15 @@ func (s *service) checkCanMoveGroupTables() {
 	}
 	s.mu.restartTime, _ = s.clock.Now()
 	s.mu.status = pb.Status_ServiceLockWaiting
+}
+
+func (s *service) incRef(group uint32, table uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.mu.lockTableRef[group]; !ok {
+		s.mu.lockTableRef[group] = make(map[uint64]uint64)
+	}
+	s.mu.lockTableRef[group][table]++
 }
 
 func (s *service) canLockOnServiceStatus(

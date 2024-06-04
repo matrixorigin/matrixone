@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go.uber.org/automaxprocs/maxprocs"
 	"net/http"
 	"os"
 	"os/signal"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -69,6 +71,10 @@ var (
 	maxProcessor = flag.Int("max-processor", 0, "set max processor for go runtime")
 	globalEtlFS  fileservice.FileService
 )
+
+func init() {
+	maxprocs.Set(maxprocs.Logger(func(string, ...interface{}) {}))
+}
 
 func main() {
 	if *maxProcessor > 0 {
@@ -168,6 +174,8 @@ func startService(
 		return err
 	}
 	setupProcessLevelRuntime(cfg, stopper)
+
+	malloc.SetDefaultConfig(cfg.Malloc)
 
 	setupStatusServer(runtime.ProcessLevelRuntime())
 

@@ -48,8 +48,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	var end bool
-	var err error
+	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
 	if arg.buf != nil {
 		proc.PutBatch(arg.buf)
@@ -57,11 +56,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	switch arg.ctr.status {
 	case sendInitial:
-		arg.buf, _, err = arg.ctr.ReceiveFromSingleReg(0, anal)
-		if err != nil {
+		msg = arg.ctr.ReceiveFromSingleReg(0, anal)
+		if msg.Err != nil {
 			result.Status = vm.ExecStop
-			return result, err
+			return result, msg.Err
 		}
+		arg.buf = msg.Batch
 		if arg.buf == nil {
 			arg.ctr.status = sendLastTag
 		}
@@ -74,12 +74,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	case sendRecursive:
 		for {
-			arg.buf, end, _ = arg.ctr.ReceiveFromAllRegs(anal)
-			if arg.buf == nil || end {
+			msg = arg.ctr.ReceiveFromAllRegs(anal)
+			if msg.Batch == nil {
 				result.Batch = nil
 				result.Status = vm.ExecStop
 				return result, nil
 			}
+			arg.buf = msg.Batch
 			if !arg.buf.Last() {
 				break
 			}

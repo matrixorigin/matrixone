@@ -18,6 +18,6 @@ import "testing"
 
 func TestClassAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
-		return NewClassAllocator()
+		return NewClassAllocator(1)
 	})
 }

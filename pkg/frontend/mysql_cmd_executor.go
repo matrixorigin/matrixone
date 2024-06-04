@@ -151,7 +151,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			text = SubStringFromBegin(bb.String(), int(getGlobalPu().SV.LengthOfQueryPrinted))
 		} else {
 			// ignore envStmt == ""
-			// case: exec `set @ t= 2;` will trigger an internal query with the same session.
+			// case: exec `set @t = 2;` will trigger an internal query with the same session.
 			// If you need real sql, can try:
 			//	+ fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 			//	+ cw.GetAst().Format(fmtCtx)
@@ -187,6 +187,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		// ignore internal EMPTY query.
 		return ctx, nil
 	}
+
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal") // pls task care of mce.GetDoQueryFunc() call case.
@@ -195,6 +196,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	// set TransactionID
 	var txn TxnOperator
 	var err error
+	// fixme: use ses.GetTxnId to simple.
 	if handler := ses.GetTxnHandler(); handler.InActiveTxn() {
 		txn = handler.GetTxn()
 		if err != nil {
@@ -204,18 +206,17 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	}
 	// set SessionID
 	copy(stm.SessionID[:], ses.GetUUID())
+	copy(stm.StatementID[:], stmID[:])
 	requestAt := envBegin
 	if !useEnv {
 		requestAt = time.Now()
 	}
 
-	copy(stm.StatementID[:], stmID[:])
-	// END> set StatementID
 	stm.Account = tenant.GetTenant()
 	stm.RoleId = proc.SessionInfo.RoleId
 	stm.User = tenant.GetUser()
-	stm.Host = ses.proto.Peer()
-	stm.Database = ses.GetDatabaseName()
+	stm.Host = ses.respr.GetStr(PEER)
+	stm.Database = ses.respr.GetStr(DBNAME)
 	stm.Statement = text
 	stm.StatementFingerprint = "" // fixme= (Reserved)
 	stm.StatementTag = ""         // fixme= (Reserved)
@@ -229,7 +230,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stm.User = ""
 	}
 	if stm.IsMoLogger() && stm.StatementType == "Load" && len(stm.Statement) > 128 {
-		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-45:]
+		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-70:]
 	}
 	stm.Report(ctx) // pls keep it simple: Only call Report twice at most.
 	ses.SetTStmt(stm)
@@ -416,80 +417,23 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) erro
 	_, task := gotrace.NewTask(context.TODO(), "frontend.WriteDataToClient")
 	defer task.End()
 	ses := obj.(*Session)
-	if openSaveQueryResult(execCtx.reqCtx, ses) {
-		if bat == nil {
-			if err := saveQueryResultMeta(execCtx.reqCtx, ses); err != nil {
-				return err
-			}
-		} else {
-			if err := saveQueryResult(execCtx.reqCtx, ses, bat); err != nil {
-				return err
-			}
-		}
-	}
-	if bat == nil {
-		return nil
-	}
 
 	begin := time.Now()
-	proto := ses.GetMysqlProtocol()
-
-	ec := ses.GetExportConfig()
-	oq := NewOutputQueue(execCtx.reqCtx, ses, len(bat.Vecs), nil, nil)
-	row2colTime := time.Duration(0)
-	procBatchBegin := time.Now()
-	n := bat.Vecs[0].Length()
-
-	if ec.needExportToFile() {
-		initExportFirst(oq)
-	}
-
-	for j := 0; j < n; j++ { //row index
-		if ec.needExportToFile() {
-			select {
-			case <-execCtx.reqCtx.Done():
-				return nil
-			default:
-			}
-			continue
-		}
-
-		row, err := extractRowFromEveryVector(execCtx.reqCtx, ses, bat, j, oq, true)
-		if err != nil {
-			return err
-		}
-		if oq.showStmtType == ShowTableStatus {
-			row2 := make([]interface{}, len(row))
-			copy(row2, row)
-			ses.AppendData(row2)
-		}
-	}
-
-	if ec.needExportToFile() {
-		oq.rowIdx = uint64(n)
-		bat2 := preCopyBat(obj, bat)
-		go constructByte(execCtx.reqCtx, obj, bat2, oq.ep.Index, oq.ep.ByteChan, oq)
-	}
-	err := oq.flush()
+	err := ses.GetResponser().RespResult(execCtx, bat)
 	if err != nil {
 		return err
 	}
-
-	procBatchTime := time.Since(procBatchBegin)
 	tTime := time.Since(begin)
-	ses.sentRows.Add(int64(n))
+	n := 0
+	if bat != nil && bat.Vecs[0] != nil {
+		n = bat.Vecs[0].Length()
+		ses.sentRows.Add(int64(n))
+	}
+
 	ses.Debugf(execCtx.reqCtx, "rowCount %v \n"+
-		"time of getDataFromPipeline : %s \n"+
-		"processBatchTime %v \n"+
-		"row2colTime %v \n"+
-		"restTime(=totalTime - row2colTime) %v \n"+
-		"protoStats %s",
+		"time of getDataFromPipeline : %s \n",
 		n,
-		tTime,
-		procBatchTime,
-		row2colTime,
-		tTime-row2colTime,
-		proto.GetStats())
+		tTime)
 
 	return nil
 }
@@ -611,19 +555,9 @@ handle cmd CMD_FIELD_LIST
 */
 func handleCmdFieldList(ses FeSession, execCtx *ExecCtx, icfl *InternalCmdFieldList) error {
 	var err error
-	proto := ses.GetMysqlProtocol()
 
 	ses.SetMysqlResultSet(nil)
 	err = doCmdFieldList(execCtx.reqCtx, ses.(*Session), icfl)
-	if err != nil {
-		return err
-	}
-
-	/*
-		mysql CMD_FIELD_LIST response: End after the column has been sent.
-		send EOF packet
-	*/
-	err = proto.sendEOFOrOkPacket(0, ses.GetTxnHandler().GetServerStatus())
 	if err != nil {
 		return err
 	}
@@ -798,8 +732,7 @@ func handleSetVar(ses FeSession, execCtx *ExecCtx, sv *tree.SetVar, sql string) 
 	return nil
 }
 
-func doShowErrors(ses *Session) error {
-	var err error
+func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 
 	levelCol := new(MysqlColumn)
 	levelCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -828,12 +761,11 @@ func doShowErrors(ses *Session) error {
 		row[2] = info.msgs[i]
 		mrs.AddRow(row)
 	}
-
-	return err
+	return trySaveQueryResult(execCtx.reqCtx, ses, mrs)
 }
 
-func handleShowErrors(ses FeSession) error {
-	err := doShowErrors(ses.(*Session))
+func handleShowErrors(ses FeSession, execCtx *ExecCtx) error {
+	err := doShowErrors(ses.(*Session), execCtx)
 	if err != nil {
 		return err
 	}
@@ -845,7 +777,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		return moerr.NewSyntaxError(execCtx.reqCtx, "like clause and where clause cannot exist at the same time")
 	}
 
-	var err error = nil
+	var err error
 
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -909,7 +841,8 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 	}
 
 	if sv.Where != nil {
-		bat, err := constructVarBatch(ses, rows)
+		bat, _, err := convertRowsIntoBatch(execCtx.proc.Mp(), mrs.Columns, rows)
+		defer cleanBatch(execCtx.proc.Mp(), bat)
 		if err != nil {
 			return err
 		}
@@ -940,14 +873,24 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 
 		bat.Shrink(sels, false)
 		execCtx.proc.Mp().PutSels(sels)
-		v0 := vector.MustStrCol(bat.Vecs[0])
-		v1 := vector.MustStrCol(bat.Vecs[1])
-		rows = rows[:len(v0)]
-		for i := range v0 {
-			rows[i][0] = v0[i]
-			rows[i][1] = v1[i]
+
+		v0 := vector.GenerateFunctionStrParameter(bat.Vecs[0])
+		v1 := vector.GenerateFunctionStrParameter(bat.Vecs[1])
+		rows = rows[:bat.Vecs[0].Length()]
+		for i := range rows {
+			s0, isNull := v0.GetStrValue(uint64(i))
+			if isNull {
+				rows[i][0] = ""
+			} else {
+				rows[i][0] = s0
+			}
+			s1, isNull := v1.GetStrValue(uint64(i))
+			if isNull {
+				rows[i][1] = ""
+			} else {
+				rows[i][1] = s1
+			}
 		}
-		bat.Clean(execCtx.proc.Mp())
 	}
 
 	//sort by name
@@ -959,76 +902,14 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		mrs.AddRow(row)
 	}
 
-	return err
+	return trySaveQueryResult(execCtx.reqCtx, ses, mrs)
 }
 
 /*
 handle show variables
 */
 func handleShowVariables(ses FeSession, execCtx *ExecCtx, sv *tree.ShowVariables) error {
-	err := doShowVariables(ses.(*Session), execCtx, sv)
-	if err != nil {
-		return err
-	}
-	return err
-}
-
-func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error) {
-	bat := batch.New(true, []string{"Variable_name", "Value"})
-	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
-	cnt := len(rows)
-	bat.SetRowCount(cnt)
-	v0 := make([]string, cnt)
-	v1 := make([]string, cnt)
-	for i, row := range rows {
-		v0[i] = row[0].(string)
-		v1[i] = fmt.Sprintf("%v", row[1])
-	}
-	bat.Vecs[0] = vector.NewVec(typ)
-	vector.AppendStringList(bat.Vecs[0], v0, nil, ses.GetMemPool())
-	bat.Vecs[1] = vector.NewVec(typ)
-	vector.AppendStringList(bat.Vecs[1], v1, nil, ses.GetMemPool())
-	return bat, nil
-}
-
-func constructCollationBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error) {
-	bat := batch.New(true, []string{"Collation", "Charset", "Id", "Default", "Compiled", "Sortlen", "Pad_attribute"})
-	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
-	longlongTyp := types.New(types.T_int64, 0, 0)
-	longTyp := types.New(types.T_int32, 0, 0)
-	cnt := len(rows)
-	bat.SetRowCount(cnt)
-	v0 := make([]string, cnt)
-	v1 := make([]string, cnt)
-	v2 := make([]int64, cnt)
-	v3 := make([]string, cnt)
-	v4 := make([]string, cnt)
-	v5 := make([]int32, cnt)
-	v6 := make([]string, cnt)
-	for i, row := range rows {
-		v0[i] = row[0].(string)
-		v1[i] = row[1].(string)
-		v2[i] = row[2].(int64)
-		v3[i] = row[3].(string)
-		v4[i] = row[4].(string)
-		v5[i] = row[5].(int32)
-		v6[i] = row[6].(string)
-	}
-	bat.Vecs[0] = vector.NewVec(typ)
-	vector.AppendStringList(bat.Vecs[0], v0, nil, ses.GetMemPool())
-	bat.Vecs[1] = vector.NewVec(typ)
-	vector.AppendStringList(bat.Vecs[1], v1, nil, ses.GetMemPool())
-	bat.Vecs[2] = vector.NewVec(longlongTyp)
-	vector.AppendFixedList[int64](bat.Vecs[2], v2, nil, ses.GetMemPool())
-	bat.Vecs[3] = vector.NewVec(typ)
-	vector.AppendStringList(bat.Vecs[3], v3, nil, ses.GetMemPool())
-	bat.Vecs[4] = vector.NewVec(typ)
-	vector.AppendStringList(bat.Vecs[4], v4, nil, ses.GetMemPool())
-	bat.Vecs[5] = vector.NewVec(longTyp)
-	vector.AppendFixedList[int32](bat.Vecs[5], v5, nil, ses.GetMemPool())
-	bat.Vecs[6] = vector.NewVec(typ)
-	vector.AppendStringList(bat.Vecs[6], v6, nil, ses.GetMemPool())
-	return bat, nil
+	return doShowVariables(ses.(*Session), execCtx, sv)
 }
 
 func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) error {
@@ -1086,7 +967,7 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 		}
 
 		exPlan = replaced
-		paramVals := ses.GetTxnCompileCtx().tcw.paramVals
+		paramVals := ses.GetTxnCompileCtx().tcw.ParamVals()
 		if len(paramVals) > 0 {
 			//replace the param var in the plan by the param value
 			exPlan, err = plan2.FillValuesOfParamsInPlan(reqCtx, exPlan, paramVals)
@@ -1112,11 +993,10 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	}
 
 	//2. fill the result set
-	explainColName := "QUERY PLAN"
 	//column
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	col1.SetName(explainColName)
+	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan))
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
@@ -1124,38 +1004,8 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	for _, line := range buffer.Lines {
 		mrs.AddRow([]any{line})
 	}
-	ses.rs = mysqlColDef2PlanResultColDef(mrs)
 
-	if openSaveQueryResult(reqCtx, ses) {
-		//3. fill the batch for saving the query result
-		bat, err := fillQueryBatch(ses, explainColName, buffer.Lines)
-		defer bat.Clean(ses.GetMemPool())
-		if err != nil {
-			return err
-		}
-
-		// save query result
-		err = maySaveQueryResult(reqCtx, ses, bat)
-		if err != nil {
-
-			return err
-		}
-	}
-	return nil
-}
-
-func fillQueryBatch(ses *Session, explainColName string, lines []string) (*batch.Batch, error) {
-	bat := batch.New(true, []string{explainColName})
-	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
-
-	cnt := len(lines)
-	bat.SetRowCount(cnt)
-	bat.Vecs[0] = vector.NewVec(typ)
-	err := vector.AppendStringList(bat.Vecs[0], lines, nil, ses.GetMemPool())
-	if err != nil {
-		return nil, err
-	}
-	return bat, nil
+	return trySaveQueryResult(reqCtx, ses, mrs)
 }
 
 // Note: for pass the compile quickly. We will remove the comments in the future.
@@ -1472,30 +1322,14 @@ func handleDropProcedure(ses FeSession, execCtx *ExecCtx, dp *tree.DropProcedure
 	return doDropProcedure(execCtx.reqCtx, ses.(*Session), dp)
 }
 
-func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt, proc *process.Process) error {
-	proto := ses.GetMysqlProtocol()
+func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt) error {
 	results, err := doInterpretCall(execCtx.reqCtx, ses.(*Session), call)
 	if err != nil {
 		return err
 	}
 
 	ses.SetMysqlResultSet(nil)
-
-	resp := NewGeneralOkResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus())
-
-	if len(results) == 0 {
-		if err := proto.SendResponse(execCtx.reqCtx, resp); err != nil {
-			return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err)
-		}
-	} else {
-		for i, result := range results {
-			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
-			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i == len(results)-1)
-			if err := proto.SendResponse(execCtx.reqCtx, resp); err != nil {
-				return moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err)
-			}
-		}
-	}
+	execCtx.results = results
 	return nil
 }
 
@@ -1641,8 +1475,8 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 		rows = append(rows, row)
 	}
 
-	bat, err = constructCollationBatch(ses, rows)
-	defer bat.Clean(proc.Mp())
+	bat, _, err = convertRowsIntoBatch(ses.GetMemPool(), mrs.Columns, rows)
+	defer cleanBatch(ses.GetMemPool(), bat)
 	if err != nil {
 		return err
 	}
@@ -1675,22 +1509,22 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 
 		bat.Shrink(sels, false)
 		proc.Mp().PutSels(sels)
-		v0 := vector.MustStrCol(bat.Vecs[0])
-		v1 := vector.MustStrCol(bat.Vecs[1])
+		v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
+		v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
 		v2 := vector.MustFixedCol[int64](bat.Vecs[2])
-		v3 := vector.MustStrCol(bat.Vecs[3])
-		v4 := vector.MustStrCol(bat.Vecs[4])
+		v3, area3 := vector.MustVarlenaRawData(bat.Vecs[3])
+		v4, area4 := vector.MustVarlenaRawData(bat.Vecs[4])
 		v5 := vector.MustFixedCol[int32](bat.Vecs[5])
-		v6 := vector.MustStrCol(bat.Vecs[6])
+		v6, area6 := vector.MustVarlenaRawData(bat.Vecs[6])
 		rows = rows[:len(v0)]
 		for i := range v0 {
-			rows[i][0] = v0[i]
-			rows[i][1] = v1[i]
+			rows[i][0] = v0[i].UnsafeGetString(area0)
+			rows[i][1] = v1[i].UnsafeGetString(area1)
 			rows[i][2] = v2[i]
-			rows[i][3] = v3[i]
-			rows[i][4] = v4[i]
+			rows[i][3] = v3[i].UnsafeGetString(area3)
+			rows[i][4] = v4[i].UnsafeGetString(area4)
 			rows[i][5] = v5[i]
-			rows[i][6] = v6[i]
+			rows[i][6] = v6[i].UnsafeGetString(area6)
 		}
 	}
 
@@ -1703,20 +1537,23 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 		mrs.AddRow(row)
 	}
 
-	// oq := newFakeOutputQueue(mrs)
-	// if err = fillResultSet(oq, bat, ses); err != nil {
-	// 	return err
-	// }
-
 	ses.SetMysqlResultSet(mrs)
-	ses.rs = mysqlColDef2PlanResultColDef(mrs)
 
-	// save query result
-	if openSaveQueryResult(execCtx.reqCtx, ses) {
-		if err := saveQueryResult(execCtx.reqCtx, ses, bat); err != nil {
+	if canSaveQueryResult(execCtx.reqCtx, ses) {
+		//already have the batch
+		ses.rs, _, _, err = mysqlColDef2PlanResultColDef(mrs.Columns)
+		if err != nil {
 			return err
 		}
-		if err := saveQueryResultMeta(execCtx.reqCtx, ses); err != nil {
+
+		// save query result
+		err = saveQueryResult(execCtx.reqCtx, ses,
+			func() ([]*batch.Batch, error) {
+				return []*batch.Batch{bat}, nil
+			},
+			nil,
+		)
+		if err != nil {
 			return err
 		}
 	}
@@ -1732,7 +1569,7 @@ func handleShowSubscriptions(ses FeSession, execCtx *ExecCtx, ss *tree.ShowSubsc
 	return err
 }
 
-func doShowBackendServers(ses *Session) error {
+func doShowBackendServers(ses *Session, execCtx *ExecCtx) error {
 	// Construct the columns.
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -1807,12 +1644,13 @@ func doShowBackendServers(ses *Session) error {
 	} else {
 		route.RouteForCommonTenant(se, nil, appendFn)
 	}
-	return nil
+
+	return trySaveQueryResult(execCtx.reqCtx, ses, mrs)
 }
 
 func handleShowBackendServers(ses FeSession, execCtx *ExecCtx) error {
 	var err error
-	if err := doShowBackendServers(ses.(*Session)); err != nil {
+	if err := doShowBackendServers(ses.(*Session), execCtx); err != nil {
 		return err
 	}
 	return err
@@ -1823,7 +1661,7 @@ func handleEmptyStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.EmptyStmt) erro
 	return err
 }
 
-func GetExplainColumns(ctx context.Context, explainColName string) ([]interface{}, error) {
+func GetExplainColumns(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
 	}
@@ -1834,11 +1672,11 @@ func GetExplainColumns(ctx context.Context, explainColName string) ([]interface{
 		c.SetName(col.Name)
 		err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		columns[i] = c
 	}
-	return columns, err
+	return cols, columns, err
 }
 
 func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*explain.ExplainOptions, error) {
@@ -2239,7 +2077,7 @@ func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeS
 }
 
 func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
-	proto := ses.GetMysqlProtocol()
+	mysqlRrWr := ses.GetResponser().MysqlRrWr()
 	defer func() {
 		err2 := writer.Close()
 		if err == nil {
@@ -2250,15 +2088,15 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	if err != nil {
 		return
 	}
-	err = proto.sendLocalInfileRequest(param.Filepath)
+	err = mysqlRrWr.WriteLocalInfileRequest(param.Filepath)
 	if err != nil {
 		return
 	}
 	start := time.Now()
 	var msg interface{}
-	msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
+	msg, err = mysqlRrWr.Read(goetty.ReadOptions{})
 	if err != nil {
-		proto.SetSequenceID(proto.GetSequenceId() + 1)
+		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
 		}
@@ -2270,12 +2108,12 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 
 	packet, ok := msg.(*Packet)
 	if !ok {
-		proto.SetSequenceID(proto.GetSequenceId() + 1)
+		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
 		err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
 		return
 	}
 
-	proto.SetSequenceID(uint8(packet.SequenceID + 1))
+	mysqlRrWr.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
 	seq := uint8(packet.SequenceID + 1)
 	length := packet.Length
 	if length == 0 {
@@ -2300,11 +2138,11 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
 		readStart := time.Now()
-		msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
+		msg, err = mysqlRrWr.Read(goetty.ReadOptions{})
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 				seq += 1
-				proto.SetSequenceID(seq)
+				mysqlRrWr.SetU8(SEQUENCEID, seq)
 				err = nil
 			}
 			break
@@ -2320,11 +2158,11 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		if !ok {
 			err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
 			seq += 1
-			proto.SetSequenceID(seq)
+			mysqlRrWr.SetU8(SEQUENCEID, seq)
 			break
 		}
 		seq = uint8(packet.SequenceID + 1)
-		proto.SetSequenceID(seq)
+		mysqlRrWr.SetU8(SEQUENCEID, seq)
 		ses.CountPayload(len(packet.Payload))
 
 		writeStart := time.Now()
@@ -2474,6 +2312,10 @@ func executeStmtWithWorkspace(ses FeSession,
 
 	txnOp := ses.GetTxnHandler().GetTxn()
 
+	//refresh txn id
+	ses.SetTxnId(txnOp.Txn().ID)
+	ses.SetStaticTxnId(txnOp.Txn().ID)
+
 	//refresh proc txnOp
 	execCtx.proc.TxnOperator = txnOp
 
@@ -2573,9 +2415,7 @@ func executeStmt(ses *Session,
 ) (err error) {
 	ses.EnterFPrint(8)
 	defer ses.ExitFPrint(8)
-	if txw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-		ses.GetTxnCompileCtx().tcw = txw
-	}
+	ses.GetTxnCompileCtx().tcw = execCtx.cw
 
 	// record goroutine info when ddl stmt run timeout
 	switch execCtx.stmt.(type) {
@@ -2655,9 +2495,7 @@ func executeStmt(ses *Session,
 
 	defer func() {
 		// Serialize the execution plan as json
-		if cwft, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(execCtx.reqCtx)
-		}
+		_ = execCtx.cw.RecordExecPlan(execCtx.reqCtx)
 	}()
 
 	cmpBegin = time.Now()
@@ -2729,7 +2567,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
 	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
-	proto := ses.GetMysqlProtocol()
+	resper := ses.GetResponser()
 	ses.SetSql(input.getSql())
 
 	//the ses.GetUserName returns the user_name with the account_name.
@@ -2757,7 +2595,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SessionInfo = process.SessionInfo{
 		User:                 ses.GetUserName(),
 		Host:                 getGlobalPu().SV.Host,
-		ConnectionID:         uint64(proto.ConnectionID()),
+		ConnectionID:         uint64(resper.GetU32(CONNID)),
 		Database:             ses.GetDatabaseName(),
 		Version:              makeServerVersion(getGlobalPu(), serverVersion.Load().(string)),
 		TimeZone:             ses.GetTimeZone(),
@@ -2836,6 +2674,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	defer func() {
 		ses.SetMysqlResultSet(nil)
+		ses.rs = nil
+		ses.p = nil
 	}()
 
 	canCache := true
@@ -2853,21 +2693,19 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 
 	for i, cw := range cws {
-		if cwft, ok := cw.(*TxnComputationWrapper); ok {
-			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
-				cwft.stmt.GetQueryType() == tree.QueryTypeOth ||
-				cwft.stmt.GetQueryType() == tree.QueryTypeTCL {
-				if _, ok := cwft.stmt.(*tree.SetVar); !ok {
-					ses.cleanCache()
-				}
-				canCache = false
+		if cw.GetAst().GetQueryType() == tree.QueryTypeDDL || cw.GetAst().GetQueryType() == tree.QueryTypeDCL ||
+			cw.GetAst().GetQueryType() == tree.QueryTypeOth ||
+			cw.GetAst().GetQueryType() == tree.QueryTypeTCL {
+			if _, ok := cw.GetAst().(*tree.SetVar); !ok {
+				ses.cleanCache()
 			}
+			canCache = false
 		}
 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		ses.sentRows.Store(int64(0))
 		ses.writeCsvBytes.Store(int64(0))
-		proto.ResetStatistics() // move from getDataFromPipeline, for record column fields' data
+		resper.ResetStatistics() // move from getDataFromPipeline, for record column fields' data
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
 		var err2 error
@@ -2923,7 +2761,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.sqlOfStmt = sqlRecord[i]
 		execCtx.cw = cw
 		execCtx.proc = proc
-		execCtx.proto = proto
+		execCtx.resper = resper
 		execCtx.ses = ses
 		execCtx.cws = cws
 		execCtx.input = input
@@ -2939,13 +2777,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		plans := make([]*plan.Plan, len(cws))
 		stmts := make([]tree.Statement, len(cws))
 		for i, cw := range cws {
-			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				if checkNodeCanCache(cwft.plan) {
-					plans[i] = cwft.plan
-					stmts[i] = cwft.stmt
-				} else {
-					return nil
-				}
+			if checkNodeCanCache(cw.Plan()) {
+				plans[i] = cw.Plan()
+				stmts[i] = cw.GetAst()
+			} else {
+				return nil
 			}
 			cw.Clear()
 		}
@@ -3141,7 +2977,7 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 
 	sql := fmt.Sprintf("execute %s", stmtName)
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
-	err = ses.GetMysqlProtocol().ParseExecuteData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	err = ses.GetResponser().MysqlRrWr().ParseExecuteData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
 		return "", nil, err
 	}
@@ -3166,7 +3002,7 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 	sql := fmt.Sprintf("send long data for stmt %s", stmtName)
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 
-	err = ses.GetMysqlProtocol().ParseSendLongData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	err = ses.GetResponser().MysqlRrWr().ParseSendLongData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
 		return err
 	}
@@ -3489,7 +3325,7 @@ func handleSetOption(ses *Session, execCtx *ExecCtx, data []byte) (err error) {
 	if len(data) < 2 {
 		return moerr.NewInternalError(execCtx.reqCtx, "invalid cmd_set_option data length")
 	}
-	cap := ses.GetMysqlProtocol().GetCapability()
+	cap := ses.GetResponser().MysqlRrWr().GetU32(CAPABILITY)
 	switch binary.LittleEndian.Uint16(data[:2]) {
 	case 0:
 		// MO do not support CLIENT_MULTI_STATEMENTS in prepare, so do nothing here(Like MySQL)
@@ -3498,7 +3334,7 @@ func handleSetOption(ses *Session, execCtx *ExecCtx, data []byte) (err error) {
 
 	case 1:
 		cap &^= CLIENT_MULTI_STATEMENTS
-		ses.GetMysqlProtocol().SetCapability(cap)
+		ses.GetResponser().MysqlRrWr().SetU32(CAPABILITY, cap)
 
 	default:
 		return moerr.NewInternalError(execCtx.reqCtx, "invalid cmd_set_option data")

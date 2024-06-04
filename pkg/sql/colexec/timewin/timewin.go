@@ -100,16 +100,18 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := arg.ctr
 	var err error
 	var bat *batch.Batch
+	var msg *process.RegisterMessage
 
 	result := vm.NewCallResult()
 	for {
 
 		switch ctr.status {
 		case dataTag:
-			bat, _, err = ctr.ReceiveFromAllRegs(anal)
-			if err != nil {
-				return result, err
+			msg = ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
+			bat := msg.Batch
 			if bat == nil {
 				if ctr.cur == hasGrow {
 					ctr.status = evalLastCur
@@ -131,10 +133,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = evalTag
 		case initTag:
-			bat, _, err = ctr.ReceiveFromAllRegs(anal)
-			if err != nil {
-				return result, err
+			msg = ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
+			bat = msg.Batch
 			if bat == nil {
 				result.Batch = nil
 				result.Status = vm.ExecStop

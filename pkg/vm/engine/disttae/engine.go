@@ -21,8 +21,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/panjf2000/ants/v2"
-	_ "go.uber.org/automaxprocs"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -49,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -123,6 +125,11 @@ func New(
 		WithLogtailUpdateStatsThreshold(threshold),
 	)
 
+	e.messageCenter = &process.MessageCenter{
+		StmtIDToBoard: make(map[uuid.UUID]*process.MessageBoard, 64),
+		RwMutex:       &sync.Mutex{},
+	}
+
 	if err := e.init(ctx); err != nil {
 		panic(err)
 	}
@@ -180,56 +187,6 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 
 	txn.deletedDatabaseMap.Delete(key)
 	return nil
-}
-
-func (e *Engine) DatabaseByAccountID(
-	accountID uint32,
-	name string,
-	op client.TxnOperator) (engine.Database, error) {
-	logDebugf(op.Txn(), "Engine.DatabaseByAccountID %s", name)
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
-		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
-	}
-	if v, ok := txn.databaseMap.Load(databaseKey{name: name, accountId: accountID}); ok {
-		return v.(*txnDatabase), nil
-	}
-	if name == catalog.MO_CATALOG {
-		db := &txnDatabase{
-			op:           op,
-			databaseId:   catalog.MO_CATALOG_ID,
-			databaseName: name,
-		}
-		return db, nil
-	}
-	key := &cache.DatabaseItem{
-		Name:      name,
-		AccountId: accountID,
-		Ts:        txn.op.SnapshotTS(),
-	}
-	var catalog *cache.CatalogCache
-	var err error
-	if !txn.op.IsSnapOp() {
-		catalog = e.getLatestCatalogCache()
-	} else {
-		catalog, err = e.getOrCreateSnapCatalogCache(
-			context.Background(),
-			types.TimestampToTS(txn.op.SnapshotTS()))
-		if err != nil {
-			return nil, err
-		}
-	}
-	if ok := catalog.GetDatabase(key); !ok {
-		return nil, moerr.GetOkExpectedEOB()
-	}
-	return &txnDatabase{
-		op:                op,
-		databaseName:      name,
-		databaseId:        key.Id,
-		rowId:             key.Rowid,
-		databaseType:      key.Typ,
-		databaseCreateSql: key.CreateSql,
-	}, nil
 }
 
 func (e *Engine) Database(ctx context.Context, name string,
@@ -531,7 +488,17 @@ func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error
 	return e.idGen.AllocateIDByKey(ctx, key)
 }
 
-func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
+func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) (err error) {
+	defer func() {
+		if err != nil {
+			if strings.Contains(name, "sysbench_db") {
+				logutil.Errorf("delete database %s failed: %v", name, err)
+				logutil.Errorf("stack: %s", stack.Callers(3))
+				logutil.Errorf("txnmeta %v", op.Txn().DebugString())
+			}
+		}
+	}()
+
 	var databaseId uint64
 	var rowId types.Rowid
 	//var db *txnDatabase
@@ -817,4 +784,8 @@ func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error 
 
 func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return e.globalStats.Get(ctx, key, sync)
+}
+
+func (e *Engine) GetMessageCenter() any {
+	return e.messageCenter
 }

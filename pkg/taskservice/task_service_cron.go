@@ -218,6 +218,10 @@ func (j *cronJob) doRun() {
 		j.s.rt.Logger().Error("failed to query cron task", zap.Error(err))
 		return
 	}
+	if len(cronTasks) == 0 {
+		j.s.rt.Logger().Error("cron task not found", zap.String("task", j.task.DebugString()))
+		return
+	}
 	if len(cronTasks) != 1 {
 		j.s.rt.Logger().Panic(fmt.Sprintf("query cron_task_id = %d, return %d records", j.task.ID, len(cronTasks)))
 		return

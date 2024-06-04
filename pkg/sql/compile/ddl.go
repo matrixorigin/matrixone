@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1290,12 +1291,26 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	}
 
-	return maybeCreateAutoIncrement(
+	err = maybeCreateAutoIncrement(
 		c.ctx,
 		dbSource,
 		qry.GetTableDef(),
 		c.proc.TxnOperator,
-		nil)
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+
+	if len(partitionTables) == 0 {
+		return nil
+	}
+
+	return shardservice.GetService().Create(
+		c.ctx,
+		qry.GetTableDef().TblId,
+		c.proc.TxnOperator,
+	)
 }
 
 func checkIndexInitializable(dbName string, tblName string) bool {
@@ -2148,6 +2163,14 @@ func (s *Scope) DropTable(c *Compile) error {
 			if err != nil {
 				return err
 			}
+
+			if err := shardservice.GetService().Delete(
+				c.ctx,
+				rel.GetTableID(c.ctx),
+				c.proc.TxnOperator,
+			); err != nil {
+				return err
+			}
 		}
 
 	} else {
@@ -2174,6 +2197,14 @@ func (s *Scope) DropTable(c *Compile) error {
 				rel.GetTableID(c.ctx),
 				c.proc.TxnOperator)
 			if err != nil {
+				return err
+			}
+
+			if err := shardservice.GetService().Delete(
+				c.ctx,
+				rel.GetTableID(c.ctx),
+				c.proc.TxnOperator,
+			); err != nil {
 				return err
 			}
 		}

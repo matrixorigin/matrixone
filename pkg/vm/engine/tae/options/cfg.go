@@ -24,7 +24,7 @@ const (
 	defaultRpcMaxMessageSize      = 16 * mpool.KB
 	defaultRpcEnableChecksum      = true
 	defaultLogtailCollectInterval = 50 * time.Millisecond
-	defaultResponseSendTimeout    = 10 * time.Second
+	defaultResponseSendTimeout    = 30 * time.Second
 	defaultRpcStreamPoisonTime    = 5 * time.Second
 )
 
@@ -57,6 +57,7 @@ type GCCfg struct {
 	GCTTL          time.Duration `toml:"gc-ttl"`
 	ScanGCInterval time.Duration `toml:"scan-gc-interval"`
 	DisableGC      bool          `toml:"disable-gc"`
+	CheckGC        bool          `toml:"check-gc"`
 }
 
 type CatalogCfg struct {

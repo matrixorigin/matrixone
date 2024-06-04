@@ -70,7 +70,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, nil
 
-	case reg.Ch <- bat:
+	case reg.Ch <- process.NewRegMsg(bat):
 		return result, nil
 	}
 }

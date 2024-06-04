@@ -36,6 +36,10 @@ const (
 	// Classes with size larger than smallClassCap will always buffering MADV_DONTNEED-advised objects.
 	// MADV_DONTNEED-advised objects consume no memory.
 	maxClassSize = 32 * GB
+
+	maxBuffer1Cap = 256
+	// objects in buffer2 will be MADV_DONTNEED-advised and will not occupy RSS, so it's safe to use a large number
+	buffer2Cap = 1024
 )
 
 type ClassAllocator struct {
@@ -47,14 +51,16 @@ type Class struct {
 	allocator *fixedSizeMmapAllocator
 }
 
-func NewClassAllocator() *ClassAllocator {
+func NewClassAllocator(
+	checkFraction uint32,
+) *ClassAllocator {
 	ret := &ClassAllocator{}
 
 	// init classes
 	for size := uint64(1); size <= maxClassSize; size *= 2 {
 		ret.classes = append(ret.classes, Class{
 			size:      size,
-			allocator: newFixedSizedAllocator(size),
+			allocator: newFixedSizedAllocator(size, checkFraction),
 		})
 	}
 
@@ -83,33 +89,44 @@ func (c *ClassAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator) {
 }
 
 type fixedSizeMmapAllocator struct {
-	size uint64
+	size          uint64
+	checkFraction uint32
 	// buffer1 buffers objects
 	buffer1 chan unsafe.Pointer
 	// buffer2 buffers MADV_DONTNEED objects
 	buffer2 chan unsafe.Pointer
 }
 
-func newFixedSizedAllocator(size uint64) *fixedSizeMmapAllocator {
+func newFixedSizedAllocator(
+	size uint64,
+	checkFraction uint32,
+) *fixedSizeMmapAllocator {
 	// if size is larger than smallClassCap, num1 will be zero, buffer1 will be empty
 	num1 := smallClassCap / size
-	if num1 > 256 {
+	if num1 > maxBuffer1Cap {
 		// don't buffer too much, since chans with larger buffer consume more memory
-		num1 = 256
+		num1 = maxBuffer1Cap
 	}
-	// objects in buffer2 will be MADV_DONTNEED-advised and will not occupy RSS, so it's safe to use a large number
-	num2 := 1024
 	ret := &fixedSizeMmapAllocator{
-		size:    size,
-		buffer1: make(chan unsafe.Pointer, num1),
-		buffer2: make(chan unsafe.Pointer, num2),
+		size:          size,
+		checkFraction: checkFraction,
+		buffer1:       make(chan unsafe.Pointer, num1),
+		buffer2:       make(chan unsafe.Pointer, buffer2Cap),
 	}
 	return ret
 }
 
 var _ Allocator = new(fixedSizeMmapAllocator)
 
-func (f *fixedSizeMmapAllocator) Allocate(_ uint64) (unsafe.Pointer, Deallocator) {
+func (f *fixedSizeMmapAllocator) Allocate(_ uint64) (ptr unsafe.Pointer, dec Deallocator) {
+	if f.checkFraction > 0 {
+		defer func() {
+			if fastrand()%f.checkFraction == 0 {
+				dec = newCheckedDeallocator(dec)
+			}
+		}()
+	}
+
 	select {
 
 	case ptr := <-f.buffer1:
@@ -149,6 +166,18 @@ func (f *fixedSizeMmapAllocator) Allocate(_ uint64) (unsafe.Pointer, Deallocator
 var _ Deallocator = new(fixedSizeMmapAllocator)
 
 func (f *fixedSizeMmapAllocator) Deallocate(ptr unsafe.Pointer) {
+
+	if f.checkFraction > 0 &&
+		fastrand()%f.checkFraction == 0 {
+		// do not reuse to detect use-after-free
+		if err := unix.Munmap(
+			unsafe.Slice((*byte)(ptr), f.size),
+		); err != nil {
+			panic(err)
+		}
+		return
+	}
+
 	select {
 
 	case f.buffer1 <- ptr:

@@ -211,9 +211,9 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	proc.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
 	proc.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:          backSes.proto.GetUserName(),
+		User:          backSes.respr.GetStr(USERNAME),
 		Host:          getGlobalPu().SV.Host,
-		Database:      backSes.proto.GetDatabaseName(),
+		Database:      backSes.respr.GetStr(DBNAME),
 		Version:       makeServerVersion(getGlobalPu(), serverVersion.Load().(string)),
 		TimeZone:      backSes.GetTimeZone(),
 		StorageEngine: getGlobalPu().StorageEngine,
@@ -250,9 +250,9 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	execCtx.input = input
 
 	proc.SessionInfo.User = userNameOnly
-	cws, err := GetComputationWrapperInBack(execCtx, backSes.proto.GetDatabaseName(),
+	cws, err := GetComputationWrapperInBack(execCtx, backSes.respr.GetStr(DBNAME),
 		input,
-		backSes.proto.GetUserName(),
+		backSes.respr.GetStr(USERNAME),
 		getGlobalPu().StorageEngine,
 		proc, backSes)
 
@@ -457,7 +457,6 @@ var NewBackgroundExec = func(
 	backSes := &backSession{
 		feSessionImpl: feSessionImpl{
 			pool:           mp,
-			proto:          &FakeProtocol{},
 			buf:            buffer.New(),
 			stmtProfile:    process.StmtProfile{},
 			tenant:         nil,
@@ -471,6 +470,7 @@ var NewBackgroundExec = func(
 			gSysVars:       GSysVariables,
 			label:          make(map[string]string),
 			timeZone:       time.Local,
+			respr:          defResper,
 		},
 	}
 	backSes.uuid, _ = uuid.NewV7()
@@ -524,9 +524,9 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 	// you can get the result batch by calling GetResultBatches()
 	ses.SetOutputCallback(batchFetcher)
 	//2. replace protocol by FakeProtocol.
-	// Any response yielded during running query will be dropped by the FakeProtocol.
-	// The client will not receive any response from the FakeProtocol.
-	prevProto := ses.ReplaceProtocol(&FakeProtocol{})
+	// Any response yielded during running query will be dropped by the NullResp.
+	// The client will not receive any response from the NullResp.
+	prevProto := ses.ReplaceResponser(&NullResp{})
 	//3. replace the derived stmt
 	prevDerivedStmt := ses.ReplaceDerivedStmt(true)
 	// inherit database
@@ -542,7 +542,7 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 		ses.GetTxnHandler().SetOptionBits(prevOptionBits)
 		ses.GetTxnHandler().SetServerStatus(prevServerStatus)
 		ses.SetOutputCallback(getDataFromPipeline)
-		ses.ReplaceProtocol(prevProto)
+		ses.ReplaceResponser(prevProto)
 		if ses.GetTxnHandler() == nil {
 			panic("need txn handler 4")
 		}
@@ -561,8 +561,7 @@ func fakeDataSetFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batc
 	}
 
 	back := handle.(*backSession)
-	oq := newFakeOutputQueue(back.mrs)
-	err := fillResultSet(execCtx.reqCtx, oq, dataSet, back)
+	err := fillResultSet(execCtx.reqCtx, dataSet, back, back.mrs)
 	if err != nil {
 		return err
 	}
@@ -570,18 +569,17 @@ func fakeDataSetFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batc
 	return nil
 }
 
-func fillResultSet(ctx context.Context, oq outputPool, dataSet *batch.Batch, ses FeSession) error {
+func fillResultSet(ctx context.Context, dataSet *batch.Batch, ses FeSession, mrs *MysqlResultSet) error {
 	n := dataSet.RowCount()
 	for j := 0; j < n; j++ { //row index
-		//needCopyBytes = true. we need to copy the bytes from the batch.Batch
-		//to avoid the data being changed after the batch.Batch returned to the
-		//pipeline.
-		_, err := extractRowFromEveryVector(ctx, ses, dataSet, j, oq, true)
+		row := make([]any, mrs.GetColumnCount())
+		err := extractRowFromEveryVector(ctx, ses, dataSet, j, row)
 		if err != nil {
 			return err
 		}
+		mrs.AddRow(row)
 	}
-	return oq.flush()
+	return nil
 }
 
 // batchFetcher2 gets the result batches from the pipeline and save the origin batches in the session.
@@ -656,6 +654,10 @@ func (backSes *backSession) SendRows() int64 {
 	return 0
 }
 
+func (backSes *backSession) GetConfig(ctx context.Context, dbName, varName string) (any, error) {
+	return nil, moerr.NewInternalError(ctx, "do not support get config in background exec")
+}
+
 func (backSes *backSession) GetTxnInfo() string {
 	txnH := backSes.GetTxnHandler()
 	if txnH == nil {
@@ -678,7 +680,7 @@ func (backSes *backSession) getNextProcessId() string {
 		temporary method:
 		routineId + sqlCount
 	*/
-	routineId := backSes.GetMysqlProtocol().ConnectionID()
+	routineId := backSes.respr.GetU32(CONNID)
 	return fmt.Sprintf("%d%d", routineId, backSes.GetSqlCount())
 }
 
@@ -792,6 +794,45 @@ func (backSes *backSession) GetDebugString() string {
 		return backSes.upstream.GetDebugString()
 	}
 	return ""
+}
+
+func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
+	backSes.EnterFPrint(116)
+	defer backSes.ExitFPrint(116)
+	var txnOp TxnOperator
+	if backSes.GetTxnHandler() != nil {
+		txnOp = backSes.GetTxnHandler().GetTxn()
+	}
+
+	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, backSes.GetTxnHandler().GetConnCtx(), txnOp)
+	callback := fakeDataSetFetcher2
+
+	newbackSes := &backSession{
+		feSessionImpl: feSessionImpl{
+			pool:           backSes.pool,
+			respr:          defResper,
+			buf:            buffer.New(),
+			stmtProfile:    process.StmtProfile{},
+			tenant:         nil,
+			txnHandler:     txnHandler,
+			txnCompileCtx:  InitTxnCompilerContext(""),
+			mrs:            nil,
+			outputCallback: callback,
+			allResultSet:   nil,
+			resultBatches:  nil,
+			derivedStmt:    false,
+			gSysVars:       GSysVariables,
+			label:          make(map[string]string),
+			timeZone:       time.Local,
+		},
+	}
+	newbackSes.uuid, _ = uuid.NewV7()
+	bh := &backExec{
+		backSes: newbackSes,
+	}
+	//the derived statement execute in a shared transaction in background session
+	bh.backSes.ReplaceDerivedStmt(true)
+	return bh
 }
 
 func (backSes *backSession) GetUserDefinedVar(name string) (SystemVariableType, *UserDefinedVar, error) {

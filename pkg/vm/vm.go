@@ -74,9 +74,9 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 			MaxParallel: ins[i].MaxParallel,
 		}
 		switch ins[i].Op {
-		case HashBuild, ShuffleBuild, IndexBuild, Restrict, MergeGroup, MergeOrder:
+		case HashBuild, ShuffleBuild, IndexBuild, Filter, MergeGroup, MergeOrder:
 			isMinor := true
-			if ins[i].Op == Restrict {
+			if ins[i].Op == Filter {
 				if ins[0].Op != TableScan && ins[0].Op != External {
 					isMinor = false // restrict operator is minor only for scan
 				}
@@ -97,7 +97,7 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 				info.ParallelIdx = -1
 			}
 
-		case TableScan, External, Order, Window, Group, Join, LoopJoin, Left, LoopLeft, Single, LoopSingle, Semi, RightSemi, LoopSemi, Anti, RightAnti, LoopAnti, Mark, LoopMark, Product:
+		case TableScan, External, Order, Window, Group, Join, LoopJoin, Left, LoopLeft, Single, LoopSingle, Semi, RightSemi, LoopSemi, Anti, RightAnti, LoopAnti, Mark, LoopMark, Product, ProductL2:
 			info.ParallelMajor = true
 			if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) {
 				if pidx, ok := idxMapMajor[info.Idx]; ok {

@@ -56,6 +56,7 @@ type Analyze interface {
 	ChildrenCallStop(time.Time)
 	Start()
 	Alloc(int64)
+	InputBlock()
 	Input(*batch.Batch, bool)
 	Output(*batch.Batch, bool)
 	WaitStop(time.Time)
@@ -68,10 +69,29 @@ type Analyze interface {
 	AddInsertTime(t time.Time)
 }
 
+var (
+	NormalEndRegisterMessage = NewRegMsg(nil)
+)
+
+// RegisterMessage channel data
+// Err == nil means pipeline finish with error
+// Batch == nil means pipeline finish without error
+// Batch != nil means pipeline is running
+type RegisterMessage struct {
+	Batch *batch.Batch
+	Err   error
+}
+
+func NewRegMsg(bat *batch.Batch) *RegisterMessage {
+	return &RegisterMessage{
+		Batch: bat,
+	}
+}
+
 // WaitRegister channel
 type WaitRegister struct {
 	Ctx context.Context
-	Ch  chan *batch.Batch
+	Ch  chan *RegisterMessage
 }
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
@@ -143,7 +163,8 @@ type AnalyzeInfo struct {
 	// WaitTimeConsumed, time taken by the node waiting for channel in milliseconds
 	WaitTimeConsumed int64
 	// InputSize, data size accepted by node
-	InputSize int64
+	InputSize   int64
+	InputBlocks int64
 	// OutputSize, data size output by node
 	OutputSize int64
 	// MemorySize, memory alloc by node

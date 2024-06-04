@@ -35,7 +35,7 @@ const (
 	Output
 	Offset
 	Product
-	Restrict
+	Filter
 	Dispatch
 	Connector
 	Projection
@@ -106,6 +106,7 @@ const (
 	Shuffle
 
 	Sample
+	ProductL2
 )
 
 // Instruction contains relational algebra

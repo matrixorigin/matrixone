@@ -19,7 +19,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,10 +40,23 @@ import (
 )
 
 const DefaultBlockMaxRows = 8192
-const BlockNumForceOneCN = 200
+const blockThresholdForTpQuery = 32
+const costThresholdForTpQuery = 240000
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
+
+var ncpu = runtime.GOMAXPROCS(0)
+var BlockThresholdForOneCN = ncpu * blockThresholdForTpQuery
+var costThresholdForOneCN = ncpu * costThresholdForTpQuery
+
+type ExecType int
+
+const (
+	ExecTypeTP ExecType = iota
+	ExecTypeAP_ONECN
+	ExecTypeAP_MULTICN
+)
 
 type StatsCache struct {
 	cache map[uint64]*pb.StatsInfo
@@ -989,16 +1004,21 @@ func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error
 	return nil
 }
 
-func recalcStatsByRuntimeFilter(node *plan.Node, joinNode *plan.Node, runtimeFilterSel float64) {
-	if node.NodeType != plan.Node_TABLE_SCAN {
+func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builder *QueryBuilder) {
+	if scanNode.NodeType != plan.Node_TABLE_SCAN {
 		return
 	}
-	node.Stats.Cost *= runtimeFilterSel
-	node.Stats.Outcnt *= runtimeFilterSel
-	if node.Stats.Cost < 1 {
-		node.Stats.Cost = 1
+	if joinNode.NodeType != plan.Node_JOIN && joinNode.NodeType != plan.Node_FUZZY_FILTER {
+		return
 	}
-	node.Stats.BlockNum = int32(node.Stats.Outcnt/2) + 1
+	runtimeFilterSel := builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity
+	scanNode.Stats.Cost *= runtimeFilterSel
+	scanNode.Stats.Outcnt *= runtimeFilterSel
+	if scanNode.Stats.Cost < 1 {
+		scanNode.Stats.Cost = 1
+	}
+	scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/2) + 1
+	scanNode.Stats.Selectivity = andSelectivity(scanNode.Stats.Selectivity, runtimeFilterSel)
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
@@ -1222,16 +1242,30 @@ func orSelectivity(s1, s2 float64) float64 {
 	}
 }
 
-const blockThresholdForTpQuery = 16
-
-func IsTpQuery(qry *plan.Query) bool {
+func GetExecType(qry *plan.Query) ExecType {
+	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		stats := node.Stats
-		if stats == nil || stats.BlockNum > blockThresholdForTpQuery {
-			return false
+		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
+			return ExecTypeAP_MULTICN
+		}
+		if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
+			ret = ExecTypeAP_ONECN
 		}
 	}
-	return true
+	return ret
+}
+
+func GetPlanTitle(qry *plan.Query) string {
+	switch GetExecType(qry) {
+	case ExecTypeTP:
+		return "TP QURERY PLAN"
+	case ExecTypeAP_ONECN:
+		return "AP QUERY PLAN ON ONE CN(" + strconv.Itoa(ncpu) + " core)"
+	case ExecTypeAP_MULTICN:
+		return "AP QUERY PLAN ON MULTICN(" + strconv.Itoa(ncpu) + " core)"
+	}
+	return "QUERY PLAN"
 }
 
 func ReCalcQueryStats(builder *QueryBuilder, query *plan.Query) {

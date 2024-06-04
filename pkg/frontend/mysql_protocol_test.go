@@ -40,6 +40,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -52,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -172,7 +174,8 @@ func TestKill(t *testing.T) {
 	//ion method: mysql -h 127.0.0.1 -P 6001 -udump -p
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	var conn1, conn2 *sql.DB
+	var dbConnPool *sql.DB
+	var conn1, conn2 *sql.Conn
 	var err error
 	var connIdRow *sql.Row
 
@@ -180,16 +183,18 @@ func TestKill(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second * 10}).AnyTimes()
-	wp := newTestWorkspace()
 
-	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-	txnOp.EXPECT().GetWorkspace().Return(wp).AnyTimes()
-	txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
-	txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
-	txnOp.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOp, nil).AnyTimes()
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, commitTS any, options ...any) (client.TxnOperator, error) {
+		wp := newTestWorkspace()
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		txnOp.EXPECT().GetWorkspace().Return(wp).AnyTimes()
+		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOp.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		return txnOp, nil
+	}).AnyTimes()
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
@@ -273,22 +278,27 @@ func TestKill(t *testing.T) {
 		echoServer(getGlobalRtMgr().Handler, getGlobalRtMgr(), NewSqlCodec())
 	}()
 
+	dbConnPool, err = openDbConn(t, 6001)
+	require.NoError(t, err)
+	dbConnPool.SetConnMaxLifetime(time.Minute * 3)
+	dbConnPool.SetMaxIdleConns(2)
+	dbConnPool.SetMaxOpenConns(2)
 	logutil.Infof("open conn1")
 	time.Sleep(time.Second * 2)
-	conn1, err = openDbConn(t, 6001)
+	conn1, err = dbConnPool.Conn(ctx)
 	require.NoError(t, err)
 	logutil.Infof("open conn1 done")
 
 	logutil.Infof("open conn2")
 	time.Sleep(time.Second * 2)
-	conn2, err = openDbConn(t, 6001)
+	conn2, err = dbConnPool.Conn(ctx)
 	require.NoError(t, err)
 	logutil.Infof("open conn2 done")
 
 	logutil.Infof("get the connection id of conn1")
 	//get the connection id of conn1
 	var conn1Id uint64
-	connIdRow = conn1.QueryRow(sql1)
+	connIdRow = conn1.QueryRowContext(ctx, sql1)
 	err = connIdRow.Scan(&conn1Id)
 	require.NoError(t, err)
 	logutil.Infof("get the connection id of conn1 done")
@@ -296,7 +306,7 @@ func TestKill(t *testing.T) {
 	logutil.Infof("get the connection id of conn2")
 	//get the connection id of conn2
 	var conn2Id uint64
-	connIdRow = conn2.QueryRow(sql1)
+	connIdRow = conn2.QueryRowContext(ctx, sql1)
 	err = connIdRow.Scan(&conn2Id)
 	require.NoError(t, err)
 	logutil.Infof("get the connection id of conn2 done")
@@ -311,7 +321,7 @@ func TestKill(t *testing.T) {
 		defer wgSleep.Done()
 		var resultId int
 		logutil.Infof("conn1 sleep(30)")
-		connIdRow = conn1.QueryRow(sql5)
+		connIdRow = conn1.QueryRowContext(ctx, sql5)
 		//find race on err here
 		err := connIdRow.Scan(&resultId)
 		require.NoError(t, err)
@@ -325,7 +335,7 @@ func TestKill(t *testing.T) {
 	//conn2 kills the query
 	sql3 = fmt.Sprintf("kill query %d;", conn1Id)
 	noResultSet[sql3] = true
-	_, err = conn2.Exec(sql3)
+	_, err = conn2.ExecContext(ctx, sql3)
 	require.NoError(t, err)
 	logutil.Infof("conn2 kill query on conn1: KILL query done")
 
@@ -344,8 +354,8 @@ func TestKill(t *testing.T) {
 		defer wgSleep2.Done()
 		var resultId int
 		logutil.Infof("conn1 sleep(30) 2")
-		connIdRow = conn1.QueryRow(sql6)
-		err = connIdRow.Scan(&resultId)
+		connIdRow = conn1.QueryRowContext(ctx, sql6)
+		err := connIdRow.Scan(&resultId)
 		require.NoError(t, err)
 		logutil.Infof("conn1 sleep(30) 2 done")
 	}()
@@ -357,7 +367,7 @@ func TestKill(t *testing.T) {
 	//conn2 kills the connection 1
 	sql2 = fmt.Sprintf("kill %d;", conn1Id)
 	noResultSet[sql2] = true
-	_, err = conn2.Exec(sql2)
+	_, err = conn2.ExecContext(ctx, sql2)
 	require.NoError(t, err)
 	logutil.Infof("conn2 kill conn1 : KILL connection done")
 
@@ -371,7 +381,7 @@ func TestKill(t *testing.T) {
 	//==============================
 	//conn 1 is killed by conn2
 	//check conn1 is disconnected or not
-	err = conn1.Ping()
+	err = conn1.PingContext(ctx)
 	require.Error(t, err)
 	logutil.Infof("conn1 test itself after being killed done")
 
@@ -381,7 +391,7 @@ func TestKill(t *testing.T) {
 	//conn2 kills itself
 	sql4 = fmt.Sprintf("kill %d;", conn2Id)
 	noResultSet[sql4] = true
-	_, err = conn2.Exec(sql4)
+	_, err = conn2.ExecContext(ctx, sql4)
 	require.NoError(t, err)
 	logutil.Infof("conn2 kill itself done")
 
@@ -392,8 +402,9 @@ func TestKill(t *testing.T) {
 
 	logutil.Infof("close conn1,conn2")
 	//close the connection
-	closeDbConn(t, conn1)
-	closeDbConn(t, conn2)
+	require.NoError(t, conn1.Close())
+	require.NoError(t, conn2.Close())
+	require.NoError(t, dbConnPool.Close())
 	logutil.Infof("close conn1,conn2 done")
 }
 
@@ -2390,7 +2401,7 @@ func Test_resultset(t *testing.T) {
 
 		res := make9ColumnsResultSet()
 
-		err = proto.SendResultSetTextBatchRowSpeedup(res, uint64(len(res.Data)))
+		err = proto.WriteResultSetRow(res, uint64(len(res.Data)))
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -2462,7 +2473,7 @@ func Test_resultset(t *testing.T) {
 
 		res := make9ColumnsResultSet()
 
-		err = proto.SendResultSetTextBatchRowSpeedup(res, 0)
+		err = proto.WriteResultSetRow(res, 0)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -2835,9 +2846,205 @@ func TestMysqlProtocolImpl_Close(t *testing.T) {
 	}
 
 	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-	proto.Quit()
+	proto.Close()
 	assert.Nil(t, proto.GetSalt())
 	assert.Nil(t, proto.strconvBuffer)
 	assert.Nil(t, proto.lenEncBuffer)
 	assert.Nil(t, proto.binaryNullBuffer)
+}
+
+var _ MysqlRrWr = &testMysqlWriter{}
+
+// testMysqlWriter works for the background transaction that does not use the network protocol.
+type testMysqlWriter struct {
+	username string
+	database string
+	ioses    goetty.IOSession
+}
+
+func (fp *testMysqlWriter) GetStr(PropertyID) string {
+	return ""
+}
+func (fp *testMysqlWriter) SetStr(PropertyID, string) {}
+func (fp *testMysqlWriter) SetU32(PropertyID, uint32) {}
+func (fp *testMysqlWriter) GetU32(PropertyID) uint32 {
+	return 0
+}
+func (fp *testMysqlWriter) SetU8(PropertyID, uint8) {}
+func (fp *testMysqlWriter) GetU8(PropertyID) uint8 {
+	return 0
+}
+func (fp *testMysqlWriter) SetBool(PropertyID, bool) {}
+func (fp *testMysqlWriter) GetBool(PropertyID) bool {
+	return false
+}
+
+func (fp *testMysqlWriter) Write(ctx *ExecCtx, batch *batch.Batch) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteHandshake() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteEOF(warnings, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteEOFIF(warnings uint16, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteEOFOrOK(warnings uint16, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteERR(errorCode uint16, sqlState, errorMessage string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteLengthEncodedNumber(u uint64) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteColumnDef(ctx context.Context, column Column, i int) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteTextRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteBinaryRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteResponse(ctx context.Context, response *Response) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) Read(options goetty.ReadOptions) (interface{}, error) {
+	return fp.ioses.Read(options)
+}
+
+func (fp *testMysqlWriter) UpdateCtx(ctx context.Context) {
+
+}
+
+func (fp *testMysqlWriter) GetCapability() uint32 {
+	return DefaultCapability
+}
+
+func (fp *testMysqlWriter) SetCapability(uint32) {
+
+}
+
+func (fp *testMysqlWriter) IsTlsEstablished() bool {
+	return true
+}
+
+func (fp *testMysqlWriter) SetTlsEstablished() {
+
+}
+
+func (fp *testMysqlWriter) HandleHandshake(ctx context.Context, payload []byte) (bool, error) {
+	return false, nil
+}
+
+func (fp *testMysqlWriter) Authenticate(ctx context.Context) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) GetSequenceId() uint8 {
+	return 0
+}
+
+func (fp *testMysqlWriter) SetSequenceID(value uint8) {
+}
+
+func (fp *testMysqlWriter) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) ResetStatistics() {}
+
+func (fp *testMysqlWriter) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
+
+func (fp *testMysqlWriter) IsEstablished() bool {
+	return true
+}
+
+func (fp *testMysqlWriter) SetEstablished() {}
+
+func (fp *testMysqlWriter) ConnectionID() uint32 {
+	return fakeConnectionID
+}
+
+func (fp *testMysqlWriter) Peer() string {
+	return "0.0.0.0:0"
+}
+
+func (fp *testMysqlWriter) GetDatabaseName() string {
+	return fp.database
+}
+
+func (fp *testMysqlWriter) SetDatabaseName(s string) {
+	fp.database = s
+}
+
+func (fp *testMysqlWriter) GetUserName() string {
+	return fp.username
+}
+
+func (fp *testMysqlWriter) SetUserName(s string) {
+	fp.username = s
+}
+
+func (fp *testMysqlWriter) Close() {}
+
+func (fp *testMysqlWriter) WriteLocalInfileRequest(filename string) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) Flush() error {
+	return nil
 }
