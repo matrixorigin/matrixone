@@ -16,11 +16,9 @@ insert into t6 values(5, "[12,12,0,0]", "5");
 insert into t6 values(6, "[13,13,0,0]", "6");
 SET experimental_ivf_index = 0;
 
-use vecdb3;
 create index idx6 using ivfflat on t6(b) lists=2 op_type "vector_l2_ops";
 SET experimental_ivf_index = 1;
 
-use vecdb3;
 create index idx6 using ivfflat on t6(b) lists=2 op_type "vector_l2_ops";
 select a, b from t6 order by l2_distance(b, "[1,0,0,0]") limit 4;
 

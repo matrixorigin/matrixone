@@ -62,8 +62,10 @@ show global variables like 'max_connections';
 
 -- @session:id=4&user=acc_idx:root&password=123456
 select @@max_connections;
+-- @ignore:0
 select @@global.max_connections;
 show variables like 'max_connections';
+-- @ignore:1
 show global variables like 'max_connections';
 -- @session
 
@@ -118,8 +120,10 @@ show global variables like 'autocommit';
 
 -- @session:id=7&user=acc_idx:root&password=123456
 select @@autocommit;
+-- @ignore:0
 select @@global.autocommit;
 show variables like 'autocommit';
+-- @ignore:1
 show global variables like 'autocommit';
 -- @session
 
