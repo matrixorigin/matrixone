@@ -41,15 +41,6 @@ func NewEmptyBloomFilter() StaticFilter {
 	return &bloomFilter{}
 }
 
-type StaticFilter interface {
-	MayContainsKey(key []byte) (bool, error)
-	MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Bitmap, error)
-	MayContainsAny(keys *vector.Vector, lowerBound int, upperBound int) bool
-	Marshal() ([]byte, error)
-	Unmarshal(buf []byte) error
-	String() string
-}
-
 func hashV1(v []byte) uint64 {
 	return xxhash.Sum64(v)
 }
@@ -58,39 +49,8 @@ type bloomFilter struct {
 	xorfilter.BinaryFuse8
 }
 
-type prefixBloomFilter struct {
-	prefixFnId uint8
-	bloomFilter
-}
-
 func NewBloomFilter(data containers.Vector) (StaticFilter, error) {
 	return NewBloomFilter2([]containers.Vector{data})
-}
-
-func NewPrefixBloomFilter(
-	data containers.Vector,
-	prefixFnId uint8,
-	prefixFn func([]byte) []byte,
-) (StaticFilter, error) {
-	hashes := make([]uint64, 0)
-	op := func(v []byte, _ bool, _ int) error {
-		hash := hashV1(prefixFn(v))
-		hashes = append(hashes, hash)
-		return nil
-	}
-	if err := containers.ForeachWindowBytes(
-		data.GetDownstreamVector(), 0, data.Length(), op, nil,
-	); err != nil {
-		return nil, err
-	}
-	bf, err := buildFuseFilter(hashes)
-	if err != nil {
-		return nil, err
-	}
-	return &prefixBloomFilter{
-		prefixFnId:  prefixFnId,
-		bloomFilter: *bf,
-	}, nil
 }
 
 func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
@@ -207,7 +167,7 @@ func (filter *bloomFilter) Unmarshal(buf []byte) error {
 }
 
 func (filter *bloomFilter) String() string {
-	s := "<SF>\n"
+	s := "<BF>\n"
 	s += strconv.Itoa(int(filter.SegmentCount))
 	s += "\n"
 	s += strconv.Itoa(int(filter.SegmentCountLength))
@@ -218,6 +178,26 @@ func (filter *bloomFilter) String() string {
 	s += "\n"
 	s += strconv.Itoa(len(filter.Fingerprints))
 	s += "\n"
-	s += "</SF>"
+	s += "</BF>"
 	return s
+}
+
+func (filter *bloomFilter) PrefixFnId() uint8 {
+	return 0
+}
+
+func (filter *bloomFilter) GetType() uint8 {
+	return BF
+}
+
+func (filter *bloomFilter) PrefixMayContainsKey(key []byte, prefixFnId uint8) (bool, error) {
+	panic("not supported")
+}
+
+func (filter *bloomFilter) PrefixMayContainsAnyKeys(keys containers.Vector, prefixFnId uint8) (bool, *nulls.Bitmap, error) {
+	panic("not supported")
+}
+
+func (filter *bloomFilter) PrefixMayContainsAny(keys *vector.Vector, lowerBound int, upperBound int, prefixFnId uint8) bool {
+	panic("not supported")
 }
