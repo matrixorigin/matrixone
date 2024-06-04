@@ -96,6 +96,7 @@ func Test_mce(t *testing.T) {
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -321,6 +322,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -369,6 +371,8 @@ func Test_mce_selfhandle(t *testing.T) {
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
@@ -699,6 +703,7 @@ func Test_handleShowVariables(t *testing.T) {
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -899,6 +904,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -1374,6 +1380,7 @@ func Test_ExecRequest(t *testing.T) {
 
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
