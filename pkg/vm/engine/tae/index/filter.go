@@ -170,8 +170,16 @@ func (filter *bloomFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *nu
 
 func (filter *bloomFilter) Marshal() (buf []byte, err error) {
 	var w bytes.Buffer
+	if err = filter.MarshalWithBuffer(&w); err != nil {
+		return
+	}
+	buf = w.Bytes()
+	return
+}
+
+func (filter *bloomFilter) MarshalWithBuffer(w *bytes.Buffer) (err error) {
 	if _, err = types.WriteValues(
-		&w,
+		w,
 		filter.Seed,
 		filter.SegmentLength,
 		filter.SegmentLengthMask,
@@ -179,10 +187,7 @@ func (filter *bloomFilter) Marshal() (buf []byte, err error) {
 		filter.SegmentCountLength); err != nil {
 		return
 	}
-	if _, err = w.Write(types.EncodeSlice(filter.Fingerprints)); err != nil {
-		return
-	}
-	buf = w.Bytes()
+	_, err = w.Write(types.EncodeSlice(filter.Fingerprints))
 	return
 }
 
