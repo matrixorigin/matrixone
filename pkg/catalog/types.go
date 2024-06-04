@@ -60,7 +60,11 @@ const (
 	// MOForeignKeys saves the fk relationships
 	MOForeignKeys = "mo_foreign_keys"
 
-	// MoDataBaseConstrant =
+	// MOShardsMetadata is used to store the sharding information of the table. See detail
+	// in shardservice.
+	MOShardsMetadata = "mo_shards_metadata"
+	// MOShards shards detail.
+	MOShards = "mo_shards"
 )
 
 var InternalColumns = map[string]int8{
@@ -143,6 +147,7 @@ const (
 
 	MO_SYSTEM    = "system"
 	MO_STATEMENT = "statement_info"
+	MO_RAWLOG    = "rawlog"
 
 	MO_SYSTEM_METRICS = "system_metrics"
 	MO_METRIC         = "metric"

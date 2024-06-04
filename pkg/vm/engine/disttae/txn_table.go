@@ -541,9 +541,9 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 		return nil
 	}
 	for _, bat := range bats {
-		vs := vector.MustStrCol(bat.GetVector(0))
-		for _, deltaLoc := range vs {
-			location, err := blockio.EncodeLocationFromString(deltaLoc)
+		vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
+		for i := range vs {
+			location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
 			if err != nil {
 				return err
 			}
@@ -582,9 +582,9 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 			continue
 		}
 		for _, bat := range bats {
-			vs := vector.MustStrCol(bat.GetVector(0))
-			for _, metalLoc := range vs {
-				location, err := blockio.EncodeLocationFromString(metalLoc)
+			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
+			for i := range vs {
+				location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
 				if err != nil {
 					return err
 				}
@@ -684,6 +684,12 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		tbl.proc.Load(),
 	); err != nil {
 		return
+	}
+	if tbl.db.op.IsSnapOp() && tbl.db.databaseName == "tpch" {
+		logutil.Infof("xxx Ranges, table:%s, len:%d, snapshot op:%s",
+			tbl.tableName,
+			blocks.Len(),
+			tbl.db.op.Txn().DebugString())
 	}
 
 	return
@@ -1756,7 +1762,7 @@ func (tbl *txnTable) tryExtractPKFilter(expr *plan.Expr) (retPKFilter PKFilter) 
 	}
 
 	pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-	retPKFilter = getPKFilterByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
+	retPKFilter = getPKFilterByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl)
 	if retPKFilter.isNull || !retPKFilter.isValid || retPKFilter.isVec {
 		return
 	}
@@ -1876,59 +1882,30 @@ func (tbl *txnTable) tryConstructPrimaryKeyIndexIter(
 	pkFilter PKFilter,
 	expr *plan.Expr,
 	state *logtailreplay.PartitionState,
-) (iter logtailreplay.RowsIter, newPkVal []byte) {
+) (iter logtailreplay.RowsIter) {
 	if !pkFilter.isValid {
 		return
 	}
 
 	switch pkFilter.op {
 	case function.EQUAL, function.PREFIX_EQ:
-		newPkVal = pkFilter.data
 		iter = state.NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
-			logtailreplay.Prefix(pkFilter.data),
+			logtailreplay.Prefix(pkFilter.packed[0]),
 		)
 	case function.IN:
-		var encodes [][]byte
-		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(pkFilter.data)
-
 		// may be it's better to iterate rows instead.
-		if vec.Length() > 128 {
+		if len(pkFilter.packed) > 128 {
 			return
 		}
 
-		var packer *types.Packer
-		put := tbl.getTxn().engine.packerPool.Get(&packer)
-
-		processed := false
-		// case 1: serial_full(secondary_index, primary_key) ==> val, a in (val)
-		if vec.Length() == 1 {
-			exprLit := rule.GetConstantValue(vec, true, 0)
-			if exprLit != nil && !exprLit.Isnull {
-				canEval, val := evalLiteralExpr(exprLit, vec.GetType().Oid)
-				if canEval {
-					logtailreplay.EncodePrimaryKey(val, packer)
-					newPkVal = packer.Bytes()
-					encodes = append(encodes, newPkVal)
-					processed = true
-				}
-			}
-		}
-
-		if !processed {
-			encodes = logtailreplay.EncodePrimaryKeyVector(vec, packer)
-		}
-
-		put.Put()
-
 		iter = state.NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
-			logtailreplay.ExactIn(encodes),
+			logtailreplay.ExactIn(pkFilter.packed),
 		)
 	}
 
-	return iter, newPkVal
+	return iter
 }
 
 func (tbl *txnTable) newReader(
@@ -1964,11 +1941,10 @@ func (tbl *txnTable) newReader(
 	}
 
 	var (
-		pkVal []byte
-		iter  logtailreplay.RowsIter
+		iter logtailreplay.RowsIter
 	)
 
-	iter, pkVal = tbl.tryConstructPrimaryKeyIndexIter(ts, pkFilter, expr, state)
+	iter = tbl.tryConstructPrimaryKeyIndexIter(ts, pkFilter, expr, state)
 	if iter == nil {
 		iter = state.NewRowsIter(
 			types.TimestampToTS(ts),
@@ -1997,7 +1973,7 @@ func (tbl *txnTable) newReader(
 				newBlockMergeReader(
 					ctx,
 					tbl,
-					pkVal,
+					pkFilter,
 					ts,
 					[]*objectio.BlockInfo{dirtyBlks[i]},
 					expr,
@@ -2014,7 +1990,7 @@ func (tbl *txnTable) newReader(
 			readers[i+1] = newBlockMergeReader(
 				ctx,
 				tbl,
-				pkVal,
+				pkFilter,
 				ts,
 				[]*objectio.BlockInfo{dirtyBlks[i]},
 				expr,
@@ -2047,7 +2023,7 @@ func (tbl *txnTable) newReader(
 		bmr := &blockMergeReader{
 			blockReader: blockReaders[i],
 			table:       tbl,
-			pkVal:       pkVal,
+			pkFilter:    pkFilter,
 			deletaLocs:  make(map[string][]objectio.Location),
 		}
 		readers[i+1] = bmr
@@ -2077,6 +2053,12 @@ func (tbl *txnTable) getPartitionState(
 			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
 		if err != nil {
 			return nil, err
+		}
+		if tbl.db.databaseName == "tpch" {
+			logutil.Infof("xxxx getPartitionState, table:%s, snapshot op :%s, snap:%p",
+				tbl.tableName,
+				tbl.db.op.Txn().DebugString(),
+				p)
 		}
 		tbl._partState.Store(p.Snapshot())
 	}

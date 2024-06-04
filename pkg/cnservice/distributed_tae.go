@@ -92,5 +92,6 @@ func (s *service) initDistributedTAE(
 		return err
 	}
 	s.initInternalSQlExecutor(internalExecutorMp)
+	s.initShardService()
 	return nil
 }
