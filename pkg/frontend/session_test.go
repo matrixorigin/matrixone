@@ -860,6 +860,7 @@ func TestSession_Migrate(t *testing.T) {
 			txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 			txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 			txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			return txnOperator, nil
 		}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)

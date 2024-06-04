@@ -2319,6 +2319,11 @@ func executeStmtWithWorkspace(ses FeSession,
 	//refresh proc txnOp
 	execCtx.proc.TxnOperator = txnOp
 
+	err = disttae.CheckTxnIsValid(txnOp)
+	if err != nil {
+		return err
+	}
+
 	//!!!NOTE!!!: statement management
 	//2. start statement on workspace
 	txnOp.GetWorkspace().StartStatement()
@@ -2348,6 +2353,12 @@ func executeStmtWithIncrStmt(ses FeSession,
 ) (err error) {
 	ses.EnterFPrint(6)
 	defer ses.ExitFPrint(6)
+
+	err = disttae.CheckTxnIsValid(txnOp)
+	if err != nil {
+		return err
+	}
+
 	if ses.IsDerivedStmt() {
 		return
 	}
