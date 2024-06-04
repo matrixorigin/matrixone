@@ -2600,7 +2600,7 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		return nil, err
 	}
 
-	if taskHost.DoTransfer() {
+	if !taskHost.DoTransfer() {
 		return taskHost.commitEntry, nil
 	}
 
