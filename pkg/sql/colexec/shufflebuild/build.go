@@ -40,12 +40,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	}
 	arg.RuntimeFilterSpec.Handled = false
 	arg.ctr = new(container)
-	if len(proc.Reg.MergeReceivers) > 1 {
-		arg.ctr.InitReceiver(proc, true)
-		arg.ctr.isMerge = true
-	} else {
-		arg.ctr.InitReceiver(proc, false)
-	}
+	arg.ctr.InitReceiver(proc, true)
 
 	arg.ctr.vecs = make([][]*vector.Vector, 0)
 	ctr := arg.ctr
@@ -196,11 +191,7 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 	var currentBatch *batch.Batch
 	var msg *process.RegisterMessage
 	for {
-		if ap.ctr.isMerge {
-			msg = ctr.ReceiveFromAllRegs(anal)
-		} else {
-			msg = ctr.ReceiveFromSingleReg(0, anal)
-		}
+		msg = ctr.ReceiveFromAllRegs(anal)
 		if msg.Err != nil {
 			return msg.Err
 		}
