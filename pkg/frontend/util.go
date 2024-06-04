@@ -850,7 +850,16 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_timestamp:
 			vData := make([]types.Timestamp, cnt)
 			for rowIdx, row := range rows {
-				vData[rowIdx] = row[colIdx].(types.Timestamp)
+				switch val := row[colIdx].(type) {
+				case types.Timestamp:
+					vData[rowIdx] = val
+				case string:
+					if vData[rowIdx], err = types.ParseTimestamp(time.Local, val, typ.Scale); err != nil {
+						return nil, nil, err
+					}
+				default:
+					return nil, nil, moerr.NewInternalErrorNoCtx("%v can't convert to timestamp type", val)
+				}
 			}
 			err := vector.AppendFixedList[types.Timestamp](bat.Vecs[colIdx], vData, nil, pool)
 			if err != nil {
