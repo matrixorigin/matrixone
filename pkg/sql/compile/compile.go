@@ -1230,7 +1230,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		defer groupInfo.Release()
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
 
-		if c.execType == plan2.ExecTypeTP {
+		if c.execType == plan2.ExecTypeTP && ss[0].PartialResults == nil {
 			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
 			return ss, nil
 		} else if !anyDistinctAgg && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
@@ -3919,7 +3919,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		return nodes, nil, nil, nil
 	}
 
-	if len(n.AggList) > 0 && ranges.Len() > 1 && c.execType != plan2.ExecTypeTP {
+	if len(n.AggList) > 0 && ranges.Len() > 1 {
 		newranges := make([]byte, 0, ranges.Size())
 		newranges = append(newranges, ranges.GetBytes(0)...)
 		partialResults = make([]any, 0, len(n.AggList))
