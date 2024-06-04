@@ -45,7 +45,6 @@ type DisposableVecPool interface {
 type MergeTaskHost interface {
 	DisposableVecPool
 	HostHintName() string
-	PrepareData(context.Context) ([]*batch.Batch, []*nulls.Nulls, func(), error)
 	GetCommitEntry() *api.MergeCommitEntry
 	PrepareNewWriter() *blockio.BlockWriter
 	DoTransfer() bool
@@ -109,7 +108,6 @@ func GetNewWriter(
 func DoMergeAndWrite(
 	ctx context.Context,
 	sortkeyPos int,
-	blkMaxRow int,
 	mergehost MergeTaskHost,
 ) (err error) {
 	now := time.Now()
@@ -147,136 +145,29 @@ func DoMergeAndWrite(
 		if err := mergeObjs(ctx, mergehost, sortkeyPos); err != nil {
 			return err
 		}
-
-		toObjsDesc := ""
-		for _, o := range commitEntry.CreatedObjs {
-			obj := objectio.ObjectStats(o)
-			toObjsDesc += fmt.Sprintf("%s(%v)Rows(%v),",
-				common.ShortObjId(*obj.ObjectName().ObjectId()),
-				obj.BlkCnt(),
-				obj.Rows())
-		}
-
-		logutil.Info("[Done] Mergeblocks",
-			zap.String("table", tableDesc),
-			zap.String("on", mergehost.HostHintName()),
-			zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
-			zap.String("to-objs", toObjsDesc),
-			common.DurationField(time.Since(now)))
-		return
-	}
-
-	// batches is read from disk, dels is read from disk and memory
-	//
-	// batches[i] means the i-th non-appendable block to be merged and
-	// it has no rowid
-	batches, dels, release, err := mergehost.PrepareData(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	if mergehost.DoTransfer() {
-		initTransferMapping(commitEntry, len(batches))
-	}
-
-	fromLayout := make([]uint32, len(batches))
-	totalRowCount := 0
-
-	mpool := mergehost.GetMPool()
-	// iter all block to get basic info, do shrink if needed
-	for i := range batches {
-		rowCntBeforeApplyDelete := batches[i].RowCount()
-		del := dels[i]
-		if del != nil && del.Count() > 0 {
-			// dup vector before apply delete. old b will be freed in releaseF
-			newb, err := batches[i].Dup(mpool)
-			if err != nil {
-				return err
-			}
-			defer newb.Clean(mpool) // whoever create new vector, should clean it
-			batches[i] = newb
-			batches[i].Shrink(del.ToI64Arrary(), true)
-			// skip empty batch
-			if batches[i].RowCount() == 0 {
-				continue
-			}
-		}
-		if mergehost.DoTransfer() {
-			AddSortPhaseMapping(commitEntry.Booking, i, rowCntBeforeApplyDelete, del, nil)
-		}
-		fromLayout[i] = uint32(batches[i].RowCount())
-		totalRowCount += batches[i].RowCount()
-	}
-
-	if totalRowCount == 0 {
-		logutil.Info("[Done] Mergeblocks due to all deleted",
-			zap.String("table", tableDesc),
-			zap.String("txn-start-ts", commitEntry.StartTs.DebugString()))
-		if mergehost.DoTransfer() {
-			CleanTransMapping(commitEntry.Booking)
-		}
-		return
-	}
-
-	// -------------------------- phase 1
-	phaseDesc = "reshape, one column"
-	toLayout := arrangeToLayout(totalRowCount, blkMaxRow)
-
-	retBatches, releaseF := ReshapeBatches(batches, fromLayout, toLayout, mergehost)
-	defer releaseF()
-	if mergehost.DoTransfer() {
-		UpdateMappingAfterMerge(commitEntry.Booking, nil, toLayout)
-	}
-
-	// -------------------------- phase 2
-	phaseDesc = "new writer to write down"
-	writer := mergehost.PrepareNewWriter()
-	for _, bat := range retBatches {
-		_, err = writer.WriteBatch(bat)
-		if err != nil {
+	} else {
+		if err = reshape(ctx, mergehost); err != nil {
 			return err
 		}
 	}
 
-	if _, _, err = writer.Sync(ctx); err != nil {
-		return err
+	toObjsDesc := ""
+	for _, o := range commitEntry.CreatedObjs {
+		obj := objectio.ObjectStats(o)
+		toObjsDesc += fmt.Sprintf("%s(%v)Rows(%v),",
+			common.ShortObjId(*obj.ObjectName().ObjectId()),
+			obj.BlkCnt(),
+			obj.Rows())
 	}
 
-	// no tomestone actually
-	cobjstats := writer.GetObjectStats()[:objectio.SchemaTombstone]
-	for _, cobj := range cobjstats {
-		commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobj.Clone().Marshal())
-	}
-	cobj := fmt.Sprintf("%s(%v)Rows(%v)",
-		common.ShortObjId(*cobjstats[0].ObjectName().ObjectId()),
-		cobjstats[0].BlkCnt(),
-		cobjstats[0].Rows())
 	logutil.Info("[Done] Mergeblocks",
 		zap.String("table", tableDesc),
 		zap.String("on", mergehost.HostHintName()),
 		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
-		zap.String("to-objs", cobj),
+		zap.String("to-objs", toObjsDesc),
 		common.DurationField(time.Since(now)))
 
 	return nil
-
-}
-
-// layout [blkMaxRow, blkMaxRow, blkMaxRow,..., blkMaxRow, totalRowCount - blkMaxRow*N]
-func arrangeToLayout(totalRowCount int, blkMaxRow int) []uint32 {
-	toLayout := make([]uint32, 0, totalRowCount/blkMaxRow)
-	unconsumed := totalRowCount
-	for unconsumed > 0 {
-		if unconsumed > blkMaxRow {
-			toLayout = append(toLayout, uint32(blkMaxRow))
-			unconsumed -= blkMaxRow
-		} else {
-			toLayout = append(toLayout, uint32(unconsumed))
-			unconsumed = 0
-		}
-	}
-	return toLayout
 }
 
 // not defined in api.go to avoid import cycle
