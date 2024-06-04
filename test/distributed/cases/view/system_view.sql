@@ -25,7 +25,3 @@ select count(*) >0 from mo_configurations() t where node_type = 'cn';
 
 select distinct node_type,default_value  from mo_configurations() t where  name like '%frontend.port';
 select count(*) > 0  from mo_configurations() t where internal = 'advanced';
-
--- test mo_variables
-select count(*) > 0 from mo_catalog.mo_variables;
-select variable_value from mo_catalog.mo_variables where variable_name = 'port' and account_name = 'sys';

@@ -80,12 +80,10 @@ func TestBuild(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, false, ok.Status == vm.ExecStop)
 			mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			mp.Free()
 			ok.Batch.Clean(tc.proc.Mp())
 			break
 		}
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 
 		tc.arg.Reset(tc.proc, false, nil)
 
@@ -99,12 +97,10 @@ func TestBuild(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, false, ok.Status == vm.ExecStop)
 			mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			mp.Free()
 			ok.Batch.Clean(tc.proc.Mp())
 			break
 		}
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())

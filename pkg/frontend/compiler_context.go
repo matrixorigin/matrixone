@@ -597,7 +597,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 	}
 }
 
-func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (varValue interface{}, err error) {
 	ctx := tcc.execCtx.reqCtx
 
 	if ctx.Value(defines.InSp{}) != nil && ctx.Value(defines.InSp{}).(bool) {
@@ -612,17 +612,24 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	if isSystemVar {
 		if isGlobalVar {
-			return tcc.GetSession().GetGlobalSystemVariableValue(ctx, varName)
+			if varValue, err = tcc.GetSession().GetGlobalSysVar(varName); err != nil {
+				return
+			}
 		} else {
-			return tcc.GetSession().GetSessionVar(ctx, varName)
+			if varValue, err = tcc.GetSession().GetSessionSysVar(varName); err != nil {
+				return
+			}
 		}
 	} else {
-		_, val, err := tcc.GetSession().GetUserDefinedVar(varName)
-		if val == nil {
+		var udVar *UserDefinedVar
+		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil || udVar == nil {
 			return nil, err
 		}
-		return val.Value, err
+
+		varValue = udVar.Value
 	}
+
+	return
 }
 
 func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (accountIds []uint32, err error) {
