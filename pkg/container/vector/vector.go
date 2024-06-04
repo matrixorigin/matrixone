@@ -2560,7 +2560,7 @@ func (v *Vector) String() string {
 	case types.T_Blockid:
 		return vecToString[types.Blockid](v)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
-		col := MustStrCol(v)
+		col := InefficientMustStrCol(v)
 		if len(col) == 1 {
 			if nulls.Contains(&v.nsp, 0) {
 				return "null"

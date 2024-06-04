@@ -22,6 +22,7 @@ const (
 	LogtailService
 	LockService
 	QueryService
+	ShardService
 	MaxService
 )
 
@@ -36,6 +37,8 @@ func (s PortSlot) String() string {
 		return "Lock service"
 	case QueryService:
 		return "Query service"
+	case ShardService:
+		return "Shard service"
 	default:
 		return "Unknown service"
 	}
@@ -109,4 +112,18 @@ func (s *store) queryServiceListenAddr() string {
 		return s.addressMgr.ListenAddress(int(QueryService))
 	}
 	return ""
+}
+
+func (s *store) shardServiceServiceAddr() string {
+	if s.newPortStrategy() {
+		return s.addressMgr.ServiceAddress(int(ShardService))
+	}
+	return s.cfg.ShardService.ServiceAddress
+}
+
+func (s *store) shardServiceListenAddr() string {
+	if s.newPortStrategy() {
+		return s.addressMgr.ListenAddress(int(ShardService))
+	}
+	return s.cfg.ShardService.ListenAddress
 }

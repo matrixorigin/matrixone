@@ -299,3 +299,11 @@ type TxnEvent struct {
 	Cost      time.Duration
 	CostEvent bool
 }
+
+func (e TxnEvent) Committed() bool {
+	return e.Txn.Status == txn.TxnStatus_Committed
+}
+
+func (e TxnEvent) Aborted() bool {
+	return e.Txn.Status == txn.TxnStatus_Aborted
+}

@@ -93,6 +93,8 @@ type MOCluster interface {
 	RemoveCN(id string)
 	// AddCN adds the specified CN to the cluster
 	AddCN(metadata.CNService)
+	// UpdateCN updates the specified CN in the cluster
+	UpdateCN(metadata.CNService)
 }
 
 type ClusterClient interface {
