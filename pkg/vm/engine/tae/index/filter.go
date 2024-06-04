@@ -58,11 +58,42 @@ type bloomFilter struct {
 	xorfilter.BinaryFuse8
 }
 
-func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
-	return NewBinaryFuseFilterByVectors([]containers.Vector{data})
+type prefixBloomFilter struct {
+	prefixFnId uint8
+	bloomFilter
 }
 
-func buildFuseFilter(hashes []uint64) (StaticFilter, error) {
+func NewBloomFilter(data containers.Vector) (StaticFilter, error) {
+	return NewBloomFilter2([]containers.Vector{data})
+}
+
+func NewPrefixBloomFilter(
+	data containers.Vector,
+	prefixFnId uint8,
+	prefixFn func([]byte) []byte,
+) (StaticFilter, error) {
+	hashes := make([]uint64, 0)
+	op := func(v []byte, _ bool, _ int) error {
+		hash := hashV1(prefixFn(v))
+		hashes = append(hashes, hash)
+		return nil
+	}
+	if err := containers.ForeachWindowBytes(
+		data.GetDownstreamVector(), 0, data.Length(), op, nil,
+	); err != nil {
+		return nil, err
+	}
+	bf, err := buildFuseFilter(hashes)
+	if err != nil {
+		return nil, err
+	}
+	return &prefixBloomFilter{
+		prefixFnId:  prefixFnId,
+		bloomFilter: *bf,
+	}, nil
+}
+
+func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
 	var inner *xorfilter.BinaryFuse8
 	var err error
 	if inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
@@ -80,7 +111,7 @@ func buildFuseFilter(hashes []uint64) (StaticFilter, error) {
 	return sf, nil
 }
 
-func NewBinaryFuseFilterByVectors(datas []containers.Vector) (StaticFilter, error) {
+func NewBloomFilter2(datas []containers.Vector) (StaticFilter, error) {
 	hashes := make([]uint64, 0)
 	op := func(v []byte, _ bool, _ int) error {
 		hash := hashV1(v)
