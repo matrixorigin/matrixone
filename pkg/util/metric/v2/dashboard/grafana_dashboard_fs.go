@@ -31,12 +31,11 @@ func (c *DashboardCreator) initFileServiceDashboard() error {
 		"FileService Metrics",
 		c.withRowOptions(
 			c.initFSOverviewRow(),
-			c.initFSReadWriteDurationRow(),
 			c.initFSReadWriteBytesRow(),
 			c.initFSS3ConnOverviewRow(),
 			c.initFSS3ConnDurationRow(),
 			c.initFSIOMergerDurationRow(),
-			c.initFSReadDurationRow(),
+			c.initFSReadWriteDurationRow(),
 			c.initFSMallocRow(),
 		)...)
 	if err != nil {
@@ -76,33 +75,6 @@ func (c *DashboardCreator) initFSOverviewRow() dashboard.Option {
 				"s3",
 				"local",
 			}),
-	)
-}
-
-func (c *DashboardCreator) initFSReadWriteDurationRow() dashboard.Option {
-	return dashboard.Row(
-		"FileService read write duration",
-		c.getMultiHistogram(
-			[]string{
-				c.getMetricWithFilter(`mo_fs_s3_io_duration_seconds_bucket`, `type="read"`),
-				c.getMetricWithFilter(`mo_fs_s3_io_duration_seconds_bucket`, `type="write"`),
-				c.getMetricWithFilter(`mo_fs_local_io_duration_seconds_bucket`, `type="read"`),
-				c.getMetricWithFilter(`mo_fs_local_io_duration_seconds_bucket`, `type="write"`),
-				c.getMetricWithFilter(`mo_fs_s3_io_duration_seconds_bucket`, `type="list"`),
-				c.getMetricWithFilter(`mo_fs_s3_io_duration_seconds_bucket`, `type="stat"`),
-			},
-			[]string{
-				"s3-read",
-				"s3-write",
-				"local-read",
-				"local-write",
-				"s3-list",
-				"s3-stat",
-			},
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
-			axis.Unit("s"),
-			axis.Min(0))...,
 	)
 }
 
@@ -187,24 +159,27 @@ func (c *DashboardCreator) initFSIOMergerDurationRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initFSReadDurationRow() dashboard.Option {
+func (c *DashboardCreator) initFSReadWriteDurationRow() dashboard.Option {
 	return dashboard.Row(
-		"FileService read duration",
+		"FileService read write duration",
 		c.getMultiHistogram(
 			[]string{
-				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="read-vector-cache"`),
-				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="update-vector-cache"`),
-				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="read-memory-cache"`),
-				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="update-memory-cache"`),
-				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="read-disk-cache"`),
-				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="update-disk-cache"`),
-				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="read-remote-cache"`),
-				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="get-reader"`),
-				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="get-content"`),
-				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="get-entry-data "`),
-				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="write-to-writer"`),
-				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="set-cached-data"`),
-				c.getMetricWithFilter(`mo_fs_read_duration_bucket`, `type="disk-cache-set-file"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="read-vector-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="update-vector-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="read-memory-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="update-memory-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="read-disk-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="update-disk-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="read-remote-cache"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="get-reader"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="get-content"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="get-entry-data "`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="write-to-writer"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="set-cached-data"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="disk-cache-set-file"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="list"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="stat"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="write"`),
 			},
 			[]string{
 				"read-vector-cache",
@@ -220,6 +195,9 @@ func (c *DashboardCreator) initFSReadDurationRow() dashboard.Option {
 				"write-to-writer",
 				"set-cached-data",
 				"disk-cache-set-file",
+				"list",
+				"stat",
+				"write",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99, 1},
 			[]float32{3, 3, 3, 3, 3},
