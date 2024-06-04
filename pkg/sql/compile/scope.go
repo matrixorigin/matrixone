@@ -17,6 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
+	"hash/crc32"
+	goruntime "runtime"
+	"runtime/debug"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -28,10 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"hash/crc32"
-	goruntime "runtime"
-	"runtime/debug"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -60,7 +61,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/panjf2000/ants/v2"
-	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
 )
 
@@ -501,8 +501,8 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		}
 
 	// Reader can be generated from local relation.
-	case s.NodeInfo.Rel != nil:
-		switch s.NodeInfo.Rel.GetEngineType() {
+	case s.DataSource.Rel != nil && s.DataSource.TableDef.Partition == nil:
+		switch s.DataSource.Rel.GetEngineType() {
 		case engine.Disttae:
 			blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
 			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len())
@@ -516,7 +516,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			scanUsedCpuNumber = 1
 		}
 
-		readers, err = s.NodeInfo.Rel.NewReader(c.ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, s.NodeInfo.Data, len(s.DataSource.OrderBy) > 0)
+		readers, err = s.DataSource.Rel.NewReader(c.ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, s.NodeInfo.Data, len(s.DataSource.OrderBy) > 0)
 		if err != nil {
 			return nil, err
 		}
@@ -768,15 +768,9 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	}
 
 	if s.NodeInfo.NeedExpandRanges {
-		isPartitionTable := false
-
 		scanNode := s.DataSource.node
 		if scanNode == nil {
 			panic("can not expand ranges on remote pipeline!")
-		}
-
-		if scanNode.TableDef.Partition != nil {
-			isPartitionTable = true
 		}
 
 		newExprList := plan2.DeepCopyExprList(inExprList)
@@ -784,16 +778,13 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			newExprList = append(newExprList, s.DataSource.node.BlockFilterList...)
 		}
 
-		ranges, err := c.expandRanges(s.DataSource.node, s.NodeInfo.Rel, newExprList)
+		ranges, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList)
 		if err != nil {
 			return err
 		}
 		s.NodeInfo.Data = append(s.NodeInfo.Data, ranges.GetAllBytes()...)
 		s.NodeInfo.NeedExpandRanges = false
 
-		if isPartitionTable {
-			s.NodeInfo.Rel = nil
-		}
 	} else if len(inExprList) > 0 {
 		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
 		if err != nil {

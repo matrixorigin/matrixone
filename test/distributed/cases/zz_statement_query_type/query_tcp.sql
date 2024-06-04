@@ -27,11 +27,9 @@ select left(statement, 47) stmt, json_unquote(json_extract(stats, '$[7]')) betwe
 set @tcp_cnt=1;
 -- @ignore:2,3,4
 select left(statement, 16) as stmt, json_unquote(json_extract(stats, '$[7]')) between (@tcp_cnt-2) and (@tcp_cnt+5) check_val, statement_id, stats, json_extract(stats, '$[7]') pkg_cnt from system.statement_info where account= 'bvt_query_tcp' and statement like 'load data infile%rawlog_withnull.csv%' and statement_type = 'Load' order by request_at desc limit 1;
--- @bvt:issue#16383
 set @tcp_cnt=25;
 -- @ignore:2,3,4
 select left(statement, 22) as stmt, json_unquote(json_extract(stats, '$[7]')) between (@tcp_cnt-2) and (@tcp_cnt+5) check_val, statement_id, stats, json_extract(stats, '$[7]') pkg_cnt from system.statement_info where account= 'bvt_query_tcp' and statement like 'load data local%rawlog_withnull.csv%' and statement_type = 'Load' order by request_at desc limit 1;
--- @bvt:issue
 
 -- case: verify 'use test
 set @tcp_cnt=1;

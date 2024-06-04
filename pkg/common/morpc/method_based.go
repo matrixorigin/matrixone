@@ -19,7 +19,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
 
@@ -31,7 +31,8 @@ type pool[REQ, RESP MethodBasedMessage] struct {
 // NewMessagePool create message pool
 func NewMessagePool[REQ, RESP MethodBasedMessage](
 	requestFactory func() REQ,
-	responseFactory func() RESP) MessagePool[REQ, RESP] {
+	responseFactory func() RESP,
+) MessagePool[REQ, RESP] {
 	return &pool[REQ, RESP]{
 		request:  sync.Pool{New: func() any { return requestFactory() }},
 		response: sync.Pool{New: func() any { return responseFactory() }},
@@ -71,7 +72,7 @@ func (c *handleFuncCtx[REQ, RESP]) call(
 	}
 }
 
-type handler[REQ, RESP MethodBasedMessage] struct {
+type methodBasedServer[REQ, RESP MethodBasedMessage] struct {
 	cfg      *Config
 	rpc      RPCServer
 	pool     MessagePool[REQ, RESP]
@@ -88,14 +89,14 @@ type handler[REQ, RESP MethodBasedMessage] struct {
 // WithHandleMessageFilter set filter func. Requests can be modified or filtered out by the filter
 // before they are processed by the handler.
 func WithHandleMessageFilter[REQ, RESP MethodBasedMessage](filter func(REQ) bool) HandlerOption[REQ, RESP] {
-	return func(s *handler[REQ, RESP]) {
+	return func(s *methodBasedServer[REQ, RESP]) {
 		s.options.filter = filter
 	}
 }
 
 // WithHandlerRespReleaseFunc sets the respReleaseFunc of the handler.
 func WithHandlerRespReleaseFunc[REQ, RESP MethodBasedMessage](f func(message Message)) HandlerOption[REQ, RESP] {
-	return func(s *handler[REQ, RESP]) {
+	return func(s *methodBasedServer[REQ, RESP]) {
 		s.respReleaseFunc = f
 	}
 }
@@ -106,8 +107,8 @@ func NewMessageHandler[REQ, RESP MethodBasedMessage](
 	address string,
 	cfg Config,
 	pool MessagePool[REQ, RESP],
-	opts ...HandlerOption[REQ, RESP]) (MessageHandler[REQ, RESP], error) {
-	s := &handler[REQ, RESP]{
+	opts ...HandlerOption[REQ, RESP]) (MethodBasedServer[REQ, RESP], error) {
+	s := &methodBasedServer[REQ, RESP]{
 		cfg:      &cfg,
 		pool:     pool,
 		handlers: make(map[uint32]handleFuncCtx[REQ, RESP]),
@@ -138,47 +139,50 @@ func NewMessageHandler[REQ, RESP MethodBasedMessage](
 	return s, nil
 }
 
-func (s *handler[REQ, RESP]) Start() error {
+func (s *methodBasedServer[REQ, RESP]) Start() error {
 	return s.rpc.Start()
 }
 
-func (s *handler[REQ, RESP]) Close() error {
+func (s *methodBasedServer[REQ, RESP]) Close() error {
 	return s.rpc.Close()
 }
 
-func (s *handler[REQ, RESP]) RegisterHandleFunc(
+func (s *methodBasedServer[REQ, RESP]) RegisterMethod(
 	method uint32,
 	h HandleFunc[REQ, RESP],
-	async bool) MessageHandler[REQ, RESP] {
+	async bool,
+) MethodBasedServer[REQ, RESP] {
 	s.handlers[method] = handleFuncCtx[REQ, RESP]{handleFunc: h, async: async}
 	return s
 }
 
-func (s *handler[REQ, RESP]) Handle(
+func (s *methodBasedServer[REQ, RESP]) Handle(
 	ctx context.Context,
-	req REQ) RESP {
+	req REQ,
+) RESP {
 	resp := s.pool.AcquireResponse()
-	if handlerCtx, ok := s.getHandler(ctx, req, resp); ok {
+	if handlerCtx, ok := s.getHandleFunc(ctx, req, resp); ok {
 		handlerCtx.call(ctx, req, resp)
 	}
 	return resp
 }
 
-func (s *handler[REQ, RESP]) onMessage(
+func (s *methodBasedServer[REQ, RESP]) onMessage(
 	ctx context.Context,
 	request RPCMessage,
-	sequence uint64,
-	cs ClientSession) error {
-	ctx, span := trace.Debug(ctx, "lockservice.server.handle")
-	defer span.End()
+	_ uint64,
+	cs ClientSession,
+) error {
 	req, ok := request.Message.(REQ)
 	if !ok {
-		getLogger().Fatal("received invalid message",
-			zap.Any("message", request))
+		return moerr.NewNotSupported(
+			ctx,
+			"invalid message type %T",
+			request)
 	}
 
 	resp := s.pool.AcquireResponse()
-	handlerCtx, ok := s.getHandler(ctx, req, resp)
+	handlerCtx, ok := s.getHandleFunc(ctx, req, resp)
 	if !ok {
 		s.pool.ReleaseRequest(req)
 		return cs.Write(ctx, resp)
@@ -198,17 +202,20 @@ func (s *handler[REQ, RESP]) onMessage(
 	}
 
 	if handlerCtx.async {
-		// TODO: make a goroutine pool
-		go fn(request)
-		return nil
+		return ants.Submit(
+			func() {
+				fn(request)
+			},
+		)
 	}
 	return fn(request)
 }
 
-func (s *handler[REQ, RESP]) getHandler(
+func (s *methodBasedServer[REQ, RESP]) getHandleFunc(
 	ctx context.Context,
 	req REQ,
-	resp RESP) (handleFuncCtx[REQ, RESP], bool) {
+	resp RESP,
+) (handleFuncCtx[REQ, RESP], bool) {
 	if getLogger().Enabled(zap.DebugLevel) {
 		getLogger().Debug("received a request",
 			zap.String("request", req.DebugString()))
@@ -243,4 +250,90 @@ func (s *handler[REQ, RESP]) getHandler(
 			req.Method()))
 	}
 	return handlerCtx, ok
+}
+
+type methodBasedClient[REQ, RESP MethodBasedMessage] struct {
+	cfg    *Config
+	client RPCClient
+	pool   MessagePool[REQ, RESP]
+	m      map[uint32]func(REQ) (string, error)
+}
+
+func NewMethodBasedClient[REQ, RESP MethodBasedMessage](
+	name string,
+	cfg Config,
+	pool MessagePool[REQ, RESP],
+) (MethodBasedClient[REQ, RESP], error) {
+	c := &methodBasedClient[REQ, RESP]{
+		cfg:  &cfg,
+		pool: pool,
+		m:    make(map[uint32]func(REQ) (string, error)),
+	}
+	c.cfg.Adjust()
+	c.cfg.BackendOptions = append(
+		c.cfg.BackendOptions,
+		WithBackendReadTimeout(internalTimeout),
+		WithBackendFreeOrphansResponse(
+			func(m Message) {
+				pool.ReleaseResponse(m.(RESP))
+			},
+		),
+	)
+
+	client, err := c.cfg.NewClient(
+		name,
+		getLogger().RawLogger(),
+		func() Message { return pool.AcquireResponse() },
+	)
+	if err != nil {
+		return nil, err
+	}
+	c.client = client
+	return c, nil
+}
+
+func (c *methodBasedClient[REQ, RESP]) RegisterMethod(
+	method uint32,
+	fn func(REQ) (string, error),
+) {
+	c.m[method] = fn
+}
+
+func (c *methodBasedClient[REQ, RESP]) Send(
+	ctx context.Context,
+	request REQ,
+) (RESP, error) {
+	var zero RESP
+
+	f, err := c.AsyncSend(ctx, request)
+	if err != nil {
+		return zero, err
+	}
+	defer f.Close()
+
+	v, err := f.Get()
+	if err != nil {
+		return zero, err
+	}
+	resp := v.(RESP)
+	if err := resp.UnwrapError(); err != nil {
+		c.pool.ReleaseResponse(resp)
+		return zero, err
+	}
+	return resp, nil
+}
+
+func (c *methodBasedClient[REQ, RESP]) AsyncSend(
+	ctx context.Context,
+	request REQ,
+) (*Future, error) {
+	address, err := c.m[request.Method()](request)
+	if err != nil {
+		return nil, err
+	}
+	return c.client.Send(ctx, address, request)
+}
+
+func (c *methodBasedClient[REQ, RESP]) Close() error {
+	return c.client.Close()
 }

@@ -29,7 +29,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
@@ -600,13 +599,8 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				entry.Size = int64(len(data))
 
 			} else {
-				if int64(len(entry.Data)) < entry.Size {
-					ptr, dec := getMallocAllocator().Allocate(uint64(entry.Size))
-					entry.Data = unsafe.Slice((*byte)(ptr), entry.Size)
-					entry.releaseFuncs = append(entry.releaseFuncs, func() {
-						dec.Deallocate(ptr)
-					})
-				}
+				finally := entry.prepareData()
+				defer finally(&err)
 				var n int
 				n, err = io.ReadFull(r, entry.Data)
 				if err != nil {
@@ -1002,6 +996,12 @@ func (l *LocalFS) FlushCache() {
 
 func (l *LocalFS) SetAsyncUpdate(b bool) {
 	l.asyncUpdate = b
+}
+
+func (l *LocalFS) Cost() *CostAttr {
+	return &CostAttr{
+		List: CostLow,
+	}
 }
 
 func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
