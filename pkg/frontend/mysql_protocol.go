@@ -432,7 +432,7 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 			// if data is 0, then print txn id
 			if len(mrs.Data[0]) == 1 {
 				if rs := (mrs.Data[0][0]).(int64); rs == int64(0) {
-					logutil.Infof("txn id: %v, sql: %s", ses.feSessionImpl.staticTxnId, sql)
+					logutil.Infof("xxxx txn id: %v, sql: %s", ses.feSessionImpl.staticTxnId, sql)
 				}
 			}
 		}
