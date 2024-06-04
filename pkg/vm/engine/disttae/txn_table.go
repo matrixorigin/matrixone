@@ -924,13 +924,17 @@ func (tbl *txnTable) collectUnCommittedObjects() []objectio.ObjectStats {
 			if entry.typ == INSERT_TXN {
 				return
 			}
-			if entry.typ != INSERT ||
-				len(entry.bat.Attrs) < 2 ||
-				entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
+
+			if entry.typ != INSERT || entry.fileName == "" {
 				return
 			}
-			for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
-				stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
+
+			if entry.bat.Attrs[0] != catalog.ObjectMeta_ObjectStats {
+				panic(fmt.Sprintf("expected object stats, but got: %s", entry.String()))
+			}
+
+			for i := 0; i < entry.bat.Vecs[0].Length(); i++ {
+				stats.UnMarshal(entry.bat.Vecs[0].GetBytesAt(i))
 				unCommittedObjects = append(unCommittedObjects, stats)
 			}
 		})
