@@ -715,18 +715,19 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			state = pb.TimeoutState
 		}
 		n := pb.CNStore{
-			UUID:               uuid,
-			Tick:               info.Tick,
-			ServiceAddress:     info.ServiceAddress,
-			SQLAddress:         info.SQLAddress,
-			LockServiceAddress: info.LockServiceAddress,
-			State:              state,
-			WorkState:          info.WorkState,
-			Labels:             info.Labels,
-			QueryAddress:       info.QueryAddress,
-			ConfigData:         info.ConfigData,
-			Resource:           info.Resource,
-			UpTime:             info.UpTime,
+			UUID:                uuid,
+			Tick:                info.Tick,
+			ServiceAddress:      info.ServiceAddress,
+			SQLAddress:          info.SQLAddress,
+			LockServiceAddress:  info.LockServiceAddress,
+			ShardServiceAddress: info.ShardServiceAddress,
+			State:               state,
+			WorkState:           info.WorkState,
+			Labels:              info.Labels,
+			QueryAddress:        info.QueryAddress,
+			ConfigData:          info.ConfigData,
+			Resource:            info.Resource,
+			UpTime:              info.UpTime,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}
@@ -743,6 +744,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			Shards:               info.Shards,
 			LogtailServerAddress: info.LogtailServerAddress,
 			LockServiceAddress:   info.LockServiceAddress,
+			ShardServiceAddress:  info.ShardServiceAddress,
 			ConfigData:           info.ConfigData,
 			QueryAddress:         info.QueryAddress,
 		}
