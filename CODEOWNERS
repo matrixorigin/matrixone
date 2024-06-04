@@ -98,6 +98,9 @@
 # pkg/lockservice
 /pkg/lockservice @zhangxu19830126
 
+# pkg/fileservice
+/pkg/shardservice @zhangxu19830126
+
 # pkg/logservice
 /pkg/logservice @zhangxu19830126
 
@@ -201,3 +204,4 @@
 /proto/txn.proto @zhangxu19830126
 /proto/api.proto @XuPeng-SH
 /proto/logtail.proto @XuPeng-SH
+/proto/shard.proto @zhangxu19830126
