@@ -97,25 +97,25 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 		var n bool
 		var v []byte
 
-		vs := vector.MustBytesCol(vec)
+		vs, area := vector.MustVarlenaRawData(vec)
 		nsp := vec.GetNulls()
 		if nsp.Any() {
 			for i, sel := range sels {
-				w := vs[sel]
+				w := vs[sel].GetByteSlice(area)
 				isNull := nulls.Contains(nsp, uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else if n && isNull {
 					diffs[i] = false
 				} else {
-					diffs[i] = diffs[i] || !(bytes.Equal(v, vs[sel]))
+					diffs[i] = diffs[i] || !(bytes.Equal(v, w))
 				}
 				n = isNull
 				v = w
 			}
 		} else {
 			for i, sel := range sels {
-				w := vs[sel]
+				w := vs[sel].GetByteSlice(area)
 				diffs[i] = diffs[i] || !(bytes.Equal(v, w))
 				v = w
 			}

@@ -381,8 +381,8 @@ func (r *aggFuncBytesResult) eq(other aggFuncBytesResult) bool {
 	if !r.basicResult.eq0(other.basicResult) {
 		return false
 	}
-	vs1 := vector.MustBytesCol(r.res)
-	vs2 := vector.MustBytesCol(other.res)
+	vs1, area1 := vector.MustVarlenaRawData(r.res)
+	vs2, area2 := vector.MustVarlenaRawData(other.res)
 	if len(vs1) != len(vs2) {
 		return false
 	}
@@ -391,7 +391,7 @@ func (r *aggFuncBytesResult) eq(other aggFuncBytesResult) bool {
 		if bs1[i] {
 			continue
 		}
-		if !bytes.Equal(vs1[i], vs2[i]) {
+		if !bytes.Equal(vs1[i].GetByteSlice(area1), vs2[i].GetByteSlice(area2)) {
 			return false
 		}
 	}

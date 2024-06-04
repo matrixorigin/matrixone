@@ -645,7 +645,7 @@ func TestGetExprValue(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setGlobalPu(pu)
-		ses := NewSession(ctx, &testMysqlWriter{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
+		ses := NewSession(ctx, &testMysqlWriter{}, testutil.NewProc().Mp())
 		ses.SetDatabaseName("db")
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
@@ -756,7 +756,7 @@ func TestGetExprValue(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setGlobalPu(pu)
-		ses := NewSession(ctx, &testMysqlWriter{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
+		ses := NewSession(ctx, &testMysqlWriter{}, testutil.NewProc().Mp())
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
 		assert.Nil(t, err)
@@ -911,8 +911,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	ctx := context.TODO()
 	pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 	setGlobalPu(pu)
-	ses1 := NewSession(ctx, &testMysqlWriter{}, testutil.NewProc().Mp(), GSysVariables, true,
-		nil)
+	ses1 := NewSession(ctx, &testMysqlWriter{}, testutil.NewProc().Mp())
 
 	ses1.SetUserDefinedVar("var2", "val2", "set var2 = val2")
 	ses1.SetUserDefinedVar("var3", "val3", "set var3 = val3")
