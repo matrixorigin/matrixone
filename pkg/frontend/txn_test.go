@@ -256,9 +256,6 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
 
-	var gSys GlobalSystemVariables
-	InitGlobalSystemVariables(&gSys)
-
 	ses := newTestSession(t, ctrl)
 	getGlobalPu().TxnClient = txnClient
 	getGlobalPu().StorageEngine = eng
@@ -288,8 +285,6 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
 
-	var gSys GlobalSystemVariables
-	InitGlobalSystemVariables(&gSys)
 	ses := newTestSession(t, ctrl)
 	getGlobalPu().TxnClient = txnClient
 	getGlobalPu().StorageEngine = eng
@@ -322,8 +317,6 @@ func newMockErrSession3(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
 
-	var gSys GlobalSystemVariables
-	InitGlobalSystemVariables(&gSys)
 	ses := newTestSession(t, ctrl)
 	getGlobalPu().TxnClient = txnClient
 	getGlobalPu().StorageEngine = eng
@@ -363,9 +356,6 @@ func Test_rollbackStatement(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
-
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
 
 		ses := newTestSession(t, ctrl)
 		getGlobalPu().TxnClient = txnClient

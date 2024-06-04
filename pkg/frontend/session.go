@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -122,7 +121,6 @@ type Session struct {
 	data            [][]interface{}
 	ep              *ExportConfig
 	showStmtType    ShowStatementType
-	sysVars         map[string]interface{}
 	userDefinedVars map[string]*UserDefinedVar
 
 	// db/tbl level config store in mo_mysql_compatibility_mode, need to read and write through SQL
@@ -145,8 +143,7 @@ type Session struct {
 	mu   sync.Mutex
 	rwmu sync.RWMutex
 
-	isNotBackgroundSession bool
-	lastInsertID           uint64
+	lastInsertID uint64
 
 	// tStmt is used only to record the StatementInfo
 	// QueryResult please use feSessionImpl.stmtProfile instead.
@@ -239,6 +236,14 @@ type Session struct {
 	proxyAddr  string
 
 	disableTrace bool
+}
+
+func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
+	if ses.gSysVars, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx); err != nil {
+		return
+	}
+	ses.sesSysVars = ses.gSysVars.Clone()
+	return
 }
 
 func (ses *Session) GetTxnHandler() *TxnHandler {
@@ -466,17 +471,11 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool, gSysVars *GlobalSystemVariables, isNotBackgroundSession bool, sharedTxnHandler *TxnHandler) *Session {
+func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool) *Session {
 	//if the sharedTxnHandler exists,we use its txnCtx and txnOperator in this session.
 	//Currently, we only use the sharedTxnHandler in the background session.
 	var txnOp TxnOperator
 	var err error
-	if sharedTxnHandler != nil {
-		if !sharedTxnHandler.InActiveTxn() {
-			panic("shared txn is invalid")
-		}
-		txnOp = sharedTxnHandler.GetTxn()
-	}
 	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, connCtx, txnOp)
 
 	ses := &Session{
@@ -485,7 +484,6 @@ func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool, gSysV
 			txnHandler: txnHandler,
 			//TODO:fix database name after the catalog is ready
 			txnCompileCtx:  InitTxnCompilerContext(proto.GetStr(DBNAME)),
-			gSysVars:       gSysVars,
 			outputCallback: getDataFromPipeline,
 			timeZone:       time.Local,
 			respr:          NewMysqlResp(proto),
@@ -504,18 +502,14 @@ func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool, gSysV
 		timestampMap: map[TS]time.Time{},
 		statsCache:   plan2.NewStatsCache(),
 	}
-	if isNotBackgroundSession {
-		ses.sysVars = gSysVars.CopySysVarsToSession()
-		ses.userDefinedVars = make(map[string]*UserDefinedVar)
-		ses.configs = make(map[string]interface{})
-		ses.prepareStmts = make(map[string]*PrepareStmt)
-		// For seq init values.
-		ses.seqCurValues = make(map[uint64]string)
-		ses.seqLastValue = new(string)
-	}
+	ses.userDefinedVars = make(map[string]*UserDefinedVar)
+	ses.configs = make(map[string]interface{})
+	ses.prepareStmts = make(map[string]*PrepareStmt)
+	// For seq init values.
+	ses.seqCurValues = make(map[uint64]string)
+	ses.seqLastValue = new(string)
 
 	ses.buf = buffer.New()
-	ses.isNotBackgroundSession = isNotBackgroundSession
 	ses.sqlHelper = &SqlHelper{ses: ses}
 	ses.uuid, _ = uuid.NewV7()
 	if ses.pool == nil {
@@ -575,7 +569,6 @@ func (ses *Session) Close() {
 		ses.txnCompileCtx = nil
 	}
 	ses.sql = ""
-	ses.sysVars = nil
 	ses.userDefinedVars = nil
 	ses.gSysVars = nil
 	for _, stmt := range ses.prepareStmts {
@@ -614,11 +607,11 @@ func (ses *Session) Close() {
 	for _, bat := range ses.resultBatches {
 		bat.Clean(ses.pool)
 	}
-	if ses.isNotBackgroundSession {
-		pool := ses.GetMemPool()
-		mpool.DeleteMPool(pool)
-		ses.SetMemPool(nil)
-	}
+
+	pool := ses.GetMemPool()
+	mpool.DeleteMPool(pool)
+	ses.SetMemPool(nil)
+
 	if ses.buf != nil {
 		ses.buf.Free()
 		ses.buf = nil
@@ -644,9 +637,7 @@ func (ses *Session) ResetBlockIdx() {
 }
 
 func (ses *Session) IsBackgroundSession() bool {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return !ses.isNotBackgroundSession
+	return false
 }
 
 func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan) {
@@ -733,10 +724,7 @@ func (ses *Session) InvalidatePrivilegeCache() {
 func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
 	ses.EnterFPrint(99)
 	defer ses.ExitFPrint(99)
-	return NewBackgroundExec(
-		ctx,
-		ses,
-		ses.GetMemPool())
+	return NewBackgroundExec(ctx, ses)
 }
 
 // GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction.
@@ -749,33 +737,14 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 		txnOp = ses.GetTxnHandler().GetTxn()
 	}
 
-	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, ses.GetTxnHandler().GetConnCtx(), txnOp)
 	var callback outputCallBackFunc
 	if newRawBatch {
 		callback = batchFetcher2
 	} else {
 		callback = fakeDataSetFetcher2
 	}
-	backSes := &backSession{
-		feSessionImpl: feSessionImpl{
-			pool:           ses.pool,
-			buf:            buffer.New(),
-			stmtProfile:    process.StmtProfile{},
-			tenant:         nil,
-			txnHandler:     txnHandler,
-			txnCompileCtx:  InitTxnCompilerContext(ses.respr.GetStr(DBNAME)),
-			mrs:            nil,
-			outputCallback: callback,
-			allResultSet:   nil,
-			resultBatches:  nil,
-			derivedStmt:    false,
-			gSysVars:       GSysVariables,
-			label:          make(map[string]string),
-			timeZone:       time.Local,
-			respr:          defResper,
-		},
-	}
-	backSes.uuid, _ = uuid.NewV7()
+
+	backSes := newBackSession(ses, txnOp, ses.respr.GetStr(DBNAME), callback)
 	bh := &backExec{
 		backSes: backSes,
 	}
@@ -791,27 +760,8 @@ var GetRawBatchBackgroundExec = func(ctx context.Context, ses *Session) Backgrou
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec {
 	ses.EnterFPrint(100)
 	defer ses.ExitFPrint(100)
-	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, ses.GetTxnHandler().GetConnCtx(), nil)
-	backSes := &backSession{
-		feSessionImpl: feSessionImpl{
-			pool:           ses.GetMemPool(),
-			buf:            buffer.New(),
-			stmtProfile:    process.StmtProfile{},
-			tenant:         nil,
-			txnHandler:     txnHandler,
-			txnCompileCtx:  InitTxnCompilerContext(""),
-			mrs:            nil,
-			outputCallback: batchFetcher2,
-			allResultSet:   nil,
-			resultBatches:  nil,
-			derivedStmt:    false,
-			gSysVars:       GSysVariables,
-			label:          make(map[string]string),
-			timeZone:       time.Local,
-			respr:          defResper,
-		},
-	}
-	backSes.uuid, _ = uuid.NewV7()
+
+	backSes := newBackSession(ses, nil, "", batchFetcher2)
 	bh := &backExec{
 		backSes: backSes,
 	}
@@ -1000,114 +950,6 @@ func (ses *Session) RemovePrepareStmt(name string) {
 	delete(ses.prepareStmts, name)
 }
 
-func (ses *Session) SetSysVar(name string, value interface{}) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.sysVars[name] = value
-}
-
-func (ses *Session) GetSysVar(name string) interface{} {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.sysVars[name]
-}
-
-func (ses *Session) GetSysVars() map[string]interface{} {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.sysVars
-}
-
-// SetGlobalVar sets the value of system variable in global.
-// used by SET GLOBAL
-func (ses *Session) SetGlobalVar(ctx context.Context, name string, value interface{}) error {
-	return ses.GetGlobalSysVars().SetGlobalSysVar(ctx, name, value)
-}
-
-// GetGlobalVar gets this value of the system variable in global
-func (ses *Session) GetGlobalVar(ctx context.Context, name string) (interface{}, error) {
-	gSysVars := ses.GetGlobalSysVars()
-	if def, val, ok := gSysVars.GetGlobalSysVar(name); ok {
-		if def.GetScope() == ScopeSession {
-			//empty
-			return nil, moerr.NewInternalError(ctx, errorSystemVariableSessionEmpty())
-		}
-		return val, nil
-	}
-	return nil, moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
-}
-
-// SetSessionVar sets the value of system variable in session
-func (ses *Session) SetSessionVar(ctx context.Context, name string, value interface{}) error {
-	gSysVars := ses.GetGlobalSysVars()
-	if def, _, ok := gSysVars.GetGlobalSysVar(name); ok {
-		if def.GetScope() == ScopeGlobal {
-			return moerr.NewInternalError(ctx, errorSystemVariableIsGlobal())
-		}
-		//scope session & both
-		if !def.GetDynamic() {
-			return moerr.NewInternalError(ctx, errorSystemVariableIsReadOnly())
-		}
-
-		cv, err := def.GetType().Convert(value)
-		if err != nil {
-			errutil.ReportError(ctx, err)
-			return err
-		}
-
-		if def.UpdateSessVar == nil {
-			ses.SetSysVar(def.GetName(), cv)
-		} else {
-			return def.UpdateSessVar(ctx, ses, ses.GetSysVars(), def.GetName(), cv)
-		}
-	} else {
-		return moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
-	}
-	return nil
-}
-
-// InitSetSessionVar sets the value of system variable in session when start a connection
-func (ses *Session) InitSetSessionVar(ctx context.Context, name string, value interface{}) error {
-	gSysVars := ses.GetGlobalSysVars()
-	if def, _, ok := gSysVars.GetGlobalSysVar(name); ok {
-		cv, err := def.GetType().Convert(value)
-		if err != nil {
-			errutil.ReportError(ctx, moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert to the system variable type %s failed, bad value %v", name, def.GetType().String(), value))
-		}
-
-		if def.UpdateSessVar == nil {
-			ses.SetSysVar(def.GetName(), cv)
-		} else {
-			return def.UpdateSessVar(ctx, ses, ses.GetSysVars(), def.GetName(), cv)
-		}
-	}
-	return nil
-}
-
-// GetSessionVar gets this value of the system variable in session
-func (ses *Session) GetSessionVar(ctx context.Context, name string) (interface{}, error) {
-	gSysVars := ses.GetGlobalSysVars()
-	if def, gVal, ok := gSysVars.GetGlobalSysVar(name); ok {
-		ciname := strings.ToLower(name)
-		if def.GetScope() == ScopeGlobal {
-			return gVal, nil
-		}
-		return ses.GetSysVar(ciname), nil
-	} else {
-		return nil, moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
-	}
-}
-
-func (ses *Session) CopyAllSessionVars() map[string]interface{} {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	cp := make(map[string]interface{})
-	for k, v := range ses.sysVars {
-		cp[k] = v
-	}
-	return cp
-}
-
 // SetUserDefinedVar sets the user defined variable to the value in session
 func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string) error {
 	ses.mu.Lock()
@@ -1117,14 +959,14 @@ func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string
 }
 
 // GetUserDefinedVar gets value of the user defined variable
-func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, *UserDefinedVar, error) {
+func (ses *Session) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	val, ok := ses.userDefinedVars[strings.ToLower(name)]
 	if !ok {
-		return SystemVariableNullType{}, nil, nil
+		return nil, nil
 	}
-	return InitSystemVariableStringType(name), val, nil
+	return val, nil
 }
 
 // SetUserDefinedVar sets the config to the value in session
@@ -1218,10 +1060,6 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	var userID int64
 	var pwd, accountStatus string
 	var accountVersion uint64
-	//var createVersion string
-	var pwdBytes []byte
-	var isSpecial bool
-	var specialAccount *TenantInfo
 
 	//Get tenant info
 	tenant, err = GetTenantInfo(ctx, userInput)
@@ -1233,17 +1071,14 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.UpdateDebugString()
 
 	ses.Debugf(ctx, "check special user")
-	// check the special user for initilization
-	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
-	if isSpecial && specialAccount.IsMoAdminRole() {
+	// check the special user for initialization
+	if isSpecial, pwdBytes, specialAccount := isSpecialUser(tenant.GetUser()); isSpecial && specialAccount.IsMoAdminRole() {
 		ses.SetTenantInfo(specialAccount)
 		if len(ses.requestLabel) == 0 {
 			ses.requestLabel = db_holder.GetLabelSelector()
 		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
-
-	ses.SetTenantInfo(tenant)
 
 	//step1 : check tenant exists or not in SYS tenant context
 	ses.timestampMap[TSCheckTenantStart] = time.Now()
@@ -1252,9 +1087,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	if err != nil {
 		return nil, err
 	}
-	mp := ses.GetMemPool()
 	ses.Debugf(ctx, "check tenant %s exists", tenant)
-	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, ses, mp, sqlForCheckTenant)
+	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, ses, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
 	}
@@ -1306,7 +1140,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	if err != nil {
 		return nil, err
 	}
-	rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, mp, sqlForPasswordOfUser)
+	rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sqlForPasswordOfUser)
 	if err != nil {
 		return nil, err
 	}
@@ -1355,7 +1189,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if err != nil {
 			return nil, err
 		}
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, mp, sqlForCheckRoleExists)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sqlForCheckRoleExists)
 		if err != nil {
 			return nil, err
 		}
@@ -1370,7 +1204,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if err != nil {
 			return nil, err
 		}
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, mp, sqlForRoleOfUser)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sqlForRoleOfUser)
 		if err != nil {
 			return nil, err
 		}
@@ -1391,7 +1225,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		ses.Debugf(tenantCtx, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, mp, sql)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sql)
 		if err != nil {
 			return nil, err
 		}
@@ -1416,7 +1250,9 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	// TO Check password
 	if checkPassword(psw, salt, authResponse) {
 		ses.Debug(tenantCtx, "check password succeeded")
-		ses.InitGlobalSystemVariables(tenantCtx)
+		if err = ses.InitSystemVariables(ctx); err != nil {
+			return nil, err
+		}
 	} else {
 		return nil, moerr.NewInternalError(tenantCtx, "check password failed")
 	}
@@ -1424,7 +1260,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	// If the login information contains the database name, verify if the database exists
 	if dbName != "" {
 		ses.timestampMap[TSCheckDbNameStart] = time.Now()
-		_, err = executeSQLInBackgroundSession(tenantCtx, ses, mp, "use "+dbName)
+		_, err = executeSQLInBackgroundSession(tenantCtx, ses, "use "+dbName)
 		if err != nil {
 			return nil, err
 		}
@@ -1454,106 +1290,46 @@ func (ses *Session) UpgradeTenant(ctx context.Context, tenantName string, retryC
 	return ses.rm.baseService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount)
 }
 
-func (ses *Session) InitGlobalSystemVariables(ctx context.Context) error {
-	var err error
-	var rsset []ExecResult
-	ses.timestampMap[TSInitGlobalSysVarStart] = time.Now()
-	defer func() {
-		ses.timestampMap[TSInitGlobalSysVarEnd] = time.Now()
-		v2.InitGlobalSysVarDurationHistogram.Observe(ses.timestampMap[TSInitGlobalSysVarEnd].Sub(ses.timestampMap[TSInitGlobalSysVarStart]).Seconds())
-	}()
+func (ses *Session) getGlobalSysVars(ctx context.Context) (gSysVars map[string]interface{}, err error) {
+	var execResults []ExecResult
 
 	tenantInfo := ses.GetTenantInfo()
-	// if is system account
-	if tenantInfo.IsSysTenant() {
-		sysTenantCtx := defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+	tenantCtx := defines.AttachAccount(ctx, tenantInfo.TenantID, tenantInfo.UserID, tenantInfo.DefaultRoleID)
+	// get system variable from mo_mysql_compatibility mode
+	sqlForGetVariables := getSqlForGetSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
 
-		// get system variable from mo_mysql_compatibility mode
-		sqlForGetVariables := getSystemVariablesWithAccount(sysAccountID)
-		mp := ses.GetMemPool()
+	if execResults, err = ExeSqlInBgSes(tenantCtx, ses, sqlForGetVariables); err != nil {
+		return
+	}
 
-		rsset, err = executeSQLInBackgroundSession(
-			sysTenantCtx,
-			ses,
-			mp,
-			sqlForGetVariables)
-		if err != nil {
-			return err
-		}
-		if execResultArrayHasData(rsset) {
-			for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-				variable_name, err := rsset[0].GetString(sysTenantCtx, i, 0)
-				if err != nil {
-					return err
-				}
-				variable_value, err := rsset[0].GetString(sysTenantCtx, i, 1)
-				if err != nil {
-					return err
-				}
+	// init with default value from gSysVarsDefs
+	gSysVars = make(map[string]interface{})
+	for name, sysVar := range gSysVarsDefs {
+		gSysVars[name] = sysVar.Default
+	}
 
-				if sv, ok := gSysVarsDefs[variable_name]; ok {
-					if !sv.GetDynamic() || (sv.Scope != ScopeGlobal && sv.Scope != ScopeBoth) {
-						continue
-					}
-					val, err := sv.GetType().ConvertFromString(variable_value)
-					if err != nil {
-						errutil.ReportError(ctx, moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert from string value to the system variable type %s failed, bad value %s", variable_name, sv.Type.String(), variable_value))
-						return err
-					}
-					err = ses.InitSetSessionVar(sysTenantCtx, variable_name, val)
-					if err != nil {
-						errutil.ReportError(ctx, moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert from string value to the system variable type %s failed, bad value %s", variable_name, sv.Type.String(), variable_value))
-					}
-				}
+	for _, execResult := range execResults {
+		for i := uint64(0); i < execResult.GetRowCount(); i++ {
+			var varName, varValue string
+			if varName, err = execResult.GetString(tenantCtx, i, 0); err != nil {
+				return
 			}
-		} else {
-			return moerr.NewInternalError(sysTenantCtx, "there is no data in mo_mysql_compatibility_mode table for account %s", sysAccountName)
-		}
-	} else {
-		tenantCtx := defines.AttachAccount(ctx, tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
-
-		// get system variable from mo_mysql_compatibility mode
-		sqlForGetVariables := getSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
-		mp := ses.GetMemPool()
-
-		rsset, err = executeSQLInBackgroundSession(
-			tenantCtx,
-			ses,
-			mp,
-			sqlForGetVariables)
-		if err != nil {
-			return err
-		}
-		if execResultArrayHasData(rsset) {
-			for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-				variable_name, err := rsset[0].GetString(tenantCtx, i, 0)
-				if err != nil {
-					return err
-				}
-				variable_value, err := rsset[0].GetString(tenantCtx, i, 1)
-				if err != nil {
-					return err
-				}
-
-				if sv, ok := gSysVarsDefs[variable_name]; ok {
-					if !sv.Dynamic || sv.GetScope() == ScopeSession {
-						continue
-					}
-					val, err := sv.GetType().ConvertFromString(variable_value)
-					if err != nil {
-						return err
-					}
-					err = ses.InitSetSessionVar(tenantCtx, variable_name, val)
-					if err != nil {
-						return err
-					}
-				}
+			if varValue, err = execResult.GetString(tenantCtx, i, 1); err != nil {
+				return
 			}
-		} else {
-			return moerr.NewInternalError(tenantCtx, "there is no data in  mo_mysql_compatibility_mode table for account %s", tenantInfo.GetTenant())
+
+			// overwrite with the values from table `mo_mysql_compatibility`
+			if sv, ok := gSysVarsDefs[varName]; ok {
+				var val interface{}
+				if val, err = sv.GetType().ConvertFromString(varValue); err != nil {
+					return
+				}
+				gSysVars[varName] = val
+			}
 		}
 	}
-	return err
+
+	return
 }
 
 func (ses *Session) GetPrivilege() *privilege {
@@ -1595,62 +1371,6 @@ func changeVersion(ctx context.Context, ses *Session, db string) error {
 // getCNLabels returns requested CN labels.
 func (ses *Session) getCNLabels() map[string]string {
 	return ses.requestLabel
-}
-
-// getSystemVariableValue get the system vaiables value from the mo_mysql_compatibility_mode table
-func (ses *Session) GetGlobalSystemVariableValue(ctx context.Context, varName string) (val interface{}, err error) {
-	var sql string
-	//var err error
-	var erArray []ExecResult
-	var accountId uint32
-	var variableValue string
-	// check the variable name isValid or not
-	_, err = ses.GetGlobalVar(ctx, varName)
-	if err != nil {
-		return nil, err
-	}
-
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return nil, err
-	}
-	if tenantInfo := ses.GetTenantInfo(); tenantInfo != nil {
-		accountId = tenantInfo.GetTenantID()
-	}
-	sql = getSqlForGetSystemVariableValueWithAccount(uint64(accountId), varName)
-
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return nil, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return nil, err
-	}
-
-	if execResultArrayHasData(erArray) {
-		variableValue, err = erArray[0].GetString(ctx, 0, 0)
-		if err != nil {
-			return nil, err
-		}
-		if sv, ok := gSysVarsDefs[varName]; ok {
-			val, err = sv.GetType().ConvertFromString(variableValue)
-			if err != nil {
-				return nil, err
-			}
-			return val, nil
-		}
-	}
-
-	return nil, moerr.NewInternalError(ctx, "can not resolve global system variable %s", varName)
 }
 
 func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d interface{}, isLastStmt bool) *Response {
