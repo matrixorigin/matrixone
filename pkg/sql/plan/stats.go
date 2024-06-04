@@ -516,7 +516,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return 0.2
 		case "prefix_eq":
 			ndv := getExprNdv(expr, builder)
-			logutil.Info("prefix_eq stats ndv: %v", ndv)
+			logutil.Infof("prefix_eq stats ndv: %v", ndv)
 			if ndv > 15 {
 				return 15 / ndv
 			}
