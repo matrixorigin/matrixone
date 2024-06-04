@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -552,6 +553,12 @@ func (c *cn) addOps(
 	for _, op := range ops {
 		if !c.hasSame(op) {
 			c.incompleteOps = append(c.incompleteOps, op)
+			switch op.Type {
+			case pb.OpType_AddReplica:
+				v2.AddReplicaOperatorCounter.Inc()
+			case pb.OpType_DeleteReplica:
+				v2.DeleteReplicaOperatorCounter.Inc()
+			}
 		}
 	}
 }
