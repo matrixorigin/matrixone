@@ -33,9 +33,8 @@ const (
 
 type container struct {
 	colexec.ReceiverOperator
-	state   int
-	isMerge bool
-	batch   *batch.Batch
+	state int
+	batch *batch.Batch
 }
 
 type Argument struct {
@@ -87,12 +86,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			proc.PutBatch(ctr.batch)
 		}
 		ctr.FreeMergeTypeOperator(pipelineFailed)
-		if ctr.isMerge {
-			ctr.FreeMergeTypeOperator(pipelineFailed)
-		} else {
-			ctr.FreeAllReg()
-		}
-
 		arg.ctr = nil
 	}
 }
