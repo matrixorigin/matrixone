@@ -236,16 +236,16 @@ SHOW CREATE TABLE mo_sample_data_tpch_sf1.supplier;
 invalid database mo_sample_data_tpch_sf1
 SHOW CREATE TABLE mysql.columns_priv;
 Table    Create Table
-columns_priv    CREATE TABLE `columns_priv` (\n  `host` CHAR(255) NOT NULL DEFAULT '',\n  `db` CHAR(64) NOT NULL DEFAULT '',\n  `user` CHAR(32) NOT NULL DEFAULT '',\n  `table_name` CHAR(64) NOT NULL DEFAULT '',\n  `column_name` CHAR(64) NOT NULL DEFAULT '',\n  `timestamp` TIMESTAMP NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),\n  `column_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  PRIMARY KEY (`host`,`db`,`user`,`table_name`,`column_name`)\n)
+columns_priv    CREATE TABLE `columns_priv` (\n  `host` CHAR(255) NOT NULL DEFAULT '',\n  `db` CHAR(64) NOT NULL DEFAULT '',\n  `user` CHAR(32) NOT NULL DEFAULT '',\n  `table_name` CHAR(64) NOT NULL DEFAULT '',\n  `column_name` CHAR(64) NOT NULL DEFAULT '',\n  `timestamp` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  `column_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  PRIMARY KEY (`host`,`db`,`user`,`table_name`,`column_name`)\n)
 SHOW CREATE TABLE mysql.db;
 Table    Create Table
 db    CREATE TABLE `db` (\n  `host` CHAR(255) NOT NULL DEFAULT '',\n  `db` CHAR(64) NOT NULL DEFAULT '',\n  `user` CHAR(32) NOT NULL DEFAULT '',\n  `select_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `insert_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `update_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `delete_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `drop_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `grant_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `references_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `index_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `alter_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_tmp_table_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `lock_tables_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_view_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `show_view_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_routine_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `alter_routine_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `execute_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `event_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `trigger_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  PRIMARY KEY (`host`,`db`,`user`),\n  KEY `user` (`user`)\n)
 SHOW CREATE TABLE mysql.procs_priv;
 Table    Create Table
-procs_priv    CREATE TABLE `procs_priv` (\n  `host` CHAR(255) NOT NULL DEFAULT '',\n  `db` CHAR(64) NOT NULL DEFAULT '',\n  `user` CHAR(32) NOT NULL DEFAULT '',\n  `routine_name` CHAR(64) NOT NULL DEFAULT '',\n  `routine_type` VARCHAR(10) NOT NULL,\n  `grantor` VARCHAR(288) NOT NULL DEFAULT '',\n  `proc_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  `timestamp` TIMESTAMP NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),\n  PRIMARY KEY (`host`,`db`,`user`,`routine_name`,`routine_type`),\n  KEY `grantor` (`grantor`)\n)
+procs_priv    CREATE TABLE `procs_priv` (\n  `host` CHAR(255) NOT NULL DEFAULT '',\n  `db` CHAR(64) NOT NULL DEFAULT '',\n  `user` CHAR(32) NOT NULL DEFAULT '',\n  `routine_name` CHAR(64) NOT NULL DEFAULT '',\n  `routine_type` VARCHAR(10) NOT NULL,\n  `grantor` VARCHAR(288) NOT NULL DEFAULT '',\n  `proc_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  `timestamp` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`host`,`db`,`user`,`routine_name`,`routine_type`),\n  KEY `grantor` (`grantor`)\n)
 SHOW CREATE TABLE mysql.tables_priv;
 Table    Create Table
-tables_priv    CREATE TABLE `tables_priv` (\n  `host` CHAR(255) NOT NULL DEFAULT '',\n  `db` CHAR(64) NOT NULL DEFAULT '',\n  `user` CHAR(32) NOT NULL DEFAULT '',\n  `table_name` CHAR(64) NOT NULL DEFAULT '',\n  `grantor` VARCHAR(288) NOT NULL DEFAULT '',\n  `timestamp` TIMESTAMP NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),\n  `table_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  `column_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  PRIMARY KEY (`host`,`db`,`user`,`table_name`),\n  KEY `grantor` (`grantor`)\n)
+tables_priv    CREATE TABLE `tables_priv` (\n  `host` CHAR(255) NOT NULL DEFAULT '',\n  `db` CHAR(64) NOT NULL DEFAULT '',\n  `user` CHAR(32) NOT NULL DEFAULT '',\n  `table_name` CHAR(64) NOT NULL DEFAULT '',\n  `grantor` VARCHAR(288) NOT NULL DEFAULT '',\n  `timestamp` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  `table_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  `column_priv` VARCHAR(10) NOT NULL DEFAULT '',\n  PRIMARY KEY (`host`,`db`,`user`,`table_name`),\n  KEY `grantor` (`grantor`)\n)
 SHOW CREATE TABLE mysql.user;
 Table    Create Table
 user    CREATE TABLE `user` (\n  `host` CHAR(255) NOT NULL DEFAULT '',\n  `user` CHAR(32) NOT NULL DEFAULT '',\n  `select_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `insert_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `update_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `delete_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `drop_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `reload_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `shutdown_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `process_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `file_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `grant_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `references_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `index_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `alter_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `show_db_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `super_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_tmp_table_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `lock_tables_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `execute_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `repl_slave_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `repl_client_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_view_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `show_view_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_routine_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `alter_routine_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_user_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `event_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `trigger_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_tablespace_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `ssl_type` VARCHAR(10) NOT NULL DEFAULT '',\n  `ssl_cipher` BLOB NOT NULL,\n  `x509_issuer` BLOB NOT NULL,\n  `x509_subject` BLOB NOT NULL,\n  `max_questions` INT UNSIGNED NOT NULL DEFAULT '0',\n  `max_updates` INT UNSIGNED NOT NULL DEFAULT '0',\n  `max_connections` INT UNSIGNED NOT NULL DEFAULT '0',\n  `max_user_connections` INT UNSIGNED NOT NULL DEFAULT '0',\n  `plugin` CHAR(64) NOT NULL DEFAULT 'caching_sha2_password',\n  `authentication_string` TEXT DEFAULT NULL,\n  `password_expired` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `password_last_changed` TIMESTAMP NULL DEFAULT NULL,\n  `password_lifetime` SMALLINT UNSIGNED DEFAULT NULL,\n  `account_locked` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `create_role_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `drop_role_priv` VARCHAR(10) NOT NULL DEFAULT 'N',\n  `password_reuse_history` SMALLINT UNSIGNED DEFAULT NULL,\n  `password_reuse_time` SMALLINT UNSIGNED DEFAULT NULL,\n  `password_require_current` VARCHAR(10) DEFAULT NULL,\n  `user_attributes` JSON DEFAULT NULL,\n  PRIMARY KEY (`host`,`user`)\n)
@@ -404,7 +404,7 @@ db    CHAR(64)    NO    PRI    ''
 user    CHAR(32)    NO    PRI    ''        
 table_name    CHAR(64)    NO    PRI    ''        
 column_name    CHAR(64)    NO    PRI    ''        
-timestamp    TIMESTAMP(0)    NO        current_timestamp()        
+timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
 column_priv    VARCHAR(10)    NO        ''        
 DESC `mysql`.`db` ;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -439,7 +439,7 @@ routine_name    CHAR(64)    NO    PRI    ''
 routine_type    VARCHAR(10)    NO    PRI    null        
 grantor    VARCHAR(288)    NO    MUL    ''        
 proc_priv    VARCHAR(10)    NO        ''        
-timestamp    TIMESTAMP(0)    NO        current_timestamp()        
+timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
 DESC `mysql`.`tables_priv` ;
 Field    Type    Null    Key    Default    Extra    Comment
 host    CHAR(255)    NO    PRI    ''        
@@ -447,7 +447,7 @@ db    CHAR(64)    NO    PRI    ''
 user    CHAR(32)    NO    PRI    ''        
 table_name    CHAR(64)    NO    PRI    ''        
 grantor    VARCHAR(288)    NO    MUL    ''        
-timestamp    TIMESTAMP(0)    NO        current_timestamp()        
+timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
 table_priv    VARCHAR(10)    NO        ''        
 column_priv    VARCHAR(10)    NO        ''        
 DESC `mysql`.`user` ;
@@ -570,7 +570,7 @@ SQL parser error: table "wb_version" does not exist
 SELECT * FROM `mo_mo`.`wb` WHERE 1=1 AND account_id = '91731e77_49ea_4a8a_b1c7_d5512c7ae96e' AND sql_user = 'admin' AND name LIKE '%New sql wb %' ORDER BY updated_at DESC LIMIT 100;
 SQL parser error: table "wb" does not exist
 SELECT SCHEMA_NAME from Information_schema.SCHEMATA where SCHEMA_NAME LIKE 'mo_mo%' ORDER BY SCHEMA_NAME='mo_mo' DESC,SCHEMA_NAME limit 1;
-schema_name
+SCHEMA_NAME
 mo_mo
 SELECT `collecttime`,`value`,`account` FROM `system_metrics`.`server_storage_usage` WHERE account != 'sys' and account != 'ob' and collectTime >= '2023-07-28 03:23:00' and collectTime < '2023-07-28 03:30:00';
 collecttime    value    account

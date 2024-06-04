@@ -721,7 +721,7 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement) stri
 			//get SET VAR sql
 			setVarSqls := make([]string, len(t.Variables))
 			for i, v := range t.Variables {
-				_, userVal, err := ses.GetUserDefinedVar(v.Name)
+				userVal, err := ses.GetUserDefinedVar(v.Name)
 				if err == nil && userVal != nil && len(userVal.Sql) != 0 {
 					setVarSqls[i] = userVal.Sql
 				}
