@@ -116,16 +116,6 @@ func (bf *prefixBloomFilter) PrefixMayContainsKey(
 	return bf.bloomFilter.MayContainsKey(key)
 }
 
-func (bf *prefixBloomFilter) PrefixMayContainsAnyKeys(
-	keys containers.Vector,
-	prefixFnId uint8,
-) (bool, *nulls.Bitmap, error) {
-	if bf.prefixFnId != prefixFnId {
-		return false, nil, moerr.NewInternalErrorNoCtx("prefixFnId mismatch: %d != %d", bf.prefixFnId, prefixFnId)
-	}
-	return bf.bloomFilter.MayContainsAnyKeys(keys)
-}
-
 func (bf *prefixBloomFilter) PrefixMayContainsAny(
 	keys *vector.Vector,
 	lowerBound int,

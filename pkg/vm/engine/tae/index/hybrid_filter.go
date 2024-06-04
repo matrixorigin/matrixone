@@ -130,13 +130,6 @@ func (bf *hybridFilter) PrefixMayContainsKey(
 	return bf.prefixBloomFilter.PrefixMayContainsKey(key, prefixFnId)
 }
 
-func (bf *hybridFilter) PrefixMayContainsAnyKeys(
-	keys containers.Vector,
-	prefixFnId uint8,
-) (bool, *nulls.Bitmap, error) {
-	return bf.prefixBloomFilter.PrefixMayContainsAnyKeys(keys, prefixFnId)
-}
-
 func (bf *hybridFilter) PrefixMayContainsAny(
 	keys *vector.Vector,
 	lowerBound int,

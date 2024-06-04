@@ -47,9 +47,6 @@ type StaticFilter interface {
 	MayContainsAny(keys *vector.Vector, lowerBound int, upperBound int) bool
 
 	PrefixMayContainsKey(key []byte, prefixFnId uint8) (bool, error)
-	PrefixMayContainsAnyKeys(keys containers.Vector, prefixFnId uint8) (
-		bool, *nulls.Bitmap, error,
-	)
 	PrefixMayContainsAny(
 		keys *vector.Vector, lowerBound int, upperBound int, prefixFnId uint8,
 	) bool
