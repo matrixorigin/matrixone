@@ -250,6 +250,10 @@ func (s *service) GetShardInfo(
 	return 0, 0, false, nil
 }
 
+func (s *service) ReplicaCount() int64 {
+	return int64(s.cache.allocate.Load().replicasCount())
+}
+
 func (s *service) removeReadCache(
 	table uint64,
 ) {
