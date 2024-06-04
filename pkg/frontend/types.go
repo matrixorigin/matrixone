@@ -17,30 +17,30 @@ package frontend
 import (
 	"context"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -274,9 +274,11 @@ type FeSession interface {
 	GetConfig(ctx context.Context, dbName, varName string) (any, error)
 	GetBackgroundExec(ctx context.Context) BackgroundExec
 	GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec
-	GetGlobalSystemVariableValue(ctx context.Context, name string) (interface{}, error)
-	GetSessionVar(ctx context.Context, name string) (interface{}, error)
-	GetUserDefinedVar(name string) (SystemVariableType, *UserDefinedVar, error)
+	GetGlobalSysVars() *SystemVariables
+	GetGlobalSysVar(name string) (interface{}, error)
+	GetSessionSysVars() *SystemVariables
+	GetSessionSysVar(name string) (interface{}, error)
+	GetUserDefinedVar(name string) (*UserDefinedVar, error)
 	GetDebugString() string
 	GetFromRealUser() bool
 	getLastCommitTS() timestamp.Timestamp
@@ -291,7 +293,6 @@ type FeSession interface {
 	GetDatabaseName() string
 	SetDatabaseName(db string)
 	GetMysqlResultSet() *MysqlResultSet
-	GetGlobalVar(ctx context.Context, name string) (interface{}, error)
 	SetNewResponse(category int, affectedRows uint64, cmd int, d interface{}, isLastStmt bool) *Response
 	GetTxnCompileCtx() *TxnCompilerContext
 	GetCmd() CommandType
@@ -431,7 +432,11 @@ type feSessionImpl struct {
 	//	in the same transaction.
 	derivedStmt bool
 
-	gSysVars *GlobalSystemVariables
+	// gSysVars is a pointer to account's sys vars (saved in GSysVarsMgr)
+	gSysVars *SystemVariables
+	// sesSysVars is session level sys vars; init as a copy of account's sys vars
+	sesSysVars *SystemVariables
+
 	// when starting a transaction in session, the snapshot ts of the transaction
 	// is to get a TN push to CN to get the maximum commitTS. but there is a problem,
 	// when the last transaction ends and the next one starts, it is possible that the
@@ -482,6 +487,7 @@ func (ses *feSessionImpl) Close() {
 	}
 	ses.sql = ""
 	ses.gSysVars = nil
+	ses.sesSysVars = nil
 	ses.allResultSet = nil
 	ses.tenant = nil
 	ses.debugStr = ""
@@ -710,8 +716,91 @@ func (ses *feSessionImpl) AppendResultBatch(bat *batch.Batch) error {
 	return nil
 }
 
-func (ses *feSessionImpl) GetGlobalSysVars() *GlobalSystemVariables {
+func (ses *feSessionImpl) GetGlobalSysVars() *SystemVariables {
 	return ses.gSysVars
+}
+
+func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
+	name = strings.ToLower(name)
+	if sv, ok := gSysVarsDefs[name]; !ok {
+		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+	} else if sv.Scope == ScopeSession {
+		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
+	}
+
+	return ses.gSysVars.Get(name), nil
+}
+
+func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interface{}) (err error) {
+	name = strings.ToLower(name)
+	if sv, ok := gSysVarsDefs[name]; !ok {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+	} else {
+		if sv.Scope == ScopeSession {
+			return moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
+		}
+		if !sv.GetDynamic() {
+			return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
+		}
+
+		if val, err = sv.GetType().Convert(val); err != nil {
+			return err
+		}
+	}
+
+	// save to table first
+	if err = doSetGlobalSystemVariable(ctx, ses, name, val); err != nil {
+		return
+	}
+	ses.gSysVars.Set(name, val)
+	return
+}
+
+func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {
+	return ses.sesSysVars
+}
+
+func (ses *feSessionImpl) GetSessionSysVar(name string) (interface{}, error) {
+	name = strings.ToLower(name)
+	if _, ok := gSysVarsDefs[name]; !ok {
+		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+	}
+
+	// init SystemVariables GlobalSysVarsMgr need to read table, read table need to use SessionSysVar
+	// when ses.sesSysVars is nil
+	// in this scenario, use Default value in gSysVarsDefs
+	if ses.sesSysVars == nil {
+		return gSysVarsDefs[name].Default, nil
+	}
+	return ses.sesSysVars.Get(name), nil
+}
+
+func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
+	name = strings.ToLower(name)
+
+	def, ok := gSysVarsDefs[name]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+	}
+
+	if def.Scope == ScopeGlobal {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsGlobal())
+	}
+
+	if !def.GetDynamic() {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
+	}
+
+	if val, err = def.GetType().Convert(val); err != nil {
+		return
+	}
+
+	if def.UpdateSessVar != nil {
+		err = def.UpdateSessVar(ctx, ses, ses.sesSysVars, name, val)
+	} else {
+		ses.sesSysVars.Set(name, val)
+	}
+	return
 }
 
 func (ses *feSessionImpl) SetSql(sql string) {
