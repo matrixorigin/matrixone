@@ -87,6 +87,7 @@ func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos 
 			totalRowCnt:   host.GetTotalRowCnt(),
 			rowSize:       host.GetTotalSize() / host.GetTotalRowCnt(),
 			targetObjSize: host.GetTargetObjSize(),
+			blkPerObj:     host.GetObjectMaxBlocks(),
 		},
 		loadedObjBlkCnts: make([]int, size),
 		mustColFunc:      mustColFunc,

@@ -38,6 +38,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		totalRowCnt:   host.GetTotalRowCnt(),
 		rowSize:       host.GetTotalSize() / host.GetTotalRowCnt(),
 		targetObjSize: host.GetTargetObjSize(),
+		blkPerObj:     host.GetObjectMaxBlocks(),
 	}
 	originalObjCnt := host.GetObjectCnt()
 	maxRowCnt := host.GetBlockMaxRows()

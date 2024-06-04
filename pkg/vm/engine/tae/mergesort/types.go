@@ -57,6 +57,7 @@ func (x *heapSlice[T]) Len() int      { return len(x.s) }
 
 type mergeStats struct {
 	totalRowCnt, rowSize, targetObjSize uint32
+	blkPerObj                           uint16
 
 	blkRowCnt, objRowCnt, objBlkCnt int
 	mergedRowCnt, objCnt            int
@@ -64,7 +65,10 @@ type mergeStats struct {
 
 func (s *mergeStats) needNewObject() bool {
 	if s.targetObjSize == 0 {
-		return s.objBlkCnt == int(options.DefaultBlocksPerObject)
+		if s.blkPerObj == 0 {
+			return s.objBlkCnt == int(options.DefaultBlocksPerObject)
+		}
+		return s.objBlkCnt == int(s.blkPerObj)
 	}
 
 	if uint32(s.objRowCnt)*s.rowSize > s.targetObjSize {
