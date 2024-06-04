@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -360,6 +361,7 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot plan2.Snapsh
 
 	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(tempCtx, txn, tableId)
 	if err != nil {
+		logutil.Errorf("[ResolveById] function Failed to get table id %s, err : %v", tableName, err)
 		return nil, nil
 	}
 
@@ -383,6 +385,7 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubm
 
 	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(pubContext, txn, tableId)
 	if err != nil {
+		logutil.Errorf("[ResolveSubscriptionTableById] function Failed to get table id %s, err : %v", tableName, err)
 		return nil, nil
 	}
 
@@ -408,6 +411,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
 	if err != nil {
+		logutil.Errorf("[Resolve] function Failed to get table %s, err : %v", tableName, err)
 		return nil, nil
 	}
 	tableDef := table.CopyTableDef(ctx)
@@ -689,6 +693,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string,
 	}
 	ctx, relation, err := tcc.getRelation(dbName, tableName, sub, snapshot)
 	if err != nil {
+		logutil.Errorf("[GetPrimaryKeyDef] function Failed to get table %s, err : %v", tableName, err)
 		return nil
 	}
 
@@ -739,6 +744,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot plan2.Snapsh
 	tableName := obj.GetObjName()
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
 	if err != nil {
+		logutil.Errorf("[Stats] function Failed to get table %s, err : %v", tableName, err)
 		return nil, err
 	}
 	s, needUpdate := tcc.statsInCache(ctx, dbName, table, snapshot)
@@ -789,6 +795,7 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 	approxNumObjects := 0
 	if partitionInfo != nil {
 		for _, PartitionTableName := range partitionInfo.PartitionTableNames {
+			logutil.Errorf("[statsInCache] function Failed to get table %s, err : %v", PartitionTableName, err)
 			_, ptable, err := tcc.getRelation(dbName, PartitionTableName, nil, snapshot)
 			if err != nil {
 				return nil, false
