@@ -495,7 +495,7 @@ func (e *Engine) getOrCreateSnapPart(
 				tbl.db.databaseName,
 				tbl.tableName,
 				tbl.db.op.Txn().DebugString(),
-				p,
+				p.Snapshot(),
 				ts.ToTimestamp().DebugString(),
 				start.ToTimestamp().DebugString(),
 				end.ToTimestamp().DebugString())

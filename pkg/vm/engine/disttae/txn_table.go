@@ -657,6 +657,12 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 	var blocks objectio.BlockInfoSlice
 	ranges = &blocks
 
+	if tbl.db.op.IsSnapOp() && tbl.db.databaseName == "tpch" {
+		logutil.Infof("xxxx Ranges start to getPartitionState, table:%s, snapshot op:%s",
+			tbl.tableName,
+			tbl.db.op.Txn().DebugString())
+	}
+
 	// get the table's snapshot
 	var part *logtailreplay.PartitionState
 	if part, err = tbl.getPartitionState(ctx); err != nil {
@@ -676,7 +682,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		return
 	}
 	if tbl.db.op.IsSnapOp() && tbl.db.databaseName == "tpch" {
-		logutil.Infof("xxxx Ranges, table:%s, len:%d, snapshot op:%s",
+		logutil.Infof("xxxx Ranges return , table:%s, len:%d, snapshot op:%s",
 			tbl.tableName,
 			blocks.Len(),
 			tbl.db.op.Txn().DebugString())
@@ -1908,10 +1914,26 @@ func (tbl *txnTable) newReader(
 	txn := tbl.getTxn()
 	ts := txn.op.SnapshotTS()
 	fs := txn.engine.fs
+
+	if tbl.db.databaseName == "tpch" && tbl.db.op.IsSnapOp() {
+		logutil.Infof("xxxx newReader start to getPartitionState, snapshot op:%s, table:%s",
+			tbl.db.op.Txn().DebugString(),
+			tbl.tableName,
+		)
+	}
+
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
+
+	if tbl.db.databaseName == "tpch" && tbl.db.op.IsSnapOp() {
+		logutil.Infof("xxxx newReader getPartitionState finish, snapshot op:%s, table:%s, state:%p",
+			tbl.db.op.Txn().DebugString(),
+			tbl.tableName,
+			state)
+	}
+
 	readers := make([]engine.Reader, readerNumber)
 
 	seqnumMp := make(map[string]int)

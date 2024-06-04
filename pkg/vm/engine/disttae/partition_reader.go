@@ -126,7 +126,7 @@ func (p *PartitionReader) Read(
 	pool engine.VectorPool) (result *batch.Batch, err error) {
 
 	defer func() {
-		if p.table.db.databaseName == "tpch" {
+		if p.table.db.databaseName == "tpch" && p.table.db.op.IsSnapOp() {
 			bat := ""
 			len := 0
 			if result != nil {
