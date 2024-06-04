@@ -27,7 +27,10 @@ type Config struct {
 	CheckFraction uint32 `toml:"check-fraction"`
 
 	// EnableMetrics indicates whether to expose metrics to prometheus
-	EnableMetrics bool `toml:"enable-metrics"`
+	// default to enable, so this field is just for config file compatibility
+	DontUse_EnableMetrics bool `toml:"enable-metrics"`
+	// DisableMetrics indicates whether to disable metrics to prometheus
+	DisableMetrics bool `toml:"disable-metrics"`
 }
 
 var defaultConfig = func() *atomic.Pointer[Config] {

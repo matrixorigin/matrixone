@@ -81,7 +81,7 @@ func (m *Metrics) startExport() {
 		sumAllocateBytes += allocateBytes
 		sumFreeBytes += freeBytes
 		if sumAllocateBytes-lastSumAllocateBytes > (1 << 30) {
-			logutil.Info("malloc stats",
+			logutil.Debug("malloc stats",
 				zap.Any("allocate", sumAllocateBytes),
 				zap.Any("free", sumFreeBytes),
 			)

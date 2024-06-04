@@ -27,7 +27,7 @@ func NewDefault(config *Config) (allocator Allocator) {
 	}
 
 	var metrics Metrics
-	if config.EnableMetrics {
+	if !config.DisableMetrics {
 		go metrics.startExport()
 	}
 
@@ -35,7 +35,7 @@ func NewDefault(config *Config) (allocator Allocator) {
 
 	case "c":
 		allocator = NewCAllocator()
-		if config.EnableMetrics {
+		if !config.DisableMetrics {
 			allocator = NewMetricsAllocator(allocator, &metrics)
 		}
 		return allocator
@@ -46,7 +46,7 @@ func NewDefault(config *Config) (allocator Allocator) {
 			func() Allocator {
 				var ret Allocator
 				ret = NewPureGoClassAllocator(256 * MB)
-				if config.EnableMetrics {
+				if !config.DisableMetrics {
 					ret = NewMetricsAllocator(ret, &metrics)
 				}
 				return ret
@@ -59,7 +59,7 @@ func NewDefault(config *Config) (allocator Allocator) {
 			func() Allocator {
 				var ret Allocator
 				ret = NewClassAllocator(config.CheckFraction)
-				if config.EnableMetrics {
+				if !config.DisableMetrics {
 					ret = NewMetricsAllocator(ret, &metrics)
 				}
 				return ret
