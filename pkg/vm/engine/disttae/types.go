@@ -794,8 +794,8 @@ type blockReader struct {
 type blockMergeReader struct {
 	*blockReader
 	table        *txnTable
-	txnOffset    int
-	fromSnapshot bool
+	txnOffset    int  // Transaction writes offset used to specify the starting position for reading data.
+	fromSnapshot bool // Boolean indicating if the data is from a snapshot.
 	pkFilter     PKFilter
 	//for perfetch deletes
 	loaded     bool

@@ -133,6 +133,9 @@ func NewCompile(
 	c.startAt = startAt
 	c.disableRetry = false
 	if c.proc.TxnOperator != nil {
+		// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
+		// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
+		// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
 		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
 		c.TxnOffset = c.proc.TxnOperator.GetWorkspace().GetSnapshotWriteOffset()
 	} else {

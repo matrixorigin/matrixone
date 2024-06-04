@@ -35,8 +35,8 @@ import (
 
 type PartitionReader struct {
 	table        *txnTable
-	txnOffset    int
-	fromSnapshot bool
+	txnOffset    int  // Transaction writes offset used to specify the starting position for reading data.
+	fromSnapshot bool // Boolean indicating if the data is from a snapshot.
 	prepared     bool
 	// inserted rows comes from txn.writes.
 	inserts []*batch.Batch

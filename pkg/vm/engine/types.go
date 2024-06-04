@@ -632,7 +632,6 @@ type Relation interface {
 	GetDBID(context.Context) uint64
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
-	//NewReader(context.Context, int, *plan.Expr, []byte, bool) ([]Reader, error)
 	NewReader(context.Context, int, *plan.Expr, []byte, bool, int, bool) ([]Reader, error)
 
 	TableColumns(ctx context.Context) ([]*Attribute, error)

@@ -122,9 +122,9 @@ type Scope struct {
 	PreScopes []*Scope
 	// NodeInfo contains the information about the remote node.
 	NodeInfo engine.Node
-	// TxnOffset read offset position within the transaction during the execute current statement
+	// TxnOffset represents the transaction's write offset, specifying the starting position for reading data.
 	TxnOffset int
-	// FromSnapshot Identify whether table_scan data comes from snapshot
+	// FromSnapshot indicates whether the `table_scan` data is sourced from a snapshot.
 	FromSnapshot bool
 	// Instructions contains command list of this scope.
 	Instructions vm.Instructions
@@ -255,7 +255,7 @@ type Compile struct {
 	ctx context.Context
 	// proc stores the execution context.
 	proc *process.Process
-	// TxnOffset read offset position within the transaction during the execute current statement
+	// TxnOffset read starting offset position within the transaction during the execute current statement
 	TxnOffset int
 
 	MessageBoard *process.MessageBoard

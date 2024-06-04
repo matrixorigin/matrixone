@@ -630,7 +630,16 @@ func (tbl *txnTable) resetSnapshot() {
 	tbl._partState.Store(nil)
 }
 
-// return all unmodified blocks
+// Ranges returns all unmodified blocks from the table.
+// Parameters:
+//   - ctx: Context used to control the lifecycle of the request.
+//   - exprs: A slice of expressions used to filter data.
+//   - txnOffset: Transaction offset used to specify the starting position for reading data.
+//   - fromSnapshot: Boolean indicating if the data is from a snapshot.
+//
+// Returns:
+//   - engine.Ranges: A list of unmodified data blocks.
+//   - error: An error if something goes wrong.
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset int, fromSnapshot bool) (ranges engine.Ranges, err error) {
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
@@ -917,6 +926,9 @@ func (tbl *txnTable) rangesOnePart(
 	return
 }
 
+// Parameters:
+//   - txnOffset: Transaction writes offset used to specify the starting position for reading data.
+//   - fromSnapshot: Boolean indicating if the data is from a snapshot.
 func (tbl *txnTable) collectUnCommittedObjects(txnOffset int, fromSnapshot bool) []objectio.ObjectStats {
 	var unCommittedObjects []objectio.ObjectStats
 
@@ -954,8 +966,9 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int, fromSnapshot bool)
 func (tbl *txnTable) collectDirtyBlocks(
 	state *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	txnOffset int,
-	fromSnapshot bool) map[types.Blockid]struct{} {
+	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
+	fromSnapshot bool, // Boolean indicating if the data is from a snapshot.
+) map[types.Blockid]struct{} {
 	dirtyBlks := make(map[types.Blockid]struct{})
 	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
 	{
@@ -1715,6 +1728,20 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 	return tbl.db.databaseId
 }
 
+// NewReader creates a new list of Readers to read data from the table.
+//
+// Parameters:
+//   - ctx: Context used to control the lifecycle of the request.
+//   - num: The number of Readers to create.
+//   - expr: Expression used to filter data.
+//   - ranges: Byte array representing the data range to read.
+//   - orderedScan: Whether to scan the data in order.
+//   - txnOffset: Transaction offset used to specify the starting position for reading data.
+//   - fromSnapshot: Boolean indicating if the data is from a snapshot.
+//
+// Returns:
+//   - []engine.Reader: A list of Readers to read data.
+//   - error: An error if something goes wrong.
 func (tbl *txnTable) NewReader(
 	ctx context.Context,
 	num int,
