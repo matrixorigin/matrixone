@@ -476,8 +476,8 @@ func newBlockMergeReader(
 	ts timestamp.Timestamp,
 	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
-	txnOffset int,
-	fromSnapshot bool,
+	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
+	fromSnapshot bool, // Boolean indicating if the data is from a snapshot.
 	fs fileservice.FileService,
 	proc *process.Process,
 ) *blockMergeReader {

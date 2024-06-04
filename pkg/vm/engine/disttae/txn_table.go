@@ -1847,8 +1847,8 @@ func (tbl *txnTable) newMergeReader(
 	expr *plan.Expr,
 	pkFilter PKFilter,
 	dirtyBlks []*objectio.BlockInfo,
-	txnOffset int,
-	fromSnapshot bool,
+	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
+	fromSnapshot bool, // Boolean indicating if the data is from a snapshot.
 ) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
@@ -1970,8 +1970,8 @@ func (tbl *txnTable) newReader(
 	pkFilter PKFilter,
 	expr *plan.Expr,
 	dirtyBlks []*objectio.BlockInfo,
-	txnOffset int,
-	fromSnapshot bool,
+	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
+	fromSnapshot bool, // Boolean indicating if the data is from a snapshot.
 ) ([]engine.Reader, error) {
 	txn := tbl.getTxn()
 	ts := txn.op.SnapshotTS()
