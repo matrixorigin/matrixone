@@ -31,7 +31,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/panjf2000/ants/v2"
-	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
