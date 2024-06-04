@@ -68,7 +68,7 @@ var (
 
 	restorePubDbDataFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {snapshot = '%s'} WHERE  DATABASE_NAME = '%s'"
 
-	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", "mo_catalog"}
+	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", moCatalog}
 
 	needSkipTablesInMocatalog = map[string]int8{
 		"mo_database":         1,
@@ -766,8 +766,6 @@ func needSkipDb(dbName string) bool {
 }
 
 func needSkipTable(accountId uint32, dbName string, tblName string) bool {
-	// TODO determine which tables should be skipped
-
 	if accountId == sysAccountID {
 		return dbName == moCatalog && needSkipTablesInMocatalog[tblName] == 1
 	} else {
@@ -1147,7 +1145,7 @@ func getTableInfoMap(
 		// filter by dbName and tblName
 		d, t := splitKey(key)
 		if needSkipDb(d) || needSkipTable(curAccountId, d, t) {
-			return
+			continue
 		}
 		if dbName != "" && dbName != d {
 			return
