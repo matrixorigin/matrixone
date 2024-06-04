@@ -1,7 +1,7 @@
+SET experimental_ivf_index = 1;
 drop database if exists vecdb3;
 create database vecdb3;
 use vecdb3;
-SET GLOBAL experimental_ivf_index = 1;
 drop table if exists t6;
 create table t6(a int primary key,b vecf32(4), c varchar(3) );
 insert into t6 values(1, "[1,0,0,0]" , "1");
@@ -10,10 +10,10 @@ insert into t6 values(3, "[3,0,0,0]", "3");
 insert into t6 values(4, "[11,11,0,0]", "4");
 insert into t6 values(5, "[12,12,0,0]", "5");
 insert into t6 values(6, "[13,13,0,0]", "6");
-SET GLOBAL experimental_ivf_index = 0;
+SET experimental_ivf_index = 0;
 create index idx6 using ivfflat on t6(b) lists=2 op_type "vector_l2_ops";
 internal error: IVF index is not enabled
-SET GLOBAL experimental_ivf_index = 1;
+SET experimental_ivf_index = 1;
 create index idx6 using ivfflat on t6(b) lists=2 op_type "vector_l2_ops";
 select a, b from t6 order by l2_distance(b, "[1,0,0,0]") limit 4;
 a    b
@@ -266,5 +266,5 @@ a    b
 7    [111, 111, 111, 0]
 8    [112, 112, 112, 0]
 11    [114, 114, 114, 0]
-SET GLOBAL experimental_ivf_index = 0;
+SET experimental_ivf_index = 0;
 drop database vecdb3;

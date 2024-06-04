@@ -9,7 +9,7 @@ col6 text
 );
 
 -- @setup
-set global save_query_result = on;
+set save_query_result = on;
 
 -- show sql result cache
 show create table test_table;
@@ -122,18 +122,15 @@ deallocate prepare s1;
 
 
 -- test save_query_result config
-set global save_query_result = off;
+set save_query_result = off;
 /* save_result */select * from test_table;
 select * from result_scan(last_query_id()) as u;
-set global save_query_result = on;
+set save_query_result = on;
 
--- @teardown
-set global save_query_result = off;
-
-set global save_query_result = on;
 drop table if exists t1;
 create table t1(a int);
 show columns from t1;
 select * from result_scan(last_query_id()) as t;
-set global save_query_result = off;
 
+# reset to default(off)
+set save_query_result = off;
