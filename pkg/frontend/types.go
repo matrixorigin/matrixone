@@ -338,6 +338,7 @@ type FeSession interface {
 	ExitFPrint(idx int)
 	SetStaticTxnId(id []byte)
 	GetStaticTxnId() uuid.UUID
+	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	SessionLogger
 }
 
