@@ -163,7 +163,6 @@ func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int
 			pubName := string(row[0].([]byte)[:])
 			pubDatabase := string(row[1].([]byte)[:])
 			subAccountListStr := string(row[2].([]byte)[:])
-			// TODO read as timestamp type
 			pubTime := row[3].(string)
 			if !canSub(subAccountName, subAccountListStr) {
 				continue

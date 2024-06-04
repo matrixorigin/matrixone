@@ -8757,12 +8757,9 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 	var accountName string
 	var dbName string
 	var err error
-	variableName1 := "version_compatibility"
+	variableName := "version_compatibility"
 	versionValue, _ := ses.GetSessionSysVar("version")
-	variableValue1 := getVariableValue(versionValue)
-
-	variableName2 := "unique_check_on_autoincr"
-	variableValue2 := "None"
+	variableValue := getVariableValue(versionValue)
 
 	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
 		dbName = string(createDatabaseStmt.Name)
@@ -8797,14 +8794,7 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 			}
 
 			//step 3: insert the record
-			sql = fmt.Sprintf(initMoMysqlCompatibilityModeFormat, accountId, accountName, dbName, variableName1, variableValue1, false)
-
-			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return rtnErr
-			}
-
-			sql = fmt.Sprintf(initMoMysqlCompatibilityModeFormat, accountId, accountName, dbName, variableName2, variableValue2, false)
+			sql = fmt.Sprintf(initMoMysqlCompatibilityModeFormat, accountId, accountName, dbName, variableName, variableValue, false)
 
 			rtnErr = bh.Exec(ctx, sql)
 			if rtnErr != nil {

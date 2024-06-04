@@ -385,10 +385,8 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			return err
 		}
 		if def, ok := gSysVarsDefs["disable_txn_trace"]; ok {
-			if boolType, ok := def.GetType().(SystemVariableBoolType); ok {
-				if boolType.IsTrue(varVal) {
-					opts = append(opts, client.WithDisableTrace(true))
-				}
+			if boolType, ok := def.GetType().(SystemVariableBoolType); ok && boolType.IsTrue(varVal) {
+				opts = append(opts, client.WithDisableTrace(true))
 			}
 		}
 	}
