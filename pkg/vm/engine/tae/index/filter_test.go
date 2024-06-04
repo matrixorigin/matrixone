@@ -31,7 +31,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 	typ := types.T_int32.ToType()
 	data := containers.MockVector2(typ, 40000, 0)
 	defer data.Close()
-	sf, err := NewBinaryFuseFilter(data)
+	sf, err := NewBloomFilter(data)
 	require.NoError(t, err)
 	var positive *nulls.Bitmap
 	var res bool
@@ -73,7 +73,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 
 	vec := containers.MockVector2(typ, 0, 0)
 	defer vec.Close()
-	sf1, err := NewBinaryFuseFilter(vec)
+	sf1, err := NewBloomFilter(vec)
 	require.NoError(t, err)
 	err = sf1.Unmarshal(buf)
 	require.NoError(t, err)
@@ -91,7 +91,7 @@ func TestNewBinaryFuseFilter(t *testing.T) {
 	typ := types.T_uint32.ToType()
 	data := containers.MockVector2(typ, 2000, 0)
 	defer data.Close()
-	_, err := NewBinaryFuseFilter(data)
+	_, err := NewBloomFilter(data)
 	require.NoError(t, err)
 }
 
@@ -101,7 +101,7 @@ func BenchmarkCreateFilter(b *testing.B) {
 	defer data.Close()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		NewBinaryFuseFilter(data)
+		NewBloomFilter(data)
 	}
 }
 
@@ -111,7 +111,7 @@ func TestStaticFilterString(t *testing.T) {
 	typ := types.T_varchar.ToType()
 	data := containers.MockVector2(typ, 40000, 0)
 	defer data.Close()
-	sf, err := NewBinaryFuseFilter(data)
+	sf, err := NewBloomFilter(data)
 	require.NoError(t, err)
 	var positive *nulls.Bitmap
 	var res bool
@@ -145,7 +145,7 @@ func TestStaticFilterString(t *testing.T) {
 
 	query = containers.MockVector2(typ, 0, 0)
 	defer query.Close()
-	sf1, err := NewBinaryFuseFilter(query)
+	sf1, err := NewBloomFilter(query)
 	require.NoError(t, err)
 	err = sf1.Unmarshal(buf)
 	require.NoError(t, err)
