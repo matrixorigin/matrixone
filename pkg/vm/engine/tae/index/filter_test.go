@@ -20,6 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/require"
@@ -103,6 +105,124 @@ func BenchmarkCreateFilter(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		NewBloomFilter(data)
 	}
+}
+
+func BenchmarkHybridBloomFilter(b *testing.B) {
+	rows := 8192
+	data := containers.MockVector(types.T_Rowid.ToType(), rows, true, nil)
+	defer data.Close()
+
+	prefixFn := func(in []byte) []byte {
+		return in
+	}
+
+	bf, err := NewBloomFilter(data)
+	require.NoError(b, err)
+	buf, err := bf.Marshal()
+	require.NoError(b, err)
+	b.Logf("buf size: %d", len(buf))
+
+	hbf, err := NewHybridBloomFilter(data, 1, prefixFn)
+	require.NoError(b, err)
+	hbf_buf, err := hbf.Marshal()
+	require.NoError(b, err)
+	b.Logf("hbf_buf size: %d", len(hbf_buf))
+
+	b.Run("maral-bf", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			var bf bloomFilter
+			bf.Unmarshal(buf)
+		}
+	})
+
+	b.Run("unmaral-hbf", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			var hbf hybridFilter
+			hbf.Unmarshal(hbf_buf)
+		}
+	})
+
+	b.Run("may-contains-hbf", func(b *testing.B) {
+		var rowid types.Rowid
+		bs := rowid[:]
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			hbf.MayContainsKey(bs)
+		}
+	})
+	b.Run("prefix-may-contains-hbf", func(b *testing.B) {
+		var rowid types.Rowid
+		bs := rowid[:]
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			hbf.PrefixMayContainsKey(bs, 1)
+		}
+	})
+}
+
+func TestHybridBloomFilter(t *testing.T) {
+	obj1 := types.NewObjectid()
+	obj2 := types.NewObjectid()
+	obj3 := types.NewObjectid()
+	obj4 := types.NewObjectid()
+	blk1_0 := types.NewBlockidWithObjectID(obj1, 0)
+	blk1_1 := types.NewBlockidWithObjectID(obj1, 1)
+	blk2_0 := types.NewBlockidWithObjectID(obj2, 0)
+	blk3_0 := types.NewBlockidWithObjectID(obj3, 0)
+	blk3_1 := types.NewBlockidWithObjectID(obj3, 1)
+	blk3_2 := types.NewBlockidWithObjectID(obj3, 2)
+	rowids := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	defer rowids.Close()
+	for i := 0; i < 10; i++ {
+		rowids.Append(*types.NewRowid(blk1_0, uint32(i)), false)
+		rowids.Append(*types.NewRowid(blk1_1, uint32(i)), false)
+		rowids.Append(*types.NewRowid(blk2_0, uint32(i)), false)
+		rowids.Append(*types.NewRowid(blk3_0, uint32(i)), false)
+		rowids.Append(*types.NewRowid(blk3_1, uint32(i)), false)
+		rowids.Append(*types.NewRowid(blk3_2, uint32(i)), false)
+	}
+	objectFn := func(in []byte) []byte {
+		return in[:types.ObjectBytesSize]
+	}
+	hbf, err := NewHybridBloomFilter(rowids, 1, objectFn)
+	require.NoError(t, err)
+	hbf_buf, err := hbf.Marshal()
+	require.NoError(t, err)
+	var hbf2 hybridFilter
+	err = hbf2.Unmarshal(hbf_buf)
+	require.NoError(t, err)
+
+	_, err = hbf2.PrefixMayContainsKey(types.NewRowid(blk1_0, 0)[:], 2)
+	require.NotNil(t, err)
+
+	ok, err := hbf2.PrefixMayContainsKey(obj1[:], 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = hbf2.PrefixMayContainsKey(obj2[:], 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = hbf2.PrefixMayContainsKey(obj3[:], 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = hbf2.PrefixMayContainsKey(obj4[:], 1)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	idVec := rowids.GetDownstreamVector()
+	ids := vector.MustFixedCol[types.Rowid](idVec)
+	for i := 0; i < len(ids); i++ {
+		id := ids[i]
+		ok, err = hbf2.MayContainsKey(id[:])
+		require.NoError(t, err)
+		require.True(t, ok)
+	}
+
+	rowid := types.NewRowid(blk3_2, 100)
+	ok, err = hbf2.MayContainsKey(rowid[:])
+	require.NoError(t, err)
+	require.False(t, ok)
 }
 
 func TestStaticFilterString(t *testing.T) {

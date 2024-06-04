@@ -3,16 +3,17 @@ package index
 import (
 	"bytes"
 	"fmt"
-	"strconv"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type hybridFilter struct {
-	prefixBloomFilter
-	bloomFilter
+	prefixBloomFilter prefixBloomFilter
+	bloomFilter       bloomFilter
 }
 
 func NewHybridBloomFilter(
@@ -53,42 +54,45 @@ func NewHybridBloomFilter(
 
 func (bf *hybridFilter) Marshal() ([]byte, error) {
 	var (
-		err error
-		w   bytes.Buffer
+		err        error
+		w          bytes.Buffer
+		len1, len2 uint32
 	)
-	if err = w.WriteByte(byte(bf.prefixFnId)); err != nil {
+	if _, err = w.Write(types.EncodeUint32(&len1)); err != nil {
+		return nil, err
+	}
+	if _, err = w.Write(types.EncodeUint32(&len2)); err != nil {
 		return nil, err
 	}
 	if err = bf.prefixBloomFilter.MarshalWithBuffer(&w); err != nil {
 		return nil, err
 	}
+	len1 = uint32(w.Len()) - uint32(2*unsafe.Sizeof(len1))
 	if err = bf.bloomFilter.MarshalWithBuffer(&w); err != nil {
 		return nil, err
 	}
-	return w.Bytes(), nil
+	len2 = uint32(w.Len()) - len1 - uint32(2*unsafe.Sizeof(len1))
+	buf := w.Bytes()
+	copy(buf[0:], types.EncodeUint32(&len1))
+	copy(buf[unsafe.Sizeof(len1):], types.EncodeUint32(&len2))
+	return buf, nil
 }
 
 func (bf *hybridFilter) Unmarshal(data []byte) error {
-	bf.prefixFnId = uint8(data[0])
-	data = data[1:]
-	if err := bf.prefixBloomFilter.Unmarshal(data); err != nil {
+	len1 := types.DecodeUint32(data)
+	len2 := types.DecodeUint32(data[unsafe.Sizeof(len1):])
+	start := int(2 * unsafe.Sizeof(len1))
+	end := start + int(len1)
+	if err := bf.prefixBloomFilter.Unmarshal(data[start:end]); err != nil {
 		return err
 	}
-	return bf.bloomFilter.Unmarshal(data)
+	start = end
+	end = start + int(len2)
+	return bf.bloomFilter.Unmarshal(data[start:end])
 }
 
 func (bf *hybridFilter) String() string {
-	s := fmt.Sprintf("<HBF:%d>", bf.prefixFnId)
-	s += strconv.Itoa(int(bf.SegmentCount))
-	s += "\n"
-	s += strconv.Itoa(int(bf.SegmentCountLength))
-	s += "\n"
-	s += strconv.Itoa(int(bf.SegmentLength))
-	s += "\n"
-	s += strconv.Itoa(int(bf.SegmentLengthMask))
-	s += "\n"
-	s += strconv.Itoa(len(bf.Fingerprints))
-	s += "\n"
+	s := fmt.Sprintf("<HBF:%d>", bf.prefixBloomFilter.PrefixFnId())
 	s += "</HBF>"
 	return s
 }
@@ -98,7 +102,7 @@ func (bf *hybridFilter) GetType() uint8 {
 }
 
 func (bf *hybridFilter) PrefixFnId() uint8 {
-	return bf.prefixFnId
+	return bf.prefixBloomFilter.PrefixFnId()
 }
 
 func (bf *hybridFilter) MayContainsKey(key []byte) (bool, error) {
