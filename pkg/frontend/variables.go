@@ -3507,7 +3507,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 	},
 	"experimental_ivf_index": {
 		Name:              "experimental_ivf_index",
-		Scope:             ScopeGlobal,
+		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
@@ -3515,7 +3515,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 	},
 	"experimental_master_index": {
 		Name:              "experimental_master_index",
-		Scope:             ScopeGlobal,
+		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_master_index"),
