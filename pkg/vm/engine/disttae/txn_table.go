@@ -636,10 +636,6 @@ func (tbl *txnTable) resetSnapshot() {
 //   - exprs: A slice of expressions used to filter data.
 //   - txnOffset: Transaction offset used to specify the starting position for reading data.
 //   - fromSnapshot: Boolean indicating if the data is from a snapshot.
-//
-// Returns:
-//   - engine.Ranges: A list of unmodified data blocks.
-//   - error: An error if something goes wrong.
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset int, fromSnapshot bool) (ranges engine.Ranges, err error) {
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
@@ -1729,7 +1725,6 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 }
 
 // NewReader creates a new list of Readers to read data from the table.
-//
 // Parameters:
 //   - ctx: Context used to control the lifecycle of the request.
 //   - num: The number of Readers to create.
@@ -1738,10 +1733,6 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 //   - orderedScan: Whether to scan the data in order.
 //   - txnOffset: Transaction offset used to specify the starting position for reading data.
 //   - fromSnapshot: Boolean indicating if the data is from a snapshot.
-//
-// Returns:
-//   - []engine.Reader: A list of Readers to read data.
-//   - error: An error if something goes wrong.
 func (tbl *txnTable) NewReader(
 	ctx context.Context,
 	num int,
