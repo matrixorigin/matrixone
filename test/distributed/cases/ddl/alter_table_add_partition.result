@@ -195,10 +195,6 @@ select table_schema, table_name, partition_name,partition_ordinal_position,parti
 from information_schema.PARTITIONS
 where table_schema = 'db1' and table_name = 'titles';
 table_schema    table_name    partition_name    partition_ordinal_position    partition_method    partition_expression
-db1    titles    p08    8    RANGE    to_days(from_date)
-db1    titles    p09    9    RANGE    to_days(from_date)
-db1    titles    p10    10    RANGE    to_days(from_date)
-db1    titles    p11    11    RANGE    to_days(from_date)
 db1    titles    p01    1    RANGE    to_days(from_date)
 db1    titles    p02    2    RANGE    to_days(from_date)
 db1    titles    p03    3    RANGE    to_days(from_date)
@@ -206,6 +202,10 @@ db1    titles    p04    4    RANGE    to_days(from_date)
 db1    titles    p05    5    RANGE    to_days(from_date)
 db1    titles    p06    6    RANGE    to_days(from_date)
 db1    titles    p07    7    RANGE    to_days(from_date)
+db1    titles    p08    8    RANGE    to_days(from_date)
+db1    titles    p09    9    RANGE    to_days(from_date)
+db1    titles    p10    10    RANGE    to_days(from_date)
+db1    titles    p11    11    RANGE    to_days(from_date)
 INSERT INTO titles VALUES
 (10017, 'Bouloucos', '1992-07-06','1993-08-03'),
 (10018, 'Peha', '1992-06-19','1987-04-03'),
@@ -265,18 +265,18 @@ select table_schema, table_name, partition_name,partition_ordinal_position,parti
 from information_schema.PARTITIONS
 where table_schema = 'db1' and table_name = 'pt1';
 table_schema    table_name    partition_name    partition_ordinal_position    partition_method    partition_expression
-db1    pt1    p1    1    RANGE    year(date_column)
-db1    pt1    p2    2    RANGE    year(date_column)
-db1    pt1    p3    3    RANGE    year(date_column)
+db1    pt1    p1    1    RANGE    YEAR(date_column)
+db1    pt1    p2    2    RANGE    YEAR(date_column)
+db1    pt1    p3    3    RANGE    YEAR(date_column)
 ALTER TABLE pt1 ADD PARTITION (PARTITION p4 VALUES LESS THAN (2022) comment '2021 - 2022');
 select table_schema, table_name, partition_name,partition_ordinal_position,partition_method,partition_expression
 from information_schema.PARTITIONS
 where table_schema = 'db1' and table_name = 'pt1';
 table_schema    table_name    partition_name    partition_ordinal_position    partition_method    partition_expression
-db1    pt1    p1    1    RANGE    year(date_column)
-db1    pt1    p2    2    RANGE    year(date_column)
-db1    pt1    p3    3    RANGE    year(date_column)
-db1    pt1    p4    4    RANGE    year(date_column)
+db1    pt1    p1    1    RANGE    YEAR(date_column)
+db1    pt1    p2    2    RANGE    YEAR(date_column)
+db1    pt1    p3    3    RANGE    YEAR(date_column)
+db1    pt1    p4    4    RANGE    YEAR(date_column)
 drop table if exists pt2;
 CREATE TABLE pt2 (
 id INT,
@@ -297,18 +297,18 @@ select table_schema, table_name, partition_name,partition_ordinal_position,parti
 from information_schema.PARTITIONS
 where table_schema = 'db1' and table_name = 'pt2';
 table_schema    table_name    partition_name    partition_ordinal_position    partition_method    partition_expression
-db1    pt2    p1    1    RANGE    year(date_column)
-db1    pt2    p2    2    RANGE    year(date_column)
-db1    pt2    p3    3    RANGE    year(date_column)
+db1    pt2    p1    1    RANGE    YEAR(date_column)
+db1    pt2    p2    2    RANGE    YEAR(date_column)
+db1    pt2    p3    3    RANGE    YEAR(date_column)
 ALTER TABLE pt2 ADD PARTITION (PARTITION p4 VALUES LESS THAN (2021));
 MAXVALUE can only be used in last partition definition
 select table_schema, table_name, partition_name,partition_ordinal_position,partition_method,partition_expression
 from information_schema.PARTITIONS
 where table_schema = 'db1' and table_name = 'pt2';
 table_schema    table_name    partition_name    partition_ordinal_position    partition_method    partition_expression
-db1    pt2    p1    1    RANGE    year(date_column)
-db1    pt2    p2    2    RANGE    year(date_column)
-db1    pt2    p3    3    RANGE    year(date_column)
+db1    pt2    p1    1    RANGE    YEAR(date_column)
+db1    pt2    p2    2    RANGE    YEAR(date_column)
+db1    pt2    p3    3    RANGE    YEAR(date_column)
 drop table if exists client_firms;
 CREATE TABLE client_firms (
 id   INT,

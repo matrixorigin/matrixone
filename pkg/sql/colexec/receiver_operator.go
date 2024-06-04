@@ -23,7 +23,6 @@ import (
 
 // isMergeType means the receiver operator receive batch from all regs or single by some order
 // Merge/MergeGroup/MergeLimit ... are Merge-Type
-// while Join/Intersect/Minus ... are not
 func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool) {
 	r.proc = proc
 	if isMergeType {
