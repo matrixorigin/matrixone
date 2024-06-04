@@ -182,22 +182,26 @@ func (filter *bloomFilter) String() string {
 	return s
 }
 
-func (filter *bloomFilter) PrefixFnId() uint8 {
-	return 0
+func (filter *bloomFilter) PrefixFnId(_ uint8) uint8 {
+	panic("not supported")
 }
 
 func (filter *bloomFilter) GetType() uint8 {
 	return BF
 }
 
-func (filter *bloomFilter) PrefixMayContainsKey(key []byte, prefixFnId uint8) (bool, error) {
+func (filter *bloomFilter) PrefixMayContainsKey(key []byte, prefixFnId uint8, level uint8) (bool, error) {
 	panic("not supported")
 }
 
-func (filter *bloomFilter) PrefixMayContainsAnyKeys(keys containers.Vector, prefixFnId uint8) (bool, *nulls.Bitmap, error) {
+func (filter *bloomFilter) PrefixMayContainsAnyKeys(keys containers.Vector, prefixFnId uint8, level uint8) (bool, *nulls.Bitmap, error) {
 	panic("not supported")
 }
 
-func (filter *bloomFilter) PrefixMayContainsAny(keys *vector.Vector, lowerBound int, upperBound int, prefixFnId uint8) bool {
+func (filter *bloomFilter) PrefixMayContainsAny(keys *vector.Vector, lowerBound int, upperBound int, prefixFnId uint8, level uint8) bool {
 	panic("not supported")
+}
+
+func (filter *bloomFilter) MaxLevel() uint8 {
+	return 0
 }

@@ -42,7 +42,10 @@ func NewPrefixBloomFilter(
 	}, nil
 }
 
-func (bf *prefixBloomFilter) PrefixFnId() uint8 {
+func (bf *prefixBloomFilter) PrefixFnId(level uint8) uint8 {
+	if level != 1 {
+		panic(fmt.Sprintf("unsupported level: %d", level))
+	}
 	return bf.prefixFnId
 }
 
@@ -109,7 +112,11 @@ func (bf *prefixBloomFilter) MayContainsAny(
 func (bf *prefixBloomFilter) PrefixMayContainsKey(
 	key []byte,
 	prefixFnId uint8,
+	level uint8,
 ) (bool, error) {
+	if level != 1 {
+		panic(fmt.Sprintf("unsupported level: %d", level))
+	}
 	if bf.prefixFnId != prefixFnId {
 		return false, moerr.NewInternalErrorNoCtx("prefixFnId mismatch: %d != %d", bf.prefixFnId, prefixFnId)
 	}
@@ -121,9 +128,15 @@ func (bf *prefixBloomFilter) PrefixMayContainsAny(
 	lowerBound int,
 	upperBound int,
 	prefixFnId uint8,
+	level uint8,
 ) bool {
+	if level != 1 {
+		panic(fmt.Sprintf("unsupported level: %d", level))
+	}
 	if bf.prefixFnId != prefixFnId {
 		return false
 	}
 	return bf.bloomFilter.MayContainsAny(keys, lowerBound, upperBound)
 }
+
+func (bf *prefixBloomFilter) MaxLevel() uint8 { return 1 }

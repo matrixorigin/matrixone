@@ -46,14 +46,15 @@ type StaticFilter interface {
 	MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Bitmap, error)
 	MayContainsAny(keys *vector.Vector, lowerBound int, upperBound int) bool
 
-	PrefixMayContainsKey(key []byte, prefixFnId uint8) (bool, error)
+	PrefixMayContainsKey(key []byte, prefixFnId uint8, level uint8) (bool, error)
 	PrefixMayContainsAny(
-		keys *vector.Vector, lowerBound int, upperBound int, prefixFnId uint8,
+		keys *vector.Vector, lowerBound int, upperBound int, prefixFnId uint8, level uint8,
 	) bool
 
 	Marshal() ([]byte, error)
 	Unmarshal(buf []byte) error
 	String() string
-	PrefixFnId() uint8
+	PrefixFnId(level uint8) uint8
 	GetType() uint8
+	MaxLevel() uint8
 }

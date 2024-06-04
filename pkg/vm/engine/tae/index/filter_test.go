@@ -122,7 +122,7 @@ func BenchmarkHybridBloomFilter(b *testing.B) {
 	require.NoError(b, err)
 	b.Logf("buf size: %d", len(buf))
 
-	hbf, err := NewHybridBloomFilter(data, 1, prefixFn)
+	hbf, err := NewHybridBloomFilter(data, 1, prefixFn, 1, prefixFn)
 	require.NoError(b, err)
 	hbf_buf, err := hbf.Marshal()
 	require.NoError(b, err)
@@ -157,7 +157,7 @@ func BenchmarkHybridBloomFilter(b *testing.B) {
 		bs := rowid[:]
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			hbf.PrefixMayContainsKey(bs, 1)
+			hbf.PrefixMayContainsKey(bs, 1, 1)
 		}
 	})
 }
@@ -173,6 +173,7 @@ func TestHybridBloomFilter(t *testing.T) {
 	blk3_0 := types.NewBlockidWithObjectID(obj3, 0)
 	blk3_1 := types.NewBlockidWithObjectID(obj3, 1)
 	blk3_2 := types.NewBlockidWithObjectID(obj3, 2)
+	blk3_3 := types.NewBlockidWithObjectID(obj3, 3)
 	rowids := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 	defer rowids.Close()
 	for i := 0; i < 10; i++ {
@@ -186,7 +187,16 @@ func TestHybridBloomFilter(t *testing.T) {
 	objectFn := func(in []byte) []byte {
 		return in[:types.ObjectBytesSize]
 	}
-	hbf, err := NewHybridBloomFilter(rowids, 1, objectFn)
+	objectFnId := uint8(1)
+	blockFn := func(in []byte) []byte {
+		return in[:types.BlockidSize]
+	}
+	blockFnId := uint8(2)
+	hbf, err := NewHybridBloomFilter(
+		rowids,
+		objectFnId, objectFn,
+		blockFnId, blockFn,
+	)
 	require.NoError(t, err)
 	hbf_buf, err := hbf.Marshal()
 	require.NoError(t, err)
@@ -194,19 +204,41 @@ func TestHybridBloomFilter(t *testing.T) {
 	err = hbf2.Unmarshal(hbf_buf)
 	require.NoError(t, err)
 
-	_, err = hbf2.PrefixMayContainsKey(types.NewRowid(blk1_0, 0)[:], 2)
+	_, err = hbf2.PrefixMayContainsKey(types.NewRowid(blk1_0, 0)[:], 2, 1)
 	require.NotNil(t, err)
 
-	ok, err := hbf2.PrefixMayContainsKey(obj1[:], 1)
+	ok, err := hbf2.PrefixMayContainsKey(obj1[:], objectFnId, 1)
 	require.NoError(t, err)
 	require.True(t, ok)
-	ok, err = hbf2.PrefixMayContainsKey(obj2[:], 1)
+	ok, err = hbf2.PrefixMayContainsKey(obj2[:], objectFnId, 1)
 	require.NoError(t, err)
 	require.True(t, ok)
-	ok, err = hbf2.PrefixMayContainsKey(obj3[:], 1)
+	ok, err = hbf2.PrefixMayContainsKey(obj3[:], objectFnId, 1)
 	require.NoError(t, err)
 	require.True(t, ok)
-	ok, err = hbf2.PrefixMayContainsKey(obj4[:], 1)
+	ok, err = hbf2.PrefixMayContainsKey(obj4[:], objectFnId, 1)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	ok, err = hbf2.PrefixMayContainsKey(blk1_0[:], blockFnId, 2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = hbf2.PrefixMayContainsKey(blk1_1[:], blockFnId, 2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = hbf2.PrefixMayContainsKey(blk2_0[:], blockFnId, 2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = hbf2.PrefixMayContainsKey(blk3_0[:], blockFnId, 2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = hbf2.PrefixMayContainsKey(blk3_1[:], blockFnId, 2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = hbf2.PrefixMayContainsKey(blk3_2[:], blockFnId, 2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = hbf2.PrefixMayContainsKey(blk3_3[:], blockFnId, 2)
 	require.NoError(t, err)
 	require.False(t, ok)
 
