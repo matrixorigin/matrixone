@@ -514,9 +514,9 @@ func (r *blockMergeReader) prefetchDeletes() error {
 				return nil
 			}
 			for _, bat := range bats {
-				vs := vector.MustStrCol(bat.GetVector(0))
-				for _, deltaLoc := range vs {
-					location, err := blockio.EncodeLocationFromString(deltaLoc)
+				vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
+				for i := range vs {
+					location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
 					if err != nil {
 						return err
 					}

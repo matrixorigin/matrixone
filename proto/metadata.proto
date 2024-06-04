@@ -125,6 +125,7 @@ message CNService {
   WorkState WorkState           = 7;
   // QueryAddress is the address of queryservice.QueryService.
   string QueryAddress           = 8;
+  string ShardServiceAddress    = 9;
 }
 
 // TNService tn service metadata
@@ -144,6 +145,7 @@ message TNService {
   map<string, LabelList> Labels = 7 [(gogoproto.nullable) = false];
   // QueryAddress it the address of query service on the tn
   string          QueryAddress       = 8;
+  string  ShardServiceAddress   = 9;
 }
 
 // LabelList defines the labels on CN store.

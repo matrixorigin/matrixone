@@ -72,15 +72,16 @@ func (s *service) heartbeat(ctx context.Context) {
 	defer cancel()
 
 	hb := logservicepb.CNStoreHeartbeat{
-		UUID:               s.cfg.UUID,
-		ServiceAddress:     s.pipelineServiceServiceAddr(),
-		SQLAddress:         s.cfg.SQLAddress,
-		LockServiceAddress: s.lockServiceServiceAddr(),
-		Role:               s.metadata.Role,
-		TaskServiceCreated: s.GetTaskRunner() != nil,
-		QueryAddress:       s.queryServiceServiceAddr(),
-		InitWorkState:      s.cfg.InitWorkState,
-		ConfigData:         s.config.GetData(),
+		UUID:                s.cfg.UUID,
+		ServiceAddress:      s.pipelineServiceServiceAddr(),
+		SQLAddress:          s.cfg.SQLAddress,
+		LockServiceAddress:  s.lockServiceServiceAddr(),
+		ShardServiceAddress: s.shardServiceServiceAddr(),
+		Role:                s.metadata.Role,
+		TaskServiceCreated:  s.GetTaskRunner() != nil,
+		QueryAddress:        s.queryServiceServiceAddr(),
+		InitWorkState:       s.cfg.InitWorkState,
+		ConfigData:          s.config.GetData(),
 		Resource: logservicepb.Resource{
 			CPUTotal:     uint64(system.NumCPU()),
 			CPUAvailable: system.CPUAvailable(),
