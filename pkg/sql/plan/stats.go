@@ -40,14 +40,14 @@ import (
 )
 
 const DefaultBlockMaxRows = 8192
-const blockThresholdForTpQuery = 32
+const BlockThresholdForTpQuery = 32
 const costThresholdForTpQuery = 240000
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
 
 var ncpu = runtime.GOMAXPROCS(0)
-var BlockThresholdForOneCN = ncpu * blockThresholdForTpQuery
+var BlockThresholdForOneCN = ncpu * BlockThresholdForTpQuery
 var costThresholdForOneCN = ncpu * costThresholdForTpQuery
 
 type ExecType int
@@ -1249,7 +1249,7 @@ func GetExecType(qry *plan.Query) ExecType {
 		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
 			return ExecTypeAP_MULTICN
 		}
-		if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
+		if stats.BlockNum > BlockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
 			ret = ExecTypeAP_ONECN
 		}
 	}
