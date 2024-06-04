@@ -2493,7 +2493,6 @@ func (m *Function) GetArgs() []*Expr {
 type Expr struct {
 	Typ Type `protobuf:"bytes,1,opt,name=typ,proto3" json:"typ"`
 	// Types that are valid to be assigned to Expr:
-	//
 	//	*Expr_Lit
 	//	*Expr_P
 	//	*Expr_V
