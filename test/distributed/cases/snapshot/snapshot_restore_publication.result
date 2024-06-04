@@ -532,7 +532,6 @@ show databases like 'db%';
 Database
 db09
 db10
-Database
 drop snapshot sp05;
 drop account acc01;
 drop account acc02;
