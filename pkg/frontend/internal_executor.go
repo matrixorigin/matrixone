@@ -197,7 +197,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		getLogger().Fatal("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
-	sess := NewSession(ctx, ie.proto, mp, GSysVariables, true, nil)
+	sess := NewSession(ctx, ie.proto, mp)
 	sess.disableTrace = true
 
 	var t *TenantInfo

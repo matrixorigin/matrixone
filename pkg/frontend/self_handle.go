@@ -42,7 +42,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		ses.EnterFPrint(12)
 		defer ses.ExitFPrint(12)
 		var v interface{}
-		v, err = ses.GetGlobalVar(execCtx.reqCtx, "lower_case_table_names")
+		v, err = ses.GetSessionSysVar("lower_case_table_names")
 		if err != nil {
 			return
 		}
