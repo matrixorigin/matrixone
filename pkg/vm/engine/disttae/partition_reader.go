@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type PartitionReader struct {
@@ -123,6 +124,26 @@ func (p *PartitionReader) Read(
 	_ *plan.Expr,
 	mp *mpool.MPool,
 	pool engine.VectorPool) (result *batch.Batch, err error) {
+
+	defer func() {
+		if p.table.db.databaseName == "tpch" {
+			bat := ""
+			len := 0
+			if result != nil {
+				bat = common.MoBatchToString(result, 10)
+				len = result.RowCount()
+			}
+			logutil.Infof("xxxx partititonReader reads:"+
+				"txn:%s, table:%s, batch:%s, len:%d, err:%v",
+				p.table.db.op.Txn().DebugString(),
+				p.table.tableName,
+				bat,
+				len,
+				err)
+		}
+
+	}()
+
 	if p == nil {
 		return
 	}
