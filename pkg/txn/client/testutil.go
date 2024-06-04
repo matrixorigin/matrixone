@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
@@ -33,6 +34,25 @@ func RunTxnTests(fn func(TxnClient, rpc.TxnSender), opts ...TxnClientCreateOptio
 	c := NewTxnClient(ts, opts...)
 	c.Resume()
 	fn(c, ts)
+}
+
+// NewTestTxnOperator returns a test txn operator.
+func NewTestTxnOperator(
+	ctx context.Context,
+) (TxnOperator, func()) {
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	ts := newTestTxnSender()
+	c := NewTxnClient(ts)
+	c.Resume()
+	txnOp, err := c.New(ctx, timestamp.Timestamp{})
+	if err != nil {
+		panic(err)
+	}
+	return txnOp, func() {
+		if err := c.Close(); err != nil {
+			panic(err)
+		}
+	}
 }
 
 func newTestTxnSender() *testTxnSender {

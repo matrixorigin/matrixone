@@ -35,18 +35,18 @@ func TestRPCSend(t *testing.T) {
 		func(
 			addr string,
 			c RPCClient,
-			h MessageHandler[*testMethodBasedMessage, *testMethodBasedMessage]) {
+			h MethodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage]) {
 			fn := func(
 				ctx context.Context,
 				req, resp *testMethodBasedMessage) error {
 				resp.payload = []byte{byte(req.method)}
 				return nil
 			}
-			h.RegisterHandleFunc(
+			h.RegisterMethod(
 				1,
 				fn,
 				false)
-			h.RegisterHandleFunc(
+			h.RegisterMethod(
 				2,
 				fn,
 				false)
@@ -77,14 +77,14 @@ func TestRequestCanBeFilter(t *testing.T) {
 		func(
 			addr string,
 			c RPCClient,
-			h MessageHandler[*testMethodBasedMessage, *testMethodBasedMessage]) {
+			h MethodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage]) {
 			fn := func(
 				ctx context.Context,
 				req, resp *testMethodBasedMessage) error {
 				resp.payload = []byte{byte(req.method)}
 				return nil
 			}
-			h.RegisterHandleFunc(
+			h.RegisterMethod(
 				1,
 				fn,
 				false)
@@ -105,7 +105,7 @@ func TestRequestCanBeFilter(t *testing.T) {
 
 func runRPCTests(
 	t *testing.T,
-	fn func(string, RPCClient, MessageHandler[*testMethodBasedMessage, *testMethodBasedMessage]),
+	fn func(string, RPCClient, MethodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage]),
 	opts ...HandlerOption[*testMethodBasedMessage, *testMethodBasedMessage]) {
 	defer leaktest.AfterTest(t)()
 	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
@@ -127,7 +127,7 @@ func runRPCTests(
 	require.NoError(t, s.Start())
 
 	cfg := Config{}
-	c, err := cfg.NewClient("ctlservice",
+	c, err := cfg.NewClient("ctl-service",
 		getLogger().RawLogger(),
 		func() Message { return &testMethodBasedMessage{} })
 	require.NoError(t, err)
