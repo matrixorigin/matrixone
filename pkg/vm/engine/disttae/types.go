@@ -467,7 +467,7 @@ func (txn *Transaction) gcObjs(start int) error {
 		if txn.writes[i].fileName != "" {
 			col, area := vector.MustVarlenaRawData(txn.writes[i].bat.GetVector(0))
 			for idx := 0; idx < len(col); idx++ {
-				stats := objectio.ObjectStats(col[i].GetByteSlice(area))
+				stats := objectio.ObjectStats(col[idx].GetByteSlice(area))
 				objName := stats.ObjectName().String()
 				//loc, _ := blockio.EncodeLocationFromString(s)
 				if _, ok := objsToGC[objName]; !ok {
