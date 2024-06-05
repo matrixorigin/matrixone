@@ -46,9 +46,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
 	if arg.buf != nil {
-		if !arg.KeepBatch {
-			proc.PutBatch(arg.buf)
-		}
+		proc.PutBatch(arg.buf)
 		arg.buf = nil
 	}
 

@@ -327,7 +327,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		t := sourceIns.Arg.(*merge.Argument)
 		arg := merge.NewArgument()
 		arg.SinkScan = t.SinkScan
-		arg.KeepBatch = t.KeepBatch
 		res.Arg = arg
 	case vm.MergeRecursive:
 		res.Arg = mergerecursive.NewArgument()

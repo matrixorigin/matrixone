@@ -30,10 +30,10 @@ type container struct {
 }
 
 type Argument struct {
-	ctr       *container
-	SinkScan  bool
-	KeepBatch bool
-	buf       *batch.Batch
+	ctr      *container
+	SinkScan bool
+
+	buf *batch.Batch
 	vm.OperatorBase
 }
 
