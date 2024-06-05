@@ -16,14 +16,9 @@ package fileservice
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	stdhttp "net/http"
-	"os"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -75,50 +70,7 @@ func NewAwsSDKv1(
 	}
 
 	// http client
-	dialer := &net.Dialer{
-		KeepAlive: 5 * time.Second,
-	}
-	transport := &stdhttp.Transport{
-		Proxy:                 stdhttp.ProxyFromEnvironment,
-		DialContext:           dialer.DialContext,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       180 * time.Second,
-		MaxIdleConnsPerHost:   100,
-		MaxConnsPerHost:       1000,
-		TLSHandshakeTimeout:   3 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ForceAttemptHTTP2:     true,
-	}
-	if len(args.CertFiles) > 0 {
-		// custom certs
-		pool, err := x509.SystemCertPool()
-		if err != nil {
-			panic(err)
-		}
-		for _, path := range args.CertFiles {
-			content, err := os.ReadFile(path)
-			if err != nil {
-				logutil.Info("load cert file error",
-					zap.Any("err", err),
-				)
-				// ignore
-				continue
-			}
-			logutil.Info("file service: load cert file",
-				zap.Any("path", path),
-			)
-			pool.AppendCertsFromPEM(content)
-		}
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
-			RootCAs:            pool,
-		}
-		transport.TLSClientConfig = tlsConfig
-	}
-	httpClient := &stdhttp.Client{
-		Transport: transport,
-	}
-	config.HTTPClient = httpClient
+	config.HTTPClient = newHTTPClient(args)
 
 	// credentials
 	if args.KeyID != "" && args.KeySecret != "" {

@@ -20,6 +20,7 @@ import (
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func (s *service) Read(
@@ -77,12 +78,16 @@ func (s *service) Read(
 	futures := newFutureSlice()
 	defer futures.close()
 
+	local := 0
+	remote := 0
 	for i, shard := range selected.values {
 		if s.isLocalReplica(shard.Replicas[0]) {
 			selected.local = append(selected.local, i)
+			local++
 			continue
 		}
 
+		remote++
 		if opts.adjust != nil {
 			opts.adjust(&shard)
 		}
@@ -101,6 +106,9 @@ func (s *service) Read(
 		}
 		futures.values = append(futures.values, f)
 	}
+
+	v2.ReplicaLocalReadCounter.Add(float64(local))
+	v2.ReplicaRemoteReadCounter.Add(float64(remote))
 
 	for _, i := range selected.local {
 		if opts.adjust != nil {
