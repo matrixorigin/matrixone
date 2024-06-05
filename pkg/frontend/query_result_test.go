@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/prashantv/gostub"
 
 	"github.com/BurntSushi/toml"
 	"github.com/golang/mock/gomock"
@@ -77,7 +78,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 
 	testutil.SetupAutoIncrService()
 	//new session
-	ses := NewSession(context.TODO(), proto, testPool, GSysVariables, true, nil)
+	ses := NewSession(context.TODO(), proto, testPool)
 	var c clock.Clock
 	_ = ses.GetTxnHandler().CreateTempStorage(c)
 	tenant := &TenantInfo{
@@ -89,6 +90,10 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 		DefaultRoleID: moAdminRoleID,
 	}
 	ses.SetTenantInfo(tenant)
+
+	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
+	defer stubs.Reset()
+	_ = ses.InitSystemVariables(context.TODO())
 
 	return ses
 }
@@ -120,7 +125,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	var files []resultFileInfo
 	//prepare session
 	ses := newTestSession(t, ctrl)
-	_ = ses.SetGlobalVar(context.TODO(), "save_query_result", int8(1))
+	_ = ses.SetSessionSysVar(context.TODO(), "save_query_result", int8(1))
 	defer ses.Close()
 
 	const blockCnt int = 3

@@ -129,7 +129,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			continue
 		}
 		w.objMetaBuilder.AddPKData(columnData)
-		bf, err := index.NewBinaryFuseFilter(columnData)
+		bf, err := index.NewBloomFilter(columnData)
 		if err != nil {
 			return nil, err
 		}
