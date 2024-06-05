@@ -682,7 +682,7 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 Drop table auto_increment16;
 no such table auto_increment.auto_increment16
 drop table if exists auto_increment17;
-set global auto_increment_offset= 10;
+set auto_increment_offset= 10;
 create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();
 select * from auto_increment17;
@@ -697,4 +697,3 @@ col1
 100
 drop table auto_increment17;
 set auto_increment_offset = 1;
-set global auto_increment_offset= 1;
