@@ -123,9 +123,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 
 	rfTag := builder.genNewMsgTag()
 
-	type_tuple := types.New(types.T_tuple, 0, 0)
 	for i := range probeExprs {
-		args := []types.Type{makeTypeByPlan2Expr(probeExprs[i]), type_tuple}
+		exprType := makeTypeByPlan2Expr(probeExprs[i])
+		args := []types.Type{exprType, exprType}
 		_, err := function.GetFunctionByName(builder.GetContext(), "in", args)
 		if err != nil {
 			//don't support this type
