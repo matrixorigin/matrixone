@@ -667,67 +667,67 @@ func getNonCompositePKSearchFuncByExpr(
 		case "between":
 			switch lval := exprImpl.F.Args[1].GetLit().Value.(type) {
 			case *plan.Literal_I8Val:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_I8Val)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_I8Val)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.I8Val, rval.I8Val)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.I8Val, rval.I8Val)
 			case *plan.Literal_I16Val:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_I16Val)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_I16Val)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.I16Val, rval.I16Val)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.I16Val, rval.I16Val)
 			case *plan.Literal_I32Val:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_I32Val)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_I32Val)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.I32Val, rval.I32Val)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.I32Val, rval.I32Val)
 			case *plan.Literal_I64Val:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_I64Val)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_I64Val)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.I64Val, rval.I64Val)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.I64Val, rval.I64Val)
 			case *plan.Literal_Fval:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_Fval)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_Fval)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.Fval, rval.Fval)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.Fval, rval.Fval)
 			case *plan.Literal_Dval:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_Dval)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_Dval)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.Dval, rval.Dval)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.Dval, rval.Dval)
 			case *plan.Literal_U8Val:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_U8Val)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_U8Val)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.U8Val, rval.U8Val)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.U8Val, rval.U8Val)
 			case *plan.Literal_U16Val:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_U16Val)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_U16Val)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.U16Val, rval.U16Val)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.U16Val, rval.U16Val)
 			case *plan.Literal_U32Val:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_U32Val)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_U32Val)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.U32Val, rval.U32Val)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.U32Val, rval.U32Val)
 			case *plan.Literal_U64Val:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_U64Val)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_U64Val)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.U64Val, rval.U64Val)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.U64Val, rval.U64Val)
 			case *plan.Literal_Dateval:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_Dateval)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_Dateval)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.Dateval, rval.Dateval)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.Dateval, rval.Dateval)
 			case *plan.Literal_Timeval:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_Timeval)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_Timeval)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.Timeval, rval.Timeval)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.Timeval, rval.Timeval)
 			case *plan.Literal_Datetimeval:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_Datetimeval)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_Datetimeval)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.Datetimeval, rval.Datetimeval)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.Datetimeval, rval.Datetimeval)
 			case *plan.Literal_Timestampval:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_Timestampval)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_Timestampval)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.Timestampval, rval.Timestampval)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.Timestampval, rval.Timestampval)
 			case *plan.Literal_Decimal64Val:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_Decimal64Val)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_Decimal64Val)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.Decimal64Val.A, rval.Decimal64Val.A)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.Decimal64Val.A, rval.Decimal64Val.A)
 			case *plan.Literal_Decimal128Val:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_Decimal128Val)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_Decimal128Val)
 
 				val1 := types.Decimal128{B0_63: uint64(lval.Decimal128Val.A), B64_127: uint64(lval.Decimal128Val.B)}
 				val2 := types.Decimal128{B0_63: uint64(rval.Decimal128Val.A), B64_127: uint64(rval.Decimal128Val.B)}
@@ -735,15 +735,15 @@ func getNonCompositePKSearchFuncByExpr(
 				sortedSearchFunc = vector.CollectOffsetsByBetweenWithCompareFactory(val1, val2, types.CompareDecimal128)
 				unSortedSearchFunc = vector.FixedSizedLinearCollectOffsetsByBetweenFactory(val1, val2, types.CompareDecimal128)
 			case *plan.Literal_Sval:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_Sval)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_Sval)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.Sval, rval.Sval)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.Sval, rval.Sval)
 			case *plan.Literal_Jsonval:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_Jsonval)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_Jsonval)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.Jsonval, rval.Jsonval)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.Jsonval, rval.Jsonval)
 			case *plan.Literal_EnumVal:
-				rval := exprImpl.F.Args[1].GetLit().Value.(*plan.Literal_EnumVal)
+				rval := exprImpl.F.Args[2].GetLit().Value.(*plan.Literal_EnumVal)
 				sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lval.EnumVal, rval.EnumVal)
 				unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lval.EnumVal, rval.EnumVal)
 			}
