@@ -2201,7 +2201,7 @@ func (tbl *txnTable) PKPersistedBetween(
 					//fake pk has no bf
 					if !isFakePK {
 						blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
-						blkBfIdx := index.NewEmptyBinaryFuseFilter()
+						blkBfIdx := index.NewEmptyBloomFilter()
 						if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
 							return false
 						}
