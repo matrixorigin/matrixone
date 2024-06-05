@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -315,6 +316,13 @@ func (exec *txnExecutor) Exec(
 		return executor.Result{}, err
 	}
 
+	if strings.Contains(sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
+		proc.Info(exec.ctx, "wuxiliang createView SQL Compile success",
+			zap.String("sql", sql),
+			zap.String("txnID", proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+
 	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
 	defer c.Release()
 	c.disableRetry = exec.opts.DisableIncrStatement()
@@ -345,6 +353,15 @@ func (exec *txnExecutor) Exec(
 	if err != nil {
 		return executor.Result{}, err
 	}
+
+	if strings.Contains(sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
+		c.proc.Info(c.ctx, "wuxiliang createView SQL Compile success",
+			zap.String("databaseName", c.db),
+			zap.String("sql", sql),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+
 	var runResult *util.RunResult
 	runResult, err = c.Run(0)
 	if err != nil {

@@ -789,6 +789,16 @@ func (s *Scope) CreateTable(c *Compile) error {
 		)
 	}
 
+	//---------------------------------------------------------------------------------
+	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+		c.proc.Info(c.ctx, "wuxiliang createView",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+	//---------------------------------------------------------------------------------
+
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
@@ -817,6 +827,17 @@ func (s *Scope) CreateTable(c *Compile) error {
 					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
 				)
 			}
+
+			//---------------------------------------------------------------------------------
+			if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+				c.proc.Info(c.ctx, "wuxiliang createView get dbSource err",
+					zap.String("databaseName", c.db),
+					zap.String("viewName", qry.GetTableDef().GetName()),
+					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+				)
+			}
+			//---------------------------------------------------------------------------------
+
 			return moerr.NewNoDB(c.ctx)
 		}
 		// TODO: debug for #11917
@@ -827,8 +848,30 @@ func (s *Scope) CreateTable(c *Compile) error {
 				zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
 			)
 		}
+
+		//---------------------------------------------------------------------------------
+		if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+			c.proc.Info(c.ctx, "wuxiliang createView no exist err",
+				zap.String("databaseName", c.db),
+				zap.String("viewName", qry.GetTableDef().GetName()),
+				zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+			)
+		}
+		//---------------------------------------------------------------------------------
+
 		return err
 	}
+
+	//---------------------------------------------------------------------------------
+	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+		c.proc.Info(c.ctx, "wuxiliang createView get dbSource success",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+	//---------------------------------------------------------------------------------
+
 	if _, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
 			// TODO: debug for #11917
@@ -839,6 +882,17 @@ func (s *Scope) CreateTable(c *Compile) error {
 					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
 				)
 			}
+
+			//---------------------------------------------------------------------------------
+			if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+				c.proc.Info(c.ctx, "wuxiliang createView if not exist",
+					zap.String("databaseName", c.db),
+					zap.String("viewName", qry.GetTableDef().GetName()),
+					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+				)
+			}
+			//---------------------------------------------------------------------------------
+
 			return nil
 		}
 		if qry.GetReplace() {
@@ -849,6 +903,18 @@ func (s *Scope) CreateTable(c *Compile) error {
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
 				)
+
+				//---------------------------------------------------------------------------------
+				if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+					c.proc.Info(c.ctx, "wuxiliang createView replace drop view err",
+						zap.String("databaseName", c.db),
+						zap.String("viewName", qry.GetTableDef().GetName()),
+						zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+						zap.Error(err),
+					)
+				}
+				//---------------------------------------------------------------------------------
+
 				return err
 			}
 		} else {
@@ -857,6 +923,17 @@ func (s *Scope) CreateTable(c *Compile) error {
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
+
+			//---------------------------------------------------------------------------------
+			if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+				c.proc.Info(c.ctx, "wuxiliang createView view already exists err",
+					zap.String("databaseName", c.db),
+					zap.String("viewName", qry.GetTableDef().GetName()),
+					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+					zap.Error(err),
+				)
+			}
+			//---------------------------------------------------------------------------------
 			return moerr.NewTableAlreadyExists(c.ctx, tblName)
 		}
 	}
@@ -864,6 +941,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
 	tmpDBSource, err := c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
 	if err == nil {
+		//---------------------------------------------------------------------------------
+		if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+			c.proc.Info(c.ctx, "wuxiliang createView entry TempEngine",
+				zap.String("databaseName", c.db),
+				zap.String("viewName", qry.GetTableDef().GetName()),
+				zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+			)
+		}
+		//---------------------------------------------------------------------------------
 		if _, err := tmpDBSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName), nil); err == nil {
 			if qry.GetIfNotExists() {
 				return nil
@@ -877,6 +963,16 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
+	//---------------------------------------------------------------------------------
+	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+		c.proc.Info(c.ctx, "wuxiliang createView before lock mo_table",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+	//---------------------------------------------------------------------------------
+
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		c.proc.Info(c.ctx, "createTable",
 			zap.String("databaseName", c.db),
@@ -886,6 +982,16 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
+	//---------------------------------------------------------------------------------
+	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+		c.proc.Info(c.ctx, "wuxiliang createView after lock mo_table, begin create view",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+	//---------------------------------------------------------------------------------
+
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		c.proc.Info(c.ctx, "createTable",
 			zap.String("databaseName", c.db),
@@ -894,6 +1000,17 @@ func (s *Scope) CreateTable(c *Compile) error {
 		)
 		return err
 	}
+
+	//---------------------------------------------------------------------------------
+	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+		c.proc.Info(c.ctx, "wuxiliang createView after create view",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+	//---------------------------------------------------------------------------------
+
 	// TODO: debug for #11917
 	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
 		c.proc.Info(c.ctx, "createTable ok",
@@ -925,6 +1042,16 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 	}
+
+	//---------------------------------------------------------------------------------
+	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+		c.proc.Info(c.ctx, "wuxiliang createView begin update mo_foreign_keys",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+	//---------------------------------------------------------------------------------
 
 	//update mo_foreign_keys
 	for _, sql := range qry.UpdateFkSqls {
@@ -1080,6 +1207,16 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
+	//---------------------------------------------------------------------------------
+	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+		c.proc.Info(c.ctx, "wuxiliang createView after update mo_foreign_keys",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+	//---------------------------------------------------------------------------------
+
 	// handle fk forward reference
 	fkRefersToMe := qry.GetFksReferToMe()
 	if len(fkRefersToMe) > 0 {
@@ -1184,6 +1321,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
+	//---------------------------------------------------------------------------------
+	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+		c.proc.Info(c.ctx, "wuxiliang createView before build index table",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+	//---------------------------------------------------------------------------------
 	// build index table
 	for _, def := range qry.IndexTables {
 		planCols = def.GetCols()
@@ -1240,6 +1386,16 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	}
 
+	//---------------------------------------------------------------------------------
+	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+		c.proc.Info(c.ctx, "wuxiliang createView after build index table",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+	//---------------------------------------------------------------------------------
+
 	if checkIndexInitializable(dbName, tblName) {
 		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
 		if err != nil {
@@ -1290,12 +1446,31 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	}
 
-	return maybeCreateAutoIncrement(
+	//---------------------------------------------------------------------------------
+	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+		c.proc.Info(c.ctx, "wuxiliang createView before maybeCreateAutoIncrement",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+	//---------------------------------------------------------------------------------
+	err = maybeCreateAutoIncrement(
 		c.ctx,
 		dbSource,
 		qry.GetTableDef(),
 		c.proc.TxnOperator,
 		nil)
+	//---------------------------------------------------------------------------------
+	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
+		c.proc.Info(c.ctx, "wuxiliang createView after maybeCreateAutoIncrement",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+	//---------------------------------------------------------------------------------
+	return err
 }
 
 func checkIndexInitializable(dbName string, tblName string) bool {
