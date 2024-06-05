@@ -17,6 +17,7 @@ package hashbuild
 import (
 	"bytes"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -185,6 +186,7 @@ func (ctr *container) collectBuildBatches(arg *Argument, proc *process.Process, 
 			break
 		}
 		currentBatch = result.Batch
+		atomic.AddInt64(&currentBatch.Cnt, 1)
 		if currentBatch.IsEmpty() {
 			proc.PutBatch(currentBatch)
 			continue
