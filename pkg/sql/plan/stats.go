@@ -487,6 +487,9 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 	if expr == nil {
 		return 1
 	}
+	if expr.Selectivity != 0 {
+		return expr.Selectivity // already calculated
+	}
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -516,9 +519,8 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return 0.2
 		case "prefix_eq":
 			ndv := getExprNdv(expr, builder)
-			logutil.Infof("prefix_eq stats ndv: %v", ndv)
-			if ndv > 15 {
-				return 15 / ndv
+			if ndv > 10 {
+				return 10 / ndv
 			}
 			return 0.5
 		case "in":
@@ -531,8 +533,8 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 		case "prefix_in":
 			card := float64(exprImpl.F.Args[1].GetVec().Len)
 			ndv := getExprNdv(expr, builder)
-			if ndv > 15*card {
-				return 15 * card / ndv
+			if ndv > 10*card {
+				return 10 * card / ndv
 			}
 			return 0.5
 		case "prefix_between":
