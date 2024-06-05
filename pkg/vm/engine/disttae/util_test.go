@@ -101,9 +101,7 @@ func makeInExprForTest[T any](arg0 *plan.Expr, vals []T, oid types.T, mp *mpool.
 				Args: []*plan.Expr{
 					arg0,
 					{
-						Typ: plan.Type{
-							Id: int32(types.T_tuple),
-						},
+						Typ: plan2.MakePlan2Type(vec.GetType()),
 						Expr: &plan.Expr_Vec{
 							Vec: &plan.LiteralVec{
 								Len:  int32(len(vals)),
@@ -657,7 +655,8 @@ func TestGetPKExpr(t *testing.T) {
 					},
 				},
 				Typ: plan.Type{
-					Id: int32(types.T_tuple),
+					Id:          int32(types.T_int64),
+					NotNullable: true,
 				},
 			},
 			{
@@ -670,7 +669,8 @@ func TestGetPKExpr(t *testing.T) {
 					},
 				},
 				Typ: plan.Type{
-					Id: int32(types.T_tuple),
+					Id:          int32(types.T_int64),
+					NotNullable: true,
 				},
 			},
 			nil,
@@ -685,7 +685,8 @@ func TestGetPKExpr(t *testing.T) {
 					},
 				},
 				Typ: plan.Type{
-					Id: int32(types.T_tuple),
+					Id:          int32(types.T_int64),
+					NotNullable: true,
 				},
 			},
 		},
