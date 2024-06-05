@@ -2555,14 +2555,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			if err != nil {
 				return 0, err
 			}
-
-			//if cExpr, ok := offsetExpr.Expr.(*plan.Expr_Lit); ok {
-			//	if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-			//		if c.I64Val < 0 {
-			//			return 0, moerr.NewSyntaxError(builder.GetContext(), "offset value must be nonnegative")
-			//		}
-			//	}
-			//}
 		}
 		if astLimit.Count != nil {
 			limitExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true)
@@ -3414,14 +3406,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 							if err != nil {
 								return 0, err
 							}
-
-							//if cExpr, ok := offsetExpr.Expr.(*plan.Expr_Lit); ok {
-							//	if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-							//		if c.I64Val < 0 {
-							//			return 0, moerr.NewSyntaxError(builder.GetContext(), "offset value must be nonnegative")
-							//		}
-							//	}
-							//}
 						}
 						if s.Limit.Count != nil {
 							limitExpr, err = limitBinder.BindExpr(s.Limit.Count, 0, true)
