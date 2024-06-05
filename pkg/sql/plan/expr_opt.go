@@ -15,8 +15,9 @@
 package plan
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -171,7 +172,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		serialArgs[i] = filter.GetF().Args[1]
 		estimateExprSelectivity(filter, builder)
 		compositeFilterSel = compositeFilterSel * filter.Selectivity
-		logutil.Infof("merge filters into cpkey: %v", FormatExpr(filter))
+		fmt.Println("!!!!!!!!!!!merge filters into cpkey, filter: %v", FormatExpr(filter))
 	}
 	rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", serialArgs)
 
@@ -194,6 +195,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		rightArg,
 	})
 	compositePKFilter.Selectivity = compositeFilterSel
+	fmt.Println("!!!!!!!!!!!merge filters into cpkey, finally %v", FormatExpr(compositePKFilter))
 
 	hitFilterSet := make(map[int]bool)
 	for i := range filterIdx {
