@@ -93,9 +93,7 @@ func getPkExpr(
 						List: []*plan.Expr{leftPK, rightPK},
 					},
 				},
-				Typ: plan.Type{
-					Id: int32(types.T_tuple),
-				},
+				Typ: leftPK.Typ,
 			}
 
 		case "and":
