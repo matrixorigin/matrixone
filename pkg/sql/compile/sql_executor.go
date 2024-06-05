@@ -137,11 +137,19 @@ func (s *sqlExecutor) ExecTxn(
 	err = execFunc(exec)
 	if err != nil {
 		logutil.Errorf("internal sql executor error: %v", err)
+		logutil.Errorf("--xxxx1---sqlExecutor commit txn error",
+			zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
+			zap.String("error", err.Error()))
 		return exec.rollback(err)
 	}
+	logutil.Info("--xxxx2---sqlExecutor commit txn", zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)))
 	if err = exec.commit(); err != nil {
+		logutil.Errorf("--xxxx3---sqlExecutor commit txn error",
+			zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
+			zap.String("error", err.Error()))
 		return err
 	}
+	logutil.Info("--xxxx4---sqlExecutor commit txn", zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)))
 	s.maybeWaitCommittedLogApplied(exec.opts)
 	return nil
 }

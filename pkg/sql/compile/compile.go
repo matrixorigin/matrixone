@@ -606,14 +606,40 @@ func (c *Compile) canRetry(err error) bool {
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
 	c.MessageBoard.Reset()
+
+	if strings.Contains(c.sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
+		c.proc.Info(c.ctx, "wuxiliang createView runOnce before lockMetaTables",
+			zap.String("databaseName", c.db),
+			zap.String("sql", c.sql),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
 	err := c.lockMetaTables()
 	if err != nil {
 		return err
 	}
+
+	if strings.Contains(c.sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
+		c.proc.Info(c.ctx, "wuxiliang createView runOnce before lockTable",
+			zap.String("databaseName", c.db),
+			zap.String("sql", c.sql),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+
 	err = c.lockTable()
 	if err != nil {
 		return err
 	}
+
+	if strings.Contains(c.sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
+		c.proc.Info(c.ctx, "wuxiliang createView runOnce after lockTable",
+			zap.String("databaseName", c.db),
+			zap.String("sql", c.sql),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
