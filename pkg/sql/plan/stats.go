@@ -1016,13 +1016,21 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 	if joinNode.NodeType != plan.Node_JOIN && joinNode.NodeType != plan.Node_FUZZY_FILTER {
 		return
 	}
+
+	if joinNode.JoinType == plan.Node_INDEX {
+		scanNode.Stats.Outcnt = builder.qry.Nodes[joinNode.Children[1]].Stats.Outcnt
+		scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/3) + 1
+		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum * DefaultBlockMaxRows)
+		scanNode.Stats.Selectivity = builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity
+		return
+	}
 	runtimeFilterSel := builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity
 	scanNode.Stats.Cost *= runtimeFilterSel
 	scanNode.Stats.Outcnt *= runtimeFilterSel
 	if scanNode.Stats.Cost < 1 {
 		scanNode.Stats.Cost = 1
 	}
-	scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/2) + 1
+	scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/3) + 1
 	scanNode.Stats.Selectivity = andSelectivity(scanNode.Stats.Selectivity, runtimeFilterSel)
 }
 

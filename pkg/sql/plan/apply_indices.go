@@ -18,8 +18,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -509,7 +507,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 						serialArgs[i] = DeepCopyExpr(filter.GetF().Args[1])
 						estimateExprSelectivity(filter, builder)
 						compositeFilterSel = compositeFilterSel * filter.Selectivity
-						logutil.Infof("!!!!!!!merge filters into cpkey, filter %v", FormatExpr(filter))
 					}
 					rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
 
@@ -530,7 +527,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 						rightArg,
 					})
 					idxFilter.Selectivity = compositeFilterSel
-					logutil.Infof("!!!!!!!merge filters into cpkey, finally %v", FormatExpr(idxFilter))
 
 					newFilterList := make([]*plan.Expr, 0, len(missFilterIdx)+1)
 					for _, idx := range missFilterIdx {
@@ -662,7 +658,6 @@ END0:
 				serialArgs[i] = DeepCopyExpr(filter.GetF().Args[1])
 				estimateExprSelectivity(filter, builder)
 				compositeFilterSel = compositeFilterSel * filter.Selectivity
-				logutil.Infof("!!!!!!!merge filters into cpkey, filter %v", FormatExpr(filter))
 			}
 			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
 
@@ -683,7 +678,6 @@ END0:
 				rightArg,
 			})
 			idxFilter.Selectivity = compositeFilterSel
-			logutil.Infof("!!!!!!!merge filters into cpkey, final %v", FormatExpr(idxFilter))
 		}
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
