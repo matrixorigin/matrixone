@@ -519,45 +519,24 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 		case "like":
 			ret = 0.2
 		case "prefix_eq":
-<<<<<<< HEAD
 			ret = 0.0001 // should never go here
-		case "in":
-			card := float64(exprImpl.F.Args[1].GetVec().Len)
-=======
-			ndv := getExprNdv(expr, builder)
-			if ndv > 10 {
-				return 10 / ndv
-			}
-			return 0.5
 		case "in", "prefix_in":
-			card := float64(1)
+			card := 1.0
 			switch arg1Impl := exprImpl.F.Args[1].Expr.(type) {
 			case *plan.Expr_Vec:
 				card = float64(arg1Impl.Vec.Len)
-
 			case *plan.Expr_List:
 				card = float64(len(arg1Impl.List.List))
 			}
 			if funcName == "prefix_in" {
 				card *= 10
 			}
->>>>>>> 52b7c7b2a6806b3d24761e03fa23d83753c5f370
 			ndv := getExprNdv(expr, builder)
 			if ndv > card {
 				ret = card / ndv
 			} else {
-				ret = 1.0
+				ret = 0.5
 			}
-<<<<<<< HEAD
-		case "prefix_in":
-			card := float64(exprImpl.F.Args[1].GetVec().Len)
-			ndv := getExprNdv(expr, builder)
-			if ndv > 10*card {
-				ret = 10 * card / ndv // todo: will fix prefix_in in the future
-			}
-=======
-			return 0.5
->>>>>>> 52b7c7b2a6806b3d24761e03fa23d83753c5f370
 		case "prefix_between":
 			ret = 0.1
 		case "isnull", "is_null":
