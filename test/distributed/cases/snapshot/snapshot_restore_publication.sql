@@ -486,11 +486,13 @@ show databases like 'db%';
 create account acc03 admin_name 'test_account' identified by '111';
 
 restore account acc01 from snapshot sp05 to account acc03;
+-- @bvt:issue#16497
 -- @session:id=11&user=acc03:test_account&password=111
 -- @ignore:2
 show publications;
 show databases like 'db%';
 -- @session
+-- @bvt:issue
 
 drop snapshot sp05;
 drop account acc01;
