@@ -525,8 +525,9 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			ndv := getExprNdv(expr, builder)
 			if ndv > card {
 				ret = card / ndv
+			} else {
+				ret = 1.0
 			}
-			ret = 1.0
 		case "prefix_in":
 			card := float64(exprImpl.F.Args[1].GetVec().Len)
 			ndv := getExprNdv(expr, builder)
