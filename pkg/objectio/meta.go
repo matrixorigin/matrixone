@@ -162,7 +162,7 @@ const (
 	bloomFilterTypeOff = sortKeyOff + sortKeyLen
 	bloomFilterTypeLen = 1
 	headerDummyOff     = bloomFilterTypeOff + bloomFilterTypeLen
-	headerDummyLen     = 30
+	headerDummyLen     = 29
 	headerLen          = headerDummyOff + headerDummyLen
 )
 
