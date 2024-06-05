@@ -43,6 +43,18 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	}
 
 	if expr.Typ.Id != int32(types.T_uint64) {
+		if expr.Typ.Id == int32(types.T_int64) {
+			if cExpr, ok := expr.Expr.(*plan.Expr_Lit); ok {
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
+					if c.I64Val < 0 {
+						return nil, moerr.NewSyntaxError(b.GetContext(), "offset value must be nonnegative")
+					}
+					//convert to uint64 instead of CAST
+					expr = makePlan2Uint64ConstExprWithType(uint64(c.I64Val))
+					return expr, nil
+				}
+			}
+		}
 		// limit '10' / offset '2'
 		// the valid string should be cast to int64
 		if expr.Typ.Id == int32(types.T_varchar) || expr.Typ.Id == int32(types.T_int64) {
