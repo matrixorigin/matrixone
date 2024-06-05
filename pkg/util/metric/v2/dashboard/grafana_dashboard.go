@@ -461,6 +461,7 @@ func (c *DashboardCreator) initK8SFilterOptions() {
 			query.Multiple(),
 			query.Label("namespace"),
 			query.Request("label_values(namespace)"),
+			query.Refresh(query.TimeChange),
 		),
 		dashboard.VariableAsQuery(
 			"pod",
@@ -469,6 +470,7 @@ func (c *DashboardCreator) initK8SFilterOptions() {
 			query.IncludeAll(),
 			query.Multiple(),
 			query.Label("pod"),
-			query.Request("label_values(pod)"),
+			query.Request(`label_values(kube_pod_info{namespace="$namespace"},pod)`),
+			query.Refresh(query.TimeChange),
 		))
 }
