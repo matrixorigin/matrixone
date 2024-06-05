@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -91,6 +92,18 @@ func (p *Partition) MutateState() (*PartitionState, func()) {
 		if !p.state.CompareAndSwap(curState, state) {
 			panic("concurrent mutation")
 		}
+		name := p.TableInfo.Name
+		if name == "customer" || name == "lineitem" ||
+			name == "nation" || name == "orders" ||
+			name == "part" || name == "partsupp" ||
+			name == "supplier" {
+			logutil.Infof("xxxx UpdatePartitionOfPush start to doneNuteate, part:%p, new state:%p, table:%s, tableID:%v",
+				p,
+				state,
+				name,
+				p.TableInfo.ID)
+		}
+
 	}
 }
 
