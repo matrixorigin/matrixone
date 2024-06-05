@@ -1,6 +1,6 @@
 module github.com/matrixorigin/matrixone
 
-go 1.21.5
+go 1.22.3
 
 require (
 	github.com/BurntSushi/toml v1.2.1
