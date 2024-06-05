@@ -35,7 +35,7 @@ type container struct {
 	poses []int32           // sorted list of attributes
 	cmps  []compare.Compare // compare structure used to do sort work
 
-	limit         int64
+	limit         uint64
 	limitExecutor colexec.ExpressionExecutor
 
 	bat *batch.Batch // bat stores the final result of merge-top

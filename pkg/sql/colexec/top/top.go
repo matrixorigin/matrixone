@@ -57,7 +57,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	if err != nil {
 		return err
 	}
-	arg.ctr.limit = vector.MustFixedCol[int64](vec)[0]
+	arg.ctr.limit = vector.MustFixedCol[uint64](vec)[0]
 	if arg.ctr.limit > 1024 {
 		arg.ctr.sels = make([]int64, 0, 1024)
 	} else {
@@ -199,12 +199,12 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 	return err
 }
 
-func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process.Process) error {
 	var start int64
 
 	length := int64(bat.RowCount())
-	if n := int64(len(ctr.sels)); n < limit {
-		start = limit - n
+	if n := uint64(len(ctr.sels)); n < limit {
+		start = int64(limit - n)
 		if start > length {
 			start = length
 		}
@@ -214,7 +214,7 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 					return err
 				}
 			}
-			ctr.sels = append(ctr.sels, n)
+			ctr.sels = append(ctr.sels, int64(n))
 			n++
 		}
 		ctr.bat.AddRowCount(int(start))
@@ -244,8 +244,8 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 	return nil
 }
 
-func (ctr *container) eval(limit int64, proc *process.Process, result *vm.CallResult) error {
-	if int64(len(ctr.sels)) < limit {
+func (ctr *container) eval(limit uint64, proc *process.Process, result *vm.CallResult) error {
+	if uint64(len(ctr.sels)) < limit {
 		ctr.sort()
 	}
 	for i, cmp := range ctr.cmps {
@@ -300,7 +300,7 @@ func (arg *Argument) updateTopValueZM() bool {
 func (arg *Argument) getTopValue() ([]byte, bool) {
 	ctr := arg.ctr
 	// not enough items in the heap.
-	if int64(len(ctr.sels)) < arg.ctr.limit {
+	if uint64(len(ctr.sels)) < arg.ctr.limit {
 		return nil, false
 	}
 	x := int(ctr.sels[0])
