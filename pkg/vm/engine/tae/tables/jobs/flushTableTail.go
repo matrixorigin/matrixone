@@ -154,6 +154,7 @@ func NewFlushTableTailTask(
 	}
 	task.schema = rel.Schema().(*catalog.Schema)
 
+	objSeen := make(map[*catalog.ObjectEntry]struct{})
 	for _, obj := range objs {
 		task.scopes = append(task.scopes, *obj.AsCommonID())
 		var hdl handle.Object
@@ -161,6 +162,10 @@ func NewFlushTableTailTask(
 		if err != nil {
 			return
 		}
+		if _, ok := objSeen[obj]; ok {
+			continue
+		}
+		objSeen[obj] = struct{}{}
 		if hdl.IsAppendable() && !obj.HasDropCommitted() {
 			task.aObjMetas = append(task.aObjMetas, obj)
 			task.aObjHandles = append(task.aObjHandles, hdl)
@@ -192,6 +197,10 @@ func NewFlushTableTailTask(
 		if err != nil {
 			return
 		}
+		if _, ok := objSeen[obj]; ok {
+			continue
+		}
+		objSeen[obj] = struct{}{}
 		task.delSrcMetas = append(task.delSrcMetas, obj)
 		task.delSrcHandles = append(task.delSrcHandles, hdl)
 	}
