@@ -163,9 +163,13 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		return filters
 	}
 
+	compositeFilterSel := 1.0
 	serialArgs := make([]*plan.Expr, len(filterIdx))
 	for i := range filterIdx {
-		serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
+		filter := filters[filterIdx[i]]
+		serialArgs[i] = filter.GetF().Args[1]
+		estimateExprSelectivity(filter, builder)
+		compositeFilterSel = compositeFilterSel * filter.Selectivity
 	}
 	rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", serialArgs)
 
@@ -187,6 +191,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		pkExpr,
 		rightArg,
 	})
+	compositePKFilter.Selectivity = compositeFilterSel
 
 	hitFilterSet := make(map[int]bool)
 	for i := range filterIdx {

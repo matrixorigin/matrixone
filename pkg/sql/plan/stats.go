@@ -485,71 +485,73 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 
 func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 	if expr == nil {
-		return 1
+		return 1.0
 	}
 	if expr.Selectivity != 0 {
 		return expr.Selectivity // already calculated
 	}
 
+	ret := 1.0
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
 		case "=":
-			return estimateEqualitySelectivity(expr, builder)
+			ret = estimateEqualitySelectivity(expr, builder)
 		case "!=", "<>":
-			return 0.9
+			ret = 0.9
 		case ">", "<", ">=", "<=", "between":
-			return estimateNonEqualitySelectivity(expr, funcName, builder)
+			ret = estimateNonEqualitySelectivity(expr, funcName, builder)
 		case "and":
 			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], builder)
 			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder)
 			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (sel1+sel2) > 1 {
-				return sel1 + sel2 - 1
+				ret = sel1 + sel2 - 1
 			} else {
-				return andSelectivity(sel1, sel2)
+				ret = andSelectivity(sel1, sel2)
 			}
 		case "or":
 			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], builder)
 			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder)
-			return orSelectivity(sel1, sel2)
+			ret = orSelectivity(sel1, sel2)
 		case "not":
-			return 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder)
+			ret = 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder)
 		case "like":
-			return 0.2
+			ret = 0.2
 		case "prefix_eq":
 			ndv := getExprNdv(expr, builder)
 			if ndv > 10 {
-				return 10 / ndv
+				ret = 10 / ndv
 			}
-			return 0.5
+			ret = 0.5
 		case "in":
 			card := float64(exprImpl.F.Args[1].GetVec().Len)
 			ndv := getExprNdv(expr, builder)
 			if ndv > card {
-				return card / ndv
+				ret = card / ndv
 			}
-			return 1
+			ret = 1.0
 		case "prefix_in":
 			card := float64(exprImpl.F.Args[1].GetVec().Len)
 			ndv := getExprNdv(expr, builder)
 			if ndv > 10*card {
-				return 10 * card / ndv
+				ret = 10 * card / ndv
 			}
-			return 0.5
+			ret = 0.5
 		case "prefix_between":
-			return 0.1
+			ret = 0.1
 		case "isnull", "is_null":
-			return getNullSelectivity(exprImpl.F.Args[0], builder, true)
+			ret = getNullSelectivity(exprImpl.F.Args[0], builder, true)
 		case "isnotnull", "is_not_null":
-			return getNullSelectivity(exprImpl.F.Args[0], builder, false)
+			ret = getNullSelectivity(exprImpl.F.Args[0], builder, false)
 		default:
-			return 0.15
+			ret = 0.15
 		}
 	case *plan.Expr_Lit:
-		return 1
+		ret = 1.0
 	}
-	return 1
+	expr.Selectivity = ret
+	return ret
 }
 
 func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
