@@ -1207,7 +1207,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {
-	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "in", "prefix_in", "serial", "serial_full":
+	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
 		if proc != nil {
 			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false)
 			if tmpexpr != nil {
@@ -1513,6 +1513,76 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return nil, err
 			}
 		}
+
+	case "in", "not_in":
+		//if all the expr in the in list can safely cast to left type, we call it safe
+		if rightList := args[1].GetList(); rightList != nil {
+			typLeft := makeTypeByPlan2Expr(args[0])
+			var inExprList, orExprList []*plan.Expr
+
+			for _, rightVal := range rightList.List {
+				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal.GetLit()) {
+					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
+					if err != nil {
+						return nil, err
+					}
+					inExprList = append(inExprList, inExpr)
+				} else {
+					orExprList = append(orExprList, rightVal)
+				}
+			}
+
+			var newExpr *plan.Expr
+
+			if len(inExprList) > 1 {
+				leftType := makeTypeByPlan2Expr(args[0])
+				argsType := []types.Type{leftType, leftType}
+				fGet, err := function.GetFunctionByName(ctx, name, argsType)
+				if err != nil {
+					return nil, err
+				}
+
+				funcID := fGet.GetEncodedOverloadID()
+				returnType := fGet.GetReturnType()
+				rightList.List = inExprList
+				exprType := makePlan2Type(&returnType)
+				exprType.NotNullable = function.DeduceNotNullable(funcID, args)
+				newExpr = &Expr{
+					Typ: exprType,
+					Expr: &plan.Expr_F{
+						F: &plan.Function{
+							Func: getFunctionObjRef(funcID, name),
+							Args: args,
+						},
+					},
+				}
+			} else if len(inExprList) > 0 {
+				orExprList = append(inExprList, orExprList...)
+			}
+
+			//expand the in list to col=a or col=b or ......
+			if name == "in" {
+				for _, expr := range orExprList {
+					tmpExpr, _ := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
+					if newExpr == nil {
+						newExpr = tmpExpr
+					} else {
+						newExpr, _ = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{newExpr, tmpExpr})
+					}
+				}
+			} else {
+				for _, expr := range orExprList {
+					tmpExpr, _ := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
+					if newExpr == nil {
+						newExpr = tmpExpr
+					} else {
+						newExpr, _ = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{newExpr, tmpExpr})
+					}
+				}
+			}
+
+			return newExpr, nil
+		}
 	}
 
 	// get args(exprs) & types
@@ -1594,67 +1664,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return nil, err
 			}
 			funcID = fGet.GetEncodedOverloadID()
-		}
-
-	case "in", "not_in":
-		//if all the expr in the in list can safely cast to left type, we call it safe
-		if rightList := args[1].GetList(); rightList != nil {
-			typLeft := makeTypeByPlan2Expr(args[0])
-			var inExprList, orExprList []*plan.Expr
-
-			for _, rightVal := range rightList.List {
-				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal.GetLit()) {
-					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
-					if err != nil {
-						return nil, err
-					}
-					inExprList = append(inExprList, inExpr)
-				} else {
-					orExprList = append(orExprList, rightVal)
-				}
-			}
-
-			var newExpr *plan.Expr
-
-			if len(inExprList) > 1 {
-				rightList.List = inExprList
-				typ := makePlan2Type(&returnType)
-				typ.NotNullable = function.DeduceNotNullable(funcID, args)
-				newExpr = &Expr{
-					Expr: &plan.Expr_F{
-						F: &plan.Function{
-							Func: getFunctionObjRef(funcID, name),
-							Args: args,
-						},
-					},
-					Typ: typ,
-				}
-			} else if len(inExprList) > 0 {
-				orExprList = append(inExprList, orExprList...)
-			}
-
-			//expand the in list to col=a or col=b or ......
-			if name == "in" {
-				for _, expr := range orExprList {
-					tmpExpr, _ := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
-					if newExpr == nil {
-						newExpr = tmpExpr
-					} else {
-						newExpr, _ = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{newExpr, tmpExpr})
-					}
-				}
-			} else {
-				for _, expr := range orExprList {
-					tmpExpr, _ := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
-					if newExpr == nil {
-						newExpr = tmpExpr
-					} else {
-						newExpr, _ = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{newExpr, tmpExpr})
-					}
-				}
-			}
-
-			return newExpr, nil
 		}
 
 	case "timediff":
