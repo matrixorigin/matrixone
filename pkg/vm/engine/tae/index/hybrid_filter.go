@@ -134,7 +134,7 @@ func (bf *hybridFilter) Unmarshal(data []byte) error {
 }
 
 func (bf *hybridFilter) String() string {
-	s := fmt.Sprintf("<HBF>")
+	s := fmt.Sprintf("<HBF:%d:%d>", bf.prefixLevel1.prefixFnId, bf.prefixLevel2.prefixFnId)
 	s += "</HBF>"
 	return s
 }
