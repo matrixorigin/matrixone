@@ -19,9 +19,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,10 +35,9 @@ import (
 )
 
 type PartitionReader struct {
-	table        *txnTable
-	txnOffset    int  // Transaction writes offset used to specify the starting position for reading data.
-	fromSnapshot bool // Boolean indicating if the data is from a snapshot.
-	prepared     bool
+	table     *txnTable
+	txnOffset int // Transaction writes offset used to specify the starting position for reading data.
+	prepared  bool
 	// inserted rows comes from txn.writes.
 	inserts []*batch.Batch
 	//deleted rows comes from txn.writes or partitionState.rows.
@@ -77,7 +77,7 @@ func (p *PartitionReader) prepare() error {
 		//load inserts and deletes from txn.writes.
 
 		txnOffset := p.txnOffset
-		if p.fromSnapshot {
+		if p.table.db.op.IsSnapOp() {
 			txnOffset = p.table.getTxn().GetSnapshotWriteOffset()
 		}
 

@@ -19,6 +19,8 @@ import (
 	"sort"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -41,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 // -----------------------------------------------------------------
@@ -477,14 +478,12 @@ func newBlockMergeReader(
 	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
 	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
-	fromSnapshot bool, // Boolean indicating if the data is from a snapshot.
 	fs fileservice.FileService,
 	proc *process.Process,
 ) *blockMergeReader {
 	r := &blockMergeReader{
-		table:        txnTable,
-		txnOffset:    txnOffset,
-		fromSnapshot: fromSnapshot,
+		table:     txnTable,
+		txnOffset: txnOffset,
 		blockReader: newBlockReader(
 			ctx,
 			txnTable.GetTableDef(ctx),
@@ -612,7 +611,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	iter.Close()
 
 	txnOffset := r.txnOffset
-	if r.fromSnapshot {
+	if r.table.db.op.IsSnapOp() {
 		txnOffset = r.table.getTxn().GetSnapshotWriteOffset()
 	}
 

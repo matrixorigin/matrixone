@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -124,8 +125,6 @@ type Scope struct {
 	NodeInfo engine.Node
 	// TxnOffset represents the transaction's write offset, specifying the starting position for reading data.
 	TxnOffset int
-	// FromSnapshot indicates whether the `table_scan` data is sourced from a snapshot.
-	FromSnapshot bool
 	// Instructions contains command list of this scope.
 	Instructions vm.Instructions
 	// Proc contains the execution context.

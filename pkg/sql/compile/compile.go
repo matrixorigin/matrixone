@@ -2219,7 +2219,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	//-----------------------------------------------------------------------------------------------------
 	ctx := c.ctx
 	txnOp = c.proc.TxnOperator
-	isFromSnapshot := false
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 			n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
@@ -2228,7 +2227,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 			if n.ScanSnapshot.Tenant != nil {
 				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
 			}
-			isFromSnapshot = true
 		}
 	}
 	//-----------------------------------------------------------------------------------------------------
@@ -2291,7 +2289,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.Attributes = attrs
 	s.DataSource.TableDef = tblDef
 	s.DataSource.Rel = rel
-	s.FromSnapshot = isFromSnapshot
 	s.DataSource.RelationName = n.TableDef.Name
 	s.DataSource.PartitionRelationNames = partitionRelNames
 	s.DataSource.SchemaName = n.ObjRef.SchemaName
@@ -3759,7 +3756,6 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 	//-----------------------------------------------------------------------------------------------------
 	ctx := c.ctx
 	txnOp = c.proc.TxnOperator
-	fromSnapshot := false
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 			n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
@@ -3768,7 +3764,6 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 			if n.ScanSnapshot.Tenant != nil {
 				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
 			}
-			fromSnapshot = true
 		}
 	}
 	//-----------------------------------------------------------------------------------------------------
@@ -3787,7 +3782,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 	if err != nil {
 		return nil, err
 	}
-	ranges, err = rel.Ranges(ctx, blockFilterList, c.TxnOffset, fromSnapshot)
+	ranges, err = rel.Ranges(ctx, blockFilterList, c.TxnOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -3800,7 +3795,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 				if err != nil {
 					return nil, err
 				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset, fromSnapshot)
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
@@ -3822,7 +3817,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 				if err != nil {
 					return nil, err
 				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset, fromSnapshot)
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
