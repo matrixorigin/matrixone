@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"regexp"
 	"runtime"
 	gotrace "runtime/trace"
 	"sort"
@@ -468,18 +467,6 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		c.proc.CleanValueScanBatchs()
 		c.proc.SetPrepareBatch(nil)
 		c.proc.SetPrepareExprList(nil)
-	}()
-
-	defer func() {
-		if c.proc.SessionInfo.User != "mo_logger" && txnOp != nil {
-			if regexp.MustCompile(`.*select count\(\*\) from tpch\.orders \{snapshot.*`).MatchString(sql) {
-				//if regexp.MustCompile(`.*from tpch\.orders \{snapshot.*`).MatchString(sql) {
-				logutil.Infof("xxxx txn: %s run sql:%s, err:%v",
-					txnOp.Txn().DebugString(),
-					sql,
-					err)
-			}
-		}
 	}()
 
 	var writeOffset uint64
