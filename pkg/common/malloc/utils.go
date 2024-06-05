@@ -14,10 +14,6 @@
 
 package malloc
 
-import "testing"
-
-func TestClassAllocator(t *testing.T) {
-	testAllocator(t, func() Allocator {
-		return NewClassAllocator(ptrTo(uint32(1)))
-	})
+func ptrTo[T any](v T) *T {
+	return &v
 }
