@@ -876,8 +876,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		}
 		if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-				node.Stats.Outcnt = float64(c.I64Val)
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				node.Stats.Outcnt = float64(c.U64Val)
 				node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
 			}
 		}
@@ -1069,8 +1069,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	// if there is a limit, outcnt is limit number
 	if node.Limit != nil {
 		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-				stats.Outcnt = float64(c.I64Val)
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				stats.Outcnt = float64(c.U64Val)
 				stats.BlockNum = int32(((stats.Outcnt / stats.Selectivity) / DefaultBlockMaxRows) + 1)
 				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
 			}

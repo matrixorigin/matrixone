@@ -161,6 +161,7 @@ func makePlan2Int64ConstExpr(v int64) *plan.Expr_Lit {
 }
 
 var MakePlan2Int64ConstExprWithType = makePlan2Int64ConstExprWithType
+var MakePlan2Uint64ConstExprWithType = makePlan2Uint64ConstExprWithType
 
 func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 	return &plan.Expr{
