@@ -1,3 +1,4 @@
+-- @bvt:issue#16501
 use tpch;
 create snapshot tpch_snapshot for account sys;
 create snapshot tpch_cluster for cluster;
@@ -8,8 +9,8 @@ drop table if exists orders;
 drop table if exists part;
 drop table if exists partsupp;
 drop table if exists supplier;
+
 select sleep(10);
--- @bvt:issue#16501
 -- customer
 select count(*) from customer {snapshot = 'tpch_snapshot'};
 select count(*) from customer {snapshot = 'tpch_snapshot'};
@@ -58,11 +59,9 @@ select count(*) from supplier {snapshot = 'tpch_snapshot'};
 select count(*) from supplier {snapshot = 'tpch_snapshot'};
 select count(*) from supplier {snapshot = 'tpch_snapshot'};
 select count(*) from supplier {snapshot = 'tpch_snapshot'};
--- @bvt:issue
 
 -- restore
 restore account sys database tpch from snapshot tpch_snapshot;
--- @bvt:issue#16501
 select count(*) from customer;
 select count(*) from customer;
 select count(*) from customer;
@@ -90,12 +89,10 @@ select count(*) from partsupp;
 select count(*) from supplier;
 select count(*) from supplier;
 select count(*) from supplier;
--- @bvt:issue
 
 drop database tpch;
 select sleep(10);
 
--- @bvt:issue#16501
 select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
 select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
 select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
@@ -137,11 +134,9 @@ select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
 select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
 select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
 select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
--- @bvt:issue
 
 restore account sys database tpch from snapshot tpch_snapshot;
 
--- @bvt:issue#16501
 select count(*) from tpch.customer;
 select count(*) from tpch.customer;
 select count(*) from tpch.customer;
@@ -169,11 +164,9 @@ select count(*) from tpch.partsupp;
 select count(*) from tpch.supplier;
 select count(*) from tpch.supplier;
 select count(*) from tpch.supplier;
--- @bvt:issue
 
 drop snapshot tpch_snapshot;
 
--- @bvt:issue#16501
 select count(*) from tpch.customer {snapshot = 'tpch_cluster'};
 select count(*) from tpch.customer {snapshot = 'tpch_cluster'};
 select count(*) from tpch.customer {snapshot = 'tpch_cluster'};
@@ -215,6 +208,7 @@ select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
--- @bvt:issue
+
 
 drop snapshot tpch_cluster;
+-- @bvt:issue
