@@ -514,9 +514,13 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 						idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
 					}
 
+					compositeFilterSel := 1.0
 					serialArgs := make([]*plan.Expr, len(hitFilterIdx))
 					for i := range hitFilterIdx {
-						serialArgs[i] = DeepCopyExpr(node.FilterList[hitFilterIdx[i]].GetF().Args[1])
+						filter := node.FilterList[hitFilterIdx[i]]
+						serialArgs[i] = DeepCopyExpr(filter.GetF().Args[1])
+						estimateExprSelectivity(filter, builder)
+						compositeFilterSel = compositeFilterSel * filter.Selectivity
 					}
 					rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
 
@@ -536,6 +540,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 						},
 						rightArg,
 					})
+					idxFilter.Selectivity = compositeFilterSel
 
 					newFilterList := make([]*plan.Expr, 0, len(missFilterIdx)+1)
 					for _, idx := range missFilterIdx {
@@ -658,9 +663,15 @@ END0:
 			col.RelPos = idxTag
 			col.ColPos = 0
 		} else {
+
+			compositeFilterSel := 1.0
+
 			serialArgs := make([]*plan.Expr, len(filterIdx))
 			for i := range filterIdx {
-				serialArgs[i] = DeepCopyExpr(node.FilterList[filterIdx[i]].GetF().Args[1])
+				filter := node.FilterList[filterIdx[i]]
+				serialArgs[i] = DeepCopyExpr(filter.GetF().Args[1])
+				estimateExprSelectivity(filter, builder)
+				compositeFilterSel = compositeFilterSel * filter.Selectivity
 			}
 			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
 
@@ -680,6 +691,7 @@ END0:
 				},
 				rightArg,
 			})
+			idxFilter.Selectivity = compositeFilterSel
 		}
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
