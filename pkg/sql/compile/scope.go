@@ -471,9 +471,6 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	}
 
 	maxProvidedCpuNumber := goruntime.GOMAXPROCS(0)
-	if c.execType == plan2.ExecTypeTP {
-		maxProvidedCpuNumber = 1
-	}
 
 	var scanUsedCpuNumber int
 	var readers []engine.Reader
@@ -689,10 +686,10 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 }
 
 func DetermineRuntimeDOP(cpunum, blocks int) int {
-	if cpunum <= 0 || blocks <= plan2.BlockThresholdForTpQuery {
+	if cpunum <= 0 || blocks <= 16 {
 		return 1
 	}
-	ret := blocks/plan2.BlockThresholdForTpQuery + 1
+	ret := blocks/16 + 1
 	if ret < cpunum {
 		return ret
 	}
