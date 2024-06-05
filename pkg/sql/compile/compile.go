@@ -3616,11 +3616,13 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	for i := 0; i < buildLen; i++ {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
+	mergeOperator := merge.NewArgument()
+	mergeOperator.KeepBatch = true
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:      vm.Merge,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
-		Arg:     merge.NewArgument(),
+		Arg:     mergeOperator,
 	})
 	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], ss != nil, s.ShuffleCnt > 0))
 
