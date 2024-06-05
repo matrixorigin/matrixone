@@ -38,7 +38,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
 	state              int
 	hasNull            bool
 	multiSels          [][]int32
@@ -111,7 +110,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
-		ctr.FreeMergeTypeOperator(pipelineFailed)
 		arg.ctr = nil
 	}
 }
