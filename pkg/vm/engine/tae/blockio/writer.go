@@ -82,8 +82,7 @@ func (w *BlockWriter) SetPrimaryKeyWithType(idx uint16, pkType uint8, prefix ...
 	w.pk = idx
 	w.sortKeyIdx = idx
 	w.pkType = pkType
-	w.prefix = make([]index.PrefixFn, 0)
-	w.prefix = append(w.prefix, prefix...)
+	w.prefix = prefix
 }
 
 func (w *BlockWriter) SetSortKey(idx uint16) {
