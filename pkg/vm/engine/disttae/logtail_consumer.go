@@ -1423,6 +1423,19 @@ func updatePartitionOfPush(
 		}
 	}
 
+	name := partition.TableInfo.Name
+	if name == "customer" || name == "lineitem" ||
+		name == "nation" || name == "orders" ||
+		name == "part" || name == "partsupp" ||
+		name == "supplier" {
+		logutil.Infof("xxxx UpdatePartitionOfPush start to doneNuteate, part:%p, new state:%p, table:%s, tableID:%v, dbID:%v",
+			partition,
+			state,
+			name,
+			tblId,
+			dbId)
+	}
+
 	doneMutate()
 
 	return nil

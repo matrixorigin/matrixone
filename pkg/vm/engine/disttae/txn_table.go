@@ -1916,9 +1916,11 @@ func (tbl *txnTable) newReader(
 	fs := txn.engine.fs
 
 	if tbl.db.databaseName == "tpch" && tbl.db.op.IsSnapOp() {
-		logutil.Infof("xxxx newReader start to getPartitionState, snapshot op:%s, table:%s",
+		logutil.Infof("xxxx newReader start to getPartitionState, snapshot op:%s, table:%s, tablID:%v, dbID:%v",
 			tbl.db.op.Txn().DebugString(),
 			tbl.tableName,
+			tbl.tableId,
+			tbl.db.databaseId,
 		)
 	}
 
@@ -1928,9 +1930,11 @@ func (tbl *txnTable) newReader(
 	}
 
 	if tbl.db.databaseName == "tpch" && tbl.db.op.IsSnapOp() {
-		logutil.Infof("xxxx newReader getPartitionState finish, snapshot op:%s, table:%s, state:%p",
+		logutil.Infof("xxxx newReader getPartitionState finish, snapshot op:%s, table:%s, tableID:%v, dbID:%v, state:%p",
 			tbl.db.op.Txn().DebugString(),
 			tbl.tableName,
+			tbl.tableId,
+			tbl.db.databaseId,
 			state)
 	}
 
