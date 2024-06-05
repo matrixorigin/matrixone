@@ -36,12 +36,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	arg.ctr = new(container)
-	if len(proc.Reg.MergeReceivers) > 1 {
-		arg.ctr.InitReceiver(proc, true)
-		arg.ctr.isMerge = true
-	} else {
-		arg.ctr.InitReceiver(proc, false)
-	}
+	arg.ctr.InitReceiver(proc, true)
 
 	if arg.NeedHashMap {
 		arg.ctr.vecs = make([][]*vector.Vector, 0)
@@ -185,11 +180,7 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 	var currentBatch *batch.Batch
 	var msg *process.RegisterMessage
 	for {
-		if ap.ctr.isMerge {
-			msg = ctr.ReceiveFromAllRegs(anal)
-		} else {
-			msg = ctr.ReceiveFromSingleReg(0, anal)
-		}
+		msg = ctr.ReceiveFromAllRegs(anal)
 		if msg.Err != nil {
 			return msg.Err
 		}

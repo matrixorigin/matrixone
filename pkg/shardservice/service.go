@@ -830,6 +830,18 @@ func (c *readCache) addShards(
 	metadata pb.ShardsMetadata,
 	shards []pb.TableShard,
 ) {
+	// skip tombstone replica
+	for i := range shards {
+		replicas := shards[i].Replicas[:0]
+		for _, r := range shards[i].Replicas {
+			if r.State == pb.ReplicaState_Tombstone {
+				continue
+			}
+			replicas = append(replicas, r)
+		}
+		shards[i].Replicas = replicas
+	}
+
 	c.shards[table] = shardsCache{
 		metadata: metadata,
 		shards:   shards,
