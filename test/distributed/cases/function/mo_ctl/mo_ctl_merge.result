@@ -19,6 +19,9 @@ mo_ctl(dn, flush, mo_ctl_merge.t1)
 select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:small');
 mo_ctl(dn, mergeobjects, mo_ctl_merge.t1:all:small)
 \nmsg: merged success\n018f2834-dcb3-7e7d-8ae5-215ad781e835_00000, rows 2, blks 1, osize 1.54KB, csize 687B\n\n\n
+select sleep(1);
+sleep(1)
+0
 select rows_cnt from metadata_scan('mo_ctl_merge.t1', 'a') g;
 rows_cnt
 2
@@ -35,6 +38,9 @@ mo_ctl(dn, flush, mo_ctl_merge.t1)
 select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap');
 mo_ctl(dn, mergeobjects, mo_ctl_merge.t1:all:overlap)
 \nmsg: merged success\n018f283b-2dcd-78db-9399-df2bd74d53e5_00000, rows 4, blks 1, osize 1.60KB, csize 704B\n\n\n
+select sleep(1);
+sleep(1)
+0
 select rows_cnt, bit_cast(`min` as int), bit_cast(`max` as int) from metadata_scan('mo_ctl_merge.t1', 'a') g;
 rows_cnt    bit_cast(min as int)    bit_cast(max as int)
 4    100    115
@@ -55,6 +61,9 @@ mo_ctl(dn, flush, mo_ctl_merge.t1)
 select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:small');
 mo_ctl(dn, mergeobjects, mo_ctl_merge.t1:all:small)
 \nmsg: merged success\n018f2834-dcb3-7e7d-8ae5-215ad781e835_00000, rows 2, blks 1, osize 1.54KB, csize 687B\n\n\n
+select sleep(1);
+sleep(1)
+0
 select rows_cnt from metadata_scan('mo_ctl_merge.t1', 'a') g;
 rows_cnt
 2
@@ -71,6 +80,9 @@ mo_ctl(dn, flush, mo_ctl_merge.t1)
 select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap');
 mo_ctl(dn, mergeobjects, mo_ctl_merge.t1:all:overlap)
 \nmsg: merged success\n018f283b-2dcd-78db-9399-df2bd74d53e5_00000, rows 4, blks 1, osize 1.60KB, csize 704B\n\n\n
+select sleep(1);
+sleep(1)
+0
 select rows_cnt, bit_cast(`min` as int), bit_cast(`max` as int) from metadata_scan('mo_ctl_merge.t1', 'a') g;
 rows_cnt    bit_cast(min as int)    bit_cast(max as int)
 6    100    125
@@ -90,6 +102,9 @@ mo_ctl(dn, flush, mo_ctl_merge.t1)
 select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:small');
 mo_ctl(dn, mergeobjects, mo_ctl_merge.t1:all:small)
 \nmsg: merged success\n018f2834-dcb3-7e7d-8ae5-215ad781e835_00000, rows 2, blks 1, osize 1.54KB, csize 687B\n\n\n
+select sleep(1);
+sleep(1)
+0
 select rows_cnt from metadata_scan('mo_ctl_merge.t1', 'a') g;
 rows_cnt
 2
@@ -106,9 +121,42 @@ mo_ctl(dn, flush, mo_ctl_merge.t1)
 select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap');
 mo_ctl(dn, mergeobjects, mo_ctl_merge.t1:all:overlap)
 \nmsg: merged success\n018f283b-2dcd-78db-9399-df2bd74d53e5_00000, rows 4, blks 1, osize 1.60KB, csize 704B\n\n\n
+select sleep(1);
+sleep(1)
+0
 select rows_cnt, min, max from metadata_scan('mo_ctl_merge.t1', 'a') g;
 rows_cnt    min    max
 6    abcdefghijklmnopqrstuvwxyzabcd    abcdefghijklmnopqrstuvwxyzabce
+drop table t1;
+create table t1(
+a int primary key,
+b varchar(10)
+);
+insert into t1 values (105, 'a');
+insert into t1 values (115, 'a');
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+mo_ctl(dn, flush, mo_ctl_merge.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+insert into t1 values (110, 'a');
+insert into t1 values (120, 'a');
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+mo_ctl(dn, flush, mo_ctl_merge.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+insert into t1 values (116, 'a');
+insert into t1 values (126, 'a');
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+mo_ctl(dn, flush, mo_ctl_merge.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap(2)');
+mo_ctl(dn, mergeobjects, mo_ctl_merge.t1:all:overlap(2))
+\nmsg: merged success\n018f283b-2dcd-78db-9399-df2bd74d53e5_00000, rows 4, blks 1, osize 1.60KB, csize 704B\n\n\n
+select sleep(1);
+sleep(1)
+0
+select rows_cnt, bit_cast(`min` as int), bit_cast(`max` as int) from metadata_scan('mo_ctl_merge.t1', 'a') g;
+rows_cnt    bit_cast(min as int)    bit_cast(max as int)
+4    105    120
+2    116    126
 drop table t1;
 select mo_ctl('dn', 'inspect', 'policy');
 mo_ctl(dn, inspect, policy)
