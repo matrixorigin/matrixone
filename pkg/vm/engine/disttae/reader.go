@@ -16,7 +16,9 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -378,7 +380,11 @@ func (r *blockReader) Read(
 
 	// get the block read filter
 	filter := r.getReadFilter(r.proc, len(r.blks))
-
+	if strings.Contains(r.withFilterMixin.tableDef.Name, "sbtest") {
+		fmt.Printf("sortedFunc=%v, unsortedFunc=%v, sorted=%v, hasFakePK=%v, pkPos=%d, valid=%v\n",
+			filter.SortedSearchFunc, filter.UnSortedSearchFunc, blockInfo.Sorted, filter.HasFakePK,
+			r.columns.pkPos, filter.Valid)
+	}
 	// if any null expr is found in the primary key (composite primary keys), quick return
 	if r.filterState.hasNull {
 		return nil, nil
