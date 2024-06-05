@@ -397,6 +397,10 @@ func (e *Engine) getOrCreateSnapPart(
 	ts types.TS) (*logtailreplay.Partition, error) {
 
 	//check whether the latest partition is available for reuse.
+	err := tbl.updateLogtail(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if p := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
 		return p, nil
 	}
