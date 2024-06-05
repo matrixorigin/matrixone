@@ -26,13 +26,9 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/profile"
-
 	"github.com/fagongzi/goetty/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -54,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -63,6 +60,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -290,7 +289,13 @@ func (s *service) Close() error {
 	if err := s.server.Close(); err != nil {
 		return err
 	}
-	return s.lockService.Close()
+	if err := s.lockService.Close(); err != nil {
+		return err
+	}
+	if err := s.shardService.Close(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ID implements the frontend.BaseService interface.
@@ -726,6 +731,29 @@ func (s *service) initLockService() {
 	if ok {
 		ss.(*status.Server).SetLockService(s.cfg.UUID, s.lockService)
 	}
+}
+
+func (s *service) initShardService() {
+	cfg := s.getShardServiceConfig()
+	if !cfg.Enable {
+		return
+	}
+
+	store := shardservice.NewShardStorage(
+		runtime.ProcessLevelRuntime().Clock(),
+		s.sqlExecutor,
+		s.timestampWaiter,
+		nil,
+		s.storeEngine,
+	)
+	s.shardService = shardservice.NewService(
+		cfg,
+		store,
+	)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(
+		runtime.ShardService,
+		s.shardService,
+	)
 }
 
 func (s *service) GetSQLExecutor() executor.SQLExecutor {

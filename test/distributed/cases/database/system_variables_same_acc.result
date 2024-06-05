@@ -1,0 +1,188 @@
+create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
+select @@rand_seed1;
+@@rand_seed1
+0
+select @@global.rand_seed1;
+internal error: the system variable is session
+show variables like 'rand_seed1';
+Variable_name    Value
+rand_seed1    0
+show global variables like 'rand_seed1';
+internal error: the system variable is session
+select @@rand_seed1;
+@@rand_seed1
+0
+select @@global.rand_seed1;
+internal error: the system variable is session
+show variables like 'rand_seed1';
+Variable_name    Value
+rand_seed1    0
+show global variables like 'rand_seed1';
+internal error: the system variable is session
+set rand_seed1 = 1;
+select @@rand_seed1;
+@@rand_seed1
+1
+show variables like 'rand_seed1';
+Variable_name    Value
+rand_seed1    1
+select @@rand_seed1;
+@@rand_seed1
+0
+show variables like 'rand_seed1';
+Variable_name    Value
+rand_seed1    0
+set global rand_seed1 = 1;
+internal error: the system variable is session
+select @@max_connections;
+@@max_connections
+151
+select @@global.max_connections;
+@@max_connections
+151
+show variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+show global variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+select @@max_connections;
+@@max_connections
+151
+select @@global.max_connections;
+@@max_connections
+151
+show variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+show global variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+set max_connections = 152;
+internal error: the system variable is global
+set global max_connections = 152;
+select @@max_connections;
+@@max_connections
+151
+select @@global.max_connections;
+@@max_connections
+152
+show variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+show global variables like 'max_connections';
+Variable_name    Value
+max_connections    152
+select @@max_connections;
+@@max_connections
+151
+select @@global.max_connections;
+@@max_connections
+152
+show variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+show global variables like 'max_connections';
+Variable_name    Value
+max_connections    152
+select @@max_connections;
+@@max_connections
+152
+select @@global.max_connections;
+@@max_connections
+152
+show variables like 'max_connections';
+Variable_name    Value
+max_connections    152
+show global variables like 'max_connections';
+Variable_name    Value
+max_connections    152
+set global max_connections = 151;
+select @@autocommit;
+@@autocommit
+1
+select @@global.autocommit;
+@@autocommit
+1
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+show global variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+select @@autocommit;
+@@autocommit
+1
+select @@global.autocommit;
+@@autocommit
+1
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+show global variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+set autocommit = 0;
+select @@autocommit;
+@@autocommit
+0
+select @@global.autocommit;
+@@autocommit
+1
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    off
+show global variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+select @@autocommit;
+@@autocommit
+1
+select @@global.autocommit;
+@@autocommit
+1
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+show global variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+set global autocommit = 0;
+select @@autocommit;
+@@autocommit
+0
+select @@global.autocommit;
+@@autocommit
+0
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    off
+show global variables like 'autocommit';
+Variable_name    Value
+autocommit    off
+select @@autocommit;
+@@autocommit
+1
+select @@global.autocommit;
+@@autocommit
+0
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+show global variables like 'autocommit';
+Variable_name    Value
+autocommit    off
+select @@autocommit;
+@@autocommit
+0
+select @@global.autocommit;
+@@autocommit
+0
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    off
+show global variables like 'autocommit';
+Variable_name    Value
+autocommit    off
+set global autocommit = 1;
+drop account acc_idx;

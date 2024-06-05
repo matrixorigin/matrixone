@@ -21,6 +21,7 @@ import (
 	"math"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,13 +41,14 @@ import (
 
 const DefaultBlockMaxRows = 8192
 const blockThresholdForTpQuery = 32
-const costThresholdForTpQuery = 160000
+const costThresholdForTpQuery = 240000
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
 
-var BlockThresholdForOneCN = runtime.GOMAXPROCS(0) * blockThresholdForTpQuery
-var costThresholdForOneCN = runtime.GOMAXPROCS(0) * costThresholdForTpQuery
+var ncpu = runtime.GOMAXPROCS(0)
+var BlockThresholdForOneCN = ncpu * blockThresholdForTpQuery
+var costThresholdForOneCN = ncpu * costThresholdForTpQuery
 
 type ExecType int
 
@@ -518,18 +520,21 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 				return 10 / ndv
 			}
 			return 0.5
-		case "in":
-			card := float64(exprImpl.F.Args[1].GetVec().Len)
+		case "in", "prefix_in":
+			card := float64(1)
+			switch arg1Impl := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_Vec:
+				card = float64(arg1Impl.Vec.Len)
+
+			case *plan.Expr_List:
+				card = float64(len(arg1Impl.List.List))
+			}
+			if funcName == "prefix_in" {
+				card *= 10
+			}
 			ndv := getExprNdv(expr, builder)
 			if ndv > card {
 				return card / ndv
-			}
-			return 1
-		case "prefix_in":
-			card := float64(exprImpl.F.Args[1].GetVec().Len)
-			ndv := getExprNdv(expr, builder)
-			if ndv > 10*card {
-				return 10 * card / ndv
 			}
 			return 0.5
 		case "prefix_between":
@@ -1252,6 +1257,18 @@ func GetExecType(qry *plan.Query) ExecType {
 		}
 	}
 	return ret
+}
+
+func GetPlanTitle(qry *plan.Query) string {
+	switch GetExecType(qry) {
+	case ExecTypeTP:
+		return "TP QURERY PLAN"
+	case ExecTypeAP_ONECN:
+		return "AP QUERY PLAN ON ONE CN(" + strconv.Itoa(ncpu) + " core)"
+	case ExecTypeAP_MULTICN:
+		return "AP QUERY PLAN ON MULTICN(" + strconv.Itoa(ncpu) + " core)"
+	}
+	return "QUERY PLAN"
 }
 
 func ReCalcQueryStats(builder *QueryBuilder, query *plan.Query) {
