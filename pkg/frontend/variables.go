@@ -596,7 +596,7 @@ func (svet SystemVariableEnumType) String() string {
 
 func (svet SystemVariableEnumType) Convert(value interface{}) (interface{}, error) {
 	cv1 := func(x int) (interface{}, error) {
-		if x >= 0 && x <= len(svet.id2TagName) {
+		if x >= 0 && x < len(svet.id2TagName) {
 			return svet.id2TagName[x], nil
 		}
 		return nil, errorConvertToEnumFailed
