@@ -893,7 +893,7 @@ func CompileFilterExpr(
 				}
 				if isPK {
 					blkBf := bf.GetBloomFilter(uint32(blkIdx))
-					blkBfIdx := index.NewEmptyBinaryFuseFilter()
+					blkBfIdx := index.NewEmptyBloomFilter()
 					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
 						return false, false, err
 					}
@@ -960,7 +960,7 @@ func CompileFilterExpr(
 				}
 				if isPK {
 					blkBf := bf.GetBloomFilter(uint32(blkIdx))
-					blkBfIdx := index.NewEmptyBinaryFuseFilter()
+					blkBfIdx := index.NewEmptyBloomFilter()
 					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
 						return false, false, err
 					}
