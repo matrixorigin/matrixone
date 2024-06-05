@@ -489,23 +489,30 @@ func (e *Engine) getOrCreateSnapPart(
 			return nil, err
 		}
 		p := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
-		if tbl.db.databaseName == "tpch" {
-			logutil.Infof("xxxx getOrCreateSnapPart reuse latest partiiton state, "+
-				"db:%s, table:%s, dbID:%v, tableID:%v, snapshot op :%s, part:%p, snap:%p, ts:%s, start:%s, end:%s",
-				tbl.db.databaseName,
-				tbl.tableName,
-				tbl.db.databaseId,
-				tbl.tableId,
-				tbl.db.op.Txn().DebugString(),
-				p,
-				p.Snapshot(),
-				ts.ToTimestamp().DebugString(),
-				start.ToTimestamp().DebugString(),
-				end.ToTimestamp().DebugString())
+		p.Lock(ctx)
+		if p.CanServe(ts) {
+			if tbl.db.databaseName == "tpch" {
+				logutil.Infof("xxxx getOrCreateSnapPart reuse latest partiiton state, "+
+					"db:%s, table:%s, dbID:%v, tableID:%v, snapshot op :%s, part:%p, snap:%p, ts:%s, start:%s, end:%s",
+					tbl.db.databaseName,
+					tbl.tableName,
+					tbl.db.databaseId,
+					tbl.tableId,
+					tbl.db.op.Txn().DebugString(),
+					p,
+					p.Snapshot(),
+					ts.ToTimestamp().DebugString(),
+					start.ToTimestamp().DebugString(),
+					end.ToTimestamp().DebugString())
+
+			}
+			p.Unlock()
+			return p, nil
 
 		}
-		return p, nil
+		p.Unlock()
 	}
+
 	if ts.Less(&start) {
 		return nil, moerr.NewInternalErrorNoCtx(
 			"No valid checkpoints for snapshot read,maybe snapshot is too old, "+
