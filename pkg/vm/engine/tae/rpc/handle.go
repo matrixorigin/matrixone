@@ -267,13 +267,13 @@ func (h *Handle) HandlePreCommitWrite(
 				PkCheck:      db.PKCheckType(pe.GetPkCheckByTn()),
 			}
 			if req.FileName != "" {
-				//loc := req.Batch.Vecs[0]
 				for i := 0; i < req.Batch.RowCount(); i++ {
-					stats := objectio.ObjectStats(req.Batch.Vecs[0].GetBytesAt(i))
 					if req.Type == db.EntryInsert {
+						stats := objectio.ObjectStats(req.Batch.Vecs[0].GetBytesAt(i))
 						req.MetaLocs = append(req.MetaLocs, stats.ObjectLocation().String())
 					} else {
-						req.DeltaLocs = append(req.DeltaLocs, stats.ObjectLocation().String())
+						loc := req.Batch.Vecs[0]
+						req.DeltaLocs = append(req.DeltaLocs, loc.GetStringAt(i))
 					}
 				}
 			}
