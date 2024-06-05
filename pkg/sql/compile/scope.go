@@ -689,10 +689,10 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 }
 
 func DetermineRuntimeDOP(cpunum, blocks int) int {
-	if cpunum <= 0 || blocks <= 8 {
+	if cpunum <= 0 || blocks <= 16 {
 		return 1
 	}
-	ret := blocks/8 + 1
+	ret := blocks/16 + 1
 	if ret < cpunum {
 		return ret
 	}
