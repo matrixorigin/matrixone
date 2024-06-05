@@ -875,29 +875,14 @@ func (txn *Transaction) compactionBlksLocked() error {
 			objStats = stats[objectio.SchemaTombstone]
 		}
 
-		//if len(createdBlks) > 0 {
 		bat := batch.NewWithSize(1)
 		bat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
-		//bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 		bat.SetVector(0, vector.NewVec(types.T_binary.ToType()))
-		//for _, blkInfo := range createdBlks {
-		//	vector.AppendBytes(
-		//		bat.GetVector(0),
-		//		objectio.EncodeBlockInfo(blkInfo),
-		//		false,
-		//		tbl.getTxn().proc.GetMPool())
-		//}
 
-		// append the object stats to bat
-		//for idx := 0; idx < len(stats); idx++ {
-		//	if stats[idx].IsZero() {
-		//		continue
-		//	}
 		if err = vector.AppendBytes(bat.Vecs[0], objStats.Marshal(),
 			false, tbl.getTxn().proc.GetMPool()); err != nil {
 			return err
 		}
-		//}
 
 		bat.SetRowCount(1)
 		defer func() {
@@ -919,7 +904,6 @@ func (txn *Transaction) compactionBlksLocked() error {
 			return err
 		}
 	}
-	//}
 
 	//compaction for txn.writes
 	for i, entry := range txn.writes {
