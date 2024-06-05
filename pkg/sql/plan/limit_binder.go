@@ -42,11 +42,11 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		return nil, err
 	}
 
-	if expr.Typ.Id != int32(types.T_int64) {
+	if expr.Typ.Id != int32(types.T_uint64) {
 		// limit '10' / offset '2'
 		// the valid string should be cast to int64
-		if expr.Typ.Id == int32(types.T_varchar) {
-			targetType := types.T_int64.ToType()
+		if expr.Typ.Id == int32(types.T_varchar) || expr.Typ.Id == int32(types.T_int64) {
+			targetType := types.T_uint64.ToType()
 			planTargetType := makePlan2Type(&targetType)
 			var err error
 			expr, err = appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
@@ -54,7 +54,7 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				return nil, err
 			}
 		} else if expr.GetP() != nil {
-			targetType := types.T_int64.ToType()
+			targetType := types.T_uint64.ToType()
 			planTargetType := makePlan2Type(&targetType)
 			return appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
 		} else if expr.GetV() != nil {
@@ -68,11 +68,11 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				return nil, err
 			}
 
-			// CAST( 1 AS BIGINT)
-			arg1 := makePlan2Int64ConstExprWithType(1)
+			// CAST( 1 AS BIGINT UNSIGNED)
+			arg1 := makePlan2Uint64ConstExprWithType(1)
 
-			// CAST(@var AS BIGINT)
-			targetType := types.T_int64.ToType()
+			// CAST(@var AS BIGINT UNSIGNED)
+			targetType := types.T_uint64.ToType()
 			planTargetType := makePlan2Type(&targetType)
 			arg2, err := appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
 			if err != nil {
@@ -85,7 +85,7 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				arg2,
 			})
 		} else {
-			return nil, moerr.NewSyntaxError(b.GetContext(), "only int64 support in limit/offset clause")
+			return nil, moerr.NewSyntaxError(b.GetContext(), "only uint64 support in limit/offset clause")
 		}
 	}
 
