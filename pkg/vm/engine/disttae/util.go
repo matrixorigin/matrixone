@@ -143,42 +143,6 @@ func getPkExpr(
 			}
 			return nil
 
-		//case "between":
-		//	var valsExprIdx int
-		//	var valsExpr [2]*plan.Expr
-		//
-		//	for idx := range exprImpl.F.Args {
-		//		if col := exprImpl.F.Args[idx].GetCol(); col != nil {
-		//			if !compPkCol(col.Name, pkName) {
-		//				return nil
-		//			}
-		//		} else {
-		//			constVal := getConstValueByExpr(exprImpl.F.Args[idx], proc)
-		//			if constVal == nil {
-		//				return nil
-		//			}
-		//
-		//			valsExpr[valsExprIdx] = &plan.Expr{
-		//				Typ: exprImpl.F.Args[idx].Typ,
-		//				Expr: &plan.Expr_Lit{
-		//					Lit: constVal,
-		//				},
-		//			}
-		//			valsExprIdx++
-		//		}
-		//	}
-		//
-		//	return &plan.Expr{
-		//		Expr: &plan.Expr_List{
-		//			List: &plan.ExprList{
-		//				List: []*plan.Expr{valsExpr[0], valsExpr[1]},
-		//			},
-		//		},
-		//		Typ: plan.Type{
-		//			Id: int32(types.T_tuple),
-		//		},
-		//	}
-
 		case "in":
 			if col := exprImpl.F.Args[0].GetCol(); col != nil {
 				if !compPkCol(col.Name, pkName) {
