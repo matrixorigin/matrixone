@@ -2939,7 +2939,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 
 	rs.Instructions[0].Idx = c.anal.curr
 
-	arg := constructFuzzyFilter(n, ns[n.Children[1]])
+	arg := constructFuzzyFilter(n, ns[n.Children[0]], ns[n.Children[1]])
 
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.FuzzyFilter,
@@ -3630,7 +3630,12 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	for i := 0; i < buildLen; i++ {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
-
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Op:      vm.Merge,
+		Idx:     c.anal.curr,
+		IsFirst: c.anal.isFirst,
+		Arg:     merge.NewArgument(),
+	})
 	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], ss != nil, s.ShuffleCnt > 0))
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
