@@ -1,4 +1,3 @@
--- @bvt:issue#16501
 use tpch;
 create snapshot tpch_snapshot for account sys;
 create snapshot tpch_cluster for cluster;
@@ -211,4 +210,3 @@ select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 
 
 drop snapshot tpch_cluster;
--- @bvt:issue
