@@ -2902,6 +2902,15 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
+	if c.execType == plan2.ExecTypeTP {
+		ss[0].appendInstruction(vm.Instruction{
+			Op:      vm.Limit,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructLimit(n),
+		})
+		return ss
+	}
 	currentFirstFlag := c.anal.isFirst
 
 	for i := range ss {
