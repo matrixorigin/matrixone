@@ -382,6 +382,8 @@ type Process struct {
 	MessageBoard *MessageBoard
 
 	logger *log.MOLogger
+
+	CloneTxnOperator client.TxnOperator
 }
 
 type vectorPool struct {

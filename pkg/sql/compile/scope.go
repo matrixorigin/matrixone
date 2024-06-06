@@ -548,7 +548,12 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 					n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
 
-					txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+					if c.proc.CloneTxnOperator != nil {
+						txnOp = c.proc.CloneTxnOperator
+					} else {
+						txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+						c.proc.CloneTxnOperator = txnOp
+					}
 					if n.ScanSnapshot.Tenant != nil {
 						ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
 					}
