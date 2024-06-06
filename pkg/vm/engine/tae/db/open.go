@@ -212,7 +212,6 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	logutil.Infof("open-tae cleaner is %p, db.cleaner %p", cleaner, db.DiskCleaner.GetCleaner())
 	db.BGCheckpointRunner.AddHelper(
 		func(name any) {
-			cleaner.AddCheckpoint(name.(string))
 			db.DiskCleaner.GetCleaner().AddCheckpoint(name.(string))
 			logutil.Infof(" add checkpoint %p, db.cleaner %p", cleaner, db.DiskCleaner.GetCleaner())
 		})
