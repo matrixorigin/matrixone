@@ -94,8 +94,8 @@ func (cleaner *DiskCleaner) process(items ...any) {
 func (cleaner *DiskCleaner) Start() {
 	cleaner.onceStart.Do(func() {
 		cleaner.processQueue.Start()
-		cleaner.tryReplay()
 	})
+	cleaner.replay()
 }
 
 func (cleaner *DiskCleaner) Stop() {
