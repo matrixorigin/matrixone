@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -791,7 +792,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	//---------------------------------------------------------------------------------
 	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-		c.proc.Info(c.ctx, "wuxiliang createView",
+		logutil.Info("wuxiliang createView",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -830,7 +831,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 			//---------------------------------------------------------------------------------
 			if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-				c.proc.Info(c.ctx, "wuxiliang createView get dbSource err",
+				logutil.Info("wuxiliang createView get dbSource err",
 					zap.String("databaseName", c.db),
 					zap.String("viewName", qry.GetTableDef().GetName()),
 					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -851,7 +852,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 		//---------------------------------------------------------------------------------
 		if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-			c.proc.Info(c.ctx, "wuxiliang createView no exist err",
+			logutil.Info("wuxiliang createView no exist err",
 				zap.String("databaseName", c.db),
 				zap.String("viewName", qry.GetTableDef().GetName()),
 				zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -861,16 +862,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 		return err
 	}
-
-	//---------------------------------------------------------------------------------
-	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-		c.proc.Info(c.ctx, "wuxiliang createView get dbSource success",
-			zap.String("databaseName", c.db),
-			zap.String("viewName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-		)
-	}
-	//---------------------------------------------------------------------------------
 
 	if _, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
@@ -885,7 +876,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 			//---------------------------------------------------------------------------------
 			if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-				c.proc.Info(c.ctx, "wuxiliang createView if not exist",
+				logutil.Info("wuxiliang createView if not exist",
 					zap.String("databaseName", c.db),
 					zap.String("viewName", qry.GetTableDef().GetName()),
 					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -903,18 +894,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
 				)
-
-				//---------------------------------------------------------------------------------
-				if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-					c.proc.Info(c.ctx, "wuxiliang createView replace drop view err",
-						zap.String("databaseName", c.db),
-						zap.String("viewName", qry.GetTableDef().GetName()),
-						zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-						zap.Error(err),
-					)
-				}
-				//---------------------------------------------------------------------------------
-
 				return err
 			}
 		} else {
@@ -926,7 +905,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 			//---------------------------------------------------------------------------------
 			if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-				c.proc.Info(c.ctx, "wuxiliang createView view already exists err",
+				logutil.Info("wuxiliang createView view already exists err",
 					zap.String("databaseName", c.db),
 					zap.String("viewName", qry.GetTableDef().GetName()),
 					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -943,7 +922,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if err == nil {
 		//---------------------------------------------------------------------------------
 		if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-			c.proc.Info(c.ctx, "wuxiliang createView entry TempEngine",
+			logutil.Info("wuxiliang createView entry TempEngine",
 				zap.String("databaseName", c.db),
 				zap.String("viewName", qry.GetTableDef().GetName()),
 				zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -965,7 +944,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	//---------------------------------------------------------------------------------
 	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-		c.proc.Info(c.ctx, "wuxiliang createView before lock mo_table",
+		logutil.Info("wuxiliang createView before lock mo_table",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -984,7 +963,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	//---------------------------------------------------------------------------------
 	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-		c.proc.Info(c.ctx, "wuxiliang createView after lock mo_table, begin create view",
+		logutil.Info("wuxiliang createView after lock mo_table, begin create view",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -1003,7 +982,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	//---------------------------------------------------------------------------------
 	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-		c.proc.Info(c.ctx, "wuxiliang createView after create view",
+		logutil.Info("wuxiliang createView after create view",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -1045,7 +1024,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	//---------------------------------------------------------------------------------
 	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-		c.proc.Info(c.ctx, "wuxiliang createView begin update mo_foreign_keys",
+		logutil.Info("wuxiliang createView begin update mo_foreign_keys",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -1209,7 +1188,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	//---------------------------------------------------------------------------------
 	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-		c.proc.Info(c.ctx, "wuxiliang createView after update mo_foreign_keys",
+		logutil.Info("wuxiliang createView after update mo_foreign_keys",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -1323,7 +1302,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	//---------------------------------------------------------------------------------
 	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-		c.proc.Info(c.ctx, "wuxiliang createView before build index table",
+		logutil.Info("wuxiliang createView before build index table",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -1388,7 +1367,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	//---------------------------------------------------------------------------------
 	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-		c.proc.Info(c.ctx, "wuxiliang createView after build index table",
+		logutil.Info("wuxiliang createView after build index table",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -1448,7 +1427,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	//---------------------------------------------------------------------------------
 	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-		c.proc.Info(c.ctx, "wuxiliang createView before maybeCreateAutoIncrement",
+		logutil.Info("wuxiliang createView before maybeCreateAutoIncrement",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -1463,7 +1442,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		nil)
 	//---------------------------------------------------------------------------------
 	if strings.Contains(qry.GetTableDef().GetName(), "log_info") {
-		c.proc.Info(c.ctx, "wuxiliang createView after maybeCreateAutoIncrement",
+		logutil.Info("wuxiliang createView after maybeCreateAutoIncrement",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),

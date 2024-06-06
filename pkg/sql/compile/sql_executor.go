@@ -265,7 +265,8 @@ func (exec *txnExecutor) Exec(
 
 	receiveAt := time.Now()
 
-	logutil.Info("Received SQL execute request",
+	logutil.Info("wuxiliang --- Received SQL execute request",
+		zap.Uint64("goroutineId", GetRoutineId()),
 		zap.String("sql", sql),
 		zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)))
 
@@ -319,13 +320,21 @@ func (exec *txnExecutor) Exec(
 	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase())
 	compileContext.SetRootSql(sql)
 
+	if strings.HasPrefix(sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
+		logutil.Info("wuxiliang createView SQL begin build",
+			zap.String("sql", sql),
+			zap.String("txnID", proc.TxnOperator.Txn().DebugString()),
+		)
+
+	}
+
 	pn, err := plan.BuildPlan(compileContext, stmts[0], false)
 	if err != nil {
 		return executor.Result{}, err
 	}
 
-	if strings.Contains(sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
-		proc.Info(exec.ctx, "wuxiliang createView SQL Compile success",
+	if strings.HasPrefix(sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
+		logutil.Info("wuxiliang createView SQL Compile success",
 			zap.String("sql", sql),
 			zap.String("txnID", proc.TxnOperator.Txn().DebugString()),
 		)
@@ -362,8 +371,8 @@ func (exec *txnExecutor) Exec(
 		return executor.Result{}, err
 	}
 
-	if strings.Contains(sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
-		c.proc.Info(c.ctx, "wuxiliang createView SQL Compile success",
+	if strings.HasPrefix(sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
+		logutil.Info("wuxiliang createView SQL Compile success",
 			zap.String("databaseName", c.db),
 			zap.String("sql", sql),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),

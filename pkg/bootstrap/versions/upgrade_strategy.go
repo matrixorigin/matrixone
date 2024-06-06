@@ -15,9 +15,11 @@
 package versions
 
 import (
+	"encoding/hex"
 	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"go.uber.org/zap"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -147,6 +149,14 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 				return err
 			}
 			res.Close()
+		}
+
+		if strings.HasPrefix(u.UpgSql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
+			getLogger().Info("wuxiliang execute upgrade createView",
+				zap.Uint64("goroutineId", compile.GetRoutineId()),
+				zap.String("upgrade entry", u.String()),
+				zap.String("txnID", hex.EncodeToString(txn.Txn().Txn().ID)),
+			)
 		}
 
 		// 2. Second, Execute upgrade sql

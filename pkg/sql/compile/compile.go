@@ -607,8 +607,8 @@ func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
 	c.MessageBoard.Reset()
 
-	if strings.Contains(c.sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
-		c.proc.Info(c.ctx, "wuxiliang createView runOnce before lockMetaTables",
+	if strings.HasPrefix(c.sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
+		logutil.Info("wuxiliang createView runOnce before lockMetaTables",
 			zap.String("databaseName", c.db),
 			zap.String("sql", c.sql),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -619,8 +619,8 @@ func (c *Compile) runOnce() error {
 		return err
 	}
 
-	if strings.Contains(c.sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
-		c.proc.Info(c.ctx, "wuxiliang createView runOnce before lockTable",
+	if strings.HasPrefix(c.sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
+		logutil.Info("wuxiliang createView runOnce before lockTable",
 			zap.String("databaseName", c.db),
 			zap.String("sql", c.sql),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -632,8 +632,8 @@ func (c *Compile) runOnce() error {
 		return err
 	}
 
-	if strings.Contains(c.sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
-		c.proc.Info(c.ctx, "wuxiliang createView runOnce after lockTable",
+	if strings.HasPrefix(c.sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
+		logutil.Info("wuxiliang createView runOnce after lockTable",
 			zap.String("databaseName", c.db),
 			zap.String("sql", c.sql),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),

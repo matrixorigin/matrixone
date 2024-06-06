@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"runtime"
+	"strconv"
 	"time"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -579,4 +581,13 @@ func GetConstraintDefFromTableDefs(defs []engine.TableDef) *engine.ConstraintDef
 		cstrDef.Cts = make([]engine.Constraint, 0)
 	}
 	return cstrDef
+}
+
+func GetRoutineId() uint64 {
+	data := make([]byte, 64)
+	data = data[:runtime.Stack(data, false)]
+	data = bytes.TrimPrefix(data, []byte("goroutine "))
+	data = data[:bytes.IndexByte(data, ' ')]
+	id, _ := strconv.ParseUint(string(data), 10, 64)
+	return id
 }
