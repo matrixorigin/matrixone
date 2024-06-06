@@ -2838,14 +2838,12 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 		})
 	}
 	c.anal.isFirst = false
-
 	rs := c.newMergeScope(ss)
-	rs.Instructions[0].Arg.Release()
-	rs.Instructions[0] = vm.Instruction{
+	rs.appendInstruction(vm.Instruction{
 		Op:  vm.MergeOrder,
 		Idx: c.anal.curr,
 		Arg: constructMergeOrder(n),
-	}
+	})
 	return []*Scope{rs}
 }
 

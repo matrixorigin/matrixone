@@ -180,7 +180,6 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	arg.ctr = new(container)
 	ctr := arg.ctr
-	arg.ctr.InitReceiver(proc, true)
 
 	length := 2 * len(proc.Reg.MergeReceivers)
 	ctr.batchList = make([]*batch.Batch, 0, length)
@@ -210,11 +209,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.status {
 		case receiving:
-			msg := ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = arg.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-			if msg.Batch == nil {
+			if result.Batch == nil {
 				// if number of block is less than 2, no need to do merge sort.
 				ctr.status = normalSending
 
@@ -231,7 +230,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			bat := msg.Batch
+			bat := result.Batch
 			if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
 				return result, err
 			}
