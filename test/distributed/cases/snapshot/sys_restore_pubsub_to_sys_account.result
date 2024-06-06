@@ -13,10 +13,10 @@ drop publication if exists publication01;
 create publication publication01 database republication01 account acc01 comment 'publish before creating snapshot';
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-publication01    republication01    2024-06-03 19:07:26    null    acc01    publish before creating snapshot
+publication01    republication01    2024-06-05 20:50:21    null    acc01    publish before creating snapshot
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-publication01    republication01    272904    true        acc01    2024-06-03 19:07:26    null    0    1    publish before creating snapshot
+publication01    republication01    272580    true        acc01    2024-06-05 20:50:21    null    0    1    publish before creating snapshot
 drop publication publication01;
 drop database republication01;
 restore account sys from snapshot sp01;
@@ -81,10 +81,10 @@ drop publication if exists pub02;
 create publication pub02 database repub02 account acc01 comment 'publish before creating snapshot';
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-pub02    repub02    2024-06-03 19:07:28    null    acc01    publish before creating snapshot
+pub02    repub02    2024-06-05 20:50:22    null    acc01    publish before creating snapshot
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub02    repub02    272923    true        acc01    2024-06-03 19:07:28    null    0    1    publish before creating snapshot
+pub02    repub02    272600    true        acc01    2024-06-05 20:50:22    null    0    1    publish before creating snapshot
 drop database if exists sub01;
 create database sub01 from sys publication pub02;
 show databases;
@@ -181,14 +181,14 @@ drop publication if exists pub03;
 create publication pub03 database repub03 account acc01 comment 'create repub03';
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-pub03    repub03    2024-06-03 19:07:29    null    acc01    create repub03
+pub03    repub03    2024-06-05 20:50:24    null    acc01    create repub03
 drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 drop database if exists sub03;
 create database sub03 from sys publication pub03;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-pub03    sys    repub03    2024-06-03 19:07:29    sub03    2024-06-03 19:07:29
+pub03    sys    repub03    2024-06-05 20:50:24    sub03    2024-06-05 20:50:24
 show databases;
 Database
 information_schema
@@ -231,7 +231,7 @@ system_metrics
 drop snapshot sp01;
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub03    repub03    272945    true        acc01    2024-06-03 19:07:29    null    0    1    create repub03
+pub03    repub03    272622    true        acc01    2024-06-05 20:50:24    null    0    1    create repub03
 show databases;
 Database
 information_schema
@@ -245,7 +245,7 @@ system
 system_metrics
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-pub03    repub03    2024-06-03 19:07:29    null    acc01    create repub03
+pub03    repub03    2024-06-05 20:50:24    null    acc01    create repub03
 drop publication pub03;
 drop database repub03;
 drop database if exists db01;
@@ -264,10 +264,10 @@ drop publication if exists pub03;
 create publication pub04 database db01 account acc01 comment 'create pub04';
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub04    db01    272963    true        acc01    2024-06-03 19:07:30    null    0    1    create pub04
+pub04    db01    272640    true        acc01    2024-06-05 20:50:25    null    0    1    create pub04
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-pub04    db01    2024-06-03 19:07:30    null    acc01    create pub04
+pub04    db01    2024-06-05 20:50:25    null    acc01    create pub04
 drop database if exists sub04;
 create database sub04 from sys publication pub04;
 use sub04;
@@ -278,9 +278,6 @@ select * from table02;
 col1    col2
 133    database
 restore account acc01 from snapshot sp02;
-select * from mo_catalog.mo_pubs;
-pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub04    db01    273508    true        acc01    2024-06-03 18:47:36    null    0    1    create pub04
 show databases;
 Database
 information_schema
@@ -292,20 +289,16 @@ use sub04;
 invalid database sub04
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-pub04    db01    2024-06-03 19:07:30    null    acc01    create pub04
+pub04    db01    2024-06-05 20:50:25    null    acc01    create pub04
 drop publication pub04;
 drop database db01;
 drop snapshot sp02;
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 drop database if exists db09;
-
 create database db09;
-
 use db09;
-
 drop table if exists index01;
-
 create table index01(
 col1 int not null,
 col2 date not null,
@@ -313,35 +306,24 @@ col3 varchar(16) not null,
 col4 int unsigned not null,
 primary key (col1)
 );
-
 insert into index01 values(1, '1980-12-17','Abby', 21);
-
 insert into index01 values(2, '1981-02-20','Bob', 22);
-
 insert into index01 values(3, '1981-02-20','Bob', 22);
-
 select count(*) from index01;
-
+count(*)
+3
 drop table if exists index02;
-
 create table index02(col1 char, col2 int, col3 binary);
-
 insert into index02 values('a', 33, 1);
-
 insert into index02 values('c', 231, 0);
-
 alter table index02 add key pk(col1) comment 'primary key';
-
 select count(*) from index02;
-
+count(*)
+2
 drop database if exists db10;
-
 create database db10;
-
 use db10;
-
 drop table if exists index03;
-
 create table index03 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -356,50 +338,55 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
-
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
-
 drop snapshot if exists sp05;
-
 create snapshot sp05 for account acc01;
-
 drop publication if exists pub05;
-
 create publication pub05 database db09 account acc02 comment 'publish db09';
-
 drop publication if exists pub06;
-
 create publication pub06 database db10 account acc02 comment 'publish db10';
-
 show publications;
-
+publication    database    create_time    update_time    sub_account    comments
+pub06    db10    2024-06-05 20:50:27    null    acc02    publish db10
+pub05    db09    2024-06-05 20:50:27    null    acc02    publish db09
 drop database if exists sub05;
-
 create database sub05 from acc01 publication pub05;
-
 show databases;
-
+Database
+information_schema
+mo_catalog
+mysql
+sub05
+system
+system_metrics
 use sub05;
-
 show create table index01;
-
+Table    Create Table
+index01    CREATE TABLE `index01` (\n  `col1` INT NOT NULL,\n  `col2` DATE NOT NULL,\n  `col3` VARCHAR(16) NOT NULL,\n  `col4` INT UNSIGNED NOT NULL,\n  PRIMARY KEY (`col1`)\n)
 select * from index02;
-
+col1    col2    col3
+a    33    1
+c    231    0
 restore account acc01 from snapshot sp05;
-
 show publications;
-
+publication    database    create_time    update_time    sub_account    comments
 show subscriptions;
-
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
 show databases;
-
+Database
+information_schema
+mo_catalog
+mysql
+sub05
+system
+system_metrics
+use sub05;
+internal error: there is no publication pub05
+drop database sub05;
 drop snapshot sp05;
-
 drop database db09;
-
 drop database db10;
-
 drop database if exists db10;
 create database db10;
 use db10;
@@ -429,7 +416,7 @@ drop publication if exists pub06;
 create publication pub06 database db10 account acc02 comment 'publish db10';
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub06    db10    273057    true        acc02    2024-06-03 19:07:31    null    2    2    publish db10
+pub06    db10    272769    true        acc02    2024-06-05 20:50:28    null    2    2    publish db10
 drop database if exists sub06;
 create database sub06 from acc01 publication pub06;
 use sub06;
@@ -486,7 +473,7 @@ drop publication if exists pub07;
 create publication pub07 database test01 account acc01 comment 'publish test01';
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub07    test01    273082    true        acc01    2024-06-03 19:07:32    null    0    1    publish test01
+pub07    test01    272795    true        acc01    2024-06-05 20:50:28    null    0    1    publish test01
 drop snapshot if exists sp101;
 create snapshot sp101 for account sys;
 drop database if exists sub07;
@@ -509,7 +496,7 @@ internal error: there is no publication pub07
 restore account sys from snapshot sp101;
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub07    test01    273082    true        acc01    2024-06-03 19:07:32    null    0    1    publish test01
+pub07    test01    272795    true        acc01    2024-06-05 20:50:28    null    0    1    publish test01
 show databases;
 Database
 information_schema
@@ -528,206 +515,225 @@ drop database test01;
 drop snapshot sp100;
 drop snapshot sp101;
 drop database if exists test02;
-
 create database test02;
-
 use test02;
-
 create table t1(col1 int, col2 decimal key);
-
 insert into t1 values(1,2);
-
 insert into t1 values(2,3);
-
 insert into t1 values(3,4);
-
 drop snapshot if exists sp102;
-
 create snapshot sp102 for account acc01;
-
 drop publication if exists pub08;
-
 create publication pub08 database test02 account acc02 comment 'publish test02';
-
 drop snapshot if exists sp103;
-
 create snapshot sp103 for account acc01;
-
 drop database if exists sub07;
-
 create database sub07 from acc01 publication pub08;
-
 show databases;
-
+Database
+information_schema
+mo_catalog
+mysql
+sub07
+system
+system_metrics
 use sub07;
-
 select * from t1;
-
+col1    col2
+1    2
+2    3
+3    4
 restore account acc01 from snapshot sp102;
-
 show databases;
-
+Database
+information_schema
+mo_catalog
+mysql
+sub07
+system
+system_metrics
 use sub07;
-
+internal error: there is no publication pub08
 select * from t1;
-
+SQL parser error: table "t1" does not exist
 restore account acc01 from snapshot sp103;
-
 show databases;
-
+Database
+information_schema
+mo_catalog
+mysql
+sub07
+system
+system_metrics
 use sub07;
-
 select * from t1;
-
+col1    col2
+1    2
+2    3
+3    4
+drop database sub07;
+drop publication pub08;
+drop database test02;
+drop snapshot sp102;
+drop snapshot sp103;
 drop account if exists acc03;
-
 create account acc03 admin_name = 'test_account' identified by '111';
-
 drop database if exists test03;
-
 create database test03;
-
 use test03;
-
 drop table if exists t1;
-
 create table t1(a int primary key,b int, constraint `c1` foreign key fk1(b) references t1(a));
-
 show tables;
-
+Tables_in_test03
+t1
 show create table t1;
-
+Table    Create Table
+t1    CREATE TABLE `t1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  CONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into t1 values (1,1);
-
 insert into t1 values (2,1);
-
 insert into t1 values (3,2);
-
 select * from t1;
-
+a    b
+1    1
+2    1
+3    2
 drop snapshot if exists sp104;
-
 create snapshot sp104 for account acc01;
-
 drop publication if exists pub09;
-
 create publication pub09 database test03 account acc02 comment 'publish test03';
-
 drop snapshot if exists sp104;
-
 create snapshot sp104 for account acc01;
-
 drop database if exists sub08;
-
 create database sub08 from acc01 publication pub09;
-
 show databases;
-
+Database
+information_schema
+mo_catalog
+mysql
+sub08
+system
+system_metrics
 use sub08;
-
 select * from t1;
-
+a    b
+1    1
+2    1
+3    2
 restore account acc01 from snapshot sp104 to account acc03;
-
 show databases;
-
+Database
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+test03
 use test03;
-
 show publications;
-
+publication    database    create_time    update_time    sub_account    comments
+pub09    test03    2024-06-05 20:50:31    null    acc02    publish test03
+drop publication pub09;
 drop database test03;
-
 show databases;
-
+Database
+information_schema
+mo_catalog
+mysql
+sub08
+system
+system_metrics
 use sub08;
-
 select * from t1;
-
+a    b
+1    1
+2    1
+3    2
+drop database sub08;
+drop publication pub09;
 drop database test03;
-
-drop database test03;
-
 drop snapshot sp104;
-
 drop account if exists acc03;
-
 create account acc03 admin_name = 'test_account' identified by '111';
-
 drop database if exists test04;
-
 create database test04;
-
 use test04;
-
 drop table if exists t1;
-
 create table t1(a int primary key,b int, constraint `c1` foreign key fk1(b) references t1(a));
-
 show tables;
-
+Tables_in_test04
+t1
 show create table t1;
-
+Table    Create Table
+t1    CREATE TABLE `t1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  CONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into t1 values (1,1);
-
 insert into t1 values (2,1);
-
 insert into t1 values (3,2);
-
 select * from t1;
-
+a    b
+1    1
+2    1
+3    2
 drop snapshot if exists sp105;
-
 create snapshot sp105 for account acc02;
-
 drop publication if exists pub10;
-
 create publication pub10 database test04 account acc02 comment 'publish test03';
-
 select * from mo_catalog.mo_pubs;
-
+pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
+pub10    test04    273036    true        acc02    2024-06-05 20:50:36    null    2    2    publish test03
 drop database if exists sub09;
-
 create database sub09 from acc01 publication pub10;
-
 show databases;
-
+Database
+information_schema
+mo_catalog
+mysql
+sub09
+system
+system_metrics
 use sub09;
-
 select * from t1;
-
+a    b
+1    1
+2    1
+3    2
 restore account acc02 from snapshot sp105 to account acc03;
-
 select * from mo_catalog.mo_pubs;
-
+pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
 show databases;
-
+Database
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
 use sub09;
-
+invalid database sub09
 select * from t1;
-
+not connect to a database
 show publications;
-
+publication    database    create_time    update_time    sub_account    comments
 drop database sub09;
-
+Can't drop database 'sub09'; database doesn't exist
 select * from mo_catalog.mo_pubs;
-
+pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
 show databases;
-
+Database
+information_schema
+mo_catalog
+mysql
+sub09
+system
+system_metrics
 use sub09;
-
 select * from t1;
-
+a    b
+1    1
+2    1
+3    2
 drop database sub09;
-
 drop publication pub10;
-
 drop database test04;
-
 drop snapshot sp105;
-
 drop account acc01;
-
 drop account acc02;
-
 drop account acc03;
-

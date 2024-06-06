@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -154,6 +155,7 @@ func NewFlushTableTailTask(
 	}
 	task.schema = rel.Schema().(*catalog.Schema)
 
+	objSeen := make(map[*catalog.ObjectEntry]struct{})
 	for _, obj := range objs {
 		task.scopes = append(task.scopes, *obj.AsCommonID())
 		var hdl handle.Object
@@ -161,6 +163,10 @@ func NewFlushTableTailTask(
 		if err != nil {
 			return
 		}
+		if _, ok := objSeen[obj]; ok {
+			continue
+		}
+		objSeen[obj] = struct{}{}
 		if hdl.IsAppendable() && !obj.HasDropCommitted() {
 			task.aObjMetas = append(task.aObjMetas, obj)
 			task.aObjHandles = append(task.aObjHandles, hdl)
@@ -192,6 +198,10 @@ func NewFlushTableTailTask(
 		if err != nil {
 			return
 		}
+		if _, ok := objSeen[obj]; ok {
+			continue
+		}
+		objSeen[obj] = struct{}{}
 		task.delSrcMetas = append(task.delSrcMetas, obj)
 		task.delSrcHandles = append(task.delSrcHandles, hdl)
 	}
@@ -678,16 +688,37 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 		}
 	}()
 	emtpyDelObjIdx = make([]*bitmap.Bitmap, len(task.delSrcMetas))
+	var (
+		enableDeltaStat = task.schema.Name == "bmsql_stock"
+		tbl             *catalog.TableEntry
+		tombstone       data.Tombstone
+		locMap          = make(map[string]int)
+		now             time.Time
+	)
+
+	if enableDeltaStat {
+		tbl = task.rel.GetMeta().(*catalog.TableEntry)
+		now = time.Now()
+	}
 	for i, obj := range task.delSrcMetas {
 		objData := obj.GetObjectData()
 		var deletes *containers.Batch
 		emptyDelObjs := &bitmap.Bitmap{}
 		emptyDelObjs.InitWithSize(int64(obj.BlockCnt()))
+		if enableDeltaStat {
+			tombstone = tbl.TryGetTombstone(obj.ID)
+		}
 		for j := 0; j < obj.BlockCnt(); j++ {
 			found, _ := objData.HasDeleteIntentsPreparedInByBlock(uint16(j), types.TS{}, task.txn.GetStartTS())
 			if !found {
 				emptyDelObjs.Add(uint64(j))
 				continue
+			}
+			if enableDeltaStat && tombstone != nil {
+				loc := tombstone.GetLatestDeltaloc(uint16(j))
+				if loc != nil {
+					locMap[loc.String()]++
+				}
 			}
 			if deletes, err = objData.CollectDeleteInRangeByBlock(
 				ctx, uint16(j), types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
@@ -706,6 +737,11 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 			bufferBatch.Extend(deletes)
 		}
 		emtpyDelObjIdx[i] = emptyDelObjs
+	}
+	if enableDeltaStat {
+		cost := time.Since(now)
+		logutil.Infof("[FlushTabletail] task %d collect tombstone for %s cost %v, location distribution(%v):%v",
+			task.ID(), task.schema.Name, cost, len(locMap), locMap)
 	}
 	if bufferBatch != nil {
 		// make sure every batch in deltaloc object is sorted by rowid
