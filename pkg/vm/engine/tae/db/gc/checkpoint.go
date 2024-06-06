@@ -652,7 +652,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 			if strings.Contains(file, checkpoint.PrefixMetadata) {
 				info := strings.Split(file, checkpoint.CheckpointDir+"/")
 				name := info[1]
-				logutil.Infof("[MergeCheckpoint] name %v", name)
+				logutil.Infof("[MergeCheckpoint] name %v, length: %d", name, len(c.checkpointMetas.files))
 				delete(c.checkpointMetas.files, name)
 			}
 		}
