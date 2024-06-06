@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -249,6 +250,10 @@ func (s *service) GetShardInfo(
 	return 0, 0, false, nil
 }
 
+func (s *service) ReplicaCount() int64 {
+	return int64(s.cache.allocate.Load().replicasCount())
+}
+
 func (s *service) removeReadCache(
 	table uint64,
 ) {
@@ -376,6 +381,7 @@ func (s *service) doTask(
 				s.logger.Error("failed to heartbeat",
 					zap.Error(err))
 			}
+			v2.ReplicaCountGauge.Set(float64(s.cache.allocate.Load().replicasCount()))
 			timer.Reset(s.cfg.HeartbeatDuration.Duration)
 		case table := <-s.createC:
 			if err := s.handleCreateTable(table); err != nil {
@@ -431,6 +437,8 @@ func (s *service) doHeartbeat(
 	for _, op := range ops {
 		switch op.Type {
 		case pb.OpType_AddReplica:
+			v2.AddReplicaOperatorCounter.Inc()
+
 			s.logger.Info(
 				"handle add replica",
 				zap.String("shard", op.TableShard.String()),
@@ -443,6 +451,8 @@ func (s *service) doHeartbeat(
 				op.Replica,
 			)
 		case pb.OpType_DeleteReplica:
+			v2.DeleteReplicaOperatorCounter.Inc()
+
 			s.logger.Info(
 				"handle delete replica",
 				zap.String("shard", op.TableShard.String()),
@@ -455,6 +465,8 @@ func (s *service) doHeartbeat(
 				op.Replica,
 			)
 		case pb.OpType_DeleteAll:
+			v2.DeleteAllReplicaOperatorCounter.Inc()
+
 			s.logger.Info(
 				"handle delete all replicas",
 			)
@@ -741,6 +753,14 @@ func (s *allocatedCache) clone() *allocatedCache {
 	return clone
 }
 
+func (s *allocatedCache) replicasCount() int {
+	n := 0
+	for _, v := range s.values {
+		n += len(v.Replicas)
+	}
+	return n
+}
+
 func (s *allocatedCache) addUnsubscribe(
 	tableID uint64,
 ) {
@@ -814,6 +834,18 @@ func (c *readCache) addShards(
 	metadata pb.ShardsMetadata,
 	shards []pb.TableShard,
 ) {
+	// skip tombstone replica
+	for i := range shards {
+		replicas := shards[i].Replicas[:0]
+		for _, r := range shards[i].Replicas {
+			if r.State == pb.ReplicaState_Tombstone {
+				continue
+			}
+			replicas = append(replicas, r)
+		}
+		shards[i].Replicas = replicas
+	}
+
 	c.shards[table] = shardsCache{
 		metadata: metadata,
 		shards:   shards,

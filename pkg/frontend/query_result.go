@@ -51,6 +51,7 @@ func canSaveQueryResult(ctx context.Context, ses *Session) bool {
 	if ses.ast == nil {
 		return false
 	}
+
 	stmtProfile := ses.GetStmtProfile()
 	if stmtProfile.GetSqlSourceType() == constant.InternalSql {
 		return false
@@ -58,7 +59,8 @@ func canSaveQueryResult(ctx context.Context, ses *Session) bool {
 	if stmtProfile.GetStmtType() == "Select" && stmtProfile.GetSqlSourceType() != constant.CloudUserSql {
 		return false
 	}
-	val, err := ses.GetGlobalVar(ctx, "save_query_result")
+
+	val, err := ses.GetSessionSysVar("save_query_result")
 	if err != nil {
 		return false
 	}
@@ -74,7 +76,7 @@ func canSaveQueryResult(ctx context.Context, ses *Session) bool {
 }
 
 func initQueryResulConfig(ctx context.Context, ses *Session) error {
-	val, err := ses.GetGlobalVar(ctx, "query_result_maxsize")
+	val, err := ses.GetSessionSysVar("query_result_maxsize")
 	if err != nil {
 		return err
 	}
@@ -84,8 +86,9 @@ func initQueryResulConfig(ctx context.Context, ses *Session) error {
 	case float64:
 		ses.limitResultSize = v
 	}
+
 	var p uint64
-	val, err = ses.GetGlobalVar(ctx, "query_result_timeout")
+	val, err = ses.GetSessionSysVar("query_result_timeout")
 	if err != nil {
 		return err
 	}
@@ -95,6 +98,7 @@ func initQueryResulConfig(ctx context.Context, ses *Session) error {
 	case float64:
 		p = uint64(v)
 	}
+
 	ses.createdTime = time.Now()
 	ses.expiredTime = ses.createdTime.Add(time.Hour * time.Duration(p))
 	return err
