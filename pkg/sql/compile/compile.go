@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"regexp"
 	"runtime"
 	gotrace "runtime/trace"
 	"sort"
@@ -467,18 +466,6 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		c.proc.CleanValueScanBatchs()
 		c.proc.SetPrepareBatch(nil)
 		c.proc.SetPrepareExprList(nil)
-	}()
-
-	defer func() {
-		if c.proc.SessionInfo.User != "mo_logger" && txnOp != nil {
-			if regexp.MustCompile(`.*select count\(\*\) from tpch\.orders \{snapshot.*`).MatchString(sql) {
-				//if regexp.MustCompile(`.*from tpch\.orders \{snapshot.*`).MatchString(sql) {
-				logutil.Infof("xxxx txn: %s run sql:%s, err:%v",
-					txnOp.Txn().DebugString(),
-					sql,
-					err)
-			}
-		}
 	}()
 
 	var writeOffset uint64
@@ -3624,7 +3611,12 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	for i := 0; i < buildLen; i++ {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
-
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Op:      vm.Merge,
+		Idx:     c.anal.curr,
+		IsFirst: c.anal.isFirst,
+		Arg:     merge.NewArgument(),
+	})
 	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], ss != nil, s.ShuffleCnt > 0))
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
