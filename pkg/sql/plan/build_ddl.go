@@ -42,12 +42,12 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 	var err error
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
-		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, s.Select, false)
+		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, s.Select, false, true)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false)
+		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false, true)
 		if err != nil {
 			return nil, err
 		}
@@ -104,12 +104,12 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	var err error
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
-		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, s.Select, false)
+		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, s.Select, false, true)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false)
+		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false, true)
 		if err != nil {
 			return nil, err
 		}
@@ -176,7 +176,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) {
 	var err error
 	var rootId int32
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 	bindCtx := NewBindContext(builder, nil)
 
 	getTblAndColName := func(relPos, colPos int32) (string, string) {
@@ -882,7 +882,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			}})
 	}
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 	bindContext := NewBindContext(builder, nil)
 
 	// set partition(unsupport now)
