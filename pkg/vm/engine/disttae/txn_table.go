@@ -115,19 +115,9 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 				return nil, err
 			}
 			partitionsTableDef = append(partitionsTableDef, partitionTable.(*txnTable).tableDef)
-			var ps *logtailreplay.PartitionState
-			if !tbl.db.op.IsSnapOp() {
-				ps = e.getOrCreateLatestPart(tbl.db.databaseId, partitionTable.(*txnTable).tableId).Snapshot()
-			} else {
-				p, err := e.getOrCreateSnapPart(
-					ctx,
-					partitionTable.(*txnTable),
-					types.TimestampToTS(tbl.db.op.SnapshotTS()),
-				)
-				if err != nil {
-					return nil, err
-				}
-				ps = p.Snapshot()
+			ps, err := partitionTable.(*txnTable).getPartitionState(ctx)
+			if err != nil {
+				return nil, err
 			}
 			approxObjectNum += int64(ps.ApproxObjectsNum())
 		}
@@ -1721,12 +1711,7 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 //   - orderedScan: Whether to scan the data in order.
 //   - txnOffset: Transaction offset used to specify the starting position for reading data.
 func (tbl *txnTable) NewReader(
-	ctx context.Context,
-	num int,
-	expr *plan.Expr,
-	ranges []byte,
-	orderedScan bool,
-	txnOffset int,
+	ctx context.Context, num int, expr *plan.Expr, ranges []byte, orderedScan bool,
 ) ([]engine.Reader, error) {
 	pkFilter := tbl.tryExtractPKFilter(expr)
 	blkArray := objectio.BlockInfoSlice(ranges)
