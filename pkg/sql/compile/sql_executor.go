@@ -265,8 +265,7 @@ func (exec *txnExecutor) Exec(
 
 	receiveAt := time.Now()
 
-	logutil.Info("wuxiliang --- Received SQL execute request",
-		zap.Uint64("goroutineId", GetRoutineId()),
+	logutil.Info("Received SQL execute request",
 		zap.String("sql", sql),
 		zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)))
 
@@ -322,6 +321,7 @@ func (exec *txnExecutor) Exec(
 
 	if strings.HasPrefix(sql, "CREATE VIEW IF NOT EXISTS `system`.`log_info`") {
 		logutil.Info("wuxiliang createView SQL begin build",
+			zap.Uint64("goroutineId", GetRoutineId()),
 			zap.String("sql", sql),
 			zap.String("txnID", proc.TxnOperator.Txn().DebugString()),
 		)
