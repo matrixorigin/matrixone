@@ -100,10 +100,12 @@ type checkpointCleaner struct {
 
 	mPool *mpool.MPool
 
-	checkpointMetas *struct {
-		sync.RWMutex
-		files map[string]struct{}
-	}
+	checkpointMetas *checkpointMeta
+}
+
+type checkpointMeta struct {
+	sync.RWMutex
+	files map[string]struct{}
 }
 
 func NewCheckpointCleaner(
@@ -123,6 +125,7 @@ func NewCheckpointCleaner(
 	cleaner.snapshotMeta = logtail.NewSnapshotMeta()
 	cleaner.option.enableGC = true
 	cleaner.mPool = common.DebugAllocator
+	cleaner.checkpointMetas = new(checkpointMeta)
 	cleaner.checkpointMetas.files = make(map[string]struct{})
 	return cleaner
 }
