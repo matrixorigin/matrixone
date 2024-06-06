@@ -485,47 +485,46 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 
 func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 	if expr == nil {
-		return 1
+		return 1.0
+	}
+	if expr.Selectivity != 0 {
+		return expr.Selectivity // already calculated
 	}
 
+	ret := 1.0
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
 		case "=":
-			return estimateEqualitySelectivity(expr, builder)
+			ret = estimateEqualitySelectivity(expr, builder)
 		case "!=", "<>":
-			return 0.9
+			ret = 0.9
 		case ">", "<", ">=", "<=", "between":
-			return estimateNonEqualitySelectivity(expr, funcName, builder)
+			ret = estimateNonEqualitySelectivity(expr, funcName, builder)
 		case "and":
 			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], builder)
 			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder)
 			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (sel1+sel2) > 1 {
-				return sel1 + sel2 - 1
+				ret = sel1 + sel2 - 1
 			} else {
-				return andSelectivity(sel1, sel2)
+				ret = andSelectivity(sel1, sel2)
 			}
 		case "or":
 			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], builder)
 			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder)
-			return orSelectivity(sel1, sel2)
+			ret = orSelectivity(sel1, sel2)
 		case "not":
-			return 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder)
+			ret = 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder)
 		case "like":
-			return 0.2
+			ret = 0.2
 		case "prefix_eq":
-			ndv := getExprNdv(expr, builder)
-			if ndv > 10 {
-				return 10 / ndv
-			}
-			return 0.5
+			ret = 0.0001 // should never go here
 		case "in", "prefix_in":
-			card := float64(1)
+			card := 1.0
 			switch arg1Impl := exprImpl.F.Args[1].Expr.(type) {
 			case *plan.Expr_Vec:
 				card = float64(arg1Impl.Vec.Len)
-
 			case *plan.Expr_List:
 				card = float64(len(arg1Impl.List.List))
 			}
@@ -534,22 +533,24 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			}
 			ndv := getExprNdv(expr, builder)
 			if ndv > card {
-				return card / ndv
+				ret = card / ndv
+			} else {
+				ret = 0.5
 			}
-			return 0.5
 		case "prefix_between":
-			return 0.1
+			ret = 0.1
 		case "isnull", "is_null":
-			return getNullSelectivity(exprImpl.F.Args[0], builder, true)
+			ret = getNullSelectivity(exprImpl.F.Args[0], builder, true)
 		case "isnotnull", "is_not_null":
-			return getNullSelectivity(exprImpl.F.Args[0], builder, false)
+			ret = getNullSelectivity(exprImpl.F.Args[0], builder, false)
 		default:
-			return 0.15
+			ret = 0.15
 		}
 	case *plan.Expr_Lit:
-		return 1
+		ret = 1.0
 	}
-	return 1
+	expr.Selectivity = ret
+	return ret
 }
 
 func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
@@ -640,6 +641,23 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				ReCalcNodeStats(child, builder, recursive, leafNode, needResetHashMapStats)
 			}
 		}
+	}
+
+	if builder.optimizerHints != nil && builder.optimizerHints.execType != 0 {
+		switch builder.optimizerHints.execType {
+		case 1:
+			node.Stats = DefaultMinimalStats()
+		case 2:
+			node.Stats = DefaultBigStats()
+		case 3:
+			node.Stats = DefaultHugeStats()
+		default:
+			panic("wrong optimizer hints for execType!")
+		}
+		if needResetHashMapStats {
+			resetHashMapStats(node.Stats)
+		}
+		return
 	}
 
 	var leftStats, rightStats, childStats *Stats
@@ -1014,13 +1032,21 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 	if joinNode.NodeType != plan.Node_JOIN && joinNode.NodeType != plan.Node_FUZZY_FILTER {
 		return
 	}
+
+	if joinNode.JoinType == plan.Node_INDEX {
+		scanNode.Stats.Outcnt = builder.qry.Nodes[joinNode.Children[1]].Stats.Outcnt
+		scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/3) + 1
+		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum * DefaultBlockMaxRows)
+		scanNode.Stats.Selectivity = builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity
+		return
+	}
 	runtimeFilterSel := builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity
 	scanNode.Stats.Cost *= runtimeFilterSel
 	scanNode.Stats.Outcnt *= runtimeFilterSel
 	if scanNode.Stats.Cost < 1 {
 		scanNode.Stats.Cost = 1
 	}
-	scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/2) + 1
+	scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/3) + 1
 	scanNode.Stats.Selectivity = andSelectivity(scanNode.Stats.Selectivity, runtimeFilterSel)
 }
 
@@ -1123,11 +1149,21 @@ func InternalTable(tableDef *TableDef) bool {
 
 func DefaultHugeStats() *plan.Stats {
 	stats := new(Stats)
-	stats.TableCnt = 10000000
-	stats.Cost = 10000000
-	stats.Outcnt = 10000000
+	stats.TableCnt = 100000000
+	stats.Cost = 100000000
+	stats.Outcnt = 100000000
 	stats.Selectivity = 1
-	stats.BlockNum = 1000
+	stats.BlockNum = 10000
+	return stats
+}
+
+func DefaultBigStats() *plan.Stats {
+	stats := new(Stats)
+	stats.TableCnt = 10000000
+	stats.Cost = float64(costThresholdForOneCN)
+	stats.Outcnt = float64(costThresholdForOneCN)
+	stats.Selectivity = 1
+	stats.BlockNum = int32(BlockThresholdForOneCN)
 	return stats
 }
 

@@ -38,10 +38,7 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
-	state int
-
+	state              int
 	hasNull            bool
 	multiSels          [][]int32
 	batches            []*batch.Batch
@@ -120,7 +117,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
 		}
-		ctr.FreeMergeTypeOperator(pipelineFailed)
 		arg.ctr = nil
 	}
 }

@@ -20,9 +20,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -32,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -41,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 func compPkCol(colName string, pkName string) bool {
@@ -1306,4 +1310,33 @@ func find[T ~string | ~int, S any](data map[T]S, val T) bool {
 		return true
 	}
 	return false
+}
+
+// txnIsValid
+// if the workspace is nil or txnOp is aborted, it returns error
+func txnIsValid(txnOp client.TxnOperator) (*Transaction, error) {
+	if txnOp == nil {
+		return nil, moerr.NewInternalErrorNoCtx("txnOp is nil")
+	}
+	ws := txnOp.GetWorkspace()
+	if ws == nil {
+		return nil, moerr.NewInternalErrorNoCtx("txn workspace is nil")
+	}
+	var wsTxn *Transaction
+	var ok bool
+	if wsTxn, ok = ws.(*Transaction); ok {
+		if wsTxn == nil {
+			return nil, moerr.NewTxnClosedNoCtx(txnOp.Txn().ID)
+		}
+	}
+	//if it is not the Transaction instance, only check the txnOp
+	if txnOp.Status() == txn.TxnStatus_Aborted {
+		return nil, moerr.NewTxnClosedNoCtx(txnOp.Txn().ID)
+	}
+	return wsTxn, nil
+}
+
+func CheckTxnIsValid(txnOp client.TxnOperator) (err error) {
+	_, err = txnIsValid(txnOp)
+	return err
 }

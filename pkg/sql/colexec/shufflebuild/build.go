@@ -17,6 +17,7 @@ package shufflebuild
 import (
 	"bytes"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -40,7 +41,6 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	}
 	arg.RuntimeFilterSpec.Handled = false
 	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, true)
 
 	arg.ctr.vecs = make([][]*vector.Vector, 0)
 	ctr := arg.ctr
@@ -186,19 +186,21 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 	return nil
 }
 
-func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	var err error
+func (ctr *container) collectBuildBatches(arg *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
-	var msg *process.RegisterMessage
 	for {
-		msg = ctr.ReceiveFromAllRegs(anal)
-		if msg.Err != nil {
-			return msg.Err
+		result, err := arg.Children[0].Call(proc)
+		if err != nil {
+			return err
 		}
-		currentBatch = msg.Batch
+		if result.Batch == nil {
+			break
+		}
+		currentBatch = result.Batch
 		if currentBatch == nil {
 			break
 		}
+		atomic.AddInt64(&currentBatch.Cnt, 1)
 		if currentBatch.IsEmpty() {
 			proc.PutBatch(currentBatch)
 			continue
