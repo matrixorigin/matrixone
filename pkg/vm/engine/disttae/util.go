@@ -66,6 +66,360 @@ func getColDefByName(name string, tableDef *plan.TableDef) *plan.ColDef {
 	return tableDef.Cols[pos]
 }
 
+const (
+	rangeLeftOpen = iota + function.FUNCTION_END_NUMBER + 1
+	rangeRightOpen
+	rangeBothOpen
+
+	//emptySet
+)
+
+type blockReaderPKFilter struct {
+	valid bool
+	op    int
+	lb    []byte
+	ub    []byte
+}
+
+func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName string, proc *process.Process) (ok bool, vals [][]byte) {
+	var val []byte
+	var col *plan.Expr_Col
+
+	if !isVec {
+		col, vals, ok = mustColConstValueFromBinaryFuncExpr(exprImpl, tblDef, proc)
+	} else {
+		col, val, ok = mustColVecValueFromBinaryFuncExpr(exprImpl)
+	}
+
+	if !ok {
+		return false, nil
+	}
+	if !compPkCol(col.Col.Name, pkName) {
+		return false, nil
+	}
+
+	if isVec {
+		return true, [][]byte{val}
+	}
+	return true, vals
+}
+
+// left op in (">", ">=", "=", "<", "<="), right op in (">", ">=", "=", "<", "<=")
+func mergeFilters(left, right blockReaderPKFilter, connector int) (finalFilter blockReaderPKFilter) {
+	switch connector {
+	case function.AND:
+		switch left.op {
+		case function.GREAT_EQUAL:
+			switch right.op {
+			case function.GREAT_EQUAL, function.GREAT_THAN:
+				// a >= x and a >= y --> a >= max(x, y)
+				// a >= x and a > y  --> a > y or a >= x
+				if bytes.Compare(left.lb, right.lb) >= 0 { // x >= y
+					return left
+				} else { // x < y
+					return right
+				}
+
+			case function.LESS_EQUAL, function.LESS_THAN:
+				// a >= x and a <= y --> [x, y]
+				// a >= x and a < y  --> [x, y)
+				finalFilter.lb = left.lb
+				finalFilter.ub = right.lb
+				if right.op == function.LESS_THAN {
+					finalFilter.op = rangeRightOpen
+				} else {
+					finalFilter.op = function.BETWEEN
+				}
+				finalFilter.valid = true
+
+			case function.EQUAL:
+				// a >= x and a = y --> a = y if y >= x
+				if bytes.Compare(left.lb, right.lb) <= 0 {
+					finalFilter.op = function.EQUAL
+					finalFilter.lb = right.lb
+					finalFilter.valid = true
+				}
+			}
+
+		case function.GREAT_THAN:
+			switch right.op {
+			case function.GREAT_EQUAL, function.GREAT_THAN:
+				// a > x and a >= y
+				// a > x and a > y
+				if bytes.Compare(left.lb, right.lb) >= 0 { // x >= y
+					return left
+				} else { // x < y
+					return right
+				}
+
+			case function.LESS_EQUAL, function.LESS_THAN:
+				// a > x and a <= y --> (x, y]
+				// a > x and a < y  --> (x, y)
+				finalFilter.lb = left.lb
+				finalFilter.ub = right.lb
+				if right.op == function.LESS_THAN {
+					finalFilter.op = rangeBothOpen
+				} else {
+					finalFilter.op = rangeLeftOpen
+				}
+				finalFilter.valid = true
+
+			case function.EQUAL:
+				// a > x and a = y --> a = y if y > x
+				if bytes.Compare(left.lb, right.lb) < 0 { // x < y
+					finalFilter.op = function.EQUAL
+					finalFilter.lb = right.lb
+					finalFilter.valid = true
+				}
+			}
+
+		case function.LESS_EQUAL:
+			switch right.op {
+			case function.GREAT_EQUAL, function.GREAT_THAN:
+				// a <= x and a >= y --> [y, x]
+				// a <= x and a > y  --> (y, x]
+				finalFilter.lb = right.lb
+				finalFilter.ub = left.lb
+				if right.op == function.GREAT_EQUAL {
+					finalFilter.op = function.BETWEEN
+				} else {
+					finalFilter.op = rangeLeftOpen
+				}
+				finalFilter.valid = true
+
+			case function.LESS_EQUAL, function.LESS_THAN:
+				// a <= x and a <= y --> a <= min(x,y)
+				// a <= x and a < y  --> a < y if x >= y | a <= x if x < y
+				if bytes.Compare(left.lb, right.lb) >= 0 {
+					finalFilter.lb = right.lb
+				} else {
+					finalFilter.lb = left.lb
+				}
+				if right.op == function.LESS_EQUAL {
+					finalFilter.op = function.LESS_EQUAL
+				} else {
+					finalFilter.op = function.LESS_THAN
+				}
+				finalFilter.valid = true
+
+			case function.EQUAL:
+				// a <= x and a = y --> a = y if x >= y
+				if bytes.Compare(left.lb, right.lb) >= 0 {
+					finalFilter.op = function.EQUAL
+					finalFilter.lb = right.lb
+					finalFilter.valid = true
+				}
+			}
+
+		case function.LESS_THAN:
+			switch right.op {
+			case function.GREAT_EQUAL, function.GREAT_THAN:
+				// a < x and a >= y --> [y, x)
+				// a < x and a > y  --> (y, x)
+				finalFilter.lb = right.lb
+				finalFilter.ub = left.lb
+				if right.op == function.GREAT_EQUAL {
+					finalFilter.op = rangeRightOpen
+				} else {
+					finalFilter.op = rangeBothOpen
+				}
+				finalFilter.valid = true
+
+			case function.LESS_EQUAL, function.LESS_THAN:
+				// a < x and a <= y --> a < x if x <= y | a <= y if x > y
+				// a < x and a < y  --> a < min(x,y)
+				finalFilter.op = function.LESS_THAN
+				if bytes.Compare(left.lb, right.lb) <= 0 {
+					finalFilter.lb = left.lb
+				} else {
+					finalFilter.lb = right.lb
+					if right.op == function.LESS_EQUAL {
+						finalFilter.op = function.LESS_EQUAL
+					}
+				}
+				finalFilter.valid = true
+
+			case function.EQUAL:
+				// a < x and a = y --> a = y if x > y
+				if bytes.Compare(left.lb, right.lb) > 0 {
+					finalFilter.op = function.EQUAL
+					finalFilter.lb = right.lb
+					finalFilter.valid = true
+				}
+			}
+
+		case function.EQUAL:
+			switch right.op {
+			case function.GREAT_EQUAL, function.GREAT_THAN:
+				// a = x and a >= y --> a = x if x >= y
+				// a = x and a > y  --> a = x if x > y
+				if bytes.Compare(left.lb, right.lb) >= 0 {
+					finalFilter.op = function.EQUAL
+					finalFilter.lb = left.lb
+				}
+				finalFilter.valid = true
+
+			case function.LESS_EQUAL, function.LESS_THAN:
+				// a = x and a <= y --> a = x if x <= y
+				// a = x and a < y  --> a = x if x < y
+				if bytes.Compare(left.lb, right.lb) <= 0 {
+					finalFilter.op = function.EQUAL
+					finalFilter.lb = left.lb
+				}
+				finalFilter.valid = true
+
+			case function.EQUAL:
+				// a = x and a = y --> a = y if x = y
+				if bytes.Compare(left.lb, right.lb) == 0 {
+					finalFilter.op = function.EQUAL
+					finalFilter.lb = right.lb
+					finalFilter.valid = true
+				}
+			}
+		}
+
+	case function.OR:
+	}
+	return
+}
+
+func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, proc *process.Process) (filter blockReaderPKFilter) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		switch name := exprImpl.F.Func.ObjName; name {
+		case "and":
+			leftFilter := constructPKFilter(exprImpl.F.Args[0], tblDef, pkName, proc)
+			rightFilter := constructPKFilter(exprImpl.F.Args[1], tblDef, pkName, proc)
+			if !leftFilter.valid {
+				return rightFilter
+			}
+
+			if !rightFilter.valid {
+				return leftFilter
+			}
+
+			return mergeFilters(leftFilter, rightFilter, function.AND)
+
+		case "or":
+			leftFilter := constructPKFilter(exprImpl.F.Args[0], tblDef, pkName, proc)
+			rightFilter := constructPKFilter(exprImpl.F.Args[1], tblDef, pkName, proc)
+			if !leftFilter.valid {
+				return rightFilter
+			}
+
+			if !rightFilter.valid {
+				return leftFilter
+			}
+
+			return mergeFilters(leftFilter, rightFilter, function.OR)
+
+		case ">=":
+			//a >= ?
+			ok, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			if !ok {
+				return
+			}
+			filter.valid = true
+			filter.op = function.GREAT_EQUAL
+			filter.lb = vals[0]
+
+		case "<=":
+			//a <= ?
+			ok, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			if !ok {
+				return
+			}
+			filter.valid = true
+			filter.op = function.LESS_EQUAL
+			filter.lb = vals[0]
+
+		case ">":
+			//a > ?
+			ok, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			if !ok {
+				return
+			}
+			filter.valid = true
+			filter.op = function.GREAT_THAN
+			filter.lb = vals[0]
+
+		case "<":
+			//a < ?
+			ok, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			if !ok {
+				return
+			}
+			filter.valid = true
+			filter.op = function.LESS_THAN
+			filter.lb = vals[0]
+
+		case "=":
+			// a = ?
+			ok, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			if !ok {
+				return
+			}
+			filter.valid = true
+			filter.op = function.EQUAL
+			filter.lb = vals[0]
+
+		case "prefix_eq":
+			ok, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			if !ok {
+				return
+			}
+			filter.valid = true
+			filter.op = function.PREFIX_EQ
+			filter.lb = vals[0]
+
+		case "in":
+			ok, vals := evalValue(exprImpl, tblDef, true, pkName, proc)
+			if !ok {
+				return
+			}
+			filter.valid = true
+			filter.op = function.IN
+			filter.lb = vals[0]
+
+		case "prefix_in":
+			ok, vals := evalValue(exprImpl, tblDef, true, pkName, proc)
+			if !ok {
+				return
+			}
+			filter.valid = true
+			filter.op = function.PREFIX_IN
+			filter.lb = vals[0]
+
+		case "between":
+			ok, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			if !ok {
+				return
+			}
+			filter.valid = true
+			filter.op = function.BETWEEN
+			filter.lb = vals[0]
+			filter.ub = vals[1]
+
+		case "prefix_between":
+			ok, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			if !ok {
+				return
+			}
+			filter.valid = true
+			filter.op = function.PREFIX_BETWEEN
+			filter.lb = vals[0]
+			filter.ub = vals[1]
+
+		default:
+			panic(name)
+		}
+	default:
+		//panic(plan2.FormatExpr(expr))
+	}
+
+	return
+}
+
 func getPkExpr(
 	expr *plan.Expr, pkName string, proc *process.Process,
 ) *plan.Expr {
@@ -524,6 +878,62 @@ func getNonSortedPKSearchFuncByPKVec(
 		}
 	}
 	return nil
+}
+
+func getNonCompositePKSearchFuncByExprInProgress(
+	expr *plan.Expr, tblDef *plan.TableDef, pkName string, proc *process.Process,
+) (bool, bool, blockio.ReadFilter) {
+	pkFilter := constructPKFilter(expr, tblDef, pkName, proc)
+	if !pkFilter.valid {
+		return false, false, blockio.ReadFilter{}
+	}
+
+	var filter blockio.ReadFilter
+	var sortedSearchFunc, unSortedSearchFunc func(*vector.Vector) []int32
+
+	filter.HasFakePK = pkName == catalog.FakePrimaryKeyColName
+
+	switch pkFilter.op {
+	case rangeLeftOpen:
+	case rangeRightOpen:
+	case rangeBothOpen:
+
+	case function.EQUAL:
+		fmt.Println("I am here", tblDef.Name)
+		sortedSearchFunc = func(vector *vector.Vector) []int32 {
+			var sels []int32
+			if vector.Length() == 0 {
+				return sels
+			}
+			for x := 0; x < vector.Length(); x++ {
+				if bytes.Compare(vector.GetRawBytesAt(x), pkFilter.lb) == 0 {
+					sels = append(sels, int32(x))
+				}
+			}
+			return sels
+		}
+		unSortedSearchFunc = sortedSearchFunc
+	case function.PREFIX_EQ:
+
+	case function.BETWEEN:
+	case function.PREFIX_BETWEEN:
+
+	case function.IN:
+	case function.PREFIX_IN:
+
+	}
+
+	if sortedSearchFunc != nil {
+		filter.SortedSearchFunc = func(vecs []*vector.Vector) []int32 {
+			return sortedSearchFunc(vecs[0])
+		}
+		filter.UnSortedSearchFunc = func(vecs []*vector.Vector) []int32 {
+			return unSortedSearchFunc(vecs[0])
+		}
+		filter.Valid = true
+		return true, false, filter
+	}
+	return false, false, filter
 }
 
 func getNonCompositePKSearchFuncByExpr(
