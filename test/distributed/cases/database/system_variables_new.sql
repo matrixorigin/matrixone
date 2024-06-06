@@ -61,8 +61,6 @@ SELECT @@global.autocommit;
 show global variables like 'autocommit';
 show global variables like 'enable_privilege_cache';
 select @@global.lower_case_table_names;
-select @@global.keep_user_target_list_in_result;
-show global variables like 'interactive_timeout';
 show global variables like 'net_write_timeout';
 show global variables like 'wait_timeout';
 show global variables like 'sql_select_limit';
