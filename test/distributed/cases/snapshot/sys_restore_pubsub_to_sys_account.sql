@@ -204,10 +204,6 @@ select * from table02;
 -- @session
 
 restore account acc01 from snapshot sp02;
--- @bvt:issue#16601
--- @ignore:2,6
-select * from mo_catalog.mo_pubs;
--- @bvt:issue
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
@@ -225,7 +221,6 @@ drop snapshot sp02;
 
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
--- @bvt:issue#16597
 -- sys create snapshot for acc01 pub
 -- @session:id=1&user=acc01:test_account&password=111
 drop database if exists db09;
@@ -306,12 +301,13 @@ show publications;
 -- @ignore:3
 show subscriptions;
 show databases;
+use sub05;
+drop database sub05;
 -- @session
 drop snapshot sp05;
 -- @session:id=1&user=acc01:test_account&password=111
 drop database db09;
 drop database db10;
--- @bvt:issue
 
 
 
@@ -357,6 +353,7 @@ select * from tm2;
 
 -- @session:id=1&user=acc01:test_account&password=111
 restore account acc01 from snapshot sp11;
+-- @ignore:2
 show publications;
 show databases;
 drop database db10;
@@ -428,7 +425,6 @@ drop snapshot sp101;
 
 
 
--- @bvt:issue#16597
 -- acc01 create db, sys create snapshot1, acc01 create publication to acc02, sys create snapshot2
 -- acc01 subscribe, sys restore to snapshot1, query, sys restore to snapshot 2
 -- @session:id=1&user=acc01:test_account&password=111
@@ -452,7 +448,7 @@ create publication pub08 database test02 account acc02 comment 'publish test02';
 drop snapshot if exists sp103;
 create snapshot sp103 for account acc01;
 
--- @session:id=1&user=acc01:test_account&password=111
+-- @session:id=2&user=acc02:test_account&password=111
 drop database if exists sub07;
 create database sub07 from acc01 publication pub08;
 show databases;
@@ -462,7 +458,7 @@ select * from t1;
 
 restore account acc01 from snapshot sp102;
 
--- @session:id=1&user=acc01:test_account&password=111
+-- @session:id=2&user=acc02:test_account&password=111
 show databases;
 use sub07;
 select * from t1;
@@ -474,13 +470,20 @@ restore account acc01 from snapshot sp103;
 show databases;
 use sub07;
 select * from t1;
+drop database sub07;
 -- @session
--- @bvt:issue
+
+-- @session:id=1&user=acc01:test_account&password=111
+drop publication pub08;
+drop database test02;
+-- @session
+drop snapshot sp102;
+drop snapshot sp103;
 
 
 
 
--- @bvt:issue#16597
+
 -- restore to new account
 drop account if exists acc03;
 create account acc03 admin_name = 'test_account' identified by '111';
@@ -522,22 +525,24 @@ restore account acc01 from snapshot sp104 to account acc03;
 -- @session:id=3&user=acc03:test_account&password=111
 show databases;
 use test03;
+-- @ignore:2
 show publications;
+drop publication pub09;
 drop database test03;
 -- @session
 
--- @session:id=2&user=acc03:test_account&password=111
+-- @session:id=2&user=acc02:test_account&password=111
 show databases;
 use sub08;
 select * from t1;
-drop database test03;
+drop database sub08;
 -- @session
 
 -- @session:id=1&user=acc01:test_account&password=111
+drop publication pub09;
 drop database test03;
 -- @session
 drop snapshot sp104;
--- @bvt:issue#16597
 
 
 
@@ -582,10 +587,11 @@ restore account acc02 from snapshot sp105 to account acc03;
 -- @ignore:2,6
 select * from mo_catalog.mo_pubs;
 
--- @session:id=3&user=acc03:test_account&password=111
+-- @session:id=4&user=acc03:test_account&password=111
 show databases;
 use sub09;
 select * from t1;
+-- @ignore:2
 show publications;
 drop database sub09;
 -- @ignore:2,6

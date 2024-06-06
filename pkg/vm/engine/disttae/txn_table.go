@@ -114,19 +114,9 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 				return nil, err
 			}
 			partitionsTableDef = append(partitionsTableDef, partitionTable.(*txnTable).tableDef)
-			var ps *logtailreplay.PartitionState
-			if !tbl.db.op.IsSnapOp() {
-				ps = e.getOrCreateLatestPart(tbl.db.databaseId, partitionTable.(*txnTable).tableId).Snapshot()
-			} else {
-				p, err := e.getOrCreateSnapPart(
-					ctx,
-					partitionTable.(*txnTable),
-					types.TimestampToTS(tbl.db.op.SnapshotTS()),
-				)
-				if err != nil {
-					return nil, err
-				}
-				ps = p.Snapshot()
+			ps, err := partitionTable.(*txnTable).getPartitionState(ctx)
+			if err != nil {
+				return nil, err
 			}
 			approxObjectNum += int64(ps.ApproxObjectsNum())
 		}
@@ -691,13 +681,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset i
 	); err != nil {
 		return
 	}
-	if tbl.db.op.IsSnapOp() && tbl.db.databaseName == "tpch" {
-		logutil.Infof("xxx Ranges, table:%s, len:%d, snapshot op:%s",
-			tbl.tableName,
-			blocks.Len(),
-			tbl.db.op.Txn().DebugString())
-	}
-
 	return
 }
 
@@ -2094,12 +2077,6 @@ func (tbl *txnTable) getPartitionState(
 			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
 		if err != nil {
 			return nil, err
-		}
-		if tbl.db.databaseName == "tpch" {
-			logutil.Infof("xxxx getPartitionState, table:%s, snapshot op :%s, snap:%p",
-				tbl.tableName,
-				tbl.db.op.Txn().DebugString(),
-				p)
 		}
 		tbl._partState.Store(p.Snapshot())
 	}
