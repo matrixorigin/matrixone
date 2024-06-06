@@ -30,8 +30,9 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1343,4 +1344,15 @@ func ToRequest(payload []byte) *Request {
 	}
 
 	return req
+}
+
+// CancelCheck checks if the given context has been canceled.
+// If the context is canceled, it returns the context's error.
+func CancelCheck(Ctx context.Context) error {
+	select {
+	case <-Ctx.Done():
+		return Ctx.Err()
+	default:
+		return nil
+	}
 }
