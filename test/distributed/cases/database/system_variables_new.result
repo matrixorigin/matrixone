@@ -1,0 +1,343 @@
+create account acc1 ADMIN_NAME 'admin' IDENTIFIED BY '111';
+create account acc2 ADMIN_NAME 'admin' IDENTIFIED BY '111';
+create account acc3 ADMIN_NAME 'admin' IDENTIFIED BY '111';
+set global sql_mode = "NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE";
+show global variables like 'sql_mode';
+Variable_name    Value
+sql_mode    NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE
+SELECT @@GLOBAL.sql_mode;
+@@sql_mode
+NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE
+SET global TIME_ZONE='+08:00';
+select @@TIME_ZONE;
+@@TIME_ZONE
+SYSTEM
+SET @@global.autocommit=off;
+SELECT @@global.autocommit;
+@@autocommit
+0
+set global enable_privilege_cache = off;
+show global variables like 'enable_privilege_cache';
+Variable_name    Value
+enable_privilege_cache    off
+set global save_query_result=on;
+SHOW GLOBAL VARIABLES LIKE 'save_query_result';
+Variable_name    Value
+save_query_result    on
+set global max_connections=65536;
+select @@max_connections;
+@@max_connections
+151
+set global lower_case_table_names=0;
+select @@global.lower_case_table_names;
+@@lower_case_table_names
+0
+set global keep_user_target_list_in_result = 0;
+select @@global.keep_user_target_list_in_result;
+@@keep_user_target_list_in_result
+0
+set global interactive_timeout = 20;
+show global variables like 'interactive_timeout';
+Variable_name    Value
+interactive_timeout    20
+set global net_write_timeout = 10;
+show global variables like 'net_write_timeout';
+Variable_name    Value
+net_write_timeout    10
+set global wait_timeout = 60;
+show global variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    60
+set global sql_select_limit = 20;
+show global variables like 'sql_select_limit';
+Variable_name    Value
+sql_select_limit    20
+set global max_allowed_packet = 23564;
+show global variables like 'max_allowed_packet';
+Variable_name    Value
+max_allowed_packet    23564
+set global tx_isolation = 1;
+show global variables like 'tx_isolation';
+Variable_name    Value
+tx_isolation    READ-COMMITTED
+show global variables like 'sql_mode';
+Variable_name    Value
+sql_mode    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+SELECT @@GLOBAL.sql_mode;
+@@sql_mode
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+select @@TIME_ZONE;
+@@TIME_ZONE
+SYSTEM
+SELECT @@global.autocommit;
+@@autocommit
+1
+show global variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+show global variables like 'enable_privilege_cache';
+Variable_name    Value
+enable_privilege_cache    on
+SHOW GLOBAL VARIABLES LIKE 'save_query_result';
+Variable_name    Value
+save_query_result    off
+select @@GLOBAL.max_connections;
+@@max_connections
+151
+select @@global.lower_case_table_names;
+@@lower_case_table_names
+1
+select @@global.keep_user_target_list_in_result;
+@@keep_user_target_list_in_result
+1
+show global variables like 'interactive_timeout';
+Variable_name    Value
+interactive_timeout    28800
+show global variables like 'net_write_timeout';
+Variable_name    Value
+net_write_timeout    60
+show global variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    28800
+show global variables like 'sql_select_limit';
+Variable_name    Value
+sql_select_limit    18446744073709551615
+show global variables like 'max_allowed_packet';
+Variable_name    Value
+max_allowed_packet    67108864
+show global variables like 'tx_isolation';
+Variable_name    Value
+tx_isolation    REPEATABLE-READ
+show global variables like 'sql_mode';
+Variable_name    Value
+sql_mode    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+SELECT @@GLOBAL.sql_mode;
+@@sql_mode
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+select @@TIME_ZONE;
+@@TIME_ZONE
+SYSTEM
+SELECT @@global.autocommit;
+@@autocommit
+1
+show global variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+show global variables like 'enable_privilege_cache';
+Variable_name    Value
+enable_privilege_cache    on
+select @@global.lower_case_table_names;
+@@lower_case_table_names
+1
+show global variables like 'net_write_timeout';
+Variable_name    Value
+net_write_timeout    60
+show global variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    28800
+show global variables like 'sql_select_limit';
+Variable_name    Value
+sql_select_limit    18446744073709551615
+show global variables like 'max_allowed_packet';
+Variable_name    Value
+max_allowed_packet    67108864
+show global variables like 'tx_isolation';
+Variable_name    Value
+tx_isolation    REPEATABLE-READ
+SET @@session.autocommit=off;
+SELECT @@session.autocommit;
+@@autocommit
+0
+set enable_privilege_cache = off;
+show variables like 'enable_privilege_cache';
+Variable_name    Value
+enable_privilege_cache    off
+set save_query_result=on;
+SHOW VARIABLES LIKE 'save_query_result';
+Variable_name    Value
+save_query_result    on
+set max_connections=1000;
+internal error: the system variable is global
+select @@max_connections;
+@@max_connections
+151
+set lower_case_table_names=0;
+internal error: the system variable is global
+select @@lower_case_table_names;
+@@lower_case_table_names
+1
+set keep_user_target_list_in_result = 0;
+select @@keep_user_target_list_in_result;
+@@keep_user_target_list_in_result
+0
+set interactive_timeout = 100;
+SELECT @@interactive_timeout;
+@@interactive_timeout
+100
+set net_write_timeout = 15;
+SELECT @@net_write_timeout;
+@@net_write_timeout
+15
+set wait_timeout = 19;
+SELECT @@wait_timeout;
+@@wait_timeout
+19
+set sql_select_limit = 200;
+SELECT @@sql_select_limit;
+@@sql_select_limit
+200
+set max_allowed_packet = 83745;
+SELECT @@max_allowed_packet;
+@@max_allowed_packet
+83745
+set tx_isolation = 1;
+SELECT @@tx_isolation;
+@@tx_isolation
+READ-COMMITTED
+SET @@SESSION.SQL_LOG_BIN= 0;
+select @@SESSION.SQL_LOG_BIN;
+@@SQL_LOG_BIN
+0
+SET @@session.autocommit=ON;
+SELECT @@session.autocommit;
+@@autocommit
+1
+SET TIME_ZONE='+08:00';
+select @@TIME_ZONE;
+@@TIME_ZONE
++08:00
+SELECT @@session.autocommit;
+@@autocommit
+1
+select @@max_connections;
+@@max_connections
+151
+show variables like 'enable_privilege_cache';
+Variable_name    Value
+enable_privilege_cache    on
+SHOW VARIABLES LIKE 'save_query_result';
+Variable_name    Value
+save_query_result    off
+select @@lower_case_table_names;
+@@lower_case_table_names
+1
+select @@keep_user_target_list_in_result;
+@@keep_user_target_list_in_result
+1
+SELECT @@interactive_timeout;
+@@interactive_timeout
+28800
+SELECT @@net_write_timeout;
+@@net_write_timeout
+60
+SELECT @@wait_timeout;
+@@wait_timeout
+28800
+SELECT @@sql_select_limit;
+@@sql_select_limit
+18446744073709551615
+SELECT @@max_allowed_packet;
+@@max_allowed_packet
+67108864
+SELECT @@tx_isolation;
+@@tx_isolation
+REPEATABLE-READ
+select @@SESSION.SQL_LOG_BIN;
+@@SQL_LOG_BIN
+0
+SELECT @@session.autocommit;
+@@autocommit
+1
+select @@TIME_ZONE;
+@@TIME_ZONE
+SYSTEM
+SELECT @@session.autocommit;
+@@autocommit
+1
+select @@max_connections;
+@@max_connections
+151
+show variables like 'enable_privilege_cache';
+Variable_name    Value
+enable_privilege_cache    on
+SHOW VARIABLES LIKE 'save_query_result';
+Variable_name    Value
+save_query_result    off
+select @@lower_case_table_names;
+@@lower_case_table_names
+1
+select @@keep_user_target_list_in_result;
+@@keep_user_target_list_in_result
+1
+SELECT @@interactive_timeout;
+@@interactive_timeout
+28800
+SELECT @@net_write_timeout;
+@@net_write_timeout
+60
+SELECT @@wait_timeout;
+@@wait_timeout
+28800
+SELECT @@sql_select_limit;
+@@sql_select_limit
+18446744073709551615
+SELECT @@max_allowed_packet;
+@@max_allowed_packet
+67108864
+SELECT @@tx_isolation;
+@@tx_isolation
+REPEATABLE-READ
+select @@SESSION.SQL_LOG_BIN;
+@@SQL_LOG_BIN
+0
+SELECT @@session.autocommit;
+@@autocommit
+1
+select @@TIME_ZONE;
+@@TIME_ZONE
+SYSTEM
+SELECT @@session.autocommit;
+@@autocommit
+1
+select @@max_connections;
+@@max_connections
+151
+show variables like 'enable_privilege_cache';
+Variable_name    Value
+enable_privilege_cache    on
+SHOW VARIABLES LIKE 'save_query_result';
+Variable_name    Value
+save_query_result    off
+select @@lower_case_table_names;
+@@lower_case_table_names
+1
+select @@keep_user_target_list_in_result;
+@@keep_user_target_list_in_result
+1
+SELECT @@net_write_timeout;
+@@net_write_timeout
+60
+SELECT @@wait_timeout;
+@@wait_timeout
+28800
+SELECT @@sql_select_limit;
+@@sql_select_limit
+18446744073709551615
+SELECT @@max_allowed_packet;
+@@max_allowed_packet
+67108864
+SELECT @@tx_isolation;
+@@tx_isolation
+REPEATABLE-READ
+select @@SESSION.SQL_LOG_BIN;
+@@SQL_LOG_BIN
+0
+SELECT @@session.autocommit;
+@@autocommit
+1
+select @@TIME_ZONE;
+@@TIME_ZONE
+SYSTEM
+drop account acc1;
+drop account acc2;
+drop account acc3;
