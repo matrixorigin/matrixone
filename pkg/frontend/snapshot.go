@@ -471,7 +471,7 @@ func restoreToAccount(
 		}
 
 		// do some op to pub database
-		if err := checkPubAndDropPubRecord(ctx, bh, snapshotName, dbName); err != nil {
+		if err := checkPubAndDropPubRecord(toCtx, bh, snapshotName, dbName); err != nil {
 			return err
 		}
 

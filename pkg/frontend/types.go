@@ -733,19 +733,22 @@ func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 
 func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
-	if sv, ok := gSysVarsDefs[name]; !ok {
-		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
-	} else {
-		if sv.Scope == ScopeSession {
-			return moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
-		}
-		if !sv.GetDynamic() {
-			return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
-		}
 
-		if val, err = sv.GetType().Convert(val); err != nil {
-			return err
-		}
+	def, ok := gSysVarsDefs[name]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+	}
+
+	if def.Scope == ScopeSession {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
+	}
+
+	if !def.GetDynamic() {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
+	}
+
+	if val, err = def.GetType().Convert(val); err != nil {
+		return err
 	}
 
 	// save to table first
