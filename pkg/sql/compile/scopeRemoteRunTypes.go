@@ -530,7 +530,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	if sessLogger := procInfo.SessionLogger; sessLogger != nil {
 		copy(result.sessionInfo.SessionId[:], sessLogger.SessId)
 		copy(result.StmtId[:], sessLogger.StmtId)
-		result.sessionInfo.LogLevel = enumLogLevel2ZapLogLevel(sessLogger.LogLevel)
+		result.sessionInfo.LogLevel = process.EnumLogLevel2ZapLogLevel(sessLogger.LogLevel)
 		// txnId, ignore. more in txnOperator.
 	}
 
