@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -396,6 +395,16 @@ func (e *Engine) getOrCreateSnapPart(
 	ctx context.Context,
 	tbl *txnTable,
 	ts types.TS) (*logtailreplay.Partition, error) {
+
+	//check whether the latest partition is available for reuse.
+	err := tbl.updateLogtail(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if p := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
+		return p, nil
+	}
+
 	//check whether the snapshot partitions are available for reuse.
 	e.mu.Lock()
 	tblSnaps, ok := e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}]
@@ -412,14 +421,6 @@ func (e *Engine) getOrCreateSnapPart(
 	defer tblSnaps.Unlock()
 	for _, snap := range tblSnaps.snaps {
 		if snap.CanServe(ts) {
-			if tbl.db.databaseName == "tpch" {
-				logutil.Infof("xxxx getOrCreateSnapPart reuse snapshot partition state, "+
-					"db:%s, table:%s, snapshot op :%s, snap:%p",
-					tbl.db.databaseName,
-					tbl.tableName,
-					tbl.db.op.Txn().DebugString(),
-					snap)
-			}
 			return snap, nil
 		}
 	}
@@ -471,13 +472,6 @@ func (e *Engine) getOrCreateSnapPart(
 	})
 	if snap.CanServe(ts) {
 		tblSnaps.snaps = append(tblSnaps.snaps, snap)
-		if tbl.db.databaseName == "tpch" {
-			logutil.Infof("xxxx getOrCreateSnapPart load ckps, db:%s, table:%s, snapshot op :%s, snap:%p",
-				tbl.db.databaseName,
-				tbl.tableName,
-				tbl.db.op.Txn().DebugString(),
-				snap)
-		}
 		return snap, nil
 	}
 
@@ -488,17 +482,7 @@ func (e *Engine) getOrCreateSnapPart(
 		if err != nil {
 			return nil, err
 		}
-		p := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
-		if tbl.db.databaseName == "tpch" {
-			logutil.Infof("xxxx getOrCreateSnapPart reuse latest partiiton state, "+
-				"db:%s, table:%s, snapshot op :%s, snap:%p",
-				tbl.db.databaseName,
-				tbl.tableName,
-				tbl.db.op.Txn().DebugString(),
-				p)
-
-		}
-		return p, nil
+		return e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId), nil
 	}
 	if ts.Less(&start) {
 		return nil, moerr.NewInternalErrorNoCtx(
