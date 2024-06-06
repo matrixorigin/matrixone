@@ -43,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	client2 "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -141,9 +140,9 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create database in snapshot txn")
 	}
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
+	txn, err := txnIsValid(op)
+	if err != nil {
+		return err
 	}
 	typ := getTyp(ctx)
 	sql := getSql(ctx)
@@ -192,9 +191,9 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
 	logDebugf(op.Txn(), "Engine.Database %s", name)
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
-		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
+	txn, err := txnIsValid(op)
+	if err != nil {
+		return nil, err
 	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -255,9 +254,9 @@ func (e *Engine) Database(ctx context.Context, name string,
 func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
 	var dbs []string
 
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
+	txn, err := txnIsValid(op)
+	if err != nil {
+		return nil, err
 	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -305,9 +304,10 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 }
 
 func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return "", "", moerr.NewTxnClosed(ctx, op.Txn().ID)
+	var txn *Transaction
+	txn, err = txnIsValid(op)
+	if err != nil {
+		return "", "", err
 	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -373,9 +373,10 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 }
 
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return "", "", nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
+	var txn *Transaction
+	txn, err = txnIsValid(op)
+	if err != nil {
+		return "", "", nil, err
 	}
 	switch tableId {
 	case catalog.MO_DATABASE_ID:
@@ -501,14 +502,15 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 
 	var databaseId uint64
 	var rowId types.Rowid
+	var txn *Transaction
 	//var db *txnDatabase
 	if op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("delete database in snapshot txn")
 	}
 
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
+	txn, err = txnIsValid(op)
+	if err != nil {
+		return err
 	}
 
 	accountId, err := defines.GetAccountId(ctx)
