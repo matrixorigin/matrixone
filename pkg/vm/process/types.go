@@ -505,6 +505,14 @@ func (proc *Process) SetCacheForAutoCol(name string) {
 	aicm.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: 0, MaxNum: aicm.MaxSize, Step: 1}
 }
 
+func (proc *Process) SetCloneTxnOperator(op client.TxnOperator) {
+	proc.CloneTxnOperator = op
+}
+
+func (proc *Process) GetCloneTxnOperator() client.TxnOperator {
+	return proc.CloneTxnOperator
+}
+
 type analyze struct {
 	parallelMajor        bool
 	parallelIdx          int
