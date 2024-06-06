@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"math"
 	"net"
-	"regexp"
 	"runtime"
 	gotrace "runtime/trace"
 	"sort"
@@ -467,18 +466,6 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		c.proc.CleanValueScanBatchs()
 		c.proc.SetPrepareBatch(nil)
 		c.proc.SetPrepareExprList(nil)
-	}()
-
-	defer func() {
-		if c.proc.SessionInfo.User != "mo_logger" && txnOp != nil {
-			if regexp.MustCompile(`.*select count\(\*\) from tpch\.orders \{snapshot.*`).MatchString(sql) {
-				//if regexp.MustCompile(`.*from tpch\.orders \{snapshot.*`).MatchString(sql) {
-				logutil.Infof("xxxx txn: %s run sql:%s, err:%v",
-					txnOp.Txn().DebugString(),
-					sql,
-					err)
-			}
-		}
 	}()
 
 	var writeOffset uint64
@@ -2799,6 +2786,16 @@ func containBrokenNode(s *Scope) bool {
 
 func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
 	// use topN TO make scope.
+	if c.execType == plan2.ExecTypeTP {
+		ss[0].appendInstruction(vm.Instruction{
+			Op:      vm.Top,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructTop(n, topN),
+		})
+		return ss
+	}
+
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
