@@ -192,15 +192,11 @@ func CleanTransMapping(b *api.BlkTransferBooking) {
 	}
 }
 
-func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, deletes *nulls.Nulls, mapping []int64) {
+func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, mapping []int64) {
 	// TODO: remove panic check
 	if mapping != nil {
-		deletecnt := 0
-		if deletes != nil {
-			deletecnt = deletes.GetCardinality()
-		}
-		if len(mapping) != originRowCnt-deletecnt {
-			panic(fmt.Sprintf("mapping length %d != originRowCnt %d - deletes %s", len(mapping), originRowCnt, deletes))
+		if len(mapping) != originRowCnt {
+			panic(fmt.Sprintf("mapping length %d != originRowCnt %d", len(mapping), originRowCnt))
 		}
 		// mapping sortedVec[i] = originalVec[sortMapping[i]]
 		// transpose it, originalVec[sortMapping[i]] = sortedVec[i]
@@ -216,10 +212,6 @@ func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, d
 	posInVecApplyDeletes := 0
 	targetMapping := b.Mappings[idx].M
 	for origRow := 0; origRow < originRowCnt; origRow++ {
-		if deletes != nil && deletes.Contains(uint64(origRow)) {
-			// this row has been deleted, skip its mapping
-			continue
-		}
 		if mapping == nil {
 			// no sort phase, the mapping is 1:1, just use posInVecApplyDeletes
 			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(posInVecApplyDeletes)}

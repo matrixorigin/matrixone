@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -380,8 +381,7 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	}
 	bat = containers.NewBatch()
 	rowCntBeforeApplyDelete := views.Columns[0].Length()
-	deletes := views.DeleteMask
-	views.ApplyDeletes()
+	bat.Deletes = views.DeleteMask
 	defer views.Close()
 	for i, colidx := range idxs {
 		colview := views.Columns[i]
@@ -399,22 +399,21 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 		bat.AddVector(task.schema.ColDefs[colidx].Name, vec.TryConvertConst())
 	}
 
-	if deletes != nil {
-		task.aObjDeletesCnt += deletes.GetCardinality()
-	}
-
 	var sortMapping []int64
 	if sortKeyPos >= 0 {
 		if objIdx == 0 {
 			logutil.Infof("flushtabletail sort obj on %s", bat.Attrs[sortKeyPos])
 		}
 		sortMapping, err = mergesort.SortBlockColumns(bat.Vecs, sortKeyPos, task.rt.VectorPool.Transient)
+		if views.DeleteMask != nil {
+			nulls.Filter(bat.Deletes, sortMapping, false)
+		}
 		if err != nil {
 			return
 		}
 	}
 	if task.doTransfer {
-		mergesort.AddSortPhaseMapping(task.transMappings, objIdx, rowCntBeforeApplyDelete, deletes, sortMapping)
+		mergesort.AddSortPhaseMapping(task.transMappings, objIdx, rowCntBeforeApplyDelete, sortMapping)
 	}
 	return
 }
@@ -447,13 +446,13 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	}
 
 	// read from aobjects
-	readedBats := make([]*containers.Batch, 0, len(task.aObjHandles))
 	for _, block := range task.aObjHandles {
 		err = block.Prefetch(readColIdxs)
 		if err != nil {
 			return
 		}
 	}
+	readedBats := make([]*containers.Batch, 0, len(task.aObjHandles))
 	for i := range task.aObjHandles {
 		bat, empty, err := task.prepareAObjSortedData(ctx, i, readColIdxs, sortKeyPos)
 		if err != nil {
@@ -489,18 +488,17 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	fromLayout := make([]uint32, 0, len(readedBats))
 	// toLayout describes the layout of the output batch, i.e. [8192, 8192, 8192, 4242]
 	toLayout := make([]uint32, 0, len(readedBats))
-	totalRowCnt := 0
 	if sortKeyPos < 0 {
 		// no pk, just pick the first column to reshape
 		sortKeyPos = 0
 	}
 	for _, bat := range readedBats {
-		vec := bat.Vecs[sortKeyPos]
-		fromLayout = append(fromLayout, uint32(vec.Length()))
-		totalRowCnt += vec.Length()
+		remains := bat.Vecs[sortKeyPos].Length() - bat.Deletes.Count()
+		fromLayout = append(fromLayout, uint32(remains))
+		task.mergeRowsCnt += remains
+		task.aObjDeletesCnt += bat.Deletes.Count()
 	}
-	task.mergeRowsCnt = totalRowCnt
-	rowsLeft := totalRowCnt
+	rowsLeft := task.mergeRowsCnt
 	for rowsLeft > 0 {
 		if rowsLeft > int(schema.BlockMaxRows) {
 			toLayout = append(toLayout, schema.BlockMaxRows)
@@ -521,11 +519,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 			return
 		}
 	} else {
-		cnBatches := make([]*batch.Batch, len(readedBats))
-		for i := range readedBats {
-			cnBatches[i] = containers.ToCNBatch(readedBats[i])
-		}
-		writtenBatches, releaseF = mergesort.ReshapeBatches(cnBatches, fromLayout, toLayout, task)
+		writtenBatches, releaseF = mergesort.ReshapeBatches(readedBats, fromLayout, toLayout, task)
 	}
 	defer releaseF()
 	if task.doTransfer {

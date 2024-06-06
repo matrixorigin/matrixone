@@ -160,8 +160,8 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []u
 	}
 
 	cnBat := containers.ToCNBatch(am.bats[0])
-	batches := make([]*batch.Batch, am.resultBlkCnt)
-	releaseFs := make([]func(), am.resultBlkCnt)
+	batches := make([]*batch.Batch, 0, am.resultBlkCnt)
+	releaseFs := make([]func(), 0, am.resultBlkCnt)
 
 	blkCnt := 0
 	bufferRowCnt := 0
@@ -173,10 +173,17 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []u
 		default:
 		}
 		blkIdx := am.nextPos()
-		rowIdx := am.rowIdx[blkIdx]
-		if batches[blkCnt] == nil {
-			batches[blkCnt], releaseFs[blkCnt] = getSimilarBatch(cnBat, int(am.rowPerBlk), am.vpool)
+		if am.bats[blkIdx].Deletes.Contains(uint64(am.rowIdx[blkIdx])) {
+			// row is deleted
+			am.pushNewElem(blkIdx)
+			continue
 		}
+		if len(batches)-1 < blkCnt {
+			bat, releaseF := getSimilarBatch(cnBat, int(am.rowPerBlk), am.vpool)
+			batches = append(batches, bat)
+			releaseFs = append(releaseFs, releaseF)
+		}
+		rowIdx := am.rowIdx[blkIdx]
 		for i := range batches[blkCnt].Vecs {
 			err := batches[blkCnt].Vecs[i].UnionOne(am.bats[blkIdx].Vecs[i].GetDownstreamVector(), rowIdx, am.vpool.GetMPool())
 			if err != nil {
@@ -197,7 +204,9 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []u
 	}
 	return batches, func() {
 		for _, f := range releaseFs {
-			f()
+			if f != nil {
+				f()
+			}
 		}
 	}, am.mapping, nil
 }
