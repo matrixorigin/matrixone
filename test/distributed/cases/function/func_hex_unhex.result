@@ -1,0 +1,405 @@
+select hex(123);
+hex(123)
+7B
+select hex(32432);
+hex(32432)
+7EB0
+select hex(2178342143);
+hex(2178342143)
+81D6DCFF
+select hex(2147483649);
+hex(2147483649)
+80000001
+select hex(456.789);
+hex(456.789)
+3435362e373839
+select hex(321354.21321);
+hex(321354.21321)
+3332313335342e3231333231
+select hex(1092);
+hex(1092)
+444
+select hex(3215133.214321432);
+hex(3215133.214321432)
+333231353133332e323134333231343332
+select hex('abc');
+hex(abc)
+616263
+select hex('qqqqq');
+hex(qqqqq)
+7171717171
+select hex('abcdefghijklmnopqrstuvwxyz');
+[unknown result because it is related to issue#16710]
+select hex('edwrgewgrewrwe');
+hex(edwrgewgrewrwe)
+6564777267657767726577727765
+select hex('123');
+hex(123)
+313233
+select hex('4321413432');
+hex(4321413432)
+34333231343133343332
+select hex('325324213');
+hex(325324213)
+333235333234323133
+select hex('0000000000000');
+hex(0000000000000)
+30303030303030303030303030
+select hex('A');
+hex(A)
+41
+select hex('a');
+hex(a)
+61
+select hex('V');
+hex(V)
+56
+select hex('M');
+hex(M)
+4d
+select hex('m');
+hex(m)
+6d
+select hex('');
+hex()
+
+select hex('!@#');
+hex(!@#)
+214023
+select hex('@##%%&^^&#$#%^&^*(()#^&**(*(');
+[unknown result because it is related to issue#16710]
+select hex('}}}{:"{:""');
+[unknown result because it is related to issue#16710]
+select hex('%');
+hex(%)
+25
+select hex(' ');
+hex( )
+20
+select hex('你好');
+[unknown result because it is related to issue#16710]
+select hex('数据库');
+[unknown result because it is related to issue#16710]
+select hex('数据库云平台');
+[unknown result because it is related to issue#16710]
+select hex('欢迎来到 MatrixOne！');
+[unknown result because it is related to issue#16710]
+select hex('😀');
+[unknown result because it is related to issue#16710]
+select hex(CAST(NULL AS UNSIGNED));
+hex(cast(null as unsigned))
+null
+select hex(-1);
+hex(-1)
+FFFFFFFFFFFFFFFF
+select hex(-3489234);
+hex(-3489234)
+FFFFFFFFFFCAC22E
+select hex(-2147483648);
+hex(-2147483648)
+FFFFFFFF80000000
+select hex(-3243123138294343);
+hex(-3243123138294343)
+FFF47A658D610DB9
+select hex(0);
+hex(0)
+0
+select hex(2147483647);
+hex(2147483647)
+7FFFFFFF
+select hex(3278990242);
+hex(3278990242)
+C3716BA2
+select hex(9223372036854775807);
+hex(9223372036854775807)
+7FFFFFFFFFFFFFFF
+select hex(3280483902382984924);
+hex(3280483902382984924)
+2D869EBA7CECCEDC
+select hex('a1b2c3d4');
+hex(a1b2c3d4)
+6131623263336434
+select hex('12345678');
+hex(12345678)
+3132333435363738
+select hex('AABBCCDD');
+hex(AABBCCDD)
+4141424243434444
+select hex('ZZZ999');
+hex(ZZZ999)
+5a5a5a393939
+select hex('0123456789abcdef');
+[unknown result because it is related to issue#16710]
+select hex('!"#$%&/()=?`~''_+-*^');
+[unknown result because it is related to issue#16710]
+select hex(' 2543g4365435    423532543254&&*32grde5y43');
+[unknown result because it is related to issue#16710]
+select hex('');
+[unknown result because it is related to issue#16710]
+select unhex('7B');
+unhex(7B)
+{
+select unhex('7D');
+unhex(7D)
+}
+select unhex('30');
+unhex(30)
+0
+select unhex('31');
+unhex(31)
+1
+select unhex('32');
+unhex(32)
+2
+select unhex('33');
+unhex(33)
+3
+select unhex('34');
+unhex(34)
+4
+select unhex('35');
+unhex(35)
+5
+select unhex('36');
+unhex(36)
+6
+select unhex('37');
+unhex(37)
+7
+select unhex('38');
+unhex(38)
+8
+select unhex('39');
+unhex(39)
+9
+select unhex('41');
+unhex(41)
+A
+select unhex('42');
+unhex(42)
+B
+select unhex('43');
+unhex(43)
+C
+select unhex('44');
+unhex(44)
+D
+select unhex('45');
+unhex(45)
+E
+select unhex('46');
+unhex(46)
+F
+select unhex('61');
+unhex(61)
+a
+select unhex('62');
+unhex(62)
+b
+select unhex('63');
+unhex(63)
+c
+select unhex('64');
+unhex(64)
+d
+select unhex('65');
+unhex(65)
+e
+select unhex('66');
+unhex(66)
+f
+select unhex('2E');
+unhex(2E)
+.
+select unhex('2C');
+unhex(2C)
+,
+select unhex('21');
+unhex(21)
+!
+select unhex('22');
+unhex(22)
+"
+select unhex('25');
+unhex(25)
+%
+select unhex('26');
+unhex(26)
+&
+select unhex('2F');
+unhex(2F)
+/
+select unhex('3D');
+unhex(3D)
+=
+select unhex('40');
+unhex(40)
+@
+select unhex('5F');
+unhex(5F)
+_
+select unhex('23');
+unhex(23)
+#
+select unhex('24');
+unhex(24)
+$
+select unhex('2A');
+unhex(2A)
+*
+select unhex('28');
+unhex(28)
+(
+select unhex('29');
+unhex(29)
+)
+select unhex('3A');
+unhex(3A)
+:
+select unhex('3B');
+unhex(3B)
+;
+select unhex('3F');
+unhex(3F)
+?
+select unhex('5E');
+unhex(5E)
+^
+select unhex('60');
+unhex(60)
+`
+select unhex('7C');
+unhex(7C)
+|
+select unhex('2D');
+unhex(2D)
+-
+select unhex('5F');
+unhex(5F)
+_
+select unhex('7E');
+unhex(7E)
+~
+select unhex('5C');
+unhex(5C)
+\
+select unhex('0A');
+unhex(0A)
+\n
+select unhex('7F');
+unhex(7F)
+
+select unhex('C3A9');
+unhex(C3A9)
+é
+select unhex('C383');
+unhex(C383)
+Ã
+select unhex('E28C85');
+unhex(E28C85)
+⌅
+select unhex('F09F98A2');
+unhex(F09F98A2)
+😢
+select unhex('2032353433673433363534333534323335333235343332353426262a33326772646535793433');
+unhex(2032353433673433363534333534323335333235343332353426262a33326772646535793433)
+ 2543g4365435423532543254&&*32grde5y43
+select unhex('');
+unhex()
+
+select unhex('2122232425262f28293d3f607e275f2b2d2a5e');
+unhex(2122232425262f28293d3f607e275f2b2d2a5e)
+!"#$%&/()=?`~'_+-*^
+select unhex('30313233343536373839616263646566');
+unhex(30313233343536373839616263646566)
+0123456789abcdef
+select unhex('4141424243434444');
+unhex(4141424243434444)
+AABBCCDD
+select unhex('3132333435363738');
+unhex(3132333435363738)
+12345678
+select unhex('5a5a5a393939');
+unhex(5a5a5a393939)
+ZZZ999
+select unhex('6131623263336434');
+unhex(6131623263336434)
+a1b2c3d4
+select unhex('33323830343833393032333832393834393031323833343234');
+unhex(33323830343833393032333832393834393031323833343234)
+3280483902382984901283424
+select unhex('41');
+unhex(41)
+A
+select unhex('61');
+unhex(61)
+a
+select unhex('56');
+unhex(56)
+V
+select unhex('4d');
+unhex(4d)
+M
+select unhex('6d');
+unhex(6d)
+m
+select unhex('313233');
+unhex(313233)
+123
+select unhex('34333231343133343332');
+unhex(34333231343133343332)
+4321413432
+select unhex('333235333234323133');
+unhex(333235333234323133)
+325324213
+select unhex('30303030303030303030303030');
+unhex(30303030303030303030303030)
+0000000000000
+select unhex('333231353133332e323134333231343332');
+unhex(333231353133332e323134333231343332)
+3215133.214321432
+select unhex('3332313335342e3231333231');
+unhex(3332313335342e3231333231)
+321354.21321
+select unhex('3435362e373839');
+unhex(3435362e373839)
+456.789
+select unhex('616263');
+unhex(616263)
+abc
+select unhex('7171717171');
+unhex(7171717171)
+qqqqq
+select unhex('6162636465666768696a6b6c6d6e6f707172737475767778797a');
+unhex(6162636465666768696a6b6c6d6e6f707172737475767778797a)
+abcdefghijklmnopqrstuvwxyz
+select unhex('6564777267657767726577727765');
+unhex(6564777267657767726577727765)
+edwrgewgrewrwe
+select unhex('e4bda0e5a5bd');
+unhex(e4bda0e5a5bd)
+你好
+select unhex('e695b0e68daee5ba93');
+unhex(e695b0e68daee5ba93)
+数据库
+select unhex('e695b0e68daee5ba93e4ba91e5b9b3e58fb0');
+unhex(e695b0e68daee5ba93e4ba91e5b9b3e58fb0)
+数据库云平台
+select unhex('e6aca2e8bf8ee69da5e588b0204d61747269784f6e65efbc81');
+unhex(e6aca2e8bf8ee69da5e588b0204d61747269784f6e65efbc81)
+欢迎来到 MatrixOne！
+select unhex('48656c6c6f20576f726c6421');
+unhex(48656c6c6f20576f726c6421)
+Hello World!
+select unhex('214023');
+unhex(214023)
+!@#
+select unhex('4023232525265e5e26232423255e265e2a282829235e262a2a282a28');
+unhex(4023232525265e5e26232423255e265e2a282829235e262a2a282a28)
+@##%%&^^&#$#%^&^*(()#^&**(*(
+select unhex('7d7d7d7b3a227b3a2222');
+unhex(7d7d7d7b3a227b3a2222)
+}}}{:"{:""
+select unhex('25');
+unhex(25)
+%
