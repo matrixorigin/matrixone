@@ -297,6 +297,9 @@ func (c *checkpointCleaner) AddCheckpoint(name string) {
 	c.checkpointMetas.Lock()
 	defer c.checkpointMetas.Unlock()
 	logutil.Infof("add checkpoint: %s, file is %d, checkpointCleaner is %p, checkpointMetas is %p ,file is %p", name, len(c.checkpointMetas.files), c, c.checkpointMetas, c.checkpointMetas.files)
+	if name == "" {
+		return
+	}
 	c.checkpointMetas.files[name] = struct{}{}
 }
 

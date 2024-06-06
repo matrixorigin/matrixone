@@ -210,6 +210,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
 	db.DiskCleaner.Start()
 	logutil.Infof("open-tae cleaner is %p, db.cleaner %p", cleaner, db.DiskCleaner.GetCleaner())
+	db.DiskCleaner.GetCleaner().AddCheckpoint("")
 	db.BGCheckpointRunner.AddHelper(
 		func(name any) {
 			db.DiskCleaner.GetCleaner().AddCheckpoint(name.(string))
