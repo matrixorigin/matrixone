@@ -26,6 +26,10 @@ type Config struct {
 	// On average, 1 / fraction of deallocations will be checked for double free or missing free
 	CheckFraction *uint32 `toml:"check-fraction"`
 
+	// FullStackFraction controls the fraction of full stack collecting in profile sampling
+	// On average, 1 / fraction of allocations will be sampled with full stack information
+	FullStackFraction *uint32 `toml:"full-stack-fraction"`
+
 	// EnableMetrics indicates whether to expose metrics to prometheus
 	EnableMetrics *bool `toml:"enable-metrics"`
 }
@@ -35,8 +39,9 @@ var defaultConfig = func() *atomic.Pointer[Config] {
 
 	// default config
 	ret.Store(&Config{
-		CheckFraction: ptrTo(uint32(65536)),
-		EnableMetrics: ptrTo(true),
+		CheckFraction:     ptrTo(uint32(65536)),
+		EnableMetrics:     ptrTo(true),
+		FullStackFraction: ptrTo(uint32(8)),
 	})
 
 	return ret
@@ -53,6 +58,9 @@ func SetDefaultConfig(delta Config) {
 	}
 	if delta.EnableMetrics != nil {
 		config.EnableMetrics = delta.EnableMetrics
+	}
+	if delta.FullStackFraction != nil {
+		config.FullStackFraction = delta.FullStackFraction
 	}
 
 	// update
