@@ -16,6 +16,7 @@ package indexbuild
 
 import (
 	"bytes"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -33,15 +34,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	if arg.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in index build!")
 	}
-
 	arg.ctr = new(container)
-	if len(proc.Reg.MergeReceivers) > 1 {
-		arg.ctr.InitReceiver(proc, true)
-		arg.ctr.isMerge = true
-	} else {
-		arg.ctr.InitReceiver(proc, false)
-	}
-
 	return nil
 }
 
@@ -80,23 +73,18 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	var err error
-	var msg *process.RegisterMessage
+func (ctr *container) collectBuildBatches(arg *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
 	for {
-		if ap.ctr.isMerge {
-			msg = ctr.ReceiveFromAllRegs(anal)
-		} else {
-			msg = ctr.ReceiveFromSingleReg(0, anal)
+		result, err := arg.Children[0].Call(proc)
+		if err != nil {
+			return err
 		}
-		if msg.Err != nil {
-			return msg.Err
-		}
-		if msg.Batch == nil {
+		if result.Batch == nil {
 			break
 		}
-		currentBatch = msg.Batch
+		currentBatch = result.Batch
+		atomic.AddInt64(&currentBatch.Cnt, 1)
 		if currentBatch.IsEmpty() {
 			proc.PutBatch(currentBatch)
 			continue
@@ -108,7 +96,7 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 			return err
 		}
 		proc.PutBatch(currentBatch)
-		if ctr.batch.RowCount() > int(ap.RuntimeFilterSpec.UpperLimit) {
+		if ctr.batch.RowCount() > int(arg.RuntimeFilterSpec.UpperLimit) {
 			// for index build, can exit early
 			return nil
 		}

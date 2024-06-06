@@ -38,6 +38,11 @@ var (
 		"inner_product":   "vector_ip_ops",
 		"cosine_distance": "vector_cosine_ops",
 	}
+	distFuncInternalDistFunc = map[string]string{
+		"l2_distance":     "l2_distance_sq",
+		"inner_product":   "spherical_distance",
+		"cosine_distance": "spherical_distance",
+	}
 	textType = types.T_text.ToType() // return type of @probe_limit
 )
 
@@ -252,7 +257,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2Dist(builder *QueryBuilder
 	//normalizeL2Lit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "normalize_l2", []*plan.Expr{
 	//	distFnExpr.Args[1],
 	//})
-	distFnName := distFnExpr.Func.ObjName
+	distFnName := distFuncInternalDistFunc[distFnExpr.Func.ObjName]
 	l2DistanceLitCol, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
 		centroidsCol,       // centroid
 		distFnExpr.Args[1], // lit
@@ -461,7 +466,7 @@ func makeEntriesOrderByL2Distance(builder *QueryBuilder, bindCtx *BindContext,
 	idxTableDefs []*TableDef, idxTags map[string]int32,
 	sortNode *plan.Node) int32 {
 
-	distFnName := fn.Func.ObjName
+	distFnName := distFuncInternalDistFunc[fn.Func.ObjName]
 	l2DistanceColLit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
 		{
 			Typ: idxTableDefs[2].Cols[3].Typ,
@@ -495,7 +500,7 @@ func makeInnerJoinOrderByL2Distance(builder *QueryBuilder, bindCtx *BindContext,
 	idxTableDefs []*TableDef, idxTags map[string]int32,
 	sortNode *plan.Node) int32 {
 
-	distFnName := fn.Func.ObjName
+	distFnName := distFuncInternalDistFunc[fn.Func.ObjName]
 	l2DistanceColLit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
 		{
 			Typ: idxTableDefs[2].Cols[3].Typ,

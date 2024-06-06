@@ -374,7 +374,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		sql := getSqlForRoleNameOfRoleId(int64(roleId))
 
 		var rets []ExecResult
-		if rets, err = executeSQLInBackgroundSession(ctx, ses, ses.GetMemPool(), sql); err != nil {
+		if rets, err = executeSQLInBackgroundSession(ctx, ses, sql); err != nil {
 			return "", err
 		}
 
@@ -572,43 +572,35 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 		var oldValueRaw interface{}
 		if system {
 			if global {
-				err = doCheckRole(execCtx.reqCtx, ses)
-				if err != nil {
+				if err = doCheckRole(execCtx.reqCtx, ses); err != nil {
 					return err
 				}
-				err = ses.SetGlobalVar(execCtx.reqCtx, name, value)
-				if err != nil {
-					return err
-				}
-				err = doSetGlobalSystemVariable(execCtx.reqCtx, ses, name, value)
-				if err != nil {
+				if err = ses.SetGlobalSysVar(execCtx.reqCtx, name, value); err != nil {
 					return err
 				}
 			} else {
 				if strings.ToLower(name) == "autocommit" {
-					oldValueRaw, err = ses.GetSessionVar(execCtx.reqCtx, "autocommit")
-					if err != nil {
+					if oldValueRaw, err = ses.GetSessionSysVar("autocommit"); err != nil {
 						return err
 					}
 				}
-				err = ses.SetSessionVar(execCtx.reqCtx, name, value)
-				if err != nil {
+				if err = ses.SetSessionSysVar(execCtx.reqCtx, name, value); err != nil {
 					return err
 				}
-			}
+				if strings.ToLower(name) == "autocommit" {
+					var oldValue, newValue bool
 
-			if strings.ToLower(name) == "autocommit" {
-				oldValue, err := valueIsBoolTrue(oldValueRaw)
-				if err != nil {
-					return err
-				}
-				newValue, err := valueIsBoolTrue(value)
-				if err != nil {
-					return err
-				}
-				err = ses.GetTxnHandler().SetAutocommit(execCtx, oldValue, newValue)
-				if err != nil {
-					return err
+					if oldValue, err = valueIsBoolTrue(oldValueRaw); err != nil {
+						return err
+					}
+
+					if newValue, err = valueIsBoolTrue(value); err != nil {
+						return err
+					}
+
+					if err = ses.GetTxnHandler().SetAutocommit(execCtx, oldValue, newValue); err != nil {
+						return err
+					}
 				}
 			}
 		} else {
@@ -619,6 +611,7 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 		}
 		return nil
 	}
+
 	for _, assign := range sv.Assignments {
 		name := assign.Name
 		var value interface{}
@@ -646,14 +639,6 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				if err != nil {
 					return err
 				}
-			}
-		} else if name == "syspublications" {
-			if !ses.GetTenantInfo().IsSysTenant() {
-				return moerr.NewInternalError(execCtx.reqCtx, "only system account can set system variable syspublications")
-			}
-			err = setVarFunc(assign.System, assign.Global, name, value, sql)
-			if err != nil {
-				return err
 			}
 		} else if name == "clear_privilege_cache" {
 			//if it is global variable, it does nothing.
@@ -802,18 +787,9 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		likePattern = strings.ToLower(sv.Like.Right.String())
 	}
 
-	var sysVars map[string]interface{}
-	if sv.Global {
-		sysVars, err = doGetGlobalSystemVariable(execCtx.reqCtx, ses)
-		if err != nil {
-			return err
-		}
-	} else {
-		sysVars = ses.CopyAllSessionVars()
-	}
-
-	rows := make([][]interface{}, 0, len(sysVars))
-	for name, value := range sysVars {
+	rows := make([][]interface{}, 0, len(gSysVarsDefs))
+	//for name, value := range sysVars {
+	for name, def := range gSysVarsDefs {
 		if hasLike {
 			s := name
 			if isIlike {
@@ -823,21 +799,26 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 				continue
 			}
 		}
-		row := make([]interface{}, 2)
-		row[0] = name
-		gsv, ok := GSysVariables.GetDefinitionOfSysVar(name)
-		if !ok {
-			return moerr.NewInternalError(execCtx.reqCtx, errorSystemVariableDoesNotExist())
-		}
-		row[1] = value
-		if svbt, ok2 := gsv.GetType().(SystemVariableBoolType); ok2 {
-			if svbt.IsTrue(value) {
-				row[1] = "on"
-			} else {
-				row[1] = "off"
+
+		var value interface{}
+		if sv.Global {
+			if value, err = ses.GetGlobalSysVar(name); err != nil {
+				continue
+			}
+		} else {
+			if value, err = ses.GetSessionSysVar(name); err != nil {
+				continue
 			}
 		}
-		rows = append(rows, row)
+
+		if boolType, ok := def.GetType().(SystemVariableBoolType); ok {
+			if boolType.IsTrue(value) {
+				value = "on"
+			} else {
+				value = "off"
+			}
+		}
+		rows = append(rows, []interface{}{name, value})
 	}
 
 	if sv.Where != nil {
@@ -873,12 +854,23 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 
 		bat.Shrink(sels, false)
 		execCtx.proc.Mp().PutSels(sels)
-		v0 := vector.MustStrCol(bat.Vecs[0])
-		v1 := vector.MustStrCol(bat.Vecs[1])
-		rows = rows[:len(v0)]
-		for i := range v0 {
-			rows[i][0] = v0[i]
-			rows[i][1] = v1[i]
+
+		v0 := vector.GenerateFunctionStrParameter(bat.Vecs[0])
+		v1 := vector.GenerateFunctionStrParameter(bat.Vecs[1])
+		rows = rows[:bat.Vecs[0].Length()]
+		for i := range rows {
+			s0, isNull := v0.GetStrValue(uint64(i))
+			if isNull {
+				rows[i][0] = ""
+			} else {
+				rows[i][0] = s0
+			}
+			s1, isNull := v1.GetStrValue(uint64(i))
+			if isNull {
+				rows[i][1] = ""
+			} else {
+				rows[i][1] = s1
+			}
 		}
 	}
 
@@ -898,11 +890,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 handle show variables
 */
 func handleShowVariables(ses FeSession, execCtx *ExecCtx, sv *tree.ShowVariables) error {
-	err := doShowVariables(ses.(*Session), execCtx, sv)
-	if err != nil {
-		return err
-	}
-	return err
+	return doShowVariables(ses.(*Session), execCtx, sv)
 }
 
 func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) error {
@@ -989,7 +977,7 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	//column
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	col1.SetName("QUERY PLAN")
+	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan))
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
@@ -1034,12 +1022,12 @@ func handlePrepareStmt(ses FeSession, execCtx *ExecCtx, st *tree.PrepareStmt) (*
 }
 
 func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
-	v, err := ses.GetGlobalVar(execCtx.reqCtx, "lower_case_table_names")
+	v, err := ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
 		return nil, err
 	}
 
-	origin, err := ses.GetGlobalVar(execCtx.reqCtx, "keep_user_target_list_in_result")
+	origin, err := ses.GetSessionSysVar("keep_user_target_list_in_result")
 	if err != nil {
 		return nil, err
 	}
@@ -1502,22 +1490,22 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 
 		bat.Shrink(sels, false)
 		proc.Mp().PutSels(sels)
-		v0 := vector.MustStrCol(bat.Vecs[0])
-		v1 := vector.MustStrCol(bat.Vecs[1])
+		v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
+		v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
 		v2 := vector.MustFixedCol[int64](bat.Vecs[2])
-		v3 := vector.MustStrCol(bat.Vecs[3])
-		v4 := vector.MustStrCol(bat.Vecs[4])
+		v3, area3 := vector.MustVarlenaRawData(bat.Vecs[3])
+		v4, area4 := vector.MustVarlenaRawData(bat.Vecs[4])
 		v5 := vector.MustFixedCol[int32](bat.Vecs[5])
-		v6 := vector.MustStrCol(bat.Vecs[6])
+		v6, area6 := vector.MustVarlenaRawData(bat.Vecs[6])
 		rows = rows[:len(v0)]
 		for i := range v0 {
-			rows[i][0] = v0[i]
-			rows[i][1] = v1[i]
+			rows[i][0] = v0[i].UnsafeGetString(area0)
+			rows[i][1] = v1[i].UnsafeGetString(area1)
 			rows[i][2] = v2[i]
-			rows[i][3] = v3[i]
-			rows[i][4] = v4[i]
+			rows[i][3] = v3[i].UnsafeGetString(area3)
+			rows[i][4] = v4[i].UnsafeGetString(area4)
 			rows[i][5] = v5[i]
-			rows[i][6] = v6[i]
+			rows[i][6] = v6[i].UnsafeGetString(area6)
 		}
 	}
 
@@ -1935,11 +1923,11 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 func parseSql(execCtx *ExecCtx) (stmts []tree.Statement, err error) {
 	var v interface{}
 	var origin interface{}
-	v, err = execCtx.ses.GetGlobalVar(execCtx.reqCtx, "lower_case_table_names")
+	v, err = execCtx.ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
 		v = int64(1)
 	}
-	origin, err = execCtx.ses.GetGlobalVar(execCtx.reqCtx, "keep_user_target_list_in_result")
+	origin, err = execCtx.ses.GetSessionSysVar("keep_user_target_list_in_result")
 	if err != nil {
 		origin = int64(0)
 	}

@@ -70,7 +70,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 
 	case *tree.PrepareString:
 		var v interface{}
-		v, err = ctx.ResolveVariable("lower_case_table_names", true, true)
+		v, err = ctx.ResolveVariable("lower_case_table_names", true, false)
 		if err != nil {
 			v = int64(1)
 		}
