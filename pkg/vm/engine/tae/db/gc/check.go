@@ -98,7 +98,6 @@ func (c *checker) Check() error {
 
 	// Collect all checkpoint files
 	ckpfiles := c.cleaner.GetCheckpoints()
-	logutil.Infof("ckpfiles: %d", len(ckpfiles))
 	checkFiles, _, err := checkpoint.ListSnapshotMeta(c.cleaner.ctx, c.cleaner.fs.Service, entry.GetStart(), nil)
 	if err != nil {
 		return err

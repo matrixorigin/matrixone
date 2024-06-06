@@ -306,13 +306,11 @@ func (r *runner) AddCheckpointMetaFile(name string) {
 	r.checkpointMetaFiles.Lock()
 	defer r.checkpointMetaFiles.Unlock()
 	r.checkpointMetaFiles.files[name] = struct{}{}
-	logutil.Infof("AddCheckpointMetaFile: %s, file is %d", name, len(r.checkpointMetaFiles.files))
 }
 
 func (r *runner) RemoveCheckpointMetaFile(name string) {
 	r.checkpointMetaFiles.Lock()
 	defer r.checkpointMetaFiles.Unlock()
-	logutil.Infof("RemoveCheckpointMetaFile: %s, file is %d", name, len(r.checkpointMetaFiles.files))
 	delete(r.checkpointMetaFiles.files, name)
 }
 
