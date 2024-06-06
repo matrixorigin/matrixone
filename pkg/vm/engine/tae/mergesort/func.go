@@ -16,7 +16,6 @@ package mergesort
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -43,14 +42,15 @@ func SortBlockColumns(
 }
 
 func ReshapeBatches(
-	batches []*batch.Batch,
+	batches []*containers.Batch,
 	fromLayout, toLayout []uint32,
 	vpool DisposableVecPool) ([]*batch.Batch, func()) {
 	// just do reshape, keep sortedIdx nil
 	ret := make([]*batch.Batch, 0, len(toLayout))
 	rfs := make([]func(), 0, len(toLayout))
+	cnBat := containers.ToCNBatch(batches[0])
 	for _, layout := range toLayout {
-		bat, releaseF := getSimilarBatch(batches[0], int(layout), vpool)
+		bat, releaseF := getSimilarBatch(cnBat, int(layout), vpool)
 		bat.SetRowCount(int(layout))
 		ret = append(ret, bat)
 		rfs = append(rfs, releaseF)
@@ -72,6 +72,7 @@ func ReshapeBatches(
 				fromIdx++
 				fromOffset = 0
 				fromLeft = int(fromLayout[fromIdx])
+				cnBat = containers.ToCNBatch(batches[fromIdx])
 			}
 			length := 0
 			if fromLeft < int(toLayout[i])-toOffset {
@@ -80,15 +81,21 @@ func ReshapeBatches(
 				length = int(toLayout[i]) - toOffset
 			}
 
-			for vecIdx, vec := range batches[fromIdx].Vecs {
-				window, err := vec.Window(fromOffset, fromOffset+length)
-				if err != nil {
-					panic(err)
+			mergedRow, j := 0, 0
+			for mergedRow < length {
+				if batches[fromIdx].Deletes.Contains(uint64(fromOffset + j)) {
+					j++
+					continue
 				}
-				err = vector.GetUnionAllFunction(*vec.GetType(), vpool.GetMPool())(ret[i].Vecs[vecIdx], window)
-				if err != nil {
-					panic(err)
+				for idx := range ret[i].Vecs {
+					err := ret[i].Vecs[idx].UnionOne(cnBat.Vecs[idx], int64(fromOffset+j), vpool.GetMPool())
+					if err != nil {
+						return nil, nil
+					}
 				}
+
+				mergedRow++
+				j++
 			}
 
 			// update offset
