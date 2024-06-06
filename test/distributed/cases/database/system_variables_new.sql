@@ -146,7 +146,6 @@ show variables like 'enable_privilege_cache';
 SHOW VARIABLES LIKE 'save_query_result';
 select @@lower_case_table_names;
 select @@keep_user_target_list_in_result;
-SELECT @@interactive_timeout;
 SELECT @@net_write_timeout;
 SELECT @@wait_timeout;
 SELECT @@sql_select_limit;

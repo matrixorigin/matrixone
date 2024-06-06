@@ -320,9 +320,6 @@ select @@lower_case_table_names;
 select @@keep_user_target_list_in_result;
 @@keep_user_target_list_in_result
 1
-SELECT @@interactive_timeout;
-@@interactive_timeout
-28800
 SELECT @@net_write_timeout;
 @@net_write_timeout
 60
