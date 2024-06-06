@@ -132,5 +132,28 @@ create table t1(a int);
 show columns from t1;
 select * from result_scan(last_query_id()) as t;
 
+-- show publications
+create account if not exists acc_save ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+drop database if exists database02;
+create database database02;
+use database02;
+create table table03(col1 char, col2 varchar(100));
+insert into table03 values ('1', 'database');
+insert into table03 values ('a', 'data warehouse');
+create publication publication02 database database02 account acc_save;
+-- @ignore:2
+show publications;
+-- @session:id=1&user=acc_save:admin&password=123456
+create database sub_database02 from sys publication publication02;
+-- @ignore:3,5
+show subscriptions;
+-- @ignore:3,5
+show subscriptions all;
+-- @session
+show subscriptions;
+show subscriptions all;
+drop publication publication02;
+drop database if exists database02;
+drop account acc_save;
 # reset to default(off)
 set save_query_result = off;
