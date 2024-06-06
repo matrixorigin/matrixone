@@ -145,7 +145,6 @@ type Cleaner interface {
 	AddChecker(checker func(item any) bool)
 	GetMaxConsumed() *checkpoint.CheckpointEntry
 	Stop()
-	AddCheckpoint(name string)
 	// for test
 	SetMinMergeCountForTest(count int)
 	GetMinMerged() *checkpoint.CheckpointEntry

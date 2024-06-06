@@ -230,13 +230,14 @@ type runner struct {
 
 	objMemSizeList []tableAndSize
 
-	helper DoCheckpointHelper
+	checkpointMetaFiles struct {
+		sync.RWMutex
+		files map[string]struct{}
+	}
 
 	onceStart sync.Once
 	onceStop  sync.Once
 }
-
-type DoCheckpointHelper func(any)
 
 func NewRunner(
 	ctx context.Context,
@@ -277,6 +278,7 @@ func NewRunner(
 	r.globalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onGlobalCheckpointEntries)
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
+	r.checkpointMetaFiles.files = make(map[string]struct{})
 	return r
 }
 
@@ -300,8 +302,24 @@ func (r *runner) String() string {
 	return buf.String()
 }
 
-func (r *runner) AddHelper(h DoCheckpointHelper) {
-	r.helper = h
+func (r *runner) AddCheckpointMetaFile(name string) {
+	r.checkpointMetaFiles.Lock()
+	defer r.checkpointMetaFiles.Unlock()
+	r.checkpointMetaFiles.files[name] = struct{}{}
+	logutil.Infof("AddCheckpointMetaFile: %s, file is %d", name, len(r.checkpointMetaFiles.files))
+}
+
+func (r *runner) RemoveCheckpointMetaFile(name string) {
+	r.checkpointMetaFiles.Lock()
+	defer r.checkpointMetaFiles.Unlock()
+	logutil.Infof("RemoveCheckpointMetaFile: %s, file is %d", name, len(r.checkpointMetaFiles.files))
+	delete(r.checkpointMetaFiles.files, name)
+}
+
+func (r *runner) GetCheckpointMetaFiles() map[string]struct{} {
+	r.checkpointMetaFiles.RLock()
+	defer r.checkpointMetaFiles.RUnlock()
+	return r.checkpointMetaFiles.files
 }
 
 // Only used in UT
@@ -544,10 +562,8 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 	if err != nil {
 		return
 	}
-	if r.helper != nil {
-		fileName := blockio.EncodeCheckpointMetadataFileNameWithoutDir(PrefixMetadata, start, end)
-		r.helper(fileName)
-	}
+	fileName := blockio.EncodeCheckpointMetadataFileNameWithoutDir(PrefixMetadata, start, end)
+	r.AddCheckpointMetaFile(fileName)
 	return
 }
 

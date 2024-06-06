@@ -99,13 +99,6 @@ type checkpointCleaner struct {
 	snapshotMeta *logtail.SnapshotMeta
 
 	mPool *mpool.MPool
-
-	checkpointMetas *checkpointMeta
-}
-
-type checkpointMeta struct {
-	sync.RWMutex
-	files map[string]struct{}
 }
 
 func NewCheckpointCleaner(
@@ -125,9 +118,6 @@ func NewCheckpointCleaner(
 	cleaner.snapshotMeta = logtail.NewSnapshotMeta()
 	cleaner.option.enableGC = true
 	cleaner.mPool = common.DebugAllocator
-	cleaner.checkpointMetas = &checkpointMeta{
-		files: make(map[string]struct{}),
-	}
 	return cleaner
 }
 
@@ -171,10 +161,6 @@ func (c *checkpointCleaner) isEnableCheckGC() bool {
 }
 
 func (c *checkpointCleaner) Replay() error {
-	err := c.replayCheckpoints()
-	if err != nil {
-		return err
-	}
 	dirs, err := c.fs.ListDir(GCMetaDir)
 	if err != nil {
 		return err
@@ -281,32 +267,8 @@ func (c *checkpointCleaner) Replay() error {
 
 }
 
-func (c *checkpointCleaner) replayCheckpoints() error {
-	dirs, err := c.fs.ListDir(CKPMetaDir)
-	if err != nil {
-		return err
-	}
-	for _, dir := range dirs {
-		c.AddCheckpoint(dir.Name)
-		logutil.Infof("replay checkpoint: %s", dir.Name)
-	}
-	return nil
-}
-
-func (c *checkpointCleaner) AddCheckpoint(name string) {
-	c.checkpointMetas.Lock()
-	defer c.checkpointMetas.Unlock()
-	logutil.Infof("add checkpoint: %s, file is %d, checkpointCleaner is %p, checkpointMetas is %p ,file is %p", name, len(c.checkpointMetas.files), c, c.checkpointMetas, c.checkpointMetas.files)
-	if name == "" {
-		return
-	}
-	c.checkpointMetas.files[name] = struct{}{}
-}
-
 func (c *checkpointCleaner) GetCheckpoints() map[string]struct{} {
-	c.checkpointMetas.RLock()
-	defer c.checkpointMetas.RUnlock()
-	return c.checkpointMetas.files
+	return c.ckpClient.GetCheckpointMetaFiles()
 }
 
 func (c *checkpointCleaner) updateMaxConsumed(e *checkpoint.CheckpointEntry) {
@@ -605,6 +567,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		return nil
 	}
 	metas := c.GetCheckpoints()
+	logutil.Infof("[MergeCheckpoint] metas len %d", len(metas))
 	ok, files, idxes, err := getAllowedMergeFiles(metas, stage, nil)
 	if err != nil {
 		return err
@@ -647,16 +610,13 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 			logutil.Errorf("DelFiles failed: %v", err.Error())
 			return err
 		}
-		c.checkpointMetas.Lock()
 		for _, file := range deleteFiles {
 			if strings.Contains(file, checkpoint.PrefixMetadata) {
 				info := strings.Split(file, checkpoint.CheckpointDir+"/")
 				name := info[1]
-				logutil.Infof("[MergeCheckpoint] name %v, length: %d", name, len(c.checkpointMetas.files))
-				delete(c.checkpointMetas.files, name)
+				c.ckpClient.RemoveCheckpointMetaFile(name)
 			}
 		}
-		c.checkpointMetas.Unlock()
 	}
 	c.updateCkpStage(&stage)
 	return nil
