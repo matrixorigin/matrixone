@@ -100,7 +100,7 @@ type checkpointCleaner struct {
 
 	mPool *mpool.MPool
 
-	checkpointMetas struct {
+	checkpointMetas *struct {
 		sync.RWMutex
 		files map[string]struct{}
 	}
