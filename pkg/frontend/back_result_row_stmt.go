@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
 func executeResultRowStmtInBack(backSes *backSession,
@@ -46,6 +47,12 @@ func executeResultRowStmtInBack(backSes *backSession,
 
 	fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
 	setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
+
+	err = disttae.CheckTxnIsValid(fPrintTxnOp)
+	if err != nil {
+		return err
+	}
+
 	runBegin := time.Now()
 	if _, err = execCtx.runner.Run(0); err != nil {
 		return
