@@ -471,6 +471,9 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	}
 
 	maxProvidedCpuNumber := goruntime.GOMAXPROCS(0)
+	if c.execType == plan2.ExecTypeTP {
+		maxProvidedCpuNumber = 1
+	}
 
 	var scanUsedCpuNumber int
 	var readers []engine.Reader

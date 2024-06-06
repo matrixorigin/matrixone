@@ -75,7 +75,8 @@ type ShardService interface {
 	// Delete deletes table shards metadata in current txn. Table shards need
 	// to be deleted if table deleted. Nothing happened if txn aborted.
 	Delete(ctx context.Context, table uint64, txnOp client.TxnOperator) error
-
+	// ReplicaCount returns the number of running replicas on current cn.
+	ReplicaCount() int64
 	// Close close the service
 	Close() error
 }
