@@ -803,9 +803,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *fuzzyfilter.Argument:
 		in.FuzzyFilter = &pipeline.FuzzyFilter{
-			N:      float32(t.N),
-			PkName: t.PkName,
-			PkTyp:  t.PkTyp,
+			N:        float32(t.N),
+			PkName:   t.PkName,
+			PkTyp:    t.PkTyp,
+			BuildIdx: int32(t.BuildIdx),
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{

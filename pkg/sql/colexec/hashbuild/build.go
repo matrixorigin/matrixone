@@ -17,6 +17,7 @@ package hashbuild
 import (
 	"bytes"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -36,12 +37,6 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	arg.ctr = new(container)
-	if len(proc.Reg.MergeReceivers) > 1 {
-		arg.ctr.InitReceiver(proc, true)
-		arg.ctr.isMerge = true
-	} else {
-		arg.ctr.InitReceiver(proc, false)
-	}
 
 	if arg.NeedHashMap {
 		arg.ctr.vecs = make([][]*vector.Vector, 0)
@@ -180,23 +175,18 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 	return nil
 }
 
-func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	var err error
+func (ctr *container) collectBuildBatches(arg *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
-	var msg *process.RegisterMessage
 	for {
-		if ap.ctr.isMerge {
-			msg = ctr.ReceiveFromAllRegs(anal)
-		} else {
-			msg = ctr.ReceiveFromSingleReg(0, anal)
+		result, err := arg.Children[0].Call(proc)
+		if err != nil {
+			return err
 		}
-		if msg.Err != nil {
-			return msg.Err
-		}
-		if msg.Batch == nil {
+		if result.Batch == nil {
 			break
 		}
-		currentBatch = msg.Batch
+		currentBatch = result.Batch
+		atomic.AddInt64(&currentBatch.Cnt, 1)
 		if currentBatch.IsEmpty() {
 			proc.PutBatch(currentBatch)
 			continue

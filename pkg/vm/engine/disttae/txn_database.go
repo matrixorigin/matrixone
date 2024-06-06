@@ -158,9 +158,6 @@ func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, 
 }
 
 func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
-	if db.databaseName == "test" && name == "bugt" && db.op.IsSnapOp() {
-		logutil.Infof("xxxx open relation, txn:%s", db.op.Txn().DebugString())
-	}
 	logDebugf(db.op.Txn(), "txnDatabase.Relation table %s", name)
 	txn := db.getTxn()
 	if txn.op.Status() == txn2.TxnStatus_Aborted {
