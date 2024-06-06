@@ -546,9 +546,10 @@ func (n *ObjectMVCCHandle) GetObject() any {
 }
 func (n *ObjectMVCCHandle) GetLatestDeltaloc(blkOffset uint16) objectio.Location {
 	mvcc := n.TryGetDeleteChain(blkOffset)
-	if mvcc == nil {
+	if mvcc == nil || mvcc.deltaloc == nil || mvcc.deltaloc.GetLatestNodeLocked() == nil {
 		return nil
 	}
+
 	return mvcc.deltaloc.GetLatestNodeLocked().BaseNode.DeltaLoc
 }
 func (n *ObjectMVCCHandle) GetLatestMVCCNode(blkOffset uint16) *catalog.MVCCNode[*catalog.MetadataMVCCNode] {
