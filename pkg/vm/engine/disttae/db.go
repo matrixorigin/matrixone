@@ -493,7 +493,7 @@ func (e *Engine) getOrCreateSnapPart(
 		if p.CanServe(ts) {
 			if tbl.db.databaseName == "tpch" {
 				logutil.Infof("xxxx getOrCreateSnapPart reuse latest partiiton state, "+
-					"db:%s, table:%s, dbID:%v, tableID:%v, snapshot op :%s, part:%p, snap:%p, ts:%s, start:%s, end:%s",
+					"db:%s, table:%s, dbID:%v, tableID:%v, snapshot op :%s, part:%p, snap:%p, rows:%v, objs:%v, ts:%s, start:%s, end:%s",
 					tbl.db.databaseName,
 					tbl.tableName,
 					tbl.db.databaseId,
@@ -501,6 +501,8 @@ func (e *Engine) getOrCreateSnapPart(
 					tbl.db.op.Txn().DebugString(),
 					p,
 					p.Snapshot(),
+					p.Rows(),
+					p.Objs(),
 					ts.ToTimestamp().DebugString(),
 					start.ToTimestamp().DebugString(),
 					end.ToTimestamp().DebugString())

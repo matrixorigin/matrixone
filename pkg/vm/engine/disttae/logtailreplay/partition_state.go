@@ -1102,3 +1102,12 @@ func (p *PartitionState) LastFlushTimestamp() types.TS {
 	defer p.shared.Unlock()
 	return p.shared.lastFlushTimestamp
 }
+
+func (p *PartitionState) Rows() int {
+	return p.rows.Len()
+}
+
+func (p *PartitionState) Objs() int {
+	return p.dataObjects.Len()
+}
+

@@ -1930,12 +1930,15 @@ func (tbl *txnTable) newReader(
 	}
 
 	if tbl.db.databaseName == "tpch" && tbl.db.op.IsSnapOp() {
-		logutil.Infof("xxxx newReader getPartitionState finish, snapshot op:%s, table:%s, tableID:%v, dbID:%v, state:%p",
+		logutil.Infof("xxxx newReader getPartitionState finish, snapshot op:%s, table:%s, tableID:%v, dbID:%v, state:%p, rows:%v, objs:%v",
 			tbl.db.op.Txn().DebugString(),
 			tbl.tableName,
 			tbl.tableId,
 			tbl.db.databaseId,
-			state)
+			state,
+			state.Rows(),
+			state.Objs(),
+		)
 	}
 
 	readers := make([]engine.Reader, readerNumber)

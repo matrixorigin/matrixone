@@ -77,6 +77,16 @@ func (r RowID) Less(than RowID) bool {
 	return bytes.Compare(r[:], than[:]) < 0
 }
 
+//For test
+func (p *Partition) Rows() int {
+	return p.Snapshot().rows.Len()
+}
+
+func (p *Partition) Objs() int {
+	return p.Snapshot().dataObjects.Len()
+}
+
+
 func (p *Partition) Snapshot() *PartitionState {
 	return p.state.Load()
 }
@@ -97,9 +107,11 @@ func (p *Partition) MutateState() (*PartitionState, func()) {
 			name == "nation" || name == "orders" ||
 			name == "part" || name == "partsupp" ||
 			name == "supplier" {
-			logutil.Infof("xxxx UpdatePartitionOfPush start to doneNuteate, part:%p, new state:%p, table:%s, tableID:%v",
+			logutil.Infof("xxxx UpdatePartitionOfPush mutate state, part:%p, new state:%p, rows:%v, objs:%v, table:%s, tableID:%v",
 				p,
 				state,
+				state.rows.Len(),
+				state.dataObjects.Len(),
 				name,
 				p.TableInfo.ID)
 		}
