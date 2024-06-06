@@ -2790,6 +2790,16 @@ func containBrokenNode(s *Scope) bool {
 
 func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
 	// use topN TO make scope.
+	if c.execType == plan2.ExecTypeTP {
+		ss[0].appendInstruction(vm.Instruction{
+			Op:      vm.Top,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructTop(n, topN),
+		})
+		return ss
+	}
+
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
@@ -2894,6 +2904,15 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
+	if c.execType == plan2.ExecTypeTP {
+		ss[0].appendInstruction(vm.Instruction{
+			Op:      vm.Limit,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructLimit(n),
+		})
+		return ss
+	}
 	currentFirstFlag := c.anal.isFirst
 
 	for i := range ss {
