@@ -182,7 +182,7 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 	defer func() {
 		// cover another func to catch the err when process Write
 		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, int64(bytesWritten)))
-		metric.LocalWriteIODurationHistogram.Observe(time.Since(start).Seconds())
+		metric.FSWriteDurationWrite.Observe(time.Since(start).Seconds())
 		metric.LocalWriteIOBytesHistogram.Observe(float64(bytesWritten))
 	}()
 
@@ -292,12 +292,10 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	bytesCounter := new(atomic.Int64)
-	start := time.Now()
+	t0 := time.Now()
 	defer func() {
-		LocalReadIODuration := time.Since(start)
-
-		metric.LocalReadIODurationHistogram.Observe(LocalReadIODuration.Seconds())
 		metric.LocalReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
+		metric.FSReadDurationGetContent.Observe(time.Since(t0).Seconds())
 	}()
 
 	if len(vector.Entries) == 0 {

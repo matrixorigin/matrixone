@@ -1957,14 +1957,26 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if isTemp {
 		oldId = rel.GetTableID(c.ctx)
 	}
-	err = incrservice.GetAutoIncrementService(c.ctx).Reset(
-		c.ctx,
-		oldId,
-		newId,
-		keepAutoIncrement,
-		c.proc.TxnOperator)
-	if err != nil {
-		return err
+
+	// check if contains any auto_increment column(include __mo_fake_pk_col), if so, reset the auto_increment value
+	tblDef := rel.GetTableDef(c.ctx)
+	var containAuto bool
+	for _, col := range tblDef.Cols {
+		if col.Typ.AutoIncr {
+			containAuto = true
+			break
+		}
+	}
+	if containAuto {
+		err = incrservice.GetAutoIncrementService(c.ctx).Reset(
+			c.ctx,
+			oldId,
+			newId,
+			keepAutoIncrement,
+			c.proc.TxnOperator)
+		if err != nil {
+			return err
+		}
 	}
 
 	// update index information in mo_catalog.mo_indexes
@@ -2156,12 +2168,22 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
-				c.ctx,
-				rel.GetTableID(c.ctx),
-				c.proc.TxnOperator)
-			if err != nil {
-				return err
+			tblDef := rel.GetTableDef(c.ctx)
+			var containAuto bool
+			for _, col := range tblDef.Cols {
+				if col.Typ.AutoIncr {
+					containAuto = true
+					break
+				}
+			}
+			if containAuto {
+				err := incrservice.GetAutoIncrementService(c.ctx).Delete(
+					c.ctx,
+					rel.GetTableID(c.ctx),
+					c.proc.TxnOperator)
+				if err != nil {
+					return err
+				}
 			}
 
 			if err := shardservice.GetService().Delete(
@@ -2191,13 +2213,23 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
-				c.ctx,
-				rel.GetTableID(c.ctx),
-				c.proc.TxnOperator)
-			if err != nil {
-				return err
+			tblDef := rel.GetTableDef(c.ctx)
+			var containAuto bool
+			for _, col := range tblDef.Cols {
+				if col.Typ.AutoIncr {
+					containAuto = true
+					break
+				}
+			}
+			if containAuto {
+				// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
+				err := incrservice.GetAutoIncrementService(c.ctx).Delete(
+					c.ctx,
+					rel.GetTableID(c.ctx),
+					c.proc.TxnOperator)
+				if err != nil {
+					return err
+				}
 			}
 
 			if err := shardservice.GetService().Delete(

@@ -181,7 +181,7 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 	defer span.End()
 	start := time.Now()
 	defer func() {
-		metric.S3ListIODurationHistogram.Observe(time.Since(start).Seconds())
+		metric.FSReadDurationList.Observe(time.Since(start).Seconds())
 	}()
 
 	path, err := ParsePathAtService(dirPath, s.name)
@@ -228,7 +228,7 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 	defer span.End()
 	start := time.Now()
 	defer func() {
-		metric.S3StatIODurationHistogram.Observe(time.Since(start).Seconds())
+		metric.FSReadDurationStat.Observe(time.Since(start).Seconds())
 	}()
 	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
@@ -308,7 +308,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	var bytesWritten int
 	start := time.Now()
 	defer func() {
-		metric.S3WriteIODurationHistogram.Observe(time.Since(start).Seconds())
+		metric.FSWriteDurationWrite.Observe(time.Since(start).Seconds())
 		metric.S3WriteIOBytesHistogram.Observe(float64(bytesWritten))
 	}()
 
@@ -567,8 +567,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 				C: bytesCounter,
 			},
 			closeFunc: func() error {
-				s3ReadIODuration := time.Since(t0)
-				metric.S3ReadIODurationHistogram.Observe(s3ReadIODuration.Seconds())
 				metric.S3ReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
 				return r.Close()
 			},

@@ -163,6 +163,7 @@ func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int
 			pubName := string(row[0].([]byte)[:])
 			pubDatabase := string(row[1].([]byte)[:])
 			subAccountListStr := string(row[2].([]byte)[:])
+			// TODO read as timestamp type
 			pubTime := row[3].(string)
 			if !canSub(subAccountName, subAccountListStr) {
 				continue
@@ -182,7 +183,7 @@ func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int
 
 func getSubInfoFromSql(ctx context.Context, ses FeSession, sql string) (subName, pubAccountName, pubName string, err error) {
 	var lowerAny interface{}
-	if lowerAny, err = ses.GetGlobalVar(ctx, "lower_case_table_names"); err != nil {
+	if lowerAny, err = ses.GetSessionSysVar("lower_case_table_names"); err != nil {
 		return
 	}
 

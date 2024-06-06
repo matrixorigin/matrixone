@@ -23,6 +23,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/docker/go-units"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -54,7 +55,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -2202,7 +2202,7 @@ func (tbl *txnTable) PKPersistedBetween(
 					//fake pk has no bf
 					if !isFakePK {
 						blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
-						blkBfIdx := index.NewEmptyBinaryFuseFilter()
+						blkBfIdx := index.NewEmptyBloomFilter()
 						if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
 							return false
 						}
@@ -2561,7 +2561,7 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 			objInfos = append(objInfos, info)
 		}
 	} else {
-		objInfos = make([]logtailreplay.ObjectInfo, 0)
+		objInfos = make([]logtailreplay.ObjectInfo, 0, len(objstats))
 		iter, err := state.NewObjectsIter(snapshot)
 		if err != nil {
 			return nil, err
@@ -2580,14 +2580,9 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 			objInfos = append(objInfos, obj)
 		}
 		if len(policyName) != 0 {
-			if strings.HasPrefix(policyName, "small") {
-				objInfos = logtailreplay.NewSmall(110 * common.Const1MBytes).Filter(objInfos)
-			} else if strings.HasPrefix(policyName, "overlap") {
-				if sortkeyPos != -1 {
-					objInfos = logtailreplay.NewOverlap(100).Filter(objInfos)
-				}
-			} else {
-				return nil, moerr.NewInvalidInput(ctx, "invalid merge policy name")
+			objInfos, err = applyMergePolicy(ctx, policyName, sortkeyPos, objInfos)
+			if err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -2607,12 +2602,12 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		return nil, err
 	}
 
-	err = mergesort.DoMergeAndWrite(ctx, sortkeyPos, int(options.DefaultBlockMaxRows), taskHost)
+	err = mergesort.DoMergeAndWrite(ctx, sortkeyPos, taskHost)
 	if err != nil {
 		return nil, err
 	}
 
-	if taskHost.DoTransfer() {
+	if !taskHost.DoTransfer() {
 		return taskHost.commitEntry, nil
 	}
 
@@ -2699,4 +2694,39 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 
 	taskHost.commitEntry.Booking = nil
 	return
+}
+
+func applyMergePolicy(ctx context.Context, policyName string, sortKeyPos int, objInfos []logtailreplay.ObjectInfo) ([]logtailreplay.ObjectInfo, error) {
+	arg := cutBetween(policyName, "(", ")")
+	if strings.HasPrefix(policyName, "small") {
+		size := uint32(110 * common.Const1MBytes)
+		i, err := units.RAMInBytes(arg)
+		if err == nil && 10*common.Const1MBytes < i && i < 250*common.Const1MBytes {
+			size = uint32(i)
+		}
+		return logtailreplay.NewSmall(size).Filter(objInfos), nil
+	} else if strings.HasPrefix(policyName, "overlap") {
+		if sortKeyPos == -1 {
+			return objInfos, nil
+		}
+		maxObjects := 100
+		i, err := strconv.Atoi(arg)
+		if err == nil {
+			maxObjects = i
+		}
+		return logtailreplay.NewOverlap(maxObjects).Filter(objInfos), nil
+	}
+
+	return nil, moerr.NewInvalidInput(ctx, "invalid merge policy name")
+}
+
+func cutBetween(s, start, end string) string {
+	i := strings.Index(s, start)
+	if i >= 0 {
+		j := strings.Index(s[i:], end)
+		if j >= 0 {
+			return s[i+len(start) : i+j]
+		}
+	}
+	return ""
 }
