@@ -153,8 +153,8 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []u
 	}
 
 	cnBat := containers.ToCNBatch(am.bats[0])
-	batches := make([]*batch.Batch, 0, len(am.toLayout))
-	releaseFs := make([]func(), 0, len(am.toLayout))
+	batches := make([]*batch.Batch, len(am.toLayout))
+	releaseFs := make([]func(), len(am.toLayout))
 
 	blkCnt := 0
 	bufferRowCnt := 0
@@ -171,10 +171,8 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []u
 			am.pushNewElem(blkIdx)
 			continue
 		}
-		if len(batches)-1 < blkCnt {
-			bat, releaseF := getSimilarBatch(cnBat, int(am.toLayout[blkCnt]), am.vpool)
-			batches = append(batches, bat)
-			releaseFs = append(releaseFs, releaseF)
+		if batches[blkCnt] == nil {
+			batches[blkCnt], releaseFs[blkCnt] = getSimilarBatch(cnBat, int(am.toLayout[blkCnt]), am.vpool)
 		}
 		rowIdx := am.rowIdx[blkIdx]
 		for i := range batches[blkCnt].Vecs {
