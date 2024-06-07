@@ -16,6 +16,7 @@ package mergeorder
 
 import (
 	"bytes"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -231,6 +232,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			bat := result.Batch
+			atomic.AddInt64(&bat.Cnt, 1)
 			if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
 				return result, err
 			}
