@@ -12,32 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package malloc
+package fileservice
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
-func TestMetricsAllocator(t *testing.T) {
-	testAllocator(t, func() Allocator {
-		return NewMetricsAllocator(
-			NewDefault(nil),
+func TestDiskObjectStorage(t *testing.T) {
+	ctx := context.Background()
+
+	testFileService(t, 0, func(name string) FileService {
+		dir := t.TempDir()
+		fs, err := NewS3FS(
+			ctx,
+			ObjectStorageArguments{
+				Name:     name,
+				Endpoint: "disk",
+				Bucket:   dir,
+			},
+			DisabledCacheConfig,
+			//CacheConfig{
+			//	MemoryCapacity: ptrTo(toml.ByteSize(1 << 30)),
+			//	DiskPath:       ptrTo(diskCacheDir),
+			//	DiskCapacity:   ptrTo(toml.ByteSize(1 << 30)),
+			//},
+			nil,
+			false,
+			true,
 		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fs
 	})
-}
 
-func BenchmarkMetricsAllocator(b *testing.B) {
-	for _, n := range benchNs {
-		benchmarkAllocator(b, func() Allocator {
-			return NewMetricsAllocator(
-				NewDefault(nil),
-			)
-		}, n)
-	}
-}
-
-func FuzzMetricsAllocator(f *testing.F) {
-	fuzzAllocator(f, func() Allocator {
-		return NewMetricsAllocator(
-			NewDefault(nil),
-		)
-	})
 }

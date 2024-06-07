@@ -210,3 +210,108 @@ func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 	require.True(t, zm.Contains(int32(79999)))
 	require.False(t, zm.Contains(int32(80000)))
 }
+
+func TestWriter_WriteBlockAndBF(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	dir := testutils.InitTestEnv(ModuleName, t)
+	dir = path.Join(dir, "/local")
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	c := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(ctx, c, nil)
+	assert.Nil(t, err)
+	writer, _ := NewBlockWriterNew(service, name, 0, nil)
+
+	schema := catalog.MockSchemaAll(4, 2)
+	bat := catalog.MockBatch(schema, 100)
+	writer.SetPrimaryKey(2)
+	_, err = writer.WriteBatch(containers.ToCNBatch(bat))
+	assert.Nil(t, err)
+	blocks, _, err := writer.Sync(context.Background())
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(blocks))
+
+	mp := mpool.MustNewZero()
+	metaloc := EncodeLocation(writer.GetName(), blocks[0].GetExtent(), 100, blocks[0].GetID())
+	require.NoError(t, err)
+	reader, err := NewObjectReader(service, metaloc)
+	require.NoError(t, err)
+	meta, err := reader.LoadObjectMeta(context.TODO(), mp)
+	require.NoError(t, err)
+	blkMeta1 := meta.GetBlockMeta(0)
+	assert.Equal(t, uint8(0), blkMeta1.BlockHeader().BloomFilterType())
+	bf, _, err := reader.LoadOneBF(context.Background(), 0)
+	assert.Nil(t, err)
+	assert.Equal(t, uint8(0), bf.GetType())
+	res, err := bf.MayContainsKey(types.EncodeValue(int32(30), bat.Vecs[2].GetType().Oid))
+	require.NoError(t, err)
+	require.True(t, res)
+	res, err = bf.MayContainsKey(types.EncodeValue(int32(300), bat.Vecs[2].GetType().Oid))
+	require.NoError(t, err)
+	require.False(t, res)
+	name = objectio.BuildObjectName(objectio.NewSegmentid(), 1)
+	writer2, _ := NewBlockWriterNew(service, name, 0, nil)
+	writer2.SetPrimaryKeyWithType(2, 1, index.PrefixFn{
+		Id: 88,
+		Fn: func(in []byte) []byte {
+			return in
+		},
+	})
+	_, err = writer2.WriteBatch(containers.ToCNBatch(bat))
+	assert.Nil(t, err)
+	blocks, _, err = writer2.Sync(context.Background())
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(blocks))
+
+	metaloc = EncodeLocation(writer2.GetName(), blocks[0].GetExtent(), 100, blocks[0].GetID())
+	require.NoError(t, err)
+	reader, err = NewObjectReader(service, metaloc)
+	require.NoError(t, err)
+	bf, _, err = reader.LoadOneBF(context.Background(), 0)
+	assert.Nil(t, err)
+	assert.Equal(t, uint8(1), bf.GetType())
+	assert.Equal(t, uint8(88), bf.PrefixFnId(1))
+
+	name = objectio.BuildObjectName(objectio.NewSegmentid(), 2)
+	writer2, _ = NewBlockWriterNew(service, name, 0, nil)
+	writer2.SetPrimaryKeyWithType(2, 2, index.PrefixFn{
+		Id: 123,
+		Fn: func(in []byte) []byte {
+			return in
+		},
+	})
+	_, err = writer2.WriteBatch(containers.ToCNBatch(bat))
+	assert.Equal(t, index.ErrPrefix, err)
+	writer2, _ = NewBlockWriterNew(service, name, 0, nil)
+	writer2.SetPrimaryKeyWithType(2, 2, index.PrefixFn{
+		Id: 123,
+		Fn: func(in []byte) []byte {
+			return in
+		},
+	}, index.PrefixFn{
+		Id: 124,
+		Fn: func(in []byte) []byte {
+			return in
+		},
+	})
+	_, err = writer2.WriteBatch(containers.ToCNBatch(bat))
+	assert.Nil(t, err)
+	blocks, _, err = writer2.Sync(context.Background())
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(blocks))
+
+	metaloc = EncodeLocation(writer2.GetName(), blocks[0].GetExtent(), 100, blocks[0].GetID())
+	require.NoError(t, err)
+	reader, err = NewObjectReader(service, metaloc)
+	require.NoError(t, err)
+	bf, _, err = reader.LoadOneBF(context.Background(), 0)
+	assert.Nil(t, err)
+	assert.Equal(t, uint8(2), bf.GetType())
+	assert.Equal(t, uint8(123), bf.PrefixFnId(1))
+	assert.Equal(t, uint8(124), bf.PrefixFnId(2))
+}

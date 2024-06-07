@@ -30,8 +30,9 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -345,7 +346,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 	var planExpr *plan.Expr
 	oid := resultVec.GetType().Oid
 	if oid == types.T_decimal64 || oid == types.T_decimal128 {
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false)
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
 		planExpr, err = binder.BindExpr(e, 0, false)
@@ -364,7 +365,7 @@ func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interfa
 		// set @a = on, type of a is bool.
 		return v.Parts[0], nil
 	default:
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false)
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
 		planExpr, err := binder.BindExpr(e, 0, false)
@@ -1343,4 +1344,15 @@ func ToRequest(payload []byte) *Request {
 	}
 
 	return req
+}
+
+// CancelCheck checks if the given context has been canceled.
+// If the context is canceled, it returns the context's error.
+func CancelCheck(Ctx context.Context) error {
+	select {
+	case <-Ctx.Done():
+		return Ctx.Err()
+	default:
+		return nil
+	}
 }
