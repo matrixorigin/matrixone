@@ -15,13 +15,13 @@
 package malloc
 
 import (
-	"encoding/binary"
 	"hash/maphash"
 	"io"
 	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/google/pprof/profile"
 )
@@ -214,7 +214,9 @@ func (p *Profiler[T, P]) getSampleValue(locations []*profile.Location) P {
 		hasherPool.Put(hasher)
 	}()
 	for _, loc := range locations {
-		hasher.Write(binary.AppendUvarint(nil, loc.ID))
+		hasher.Write(
+			unsafe.Slice((*byte)(unsafe.Pointer(&loc.ID)), unsafe.Sizeof(loc.ID)),
+		)
 	}
 	key := SampleKey{
 		Hash: hasher.Sum64(),
