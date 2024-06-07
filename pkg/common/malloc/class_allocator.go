@@ -52,7 +52,7 @@ type Class struct {
 }
 
 func NewClassAllocator(
-	checkFraction uint32,
+	checkFraction *uint32,
 ) *ClassAllocator {
 	ret := &ClassAllocator{}
 
@@ -90,7 +90,7 @@ func (c *ClassAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator) {
 
 type fixedSizeMmapAllocator struct {
 	size          uint64
-	checkFraction uint32
+	checkFraction *uint32
 	// buffer1 buffers objects
 	buffer1 chan unsafe.Pointer
 	// buffer2 buffers MADV_DONTNEED objects
@@ -99,7 +99,7 @@ type fixedSizeMmapAllocator struct {
 
 func newFixedSizedAllocator(
 	size uint64,
-	checkFraction uint32,
+	checkFraction *uint32,
 ) *fixedSizeMmapAllocator {
 	// if size is larger than smallClassCap, num1 will be zero, buffer1 will be empty
 	num1 := smallClassCap / size
@@ -119,9 +119,9 @@ func newFixedSizedAllocator(
 var _ Allocator = new(fixedSizeMmapAllocator)
 
 func (f *fixedSizeMmapAllocator) Allocate(_ uint64) (ptr unsafe.Pointer, dec Deallocator) {
-	if f.checkFraction > 0 {
+	if f.checkFraction != nil {
 		defer func() {
-			if fastrand()%f.checkFraction == 0 {
+			if fastrand()%*f.checkFraction == 0 {
 				dec = newCheckedDeallocator(dec)
 			}
 		}()
@@ -167,8 +167,8 @@ var _ Deallocator = new(fixedSizeMmapAllocator)
 
 func (f *fixedSizeMmapAllocator) Deallocate(ptr unsafe.Pointer) {
 
-	if f.checkFraction > 0 &&
-		fastrand()%f.checkFraction == 0 {
+	if f.checkFraction != nil &&
+		fastrand()%*f.checkFraction == 0 {
 		// do not reuse to detect use-after-free
 		if err := unix.Munmap(
 			unsafe.Slice((*byte)(ptr), f.size),
