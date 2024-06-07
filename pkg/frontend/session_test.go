@@ -337,7 +337,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
 
 		table := mock_frontend.NewMockRelation(ctrl)
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		table.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
