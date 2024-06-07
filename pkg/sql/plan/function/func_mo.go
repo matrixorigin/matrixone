@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -34,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 const (
@@ -434,7 +435,8 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				return err
 			}
 
-			ranges, err := rel.Ranges(ctx, nil)
+			//ranges, err := rel.Ranges(ctx, nil)
+			ranges, err := rel.Ranges(ctx, nil, 0)
 			if err != nil {
 				return err
 			}
