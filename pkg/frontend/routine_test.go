@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -106,7 +107,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	uuid, _ := uuid.NewV7()
 	runner := mock_frontend.NewMockComputationRunner(ctrl)
 	runner.EXPECT().Run(gomock.Any()).DoAndReturn(func(uint64) (*util.RunResult, error) {
-		proto := ses.GetMysqlProtocol()
+		proto := ses.GetResponser().MysqlRrWr()
 		if mrs != nil {
 			if res.isSleepSql {
 				select {
@@ -116,7 +117,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 					res.resultX.Store(contextCancel)
 				}
 			}
-			err = proto.SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount())
+			err = proto.WriteResultSetRow(mrs, mrs.GetRowCount())
 			if err != nil {
 				logutil.Errorf("flush error %v", err)
 				return nil, err
@@ -134,7 +135,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	mcw.EXPECT().GetLoadTag().Return(false).AnyTimes()
 	mcw.EXPECT().Clear().AnyTimes()
 	mcw.EXPECT().Free().AnyTimes()
-	mcw.EXPECT().Plan().Return(nil).AnyTimes()
+	mcw.EXPECT().Plan().Return(&plan2.Plan{}).AnyTimes()
 	return mcw
 }
 

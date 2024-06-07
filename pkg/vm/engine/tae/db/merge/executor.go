@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
+	"github.com/KimMachineGun/automemlimit/memlimit"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -48,7 +49,7 @@ type MergeExecutor struct {
 	rt                  *dbutils.Runtime
 	cnSched             CNMergeScheduler
 	memAvail            int
-	memSpare            int // 10% of total memory
+	memSpare            int // 10% of total memory or container memory limit
 	cpuPercent          float64
 	activeMergeBlkCount int32
 	activeEstimateBytes int64
@@ -66,11 +67,29 @@ func NewMergeExecutor(rt *dbutils.Runtime, sched CNMergeScheduler) *MergeExecuto
 	}
 }
 
+func (e *MergeExecutor) setSpareMem(total uint64) {
+	containerMLimit, err := memlimit.FromCgroup()
+	logutil.Infof("[Mergeblocks] constainer memory limit %v, host mem %v, err %v",
+		common.HumanReadableBytes(int(containerMLimit)),
+		common.HumanReadableBytes(int(total)),
+		err)
+	tenth := int(float64(total) * 0.1)
+	limitdiff := 0
+	if containerMLimit > 0 {
+		limitdiff = int(total - containerMLimit)
+	}
+	if limitdiff > tenth {
+		e.memSpare = limitdiff
+	} else {
+		e.memSpare = tenth
+	}
+}
+
 func (e *MergeExecutor) RefreshMemInfo() {
 	if stats, err := mem.VirtualMemory(); err == nil {
 		e.memAvail = int(stats.Available)
 		if e.memSpare == 0 {
-			e.memSpare = int(float32(stats.Total) * 0.1)
+			e.setSpareMem(stats.Total)
 		}
 	}
 	if percents, err := cpu.Percent(0, false); err == nil {
@@ -172,9 +191,10 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 		}
 
 		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-			return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes)
+			task, err := jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes)
+			return task, err
 		}
-		task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
+		task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTaskWithObserver(nil, tasks.DataCompactionTask, scopes, factory, e)
 		if err != nil {
 			if err != tasks.ErrScheduleScopeConflict {
 				logutil.Infof("[Mergeblocks] Schedule error info=%v", err)
@@ -182,7 +202,6 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 			return
 		}
 		e.AddActiveTask(task.ID(), blkCnt, esize)
-		task.AddObserver(e)
 		logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
 	}
 

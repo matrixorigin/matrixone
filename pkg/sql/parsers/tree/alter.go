@@ -417,19 +417,28 @@ func (node *AlterView) reset() {
 	*node = AlterView{}
 }
 
+type DatabaseConfig int
+
+const (
+	MYSQL_COMPATIBILITY_MODE DatabaseConfig = iota
+	UNIQUE_CHECK_ON_AUTOINCR
+)
+
 type AlterDataBaseConfig struct {
 	statementImpl
 	AccountName    string
 	DbName         string
 	IsAccountLevel bool
+	ConfigType     DatabaseConfig
 	UpdateConfig   string
 }
 
-func NewAlterDataBaseConfig(accountName, dbName string, isAccountLevel bool, updateConfig string) *AlterDataBaseConfig {
+func NewAlterDataBaseConfig(accountName, dbName string, isAccountLevel bool, configType DatabaseConfig, updateConfig string) *AlterDataBaseConfig {
 	a := reuse.Alloc[AlterDataBaseConfig](nil)
 	a.AccountName = accountName
 	a.DbName = dbName
 	a.IsAccountLevel = isAccountLevel
+	a.ConfigType = configType
 	a.UpdateConfig = updateConfig
 	return a
 }

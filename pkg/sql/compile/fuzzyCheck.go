@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -92,6 +91,11 @@ func (f fuzzyCheck) TypeName() string {
 }
 
 func (f *fuzzyCheck) reset() {
+	f.condition = ""
+	f.cnt = 0
+}
+
+func (f *fuzzyCheck) clear() {
 	f.db = ""
 	f.tbl = ""
 	f.attr = ""
@@ -316,7 +320,7 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 
 	res, err := c.runSqlWithResult(duplicateCheckSql)
 	if err != nil {
-		logutil.Errorf("The sql that caused the fuzzy check background SQL failed is %s, and generated background sql is %s", c.sql, duplicateCheckSql)
+		c.proc.Errorf(c.ctx, "The sql that caused the fuzzy check background SQL failed is %s, and generated background sql is %s", c.sql, duplicateCheckSql)
 		return err
 	}
 	defer res.Close()
@@ -451,7 +455,7 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	case types.T_float64:
 		return fmt.Sprintf("%v", vector.GetFixedAt[float64](vec, rowIndex)), nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
-		return vec.GetStringAt(rowIndex), nil
+		return vec.UnsafeGetStringAt(rowIndex), nil
 	case types.T_array_float32:
 		return types.ArrayToString[float32](vector.GetArrayAt[float32](vec, rowIndex)), nil
 	case types.T_array_float64:

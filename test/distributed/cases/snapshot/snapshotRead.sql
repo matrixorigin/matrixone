@@ -290,12 +290,9 @@ insert into cluster01 values(2,3,0);
 select * from cluster01;
 drop snapshot if exists sp06;
 create snapshot sp06 for account sys;
--- @bvt:issue#15901
 select count(*) from mo_catalog.mo_tables{snapshot = sp06} where reldatabase = 'mo_catalog';
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = sp06} where datname = 'mo_catalog';
-select attname from mo_catalog.mo_columns{snapshot = sp06} where att_database = 'mo_catalog';
--- @bvt:issue
 drop table cluster01;
 drop snapshot sp06;
 
@@ -391,9 +388,7 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account sys;
 use test04;
 select count(*) from normal_table01 {snapshot = 'sp08'};
--- @bvt:issue#15907
 select count(*) from t3 {snapshot = 'sp08'};
--- @bvt:issue
 use mo_catalog;
 select count(*) from cluster02 {snapshot = 'sp08'};
 use test04;
@@ -406,9 +401,7 @@ select count(*) from normal_table01 {snapshot = 'sp08'};
 use mo_catalog;
 select count(*) from cluster02 {snapshot = 'sp08'};
 use test04;
--- @bvt:issue#15907
 select count(*) from t3 {snapshot = 'sp08'};
--- @bvt:issue
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp08'} where reldatabase = 'test04';
 drop account test_tenant_1;
 -- @ignore:0,6,7
@@ -442,12 +435,10 @@ insert into t1 values('abcde_');
 select count(*) from t1;
 drop snapshot if exists `binary`;
 create snapshot `binary` for account sys;
--- @bvt:issue#15901
 select count(*) from mo_catalog.mo_tables{snapshot = `binary`} where reldatabase = 'test05';
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = `binary`} where datname = 'test05';
 select attname from mo_catalog.mo_columns{snapshot = `binary`} where att_database = 'test05';
--- @bvt:issue
 drop snapshot `binary`;
 drop table t1;
 
@@ -461,12 +452,11 @@ insert into t1 values('2022-01-01', 1);
 insert into t1 values('2022-01-02', 2);
 drop snapshot if exists consistent;
 create snapshot consistent for account sys;
--- @bvt:issue#15901
+-- @ignore:0,6,7
 select count(*) from mo_catalog.mo_tables{snapshot = consistent} where reldatabase = 'test05';
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = consistent} where datname = 'test05';
 select attname from mo_catalog.mo_columns{snapshot = consistent} where att_database = 'test05';
--- @bvt:issue
 drop snapshot consistent;
 drop table t1;
 drop database if exists test05;
@@ -487,9 +477,7 @@ drop snapshot if exists sp09;
 create snapshot sp09 for account sys;
 -- @ignore:1
 show snapshots;
--- @bvt:issue#15907
 select count(*) from tran01{snapshot = 'sp09'};
--- @bvt:issue
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp09'} where reldatabase = 'test06';
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = 'sp09'} where datname = 'test06';

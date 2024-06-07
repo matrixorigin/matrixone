@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -49,9 +50,8 @@ import (
 
 func (mixin *withFilterMixin) reset() {
 	mixin.filterState.evaluated = false
-	mixin.filterState.filter = nil
+	mixin.filterState.filter = blockio.ReadFilter{}
 	mixin.columns.pkPos = -1
-	mixin.columns.rowidPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
 	mixin.columns.colTypes = nil
@@ -80,19 +80,9 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	mixin.columns.colTypes = make([]types.Type, len(cols))
 	// mixin.columns.colNulls = make([]bool, len(cols))
 	mixin.columns.pkPos = -1
-	mixin.columns.rowidPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
-	compPKName2Pos := make(map[string]struct{})
-	positions := make(map[string]int)
-	if mixin.tableDef.Pkey != nil && mixin.tableDef.Pkey.CompPkeyCol != nil {
-		pk := mixin.tableDef.Pkey
-		for _, name := range pk.Names {
-			compPKName2Pos[name] = struct{}{}
-		}
-	}
 	for i, column := range cols {
 		if column == catalog.Row_ID {
-			mixin.columns.rowidPos = i
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
 		} else {
@@ -103,27 +93,11 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			colDef := mixin.tableDef.Cols[colIdx]
 			mixin.columns.seqnums[i] = uint16(colDef.Seqnum)
 
-			if _, ok := compPKName2Pos[column]; ok {
-				positions[column] = i
-			}
-
 			if mixin.tableDef.Pkey != nil && mixin.tableDef.Pkey.PkeyColName == column {
 				// primary key is in the cols
 				mixin.columns.pkPos = i
 			}
 			mixin.columns.colTypes[i] = types.T(colDef.Typ.Id).ToType()
-			// if colDef.Default != nil {
-			// 	mixin.columns.colNulls[i] = colDef.Default.NullAbility
-			// }
-		}
-	}
-	if len(positions) != 0 {
-		for _, name := range mixin.tableDef.Pkey.Names {
-			if pos, ok := positions[name]; !ok {
-				break
-			} else {
-				mixin.columns.compPKPositions = append(mixin.columns.compPKPositions, uint16(pos))
-			}
 		}
 	}
 }
@@ -136,85 +110,23 @@ func (mixin *withFilterMixin) getReadFilter(proc *process.Process, blkCnt int) (
 		return
 	}
 	pk := mixin.tableDef.Pkey
-	if pk == nil {
+	if mixin.filterState.expr == nil || pk == nil {
 		mixin.filterState.evaluated = true
-		mixin.filterState.filter = nil
+		mixin.filterState.filter = blockio.ReadFilter{}
 		return
 	}
-	if pk.CompPkeyCol == nil {
-		return mixin.getNonCompositPKFilter(proc, blkCnt)
-	}
-	return mixin.getCompositPKFilter(proc, blkCnt)
+	return mixin.getPKFilter(proc, blkCnt)
 }
 
-func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process, blkCnt int) (
-	filter blockio.ReadFilter,
-) {
-	// if no primary key is included in the columns or no filter expr is given,
-	// no filter is needed
-	if len(mixin.columns.compPKPositions) == 0 || mixin.filterState.expr == nil {
-		mixin.filterState.evaluated = true
-		mixin.filterState.filter = nil
-		return
-	}
-
-	// evaluate
-	pkNames := mixin.tableDef.Pkey.Names
-	pkVals := make([]*plan.Literal, len(pkNames))
-	ok, hasNull := getCompositPKVals(mixin.filterState.expr, pkNames, pkVals, proc)
-
-	if !ok || pkVals[0] == nil {
-		mixin.filterState.evaluated = true
-		mixin.filterState.filter = nil
-		mixin.filterState.hasNull = hasNull
-		return
-	}
-	cnt := getValidCompositePKCnt(pkVals)
-	pkVals = pkVals[:cnt]
-
-	filterFuncs := make([]func(*vector.Vector, []int32, *[]int32), len(pkVals))
-	for i := range filterFuncs {
-		filterFuncs[i] = getCompositeFilterFuncByExpr(pkVals[i], i == 0)
-	}
-
-	filter = func(vecs []*vector.Vector) []int32 {
-		var (
-			inputSels []int32
-		)
-		for i := range filterFuncs {
-			vec := vecs[i]
-			mixin.sels = mixin.sels[:0]
-			filterFuncs[i](vec, inputSels, &mixin.sels)
-			if len(mixin.sels) == 0 {
-				break
-			}
-			inputSels = mixin.sels
-		}
-		// logutil.Debugf("%s: %d/%d", mixin.tableDef.Name, len(res), vecs[0].Length())
-
-		return mixin.sels
-	}
-
-	mixin.filterState.evaluated = true
-	mixin.filterState.filter = filter
-	mixin.filterState.seqnums = make([]uint16, 0, len(mixin.columns.compPKPositions))
-	mixin.filterState.colTypes = make([]types.Type, 0, len(mixin.columns.compPKPositions))
-	for _, pos := range mixin.columns.compPKPositions {
-		mixin.filterState.seqnums = append(mixin.filterState.seqnums, mixin.columns.seqnums[pos])
-		mixin.filterState.colTypes = append(mixin.filterState.colTypes, mixin.columns.colTypes[pos])
-	}
-	// records how many blks one reader needs to read when having filter
-	objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
-	return
-}
-
-func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkCnt int) blockio.ReadFilter {
+func (mixin *withFilterMixin) getPKFilter(
+	proc *process.Process, blkCnt int,
+) blockio.ReadFilter {
 	// if no primary key is included in the columns or no filter expr is given,
 	// no filter is needed
 	if mixin.columns.pkPos == -1 || mixin.filterState.expr == nil {
 		mixin.filterState.evaluated = true
-		mixin.filterState.filter = nil
-		return nil
+		mixin.filterState.filter = blockio.ReadFilter{}
+		return blockio.ReadFilter{}
 	}
 
 	// evaluate the search function for the filter
@@ -225,16 +137,16 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkC
 	// C: {A|B} and {A|B}
 	// D: {A|B|C} [and {A|B|C}]*
 	// for other patterns, no filter is needed
-	ok, hasNull, searchFunc := getNonCompositePKSearchFuncByExpr(
+	ok, hasNull, filter := getNonCompositePKSearchFuncByExpr(
 		mixin.filterState.expr,
 		mixin.tableDef.Pkey.PkeyColName,
 		proc,
 	)
-	if !ok || searchFunc == nil {
+	if !ok || !filter.Valid {
 		mixin.filterState.evaluated = true
-		mixin.filterState.filter = nil
+		mixin.filterState.filter = blockio.ReadFilter{}
 		mixin.filterState.hasNull = hasNull
-		return nil
+		return blockio.ReadFilter{}
 	}
 
 	// here we will select the primary key column from the vectors, and
@@ -242,13 +154,13 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkC
 	// it returns the offset of the primary key in the pk vector.
 	// if the primary key is not found, it returns empty slice
 	mixin.filterState.evaluated = true
-	mixin.filterState.filter = searchFunc
+	mixin.filterState.filter = filter
 	mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[mixin.columns.pkPos]}
 	mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
 
 	// records how many blks one reader needs to read when having filter
 	objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
-	return searchFunc
+	return filter
 }
 
 // -----------------------------------------------------------------
@@ -477,7 +389,7 @@ func (r *blockReader) Read(
 		for len(r.steps) > 0 && r.steps[0] == r.currentStep {
 			// always true for now, will optimize this in the future
 			prefetchFile := r.scanType == SMALL || r.scanType == LARGE || r.scanType == NORMAL
-			if filter != nil && blockInfo.Sorted {
+			if filter.Valid && blockInfo.Sorted {
 				err = blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 			} else {
 				err = blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
@@ -491,7 +403,7 @@ func (r *blockReader) Read(
 	}
 
 	statsCtx, numRead, numHit := r.ctx, int64(0), int64(0)
-	if filter != nil {
+	if filter.Valid {
 		// try to store the blkReadStats CounterSet into ctx, so that
 		// it can record the mem cache hit stats when call MemCache.Read() later soon.
 		statsCtx, numRead, numHit = r.prepareGatherStats()
@@ -502,6 +414,7 @@ func (r *blockReader) Read(
 	if r.scanType == LARGE || r.scanType == NORMAL {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
+
 	bat, err = blockio.BlockRead(
 		statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
@@ -513,7 +426,7 @@ func (r *blockReader) Read(
 		return nil, err
 	}
 
-	if filter != nil {
+	if filter.Valid {
 		// we collect mem cache hit related statistics info for blk read here
 		r.gatherStats(numRead, numHit)
 	}
@@ -559,7 +472,7 @@ func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
 func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
-	encodedPrimaryKey []byte,
+	pkFilter PKFilter,
 	ts timestamp.Timestamp,
 	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
@@ -577,8 +490,8 @@ func newBlockMergeReader(
 			fs,
 			proc,
 		),
-		encodedPrimaryKey: encodedPrimaryKey,
-		deletaLocs:        make(map[string][]objectio.Location),
+		pkFilter:   pkFilter,
+		deletaLocs: make(map[string][]objectio.Location),
 	}
 	return r
 }
@@ -601,9 +514,9 @@ func (r *blockMergeReader) prefetchDeletes() error {
 				return nil
 			}
 			for _, bat := range bats {
-				vs := vector.MustStrCol(bat.GetVector(0))
-				for _, deltaLoc := range vs {
-					location, err := blockio.EncodeLocationFromString(deltaLoc)
+				vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
+				for i := range vs {
+					location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
 					if err != nil {
 						return err
 					}
@@ -654,7 +567,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	}
 
 	// load deletes from partition state for the specified block
-	filter := r.getReadFilter(r.proc, len(r.blks))
+	//filter := r.getReadFilter(r.proc, len(r.blks))
 
 	state, err := r.table.getPartitionState(ctx)
 	if err != nil {
@@ -662,12 +575,17 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	}
 	ts := types.TimestampToTS(r.ts)
 
-	if filter != nil && info.Sorted && len(r.encodedPrimaryKey) > 0 {
-		iter := state.NewPrimaryKeyDelIter(
-			ts,
-			logtailreplay.Prefix(r.encodedPrimaryKey),
-			info.BlockID,
-		)
+	var iter logtailreplay.RowsIter
+	if !r.pkFilter.isNull && r.pkFilter.isValid {
+		switch r.pkFilter.op {
+		case function.EQUAL, function.PREFIX_EQ:
+			iter = state.NewPrimaryKeyDelIter(ts, logtailreplay.Prefix(r.pkFilter.packed[0]), info.BlockID)
+		case function.IN:
+			iter = state.NewPrimaryKeyDelIter(ts, logtailreplay.ExactIn(r.pkFilter.packed), info.BlockID)
+		}
+	}
+
+	if iter != nil {
 		for iter.Next() {
 			entry := iter.Entry()
 			if !entry.Deleted {
@@ -676,9 +594,8 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 			_, offset := entry.RowID.Decode()
 			r.buffer = append(r.buffer, int64(offset))
 		}
-		iter.Close()
 	} else {
-		iter := state.NewRowsIter(ts, &info.BlockID, true)
+		iter = state.NewRowsIter(ts, &info.BlockID, true)
 		currlen := len(r.buffer)
 		for iter.Next() {
 			entry := iter.Entry()
@@ -686,8 +603,9 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 			r.buffer = append(r.buffer, int64(offset))
 		}
 		v2.TaskLoadMemDeletesPerBlockHistogram.Observe(float64(len(r.buffer) - currlen))
-		iter.Close()
 	}
+
+	iter.Close()
 
 	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
 	//load deletes from txn.writes for the specified block

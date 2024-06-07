@@ -165,6 +165,9 @@ var (
 	// default lower_case_table_names
 	defaultLowerCaseTableNames = "1"
 
+	// largestEntryLimit is the max size for reading file to csv buf
+	LargestEntryLimit = 10 * 1024 * 1024
+
 	CNPrimaryCheck = false
 )
 
@@ -582,7 +585,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		SelectAggrThreshold:                toml.Duration{},
 		EnableStmtMerge:                    false,
 		LabelSelector:                      map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal}, /*role=logging_cn*/
-		TCPPacket:                          false,
+		TCPPacket:                          true,
 		CU:                                 *NewOBCUConfig(),
 		CUv1:                               *NewOBCUConfig(),
 		OBCollectorConfig:                  *NewOBCollectorConfig(),

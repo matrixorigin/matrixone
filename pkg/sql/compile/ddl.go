@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -782,7 +783,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	exeCols := planColsToExeCols(planCols)
 	// TODO: debug for #11917
 	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		getLogger().Info("createTable",
+		c.proc.Info(c.ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -792,7 +793,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
-		getLogger().Info("createTable",
+		c.proc.Info(c.ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -811,7 +812,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if dbName == "" {
 			// TODO: debug for #11917
 			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-				getLogger().Info("createTable",
+				c.proc.Info(c.ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -821,7 +822,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		// TODO: debug for #11917
 		if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-			getLogger().Info("createTable no exist",
+			c.proc.Info(c.ctx, "createTable no exist",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -833,7 +834,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if qry.GetIfNotExists() {
 			// TODO: debug for #11917
 			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-				getLogger().Info("createTable no exist",
+				c.proc.Info(c.ctx, "createTable no exist",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -844,7 +845,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if qry.GetReplace() {
 			err := c.runSql(fmt.Sprintf("drop view if exists %s", tblName))
 			if err != nil {
-				getLogger().Info("createTable",
+				c.proc.Info(c.ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -852,7 +853,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 				return err
 			}
 		} else {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -868,7 +869,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			if qry.GetIfNotExists() {
 				return nil
 			}
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -878,7 +879,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-		getLogger().Info("createTable",
+		c.proc.Info(c.ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -887,7 +888,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
-		getLogger().Info("createTable",
+		c.proc.Info(c.ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -896,7 +897,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	// TODO: debug for #11917
 	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		getLogger().Info("createTable ok",
+		c.proc.Info(c.ctx, "createTable ok",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
@@ -908,7 +909,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		storageCols := planColsToExeCols(table.GetCols())
 		storageDefs, err := planDefsToExeDefs(table)
 		if err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -917,7 +918,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		err = dbSource.Create(c.ctx, table.GetName(), append(storageCols, storageDefs...))
 		if err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -942,7 +943,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		//due to the colId may be changed.
 		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
 		if err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -953,7 +954,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 		newTableDef, err := newRelation.TableDefs(c.ctx)
 		if err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1014,7 +1015,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			Fkeys: newFkeys,
 		})
 		if err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1023,7 +1024,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		err = newRelation.UpdateConstraint(c.ctx, newCt)
 		if err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1040,7 +1041,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 				//add current table to parent's children table
 				err = AddChildTblIdToParentTable(c.ctx, newRelation, 0)
 				if err != nil {
-					getLogger().Info("createTable",
+					c.proc.Info(c.ctx, "createTable",
 						zap.String("databaseName", c.db),
 						zap.String("tableName", qry.GetTableDef().GetName()),
 						zap.Error(err),
@@ -1051,7 +1052,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			fkDbSource, err := c.e.Database(c.ctx, fkDbName, c.proc.TxnOperator)
 			if err != nil {
-				getLogger().Info("createTable",
+				c.proc.Info(c.ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1060,7 +1061,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			fkRelation, err := fkDbSource.Relation(c.ctx, fkTableName, nil)
 			if err != nil {
-				getLogger().Info("createTable",
+				c.proc.Info(c.ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1070,7 +1071,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			//add current table to parent's children table
 			err = AddChildTblIdToParentTable(c.ctx, fkRelation, tblId)
 			if err != nil {
-				getLogger().Info("createTable",
+				c.proc.Info(c.ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1088,7 +1089,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		//due to the colId may be changed.
 		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
 		if err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1099,7 +1100,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 		newTableDef, err := newRelation.TableDefs(c.ctx)
 		if err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1134,7 +1135,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 					newDef.ForeignCols[j] = id
 				} else {
 					err := moerr.NewInternalError(c.ctx, "no column %s", colReferred)
-					getLogger().Info("createTable",
+					c.proc.Info(c.ctx, "createTable",
 						zap.String("databaseName", c.db),
 						zap.String("tableName", qry.GetTableDef().GetName()),
 						zap.Error(err),
@@ -1146,7 +1147,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			// add the fk def into the child table
 			childDb, err := c.e.Database(c.ctx, info.Db, c.proc.TxnOperator)
 			if err != nil {
-				getLogger().Info("createTable",
+				c.proc.Info(c.ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1155,7 +1156,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			childTable, err := childDb.Relation(c.ctx, info.Table, nil)
 			if err != nil {
-				getLogger().Info("createTable",
+				c.proc.Info(c.ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1164,7 +1165,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			err = AddFkeyToRelation(c.ctx, childTable, newDef)
 			if err != nil {
-				getLogger().Info("createTable",
+				c.proc.Info(c.ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1174,7 +1175,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			// add the child table id -- tblId into the current table -- refChildDef
 			err = AddChildTblIdToParentTable(c.ctx, newRelation, childTable.GetTableID(c.ctx))
 			if err != nil {
-				getLogger().Info("createTable",
+				c.proc.Info(c.ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1190,7 +1191,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		exeCols = planColsToExeCols(planCols)
 		exeDefs, err = planDefsToExeDefs(def)
 		if err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1198,7 +1199,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 		if _, err := dbSource.Relation(c.ctx, def.Name, nil); err == nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1206,7 +1207,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return moerr.NewTableAlreadyExists(c.ctx, def.Name)
 		}
 		if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1243,7 +1244,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if checkIndexInitializable(dbName, tblName) {
 		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
 		if err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1252,7 +1253,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
 		if err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1261,7 +1262,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		err = c.runSql(insertSQL)
 		if err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1271,7 +1272,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 		insertSQL2, err := makeInsertTablePartitionsSQL(c.ctx, dbSource, newRelation)
 		if err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1280,7 +1281,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		err = c.runSql(insertSQL2)
 		if err != nil {
-			getLogger().Info("createTable",
+			c.proc.Info(c.ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1290,12 +1291,26 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	}
 
-	return maybeCreateAutoIncrement(
+	err = maybeCreateAutoIncrement(
 		c.ctx,
 		dbSource,
 		qry.GetTableDef(),
 		c.proc.TxnOperator,
-		nil)
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+
+	if len(partitionTables) == 0 {
+		return nil
+	}
+
+	return shardservice.GetService().Create(
+		c.ctx,
+		qry.GetTableDef().TblId,
+		c.proc.TxnOperator,
+	)
 }
 
 func (s *Scope) CreateView(c *Compile) error {
@@ -2073,14 +2088,26 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if isTemp {
 		oldId = rel.GetTableID(c.ctx)
 	}
-	err = incrservice.GetAutoIncrementService(c.ctx).Reset(
-		c.ctx,
-		oldId,
-		newId,
-		keepAutoIncrement,
-		c.proc.TxnOperator)
-	if err != nil {
-		return err
+
+	// check if contains any auto_increment column(include __mo_fake_pk_col), if so, reset the auto_increment value
+	tblDef := rel.GetTableDef(c.ctx)
+	var containAuto bool
+	for _, col := range tblDef.Cols {
+		if col.Typ.AutoIncr {
+			containAuto = true
+			break
+		}
+	}
+	if containAuto {
+		err = incrservice.GetAutoIncrementService(c.ctx).Reset(
+			c.ctx,
+			oldId,
+			newId,
+			keepAutoIncrement,
+			c.proc.TxnOperator)
+		if err != nil {
+			return err
+		}
 	}
 
 	// update index information in mo_catalog.mo_indexes
@@ -2272,11 +2299,29 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
+			tblDef := rel.GetTableDef(c.ctx)
+			var containAuto bool
+			for _, col := range tblDef.Cols {
+				if col.Typ.AutoIncr {
+					containAuto = true
+					break
+				}
+			}
+			if containAuto {
+				err := incrservice.GetAutoIncrementService(c.ctx).Delete(
+					c.ctx,
+					rel.GetTableID(c.ctx),
+					c.proc.TxnOperator)
+				if err != nil {
+					return err
+				}
+			}
+
+			if err := shardservice.GetService().Delete(
 				c.ctx,
 				rel.GetTableID(c.ctx),
-				c.proc.TxnOperator)
-			if err != nil {
+				c.proc.TxnOperator,
+			); err != nil {
 				return err
 			}
 		}
@@ -2299,12 +2344,30 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
+			tblDef := rel.GetTableDef(c.ctx)
+			var containAuto bool
+			for _, col := range tblDef.Cols {
+				if col.Typ.AutoIncr {
+					containAuto = true
+					break
+				}
+			}
+			if containAuto {
+				// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
+				err := incrservice.GetAutoIncrementService(c.ctx).Delete(
+					c.ctx,
+					rel.GetTableID(c.ctx),
+					c.proc.TxnOperator)
+				if err != nil {
+					return err
+				}
+			}
+
+			if err := shardservice.GetService().Delete(
 				c.ctx,
 				rel.GetTableID(c.ctx),
-				c.proc.TxnOperator)
-			if err != nil {
+				c.proc.TxnOperator,
+			); err != nil {
 				return err
 			}
 		}

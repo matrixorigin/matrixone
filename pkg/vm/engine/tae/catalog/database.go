@@ -105,21 +105,13 @@ func NewDBEntryWithID(catalog *Catalog, name string, createSql, datTyp string, i
 }
 
 func NewSystemDBEntry(catalog *Catalog) *DBEntry {
-	entry := &DBEntry{
-		ID: pkgcatalog.MO_CATALOG_ID,
-		BaseEntryImpl: NewBaseEntry(
-			func() *EmptyMVCCNode {
-				return &EmptyMVCCNode{}
-			}),
-		catalog: catalog,
-		DBNode: &DBNode{
-			name:      pkgcatalog.MO_CATALOG,
-			createSql: "create database " + pkgcatalog.MO_CATALOG,
-		},
-		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes: make(map[string]*nodeList[*TableEntry]),
-		link:      common.NewGenericSortedDList((*TableEntry).Less),
-		isSys:     true,
+	entry := NewReplayDBEntry()
+	entry.isSys = true
+	entry.ID = pkgcatalog.MO_CATALOG_ID
+	entry.catalog = catalog
+	entry.DBNode = &DBNode{
+		name:      pkgcatalog.MO_CATALOG,
+		createSql: "create database " + pkgcatalog.MO_CATALOG,
 	}
 	entry.CreateWithTS(types.SystemDBTS, &EmptyMVCCNode{})
 	return entry
@@ -127,14 +119,14 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 
 func NewReplayDBEntry() *DBEntry {
 	entry := &DBEntry{
-		BaseEntryImpl: NewReplayBaseEntry(
-			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
-		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes: make(map[string]*nodeList[*TableEntry]),
-		link:      common.NewGenericSortedDList((*TableEntry).Less),
+		BaseEntryImpl: NewBaseEntry(func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
+		entries:       make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes:     make(map[string]*nodeList[*TableEntry]),
+		link:          common.NewGenericSortedDList((*TableEntry).Less),
 	}
 	return entry
 }
+
 func (e *DBEntry) GetID() uint64    { return e.ID }
 func (e *DBEntry) IsSystemDB() bool { return e.isSys }
 func (e *DBEntry) CoarseTableCnt() int {
@@ -173,6 +165,7 @@ func (e *DBEntry) String() string {
 func (e *DBEntry) StringLocked() string {
 	return e.StringWithlevelLocked(common.PPL1)
 }
+
 func (e *DBEntry) StringWithLevel(level common.PPLevel) string {
 	e.RLock()
 	defer e.RUnlock()
@@ -454,6 +447,16 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 			}
 			return true
 		})
+
+		// When Rollback, the last mvcc has already removed
+		fullname := table.GetFullName()
+		nn := e.nameNodes[fullname]
+		if nn != nil {
+			nn.DeleteNode(table.ID)
+			if nn.Length() == 0 {
+				delete(e.nameNodes, fullname)
+			}
+		}
 		e.link.Delete(n)
 		delete(e.entries, table.ID)
 	}

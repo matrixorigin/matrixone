@@ -78,6 +78,7 @@ type Source struct {
 	PartitionRelationNames []string
 	Attributes             []string
 	R                      engine.Reader
+	Rel                    engine.Relation
 	Bat                    *batch.Batch
 	FilterExpr             *plan.Expr // todo: change this to []*plan.Expr
 	node                   *plan.Node
@@ -225,8 +226,9 @@ func (a *anaylze) release() {
 type Compile struct {
 	scope []*Scope
 
-	pn   *plan.Plan
-	info plan2.ExecInfo
+	pn *plan.Plan
+
+	execType plan2.ExecType
 
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.

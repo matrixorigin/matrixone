@@ -66,27 +66,28 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	var err error
-	var end bool
 	ctr := arg.ctr
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
 	var bat *batch.Batch
+	var msg *process.RegisterMessage
 
 	for {
 		switch ctr.status {
 		case receiveAll:
 			for {
-				bat, end, err = ctr.ReceiveFromAllRegs(anal)
-				if err != nil {
-					return result, err
+				msg = ctr.ReceiveFromAllRegs(anal)
+				if msg.Err != nil {
+					return result, msg.Err
 				}
 
-				if end {
+				if msg.Batch == nil {
 					ctr.status = eval
 					break
 				}
+				bat = msg.Batch
 				if ctr.bat == nil {
 					ctr.bat = bat
 					continue
@@ -102,15 +103,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.bat.AddRowCount(bat.RowCount())
 			}
 		case receive:
-			ctr.bat, end, err = ctr.ReceiveFromAllRegs(anal)
-			if err != nil {
-				return result, err
+			msg = ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
-			if end {
+			if msg.Batch == nil {
 				ctr.status = done
 			} else {
 				ctr.status = eval
 			}
+			ctr.bat = msg.Batch
 		case eval:
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
@@ -438,7 +440,6 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	}
 
 	ovec := ctr.orderVecs[0].Vec[0]
-	var strCol []string
 
 	rowCount := bat.RowCount()
 	//if ctr.sels == nil {
@@ -453,12 +454,7 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	if !ovec.IsConst() {
 		nullCnt := ovec.GetNulls().Count()
 		if nullCnt < ovec.Length() {
-			if ovec.GetType().IsVarlen() {
-				strCol = vector.MustStrCol(ovec)
-			} else {
-				strCol = nil
-			}
-			sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec, strCol)
+			sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
 		}
 	}
 
@@ -478,16 +474,11 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 		if !vec.IsConst() {
 			nullCnt := vec.GetNulls().Count()
 			if nullCnt < vec.Length() {
-				if vec.GetType().IsVarlen() {
-					strCol = vector.MustStrCol(vec)
-				} else {
-					strCol = nil
-				}
 				for i, j := 0, len(ps); i < j; i++ {
 					if i == j-1 {
-						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:], vec, strCol)
+						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:], vec)
 					} else {
-						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:ps[i+1]], vec, strCol)
+						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:ps[i+1]], vec)
 					}
 				}
 			}

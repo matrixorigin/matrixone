@@ -162,6 +162,8 @@ type TxnOperator interface {
 	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
 	// RemoveWaitLock remove wait lock for current txn
 	RemoveWaitLock(key uint64)
+	// LockTableCount get quality of lock table
+	LockTableCount() int32
 	// LockSkipped return true if lock need skipped.
 	LockSkipped(tableID uint64, mode lock.LockMode) bool
 
@@ -187,6 +189,7 @@ type TxnOperator interface {
 
 	EnterRunSql()
 	ExitRunSql()
+	SetFootPrints(prints [][2]uint32)
 }
 
 // TxnIDGenerator txn id generator
@@ -295,4 +298,12 @@ type TxnEvent struct {
 	Sequence  uint64
 	Cost      time.Duration
 	CostEvent bool
+}
+
+func (e TxnEvent) Committed() bool {
+	return e.Txn.Status == txn.TxnStatus_Committed
+}
+
+func (e TxnEvent) Aborted() bool {
+	return e.Txn.Status == txn.TxnStatus_Aborted
 }

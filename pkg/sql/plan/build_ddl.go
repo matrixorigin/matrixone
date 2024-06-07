@@ -362,7 +362,13 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	if len(createView.Database) == 0 {
 		createView.Database = ctx.DefaultDatabase()
 	}
-	if sub, err := ctx.GetSubscriptionMeta(createView.Database, Snapshot{TS: &timestamp.Timestamp{}}); err != nil {
+
+	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		snapshot = ctx.GetSnapshot()
+	}
+
+	if sub, err := ctx.GetSubscriptionMeta(createView.Database, *snapshot); err != nil {
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
@@ -3662,12 +3668,6 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 
 func getAutoIncrementOffsetFromVariables(ctx CompilerContext) (uint64, bool) {
 	v, err := ctx.ResolveVariable("auto_increment_offset", true, false)
-	if err == nil {
-		if offset, ok := v.(int64); ok && offset > 1 {
-			return uint64(offset - 1), true
-		}
-	}
-	v, err = ctx.ResolveVariable("auto_increment_offset", true, true)
 	if err == nil {
 		if offset, ok := v.(int64); ok && offset > 1 {
 			return uint64(offset - 1), true

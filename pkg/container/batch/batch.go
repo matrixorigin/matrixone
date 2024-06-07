@@ -18,8 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -65,11 +66,12 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 	}
 
 	return types.Encode(&EncodeBatch{
-		rowCount:  int64(bat.rowCount),
-		Vecs:      bat.Vecs,
-		Attrs:     bat.Attrs,
-		AggInfos:  aggInfos,
-		Recursive: bat.Recursive,
+		rowCount:   int64(bat.rowCount),
+		Vecs:       bat.Vecs,
+		Attrs:      bat.Attrs,
+		AggInfos:   aggInfos,
+		Recursive:  bat.Recursive,
+		ShuffleIdx: bat.ShuffleIDX,
 	})
 }
 
@@ -106,6 +108,7 @@ func (bat *Batch) unmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 			}
 		}
 	}
+	bat.ShuffleIDX = rbat.ShuffleIdx
 	return nil
 }
 

@@ -538,7 +538,7 @@ var supportedStringBuiltIns = []FuncNew{
 	{
 		functionId: ILIKE,
 		class:      plan.Function_STRICT,
-		layout:     BINARY_LOGICAL_OPERATOR,
+		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() {
@@ -1970,6 +1970,36 @@ var supportedArrayOperations = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return L2DistanceArray[float64]
+				},
+			},
+		},
+	},
+	// function `l2_distance_sq`
+	{
+		functionId: L2_DISTANCE_SQ,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L2DistanceSqArray[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L2DistanceSqArray[float64]
 				},
 			},
 		},
@@ -3839,7 +3869,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				volatile:   true,
 				args:       []types.T{types.T_varchar, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInPurgeLog

@@ -72,6 +72,9 @@ enum CmdMethod {
   MigrateConnFrom = 20;
   // MigrateConnTo migrate the session info to the new cn node.
   MigrateConnTo = 21;
+
+  // GetReplicaCount get the replica count on specified cn node.
+  GetReplicaCount = 22;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -196,6 +199,7 @@ message Request {
   GetPipelineInfoRequest GetPipelineInfoRequest = 22;
   MigrateConnFromRequest MigrateConnFromRequest = 23;
   MigrateConnToRequest MigrateConnToRequest = 24;
+  GetReplicaCountRequest GetReplicaCount = 25 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -245,6 +249,7 @@ message Response {
   GetPipelineInfoResponse GetPipelineInfoResponse = 22;
   MigrateConnFromResponse MigrateConnFromResponse = 23;
   MigrateConnToResponse MigrateConnToResponse = 24;
+  GetReplicaCountResponse GetReplicaCount = 25 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -449,4 +454,12 @@ message MigrateConnToRequest {
 
 message MigrateConnToResponse {
   bool Success = 1;
+}
+
+message GetReplicaCountRequest {
+  string CN = 1;
+}
+
+message GetReplicaCountResponse {
+  int64 Count = 1;
 }

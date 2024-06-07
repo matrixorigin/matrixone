@@ -214,7 +214,7 @@ type BaseMVCCNode interface {
 	GetPrepare() types.TS
 	GetTxn() TxnReader
 
-	ApplyCommit() (err error)
+	ApplyCommit(string) (err error)
 	ApplyRollback() (err error)
 	PrepareCommit() (err error)
 	PrepareRollback() (err error)
@@ -282,7 +282,7 @@ type TxnStore interface {
 	GetRelationByID(dbId uint64, tid uint64) (handle.Relation, error)
 
 	CreateDatabase(name, createSql, datTyp string) (handle.Database, error)
-	CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (handle.Database, error)
+	CreateDatabaseWithID(ctx context.Context, name, createSql, datTyp string, id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	GetDatabaseByID(id uint64) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
@@ -329,7 +329,7 @@ type TxnEntryType int16
 type TxnEntry interface {
 	PrepareCommit() error
 	PrepareRollback() error
-	ApplyCommit() error
+	ApplyCommit(string) error
 	ApplyRollback() error
 	MakeCommand(uint32) (TxnCmd, error)
 	Is1PC() bool

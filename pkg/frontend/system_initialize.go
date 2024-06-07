@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -127,20 +126,6 @@ func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, fina
 	addSqlIntoSet(initMoUserGrant4)
 	addSqlIntoSet(initMoUserGrant5)
 
-	//setp6: add new entries to the mo_mysql_compatibility_mode
-	pu := config.GetParameterUnit(ctx)
-	for _, variable := range gSysVarsDefs {
-		if _, ok := configInitVariables[variable.Name]; ok {
-			addsql := addInitSystemVariablesSql(sysAccountID, sysAccountName, variable.Name, pu)
-			if len(addsql) != 0 {
-				addSqlIntoSet(addsql)
-			}
-		} else {
-			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
-			addSqlIntoSet(initMoMysqlCompatibilityMode)
-		}
-	}
-
 	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant, mo_mysql_compatibility_mode
 	for _, sql := range initDataSqls {
 		res, err := txn.Exec(sql, executor.StatementOption{})
@@ -177,7 +162,7 @@ func checkSysExistsOrNotWithTxn(ctx context.Context, txn executor.TxnExecutor) (
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
 				count += i
-				tableName := cols[0].GetStringAt(i)
+				tableName := cols[0].UnsafeGetStringAt(i)
 				// if there is at least one catalog table, it denotes the sys tenant exists.
 				if _, ok := sysWantedTables[tableName]; ok {
 					sysTenantExists = true

@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -59,7 +60,11 @@ const (
 	// MOForeignKeys saves the fk relationships
 	MOForeignKeys = "mo_foreign_keys"
 
-	// MoDataBaseConstrant =
+	// MOShardsMetadata is used to store the sharding information of the table. See detail
+	// in shardservice.
+	MOShardsMetadata = "mo_shards_metadata"
+	// MOShards shards detail.
+	MOShards = "mo_shards"
 )
 
 var InternalColumns = map[string]int8{
@@ -142,6 +147,7 @@ const (
 
 	MO_SYSTEM    = "system"
 	MO_STATEMENT = "statement_info"
+	MO_RAWLOG    = "rawlog"
 
 	MO_SYSTEM_METRICS = "system_metrics"
 	MO_METRIC         = "metric"
@@ -402,9 +408,9 @@ type CreateDatabase struct {
 	Name        string
 	CreateSql   string
 	DatTyp      string
-	Owner       uint32
-	Creator     uint32
-	AccountId   uint32
+	Owner       uint32 // roleid
+	Creator     uint32 // userid
+	AccountId   uint32 // tenantid
 	CreatedTime types.Timestamp
 }
 
@@ -431,12 +437,9 @@ type CreateTable struct {
 	Defs         []engine.TableDef
 }
 
-type UpdateConstraint struct {
-	DatabaseId   uint64
-	TableId      uint64
-	TableName    string
-	DatabaseName string
-	Constraint   []byte
+func (t CreateTable) String() string {
+	return fmt.Sprintf("{aid-%v,uid-%v,rid-%v}: %d-%s:%d-%s, %q",
+		t.AccountId, t.Creator, t.Owner, t.DatabaseId, t.DatabaseName, t.TableId, t.Name, t.CreateSql)
 }
 
 type DropOrTruncateTable struct {
@@ -756,6 +759,7 @@ var (
 	QueryResultMetaDir  string
 	//ProfileDir holds all profiles dumped by the runtime/pprof
 	ProfileDir string
+	TraceDir   string
 )
 
 func init() {
@@ -763,6 +767,7 @@ func init() {
 	QueryResultMetaPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta/%s_%s.blk")
 	QueryResultMetaDir = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta")
 	ProfileDir = fileservice.JoinPath(defines.ETLFileServiceName, "/profile")
+	TraceDir = fileservice.JoinPath(defines.ETLFileServiceName, "/trace")
 }
 
 const QueryResultName = "%s_%s_%d.blk"

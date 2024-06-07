@@ -402,7 +402,7 @@ func (db *txnDB) WaitPrepared() (err error) {
 }
 func (db *txnDB) Apply1PCCommit() (err error) {
 	if db.createEntry != nil && db.createEntry.Is1PC() {
-		if err = db.createEntry.ApplyCommit(); err != nil {
+		if err = db.createEntry.ApplyCommit(db.store.txn.GetID()); err != nil {
 			return
 		}
 	}
@@ -412,7 +412,7 @@ func (db *txnDB) Apply1PCCommit() (err error) {
 		}
 	}
 	if db.dropEntry != nil && db.dropEntry.Is1PC() {
-		if err = db.dropEntry.ApplyCommit(); err != nil {
+		if err = db.dropEntry.ApplyCommit(db.store.txn.GetID()); err != nil {
 			return
 		}
 	}
@@ -421,7 +421,7 @@ func (db *txnDB) Apply1PCCommit() (err error) {
 func (db *txnDB) ApplyCommit() (err error) {
 	now := time.Now()
 	if db.createEntry != nil && !db.createEntry.Is1PC() {
-		if err = db.createEntry.ApplyCommit(); err != nil {
+		if err = db.createEntry.ApplyCommit(db.store.txn.GetID()); err != nil {
 			return
 		}
 	}
@@ -431,7 +431,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 		}
 	}
 	if db.dropEntry != nil && !db.dropEntry.Is1PC() {
-		if err = db.dropEntry.ApplyCommit(); err != nil {
+		if err = db.dropEntry.ApplyCommit(db.store.txn.GetID()); err != nil {
 			return
 		}
 	}

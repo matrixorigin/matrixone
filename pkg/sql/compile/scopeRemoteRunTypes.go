@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -86,6 +87,7 @@ type processHelper struct {
 	txnClient        client.TxnClient
 	sessionInfo      process.SessionInfo
 	analysisNodeList []int32
+	StmtId           uuid.UUID
 }
 
 // messageSenderOnClient is a structure
@@ -233,6 +235,7 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 		n := source[i]
 		atomic.AddInt64(&target.analInfos[i].OutputSize, n.OutputSize)
 		atomic.AddInt64(&target.analInfos[i].OutputRows, n.OutputRows)
+		atomic.AddInt64(&target.analInfos[i].InputBlocks, n.InputBlocks)
 		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
 		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
 		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
@@ -254,7 +257,7 @@ func (sender *messageSenderOnClient) close() {
 		sender.ctxCancel()
 	}
 	// XXX not a good way to deal it if close failed.
-	_ = sender.streamSender.Close(true)
+	_ = sender.streamSender.Close(false)
 }
 
 // messageReceiverOnServer is a structure
@@ -381,11 +384,17 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
 	proc.DispatchNotifyCh = make(chan process.WrapCs)
+	{
+		txn := proc.TxnOperator.Txn()
+		txnId := txn.GetID()
+		proc.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
+	}
 
 	c := reuse.Alloc[Compile](nil)
 	c.proc = proc
-	c.proc.MessageBoard = c.MessageBoard
 	c.e = cnInfo.storeEngine
+	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.StmtProfile.GetStmtId())
+	c.proc.MessageBoard = c.MessageBoard
 	c.anal = newAnaylze()
 	c.anal.analInfos = proc.AnalInfos
 	c.addr = receiver.cnInformation.cnAddr
@@ -517,6 +526,12 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	result.sessionInfo, err = convertToProcessSessionInfo(procInfo.SessionInfo)
 	if err != nil {
 		return processHelper{}, err
+	}
+	if sessLogger := procInfo.SessionLogger; sessLogger != nil {
+		copy(result.sessionInfo.SessionId[:], sessLogger.SessId)
+		copy(result.StmtId[:], sessLogger.StmtId)
+		result.sessionInfo.LogLevel = enumLogLevel2ZapLogLevel(sessLogger.LogLevel)
+		// txnId, ignore. more in txnOperator.
 	}
 
 	return result, nil
