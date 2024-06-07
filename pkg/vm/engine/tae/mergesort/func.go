@@ -41,7 +41,7 @@ func SortBlockColumns(
 	return sortedIdx, nil
 }
 
-func ReshapeBatches(batches []*containers.Batch, toLayout []uint32, vpool DisposableVecPool) ([]*batch.Batch, func()) {
+func ReshapeBatches(batches []*containers.Batch, toLayout []uint32, vpool DisposableVecPool) ([]*batch.Batch, func(), []int, error) {
 	// just do reshape, keep sortedIdx nil
 	ret := make([]*batch.Batch, len(toLayout))
 	rfs := make([]func(), len(toLayout))
@@ -51,30 +51,46 @@ func ReshapeBatches(batches []*containers.Batch, toLayout []uint32, vpool Dispos
 		}
 	}
 
+	k := 0
+	accRowCnt := make([]int64, len(batches))
+
+	totalRowCnt := 0
+	for i, blk := range batches {
+		accRowCnt[i] = int64(totalRowCnt)
+		totalRowCnt += blk.Length()
+	}
+
+	mapping := make([]int, totalRowCnt)
+	for i := range mapping {
+		mapping[i] = -1
+	}
+
 	retIdx := 0
 	ret[0], rfs[0] = getSimilarBatch(containers.ToCNBatch(batches[0]), int(toLayout[retIdx]), vpool)
-	for _, bat := range batches {
+	for batIdx, bat := range batches {
 		cnBat := containers.ToCNBatch(bat)
 		for row := 0; row < cnBat.RowCount(); row++ {
 			if bat.Deletes.Contains(uint64(row)) {
 				continue
 			}
 
+			mapping[accRowCnt[batIdx]+int64(row)] = k
+			k++
 			for idx := range ret[retIdx].Vecs {
 				err := ret[retIdx].Vecs[idx].UnionOne(cnBat.Vecs[idx], int64(row), vpool.GetMPool())
 				if err != nil {
-					return nil, nil
+					return nil, nil, nil, err
 				}
 			}
 			ret[retIdx].SetRowCount(ret[retIdx].RowCount() + 1)
 			if uint32(ret[retIdx].RowCount()) == toLayout[retIdx] {
 				if retIdx == len(toLayout)-1 {
-					return ret, releaseF
+					return ret, releaseF, mapping, nil
 				}
 				retIdx++
 				ret[retIdx], rfs[retIdx] = getSimilarBatch(containers.ToCNBatch(batches[0]), int(toLayout[retIdx]), vpool)
 			}
 		}
 	}
-	return ret, releaseF
+	return ret, releaseF, mapping, nil
 }

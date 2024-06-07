@@ -27,7 +27,7 @@ import (
 )
 
 type AObjMerger interface {
-	Merge(context.Context) ([]*batch.Batch, func(), []uint32, error)
+	Merge(context.Context) ([]*batch.Batch, func(), []int, error)
 }
 
 type aObjMerger[T any] struct {
@@ -40,7 +40,7 @@ type aObjMerger[T any] struct {
 	rowIdx    []int64
 	accRowCnt []int64
 
-	mapping  []uint32
+	mapping  []int
 	toLayout []uint32
 	vpool    DisposableVecPool
 }
@@ -50,7 +50,7 @@ func MergeAObj(
 	vpool DisposableVecPool,
 	batches []*containers.Batch,
 	sortKeyPos int,
-	toLayout []uint32) ([]*batch.Batch, func(), []uint32, error) {
+	toLayout []uint32) ([]*batch.Batch, func(), []int, error) {
 	var merger AObjMerger
 	typ := batches[0].Vecs[sortKeyPos].GetType()
 	if typ.IsVarlen() {
@@ -138,12 +138,15 @@ func newAObjMerger[T any](
 		m.accRowCnt[i] = int64(totalRowCnt)
 		totalRowCnt += len(m.cols[i])
 	}
-	m.mapping = make([]uint32, totalRowCnt)
+	m.mapping = make([]int, totalRowCnt)
+	for i := range m.mapping {
+		m.mapping[i] = -1
+	}
 
 	return m
 }
 
-func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []uint32, error) {
+func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []int, error) {
 	for i := 0; i < len(am.bats); i++ {
 		heapPush(am.heap, heapElem[T]{
 			data:   am.cols[i][0],
@@ -158,7 +161,7 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []u
 
 	blkCnt := 0
 	bufferRowCnt := 0
-	k := uint32(0)
+	k := 0
 	for am.heap.Len() != 0 {
 		select {
 		case <-ctx.Done():
