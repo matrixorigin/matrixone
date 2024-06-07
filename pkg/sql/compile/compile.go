@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"math"
 	"net"
 	"runtime"
@@ -29,6 +28,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -134,7 +135,13 @@ func NewCompile(
 	c.startAt = startAt
 	c.disableRetry = false
 	if c.proc.TxnOperator != nil {
+		// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
+		// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
+		// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
 		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+		c.TxnOffset = c.proc.TxnOperator.GetWorkspace().GetSnapshotWriteOffset()
+	} else {
+		c.TxnOffset = 0
 	}
 	return c
 }
@@ -2180,6 +2187,7 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Scope, error) {
 	s := newScope(Remote)
 	s.NodeInfo = node
+	s.TxnOffset = c.TxnOffset
 	s.DataSource = &Source{
 		node: n,
 	}
@@ -2849,6 +2857,21 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 }
 
 func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
+	if c.execType == plan2.ExecTypeTP {
+		ss[0].appendInstruction(vm.Instruction{
+			Op:      vm.Order,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructOrder(n),
+		})
+		ss[0].appendInstruction(vm.Instruction{
+			Op:  vm.MergeOrder,
+			Idx: c.anal.curr,
+			Arg: constructMergeOrder(n),
+		})
+		return ss
+	}
+
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
@@ -2863,14 +2886,12 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 		})
 	}
 	c.anal.isFirst = false
-
 	rs := c.newMergeScope(ss)
-	rs.Instructions[0].Arg.Release()
-	rs.Instructions[0] = vm.Instruction{
+	rs.appendInstruction(vm.Instruction{
 		Op:  vm.MergeOrder,
 		Idx: c.anal.curr,
 		Arg: constructMergeOrder(n),
-	}
+	})
 	return []*Scope{rs}
 }
 
@@ -3835,7 +3856,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 	if err != nil {
 		return nil, err
 	}
-	ranges, err = rel.Ranges(ctx, blockFilterList)
+	ranges, err = rel.Ranges(ctx, blockFilterList, c.TxnOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -3848,7 +3869,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 				if err != nil {
 					return nil, err
 				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
@@ -3870,7 +3891,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 				if err != nil {
 					return nil, err
 				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
