@@ -317,7 +317,11 @@ func (r *runner) RemoveCheckpointMetaFile(name string) {
 func (r *runner) GetCheckpointMetaFiles() map[string]struct{} {
 	r.checkpointMetaFiles.RLock()
 	defer r.checkpointMetaFiles.RUnlock()
-	return r.checkpointMetaFiles.files
+	files := make(map[string]struct{})
+	for k, v := range r.checkpointMetaFiles.files {
+		files[k] = v
+	}
+	return files
 }
 
 // Only used in UT
