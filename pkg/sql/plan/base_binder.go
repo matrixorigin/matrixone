@@ -1656,6 +1656,21 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 		}
 
+	case "like":
+		// if constant's type higher than column's type
+		// and constant's value in range of column's type, then no cast was needed
+		switch args[0].Expr.(type) {
+		case *plan.Expr_Col:
+			if checkNoNeedCast(argsType[1], argsType[0], args[1]) {
+				argsCastType = []types.Type{argsType[0], argsType[0]}
+				fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
+				if err != nil {
+					return nil, err
+				}
+				funcID = fGet.GetEncodedOverloadID()
+			}
+		}
+
 	case "between":
 		if checkNoNeedCast(argsType[1], argsType[0], args[1]) && checkNoNeedCast(argsType[2], argsType[0], args[2]) {
 			argsCastType = []types.Type{argsType[0], argsType[0], argsType[0]}
