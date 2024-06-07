@@ -1344,3 +1344,10 @@ func ToRequest(payload []byte) *Request {
 
 	return req
 }
+
+func checkMoreResultSet(status uint16, isLastStmt bool) uint16 {
+	if !isLastStmt {
+		status |= SERVER_MORE_RESULTS_EXISTS
+	}
+	return status
+}
