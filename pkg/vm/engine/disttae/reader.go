@@ -137,7 +137,7 @@ func (mixin *withFilterMixin) getPKFilter(
 	// C: {A|B} and {A|B}
 	// D: {A|B|C} [and {A|B|C}]*
 	// for other patterns, no filter is needed
-	ok, hasNull, filter := getNonCompositePKSearchFuncByExprInProgress(
+	ok, hasNull, filter := getNonCompositePKSearchFuncByExpr(
 		mixin.filterState.expr,
 		mixin.tableDef,
 		mixin.tableDef.Pkey.PkeyColName,
