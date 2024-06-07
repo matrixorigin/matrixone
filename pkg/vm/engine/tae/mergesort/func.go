@@ -41,66 +41,41 @@ func SortBlockColumns(
 	return sortedIdx, nil
 }
 
-func ReshapeBatches(
-	batches []*containers.Batch,
-	fromLayout, toLayout []uint32,
-	vpool DisposableVecPool) ([]*batch.Batch, func()) {
+func ReshapeBatches(batches []*containers.Batch, toLayout []uint32, vpool DisposableVecPool) ([]*batch.Batch, func()) {
 	// just do reshape, keep sortedIdx nil
 	ret := make([]*batch.Batch, 0, len(toLayout))
 	rfs := make([]func(), 0, len(toLayout))
-	cnBat := containers.ToCNBatch(batches[0])
-	for _, layout := range toLayout {
-		bat, releaseF := getSimilarBatch(cnBat, int(layout), vpool)
-		bat.SetRowCount(int(layout))
-		ret = append(ret, bat)
-		rfs = append(rfs, releaseF)
-	}
 	releaseF := func() {
 		for _, rf := range rfs {
 			rf()
 		}
 	}
 
-	fromIdx := 0
-	fromOffset := 0
-	for i := 0; i < len(toLayout); i++ {
-		toOffset := 0
-		for toOffset < int(toLayout[i]) {
-			// find offset to fill a full block
-			fromLeft := int(fromLayout[fromIdx]) - fromOffset
-			if fromLeft == 0 {
-				fromIdx++
-				fromOffset = 0
-				fromLeft = int(fromLayout[fromIdx])
-				cnBat = containers.ToCNBatch(batches[fromIdx])
-			}
-			length := 0
-			if fromLeft < int(toLayout[i])-toOffset {
-				length = fromLeft
-			} else {
-				length = int(toLayout[i]) - toOffset
+	retIdx := 0
+	retBat, rf := getSimilarBatch(containers.ToCNBatch(batches[0]), int(toLayout[retIdx]), vpool)
+	for _, bat := range batches {
+		cnBat := containers.ToCNBatch(bat)
+		for row := 0; row < cnBat.RowCount(); row++ {
+			if bat.Deletes.Contains(uint64(row)) {
+				continue
 			}
 
-			mergedRow, j := 0, 0
-			for mergedRow < length {
-				if batches[fromIdx].Deletes.Contains(uint64(fromOffset + j)) {
-					j++
-					continue
+			for idx := range retBat.Vecs {
+				err := retBat.Vecs[idx].UnionOne(cnBat.Vecs[idx], int64(row), vpool.GetMPool())
+				if err != nil {
+					return nil, nil
 				}
-				for idx := range ret[i].Vecs {
-					err := ret[i].Vecs[idx].UnionOne(cnBat.Vecs[idx], int64(fromOffset+j), vpool.GetMPool())
-					if err != nil {
-						return nil, nil
-					}
-				}
-
-				mergedRow++
-				j++
 			}
-
-			// update offset
-			fromOffset += length
-			toOffset += length
+			retBat.SetRowCount(retBat.RowCount() + 1)
+			if uint32(retBat.RowCount()) == toLayout[retIdx] {
+				ret = append(ret, retBat)
+				rfs = append(rfs, rf)
+				retIdx++
+				if retIdx > len(toLayout)-1 {
+					break
+				}
+				retBat, rf = getSimilarBatch(containers.ToCNBatch(batches[0]), int(toLayout[retIdx]), vpool)
+			}
 		}
 	}
 	return ret, releaseF
