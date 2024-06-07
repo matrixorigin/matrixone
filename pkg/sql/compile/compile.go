@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"math"
 	"net"
 	"runtime"
@@ -2898,6 +2899,16 @@ func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
+	if c.execType == plan2.ExecTypeTP {
+		ss[0].appendInstruction(vm.Instruction{
+			Op:      vm.Offset,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     offset.NewArgument().WithOffset(n.Offset),
+		})
+		return ss
+	}
+
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
