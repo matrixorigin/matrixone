@@ -40,7 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
-func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool) *QueryBuilder {
+func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
 	var mysqlCompatible bool
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
@@ -64,6 +64,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		tag2Table:          make(map[int32]*TableDef),
 		isPrepareStatement: isPrepareStatement,
 		deleteNode:         make(map[uint64]int32),
+		skipStats:          skipStats,
 	}
 }
 
