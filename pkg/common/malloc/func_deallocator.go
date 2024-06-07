@@ -14,10 +14,27 @@
 
 package malloc
 
-import "testing"
+import "unsafe"
 
-func TestClassAllocator(t *testing.T) {
-	testAllocator(t, func() Allocator {
-		return NewClassAllocator(ptrTo(uint32(1)))
-	})
+type FuncDeallocator func(ptr unsafe.Pointer)
+
+var _ Deallocator = FuncDeallocator(nil)
+
+func (f FuncDeallocator) Deallocate(ptr unsafe.Pointer) {
+	f(ptr)
+}
+
+type argumentedFuncDeallocator[T any] struct {
+	argument T
+	fn       func(unsafe.Pointer, T)
+}
+
+func (a *argumentedFuncDeallocator[T]) SetArgument(arg T) {
+	a.argument = arg
+}
+
+var _ Deallocator = &argumentedFuncDeallocator[int]{}
+
+func (a *argumentedFuncDeallocator[T]) Deallocate(ptr unsafe.Pointer) {
+	a.fn(ptr, a.argument)
 }

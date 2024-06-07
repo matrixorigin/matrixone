@@ -76,8 +76,6 @@ func (arg *Argument) Release() {
 }
 
 type container struct {
-	colexec.ReceiverOperator
-
 	// operator status
 	status int
 
