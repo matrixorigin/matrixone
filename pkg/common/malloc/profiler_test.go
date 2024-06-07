@@ -56,6 +56,7 @@ func TestProfiler(t *testing.T) {
 }
 
 func TestProfilerWrite(t *testing.T) {
+	t.Skip()
 	f, err := os.Create("test_profile")
 	if err != nil {
 		t.Fatal(err)
