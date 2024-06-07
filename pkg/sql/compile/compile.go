@@ -3549,16 +3549,19 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 
 	// all join's first flag will setting in newLeftScope and newRightScope
 	// so we set it to false now
-	c.anal.isFirst = false
-	mergeChildren := c.newMergeScope(buildScopes)
+	if c.execType == plan2.ExecTypeTP {
+		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
+	} else {
+		c.anal.isFirst = false
+		mergeChildren := c.newMergeScope(buildScopes)
 
-	mergeChildren.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
-		Arg: constructDispatch(1, rs, c.addr, n, false),
-	})
-	mergeChildren.IsEnd = true
-	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
-
+		mergeChildren.appendInstruction(vm.Instruction{
+			Op:  vm.Dispatch,
+			Arg: constructDispatch(1, rs, c.addr, n, false),
+		})
+		mergeChildren.IsEnd = true
+		rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
+	}
 	return rs
 }
 
