@@ -1367,8 +1367,8 @@ func (s *Scope) CreateView(c *Compile) error {
 		return err
 	}
 
-	tblName := qry.GetTableDef().GetName()
-	if _, err = dbSource.Relation(c.ctx, tblName, nil); err == nil {
+	viewName := qry.GetTableDef().GetName()
+	if _, err = dbSource.Relation(c.ctx, viewName, nil); err == nil {
 		if qry.GetIfNotExists() {
 			// TODO: debug for #11917
 			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
@@ -1381,7 +1381,7 @@ func (s *Scope) CreateView(c *Compile) error {
 			return nil
 		}
 		if qry.GetReplace() {
-			err = c.runSql(fmt.Sprintf("drop view if exists %s", tblName))
+			err = c.runSql(fmt.Sprintf("drop view if exists %s", viewName))
 			if err != nil {
 				getLogger().Info("createView",
 					zap.String("databaseName", c.db),
@@ -1396,14 +1396,14 @@ func (s *Scope) CreateView(c *Compile) error {
 				zap.String("ViewName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
-			return moerr.NewTableAlreadyExists(c.ctx, tblName)
+			return moerr.NewTableAlreadyExists(c.ctx, viewName)
 		}
 	}
 
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
 	tmpDBSource, err := c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
 	if err == nil {
-		if _, err := tmpDBSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName), nil); err == nil {
+		if _, err = tmpDBSource.Relation(c.ctx, engine.GetTempTableName(dbName, viewName), nil); err == nil {
 			if qry.GetIfNotExists() {
 				return nil
 			}
@@ -1412,11 +1412,11 @@ func (s *Scope) CreateView(c *Compile) error {
 				zap.String("ViewName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
-			return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", tblName))
+			return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", viewName))
 		}
 	}
 
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+	if err = lockMoTable(c, dbName, viewName, lock.LockMode_Exclusive); err != nil {
 		getLogger().Info("createView",
 			zap.String("databaseName", c.db),
 			zap.String("ViewName", qry.GetTableDef().GetName()),
@@ -1425,7 +1425,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		return err
 	}
 
-	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	if err = dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), viewName, append(exeCols, exeDefs...)); err != nil {
 		getLogger().Info("createView",
 			zap.String("databaseName", c.db),
 			zap.String("ViewName", qry.GetTableDef().GetName()),
