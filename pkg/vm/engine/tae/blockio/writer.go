@@ -34,10 +34,12 @@ type BlockWriter struct {
 	objMetaBuilder *ObjectColumnMetasBuilder
 	isSetPK        bool
 	pk             uint16
+	pkType         uint8
 	sortKeyIdx     uint16
 	nameStr        string
 	name           objectio.ObjectName
 	objectStats    []objectio.ObjectStats
+	prefix         []index.PrefixFn
 }
 
 func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, error) {
@@ -72,6 +74,15 @@ func (w *BlockWriter) SetPrimaryKey(idx uint16) {
 	w.isSetPK = true
 	w.pk = idx
 	w.sortKeyIdx = idx
+	w.pkType = index.BF
+}
+
+func (w *BlockWriter) SetPrimaryKeyWithType(idx uint16, pkType uint8, prefix ...index.PrefixFn) {
+	w.isSetPK = true
+	w.pk = idx
+	w.sortKeyIdx = idx
+	w.pkType = pkType
+	w.prefix = prefix
 }
 
 func (w *BlockWriter) SetSortKey(idx uint16) {
@@ -129,7 +140,23 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			continue
 		}
 		w.objMetaBuilder.AddPKData(columnData)
-		bf, err := index.NewBloomFilter(columnData)
+		var bf index.StaticFilter
+		if w.pkType == index.BF {
+			bf, err = index.NewBloomFilter(columnData)
+		} else if w.pkType == index.PBF {
+			if len(w.prefix) < 1 {
+				return nil, index.ErrPrefix
+			}
+			prefix := w.prefix[0]
+			bf, err = index.NewPrefixBloomFilter(columnData, prefix.Id, prefix.Fn)
+		} else if w.pkType == index.HBF {
+			if len(w.prefix) < 2 {
+				return nil, index.ErrPrefix
+			}
+			prefixL1 := w.prefix[0]
+			prefixL2 := w.prefix[1]
+			bf, err = index.NewHybridBloomFilter(columnData, prefixL1.Id, prefixL1.Fn, prefixL2.Id, prefixL2.Fn)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -138,7 +165,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			return nil, err
 		}
 
-		if err = w.writer.WriteBF(int(block.GetID()), seqnums[i], buf); err != nil {
+		if err = w.writer.WriteBF(int(block.GetID()), seqnums[i], buf, w.pkType); err != nil {
 			return nil, err
 		}
 	}

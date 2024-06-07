@@ -193,6 +193,7 @@ type OptimizerHints struct {
 	runtimeFilter              int
 	joinOrdering               int
 	forceOneCN                 int
+	execType                   int
 }
 
 type CTERef struct {

@@ -37,6 +37,18 @@ func DecodeBloomFilter(sf StaticFilter, data []byte) error {
 	return nil
 }
 
+func NewEmptyBloomFilterWithType(t uint8) StaticFilter {
+	if t == BF {
+		return &bloomFilter{}
+	} else if t == PBF {
+		return &prefixBloomFilter{}
+	} else if t == HBF {
+		return &hybridFilter{}
+	} else {
+		return nil
+	}
+}
+
 func NewEmptyBloomFilter() StaticFilter {
 	return &bloomFilter{}
 }
