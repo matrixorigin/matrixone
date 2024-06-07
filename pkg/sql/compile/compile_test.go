@@ -134,21 +134,10 @@ func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	ctrl := gomock.NewController(t)
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
-	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
-	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
-	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
-	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-	txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
-	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
-	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
 	for _, tc := range tcs {
-		tc.proc.TxnClient = txnClient
-		tc.proc.TxnOperator = txnOperator
+		tc.proc.TxnClient = txnCli
+		tc.proc.TxnOperator = txnOp
 		tc.proc.Ctx = ctx
 		c := NewCompile("test", "test", tc.sql, "", "", ctx, tc.e, tc.proc, tc.stmt, false, nil, time.Now())
 		err := c.Compile(ctx, tc.pn, testPrint)
@@ -174,6 +163,10 @@ func TestCompileWithFaults(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "")
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
+	ctrl := gomock.NewController(t)
+	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+	tc.proc.TxnClient = txnCli
+	tc.proc.TxnOperator = txnOp
 	tc.proc.Ctx = ctx
 	c := NewCompile("test", "test", tc.sql, "", "", ctx, tc.e, tc.proc, nil, false, nil, time.Now())
 	err := c.Compile(ctx, tc.pn, testPrint)
@@ -181,6 +174,23 @@ func TestCompileWithFaults(t *testing.T) {
 	c.getAffectedRows()
 	_, err = c.Run(0)
 	require.NoError(t, err)
+}
+
+func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.TxnOperator) {
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+	return txnClient, txnOperator
 }
 
 func newTestCase(sql string, t *testing.T) compileTestCase {
