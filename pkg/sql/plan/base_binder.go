@@ -1517,10 +1517,11 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	case "in", "not_in":
 		//if all the expr in the in list can safely cast to left type, we call it safe
 		if rightList := args[1].GetList(); rightList != nil {
+			typLeft := makeTypeByPlan2Expr(args[0])
 			var inExprList, orExprList []*plan.Expr
 
 			for _, rightVal := range rightList.List {
-				if isRuntimeConstExpr(rightVal) {
+				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
 					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
 					if err != nil {
 						return nil, err

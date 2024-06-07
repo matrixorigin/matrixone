@@ -1245,6 +1245,10 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
 func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
+	if constExpr.GetP() != nil {
+		return true
+	}
+
 	lit := constExpr.GetLit()
 	if lit == nil {
 		return false
