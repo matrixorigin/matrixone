@@ -1629,7 +1629,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	// rewrite some cast rule:  expr:  int32Col > 10,
 	// old rule: cast(int32Col as int64) >10 ,   new rule: int32Col > (cast 10 as int32)
 	switch name {
-	case "=", "<", "<=", ">", ">=", "<>", "like":
+	case "=", "<", "<=", ">", ">=", "<>":
 		// if constant's type higher than column's type
 		// and constant's value in range of column's type, then no cast was needed
 		switch args[0].Expr.(type) {
