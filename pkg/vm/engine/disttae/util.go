@@ -581,7 +581,7 @@ func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, pr
 			filter.oid = oid
 
 		default:
-			panic(name)
+			//panic(name)
 		}
 	default:
 		//panic(plan2.FormatExpr(expr))
