@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"math"
 	"net"
 	"runtime"
@@ -29,6 +28,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -2844,6 +2845,21 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 }
 
 func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
+	if c.execType == plan2.ExecTypeTP {
+		ss[0].appendInstruction(vm.Instruction{
+			Op:      vm.Order,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructOrder(n),
+		})
+		ss[0].appendInstruction(vm.Instruction{
+			Op:  vm.MergeOrder,
+			Idx: c.anal.curr,
+			Arg: constructMergeOrder(n),
+		})
+		return ss
+	}
+
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
@@ -2858,14 +2874,12 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 		})
 	}
 	c.anal.isFirst = false
-
 	rs := c.newMergeScope(ss)
-	rs.Instructions[0].Arg.Release()
-	rs.Instructions[0] = vm.Instruction{
+	rs.appendInstruction(vm.Instruction{
 		Op:  vm.MergeOrder,
 		Idx: c.anal.curr,
 		Arg: constructMergeOrder(n),
-	}
+	})
 	return []*Scope{rs}
 }
 

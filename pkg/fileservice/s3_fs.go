@@ -93,6 +93,12 @@ func NewS3FS(
 			return nil, err
 		}
 
+	case strings.EqualFold(args.Endpoint, "disk"):
+		fs.storage, err = newDiskObjectStorage(ctx, args, perfCounterSets)
+		if err != nil {
+			return nil, err
+		}
+
 	default:
 		fs.storage, err = NewAwsSDKv2(ctx, args, perfCounterSets)
 		if err != nil {
