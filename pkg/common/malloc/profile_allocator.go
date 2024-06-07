@@ -87,10 +87,8 @@ func NewProfileAllocator(
 		New: func() any {
 			argumented := new(argumentedFuncDeallocator[profileDeallocateArgs])
 			argumented.fn = func(_ unsafe.Pointer, args profileDeallocateArgs) {
-				args.fn(func(values *HeapSampleValues) {
-					values.InuseBytes.Add(int64(-args.size))
-					values.InuseObjects.Add(-1)
-				})
+				args.values.InuseBytes.Add(int64(-args.size))
+				args.values.InuseObjects.Add(-1)
 				ret.funcPool.Put(argumented)
 			}
 			return argumented
@@ -101,25 +99,23 @@ func NewProfileAllocator(
 }
 
 type profileDeallocateArgs struct {
-	fn   func(func(*HeapSampleValues))
-	size uint64
+	values *HeapSampleValues
+	size   uint64
 }
 
 var _ Allocator = new(ProfileAllocator)
 
 func (p *ProfileAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator) {
 	ptr, dec := p.upstream.Allocate(size)
-	sampleFunc := p.profiler.Sample(1, p.profileFraction)
-	sampleFunc(func(values *HeapSampleValues) {
-		values.AllocatedBytes.Add(int64(size))
-		values.AllocatedObjects.Add(1)
-		values.InuseBytes.Add(int64(size))
-		values.InuseObjects.Add(int64(1))
-	})
+	values := p.profiler.Sample(1, p.profileFraction)
+	values.AllocatedBytes.Add(int64(size))
+	values.AllocatedObjects.Add(1)
+	values.InuseBytes.Add(int64(size))
+	values.InuseObjects.Add(int64(1))
 	fn := p.funcPool.Get().(*argumentedFuncDeallocator[profileDeallocateArgs])
 	fn.SetArgument(profileDeallocateArgs{
-		fn:   sampleFunc,
-		size: size,
+		values: values,
+		size:   size,
 	})
 	return ptr, ChainDeallocator(dec, fn)
 }

@@ -69,7 +69,7 @@ func NewProfiler[T any, P interface {
 func (p *Profiler[T, P]) Sample(
 	skip int,
 	fullStackFraction uint32,
-) func(func(P)) {
+) P {
 
 	var locations []*profile.Location
 	if fullStackFraction > 0 &&
@@ -80,11 +80,7 @@ func (p *Profiler[T, P]) Sample(
 		locations = p.getFullStackLocations(skip)
 	}
 
-	value := p.getSampleValue(locations)
-
-	return func(fn func(P)) {
-		fn(value)
-	}
+	return p.getSampleValue(locations)
 }
 
 func (p *Profiler[T, P]) getFullStackLocations(skip int) []*profile.Location {
