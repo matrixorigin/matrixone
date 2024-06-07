@@ -1303,7 +1303,7 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, sel float64) floa
 }
 
 func (builder *QueryBuilder) canSkipStats() bool {
-	if builder.skipStats == true {
+	if builder.skipStats {
 		// if already set to true by other parts, just skip stats
 		return true
 	}
