@@ -390,7 +390,7 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 		return
 	}
 	bat = containers.NewBatch()
-	rowCntBeforeApplyDelete := views.Columns[0].Length()
+	totalRowCnt := views.Columns[0].Length()
 	bat.Deletes = views.DeleteMask.Clone()
 	task.aObjDeletesCnt += bat.Deletes.GetCardinality()
 	defer views.Close()
@@ -416,7 +416,7 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 			logutil.Infof("flushtabletail sort obj on %s", bat.Attrs[sortKeyPos])
 		}
 		sortMapping, err = mergesort.SortBlockColumns(bat.Vecs, sortKeyPos, task.rt.VectorPool.Transient)
-		if views.DeleteMask != nil {
+		if bat.Deletes != nil {
 			nulls.Filter(bat.Deletes, sortMapping, false)
 		}
 		if err != nil {
@@ -424,7 +424,7 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 		}
 	}
 	if task.doTransfer {
-		mergesort.AddSortPhaseMapping(task.transMappings, objIdx, rowCntBeforeApplyDelete, sortMapping)
+		mergesort.AddSortPhaseMapping(task.transMappings, objIdx, totalRowCnt, sortMapping)
 	}
 	return
 }
@@ -521,14 +521,17 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	// do first sort
 	var writtenBatches []*batch.Batch
 	var releaseF func()
-	var mapping []uint32
+	var mapping []int
 	if schema.HasSortKey() {
 		writtenBatches, releaseF, mapping, err = mergesort.MergeAObj(ctx, task, readedBats, sortKeyPos, toLayout)
 		if err != nil {
 			return
 		}
 	} else {
-		writtenBatches, releaseF = mergesort.ReshapeBatches(readedBats, toLayout, task)
+		writtenBatches, releaseF, mapping, err = mergesort.ReshapeBatches(readedBats, toLayout, task)
+		if err != nil {
+			return
+		}
 	}
 	defer releaseF()
 	if task.doTransfer {
