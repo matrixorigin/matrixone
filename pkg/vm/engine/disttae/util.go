@@ -270,7 +270,7 @@ func mergeFilters(left, right blockReaderPKFilter, connector int) (finalFilter b
 
 			case function.EQUAL:
 				// a = x and a = y --> a = y if x = y
-				if bytes.Compare(left.lb, right.lb) == 0 {
+				if bytes.Equal(left.lb, right.lb) {
 					return left
 				}
 			}
@@ -431,7 +431,7 @@ func mergeFilters(left, right blockReaderPKFilter, connector int) (finalFilter b
 			case function.EQUAL:
 				// a = x or a = y --> a = x if x = y
 				//                --> a in (x, y) if x != y
-				if bytes.Compare(left.lb, right.lb) == 0 {
+				if bytes.Equal(left.lb, right.lb) {
 					return left
 				}
 
