@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sort"
@@ -328,10 +327,11 @@ func TestReshapeBatches1(t *testing.T) {
 		t.Log(vec2)
 		vecs := []containers.Vector{vec, vec2}
 
-		inputBatches := make([]*batch.Batch, 2)
+		inputBatches := make([]*containers.Batch, 2)
 		for i := range inputBatches {
-			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vecs[i].GetDownstreamVector()
+			bat := containers.NewBatch()
+			bat.Vecs = append(bat.Vecs, vecs[i])
+			bat.Attrs = append(bat.Attrs, "")
 			inputBatches[i] = bat
 		}
 		retBatches, releaseF := ReshapeBatches(inputBatches, []uint32{4, 6}, []uint32{5, 5}, pool)
@@ -350,10 +350,11 @@ func TestReshapeBatches3(t *testing.T) {
 		vec := containers.MockVector(vecType, 50000, false, nil)
 		vec2 := containers.MockVector(vecType, 50000, false, nil)
 		vecs := []containers.Vector{vec, vec2}
-		inputBatches := make([]*batch.Batch, 2)
+		inputBatches := make([]*containers.Batch, 2)
 		for i := range inputBatches {
-			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vecs[i].GetDownstreamVector()
+			bat := containers.NewBatch()
+			bat.Vecs = append(bat.Vecs, vecs[i])
+			bat.Attrs = append(bat.Attrs, "")
 			inputBatches[i] = bat
 		}
 		t0 := time.Now()
