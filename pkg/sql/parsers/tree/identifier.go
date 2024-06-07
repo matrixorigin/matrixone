@@ -71,7 +71,7 @@ type UnresolvedName struct {
 func (node *UnresolvedName) Format(ctx *FmtCtx) {
 	for i := node.NumParts - 1; i >= 0; i-- {
 		if node.CStrParts[i] != nil {
-			ctx.WriteString(node.CStrParts[i].Compare())
+			ctx.WriteString(node.CStrParts[i].Origin())
 		} else {
 			ctx.WriteString(node.Parts[i])
 		}
@@ -130,10 +130,10 @@ func SetUnresolvedName(parts ...string) *UnresolvedName {
 	return u
 }
 
-func (node *UnresolvedName) SetUnresolvedNameCStrParts(useOrigin int64, parts ...string) {
+func (node *UnresolvedName) SetUnresolvedNameCStrParts(parts ...*CStr) {
 	l := len(parts)
 	for i := 0; i < l; i++ {
-		node.CStrParts[i] = NewCStrUseOrigin(parts[l-1-i], useOrigin)
+		node.CStrParts[i] = parts[l-1-i]
 	}
 }
 

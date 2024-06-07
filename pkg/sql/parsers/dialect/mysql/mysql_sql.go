@@ -10465,7 +10465,7 @@ yydefault:
 //line mysql_sql.y:1389
 		{
 			unResolve := tree.SetUnresolvedName(yyDollar[1].cstrUnion().Compare())
-			unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, yyDollar[1].cstrUnion().Origin())
+			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion())
 			yyLOCAL = unResolve
 		}
 		yyVAL.union = yyLOCAL
@@ -10475,7 +10475,7 @@ yydefault:
 //line mysql_sql.y:1395
 		{
 			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin()), yyDollar[3].cstrUnion().Compare())
-			unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, yyDollar[1].cstrUnion().Origin(), yyDollar[3].cstrUnion().Origin())
+			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion(), yyDollar[3].cstrUnion())
 			yyLOCAL = unResolve
 		}
 		yyVAL.union = yyLOCAL
@@ -10485,7 +10485,7 @@ yydefault:
 //line mysql_sql.y:1401
 		{
 			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin()), yylex.(*Lexer).GetDbOrTblName(yyDollar[3].cstrUnion().Origin()), yyDollar[5].cstrUnion().Compare())
-			unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, yyDollar[1].cstrUnion().Origin(), yyDollar[3].cstrUnion().Origin(), yyDollar[5].cstrUnion().Origin())
+			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion(), yyDollar[3].cstrUnion(), yyDollar[5].cstrUnion())
 			yyLOCAL = unResolve
 		}
 		yyVAL.union = yyLOCAL
@@ -16402,7 +16402,7 @@ yydefault:
 			yyLOCAL = &tree.TableFunction{
 				Func: &tree.FuncExpr{
 					Func:     tree.FuncName2ResolvableFunctionReference(name),
-					FuncName: tree.NewCStrUseOrigin(yyDollar[1].cstrUnion().Origin(), yylex.(*Lexer).useOrigin),
+					FuncName: yyDollar[1].cstrUnion(),
 					Exprs:    yyDollar[3].exprsUnion(),
 					Type:     tree.FUNC_TYPE_TABLE,
 				},
@@ -20379,7 +20379,7 @@ yydefault:
 //line mysql_sql.y:8557
 		{
 			unResolve := tree.SetUnresolvedName(yyDollar[1].cstrUnion().Compare())
-			unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, yyDollar[1].cstrUnion().Origin())
+			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion())
 			yyLOCAL = unResolve
 		}
 		yyVAL.union = yyLOCAL
@@ -20389,7 +20389,7 @@ yydefault:
 //line mysql_sql.y:8563
 		{
 			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin()), yyDollar[3].cstrUnion().Compare())
-			unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, yyDollar[1].cstrUnion().Origin(), yyDollar[3].cstrUnion().Origin())
+			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion(), yyDollar[3].cstrUnion())
 			yyLOCAL = unResolve
 		}
 		yyVAL.union = yyLOCAL
@@ -20399,7 +20399,7 @@ yydefault:
 //line mysql_sql.y:8569
 		{
 			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin()), yylex.(*Lexer).GetDbOrTblName(yyDollar[3].cstrUnion().Origin()), yyDollar[5].cstrUnion().Compare())
-			unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, yyDollar[1].cstrUnion().Origin(), yyDollar[3].cstrUnion().Origin(), yyDollar[5].cstrUnion().Origin())
+			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion(), yyDollar[3].cstrUnion(), yyDollar[5].cstrUnion())
 			yyLOCAL = unResolve
 		}
 		yyVAL.union = yyLOCAL
@@ -20441,7 +20441,7 @@ yydefault:
 //line mysql_sql.y:8595
 		{
 			unResolve := tree.SetUnresolvedName(yyDollar[1].cstrUnion().Compare())
-			unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, yyDollar[1].cstrUnion().Origin())
+			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion())
 			yyLOCAL = unResolve
 		}
 		yyVAL.union = yyLOCAL
@@ -20451,7 +20451,7 @@ yydefault:
 //line mysql_sql.y:8601
 		{
 			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin()), yyDollar[3].cstrUnion().Compare())
-			unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, yyDollar[1].cstrUnion().Origin(), yyDollar[3].cstrUnion().Origin())
+			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion(), yyDollar[3].cstrUnion())
 			yyLOCAL = unResolve
 		}
 		yyVAL.union = yyLOCAL
@@ -20461,7 +20461,7 @@ yydefault:
 //line mysql_sql.y:8607
 		{
 			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin()), yylex.(*Lexer).GetDbOrTblName(yyDollar[3].cstrUnion().Origin()), yyDollar[5].cstrUnion().Compare())
-			unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, yyDollar[1].cstrUnion().Origin(), yyDollar[3].cstrUnion().Origin(), yyDollar[5].cstrUnion().Origin())
+			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion(), yyDollar[3].cstrUnion(), yyDollar[5].cstrUnion())
 			yyLOCAL = unResolve
 		}
 		yyVAL.union = yyLOCAL
@@ -20630,7 +20630,7 @@ yydefault:
 			}
 			expr := &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[3].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[3].str, 1),
 				Exprs:    es,
 			}
 			yyLOCAL = tree.NewAttributeOnUpdate(expr)
@@ -21226,7 +21226,7 @@ yydefault:
 			es := tree.NewNumValWithType(constant.MakeString(yyDollar[5].str), yyDollar[5].str, false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{yyDollar[3].exprUnion(), es},
 			}
 		}
@@ -21295,7 +21295,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				WindowSpec: yyDollar[4].windowSpecUnion(),
 			}
 		}
@@ -21308,7 +21308,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				WindowSpec: yyDollar[4].windowSpecUnion(),
 			}
 		}
@@ -21321,7 +21321,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				WindowSpec: yyDollar[4].windowSpecUnion(),
 			}
 		}
@@ -21910,7 +21910,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      append(yyDollar[4].exprsUnion(), tree.NewNumValWithType(constant.MakeString(yyDollar[6].str), yyDollar[6].str, false, tree.P_char)),
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[8].windowSpecUnion(),
@@ -21926,7 +21926,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      append(yyDollar[4].exprsUnion(), tree.NewNumValWithType(constant.MakeString(yyDollar[6].str), yyDollar[6].str, false, tree.P_char)),
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[8].windowSpecUnion(),
@@ -21942,7 +21942,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{yyDollar[4].exprUnion()},
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -21957,7 +21957,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      yyDollar[4].exprsUnion(),
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -21973,7 +21973,7 @@ yydefault:
 			es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{es},
 				WindowSpec: yyDollar[5].windowSpecUnion(),
 			}
@@ -21987,7 +21987,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      yyDollar[3].exprsUnion(),
 				WindowSpec: yyDollar[5].windowSpecUnion(),
 			}
@@ -22001,7 +22001,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      yyDollar[3].exprsUnion(),
 				WindowSpec: yyDollar[5].windowSpecUnion(),
 			}
@@ -22015,7 +22015,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{yyDollar[4].exprUnion()},
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -22030,7 +22030,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{yyDollar[4].exprUnion()},
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -22045,7 +22045,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{yyDollar[4].exprUnion()},
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -22060,7 +22060,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      yyDollar[4].exprsUnion(),
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -22076,7 +22076,7 @@ yydefault:
 			es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{es},
 				WindowSpec: yyDollar[5].windowSpecUnion(),
 			}
@@ -22090,7 +22090,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{yyDollar[4].exprUnion()},
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -22105,7 +22105,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{yyDollar[4].exprUnion()},
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -22120,7 +22120,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{yyDollar[4].exprUnion()},
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -22135,7 +22135,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{yyDollar[4].exprUnion()},
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -22150,7 +22150,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{yyDollar[4].exprUnion()},
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -22165,7 +22165,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{yyDollar[4].exprUnion()},
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -22180,7 +22180,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{yyDollar[4].exprUnion()},
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -22195,7 +22195,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{yyDollar[4].exprUnion()},
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -22210,7 +22210,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{yyDollar[4].exprUnion()},
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -22225,7 +22225,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
-				FuncName:   tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:      tree.Exprs{yyDollar[4].exprUnion()},
 				Type:       yyDollar[3].funcTypeUnion(),
 				WindowSpec: yyDollar[6].windowSpecUnion(),
@@ -22240,7 +22240,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    yyDollar[3].exprsUnion(),
 			}
 		}
@@ -22253,7 +22253,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    yyDollar[3].exprsUnion(),
 			}
 		}
@@ -22266,7 +22266,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{yyDollar[3].exprUnion(), yyDollar[5].exprUnion()},
 			}
 		}
@@ -22279,7 +22279,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{yyDollar[3].exprUnion(), yyDollar[5].exprUnion(), yyDollar[7].exprUnion()},
 			}
 		}
@@ -22294,7 +22294,7 @@ yydefault:
 			timeUinit := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{timeUinit, yyDollar[5].exprUnion()},
 			}
 		}
@@ -22307,7 +22307,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    yyDollar[3].exprsUnion(),
 			}
 		}
@@ -22320,7 +22320,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{yyDollar[4].exprUnion()},
 				Type:     yyDollar[3].funcTypeUnion(),
 			}
@@ -22334,7 +22334,7 @@ yydefault:
 			name := tree.SetUnresolvedName("nextval")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    yyDollar[3].exprsUnion(),
 			}
 		}
@@ -22347,7 +22347,7 @@ yydefault:
 			name := tree.SetUnresolvedName("setval")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    yyDollar[3].exprsUnion(),
 			}
 		}
@@ -22360,7 +22360,7 @@ yydefault:
 			name := tree.SetUnresolvedName("currval")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    yyDollar[3].exprsUnion(),
 			}
 		}
@@ -22373,7 +22373,7 @@ yydefault:
 			name := tree.SetUnresolvedName("lastval")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    nil,
 			}
 		}
@@ -22389,7 +22389,7 @@ yydefault:
 			arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{arg0, arg1, arg2, yyDollar[3].exprUnion()},
 			}
 		}
@@ -22404,7 +22404,7 @@ yydefault:
 			arg1 := tree.NewNumValWithType(constant.MakeString("both"), "both", false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{arg0, arg1, yyDollar[3].exprUnion(), yyDollar[5].exprUnion()},
 			}
 		}
@@ -22421,7 +22421,7 @@ yydefault:
 			arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{arg0, arg1, arg2, yyDollar[5].exprUnion()},
 			}
 		}
@@ -22437,7 +22437,7 @@ yydefault:
 			arg1 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{arg0, arg1, yyDollar[4].exprUnion(), yyDollar[6].exprUnion()},
 			}
 		}
@@ -22451,7 +22451,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{column},
 			}
 		}
@@ -22474,7 +22474,7 @@ yydefault:
 			}
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    es,
 			}
 		}
@@ -22491,7 +22491,7 @@ yydefault:
 			}
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    es,
 			}
 		}
@@ -22506,7 +22506,7 @@ yydefault:
 			arg1 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{arg1, yyDollar[5].exprUnion(), yyDollar[7].exprUnion()},
 			}
 		}
@@ -22519,7 +22519,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    yyDollar[3].exprsUnion(),
 			}
 		}
@@ -22532,7 +22532,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -22544,7 +22544,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -22560,7 +22560,7 @@ yydefault:
 			}
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    es,
 			}
 		}
@@ -22573,7 +22573,7 @@ yydefault:
 			name := tree.SetUnresolvedName("binary")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    yyDollar[3].exprsUnion(),
 			}
 		}
@@ -22588,7 +22588,7 @@ yydefault:
 			exprs[0] = yyDollar[2].exprUnion()
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    exprs,
 			}
 		}
@@ -22603,7 +22603,7 @@ yydefault:
 			exprs[0] = yyDollar[2].unresolvedNameUnion()
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    exprs,
 			}
 		}
@@ -22616,7 +22616,7 @@ yydefault:
 			name := tree.SetUnresolvedName("char")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    yyDollar[3].exprsUnion(),
 			}
 		}
@@ -22632,7 +22632,7 @@ yydefault:
 			name := tree.SetUnresolvedName("char")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    es,
 			}
 		}
@@ -22646,7 +22646,7 @@ yydefault:
 			name := tree.SetUnresolvedName("date")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{val},
 			}
 		}
@@ -22660,7 +22660,7 @@ yydefault:
 			name := tree.SetUnresolvedName("time")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{val},
 			}
 		}
@@ -22673,7 +22673,7 @@ yydefault:
 			name := tree.SetUnresolvedName("insert")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    yyDollar[3].exprsUnion(),
 			}
 		}
@@ -22688,7 +22688,7 @@ yydefault:
 			name := tree.SetUnresolvedName("mod")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    es,
 			}
 		}
@@ -22701,7 +22701,7 @@ yydefault:
 			name := tree.SetUnresolvedName("password")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    yyDollar[3].exprsUnion(),
 			}
 		}
@@ -22715,7 +22715,7 @@ yydefault:
 			name := tree.SetUnresolvedName("timestamp")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{val},
 			}
 		}
@@ -22728,7 +22728,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    yyDollar[3].exprsUnion(),
 			}
 		}
@@ -22741,7 +22741,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    yyDollar[3].exprsUnion(),
 			}
 		}
@@ -22754,7 +22754,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    yyDollar[3].exprsUnion(),
 			}
 		}
@@ -22817,7 +22817,7 @@ yydefault:
 			arg2 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[1].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr(yyDollar[1].str, 1),
 				Exprs:    tree.Exprs{yyDollar[2].exprUnion(), arg2},
 			}
 		}
@@ -22926,7 +22926,7 @@ yydefault:
 			name := tree.SetUnresolvedName("concat")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin("concat", yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStr("concat", 1),
 				Exprs:    tree.Exprs{yyDollar[1].exprUnion(), yyDollar[3].exprUnion()},
 			}
 		}
