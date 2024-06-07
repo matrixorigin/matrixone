@@ -851,6 +851,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.joinOrdering = value
 	case "forceOneCN":
 		builder.optimizerHints.forceOneCN = value
+	case "execType":
+		builder.optimizerHints.execType = value
 	}
 }
 
