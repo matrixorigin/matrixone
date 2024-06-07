@@ -521,7 +521,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	var releaseF func()
 	var mapping []uint32
 	if schema.HasSortKey() {
-		writtenBatches, releaseF, mapping, err = mergesort.MergeAObj(ctx, task, readedBats, sortKeyPos, schema.BlockMaxRows, len(toLayout))
+		writtenBatches, releaseF, mapping, err = mergesort.MergeAObj(ctx, task, readedBats, sortKeyPos, toLayout)
 		if err != nil {
 			return
 		}
