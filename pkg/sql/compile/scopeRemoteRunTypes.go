@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"hash/crc32"
 	"runtime"
 	"sync/atomic"
@@ -400,7 +401,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c.addr = receiver.cnInformation.cnAddr
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 	c.ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
-
+	c.execType = plan2.ExecTypeAP_MULTICN
 	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)
 	}
