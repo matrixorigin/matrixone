@@ -643,6 +643,23 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 	}
 
+	if builder.optimizerHints != nil && builder.optimizerHints.execType != 0 {
+		switch builder.optimizerHints.execType {
+		case 1:
+			node.Stats = DefaultMinimalStats()
+		case 2:
+			node.Stats = DefaultBigStats()
+		case 3:
+			node.Stats = DefaultHugeStats()
+		default:
+			panic("wrong optimizer hints for execType!")
+		}
+		if needResetHashMapStats {
+			resetHashMapStats(node.Stats)
+		}
+		return
+	}
+
 	var leftStats, rightStats, childStats *Stats
 	if len(node.Children) == 1 {
 		childStats = builder.qry.Nodes[node.Children[0]].Stats
@@ -1132,11 +1149,21 @@ func InternalTable(tableDef *TableDef) bool {
 
 func DefaultHugeStats() *plan.Stats {
 	stats := new(Stats)
-	stats.TableCnt = 10000000
-	stats.Cost = 10000000
-	stats.Outcnt = 10000000
+	stats.TableCnt = 100000000
+	stats.Cost = 100000000
+	stats.Outcnt = 100000000
 	stats.Selectivity = 1
-	stats.BlockNum = 1000
+	stats.BlockNum = 10000
+	return stats
+}
+
+func DefaultBigStats() *plan.Stats {
+	stats := new(Stats)
+	stats.TableCnt = 10000000
+	stats.Cost = float64(costThresholdForOneCN)
+	stats.Outcnt = float64(costThresholdForOneCN)
+	stats.Selectivity = 1
+	stats.BlockNum = int32(BlockThresholdForOneCN)
 	return stats
 }
 
