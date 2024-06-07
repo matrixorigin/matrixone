@@ -381,7 +381,8 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	}
 	bat = containers.NewBatch()
 	rowCntBeforeApplyDelete := views.Columns[0].Length()
-	bat.Deletes = views.DeleteMask
+	bat.Deletes = views.DeleteMask.Clone()
+	task.aObjDeletesCnt += bat.Deletes.GetCardinality()
 	defer views.Close()
 	for i, colidx := range idxs {
 		colview := views.Columns[i]
@@ -446,13 +447,14 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	}
 
 	// read from aobjects
+	readedBats := make([]*containers.Batch, 0, len(task.aObjHandles))
 	for _, block := range task.aObjHandles {
 		err = block.Prefetch(readColIdxs)
 		if err != nil {
 			return
 		}
 	}
-	readedBats := make([]*containers.Batch, 0, len(task.aObjHandles))
+
 	for i := range task.aObjHandles {
 		bat, empty, err := task.prepareAObjSortedData(ctx, i, readColIdxs, sortKeyPos)
 		if err != nil {
@@ -469,7 +471,19 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 		}
 	}()
 
-	if len(readedBats) == 0 {
+	// prepare merge
+	// toLayout describes the layout of the output batch, i.e. [8192, 8192, 8192, 4242]
+	toLayout := make([]uint32, 0, len(readedBats))
+	if sortKeyPos < 0 {
+		// no pk, just pick the first column to reshape
+		sortKeyPos = 0
+	}
+	for _, bat := range readedBats {
+		task.mergeRowsCnt += bat.Vecs[sortKeyPos].Length()
+	}
+	task.mergeRowsCnt -= task.aObjDeletesCnt
+
+	if task.mergeRowsCnt == 0 {
 		// just soft delete all Objects
 		for _, obj := range task.aObjHandles {
 			tbl := obj.GetRelation()
@@ -483,18 +497,6 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 		return nil
 	}
 
-	// prepare merge
-	// toLayout describes the layout of the output batch, i.e. [8192, 8192, 8192, 4242]
-	toLayout := make([]uint32, 0, len(readedBats))
-	if sortKeyPos < 0 {
-		// no pk, just pick the first column to reshape
-		sortKeyPos = 0
-	}
-	for _, bat := range readedBats {
-		remains := bat.Vecs[sortKeyPos].Length() - bat.Deletes.Count()
-		task.mergeRowsCnt += remains
-		task.aObjDeletesCnt += bat.Deletes.Count()
-	}
 	rowsLeft := task.mergeRowsCnt
 	for rowsLeft > 0 {
 		if rowsLeft > int(schema.BlockMaxRows) {
