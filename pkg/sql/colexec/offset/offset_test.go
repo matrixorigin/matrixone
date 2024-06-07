@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -54,7 +55,7 @@ func init() {
 			},
 			arg: &Argument{
 				Seen:       0,
-				OffsetExpr: plan2.MakePlan2Int64ConstExprWithType(8),
+				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     1,
@@ -71,7 +72,7 @@ func init() {
 			},
 			arg: &Argument{
 				Seen:       0,
-				OffsetExpr: plan2.MakePlan2Int64ConstExprWithType(10),
+				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(10),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     1,
@@ -88,7 +89,7 @@ func init() {
 			},
 			arg: &Argument{
 				Seen:       0,
-				OffsetExpr: plan2.MakePlan2Int64ConstExprWithType(12),
+				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(12),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     1,
