@@ -71,16 +71,18 @@ func (p *Profiler[T, P]) Sample(
 	fullStackFraction uint32,
 ) P {
 
-	var locations []*profile.Location
 	if fullStackFraction > 0 &&
 		fastrand()%fullStackFraction > 0 {
 		// omit stack
-		locations = append(locations, p.getMockLocation("|stack omitted|"))
-	} else {
-		locations = p.getFullStackLocations(skip)
+		return p.getSampleValue(
+			p.getMockLocation("|stack omitted|"),
+		)
 	}
 
-	return p.getSampleValue(locations)
+	// full stack
+	return p.getSampleValue(
+		p.getFullStackLocations(skip)...,
+	)
 }
 
 func (p *Profiler[T, P]) getFullStackLocations(skip int) []*profile.Location {
@@ -94,7 +96,7 @@ func (p *Profiler[T, P]) getFullStackLocations(skip int) []*profile.Location {
 	for {
 		n := runtime.Callers(3+skip, pcs)
 		if n == len(pcs) {
-			pcs = append(pcs, pcs...)
+			pcs = append(pcs, make([]uintptr, len(pcs))...)
 			continue
 		}
 		pcs = pcs[:n]
@@ -207,7 +209,7 @@ func (p *Profiler[T, P]) getMockFunction(label string) *profile.Function {
 	return v.(*profile.Function)
 }
 
-func (p *Profiler[T, P]) getSampleValue(locations []*profile.Location) P {
+func (p *Profiler[T, P]) getSampleValue(locations ...*profile.Location) P {
 	hasher := hasherPool.Get().(*maphash.Hash)
 	defer func() {
 		hasher.Reset()
