@@ -328,3 +328,13 @@ select * from test10;
 load data infile {'filepath'='$resources/load_data/text.csv.tar.bz2', 'compression'='tar.bz2'} into table test10 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
 select * from test10;
 drop table test10;
+
+drop table if exists load_data_t1;
+CREATE TABLE load_data_t1 (
+`name` VARCHAR(255) DEFAULT null,
+`age` INT DEFAULT null,
+`city` VARCHAR(255) DEFAULT null
+);
+load data inline format='csv', data=$XXX$ zhangsan,26,XiAn $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age,name);
+select * from load_data_t1;
+drop table load_data_t1;
