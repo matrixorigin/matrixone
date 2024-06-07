@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
-	"strings"
 )
 
 func compPkCol(colName string, pkName string) bool {
@@ -581,7 +582,7 @@ func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, pr
 			filter.oid = oid
 
 		default:
-			panic(name)
+			//panic(name)
 		}
 	default:
 		//panic(plan2.FormatExpr(expr))
