@@ -415,6 +415,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			return
 		}
 	}
+
+	// checks if the given context has been canceled.
+	if err = CancelCheck(ctx); err != nil {
+		return
+	}
+
 	return
 }
 
@@ -588,6 +594,11 @@ func restoreToDatabaseOrTable(
 			continue
 		}
 
+		// checks if the given context has been canceled.
+		if err = CancelCheck(ctx); err != nil {
+			return
+		}
+
 		if err = recreateTable(ctx, bh, snapshotName, tblInfo, toAccountId); err != nil {
 			return
 		}
@@ -619,6 +630,12 @@ func restoreSystemDatabase(
 		}
 
 		getLogger().Info(fmt.Sprintf("[%s] start to restore system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
+
+		// checks if the given context has been canceled.
+		if err = CancelCheck(ctx); err != nil {
+			return
+		}
+
 		if err = recreateTable(ctx, bh, snapshotName, tblInfo, toAccountId); err != nil {
 			return
 		}
