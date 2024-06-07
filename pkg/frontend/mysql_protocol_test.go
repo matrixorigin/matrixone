@@ -86,14 +86,6 @@ func (tRM *TestRoutineManager) Closed(rs goetty.IOSession) {
 	delete(tRM.clients, rs)
 }
 
-func NewTestRoutineManager(pu *config.ParameterUnit) *TestRoutineManager {
-	rm := &TestRoutineManager{
-		clients: make(map[goetty.IOSession]*Routine),
-		pu:      pu,
-	}
-	return rm
-}
-
 func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connect
@@ -193,6 +185,7 @@ func TestKill(t *testing.T) {
 		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 		return txnOp, nil
 	}).AnyTimes()
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
@@ -1975,7 +1968,7 @@ func Test_openpacket(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
-		ses := NewSession(context.TODO(), proto, nil, nil, false, nil)
+		ses := NewSession(context.TODO(), proto, nil)
 		proto.ses = ses
 
 		err = proto.fillPacket(make([]byte, MaxPayloadSize)...)
@@ -2004,7 +1997,7 @@ func Test_openpacket(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
-		ses := NewSession(context.TODO(), proto, nil, nil, false, nil)
+		ses := NewSession(context.TODO(), proto, nil)
 		proto.ses = ses
 
 		err = proto.openPacket()
@@ -2360,9 +2353,7 @@ func Test_resultset(t *testing.T) {
 			t.Error(err)
 		}
 		setGlobalPu(pu)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(ctx, proto, nil, &gSys, true, nil)
+		ses := NewSession(ctx, proto, nil)
 		proto.ses = ses
 
 		res := make9ColumnsResultSet()
@@ -2394,9 +2385,7 @@ func Test_resultset(t *testing.T) {
 			t.Error(err)
 		}
 		setGlobalPu(pu)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(ctx, proto, nil, &gSys, true, nil)
+		ses := NewSession(ctx, proto, nil)
 		proto.ses = ses
 
 		res := make9ColumnsResultSet()
@@ -2428,9 +2417,7 @@ func Test_resultset(t *testing.T) {
 			t.Error(err)
 		}
 		setGlobalPu(pu)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(ctx, proto, nil, &gSys, true, nil)
+		ses := NewSession(ctx, proto, nil)
 		proto.ses = ses
 
 		res := make9ColumnsResultSet()
@@ -2465,9 +2452,7 @@ func Test_resultset(t *testing.T) {
 			t.Error(err)
 		}
 		setGlobalPu(pu)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(ctx, proto, nil, &gSys, true, nil)
+		ses := NewSession(ctx, proto, nil)
 		ses.cmd = COM_STMT_EXECUTE
 		proto.ses = ses
 

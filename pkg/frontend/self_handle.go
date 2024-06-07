@@ -43,7 +43,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		defer ses.ExitFPrint(12)
 		var v interface{}
 		var uniqueCheckOnAuto string
-		v, err = ses.GetGlobalVar(execCtx.reqCtx, "lower_case_table_names")
+		v, err = ses.GetSessionSysVar("lower_case_table_names")
 		if err != nil {
 			return
 		}

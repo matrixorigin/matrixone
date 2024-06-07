@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -41,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -61,6 +61,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
+
 	_, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
@@ -68,8 +69,9 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 
 	// For determine this is a background sql.
 	ctx = context.WithValue(ctx, defines.BgKey{}, true)
+
 	//logutil.Debugf("-->bh:%s", sql)
-	v, err := back.backSes.GetGlobalVar(ctx, "lower_case_table_names")
+	v, err := back.backSes.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
 		return err
 	}
@@ -82,6 +84,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 			stmt.Free()
 		}
 	}()
+
 	if len(statements) > 1 {
 		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
@@ -115,7 +118,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	// For determine this is a background sql.
 	ctx = context.WithValue(ctx, defines.BgKey{}, true)
 	//logutil.Debugf("-->bh:%s", sql)
-	v, err := back.backSes.GetGlobalVar(ctx, "lower_case_table_names")
+	v, err := back.backSes.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
 		return err
 	}
@@ -368,6 +371,12 @@ func executeStmtInBack(backSes *backSession,
 
 	execCtx.ses.EnterFPrint(94)
 	defer execCtx.ses.ExitFPrint(94)
+
+	err = disttae.CheckTxnIsValid(execCtx.ses.GetTxnHandler().GetTxn())
+	if err != nil {
+		return err
+	}
+
 	if ret, err = execCtx.cw.Compile(execCtx, backSes.GetOutputCallback(execCtx)); err != nil {
 		return
 	}
@@ -408,12 +417,7 @@ func executeStmtInBack(backSes *backSession,
 			return err
 		}
 	case tree.OUTPUT_UNDEFINED:
-		isExecute := false
-		switch execCtx.stmt.(type) {
-		case *tree.Execute:
-			isExecute = true
-		}
-		if !isExecute {
+		if _, ok := execCtx.stmt.(*tree.Execute); !ok {
 			return moerr.NewInternalError(execCtx.reqCtx, "need set result type for %s", execCtx.sqlOfStmt)
 		}
 	}
@@ -451,29 +455,8 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 
 var NewBackgroundExec = func(
 	reqCtx context.Context,
-	upstream FeSession,
-	mp *mpool.MPool) BackgroundExec {
-	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, upstream.GetTxnHandler().GetConnCtx(), nil)
-	backSes := &backSession{
-		feSessionImpl: feSessionImpl{
-			pool:           mp,
-			buf:            buffer.New(),
-			stmtProfile:    process.StmtProfile{},
-			tenant:         nil,
-			txnHandler:     txnHandler,
-			txnCompileCtx:  InitTxnCompilerContext(""),
-			mrs:            nil,
-			outputCallback: fakeDataSetFetcher2,
-			allResultSet:   nil,
-			resultBatches:  nil,
-			derivedStmt:    false,
-			gSysVars:       GSysVariables,
-			label:          make(map[string]string),
-			timeZone:       time.Local,
-			respr:          defResper,
-		},
-	}
-	backSes.uuid, _ = uuid.NewV7()
+	upstream FeSession) BackgroundExec {
+	backSes := newBackSession(upstream, nil, "", fakeDataSetFetcher2)
 	if up, ok := upstream.(*Session); ok {
 		backSes.upstream = up
 	}
@@ -484,17 +467,24 @@ var NewBackgroundExec = func(
 	return bh
 }
 
+// ExeSqlInBgSes for mock stub
+var ExeSqlInBgSes = func(reqCtx context.Context, upstream *Session, sql string) ([]ExecResult, error) {
+	return executeSQLInBackgroundSession(reqCtx, upstream, sql)
+}
+
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(reqCtx context.Context, upstream *Session, mp *mpool.MPool, sql string) ([]ExecResult, error) {
-	bh := NewBackgroundExec(reqCtx, upstream, mp)
+func executeSQLInBackgroundSession(reqCtx context.Context, upstream *Session, sql string) ([]ExecResult, error) {
+	bh := NewBackgroundExec(reqCtx, upstream)
 	defer bh.Close()
+
 	upstream.Debugf(reqCtx, "background exec sql:%v", sql)
 	err := bh.Exec(reqCtx, sql)
 	upstream.Debug(reqCtx, "background exec sql done")
 	if err != nil {
 		return nil, err
 	}
+
 	return getResultSet(reqCtx, bh)
 }
 
@@ -626,6 +616,32 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
+}
+
+func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
+	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, ses.GetTxnHandler().GetConnCtx(), txnOp)
+	backSes := &backSession{
+		feSessionImpl: feSessionImpl{
+			pool:           ses.GetMemPool(),
+			buf:            buffer.New(),
+			stmtProfile:    process.StmtProfile{},
+			tenant:         nil,
+			txnHandler:     txnHandler,
+			txnCompileCtx:  InitTxnCompilerContext(db),
+			mrs:            nil,
+			outputCallback: callBack,
+			allResultSet:   nil,
+			resultBatches:  nil,
+			derivedStmt:    false,
+			label:          make(map[string]string),
+			timeZone:       time.Local,
+			respr:          defResper,
+		},
+	}
+	backSes.gSysVars = ses.GetGlobalSysVars()
+	backSes.sesSysVars = ses.GetSessionSysVars()
+	backSes.uuid, _ = uuid.NewV7()
+	return backSes
 }
 
 func (backSes *backSession) getCachedPlan(sql string) *cachedPlan {
@@ -804,39 +820,17 @@ func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRa
 		txnOp = backSes.GetTxnHandler().GetTxn()
 	}
 
-	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, backSes.GetTxnHandler().GetConnCtx(), txnOp)
-	callback := fakeDataSetFetcher2
-
-	newbackSes := &backSession{
-		feSessionImpl: feSessionImpl{
-			pool:           backSes.pool,
-			respr:          defResper,
-			buf:            buffer.New(),
-			stmtProfile:    process.StmtProfile{},
-			tenant:         nil,
-			txnHandler:     txnHandler,
-			txnCompileCtx:  InitTxnCompilerContext(""),
-			mrs:            nil,
-			outputCallback: callback,
-			allResultSet:   nil,
-			resultBatches:  nil,
-			derivedStmt:    false,
-			gSysVars:       GSysVariables,
-			label:          make(map[string]string),
-			timeZone:       time.Local,
-		},
-	}
-	newbackSes.uuid, _ = uuid.NewV7()
+	newBackSes := newBackSession(backSes, txnOp, "", fakeDataSetFetcher2)
 	bh := &backExec{
-		backSes: newbackSes,
+		backSes: newBackSes,
 	}
 	//the derived statement execute in a shared transaction in background session
 	bh.backSes.ReplaceDerivedStmt(true)
 	return bh
 }
 
-func (backSes *backSession) GetUserDefinedVar(name string) (SystemVariableType, *UserDefinedVar, error) {
-	return nil, nil, moerr.NewInternalError(context.Background(), "do not support user defined var in background exec")
+func (backSes *backSession) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
+	return nil, moerr.NewInternalError(context.Background(), "do not support user defined var in background exec")
 }
 
 func (backSes *backSession) GetSessionVar(ctx context.Context, name string) (interface{}, error) {
@@ -847,17 +841,10 @@ func (backSes *backSession) GetSessionVar(ctx context.Context, name string) (int
 	return nil, nil
 }
 
-func (backSes *backSession) GetGlobalSystemVariableValue(ctx context.Context, name string) (interface{}, error) {
-	return nil, moerr.NewInternalError(ctx, "do not support system variable in background exec")
-}
-
 func (backSes *backSession) GetBackgroundExec(ctx context.Context) BackgroundExec {
 	backSes.EnterFPrint(98)
 	defer backSes.ExitFPrint(98)
-	return NewBackgroundExec(
-		ctx,
-		backSes,
-		backSes.GetMemPool())
+	return NewBackgroundExec(ctx, backSes)
 }
 
 func (backSes *backSession) GetStorage() engine.Engine {
@@ -866,17 +853,6 @@ func (backSes *backSession) GetStorage() engine.Engine {
 
 func (backSes *backSession) GetStatsCache() *plan2.StatsCache {
 	return nil
-}
-
-func (backSes *backSession) GetGlobalVar(ctx context.Context, name string) (interface{}, error) {
-	if def, val, ok := backSes.gSysVars.GetGlobalSysVar(name); ok {
-		if def.GetScope() == ScopeSession {
-			//empty
-			return nil, moerr.NewInternalError(ctx, errorSystemVariableSessionEmpty())
-		}
-		return val, nil
-	}
-	return nil, moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
 }
 
 func (backSes *backSession) GetSessId() uuid.UUID {

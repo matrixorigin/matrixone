@@ -23,7 +23,6 @@ import (
 	"io"
 	"math"
 	"math/bits"
-	"os"
 	"path"
 	"sort"
 	"strconv"
@@ -538,11 +537,6 @@ const (
 	dumpDefaultRoleID = moAdminRoleID
 
 	moCatalog = "mo_catalog"
-
-	SaveQueryResult     = "save_query_result"
-	QueryResultMaxsize  = "query_result_maxsize"
-	QueryResultTimeout  = "query_result_timeout"
-	LowerCaseTableNames = "lower_case_table_names"
 )
 
 type objectType int
@@ -878,12 +872,6 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 }
 
 var (
-	sysWantedDatabases = map[string]int8{
-		"mo_catalog":         0,
-		"information_schema": 0,
-		"system":             0,
-		"system_metrics":     0,
-	}
 	sysDatabases = map[string]int8{
 		"mo_catalog":         0,
 		"information_schema": 0,
@@ -911,12 +899,6 @@ var (
 		"mo_transactions":             0,
 		"mo_cache":                    0,
 		"mo_snapshots":                0,
-	}
-	configInitVariables = map[string]int8{
-		"save_query_result":      0,
-		"query_result_maxsize":   0,
-		"query_result_timeout":   0,
-		"lower_case_table_names": 0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -1009,18 +991,12 @@ var (
 	dropMoTablePartitions           = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
 
-	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
+	initMoMysqlCompatibilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
 		account_name,
 		dat_name,
 		variable_name,
 		variable_value, system_variables) values (%d, "%s", "%s", "%s", "%s", %v);`
-
-	initMoMysqlCompatbilityModeWithoutDataBaseFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
-		account_id,
-		account_name,
-		variable_name,
-		variable_value, system_variables) values (%d, "%s", "%s", "%s", %v);`
 
 	insertIntoMoStages = `insert into mo_catalog.mo_stages(
 		stage_name,
@@ -1441,15 +1417,17 @@ const (
 	deleteStoredProcedureFormat = `delete from mo_catalog.mo_stored_procedure where proc_id = %d;`
 
 	// delete a tuple from mo_mysql_compatibility_mode when drop a database
-	deleteMysqlCompatbilityModeFormat = `delete from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s";`
+	deleteMysqlCompatibilityModeFormat = `delete from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s";`
 
 	getSystemVariableValueWithDatabaseFormat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s" and variable_name = "%s";`
 
-	getSystemVariablesWithAccountFromat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true;`
+	getSystemVariablesWithAccountFormat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true;`
 
-	getSystemVariableValueWithAccountFromat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and variable_name = '%s' and system_variables = true;`
+	getSystemVariableWithAccountFormat = `select variable_name from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true and variable_name = '%s';`
 
-	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s';`
+	insertSystemVariableWithAccountFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (%d, "%s", "%s", "%s", %v);`
+
+	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s' and system_variables = true;`
 
 	updateConfigurationByDbNameAndAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and dat_name = '%s' and variable_name = '%s';`
 
@@ -1942,24 +1920,27 @@ func getSqlForDeleteUser(userId int64) []string {
 }
 
 func getSqlForDeleteMysqlCompatbilityMode(dtname string) string {
-	return fmt.Sprintf(deleteMysqlCompatbilityModeFormat, dtname)
+	return fmt.Sprintf(deleteMysqlCompatibilityModeFormat, dtname)
 }
 
 func getSqlForGetSystemVariableValueWithDatabase(dtname, variable_name string) string {
 	return fmt.Sprintf(getSystemVariableValueWithDatabaseFormat, dtname, variable_name)
 }
 
-func getSystemVariablesWithAccount(accountId uint64) string {
-	return fmt.Sprintf(getSystemVariablesWithAccountFromat, accountId)
+func getSqlForGetSystemVariablesWithAccount(accountId uint64) string {
+	return fmt.Sprintf(getSystemVariablesWithAccountFormat, accountId)
 }
 
-// getSqlForGetSystemVariableValueWithAccount will get sql for get variable value with specific account
-func getSqlForGetSystemVariableValueWithAccount(accountId uint64, varName string) string {
-	return fmt.Sprintf(getSystemVariableValueWithAccountFromat, accountId, varName)
+func getSqlForGetSysVarWithAccount(accountId uint64, varName string) string {
+	return fmt.Sprintf(getSystemVariableWithAccountFormat, accountId, varName)
 }
 
-// getSqlForUpdateSystemVariableValue returns a SQL query to update the value of a system variable for a given account.
-func getSqlForUpdateSystemVariableValue(varValue string, accountId uint64, varName string) string {
+func getSqlForInsertSysVarWithAccount(accountId uint64, accountName string, varName string, varValue string) string {
+	return fmt.Sprintf(insertSystemVariableWithAccountFormat, accountId, accountName, varName, varValue, true)
+}
+
+// getSqlForUpdateSysVarValue returns a SQL query to update the value of a system variable for a given account.
+func getSqlForUpdateSysVarValue(varValue string, accountId uint64, varName string) string {
 	return fmt.Sprintf(updateSystemVariableValueFormat, varValue, accountId, varName)
 }
 
@@ -2674,6 +2655,7 @@ func finishTxn(ctx context.Context, bh BackgroundExec, err error) error {
 		}
 		return err
 	}
+
 	if err == nil {
 		//normal COMMIT the transaction
 		err = bh.Exec(ctx, "commit;")
@@ -7533,242 +7515,6 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 	return false, nil
 }
 
-// checkSysExistsOrNot checks the SYS tenant exists or not.
-func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec) (bool, error) {
-	var erArray []ExecResult
-	var err error
-	var tableNames []string
-	var tableName string
-
-	dbSql := "show databases;"
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, dbSql)
-	if err != nil {
-		return false, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return false, err
-	}
-	if len(erArray) != 1 {
-		return false, moerr.NewInternalError(ctx, "it must have result set")
-	}
-
-	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		_, err = erArray[0].GetString(ctx, i, 0)
-		if err != nil {
-			return false, err
-		}
-	}
-
-	sql := "show tables from mo_catalog;"
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return false, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return false, err
-	}
-	if len(erArray) != 1 {
-		return false, moerr.NewInternalError(ctx, "it must have result set")
-	}
-
-	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		tableName, err = erArray[0].GetString(ctx, i, 0)
-		if err != nil {
-			return false, err
-		}
-		tableNames = append(tableNames, tableName)
-	}
-
-	//if there is at least one catalog table, it denotes the sys tenant exists.
-	for _, name := range tableNames {
-		if _, ok := sysWantedTables[name]; ok {
-			return true, nil
-		}
-	}
-
-	return false, nil
-}
-
-// InitSysTenantOld initializes the tenant SYS before any tenants and accepting any requests
-// during the system is booting.
-// Deprecated: Use InitSysTenant instead
-func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, finalVersion string) (err error) {
-	var exists bool
-	var mp *mpool.MPool
-	pu := config.GetParameterUnit(ctx)
-
-	tenant := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          rootName,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        rootID,
-		DefaultRoleID: moAdminRoleID,
-	}
-
-	ctx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
-
-	mp, err = mpool.NewMPool("init_system_tenant", 0, mpool.NoFixed)
-	if err != nil {
-		return err
-	}
-	defer mpool.DeleteMPool(mp)
-	//Note: it is special here. The connection ctx here is ctx also.
-	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
-	upstream := &Session{
-		feSessionImpl: feSessionImpl{},
-
-		seqCurValues: make(map[uint64]string),
-		seqLastValue: new(string),
-	}
-	bh := NewBackgroundExec(ctx, upstream, mp)
-	defer bh.Close()
-
-	//USE the mo_catalog
-	err = bh.Exec(ctx, "use mo_catalog;")
-	if err != nil {
-		return err
-	}
-
-	err = bh.Exec(ctx, createDbInformationSchemaSql)
-	if err != nil {
-		return err
-	}
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	exists, err = checkSysExistsOrNot(ctx, bh)
-	if err != nil {
-		return err
-	}
-
-	if !exists {
-		err = createTablesInMoCatalogOld(ctx, bh, tenant, pu, finalVersion)
-		if err != nil {
-			return err
-		}
-	}
-
-	return err
-}
-
-// createTablesInMoCatalogOld creates catalog tables in the database mo_catalog.
-// Deprecated: Use createTablesInMoCatalog instead
-func createTablesInMoCatalogOld(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, finalVersion string) error {
-	var err error
-	var initMoAccount string
-	var initDataSqls []string
-	if !tenant.IsSysTenant() {
-		return moerr.NewInternalError(ctx, "only sys tenant can execute the function")
-	}
-
-	addSqlIntoSet := func(sql string) {
-		initDataSqls = append(initDataSqls, sql)
-	}
-
-	//create tables for the tenant
-	for _, sql := range createSqls {
-		addSqlIntoSet(sql)
-	}
-
-	//initialize the default data of tables for the tenant
-	//step 1: add new tenant entry to the mo_account
-	initMoAccount = fmt.Sprintf(initMoAccountFormat, sysAccountID, sysAccountName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments, finalVersion)
-	addSqlIntoSet(initMoAccount)
-
-	//step 2:add new role entries to the mo_role
-
-	initMoRole1 := fmt.Sprintf(initMoRoleFormat, moAdminRoleID, moAdminRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), "")
-	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), "")
-	addSqlIntoSet(initMoRole1)
-	addSqlIntoSet(initMoRole2)
-
-	//step 3:add new user entry to the mo_user
-
-	defaultPassword := rootPassword
-	if d := os.Getenv(defaultPasswordEnv); d != "" {
-		defaultPassword = d
-	}
-
-	//encryption the password
-	encryption := HashPassWord(defaultPassword)
-
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, encryption, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
-	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, encryption, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
-	addSqlIntoSet(initMoUser1)
-	addSqlIntoSet(initMoUser2)
-
-	//step4: add new entries to the mo_role_privs
-	//moadmin role
-	for _, t := range entriesOfMoAdminForMoRolePrivsFor {
-		entry := privilegeEntriesMap[t]
-		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-			moAdminRoleID, moAdminRoleName,
-			entry.objType, entry.objId,
-			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			rootID, types.CurrentTimestamp().String2(time.UTC, 0),
-			entry.withGrantOption)
-		addSqlIntoSet(initMoRolePriv)
-	}
-
-	//public role
-	for _, t := range entriesOfPublicForMoRolePrivsFor {
-		entry := privilegeEntriesMap[t]
-		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-			publicRoleID, publicRoleName,
-			entry.objType, entry.objId,
-			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			rootID, types.CurrentTimestamp().String2(time.UTC, 0),
-			entry.withGrantOption)
-		addSqlIntoSet(initMoRolePriv)
-	}
-
-	//step5: add new entries to the mo_user_grant
-
-	initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, moAdminRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), false)
-	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), false)
-	addSqlIntoSet(initMoUserGrant1)
-	addSqlIntoSet(initMoUserGrant2)
-	initMoUserGrant4 := fmt.Sprintf(initMoUserGrantFormat, moAdminRoleID, dumpID, types.CurrentTimestamp().String2(time.UTC, 0), false)
-	initMoUserGrant5 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, dumpID, types.CurrentTimestamp().String2(time.UTC, 0), false)
-	addSqlIntoSet(initMoUserGrant4)
-	addSqlIntoSet(initMoUserGrant5)
-
-	//setp6: add new entries to the mo_mysql_compatibility_mode
-	for _, variable := range gSysVarsDefs {
-		if _, ok := configInitVariables[variable.Name]; ok {
-			addsql := addInitSystemVariablesSql(sysAccountID, sysAccountName, variable.Name, pu)
-			if len(addsql) != 0 {
-				addSqlIntoSet(addsql)
-			}
-		} else {
-			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
-			addSqlIntoSet(initMoMysqlCompatibilityMode)
-		}
-	}
-
-	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant, mo_mysql_compatibility_mode
-	for _, sql := range initDataSqls {
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
-		}
-	}
-	return err
-}
-
 func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, userName string) (bool, error) {
 	var sqlForCheckTenant string
 	var erArray []ExecResult
@@ -8147,19 +7893,6 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
 
-	//setp6: add new entries to the mo_mysql_compatibility_mode
-	for _, variable := range gSysVarsDefs {
-		if _, ok := configInitVariables[variable.Name]; ok {
-			addsql := addInitSystemVariablesSql(int(newTenant.GetTenantID()), newTenant.GetTenant(), variable.Name, pu)
-			if len(addsql) != 0 {
-				addSqlIntoSet(addsql)
-			}
-		} else {
-			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, newTenant.GetTenantID(), newTenant.GetTenant(), variable.Name, getVariableValue(variable.Default), true)
-			addSqlIntoSet(initMoMysqlCompatibilityMode)
-		}
-	}
-
 	//fill the mo_role, mo_user, mo_role_privs, mo_user_grant, mo_role_grant
 	for _, sql := range initDataSqls {
 		bh.ClearExecResultSet()
@@ -8222,44 +7955,45 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 
 // create subscription database
 func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo, ses *Session) error {
-	ctx, span := trace.Debug(ctx, "createSubscriptionDatabase")
-	defer span.End()
-
-	var err error
-	subscriptions := make([]string, 0)
-	//process the syspublications
-	syspublications_value, err := ses.GetGlobalVar(ctx, "syspublications")
-	if err != nil {
-		return err
-	}
-
-	if syspublications, ok := syspublications_value.(string); ok {
-		if len(syspublications) == 0 {
-			return err
-		}
-		subscriptions = strings.Split(syspublications, ",")
-	}
-	// if no subscriptions, return
-	if len(subscriptions) == 0 {
-		return err
-	}
-
-	//with new tenant
-	ctx = defines.AttachAccount(ctx, uint32(newTenant.GetTenantID()), uint32(newTenant.GetUserID()), uint32(newTenant.GetDefaultRoleID()))
-
-	createSubscriptionFormat := `create database %s from sys publication %s;`
-	sqls := make([]string, 0, len(subscriptions))
-	for _, subscription := range subscriptions {
-		sqls = append(sqls, fmt.Sprintf(createSubscriptionFormat, subscription, subscription))
-	}
-	for _, sql := range sqls {
-		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
-		}
-	}
-	return err
+	// TODO implement this function (#8946) by other ways
+	return nil
+	//ctx, span := trace.Debug(ctx, "createSubscriptionDatabase")
+	//defer span.End()
+	//
+	//subscriptions := make([]string, 0)
+	////process the syspublications
+	//sysPubsVar, err := ses.GetSessionSysVar("syspublications")
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//if sysPublications, ok := sysPubsVar.(string); ok {
+	//	if len(sysPublications) == 0 {
+	//		return err
+	//	}
+	//	subscriptions = strings.Split(sysPublications, ",")
+	//}
+	//// if no subscriptions, return
+	//if len(subscriptions) == 0 {
+	//	return err
+	//}
+	//
+	////with new tenant
+	//ctx = defines.AttachAccount(ctx, uint32(newTenant.GetTenantID()), uint32(newTenant.GetUserID()), uint32(newTenant.GetDefaultRoleID()))
+	//
+	//createSubscriptionFormat := `create database %s from sys publication %s;`
+	//sqls := make([]string, 0, len(subscriptions))
+	//for _, subscription := range subscriptions {
+	//	sqls = append(sqls, fmt.Sprintf(createSubscriptionFormat, subscription, subscription))
+	//}
+	//for _, sql := range sqls {
+	//	bh.ClearExecResultSet()
+	//	err = bh.Exec(ctx, sql)
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
+	//return err
 }
 
 type createUser struct {
@@ -9060,7 +8794,8 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 	var dbName string
 	var err error
 	variableName1 := "version_compatibility"
-	variableValue1 := getVariableValue(ses.GetSysVar("version"))
+	versionValue, _ := ses.GetSessionSysVar("version")
+	variableValue1 := getVariableValue(versionValue)
 
 	variableName2 := "unique_check_on_autoincr"
 	variableValue2 := "None"
@@ -9098,14 +8833,14 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 			}
 
 			//step 3: insert the record
-			sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, accountId, accountName, dbName, variableName1, variableValue1, false)
+			sql = fmt.Sprintf(initMoMysqlCompatibilityModeFormat, accountId, accountName, dbName, variableName1, variableValue1, false)
 
 			rtnErr = bh.Exec(ctx, sql)
 			if rtnErr != nil {
 				return rtnErr
 			}
 
-			sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, accountId, accountName, dbName, variableName2, variableValue2, false)
+			sql = fmt.Sprintf(initMoMysqlCompatibilityModeFormat, accountId, accountName, dbName, variableName2, variableValue2, false)
 
 			rtnErr = bh.Exec(ctx, sql)
 			if rtnErr != nil {
@@ -9459,112 +9194,39 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	return err
 }
 
-func doGetGlobalSystemVariable(ctx context.Context, ses *Session) (ret map[string]interface{}, err error) {
-	var sql string
-	var erArray []ExecResult
-	var sysVars map[string]interface{}
-	var accountId uint32
-	var variableName, variableValue string
-	var val interface{}
-	tenantInfo := ses.GetTenantInfo()
-
-	sysVars = make(map[string]interface{})
+func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) (err error) {
+	accountId := uint64(ses.GetTenantInfo().TenantID)
+	accountName := ses.GetTenantName()
+	varName = strings.ToLower(varName)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	err = bh.Exec(ctx, "begin;")
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return
+	}
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
-	if err != nil {
-		return nil, err
-	}
 
-	accountId = tenantInfo.GetTenantID()
-	sql = getSystemVariablesWithAccount(uint64(accountId))
-
+	// check if var exists
+	sql := getSqlForGetSysVarWithAccount(accountId, varName)
 	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return nil, err
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
 	}
 
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return nil, err
+	var erArray []ExecResult
+	if erArray, err = getResultSet(ctx, bh); err != nil {
+		return
 	}
 
 	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			variableName, err = erArray[0].GetString(ctx, i, 0)
-			if err != nil {
-				return nil, err
-			}
-			variableValue, err = erArray[0].GetString(ctx, i, 1)
-			if err != nil {
-				return nil, err
-			}
-
-			if sv, ok := gSysVarsDefs[variableName]; ok {
-				val, err = sv.GetType().ConvertFromString(variableValue)
-				if err != nil {
-					ses.Error(ctx, err.Error(), zap.String("variable name:", variableName), zap.String("convert from variable value:", variableValue))
-					return nil, err
-				}
-				sysVars[variableName] = val
-			}
-		}
-	}
-
-	return sysVars, nil
-}
-
-func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) error {
-	var sql string
-	var accountId uint32
-	var err error
-	tenantInfo := ses.GetTenantInfo()
-
-	varName = strings.ToLower(varName)
-	if sv, ok := gSysVarsDefs[varName]; ok {
-		if sv.GetScope() == ScopeSession {
-			return moerr.NewInternalError(ctx, errorSystemVariableIsSession())
-		}
-		if !sv.GetDynamic() {
-			return moerr.NewInternalError(ctx, errorSystemVariableIsReadOnly())
-		}
-
-		setGlobalFunc := func() (rtnErr error) {
-			bh := ses.GetBackgroundExec(ctx)
-			defer bh.Close()
-
-			rtnErr = bh.Exec(ctx, "begin;")
-			defer func() {
-				rtnErr = finishTxn(ctx, bh, rtnErr)
-			}()
-			if rtnErr != nil {
-				return rtnErr
-			}
-
-			accountId = tenantInfo.GetTenantID()
-			sql = getSqlForUpdateSystemVariableValue(getVariableValue(varValue), uint64(accountId), varName)
-			if _, ok := sv.GetType().(SystemVariableBoolType); ok {
-				ses.Info(ctx, "set global bool type value", zap.String("variable name", varName), zap.String("variable value", getVariableValue(varValue)), zap.String("update sql", sql))
-			}
-			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return rtnErr
-			}
-			return rtnErr
-		}
-		err = setGlobalFunc()
-		if err != nil {
-			return err
-		}
-		return err
+		sql = getSqlForUpdateSysVarValue(getVariableValue(varValue), accountId, varName)
 	} else {
-		return moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
+		sql = getSqlForInsertSysVarWithAccount(accountId, accountName, varName, getVariableValue(varValue))
 	}
+	err = bh.Exec(ctx, sql)
+	return
 }
 
 func doCheckRole(ctx context.Context, ses *Session) error {
@@ -9586,31 +9248,6 @@ func doCheckRole(ctx context.Context, ses *Session) error {
 func isSuperUser(username string) bool {
 	u := strings.ToLower(username)
 	return u == dumpName || u == rootName
-}
-
-func addInitSystemVariablesSql(accountId int, accountName, variable_name string, pu *config.ParameterUnit) string {
-	var initMoMysqlCompatibilityMode string
-
-	switch variable_name {
-	case SaveQueryResult:
-		if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
-			initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue(pu.SV.SaveQueryResult), true)
-
-		} else {
-			initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue("off"), true)
-		}
-
-	case QueryResultMaxsize:
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_maxsize", getVariableValue(pu.SV.QueryResultMaxsize), true)
-
-	case QueryResultTimeout:
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_timeout", getVariableValue(pu.SV.QueryResultTimeout), true)
-
-	case LowerCaseTableNames:
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "lower_case_table_names", getVariableValue(pu.SV.LowerCaseTableNames), true)
-	}
-
-	return initMoMysqlCompatibilityMode
 }
 
 // postAlterSessionStatus post alter all nodes session status which the tenant has been alter restricted or open.
