@@ -1308,21 +1308,13 @@ func (s *Scope) CreateView(c *Compile) error {
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := planColsToExeCols(planCols)
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		getLogger().Info("createView",
-			zap.String("databaseName", c.db),
-			zap.String("ViewName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-		)
-	}
 
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
 		getLogger().Info("createView",
 			zap.String("databaseName", c.db),
-			zap.String("ViewName", qry.GetTableDef().GetName()),
+			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.Error(err),
 		)
 		return err
@@ -1335,23 +1327,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if dbName == "" {
-			// TODO: debug for #11917
-			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-				getLogger().Info("createView",
-					zap.String("databaseName", c.db),
-					zap.String("ViewName", qry.GetTableDef().GetName()),
-					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-				)
-			}
 			return moerr.NewNoDB(c.ctx)
-		}
-		// TODO: debug for #11917
-		if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-			getLogger().Info("createTable no exist",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-			)
 		}
 		return err
 	}
@@ -1359,22 +1335,15 @@ func (s *Scope) CreateView(c *Compile) error {
 	viewName := qry.GetTableDef().GetName()
 	if _, err = dbSource.Relation(c.ctx, viewName, nil); err == nil {
 		if qry.GetIfNotExists() {
-			// TODO: debug for #11917
-			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-				getLogger().Info("createView no exist",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-				)
-			}
 			return nil
 		}
+
 		if qry.GetReplace() {
 			err = c.runSql(fmt.Sprintf("drop view if exists %s", viewName))
 			if err != nil {
 				getLogger().Info("createView",
 					zap.String("databaseName", c.db),
-					zap.String("ViewName", qry.GetTableDef().GetName()),
+					zap.String("viewName", qry.GetTableDef().GetName()),
 					zap.Error(err),
 				)
 				return err
@@ -1382,7 +1351,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		} else {
 			getLogger().Info("createView",
 				zap.String("databaseName", c.db),
-				zap.String("ViewName", qry.GetTableDef().GetName()),
+				zap.String("viewName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
 			return moerr.NewTableAlreadyExists(c.ctx, viewName)
@@ -1398,7 +1367,7 @@ func (s *Scope) CreateView(c *Compile) error {
 			}
 			getLogger().Info("createView",
 				zap.String("databaseName", c.db),
-				zap.String("ViewName", qry.GetTableDef().GetName()),
+				zap.String("viewName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
 			return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", viewName))
@@ -1408,7 +1377,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	if err = lockMoTable(c, dbName, viewName, lock.LockMode_Exclusive); err != nil {
 		getLogger().Info("createView",
 			zap.String("databaseName", c.db),
-			zap.String("ViewName", qry.GetTableDef().GetName()),
+			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.Error(err),
 		)
 		return err
@@ -1417,18 +1386,10 @@ func (s *Scope) CreateView(c *Compile) error {
 	if err = dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), viewName, append(exeCols, exeDefs...)); err != nil {
 		getLogger().Info("createView",
 			zap.String("databaseName", c.db),
-			zap.String("ViewName", qry.GetTableDef().GetName()),
+			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.Error(err),
 		)
 		return err
-	}
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		getLogger().Info("createView ok",
-			zap.String("databaseName", c.db),
-			zap.String("ViewName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-		)
 	}
 	return nil
 }
