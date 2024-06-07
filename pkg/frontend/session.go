@@ -1413,7 +1413,10 @@ func (ses *Session) StatusSession() *status.Session {
 // getStatusAfterTxnIsEnded
 // !!! only used after the txn is ended.
 // it may be called in the active txn. so, we
-func (ses *Session) getStatusAfterTxnIsEnded(ctx context.Context) uint16 {
+func (ses *Session) getStatusAfterTxnIsEnded(isLastStmt bool) uint16 {
+	if !isLastStmt {
+		return extendStatus(ses.GetTxnHandler().GetServerStatus()) | SERVER_MORE_RESULTS_EXISTS
+	}
 	return extendStatus(ses.GetTxnHandler().GetServerStatus())
 }
 
