@@ -566,7 +566,7 @@ func Test_checkUniqueKeyIncludePartKey(t *testing.T) {
 
 func mockPartitionBinder(tableDef *plan.TableDef) (*PartitionBinder, error) {
 	mock := NewMockOptimizer(false)
-	builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext(), false)
+	builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext(), false, false)
 	bindContext := NewBindContext(builder, nil)
 	nodeID := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
