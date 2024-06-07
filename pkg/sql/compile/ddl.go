@@ -842,24 +842,13 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			return nil
 		}
-		if qry.GetReplace() {
-			err := c.runSql(fmt.Sprintf("drop view if exists %s", tblName))
-			if err != nil {
-				c.proc.Info(c.ctx, "createTable",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.Error(err),
-				)
-				return err
-			}
-		} else {
-			c.proc.Info(c.ctx, "createTable",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
-			return moerr.NewTableAlreadyExists(c.ctx, tblName)
-		}
+
+		c.proc.Info(c.ctx, "createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return moerr.NewTableAlreadyExists(c.ctx, tblName)
 	}
 
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
