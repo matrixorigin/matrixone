@@ -62,7 +62,7 @@ func TestReshapeBatches(t *testing.T) {
 	var m1, m2 runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&m1)
-	retBatch, releaseF := ReshapeBatches(batches, fromLayout, toLayout, pool)
+	retBatch, releaseF := ReshapeBatches(batches, toLayout, pool)
 	runtime.ReadMemStats(&m2)
 	t.Log("total:", m2.TotalAlloc-m1.TotalAlloc)
 	t.Log("mallocs:", m2.Mallocs-m1.Mallocs)

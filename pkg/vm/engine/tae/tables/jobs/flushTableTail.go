@@ -484,8 +484,6 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	}
 
 	// prepare merge
-	// fromLayout describes the layout of the input batch, which is a list of batch length
-	fromLayout := make([]uint32, 0, len(readedBats))
 	// toLayout describes the layout of the output batch, i.e. [8192, 8192, 8192, 4242]
 	toLayout := make([]uint32, 0, len(readedBats))
 	if sortKeyPos < 0 {
@@ -494,7 +492,6 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	}
 	for _, bat := range readedBats {
 		remains := bat.Vecs[sortKeyPos].Length() - bat.Deletes.Count()
-		fromLayout = append(fromLayout, uint32(remains))
 		task.mergeRowsCnt += remains
 		task.aObjDeletesCnt += bat.Deletes.Count()
 	}
@@ -519,7 +516,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 			return
 		}
 	} else {
-		writtenBatches, releaseF = mergesort.ReshapeBatches(readedBats, fromLayout, toLayout, task)
+		writtenBatches, releaseF = mergesort.ReshapeBatches(readedBats, toLayout, task)
 	}
 	defer releaseF()
 	if task.doTransfer {

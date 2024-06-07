@@ -334,7 +334,7 @@ func TestReshapeBatches1(t *testing.T) {
 			bat.Attrs = append(bat.Attrs, "")
 			inputBatches[i] = bat
 		}
-		retBatches, releaseF := ReshapeBatches(inputBatches, []uint32{4, 6}, []uint32{5, 5}, pool)
+		retBatches, releaseF := ReshapeBatches(inputBatches, []uint32{5, 5}, pool)
 		t.Log(retBatches)
 		for i := range retBatches {
 			require.Equal(t, 5, retBatches[i].RowCount())
@@ -358,7 +358,7 @@ func TestReshapeBatches3(t *testing.T) {
 			inputBatches[i] = bat
 		}
 		t0 := time.Now()
-		_, releaseF := ReshapeBatches(inputBatches, []uint32{50000, 50000}, []uint32{50000, 50000}, pool)
+		_, releaseF := ReshapeBatches(inputBatches, []uint32{50000, 50000}, pool)
 		t.Logf("%v takes %v", vecType, time.Since(t0))
 		releaseF()
 	}
