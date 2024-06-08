@@ -78,7 +78,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
 	// }
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 	if stmt.IsRestore {
 		oldSnapshot := builder.compCtx.GetSnapshot()
@@ -763,9 +763,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			filterExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
 				pkExpr,
 				{
-					Typ: plan.Type{
-						Id: int32(types.T_tuple),
-					},
+					Typ: pkExpr.Typ,
 					Expr: &plan.Expr_List{
 						List: &plan.ExprList{
 							List: colExprs[0],
@@ -830,9 +828,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			filterExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
 				pkExpr,
 				{
-					Typ: plan.Type{
-						Id: int32(types.T_tuple),
-					},
+					Typ: pkExpr.Typ,
 					Expr: &plan.Expr_Vec{
 						Vec: &plan.LiteralVec{
 							Len:  int32(vec.Length()),

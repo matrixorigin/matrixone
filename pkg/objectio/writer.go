@@ -211,8 +211,9 @@ func (w *objectWriterV1) UpdateBlockZM(tye DataMetaType, blkIdx int, seqnum uint
 	w.blocks[tye][blkIdx].meta.ColumnMeta(seqnum).SetZoneMap(zm)
 }
 
-func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte) (err error) {
+func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte, typ uint8) (err error) {
 	w.blocks[SchemaData][blkIdx].bloomFilter = buf
+	w.blocks[SchemaData][blkIdx].meta.BlockHeader().SetBloomFilterType(typ)
 	return
 }
 

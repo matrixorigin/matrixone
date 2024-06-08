@@ -81,7 +81,7 @@ func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
 	if backend == c.localServiceAddress {
 		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("remote run pipeline in local: %s", backend))
 	}
-	return c.client.NewStream(backend, false)
+	return c.client.NewStream(backend, true)
 }
 
 func (c *CNClient) Close() error {
@@ -96,7 +96,7 @@ func (c *CNClient) Close() error {
 }
 
 const (
-	dfMaxSenderNumber       = 10
+	dfMaxSenderNumber       = 100000
 	dfConnectTimeout        = 5 * time.Second
 	dfClientReadBufferSize  = 1 << 10
 	dfClientWriteBufferSize = 1 << 10

@@ -1,4 +1,5 @@
 use tpch;
+-- @bvt:issue#16501
 -- tpch q1 --
 select
 	l_returnflag,
@@ -1909,6 +1910,7 @@ order by
     s_name
 limit 100
 ;
+-- @bvt:issue
 
 drop database if exists TPCH;
 drop snapshot tpch_snapshot;

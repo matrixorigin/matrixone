@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,20 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memorycache
+package malloc
 
-func (r RCBytes) Release() {
-	r.d.release(r.size)
+import "unsafe"
+
+type FuncDeallocator func(ptr unsafe.Pointer)
+
+var _ Deallocator = FuncDeallocator(nil)
+
+func (f FuncDeallocator) Deallocate(ptr unsafe.Pointer) {
+	f(ptr)
 }
 
-func (r RCBytes) Bytes() []byte {
-	if r.d == nil {
-		return nil
-	}
-	return r.d.Buf()
+type argumentedFuncDeallocator[T any] struct {
+	argument T
+	fn       func(unsafe.Pointer, T)
 }
 
-func (r RCBytes) Slice(n int) CacheData {
-	r.d.Truncate(n)
-	return r
+func (a *argumentedFuncDeallocator[T]) SetArgument(arg T) {
+	a.argument = arg
+}
+
+var _ Deallocator = &argumentedFuncDeallocator[int]{}
+
+func (a *argumentedFuncDeallocator[T]) Deallocate(ptr unsafe.Pointer) {
+	a.fn(ptr, a.argument)
 }

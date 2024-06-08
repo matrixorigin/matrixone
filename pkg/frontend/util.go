@@ -32,6 +32,8 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -344,7 +346,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 	var planExpr *plan.Expr
 	oid := resultVec.GetType().Oid
 	if oid == types.T_decimal64 || oid == types.T_decimal128 {
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false)
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
 		planExpr, err = binder.BindExpr(e, 0, false)
@@ -363,7 +365,7 @@ func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interfa
 		// set @a = on, type of a is bool.
 		return v.Parts[0], nil
 	default:
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false)
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
 		planExpr, err := binder.BindExpr(e, 0, false)
@@ -761,10 +763,16 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 	bat.SetRowCount(cnt)
 	for colIdx, typ := range colTyps {
 		bat.Vecs[colIdx] = vector.NewVec(typ)
+		nsp := nulls.NewWithSize(cnt)
+
 		switch typ.Oid {
 		case types.T_varchar:
 			vData := make([]string, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				if val, ok := row[colIdx].(string); ok {
 					vData[rowIdx] = val
 				} else {
@@ -778,6 +786,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_int16:
 			vData := make([]int16, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(int16)
 			}
 			err := vector.AppendFixedList[int16](bat.Vecs[colIdx], vData, nil, pool)
@@ -787,6 +799,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_int32:
 			vData := make([]int32, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(int32)
 			}
 			err := vector.AppendFixedList[int32](bat.Vecs[colIdx], vData, nil, pool)
@@ -796,6 +812,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_int64:
 			vData := make([]int64, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(int64)
 			}
 			err := vector.AppendFixedList[int64](bat.Vecs[colIdx], vData, nil, pool)
@@ -805,6 +825,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_float64:
 			vData := make([]float64, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(float64)
 			}
 			err := vector.AppendFixedList[float64](bat.Vecs[colIdx], vData, nil, pool)
@@ -814,6 +838,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_float32:
 			vData := make([]float32, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(float32)
 			}
 			err := vector.AppendFixedList[float32](bat.Vecs[colIdx], vData, nil, pool)
@@ -823,6 +851,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_date:
 			vData := make([]types.Date, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(types.Date)
 			}
 			err := vector.AppendFixedList[types.Date](bat.Vecs[colIdx], vData, nil, pool)
@@ -832,6 +864,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_time:
 			vData := make([]types.Time, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(types.Time)
 			}
 			err := vector.AppendFixedList[types.Time](bat.Vecs[colIdx], vData, nil, pool)
@@ -841,6 +877,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_datetime:
 			vData := make([]types.Datetime, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				vData[rowIdx] = row[colIdx].(types.Datetime)
 			}
 			err := vector.AppendFixedList[types.Datetime](bat.Vecs[colIdx], vData, nil, pool)
@@ -850,6 +890,10 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		case types.T_timestamp:
 			vData := make([]types.Timestamp, cnt)
 			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
 				switch val := row[colIdx].(type) {
 				case types.Timestamp:
 					vData[rowIdx] = val
@@ -868,6 +912,8 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		default:
 			return nil, nil, moerr.NewInternalErrorNoCtx("unsupported type %d", typ.Oid)
 		}
+
+		bat.Vecs[colIdx].SetNulls(nsp)
 	}
 	return bat, planColDefs, nil
 }
@@ -1298,4 +1344,15 @@ func ToRequest(payload []byte) *Request {
 	}
 
 	return req
+}
+
+// CancelCheck checks if the given context has been canceled.
+// If the context is canceled, it returns the context's error.
+func CancelCheck(Ctx context.Context) error {
+	select {
+	case <-Ctx.Done():
+		return Ctx.Err()
+	default:
+		return nil
+	}
 }
