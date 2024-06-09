@@ -27,13 +27,13 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) (*Plan, error) {
+func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt)
+	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, skipStats)
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -92,9 +92,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	defer task.End()
 	switch stmt := stmt.(type) {
 	case *tree.Select:
-		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, isPrepareStmt)
+		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
 	case *tree.ParenSelect:
-		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt)
+		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
 	case *tree.ExplainAnalyze:
 		return buildExplainAnalyze(ctx, stmt, isPrepareStmt)
 	case *tree.Insert:

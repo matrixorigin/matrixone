@@ -292,9 +292,12 @@ func (s *service) Close() error {
 	if err := s.lockService.Close(); err != nil {
 		return err
 	}
-	if err := s.shardService.Close(); err != nil {
-		return err
+	if s.shardService != nil {
+		if err := s.shardService.Close(); err != nil {
+			return err
+		}
 	}
+
 	return nil
 }
 

@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -370,6 +371,12 @@ func executeStmtInBack(backSes *backSession,
 
 	execCtx.ses.EnterFPrint(94)
 	defer execCtx.ses.ExitFPrint(94)
+
+	err = disttae.CheckTxnIsValid(execCtx.ses.GetTxnHandler().GetTxn())
+	if err != nil {
+		return err
+	}
+
 	if ret, err = execCtx.cw.Compile(execCtx, backSes.GetOutputCallback(execCtx)); err != nil {
 		return
 	}
@@ -410,12 +417,7 @@ func executeStmtInBack(backSes *backSession,
 			return err
 		}
 	case tree.OUTPUT_UNDEFINED:
-		isExecute := false
-		switch execCtx.stmt.(type) {
-		case *tree.Execute:
-			isExecute = true
-		}
-		if !isExecute {
+		if _, ok := execCtx.stmt.(*tree.Execute); !ok {
 			return moerr.NewInternalError(execCtx.reqCtx, "need set result type for %s", execCtx.sqlOfStmt)
 		}
 	}

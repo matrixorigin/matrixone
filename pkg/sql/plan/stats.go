@@ -643,6 +643,23 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 	}
 
+	if builder.optimizerHints != nil && builder.optimizerHints.execType != 0 {
+		switch builder.optimizerHints.execType {
+		case 1:
+			node.Stats = DefaultMinimalStats()
+		case 2:
+			node.Stats = DefaultBigStats()
+		case 3:
+			node.Stats = DefaultHugeStats()
+		default:
+			panic("wrong optimizer hints for execType!")
+		}
+		if needResetHashMapStats {
+			resetHashMapStats(node.Stats)
+		}
+		return
+	}
+
 	var leftStats, rightStats, childStats *Stats
 	if len(node.Children) == 1 {
 		childStats = builder.qry.Nodes[node.Children[0]].Stats
@@ -895,8 +912,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		}
 		if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-				node.Stats.Outcnt = float64(c.I64Val)
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				node.Stats.Outcnt = float64(c.U64Val)
 				node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
 			}
 		}
@@ -1101,8 +1118,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	// if there is a limit, outcnt is limit number
 	if node.Limit != nil {
 		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-				stats.Outcnt = float64(c.I64Val)
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				stats.Outcnt = float64(c.U64Val)
 				stats.BlockNum = int32(((stats.Outcnt / stats.Selectivity) / DefaultBlockMaxRows) + 1)
 				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
 			}
@@ -1132,11 +1149,21 @@ func InternalTable(tableDef *TableDef) bool {
 
 func DefaultHugeStats() *plan.Stats {
 	stats := new(Stats)
-	stats.TableCnt = 10000000
-	stats.Cost = 10000000
-	stats.Outcnt = 10000000
+	stats.TableCnt = 100000000
+	stats.Cost = 100000000
+	stats.Outcnt = 100000000
 	stats.Selectivity = 1
-	stats.BlockNum = 1000
+	stats.BlockNum = 10000
+	return stats
+}
+
+func DefaultBigStats() *plan.Stats {
+	stats := new(Stats)
+	stats.TableCnt = 10000000
+	stats.Cost = float64(costThresholdForOneCN)
+	stats.Outcnt = float64(costThresholdForOneCN)
+	stats.Selectivity = 1
+	stats.BlockNum = int32(BlockThresholdForOneCN)
 	return stats
 }
 
@@ -1346,6 +1373,10 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, sel float64) floa
 }
 
 func (builder *QueryBuilder) canSkipStats() bool {
+	if builder.skipStats {
+		// if already set to true by other parts, just skip stats
+		return true
+	}
 	//for now ,only skip stats for select count(*) from xx
 	if len(builder.qry.Steps) != 1 || len(builder.qry.Nodes) != 3 {
 		return false
