@@ -122,7 +122,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildExecute(stmt *tree.Execute, ctx CompilerContext) (*Plan, error) {
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 	binder := NewWhereBinder(builder, &BindContext{})
 
 	args := make([]*Expr, len(stmt.Variables))
@@ -172,7 +172,7 @@ func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
 	var err error
 	items := make([]*plan.SetVariablesItem, len(stmt.Assignments))
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 	binder := NewWhereBinder(builder, &BindContext{})
 
 	for idx, assignment := range stmt.Assignments {

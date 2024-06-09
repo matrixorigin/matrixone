@@ -912,8 +912,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		}
 		if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-				node.Stats.Outcnt = float64(c.I64Val)
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				node.Stats.Outcnt = float64(c.U64Val)
 				node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
 			}
 		}
@@ -1118,8 +1118,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	// if there is a limit, outcnt is limit number
 	if node.Limit != nil {
 		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-				stats.Outcnt = float64(c.I64Val)
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				stats.Outcnt = float64(c.U64Val)
 				stats.BlockNum = int32(((stats.Outcnt / stats.Selectivity) / DefaultBlockMaxRows) + 1)
 				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
 			}
@@ -1373,6 +1373,10 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, sel float64) floa
 }
 
 func (builder *QueryBuilder) canSkipStats() bool {
+	if builder.skipStats {
+		// if already set to true by other parts, just skip stats
+		return true
+	}
 	//for now ,only skip stats for select count(*) from xx
 	if len(builder.qry.Steps) != 1 || len(builder.qry.Nodes) != 3 {
 		return false
