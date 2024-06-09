@@ -49,7 +49,7 @@ drop database test;
 # it's 0 now
 select @@lower_case_table_names;
 
-# create table with lower_case_table_names = 1
+# create table with lower_case_table_names = 0
 create database test;
 use test;
 create table T1 (a int);

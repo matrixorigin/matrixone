@@ -109,10 +109,10 @@ func NewUnresolvedName(ctx context.Context, parts ...string) (*UnresolvedName, e
 		return nil, moerr.NewInternalError(ctx, "the count of name parts among [1,4]")
 	}
 	u := &UnresolvedName{
-		NumParts: len(parts),
+		NumParts: l,
 		Star:     false,
 	}
-	for i := 0; i < len(parts); i++ {
+	for i := 0; i < l; i++ {
 		u.Parts[i] = parts[l-1-i]
 	}
 	return u, nil
@@ -121,7 +121,7 @@ func NewUnresolvedName(ctx context.Context, parts ...string) (*UnresolvedName, e
 func SetUnresolvedName(parts ...string) *UnresolvedName {
 	l := len(parts)
 	u := &UnresolvedName{
-		NumParts: len(parts),
+		NumParts: l,
 		Star:     false,
 	}
 	for i := 0; i < l; i++ {
@@ -143,11 +143,11 @@ func NewUnresolvedNameWithStar(ctx context.Context, parts ...string) (*Unresolve
 		return nil, moerr.NewInternalError(ctx, "the count of name parts among [1,3]")
 	}
 	u := &UnresolvedName{
-		NumParts: len(parts),
+		NumParts: l,
 		Star:     true,
 	}
 	u.Parts[0] = ""
-	for i := 0; i < len(parts); i++ {
+	for i := 0; i < l; i++ {
 		u.Parts[i] = parts[l-1-i]
 	}
 	return u, nil
@@ -156,10 +156,10 @@ func NewUnresolvedNameWithStar(ctx context.Context, parts ...string) (*Unresolve
 func SetUnresolvedNameWithStar(parts ...string) *UnresolvedName {
 	l := len(parts)
 	u := &UnresolvedName{
-		NumParts: len(parts),
+		NumParts: l,
 		Star:     true,
 	}
-	for i := 0; i < len(parts); i++ {
+	for i := 0; i < l; i++ {
 		u.Parts[i] = parts[l-1-i]
 	}
 	return u
