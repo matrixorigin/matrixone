@@ -34,6 +34,8 @@ type RunnerReader interface {
 	GetStage() types.TS
 	MaxLSN() uint64
 	GetCatalog() *catalog.Catalog
+	GetCheckpointMetaFiles() map[string]struct{}
+	RemoveCheckpointMetaFile(string)
 }
 
 func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncateLSN uint64) *containers.Batch {
