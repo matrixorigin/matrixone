@@ -47,7 +47,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	arg.ctr.offset = uint64(vector.MustFixedCol[int64](vec)[0])
+	arg.ctr.offset = uint64(vector.MustFixedCol[uint64](vec)[0])
 
 	ap.ctr.seen = 0
 	return nil
