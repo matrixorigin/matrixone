@@ -2226,6 +2226,7 @@ func (tbl *txnTable) PKPersistedBetween(
 
 		_, _, filter := getNonCompositePKSearchFuncByExpr(
 			inExpr,
+			tbl.tableDef,
 			"pk",
 			tbl.proc.Load())
 		return filter.SortedSearchFunc
