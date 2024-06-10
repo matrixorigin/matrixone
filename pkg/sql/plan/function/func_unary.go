@@ -794,6 +794,20 @@ func HexUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return opUnaryFixedToStr[uint64](ivecs, result, proc, length, hexEncodeUint64)
 }
 
+func HexFloat32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryFixedToStr[float32](ivecs, result, proc, length, func(v float32) string {
+		// round is used to handle select hex(456.789); which should return 1C9 and not 1C8
+		return fmt.Sprintf("%X", uint64(math.Round(float64(v))))
+	})
+}
+
+func HexFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryFixedToStr[float64](ivecs, result, proc, length, func(v float64) string {
+		// round is used to handle select hex(456.789); which should return 1C9 and not 1C8
+		return fmt.Sprintf("%X", uint64(math.Round(v)))
+	})
+}
+
 func HexArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
 		buf := make([]byte, hex.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
@@ -803,7 +817,7 @@ func HexArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 func hexEncodeString(xs []byte) string {
-	return hex.EncodeToString(xs)
+	return strings.ToUpper(hex.EncodeToString(xs))
 }
 
 func hexEncodeInt64(xs int64) string {
@@ -819,12 +833,17 @@ func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlen
 		return rs.AppendMustNullForBytesResult()
 	}
 
-	buf := make([]byte, hex.DecodedLen(len(data)))
-	_, err := hex.Decode(buf, data)
+	// Add a '0' to the front, if the length is not the multiple of 2
+	str := functionUtil.QuickBytesToStr(data)
+	if len(str)%2 != 0 {
+		str = "0" + str
+	}
+
+	bs, err := hex.DecodeString(str)
 	if err != nil {
 		return rs.AppendMustNullForBytesResult()
 	}
-	return rs.AppendMustBytesValue(buf)
+	return rs.AppendMustBytesValue(bs)
 }
 
 func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
