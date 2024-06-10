@@ -505,19 +505,19 @@ func Test_mergeAnalyseInfo(t *testing.T) {
 }
 
 func Test_convertToProcessLimitation(t *testing.T) {
-	lim := &pipeline.ProcessLimitation{
+	lim := pipeline.ProcessLimitation{
 		Size: 100,
 	}
-	limitation := convertToProcessLimitation(lim)
+	limitation := process.ConvertToProcessLimitation(lim)
 	require.Equal(t, limitation.Size, int64(100))
 }
 
 func Test_convertToProcessSessionInfo(t *testing.T) {
 	ti, _ := time.Now().MarshalBinary()
-	sei := &pipeline.SessionInfo{
+	sei := pipeline.SessionInfo{
 		TimeZone: ti,
 	}
-	_, err := convertToProcessSessionInfo(sei)
+	_, err := process.ConvertToProcessSessionInfo(sei)
 	require.Nil(t, err)
 }
 

@@ -61,7 +61,7 @@ func TestInitMetadataWithExistData(t *testing.T) {
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,
-				Size:   int64(value.Size()),
+				Size:   int64(value.ProtoSize()),
 				Data:   protoc.MustMarshal(&value),
 			},
 		},
@@ -92,7 +92,7 @@ func TestInitMetadataWithInvalidUUIDWillPanic(t *testing.T) {
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,
-				Size:   int64(value.Size()),
+				Size:   int64(value.ProtoSize()),
 				Data:   protoc.MustMarshal(&value),
 			},
 		},

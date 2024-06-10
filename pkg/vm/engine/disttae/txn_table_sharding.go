@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -30,15 +31,34 @@ import (
 )
 
 type txnTableDelegate struct {
+	ctx context.Context
 	raw *txnTable
 }
 
-func newTxnTableDelegate(
+func newTxnTable(
+	ctx context.Context,
 	key tableKey,
-	item *cache.TableItem,
+	item cache.TableItem,
 	db *txnDatabase,
 	process *process.Process,
 ) engine.Relation {
+	tbl := newTxnTableWithItem(
+		db,
+		item,
+		process,
+	)
+	db.getTxn().tableCache.tableMap.Store(key, tbl)
+	return &txnTableDelegate{
+		ctx: ctx,
+		raw: tbl,
+	}
+}
+
+func newTxnTableWithItem(
+	db *txnDatabase,
+	item cache.TableItem,
+	process *process.Process,
+) *txnTable {
 	tbl := &txnTable{
 		db:            db,
 		accountId:     item.AccountId,
@@ -59,13 +79,10 @@ func newTxnTableDelegate(
 		constraint:    item.Constraint,
 		rowid:         item.Rowid,
 		rowids:        item.Rowids,
-		lastTS:        db.getTxn().op.SnapshotTS(),
+		lastTS:        db.op.SnapshotTS(),
 	}
 	tbl.proc.Store(process)
-	db.getTxn().tableCache.tableMap.Store(key, tbl)
-	return &txnTableDelegate{
-		raw: tbl,
-	}
+	return tbl
 }
 
 func (tbl *txnTableDelegate) Stats(
@@ -94,6 +111,7 @@ func (tbl *txnTableDelegate) Size(
 func (tbl *txnTableDelegate) Ranges(
 	context.Context,
 	[]*plan.Expr,
+	int,
 ) (engine.Ranges, error) {
 	// TODO: forward
 	return nil, nil
@@ -120,6 +138,7 @@ func (tbl *txnTableDelegate) NewReader(
 	expr *plan.Expr,
 	ranges []byte,
 	orderedScan bool,
+	txnOffset int,
 ) ([]engine.Reader, error) {
 	// forward
 	return nil, nil
@@ -263,4 +282,41 @@ func (tbl *txnTableDelegate) MaxAndMinValues(
 
 func (tbl *txnTableDelegate) GetEngineType() engine.EngineType {
 	return tbl.raw.GetEngineType()
+}
+
+func getTxnTable(
+	ctx context.Context,
+	param shard.ReadParam,
+	engine engine.Engine,
+) (*txnTable, error) {
+	// TODO: reduce mem allocate
+	proc, err := process.GetCodecService().Decode(
+		ctx,
+		param.Process,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	db := &txnDatabase{
+		op:           proc.TxnOperator,
+		databaseName: param.TxnTable.DatabaseName,
+		databaseId:   param.TxnTable.DatabaseID,
+	}
+
+	item, err := db.getTableItem(
+		ctx,
+		uint32(param.TxnTable.AccountID),
+		param.TxnTable.TableName,
+		engine.(*Engine),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return newTxnTableWithItem(
+		db,
+		item,
+		proc,
+	), nil
 }

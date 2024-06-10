@@ -1539,38 +1539,6 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 	return res
 }
 
-// convert pipeline.ProcessLimitation to process.Limitation
-func convertToProcessLimitation(lim *pipeline.ProcessLimitation) process.Limitation {
-	return process.Limitation{
-		Size:          lim.Size,
-		BatchRows:     lim.BatchRows,
-		BatchSize:     lim.BatchSize,
-		PartitionRows: lim.PartitionRows,
-		ReaderSize:    lim.ReaderSize,
-	}
-}
-
-// convert pipeline.SessionInfo to process.SessionInfo
-func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo, error) {
-	sessionInfo := process.SessionInfo{
-		User:         sei.User,
-		Host:         sei.Host,
-		Role:         sei.Role,
-		ConnectionID: sei.ConnectionId,
-		Database:     sei.Database,
-		Version:      sei.Version,
-		Account:      sei.Account,
-		QueryId:      sei.QueryId,
-	}
-	t := time.Time{}
-	err := t.UnmarshalBinary(sei.TimeZone)
-	if err != nil {
-		return sessionInfo, nil
-	}
-	sessionInfo.TimeZone = t.Location()
-	return sessionInfo, nil
-}
-
 func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 	a := &plan.AnalyzeInfo{
 		InputBlocks:      info.InputBlocks,

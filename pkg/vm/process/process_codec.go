@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -13,6 +14,7 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -38,7 +40,7 @@ func (proc *Process) BuildProcessInfo(
 		if err != nil {
 			return procInfo, err
 		}
-		procInfo.Snapshot = string(snapshot)
+		procInfo.Snapshot = snapshot
 		procInfo.AnalysisNodeList = make([]int32, len(proc.AnalInfos))
 		for i := range procInfo.AnalysisNodeList {
 			procInfo.AnalysisNodeList[i] = proc.AnalInfos[i].NodeId
@@ -50,7 +52,7 @@ func (proc *Process) BuildProcessInfo(
 			return procInfo, err
 		}
 
-		procInfo.SessionInfo = &pipeline.SessionInfo{
+		procInfo.SessionInfo = pipeline.SessionInfo{
 			User:         proc.SessionInfo.GetUser(),
 			Host:         proc.SessionInfo.GetHost(),
 			Role:         proc.SessionInfo.GetRole(),
@@ -64,7 +66,7 @@ func (proc *Process) BuildProcessInfo(
 	{ // log info
 		stmtId := proc.StmtProfile.GetStmtId()
 		txnId := proc.StmtProfile.GetTxnId()
-		procInfo.SessionLogger = &pipeline.SessionLoggerInfo{
+		procInfo.SessionLogger = pipeline.SessionLoggerInfo{
 			SessId:   proc.SessionInfo.SessionId[:],
 			StmtId:   stmtId[:],
 			TxnId:    txnId[:],
@@ -74,16 +76,63 @@ func (proc *Process) BuildProcessInfo(
 	return procInfo, nil
 }
 
-type ProcessCodec struct {
+type ProcessCodecService interface {
+	Encode(
+		proc *Process,
+		sql string,
+	) ([]byte, error)
+
+	Decode(
+		ctx context.Context,
+		data pipeline.ProcessInfo,
+	) (*Process, error)
+}
+
+func NewCodecService(
+	txnClient client.TxnClient,
+	fileService fileservice.FileService,
+	lockService lockservice.LockService,
+	queryClient qclient.QueryClient,
+	hakeeper logservice.CNHAKeeperClient,
+	udfService udf.Service,
+	engine engine.Engine,
+) ProcessCodecService {
+	mp, err := mpool.NewMPool("codec", 1024*1024*32, mpool.NoFixed)
+	if err != nil {
+		panic(err)
+	}
+	return &codecService{
+		txnClient:   txnClient,
+		fileService: fileService,
+		lockService: lockService,
+		queryClient: queryClient,
+		hakeeper:    hakeeper,
+		udfService:  udfService,
+		engine:      engine,
+		mp:          mp,
+	}
+}
+
+type codecService struct {
 	txnClient   client.TxnClient
 	fileService fileservice.FileService
 	lockService lockservice.LockService
 	queryClient qclient.QueryClient
 	hakeeper    logservice.CNHAKeeperClient
 	udfService  udf.Service
+	mp          *mpool.MPool
+	engine      engine.Engine
 }
 
-func (c *ProcessCodec) Encode(
+func GetCodecService() ProcessCodecService {
+	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ProcessCodecService)
+	if !ok {
+		panic("codec service not found")
+	}
+	return v.(ProcessCodecService)
+}
+
+func (c *codecService) Encode(
 	proc *Process,
 	sql string,
 ) ([]byte, error) {
@@ -94,37 +143,43 @@ func (c *ProcessCodec) Encode(
 	return procInfo.Marshal()
 }
 
-func NewProcessFromPipelineInfo(
+func (c *codecService) Decode(
 	ctx context.Context,
-	mp *mpool.MPool,
-	data []byte,
+	value pipeline.ProcessInfo,
 ) (*Process, error) {
-	value := pipeline.ProcessInfo{}
-	if err := value.Unmarshal(data); err != nil {
+	txnOp, err := c.txnClient.NewWithSnapshot(value.Snapshot)
+	if err != nil {
+		return nil, err
+	}
+
+	sessionInfo, err := ConvertToProcessSessionInfo(value.SessionInfo)
+	if err != nil {
 		return nil, err
 	}
 
 	proc := New(
 		ctx,
-		mp,
-		pHelper.txnClient,
-		pHelper.txnOperator,
-		cnInfo.fileService,
-		cnInfo.lockService,
-		cnInfo.queryClient,
-		cnInfo.hakeeper,
-		cnInfo.udfService,
-		cnInfo.aicm)
-	proc.UnixTime = pHelper.unixTime
-	proc.Id = pHelper.id
-	proc.Lim = pHelper.lim
-	proc.SessionInfo = pHelper.sessionInfo
-	proc.SessionInfo.StorageEngine = cnInfo.storeEngine
+		c.mp,
+		c.txnClient,
+		txnOp,
+		c.fileService,
+		c.lockService,
+		c.queryClient,
+		c.hakeeper,
+		c.udfService,
+		nil,
+	)
+	proc.UnixTime = value.UnixTime
+	proc.Id = value.Id
+	proc.Lim = ConvertToProcessLimitation(value.Lim)
+	proc.SessionInfo = sessionInfo
+	proc.SessionInfo.StorageEngine = c.engine
+	return proc, nil
 }
 
 // convert process.Limitation to pipeline.ProcessLimitation
-func convertToPipelineLimitation(lim Limitation) *pipeline.ProcessLimitation {
-	return &pipeline.ProcessLimitation{
+func convertToPipelineLimitation(lim Limitation) pipeline.ProcessLimitation {
+	return pipeline.ProcessLimitation{
 		Size:          lim.Size,
 		BatchRows:     lim.BatchRows,
 		BatchSize:     lim.BatchSize,
@@ -164,4 +219,40 @@ func EnumLogLevel2ZapLogLevel(level pipeline.SessionLoggerInfo_LogLevel) zapcore
 		return lvl
 	}
 	return zap.InfoLevel
+}
+
+// convert pipeline.ProcessLimitation to process.Limitation
+func ConvertToProcessLimitation(
+	lim pipeline.ProcessLimitation,
+) Limitation {
+	return Limitation{
+		Size:          lim.Size,
+		BatchRows:     lim.BatchRows,
+		BatchSize:     lim.BatchSize,
+		PartitionRows: lim.PartitionRows,
+		ReaderSize:    lim.ReaderSize,
+	}
+}
+
+// convert pipeline.SessionInfo to process.SessionInfo
+func ConvertToProcessSessionInfo(
+	sei pipeline.SessionInfo,
+) (SessionInfo, error) {
+	sessionInfo := SessionInfo{
+		User:         sei.User,
+		Host:         sei.Host,
+		Role:         sei.Role,
+		ConnectionID: sei.ConnectionId,
+		Database:     sei.Database,
+		Version:      sei.Version,
+		Account:      sei.Account,
+		QueryId:      sei.QueryId,
+	}
+	t := time.Time{}
+	err := t.UnmarshalBinary(sei.TimeZone)
+	if err != nil {
+		return sessionInfo, nil
+	}
+	sessionInfo.TimeZone = t.Location()
+	return sessionInfo, nil
 }
