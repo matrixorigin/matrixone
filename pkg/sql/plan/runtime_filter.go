@@ -291,7 +291,6 @@ func (builder *QueryBuilder) isMasterIndexInnerJoin(node *plan.Node) bool {
 
 	// Check if left child is a master/secondary index table
 	//TODO: verify if Cols will contain  __mo_cpkey
-	leftIsSecondaryIndexOrMasterIndexHiddenTable := true
 	for _, column := range leftChild.TableDef.Cols {
 		if column.Name == catalog.MasterIndexTablePrimaryColName {
 			continue
@@ -302,11 +301,10 @@ func (builder *QueryBuilder) isMasterIndexInnerJoin(node *plan.Node) bool {
 		if column.Name == catalog.Row_ID {
 			continue
 		}
-		leftIsSecondaryIndexOrMasterIndexHiddenTable = false
+		return false
 	}
 
 	// Check if right child is a master/secondary index table
-	rightIsSecondaryIndexOrMasterIndexHiddenTable := true
 	for _, column := range rightChild.TableDef.Cols {
 		if column.Name == catalog.MasterIndexTablePrimaryColName {
 			continue
@@ -317,12 +315,9 @@ func (builder *QueryBuilder) isMasterIndexInnerJoin(node *plan.Node) bool {
 		if column.Name == catalog.Row_ID {
 			continue
 		}
-		rightIsSecondaryIndexOrMasterIndexHiddenTable = false
+		return false
 	}
 
-	if leftIsSecondaryIndexOrMasterIndexHiddenTable && rightIsSecondaryIndexOrMasterIndexHiddenTable {
-		return true
-	}
+	return true
 
-	return false
 }
