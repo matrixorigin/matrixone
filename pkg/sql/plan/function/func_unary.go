@@ -782,6 +782,8 @@ func ConnectionID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	})
 }
 
+// HexString returns a hexadecimal string representation of a string.
+// See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_hex
 func HexString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryBytesToStr(ivecs, result, proc, length, hexEncodeString)
 }
@@ -828,6 +830,8 @@ func hexEncodeUint64(xs uint64) string {
 	return fmt.Sprintf("%X", xs)
 }
 
+// UnhexString returns a string representation of a hexadecimal value.
+// See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_unhex
 func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
 	if null {
 		return rs.AppendMustNullForBytesResult()
