@@ -18,11 +18,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/util/protoc"
 	"github.com/stretchr/testify/assert"
 )
 
