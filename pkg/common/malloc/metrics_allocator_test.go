@@ -20,7 +20,6 @@ func TestMetricsAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
 		return NewMetricsAllocator(
 			NewDefault(nil),
-			new(Metrics),
 		)
 	})
 }
@@ -30,7 +29,6 @@ func BenchmarkMetricsAllocator(b *testing.B) {
 		benchmarkAllocator(b, func() Allocator {
 			return NewMetricsAllocator(
 				NewDefault(nil),
-				new(Metrics),
 			)
 		}, n)
 	}
@@ -40,7 +38,6 @@ func FuzzMetricsAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
 		return NewMetricsAllocator(
 			NewDefault(nil),
-			new(Metrics),
 		)
 	})
 }
