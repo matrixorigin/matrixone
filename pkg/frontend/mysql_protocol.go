@@ -2701,16 +2701,26 @@ func (mp *MysqlProtocolImpl) appendTime(t types.Time) {
 	if int64(t) == 0 {
 		mp.append(0)
 	} else {
-		hour, minute, sec, msec, _ := t.ClockFormat()
+		hour, minute, sec, msec, isNeg := t.ClockFormat()
 		day := uint32(hour / 24)
 		hour = hour % 24
 		if msec != 0 {
 			mp.append(12)
+			if isNeg {
+				mp.append(1)
+			} else {
+				mp.append(0)
+			}
 			mp.appendUint32(day)
 			mp.append(uint8(hour), minute, sec)
 			mp.appendUint64(msec)
 		} else {
 			mp.append(8)
+			if isNeg {
+				mp.append(1)
+			} else {
+				mp.append(0)
+			}
 			mp.appendUint32(day)
 			mp.append(uint8(hour), minute, sec)
 		}
