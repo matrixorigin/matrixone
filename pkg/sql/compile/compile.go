@@ -1430,7 +1430,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			return ss, nil
 		}
 		rs := ss[0]
-		if c.IsTpQuery() {
+		if !c.IsTpQuery() {
 			rs = c.newMergeScope(ss)
 			// updateScopesLastFlag([]*Scope{rs})
 			rs.Magic = Merge
