@@ -44,7 +44,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 		idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
 
 		// 1. SELECT pk from idx WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value"))
-		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, scanNode.ScanSnapshot, colDefs)
+		currIdxScanTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, scanNode.ScanSnapshot, colDefs)
 
 		// 2. (SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value1")) )
 		//    	INNER JOIN
@@ -56,8 +56,8 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: currIdxProjTag,
-					ColPos: 0, // __mo_index_pk_col
+					RelPos: currIdxScanTag,
+					ColPos: 1, // __mo_index_pk_col
 				},
 			},
 		}
@@ -103,7 +103,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: prevIndexPkCol.GetCol().RelPos, // last idxTbl (may be join) relPos
-					ColPos: 0,                              // idxTbl.pk
+					ColPos: 1,                              // idxTbl.pk
 				},
 			},
 		},
@@ -227,25 +227,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		ScanSnapshot: scanSnapshot,
 	}, bindCtx)
 
-	// b. Project __mo_index_pk_col
-	projPkCol := &Expr{
-		Typ: makePlan2Type(&varcharType),
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: idxScanTag, //__mo_index_pk_col
-				ColPos: 1,
-			},
-		},
-	}
-	idxProjectTag := builder.genNewTag()
-	projectId := builder.appendNode(&Node{
-		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{scanId},
-		ProjectList: []*Expr{projPkCol},
-		BindingTags: []int32{idxProjectTag},
-	}, bindCtx)
-
-	return idxProjectTag, projectId
+	return idxScanTag, scanId
 }
 
 func isKeyPresentInList(key string, list []string) bool {
