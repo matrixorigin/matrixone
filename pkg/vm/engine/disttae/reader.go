@@ -140,6 +140,7 @@ func (mixin *withFilterMixin) getPKFilter(
 	// for other patterns, no filter is needed
 	ok, hasNull, filter := getNonCompositePKSearchFuncByExpr(
 		mixin.filterState.expr,
+		mixin.tableDef,
 		mixin.tableDef.Pkey.PkeyColName,
 		proc,
 	)
