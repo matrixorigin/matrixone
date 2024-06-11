@@ -219,29 +219,11 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		return nil, err
 	}
 
-	tbl := &txnTable{
-		db:            db,
-		accountId:     item.AccountId,
-		tableId:       item.Id,
-		version:       item.Version,
-		tableName:     item.Name,
-		defs:          item.Defs,
-		tableDef:      item.TableDef,
-		primaryIdx:    item.PrimaryIdx,
-		primarySeqnum: item.PrimarySeqnum,
-		clusterByIdx:  item.ClusterByIdx,
-		relKind:       item.Kind,
-		viewdef:       item.ViewDef,
-		comment:       item.Comment,
-		partitioned:   item.Partitioned,
-		partition:     item.Partition,
-		createSql:     item.CreateSql,
-		constraint:    item.Constraint,
-		rowid:         item.Rowid,
-		rowids:        item.Rowids,
-		lastTS:        txn.op.SnapshotTS(),
-	}
-	tbl.proc.Store(p)
+	tbl := newTxnTableWithItem(
+		db,
+		item,
+		p,
+	)
 
 	db.getTxn().tableCache.tableMap.Store(key, tbl)
 	return tbl, nil
