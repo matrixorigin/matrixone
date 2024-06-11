@@ -26,7 +26,7 @@ import (
 
 func TestSplitRecursiveMember(t *testing.T) {
 	sql := "with recursive c as (select a from t1 union all select a+1 from c where a < 3 union all select a+1 from c where a < 4) select * from c"
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1, 0)
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", sql, err)
 		return
