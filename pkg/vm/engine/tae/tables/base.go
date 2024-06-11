@@ -571,9 +571,6 @@ func (blk *baseObject) ResolvePersistedColumnDatas(
 		return nil, err
 	}
 	for i, vec := range vecs {
-		if vec == nil {
-			logutil.Infof("column %d is not found in block %d", colIdxs[i], blkID)
-		}
 		view.SetData(colIdxs[i], vec)
 	}
 
