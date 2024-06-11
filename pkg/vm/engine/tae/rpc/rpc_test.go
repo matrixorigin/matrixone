@@ -84,7 +84,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	//moBats[3] = containers.CopyToCNBatch(taeBats[3])
 
 	var objNames []objectio.ObjectName
-	var blkMetas []string
+	//var blkMetas []string
 	var stats []objectio.ObjectStats
 	offset := 0
 	for i := 0; i < 100; i++ {
@@ -98,19 +98,10 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 			//offset++
 		}
 		offset += 50
-		blocks, _, err := writer.Sync(context.Background())
+		_, _, err = writer.Sync(context.Background())
+		stats = append(stats, writer.GetObjectStats()[objectio.SchemaData])
 		assert.Nil(t, err)
-		assert.Equal(t, 50, len(blocks))
-		for _, blk := range blocks {
-			metaLoc := blockio.EncodeLocation(
-				writer.GetName(),
-				blk.GetExtent(),
-				uint32(taeBats[0].Vecs[0].Length()),
-				blk.GetID())
-			assert.Nil(t, err)
-			blkMetas = append(blkMetas, metaLoc.String())
-			stats = append(stats, writer.GetObjectStats()[objectio.SchemaData])
-		}
+		assert.Equal(t, 50, int(stats[len(stats)-1].BlkCnt()))
 	}
 
 	//create dbtest and tbtest;
@@ -170,18 +161,15 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	entries = append(entries, createTbEntries...)
 
 	//add 100 * 50 blocks from S3 into "tbtest" table
-	attrs := []string{catalog2.BlockMeta_MetaLoc, catalog2.ObjectMeta_ObjectStats}
-	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0), types.New(types.T_varchar, types.MaxVarcharLen, 0)}
+	attrs := []string{catalog2.ObjectMeta_ObjectStats}
+	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
 	offset = 0
-	for _, obj := range objNames {
+	for i, obj := range objNames {
 		metaLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
-		for i := 0; i < 50; i++ {
-			metaLocBat.Vecs[0].Append([]byte(blkMetas[offset+i]), false)
-			metaLocBat.Vecs[1].Append([]byte(stats[offset+i][:]), false)
-		}
-		offset += 50
+		//metaLocBat.Vecs[0].Append([]byte(blkMetas[offset+i]), false)
+		metaLocBat.Vecs[0].Append([]byte(stats[i][:]), false)
 		metaLocMoBat := containers.ToCNBatch(metaLocBat)
 		addS3BlkEntry, err := makePBEntry(INSERT, dbTestID,
 			tbTestID, dbName, schema.Name, obj.String(), metaLocMoBat)

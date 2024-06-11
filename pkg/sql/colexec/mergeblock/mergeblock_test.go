@@ -52,9 +52,20 @@ func TestMergeBlock(t *testing.T) {
 	name1 := objectio.BuildObjectName(segmentid, 0)
 	name2 := objectio.BuildObjectName(segmentid, 1)
 	name3 := objectio.BuildObjectName(segmentid, 2)
-	loc1 := blockio.EncodeLocation(name1, objectio.Extent{}, 15, 0)
-	loc2 := blockio.EncodeLocation(name2, objectio.Extent{}, 15, 0)
-	loc3 := blockio.EncodeLocation(name3, objectio.Extent{}, 15, 0)
+
+	rowCnt := uint32(15)
+	loc1 := blockio.EncodeLocation(name1, objectio.Extent{}, rowCnt, 0)
+	loc2 := blockio.EncodeLocation(name2, objectio.Extent{}, rowCnt, 0)
+	loc3 := blockio.EncodeLocation(name3, objectio.Extent{}, rowCnt, 0)
+
+	var stats1, stats2, stats3 objectio.ObjectStats
+	objectio.SetObjectStatsObjectName(&stats1, name1)
+	objectio.SetObjectStatsObjectName(&stats2, name2)
+	objectio.SetObjectStatsObjectName(&stats3, name3)
+
+	objectio.SetObjectStatsRowCnt(&stats1, rowCnt)
+	objectio.SetObjectStatsRowCnt(&stats2, rowCnt)
+	objectio.SetObjectStatsRowCnt(&stats3, rowCnt)
 
 	sid1 := loc1.Name().SegmentId()
 	blkInfo1 := objectio.BlockInfo{
@@ -102,9 +113,9 @@ func TestMergeBlock(t *testing.T) {
 				string(objectio.EncodeBlockInfo(blkInfo3))},
 				nil),
 			testutil.MakeTextVector([]string{
-				string(objectio.ZeroObjectStats[:]),
-				string(objectio.ZeroObjectStats[:]),
-				string(objectio.ZeroObjectStats[:])},
+				string(stats1.Marshal()),
+				string(stats2.Marshal()),
+				string(stats3.Marshal())},
 				nil),
 		},
 		Cnt: 1,
@@ -133,20 +144,19 @@ func TestMergeBlock(t *testing.T) {
 	// argument1.Prepare(proc)
 	_, err := argument1.Call(proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(15*3), argument1.affectedRows)
+	require.Equal(t, uint64(rowCnt*3), argument1.affectedRows)
 	// Check Tbl
 	{
 		result := argument1.container.source.(*mockRelation).result
 		// check attr names
 		require.True(t, reflect.DeepEqual(
-			[]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats},
+			[]string{catalog.ObjectMeta_ObjectStats},
 			result.Attrs,
 		))
 		// check vector
-		require.Equal(t, 2, len(result.Vecs))
+		require.Equal(t, 1, len(result.Vecs))
 		//for i, vec := range result.Vecs {
 		require.Equal(t, 3, result.Vecs[0].Length(), fmt.Sprintf("column number: %d", 0))
-		require.Equal(t, 3, result.Vecs[1].Length(), fmt.Sprintf("column number: %d", 1))
 		//}
 	}
 	// Check UniqueTables

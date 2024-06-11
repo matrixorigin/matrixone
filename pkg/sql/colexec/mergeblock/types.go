@@ -124,39 +124,25 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 }
 
 func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
-	var typs []types.Type
-	// exclude the table id column
-	attrs := src.Attrs[1:]
-
-	for idx := 1; idx < len(src.Vecs); idx++ {
-		typs = append(typs, *src.Vecs[idx].GetType())
-	}
-
-	// src comes from old CN which haven't object stats column
-	if src.Attrs[len(src.Attrs)-1] != catalog.ObjectMeta_ObjectStats {
-		attrs = append(attrs, catalog.ObjectMeta_ObjectStats)
-		typs = append(typs, types.T_binary.ToType())
-	}
+	// [idx | object stats]
+	// [idx | blk info]
+	// [idx | blk info | object stats]
 
 	// If the target is a partition table
 	if len(arg.container.partitionSources) > 0 {
 		// 'i' aligns with partition number
 		for i := range arg.container.partitionSources {
-			bat := batch.NewWithSize(len(attrs))
-			bat.Attrs = attrs
+			bat := batch.NewWithSize(1)
+			bat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
 			bat.Cnt = 1
-			for idx := 0; idx < len(attrs); idx++ {
-				bat.Vecs[idx] = proc.GetVector(typs[idx])
-			}
+			bat.Vecs[0] = proc.GetVector(types.T_binary.ToType())
 			arg.container.mp[i] = bat
 		}
 	} else {
-		bat := batch.NewWithSize(len(attrs))
-		bat.Attrs = attrs
+		bat := batch.NewWithSize(1)
+		bat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
 		bat.Cnt = 1
-		for idx := 0; idx < len(attrs); idx++ {
-			bat.Vecs[idx] = proc.GetVector(typs[idx])
-		}
+		bat.Vecs[0] = proc.GetVector(types.T_binary.ToType())
 		arg.container.mp[0] = bat
 	}
 }
