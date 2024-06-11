@@ -16,9 +16,12 @@ package dashboard
 
 import (
 	"context"
+	"runtime/metrics"
+	"strings"
 
 	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
+	"github.com/K-Phoen/grabana/row"
 )
 
 func (c *DashboardCreator) initRuntimeDashboard() error {
@@ -30,118 +33,87 @@ func (c *DashboardCreator) initRuntimeDashboard() error {
 	build, err := dashboard.New(
 		"Go Runtime Metrics",
 		c.withRowOptions(
-			c.initMemoryRow(),
-			c.initGCRow(),
-			c.initGoroutineRow(),
+			dashboard.Row("Memory", c.getRowOptions("/memory/")...),
+			dashboard.Row("GC", c.getRowOptions("/gc/")...),
+			dashboard.Row("CPU", c.getRowOptions("/cpu/")...),
+			dashboard.Row("Schedule", c.getRowOptions("/sched/")...),
+			dashboard.Row("Sync", c.getRowOptions("/sync/")...),
+			dashboard.Row("CGO", c.getRowOptions("/cgo/")...),
 		)...)
 	if err != nil {
 		return err
 	}
+
 	_, err = c.cli.UpsertDashboard(context.Background(), folder, build)
 	return err
 }
 
-func (c *DashboardCreator) initGCRow() dashboard.Option {
-	return dashboard.Row(
-		"Go GC Status",
-		c.getHistogramWithExtraBy(
-			"STW duration",
-			c.getMetricWithFilter(`go_gc_pauses_seconds_bucket`, ``),
-			[]float64{0.8, 0.90, 0.95, 0.99},
-			12,
-			c.by,
-			axis.Unit("s"),
-			axis.Min(0)),
-	)
-}
+func (c *DashboardCreator) getRowOptions(prefixes ...string) []row.Option {
+	var options []row.Option
 
-func (c *DashboardCreator) initGoroutineRow() dashboard.Option {
-	return dashboard.Row(
-		"Goroutine Status",
-		c.withGraph(
-			"Goroutine count",
-			6,
-			`sum(`+c.getMetricWithFilter("go_goroutines", "")+`) by (`+c.by+`)`,
-			"{{ "+c.by+" }}"),
+	// read info from runtime/metrics
+	allDescriptions := metrics.All()
+	for _, desc := range allDescriptions {
+		ok := false
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(desc.Name, prefix) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			continue
+		}
 
-		c.getHistogramWithExtraBy(
-			"Schedule latency duration",
-			c.getMetricWithFilter(`go_sched_latencies_seconds_bucket`, ``),
-			[]float64{0.8, 0.90, 0.95, 0.99},
-			6,
-			c.by,
-			axis.Unit("s"),
-			axis.Min(0)),
-	)
-}
+		metricName := "go" + desc.Name
+		metricName = strings.ReplaceAll(metricName, "/", "_")
+		metricName = strings.ReplaceAll(metricName, ":", "_")
+		metricName = strings.ReplaceAll(metricName, "-", "_")
 
-func (c *DashboardCreator) initMemoryRow() dashboard.Option {
-	return dashboard.Row(
-		"Memory Status",
-		c.withGraph(
-			"Live Objects",
-			3,
-			`sum(`+c.getMetricWithFilter("go_gc_heap_objects_objects", "")+`) by (`+c.by+`)`,
-			"{{ "+c.by+" }}"),
+		switch desc.Kind {
 
-		c.withGraph(
-			"Free and ready to return system",
-			3,
-			`sum(`+c.getMetricWithFilter("go_memory_classes_heap_free_bytes", "")+`) by (`+c.by+`)`,
-			"{{ "+c.by+" }}",
-			axis.Unit("bytes"),
-			axis.Min(0)),
+		case metrics.KindUint64, metrics.KindFloat64:
+			// sum
+			options = append(
+				options,
+				c.withGraph(
+					desc.Name,
+					3,
+					`sum(`+c.getMetricWithFilter(metricName, "")+`) by (`+c.by+`)`,
+					"{{ "+c.by+" }}"),
+			)
 
-		c.withGraph(
-			"Dead objects and not marked free live objects",
-			3,
-			`sum(`+c.getMetricWithFilter("go_memory_classes_heap_objects_bytes", "")+`) by (`+c.by+`)`,
-			"{{ "+c.by+" }}",
-			axis.Unit("bytes"),
-			axis.Min(0)),
+			// rate
+			if desc.Cumulative {
+				_, unit, _ := strings.Cut(desc.Name, ":")
+				options = append(
+					options,
+					c.withGraph(
+						"rate: "+desc.Name+" per "+unit,
+						3,
+						`sum(rate(`+c.getMetricWithFilter(metricName, "")+`[$interval])) by (`+c.by+`)`,
+						"{{ "+c.by+" }}",
+						axis.Unit(unit),
+						axis.Min(0)),
+				)
+			}
 
-		c.withGraph(
-			"Released to system",
-			3,
-			`sum(`+c.getMetricWithFilter("go_memory_classes_heap_released_bytes", "")+`) by (`+c.by+`)`,
-			"{{ "+c.by+" }}",
-			axis.Unit("bytes"),
-			axis.Min(0)),
+		case metrics.KindFloat64Histogram:
+			// histogram
+			_, unit, _ := strings.Cut(desc.Name, ":")
+			options = append(
+				options,
+				c.getHistogram(
+					desc.Name,
+					c.getMetricWithFilter(metricName+"_bucket", ``),
+					[]float64{0.8, 0.90, 0.95, 0.99},
+					6,
+					axis.Unit(unit),
+					axis.Min(0)),
+			)
 
-		c.withGraph(
-			"Heap Allocation Bytes/s",
-			3,
-			`sum(rate(`+c.getMetricWithFilter("go_gc_heap_allocs_bytes_total", "")+`[$interval])) by (`+c.by+`)`,
-			"{{ "+c.by+" }}",
-			axis.Unit("bytes"),
-			axis.Min(0)),
+		}
+	}
 
-		c.withGraph(
-			"Heap Free Bytes/s",
-			3,
-			`sum(rate(`+c.getMetricWithFilter("go_gc_heap_frees_bytes_total", "")+`[$interval])) by (`+c.by+`)`,
-			"{{ "+c.by+" }}",
-			axis.Unit("bytes"),
-			axis.Min(0)),
-
-		c.withGraph(
-			"Heap Allocation Object/s",
-			3,
-			`sum(rate(`+c.getMetricWithFilter("go_gc_heap_allocs_objects_total", "")+`[$interval])) by (`+c.by+`)`,
-			"{{ "+c.by+" }}"),
-
-		c.withGraph(
-			"Heap Free Object/s",
-			3,
-			`sum(rate(`+c.getMetricWithFilter("go_gc_heap_frees_objects_total", "")+`[$interval])) by (`+c.by+`)`,
-			"{{ "+c.by+" }}"),
-
-		c.getHistogram(
-			"Allocation bytes size",
-			c.getMetricWithFilter(`go_gc_heap_allocs_by_size_bytes_bucket`, ``),
-			[]float64{0.8, 0.90, 0.95, 0.99},
-			12,
-			axis.Unit("bytes"),
-			axis.Min(0)),
-	)
+	return options
 }
