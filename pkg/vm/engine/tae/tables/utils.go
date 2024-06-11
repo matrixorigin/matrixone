@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -107,9 +106,6 @@ func LoadPersistedColumnDatas(
 		idx := i
 		if idx >= phyAddIdx && phyAddIdx > -1 {
 			idx++
-		}
-		if vec == nil {
-			logutil.Infof("vec is nil")
 		}
 		vectors[idx] = vec
 	}
