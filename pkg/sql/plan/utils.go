@@ -628,7 +628,7 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 		switch exprImpl.F.Func.ObjName {
 		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "in", "prefix_in":
 			switch e := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec:
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List:
 				return extractColRefInFilter(exprImpl.F.Args[0])
 			case *plan.Expr_F:
 				switch e.F.Func.ObjName {
@@ -1245,7 +1245,7 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
 func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
-	if constExpr.GetP() != nil && constT.IsNumeric() && columnT.IsNumeric() {
+	if constExpr.GetP() != nil && columnT.IsNumeric() {
 		return true
 	}
 
