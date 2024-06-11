@@ -192,15 +192,11 @@ func CleanTransMapping(b *api.BlkTransferBooking) {
 	}
 }
 
-func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, deletes *nulls.Nulls, mapping []int64) {
+func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, mapping []int64) {
 	// TODO: remove panic check
 	if mapping != nil {
-		deletecnt := 0
-		if deletes != nil {
-			deletecnt = deletes.GetCardinality()
-		}
-		if len(mapping) != originRowCnt-deletecnt {
-			panic(fmt.Sprintf("mapping length %d != originRowCnt %d - deletes %s", len(mapping), originRowCnt, deletes))
+		if len(mapping) != originRowCnt {
+			panic(fmt.Sprintf("mapping length %d != originRowCnt %d", len(mapping), originRowCnt))
 		}
 		// mapping sortedVec[i] = originalVec[sortMapping[i]]
 		// transpose it, originalVec[sortMapping[i]] = sortedVec[i]
@@ -213,24 +209,18 @@ func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, d
 		}
 		mapping = transposedMapping
 	}
-	posInVecApplyDeletes := 0
 	targetMapping := b.Mappings[idx].M
 	for origRow := 0; origRow < originRowCnt; origRow++ {
-		if deletes != nil && deletes.Contains(uint64(origRow)) {
-			// this row has been deleted, skip its mapping
-			continue
-		}
 		if mapping == nil {
 			// no sort phase, the mapping is 1:1, just use posInVecApplyDeletes
-			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(posInVecApplyDeletes)}
+			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(origRow)}
 		} else {
-			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(mapping[posInVecApplyDeletes])}
+			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(mapping[origRow])}
 		}
-		posInVecApplyDeletes++
 	}
 }
 
-func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping, toLayout []uint32) {
+func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping []int, toLayout []uint32) {
 	bisectHaystack := make([]uint32, 0, len(toLayout)+1)
 	bisectHaystack = append(bisectHaystack, 0)
 	for _, x := range toLayout {
@@ -259,18 +249,18 @@ func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping, toLayout []uint
 
 	for _, mcontainer := range b.Mappings {
 		m := mcontainer.M
-		var curTotal int32   // index in the flatten src array
-		var destTotal uint32 // index in the flatten merged array
+		size := len(m)
+		var curTotal int32 // index in the flatten src array
 		for srcRow := range m {
 			curTotal = totalHandledRows + m[srcRow].RowIdx
-			if mapping == nil {
-				destTotal = uint32(curTotal)
+			destTotal := mapping[curTotal]
+			if destTotal == -1 {
+				delete(m, srcRow)
 			} else {
-				destTotal = mapping[curTotal]
+				destBlkIdx, destRowIdx := bisectPinpoint(uint32(destTotal))
+				m[srcRow] = api.TransDestPos{BlkIdx: int32(destBlkIdx), RowIdx: int32(destRowIdx)}
 			}
-			destBlkIdx, destRowIdx := bisectPinpoint(destTotal)
-			m[srcRow] = api.TransDestPos{BlkIdx: int32(destBlkIdx), RowIdx: int32(destRowIdx)}
 		}
-		totalHandledRows += int32(len(m))
+		totalHandledRows += int32(size)
 	}
 }
