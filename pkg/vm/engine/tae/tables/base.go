@@ -594,60 +594,6 @@ func (blk *baseObject) ResolvePersistedColumnDatas(
 	return
 }
 
-func (blk *baseObject) ResolvePersistedColumnDatasWithNoCopy(
-	ctx context.Context,
-	txn txnif.TxnReader,
-	readSchema *catalog.Schema,
-	blkID uint16,
-	colIdxs []int,
-	skipDeletes bool,
-	mp *mpool.MPool,
-) (view *containers.BlockView, releaseFunc func(), err error) {
-
-	view = containers.NewBlockView()
-	location, err := blk.buildMetalocation(blkID)
-	if err != nil {
-		return nil, nil, err
-	}
-	id := blk.meta.AsCommonID()
-	id.SetBlockOffset(blkID)
-	vecs, release, err := LoadPersistedColumnDatasWithNoCopy(
-		ctx, readSchema, blk.rt, id, colIdxs, location, mp,
-	)
-	if err != nil {
-		if release != nil {
-			release()
-		}
-		return nil, nil, err
-	}
-	releaseFunc = release
-	for i, vec := range vecs {
-		view.SetData(colIdxs[i], vec)
-	}
-
-	if skipDeletes {
-		return
-	}
-
-	defer func() {
-		if err != nil {
-			if releaseFunc != nil {
-				releaseFunc()
-			}
-			view.Close()
-		}
-	}()
-
-	blk.RLock()
-	err = blk.fillInMemoryDeletesLocked(txn, blkID, view.BaseView, blk.RWMutex)
-	blk.RUnlock()
-
-	if err = blk.FillPersistedDeletes(ctx, blkID, txn, view.BaseView, mp); err != nil {
-		return
-	}
-	return
-}
-
 func (blk *baseObject) ResolvePersistedColumnData(
 	ctx context.Context,
 	txn txnif.TxnReader,
