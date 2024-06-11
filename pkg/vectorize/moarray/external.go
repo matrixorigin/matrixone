@@ -121,6 +121,21 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	return math.Sqrt(float64(sumOfSquares)), nil
 }
 
+// L2DistanceSq returns the squared L2 distance between two vectors.
+// It is an optimized version of L2Distance used in Index Scan
+func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (float64, error) {
+	if len(v1) != len(v2) {
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
+	}
+	var sumOfSquares T
+	var difference T
+	for i := range v1 {
+		difference = v1[i] - v2[i]
+		sumOfSquares += difference * difference
+	}
+	return float64(sumOfSquares), nil
+}
+
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	cosineSimilarity, err := CosineSimilarity[T](v1, v2)
 	if err != nil {

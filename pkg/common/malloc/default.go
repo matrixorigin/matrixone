@@ -15,27 +15,47 @@
 package malloc
 
 import (
+	"net/http"
 	"os"
 	"runtime"
 	"strings"
 )
 
-func NewDefault(config *Config) Allocator {
+func NewDefault(config *Config) (allocator Allocator) {
 	if config == nil {
 		c := *defaultConfig.Load()
 		config = &c
 	}
 
+	defer func() {
+		if config.FullStackFraction != nil && *config.FullStackFraction > 0 {
+			allocator = NewProfileAllocator(
+				allocator,
+				globalProfiler,
+				*config.FullStackFraction,
+			)
+		}
+	}()
+
 	switch strings.TrimSpace(strings.ToLower(os.Getenv("MO_MALLOC"))) {
 
 	case "c":
-		return NewCAllocator()
+		allocator = NewCAllocator()
+		if config.EnableMetrics != nil && *config.EnableMetrics {
+			allocator = NewMetricsAllocator(allocator)
+		}
+		return allocator
 
 	case "old":
 		return NewShardedAllocator(
 			runtime.GOMAXPROCS(0),
 			func() Allocator {
-				return NewPureGoClassAllocator(256 * MB)
+				var ret Allocator
+				ret = NewPureGoClassAllocator(256 * MB)
+				if config.EnableMetrics != nil && *config.EnableMetrics {
+					ret = NewMetricsAllocator(ret)
+				}
+				return ret
 			},
 		)
 
@@ -43,9 +63,22 @@ func NewDefault(config *Config) Allocator {
 		return NewShardedAllocator(
 			runtime.GOMAXPROCS(0),
 			func() Allocator {
-				return NewClassAllocator(config.CheckFraction)
+				var ret Allocator
+				ret = NewClassAllocator(config.CheckFraction)
+				if config.EnableMetrics != nil && *config.EnableMetrics {
+					ret = NewMetricsAllocator(ret)
+				}
+				return ret
 			},
 		)
 
 	}
+}
+
+var globalProfiler = NewProfiler[HeapSampleValues]()
+
+func init() {
+	http.HandleFunc("/debug/pprof/malloc", func(w http.ResponseWriter, req *http.Request) {
+		globalProfiler.Write(w)
+	})
 }

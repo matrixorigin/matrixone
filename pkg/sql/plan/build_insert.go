@@ -78,7 +78,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
 	// }
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 	if stmt.IsRestore {
 		oldSnapshot := builder.compCtx.GetSnapshot()
@@ -228,12 +228,20 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		// append project node to make batch like update logic, not insert
 		updateColLength := 0
 		updateColPosMap := make(map[string]int)
+		updatePkCol := false
 		var insertColPos []int
 		var projectProjection []*Expr
 		tableDef = DeepCopyTableDef(tableDef, true)
 		tableDef.Cols = append(tableDef.Cols, MakeRowIdColDef())
 		colLength := len(tableDef.Cols)
 		rowIdPos := colLength - 1
+		if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+			for _, name := range tableDef.Pkey.Names {
+				if _, ok := rewriteInfo.onDuplicateExpr[name]; ok {
+					updatePkCol = true
+				}
+			}
+		}
 		for _, col := range tableDef.Cols {
 			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 				continue
@@ -288,6 +296,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		upPlanCtx.rowIdPos = rowIdPos
 		upPlanCtx.insertColPos = insertColPos
 		upPlanCtx.updateColPosMap = updateColPosMap
+		upPlanCtx.updatePkCol = updatePkCol
 
 		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, true)
 		if err != nil {
@@ -754,9 +763,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			filterExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
 				pkExpr,
 				{
-					Typ: plan.Type{
-						Id: int32(types.T_tuple),
-					},
+					Typ: pkExpr.Typ,
 					Expr: &plan.Expr_List{
 						List: &plan.ExprList{
 							List: colExprs[0],
@@ -821,9 +828,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			filterExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
 				pkExpr,
 				{
-					Typ: plan.Type{
-						Id: int32(types.T_tuple),
-					},
+					Typ: pkExpr.Typ,
 					Expr: &plan.Expr_Vec{
 						Vec: &plan.LiteralVec{
 							Len:  int32(vec.Length()),

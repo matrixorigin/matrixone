@@ -60,6 +60,7 @@ func initMemMetrics() {
 	registry.MustRegister(memMPoolAllocatedSizeGauge)
 	registry.MustRegister(MemTotalCrossPoolFreeCounter)
 	registry.MustRegister(memMPoolHighWaterMarkGauge)
+	registry.MustRegister(mallocCounter)
 }
 
 func initTaskMetrics() {
@@ -83,13 +84,13 @@ func initFileServiceMetrics() {
 	registry.MustRegister(S3DNSResolveCounter)
 
 	registry.MustRegister(s3IOBytesHistogram)
-	registry.MustRegister(s3IODurationHistogram)
 	registry.MustRegister(s3ConnDurationHistogram)
 	registry.MustRegister(localIOBytesHistogram)
-	registry.MustRegister(localIODurationHistogram)
 
 	registry.MustRegister(ioMergerCounter)
 	registry.MustRegister(ioMergerDuration)
+	registry.MustRegister(fsMallocLiveObjects)
+	registry.MustRegister(fsReadWriteDuration)
 }
 
 func initLogtailMetrics() {
@@ -129,12 +130,11 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnTableRangeDurationHistogram)
 	registry.MustRegister(TxnCheckPKDupDurationHistogram)
 	registry.MustRegister(TxnLockWaitersTotalHistogram)
-	registry.MustRegister(txnTableRangeSizeHistogram)
+	registry.MustRegister(txnTableRangeTotalHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
 	registry.MustRegister(TxnUnlockTableTotalHistogram)
 	registry.MustRegister(txnReaderDurationHistogram)
 
-	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
 	registry.MustRegister(txnCNCommittedLocationQuantityGauge)
 
 	registry.MustRegister(txnRangesSelectivityHistogram)

@@ -61,6 +61,9 @@ type FileService interface {
 	// PrefetchFile prefetches a file
 	PrefetchFile(ctx context.Context, filePath string) error
 
+	// Cost returns the cost attr of the file service
+	Cost() *CostAttr
+
 	Close()
 }
 
@@ -105,7 +108,8 @@ type IOEntry struct {
 
 	// raw content
 	// when reading, if len(Data) < Size, a new Size-lengthed byte slice will be allocated
-	Data []byte
+	Data        []byte
+	releaseData func()
 
 	// when reading, if Writer is not nil, write data to it instead of setting Data field
 	WriterForRead io.Writer
@@ -138,8 +142,6 @@ type IOEntry struct {
 	fromCache IOVectorCache
 
 	allocator CacheDataAllocator
-
-	releaseFuncs []func()
 }
 
 func (i IOEntry) String() string {
@@ -161,4 +163,16 @@ type DirEntry struct {
 	Name  string
 	IsDir bool
 	Size  int64
+}
+
+type CostItem uint8
+
+const (
+	CostLow CostItem = iota
+	CostHigh
+)
+
+type CostAttr struct {
+	// List is the cost of List from FileService
+	List CostItem
 }

@@ -99,6 +99,7 @@ col1    col2
 drop view v01;
 drop view v02;
 drop table table01;
+drop database test;
 use test;
 drop view v02;
 drop table table01;
@@ -307,39 +308,46 @@ drop view department_view;
 select * from employee_with_department_view;
 SQL parser error: table "employee_view" does not exist
 restore account acc01 from snapshot sp04 to account acc02;
-invalid input: column 'e.departmentid' does not exist
 use test;
 select * from employee_view;
-SQL parser error: table "employee_view" does not exist
+employee_id    first_name    last_name    department_id
+1    John    Doe    1
+2    Jane    Smith    2
+3    Bob    Johnson    1
 select * from department_view;
-SQL parser error: table "department_view" does not exist
+department_id    department_name
+1    HR
+2    Engineering
 select * from employee_with_department_view;
-SQL parser error: table "employee_with_department_view" does not exist
+employee_id    first_name    last_name    department_name
+1    John    Doe    HR
+2    Jane    Smith    Engineering
+3    Bob    Johnson    HR
 drop table employees;
-no such table test.employees
 truncate departments;
-no such table test.departments
 select * from employee_view;
-SQL parser error: table "employee_view" does not exist
+SQL parser error: table "employees" does not exist
 restore account acc01 from snapshot sp04 to account acc02;
-invalid input: column 'e.departmentid' does not exist
 use test;
 select * from employee_view;
-SQL parser error: table "employee_view" does not exist
+employee_id    first_name    last_name    department_id
+1    John    Doe    1
+2    Jane    Smith    2
+3    Bob    Johnson    1
 select * from department_view;
-SQL parser error: table "department_view" does not exist
+department_id    department_name
+1    HR
+2    Engineering
 select * from employee_with_department_view;
-SQL parser error: table "employee_with_department_view" does not exist
+employee_id    first_name    last_name    department_name
+1    John    Doe    HR
+2    Jane    Smith    Engineering
+3    Bob    Johnson    HR
 drop view employee_view;
-invalid view 'test.employee_view'
 drop view department_view;
-invalid view 'test.department_view'
 drop view employee_with_department_view;
-invalid view 'test.employee_with_department_view'
 drop table employees;
-no such table test.employees
 drop table departments;
-no such table test.departments
 drop table employees;
 drop table departments;
 drop view employee_with_department_view;
@@ -380,30 +388,26 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 drop snapshot if exists sp06;
 create snapshot sp06 for account acc01;
 restore account acc01 from snapshot sp05 to account acc02;
-SQL parser error: table "employees" does not exist
+use test;
+select * from view01;
+emp_no    birth_date    first_name    last_name    gender    hire_date
+9001    1980-12-17    SMITH    CLERK    F    2008-12-17
+9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
+use test;
+drop table partition01;
+select * from view01;
+SQL parser error: table "partition01" does not exist
+restore account acc01 from snapshot sp06 to account acc02;
 use test;
 select * from view01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 9003    1999-02-20    BOB    DOCTOR    F    2009-02-20
-drop table partition01;
-select * from view01;
-SQL parser error: table "partition01" does not exist
-restore account acc01 from snapshot sp06 to account acc02;
-SQL parser error: table "employees" does not exist
-use test;
-select * from view01;
-SQL parser error: table "view01" does not exist
 drop view view01;
-invalid view 'test.view01'
 drop table partition01;
-no such table test.partition01
 drop database test;
-drop table partition01;
-no such table test.partition01
-drop table view01;
-no such table test.view01
+drop database test;
 drop snapshot sp06;
 drop snapshot sp05;
 drop database if exists test01;
@@ -443,46 +447,39 @@ drop database test01;
 select * from test01.EmployeeSalaryRanking;
 invalid database test01
 restore account acc01 from snapshot sp06 to account acc02;
-SQL parser error: table "employees" does not exist
 select * from test01.EmployeeSalaryRanking;
-invalid database test01
+employeeid    employeename    salary    salaryrank
+3    Charlie    90000.00    1
+2    Bob    80000.00    2
+5    Eva    75000.00    3
+1    Alice    70000.00    4
+4    David    65000.00    5
 drop database test01;
-Can't drop database 'test01'; database doesn't exist
 drop snapshot sp06;
 drop database if exists test02;
-
 create database test02;
-
 use test02;
-
 drop table if exists students;
-
 create table Students (
 StudentID INT PRIMARY KEY auto_increment,
 Name VARCHAR(100),
 Grade DECIMAL(3, 2)
 );
-
 drop table if exists Courses;
-
 create table Courses (
 CourseID INT PRIMARY KEY,
 Title VARCHAR(100),
 Teacher VARCHAR(100)
 );
-
 insert into Students (StudentID, Name, Grade) VALUES
 (1, 'Alice', 3.5),
 (2, 'Bob', 3.0),
 (3, 'Charlie', 3.7);
-
 insert into Courses (CourseID, Title, Teacher) VALUES
 (101, 'Mathematics', 'Mr. Smith'),
 (102, 'Physics', 'Dr. Johnson'),
 (103, 'Chemistry', 'Ms. Lee');
-
 drop table if exists Enrollments;
-
 create table Enrollments (
 StudentID INT,
 CourseID INT,
@@ -491,15 +488,12 @@ PRIMARY KEY (StudentID, CourseID),
 FOREIGN KEY (StudentID) REFERENCES Students(StudentID),
 FOREIGN KEY (CourseID) REFERENCES Courses(CourseID)
 );
-
 insert into Enrollments (StudentID, CourseID, EnrollmentDate) VALUES
 (1, 101, '2024-01-10'),
 (2, 102, '2024-01-15'),
 (1, 103, '2024-01-20'),
 (3, 101, '2024-02-01');
-
 drop view if exists StudentCoursesView;
-
 create view StudentCoursesView as
 select
 s.Name as StudentName,
@@ -514,55 +508,53 @@ join
 Courses c on e.CourseID = c.CourseID
 order by
 s.Name, c.Title;
-
 select * from StudentCoursesView;
-
+studentname    coursetitle    teacher    enrollmentdate
+Alice    Chemistry    Ms. Lee    2024-01-20
+Alice    Mathematics    Mr. Smith    2024-01-10
+Bob    Physics    Dr. Johnson    2024-01-15
+Charlie    Mathematics    Mr. Smith    2024-02-01
 drop snapshot if exists sp07;
-
 create snapshot sp07 for account acc01;
-
 use test02;
-
 drop table Enrollments;
-
 drop table students;
-
 select * from StudentCoursesView;
-
+SQL parser error: table "students" does not exist
 restore account acc01 database test02 table students from snapshot sp07 to account acc02;
-
 use test02;
-
 select * from Students;
-
+studentid    name    grade
+1    Alice    3.50
+2    Bob    3.00
+3    Charlie    3.70
 select * from Enrollments;
-
+SQL parser error: table "enrollments" does not exist
 select * from StudentCoursesView;
-
+SQL parser error: table "studentcoursesview" does not exist
 restore account acc01 database test02 table Enrollments from snapshot sp07 to account acc02;
-
+no such table test02.courses
 use test02;
-
 select * from Enrollments;
-
+SQL parser error: table "enrollments" does not exist
 select * from StudentCoursesView;
-
+SQL parser error: table "studentcoursesview" does not exist
 show create view StudentCoursesView;
-
+invalid input: show view 'studentcoursesview' is not a valid view
 drop view StudentCoursesView;
-
+invalid view 'test02.studentcoursesview'
 drop table Enrollments;
-
+no such table test02.enrollments
 drop table students;
-
 drop table Courses;
-
+no such table test02.courses
+drop database test02;
+drop database test02;
 drop snapshot sp07;
-
+drop database if exists test02;
+create database test02;
 use test02;
-
 drop table if exists employees;
-
 create table employees (
 id INT PRIMARY KEY,
 name VARCHAR(255),
@@ -570,93 +562,71 @@ department VARCHAR(255),
 salary DECIMAL(10, 2),
 hire_date DATE
 );
-
 drop view if exists employees_view;
-
 drop view if exists it_employees_view;
-
 drop view if exists employees_by_department_view;
-
 drop view if exists employees_by_salary_view;
-
 drop view if exists avg_salary_per_department_view;
-
 create view employees_view AS SELECT * FROM employees;
-
 create view it_employees_view AS SELECT * FROM employees WHERE department = 'IT';
-
 create view employees_by_department_view AS
 select name, department
 from employees
 order by department;
-
 create view employees_by_salary_view AS
 select name, salary
 from employees
 order by salary desc;
-
 create view avg_salary_per_department_view AS
 select department, avg(salary) as avg_salary
 from employees
 group by department;
-
 drop snapshot if exists sp10;
-
 create snapshot sp10 for account acc01;
-
 use test02;
-
 drop database test02;
-
 restore account acc01 from snapshot sp10 to account acc02;
-
+use test02;
+show create view employees_view;
+View    Create View    character_set_client    collation_connection
+employees_view    create view employees_view AS SELECT * FROM employees;    utf8mb4    utf8mb4_general_ci
+show create view it_employees_view;
+View    Create View    character_set_client    collation_connection
+it_employees_view    create view it_employees_view AS SELECT * FROM employees WHERE department = 'IT';    utf8mb4    utf8mb4_general_ci
+show create view employees_by_department_view;
+View    Create View    character_set_client    collation_connection
+employees_by_department_view    create view employees_by_department_view AS\nselect name, department\nfrom employees\norder by department;    utf8mb4    utf8mb4_general_ci
+show create view employees_by_salary_view;
+View    Create View    character_set_client    collation_connection
+employees_by_salary_view    create view employees_by_salary_view AS\nselect name, salary\nfrom employees\norder by salary desc;    utf8mb4    utf8mb4_general_ci
+show create view avg_salary_per_department_view;
+View    Create View    character_set_client    collation_connection
+avg_salary_per_department_view    create view avg_salary_per_department_view AS\nselect department, avg(salary) as avg_salary\nfrom employees\ngroup by department;    utf8mb4    utf8mb4_general_ci
 drop view if exists employees_view;
-
 drop view if exists it_employees_view;
-
 drop view if exists employees_by_department_view;
-
 drop view if exists employees_by_salary_view;
-
 drop view if exists avg_salary_per_department_view;
-
 drop table employees;
-
-drop snapshot sp10;
-
 drop database test02;
-
 drop snapshot sp10;
-
 drop database if exists test03;
-
 drop database if exists test04;
-
 drop database if exists test05;
-
 create database test03;
-
 create database test04;
-
 create database test05;
-
 use test03;
-
 drop table if exists departments;
-
 create table departments (
 department_id INT PRIMARY KEY,
 department_name VARCHAR(100)
 );
-
 insert into departments (department_id, department_name)
 values (1, 'HR'),
 (2, 'Engineering');
-
 use test04;
-
 drop table if exists employees;
-
 create table employees (
 employee_id INT PRIMARY KEY,
 first_name VARCHAR(50),
@@ -664,91 +634,77 @@ last_name VARCHAR(50),
 department_id INT,
 FOREIGN KEY (department_id) REFERENCES test03.departments(department_id)
 );
-
 insert into employees values
 (1, 'John', 'Doe', 1),
 (2, 'Jane', 'Smith', 2),
 (3, 'Bob', 'Johnson', 1);
-
 use test04;
-
 drop view if exists employee_view;
-
 create view employee_view as select employee_id, first_name, last_name, department_id from test04.employees;
-
 select * from employee_view;
-
+employee_id    first_name    last_name    department_id
+1    John    Doe    1
+2    Jane    Smith    2
+3    Bob    Johnson    1
 use test03;
-
 drop view if exists department_view;
-
 create view department_view as select department_id, department_name from test03.departments;
-
 select * from department_view;
-
+department_id    department_name
+1    HR
+2    Engineering
 use test05;
-
 drop view if exists employee_with_department_view;
-
 create view employee_with_department_view as
 select e.employee_id, e.first_name, e.last_name, d.department_name
 from test04.employee_view e join test03.department_view d on e.department_id = d.department_id;
-
 select * from employee_with_department_view;
-
+employee_id    first_name    last_name    department_name
+1    John    Doe    HR
+2    Jane    Smith    Engineering
+3    Bob    Johnson    HR
 drop snapshot if exists sp100;
-
 create snapshot sp100 for account acc01;
-
 drop database test04;
-
 select * from test04.employee_view;
-
+invalid database test04
 select * from test03.department_view;
-
+department_id    department_name
+1    HR
+2    Engineering
 select * from test05.employee_with_department_view;
-
+invalid database test04
 drop snapshot if exists sp101;
-
 create snapshot sp101 for account acc01;
-
 drop database test03;
-
 drop database test05;
-
 select * from test04.employee_view;
-
+invalid database test04
 select * from test03.department_view;
-
+invalid database test03
 select * from test05.employee_with_department_view;
-
+invalid database test05
 restore account acc01 from snapshot sp100 to account acc02;
-
 select * from test04.employee_view;
-
+employee_id    first_name    last_name    department_id
+1    John    Doe    1
+2    Jane    Smith    2
+3    Bob    Johnson    1
 select * from test03.department_view;
-
+department_id    department_name
+1    HR
+2    Engineering
 select * from test05.employee_with_department_view;
-
-drop table employees;
-
-drop table departments;
-
-drop view employee_view;
-
-drop view department_view;
-
-drop view employee_with_department_view;
-
-drop database test03;
-
+employee_id    first_name    last_name    department_name
+1    John    Doe    HR
+2    Jane    Smith    Engineering
+3    Bob    Johnson    HR
+drop view test03.department_view;
+drop view test05.employee_with_department_view;
 drop database test04;
-
+drop database test03;
 drop database test05;
-
 drop snapshot sp100;
-
 drop snapshot sp101;
 drop account acc01;
 drop account acc02;
-

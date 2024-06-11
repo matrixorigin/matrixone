@@ -395,6 +395,16 @@ func (e *Engine) getOrCreateSnapPart(
 	ctx context.Context,
 	tbl *txnTable,
 	ts types.TS) (*logtailreplay.Partition, error) {
+
+	//check whether the latest partition is available for reuse.
+	err := tbl.updateLogtail(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if p := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
+		return p, nil
+	}
+
 	//check whether the snapshot partitions are available for reuse.
 	e.mu.Lock()
 	tblSnaps, ok := e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}]
@@ -477,8 +487,8 @@ func (e *Engine) getOrCreateSnapPart(
 	if ts.Less(&start) {
 		return nil, moerr.NewInternalErrorNoCtx(
 			"No valid checkpoints for snapshot read,maybe snapshot is too old, "+
-				"snapshot:%s, start:%s, end:%s",
-			ts.ToTimestamp().DebugString(),
+				"snapshot op:%s, start:%s, end:%s",
+			tbl.db.op.Txn().DebugString(),
 			start.ToTimestamp().DebugString(),
 			end.ToTimestamp().DebugString())
 	}

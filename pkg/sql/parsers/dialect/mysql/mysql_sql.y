@@ -358,7 +358,7 @@ import (
 
 
 // Alter
-%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE
+%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
 %token <str> MODIFY CHANGE
 
 // Time
@@ -3439,6 +3439,22 @@ alter_database_config_stmt:
             accountName,
             dbName,
             isAccountLevel,
+            tree.MYSQL_COMPATIBILITY_MODE,
+            updateConfig,
+        )
+    }
+|   ALTER DATABASE db_name SET UNIQUE_CHECK_ON_AUTOINCR '=' STRING
+    {
+        var accountName = ""
+        var dbName = $3
+        var isAccountLevel = false
+        var updateConfig = $7
+
+        $$ = tree.NewAlterDataBaseConfig(
+            accountName,
+            dbName,
+            isAccountLevel,
+            tree.UNIQUE_CHECK_ON_AUTOINCR,
             updateConfig,
         )
     }
@@ -3453,6 +3469,7 @@ alter_database_config_stmt:
             accountName,
             dbName,
             isAccountLevel,
+            tree.MYSQL_COMPATIBILITY_MODE,
             updateConfig,
         )
     }
@@ -8198,11 +8215,19 @@ table_snapshot_opt:
             Expr: $4,
         }
     }
-|   '{' SNAPSHOT '=' expression '}'
+|   '{' SNAPSHOT '=' ident '}'
     {
+        var Str = $4.Compare()
         $$ = &tree.AtTimeStamp{
             Type: tree.ATTIMESTAMPSNAPSHOT,
-            Expr: $4,
+            Expr: tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char),
+        }
+    }
+|   '{' SNAPSHOT '=' STRING '}'
+    {
+        $$ = &tree.AtTimeStamp{
+           Type: tree.ATTIMESTAMPSNAPSHOT,
+          Expr: tree.NewNumValWithType(constant.MakeString($4), $4, false, tree.P_char),
         }
     }
 |   '{' MO_TS '=' expression '}'
@@ -12021,6 +12046,7 @@ non_reserved_keyword:
 |	RETURNS
 |	QUERY_RESULT
 |	MYSQL_COMPATIBILITY_MODE
+|   UNIQUE_CHECK_ON_AUTOINCR
 |	SEQUENCE
 |	BACKEND
 |	SERVERS

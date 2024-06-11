@@ -1,6 +1,6 @@
 module github.com/matrixorigin/matrixone
 
-go 1.21.5
+go 1.22.3
 
 require (
 	github.com/BurntSushi/toml v1.2.1
@@ -34,6 +34,7 @@ require (
 	github.com/google/btree v1.1.2
 	github.com/google/gofuzz v1.2.0
 	github.com/google/gops v0.3.25
+	github.com/google/pprof v0.0.0-20230510103437-eeec1cb781c3
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/memberlist v0.3.1
@@ -44,6 +45,7 @@ require (
 	github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd
 	github.com/minio/minio-go/v7 v7.0.63
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
+	github.com/ncruces/go-dns v1.2.5
 	github.com/panjf2000/ants/v2 v2.7.4
 	github.com/parquet-go/parquet-go v0.20.1
 	github.com/pierrec/lz4/v4 v4.1.18
@@ -83,7 +85,6 @@ require (
 	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/godbus/dbus/v5 v5.0.4 // indirect
-	github.com/google/pprof v0.0.0-20230510103437-eeec1cb781c3 // indirect
 	github.com/gosimple/slug v1.13.1 // indirect
 	github.com/gosimple/unidecode v1.0.1 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect

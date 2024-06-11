@@ -42,9 +42,9 @@
 # pkg/cnservice
 /pkg/cnservice @reusee @daviszhen
 
-/pkg/cacheservice @volgariver6 
+/pkg/cacheservice @volgariver6
 
-/pkg/clusterservice @volgariver6 
+/pkg/clusterservice @volgariver6
 
 
 
@@ -75,7 +75,7 @@
 
 # pkg/container
 /pkg/container @XuPeng-SH
-/pkg/container/vector @aunjgr
+/pkg/container/vector @aunjgr @XuPeng-SH
 
 # pkg/defines
 /pkg/defines @daviszhen
@@ -97,6 +97,9 @@
 
 # pkg/lockservice
 /pkg/lockservice @zhangxu19830126
+
+# pkg/fileservice
+/pkg/shardservice @zhangxu19830126
 
 # pkg/logservice
 /pkg/logservice @zhangxu19830126
@@ -201,3 +204,4 @@
 /proto/txn.proto @zhangxu19830126
 /proto/api.proto @XuPeng-SH
 /proto/logtail.proto @XuPeng-SH
+/proto/shard.proto @zhangxu19830126

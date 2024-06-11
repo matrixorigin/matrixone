@@ -176,6 +176,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 		// find the nearest cluster center from the build table.
 		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
 		case types.T_array_float32:
+			tblEmbeddingF32IsNull := ctr.inBat.Vecs[tblColPos].IsNull(uint64(j))
 			tblEmbeddingF32 = types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
 
 			//// NOTE: make sure you normalize_l2 probe vector once.
@@ -189,17 +190,27 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			//_ = moarray.NormalizeL2[float32](tblEmbeddingF32, normalizeTblEmbeddingF32)
 
 			for i = 0; i < buildCount; i++ {
+				clusterEmbeddingF32IsNull := ctr.bat.Vecs[centroidColPos].IsNull(uint64(i))
 				clusterEmbeddingF32 = types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				dist, _ := moarray.L2Distance[float32](clusterEmbeddingF32, tblEmbeddingF32)
-				if dist < leastDistance {
-					leastDistance = dist
+				if tblEmbeddingF32IsNull || clusterEmbeddingF32IsNull {
+					leastDistance = 0
 					leastClusterIndex = i
+				} else {
+					dist, err := moarray.L2DistanceSq[float32](clusterEmbeddingF32, tblEmbeddingF32)
+					if err != nil {
+						return err
+					}
+					if dist < leastDistance {
+						leastDistance = dist
+						leastClusterIndex = i
+					}
 				}
 			}
 			//// article:https://blog.mike.norgate.xyz/unlocking-go-slice-performance-navigating-sync-pool-for-enhanced-efficiency-7cb63b0b453e
 			//*normalizeTblEmbeddingPtrF32 = normalizeTblEmbeddingF32
 			//arrayF32Pool.Put(normalizeTblEmbeddingPtrF32)
 		case types.T_array_float64:
+			tblEmbeddingF64IsNull := ctr.inBat.Vecs[tblColPos].IsNull(uint64(j))
 			tblEmbeddingF64 = types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
 
 			//normalizeTblEmbeddingPtrF64 = arrayF64Pool.Get().(*[]float64)
@@ -212,11 +223,20 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			//_ = moarray.NormalizeL2[float64](tblEmbeddingF64, normalizeTblEmbeddingF64)
 
 			for i = 0; i < buildCount; i++ {
+				clusterEmbeddingF64IsNull := ctr.bat.Vecs[centroidColPos].IsNull(uint64(i))
 				clusterEmbeddingF64 = types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				dist, _ := moarray.L2Distance[float64](clusterEmbeddingF64, tblEmbeddingF64)
-				if dist < leastDistance {
-					leastDistance = dist
+				if tblEmbeddingF64IsNull || clusterEmbeddingF64IsNull {
+					leastDistance = 0
 					leastClusterIndex = i
+				} else {
+					dist, err := moarray.L2DistanceSq[float64](clusterEmbeddingF64, tblEmbeddingF64)
+					if err != nil {
+						return err
+					}
+					if dist < leastDistance {
+						leastDistance = dist
+						leastClusterIndex = i
+					}
 				}
 			}
 			//*normalizeTblEmbeddingPtrF64 = normalizeTblEmbeddingF64

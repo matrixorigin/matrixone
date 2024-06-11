@@ -1,3 +1,4 @@
+-- @bvt:issue#16501
 use tpch;
 create snapshot tpch_snapshot for account sys;
 create snapshot tpch_cluster for cluster;
@@ -8,6 +9,7 @@ drop table if exists orders;
 drop table if exists part;
 drop table if exists partsupp;
 drop table if exists supplier;
+
 select sleep(10);
 -- customer
 select count(*) from customer {snapshot = 'tpch_snapshot'};
@@ -207,4 +209,6 @@ select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 
+
 drop snapshot tpch_cluster;
+-- @bvt:issue

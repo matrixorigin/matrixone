@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1290,12 +1291,26 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	}
 
-	return maybeCreateAutoIncrement(
+	err = maybeCreateAutoIncrement(
 		c.ctx,
 		dbSource,
 		qry.GetTableDef(),
 		c.proc.TxnOperator,
-		nil)
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+
+	if len(partitionTables) == 0 {
+		return nil
+	}
+
+	return shardservice.GetService().Create(
+		c.ctx,
+		qry.GetTableDef().TblId,
+		c.proc.TxnOperator,
+	)
 }
 
 func checkIndexInitializable(dbName string, tblName string) bool {
@@ -1942,14 +1957,26 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if isTemp {
 		oldId = rel.GetTableID(c.ctx)
 	}
-	err = incrservice.GetAutoIncrementService(c.ctx).Reset(
-		c.ctx,
-		oldId,
-		newId,
-		keepAutoIncrement,
-		c.proc.TxnOperator)
-	if err != nil {
-		return err
+
+	// check if contains any auto_increment column(include __mo_fake_pk_col), if so, reset the auto_increment value
+	tblDef := rel.GetTableDef(c.ctx)
+	var containAuto bool
+	for _, col := range tblDef.Cols {
+		if col.Typ.AutoIncr {
+			containAuto = true
+			break
+		}
+	}
+	if containAuto {
+		err = incrservice.GetAutoIncrementService(c.ctx).Reset(
+			c.ctx,
+			oldId,
+			newId,
+			keepAutoIncrement,
+			c.proc.TxnOperator)
+		if err != nil {
+			return err
+		}
 	}
 
 	// update index information in mo_catalog.mo_indexes
@@ -2141,11 +2168,29 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
+			tblDef := rel.GetTableDef(c.ctx)
+			var containAuto bool
+			for _, col := range tblDef.Cols {
+				if col.Typ.AutoIncr {
+					containAuto = true
+					break
+				}
+			}
+			if containAuto {
+				err := incrservice.GetAutoIncrementService(c.ctx).Delete(
+					c.ctx,
+					rel.GetTableID(c.ctx),
+					c.proc.TxnOperator)
+				if err != nil {
+					return err
+				}
+			}
+
+			if err := shardservice.GetService().Delete(
 				c.ctx,
 				rel.GetTableID(c.ctx),
-				c.proc.TxnOperator)
-			if err != nil {
+				c.proc.TxnOperator,
+			); err != nil {
 				return err
 			}
 		}
@@ -2168,12 +2213,30 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
+			tblDef := rel.GetTableDef(c.ctx)
+			var containAuto bool
+			for _, col := range tblDef.Cols {
+				if col.Typ.AutoIncr {
+					containAuto = true
+					break
+				}
+			}
+			if containAuto {
+				// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
+				err := incrservice.GetAutoIncrementService(c.ctx).Delete(
+					c.ctx,
+					rel.GetTableID(c.ctx),
+					c.proc.TxnOperator)
+				if err != nil {
+					return err
+				}
+			}
+
+			if err := shardservice.GetService().Delete(
 				c.ctx,
 				rel.GetTableID(c.ctx),
-				c.proc.TxnOperator)
-			if err != nil {
+				c.proc.TxnOperator,
+			); err != nil {
 				return err
 			}
 		}

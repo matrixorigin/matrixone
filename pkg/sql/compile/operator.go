@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -78,7 +79,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
@@ -281,9 +281,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg := projection.NewArgument()
 		arg.Es = t.Es
 		res.Arg = arg
-	case vm.Restrict:
-		t := sourceIns.Arg.(*restrict.Argument)
-		arg := restrict.NewArgument()
+	case vm.Filter:
+		t := sourceIns.Arg.(*filter.Argument)
+		arg := filter.NewArgument()
 		arg.E = t.E
 		res.Arg = arg
 	case vm.Semi:
@@ -494,6 +494,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.N = t.N
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
+		arg.BuildIdx = t.BuildIdx
 		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -501,8 +502,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	return res
 }
 
-func constructRestrict(n *plan.Node, filterExpr *plan2.Expr) *restrict.Argument {
-	arg := restrict.NewArgument()
+func constructRestrict(n *plan.Node, filterExpr *plan2.Expr) *filter.Argument {
+	arg := filter.NewArgument()
 	arg.E = filterExpr
 	arg.IsEnd = n.IsEnd
 	return arg
@@ -541,7 +542,7 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 	return arg
 }
 
-func constructFuzzyFilter(n, right *plan.Node) *fuzzyfilter.Argument {
+func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.Argument {
 	pkName := n.TableDef.Pkey.PkeyColName
 	var pkTyp plan.Type
 	if pkName == catalog.CPrimaryKeyColName {
@@ -558,9 +559,24 @@ func constructFuzzyFilter(n, right *plan.Node) *fuzzyfilter.Argument {
 	arg := fuzzyfilter.NewArgument()
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
-	arg.N = right.Stats.Outcnt
-	if len(n.RuntimeFilterBuildList) > 0 {
-		arg.RuntimeFilterSpec = n.RuntimeFilterBuildList[0]
+
+	if tableScan.Stats.Outcnt < sinkScan.Stats.Outcnt {
+		arg.BuildIdx = 0 // build on tableScan
+		arg.N = sinkScan.Stats.Outcnt + tableScan.Stats.Outcnt
+	} else {
+		arg.BuildIdx = 1 // build on sinkScan
+		arg.N = sinkScan.Stats.Outcnt
+	}
+
+	// currently can not build runtime filter on table scan and probe it on sink scan
+	// so only use runtime filter when build on sink scan
+	if arg.BuildIdx == 1 {
+		if len(n.RuntimeFilterBuildList) > 0 {
+			arg.RuntimeFilterSpec = n.RuntimeFilterBuildList[0]
+		}
+	} else {
+		tableScan.RuntimeFilterProbeList = nil
+		n.RuntimeFilterBuildList = nil
 	}
 	return arg
 }
