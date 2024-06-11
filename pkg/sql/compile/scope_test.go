@@ -87,6 +87,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		require.NoError(t1, err)
 		proc.Ctx = ctx
 		c := NewCompile("test", "test", sql, "", "", context.Background(), e, proc, nil, false, nil, time.Now())
+		qry.Nodes[0].Stats.Cost = 10000000 // to hint this is ap query for unit test
 		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, func(batch *batch.Batch) error {
 			return nil
 		})
