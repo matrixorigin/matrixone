@@ -206,13 +206,14 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 	if execCtx.skipRespClient {
 		return nil
 	}
+
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 		if len(execCtx.proc.SessionInfo.SeqAddValues) != 0 {
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
-		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
 		if err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -251,13 +252,13 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 			return
 		}
 
-		err = resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err = resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
 		if err != nil {
 			return
 		}
 
 	default:
-		err = resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err = resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
 		if err != nil {
 			return
 		}
@@ -297,7 +298,8 @@ func (resper *MysqlResp) respMixedResultRow(ses *Session,
 			zap.Error(err))
 		return err
 	}
-	err = resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+
+	err = resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
 	if err != nil {
 		return
 	}
