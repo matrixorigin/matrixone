@@ -122,6 +122,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 	defer span.End()
 	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel() // quit CheckNewAccountSize goroutine
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
 	logger.Info("started")
 	if !checkServerStarted(logger) {
@@ -131,8 +132,6 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 	defer func() {
 		logger.Info("finished", zap.Error(err))
 		cleanStorageUsageMetric(logger, "CalculateStorageUsage")
-		// quit CheckNewAccountSize goroutine
-		cancel()
 	}()
 
 	// start background task to check new account
