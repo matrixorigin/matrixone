@@ -361,7 +361,6 @@ func (c *Compile) run(s *Scope) error {
 	if s == nil {
 		return nil
 	}
-	//fmt.Println(DebugShowScopes([]*Scope{s}))
 	switch s.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -644,6 +643,19 @@ func (c *Compile) canRetry(err error) bool {
 	return !c.disableRetry && c.isRetryErr(err)
 }
 
+func (c *Compile) IsTpQuery() bool {
+	return c.execType == plan2.ExecTypeTP
+}
+
+func (c *Compile) printPipeline() {
+	if c.IsTpQuery() {
+		fmt.Println("pipeline for tp query!")
+	} else {
+		fmt.Println("pipeline for ap query!")
+	}
+	fmt.Println(DebugShowScopes(c.scope))
+}
+
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
@@ -663,6 +675,8 @@ func (c *Compile) runOnce() error {
 			return err
 		}
 	}
+
+	//c.printPipeline()
 
 	for i := range c.scope {
 		wg.Add(1)
@@ -1086,7 +1100,7 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 	case plan.Query_UPDATE:
 		return ss[0], nil
 	default:
-		if c.execType == plan2.ExecTypeTP {
+		if c.IsTpQuery() {
 			rs = ss[len(ss)-1]
 		} else {
 			rs = c.newMergeScope(ss)
@@ -1233,7 +1247,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		defer groupInfo.Release()
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
 
-		if c.execType == plan2.ExecTypeTP && ss[0].PartialResults == nil {
+		if c.IsTpQuery() && ss[0].PartialResults == nil {
 			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
 			return ss, nil
 		} else if !anyDistinctAgg && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
@@ -1415,11 +1429,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			arg.Release()
 			return ss, nil
 		}
-		rs := c.newMergeScope(ss)
-		// updateScopesLastFlag([]*Scope{rs})
-		rs.Magic = Merge
-		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-
+		rs := ss[0]
+		if c.IsTpQuery() {
+			rs = c.newMergeScope(ss)
+			// updateScopesLastFlag([]*Scope{rs})
+			rs.Magic = Merge
+			c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
+		}
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Deletion,
 			Arg: arg,
@@ -2421,7 +2437,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 		return c.compileShuffleJoin(ctx, node, left, right, probeScopes, buildScopes)
 	}
 	rs := c.compileBroadcastJoin(ctx, node, left, right, probeScopes, buildScopes)
-	if c.execType == plan2.ExecTypeTP {
+	if c.IsTpQuery() {
 		//construct join build operator for tp join
 		buildScopes[0].appendInstruction(constructJoinBuildInstruction(c, rs[0].Instructions[0], false, false))
 		rs[0].Proc.Reg.MergeReceivers[1] = &process.WaitRegister{
@@ -2612,7 +2628,7 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 	case plan.Node_SEMI:
 		if isEq {
 			if node.BuildOnLeft {
-				if c.execType == plan2.ExecTypeTP {
+				if c.IsTpQuery() {
 					rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
 				} else {
 					rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, probeScopes), probeScopes, buildScopes, node)
@@ -2663,7 +2679,7 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 		}
 	case plan.Node_RIGHT:
 		if isEq {
-			if c.execType == plan2.ExecTypeTP {
+			if c.IsTpQuery() {
 				rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
 			} else {
 				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, probeScopes), probeScopes, buildScopes, node)
@@ -2698,7 +2714,7 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 	case plan.Node_ANTI:
 		if isEq {
 			if node.BuildOnLeft {
-				if c.execType == plan2.ExecTypeTP {
+				if c.IsTpQuery() {
 					rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
 				} else {
 					rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, probeScopes), probeScopes, buildScopes, node)
@@ -2844,7 +2860,7 @@ func containBrokenNode(s *Scope) bool {
 
 func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
 	// use topN TO make scope.
-	if c.execType == plan2.ExecTypeTP {
+	if c.IsTpQuery() {
 		ss[0].appendInstruction(vm.Instruction{
 			Op:      vm.Top,
 			Idx:     c.anal.curr,
@@ -2880,7 +2896,7 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 }
 
 func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
-	if c.execType == plan2.ExecTypeTP {
+	if c.IsTpQuery() {
 		ss[0].appendInstruction(vm.Instruction{
 			Op:      vm.Order,
 			Idx:     c.anal.curr,
@@ -2952,7 +2968,7 @@ func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
-	if c.execType == plan2.ExecTypeTP {
+	if c.IsTpQuery() {
 		ss[0].appendInstruction(vm.Instruction{
 			Op:      vm.Offset,
 			Idx:     c.anal.curr,
@@ -2981,7 +2997,7 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
-	if c.execType == plan2.ExecTypeTP {
+	if c.IsTpQuery() {
 		ss[0].appendInstruction(vm.Instruction{
 			Op:      vm.Limit,
 			Idx:     c.anal.curr,
@@ -3572,7 +3588,7 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 
 	// all join's first flag will setting in newLeftScope and newRightScope
 	// so we set it to false now
-	if c.execType == plan2.ExecTypeTP {
+	if c.IsTpQuery() {
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 	} else {
 		c.anal.isFirst = false
@@ -3770,7 +3786,7 @@ func regTransplant(source, target *Scope, sourceIdx, targetIdx int) {
 }
 
 func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
-	if cpunum <= 0 || blocks <= 0 || c.execType == plan2.ExecTypeTP {
+	if cpunum <= 0 || blocks <= 0 || c.IsTpQuery() {
 		return 1
 	}
 
@@ -4883,7 +4899,7 @@ func runDetectFkReferToDBSql(c *Compile, sql string) error {
 }
 
 func getEngineNode(c *Compile) engine.Node {
-	if c.execType == plan2.ExecTypeTP {
+	if c.IsTpQuery() {
 		return engine.Node{Addr: c.addr, Mcpu: 1}
 	} else {
 		return engine.Node{Addr: c.addr, Mcpu: ncpu}
