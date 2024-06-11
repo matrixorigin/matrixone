@@ -282,9 +282,6 @@ type MysqlProtocolImpl struct {
 	//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
 	sequenceId atomic.Uint32
 
-	//for debug
-	debugCount [16]uint64
-
 	ctx context.Context
 
 	//joint capability shared by the server and the client
@@ -2586,7 +2583,6 @@ func (mp *MysqlProtocolImpl) openPacket() {
 	writeIdx += n
 	mp.bytesInOutBuffer += n
 	outbuf.SetWriteIndex(writeIdx)
-	return
 }
 
 func (mp *MysqlProtocolImpl) getBeginWriteIndex() int {
