@@ -42,7 +42,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		ses.EnterFPrint(12)
 		defer ses.ExitFPrint(12)
 		var v interface{}
-		v, err = ses.GetGlobalVar(execCtx.reqCtx, "lower_case_table_names")
+		v, err = ses.GetSessionSysVar("lower_case_table_names")
 		if err != nil {
 			return
 		}
@@ -159,7 +159,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 	case *tree.ShowErrors, *tree.ShowWarnings:
 		ses.EnterFPrint(25)
 		defer ses.ExitFPrint(25)
-		err = handleShowErrors(ses)
+		err = handleShowErrors(ses, execCtx)
 		if err != nil {
 			return
 		}
@@ -322,7 +322,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 	case *tree.CallStmt:
 		ses.EnterFPrint(49)
 		defer ses.ExitFPrint(49)
-		if err = handleCallProcedure(ses, execCtx, st, execCtx.proc); err != nil {
+		if err = handleCallProcedure(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.Grant:

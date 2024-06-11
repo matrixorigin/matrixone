@@ -35,7 +35,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	switch st := execCtx.stmt.(type) {
 	case *tree.Select:
 		if ep.needExportToFile() {
-
+			defer ep.Close()
 			columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 			if err != nil {
 				ses.Error(execCtx.reqCtx,
@@ -55,6 +55,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				return
 			}
 
+			ep.init()
 			fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
 			setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 			runBegin := time.Now()
@@ -72,8 +73,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 			}
 
-			oq := NewOutputQueue(execCtx.reqCtx, ses, 0, nil, nil)
-			if err = exportAllData(oq); err != nil {
+			if err = exportAllData(ep); err != nil {
 				return
 			}
 			if err = ep.Writer.Flush(); err != nil {
@@ -166,7 +166,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	return
 }
 
-func respStatus(ses *Session,
+func (resper *MysqlResp) respStatus(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(73)
 	defer ses.ExitFPrint(73)
@@ -186,22 +186,22 @@ func respStatus(ses *Session,
 		}
 		ses.SetSeqLastValue(execCtx.proc)
 
-		resp := setResponse(ses, execCtx.isLastStmt, rspLen)
-		if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+		res := setResponse(ses, execCtx.isLastStmt, rspLen)
+		if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err
 		}
 	case *tree.PrepareStmt, *tree.PrepareString:
 		if ses.GetCmd() == COM_STMT_PREPARE {
-			if err2 := ses.GetMysqlProtocol().SendPrepareResponse(execCtx.reqCtx, execCtx.prepareStmt); err2 != nil {
+			if err2 := resper.mysqlRrWr.WritePrepareResponse(execCtx.reqCtx, execCtx.prepareStmt); err2 != nil {
 				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 				return err
 			}
 		} else {
-			resp := setResponse(ses, execCtx.isLastStmt, rspLen)
-			if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+			res := setResponse(ses, execCtx.isLastStmt, rspLen)
+			if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 				return err
@@ -211,8 +211,8 @@ func respStatus(ses *Session,
 	case *tree.Deallocate:
 		//we will not send response in COM_STMT_CLOSE command
 		if ses.GetCmd() != COM_STMT_CLOSE {
-			resp := setResponse(ses, execCtx.isLastStmt, rspLen)
-			if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+			res := setResponse(ses, execCtx.isLastStmt, rspLen)
+			if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 				return err
@@ -223,18 +223,24 @@ func respStatus(ses *Session,
 		if st.IsAsSelect {
 			return nil
 		}
-		resp := setResponse(ses, execCtx.isLastStmt, rspLen)
+		res := setResponse(ses, execCtx.isLastStmt, rspLen)
 		if len(execCtx.proc.SessionInfo.SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
 		}
 		_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
-		if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+		if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
+			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
+			return err
+		}
+	case *InternalCmdFieldList:
+		if err2 := resper.mysqlRrWr.WriteEOFOrOK(0, ses.GetTxnHandler().GetServerStatus()); err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err
 		}
 	default:
-		resp := setResponse(ses, execCtx.isLastStmt, rspLen)
+		res := setResponse(ses, execCtx.isLastStmt, rspLen)
 
 		if len(execCtx.proc.SessionInfo.SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
@@ -242,7 +248,7 @@ func respStatus(ses *Session,
 
 		switch st := execCtx.stmt.(type) {
 		case *tree.Insert:
-			resp.lastInsertId = execCtx.proc.GetLastInsertID()
+			res.lastInsertId = execCtx.proc.GetLastInsertID()
 			if execCtx.proc.GetLastInsertID() != 0 {
 				ses.SetLastInsertID(execCtx.proc.GetLastInsertID())
 			}
@@ -263,7 +269,7 @@ func respStatus(ses *Session,
 			})
 		}
 
-		if err2 := ses.GetMysqlProtocol().SendResponse(execCtx.reqCtx, resp); err2 != nil {
+		if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err

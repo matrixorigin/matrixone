@@ -26,7 +26,7 @@ import (
 func TestScope(t *testing.T) {
 	convey.Convey("test scope", t, func() {
 		wanted := make(map[Scope]string)
-		for i := ScopeGlobal; i <= ScopeResetPersist; i++ {
+		for i := ScopeGlobal; i <= ScopeBoth; i++ {
 			wanted[i] = i.String()
 		}
 

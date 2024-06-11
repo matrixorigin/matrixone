@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -51,7 +52,7 @@ import (
 
 func (mixin *withFilterMixin) reset() {
 	mixin.filterState.evaluated = false
-	mixin.filterState.filter = nil
+	mixin.filterState.filter = blockio.ReadFilter{}
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
@@ -113,7 +114,7 @@ func (mixin *withFilterMixin) getReadFilter(proc *process.Process, blkCnt int) (
 	pk := mixin.tableDef.Pkey
 	if mixin.filterState.expr == nil || pk == nil {
 		mixin.filterState.evaluated = true
-		mixin.filterState.filter = nil
+		mixin.filterState.filter = blockio.ReadFilter{}
 		return
 	}
 	return mixin.getPKFilter(proc, blkCnt)
@@ -126,8 +127,8 @@ func (mixin *withFilterMixin) getPKFilter(
 	// no filter is needed
 	if mixin.columns.pkPos == -1 || mixin.filterState.expr == nil {
 		mixin.filterState.evaluated = true
-		mixin.filterState.filter = nil
-		return nil
+		mixin.filterState.filter = blockio.ReadFilter{}
+		return blockio.ReadFilter{}
 	}
 
 	// evaluate the search function for the filter
@@ -138,16 +139,17 @@ func (mixin *withFilterMixin) getPKFilter(
 	// C: {A|B} and {A|B}
 	// D: {A|B|C} [and {A|B|C}]*
 	// for other patterns, no filter is needed
-	ok, hasNull, searchFunc := getNonCompositePKSearchFuncByExpr(
+	ok, hasNull, filter := getNonCompositePKSearchFuncByExpr(
 		mixin.filterState.expr,
+		mixin.tableDef,
 		mixin.tableDef.Pkey.PkeyColName,
 		proc,
 	)
-	if !ok || searchFunc == nil {
+	if !ok || !filter.Valid {
 		mixin.filterState.evaluated = true
-		mixin.filterState.filter = nil
+		mixin.filterState.filter = blockio.ReadFilter{}
 		mixin.filterState.hasNull = hasNull
-		return nil
+		return blockio.ReadFilter{}
 	}
 
 	// here we will select the primary key column from the vectors, and
@@ -155,13 +157,13 @@ func (mixin *withFilterMixin) getPKFilter(
 	// it returns the offset of the primary key in the pk vector.
 	// if the primary key is not found, it returns empty slice
 	mixin.filterState.evaluated = true
-	mixin.filterState.filter = searchFunc
+	mixin.filterState.filter = filter
 	mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[mixin.columns.pkPos]}
 	mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
 
 	// records how many blks one reader needs to read when having filter
 	objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
-	return searchFunc
+	return filter
 }
 
 // -----------------------------------------------------------------
@@ -390,7 +392,7 @@ func (r *blockReader) Read(
 		for len(r.steps) > 0 && r.steps[0] == r.currentStep {
 			// always true for now, will optimize this in the future
 			prefetchFile := r.scanType == SMALL || r.scanType == LARGE || r.scanType == NORMAL
-			if filter != nil && blockInfo.Sorted {
+			if filter.Valid && blockInfo.Sorted {
 				err = blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 			} else {
 				err = blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
@@ -404,7 +406,7 @@ func (r *blockReader) Read(
 	}
 
 	statsCtx, numRead, numHit := r.ctx, int64(0), int64(0)
-	if filter != nil {
+	if filter.Valid {
 		// try to store the blkReadStats CounterSet into ctx, so that
 		// it can record the mem cache hit stats when call MemCache.Read() later soon.
 		statsCtx, numRead, numHit = r.prepareGatherStats()
@@ -415,6 +417,7 @@ func (r *blockReader) Read(
 	if r.scanType == LARGE || r.scanType == NORMAL {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
+
 	bat, err = blockio.BlockRead(
 		statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
@@ -426,7 +429,7 @@ func (r *blockReader) Read(
 		return nil, err
 	}
 
-	if filter != nil {
+	if filter.Valid {
 		// we collect mem cache hit related statistics info for blk read here
 		r.gatherStats(numRead, numHit)
 	}
@@ -472,7 +475,7 @@ func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
 func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
-	pkVal []byte,
+	pkFilter PKFilter,
 	ts timestamp.Timestamp,
 	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
@@ -490,7 +493,7 @@ func newBlockMergeReader(
 			fs,
 			proc,
 		),
-		pkVal:      pkVal,
+		pkFilter:   pkFilter,
 		deletaLocs: make(map[string][]objectio.Location),
 	}
 	return r
@@ -567,7 +570,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	}
 
 	// load deletes from partition state for the specified block
-	filter := r.getReadFilter(r.proc, len(r.blks))
+	//filter := r.getReadFilter(r.proc, len(r.blks))
 
 	state, err := r.table.getPartitionState(ctx)
 	if err != nil {
@@ -576,12 +579,17 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	ts := types.TimestampToTS(r.ts)
 	rowids := ""
 
-	if filter != nil && info.Sorted && len(r.pkVal) > 0 {
-		iter := state.NewPrimaryKeyDelIter(
-			ts,
-			logtailreplay.Prefix(r.pkVal),
-			info.BlockID,
-		)
+	var iter logtailreplay.RowsIter
+	if !r.pkFilter.isNull && r.pkFilter.isValid {
+		switch r.pkFilter.op {
+		case function.EQUAL, function.PREFIX_EQ:
+			iter = state.NewPrimaryKeyDelIter(ts, logtailreplay.Prefix(r.pkFilter.packed[0]), info.BlockID)
+		case function.IN:
+			iter = state.NewPrimaryKeyDelIter(ts, logtailreplay.ExactIn(r.pkFilter.packed), info.BlockID)
+		}
+	}
+
+	if iter != nil {
 		for iter.Next() {
 			entry := iter.Entry()
 			if !entry.Deleted {
@@ -591,9 +599,8 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 			r.buffer = append(r.buffer, int64(offset))
 			rowids = fmt.Sprintf("%s[%s]", rowids, entry.RowID.String())
 		}
-		iter.Close()
 	} else {
-		iter := state.NewRowsIter(ts, &info.BlockID, true)
+		iter = state.NewRowsIter(ts, &info.BlockID, true)
 		currlen := len(r.buffer)
 		for iter.Next() {
 			entry := iter.Entry()
@@ -602,7 +609,6 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 			rowids = fmt.Sprintf("%s[%s]", rowids, entry.RowID.String())
 		}
 		v2.TaskLoadMemDeletesPerBlockHistogram.Observe(float64(len(r.buffer) - currlen))
-		iter.Close()
 	}
 
 	if regexp.MustCompile(`.*sbtest.*`).MatchString(r.table.tableName) && rowids != "" {
@@ -614,6 +620,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	}
 
 	rowids = ""
+	iter.Close()
 
 	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
 	//load deletes from txn.writes for the specified block

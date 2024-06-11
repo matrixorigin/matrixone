@@ -35,7 +35,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 		return nil, err
 	}
 	// new logic
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	queryBindCtx := NewBindContext(builder, nil)
 	lastNodeId, updatePlanCtxs, err := selectUpdateTables(builder, queryBindCtx, stmt, tblInfo)
 	if err != nil {

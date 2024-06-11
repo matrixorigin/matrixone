@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
+	"math"
 	"testing"
 )
 
@@ -29,23 +30,35 @@ func TestParseArgs(t *testing.T) {
 	}{
 		{
 			s: "db1.table1",
-			r: arguments{db: "db1", tbl: "table1", targetObjSize: defaultTargetObjectSize},
+			r: arguments{db: "db1", tbl: "table1", accountId: math.MaxUint64, targetObjSize: defaultTargetObjectSize},
 		},
 		{
 			s: "db1.table1:all:small",
-			r: arguments{db: "db1", tbl: "table1", filter: "small", targetObjSize: defaultTargetObjectSize},
+			r: arguments{db: "db1", tbl: "table1", accountId: math.MaxUint64, filter: "small", targetObjSize: defaultTargetObjectSize},
 		},
 		{
 			s: "db1.table1:all:small:1M",
-			r: arguments{db: "db1", tbl: "table1", filter: "small", targetObjSize: common.Const1MBytes},
+			r: arguments{db: "db1", tbl: "table1", accountId: math.MaxUint64, filter: "small", targetObjSize: common.Const1MBytes},
 		},
 		{
 			s: "db1",
 			e: true,
 		},
 		{
+			s: "db1.table1.1:all:small:1M",
+			r: arguments{db: "db1", tbl: "table1", accountId: 1, filter: "small", targetObjSize: common.Const1MBytes},
+		},
+		{
+			s: ".10000",
+			r: arguments{tbl: "10000", accountId: math.MaxUint64, targetObjSize: defaultTargetObjectSize},
+		},
+		{
+			s: ".10000.1",
+			r: arguments{tbl: "10000", accountId: 1, targetObjSize: defaultTargetObjectSize},
+		},
+		{
 			s: "db1.table1:018f27b6-c6e1-7bef-a1e8-0f639ddedeef_0,018f27b6-c6e1-7bef-a1e8-0f639ddede00_0",
-			r: arguments{db: "db1", tbl: "table1", objs: []objectio.ObjectStats{
+			r: arguments{db: "db1", tbl: "table1", accountId: math.MaxUint64, objs: []objectio.ObjectStats{
 				{
 					0x01, 0x8f, 0x27, 0xb6, 0xc6, 0xe1, 0x7b, 0xef,
 					0xa1, 0xe8, 0x0f, 0x63, 0x9d, 0xde, 0xde, 0xef,
@@ -92,7 +105,7 @@ func TestParseArgs(t *testing.T) {
 		},
 		{
 			s: "db1.table1:018f27b6-c6e1-7bef-a1e8-0f639ddedeef_0,018f27b6-c6e1-7bef-a1e8-0f639ddede00_0:1M",
-			r: arguments{db: "db1", tbl: "table1", objs: []objectio.ObjectStats{
+			r: arguments{db: "db1", tbl: "table1", accountId: math.MaxUint64, objs: []objectio.ObjectStats{
 				{
 					0x01, 0x8f, 0x27, 0xb6, 0xc6, 0xe1, 0x7b, 0xef,
 					0xa1, 0xe8, 0x0f, 0x63, 0x9d, 0xde, 0xde, 0xef,

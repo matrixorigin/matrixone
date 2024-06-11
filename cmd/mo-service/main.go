@@ -30,6 +30,8 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"go.uber.org/automaxprocs/maxprocs"
+
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
@@ -69,6 +71,10 @@ var (
 	maxProcessor = flag.Int("max-processor", 0, "set max processor for go runtime")
 	globalEtlFS  fileservice.FileService
 )
+
+func init() {
+	maxprocs.Set(maxprocs.Logger(func(string, ...interface{}) {}))
+}
 
 func main() {
 	if *maxProcessor > 0 {

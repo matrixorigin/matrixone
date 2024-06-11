@@ -524,7 +524,10 @@ func (s *service) handleTxnCommit(e client.TxnEvent) {
 			csv: newTxnClosed(e.Txn),
 		}
 		if e.Err != nil {
-			s.doAddTxnError(e.Txn.ID, e.Err)
+			s.addTxnError(
+				e.Txn.ID,
+				e.Err,
+			)
 		}
 	}
 
@@ -543,7 +546,10 @@ func (s *service) handleTxnRollback(e client.TxnEvent) {
 			csv: newTxnClosed(e.Txn),
 		}
 		if e.Err != nil {
-			s.doAddTxnError(e.Txn.ID, e.Err)
+			s.addTxnError(
+				e.Txn.ID,
+				e.Err,
+			)
 		}
 	}
 
@@ -564,7 +570,8 @@ func (s *service) handleTxnActionEvent(event client.TxnEvent) {
 
 func (s *service) TxnError(
 	op client.TxnOperator,
-	value error) {
+	value error,
+) {
 	if s.atomic.closed.Load() {
 		return
 	}
@@ -577,15 +584,16 @@ func (s *service) TxnError(
 		return
 	}
 
-	s.doAddTxnError(op.Txn().ID, value)
+	s.addTxnError(
+		op.Txn().ID,
+		value,
+	)
 }
 
-func (s *service) doAddTxnError(
+func (s *service) addTxnError(
 	txnID []byte,
-	value error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
+	value error,
+) {
 	ts := time.Now().UnixNano()
 	msg := value.Error()
 	if me, ok := value.(*moerr.Error); ok {
@@ -598,27 +606,11 @@ func (s *service) doAddTxnError(
 		txnID,
 		escape(msg))
 
-	now, _ := s.clock.Now()
-	err := s.executor.ExecTxn(
-		ctx,
-		func(txn executor.TxnExecutor) error {
-			res, err := txn.Exec(sql,
-				executor.StatementOption{})
-			if err != nil {
-				return err
-			}
-			res.Close()
-			return nil
-		},
-		executor.Options{}.
-			WithDatabase(DebugDB).
-			WithMinCommittedTS(now).
-			WithWaitCommittedLogApplied().
-			WithDisableTrace())
-	if err != nil {
-		s.logger.Error("exec txn error trace failed",
-			zap.String("sql", sql),
-			zap.Error(err))
+	select {
+	case s.txnErrorC <- sql:
+	default:
+		s.logger.Info("failed to added txn error trace",
+			zap.String("sql", sql))
 	}
 }
 
@@ -971,6 +963,49 @@ func (s *service) txnCSVFile() string {
 
 func (s *service) txnActionCSVFile() string {
 	return filepath.Join(s.dir, fmt.Sprintf("txn-action-%d.csv", s.seq.Add(1)))
+}
+
+func (s *service) handleTxnError(
+	ctx context.Context,
+) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case sql := <-s.txnErrorC:
+			s.doAddTxnError(sql)
+		}
+	}
+}
+
+func (s *service) doAddTxnError(
+	sql string,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	now, _ := s.clock.Now()
+	err := s.executor.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			res, err := txn.Exec(sql,
+				executor.StatementOption{})
+			if err != nil {
+				return err
+			}
+			res.Close()
+			return nil
+		},
+		executor.Options{}.
+			WithDatabase(DebugDB).
+			WithMinCommittedTS(now).
+			WithWaitCommittedLogApplied().
+			WithDisableTrace())
+	if err != nil {
+		s.logger.Error("exec txn error trace failed",
+			zap.String("sql", sql),
+			zap.Error(err))
+	}
 }
 
 func addTxnFilterSQL(

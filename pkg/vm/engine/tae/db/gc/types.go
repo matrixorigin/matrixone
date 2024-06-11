@@ -153,5 +153,6 @@ type Cleaner interface {
 	SetTid(tid uint64)
 	EnableGCForTest()
 	DisableGCForTest()
+	SetCheckGC(enable bool)
 	GetMPool() *mpool.MPool
 }

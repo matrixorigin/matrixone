@@ -1,4 +1,3 @@
--- @bvt:issue#16150
 use mo_catalog;
 create cluster table clu01(col1 int, col2 decimal);
 insert into clu01 values(1,2,0);
@@ -133,9 +132,7 @@ show databases;
 select count(*) from rs02;
 select count(*) from rs03;
 use mo_catalog;
--- @bvt:issue#16150
 select count(*) from cluster01;
--- @bvt:issue
 drop table cluster01;
 use test02;
 drop table rs02;

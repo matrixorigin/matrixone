@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/google/uuid"
@@ -504,8 +505,12 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 }
 
 // builtInPurgeLog act like `select mo_purge_log('rawlog,statement_info,metric', '2023-06-27')`
+// moc#3199
+// - Not Support TXN
+// - Not Support Multi-table in one cmd
+// - 2 way to do purge: diff_hours = {now}-{target_date}; if diff_hours <= 24h, exec delete from ; else exec prune
 func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	rs := vector.MustFunctionResult[uint8](result)
+	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](parameters[1])
@@ -514,56 +519,99 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 		return moerr.NewNotSupported(proc.Ctx, "only support sys account")
 	}
 
+	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
+	}
+	exec := v.(executor.SQLExecutor)
+
+	deleteTable := func(tbl *table.Table, dateStr string) error {
+		sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
+			tbl.Database, tbl.Table, tbl.TimestampColumn.Name, dateStr)
+		opts := executor.Options{}.WithDatabase(tbl.Database).
+			WithTxn(proc.TxnOperator).
+			WithTimeZone(proc.SessionInfo.TimeZone)
+		if proc.TxnOperator != nil {
+			opts = opts.WithDisableIncrStatement() // this option always with WithTxn()
+		}
+		res, err := exec.Exec(proc.Ctx, sql, opts)
+		if err != nil {
+			return err
+		}
+		res.Close()
+		return nil
+	}
+	pruneObj := func(tbl *table.Table, hours time.Duration) (string, error) {
+		var result string
+		// Tips: NO Txn guarantee
+		opts := executor.Options{}.WithDatabase(tbl.Database).
+			WithTimeZone(proc.SessionInfo.TimeZone)
+		// fixme: hours should > 24 * time.Hour
+		runPruneSql := fmt.Sprintf(`select mo_ctl('dn', 'inspect', 'objprune -t %s.%s -d %s -f')`, tbl.Database, tbl.Table, hours)
+		res, err := exec.Exec(proc.Ctx, runPruneSql, opts)
+		if err != nil {
+			return "", err
+		}
+		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				result += executor.GetStringRows(cols[0])[i]
+			}
+			return true
+		})
+		res.Close()
+		return result, nil
+	}
+
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
 		// fixme: should we need to support null date?
 		if null1 || null2 {
-			rs.Append(uint8(1), true)
+			rs.AppendBytes(nil, true)
 			continue
 		}
 
-		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
-		if !ok {
-			return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
+		tblName := strings.TrimSpace(util.UnsafeBytesToString(v1))
+		// not allow purge multi table in one call.
+		if strings.Contains(tblName, ",") {
+			return moerr.NewNotSupported(proc.Ctx, "table name contains comma.")
 		}
-		exec := v.(executor.SQLExecutor)
+
+		now := time.Now()
+		found := false
 		tables := table.GetAllTables()
-		tableNames := strings.Split(util.UnsafeBytesToString(v1), ",")
-		for _, tblName := range tableNames {
-			found := false
-			for _, tbl := range tables {
-				if tbl.TimestampColumn != nil && strings.TrimSpace(tblName) == tbl.Table {
-					found = true
-					break
+		for _, tbl := range tables {
+			if tbl.TimestampColumn == nil || tblName != tbl.Table {
+				continue
+			}
+
+			found = true
+			targetTime := v2.ToDatetime().ConvertToGoTime(time.Local)
+			if d := now.Sub(targetTime); d > rpc.AllowPruneDuration {
+				d = d / time.Second * time.Second
+				result, err := pruneObj(tbl, d)
+				if err != nil {
+					return err
 				}
+				rs.AppendMustBytesValue(util.UnsafeStringToBytes(result))
+			} else {
+				// try prune obj 24 hours before
+				_, err := pruneObj(tbl, rpc.AllowPruneDuration)
+				if err != nil {
+					return err
+				}
+				// do the delete job
+				if err := deleteTable(tbl, v2.String()); err != nil {
+					return err
+				}
+				rs.AppendMustBytesValue([]byte("success"))
 			}
-			if !found {
-				return moerr.NewNotSupported(proc.Ctx, "purge '%s'", tblName)
-			}
+			break
+		}
+		if !found {
+			return moerr.NewNotSupported(proc.Ctx, "purge '%s'", tblName)
 		}
 
-		for _, tblName := range tableNames {
-			for _, tbl := range tables {
-				if strings.TrimSpace(tblName) == tbl.Table {
-					sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
-						tbl.Database, tbl.Table, tbl.TimestampColumn.Name, v2.String())
-					opts := executor.Options{}.WithDatabase(tbl.Database).
-						WithTxn(proc.TxnOperator).
-						WithTimeZone(proc.SessionInfo.TimeZone)
-					if proc.TxnOperator != nil {
-						opts = opts.WithDisableIncrStatement() // this option always with WithTxn()
-					}
-					res, err := exec.Exec(proc.Ctx, sql, opts)
-					if err != nil {
-						return err
-					}
-					res.Close()
-				}
-			}
-		}
-
-		rs.Append(uint8(0), false)
 	}
 
 	return nil

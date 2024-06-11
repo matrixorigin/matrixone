@@ -3839,7 +3839,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				volatile:   true,
 				args:       []types.T{types.T_varchar, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInPurgeLog

@@ -92,3 +92,14 @@ drop database sub1;
 drop database sub2;
 drop account a1;
 drop account a2;
+
+create database sub1;
+create table sub1.t1 (a int,b int);
+insert into sub1.t1 values (1, 1), (2, 2), (3, 3);
+
+create publication pub1 database sub1;
+
+drop publication if exists pub1;
+drop publication if exists pub1;
+
+drop database if exists sub1;

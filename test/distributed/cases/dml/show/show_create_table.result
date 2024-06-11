@@ -16,10 +16,10 @@ b    INT(32)    NO        10
 c    INT(32)    YES        20        
 d    VARCHAR(20)    NO        'xxx'        
 e    TIMESTAMP(0)    YES        null        
-f    TIMESTAMP(0)    YES        current_timestamp()        
+f    TIMESTAMP(0)    YES        CURRENT_TIMESTAMP()        
 show create table t;
 Table    Create Table
-t    CREATE TABLE `t` (\n  `a` INT NOT NULL,\n  `b` INT NOT NULL DEFAULT 10,\n  `c` INT DEFAULT 20,\n  `d` VARCHAR(20) NOT NULL DEFAULT 'xxx',\n  `e` TIMESTAMP NULL DEFAULT NULL,\n  `f` TIMESTAMP DEFAULT current_timestamp(),\n  PRIMARY KEY (`a`)\n)
+t    CREATE TABLE `t` (\n  `a` INT NOT NULL,\n  `b` INT NOT NULL DEFAULT 10,\n  `c` INT DEFAULT 20,\n  `d` VARCHAR(20) NOT NULL DEFAULT 'xxx',\n  `e` TIMESTAMP NULL DEFAULT NULL,\n  `f` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
 INSERT INTO t (a, b, d) VALUES (1, 15, 'Hello');
 INSERT INTO t (a, b, d) VALUES (2, 25, 'World');
 INSERT INTO t (a, b, d) VALUES (3, 35, 'Dolor Sit');
@@ -69,10 +69,10 @@ b    INT(32)    NO        10
 c    INT(32)    YES        20        
 d    VARCHAR(20)    NO        'xxx'        
 e    TIMESTAMP(0)    YES        null        
-f    TIMESTAMP(0)    YES        current_timestamp()        
+f    TIMESTAMP(0)    YES        CURRENT_TIMESTAMP()        
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` INT NOT NULL,\n  `b` INT NOT NULL DEFAULT 10,\n  `c` INT DEFAULT 20,\n  `d` VARCHAR(20) NOT NULL DEFAULT 'xxx',\n  `e` TIMESTAMP NULL DEFAULT NULL,\n  `f` TIMESTAMP DEFAULT current_timestamp(),\n  PRIMARY KEY (`a`)\n)
+t1    CREATE TABLE `t1` (\n  `a` INT NOT NULL,\n  `b` INT NOT NULL DEFAULT 10,\n  `c` INT DEFAULT 20,\n  `d` VARCHAR(20) NOT NULL DEFAULT 'xxx',\n  `e` TIMESTAMP NULL DEFAULT NULL,\n  `f` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
 INSERT INTO t1 (a, b, d) VALUES (1, 15, 'Hello');
 INSERT INTO t1 (a, b, d) VALUES (2, 25, 'World');
 INSERT INTO t1 (a, b, d) VALUES (3, 35, 'Dolor Sit');
@@ -105,10 +105,10 @@ b    INT(32)    NO        10
 c    INT(32)    YES        20        
 d    VARCHAR(20)    NO        'xxx'        
 e    TIMESTAMP(0)    YES        null        
-f    TIMESTAMP(0)    YES        current_timestamp()        
+f    TIMESTAMP(0)    YES        CURRENT_TIMESTAMP()        
 show create table t2;
 Table    Create Table
-t2    CREATE TABLE `t2` (\n  `a` INT NOT NULL,\n  `b` INT NOT NULL DEFAULT 10,\n  `c` INT DEFAULT 20,\n  `d` VARCHAR(20) NOT NULL DEFAULT 'xxx',\n  `e` TIMESTAMP NULL DEFAULT NULL,\n  `f` TIMESTAMP DEFAULT current_timestamp(),\n  PRIMARY KEY (`a`)\n)
+t2    CREATE TABLE `t2` (\n  `a` INT NOT NULL,\n  `b` INT NOT NULL DEFAULT 10,\n  `c` INT DEFAULT 20,\n  `d` VARCHAR(20) NOT NULL DEFAULT 'xxx',\n  `e` TIMESTAMP NULL DEFAULT NULL,\n  `f` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
 INSERT INTO t2 (a, b, d) VALUES (1, 15, 'Hello');
 INSERT INTO t2 (a, b, d) VALUES (2, 25, 'World');
 INSERT INTO t2 (a, b, d) VALUES (3, 35, 'Dolor Sit');

@@ -120,9 +120,10 @@ func PrintMemStats() {
 		heapp.WriteTo(buf, 0)
 		mlimit := debug.SetMemoryLimit(-1)
 		log := buf.Bytes()
-		for len(log) > 200*1024 {
-			logutil.Info(base64.RawStdEncoding.EncodeToString(log[:200*1024]))
-			log = log[200*1024:]
+		chunkSize := 150 * 1024
+		for len(log) > chunkSize {
+			logutil.Info(base64.RawStdEncoding.EncodeToString(log[:chunkSize]))
+			log = log[chunkSize:]
 		}
 		logutil.Info(
 			base64.RawStdEncoding.EncodeToString(log),

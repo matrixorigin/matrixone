@@ -46,7 +46,8 @@ select @@SESSION.SQL_LOG_BIN;
 0
 SET @@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '65c4c218-d343-11eb-8106-525400f4f901:1-769275';
 select @@GLOBAL.GTID_PURGED;
-internal error: can not resolve global system variable GTID_PURGED
+@@GTID_PURGED
+65c4c218-d343-11eb-8106-525400f4f901:1-769275
 /*!40103 SET TIME_ZONE='+00:00' */;
 select @@TIME_ZONE;
 @@TIME_ZONE

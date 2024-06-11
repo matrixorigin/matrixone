@@ -110,12 +110,12 @@ partition_comment
 from information_schema.partitions
 where table_name = 't1' and table_schema = 'db1';
 table_catalog    table_schema    table_name    partition_name    partition_ordinal_position    partition_method    partition_expression    partition_description    table_rows    avg_row_length    data_length    max_data_length    partition_comment
-def    db1    t1    p0    1    LINEAR HASH    year(col3)        0    0    0    0    
-def    db1    t1    p1    2    LINEAR HASH    year(col3)        0    0    0    0    
-def    db1    t1    p2    3    LINEAR HASH    year(col3)        0    0    0    0    
-def    db1    t1    p3    4    LINEAR HASH    year(col3)        0    0    0    0    
-def    db1    t1    p4    5    LINEAR HASH    year(col3)        0    0    0    0    
-def    db1    t1    p5    6    LINEAR HASH    year(col3)        0    0    0    0    
+def    db1    t1    p0    1    LINEAR HASH    YEAR(col3)        0    0    0    0    
+def    db1    t1    p1    2    LINEAR HASH    YEAR(col3)        0    0    0    0    
+def    db1    t1    p2    3    LINEAR HASH    YEAR(col3)        0    0    0    0    
+def    db1    t1    p3    4    LINEAR HASH    YEAR(col3)        0    0    0    0    
+def    db1    t1    p4    5    LINEAR HASH    YEAR(col3)        0    0    0    0    
+def    db1    t1    p5    6    LINEAR HASH    YEAR(col3)        0    0    0    0    
 drop table t1;
 drop table if exists employees;
 CREATE TABLE employees (
@@ -193,8 +193,8 @@ partition_comment
 from information_schema.partitions
 where table_name = 'trp' and table_schema = 'db1';
 table_catalog    table_schema    table_name    partition_name    partition_ordinal_position    partition_method    partition_expression    partition_description    table_rows    avg_row_length    data_length    max_data_length    partition_comment
-def    db1    trp    p0    1    RANGE    year(separated)    1991    0    0    0    0    
-def    db1    trp    p1    2    RANGE    year(separated)    1996    0    0    0    0    
-def    db1    trp    p2    3    RANGE    year(separated)    2001    0    0    0    0    
-def    db1    trp    p3    4    RANGE    year(separated)    MAXVALUE    0    0    0    0    
+def    db1    trp    p0    1    RANGE    YEAR(separated)    1991    0    0    0    0    
+def    db1    trp    p1    2    RANGE    YEAR(separated)    1996    0    0    0    0    
+def    db1    trp    p2    3    RANGE    YEAR(separated)    2001    0    0    0    0    
+def    db1    trp    p3    4    RANGE    YEAR(separated)    MAXVALUE    0    0    0    0    
 drop table trp;

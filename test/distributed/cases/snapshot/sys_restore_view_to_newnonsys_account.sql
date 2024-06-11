@@ -439,7 +439,6 @@ drop snapshot sp06;
 
 
 
--- @bvt:issue#16346
 -- create table1 and view, create table2 and view, drop table1 then restore
 -- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test02;
@@ -531,13 +530,12 @@ drop view StudentCoursesView;
 drop table Enrollments;
 drop table students;
 drop table Courses;
-drop snapshot sp07;
 drop database test02;
 -- @session
 -- @session:id=1&user=acc01:test_account&password=111
 drop database test02;
 -- @session
--- @bvt:issue
+drop snapshot sp07;
 
 
 

@@ -1,0 +1,64 @@
+create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
+select @@max_connections;
+@@max_connections
+151
+select @@global.max_connections;
+@@max_connections
+151
+show variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+show global variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+select @@max_connections;
+@@max_connections
+151
+select @@global.max_connections;
+@@max_connections
+151
+show variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+show global variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+set global max_connections = 152;
+select @@max_connections;
+@@max_connections
+151
+select @@global.max_connections;
+@@max_connections
+152
+show variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+show global variables like 'max_connections';
+Variable_name    Value
+max_connections    152
+select @@max_connections;
+@@max_connections
+151
+select @@global.max_connections;
+@@max_connections
+151
+show variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+show global variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+select @@max_connections;
+@@max_connections
+151
+select @@global.max_connections;
+@@max_connections
+151
+show variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+show global variables like 'max_connections';
+Variable_name    Value
+max_connections    151
+set global max_connections = 151;
+drop account acc_idx;

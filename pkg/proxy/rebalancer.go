@@ -165,6 +165,9 @@ func (r *rebalancer) collectTunnels(hash LabelHash) []*tunnel {
 
 	selector := li.genSelector(clusterservice.EQ_Globbing)
 	appendFn := func(s *metadata.CNService) {
+		if s.WorkState != metadata.WorkState_Working {
+			return
+		}
 		cns[s.ServiceID] = struct{}{}
 		if len(s.Labels) > 0 {
 			notEmptyCns[s.ServiceID] = struct{}{}
@@ -177,6 +180,9 @@ func (r *rebalancer) collectTunnels(hash LabelHash) []*tunnel {
 	}
 
 	r.mc.GetCNService(selector, func(s metadata.CNService) bool {
+		if s.WorkState != metadata.WorkState_Working {
+			return true
+		}
 		if len(s.Labels) == 0 {
 			emptyCNs[s.ServiceID] = struct{}{}
 		}

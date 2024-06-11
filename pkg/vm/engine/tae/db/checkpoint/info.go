@@ -18,6 +18,7 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"time"
 )
@@ -32,6 +33,7 @@ type RunnerReader interface {
 	MaxGlobalCheckpoint() *CheckpointEntry
 	GetStage() types.TS
 	MaxLSN() uint64
+	GetCatalog() *catalog.Catalog
 }
 
 func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncateLSN uint64) *containers.Batch {
@@ -100,6 +102,10 @@ func (r *runner) MaxCheckpoint() *CheckpointEntry {
 	defer r.storage.RUnlock()
 	entry, _ := r.storage.entries.Max()
 	return entry
+}
+
+func (r *runner) GetCatalog() *catalog.Catalog {
+	return r.catalog
 }
 
 func (r *runner) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {

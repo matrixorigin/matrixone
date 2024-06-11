@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -68,6 +69,14 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 			accountId != catalog.System_Account {
 			continue
 		}
+
+		if util.IsClusterTableAttribute(colName) &&
+			isClusterTable &&
+			accountId == catalog.System_Account &&
+			!snapshot.TS.Equal(timestamp.Timestamp{}) {
+			continue
+		}
+
 		//-------------------------------------------------------------------------------------------------------------
 		buf := bytes.NewBuffer(make([]byte, 0, 64))
 

@@ -52,10 +52,12 @@ null	1.0000
 DROP TABLE t1;
 CREATE TABLE t(i INT);
 INSERT INTO t VALUES (-1),(2),(1);
+set keep_user_target_list_in_result = 0;
 SELECT ABS(i) AS a FROM t GROUP BY abs(i) ORDER BY a + 1;
 a
 1
 2
+set keep_user_target_list_in_result = 1;
 SELECT ABS(i) AS a FROM t GROUP BY a ORDER BY a + 1;
 a
 1

@@ -316,7 +316,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 		}
 		return &plan.Literal{
 			Value: &plan.Literal_Sval{
-				Sval: vec.GetStringAt(0),
+				Sval: vec.GetStringAt(int(row)),
 			},
 		}
 	case types.T_timestamp:

@@ -1,4 +1,4 @@
-set global enable_privilege_cache = off;
+set enable_privilege_cache = off;
 create publication pub1 database t;
 internal error: database 't' does not exist
 create account acc0 admin_name 'root' identified by '111';
@@ -12,11 +12,11 @@ create publication pub4 database t account acc0,acc1,accx;
 create publication pub5 database t account accx comment 'test';
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-pub5    t    2024-01-05 18:21:29    null    accx    test
-pub4    t    2024-01-05 18:21:29    null    acc0,acc1,accx    
-pub3    t    2024-01-05 18:21:29    null    acc0,acc1    
-pub2    t    2024-01-05 18:21:29    null    *    
-pub1    t    2024-01-05 18:21:29    null    *    
+pub5    t    2024-05-30 22:59:02    null    accx    test
+pub4    t    2024-05-30 22:59:02    null    acc0,acc1,accx    
+pub3    t    2024-05-30 22:59:02    null    acc0,acc1    
+pub2    t    2024-05-30 22:59:02    null    *    
+pub1    t    2024-05-30 22:59:02    null    *    
 show create publication pub1;
 Publication    Create Publication
 pub1    CREATE PUBLICATION pub1 DATABASE t ACCOUNT all
@@ -50,10 +50,10 @@ pub5    CREATE PUBLICATION pub5 DATABASE t ACCOUNT all
 drop publication pub1;
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-pub5    t    2024-01-05 18:21:29    2024-01-05 18:21:29    *    1212
-pub4    t    2024-01-05 18:21:29    2024-01-05 18:21:29    acc0,accx    
-pub3    t    2024-01-05 18:21:29    2024-01-05 18:21:29    acc0,acc1,accx    
-pub2    t    2024-01-05 18:21:29    null    *    
+pub5    t    2024-05-30 22:59:02    2024-05-30 22:59:02    *    1212
+pub4    t    2024-05-30 22:59:02    2024-05-30 22:59:02    acc0,accx    
+pub3    t    2024-05-30 22:59:02    2024-05-30 22:59:02    acc0,acc1,accx    
+pub2    t    2024-05-30 22:59:02    null    *    
 create publication pub1 database t;
 create publication pub1 database t;
 Duplicate entry 'pub1' for key 'pub_name'
@@ -83,22 +83,22 @@ create view v1 as (select * from sys_tbl_1);
 create publication sys_pub_1 database sys_db_1;
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-sys_pub_1    sys_db_1    2024-01-05 18:21:30    null    *    
+sys_pub_1    sys_db_1    2024-05-30 22:59:04    null    *    
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    sys_db_1    all
 create database sub1 from sys publication sys_pub_1;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub1
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
+sys_pub_1    sys    sys_db_1    2024-05-30 22:59:04    sub1    2024-05-30 22:59:04
 use sub1;
 show tables;
 Tables_in_sub1
@@ -136,15 +136,15 @@ sys_pub_1    sys_db_1    all
 create database sub1 from sys publication sys_pub_1;
 show databases;
 Database
-system
-system_metrics
 information_schema
+mo_catalog
 mysql
 sub1
-mo_catalog
+system
+system_metrics
 show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
+sys_pub_1    sys    sys_db_1    2024-05-30 22:59:04    sub1    2024-05-30 22:59:04
 use sub1;
 show tables;
 Tables_in_sub1
@@ -174,7 +174,7 @@ use sub1;
 internal error: the account acc0 is not allowed to subscribe the publication sys_pub_1
 show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
+sys_pub_1    sys    sys_db_1    2024-05-30 22:59:04    sub1    2024-05-30 22:59:04
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -190,7 +190,7 @@ pub_name    database_name    account_list
 sys_pub_1    sys_db_1    acc0,acc1
 show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
+sys_pub_1    sys    sys_db_1    2024-05-30 22:59:04    sub1    2024-05-30 22:59:04
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -207,7 +207,7 @@ insert into sys_tbl_1 values(4);
 create table sys_tbl_2(b text);
 show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
+sys_pub_1    sys    sys_db_1    2024-05-30 22:59:04    sub1    2024-05-30 22:59:04
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -230,7 +230,7 @@ create database sub2 from acc2 publication acc2_pub_1;
 use sub2;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-acc2_pub_1    acc2    acc2_db_1    2024-01-05 18:21:31    sub2    2024-01-05 18:21:31
+acc2_pub_1    acc2    acc2_db_1    2024-05-30 22:59:04    sub2    2024-05-30 22:59:04
 show tables;
 Tables_in_sub2
 acc2_tbl_1
@@ -248,8 +248,8 @@ create database sub2 from acc2 publication acc2_pub_1;
 use sub2;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-acc2_pub_1    acc2    acc2_db_1    2024-01-05 18:21:31    sub2    2024-01-05 18:21:31
-sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
+sys_pub_1    sys    sys_db_1    2024-05-30 22:59:04    sub1    2024-05-30 22:59:04
+acc2_pub_1    acc2    acc2_db_1    2024-05-30 22:59:04    sub2    2024-05-30 22:59:04
 desc acc2_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
 q    TEXT(0)    YES        null        
@@ -297,20 +297,3 @@ create database sub_db4 from sys publication pubname4;
 internal error: can not subscribe to self
 drop publication pubname4;
 drop database db1;
-create database db1;
-create publication pubname1 database db1 account test_tenant_1 comment 'publish db1 database';
-create publication pubname2 database db1 account test_tenant_1 comment 'publish db1 database';
-set global syspublications = "pubname1,pubname1";
-create account test_tenant_1 admin_name 'test_account' identified by '111';
-set global syspublications = "pubname1,pubname2";
-create account test_tenant_2 admin_name 'test_account' identified by '111';
-show publications;
-publication    database    create_time    update_time    sub_account    comments
-pubname2    db1    2024-01-05 18:21:31    null    test_tenant_1    publish db1 database
-pubname1    db1    2024-01-05 18:21:31    null    test_tenant_1    publish db1 database
-drop publication pubname1;
-drop publication pubname2;
-drop account test_tenant_1;
-drop account test_tenant_2;
-drop database db1;
-set global enable_privilege_cache = on;

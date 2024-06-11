@@ -198,6 +198,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
 		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
+		ReplaceCtx:      DeepCopyReplaceCtx(node.ReplaceCtx),
 		NotCacheable:    node.NotCacheable,
 		SourceStep:      node.SourceStep,
 		PreInsertCtx:    DeepCopyPreInsertCtx(node.PreInsertCtx),
@@ -288,6 +289,26 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	}
 
 	return newNode
+}
+
+func DeepCopyReplaceCtx(oldCtx *plan.ReplaceCtx) *plan.ReplaceCtx {
+	if oldCtx == nil {
+		return nil
+	}
+	ctx := &plan.ReplaceCtx{
+		Ref:                       DeepCopyObjectRef(oldCtx.Ref),
+		AddAffectedRows:           oldCtx.AddAffectedRows,
+		IsClusterTable:            oldCtx.IsClusterTable,
+		TableDef:                  DeepCopyTableDef(oldCtx.TableDef, true),
+		DeleteCond:                oldCtx.DeleteCond,
+		PartitionTableIds:         make([]uint64, len(oldCtx.PartitionTableIds)),
+		PartitionTableNames:       make([]string, len(oldCtx.PartitionTableNames)),
+		PartitionIdx:              oldCtx.PartitionIdx,
+		RewriteFromOnDuplicateKey: oldCtx.RewriteFromOnDuplicateKey,
+	}
+	copy(ctx.PartitionTableIds, oldCtx.PartitionTableIds)
+	copy(ctx.PartitionTableNames, oldCtx.PartitionTableNames)
+	return ctx
 }
 
 func DeepCopyDefault(def *plan.Default) *plan.Default {

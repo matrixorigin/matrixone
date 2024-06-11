@@ -24,13 +24,27 @@ import (
 )
 
 func isRuntimeConstExpr(expr *plan.Expr) bool {
-	switch expr.Expr.(type) {
-	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V:
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_T:
 		return true
 
 	case *plan.Expr_F:
-		fn := expr.GetF()
-		return fn.Func.ObjName == "cast" && isRuntimeConstExpr(fn.Args[0])
+		for _, subExpr := range exprImpl.F.Args {
+			if !isRuntimeConstExpr(subExpr) {
+				return false
+			}
+		}
+
+		return true
+
+	case *plan.Expr_List:
+		for _, subExpr := range exprImpl.List.List {
+			if !isRuntimeConstExpr(subExpr) {
+				return false
+			}
+		}
+
+		return true
 
 	default:
 		return false
@@ -453,11 +467,11 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 						case "between":
 							fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
 							fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[2]})
-							node.FilterList[i], _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_between", fn.Args)
+							node.FilterList[i], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
 
 						case "in":
 							fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
-							node.FilterList[i], _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", fn.Args)
+							node.FilterList[i], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
 						}
 					}
 				}
@@ -780,12 +794,12 @@ END0:
 			switch fn.Func.ObjName {
 			case "in":
 				fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
-				idxFilter, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", fn.Args)
+				idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
 
 			case "between":
 				fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
 				fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[2]})
-				idxFilter, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_between", fn.Args)
+				idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
 			}
 		}
 

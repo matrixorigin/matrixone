@@ -36,7 +36,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	if err != nil {
 		return nil, err
 	}
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 
 	queryBindCtx := NewBindContext(builder, nil)
 	lastNodeId, err := deleteToSelect(builder, queryBindCtx, stmt, true, tblInfo)

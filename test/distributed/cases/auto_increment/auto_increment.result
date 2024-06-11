@@ -610,6 +610,7 @@ col1    col2
 -2147483648    aaa
 Drop table auto_increment14;
 drop table if exists auto_increment15;
+
 create temporary table auto_increment15(
 a int primary key auto_increment,
 b bigint auto_increment,
@@ -617,10 +618,12 @@ c int auto_increment,
 d int auto_increment,
 e bigint auto_increment
 )auto_increment = 100;
+
 show create table auto_increment15;
 Table    Create Table
 auto_increment15    CREATE TABLE `auto_increment15` (\n`a` INT NOT NULL AUTO_INCREMENT,\n`b` BIGINT NOT NULL AUTO_INCREMENT,\n`c` INT NOT NULL AUTO_INCREMENT,\n`d` INT NOT NULL AUTO_INCREMENT,\n`e` BIGINT NOT NULL AUTO_INCREMENT,\nPRIMARY KEY (`a`)\n)
 insert into auto_increment15 values (),(),(),();
+
 select * from auto_increment15 order by a;
 a    b    c    d    e
 100    100    100    100    100
@@ -628,6 +631,7 @@ a    b    c    d    e
 102    102    102    102    102
 103    103    103    103    103
 insert into auto_increment15 values (NULL, NULL, NULL, NULL, NULL);
+
 select * from auto_increment15 order by a;
 a    b    c    d    e
 100    100    100    100    100
@@ -636,6 +640,7 @@ a    b    c    d    e
 103    103    103    103    103
 104    104    104    104    104
 insert into auto_increment15(b,c,d) values (NULL,NULL,NULL);
+
 select * from auto_increment15 order by a;
 a    b    c    d    e
 100    100    100    100    100
@@ -655,6 +660,7 @@ a    b    c    d    e
 104    104    104    104    104
 105    105    105    105    105
 insert into auto_increment15(c,d,e) values (200, 200, 200);
+
 select * from auto_increment15;
 a    b    c    d    e
 100    100    100    100    100
@@ -665,6 +671,7 @@ a    b    c    d    e
 105    105    105    105    105
 106    401    200    200    200
 insert into auto_increment15(c,d,e) values (200, 400, 600);
+
 select * from auto_increment15;
 a    b    c    d    e
 100    100    100    100    100
@@ -676,13 +683,14 @@ a    b    c    d    e
 106    401    200    200    200
 107    402    200    400    600
 Drop table auto_increment15;
+
 Drop table if exists auto_increment16;
 Create temporary table auto_increment16(col1 int auto_increment)auto_increment < 0;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 80 near " < 0;";
 Drop table auto_increment16;
 no such table auto_increment.auto_increment16
 drop table if exists auto_increment17;
-set global auto_increment_offset= 10;
+set auto_increment_offset = 10;
 create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();
 select * from auto_increment17;
@@ -697,4 +705,3 @@ col1
 100
 drop table auto_increment17;
 set auto_increment_offset = 1;
-set global auto_increment_offset= 1;

@@ -42,7 +42,7 @@ func newPluginRouter(r Router, p Plugin) *pluginRouter {
 
 // Route implements Router.Route.
 func (r *pluginRouter) Route(
-	ctx context.Context, ci clientInfo, filter func(uuid string) bool,
+	ctx context.Context, ci clientInfo, filter func(prevAddr string) bool,
 ) (*CNServer, error) {
 	re, err := r.plugin.RecommendCN(ctx, ci)
 	if err != nil {
@@ -58,6 +58,10 @@ func (r *pluginRouter) Route(
 	case plugin.Select:
 		if re.CN == nil {
 			return nil, moerr.NewInternalErrorNoCtx("no CN server selected")
+		}
+		// selected CN should be filtered out, fall back to the delegated router
+		if filter != nil && filter(re.CN.SQLAddress) {
+			return r.Router.Route(ctx, ci, filter)
 		}
 		hash, err := ci.labelInfo.getHash()
 		if err != nil {

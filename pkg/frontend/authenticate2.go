@@ -213,7 +213,7 @@ func privilegeCacheIsEnabled(ctx context.Context, ses *Session) (bool, error) {
 	var err error
 	var value interface{}
 	var newValue bool
-	value, err = ses.GetSessionVar(ctx, "enable_privilege_cache")
+	value, err = ses.GetSessionSysVar("enable_privilege_cache")
 	if err != nil {
 		return false, err
 	}

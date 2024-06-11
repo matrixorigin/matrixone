@@ -54,6 +54,15 @@ func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResp
 		return nil, err
 	}
 	r := resp.MigrateConnFromResponse
+
+	c.log.Info("connection migrate from server", zap.String("server address", addr),
+		zap.String("tenant", string(c.clientInfo.Tenant)),
+		zap.String("username", c.clientInfo.username),
+		zap.Uint32("conn ID", c.connID),
+		zap.String("DB", r.DB),
+		zap.Int("prepare stmt num", len(r.PrepareStmts)),
+	)
+
 	defer c.queryClient.Release(resp)
 	return r, nil
 }

@@ -29,9 +29,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+
 	"github.com/google/uuid"
 	"github.com/panjf2000/ants/v2"
-	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -2204,6 +2205,10 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	//-----------------------------------------------------------------------------------------------------
 	ctx := c.ctx
 	txnOp = c.proc.TxnOperator
+	err = disttae.CheckTxnIsValid(txnOp)
+	if err != nil {
+		return err
+	}
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 			n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
@@ -2220,7 +2225,10 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		ts = txnOp.Txn().SnapshotTS
 	}
 	{
-		//ctx := c.ctx
+		err = disttae.CheckTxnIsValid(txnOp)
+		if err != nil {
+			return err
+		}
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
@@ -2743,11 +2751,15 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			}
 			defer vec2.Free(c.proc.Mp())
 
-			limit, offset := vector.MustFixedCol[int64](vec1)[0], vector.MustFixedCol[int64](vec2)[0]
+			limit, offset := vector.MustFixedCol[uint64](vec1)[0], vector.MustFixedCol[uint64](vec2)[0]
 			topN := limit + offset
-			if topN <= 8192*2 {
+			overflow := false
+			if topN < limit || topN < offset {
+				overflow = true
+			}
+			if !overflow && topN <= 8192*2 {
 				// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
-				return c.compileOffset(n, c.compileTop(n, plan2.MakePlan2Int64ConstExprWithType(topN), ss))
+				return c.compileOffset(n, c.compileTop(n, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
 			}
 		}
 		return c.compileLimit(n, c.compileOffset(n, c.compileOrder(n, ss)))
