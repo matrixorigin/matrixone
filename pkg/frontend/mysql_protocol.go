@@ -2543,14 +2543,20 @@ func (mp *MysqlProtocolImpl) openRow() {
 }
 
 // close a finished row of the resultset
-func (mp *MysqlProtocolImpl) closeRow() {
-	mp.closePacket(true)
-	mp.flushIfFull()
-	return
+func (mp *MysqlProtocolImpl) closeRow() error {
+	err := mp.closePacket(true)
+	if err != nil {
+		return err
+	}
+	err = mp.flushIfFull()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // flushOutBuffer the data in the outbuf into the network
-func (mp *MysqlProtocolImpl) flushIfFull() {
+func (mp *MysqlProtocolImpl) flushIfFull() error {
 	if mp.bytesInOutBuffer >= mp.untilBytesInOutbufToFlush {
 		mp.flushCount++
 		mp.writeBytes += uint64(mp.bytesInOutBuffer)
@@ -2558,11 +2564,11 @@ func (mp *MysqlProtocolImpl) flushIfFull() {
 		mp.ses.CountPacket(1)
 		err := mp.tcpConn.Flush(0)
 		if err != nil {
-			return
+			return err
 		}
 		mp.resetFlushOutBuffer()
 	}
-	return
+	return nil
 }
 
 // open a new mysql protocol packet
@@ -2583,13 +2589,6 @@ func (mp *MysqlProtocolImpl) openPacket() {
 	return
 }
 
-//func beginWriteIndex(outbuf *goetty_buf.ByteBuf, offset int) int {
-//	if offset < 0 {
-//		panic("invalid offset")
-//	}
-//	return outbuf.GetReadIndex() + offset
-//}
-
 func (mp *MysqlProtocolImpl) getBeginWriteIndex() int {
 	if mp.beginOffset < 0 {
 		panic("invalid offset")
@@ -2607,7 +2606,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 	hasDataLen := 0
 	curDataLen := 0
 	var buf []byte
-
+	var err error
 	for ; i < n; i += curLen {
 		if !mp.isInPacket() {
 			mp.openPacket()
@@ -2630,8 +2629,14 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 		//> 16MB, split it
 		curDataLen = outbuf.GetWriteIndex() - mp.getBeginWriteIndex() - HeaderLengthOfTheProtocol
 		if curDataLen == int(MaxPayloadSize) {
-			mp.closePacket(i+curLen == n)
-			mp.flushIfFull()
+			err = mp.closePacket(i+curLen == n)
+			if err != nil {
+				return err
+			}
+			err = mp.flushIfFull()
+			if err != nil {
+				return err
+			}
 
 		}
 	}
@@ -2640,14 +2645,15 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 }
 
 // close a mysql protocol packet
-func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) {
+func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 	if !mp.isInPacket() {
-		return
+		return nil
 	}
 	outbuf := mp.tcpConn.OutBuf()
 	payLoadLen := outbuf.GetWriteIndex() - mp.getBeginWriteIndex() - 4
 	if payLoadLen < 0 || payLoadLen > int(MaxPayloadSize) {
-		return
+		return moerr.NewInternalError(mp.ctx, "invalid payload len :%d curWriteIdx %d beginWriteIdx %d ",
+			payLoadLen, outbuf.GetWriteIndex(), mp.getBeginWriteIndex())
 	}
 
 	buf := outbuf.RawBuf()
@@ -2666,7 +2672,7 @@ func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) {
 	}
 
 	mp.resetPacket()
-	return
+	return nil
 }
 
 /*
@@ -2737,7 +2743,7 @@ func (mp *MysqlProtocolImpl) appendDate(value types.Date) {
 	}
 }
 
-// the server send every row of the result set as an independent packetjjiji
+// the server send every row of the result set as an independent packet
 // thread safe
 func (mp *MysqlProtocolImpl) SendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
 	mp.m.Lock()
@@ -2759,8 +2765,10 @@ func (mp *MysqlProtocolImpl) sendResultSetTextRow(mrs *MysqlResultSet, r uint64)
 		return err
 	}
 
-	mp.closeRow()
-
+	err = mp.closeRow()
+	if err != nil {
+		return err
+	}
 	//begin2 := time.Now()
 	//err = mp.writePackets(data)
 	//if err != nil {
