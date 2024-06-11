@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -119,6 +120,7 @@ func callNonBlocking(
 	defer anal.Stop()
 
 	if result.Batch == nil {
+	    logutil.Infof("xxxx callNonBlocking, result.Batch is nil, txn:%s",proc.TxnOperator.Txn().DebugString())
 		err := lockTalbeIfLockCountIsZero(proc, arg)
 		if err != nil {
 			return result, err
@@ -529,9 +531,11 @@ func doLock(
 	// if has no conflict, lockedTS means the latest commit ts of this table
 	lockedTS := result.Timestamp
 
-	logutil.Infof("xxxx txn:%s, doLock , result.HasConflict:%v, result.HasPrevCommit:%v, snapshotTS:%s, lockedTS:%s, isRC:%v, isRetry:%v",
-		txnOp.Txn().DebugString(), result.HasConflict, result.HasPrevCommit,
-		snapshotTS.DebugString(), lockedTS.DebugString(), txnOp.Txn().IsRCIsolation(), txnOp.IsRetry())
+	pkstr := common.MoVectorToString(vec, 10, common.WithDoNotPrintBin{})
+	logutil.Infof("xxxx txn:%s, doLock , pk:%s,tableID:%v, result.HasConflict:%v, result.HasPrevCommit:%v, snapshotTS:%s, lockedTS:%s, isRC:%v, isRetry:%v",
+		txnOp.Txn().DebugString(), pkstr, tableID, result.HasConflict, result.HasPrevCommit,
+		snapshotTS.DebugString(), lockedTS.DebugString(), txnOp.Txn().IsRCIsolation(),
+		txnOp.IsRetry())
 
 	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
 	if !result.HasConflict &&
