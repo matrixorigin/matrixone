@@ -248,7 +248,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 		// not necessary, but we still clean the preScope error channel here.
 		for len(preScopeResultReceiveChan) > 0 {
-			_ = <-preScopeResultReceiveChan
+			<-preScopeResultReceiveChan
 		}
 
 		// clean the notifyMessageResultReceiveChan to make sure all the rpc-sender can be closed.
