@@ -500,8 +500,6 @@ func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 func (node *DeleteNode) GetPrefix() []byte {
 	return objectio.NewBlockidWithObjectID(&node.GetMeta().ID, node.chain.Load().mvcc.blkID)[:]
 }
-func (node *DeleteNode) Set1PC()     { node.TxnMVCCNode.Set1PC() }
-func (node *DeleteNode) Is1PC() bool { return node.TxnMVCCNode.Is1PC() }
 func (node *DeleteNode) PrepareRollback() (err error) {
 	node.chain.Load().mvcc.Lock()
 	defer node.chain.Load().mvcc.Unlock()
