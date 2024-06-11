@@ -418,6 +418,8 @@ func (c *Compile) run(s *Scope) error {
 		} else {
 			return s.CreateTable(c)
 		}
+	case CreateView:
+		return s.CreateView(c)
 	case AlterView:
 		return s.AlterView(c)
 	case AlterTable:
@@ -781,6 +783,11 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 		case plan.DataDefinition_CREATE_TABLE:
 			return []*Scope{
 				newScope(CreateTable).
+					withPlan(pn),
+			}, nil
+		case plan.DataDefinition_CREATE_VIEW:
+			return []*Scope{
+				newScope(CreateView).
 					withPlan(pn),
 			}, nil
 		case plan.DataDefinition_ALTER_VIEW:
