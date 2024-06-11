@@ -361,7 +361,7 @@ func (c *Compile) run(s *Scope) error {
 	if s == nil {
 		return nil
 	}
-
+	//fmt.Println(DebugShowScopes([]*Scope{s}))
 	switch s.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -2605,7 +2605,11 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 	case plan.Node_SEMI:
 		if isEq {
 			if node.BuildOnLeft {
-				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, probeScopes), probeScopes, buildScopes, node)
+				if c.execType == plan2.ExecTypeTP {
+					rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
+				} else {
+					rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, probeScopes), probeScopes, buildScopes, node)
+				}
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.RightSemi,
@@ -2652,7 +2656,11 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 		}
 	case plan.Node_RIGHT:
 		if isEq {
-			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, probeScopes), probeScopes, buildScopes, node)
+			if c.execType == plan2.ExecTypeTP {
+				rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
+			} else {
+				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, probeScopes), probeScopes, buildScopes, node)
+			}
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Right,
@@ -2683,7 +2691,11 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 	case plan.Node_ANTI:
 		if isEq {
 			if node.BuildOnLeft {
-				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, probeScopes), probeScopes, buildScopes, node)
+				if c.execType == plan2.ExecTypeTP {
+					rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
+				} else {
+					rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, probeScopes), probeScopes, buildScopes, node)
+				}
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.RightAnti,
