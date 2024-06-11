@@ -116,59 +116,6 @@ func LoadPersistedColumnDatas(
 	return vectors, nil
 }
 
-func LoadPersistedColumnDatasWithNoCopy(
-	ctx context.Context,
-	schema *catalog.Schema,
-	rt *dbutils.Runtime,
-	id *common.ID,
-	colIdxs []int,
-	location objectio.Location,
-	mp *mpool.MPool,
-) ([]containers.Vector, func(), error) {
-	cols := make([]uint16, 0)
-	typs := make([]types.Type, 0)
-	vectors := make([]containers.Vector, len(colIdxs))
-	phyAddIdx := -1
-	for i, colIdx := range colIdxs {
-		def := schema.ColDefs[colIdx]
-		if def.IsPhyAddr() {
-			vec, err := model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
-			if err != nil {
-				return nil, nil, err
-			}
-			phyAddIdx = i
-			vectors[phyAddIdx] = vec
-			continue
-		}
-		cols = append(cols, def.SeqNum)
-		typs = append(typs, def.Type)
-	}
-	if len(cols) == 0 {
-		return vectors, nil, nil
-	}
-	//Extend lifetime of vectors is without the function.
-	//need to copy. closeFunc will be nil.
-	vecs, release, err := blockio.LoadColumns2(
-		ctx, cols,
-		typs,
-		rt.Fs.Service,
-		location,
-		fileservice.Policy(0),
-		true,
-		rt.VectorPool.Transient)
-	if err != nil {
-		return nil, release, err
-	}
-	for i, vec := range vecs {
-		idx := i
-		if idx >= phyAddIdx && phyAddIdx > -1 {
-			idx++
-		}
-		vectors[idx] = vec
-	}
-	return vectors, release, nil
-}
-
 func ReadPersistedBlockRow(location objectio.Location) int {
 	return int(location.Rows())
 }
