@@ -42,9 +42,9 @@
 # pkg/cnservice
 /pkg/cnservice @reusee @daviszhen
 
-/pkg/cacheservice @volgariver6 
+/pkg/cacheservice @volgariver6
 
-/pkg/clusterservice @volgariver6 
+/pkg/clusterservice @volgariver6
 
 
 
@@ -75,7 +75,7 @@
 
 # pkg/container
 /pkg/container @XuPeng-SH
-/pkg/container/vector @aunjgr
+/pkg/container/vector @aunjgr @XuPeng-SH
 
 # pkg/defines
 /pkg/defines @daviszhen

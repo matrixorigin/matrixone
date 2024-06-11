@@ -48,4 +48,21 @@ select a from t3 where b between 1 and 3;
 select a from t3 where b in (1,2,3);
 drop table t3;
 
+-- >, >=, <, <=
+create table t4(a int primary key, b int);
+insert into t4 select *, * from generate_series(1, 8192000)g;
+-- @ignore:0
+select mo_ctl("dn", "flush", "testdb.t4");
+select b from t4 where a < 3;
+select b from t4 where a <= 3;
+select b from t4 where a > 1 and a < 3;
+select b from t4 where a >= 1 and a < 3;
+select b from t4 where a > 1 and a <= 3;
+select b from t4 where a >= 1 and a <= 3;
+select b from t4 where a < 3 and a = 3;
+select b from t4 where a < 1 or a < 3;
+select b from t4 where a <= 1 or a <= 3;
+select b from t4 where a < 2 or a = 3;
+select b from t4 where a < 3 or a = 2;
+drop table t4;
 drop database testdb;
