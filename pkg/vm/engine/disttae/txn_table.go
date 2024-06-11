@@ -23,6 +23,8 @@ import (
 	"time"
 	"unsafe"
 
+	"go.uber.org/zap"
+
 	"github.com/docker/go-units"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -57,7 +59,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 const (
@@ -630,8 +631,12 @@ func (tbl *txnTable) resetSnapshot() {
 	tbl._partState.Store(nil)
 }
 
-// return all unmodified blocks
-func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges engine.Ranges, err error) {
+// Ranges returns all unmodified blocks from the table.
+// Parameters:
+//   - ctx: Context used to control the lifecycle of the request.
+//   - exprs: A slice of expressions used to filter data.
+//   - txnOffset: Transaction offset used to specify the starting position for reading data.
+func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset int) (ranges engine.Ranges, err error) {
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
 	trace.GetService().AddTxnDurationAction(
@@ -683,6 +688,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		exprs,
 		&blocks,
 		tbl.proc.Load(),
+		txnOffset,
 	); err != nil {
 		return
 	}
@@ -717,16 +723,17 @@ func (tbl *txnTable) rangesOnePart(
 	exprs []*plan.Expr, // filter expression
 	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
+	txnOffset int,
 ) (err error) {
-
 	var done bool
 	// collect dirty blocks lazily
 	var dirtyBlks map[types.Blockid]struct{}
-	uncommittedObjects := tbl.collectUnCommittedObjects()
+	uncommittedObjects := tbl.collectUnCommittedObjects(txnOffset)
 
 	if done, err = TryFastFilterBlocks(
 		ctx,
 		tbl,
+		txnOffset,
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
 		exprs,
@@ -752,7 +759,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if dirtyBlks == nil {
-		tbl.collectDirtyBlocks(state, uncommittedObjects)
+		tbl.collectDirtyBlocks(state, uncommittedObjects, txnOffset)
 	}
 
 	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
@@ -906,12 +913,20 @@ func (tbl *txnTable) rangesOnePart(
 	return
 }
 
-func (tbl *txnTable) collectUnCommittedObjects() []objectio.ObjectStats {
+// Parameters:
+//   - txnOffset: Transaction writes offset used to specify the starting position for reading data.
+//   - fromSnapshot: Boolean indicating if the data is from a snapshot.
+func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectStats {
 	var unCommittedObjects []objectio.ObjectStats
+
+	if tbl.db.op.IsSnapOp() {
+		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
+	}
+
 	tbl.getTxn().forEachTableWrites(
 		tbl.db.databaseId,
 		tbl.tableId,
-		tbl.getTxn().GetSnapshotWriteOffset(),
+		txnOffset,
 		func(entry Entry) {
 			stats := objectio.ObjectStats{}
 			if entry.bat == nil || entry.bat.IsEmpty() {
@@ -936,7 +951,9 @@ func (tbl *txnTable) collectUnCommittedObjects() []objectio.ObjectStats {
 
 func (tbl *txnTable) collectDirtyBlocks(
 	state *logtailreplay.PartitionState,
-	uncommittedObjects []objectio.ObjectStats) map[types.Blockid]struct{} {
+	uncommittedObjects []objectio.ObjectStats,
+	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
+) map[types.Blockid]struct{} {
 	dirtyBlks := make(map[types.Blockid]struct{})
 	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
 	{
@@ -964,10 +981,14 @@ func (tbl *txnTable) collectDirtyBlocks(
 		}, uncommittedObjects...)
 	}
 
+	if tbl.db.op.IsSnapOp() {
+		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
+	}
+
 	tbl.getTxn().forEachTableWrites(
 		tbl.db.databaseId,
 		tbl.tableId,
-		tbl.getTxn().GetSnapshotWriteOffset(),
+		txnOffset,
 		func(entry Entry) {
 			// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
 			// TODO Adjustments will be made here in the future
@@ -1691,8 +1712,21 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 	return tbl.db.databaseId
 }
 
+// NewReader creates a new list of Readers to read data from the table.
+// Parameters:
+//   - ctx: Context used to control the lifecycle of the request.
+//   - num: The number of Readers to create.
+//   - expr: Expression used to filter data.
+//   - ranges: Byte array representing the data range to read.
+//   - orderedScan: Whether to scan the data in order.
+//   - txnOffset: Transaction offset used to specify the starting position for reading data.
 func (tbl *txnTable) NewReader(
-	ctx context.Context, num int, expr *plan.Expr, ranges []byte, orderedScan bool,
+	ctx context.Context,
+	num int,
+	expr *plan.Expr,
+	ranges []byte,
+	orderedScan bool,
+	txnOffset int,
 ) ([]engine.Reader, error) {
 	pkFilter := tbl.tryExtractPKFilter(expr)
 	blkArray := objectio.BlockInfoSlice(ranges)
@@ -1700,10 +1734,10 @@ func (tbl *txnTable) NewReader(
 		return []engine.Reader{new(emptyReader)}, nil
 	}
 	if blkArray.Len() == 0 {
-		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil)
+		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil, txnOffset)
 	}
 	if blkArray.Len() == 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
-		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil)
+		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil, txnOffset)
 	}
 	if blkArray.Len() > 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
 		rds := make([]engine.Reader, num)
@@ -1720,7 +1754,7 @@ func (tbl *txnTable) NewReader(
 			}
 			dirtyBlks = append(dirtyBlks, blkInfo)
 		}
-		rds0, err := tbl.newMergeReader(ctx, num, expr, pkFilter, dirtyBlks)
+		rds0, err := tbl.newMergeReader(ctx, num, expr, pkFilter, dirtyBlks, txnOffset)
 		if err != nil {
 			return nil, err
 		}
@@ -1790,6 +1824,7 @@ func (tbl *txnTable) newMergeReader(
 	expr *plan.Expr,
 	pkFilter PKFilter,
 	dirtyBlks []*objectio.BlockInfo,
+	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
 ) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
@@ -1798,7 +1833,8 @@ func (tbl *txnTable) newMergeReader(
 		num,
 		pkFilter,
 		expr,
-		dirtyBlks)
+		dirtyBlks,
+		txnOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -1909,6 +1945,7 @@ func (tbl *txnTable) newReader(
 	pkFilter PKFilter,
 	expr *plan.Expr,
 	dirtyBlks []*objectio.BlockInfo,
+	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
 ) ([]engine.Reader, error) {
 	txn := tbl.getTxn()
 	ts := txn.op.SnapshotTS()
@@ -1949,10 +1986,11 @@ func (tbl *txnTable) newReader(
 	}
 
 	partReader := &PartitionReader{
-		table:    tbl,
-		iter:     iter,
-		seqnumMp: seqnumMp,
-		typsMap:  mp,
+		table:     tbl,
+		txnOffset: txnOffset,
+		iter:      iter,
+		seqnumMp:  seqnumMp,
+		typsMap:   mp,
 	}
 
 	//tbl.Lock()
@@ -1972,6 +2010,7 @@ func (tbl *txnTable) newReader(
 					ts,
 					[]*objectio.BlockInfo{dirtyBlks[i]},
 					expr,
+					txnOffset,
 					fs,
 					proc,
 				),
@@ -1989,6 +2028,7 @@ func (tbl *txnTable) newReader(
 				ts,
 				[]*objectio.BlockInfo{dirtyBlks[i]},
 				expr,
+				txnOffset,
 				fs,
 				proc,
 			)
@@ -2018,6 +2058,7 @@ func (tbl *txnTable) newReader(
 		bmr := &blockMergeReader{
 			blockReader: blockReaders[i],
 			table:       tbl,
+			txnOffset:   txnOffset,
 			pkFilter:    pkFilter,
 			deletaLocs:  make(map[string][]objectio.Location),
 		}
@@ -2237,6 +2278,7 @@ func (tbl *txnTable) PKPersistedBetween(
 
 		_, _, filter := getNonCompositePKSearchFuncByExpr(
 			inExpr,
+			tbl.tableDef,
 			"pk",
 			tbl.proc.Load())
 		return filter.SortedSearchFunc
