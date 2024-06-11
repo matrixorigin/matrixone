@@ -1,4 +1,3 @@
-SET experimental_master_index = 1;
 
 drop database if exists d1;
 create database d1;
@@ -66,4 +65,3 @@ select mo_ctl('dn','flush','d1.t1');
 select * from t1 where b in (1,2) for update;
 drop database if exists d1;
 
-SET experimental_master_index = 0;
