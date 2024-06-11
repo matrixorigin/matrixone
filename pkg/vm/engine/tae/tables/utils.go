@@ -87,7 +87,6 @@ func LoadPersistedColumnDatas(
 		typs = append(typs, def.Type)
 	}
 	if len(cols) == 0 {
-		logutil.Infof("no cols to load")
 		return vectors, nil
 	}
 	//Extend lifetime of vectors is without the function.
