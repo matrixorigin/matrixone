@@ -73,6 +73,10 @@ func (c *DashboardCreator) getRowOptions(prefixes ...string) []row.Option {
 		switch desc.Kind {
 
 		case metrics.KindUint64, metrics.KindFloat64:
+			if desc.Cumulative {
+				metricName += "_total"
+			}
+
 			// sum
 			options = append(
 				options,
@@ -89,7 +93,7 @@ func (c *DashboardCreator) getRowOptions(prefixes ...string) []row.Option {
 				options = append(
 					options,
 					c.withGraph(
-						"rate: "+desc.Name+" per "+unit,
+						"rate: "+desc.Name,
 						3,
 						`sum(rate(`+c.getMetricWithFilter(metricName, "")+`[$interval])) by (`+c.by+`)`,
 						"{{ "+c.by+" }}",
