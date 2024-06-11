@@ -593,7 +593,11 @@ var _ Ranges = (*objectio.BlockInfoSlice)(nil)
 type Relation interface {
 	Statistics
 
-	Ranges(context.Context, []*plan.Expr) (Ranges, error)
+	// Ranges Parameters:
+	// first parameter: Context
+	// second parameter: Slice of expressions used to filter the data.
+	// third parameter: Transaction offset used to specify the starting position for reading data.
+	Ranges(context.Context, []*plan.Expr, int) (Ranges, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 
@@ -630,8 +634,13 @@ type Relation interface {
 
 	GetDBID(context.Context) uint64
 
-	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
-	NewReader(context.Context, int, *plan.Expr, []byte, bool) ([]Reader, error)
+	// NewReader Parameters:
+	// second parameter is the number of reader,
+	// third parameter is the filter extend,
+	// foruth parameter is the payload required by the engine
+	// fifth parameter is data blocks
+	// sixth parameter is transaction offset used to specify the starting position for reading data.
+	NewReader(context.Context, int, *plan.Expr, []byte, bool, int) ([]Reader, error)
 
 	TableColumns(ctx context.Context) ([]*Attribute, error)
 
