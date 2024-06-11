@@ -1103,16 +1103,16 @@ message DataDefinition {
 		DropTable drop_table			= 8;
 		CreateIndex create_index 		= 9;
 		AlterIndex alter_index 			= 10;
-		DropIndex drop_index 			= 11;
+		DropIndex drop_index 			  = 11;
 		TruncateTable truncate_table	= 12;
 		ShowVariables show_variables 	= 13;
-		AlterView alter_view			= 14;
+		AlterView alter_view			      = 14;
 		LockTables lock_tables          = 15;
 		UnLockTables unlock_tables      = 16;
 		CreateSequence create_sequence  = 17;
 		DropSequence   drop_sequence    = 18;
 		AlterSequence  alter_sequence   = 19;
-
+		CreateView  create_view         = 20;
 	}
 }
 
@@ -1324,6 +1324,13 @@ message DropTable {
 	repeated string updateFkSqls = 11;
 	//fk child table id that refers to me
 	repeated uint64 fkChildTblsReferToMe = 12;
+}
+
+message CreateView {
+	bool if_not_exists 	= 1;
+	string database 	= 2;
+	bool replace        = 3;
+	TableDef table_def 	= 4;
 }
 
 message AlterView {

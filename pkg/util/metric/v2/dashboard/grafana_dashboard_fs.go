@@ -31,12 +31,12 @@ func (c *DashboardCreator) initFileServiceDashboard() error {
 		"FileService Metrics",
 		c.withRowOptions(
 			c.initFSOverviewRow(),
-			c.initFSReadWriteBytesRow(),
-			c.initFSS3ConnOverviewRow(),
-			c.initFSS3ConnDurationRow(),
 			c.initFSIOMergerDurationRow(),
 			c.initFSReadWriteDurationRow(),
 			c.initFSMallocRow(),
+			c.initFSReadWriteBytesRow(),
+			c.initFSS3ConnOverviewRow(),
+			c.initFSS3ConnDurationRow(),
 		)...)
 	if err != nil {
 		return err
@@ -152,8 +152,8 @@ func (c *DashboardCreator) initFSIOMergerDurationRow() dashboard.Option {
 				"wait",
 				"initiate",
 			},
-			[]float64{0.50, 0.8, 0.90, 0.99, 1},
-			[]float32{3, 3, 3, 3, 3},
+			[]float64{0.90, 0.99, 1},
+			[]float32{1, 1, 1},
 			axis.Unit("seconds"),
 			axis.Min(0))...,
 	)
@@ -180,6 +180,7 @@ func (c *DashboardCreator) initFSReadWriteDurationRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="list"`),
 				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="stat"`),
 				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="write"`),
+				c.getMetricWithFilter(`mo_fs_read_write_duration_bucket`, `type="io-read-all"`),
 			},
 			[]string{
 				"read-vector-cache",
@@ -198,9 +199,10 @@ func (c *DashboardCreator) initFSReadWriteDurationRow() dashboard.Option {
 				"list",
 				"stat",
 				"write",
+				"io-read-all",
 			},
-			[]float64{0.50, 0.8, 0.90, 0.99, 1},
-			[]float32{3, 3, 3, 3, 3},
+			[]float64{0.90, 0.99, 1},
+			[]float32{1, 1, 1},
 			axis.Unit("seconds"),
 			axis.Min(0))...,
 	)

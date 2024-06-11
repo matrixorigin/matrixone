@@ -1521,7 +1521,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			var inExprList, orExprList []*plan.Expr
 
 			for _, rightVal := range rightList.List {
-				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal.GetLit()) {
+				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
 					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
 					if err != nil {
 						return nil, err
@@ -1629,13 +1629,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	// rewrite some cast rule:  expr:  int32Col > 10,
 	// old rule: cast(int32Col as int64) >10 ,   new rule: int32Col > (cast 10 as int32)
 	switch name {
-	case "=", "<", "<=", ">", ">=", "<>", "like":
+	case "=", "<", "<=", ">", ">=", "<>":
 		// if constant's type higher than column's type
 		// and constant's value in range of column's type, then no cast was needed
-		switch leftExpr := args[0].Expr.(type) {
+		switch args[0].Expr.(type) {
 		case *plan.Expr_Lit:
 			if args[1].GetCol() != nil {
-				if checkNoNeedCast(argsType[0], argsType[1], leftExpr.Lit) {
+				if checkNoNeedCast(argsType[0], argsType[1], args[0]) {
 					argsCastType = []types.Type{argsType[1], argsType[1]}
 					// need to update function id
 					fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
@@ -1646,7 +1646,22 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				}
 			}
 		case *plan.Expr_Col:
-			if checkNoNeedCast(argsType[1], argsType[0], args[1].GetLit()) {
+			if checkNoNeedCast(argsType[1], argsType[0], args[1]) {
+				argsCastType = []types.Type{argsType[0], argsType[0]}
+				fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
+				if err != nil {
+					return nil, err
+				}
+				funcID = fGet.GetEncodedOverloadID()
+			}
+		}
+
+	case "like":
+		// if constant's type higher than column's type
+		// and constant's value in range of column's type, then no cast was needed
+		switch args[0].Expr.(type) {
+		case *plan.Expr_Col:
+			if checkNoNeedCast(argsType[1], argsType[0], args[1]) {
 				argsCastType = []types.Type{argsType[0], argsType[0]}
 				fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 				if err != nil {
@@ -1657,7 +1672,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 
 	case "between":
-		if checkNoNeedCast(argsType[1], argsType[0], args[1].GetLit()) && checkNoNeedCast(argsType[2], argsType[0], args[2].GetLit()) {
+		if checkNoNeedCast(argsType[1], argsType[0], args[1]) && checkNoNeedCast(argsType[2], argsType[0], args[2]) {
 			argsCastType = []types.Type{argsType[0], argsType[0], argsType[0]}
 			fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 			if err != nil {

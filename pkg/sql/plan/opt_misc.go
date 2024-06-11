@@ -853,6 +853,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.forceOneCN = value
 	case "execType":
 		builder.optimizerHints.execType = value
+	case "disableRightJoin":
+		builder.optimizerHints.disableRightJoin = value
 	}
 }
 
