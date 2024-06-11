@@ -23,6 +23,9 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,8 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -249,12 +250,8 @@ func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
 	return ret
 }
 
-func (s *SessionAllocator) Alloc(capacity int) []byte {
-	alloc, err := s.mp.Alloc(capacity)
-	if err != nil {
-		panic(err)
-	}
-	return alloc
+func (s *SessionAllocator) Alloc(capacity int) ([]byte, error) {
+	return s.mp.Alloc(capacity)
 }
 
 func (s SessionAllocator) Free(bs []byte) {

@@ -21,11 +21,12 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
-	"go.uber.org/zap"
 )
 
 // RelationName counter for the new connection
