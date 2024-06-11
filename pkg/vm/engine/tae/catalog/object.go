@@ -404,12 +404,6 @@ func (entry *ObjectEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return newObjectCmd(id, cmdType, entry), nil
 }
 
-func (entry *ObjectEntry) Set1PC() {
-	entry.GetLatestNodeLocked().Set1PC()
-}
-func (entry *ObjectEntry) Is1PC() bool {
-	return entry.GetLatestNodeLocked().Is1PC()
-}
 func (entry *ObjectEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevel(level)))

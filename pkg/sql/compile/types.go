@@ -51,6 +51,7 @@ const (
 	Parallel
 	CreateDatabase
 	CreateTable
+	CreateView
 	CreateIndex
 	DropDatabase
 	DropTable
