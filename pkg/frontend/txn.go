@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
@@ -325,6 +326,10 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.SetTxnId(dumpUUID[:])
 	} else {
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		err = disttae.CheckTxnIsValid(th.txnOp)
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }

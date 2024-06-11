@@ -895,8 +895,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		}
 		if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-				node.Stats.Outcnt = float64(c.I64Val)
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				node.Stats.Outcnt = float64(c.U64Val)
 				node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
 			}
 		}
@@ -1101,8 +1101,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	// if there is a limit, outcnt is limit number
 	if node.Limit != nil {
 		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-				stats.Outcnt = float64(c.I64Val)
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				stats.Outcnt = float64(c.U64Val)
 				stats.BlockNum = int32(((stats.Outcnt / stats.Selectivity) / DefaultBlockMaxRows) + 1)
 				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
 			}
@@ -1132,11 +1132,21 @@ func InternalTable(tableDef *TableDef) bool {
 
 func DefaultHugeStats() *plan.Stats {
 	stats := new(Stats)
-	stats.TableCnt = 10000000
-	stats.Cost = 10000000
-	stats.Outcnt = 10000000
+	stats.TableCnt = 100000000
+	stats.Cost = 100000000
+	stats.Outcnt = 100000000
 	stats.Selectivity = 1
-	stats.BlockNum = 1000
+	stats.BlockNum = 10000
+	return stats
+}
+
+func DefaultBigStats() *plan.Stats {
+	stats := new(Stats)
+	stats.TableCnt = 10000000
+	stats.Cost = float64(costThresholdForOneCN)
+	stats.Outcnt = float64(costThresholdForOneCN)
+	stats.Selectivity = 1
+	stats.BlockNum = int32(BlockThresholdForOneCN)
 	return stats
 }
 
@@ -1163,11 +1173,10 @@ func DefaultMinimalStats() *plan.Stats {
 func resetHashMapStats(stats *plan.Stats) {
 	if stats.HashmapStats == nil {
 		stats.HashmapStats = &plan.HashMapStats{}
-	} else {
-		stats.HashmapStats.HashmapSize = 0
-		stats.HashmapStats.HashOnPK = false
-		stats.HashmapStats.Shuffle = false
 	}
+	stats.HashmapStats.HashmapSize = 1
+	stats.HashmapStats.HashOnPK = false
+	stats.HashmapStats.Shuffle = false
 }
 
 func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive bool) {
@@ -1200,7 +1209,9 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 		//right joins does not support non equal join for now
-		if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
+		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
+			node.BuildOnLeft = false
+		} else if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
 			node.BuildOnLeft = true
 		}
 	}
@@ -1346,6 +1357,10 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, sel float64) floa
 }
 
 func (builder *QueryBuilder) canSkipStats() bool {
+	if builder.skipStats {
+		// if already set to true by other parts, just skip stats
+		return true
+	}
 	//for now ,only skip stats for select count(*) from xx
 	if len(builder.qry.Steps) != 1 || len(builder.qry.Nodes) != 3 {
 		return false
@@ -1366,4 +1381,22 @@ func (builder *QueryBuilder) canSkipStats() bool {
 	}
 	scan := builder.qry.Nodes[agg.Children[0]]
 	return scan.NodeType == plan.Node_TABLE_SCAN
+}
+
+func (builder *QueryBuilder) hintQueryType() {
+	if builder.optimizerHints != nil && builder.optimizerHints.execType != 0 {
+		for _, node := range builder.qry.GetNodes() {
+			switch builder.optimizerHints.execType {
+			case 1:
+				*node.Stats = *DefaultMinimalStats()
+			case 2:
+				*node.Stats = *DefaultBigStats()
+			case 3:
+				*node.Stats = *DefaultHugeStats()
+			default:
+				panic("wrong optimizer hints for execType!")
+			}
+		}
+		return
+	}
 }

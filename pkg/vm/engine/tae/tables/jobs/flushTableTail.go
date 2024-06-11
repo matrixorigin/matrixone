@@ -540,7 +540,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 
 	// write!
 	// create new object to hold merged blocks
-	if task.createdObjHandles, err = task.rel.CreateNonAppendableObject(false, nil); err != nil {
+	if task.createdObjHandles, err = task.rel.CreateNonAppendableObject(nil); err != nil {
 		return
 	}
 	toObjectEntry := task.createdObjHandles.GetMeta().(*catalog.ObjectEntry)

@@ -146,7 +146,9 @@ var (
 	FSReadDurationDiskCacheSetFile  = fsReadWriteDuration.WithLabelValues("disk-cache-set-file")
 	FSReadDurationList              = fsReadWriteDuration.WithLabelValues("list")
 	FSReadDurationStat              = fsReadWriteDuration.WithLabelValues("stat")
-	FSWriteDurationWrite            = fsReadWriteDuration.WithLabelValues("write")
+	FSReadDurationIOReadAll         = fsReadWriteDuration.WithLabelValues("io-read-all")
+
+	FSWriteDurationWrite = fsReadWriteDuration.WithLabelValues("write")
 )
 
 var (
