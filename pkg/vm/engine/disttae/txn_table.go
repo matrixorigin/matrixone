@@ -26,6 +26,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/docker/go-units"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1711,7 +1712,12 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 //   - orderedScan: Whether to scan the data in order.
 //   - txnOffset: Transaction offset used to specify the starting position for reading data.
 func (tbl *txnTable) NewReader(
-	ctx context.Context, num int, expr *plan.Expr, ranges []byte, orderedScan bool,
+	ctx context.Context,
+	num int,
+	expr *plan.Expr,
+	ranges []byte,
+	orderedScan bool,
+	txnOffset int,
 ) ([]engine.Reader, error) {
 	pkFilter := tbl.tryExtractPKFilter(expr)
 	blkArray := objectio.BlockInfoSlice(ranges)
