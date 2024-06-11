@@ -695,7 +695,6 @@ func (d *DeltalocChain) PrepareCommit() (err error) {
 	}
 	return
 }
-func (d *DeltalocChain) Is1PC() bool { return false }
 func (d *DeltalocChain) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return catalog.NewDeltalocCmd(id, catalog.IOET_WALTxnCommand_Block, d.mvcc.GetID(), d.BaseEntryImpl), nil
 }
@@ -712,8 +711,6 @@ func (d *DeltalocChain) PrepareRollback() error {
 	_, err := d.BaseEntryImpl.PrepareRollback()
 	return err
 }
-func (d *DeltalocChain) Set1PC() {}
-
 func (d *DeltalocChain) GetBlockID() *objectio.Blockid {
 	return objectio.NewBlockidWithObjectID(&d.mvcc.meta.ID, d.mvcc.blkID)
 }
