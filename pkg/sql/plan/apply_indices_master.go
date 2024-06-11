@@ -217,6 +217,10 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		panic("unsupported filter expression")
 	}
 
+	//NOTE: very important. You need to set ColName for the ColExpr to be pushed down to
+	// the Storage Engine layer. Otherwise, we will end up scanning all the rows.
+	builder.addNameByColRef(idxScanTag, idxTableDef)
+
 	scanId := builder.appendNode(&Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    idxTableDef,
