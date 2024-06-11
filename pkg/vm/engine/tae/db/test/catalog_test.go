@@ -43,7 +43,7 @@ func TestCatalog1(t *testing.T) {
 	schema := catalog.MockSchema(1, 0)
 	txn, _, rel := testutil.CreateRelationNoCommit(t, db, testutil.DefaultTestDB, schema, true)
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
-	obj, err := rel.CreateNonAppendableObject(false, nil)
+	obj, err := rel.CreateNonAppendableObject(nil)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
