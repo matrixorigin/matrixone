@@ -553,6 +553,7 @@ func (blk *baseObject) ResolvePersistedColumnDatas(
 	blkID uint16,
 	colIdxs []int,
 	skipDeletes bool,
+	bat *containers.Batch,
 	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
 
@@ -564,11 +565,65 @@ func (blk *baseObject) ResolvePersistedColumnDatas(
 	id := blk.meta.AsCommonID()
 	id.SetBlockOffset(blkID)
 	vecs, err := LoadPersistedColumnDatas(
-		ctx, readSchema, blk.rt, id, colIdxs, location, mp,
+		ctx, readSchema, blk.rt, id, colIdxs, location, bat, mp,
 	)
 	if err != nil {
 		return nil, err
 	}
+	for i, vec := range vecs {
+		if vec == nil {
+			logutil.Infof("column %d is not found in block %d", colIdxs[i], blkID)
+		}
+		view.SetData(colIdxs[i], vec)
+	}
+
+	if skipDeletes {
+		return
+	}
+
+	defer func() {
+		if err != nil {
+			view.Close()
+		}
+	}()
+
+	blk.RLock()
+	err = blk.fillInMemoryDeletesLocked(txn, blkID, view.BaseView, blk.RWMutex)
+	blk.RUnlock()
+
+	if err = blk.FillPersistedDeletes(ctx, blkID, txn, view.BaseView, mp); err != nil {
+		return
+	}
+	return
+}
+
+func (blk *baseObject) ResolvePersistedColumnDatasWithNoCopy(
+	ctx context.Context,
+	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
+	blkID uint16,
+	colIdxs []int,
+	skipDeletes bool,
+	mp *mpool.MPool,
+) (view *containers.BlockView, releaseFunc func(), err error) {
+
+	view = containers.NewBlockView()
+	location, err := blk.buildMetalocation(blkID)
+	if err != nil {
+		return nil, nil, err
+	}
+	id := blk.meta.AsCommonID()
+	id.SetBlockOffset(blkID)
+	vecs, release, err := LoadPersistedColumnDatasWithNoCopy(
+		ctx, readSchema, blk.rt, id, colIdxs, location, mp,
+	)
+	if err != nil {
+		if release != nil {
+			release()
+		}
+		return nil, nil, err
+	}
+	releaseFunc = release
 	for i, vec := range vecs {
 		view.SetData(colIdxs[i], vec)
 	}
@@ -579,6 +634,9 @@ func (blk *baseObject) ResolvePersistedColumnDatas(
 
 	defer func() {
 		if err != nil {
+			if releaseFunc != nil {
+				releaseFunc()
+			}
 			view.Close()
 		}
 	}()

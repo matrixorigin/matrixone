@@ -155,6 +155,26 @@ func (obj *aobject) GetColumnDataByIds(
 		readSchema.(*catalog.Schema),
 		colIdxes,
 		false,
+		nil,
+		mp,
+	)
+}
+func (obj *aobject) GetColumnDataByIdsWithBatch(
+	ctx context.Context,
+	txn txnif.AsyncTxn,
+	readSchema any,
+	_ uint16,
+	colIdxes []int,
+	bat *containers.Batch,
+	mp *mpool.MPool,
+) (view *containers.BlockView, err error) {
+	return obj.resolveColumnDatas(
+		ctx,
+		txn,
+		readSchema.(*catalog.Schema),
+		colIdxes,
+		false,
+		bat,
 		mp,
 	)
 }
@@ -183,6 +203,7 @@ func (obj *aobject) resolveColumnDatas(
 	readSchema *catalog.Schema,
 	colIdxes []int,
 	skipDeletes bool,
+	bat *containers.Batch,
 	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
 	node := obj.PinNode()
@@ -201,6 +222,7 @@ func (obj *aobject) resolveColumnDatas(
 			0,
 			colIdxes,
 			skipDeletes,
+			bat,
 			mp,
 		)
 	}

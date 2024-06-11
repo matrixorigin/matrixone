@@ -3201,7 +3201,8 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 		w.cantFreeData = true
 		w.cantFreeArea = true
 	} else {
-		err := w.PreExtend(end-start, mp)
+		row := end - start
+		err := w.PreExtend(row, mp)
 		if err != nil {
 			return err
 		}

@@ -16,7 +16,6 @@ package data
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -85,6 +84,9 @@ type Object interface {
 	) (*containers.ColumnView, error)
 	GetColumnDataByIds(
 		ctx context.Context, txn txnif.AsyncTxn, readSchema any, blkID uint16, colIdxes []int, mp *mpool.MPool,
+	) (*containers.BlockView, error)
+	GetColumnDataByIdsWithBatch(
+		ctx context.Context, txn txnif.AsyncTxn, readSchema any, blkID uint16, colIdxes []int, bat *containers.Batch, mp *mpool.MPool,
 	) (*containers.BlockView, error)
 	Prefetch(idxes []uint16, blkID uint16) error
 	GetMeta() any

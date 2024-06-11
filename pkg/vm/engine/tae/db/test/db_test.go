@@ -1165,6 +1165,174 @@ func TestFlushTabletail(t *testing.T) {
 	}
 }
 
+func TestFlushTabletailNoCopy(t *testing.T) {
+	// TODO
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	// db := initDB(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker.Start()
+	defer worker.Stop()
+	schema := catalog.MockSchemaAll(13, 2)
+	schema.Name = "table"
+	schema.BlockMaxRows = 20
+	schema.ObjectMaxBlocks = 10
+	bats := catalog.MockBatch(schema, 2*(int(schema.BlockMaxRows)*2+int(schema.BlockMaxRows/2))).Split(2)
+	bat := bats[0]  // 50 rows
+	bat2 := bats[1] // 50 rows
+
+	defer bat.Close()
+	defer bat2.Close()
+	testutil.CreateRelationAndAppend(t, 0, tae.DB, "db", schema, bat, true)
+
+	{
+		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+		require.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(1))))
+		require.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(19)))) // ab0 has 2
+		require.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(21)))) // ab1 has 1
+		require.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(45)))) // ab2 has 1
+
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	var commitDeleteAfterFlush txnif.AsyncTxn
+	{
+		var rel handle.Relation
+		commitDeleteAfterFlush, rel = testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+		require.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(42)))) // expect to transfer to nablk1
+	}
+
+	flushTable := func() {
+		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+		blkMetas := testutil.GetAllBlockMetas(rel)
+		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tae.Runtime, types.MaxTs())
+		require.NoError(t, err)
+		worker.SendOp(task)
+		err = task.WaitDone(ctx)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	flushTable()
+
+	{
+		require.NoError(t, commitDeleteAfterFlush.Commit(context.Background()))
+		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+		_, _, err := rel.GetByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(42)))
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+
+		require.NoError(t, rel.Append(context.Background(), bat2))
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+	{
+		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+		require.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(15))))
+		require.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(20)))) // nab0 has 2
+		require.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(27)))) // nab1 has 2
+		require.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat2.Vecs[2].Get(11))))
+		require.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat2.Vecs[2].Get(15)))) // ab3 has 2, ab4 and ab5 has 0
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	flushTable()
+
+	{
+		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+		require.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(10)))) // nab0 has 2+1, nab1 has 2
+		require.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat2.Vecs[2].Get(44))))
+		require.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat2.Vecs[2].Get(45)))) // nab5 has 2
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	flushTable()
+
+	{
+		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+		it := rel.MakeObjectIt()
+		// 6 nablks has 87 rows
+		dels := []int{3, 2, 0, 0, 0, 2}
+		total := 0
+		for i := 0; it.Valid(); it.Next() {
+			obj := it.GetObject()
+			for j := uint16(0); j < uint16(obj.BlkCnt()); j++ {
+				view, err := obj.GetColumnDataById(context.Background(), j, 2, common.DefaultAllocator)
+				require.NoError(t, err)
+				defer view.Close()
+				viewDel := 0
+				if view.DeleteMask != nil {
+					viewDel = view.DeleteMask.GetCardinality()
+				}
+				require.Equal(t, dels[i], viewDel)
+				view.ApplyDeletes()
+				total += view.Length()
+				i++
+			}
+		}
+		require.Equal(t, 87, total)
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	t.Log(tae.Catalog.SimplePPString(common.PPL2))
+
+	tae.Restart(ctx)
+	{
+		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+		it := rel.MakeObjectIt()
+		// 6 nablks has 87 rows
+		dels := []int{3, 2, 0, 0, 0, 2}
+		total := 0
+		idxs := make([]int, 0, len(schema.ColDefs)-1)
+		for i := 0; i < len(schema.ColDefs)-1; i++ {
+			idxs = append(idxs, i)
+		}
+
+		srcBat := containers.NewBatch()
+		defer srcBat.Close()
+		for i := 0; it.Valid(); it.Next() {
+			obj := it.GetObject()
+			for j := uint16(0); j < uint16(obj.BlkCnt()); j++ {
+				for _, vec := range srcBat.Vecs {
+					vec.GetDownstreamVector().Reset(*vec.GetType())
+				}
+				views, err := obj.GetColumnDataByIdsWithBatch(context.Background(), j, idxs, srcBat, common.DefaultAllocator)
+				require.NoError(t, err)
+				defer views.Close()
+				for n, view := range views.Columns {
+					require.Equal(t, schema.ColDefs[n].Type.Oid, view.GetData().GetType().Oid)
+				}
+
+				if len(srcBat.Vecs) == 0 {
+					for z := 0; z < len(schema.ColDefs)-1; z++ {
+						def := schema.ColDefs[z]
+						if def.IsPhyAddr() {
+							logutil.Infof("skip column %s", def.Name)
+							continue
+						}
+						srcBat.Vecs = append(srcBat.Vecs, views.Columns[z].GetData())
+						srcBat.Attrs = append(srcBat.Attrs, schema.ColDefs[z].Name)
+					}
+				}
+				viewDel := 0
+				if views.DeleteMask != nil {
+					viewDel = views.DeleteMask.GetCardinality()
+				}
+				require.Equal(t, dels[i], viewDel)
+				views.ApplyDeletes()
+				total += views.Columns[0].Length()
+				i++
+			}
+		}
+		require.Equal(t, 87, total)
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+}
+
 func TestRollback1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)

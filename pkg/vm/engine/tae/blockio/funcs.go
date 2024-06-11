@@ -16,7 +16,6 @@ package blockio
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -74,6 +73,7 @@ func LoadColumnsData2(
 	policy fileservice.Policy,
 	needCopy bool,
 	vPool *containers.VectorPool,
+	bat ...*containers.Batch,
 ) (vectors []containers.Vector, release func(), err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
@@ -104,12 +104,22 @@ func LoadColumnsData2(
 
 		var vec containers.Vector
 		if needCopy {
-			if vec, err = containers.CloneVector(
-				obj.(*vector.Vector),
-				vPool.GetMPool(),
-				vPool,
-			); err != nil {
-				return
+			if len(bat) == 1 && bat[0] != nil && len(bat[0].Vecs) == len(cols) {
+				// Clone the vector to the batch
+				if err = obj.(*vector.Vector).CloneWindowTo(
+					bat[0].Vecs[i].GetDownstreamVector(), 0, obj.(*vector.Vector).Length(), vPool.GetMPool(),
+				); err != nil {
+					return
+				}
+				vec = bat[0].Vecs[i]
+			} else {
+				if vec, err = containers.CloneVector(
+					obj.(*vector.Vector),
+					vPool.GetMPool(),
+					vPool,
+				); err != nil {
+					return
+				}
 			}
 		} else {
 			vec = containers.ToTNVector(obj.(*vector.Vector), nil)
@@ -161,8 +171,9 @@ func LoadColumns2(
 	policy fileservice.Policy,
 	needCopy bool,
 	vPool *containers.VectorPool,
+	bat ...*containers.Batch,
 ) (vectors []containers.Vector, release func(), err error) {
-	return LoadColumnsData2(ctx, objectio.SchemaData, cols, typs, fs, location, policy, needCopy, vPool)
+	return LoadColumnsData2(ctx, objectio.SchemaData, cols, typs, fs, location, policy, needCopy, vPool, bat...)
 }
 
 // LoadTombstoneColumns2 load tombstone data from file service for TN

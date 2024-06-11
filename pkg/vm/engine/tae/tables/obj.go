@@ -91,7 +91,23 @@ func (obj *object) GetColumnDataByIds(
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return obj.ResolvePersistedColumnDatas(
-		ctx, txn, schema, blkID, colIdxes, false, mp,
+		ctx, txn, schema, blkID, colIdxes, false, nil, mp,
+	)
+}
+func (obj *object) GetColumnDataByIdsWithBatch(
+	ctx context.Context,
+	txn txnif.AsyncTxn,
+	readSchema any,
+	blkID uint16,
+	colIdxes []int,
+	bat *containers.Batch,
+	mp *mpool.MPool,
+) (view *containers.BlockView, err error) {
+	node := obj.PinNode()
+	defer node.Unref()
+	schema := readSchema.(*catalog.Schema)
+	return obj.ResolvePersistedColumnDatas(
+		ctx, txn, schema, blkID, colIdxes, false, bat, mp,
 	)
 }
 
