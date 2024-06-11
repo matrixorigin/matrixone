@@ -91,6 +91,8 @@ type dmlPlanCtx struct {
 	pkFilterExprs          []*Expr
 	isDeleteWithoutFilters bool
 	partitionInfos         map[uint64]*partSubTableInfo // key: Main Table Id, value: Partition sub table information
+
+	lockRows *plan.Expr // update t1 set a = 1 where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
 }
 
 type partSubTableInfo struct {
@@ -1646,7 +1648,8 @@ func makeOneDeletePlan(
 				PrimaryColTyp:      delNodeInfo.pkTyp,
 				RefreshTsIdxInBat:  -1, //unsupport now
 				// FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
-				LockTable: delNodeInfo.lockTable,
+				LockTable:         delNodeInfo.lockTable,
+				LockTableAtTheEnd: false,
 			}
 			// if delNodeInfo.tableDef.Partition != nil {
 			// 	lockTarget.IsPartitionTable = true
@@ -3553,7 +3556,9 @@ func makePreUpdateDeletePlan(
 		PrimaryColIdxInBat: int32(pkPos),
 		PrimaryColTyp:      pkTyp,
 		RefreshTsIdxInBat:  -1,
-		LockTable:          false,
+		LockTable:          delCtx.lockTable,
+		LockRows:           delCtx.lockRows,
+		LockTableAtTheEnd:  getLockTableAtTheEnd(delCtx.tableDef),
 	}
 	if delCtx.tableDef.Partition != nil {
 		lockTarget.IsPartitionTable = true
@@ -3642,7 +3647,9 @@ func makePreUpdateDeletePlan(
 			PrimaryColIdxInBat: newPkPos,
 			PrimaryColTyp:      pkTyp,
 			RefreshTsIdxInBat:  -1, //unsupport now
-			LockTable:          false,
+			LockTable:          delCtx.lockTable,
+			LockRows:           delCtx.lockRows,
+			LockTableAtTheEnd:  getLockTableAtTheEnd(delCtx.tableDef),
 		}
 		if delCtx.tableDef.Partition != nil {
 			lockTarget.IsPartitionTable = true
@@ -3734,6 +3741,7 @@ func appendLockNode(
 		RefreshTsIdxInBat:  -1, //unsupport now
 		LockTable:          lockTable,
 		Block:              block,
+		LockTableAtTheEnd:  getLockTableAtTheEnd(tableDef),
 	}
 
 	if !lockTable && tableDef.Partition != nil {
@@ -4195,4 +4203,8 @@ func IsForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
 	} else {
 		return false, moerr.NewInternalError(ctx.GetContext(), "invalid  %v ", value)
 	}
+}
+
+func getLockTableAtTheEnd(tableDef *TableDef) bool {
+	return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
 }

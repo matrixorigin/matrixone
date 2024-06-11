@@ -93,6 +93,7 @@ select * from su_01 where c1=7 for update;
 -- @session:id=1{
 use select_for_update;
 select * from su_01;
+-- @wait:0:commit
 delete from su_01 where c1=7;
 -- @session}
 commit;
@@ -102,6 +103,7 @@ select * from su_01 where c1=7 for update;
 -- @session:id=1{
 use select_for_update;
 select * from su_01;
+-- @wait:0:commit
 update su_01 set c3=c3*10 where c1=1;
 -- @session}
 commit;
@@ -499,6 +501,7 @@ begin;
 select * from su_04 where c2='kelly' for update;
 -- @session:id=1{
 use select_for_update;
+-- @wait:0:commit
 delete from su_04 where c1=4;
 select * from su_04;
 -- @session}
@@ -695,6 +698,7 @@ select * from su_06 where c1>=2 for update;
 use select_for_update;
 prepare stmt1 from 'delete from su_06 where c3 in (?)';
 set @var = 3;
+-- @wait:0:commit
 execute stmt1 using @var;
 select * from su_06;
 -- @session}
