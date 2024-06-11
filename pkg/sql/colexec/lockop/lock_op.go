@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -528,6 +529,10 @@ func doLock(
 	// if has no conflict, lockedTS means the latest commit ts of this table
 	lockedTS := result.Timestamp
 
+	logutil.Infof("xxxx txn:%s, doLock , result.HasConflict:%v, result.HasPrevCommit:%v, snapshotTS:%s, lockedTS:%s, isRC:%v, isRetry:%v",
+		txnOp.Txn().DebugString(), result.HasConflict, result.HasPrevCommit,
+		snapshotTS.DebugString(), lockedTS.DebugString(), txnOp.Txn().IsRCIsolation(), txnOp.IsRetry())
+
 	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
 	if !result.HasConflict &&
 		snapshotTS.LessEq(lockedTS) && // only retry when snapshotTS <= lockedTS, means lost some update in rc mode.
@@ -560,6 +565,7 @@ func doLock(
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 				return false, false, timestamp.Timestamp{}, err
 			}
+			logutil.Infof("xxxx txn:%s doLock, changed.", txnOp.Txn().DebugString())
 			return true, false, newSnapshotTS, nil
 		}
 	}
@@ -975,6 +981,7 @@ func lockTalbeIfLockCountIsZero(
 				if err != nil {
 					return err
 				} else if arg.rt.retryError != nil {
+					logutil.Infof("xxxx txn:%s, lockop retry", proc.TxnOperator.Txn().DebugString())
 					if arg.rt.defChanged {
 						arg.rt.retryError = retryWithDefChangedError
 					}

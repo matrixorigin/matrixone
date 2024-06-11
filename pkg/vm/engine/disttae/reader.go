@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -655,21 +656,41 @@ func (r *blockMergeReader) Read(
 	expr *plan.Expr,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
-) (*batch.Batch, error) {
+) (result *batch.Batch, err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnBlockMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	defer func() {
+		if regexp.MustCompile(`.*sbtest.*`).MatchString(r.table.tableName) {
+			bat := ""
+			len := 0
+			if result != nil {
+				bat = common.MoBatchToString(result, 10)
+				len = result.RowCount()
+			}
+			logutil.Infof("xxxx blockMergeReader reads:"+
+				"txn:%s, table:%s, batch:%s, len:%d, err:%v",
+				r.table.db.op.Txn().DebugString(),
+				r.table.tableName,
+				bat,
+				len,
+				err)
+		}
+
+	}()
+
 	//prefetch deletes for r.blks
-	if err := r.prefetchDeletes(); err != nil {
-		return nil, err
+	if err = r.prefetchDeletes(); err != nil {
+		return
 	}
 	//load deletes for the specified block
-	if err := r.loadDeletes(ctx, cols); err != nil {
-		return nil, err
+	if err = r.loadDeletes(ctx, cols); err != nil {
+		return
 	}
-	return r.blockReader.Read(ctx, cols, expr, mp, vp)
+	result, err = r.blockReader.Read(ctx, cols, expr, mp, vp)
+	return 
 }
 
 // -----------------------------------------------------------------
