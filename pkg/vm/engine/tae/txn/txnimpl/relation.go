@@ -175,12 +175,12 @@ func (h *txnRelation) GetObject(id *types.Objectid) (obj handle.Object, err erro
 	return h.Txn.GetStore().GetObject(fp)
 }
 
-func (h *txnRelation) CreateObject(is1PC bool) (obj handle.Object, err error) {
-	return h.Txn.GetStore().CreateObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
+func (h *txnRelation) CreateObject() (obj handle.Object, err error) {
+	return h.Txn.GetStore().CreateObject(h.table.entry.GetDB().ID, h.table.entry.GetID())
 }
 
-func (h *txnRelation) CreateNonAppendableObject(is1PC bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
-	return h.Txn.GetStore().CreateNonAppendableObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC, opt)
+func (h *txnRelation) CreateNonAppendableObject(opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
+	return h.Txn.GetStore().CreateNonAppendableObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), opt)
 }
 
 func (h *txnRelation) SoftDeleteObject(id *types.Objectid) (err error) {
