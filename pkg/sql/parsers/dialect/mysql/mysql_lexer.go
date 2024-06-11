@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -99,6 +100,13 @@ func (l *Lexer) Lex(lval *yySymType) int {
 
 	lval.str = str
 	return typ
+}
+
+func (l *Lexer) GetDbOrTblName(origin string) string {
+	if l.lower == 1 {
+		return strings.ToLower(origin)
+	}
+	return origin
 }
 
 func (l *Lexer) Error(err string) {
