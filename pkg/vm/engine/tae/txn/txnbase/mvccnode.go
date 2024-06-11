@@ -29,7 +29,6 @@ type TxnMVCCNode struct {
 	Start, Prepare, End types.TS
 	Txn                 txnif.TxnReader
 	Aborted             bool
-	is1PC               bool // for subTxn
 }
 
 var (
@@ -69,12 +68,6 @@ func NewTxnMVCCNodeWithStartEnd(start, end types.TS) *TxnMVCCNode {
 }
 func (un *TxnMVCCNode) IsAborted() bool {
 	return un.Aborted
-}
-func (un *TxnMVCCNode) Is1PC() bool {
-	return un.is1PC
-}
-func (un *TxnMVCCNode) Set1PC() {
-	un.is1PC = true
 }
 
 // Check w-w confilct
@@ -321,11 +314,7 @@ func (un *TxnMVCCNode) ApplyCommit(id string) (ts types.TS, err error) {
 	if un.Txn.GetID() != id {
 		err = moerr.NewMissingTxnNoCtx()
 	}
-	if un.Is1PC() {
-		un.End = un.Txn.GetPrepareTS()
-	} else {
-		un.End = un.Txn.GetCommitTS()
-	}
+	un.End = un.Txn.GetCommitTS()
 	un.Txn = nil
 	ts = un.End
 	return
@@ -358,7 +347,8 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += int64(sn1)
-	if sn1, err = w.Write(types.EncodeBool(&un.is1PC)); err != nil {
+	var is1PC bool
+	if sn1, err = w.Write(types.EncodeBool(&is1PC)); err != nil {
 		return
 	}
 	n += int64(sn1)
@@ -380,7 +370,8 @@ func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += int64(sn)
 
-	if sn, err = r.Read(types.EncodeBool(&un.is1PC)); err != nil {
+	var is1PC bool
+	if sn, err = r.Read(types.EncodeBool(&is1PC)); err != nil {
 		return
 	}
 	n += int64(sn)

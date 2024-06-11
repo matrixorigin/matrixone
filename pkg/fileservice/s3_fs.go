@@ -604,7 +604,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 			return nil, err
 		}
 		defer reader.Close()
+		tStart := time.Now()
 		bs, err = io.ReadAll(reader)
+		metric.FSReadDurationIOReadAll.Observe(time.Since(tStart).Seconds())
 		if err != nil {
 			return nil, err
 		}
