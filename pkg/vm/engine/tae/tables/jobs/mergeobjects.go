@@ -325,7 +325,7 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *
 	for _, stats := range entry.CreatedObjs {
 		stats := objectio.ObjectStats(stats)
 		objID := stats.ObjectName().ObjectId()
-		obj, err := rel.CreateNonAppendableObject(false, new(objectio.CreateObjOpt).WithId(objID))
+		obj, err := rel.CreateNonAppendableObject(new(objectio.CreateObjOpt).WithId(objID))
 		if err != nil {
 			return nil, err
 		}

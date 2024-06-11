@@ -360,6 +360,7 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 		if bats != nil {
 			objectCount = bats[ObjectList].Length()
 			tombstoneCount = bats[TombstoneList].Length()
+			t.closeBatch(bats)
 		}
 		logutil.Info("[DiskCleaner]", zap.String("op", "SaveFullTable-End"),
 			zap.String("collect cost :", collectCost.String()),
@@ -371,7 +372,6 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 	bats = t.collectData(files)
 	collectCost = time.Since(now)
 	now = time.Now()
-	defer t.closeBatch(bats)
 	name := blockio.EncodeGCMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
 	writer, err = objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
 	if err != nil {
