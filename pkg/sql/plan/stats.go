@@ -643,23 +643,6 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 	}
 
-	if builder.optimizerHints != nil && builder.optimizerHints.execType != 0 {
-		switch builder.optimizerHints.execType {
-		case 1:
-			node.Stats = DefaultMinimalStats()
-		case 2:
-			node.Stats = DefaultBigStats()
-		case 3:
-			node.Stats = DefaultHugeStats()
-		default:
-			panic("wrong optimizer hints for execType!")
-		}
-		if needResetHashMapStats {
-			resetHashMapStats(node.Stats)
-		}
-		return
-	}
-
 	var leftStats, rightStats, childStats *Stats
 	if len(node.Children) == 1 {
 		childStats = builder.qry.Nodes[node.Children[0]].Stats
@@ -1190,11 +1173,10 @@ func DefaultMinimalStats() *plan.Stats {
 func resetHashMapStats(stats *plan.Stats) {
 	if stats.HashmapStats == nil {
 		stats.HashmapStats = &plan.HashMapStats{}
-	} else {
-		stats.HashmapStats.HashmapSize = 0
-		stats.HashmapStats.HashOnPK = false
-		stats.HashmapStats.Shuffle = false
 	}
+	stats.HashmapStats.HashmapSize = 1
+	stats.HashmapStats.HashOnPK = false
+	stats.HashmapStats.Shuffle = false
 }
 
 func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive bool) {
@@ -1227,7 +1209,9 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 		//right joins does not support non equal join for now
-		if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
+		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
+			node.BuildOnLeft = false
+		} else if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
 			node.BuildOnLeft = true
 		}
 	}
@@ -1397,4 +1381,22 @@ func (builder *QueryBuilder) canSkipStats() bool {
 	}
 	scan := builder.qry.Nodes[agg.Children[0]]
 	return scan.NodeType == plan.Node_TABLE_SCAN
+}
+
+func (builder *QueryBuilder) hintQueryType() {
+	if builder.optimizerHints != nil && builder.optimizerHints.execType != 0 {
+		for _, node := range builder.qry.GetNodes() {
+			switch builder.optimizerHints.execType {
+			case 1:
+				*node.Stats = *DefaultMinimalStats()
+			case 2:
+				*node.Stats = *DefaultBigStats()
+			case 3:
+				*node.Stats = *DefaultHugeStats()
+			default:
+				panic("wrong optimizer hints for execType!")
+			}
+		}
+		return
+	}
 }
