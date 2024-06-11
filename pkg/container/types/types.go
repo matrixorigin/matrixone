@@ -677,11 +677,11 @@ func (t T) String() string {
 	case T_tuple:
 		return "TUPLE"
 	case T_decimal64:
-		return "DECIMAL"
+		return "DECIMAL64"
 	case T_decimal128:
-		return "DECIMAL"
+		return "DECIMAL128"
 	case T_decimal256:
-		return "DECIMAL"
+		return "DECIMAL256"
 	case T_blob:
 		return "BLOB"
 	case T_text:

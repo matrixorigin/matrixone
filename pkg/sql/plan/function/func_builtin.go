@@ -163,7 +163,14 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			ret := fmt.Sprintf("%s(%d)", typ.String(), typ.Width)
+
+			ts := typ.String()
+			// after decimal fix, remove this
+			if typ.Oid.IsDecimal() {
+				ts = "DECIMAL"
+			}
+
+			ret := fmt.Sprintf("%s(%d)", ts, typ.Width)
 			return functionUtil.QuickStrToBytes(ret), nil
 		}
 	}
