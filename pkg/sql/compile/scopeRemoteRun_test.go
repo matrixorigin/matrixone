@@ -164,7 +164,7 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 func Test_EncodeProcessInfo(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOperator.EXPECT().Snapshot().Return(([]byte)("test"), nil)
+	txnOperator.EXPECT().Snapshot().AnyTimes()
 
 	a := reuse.Alloc[process.AnalyzeInfo](nil)
 	proc := &process.Process{

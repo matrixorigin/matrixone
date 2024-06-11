@@ -31,7 +31,7 @@ type RPCRequest struct {
 
 var _ morpc.PayloadMessage = (*RPCRequest)(nil)
 
-func (r *RPCRequest) Size() int {
+func (r *RPCRequest) ProtoSize() int {
 	return r.Request.ProtoSize() + len(r.payload)
 }
 
