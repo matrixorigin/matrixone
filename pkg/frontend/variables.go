@@ -3513,14 +3513,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int64(0),
 	},
-	"experimental_master_index": {
-		Name:              "experimental_master_index",
-		Scope:             ScopeBoth,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableBoolType("experimental_master_index"),
-		Default:           int64(0),
-	},
 	"refresh_global_sys_vars_mgr": {
 		Name:              "refresh_global_sys_vars_mgr",
 		Scope:             ScopeBoth,

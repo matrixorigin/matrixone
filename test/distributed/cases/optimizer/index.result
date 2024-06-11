@@ -1,4 +1,3 @@
-SET experimental_master_index = 1;
 drop database if exists d1;
 create database d1;
 use d1;
@@ -174,4 +173,3 @@ a    b
 1    1
 2    2
 drop database if exists d1;
-SET experimental_master_index = 0;

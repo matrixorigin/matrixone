@@ -344,7 +344,8 @@ func buildSourceDefs(stmt *tree.CreateSource, ctx CompilerContext, createStream 
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
 	viewName := stmt.Name.ObjectName
-	createTable := &plan.CreateTable{
+
+	createView := &plan.CreateView{
 		Replace:     stmt.Replace,
 		IfNotExists: stmt.IfNotExists,
 		TableDef: &TableDef{
@@ -354,12 +355,12 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 
 	// get database name
 	if len(stmt.Name.SchemaName) == 0 {
-		createTable.Database = ""
+		createView.Database = ""
 	} else {
-		createTable.Database = string(stmt.Name.SchemaName)
+		createView.Database = string(stmt.Name.SchemaName)
 	}
-	if len(createTable.Database) == 0 {
-		createTable.Database = ctx.DefaultDatabase()
+	if len(createView.Database) == 0 {
+		createView.Database = ctx.DefaultDatabase()
 	}
 
 	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
@@ -367,7 +368,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		snapshot = ctx.GetSnapshot()
 	}
 
-	if sub, err := ctx.GetSubscriptionMeta(createTable.Database, *snapshot); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(createView.Database, *snapshot); err != nil {
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
@@ -378,16 +379,16 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		return nil, err
 	}
 
-	createTable.TableDef.Cols = tableDef.Cols
-	createTable.TableDef.ViewSql = tableDef.ViewSql
-	createTable.TableDef.Defs = tableDef.Defs
+	createView.TableDef.Cols = tableDef.Cols
+	createView.TableDef.ViewSql = tableDef.ViewSql
+	createView.TableDef.Defs = tableDef.Defs
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
-				DdlType: plan.DataDefinition_CREATE_TABLE,
-				Definition: &plan.DataDefinition_CreateTable{
-					CreateTable: createTable,
+				DdlType: plan.DataDefinition_CREATE_VIEW,
+				Definition: &plan.DataDefinition_CreateView{
+					CreateView: createView,
 				},
 			},
 		},
