@@ -22,6 +22,8 @@ import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "metadata.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = false;
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
 
 message Request {
   uint64 requestID = 1;

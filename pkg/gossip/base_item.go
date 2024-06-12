@@ -89,7 +89,7 @@ func (s *BaseStore[K]) Data(limit int) ([]gossip.CommonItem, int) {
 		s.queueMu.Unlock()
 		return nil, limit
 	}
-	sz := s.queueMu.itemQueue[0].Size()
+	sz := s.queueMu.itemQueue[0].ProtoSize()
 	limitCount := limit / sz
 	var leftSize int
 	if count < limitCount {

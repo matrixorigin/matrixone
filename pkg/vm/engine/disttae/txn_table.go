@@ -149,58 +149,18 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 	var rows uint64
 	deletes := make(map[types.Rowid]struct{})
-	tbl.getTxn().forEachTableWrites(
-		tbl.db.databaseId,
-		tbl.tableId,
-		tbl.getTxn().GetSnapshotWriteOffset(),
-		func(entry Entry) {
-			if entry.typ == INSERT || entry.typ == INSERT_TXN {
-				rows = rows + uint64(entry.bat.RowCount())
-			} else {
-				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-					/*
-						CASE:
-						create table t1(a int);
-						begin;
-						truncate t1; //txnDatabase.Truncate will DELETE mo_tables
-						show tables; // t1 must be shown
-					*/
-					if entry.databaseId == catalog.MO_CATALOG_ID &&
-						entry.tableId == catalog.MO_TABLES_ID &&
-						entry.truncate {
-						return
-					}
-					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-					for _, v := range vs {
-						deletes[v] = struct{}{}
-					}
-				}
-			}
-		})
 
-	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
-	partition, err := tbl.getPartitionState(ctx)
+	rows += tbl.getUncommittedRows(deletes)
+
+	v, err := tbl.getCommittedRows(
+		ctx,
+		deletes,
+	)
 	if err != nil {
 		return 0, err
 	}
-	iter := partition.NewRowsIter(ts, nil, false)
-	defer func() { _ = iter.Close() }()
-	for iter.Next() {
-		entry := iter.Entry()
-		if _, ok := deletes[entry.RowID]; ok {
-			continue
-		}
-		rows++
-	}
-	//s := e.Stats(ctx, pb.StatsInfoKey{
-	//	DatabaseID: tbl.db.databaseId,
-	//	TableID:    tbl.tableId,
-	//}, true)
-	s, _ := tbl.Stats(ctx, true)
-	if s == nil {
-		return rows, nil
-	}
-	return uint64(s.TableCnt) + rows, nil
+
+	return v + rows, nil
 }
 
 func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error) {
@@ -2748,4 +2708,66 @@ func cutBetween(s, start, end string) string {
 		}
 	}
 	return ""
+}
+
+func (tbl *txnTable) getUncommittedRows(
+	deletes map[types.Rowid]struct{},
+) uint64 {
+	rows := uint64(0)
+	tbl.getTxn().forEachTableWrites(
+		tbl.db.databaseId,
+		tbl.tableId,
+		tbl.getTxn().GetSnapshotWriteOffset(),
+		func(entry Entry) {
+			if entry.typ == INSERT || entry.typ == INSERT_TXN {
+				rows = rows + uint64(entry.bat.RowCount())
+			} else {
+				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+					/*
+						CASE:
+						create table t1(a int);
+						begin;
+						truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+						show tables; // t1 must be shown
+					*/
+					if entry.databaseId == catalog.MO_CATALOG_ID &&
+						entry.tableId == catalog.MO_TABLES_ID &&
+						entry.truncate {
+						return
+					}
+					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+					for _, v := range vs {
+						deletes[v] = struct{}{}
+					}
+				}
+			}
+		},
+	)
+	return rows
+}
+
+func (tbl *txnTable) getCommittedRows(
+	ctx context.Context,
+	deletes map[types.Rowid]struct{},
+) (uint64, error) {
+	rows := uint64(0)
+	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
+	partition, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return 0, err
+	}
+	iter := partition.NewRowsIter(ts, nil, false)
+	defer func() { _ = iter.Close() }()
+	for iter.Next() {
+		entry := iter.Entry()
+		if _, ok := deletes[entry.RowID]; ok {
+			continue
+		}
+		rows++
+	}
+	s, _ := tbl.Stats(ctx, true)
+	if s == nil {
+		return rows, nil
+	}
+	return uint64(s.TableCnt) + rows, nil
 }
