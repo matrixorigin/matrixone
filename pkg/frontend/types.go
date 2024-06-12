@@ -23,6 +23,9 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,8 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -337,8 +338,10 @@ type FeSession interface {
 	ResetFPrints()
 	EnterFPrint(idx int)
 	ExitFPrint(idx int)
-	SetStaticTxnId(id []byte)
-	GetStaticTxnId() uuid.UUID
+	//SetStaticTxnId(id []byte)
+	//GetStaticTxnId() uuid.UUID
+	SetStaticTxnInfo(info string)
+	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	SessionLogger
 }
@@ -457,6 +460,8 @@ type feSessionImpl struct {
 	respr        Responser
 	//refreshed once
 	staticTxnId uuid.UUID
+	//txn info
+	txnInfo string
 }
 
 func (ses *feSessionImpl) EnterFPrint(idx int) {
@@ -856,11 +861,12 @@ func (ses *feSessionImpl) GetResponser() Responser {
 	return ses.respr
 }
 
-func (ses *feSessionImpl) SetStaticTxnId(id []byte) {
-	copy(ses.staticTxnId[:], id)
+func (ses *feSessionImpl) SetStaticTxnInfo(info string) {
+	ses.txnInfo = info
 }
-func (ses *feSessionImpl) GetStaticTxnId() uuid.UUID {
-	return ses.staticTxnId
+
+func (ses *feSessionImpl) GetStaticTxnInfo() string {
+	return ses.txnInfo
 }
 
 func (ses *Session) GetDebugString() string {

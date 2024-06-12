@@ -107,6 +107,8 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 		err = ses.GetTxnHandler().Commit(execCtx)
 		if err != nil {
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
+		} else {
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, success, nil)
 		}
 	} else if execCtx.txnOpt.byRollback {
 		//roll back the txn by the ROLLBACK statement
@@ -119,6 +121,8 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 		if execErr == nil {
 			err = commitTxnFunc(ses, execCtx)
 			if err == nil {
+				//TODO::
+				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, success, nil)
 				return err
 			}
 			// if commitTxnFunc failed, we will roll back the transaction.
@@ -504,12 +508,16 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	if th.txnOp != nil {
 		execCtx.ses.EnterFPrint(79)
 		defer execCtx.ses.ExitFPrint(79)
-		commitTs := th.txnOp.Txn().CommitTS
-		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		//commitTs := th.txnOp.Txn().CommitTS
+		//execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		err = th.txnOp.Commit(ctx2)
 		if err != nil {
 			th.invalidateTxnUnsafe()
 		}
+		commitTs := th.txnOp.Txn().CommitTS
+		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		execCtx.ses.SetStaticTxnInfo(th.txnOp.Txn().DebugString())
+
 		execCtx.ses.updateLastCommitTS(commitTs)
 	}
 	th.invalidateTxnUnsafe()

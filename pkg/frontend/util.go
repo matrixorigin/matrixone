@@ -497,13 +497,13 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 
 	}
 
+	txnInfo := ses.GetStaticTxnInfo()
 	if status == success {
-		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
+		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()), logutil.TxnIdField(txnInfo))
 		err = nil // make sure: it is nil for EndStatement
 	} else {
-		txnId := ses.GetStaticTxnId()
 		ses.Error(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err),
-			logutil.TxnIdField(hex.EncodeToString(txnId[:])))
+			logutil.TxnIdField(txnInfo))
 	}
 
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
