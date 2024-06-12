@@ -514,24 +514,24 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 
 	result := processHelper{
 		id:               procInfo.Id,
-		lim:              convertToProcessLimitation(procInfo.Lim),
+		lim:              process.ConvertToProcessLimitation(procInfo.Lim),
 		unixTime:         procInfo.UnixTime,
 		accountId:        procInfo.AccountId,
 		txnClient:        cli,
 		analysisNodeList: procInfo.GetAnalysisNodeList(),
 	}
-	result.txnOperator, err = cli.NewWithSnapshot([]byte(procInfo.Snapshot))
+	result.txnOperator, err = cli.NewWithSnapshot(procInfo.Snapshot)
 	if err != nil {
 		return processHelper{}, err
 	}
-	result.sessionInfo, err = convertToProcessSessionInfo(procInfo.SessionInfo)
+	result.sessionInfo, err = process.ConvertToProcessSessionInfo(procInfo.SessionInfo)
 	if err != nil {
 		return processHelper{}, err
 	}
-	if sessLogger := procInfo.SessionLogger; sessLogger != nil {
+	if sessLogger := procInfo.SessionLogger; len(sessLogger.SessId) > 0 {
 		copy(result.sessionInfo.SessionId[:], sessLogger.SessId)
 		copy(result.StmtId[:], sessLogger.StmtId)
-		result.sessionInfo.LogLevel = enumLogLevel2ZapLogLevel(sessLogger.LogLevel)
+		result.sessionInfo.LogLevel = process.EnumLogLevel2ZapLogLevel(sessLogger.LogLevel)
 		// txnId, ignore. more in txnOperator.
 	}
 
