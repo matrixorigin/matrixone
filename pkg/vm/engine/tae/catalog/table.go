@@ -279,13 +279,6 @@ func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	defer entry.RUnlock()
 	return newTableCmd(id, cmdType, entry), nil
 }
-
-func (entry *TableEntry) Set1PC() {
-	entry.GetLatestNodeLocked().Set1PC()
-}
-func (entry *TableEntry) Is1PC() bool {
-	return entry.GetLatestNodeLocked().Is1PC()
-}
 func (entry *TableEntry) AddEntryLocked(objectEntry *ObjectEntry) {
 	n := entry.link.Insert(objectEntry)
 	entry.entries[objectEntry.ID] = n

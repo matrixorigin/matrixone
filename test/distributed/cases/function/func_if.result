@@ -255,3 +255,4 @@ if(c = 0, if(b = 0, a, a / b), if(b = 0, a / c, a / b / c))
 0.3333333333333333
 0.16666666666666666
 DROP TABLE t1;
+SET TIME_ZONE = "SYSTEM";

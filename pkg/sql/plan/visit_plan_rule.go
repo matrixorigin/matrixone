@@ -97,6 +97,11 @@ func (rule *GetParamRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		*/
 		return e, nil
+	case *plan.Expr_List:
+		for i := range exprImpl.List.List {
+			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
+		}
+		return e, nil
 	default:
 		return e, nil
 	}
@@ -149,6 +154,11 @@ func (rule *ResetParamOrderRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		return e, nil
 	case *plan.Expr_P:
 		exprImpl.P.Pos = int32(rule.params[int(exprImpl.P.Pos)])
+		return e, nil
+	case *plan.Expr_List:
+		for i := range exprImpl.List.List {
+			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
+		}
 		return e, nil
 	default:
 		return e, nil
@@ -206,6 +216,14 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 			Typ:  e.Typ,
 			Expr: rule.params[int(exprImpl.P.Pos)].Expr,
 		}, nil
+	case *plan.Expr_List:
+		for i, arg := range exprImpl.List.List {
+			exprImpl.List.List[i], err = rule.ApplyExpr(arg)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return e, nil
 	default:
 		return e, nil
 	}

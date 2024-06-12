@@ -107,7 +107,7 @@ type ReadFunc func(
 	ctx context.Context,
 	shard pb.TableShard,
 	engine engine.Engine,
-	payload []byte,
+	param pb.ReadParam,
 	ts timestamp.Timestamp,
 ) ([]byte, error)
 
@@ -130,7 +130,7 @@ type ShardStorage interface {
 	// Ensure that subsequent reads have full log tail data.
 	WaitLogAppliedAt(ctx context.Context, ts timestamp.Timestamp) error
 	// Read read data with the given timestamp
-	Read(ctx context.Context, shard pb.TableShard, method int, payload []byte, ts timestamp.Timestamp) ([]byte, error)
+	Read(ctx context.Context, shard pb.TableShard, method int, param pb.ReadParam, ts timestamp.Timestamp) ([]byte, error)
 }
 
 var (
@@ -154,6 +154,6 @@ const (
 type ReadRequest struct {
 	TableID uint64
 	Method  int
-	Data    []byte
+	Param   pb.ReadParam
 	Apply   func([]byte)
 }
