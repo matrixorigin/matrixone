@@ -78,7 +78,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
 	// }
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 	if stmt.IsRestore {
 		oldSnapshot := builder.compCtx.GetSnapshot()
@@ -97,6 +97,10 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	ifExistAutoPkCol, insertWithoutUniqueKeyMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
+	}
+	replaceStmt := getRewriteToReplaceStmt(tableDef, stmt, rewriteInfo, isPrepareStmt)
+	if replaceStmt != nil {
+		return buildReplace(replaceStmt, ctx, isPrepareStmt, true)
 	}
 	lastNodeId := rewriteInfo.rootId
 	sourceStep := builder.appendStep(lastNodeId)
@@ -904,4 +908,50 @@ func remapPartExprColRef(expr *Expr, colMap map[int]int, tableDef *TableDef) boo
 		}
 	}
 	return true
+}
+
+func getRewriteToReplaceStmt(tableDef *TableDef, stmt *tree.Insert, info *dmlSelectInfo, isPrepareStmt bool) *tree.Replace {
+	if len(info.onDuplicateIdx) == 0 {
+		return nil
+	}
+	if _, ok := stmt.Rows.Select.(*tree.ValuesClause); !ok {
+		return nil
+	}
+	if isPrepareStmt {
+		return nil
+	}
+	canUpdateCols := make([]string, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col.Hidden {
+			continue
+		}
+		canUpdateCols = append(canUpdateCols, col.Name)
+	}
+	if len(info.onDuplicateExpr) != len(canUpdateCols) {
+		return nil
+	}
+
+	for colName, colExpr := range info.onDuplicateExpr {
+		isUpdateSelf := false
+		if expr, ok := colExpr.Expr.(*plan.Expr_F); ok {
+			if expr.F.Func.GetObjName() == "values" {
+				if cExpr, ok := expr.F.Args[0].Expr.(*plan.Expr_Col); ok {
+					if cExpr.Col.Name == colName {
+						isUpdateSelf = true
+					}
+				}
+			}
+		}
+		if !isUpdateSelf {
+			return nil
+		}
+	}
+
+	replaceStmt := &tree.Replace{
+		Table:          stmt.Table,
+		PartitionNames: stmt.PartitionNames,
+		Columns:        stmt.Columns,
+		Rows:           stmt.Rows,
+	}
+	return replaceStmt
 }

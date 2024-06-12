@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"hash/crc32"
 	"runtime"
 	"sync/atomic"
@@ -257,7 +258,7 @@ func (sender *messageSenderOnClient) close() {
 		sender.ctxCancel()
 	}
 	// XXX not a good way to deal it if close failed.
-	_ = sender.streamSender.Close(false)
+	_ = sender.streamSender.Close(true)
 }
 
 // messageReceiverOnServer is a structure
@@ -400,7 +401,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c.addr = receiver.cnInformation.cnAddr
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 	c.ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
-
+	c.execType = plan2.ExecTypeAP_MULTICN
 	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)
 	}
@@ -513,24 +514,24 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 
 	result := processHelper{
 		id:               procInfo.Id,
-		lim:              convertToProcessLimitation(procInfo.Lim),
+		lim:              process.ConvertToProcessLimitation(procInfo.Lim),
 		unixTime:         procInfo.UnixTime,
 		accountId:        procInfo.AccountId,
 		txnClient:        cli,
 		analysisNodeList: procInfo.GetAnalysisNodeList(),
 	}
-	result.txnOperator, err = cli.NewWithSnapshot([]byte(procInfo.Snapshot))
+	result.txnOperator, err = cli.NewWithSnapshot(procInfo.Snapshot)
 	if err != nil {
 		return processHelper{}, err
 	}
-	result.sessionInfo, err = convertToProcessSessionInfo(procInfo.SessionInfo)
+	result.sessionInfo, err = process.ConvertToProcessSessionInfo(procInfo.SessionInfo)
 	if err != nil {
 		return processHelper{}, err
 	}
-	if sessLogger := procInfo.SessionLogger; sessLogger != nil {
+	if sessLogger := procInfo.SessionLogger; len(sessLogger.SessId) > 0 {
 		copy(result.sessionInfo.SessionId[:], sessLogger.SessId)
 		copy(result.StmtId[:], sessLogger.StmtId)
-		result.sessionInfo.LogLevel = enumLogLevel2ZapLogLevel(sessLogger.LogLevel)
+		result.sessionInfo.LogLevel = process.EnumLogLevel2ZapLogLevel(sessLogger.LogLevel)
 		// txnId, ignore. more in txnOperator.
 	}
 

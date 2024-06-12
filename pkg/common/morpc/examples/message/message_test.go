@@ -23,7 +23,7 @@ import (
 func TestMarshal(t *testing.T) {
 	m := &ExampleMessage{MsgID: 1, Content: "hello"}
 
-	data := make([]byte, m.Size())
+	data := make([]byte, m.ProtoSize())
 	_, err := m.MarshalTo(data)
 	assert.NoError(t, err)
 

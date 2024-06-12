@@ -35,7 +35,7 @@ type container struct {
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare
 
-	limit         int64
+	limit         uint64
 	limitExecutor colexec.ExpressionExecutor
 
 	executorsForOrderColumn []colexec.ExpressionExecutor

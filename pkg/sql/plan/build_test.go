@@ -23,12 +23,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/assert"
 )
 
 func BenchmarkInsert(b *testing.B) {
@@ -1174,4 +1175,22 @@ func Test_mergeContexts(t *testing.T) {
 	err = bc.mergeContexts(ctx, bc1, bc2)
 	assert.Error(t, err)
 	assert.EqualError(t, err, "invalid input: table 'a' specified more than once")
+}
+
+func Test_limitUint64(t *testing.T) {
+	sqls := []string{
+		"select * from t1 limit 0, 18446744073709551615",
+		"select * from t1 limit 18446744073709551615, 18446744073709551615",
+		"SELECT IFNULL(CAST(@var AS BIGINT UNSIGNED), 1)",
+	}
+	testutil.NewProc()
+	mock := NewMockOptimizer(false)
+
+	for _, sql := range sqls {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		outPutPlan(logicPlan, true, t)
+	}
 }

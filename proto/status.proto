@@ -21,6 +21,9 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/status";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "google/protobuf/timestamp.proto";
 
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
+
 enum SessionField {
 	NODE_ID = 0;
 	CONN_ID = 1;

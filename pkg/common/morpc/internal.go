@@ -37,7 +37,7 @@ func (m *flagOnlyMessage) DebugString() string {
 	return fmt.Sprintf("internal flag only message, flag %d", m.flag)
 }
 
-func (m *flagOnlyMessage) Size() int {
+func (m *flagOnlyMessage) ProtoSize() int {
 	return 8
 }
 

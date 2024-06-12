@@ -28,7 +28,7 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 		return
 	}
 
-	if node.TableDef.Pkey == nil || len(node.TableDef.Pkey.Names) == 1 {
+	if node.TableDef.Pkey == nil {
 		return
 	}
 
@@ -41,6 +41,7 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDef, tableTag int32, filters ...*plan.Expr) []*plan.Expr {
 	pkIdx := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
 	col2filter := make(map[int32]int)
+	numParts := len(tableDef.Pkey.Names)
 
 	for i, expr := range filters {
 		fn := expr.GetF()
@@ -88,8 +89,10 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				}
 
 				if subFn.Func.ObjName == "=" {
-					newArgs := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, subExpr)
-					subExpr = newArgs[0]
+					if numParts > 1 {
+						newArgs := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, subExpr)
+						subExpr = newArgs[0]
+					}
 				} else if subFn.Func.ObjName == "and" {
 					var andArgs []*plan.Expr
 					flattenLogicalExpressions(subExpr, "and", &andArgs)
@@ -103,7 +106,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				}
 
 				mergedFn := subExpr.GetF()
-				if mergedFn == nil || mergedFn.Args[0].GetCol() == nil || !isRuntimeConstExpr(mergedFn.Args[1]) {
+				if mergedFn == nil || len(mergedFn.Args) != 2 || mergedFn.Args[0].GetCol() == nil || !isRuntimeConstExpr(mergedFn.Args[1]) {
 					newOrArgs = append(newOrArgs, subExpr)
 					continue
 				}
@@ -167,7 +170,10 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 	}
 
-	numParts := len(tableDef.Pkey.Names)
+	if numParts == 1 {
+		return filters
+	}
+
 	filterIdx := make([]int, 0, numParts)
 	for _, part := range tableDef.Pkey.Names {
 		colIdx := tableDef.Name2ColIndex[part]

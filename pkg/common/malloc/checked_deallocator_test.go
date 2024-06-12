@@ -22,7 +22,7 @@ import (
 )
 
 func TestCheckedDeallocator(t *testing.T) {
-	allocator := NewClassAllocator(1)
+	allocator := NewClassAllocator(ptrTo(uint32(1)))
 
 	func() {
 		defer func() {
