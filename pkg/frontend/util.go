@@ -499,7 +499,10 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 
 	txnInfo := ses.GetStaticTxnInfo()
 	if status == success {
-		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()), logutil.TxnIdField(txnInfo))
+		sql := ses.GetSql()
+		if strings.Contains(strings.ToLower(sql), "create database sysbench_db") {
+			ses.Info(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()), logutil.TxnIdField(txnInfo))
+		}
 		err = nil // make sure: it is nil for EndStatement
 	} else {
 		ses.Error(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err),

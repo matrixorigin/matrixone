@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -121,8 +122,10 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 		if execErr == nil {
 			err = commitTxnFunc(ses, execCtx)
 			if err == nil {
-				//TODO::
-				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, success, nil)
+				sql := ses.GetSql()
+				if strings.Contains(strings.ToLower(sql), "create database sysbench_db") {
+					logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, success, nil)
+				}
 				return err
 			}
 			// if commitTxnFunc failed, we will roll back the transaction.
