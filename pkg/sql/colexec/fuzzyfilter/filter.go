@@ -262,7 +262,7 @@ func (arg *Argument) handleBuild(proc *process.Process, pkCol *vector.Vector) er
 						arg.appendCollisionKey(proc, i, pkCol)
 						return
 					}
-					logutil.Warnf("too many collision for fuzzy filter")
+					logutil.Debugf("too many collision for fuzzy filter")
 				}
 			})
 		}
@@ -313,7 +313,7 @@ func (arg *Argument) handleProbe(proc *process.Process, pkCol *vector.Vector) er
 						arg.appendCollisionKey(proc, i, pkCol)
 						return
 					}
-					logutil.Warnf("too many collision for fuzzy filter")
+					logutil.Debugf("too many collision for fuzzy filter")
 				}
 			})
 		}

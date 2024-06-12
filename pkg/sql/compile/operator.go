@@ -564,8 +564,8 @@ func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.Argume
 	// 	arg.BuildIdx = 0 // build on tableScan
 	// 	arg.N = sinkScan.Stats.Outcnt + tableScan.Stats.Outcnt
 	// } else {
-		arg.BuildIdx = 1 // build on sinkScan
-		arg.N = 1.2 * sinkScan.Stats.Outcnt
+	arg.BuildIdx = 1 // build on sinkScan
+	arg.N = 1.2 * sinkScan.Stats.Outcnt
 	// }
 
 	// currently can not build runtime filter on table scan and probe it on sink scan
