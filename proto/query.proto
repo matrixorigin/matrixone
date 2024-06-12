@@ -26,6 +26,10 @@ import "statsinfo.proto";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "google/protobuf/timestamp.proto";
 
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
+
+
 enum CmdMethod {
   // Query is the common query command.
   Query = 0;

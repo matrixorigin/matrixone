@@ -91,6 +91,7 @@ func (s *service) initDistributedTAE(
 	if err != nil {
 		return err
 	}
+	s.initProcessCodecService()
 	s.initInternalSQlExecutor(internalExecutorMp)
 	s.initShardService()
 	return nil
