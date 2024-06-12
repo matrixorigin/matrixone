@@ -531,7 +531,7 @@ func doLock(
 	// if has no conflict, lockedTS means the latest commit ts of this table
 	lockedTS := result.Timestamp
 
-	pkstr := common.MoVectorToString(vec, 10, common.WithDoNotPrintBin{})
+	pkstr := common.MoVectorToString(vec, vec.Length(), common.WithDoNotPrintBin{})
 	logutil.Infof("xxxx txn:%s, doLock , pk:%s,tableID:%v, result.HasConflict:%v, result.HasPrevCommit:%v, snapshotTS:%s, lockedTS:%s, isRC:%v, isRetry:%v",
 		txnOp.Txn().DebugString(), pkstr, tableID, result.HasConflict, result.HasPrevCommit,
 		snapshotTS.DebugString(), lockedTS.DebugString(), txnOp.Txn().IsRCIsolation(),
