@@ -365,7 +365,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 // buildJoinParallelRun deal one case of scope.ParallelRun.
 // this function will create a pipeline to run a join in parallel.
 func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
-	if c.execType == plan2.ExecTypeTP {
+	if c.IsTpQuery() {
 		//tp query build scope in compile time, not runtime
 		return s, nil
 	}
@@ -477,7 +477,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	}
 
 	maxProvidedCpuNumber := goruntime.GOMAXPROCS(0)
-	if c.execType == plan2.ExecTypeTP {
+	if c.IsTpQuery() {
 		maxProvidedCpuNumber = 1
 	}
 
