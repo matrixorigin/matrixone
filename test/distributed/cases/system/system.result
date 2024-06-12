@@ -4,3 +4,5 @@ true
 select mo_memory("total") >= mo_memory("available");
 mo_memory(total) >= mo_memory(available)
 true
+select * from information_schema.files limit 1;
+empty set
