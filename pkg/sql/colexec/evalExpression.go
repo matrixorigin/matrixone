@@ -584,6 +584,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	}
 	if selectList == nil {
 		expr.selectList.AnyNull = false
+		expr.selectList.AllNull = false
 		for i := range expr.selectList.SelectList {
 			expr.selectList.SelectList[i] = true
 		}

@@ -217,7 +217,7 @@ func valueDec64Compare(
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.ShouldEvalAllRow() {
+		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -406,7 +406,7 @@ func valueDec128Compare(
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.ShouldEvalAllRow() {
+		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {

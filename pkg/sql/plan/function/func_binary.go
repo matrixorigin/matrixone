@@ -371,7 +371,7 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.ShouldEvalAllRow() {
+		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
