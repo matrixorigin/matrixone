@@ -335,6 +335,7 @@ drop snapshot sp10;
 
 
 
+-- @bvt:issue#16709
 -- abnormal test: sys restore non-sys account:acc01 to sys
 -- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test01;
@@ -370,3 +371,4 @@ drop database test01;
 -- @session
 
 drop account acc01;
+-- @bvt:issue
