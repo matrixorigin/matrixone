@@ -195,6 +195,7 @@ type OptimizerHints struct {
 	forceOneCN                 int
 	execType                   int
 	disableRightJoin           int
+	printShuffle               int
 }
 
 type CTERef struct {

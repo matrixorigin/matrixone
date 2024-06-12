@@ -855,6 +855,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.execType = value
 	case "disableRightJoin":
 		builder.optimizerHints.disableRightJoin = value
+	case "printShuffle":
+		builder.optimizerHints.printShuffle = value
 	}
 }
 

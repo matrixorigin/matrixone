@@ -1489,8 +1489,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		determineHashOnPK(rootID, builder)
 		determineShuffleMethod(rootID, builder)
 		determineShuffleMethod2(rootID, -1, builder)
-		if HasShuffleInPlan(builder.qry) {
-			logutil.Infof("has shuffle node in plan! sql %v", builder.compCtx.GetRootSql())
+		if builder.optimizerHints != nil && builder.optimizerHints.printShuffle == 1 && HasShuffleInPlan(builder.qry) {
+			logutil.Infof("has shuffle node in plan! sql: %v", builder.compCtx.GetRootSql())
 		}
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
