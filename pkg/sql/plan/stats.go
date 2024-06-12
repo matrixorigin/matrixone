@@ -1267,7 +1267,7 @@ func orSelectivity(s1, s2 float64) float64 {
 
 func HasShuffleInPlan(qry *plan.Query) bool {
 	for _, node := range qry.GetNodes() {
-		if node.Stats != nil && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
+		if node.NodeType != plan.Node_TABLE_SCAN && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
 			return true
 		}
 	}
@@ -1282,6 +1282,9 @@ func GetExecType(qry *plan.Query) ExecType {
 			return ExecTypeAP_MULTICN
 		}
 		if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
+			ret = ExecTypeAP_ONECN
+		}
+		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {
 			ret = ExecTypeAP_ONECN
 		}
 	}
