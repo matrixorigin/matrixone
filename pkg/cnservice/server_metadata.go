@@ -17,9 +17,9 @@ package cnservice
 import (
 	"path/filepath"
 
-	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/file"
+	"github.com/matrixorigin/matrixone/pkg/util/protoc"
 	"go.uber.org/zap"
 )
 

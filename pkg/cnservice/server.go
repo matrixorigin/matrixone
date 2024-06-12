@@ -65,6 +65,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func NewService(
@@ -955,4 +956,19 @@ func (l *locker) Get(
 		return false, err
 	}
 	return v == 1, nil
+}
+
+func (s *service) initProcessCodecService() {
+	runtime.ProcessLevelRuntime().SetGlobalVariables(
+		runtime.ProcessCodecService,
+		process.NewCodecService(
+			s._txnClient,
+			s.fileService,
+			s.lockService,
+			s.queryClient,
+			s._hakeeperClient,
+			s.udfService,
+			s.storeEngine,
+		),
+	)
 }
