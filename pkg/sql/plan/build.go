@@ -100,7 +100,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.Insert:
 		return buildInsert(stmt, ctx, false, isPrepareStmt)
 	case *tree.Replace:
-		return buildReplace(stmt, ctx, isPrepareStmt)
+		return buildReplace(stmt, ctx, isPrepareStmt, false)
 	case *tree.Update:
 		return buildTableUpdate(stmt, ctx, isPrepareStmt)
 	case *tree.Delete:

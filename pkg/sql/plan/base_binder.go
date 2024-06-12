@@ -1661,7 +1661,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		// and constant's value in range of column's type, then no cast was needed
 		switch args[0].Expr.(type) {
 		case *plan.Expr_Col:
-			if checkNoNeedCast(argsType[1], argsType[0], args[1]) {
+			if argsType[0].IsVarlen() && checkNoNeedCast(argsType[1], argsType[0], args[1]) {
 				argsCastType = []types.Type{argsType[0], argsType[0]}
 				fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 				if err != nil {
