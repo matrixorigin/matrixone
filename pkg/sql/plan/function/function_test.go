@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -295,11 +296,15 @@ func TestCastNanoToTimestamp(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, CastNanoToTimestamp)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TCastNanoToTimestamp)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("err info is '%s'", info))
 	}
 
+}
+
+func TCastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return CastNanoToTimestamp(ivecs, result, proc, length, nil)
 }
 
 func initCastNanoToTimestampTestCase(inputs []string, outputs []int64) []tcTemp {

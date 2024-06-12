@@ -16,14 +16,15 @@ package function
 
 import (
 	"fmt"
+	"math"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"math"
-	"testing"
 )
 
 func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
@@ -45,7 +46,7 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 				types.T_uint32.ToType(), false,
 				[]uint32{135}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInCurrentUserID)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInCurrentUserID)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -58,7 +59,7 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 				types.T_varchar.ToType(), false,
 				[]string{"test_user1"}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInCurrentUserName)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInCurrentUserName)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -71,7 +72,7 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 				types.T_uint32.ToType(), false,
 				[]uint32{246}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInCurrentAccountID)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInCurrentAccountID)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -84,7 +85,7 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 				types.T_varchar.ToType(), false,
 				[]string{"test_account2"}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInCurrentAccountName)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInCurrentAccountName)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -97,7 +98,7 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 				types.T_uint32.ToType(), false,
 				[]uint32{147}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInCurrentRoleID)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInCurrentRoleID)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -110,7 +111,7 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 				types.T_varchar.ToType(), false,
 				[]string{"test_role3"}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInCurrentRoleName)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInCurrentRoleName)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -123,7 +124,7 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 				types.T_varchar.ToType(), false,
 				[]string{"test_role3"}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInCurrentRole)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInCurrentRole)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -145,7 +146,7 @@ func Test_BuiltIn_Rpad(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"", "h", "hello#####"}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRpad)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInRpad)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -164,7 +165,7 @@ func Test_BuiltIn_Rpad(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"hello#@&#@&#@&#"}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRpad)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInRpad)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -183,7 +184,7 @@ func Test_BuiltIn_Rpad(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"hello#@&#@&#@&#", ""}, []bool{false, true}),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRpad)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInRpad)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -202,7 +203,7 @@ func Test_BuiltIn_Rpad(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"你好再见再见再见再见"}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRpad)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInRpad)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -225,7 +226,7 @@ func Test_BuiltIn_Lpad(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"h", "#####hello", "#@&#@&#@&#hello"}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLpad)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInLpad)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -244,7 +245,7 @@ func Test_BuiltIn_Lpad(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"ab12345678"}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLpad)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInLpad)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -263,7 +264,7 @@ func Test_BuiltIn_Lpad(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"再见再见再见再见你好"}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLpad)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInLpad)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -283,7 +284,7 @@ func Test_BuiltIn_Repeat(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"", "", "ab", "ababab", "", ""}, []bool{false, false, false, false, true, true}),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRepeat)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInRepeat)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -300,7 +301,7 @@ func Test_BuiltIn_Repeat(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"", "", "", "", "", ""}, []bool{true, true, true, true, true, true}),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRepeat)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInRepeat)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -323,7 +324,7 @@ func Test_BuiltIn_Serial(t *testing.T) {
 		expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"serial(true, 10)", "serial(false, 1)"}, nil),
 	}
-	tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpSerial().BuiltInSerial)
+	tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TBuiltInSerial)
 	tcc.Run()
 
 	vec := tcc.GetResultVectorDirectly()
@@ -364,7 +365,7 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 		expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"serial_full(null, 10)", "serial_full(false, null)", "serial_full(null, 120)", "serial_full(null, null)"}, nil),
 	}
-	tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpSerial().BuiltInSerialFull)
+	tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TBuiltInSerialFull)
 	tcc.Run()
 
 	vec := tcc.GetResultVectorDirectly()
@@ -471,7 +472,7 @@ func TestSerialExtract(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSerialExtract)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInSerialExtract)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -492,7 +493,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{0, 0, 1, 10, 100, 99, -1}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLn)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInLn)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -510,7 +511,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{math.Exp(-1), math.Exp(0), math.Exp(1), math.Exp(2), math.Exp(10), math.Exp(100)}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInExp)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInExp)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -528,7 +529,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{-1, 0, 1}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSin)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInSin)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -546,7 +547,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{-1, 1, -1}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInCos)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInCos)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -564,7 +565,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{0}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInTan)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInTan)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -582,7 +583,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{0}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSinh)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInSinh)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -600,7 +601,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{0}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInACos)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInACos)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -618,7 +619,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{0}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInATan)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInATan)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -641,7 +642,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{-0.7853981633974483, 0, -0.7853981633974483, 0.7853981633974483, -0.7853981633974483, 0.7853981633974483}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInATan2)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInATan2)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -664,7 +665,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{0.6826061944859853}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInLog)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -687,7 +688,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), true,
 				nil, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInLog)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -705,7 +706,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{3}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog2)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInLog2)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -723,7 +724,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), true,
 				nil, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog2)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInLog2)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -741,7 +742,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{2}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog10)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInLog10)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -759,8 +760,108 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), true,
 				nil, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog10)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TbuiltInLog10)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
+}
+
+func TbuiltInCurrentUserID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInCurrentUserID(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInCurrentUserName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInCurrentUserName(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInCurrentAccountID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInCurrentAccountID(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInCurrentAccountName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInCurrentAccountName(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInCurrentRoleID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInCurrentRoleID(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInCurrentRoleName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInCurrentRoleName(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInCurrentRole(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInCurrentRole(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInRpad(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInRpad(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInLpad(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInLpad(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInRepeat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInRepeat(ivecs, result, proc, length, nil)
+}
+
+func TBuiltInSerial(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return newOpSerial().BuiltInSerial(ivecs, result, proc, length, nil)
+}
+
+func TBuiltInSerialFull(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return newOpSerial().BuiltInSerialFull(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInSerialExtract(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInSerialExtract(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInLn(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInLn(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInExp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInExp(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInSin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInSin(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInCos(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInCos(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInTan(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInTan(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInSinh(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInSinh(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInACos(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInACos(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInATan(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInATan(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInATan2(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInATan2(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInLog(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInLog(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInLog2(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInLog2(ivecs, result, proc, length, nil)
+}
+
+func TbuiltInLog10(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return builtInLog10(ivecs, result, proc, length, nil)
 }

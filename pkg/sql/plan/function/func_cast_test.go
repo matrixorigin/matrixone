@@ -20,7 +20,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1748,7 +1750,7 @@ func TestCast(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, NewCast)
+			tc.inputs, tc.expect, TNewCast)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -1761,8 +1763,12 @@ func BenchmarkCast(b *testing.B) {
 	b.StartTimer()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, NewCast)
+			tc.inputs, tc.expect, TNewCast)
 		_ = fcTC.BenchMarkRun()
 	}
 	b.StopTimer()
+}
+
+func TNewCast(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return NewCast(ivecs, result, proc, length, nil)
 }

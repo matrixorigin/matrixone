@@ -22,12 +22,15 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/exp/constraints"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -62,7 +65,7 @@ func TestAbs(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, AbsInt64)
+			tc.inputs, tc.expect, TAbsInt64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -75,10 +78,14 @@ func BenchmarkAbsInt64(b *testing.B) {
 	b.StartTimer()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, AbsInt64)
+			tc.inputs, tc.expect, TAbsInt64)
 		_ = fcTC.BenchMarkRun()
 	}
 	b.StopTimer()
+}
+
+func TAbsInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return AbsInt64(ivecs, result, proc, length, nil)
 }
 
 func initAbsArrayTestCase() []tcTemp {
@@ -118,13 +125,17 @@ func TestAbsArray(t *testing.T) {
 		var fcTC testutil.FunctionTestCase
 		switch tc.typ {
 		case types.T_array_float32:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsArray[float32])
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TAbsArray[float32])
 		case types.T_array_float64:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsArray[float64])
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TAbsArray[float64])
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TAbsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return AbsArray[T](ivecs, result, proc, length, nil)
 }
 
 func initNormalizeL2ArrayTestCase() []tcTemp {
@@ -187,13 +198,17 @@ func TestNormalizeL2Array(t *testing.T) {
 		var fcTC testutil.FunctionTestCase
 		switch tc.typ {
 		case types.T_array_float32:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float32])
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TNormalizeL2Array[float32])
 		case types.T_array_float64:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float64])
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TNormalizeL2Array[float64])
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TNormalizeL2Array[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return NormalizeL2Array[T](ivecs, result, proc, length, nil)
 }
 
 func initSummationArrayTestCase() []tcTemp {
@@ -233,13 +248,17 @@ func TestSummationArray(t *testing.T) {
 		var fcTC testutil.FunctionTestCase
 		switch tc.typ {
 		case types.T_array_float32:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float32])
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TSummationArray[float32])
 		case types.T_array_float64:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float64])
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TSummationArray[float64])
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TSummationArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return SummationArray[T](ivecs, result, proc, length, nil)
 }
 
 func initL1NormArrayTestCase() []tcTemp {
@@ -279,13 +298,17 @@ func TestL1NormArray(t *testing.T) {
 		var fcTC testutil.FunctionTestCase
 		switch tc.typ {
 		case types.T_array_float32:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, L1NormArray[float32])
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TL1NormArray[float32])
 		case types.T_array_float64:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, L1NormArray[float64])
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TL1NormArray[float64])
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TL1NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return L1NormArray[T](ivecs, result, proc, length, nil)
 }
 
 func initL2NormArrayTestCase() []tcTemp {
@@ -325,13 +348,17 @@ func TestL2NormArray(t *testing.T) {
 		var fcTC testutil.FunctionTestCase
 		switch tc.typ {
 		case types.T_array_float32:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, L2NormArray[float32])
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TL2NormArray[float32])
 		case types.T_array_float64:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, L2NormArray[float64])
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TL2NormArray[float64])
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TL2NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return L2NormArray[T](ivecs, result, proc, length, nil)
 }
 
 func initSubVectorTestCase() []tcTemp {
@@ -509,22 +536,30 @@ func TestSubVector(t *testing.T) {
 		case types.T_array_float32:
 			switch tc.info {
 			case "2":
-				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith2Args[float32])
+				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TSubVectorWith2Args[float32])
 			case "3":
-				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith3Args[float32])
+				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TSubVectorWith3Args[float32])
 			}
 		case types.T_array_float64:
 			switch tc.info {
 			case "2":
-				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith2Args[float64])
+				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TSubVectorWith2Args[float64])
 			case "3":
-				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith3Args[float64])
+				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TSubVectorWith3Args[float64])
 			}
 		}
 
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TSubVectorWith2Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return SubVectorWith2Args[T](ivecs, result, proc, length, nil)
+}
+
+func TSubVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return SubVectorWith3Args[T](ivecs, result, proc, length, nil)
 }
 
 func initAsciiStringTestCase() []tcTemp {
@@ -550,10 +585,14 @@ func TestAsciiString(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, AsciiString)
+			tc.inputs, tc.expect, TAsciiString)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TAsciiString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return AsciiString(ivecs, result, proc, length, nil)
 }
 
 func initAsciiIntTestCase() []tcTemp {
@@ -579,10 +618,14 @@ func TestAsciiInt(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, AsciiInt[int64])
+			tc.inputs, tc.expect, TAsciiInt[int64])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TAsciiInt[T types.Ints](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return AsciiInt[T](ivecs, result, proc, length, nil)
 }
 
 func initAsciiUintTestCase() []tcTemp {
@@ -608,10 +651,14 @@ func TestAsciiUint(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, AsciiUint[uint64])
+			tc.inputs, tc.expect, TAsciiUint[uint64])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TAsciiUint[T types.UInts](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return AsciiUint[T](ivecs, result, proc, length, nil)
 }
 
 func initBinTestCase() []tcTemp {
@@ -637,10 +684,14 @@ func TestBin(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, Bin[uint8])
+			tc.inputs, tc.expect, TBin[uint8])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TBin[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return Bin[T](ivecs, result, proc, length, nil)
 }
 
 func initBinFloatTestCase() []tcTemp {
@@ -666,10 +717,14 @@ func TestBinFloat(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, BinFloat[float32])
+			tc.inputs, tc.expect, TBinFloat[float32])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TBinFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return BinFloat[T](ivecs, result, proc, length, nil)
 }
 
 func initBitLengthFuncTestCase() []tcTemp {
@@ -717,10 +772,14 @@ func TestBitLengthFunc(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, BitLengthFunc)
+			tc.inputs, tc.expect, TBitLengthFunc)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TBitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return BitLengthFunc(ivecs, result, proc, length, nil)
 }
 
 func initCurrentDateTestCase() []tcTemp {
@@ -746,10 +805,14 @@ func TestCurrentDate(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, CurrentDate)
+			tc.inputs, tc.expect, TCurrentDate)
 		s, _ := fcTC.Run()
 		require.Equal(t, s, false)
 	}
+}
+
+func TCurrentDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return CurrentDate(ivecs, result, proc, length, nil)
 }
 
 func initDateToDateTestCase() []tcTemp {
@@ -775,10 +838,14 @@ func TestDateToDate(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, DateToDate)
+			tc.inputs, tc.expect, TDateToDate)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDateToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DateToDate(ivecs, result, proc, length, nil)
 }
 
 func initDatetimeToDateTestCase() []tcTemp {
@@ -805,10 +872,14 @@ func TestDatetimeToDate(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, DatetimeToDate)
+			tc.inputs, tc.expect, TDatetimeToDate)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDatetimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DatetimeToDate(ivecs, result, proc, length, nil)
 }
 
 func initTimeToDateTestCase() []tcTemp {
@@ -835,10 +906,14 @@ func TestTimeToDate(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, TimeToDate)
+			tc.inputs, tc.expect, TTimeToDate)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TTimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return TimeToDate(ivecs, result, proc, length, nil)
 }
 
 func initDateStringToDateTestCase() []tcTemp {
@@ -865,10 +940,14 @@ func TestDateStringToDate(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, DateStringToDate)
+			tc.inputs, tc.expect, TDateStringToDate)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DateStringToDate(ivecs, result, proc, length, nil)
 }
 
 func initDateToDayTestCase() []tcTemp {
@@ -894,10 +973,14 @@ func TestDateToDay(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, DateToDay)
+			tc.inputs, tc.expect, TDateToDay)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDateToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DateToDay(ivecs, result, proc, length, nil)
 }
 
 func initDatetimeToDayTestCase() []tcTemp {
@@ -923,10 +1006,14 @@ func TestDatetimeToDay(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, DatetimeToDay)
+			tc.inputs, tc.expect, TDatetimeToDay)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDatetimeToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DatetimeToDay(ivecs, result, proc, length, nil)
 }
 
 func initDayOfYearTestCase() []tcTemp {
@@ -952,10 +1039,14 @@ func TestDayOfYear(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, DayOfYear)
+			tc.inputs, tc.expect, TDayOfYear)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDayOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DayOfYear(ivecs, result, proc, length, nil)
 }
 
 func initEmptyTestCase() []tcTemp {
@@ -981,10 +1072,14 @@ func TestEmpty(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, Empty)
+			tc.inputs, tc.expect, TEmpty)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TEmpty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return Empty(ivecs, result, proc, length, nil)
 }
 
 func initJsonQuoteTestCase() []tcTemp {
@@ -1010,10 +1105,14 @@ func TestJsonQuote(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, JsonQuote)
+			tc.inputs, tc.expect, TJsonQuote)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TJsonQuote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return JsonQuote(ivecs, result, proc, length, nil)
 }
 
 func initJsonUnquoteTestCase() []tcTemp {
@@ -1039,10 +1138,14 @@ func TestJsonUnquote(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, JsonUnquote)
+			tc.inputs, tc.expect, TJsonUnquote)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TJsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return JsonUnquote(ivecs, result, proc, length, nil)
 }
 
 func TestLoadFile(t *testing.T) {
@@ -1086,10 +1189,14 @@ func TestLoadFile(t *testing.T) {
 	// do the test work.
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, LoadFile)
+			tc.inputs, tc.expect, TLoadFile)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TLoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return LoadFile(ivecs, result, proc, length, nil)
 }
 
 func initMoMemoryUsageTestCase() []tcTemp {
@@ -1115,10 +1222,14 @@ func TestMoMemoryUsage(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, MoMemUsage)
+			tc.inputs, tc.expect, TMoMemUsage)
 		_, _ = fcTC.Run()
 		require.Error(t, moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input"))
 	}
+}
+
+func TMoMemUsage(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return MoMemUsage(ivecs, result, proc, length, nil)
 }
 
 func TestMoEnableMemoryUsage(t *testing.T) {
@@ -1128,10 +1239,14 @@ func TestMoEnableMemoryUsage(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, MoEnableMemUsageDetail)
+			tc.inputs, tc.expect, TMoEnableMemUsageDetail)
 		_, _ = fcTC.Run()
 		require.Error(t, moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input"))
 	}
+}
+
+func TMoEnableMemUsageDetail(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return MoEnableMemUsageDetail(ivecs, result, proc, length, nil)
 }
 
 func TestMoDisableMemoryUsage(t *testing.T) {
@@ -1141,10 +1256,14 @@ func TestMoDisableMemoryUsage(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, MoDisableMemUsageDetail)
+			tc.inputs, tc.expect, TMoDisableMemUsageDetail)
 		_, _ = fcTC.Run()
 		require.Error(t, moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input"))
 	}
+}
+
+func TMoDisableMemUsageDetail(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return MoDisableMemUsageDetail(ivecs, result, proc, length, nil)
 }
 
 func initSpaceTestCase() []tcTemp {
@@ -1170,10 +1289,14 @@ func TestSpace(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, SpaceNumber[uint64])
+			tc.inputs, tc.expect, TSpaceNumber[uint64])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TSpaceNumber[T types.BuiltinNumber](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return SpaceNumber[T](ivecs, result, proc, length, nil)
 }
 
 func initToTimeCase() []tcTemp {
@@ -1255,16 +1378,16 @@ func TestToTime(t *testing.T) {
 		switch tc.typ {
 		case types.T_date:
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DateToTime)
+				tc.inputs, tc.expect, TDateToTime)
 		case types.T_datetime:
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DatetimeToTime)
+				tc.inputs, tc.expect, TDatetimeToTime)
 		case types.T_int64:
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, Int64ToTime)
+				tc.inputs, tc.expect, TInt64ToTime)
 		case types.T_varchar:
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DateStringToTime)
+				tc.inputs, tc.expect, TDateStringToTime)
 			//case types.T_decimal128:
 			//	fcTC = testutil.NewFunctionTestCase(proc,
 			//		tc.inputs, tc.expect, Decimal128ToTime)
@@ -1272,6 +1395,22 @@ func TestToTime(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDateToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DateToTime(ivecs, result, proc, length, nil)
+}
+
+func TDatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DatetimeToTime(ivecs, result, proc, length, nil)
+}
+
+func TInt64ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return Int64ToTime(ivecs, result, proc, length, nil)
+}
+
+func TDateStringToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DateStringToTime(ivecs, result, proc, length, nil)
 }
 
 func initToTimestampCase() []tcTemp {
@@ -1328,17 +1467,29 @@ func TestToTimeStamp(t *testing.T) {
 		switch tc.typ {
 		case types.T_date:
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DateToTimestamp)
+				tc.inputs, tc.expect, TDateToTimestamp)
 		case types.T_datetime:
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DatetimeToTimestamp)
+				tc.inputs, tc.expect, TDatetimeToTimestamp)
 		case types.T_varchar:
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DateStringToTimestamp)
+				tc.inputs, tc.expect, TDateStringToTimestamp)
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDateToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DateToTime(ivecs, result, proc, length, nil)
+}
+
+func TDatetimeToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DatetimeToTime(ivecs, result, proc, length, nil)
+}
+
+func TDateStringToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DateStringToTime(ivecs, result, proc, length, nil)
 }
 
 func TestValues(t *testing.T) {
@@ -1366,10 +1517,14 @@ func TestValues(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, Values)
+			tc.inputs, tc.expect, TValues)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TValues(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return Values(ivecs, result, proc, length, nil)
 }
 
 func initHourTestCase() []tcTemp {
@@ -1414,14 +1569,22 @@ func TestHour(t *testing.T) {
 		switch tc.typ {
 		case types.T_datetime:
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DatetimeToHour)
+				tc.inputs, tc.expect, TDatetimeToHour)
 		case types.T_timestamp:
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, TimestampToHour)
+				tc.inputs, tc.expect, TTimestampToHour)
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDatetimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DatetimeToHour(ivecs, result, proc, length, nil)
+}
+
+func TTimestampToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return TimestampToHour(ivecs, result, proc, length, nil)
 }
 
 func initMinuteTestCase() []tcTemp {
@@ -1466,14 +1629,22 @@ func TestMinute(t *testing.T) {
 		switch tc.typ {
 		case types.T_datetime:
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DatetimeToMinute)
+				tc.inputs, tc.expect, TDatetimeToMinute)
 		case types.T_timestamp:
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, TimestampToMinute)
+				tc.inputs, tc.expect, TTimestampToMinute)
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDatetimeToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DatetimeToHour(ivecs, result, proc, length, nil)
+}
+
+func TTimestampToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return TimestampToMinute(ivecs, result, proc, length, nil)
 }
 
 func initSecondTestCase() []tcTemp {
@@ -1518,14 +1689,22 @@ func TestSecond(t *testing.T) {
 		switch tc.typ {
 		case types.T_datetime:
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DatetimeToSecond)
+				tc.inputs, tc.expect, TDatetimeToSecond)
 		case types.T_timestamp:
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, TimestampToSecond)
+				tc.inputs, tc.expect, TTimestampToSecond)
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDatetimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DatetimeToHour(ivecs, result, proc, length, nil)
+}
+
+func TTimestampToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return TimestampToHour(ivecs, result, proc, length, nil)
 }
 
 func initBinaryTestCase() []tcTemp {
@@ -1552,10 +1731,14 @@ func TestBinary(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, Binary)
+			tc.inputs, tc.expect, TBinary)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TBinary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return Binary(ivecs, result, proc, length, nil)
 }
 
 func initHexStringTestCase() []tcTemp {
@@ -1600,10 +1783,14 @@ func TestHexString(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexString)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, THexString)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func THexString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return HexString(ivecs, result, proc, length, nil)
 }
 
 func initHexInt64TestCase() []tcTemp {
@@ -1635,10 +1822,14 @@ func TestHexInt64(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexInt64)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, THexInt64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func THexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return HexInt64(ivecs, result, proc, length, nil)
 }
 
 // HexArray
@@ -1715,10 +1906,14 @@ func TestHexArray(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexArray)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, THexArray)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func THexArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return HexArray(ivecs, result, proc, length, nil)
 }
 
 func initMd5TestCase() []tcTemp {
@@ -1749,10 +1944,14 @@ func TestMd5(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Md5)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TMd5)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TMd5(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return Md5(ivecs, result, proc, length, nil)
 }
 
 func initUnhexTestCase() []tcTemp {
@@ -1817,10 +2016,14 @@ func TestUnhex(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Unhex)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TUnhex)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TUnhex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return Unhex(ivecs, result, proc, length, nil)
 }
 
 // ToBase64
@@ -1858,10 +2061,14 @@ func TestToBase64(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, ToBase64)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TToBase64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return ToBase64(ivecs, result, proc, length, nil)
 }
 
 // FromBase64
@@ -1900,10 +2107,14 @@ func TestFromBase64(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, FromBase64)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TFromBase64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TFromBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return FromBase64(ivecs, result, proc, length, nil)
 }
 
 func initBlobLengthTestCase() []tcTemp {
@@ -1928,10 +2139,14 @@ func TestBlobLength(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Length)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TLength)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TLength(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return Length(ivecs, result, proc, length, nil)
 }
 
 func initLengthTestCase() []tcTemp {
@@ -1962,7 +2177,7 @@ func TestLength(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Length)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TLength)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2105,10 +2320,14 @@ func TestLengthUTF8(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, LengthUTF8)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TLengthUTF8)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TLengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return LengthUTF8(ivecs, result, proc, length, nil)
 }
 
 // Ltrim
@@ -2134,11 +2353,15 @@ func TestLtrim(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Ltrim)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TLtrim)
 
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TLtrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return Ltrim(ivecs, result, proc, length, nil)
 }
 
 // Rtrim
@@ -2508,10 +2731,14 @@ func TestRtrim(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Rtrim)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TRtrim)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TRtrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return Rtrim(ivecs, result, proc, length, nil)
 }
 
 // Reverse
@@ -2608,10 +2835,14 @@ func TestReverse(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Reverse)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TReverse)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TReverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return Reverse(ivecs, result, proc, length, nil)
 }
 
 // Oct
@@ -2642,10 +2873,14 @@ func TestOctUint8(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint8])
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TOct[uint8])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TOct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return Oct[T](ivecs, result, proc, length, nil)
 }
 
 func initOctUint16TestCase() []tcTemp {
@@ -2677,7 +2912,7 @@ func TestOctUint16(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint16])
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TOct[uint16])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2713,7 +2948,7 @@ func TestOctUint32(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint32])
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TOct[uint32])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2750,7 +2985,7 @@ func TestOctUint64(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint64])
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TOct[uint64])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2781,7 +3016,7 @@ func TestOctInt8(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int8])
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TOct[int8])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2810,7 +3045,7 @@ func TestOctInt16(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int16])
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TOct[int16])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2839,7 +3074,7 @@ func TestOctInt32(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int32])
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TOct[int32])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2868,7 +3103,7 @@ func TestOctInt64(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int64])
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TOct[int64])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -2902,10 +3137,14 @@ func TestDateToMonth(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToMonth)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TDateToMonth)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDateToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DateToMonth(ivecs, result, proc, length, nil)
 }
 
 func initDateTimeToMonthTestCase() []tcTemp {
@@ -2932,10 +3171,14 @@ func TestDateTimeToMonth(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToMonth)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TDatetimeToMonth)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDatetimeToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DatetimeToMonth(ivecs, result, proc, length, nil)
 }
 
 func initDateStringToMonthTestCase() []tcTemp {
@@ -2959,11 +3202,15 @@ func TestDateStringToMonth(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateStringToMonth)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TDateStringToMonth)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 	//TODO: Ignoring Scalar Nulls: Original code: https://github.com/m-schen/matrixone/blob/823b5524f1c6eb189ee9652013bdf86b99e5571e/pkg/sql/plan/function/builtin/unary/month_test.go#L150
+}
+
+func TDateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DateStringToMonth(ivecs, result, proc, length, nil)
 }
 
 // Year
@@ -2992,10 +3239,14 @@ func TestDateToYear(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToYear)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TDateToYear)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDateToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DateToYear(ivecs, result, proc, length, nil)
 }
 
 func initDateTimeToYearTestCase() []tcTemp {
@@ -3022,10 +3273,14 @@ func TestDateTimeToYear(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToYear)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TDatetimeToYear)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDatetimeToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DatetimeToYear(ivecs, result, proc, length, nil)
 }
 
 func initDateStringToYearTestCase() []tcTemp {
@@ -3049,11 +3304,15 @@ func TestDateStringToYear(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateStringToYear)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TDateStringToYear)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 	//TODO: Ignoring Scalar Nulls: Original code:https://github.com/m-schen/matrixone/blob/e8259e975b2c256e529bf26c0ac278fe0df8e97c/pkg/sql/plan/function/builtin/unary/year_test.go#L150
+}
+
+func TDateStringToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DateStringToYear(ivecs, result, proc, length, nil)
 }
 
 // Week
@@ -3111,10 +3370,14 @@ func TestDateToWeek(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToWeek)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TDateToWeek)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DateToWeek(ivecs, result, proc, length, nil)
 }
 
 func initDateTimeToWeekTestCase() []tcTemp {
@@ -3169,11 +3432,15 @@ func TestDateTimeToWeek(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToWeek)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TDatetimeToWeek)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 	//TODO: Ignoring Scalar Nulls: Original code:https://github.com/m-schen/matrixone/blob/749eb739130decdbbf3dcc3dd5b21f656620edd9/pkg/sql/plan/function/builtin/unary/week_test.go#L114
+}
+
+func TDatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DatetimeToWeek(ivecs, result, proc, length, nil)
 }
 
 // Week day
@@ -3202,10 +3469,14 @@ func TestDateToWeekday(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToWeekday)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TDateToWeekday)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDateToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DateToWeekday(ivecs, result, proc, length, nil)
 }
 
 func initDateTimeToWeekdayTestCase() []tcTemp {
@@ -3233,10 +3504,14 @@ func TestDateTimeToWeekday(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToWeekday)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TDatetimeToWeekday)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TDatetimeToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return DatetimeToWeekday(ivecs, result, proc, length, nil)
 }
 
 func initPiTestCase() []tcTemp {
@@ -3255,10 +3530,14 @@ func TestPi(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Pi)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TPi)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TPi(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return TPi(ivecs, result, proc, length, nil)
 }
 
 func initUTCTimestampTestCase() []tcTemp {
@@ -3277,10 +3556,14 @@ func TestUTCTimestamp(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, UTCTimestamp)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TUTCTimestamp)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TUTCTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return UTCTimestamp(ivecs, result, proc, length, nil)
 }
 
 func TestSleep(t *testing.T) {
@@ -3305,7 +3588,7 @@ func TestSleep(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, Sleep[uint64])
+			tc.inputs, tc.expect, TSleep[uint64])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -3336,7 +3619,7 @@ func TestSleep(t *testing.T) {
 
 	for _, tc := range testCases2 {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, Sleep[float64])
+			tc.inputs, tc.expect, TSleep[float64])
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -3403,6 +3686,10 @@ func initBitCastTestCase() []tcTemp {
 	}
 }
 
+func TSleep[T uint64 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return Sleep[T](ivecs, result, proc, length, nil)
+}
+
 func TestBitCast(t *testing.T) {
 	testCases := initBitCastTestCase()
 
@@ -3410,10 +3697,14 @@ func TestBitCast(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, BitCast)
+			tc.inputs, tc.expect, TBitCast)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TBitCast(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return BitCast(ivecs, result, proc, length, nil)
 }
 
 func initSHA1TestCase() []tcTemp {
@@ -3437,8 +3728,12 @@ func TestSHA1(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SHA1Func)
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TSHA1Func)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TSHA1Func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return SHA1Func(ivecs, result, proc, length, nil)
 }

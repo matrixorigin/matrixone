@@ -4693,7 +4693,7 @@ func evalRowsetData(proc *process.Process,
 	bats = []*batch.Batch{batch.EmptyForConstFoldBatch}
 	if len(exprExecs) > 0 {
 		for i, expr := range exprExecs {
-			val, err := expr.Eval(proc, bats)
+			val, err := expr.Eval(proc, bats, nil)
 			if err != nil {
 				return err
 			}

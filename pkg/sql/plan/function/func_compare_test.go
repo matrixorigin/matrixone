@@ -15,10 +15,13 @@
 package function
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 func TestOperatorOpBitAndInt64Fn(t *testing.T) {
@@ -39,7 +42,7 @@ func TestOperatorOpBitAndInt64Fn(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	fcTC := testutil.NewFunctionTestCase(proc,
-		tc.inputs, tc.expect, operatorOpBitAndInt64Fn)
+		tc.inputs, tc.expect, ToperatorOpBitAndInt64Fn)
 	s, info := fcTC.Run()
 	require.True(t, s, info)
 }
@@ -62,7 +65,7 @@ func TestOperatorOpBitOrInt64Fn(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	fcTC := testutil.NewFunctionTestCase(proc,
-		tc.inputs, tc.expect, operatorOpBitOrInt64Fn)
+		tc.inputs, tc.expect, ToperatorOpBitOrInt64Fn)
 	s, info := fcTC.Run()
 	require.True(t, s, info)
 }
@@ -85,7 +88,7 @@ func TestOperatorOpBitXorInt64Fn(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	fcTC := testutil.NewFunctionTestCase(proc,
-		tc.inputs, tc.expect, operatorOpBitXorInt64Fn)
+		tc.inputs, tc.expect, ToperatorOpBitXorInt64Fn)
 	s, info := fcTC.Run()
 	require.True(t, s, info)
 }
@@ -109,7 +112,7 @@ func TestOperatorOpBitRightShiftInt64Fn(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	fcTC := testutil.NewFunctionTestCase(proc,
-		tc.inputs, tc.expect, operatorOpBitShiftRightInt64Fn)
+		tc.inputs, tc.expect, ToperatorOpBitShiftRightInt64Fn)
 	s, info := fcTC.Run()
 	require.True(t, s, info)
 }
@@ -133,7 +136,27 @@ func TestOperatorOpBitLeftShiftInt64Fn(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	fcTC := testutil.NewFunctionTestCase(proc,
-		tc.inputs, tc.expect, operatorOpBitShiftLeftInt64Fn)
+		tc.inputs, tc.expect, ToperatorOpBitShiftLeftInt64Fn)
 	s, info := fcTC.Run()
 	require.True(t, s, info)
+}
+
+func ToperatorOpBitAndInt64Fn(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return operatorOpBitAndInt64Fn(ivecs, result, proc, length, nil)
+}
+
+func ToperatorOpBitOrInt64Fn(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return operatorOpBitOrInt64Fn(ivecs, result, proc, length, nil)
+}
+
+func ToperatorOpBitXorInt64Fn(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return operatorOpBitXorInt64Fn(ivecs, result, proc, length, nil)
+}
+
+func ToperatorOpBitShiftRightInt64Fn(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return operatorOpBitShiftRightInt64Fn(ivecs, result, proc, length, nil)
+}
+
+func ToperatorOpBitShiftLeftInt64Fn(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return operatorOpBitShiftLeftInt64Fn(ivecs, result, proc, length, nil)
 }

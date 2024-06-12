@@ -16,11 +16,14 @@ package function
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func Test_getSubstring(t *testing.T) {
@@ -233,12 +236,20 @@ func TestLocate(t *testing.T) {
 		switch tc.info {
 		case "2":
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, buildInLocate2Args)
+				tc.inputs, tc.expect, TbuildInLocate2Args)
 		case "3":
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, buildInLocate3Args)
+				tc.inputs, tc.expect, TbuildInLocate3Args)
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TbuildInLocate2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return buildInLocate2Args(ivecs, result, proc, length, nil)
+}
+
+func TbuildInLocate3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
+	return buildInLocate3Args(ivecs, result, proc, length, nil)
 }
