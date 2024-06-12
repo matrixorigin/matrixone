@@ -51,8 +51,8 @@ ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
 mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
-sal    DECIMAL64(7)    YES        null        雇员的基本工资
-comm    DECIMAL64(7)    YES        null        奖金
+sal    DECIMAL(7)    YES        null        雇员的基本工资
+comm    DECIMAL(7)    YES        null        奖金
 deptno    INT UNSIGNED(32)    YES    MUL    null        
 alter table emp modify deptno int unsigned default 100;
 desc emp;
@@ -62,8 +62,8 @@ ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
 mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
-sal    DECIMAL64(7)    YES        null        雇员的基本工资
-comm    DECIMAL64(7)    YES        null        奖金
+sal    DECIMAL(7)    YES        null        雇员的基本工资
+comm    DECIMAL(7)    YES        null        奖金
 deptno    INT UNSIGNED(32)    YES    MUL    100        
 alter table emp change deptno deptid varchar(20);
 Cannot change column 'deptno': used in a foreign key constraint 'c1'
@@ -77,8 +77,8 @@ ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
 mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
-sal    DECIMAL64(7)    YES        null        雇员的基本工资
-comm    DECIMAL64(7)    YES        null        奖金
+sal    DECIMAL(7)    YES        null        雇员的基本工资
+comm    DECIMAL(7)    YES        null        奖金
 deptid    INT UNSIGNED(32)    YES    MUL    null        
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,100);
 internal error: Cannot add or update a child row: a foreign key constraint fails
@@ -148,8 +148,8 @@ ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
 mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
-sal    DECIMAL64(7)    YES        null        雇员的基本工资
-comm    DECIMAL64(7)    YES        null        奖金
+sal    DECIMAL(7)    YES        null        雇员的基本工资
+comm    DECIMAL(7)    YES        null        奖金
 deptno    INT UNSIGNED(32)    YES    MUL    10        所在部门
 alter table emp ALTER COLUMN deptno SET INVISIBLE;
 desc emp;
@@ -159,8 +159,8 @@ ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
 mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
-sal    DECIMAL64(7)    YES        null        雇员的基本工资
-comm    DECIMAL64(7)    YES        null        奖金
+sal    DECIMAL(7)    YES        null        雇员的基本工资
+comm    DECIMAL(7)    YES        null        奖金
 deptno    INT UNSIGNED(32)    YES    MUL    10        所在部门
 alter table emp ALTER COLUMN deptno drop default;
 desc emp;
@@ -170,8 +170,8 @@ ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
 mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
-sal    DECIMAL64(7)    YES        null        雇员的基本工资
-comm    DECIMAL64(7)    YES        null        奖金
+sal    DECIMAL(7)    YES        null        雇员的基本工资
+comm    DECIMAL(7)    YES        null        奖金
 deptno    INT UNSIGNED(32)    YES    MUL    null        所在部门
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptno
@@ -197,8 +197,8 @@ ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
 mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
-sal    DECIMAL64(7)    YES        null        雇员的基本工资
-comm    DECIMAL64(7)    YES        null        奖金
+sal    DECIMAL(7)    YES        null        雇员的基本工资
+comm    DECIMAL(7)    YES        null        奖金
 deptid    INT UNSIGNED(32)    YES    MUL    null        所在部门
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptid

@@ -227,9 +227,9 @@ Field    Type    Null    Key    Default    Extra    Comment
 query_id    INT(32)    NO        '0'        
 seq    INT(32)    NO        '0'        
 state    VARCHAR(30)    NO        ''        
-duration    DECIMAL64(9)    NO        '0.000000'        
-cpu_user    DECIMAL64(9)    YES        null        
-cpu_system    DECIMAL64(9)    YES        null        
+duration    DECIMAL(9)    NO        '0.000000'        
+cpu_user    DECIMAL(9)    YES        null        
+cpu_system    DECIMAL(9)    YES        null        
 context_voluntary    INT(32)    YES        null        
 context_involuntary    INT(32)    YES        null        
 block_ops_in    INT(32)    YES        null        

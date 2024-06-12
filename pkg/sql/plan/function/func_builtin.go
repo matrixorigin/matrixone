@@ -154,7 +154,13 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			return functionUtil.QuickStrToBytes(typ.String()), nil
+			ts := typ.String()
+			// after decimal fix, remove this
+			if typ.Oid.IsDecimal() {
+				ts = "DECIMAL"
+			}
+
+			return functionUtil.QuickStrToBytes(ts), nil
 		}
 	case typWithLen:
 		f = func(s []byte) ([]byte, error) {

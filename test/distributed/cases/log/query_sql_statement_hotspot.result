@@ -6,7 +6,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 statement_id    VARCHAR(36)    NO        null
 statement    TEXT(0)    NO        null
 timeconsumed    DOUBLE(0)    YES        null
-memorysize    DECIMAL128(38)    YES        null
+memorysize    DECIMAL(38)    YES        null
 collecttime    DATETIME(6)    NO        null
 node    VARCHAR(36)    NO        null
 account    VARCHAR(1024)    NO        null
