@@ -148,7 +148,7 @@ func (obj *aobject) PrepareCompact() bool {
 	}
 	prepareCompact := obj.RefCount() == 0
 	if !prepareCompact && obj.meta.CheckPrintPrepareCompactLocked() {
-		logutil.Infof("obj %v, data ref count > 0", obj.meta.ID.String())
+		logutil.Infof("obj %v, data ref count is %d", obj.meta.ID.String(), obj.RefCount())
 	}
 	return prepareCompact
 }
