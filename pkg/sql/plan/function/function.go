@@ -496,11 +496,11 @@ type FunctionSelectList struct {
 	SelectList []bool
 }
 
-func (selectList *FunctionSelectList) HasAnyNull() bool {
-	return selectList.AnyNull
+func (selectList *FunctionSelectList) ShouldEvalAllRow() bool {
+	return !selectList.AnyNull
 }
 
-func (selectList *FunctionSelectList) IsAllNull() bool {
+func (selectList *FunctionSelectList) IgnoreAllRow() bool {
 	return selectList.AllNull
 }
 

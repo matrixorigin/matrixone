@@ -393,11 +393,11 @@ func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionRes
 	}
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
@@ -430,11 +430,11 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -581,11 +581,11 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -745,11 +745,11 @@ func opBinaryFixedFixedToFixed[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -867,11 +867,11 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -1015,11 +1015,11 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -1163,11 +1163,11 @@ func opBinaryStrFixedToStrWithErrorCheck[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -1327,11 +1327,11 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -1475,11 +1475,11 @@ func specialTemplateForModFunction[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -1617,11 +1617,11 @@ func specialTemplateForDivFunction[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -1759,11 +1759,11 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -1879,11 +1879,11 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -2020,11 +2020,11 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -2239,11 +2239,11 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -2361,11 +2361,11 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -2507,11 +2507,11 @@ func opUnaryFixedToFixed[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -2569,11 +2569,11 @@ func opUnaryBytesToFixed[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -2631,11 +2631,11 @@ func opUnaryStrToFixed[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -2692,11 +2692,11 @@ func opUnaryBytesToBytes(
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -2765,11 +2765,11 @@ func opUnaryBytesToStr(
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -2838,11 +2838,11 @@ func opUnaryStrToStr(
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -2911,11 +2911,11 @@ func opUnaryFixedToStr[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -2987,11 +2987,11 @@ func opUnaryFixedToStrWithErrorCheck[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -3072,11 +3072,11 @@ func opUnaryStrToBytesWithErrorCheck(
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -3154,11 +3154,11 @@ func opUnaryBytesToBytesWithErrorCheck(
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -3236,11 +3236,11 @@ func opUnaryBytesToStrWithErrorCheck(
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -3322,11 +3322,11 @@ func opUnaryFixedToFixedWithErrorCheck[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -3394,11 +3394,11 @@ func opUnaryBytesToFixedWithErrorCheck[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -3466,11 +3466,11 @@ func opUnaryStrToFixedWithErrorCheck[
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {

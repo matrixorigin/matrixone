@@ -148,7 +148,7 @@ func vectorScalarOp[T types.RealNumbers](ivecs []*vector.Vector, result vector.F
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	num := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
 
-	if selectList == nil || !selectList.HasAnyNull() {
+	if selectList == nil || !selectList.ShouldEvalAllRow() {
 		for i := uint64(0); i < uint64(length); i++ {
 			vec, null1 := vs.GetStrValue(i)
 			sca, null2 := num.GetValue(i)

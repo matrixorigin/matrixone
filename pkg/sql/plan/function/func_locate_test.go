@@ -19,9 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -70,156 +68,156 @@ func initLocateTestCase() []tcTemp {
 		{
 			info: "2",
 			typ:  types.T_varchar,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"ghi"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"abcdefghijklmn"},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{7},
 				[]bool{false}),
 		},
 		{
 			info: "2",
 			typ:  types.T_varchar,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"gxhi"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"abcdefghijklmn"},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{0},
 				[]bool{false}),
 		},
 		{
 			info: "3",
 			typ:  types.T_varchar,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"ghi"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"abcdefghijklmn"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{0},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{0},
 				[]bool{false}),
 		},
 		{
 			info: "3",
 			typ:  types.T_varchar,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"ghi"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"abcdefghijklmn"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{1},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{7},
 				[]bool{false}),
 		},
 		{
 			info: "3",
 			typ:  types.T_varchar,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"ghi"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"abcdefghijklmn"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{6},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{7},
 				[]bool{false}),
 		},
 		{
 			info: "3",
 			typ:  types.T_varchar,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"ghi"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"abcdefghijklmn"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{-6},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{0},
 				[]bool{false}),
 		},
 		{
 			info: "3",
 			typ:  types.T_varchar,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"ghi"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"abcdefghijklmn"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{8},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{0},
 				[]bool{false}),
 		},
 		{
 			info: "3",
 			typ:  types.T_varchar,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"xxx"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"abcdefghijklmn"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{8},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{0},
 				[]bool{false}),
 		},
 		{
 			info: "3",
 			typ:  types.T_varchar,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"abcdefghijklmn"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"abcdefghijklmn"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{0},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{0},
 				[]bool{false}),
 		},
@@ -232,24 +230,16 @@ func TestLocate(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		var fcTC testutil.FunctionTestCase
+		var fcTC FunctionTestCase
 		switch tc.info {
 		case "2":
-			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, TbuildInLocate2Args)
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, buildInLocate2Args)
 		case "3":
-			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, TbuildInLocate3Args)
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, buildInLocate3Args)
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
-}
-
-func TbuildInLocate2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
-	return buildInLocate2Args(ivecs, result, proc, length, nil)
-}
-
-func TbuildInLocate3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
-	return buildInLocate3Args(ivecs, result, proc, length, nil)
 }

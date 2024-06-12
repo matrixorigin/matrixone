@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package testutil
+package function
 
 import (
 	"fmt"
@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type fEvalFn func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) error
+type fEvalFn func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error
 
 type FunctionTestCase struct {
 	proc       *process.Process

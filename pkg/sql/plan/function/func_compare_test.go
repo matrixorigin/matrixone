@@ -18,9 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,19 +28,19 @@ func TestOperatorOpBitAndInt64Fn(t *testing.T) {
 	// null & 2 = null
 	tc := tcTemp{
 		info: "& test",
-		inputs: []testutil.FunctionTestInput{
-			testutil.NewFunctionTestInput(types.T_int64.ToType(),
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{1, -1, 0}, []bool{false, false, true}),
-			testutil.NewFunctionTestInput(types.T_int64.ToType(),
+			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{2, 2, 2}, []bool{false, false, false}),
 		},
-		expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 			[]int64{0, 2, 0}, []bool{false, false, true}),
 	}
 
 	proc := testutil.NewProcess()
-	fcTC := testutil.NewFunctionTestCase(proc,
-		tc.inputs, tc.expect, ToperatorOpBitAndInt64Fn)
+	fcTC := NewFunctionTestCase(proc,
+		tc.inputs, tc.expect, operatorOpBitAndInt64Fn)
 	s, info := fcTC.Run()
 	require.True(t, s, info)
 }
@@ -53,19 +51,19 @@ func TestOperatorOpBitOrInt64Fn(t *testing.T) {
 	// null | 2 = null
 	tc := tcTemp{
 		info: "| test",
-		inputs: []testutil.FunctionTestInput{
-			testutil.NewFunctionTestInput(types.T_int64.ToType(),
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{1, -1, 0}, []bool{false, false, true}),
-			testutil.NewFunctionTestInput(types.T_int64.ToType(),
+			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{2, 2, 2}, []bool{false, false, false}),
 		},
-		expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 			[]int64{3, -1, 0}, []bool{false, false, true}),
 	}
 
 	proc := testutil.NewProcess()
-	fcTC := testutil.NewFunctionTestCase(proc,
-		tc.inputs, tc.expect, ToperatorOpBitOrInt64Fn)
+	fcTC := NewFunctionTestCase(proc,
+		tc.inputs, tc.expect, operatorOpBitOrInt64Fn)
 	s, info := fcTC.Run()
 	require.True(t, s, info)
 }
@@ -76,19 +74,19 @@ func TestOperatorOpBitXorInt64Fn(t *testing.T) {
 	// null ^ 2 = null
 	tc := tcTemp{
 		info: "^ test",
-		inputs: []testutil.FunctionTestInput{
-			testutil.NewFunctionTestInput(types.T_int64.ToType(),
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{1, -1, 0}, []bool{false, false, true}),
-			testutil.NewFunctionTestInput(types.T_int64.ToType(),
+			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{2, 2, 2}, []bool{false, false, false}),
 		},
-		expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 			[]int64{3, -3, 0}, []bool{false, false, true}),
 	}
 
 	proc := testutil.NewProcess()
-	fcTC := testutil.NewFunctionTestCase(proc,
-		tc.inputs, tc.expect, ToperatorOpBitXorInt64Fn)
+	fcTC := NewFunctionTestCase(proc,
+		tc.inputs, tc.expect, operatorOpBitXorInt64Fn)
 	s, info := fcTC.Run()
 	require.True(t, s, info)
 }
@@ -100,19 +98,19 @@ func TestOperatorOpBitRightShiftInt64Fn(t *testing.T) {
 	// null >> 2 = null
 	tc := tcTemp{
 		info: ">> test",
-		inputs: []testutil.FunctionTestInput{
-			testutil.NewFunctionTestInput(types.T_int64.ToType(),
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{1024, -5, 2, 0}, []bool{false, false, false, true}),
-			testutil.NewFunctionTestInput(types.T_int64.ToType(),
+			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{2, 2, -2, 2}, []bool{false, false, false, true}),
 		},
-		expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 			[]int64{256, -2, 0, 0}, []bool{false, false, false, true}),
 	}
 
 	proc := testutil.NewProcess()
-	fcTC := testutil.NewFunctionTestCase(proc,
-		tc.inputs, tc.expect, ToperatorOpBitShiftRightInt64Fn)
+	fcTC := NewFunctionTestCase(proc,
+		tc.inputs, tc.expect, operatorOpBitShiftRightInt64Fn)
 	s, info := fcTC.Run()
 	require.True(t, s, info)
 }
@@ -124,39 +122,19 @@ func TestOperatorOpBitLeftShiftInt64Fn(t *testing.T) {
 	// null << 2 = null
 	tc := tcTemp{
 		info: ">> test",
-		inputs: []testutil.FunctionTestInput{
-			testutil.NewFunctionTestInput(types.T_int64.ToType(),
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{1, -1, 2, 0}, []bool{false, false, false, true}),
-			testutil.NewFunctionTestInput(types.T_int64.ToType(),
+			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{2, 2, -2, 2}, []bool{false, false, false, true}),
 		},
-		expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 			[]int64{4, -4, 0, 0}, []bool{false, false, false, true}),
 	}
 
 	proc := testutil.NewProcess()
-	fcTC := testutil.NewFunctionTestCase(proc,
-		tc.inputs, tc.expect, ToperatorOpBitShiftLeftInt64Fn)
+	fcTC := NewFunctionTestCase(proc,
+		tc.inputs, tc.expect, operatorOpBitShiftLeftInt64Fn)
 	s, info := fcTC.Run()
 	require.True(t, s, info)
-}
-
-func ToperatorOpBitAndInt64Fn(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
-	return operatorOpBitAndInt64Fn(ivecs, result, proc, length, nil)
-}
-
-func ToperatorOpBitOrInt64Fn(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
-	return operatorOpBitOrInt64Fn(ivecs, result, proc, length, nil)
-}
-
-func ToperatorOpBitXorInt64Fn(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
-	return operatorOpBitXorInt64Fn(ivecs, result, proc, length, nil)
-}
-
-func ToperatorOpBitShiftRightInt64Fn(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
-	return operatorOpBitShiftRightInt64Fn(ivecs, result, proc, length, nil)
-}
-
-func ToperatorOpBitShiftLeftInt64Fn(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
-	return operatorOpBitShiftLeftInt64Fn(ivecs, result, proc, length, nil)
 }

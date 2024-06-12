@@ -213,11 +213,11 @@ func valueDec64Compare(
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
@@ -402,11 +402,11 @@ func valueDec128Compare(
 	rsAnyNull := false
 
 	if selectList != nil {
-		if selectList.IsAllNull() {
+		if selectList.IgnoreAllRow() {
 			nulls.AddRange(rsNull, 0, uint64(length))
 			return nil
 		}
-		if selectList.HasAnyNull() {
+		if selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {

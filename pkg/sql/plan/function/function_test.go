@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -296,15 +295,11 @@ func TestCastNanoToTimestamp(t *testing.T) {
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, TCastNanoToTimestamp)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastNanoToTimestamp)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("err info is '%s'", info))
 	}
 
-}
-
-func TCastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
-	return CastNanoToTimestamp(ivecs, result, proc, length, nil)
 }
 
 func initCastNanoToTimestampTestCase(inputs []string, outputs []int64) []tcTemp {
@@ -313,12 +308,12 @@ func initCastNanoToTimestampTestCase(inputs []string, outputs []int64) []tcTemp 
 		res[i] = tcTemp{
 			info: fmt.Sprintf("case %d", i),
 			typ:  types.T_int64,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{outputs[i]},
 					[]bool{false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{inputs[i]},
 				[]bool{false}),
 		}

@@ -19,9 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,9 +58,9 @@ func initFormatTestCase1() []tcTemp {
 				nullList[j] = false
 			}
 		}
-		inputs := make([]testutil.FunctionTestInput, 2)
-		inputs[0] = testutil.NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
-		inputs[1] = testutil.NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
+		inputs := make([]FunctionTestInput, 2)
+		inputs[0] = NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
+		inputs[1] = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
 
 		results := make([]string, 8192)
 		rnullList := make([]bool, 8192)
@@ -83,7 +81,7 @@ func initFormatTestCase1() []tcTemp {
 			}
 		}
 
-		expect := testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
+		expect := NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
 
 		cases[i] = tcTemp{
 			info:   "test format",
@@ -102,14 +100,10 @@ func BenchmarkDateFormat1(b *testing.B) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, BenchDateFormat)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
 		fcTC.BenchMarkRun()
 		_, _ = fcTC.Run()
 	}
-}
-
-func BenchDateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
-	return DateFormat(ivecs, result, proc, length, nil)
 }
 
 func initFormatTestCase2() []tcTemp {
@@ -147,9 +141,9 @@ func initFormatTestCase2() []tcTemp {
 				nullList[j] = false
 			}
 		}
-		inputs := make([]testutil.FunctionTestInput, 2)
-		inputs[0] = testutil.NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
-		inputs[1] = testutil.NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
+		inputs := make([]FunctionTestInput, 2)
+		inputs[0] = NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
+		inputs[1] = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
 
 		results := make([]string, 8192)
 		rnullList := make([]bool, 8192)
@@ -170,7 +164,7 @@ func initFormatTestCase2() []tcTemp {
 			}
 		}
 
-		expect := testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
+		expect := NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
 
 		cases[i] = tcTemp{
 			info:   "test format",
@@ -189,7 +183,7 @@ func BenchmarkDateFormat2(b *testing.B) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, BenchDateFormat)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
 		fcTC.BenchMarkRun()
 		_, _ = fcTC.Run()
 	}
@@ -230,9 +224,9 @@ func initFormatTestCase3() []tcTemp {
 				nullList[j] = false
 			}
 		}
-		inputs := make([]testutil.FunctionTestInput, 2)
-		inputs[0] = testutil.NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
-		inputs[1] = testutil.NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
+		inputs := make([]FunctionTestInput, 2)
+		inputs[0] = NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
+		inputs[1] = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
 
 		results := make([]string, 8192)
 		rnullList := make([]bool, 8192)
@@ -253,7 +247,7 @@ func initFormatTestCase3() []tcTemp {
 			}
 		}
 
-		expect := testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
+		expect := NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
 
 		cases[i] = tcTemp{
 			info:   "test format",
@@ -272,7 +266,7 @@ func BenchmarkDateFormat3(b *testing.B) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, BenchDateFormat)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
 		fcTC.BenchMarkRun()
 		_, _ = fcTC.Run()
 	}
@@ -313,9 +307,9 @@ func initFormatTestCase4() []tcTemp {
 				nullList[j] = false
 			}
 		}
-		inputs := make([]testutil.FunctionTestInput, 2)
-		inputs[0] = testutil.NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
-		inputs[1] = testutil.NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
+		inputs := make([]FunctionTestInput, 2)
+		inputs[0] = NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
+		inputs[1] = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
 
 		results := make([]string, 8192)
 		rnullList := make([]bool, 8192)
@@ -336,7 +330,7 @@ func initFormatTestCase4() []tcTemp {
 			}
 		}
 
-		expect := testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
+		expect := NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
 
 		cases[i] = tcTemp{
 			info:   "test format",
@@ -355,7 +349,7 @@ func BenchmarkDateFormat4(b *testing.B) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, BenchDateFormat)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
 		fcTC.BenchMarkRun()
 		_, _ = fcTC.Run()
 	}
@@ -396,9 +390,9 @@ func initFormatTestCase5() []tcTemp {
 				nullList[j] = false
 			}
 		}
-		inputs := make([]testutil.FunctionTestInput, 2)
-		inputs[0] = testutil.NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
-		inputs[1] = testutil.NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
+		inputs := make([]FunctionTestInput, 2)
+		inputs[0] = NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
+		inputs[1] = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
 
 		results := make([]string, 8192)
 		rnullList := make([]bool, 8192)
@@ -419,7 +413,7 @@ func initFormatTestCase5() []tcTemp {
 			}
 		}
 
-		expect := testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
+		expect := NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
 
 		cases[i] = tcTemp{
 			info:   "test format",
@@ -438,7 +432,7 @@ func BenchmarkDateFormat5(b *testing.B) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, BenchDateFormat)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
 		fcTC.BenchMarkRun()
 		_, _ = fcTC.Run()
 	}
@@ -479,9 +473,9 @@ func initFormatTestCase6() []tcTemp {
 				nullList[j] = false
 			}
 		}
-		inputs := make([]testutil.FunctionTestInput, 2)
-		inputs[0] = testutil.NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
-		inputs[1] = testutil.NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
+		inputs := make([]FunctionTestInput, 2)
+		inputs[0] = NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
+		inputs[1] = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
 
 		results := make([]string, 8192)
 		rnullList := make([]bool, 8192)
@@ -502,7 +496,7 @@ func initFormatTestCase6() []tcTemp {
 			}
 		}
 
-		expect := testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
+		expect := NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
 
 		cases[i] = tcTemp{
 			info:   "test format",
@@ -521,7 +515,7 @@ func BenchmarkDateFormat6(b *testing.B) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, BenchDateFormat)
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
 		fcTC.BenchMarkRun()
 		_, _ = fcTC.Run()
 	}
@@ -542,8 +536,8 @@ func TestDateFormat(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases1 {
-		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, BenchDateFormat)
+		fcTC := NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, DateFormat)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -551,8 +545,8 @@ func TestDateFormat(t *testing.T) {
 	testCases2 := initFormatTestCase2()
 	// do the test work.
 	for _, tc := range testCases2 {
-		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, BenchDateFormat)
+		fcTC := NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, DateFormat)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -560,8 +554,8 @@ func TestDateFormat(t *testing.T) {
 	testCases3 := initFormatTestCase3()
 	// do the test work.
 	for _, tc := range testCases3 {
-		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, BenchDateFormat)
+		fcTC := NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, DateFormat)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -569,8 +563,8 @@ func TestDateFormat(t *testing.T) {
 	testCases4 := initFormatTestCase4()
 	// do the test work.
 	for _, tc := range testCases4 {
-		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, BenchDateFormat)
+		fcTC := NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, DateFormat)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -578,8 +572,8 @@ func TestDateFormat(t *testing.T) {
 	testCases5 := initFormatTestCase5()
 	// do the test work.
 	for _, tc := range testCases5 {
-		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, BenchDateFormat)
+		fcTC := NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, DateFormat)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -587,8 +581,8 @@ func TestDateFormat(t *testing.T) {
 	testCases6 := initFormatTestCase6()
 	// do the test work.
 	for _, tc := range testCases6 {
-		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, BenchDateFormat)
+		fcTC := NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, DateFormat)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
