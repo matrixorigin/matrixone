@@ -103,10 +103,23 @@ func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName 
 		return false, 0, nil
 	}
 
-	if isVec {
-		return true, types.T(tblDef.Cols[col.Col.ColPos].Typ.Id), [][]byte{val}
+	var colPos int32
+	if col.Col.Name == "" {
+		colPos = col.Col.ColPos
+		logutil.Warnf("colExpr.Col.Name is empty")
+	} else {
+		idx := strings.Index(col.Col.Name, ".")
+		if idx == -1 {
+			colPos = tblDef.Name2ColIndex[col.Col.Name]
+		} else {
+			colPos = tblDef.Name2ColIndex[col.Col.Name[idx+1:]]
+		}
 	}
-	return true, types.T(tblDef.Cols[col.Col.ColPos].Typ.Id), vals
+
+	if isVec {
+		return true, types.T(tblDef.Cols[colPos].Typ.Id), [][]byte{val}
+	}
+	return true, types.T(tblDef.Cols[colPos].Typ.Id), vals
 }
 
 // left op in (">", ">=", "=", "<", "<="), right op in (">", ">=", "=", "<", "<=")
