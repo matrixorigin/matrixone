@@ -162,6 +162,7 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 			err := fs.Read(ctx, &vec)
 			assert.Nil(t, err)
 			assert.Equal(t, expected[offset:offset+length], vec.Entries[0].Data)
+			vec.Release()
 		}
 	}
 

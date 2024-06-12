@@ -596,7 +596,7 @@ func (svet SystemVariableEnumType) String() string {
 
 func (svet SystemVariableEnumType) Convert(value interface{}) (interface{}, error) {
 	cv1 := func(x int) (interface{}, error) {
-		if x >= 0 && x <= len(svet.id2TagName) {
+		if x >= 0 && x < len(svet.id2TagName) {
 			return svet.id2TagName[x], nil
 		}
 		return nil, errorConvertToEnumFailed
@@ -960,7 +960,7 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 	m.Lock()
 	defer m.Unlock()
 	// get from gSysVarsDefs && table if absent
-	if _, ok := m.accountsGlobalSysVarsMap[accountId]; !ok {
+	if m.accountsGlobalSysVarsMap[accountId] == nil {
 		sysVars, err := ses.getGlobalSysVars(ctx)
 		if err != nil {
 			return nil, err
@@ -3513,12 +3513,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int64(0),
 	},
-	"experimental_master_index": {
-		Name:              "experimental_master_index",
+	"refresh_global_sys_vars_mgr": {
+		Name:              "refresh_global_sys_vars_mgr",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableBoolType("experimental_master_index"),
+		Type:              InitSystemVariableBoolType("refresh_global_sys_vars_mgr"),
 		Default:           int64(0),
 	},
 }

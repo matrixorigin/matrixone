@@ -65,6 +65,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func NewService(
@@ -292,9 +293,12 @@ func (s *service) Close() error {
 	if err := s.lockService.Close(); err != nil {
 		return err
 	}
-	if err := s.shardService.Close(); err != nil {
-		return err
+	if s.shardService != nil {
+		if err := s.shardService.Close(); err != nil {
+			return err
+		}
 	}
+
 	return nil
 }
 
@@ -952,4 +956,19 @@ func (l *locker) Get(
 		return false, err
 	}
 	return v == 1, nil
+}
+
+func (s *service) initProcessCodecService() {
+	runtime.ProcessLevelRuntime().SetGlobalVariables(
+		runtime.ProcessCodecService,
+		process.NewCodecService(
+			s._txnClient,
+			s.fileService,
+			s.lockService,
+			s.queryClient,
+			s._hakeeperClient,
+			s.udfService,
+			s.storeEngine,
+		),
+	)
 }

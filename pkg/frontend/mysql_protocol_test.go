@@ -70,7 +70,7 @@ func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	routine := NewRoutine(context.TODO(), pro, tRM.pu.SV, rs)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
-	err := pro.writePackets(hsV10pkt, true)
+	err := pro.writePackets(hsV10pkt)
 	if err != nil {
 		panic(err)
 	}
@@ -185,6 +185,7 @@ func TestKill(t *testing.T) {
 		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 		return txnOp, nil
 	}).AnyTimes()
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
@@ -1872,7 +1873,7 @@ func Test_writePackets(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize), true)
+		err = proto.writePackets(make([]byte, MaxPayloadSize))
 		convey.So(err, convey.ShouldBeNil)
 	})
 	convey.Convey("writepackets 16MB failed", t, func() {
@@ -1899,7 +1900,7 @@ func Test_writePackets(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize), true)
+		err = proto.writePackets(make([]byte, MaxPayloadSize))
 		convey.So(err, convey.ShouldBeError)
 	})
 
@@ -1920,7 +1921,7 @@ func Test_writePackets(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize), true)
+		err = proto.writePackets(make([]byte, MaxPayloadSize))
 		convey.So(err, convey.ShouldBeError)
 	})
 }
@@ -1942,10 +1943,10 @@ func Test_openpacket(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
-		err = proto.openPacket()
+		proto.openPacket()
 		convey.So(err, convey.ShouldBeNil)
 		outBuf := proto.tcpConn.OutBuf()
-		headLen := outBuf.GetWriteIndex() - beginWriteIndex(outBuf, proto.beginOffset)
+		headLen := outBuf.GetWriteIndex() - proto.getBeginWriteIndex()
 		convey.So(headLen, convey.ShouldEqual, HeaderLengthOfTheProtocol)
 	})
 
@@ -1976,7 +1977,7 @@ func Test_openpacket(t *testing.T) {
 		err = proto.closePacket(true)
 		convey.So(err, convey.ShouldBeNil)
 
-		proto.append(nil, make([]byte, 1024)...)
+		proto.append(make([]byte, 1024)...)
 	})
 
 	convey.Convey("closepacket falied.", t, func() {
@@ -1999,7 +2000,7 @@ func Test_openpacket(t *testing.T) {
 		ses := NewSession(context.TODO(), proto, nil)
 		proto.ses = ses
 
-		err = proto.openPacket()
+		proto.openPacket()
 		convey.So(err, convey.ShouldBeNil)
 
 		proto.beginOffset = proto.tcpConn.OutBuf().GetWriteIndex() - proto.tcpConn.OutBuf().GetReadIndex()
@@ -2090,23 +2091,25 @@ func Test_openpacket(t *testing.T) {
 		for _, c := range kases {
 			proto.SetSequenceID(0)
 
-			err = proto.openRow(nil)
+			proto.openRow()
 			convey.So(err, convey.ShouldBeNil)
 
 			outBuf := proto.tcpConn.OutBuf()
-			beginOffset := proto.beginOffset
 
-			rawBuf := proto.append(nil, c.data...)
+			beginIdx := proto.getBeginWriteIndex()
 
-			err = proto.closeRow(nil)
+			proto.append(c.data...)
+
+			widx := outBuf.GetWriteIndex()
+
+			err = proto.closeRow()
 			convey.So(err, convey.ShouldBeNil)
 
 			want := mysqlPack(c.data)
 
 			convey.So(c.len, convey.ShouldEqual, len(want))
 
-			widx := outBuf.GetWriteIndex()
-			beginIdx := beginWriteIndex(outBuf, beginOffset)
+			rawBuf := proto.tcpConn.OutBuf().RawBuf()
 			res := rawBuf[beginIdx:widx]
 
 			convey.So(bytes.Equal(res, want), convey.ShouldBeTrue)

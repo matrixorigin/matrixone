@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -29,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util/protoc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -414,8 +414,7 @@ func TestSnapshotTxnOperator(t *testing.T) {
 		v, err := tc.Snapshot()
 		assert.NoError(t, err)
 
-		tc2, err := newTxnOperatorWithSnapshot(tc.sender, v)
-		assert.NoError(t, err)
+		tc2 := newTxnOperatorWithSnapshot(tc.sender, v)
 		assert.True(t, tc2.mu.txn.Mirror)
 
 		tc2.mu.txn.Mirror = false

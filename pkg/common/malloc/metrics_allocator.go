@@ -16,31 +16,31 @@ package malloc
 
 import (
 	"sync"
-	"sync/atomic"
-	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 type MetricsAllocator struct {
 	upstream Allocator
-	metrics  *Metrics
-	inUse    sync.Map // unsafe.Pointer -> size
+	funcPool sync.Pool
 }
 
-type Metrics struct {
-	AllocateBytesDelta atomic.Uint64
-	FreeBytesDelta     atomic.Uint64
-}
-
-func NewMetricsAllocator(upstream Allocator, metrics *Metrics) *MetricsAllocator {
-	return &MetricsAllocator{
+func NewMetricsAllocator(upstream Allocator) *MetricsAllocator {
+	ret := &MetricsAllocator{
 		upstream: upstream,
-		metrics:  metrics,
 	}
+	ret.funcPool = sync.Pool{
+		New: func() any {
+			argumented := new(argumentedFuncDeallocator[uint64])
+			argumented.fn = func(_ unsafe.Pointer, size uint64) {
+				metric.MallocCounterFreeBytes.Add(float64(size))
+				ret.funcPool.Put(argumented)
+			}
+			return argumented
+		},
+	}
+	return ret
 }
 
 type AllocateInfo struct {
@@ -51,44 +51,9 @@ type AllocateInfo struct {
 var _ Allocator = new(MetricsAllocator)
 
 func (m *MetricsAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator) {
-	m.metrics.AllocateBytesDelta.Add(size)
+	metric.MallocCounterAllocateBytes.Add(float64(size))
 	ptr, dec := m.upstream.Allocate(size)
-	m.inUse.Store(ptr, AllocateInfo{
-		Deallocator: dec,
-		Size:        size,
-	})
-	return ptr, m
-}
-
-var _ Deallocator = new(MetricsAllocator)
-
-func (m *MetricsAllocator) Deallocate(ptr unsafe.Pointer) {
-	v, ok := m.inUse.LoadAndDelete(ptr)
-	if !ok {
-		panic("double free")
-	}
-	info := v.(AllocateInfo)
-	m.metrics.FreeBytesDelta.Add(info.Size)
-	info.Deallocator.Deallocate(ptr)
-}
-
-func (m *Metrics) startExport() {
-	var sumAllocateBytes, sumFreeBytes, lastSumAllocateBytes uint64
-	for range time.NewTicker(time.Second).C {
-		allocateBytes := m.AllocateBytesDelta.Swap(0)
-		freeBytes := m.FreeBytesDelta.Swap(0)
-
-		sumAllocateBytes += allocateBytes
-		sumFreeBytes += freeBytes
-		if sumAllocateBytes-lastSumAllocateBytes > (1 << 30) {
-			logutil.Info("malloc stats",
-				zap.Any("allocate", sumAllocateBytes),
-				zap.Any("free", sumFreeBytes),
-			)
-			lastSumAllocateBytes = sumAllocateBytes
-		}
-
-		metric.MallocCounterAllocateBytes.Add(float64(allocateBytes))
-		metric.MallocCounterFreeBytes.Add(float64(freeBytes))
-	}
+	fn := m.funcPool.Get().(*argumentedFuncDeallocator[uint64])
+	fn.SetArgument(size)
+	return ptr, ChainDeallocator(dec, fn)
 }

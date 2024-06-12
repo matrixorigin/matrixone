@@ -351,6 +351,7 @@ func testFileService(
 			for i, entry := range readVector.Entries {
 				assert.Equal(t, parts[i], entry.Data, "part %d, got %+v", i, entry)
 			}
+			readVector.Release()
 
 			// read, random entry
 			parts = randomSplit(content, 16)
@@ -368,6 +369,7 @@ func testFileService(
 			for i, entry := range readVector.Entries {
 				assert.Equal(t, parts[i], entry.Data, "path: %s, entry: %+v, content %v", filePath, entry, content)
 			}
+			readVector.Release()
 
 			// read, random entry with ReadCloserForRead
 			parts = randomSplit(content, len(content)/10)

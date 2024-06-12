@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -154,6 +156,7 @@ func NewFlushTableTailTask(
 	}
 	task.schema = rel.Schema().(*catalog.Schema)
 
+	objSeen := make(map[*catalog.ObjectEntry]struct{})
 	for _, obj := range objs {
 		task.scopes = append(task.scopes, *obj.AsCommonID())
 		var hdl handle.Object
@@ -161,6 +164,10 @@ func NewFlushTableTailTask(
 		if err != nil {
 			return
 		}
+		if _, ok := objSeen[obj]; ok {
+			continue
+		}
+		objSeen[obj] = struct{}{}
 		if hdl.IsAppendable() && !obj.HasDropCommitted() {
 			task.aObjMetas = append(task.aObjMetas, obj)
 			task.aObjHandles = append(task.aObjHandles, hdl)
@@ -192,6 +199,10 @@ func NewFlushTableTailTask(
 		if err != nil {
 			return
 		}
+		if _, ok := objSeen[obj]; ok {
+			continue
+		}
+		objSeen[obj] = struct{}{}
 		task.delSrcMetas = append(task.delSrcMetas, obj)
 		task.delSrcHandles = append(task.delSrcHandles, hdl)
 	}
@@ -379,9 +390,9 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 		return
 	}
 	bat = containers.NewBatch()
-	rowCntBeforeApplyDelete := views.Columns[0].Length()
-	deletes := views.DeleteMask
-	views.ApplyDeletes()
+	totalRowCnt := views.Columns[0].Length()
+	bat.Deletes = views.DeleteMask.Clone()
+	task.aObjDeletesCnt += bat.Deletes.GetCardinality()
 	defer views.Close()
 	for i, colidx := range idxs {
 		colview := views.Columns[i]
@@ -399,22 +410,21 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 		bat.AddVector(task.schema.ColDefs[colidx].Name, vec.TryConvertConst())
 	}
 
-	if deletes != nil {
-		task.aObjDeletesCnt += deletes.GetCardinality()
-	}
-
 	var sortMapping []int64
 	if sortKeyPos >= 0 {
 		if objIdx == 0 {
 			logutil.Infof("flushtabletail sort obj on %s", bat.Attrs[sortKeyPos])
 		}
 		sortMapping, err = mergesort.SortBlockColumns(bat.Vecs, sortKeyPos, task.rt.VectorPool.Transient)
+		if bat.Deletes != nil {
+			nulls.Filter(bat.Deletes, sortMapping, false)
+		}
 		if err != nil {
 			return
 		}
 	}
 	if task.doTransfer {
-		mergesort.AddSortPhaseMapping(task.transMappings, objIdx, rowCntBeforeApplyDelete, deletes, sortMapping)
+		mergesort.AddSortPhaseMapping(task.transMappings, objIdx, totalRowCnt, sortMapping)
 	}
 	return
 }
@@ -454,6 +464,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 			return
 		}
 	}
+
 	for i := range task.aObjHandles {
 		bat, empty, err := task.prepareAObjSortedData(ctx, i, readColIdxs, sortKeyPos)
 		if err != nil {
@@ -470,7 +481,19 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 		}
 	}()
 
-	if len(readedBats) == 0 {
+	// prepare merge
+	// toLayout describes the layout of the output batch, i.e. [8192, 8192, 8192, 4242]
+	toLayout := make([]uint32, 0, len(readedBats))
+	if sortKeyPos < 0 {
+		// no pk, just pick the first column to reshape
+		sortKeyPos = 0
+	}
+	for _, bat := range readedBats {
+		task.mergeRowsCnt += bat.Vecs[sortKeyPos].Length()
+	}
+	task.mergeRowsCnt -= task.aObjDeletesCnt
+
+	if task.mergeRowsCnt == 0 {
 		// just soft delete all Objects
 		for _, obj := range task.aObjHandles {
 			tbl := obj.GetRelation()
@@ -484,23 +507,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 		return nil
 	}
 
-	// prepare merge
-	// fromLayout describes the layout of the input batch, which is a list of batch length
-	fromLayout := make([]uint32, 0, len(readedBats))
-	// toLayout describes the layout of the output batch, i.e. [8192, 8192, 8192, 4242]
-	toLayout := make([]uint32, 0, len(readedBats))
-	totalRowCnt := 0
-	if sortKeyPos < 0 {
-		// no pk, just pick the first column to reshape
-		sortKeyPos = 0
-	}
-	for _, bat := range readedBats {
-		vec := bat.Vecs[sortKeyPos]
-		fromLayout = append(fromLayout, uint32(vec.Length()))
-		totalRowCnt += vec.Length()
-	}
-	task.mergeRowsCnt = totalRowCnt
-	rowsLeft := totalRowCnt
+	rowsLeft := task.mergeRowsCnt
 	for rowsLeft > 0 {
 		if rowsLeft > int(schema.BlockMaxRows) {
 			toLayout = append(toLayout, schema.BlockMaxRows)
@@ -514,18 +521,17 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	// do first sort
 	var writtenBatches []*batch.Batch
 	var releaseF func()
-	var mapping []uint32
+	var mapping []int
 	if schema.HasSortKey() {
-		writtenBatches, releaseF, mapping, err = mergesort.MergeAObj(ctx, task, readedBats, sortKeyPos, schema.BlockMaxRows, len(toLayout))
+		writtenBatches, releaseF, mapping, err = mergesort.MergeAObj(ctx, task, readedBats, sortKeyPos, toLayout)
 		if err != nil {
 			return
 		}
 	} else {
-		cnBatches := make([]*batch.Batch, len(readedBats))
-		for i := range readedBats {
-			cnBatches[i] = containers.ToCNBatch(readedBats[i])
+		writtenBatches, releaseF, mapping, err = mergesort.ReshapeBatches(readedBats, toLayout, task)
+		if err != nil {
+			return
 		}
-		writtenBatches, releaseF = mergesort.ReshapeBatches(cnBatches, fromLayout, toLayout, task)
 	}
 	defer releaseF()
 	if task.doTransfer {
@@ -534,7 +540,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 
 	// write!
 	// create new object to hold merged blocks
-	if task.createdObjHandles, err = task.rel.CreateNonAppendableObject(false, nil); err != nil {
+	if task.createdObjHandles, err = task.rel.CreateNonAppendableObject(nil); err != nil {
 		return
 	}
 	toObjectEntry := task.createdObjHandles.GetMeta().(*catalog.ObjectEntry)
@@ -678,16 +684,37 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 		}
 	}()
 	emtpyDelObjIdx = make([]*bitmap.Bitmap, len(task.delSrcMetas))
+	var (
+		enableDeltaStat = task.schema.Name == "bmsql_stock"
+		tbl             *catalog.TableEntry
+		tombstone       data.Tombstone
+		locMap          = make(map[string]int)
+		now             time.Time
+	)
+
+	if enableDeltaStat {
+		tbl = task.rel.GetMeta().(*catalog.TableEntry)
+		now = time.Now()
+	}
 	for i, obj := range task.delSrcMetas {
 		objData := obj.GetObjectData()
 		var deletes *containers.Batch
 		emptyDelObjs := &bitmap.Bitmap{}
 		emptyDelObjs.InitWithSize(int64(obj.BlockCnt()))
+		if enableDeltaStat {
+			tombstone = tbl.TryGetTombstone(obj.ID)
+		}
 		for j := 0; j < obj.BlockCnt(); j++ {
 			found, _ := objData.HasDeleteIntentsPreparedInByBlock(uint16(j), types.TS{}, task.txn.GetStartTS())
 			if !found {
 				emptyDelObjs.Add(uint64(j))
 				continue
+			}
+			if enableDeltaStat && tombstone != nil {
+				loc := tombstone.GetLatestDeltaloc(uint16(j))
+				if loc != nil {
+					locMap[loc.String()]++
+				}
 			}
 			if deletes, err = objData.CollectDeleteInRangeByBlock(
 				ctx, uint16(j), types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
@@ -706,6 +733,11 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 			bufferBatch.Extend(deletes)
 		}
 		emtpyDelObjIdx[i] = emptyDelObjs
+	}
+	if enableDeltaStat {
+		cost := time.Since(now)
+		logutil.Infof("[FlushTabletail] task %d collect tombstone for %s cost %v, location distribution(%v):%v",
+			task.ID(), task.schema.Name, cost, len(locMap), locMap)
 	}
 	if bufferBatch != nil {
 		// make sure every batch in deltaloc object is sorted by rowid

@@ -350,8 +350,8 @@ func (o *testOperator) Rollback(ctx context.Context) error {
 	return nil
 }
 
-func (o *testOperator) Snapshot() ([]byte, error) {
-	return nil, nil
+func (o *testOperator) Snapshot() (txn.CNTxnSnapshot, error) {
+	return txn.CNTxnSnapshot{}, nil
 }
 
 func (o *testOperator) Txn() txn.TxnMeta {

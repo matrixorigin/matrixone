@@ -628,7 +628,7 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 		switch exprImpl.F.Func.ObjName {
 		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "in", "prefix_in":
 			switch e := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec:
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List:
 				return extractColRefInFilter(exprImpl.F.Args[0])
 			case *plan.Expr_F:
 				switch e.F.Func.ObjName {
@@ -1105,12 +1105,20 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	// If it is Expr_List, perform constant folding on its elements
 	if elist := expr.GetList(); elist != nil {
 		exprList := elist.List
+		cannotFold := false
 		for i := range exprList {
 			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst)
 			if err != nil {
 				return nil, err
 			}
 			exprList[i] = foldExpr
+			if foldExpr.GetLit() == nil {
+				cannotFold = true
+			}
+		}
+
+		if cannotFold {
+			return expr, nil
 		}
 
 		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
@@ -1236,8 +1244,13 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // checkNoNeedCast
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
-func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
-	if constExpr == nil {
+func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
+	if constExpr.GetP() != nil && columnT.IsNumeric() {
+		return true
+	}
+
+	lit := constExpr.GetLit()
+	if lit == nil {
 		return false
 	}
 
@@ -1271,7 +1284,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 		}
 
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		val, valOk := constExpr.Value.(*plan.Literal_I64Val)
+		val, valOk := lit.Value.(*plan.Literal_I64Val)
 		if !valOk {
 			return false
 		}
@@ -1308,7 +1321,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 		}
 
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		val_u, valOk := constExpr.Value.(*plan.Literal_U64Val)
+		val_u, valOk := lit.Value.(*plan.Literal_U64Val)
 		if !valOk {
 			return false
 		}
@@ -1782,6 +1795,7 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 	default:
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}
+	out.WriteString(fmt.Sprintf("%sExpr_Selectivity(%v)", prefix, expr.Selectivity))
 }
 
 // databaseIsValid checks whether the database exists or not.
@@ -2021,12 +2035,8 @@ func MakeIntervalExpr(num int64, str string) *Expr {
 }
 
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
-	rightType := plan.Type{Id: int32(types.T_tuple)}
-	if matchPrefix {
-		rightType = left.Typ
-	}
 	rightArg := &plan.Expr{
-		Typ: rightType,
+		Typ: left.Typ,
 		Expr: &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
 				Len:  length,

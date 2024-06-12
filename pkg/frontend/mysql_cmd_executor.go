@@ -695,6 +695,14 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				return err
 			}
 			runtime.ProcessLevelRuntime().SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
+		} else if name == "refresh_global_sys_vars_mgr" {
+			// refresh the cache of current account in GSysVarsMgr, load the newest data from `mo_mysql_compatibility_mode` table
+			if value.(int64) == 1 {
+				GSysVarsMgr.Put(ses.GetAccountId(), nil)
+				if err = ses.InitSystemVariables(execCtx.reqCtx); err != nil {
+					return err
+				}
+			}
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
@@ -2300,6 +2308,11 @@ func executeStmtWithWorkspace(ses FeSession,
 	//refresh proc txnOp
 	execCtx.proc.TxnOperator = txnOp
 
+	err = disttae.CheckTxnIsValid(txnOp)
+	if err != nil {
+		return err
+	}
+
 	//!!!NOTE!!!: statement management
 	//2. start statement on workspace
 	txnOp.GetWorkspace().StartStatement()
@@ -2329,6 +2342,12 @@ func executeStmtWithIncrStmt(ses FeSession,
 ) (err error) {
 	ses.EnterFPrint(6)
 	defer ses.ExitFPrint(6)
+
+	err = disttae.CheckTxnIsValid(txnOp)
+	if err != nil {
+		return err
+	}
+
 	if ses.IsDerivedStmt() {
 		return
 	}

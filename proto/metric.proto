@@ -16,6 +16,11 @@ syntax = "proto3";
 package metric;
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/metric";
 
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
+
 message LabelPair {
     string name  = 1;
     string value = 2;
