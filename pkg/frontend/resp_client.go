@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"math"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -162,6 +163,7 @@ const (
 type NullResp struct {
 	username string
 	database string
+	sync.Mutex
 }
 
 func (resper *NullResp) MysqlRrWr() MysqlRrWr {
@@ -170,6 +172,11 @@ func (resper *NullResp) MysqlRrWr() MysqlRrWr {
 }
 
 func (resper *NullResp) GetStr(id PropertyID) string {
+	if resper == nil {
+		return ""
+	}
+	resper.Lock()
+	defer resper.Unlock()
 	switch id {
 	case DBNAME:
 		return resper.database
@@ -182,6 +189,11 @@ func (resper *NullResp) GetStr(id PropertyID) string {
 	}
 }
 func (resper *NullResp) SetStr(id PropertyID, val string) {
+	if resper == nil {
+		return
+	}
+	resper.Lock()
+	defer resper.Unlock()
 	switch id {
 	case DBNAME:
 		resper.database = val

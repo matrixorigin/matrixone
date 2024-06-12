@@ -159,7 +159,7 @@ func (space *tableSpace) prepareApplyANode(node *anode) error {
 	for appended < node.Rows() {
 		appender, err := space.tableHandle.GetAppender()
 		if moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound) {
-			objH, err := space.table.CreateObject(true)
+			objH, err := space.table.CreateObject()
 			if err != nil {
 				return err
 			}
@@ -248,7 +248,7 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 	}
 
 	if shouldCreateNewObj() {
-		space.nobj, err = space.table.CreateNonAppendableObject(false, new(objectio.CreateObjOpt).WithId(sid))
+		space.nobj, err = space.table.CreateNonAppendableObject(new(objectio.CreateObjOpt).WithId(sid))
 		if err != nil {
 			return
 		}
