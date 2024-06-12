@@ -35,7 +35,7 @@ import (
 
 type ReadFilterSearchFuncType func([]*vector.Vector) []int32
 
-type ReadFilter struct {
+type BlockReadFilter struct {
 	HasFakePK          bool
 	Valid              bool
 	SortedSearchFunc   ReadFilterSearchFuncType
@@ -122,7 +122,7 @@ func BlockRead(
 	ts timestamp.Timestamp,
 	filterSeqnums []uint16,
 	filterColTypes []types.Type,
-	filter ReadFilter,
+	filter BlockReadFilter,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 	vp engine.VectorPool,

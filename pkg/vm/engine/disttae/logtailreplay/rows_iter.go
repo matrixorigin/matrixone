@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/tidwall/btree"
@@ -178,6 +179,71 @@ func MinMax(min []byte, max []byte) PrimaryKeyMatchSpec {
 	return PrimaryKeyMatchSpec{}
 }
 
+func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
+	// 0: [,]
+	// 1: (,]
+	// 2: [,)
+	// 3: (,)
+	// 4: prefix between
+	var validCheck func(bb []byte) bool
+	var seek2First func(iter btree.IterG[*PrimaryIndexEntry]) bool
+	switch kind {
+	case 0:
+		validCheck = func(bb []byte) bool { return bytes.Compare(bb, ub) <= 0 }
+		seek2First = func(iter btree.IterG[*PrimaryIndexEntry]) bool { return true }
+	case 1:
+		validCheck = func(bb []byte) bool { return bytes.Compare(bb, ub) <= 0 }
+		seek2First = func(iter btree.IterG[*PrimaryIndexEntry]) bool {
+			for bytes.Equal(iter.Item().Bytes, lb) {
+				if ok := iter.Next(); !ok {
+					return false
+				}
+			}
+			return true
+		}
+	case 2:
+		validCheck = func(bb []byte) bool { return bytes.Compare(bb, ub) < 0 }
+		seek2First = func(iter btree.IterG[*PrimaryIndexEntry]) bool { return true }
+	case 3:
+		validCheck = func(bb []byte) bool { return bytes.Compare(bb, ub) < 0 }
+		seek2First = func(iter btree.IterG[*PrimaryIndexEntry]) bool {
+			for bytes.Equal(iter.Item().Bytes, lb) {
+				if ok := iter.Next(); !ok {
+					return false
+				}
+			}
+			return true
+		}
+	case 4:
+		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) <= 0 }
+		seek2First = func(iter btree.IterG[*PrimaryIndexEntry]) bool { return true }
+	}
+
+	first := true
+	return PrimaryKeyMatchSpec{
+		Name: "Between Kind",
+		Move: func(p *primaryKeyIter) bool {
+			var ok bool
+			if first {
+				first = false
+				if ok = p.iter.Seek(&PrimaryIndexEntry{Bytes: lb}); ok {
+					ok = seek2First(p.iter)
+				}
+
+			} else {
+				ok = p.iter.Next()
+			}
+
+			if !ok {
+				return false
+			}
+
+			item := p.iter.Item()
+			return validCheck(item.Bytes)
+		},
+	}
+}
+
 type phase int
 
 const (
@@ -186,7 +252,7 @@ const (
 	judge phase = 2
 )
 
-func ExactIn(encodes [][]byte) PrimaryKeyMatchSpec {
+func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 	var encoded []byte
 
 	first := true
@@ -206,11 +272,16 @@ func ExactIn(encodes [][]byte) PrimaryKeyMatchSpec {
 	}
 
 	match := func(key []byte) bool {
-		return bytes.Equal(key, encoded)
+		if kind == function.PREFIX_IN {
+			return bytes.HasPrefix(key, encoded)
+		} else {
+			// in
+			return bytes.Equal(key, encoded)
+		}
 	}
 
 	return PrimaryKeyMatchSpec{
-		Name: "ExactIn",
+		Name: "InKind",
 		Move: func(p *primaryKeyIter) bool {
 			if first {
 				first = false

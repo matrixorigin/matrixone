@@ -71,7 +71,7 @@ const (
 	//emptySet
 )
 
-type blockReaderPKFilter struct {
+type BasePKFilter struct {
 	valid bool
 	op    int
 	lb    []byte
@@ -79,7 +79,7 @@ type blockReaderPKFilter struct {
 	oid   types.T
 }
 
-func (b *blockReaderPKFilter) String() string {
+func (b *BasePKFilter) String() string {
 	return fmt.Sprintf("valid = %v, op = %d, lb = %v, ub = %v, oid = %s",
 		b.valid, b.op, b.lb, b.ub, b.oid)
 }
@@ -99,6 +99,7 @@ func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName 
 		return false, 0, nil
 	}
 	if !compPkCol(col.Col.Name, pkName) {
+		fmt.Println(col.Col.Name, pkName)
 		return false, 0, nil
 	}
 
@@ -124,7 +125,7 @@ func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName 
 // left op in (">", ">=", "=", "<", "<="), right op in (">", ">=", "=", "<", "<=")
 // left op AND right op
 // left op OR right op
-func mergeFilters(left, right blockReaderPKFilter, connector int) (finalFilter blockReaderPKFilter) {
+func mergeFilters(left, right BasePKFilter, connector int) (finalFilter BasePKFilter) {
 	switch connector {
 	case function.AND:
 		switch left.op {
@@ -454,13 +455,13 @@ func mergeFilters(left, right blockReaderPKFilter, connector int) (finalFilter b
 	return
 }
 
-func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, proc *process.Process) (filter blockReaderPKFilter) {
+func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process.Process) (filter BasePKFilter) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch name := exprImpl.F.Func.ObjName; name {
 		case "and":
-			leftFilter := constructPKFilter(exprImpl.F.Args[0], tblDef, pkName, proc)
-			rightFilter := constructPKFilter(exprImpl.F.Args[1], tblDef, pkName, proc)
+			leftFilter := constructBasePKFilter(exprImpl.F.Args[0], tblDef, proc)
+			rightFilter := constructBasePKFilter(exprImpl.F.Args[1], tblDef, proc)
 			if !leftFilter.valid {
 				return rightFilter
 			}
@@ -473,8 +474,8 @@ func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, pr
 			filter.oid = leftFilter.oid
 
 		case "or":
-			leftFilter := constructPKFilter(exprImpl.F.Args[0], tblDef, pkName, proc)
-			rightFilter := constructPKFilter(exprImpl.F.Args[1], tblDef, pkName, proc)
+			leftFilter := constructBasePKFilter(exprImpl.F.Args[0], tblDef, proc)
+			rightFilter := constructBasePKFilter(exprImpl.F.Args[1], tblDef, proc)
 			if !leftFilter.valid {
 				return rightFilter
 			}
@@ -488,7 +489,7 @@ func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, pr
 
 		case ">=":
 			//a >= ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
 			if !ok {
 				return
 			}
@@ -499,7 +500,7 @@ func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, pr
 
 		case "<=":
 			//a <= ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
 			if !ok {
 				return
 			}
@@ -510,7 +511,7 @@ func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, pr
 
 		case ">":
 			//a > ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
 			if !ok {
 				return
 			}
@@ -521,7 +522,7 @@ func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, pr
 
 		case "<":
 			//a < ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
 			if !ok {
 				return
 			}
@@ -532,7 +533,7 @@ func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, pr
 
 		case "=":
 			// a = ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
 			if !ok {
 				return
 			}
@@ -542,7 +543,7 @@ func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, pr
 			filter.oid = oid
 
 		case "prefix_eq":
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
 			if !ok {
 				return
 			}
@@ -552,7 +553,7 @@ func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, pr
 			filter.oid = oid
 
 		case "in":
-			ok, oid, vals := evalValue(exprImpl, tblDef, true, pkName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, true, tblDef.Pkey.PkeyColName, proc)
 			if !ok {
 				return
 			}
@@ -562,7 +563,7 @@ func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, pr
 			filter.oid = oid
 
 		case "prefix_in":
-			ok, oid, vals := evalValue(exprImpl, tblDef, true, pkName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, true, tblDef.Pkey.PkeyColName, proc)
 			if !ok {
 				return
 			}
@@ -572,7 +573,7 @@ func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, pr
 			filter.oid = oid
 
 		case "between":
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
 			if !ok {
 				return
 			}
@@ -583,7 +584,7 @@ func constructPKFilter(expr *plan.Expr, tblDef *plan.TableDef, pkName string, pr
 			filter.oid = oid
 
 		case "prefix_between":
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, pkName, proc)
+			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
 			if !ok {
 				return
 			}
@@ -1065,17 +1066,17 @@ func getNonSortedPKSearchFuncByPKVec(
 
 func getNonCompositePKSearchFuncByExpr(
 	expr *plan.Expr, tblDef *plan.TableDef, pkName string, proc *process.Process,
-) (bool, bool, blockio.ReadFilter) {
-	pkFilter := constructPKFilter(expr, tblDef, pkName, proc)
+) (bool, bool, blockio.BlockReadFilter) {
+	pkFilter := constructBasePKFilter(expr, tblDef, proc)
 	if !pkFilter.valid {
-		return false, false, blockio.ReadFilter{}
+		return false, false, blockio.BlockReadFilter{}
 	}
 
 	if tblDef.Pkey.CompPkeyCol != nil {
 		pkFilter.oid = types.T_varchar
 	}
 
-	var readFilter blockio.ReadFilter
+	var readFilter blockio.BlockReadFilter
 	var sortedSearchFunc, unSortedSearchFunc func(*vector.Vector) []int32
 
 	readFilter.HasFakePK = pkName == catalog.FakePrimaryKeyColName
@@ -1469,93 +1470,92 @@ func evalLiteralExpr(expr *plan.Literal, oid types.T) (canEval bool, val any) {
 	return
 }
 
-type PKFilter struct {
-	op      uint8
-	val     any
+type InMemPKFilter struct {
+	op int
+	//val     any
 	packed  [][]byte
 	isVec   bool
 	isValid bool
-	isNull  bool
+	iter    logtailreplay.RowsIter
+	//isNull  bool
 }
 
-func (f *PKFilter) String() string {
+func (f *InMemPKFilter) String() string {
 	var buf bytes.Buffer
 	buf.WriteString(
-		fmt.Sprintf("PKFilter{op: %d, isVec: %v, isValid: %v, isNull: %v, val: %v, data(len=%d)",
-			f.op, f.isVec, f.isValid, f.isNull, f.val, len(f.packed),
+		fmt.Sprintf("InMemPKFilter{op: %d, isVec: %v, isValid: %v, val: %v, data(len=%d)",
+			f.op, f.isVec, f.isValid, len(f.packed),
 		))
 	return buf.String()
 }
 
-func (f *PKFilter) SetNull() {
-	f.isNull = true
+func (f *InMemPKFilter) SetNull() {
 	f.isValid = false
 }
 
-func (f *PKFilter) SetFullData(op uint8, isVec bool, val ...[]byte) {
+func (f *InMemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 	f.packed = append(f.packed, val...)
 	f.op = op
 	f.isVec = isVec
 	f.isValid = true
-	f.isNull = false
 }
 
-func (f *PKFilter) SetVal(op uint8, isVec bool, val any) {
-	f.op = op
-	f.val = val
-	f.isVec = isVec
-	f.isValid = true
-	f.isNull = false
-}
+//func (f *InMemPKFilter) SetVal(op uint8, isVec bool, val any) {
+//	f.op = op
+//	f.val = val
+//	f.isVec = isVec
+//	f.isValid = true
+//	f.isNull = false
+//}
 
-func getPKFilterByExpr(
-	expr *plan.Expr,
-	pkName string,
-	oid types.T,
-	tbl *txnTable,
-) (retFilter PKFilter) {
-	valExpr := getPkExpr(expr, pkName, tbl.proc.Load())
-	if valExpr == nil {
-		return
-	}
-	switch exprImpl := valExpr.Expr.(type) {
-	case *plan.Expr_Lit:
-		if exprImpl.Lit.Isnull {
-			retFilter.SetNull()
-			return
-		}
-
-		canEval, val := evalLiteralExpr(exprImpl.Lit, oid)
-		if !canEval {
-			return
-		}
-		retFilter.SetVal(function.EQUAL, false, val)
-		return
-	case *plan.Expr_Vec:
-		var packed [][]byte
-		var packer *types.Packer
-
-		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(exprImpl.Vec.Data)
-
-		put := tbl.getTxn().engine.packerPool.Get(&packer)
-		packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
-		put.Put()
-
-		retFilter.SetFullData(function.IN, true, packed...)
-		return
-	case *plan.Expr_F:
-		switch exprImpl.F.Func.ObjName {
-		case "prefix_eq":
-			val := []byte(exprImpl.F.Args[1].GetLit().GetSval())
-			retFilter.SetVal(function.PREFIX_EQ, false, val)
-			return
-			// case "prefix_between":
-			// case "prefix_in":
-		}
-	}
-	return
-}
+//func getPKFilterByExpr(
+//	expr *plan.Expr,
+//	pkName string,
+//	oid types.T,
+//	tbl *txnTable,
+//) (retFilter InMemPKFilter) {
+//	valExpr := getPkExpr(expr, pkName, tbl.proc.Load())
+//	if valExpr == nil {
+//		return
+//	}
+//	switch exprImpl := valExpr.Expr.(type) {
+//	case *plan.Expr_Lit:
+//		if exprImpl.Lit.Isnull {
+//			retFilter.SetNull()
+//			return
+//		}
+//
+//		canEval, val := evalLiteralExpr(exprImpl.Lit, oid)
+//		if !canEval {
+//			return
+//		}
+//		retFilter.SetVal(function.EQUAL, false, val)
+//		return
+//	case *plan.Expr_Vec:
+//		var packed [][]byte
+//		var packer *types.Packer
+//
+//		vec := vector.NewVec(types.T_any.ToType())
+//		vec.UnmarshalBinary(exprImpl.Vec.Data)
+//
+//		put := tbl.getTxn().engine.packerPool.Get(&packer)
+//		packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
+//		put.Put()
+//
+//		retFilter.SetFullData(function.IN, true, packed...)
+//		return
+//	case *plan.Expr_F:
+//		switch exprImpl.F.Func.ObjName {
+//		case "prefix_eq":
+//			val := []byte(exprImpl.F.Args[1].GetLit().GetSval())
+//			retFilter.SetVal(function.PREFIX_EQ, false, val)
+//			return
+//			// case "prefix_between":
+//			// case "prefix_in":
+//		}
+//	}
+//	return
+//}
 
 // return canEval, isNull, isVec, evaledVal
 func getPkValueByExpr(
