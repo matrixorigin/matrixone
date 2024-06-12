@@ -54,6 +54,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(qc qcl
 				clusterservice.WithDisableRefresh(),
 				clusterservice.WithServices([]metadata.CNService{{
 					ServiceID:    cn.ServiceID,
+					SQLAddress:   cn.SQLAddress,
 					QueryAddress: address,
 				}}, nil))
 			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
@@ -83,6 +84,16 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(qc qcl
 				}
 				return nil
 			}, false)
+			qs.AddHandleFunc(pb.CmdMethod_ResetSession, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+				if req.ResetSessionRequest == nil {
+					return moerr.NewInternalError(ctx, "bad request")
+				}
+				resp.ResetSessionResponse = &pb.ResetSessionResponse{
+					AuthString: nil,
+					Success:    true,
+				}
+				return nil
+			}, false)
 			err = qs.Start()
 			assert.NoError(t, err)
 
@@ -97,7 +108,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(qc qcl
 
 }
 
-func TestQueryServiceMigrateConn(t *testing.T) {
+func TestQueryServiceMigrateFrom(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1"}
 	runTestWithQueryService(t, cn, func(qc qclient.QueryClient, addr string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -114,7 +125,7 @@ func TestQueryServiceMigrateConn(t *testing.T) {
 	})
 }
 
-func TestQueryServiceMigrateFrom(t *testing.T) {
+func TestQueryServiceMigrateTo(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1"}
 	runTestWithQueryService(t, cn, func(qc qclient.QueryClient, addr string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)

@@ -61,17 +61,13 @@ func (r *pluginRouter) Route(
 		if re.CN == nil {
 			return nil, moerr.NewInternalErrorNoCtx("no CN server selected")
 		}
-		hash, err := ci.labelInfo.getHash()
-		if err != nil {
-			return nil, err
-		}
 		v2.ProxyConnectSelectCounter.Inc()
 		return &CNServer{
 			reqLabel: ci.labelInfo,
 			cnLabel:  re.CN.Labels,
 			uuid:     re.CN.ServiceID,
 			addr:     re.CN.SQLAddress,
-			hash:     hash,
+			hash:     ci.hash,
 		}, nil
 	case plugin.Reject:
 		v2.ProxyConnectRejectCounter.Inc()
