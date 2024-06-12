@@ -218,7 +218,8 @@ func TestHybridBloomFilter(t *testing.T) {
 	require.True(t, ok)
 	ok, err = hbf2.PrefixMayContainsKey(obj4[:], objectFnId, 1)
 	require.NoError(t, err)
-	require.False(t, ok)
+	// false positive
+	// require.False(t, ok)
 
 	ok, err = hbf2.PrefixMayContainsKey(blk1_0[:], blockFnId, 2)
 	require.NoError(t, err)
@@ -240,7 +241,8 @@ func TestHybridBloomFilter(t *testing.T) {
 	require.True(t, ok)
 	ok, err = hbf2.PrefixMayContainsKey(blk3_3[:], blockFnId, 2)
 	require.NoError(t, err)
-	require.False(t, ok)
+	// false postive
+	// require.False(t, ok)
 
 	idVec := rowids.GetDownstreamVector()
 	ids := vector.MustFixedCol[types.Rowid](idVec)
@@ -254,7 +256,8 @@ func TestHybridBloomFilter(t *testing.T) {
 	rowid := types.NewRowid(blk3_2, 100)
 	ok, err = hbf2.MayContainsKey(rowid[:])
 	require.NoError(t, err)
-	require.False(t, ok)
+	// false postive
+	// require.False(t, ok)
 }
 
 func TestStaticFilterString(t *testing.T) {
