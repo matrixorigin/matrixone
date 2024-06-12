@@ -118,7 +118,11 @@ func newMessageSenderOnClient(
 		sender.ctx = ctx
 	}
 	sender.c = c
-	return sender, nil
+
+	if sender.receiveCh == nil {
+		sender.receiveCh, err = sender.streamSender.Receive()
+	}
+	return sender, err
 }
 
 // XXX we can set a scope as argument directly next day.
