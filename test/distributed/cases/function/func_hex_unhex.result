@@ -29,7 +29,8 @@ select hex('qqqqq');
 hex(qqqqq)
 7171717171
 select hex('abcdefghijklmnopqrstuvwxyz');
-[unknown result because it is related to issue#16710]
+hex(abcdefghijklmnopqrstuvwxyz)
+6162636465666768696A6B6C6D6E6F707172737475767778797A
 select hex('edwrgewgrewrwe');
 hex(edwrgewgrewrwe)
 6564777267657767726577727765
@@ -67,9 +68,11 @@ select hex('!@#');
 hex(!@#)
 214023
 select hex('@##%%&^^&#$#%^&^*(()#^&**(*(');
-[unknown result because it is related to issue#16710]
+hex(@##%%&^^&#$#%^&^*(()#^&**(*()
+4023232525265E5E26232423255E265E2A282829235E262A2A282A28
 select hex('}}}{:"{:""');
-[unknown result because it is related to issue#16710]
+hex(}}}{:"{:"")
+7D7D7D7B3A227B3A2222
 select hex('%');
 hex(%)
 25
@@ -77,15 +80,20 @@ select hex(' ');
 hex( )
 20
 select hex('你好');
-[unknown result because it is related to issue#16710]
+hex(你好)
+E4BDA0E5A5BD
 select hex('数据库');
-[unknown result because it is related to issue#16710]
+hex(数据库)
+E695B0E68DAEE5BA93
 select hex('数据库云平台');
-[unknown result because it is related to issue#16710]
+hex(数据库云平台)
+E695B0E68DAEE5BA93E4BA91E5B9B3E58FB0
 select hex('欢迎来到 MatrixOne！');
-[unknown result because it is related to issue#16710]
+hex(欢迎来到 MatrixOne！)
+E6ACA2E8BF8EE69DA5E588B0204D61747269784F6E65EFBC81
 select hex('😀');
-[unknown result because it is related to issue#16710]
+hex(😀)
+F09F9880
 select hex(CAST(NULL AS UNSIGNED));
 hex(cast(null as unsigned))
 null
@@ -129,13 +137,17 @@ select hex('ZZZ999');
 hex(ZZZ999)
 5A5A5A393939
 select hex('0123456789abcdef');
-[unknown result because it is related to issue#16710]
+hex(0123456789abcdef)
+30313233343536373839616263646566
 select hex('!"#$%&/()=?`~''_+-*^');
-[unknown result because it is related to issue#16710]
+hex(!"#$%&/()=?`~'_+-*^)
+2122232425262F28293D3F607E275F2B2D2A5E
 select hex(' 2543g4365435    423532543254&&*32grde5y43');
-[unknown result because it is related to issue#16710]
+hex( 2543g4365435    423532543254&&*32grde5y43)
+203235343367343336353433352020202034323335333235343332353426262A33326772646535793433
 select hex('');
-[unknown result because it is related to issue#16710]
+hex()
+
 select unhex('7B');
 unhex(7B)
 {
