@@ -300,7 +300,7 @@ func (s *storage) Read(
 	ctx context.Context,
 	shard pb.TableShard,
 	method int,
-	payload []byte,
+	param pb.ReadParam,
 	ts timestamp.Timestamp,
 ) ([]byte, error) {
 	// TODO: implement this

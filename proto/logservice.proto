@@ -16,12 +16,15 @@
 
 syntax = "proto3";
 package logservice;
+
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/logservice";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "metadata.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = false;
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
 
 enum UpdateType {
   LeaseHolderIDUpdate = 0;

@@ -16,12 +16,15 @@
 
 syntax = "proto3";
 package lock; 
+
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/lock";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "timestamp.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = true;
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
 
 // Granularity row granularity, single row or row range
 enum Granularity {
