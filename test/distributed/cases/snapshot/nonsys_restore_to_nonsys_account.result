@@ -526,8 +526,8 @@ drop snapshot if exists sp10;
 create snapshot sp10 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp10    2024-05-17 04:45:36.113777    account    acc01        
-sp09    2024-05-17 04:45:35.904463    account    acc01        
+sp10    2024-05-17 04:45:36.113777    account    acc01
+sp09    2024-05-17 04:45:35.904463    account    acc01
 restore account acc01 from snapshot sp09;
 select * from table02;
 col1    col2
@@ -732,11 +732,11 @@ Table    Create Table
 tm2    CREATE TABLE `tm2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp15    2024-05-17 04:45:37.101762    account    acc01        
-sp14    2024-05-17 04:45:36.930036    account    acc01        
-sp13    2024-05-17 04:45:36.831314    account    acc01        
-sp12    2024-05-17 04:45:36.720739    account    acc01        
-sp11    2024-05-17 04:45:36.632035    account    acc01        
+sp15    2024-05-17 04:45:37.101762    account    acc01
+sp14    2024-05-17 04:45:36.930036    account    acc01
+sp13    2024-05-17 04:45:36.831314    account    acc01
+sp12    2024-05-17 04:45:36.720739    account    acc01
+sp11    2024-05-17 04:45:36.632035    account    acc01
 drop database db03;
 drop snapshot sp15;
 drop snapshot sp14;
@@ -911,8 +911,8 @@ Table    Create Table
 table01    CREATE TABLE `table01` (\n  `col1` INT DEFAULT NULL,\n  `col2` ENUM('a','b','c') DEFAULT NULL\n)
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp15    2024-05-17 04:45:39.30566    account    acc01        
-sp14    2024-05-17 04:45:38.940086    account    acc01        
+sp15    2024-05-17 04:45:39.30566    account    acc01
+sp14    2024-05-17 04:45:38.940086    account    acc01
 drop snapshot sp14;
 drop snapshot sp15;
 drop database db07;
@@ -1014,7 +1014,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp16    2024-05-17 04:45:40.39858    account    acc01        
+sp16    2024-05-17 04:45:40.39858    account    acc01
 drop database db09;
 drop database db10;
 drop snapshot sp16;
@@ -1083,14 +1083,16 @@ col1    col2
 23420    32432543
 show columns from pri01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DECIMAL128(38)    YES        null        
+col1    INT(32)    NO    PRI    null
+col2    DECIMAL(38)    YES        null
+col1    INT(32)    NO    PRI    null
+col2    DECIMAL128(38)    YES        null
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp18'} where reldatabase = 'db11';
 count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp18'} where datname = 'db11';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-279542    db11    def    create database db11    2    2    2024-05-17 12:45:40    46    
+279542    db11    def    create database db11    2    2    2024-05-17 12:45:40    46
 select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database = 'db11';
 attname
 __mo_rowid
