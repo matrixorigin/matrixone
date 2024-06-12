@@ -527,40 +527,39 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 	readSchema *catalog.Schema,
 	colIdxes []int,
 	skipDeletes bool,
-	bat *containers.Batch,
 	mp *mpool.MPool,
-) error {
+) (view *containers.BlockView, err error) {
 	node.object.RLock()
 	defer node.object.RUnlock()
 	maxRow, visible, deSels, err := node.object.appendMVCC.GetVisibleRowLocked(ctx, txn)
 	if !visible || err != nil {
 		// blk.RUnlock()
-		return err
+		return
 	}
-	logutil.Infof("resolveInMemoryColumnDatas1111: %d, %p", maxRow, bat)
-	var srcBat *containers.Batch
-	srcBat, err = node.GetDataWindow(readSchema, colIdxes, 0, maxRow, mp)
+	data, err := node.GetDataWindow(readSchema, colIdxes, 0, maxRow, mp)
 	if err != nil {
-		return err
+		return
 	}
-	bat.Vecs = srcBat.Vecs
-	logutil.Infof("resolveInMemoryColumnDatas: %d, %p", bat.Length(), bat)
+	view = containers.NewBlockView()
+	for i, colIdx := range colIdxes {
+		view.SetData(colIdx, data.Vecs[i])
+	}
 	if skipDeletes {
-		return nil
+		return
 	}
 
-	err = node.object.fillInMemoryBatchDeletesLocked(txn, 0, bat, node.object.RWMutex)
+	err = node.object.fillInMemoryDeletesLocked(txn, 0, view.BaseView, node.object.RWMutex)
 	if err != nil {
-		return err
+		return
 	}
 	if !deSels.IsEmpty() {
-		if bat.Deletes != nil {
-			bat.Deletes.Or(deSels)
+		if view.DeleteMask != nil {
+			view.DeleteMask.Or(deSels)
 		} else {
-			bat.Deletes = deSels
+			view.DeleteMask = deSels
 		}
 	}
-	return nil
+	return
 }
 
 // Note: With PinNode Context

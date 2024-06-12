@@ -64,6 +64,59 @@ func LoadPersistedColumnDatas(
 	id *common.ID,
 	colIdxs []int,
 	location objectio.Location,
+	mp *mpool.MPool,
+) ([]containers.Vector, error) {
+	cols := make([]uint16, 0)
+	typs := make([]types.Type, 0)
+	vectors := make([]containers.Vector, len(colIdxs))
+	phyAddIdx := -1
+	for i, colIdx := range colIdxs {
+		def := schema.ColDefs[colIdx]
+		if def.IsPhyAddr() {
+			vec, err := model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
+			if err != nil {
+				return nil, err
+			}
+			phyAddIdx = i
+			vectors[phyAddIdx] = vec
+			continue
+		}
+		cols = append(cols, def.SeqNum)
+		typs = append(typs, def.Type)
+	}
+	if len(cols) == 0 {
+		return vectors, nil
+	}
+	//Extend lifetime of vectors is without the function.
+	//need to copy. closeFunc will be nil.
+	vecs, _, err := blockio.LoadColumns2(
+		ctx, cols,
+		typs,
+		rt.Fs.Service,
+		location,
+		fileservice.Policy(0),
+		true,
+		rt.VectorPool.Transient)
+	if err != nil {
+		return nil, err
+	}
+	for i, vec := range vecs {
+		idx := i
+		if idx >= phyAddIdx && phyAddIdx > -1 {
+			idx++
+		}
+		vectors[idx] = vec
+	}
+	return vectors, nil
+}
+
+func LoadPersistedColumnDatasWithBatch(
+	ctx context.Context,
+	schema *catalog.Schema,
+	rt *dbutils.Runtime,
+	id *common.ID,
+	colIdxs []int,
+	location objectio.Location,
 	bat *containers.Batch,
 	mp *mpool.MPool,
 ) error {

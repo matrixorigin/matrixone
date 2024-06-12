@@ -605,6 +605,53 @@ func (blk *baseObject) ResolvePersistedColumnDatas(
 	blkID uint16,
 	colIdxs []int,
 	skipDeletes bool,
+	mp *mpool.MPool,
+) (view *containers.BlockView, err error) {
+
+	view = containers.NewBlockView()
+	location, err := blk.buildMetalocation(blkID)
+	if err != nil {
+		return nil, err
+	}
+	id := blk.meta.AsCommonID()
+	id.SetBlockOffset(blkID)
+	vecs, err := LoadPersistedColumnDatas(
+		ctx, readSchema, blk.rt, id, colIdxs, location, mp,
+	)
+	if err != nil {
+		return nil, err
+	}
+	for i, vec := range vecs {
+		view.SetData(colIdxs[i], vec)
+	}
+
+	if skipDeletes {
+		return
+	}
+
+	defer func() {
+		if err != nil {
+			view.Close()
+		}
+	}()
+
+	blk.RLock()
+	err = blk.fillInMemoryDeletesLocked(txn, blkID, view.BaseView, blk.RWMutex)
+	blk.RUnlock()
+
+	if err = blk.FillPersistedDeletes(ctx, blkID, txn, view.BaseView, mp); err != nil {
+		return
+	}
+	return
+}
+
+func (blk *baseObject) ResolvePersistedColumnDatasWithBatch(
+	ctx context.Context,
+	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
+	blkID uint16,
+	colIdxs []int,
+	skipDeletes bool,
 	bat *containers.Batch,
 	mp *mpool.MPool,
 ) error {
@@ -614,7 +661,7 @@ func (blk *baseObject) ResolvePersistedColumnDatas(
 	}
 	id := blk.meta.AsCommonID()
 	id.SetBlockOffset(blkID)
-	err = LoadPersistedColumnDatas(
+	err = LoadPersistedColumnDatasWithBatch(
 		ctx, readSchema, blk.rt, id, colIdxs, location, bat, mp,
 	)
 	if err != nil {

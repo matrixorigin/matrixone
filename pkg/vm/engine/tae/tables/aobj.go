@@ -149,26 +149,16 @@ func (obj *aobject) GetColumnDataByIds(
 	colIdxes []int,
 	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
-	bat := containers.NewBatch()
-	err = obj.resolveColumnDatas(
+	return obj.resolveColumnDatas(
 		ctx,
 		txn,
 		readSchema.(*catalog.Schema),
 		colIdxes,
 		false,
-		bat,
 		mp,
 	)
-	if err != nil {
-		return nil, err
-	}
-	view = containers.NewBlockView()
-	for i, colIdx := range colIdxes {
-		view.SetData(colIdx, bat.Vecs[i])
-	}
-	view.DeleteMask = bat.Deletes
-	return view, nil
 }
+
 func (obj *aobject) GetColumnDataByIdsWithBatch(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
@@ -178,10 +168,13 @@ func (obj *aobject) GetColumnDataByIdsWithBatch(
 	bat *containers.Batch,
 	mp *mpool.MPool,
 ) error {
-	return obj.resolveColumnDatas(
+	node := obj.PinNode()
+	defer node.Unref()
+	return obj.ResolvePersistedColumnDatasWithBatch(
 		ctx,
 		txn,
 		readSchema.(*catalog.Schema),
+		0,
 		colIdxes,
 		false,
 		bat,
@@ -213,15 +206,15 @@ func (obj *aobject) resolveColumnDatas(
 	readSchema *catalog.Schema,
 	colIdxes []int,
 	skipDeletes bool,
-	bat *containers.Batch,
 	mp *mpool.MPool,
-) error {
+) (view *containers.BlockView, err error) {
 	node := obj.PinNode()
 	defer node.Unref()
+
 	if !node.IsPersisted() {
 		return node.MustMNode().resolveInMemoryColumnDatas(
 			ctx,
-			txn, readSchema, colIdxes, skipDeletes, bat, mp,
+			txn, readSchema, colIdxes, skipDeletes, mp,
 		)
 	} else {
 		return obj.ResolvePersistedColumnDatas(
@@ -231,11 +224,9 @@ func (obj *aobject) resolveColumnDatas(
 			0,
 			colIdxes,
 			skipDeletes,
-			bat,
 			mp,
 		)
 	}
-
 }
 
 // check if all rows are committed before the specified ts

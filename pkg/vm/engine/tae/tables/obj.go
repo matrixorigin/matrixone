@@ -90,20 +90,11 @@ func (obj *object) GetColumnDataByIds(
 	node := obj.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
-	bat := containers.NewBatch()
-	err = obj.ResolvePersistedColumnDatas(
-		ctx, txn, schema, blkID, colIdxes, false, bat, mp,
+	return obj.ResolvePersistedColumnDatas(
+		ctx, txn, schema, blkID, colIdxes, false, mp,
 	)
-	if err != nil {
-		return
-	}
-	view = containers.NewBlockView()
-	for i, vec := range bat.Vecs {
-		view.SetData(colIdxes[i], vec)
-	}
-	view.DeleteMask = bat.Deletes
-	return
 }
+
 func (obj *object) GetColumnDataByIdsWithBatch(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
@@ -116,7 +107,7 @@ func (obj *object) GetColumnDataByIdsWithBatch(
 	node := obj.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
-	return obj.ResolvePersistedColumnDatas(
+	return obj.ResolvePersistedColumnDatasWithBatch(
 		ctx, txn, schema, blkID, colIdxes, false, bat, mp,
 	)
 }
