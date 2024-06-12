@@ -1,6 +1,7 @@
 create account acc1 ADMIN_NAME 'admin' IDENTIFIED BY '111';
 create account acc2 ADMIN_NAME 'admin' IDENTIFIED BY '111';
 create account acc3 ADMIN_NAME 'admin' IDENTIFIED BY '111';
+set global enable_privilege_cache = on;
 set global sql_mode = "NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE";
 show global variables like 'sql_mode';
 Variable_name    Value

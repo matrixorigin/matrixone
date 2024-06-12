@@ -264,13 +264,13 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 }
 
 func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
-	rvec := &Vector{
-		area:         vec.Area,
-		length:       int(vec.Len),
-		typ:          ProtoTypeToType(vec.Type),
-		cantFreeData: true,
-		cantFreeArea: true,
-	}
+	rvec := NewVecFromReuse()
+	rvec.area = vec.Area
+	rvec.length = int(vec.Len)
+	rvec.typ = ProtoTypeToType(vec.Type)
+	rvec.cantFreeData = true
+	rvec.cantFreeArea = true
+
 	if vec.IsConst {
 		rvec.class = CONSTANT
 	} else {

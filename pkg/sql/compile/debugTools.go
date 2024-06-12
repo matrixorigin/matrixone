@@ -86,6 +86,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.TableScan:               "tablescan",
 	vm.ValueScan:               "valuescan",
 	vm.TableFunction:           "tablefunction",
+	vm.OnDuplicateKey:          "on duplicate key",
 }
 
 var debugMagicNames = map[magicType]string{

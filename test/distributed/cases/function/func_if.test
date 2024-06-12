@@ -196,3 +196,5 @@ ORDER BY 1
 DROP TABLE test_grids_1;
 drop table test_grid_dtl_1;
 
+# reset
+SET TIME_ZONE = "SYSTEM";

@@ -575,10 +575,13 @@ func (node *AliasedTableExpr) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewAliasedTableExpr(e TableExpr, a AliasClause) *AliasedTableExpr {
+func NewAliasedTableExpr(e TableExpr, a string, i IdentifierList) *AliasedTableExpr {
 	return &AliasedTableExpr{
 		Expr: e,
-		As:   a,
+		As: AliasClause{
+			Alias: Identifier(a),
+			Cols:  i,
+		},
 	}
 }
 

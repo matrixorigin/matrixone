@@ -22,25 +22,23 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-
-	"go.uber.org/zap"
 )
 
 const (
 	LoggerName              = "MetricTask"
-	LoggerNameMetricStorage = "MetricStorage"
+	LoggerNameMetricStorage = "MetricStorageUsage"
 
 	StorageUsageCronTask     = "StorageUsage"
 	StorageUsageTaskCronExpr = ExprEvery05Min
@@ -92,11 +90,13 @@ const (
 var (
 	gUpdateStorageUsageInterval atomic.Int64
 	gCheckNewInterval           atomic.Int64
+	frontendServerStarted       func() bool
 )
 
 func init() {
 	gUpdateStorageUsageInterval.Store(int64(time.Minute))
 	gCheckNewInterval.Store(int64(time.Minute))
+	frontendServerStarted = func() bool { return true }
 }
 
 func SetUpdateStorageUsageInterval(interval time.Duration) {
@@ -113,18 +113,25 @@ func cleanStorageUsageMetric(logger *log.MOLogger, actor string) {
 	logger.Info("clean storage usage metric", zap.String("actor", actor))
 }
 
+func checkServerStarted(logger *log.MOLogger) bool {
+	return frontendServerStarted()
+}
+
 func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalExecutor) (err error) {
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
 	defer span.End()
 	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel() // quit CheckNewAccountSize goroutine
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
 	logger.Info("started")
+	if !checkServerStarted(logger) {
+		logger.Info("mo server is not started yet, wait next schedule.")
+		return nil
+	}
 	defer func() {
 		logger.Info("finished", zap.Error(err))
 		cleanStorageUsageMetric(logger, "CalculateStorageUsage")
-		// quit CheckNewAccountSize goroutine
-		cancel()
 	}()
 
 	// start background task to check new account

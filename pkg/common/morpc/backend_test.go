@@ -977,7 +977,7 @@ func (tm *testMessage) DebugString() string {
 	return fmt.Sprintf("%d:%d", tm.id, len(tm.payload))
 }
 
-func (tm *testMessage) Size() int {
+func (tm *testMessage) ProtoSize() int {
 	return 8 + len(tm.payload)
 }
 
