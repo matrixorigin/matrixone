@@ -74,7 +74,16 @@ func (entry *ObjectEntry) GetCompSize() int {
 	stats := entry.GetObjectStats()
 	return int(stats.Size())
 }
-
+func (entry *ObjectEntry) IsDeletesFlushedBefore(ts types.TS) bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
+	if tombstone == nil {
+		return true
+	}
+	persistedTS := tombstone.GetDeltaCommitedTSLocked()
+	return persistedTS.Less(&ts)
+}
 func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) string {
 	zonemapStr := "nil"
 	if z := entry.GetSortKeyZonemap(); z != nil {
@@ -99,13 +108,18 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 }
 
 func (entry *ObjectEntry) InMemoryDeletesExisted() bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.InMemoryDeletesExistedLocked()
+}
+
+func (entry *ObjectEntry) InMemoryDeletesExistedLocked() bool {
 	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
 	if tombstone != nil {
-		return tombstone.InMemoryDeletesExisted()
+		return tombstone.InMemoryDeletesExistedLocked()
 	}
 	return false
 }
-
 func NewObjectEntry(
 	table *TableEntry,
 	id *objectio.ObjectId,
@@ -158,7 +172,7 @@ func NewObjectEntryByMetaLocation(
 
 func NewReplayObjectEntry() *ObjectEntry {
 	e := &ObjectEntry{
-		BaseEntryImpl: NewReplayBaseEntry(
+		BaseEntryImpl: NewBaseEntry(
 			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
 	}
 	return e
@@ -390,15 +404,17 @@ func (entry *ObjectEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return newObjectCmd(id, cmdType, entry), nil
 }
 
-func (entry *ObjectEntry) Set1PC() {
-	entry.GetLatestNodeLocked().Set1PC()
-}
-func (entry *ObjectEntry) Is1PC() bool {
-	return entry.GetLatestNodeLocked().Is1PC()
-}
 func (entry *ObjectEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevel(level)))
+	if level == common.PPL0 {
+		return w.String()
+	}
+	return w.String()
+}
+func (entry *ObjectEntry) PPStringLocked(level common.PPLevel, depth int, prefix string) string {
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevelLocked(level)))
 	if level == common.PPL0 {
 		return w.String()
 	}
@@ -568,9 +584,14 @@ func (entry *ObjectEntry) GetSchemaLocked() *Schema {
 // a block can be compacted:
 // 1. no uncommited node
 // 2. at least one committed node
+// Note: Soft deleted nobjects might have in memory deletes to be flushed.
 func (entry *ObjectEntry) PrepareCompact() bool {
 	entry.RLock()
 	defer entry.RUnlock()
+	return entry.PrepareCompactLocked()
+}
+
+func (entry *ObjectEntry) PrepareCompactLocked() bool {
 	if entry.HasUncommittedNodeLocked() {
 		return false
 	}

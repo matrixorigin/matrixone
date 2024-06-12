@@ -41,7 +41,7 @@ func init() {
 			}
 		},
 		func(c *Compile) {
-			c.reset()
+			c.clear()
 		},
 		reuse.DefaultOptions[Compile]().
 			WithEnableChecker(),
@@ -69,7 +69,7 @@ func init() {
 		func() *fuzzyCheck {
 			return &fuzzyCheck{}
 		},
-		func(f *fuzzyCheck) { f.reset() },
+		func(f *fuzzyCheck) { f.clear() },
 		reuse.DefaultOptions[fuzzyCheck]().
 			WithEnableChecker(),
 	)

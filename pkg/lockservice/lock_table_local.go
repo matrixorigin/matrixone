@@ -90,11 +90,6 @@ func (l *localLockTable) lock(
 func (l *localLockTable) doLock(
 	c *lockContext,
 	blocked bool) {
-	// deadlock detected, return
-	if c.txn.deadlockFound {
-		c.done(ErrDeadLockDetected)
-		return
-	}
 	var old *waiter
 	var err error
 	table := l.bind.Table
@@ -152,7 +147,8 @@ func (l *localLockTable) doLock(
 			!bytes.Equal(c.w.txn.TxnID, oldTxnID)) {
 			e = ErrTxnNotFound
 		}
-		if e != nil {
+		if e != nil ||
+			c.txn.deadlockFound {
 			c.closed = true
 			if e != ErrTxnNotFound {
 				c.txn.closeBlockWaiters()
@@ -468,6 +464,15 @@ func (l *localLockTable) handleLockConflictLocked(
 	for _, txn := range conflictWith.holders.txns {
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
 	}
+	c.result.ConflictKey = key
+	if len(c.w.waitFor) > 0 {
+		c.result.ConflictTxn = c.w.waitFor[0]
+	}
+	c.result.Waiters = uint32(conflictWith.waiters.size())
+	conflictWith.waiters.iter(func(w *waiter) bool {
+		c.result.PrevWaiter = w.txn.TxnID
+		return true
+	})
 
 	conflictWith.addWaiter(c.w)
 	l.events.add(c)

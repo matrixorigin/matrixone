@@ -20,6 +20,9 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/statsinfo";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
+
 message ShuffleHeap {
   ShuffleHeap Left = 1;
   ShuffleHeap Right = 2;

@@ -2238,13 +2238,13 @@ func (data *CheckpointData) PrefetchFrom(
 	if version < CheckpointVersion4 {
 		return prefetchCheckpointData(ctx, version, service, key)
 	}
-	blocks := vector.MustBytesCol(data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_BlockLocation).GetDownstreamVector())
+	blocks, area := vector.MustVarlenaRawData(data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_BlockLocation).GetDownstreamVector())
 	dataType := vector.MustFixedCol[uint16](data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_SchemaType).GetDownstreamVector())
 	var pref blockio.PrefetchParams
 	locations := make(map[string][]blockIdx)
 	checkpointSize := uint64(0)
-	for i := 0; i < len(blocks); i++ {
-		location := objectio.Location(blocks[i])
+	for i := range blocks {
+		location := objectio.Location(blocks[i].GetByteSlice(area))
 		if location.IsEmpty() {
 			continue
 		}
@@ -3122,7 +3122,7 @@ func (collector *BaseCollector) VisitObj(entry *catalog.ObjectEntry) (err error)
 }
 
 func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
-	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) && !entry.InMemoryDeletesExisted() {
+	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) && !entry.InMemoryDeletesExisted() && entry.IsDeletesFlushedBefore(collector.versionThershold) {
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().BaseEntryImpl) {
@@ -3162,7 +3162,7 @@ func (collector *BaseCollector) VisitTombstone(entry data.Tombstone) (err error)
 
 func (collector *GlobalCollector) VisitTombstone(entry data.Tombstone) error {
 	obj := entry.GetObject().(*catalog.ObjectEntry)
-	if collector.isEntryDeletedBeforeThreshold(obj.BaseEntryImpl) && !obj.InMemoryDeletesExisted() {
+	if collector.isEntryDeletedBeforeThreshold(obj.BaseEntryImpl) && !obj.InMemoryDeletesExisted() && obj.IsDeletesFlushedBefore(collector.versionThershold) {
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(obj.GetTable().BaseEntryImpl) {

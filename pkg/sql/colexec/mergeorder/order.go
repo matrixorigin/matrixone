@@ -16,6 +16,7 @@ package mergeorder
 
 import (
 	"bytes"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -180,7 +181,6 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	arg.ctr = new(container)
 	ctr := arg.ctr
-	arg.ctr.InitReceiver(proc, true)
 
 	length := 2 * len(proc.Reg.MergeReceivers)
 	ctr.batchList = make([]*batch.Batch, 0, length)
@@ -206,15 +206,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
-
+	var err error
 	for {
 		switch ctr.status {
 		case receiving:
-			bat, end, err := ctr.ReceiveFromAllRegs(anal)
+			result, err = arg.Children[0].Call(proc)
 			if err != nil {
 				return result, err
 			}
-			if end {
+			if result.Batch == nil {
 				// if number of block is less than 2, no need to do merge sort.
 				ctr.status = normalSending
 
@@ -231,6 +231,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
+			bat := result.Batch
+			atomic.AddInt64(&bat.Cnt, 1)
 			if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
 				return result, err
 			}
@@ -257,6 +259,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				result.Status = vm.ExecStop
 				return result, err
 			}
+			result.Status = vm.ExecHasMore
 			return result, err
 		}
 	}

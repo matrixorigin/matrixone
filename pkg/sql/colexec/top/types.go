@@ -35,7 +35,7 @@ type container struct {
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare
 
-	limit         int64
+	limit         uint64
 	limitExecutor colexec.ExpressionExecutor
 
 	executorsForOrderColumn []colexec.ExpressionExecutor
@@ -92,6 +92,10 @@ func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

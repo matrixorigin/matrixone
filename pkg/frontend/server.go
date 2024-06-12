@@ -17,13 +17,11 @@ package frontend
 import (
 	"context"
 	"io"
-	"strings"
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -47,7 +45,7 @@ type MOServer struct {
 }
 
 // BaseService is an interface which indicates that the instance is
-// the base CN service and should implements the following methods.
+// the base CN service and should implement the following methods.
 type BaseService interface {
 	// ID returns the ID of the service.
 	ID() string
@@ -69,7 +67,12 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 
 func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
-	return mo.app.Start()
+	err := mo.app.Start()
+	if err != nil {
+		return err
+	}
+	setMoServerStarted(true)
+	return nil
 }
 
 func (mo *MOServer) Stop() error {
@@ -83,6 +86,7 @@ func nextConnectionID() uint32 {
 var globalRtMgr atomic.Value
 var globalPu atomic.Value
 var globalAicm atomic.Value
+var moServerStarted atomic.Bool
 
 func setGlobalRtMgr(rtMgr *RoutineManager) {
 	globalRtMgr.Store(rtMgr)
@@ -109,6 +113,14 @@ func getGlobalAic() *defines.AutoIncrCacheManager {
 		return globalAicm.Load().(*defines.AutoIncrCacheManager)
 	}
 	return nil
+}
+
+func MoServerIsStarted() bool {
+	return moServerStarted.Load()
+}
+
+func setMoServerStarted(b bool) {
+	moServerStarted.Store(b)
 }
 
 func NewMOServer(
@@ -158,10 +170,6 @@ func NewMOServer(
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-	err = initVarByConfig(ctx, pu)
-	if err != nil {
-		logutil.Panicf("start server failed with %+v", err)
-	}
 	mo.app = app
 	return mo
 }
@@ -194,30 +202,4 @@ func (mo *MOServer) handleMessage(rs goetty.IOSession) error {
 			return err
 		}
 	}
-}
-
-func initVarByConfig(ctx context.Context, pu *config.ParameterUnit) error {
-	var err error
-	if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
-		err = GSysVariables.SetGlobalSysVar(ctx, "save_query_result", pu.SV.SaveQueryResult)
-		if err != nil {
-			return err
-		}
-	}
-
-	err = GSysVariables.SetGlobalSysVar(ctx, "query_result_maxsize", pu.SV.QueryResultMaxsize)
-	if err != nil {
-		return err
-	}
-
-	err = GSysVariables.SetGlobalSysVar(ctx, "query_result_timeout", pu.SV.QueryResultTimeout)
-	if err != nil {
-		return err
-	}
-
-	err = GSysVariables.SetGlobalSysVar(ctx, "lower_case_table_names", pu.SV.LowerCaseTableNames)
-	if err != nil {
-		return err
-	}
-	return err
 }

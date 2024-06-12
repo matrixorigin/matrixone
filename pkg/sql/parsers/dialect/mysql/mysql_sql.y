@@ -275,7 +275,7 @@ import (
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
-%left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE
+%left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE CROSS_L2
 %nonassoc LOWER_THAN_ON
 %nonassoc <str> ON USING
 %left <str> SUBQUERY_AS_EXPR
@@ -358,7 +358,7 @@ import (
 
 
 // Alter
-%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE
+%token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
 %token <str> MODIFY CHANGE
 
 // Time
@@ -1388,19 +1388,19 @@ normal_ident:
     ident
     {
         unResolve := tree.SetUnresolvedName($1.Compare())
-        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin())
+        unResolve.SetUnresolvedNameCStrParts($1)
         $$ = unResolve
     }
 |   ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare())
-        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin(), $3.Origin())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), $3.Compare())
+        unResolve.SetUnresolvedNameCStrParts($1, $3)
         $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
-        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin(), $3.Origin(), $5.Origin())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), yylex.(*Lexer).GetDbOrTblName($3.Origin()), $5.Compare())
+        unResolve.SetUnresolvedNameCStrParts($1, $3, $5)
         $$ = unResolve
     }
 
@@ -3439,6 +3439,22 @@ alter_database_config_stmt:
             accountName,
             dbName,
             isAccountLevel,
+            tree.MYSQL_COMPATIBILITY_MODE,
+            updateConfig,
+        )
+    }
+|   ALTER DATABASE db_name SET UNIQUE_CHECK_ON_AUTOINCR '=' STRING
+    {
+        var accountName = ""
+        var dbName = $3
+        var isAccountLevel = false
+        var updateConfig = $7
+
+        $$ = tree.NewAlterDataBaseConfig(
+            accountName,
+            dbName,
+            isAccountLevel,
+            tree.UNIQUE_CHECK_ON_AUTOINCR,
             updateConfig,
         )
     }
@@ -3453,6 +3469,7 @@ alter_database_config_stmt:
             accountName,
             dbName,
             isAccountLevel,
+            tree.MYSQL_COMPATIBILITY_MODE,
             updateConfig,
         )
     }
@@ -4115,7 +4132,7 @@ table_name_unresolved:
 db_name:
     ident
     {
-    	$$ = $1.Compare()
+		$$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
     }
 
 unresolved_object_name:
@@ -5352,11 +5369,11 @@ select_expression:
     }
 |   ident '.' '*' %prec '*'
     {
-        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($1.Compare())}
+        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yylex.(*Lexer).GetDbOrTblName($1.Origin()))}
     }
 |   ident '.' ident '.' '*' %prec '*'
     {
-        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar($3.Compare(), $1.Compare())}
+        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yylex.(*Lexer).GetDbOrTblName($1.Origin()), yylex.(*Lexer).GetDbOrTblName($3.Origin()))}
     }
 
 from_opt:
@@ -5528,6 +5545,10 @@ inner_join:
     {
         $$ = tree.JOIN_TYPE_CROSS
     }
+|   CROSS_L2 JOIN
+    {
+        $$ = tree.JOIN_TYPE_CROSS_L2
+    }
 
 join_condition_opt:
     %prec JOIN
@@ -5601,11 +5622,11 @@ table_subquery:
 table_function:
     ident '(' expression_list_opt ')'
     {
-        name := tree.SetUnresolvedName(strings.ToLower($1.Compare()))
+        name := tree.SetUnresolvedName($1.Compare())
         $$ = &tree.TableFunction{
        	        Func: &tree.FuncExpr{
         	        Func: tree.FuncName2ResolvableFunctionReference(name),
-                    FuncName: tree.NewCStrUseOrigin($1.Origin(),yylex.(*Lexer).useOrigin),
+                    FuncName: $1,
         	        Exprs: $3,
         	        Type: tree.FUNC_TYPE_TABLE,
                 },
@@ -5718,13 +5739,16 @@ as_opt_id:
 table_alias:
     ident
     {
-    	$$ = $1.Compare()
+	    $$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
     }
 |   STRING
+    {
+	    $$ = yylex.(*Lexer).GetDbOrTblName($1)
+    }
 
 as_name_opt:
     {
-        $$ = tree.NewCStr("", yylex.(*Lexer).lower)
+        $$ = tree.NewCStr("", 1)
     }
 |   ident
     {
@@ -5736,11 +5760,11 @@ as_name_opt:
     }
 |   STRING
     {
-        $$ = tree.NewCStr($1, yylex.(*Lexer).lower)
+        $$ = tree.NewCStr($1, 1)
     }
 |   AS STRING
     {
-        $$ = tree.NewCStr($2, yylex.(*Lexer).lower)
+        $$ = tree.NewCStr($2, 1)
     }
 
 stmt_name:
@@ -6742,15 +6766,15 @@ role_spec:
 role_name:
     ID
 	{
-		$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
+		$$ = tree.NewCStr($1, 1)
     }
 |   QUOTE_ID
 	{
-		$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
+		$$ = tree.NewCStr($1, 1)
     }
 |   STRING
 	{
-    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
+    	$$ = tree.NewCStr($1, 1)
     }
 
 index_prefix:
@@ -8171,12 +8195,12 @@ table_name:
     ident table_snapshot_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, $2)
+        $$ = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetDbOrTblName($1.Origin())), prefix, $2)
     }
 |   ident '.' ident table_snapshot_opt
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, $4)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yylex.(*Lexer).GetDbOrTblName($1.Origin())), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetDbOrTblName($3.Origin())), prefix, $4)
     }
 
 table_snapshot_opt:
@@ -8194,11 +8218,19 @@ table_snapshot_opt:
             Expr: $4,
         }
     }
-|   '{' SNAPSHOT '=' expression '}'
+|   '{' SNAPSHOT '=' ident '}'
     {
+        var Str = $4.Compare()
         $$ = &tree.AtTimeStamp{
             Type: tree.ATTIMESTAMPSNAPSHOT,
-            Expr: $4,
+            Expr: tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char),
+        }
+    }
+|   '{' SNAPSHOT '=' STRING '}'
+    {
+        $$ = &tree.AtTimeStamp{
+           Type: tree.ATTIMESTAMPSNAPSHOT,
+          Expr: tree.NewNumValWithType(constant.MakeString($4), $4, false, tree.P_char),
         }
     }
 |   '{' MO_TS '=' expression '}'
@@ -8524,57 +8556,57 @@ column_name_unresolved:
     ident
     {
         unResolve := tree.SetUnresolvedName($1.Compare())
-        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin())
+        unResolve.SetUnresolvedNameCStrParts($1)
         $$ = unResolve
     }
 |   ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare())
-        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin(), $3.Origin())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), $3.Compare())
+        unResolve.SetUnresolvedNameCStrParts($1, $3)
         $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
-        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin(), $3.Origin(), $5.Origin())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), yylex.(*Lexer).GetDbOrTblName($3.Origin()), $5.Compare())
+        unResolve.SetUnresolvedNameCStrParts($1, $3, $5)
         $$ = unResolve
     }
 
 ident:
     ID
     {
-		$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
+		$$ = tree.NewCStr($1, 1)
     }
 |	QUOTE_ID
 	{
-    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
+    	$$ = tree.NewCStr($1, 1)
     }
 |   not_keyword
 	{
-    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
+    	$$ = tree.NewCStr($1, 1)
     }
 |   non_reserved_keyword
 	{
-    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
+    	$$ = tree.NewCStr($1, 1)
     }
 
 column_name:
     ident
     {
         unResolve := tree.SetUnresolvedName($1.Compare())
-        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin())
+        unResolve.SetUnresolvedNameCStrParts($1)
         $$ = unResolve
     }
 |   ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare())
-        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin(), $3.Origin())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), $3.Compare())
+        unResolve.SetUnresolvedNameCStrParts($1, $3)
         $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
-        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin(), $3.Origin(), $5.Origin())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), yylex.(*Lexer).GetDbOrTblName($3.Origin()), $5.Compare())
+        unResolve.SetUnresolvedNameCStrParts($1, $3, $5)
         $$ = unResolve
     }
 
@@ -8668,7 +8700,7 @@ column_attribute_elem:
         }
         expr := &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($3,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($3, 1),
             Exprs: es,
         }
         $$ = tree.NewAttributeOnUpdate(expr)
@@ -9045,7 +9077,7 @@ simple_expr:
         es := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3, es},
         }
     }
@@ -9084,7 +9116,7 @@ function_call_window:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             WindowSpec: $4,
         }
     }
@@ -9093,7 +9125,7 @@ function_call_window:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             WindowSpec: $4,
         }
     }
@@ -9102,7 +9134,7 @@ function_call_window:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             WindowSpec: $4,
         }
     }
@@ -9537,7 +9569,7 @@ function_call_aggregate:
 	    name := tree.SetUnresolvedName(strings.ToLower($1))
 	        $$ = &tree.FuncExpr{
 	        Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
 	        Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
 	        Type: $3,
 	        WindowSpec: $8,
@@ -9546,10 +9578,10 @@ function_call_aggregate:
     }
 |  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt kmeans_opt ')' window_spec_opt
       {
-  	     name := tree.SetUnresolvedName(strings.ToLower($1))
+  	    name := tree.SetUnresolvedName(strings.ToLower($1))
 		$$ = &tree.FuncExpr{
 		Func: tree.FuncName2ResolvableFunctionReference(name),
-        FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+        FuncName: tree.NewCStr($1, 1),
 		Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
 		Type: $3,
 		WindowSpec: $8,
@@ -9561,7 +9593,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -9572,7 +9604,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $4,
             Type: $3,
             WindowSpec: $6,
@@ -9584,7 +9616,7 @@ function_call_aggregate:
         es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{es},
             WindowSpec: $5,
         }
@@ -9594,7 +9626,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
             WindowSpec: $5,
         }
@@ -9604,7 +9636,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
             WindowSpec: $5,
         }
@@ -9614,7 +9646,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -9625,7 +9657,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -9636,7 +9668,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -9647,7 +9679,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $4,
             Type: $3,
             WindowSpec: $6,
@@ -9659,7 +9691,7 @@ function_call_aggregate:
         es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{es},
             WindowSpec: $5,
         }
@@ -9669,7 +9701,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -9680,7 +9712,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -9691,7 +9723,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -9702,7 +9734,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -9713,7 +9745,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -9724,7 +9756,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -9735,7 +9767,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -9746,7 +9778,7 @@ function_call_aggregate:
 	name := tree.SetUnresolvedName(strings.ToLower($1))
 	$$ = &tree.FuncExpr{
 	    Func: tree.FuncName2ResolvableFunctionReference(name),
-        FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+        FuncName: tree.NewCStr($1, 1),
 	    Exprs: tree.Exprs{$4},
 	    Type: $3,
 	    WindowSpec: $6,
@@ -9757,7 +9789,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -9768,7 +9800,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -9786,7 +9818,7 @@ function_call_generic:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
     }
@@ -9795,7 +9827,7 @@ function_call_generic:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
     }
@@ -9804,7 +9836,7 @@ function_call_generic:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3, $5},
         }
     }
@@ -9813,7 +9845,7 @@ function_call_generic:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3, $5, $7},
         }
     }
@@ -9824,7 +9856,7 @@ function_call_generic:
         timeUinit := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{timeUinit, $5},
         }
     }
@@ -9833,7 +9865,7 @@ function_call_generic:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
     }
@@ -9842,7 +9874,7 @@ function_call_generic:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
         }
@@ -9852,7 +9884,7 @@ function_call_generic:
         name := tree.SetUnresolvedName("nextval")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
     }
@@ -9861,7 +9893,7 @@ function_call_generic:
         name := tree.SetUnresolvedName("setval")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
     }
@@ -9870,7 +9902,7 @@ function_call_generic:
         name := tree.SetUnresolvedName("currval")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
     }
@@ -9879,7 +9911,7 @@ function_call_generic:
         name := tree.SetUnresolvedName("lastval")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: nil,
         }
     }
@@ -9891,7 +9923,7 @@ function_call_generic:
         arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{arg0, arg1, arg2, $3},
         }
     }
@@ -9902,7 +9934,7 @@ function_call_generic:
         arg1 := tree.NewNumValWithType(constant.MakeString("both"), "both", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{arg0, arg1, $3, $5},
         }
     }
@@ -9915,7 +9947,7 @@ function_call_generic:
         arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{arg0, arg1, arg2, $5},
         }
     }
@@ -9927,7 +9959,7 @@ function_call_generic:
         arg1 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{arg0, arg1, $4, $6},
         }
     }
@@ -9937,7 +9969,7 @@ function_call_generic:
         name := tree.SetUnresolvedName(strings.ToLower($1))
     	$$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{column},
         }
     }
@@ -9999,7 +10031,7 @@ function_call_nonkeyword:
         }
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: es,
         }
     }
@@ -10012,7 +10044,7 @@ function_call_nonkeyword:
         }
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: es,
         }
     }
@@ -10023,7 +10055,7 @@ function_call_nonkeyword:
         arg1 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
 		$$ =  &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{arg1, $5, $7},
         }
 	}
@@ -10033,7 +10065,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
     }
@@ -10042,15 +10074,15 @@ function_call_keyword:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
         }
     }
-|    SCHEMA '('')'
+|   SCHEMA '('')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
         }
     }
 |   name_datetime_scale datetime_scale_opt
@@ -10062,7 +10094,7 @@ function_call_keyword:
         }
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: es,
         }
     }
@@ -10071,7 +10103,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("binary")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
     }
@@ -10082,7 +10114,7 @@ function_call_keyword:
         exprs[0] = $2
         $$ = &tree.FuncExpr{
            Func: tree.FuncName2ResolvableFunctionReference(name),
-           FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+           FuncName: tree.NewCStr($1, 1),
            Exprs: exprs,
         }
     }
@@ -10093,7 +10125,7 @@ function_call_keyword:
         exprs[0] = $2
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: exprs,
         }
     }
@@ -10102,7 +10134,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("char")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
     }
@@ -10114,7 +10146,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("char")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: es,
         }
     }
@@ -10124,7 +10156,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("date")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{val},
         }
     }
@@ -10134,7 +10166,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("time")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{val},
         }
     }
@@ -10143,7 +10175,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("insert")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
     }
@@ -10154,7 +10186,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("mod")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: es,
         }
     }
@@ -10163,7 +10195,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("password")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
     }
@@ -10173,7 +10205,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("timestamp")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{val},
         }
     }
@@ -10182,7 +10214,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
     }
@@ -10191,7 +10223,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
     }
@@ -10200,7 +10232,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
     }
@@ -10288,7 +10320,7 @@ interval_expr:
         arg2 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$2, arg2},
         }
     }
@@ -10353,10 +10385,10 @@ expression:
     }
 |   expression PIPE_CONCAT expression %prec PIPE_CONCAT
     {
-        name := tree.SetUnresolvedName(strings.ToLower("concat"))
+        name := tree.SetUnresolvedName("concat")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin("concat",yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStr("concat", 1),
             Exprs: tree.Exprs{$1, $3},
         }
     }
@@ -12017,6 +12049,7 @@ non_reserved_keyword:
 |	RETURNS
 |	QUERY_RESULT
 |	MYSQL_COMPATIBILITY_MODE
+|   UNIQUE_CHECK_ON_AUTOINCR
 |	SEQUENCE
 |	BACKEND
 |	SERVERS

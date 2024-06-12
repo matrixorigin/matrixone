@@ -38,12 +38,8 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
-	state int
-
+	state              int
 	hasNull            bool
-	isMerge            bool
 	multiSels          [][]int32
 	batches            []*batch.Batch
 	batchIdx           int
@@ -67,8 +63,6 @@ type Argument struct {
 	NeedExpr    bool
 	NeedHashMap bool
 	IsDup       bool
-	Ibucket     uint64
-	Nbucket     uint64
 	Typs        []types.Type
 	Conditions  []*plan.Expr
 
@@ -110,6 +104,10 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
@@ -118,12 +116,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanEvalVectors()
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
-		}
-		ctr.FreeMergeTypeOperator(pipelineFailed)
-		if ctr.isMerge {
-			ctr.FreeMergeTypeOperator(pipelineFailed)
-		} else {
-			ctr.FreeAllReg()
 		}
 		arg.ctr = nil
 	}

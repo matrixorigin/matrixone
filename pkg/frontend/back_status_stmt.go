@@ -15,12 +15,23 @@
 package frontend
 
 import (
-	"fmt"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
 func executeStatusStmtInBack(backSes *backSession,
 	execCtx *ExecCtx) (err error) {
+	execCtx.ses.EnterFPrint(96)
+	defer execCtx.ses.ExitFPrint(96)
+	fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
+	setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
+
+	err = disttae.CheckTxnIsValid(fPrintTxnOp)
+	if err != nil {
+		return err
+	}
+
 	runBegin := time.Now()
 	if _, err = execCtx.runner.Run(0); err != nil {
 		return
@@ -28,7 +39,7 @@ func executeStatusStmtInBack(backSes *backSession,
 
 	// only log if run time is longer than 1s
 	if time.Since(runBegin) > time.Second {
-		logInfo(backSes, backSes.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+		backSes.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 	}
 
 	return

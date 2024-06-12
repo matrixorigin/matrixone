@@ -285,7 +285,7 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 }
 
 // ApplyCommit Gc in memory deletes and update table compact status
-func (entry *flushTableTailEntry) ApplyCommit() (err error) {
+func (entry *flushTableTailEntry) ApplyCommit(_ string) (err error) {
 	for _, blk := range entry.ablksMetas {
 		_ = blk.GetObjectData().TryUpgrade()
 		blk.GetObjectData().UpgradeAllDeleteChain()
@@ -320,8 +320,6 @@ func (entry *flushTableTailEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err
 	return &flushTableTailCmd{}, nil
 }
 func (entry *flushTableTailEntry) IsAborted() bool { return false }
-func (entry *flushTableTailEntry) Set1PC()         {}
-func (entry *flushTableTailEntry) Is1PC() bool     { return false }
 
 ////////////////////////////////////////
 // flushTableTailCmd

@@ -228,4 +228,5 @@ select t * 10 from t1;
 select t / 10 from t1;
 select t % 5 from t1;
 
-set @@time_zone='+5:99';
+# reset
+SET TIME_ZONE = "SYSTEM";

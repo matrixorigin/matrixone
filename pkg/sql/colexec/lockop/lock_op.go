@@ -475,6 +475,30 @@ func doLock(
 			break
 		}
 	}
+	if err != nil {
+		return false, false, timestamp.Timestamp{}, err
+	}
+
+	if len(result.ConflictKey) > 0 {
+		trace.GetService().AddTxnActionInfo(
+			txnOp,
+			client.LockEvent,
+			seq,
+			tableID,
+			func(writer trace.Writer) {
+				writer.WriteHex(result.ConflictKey)
+				writer.WriteString(":")
+				writer.WriteHex(result.ConflictTxn)
+				writer.WriteString("/")
+				writer.WriteUint(uint64(result.Waiters))
+				if len(result.PrevWaiter) > 0 {
+					writer.WriteString("/")
+					writer.WriteHex(result.PrevWaiter)
+				}
+			},
+		)
+	}
+
 	trace.GetService().AddTxnDurationAction(
 		txnOp,
 		client.LockEvent,
@@ -482,9 +506,6 @@ func doLock(
 		tableID,
 		time.Since(startAt),
 		nil)
-	if err != nil {
-		return false, false, timestamp.Timestamp{}, err
-	}
 
 	// add bind locks
 	if err = txnOp.AddLockTable(result.LockedOn); err != nil {
@@ -568,15 +589,23 @@ func doLock(
 	return true, result.TableDefChanged, snapshotTS, nil
 }
 
+const defaultWaitTimeOnRetryLock = time.Second
+
 func canRetryLock(txn client.TxnOperator, err error) bool {
 	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
-	if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
-		!moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
+	if txn.LockTableCount() > 0 {
 		return false
 	}
-	if txn.LockTableCount() == 0 {
+	if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
+		return true
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
+		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
 	return false
@@ -806,6 +835,10 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 	return arg
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 // Free free mem
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.rt == nil {
@@ -836,15 +869,12 @@ func (arg *Argument) getBatch(
 		fn = arg.rt.ReceiveFromAllRegs
 	}
 
-	bat, end, err := fn(anal)
-	if err != nil {
-		return nil, err
+	msg := fn(anal)
+	if msg.Err != nil {
+		return nil, msg.Err
 	}
-	if end {
-		return nil, nil
-	}
-	anal.Input(bat, isFirst)
-	return bat, nil
+	anal.Input(msg.Batch, isFirst)
+	return msg.Batch, nil
 }
 
 func getRowsFilter(

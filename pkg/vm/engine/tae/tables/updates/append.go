@@ -137,13 +137,13 @@ func (node *AppendNode) PrepareCommit() error {
 	return err
 }
 
-func (node *AppendNode) ApplyCommit() error {
+func (node *AppendNode) ApplyCommit(id string) error {
 	node.mvcc.Lock()
 	defer node.mvcc.Unlock()
 	if node.IsCommitted() {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
-	node.TxnMVCCNode.ApplyCommit()
+	node.TxnMVCCNode.ApplyCommit(id)
 	listener := node.mvcc.GetAppendListener()
 	if listener == nil {
 		return nil
@@ -217,11 +217,4 @@ func (node *AppendNode) PrepareRollback() (err error) {
 func (node *AppendNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewAppendCmd(id, node)
 	return
-}
-
-func (node *AppendNode) Set1PC() {
-	node.TxnMVCCNode.Set1PC()
-}
-func (node *AppendNode) Is1PC() bool {
-	return node.TxnMVCCNode.Is1PC()
 }

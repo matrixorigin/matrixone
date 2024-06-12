@@ -17,12 +17,12 @@ package cnservice
 import (
 	"testing"
 
-	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/file"
+	"github.com/matrixorigin/matrixone/pkg/util/protoc"
 	"github.com/stretchr/testify/assert"
 )
 

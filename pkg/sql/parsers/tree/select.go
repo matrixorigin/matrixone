@@ -418,6 +418,7 @@ const (
 	JOIN_TYPE_NATURAL       = "NATURAL"
 	JOIN_TYPE_NATURAL_LEFT  = "NATURAL LEFT"
 	JOIN_TYPE_NATURAL_RIGHT = "NATURAL RIGHT"
+	JOIN_TYPE_CROSS_L2      = "CROSS_L2"
 )
 
 // the table expression
@@ -574,10 +575,13 @@ func (node *AliasedTableExpr) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewAliasedTableExpr(e TableExpr, a AliasClause) *AliasedTableExpr {
+func NewAliasedTableExpr(e TableExpr, a string, i IdentifierList) *AliasedTableExpr {
 	return &AliasedTableExpr{
 		Expr: e,
-		As:   a,
+		As: AliasClause{
+			Alias: Identifier(a),
+			Cols:  i,
+		},
 	}
 }
 

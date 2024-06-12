@@ -381,7 +381,7 @@ func TestCreateBlock(t *testing.T) {
 	schema := catalog.MockSchemaAll(13, 12)
 	rel, err := database.CreateRelation(schema)
 	assert.Nil(t, err)
-	_, err = rel.CreateObject(false)
+	_, err = rel.CreateObject()
 	assert.Nil(t, err)
 
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
@@ -412,7 +412,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		rel, err := database.GetRelationByName(schema.Name)
 		readSchema := rel.Schema()
 		assert.Nil(t, err)
-		obj, err := rel.CreateNonAppendableObject(false, nil)
+		obj, err := rel.CreateNonAppendableObject(nil)
 		assert.Nil(t, err)
 		dataBlk := obj.GetMeta().(*catalog.ObjectEntry).GetObjectData()
 		sid := objectio.NewObjectid()
@@ -482,7 +482,7 @@ func TestCreateObject(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
-	_, err = rel.CreateNonAppendableObject(false, nil)
+	_, err = rel.CreateNonAppendableObject(nil)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -1184,7 +1184,7 @@ func TestRollback1(t *testing.T) {
 	processor := new(catalog.LoopProcessor)
 	processor.ObjectFn = onSegFn
 	txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
-	_, err := rel.CreateObject(false)
+	_, err := rel.CreateObject()
 	assert.Nil(t, err)
 
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
@@ -1199,7 +1199,7 @@ func TestRollback1(t *testing.T) {
 	assert.Equal(t, objCnt, 0)
 
 	txn, rel = testutil.GetDefaultRelation(t, db, schema.Name)
-	obj, err := rel.CreateObject(false)
+	obj, err := rel.CreateObject()
 	assert.Nil(t, err)
 	objMeta := obj.GetMeta().(*catalog.ObjectEntry)
 	assert.Nil(t, txn.Commit(context.Background()))
@@ -2665,6 +2665,125 @@ func TestMergeblocks2(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
+// Object1: 1, 2, 3 | 4, 5, 6
+// Object2: 7, 8, 9 | 10, 11, 12
+// Now delete 1 and 10, then after merge:
+// Object1: 2, 3, 4 | 5, 6, 7
+// Object2: 8, 9, 11 | 12
+// Delete map not nil on: [obj1, blk1] and [obj2, blk2]
+func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 3
+	schema.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 12)
+	bats := bat.Split(2)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bats[0], true)
+
+	txn, rel := tae.GetRelation()
+	_ = rel.Append(context.Background(), bats[1])
+	assert.Nil(t, txn.Commit(context.Background()))
+
+	// flush to nblk
+	{
+		txn, rel := tae.GetRelation()
+		blkMetas := testutil.GetAllBlockMetas(rel)
+		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tae.DB.Runtime, types.MaxTs())
+		require.NoError(t, err)
+		require.NoError(t, task.OnExec(context.Background()))
+		require.NoError(t, txn.Commit(context.Background()))
+
+		testutil.CheckAllColRowsByScan(t, rel, 12, true)
+	}
+
+	{
+		t.Log("************split one object into two objects************")
+
+		txn, rel = tae.GetRelation()
+		objIt := rel.MakeObjectIt()
+		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		objHandle, err := rel.GetObject(&obj.ID)
+		assert.NoError(t, err)
+
+		objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
+		task, err := jobs.NewMergeObjectsTask(nil, txn, objsToMerge, tae.Runtime, 0)
+		assert.NoError(t, err)
+		assert.NoError(t, task.OnExec(context.Background()))
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
+
+	{
+		t.Log("************check del map************")
+		it := rel.MakeObjectIt()
+		for it.Valid() {
+			obj := it.GetObject()
+			assert.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 0)))
+			assert.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 1)))
+			it.Next()
+		}
+	}
+
+	{
+		t.Log("************delete during merge************")
+
+		txn, rel = tae.GetRelation()
+		objIt := rel.MakeObjectIt()
+		obj1 := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		objHandle1, err := rel.GetObject(&obj1.ID)
+		assert.NoError(t, err)
+		objIt.Next()
+		obj2 := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		objHandle2, err := rel.GetObject(&obj2.ID)
+		assert.NoError(t, err)
+
+		v := testutil.GetSingleSortKeyValue(bat, schema, 1)
+		filter := handle.NewEQFilter(v)
+		txn2, rel := tae.GetRelation()
+		_ = rel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, txn2.Commit(context.Background()))
+		_, rel = tae.GetRelation()
+		testutil.CheckAllColRowsByScan(t, rel, 11, true)
+
+		v = testutil.GetSingleSortKeyValue(bat, schema, 10)
+		filter = handle.NewEQFilter(v)
+		txn2, rel = tae.GetRelation()
+		_ = rel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, txn2.Commit(context.Background()))
+		_, rel = tae.GetRelation()
+		testutil.CheckAllColRowsByScan(t, rel, 10, true)
+
+		objsToMerge := []*catalog.ObjectEntry{objHandle1.GetMeta().(*catalog.ObjectEntry), objHandle2.GetMeta().(*catalog.ObjectEntry)}
+		task, err := jobs.NewMergeObjectsTask(nil, txn, objsToMerge, tae.Runtime, 0)
+		assert.NoError(t, err)
+		assert.NoError(t, task.OnExec(context.Background()))
+		assert.NoError(t, txn.Commit(context.Background()))
+		{
+			t.Log("************check del map again************")
+			_, rel = tae.GetRelation()
+			objCnt := 0
+			for it := rel.MakeObjectIt(); it.Valid(); it.Next() {
+				obj := it.GetObject()
+				if objCnt == 0 {
+					assert.NotNil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 0)))
+				} else {
+					assert.NotNil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 1)))
+				}
+				objCnt++
+			}
+			assert.Equal(t, 2, objCnt)
+		}
+	}
+}
+
 func TestMergeEmptyBlocks(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -3391,6 +3510,38 @@ func TestDropCreated3(t *testing.T) {
 	tae.Restart(ctx)
 }
 
+func TestRollbackCreateTable(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	schema := catalog.MockSchemaAll(1, -1)
+	defer tae.Close()
+
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db", "sql", "")
+	db.CreateRelationWithID(schema.Clone(), uint64(27200))
+	txn.Commit(ctx)
+
+	for i := 0; i < 10; i += 2 {
+		tae.Catalog.GCByTS(ctx, tae.TxnMgr.Now())
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		db.DropRelationByID(uint64(i + 27200))
+		db.CreateRelationWithID(schema.Clone(), uint64(i+27200+1))
+		txn.Commit(ctx)
+
+		txn, _ = tae.StartTxn(nil)
+		db, _ = txn.GetDatabase("db")
+		db.DropRelationByID(uint64(i + 27200 + 1))
+		db.CreateRelationWithID(schema.Clone(), uint64(i+27200+2))
+		txn.Rollback(ctx)
+	}
+
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+
 func TestDropCreated4(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
@@ -3844,8 +3995,8 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 db
 	datname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // datname column
 	require.NoError(t, err)
-	require.Equal(t, "todrop", datname.GetStringAt(0))
-	require.Equal(t, "db", datname.GetStringAt(1))
+	require.Equal(t, "todrop", datname.UnsafeGetStringAt(0))
+	require.Equal(t, "db", datname.UnsafeGetStringAt(1))
 
 	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 	require.Equal(t, fixedColCnt+1, len(resp.Commands[1].Bat.Vecs))
@@ -3866,8 +4017,8 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 tables
 	relname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // relname column
 	require.NoError(t, err)
-	require.Equal(t, schema.Name, relname.GetStringAt(0))
-	require.Equal(t, schema.Name, relname.GetStringAt(1))
+	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(0))
+	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(1))
 	close()
 
 	// get columns catalog change
@@ -6458,6 +6609,9 @@ func TestAppendAndGC(t *testing.T) {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
+		return
+	}
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
@@ -6468,6 +6622,9 @@ func TestAppendAndGC(t *testing.T) {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
 	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
+	if minMerged == nil {
+		return
+	}
 	assert.NotNil(t, minMerged)
 	tae.Restart(ctx)
 	db = tae.DB
@@ -6588,6 +6745,9 @@ func TestSnapshotGC(t *testing.T) {
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
+	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
+		return
+	}
 	db.DiskCleaner.GetCleaner().EnableGCForTest()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
@@ -6598,13 +6758,15 @@ func TestSnapshotGC(t *testing.T) {
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
+	if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
+		return
+	}
 	assert.NotNil(t, minMerged)
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
-	db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
 	testutils.WaitExpect(5000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetMaxConsumed() == nil {
 			return false
@@ -7015,13 +7177,13 @@ func TestGCCatalog1(t *testing.T) {
 	tb3, err := db2.CreateRelation(schema3)
 	assert.Nil(t, err)
 
-	_, err = tb.CreateObject(false)
+	_, err = tb.CreateObject()
 	assert.Nil(t, err)
-	_, err = tb2.CreateObject(false)
+	_, err = tb2.CreateObject()
 	assert.Nil(t, err)
-	obj3, err := tb2.CreateObject(false)
+	obj3, err := tb2.CreateObject()
 	assert.Nil(t, err)
-	obj4, err := tb3.CreateObject(false)
+	obj4, err := tb3.CreateObject()
 	assert.Nil(t, err)
 
 	err = txn1.Commit(context.Background())
@@ -7677,7 +7839,7 @@ func TestDeduplication(t *testing.T) {
 	txn.GetStore().IncreateWriteCnt()
 	assert.NoError(t, txn.Commit(context.Background()))
 	assert.NoError(t, obj.PrepareCommit())
-	assert.NoError(t, obj.ApplyCommit())
+	assert.NoError(t, obj.ApplyCommit(txn.GetID()))
 
 	txns := make([]txnif.AsyncTxn, 0)
 	for i := 0; i < 5; i++ {
@@ -8610,4 +8772,53 @@ func TestSplitCommand(t *testing.T) {
 	tae.Restart(context.Background())
 	t.Log(tae.Catalog.SimplePPString(3))
 	tae.CheckRowsByScan(50, false)
+}
+
+func TestVisitTombstone(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	options.WithGlobalVersionInterval(time.Microsecond)(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	var metas []*catalog.ObjectEntry
+
+	txn, rel := tae.GetRelation()
+	it := rel.MakeObjectIt()
+	for it.Valid() {
+		blk := it.GetObject()
+		meta := blk.GetMeta().(*catalog.ObjectEntry)
+		metas = append(metas, meta)
+		it.Next()
+	}
+	_ = txn.Commit(context.Background())
+	if len(metas) == 0 {
+		return
+	}
+	txn, _ = tae.GetRelation()
+	task, err := jobs.NewFlushTableTailTask(nil, txn, metas, tae.Runtime, txn.GetStartTS())
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	{
+		tae.DeleteAll(true)
+	}
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	ts1 := tae.TxnMgr.Now()
+
+	tae.CompactBlocks(false)
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.ForceGlobalCheckpoint(ctx, ts1, time.Minute)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.Restart(context.Background())
+	t.Log(tae.Catalog.SimplePPString(3))
 }

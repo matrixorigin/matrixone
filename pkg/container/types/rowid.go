@@ -51,6 +51,29 @@ func BuildTestBlockid(a, b int64) (ret Blockid) {
 	return
 }
 
+func NewObjectid() *Objectid {
+	sid := Uuid(uuid.Must(uuid.NewV7()))
+	var oid Objectid
+	copy(oid[:UuidSize], sid[:])
+	return &oid
+}
+
+func NewBlockidWithObjectID(segid *Objectid, blknum uint16) *Blockid {
+	var bid Blockid
+	size := ObjectidSize
+	copy(bid[:size], segid[:])
+	copy(bid[size:size+2], EncodeUint16(&blknum))
+	return &bid
+}
+
+func NewRowid(blkid *Blockid, offset uint32) *Rowid {
+	var rowid Rowid
+	size := BlockidSize
+	copy(rowid[:size], blkid[:])
+	copy(rowid[size:size+4], EncodeUint32(&offset))
+	return &rowid
+}
+
 func CompareRowidRowidAligned(a, b Rowid) int {
 	return bytes.Compare(a[:], b[:])
 }
@@ -176,6 +199,11 @@ func (b *Blockid) String() string {
 	uuid := (*uuid.UUID)(b[:UuidSize])
 	filen, blkn := b.Offsets()
 	return fmt.Sprintf("%s-%d-%d", uuid.String(), filen, blkn)
+}
+
+func (b *Blockid) ObjectNameString() string {
+	fileNum, _ := b.Offsets()
+	return fmt.Sprintf("%v_%05d", b.Segment().ToString(), fileNum)
 }
 
 func (b *Blockid) ShortString() string {

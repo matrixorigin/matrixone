@@ -306,6 +306,10 @@ func (e *testEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	return nil
 }
 
+func (e *testEngine) GetMessageCenter() any {
+	return nil
+}
+
 func (e *testEngine) Rows(ctx context.Context, key pb.StatsInfoKey) uint64 {
 	return 0
 }
@@ -318,6 +322,7 @@ func newtestOperator() *testOperator {
 	return &testOperator{}
 }
 
+func (o *testOperator) SetFootPrints(prints [][2]uint32) {}
 func (o *testOperator) AddWorkspace(_ client.Workspace) {
 }
 
@@ -345,8 +350,8 @@ func (o *testOperator) Rollback(ctx context.Context) error {
 	return nil
 }
 
-func (o *testOperator) Snapshot() ([]byte, error) {
-	return nil, nil
+func (o *testOperator) Snapshot() (txn.CNTxnSnapshot, error) {
+	return txn.CNTxnSnapshot{}, nil
 }
 
 func (o *testOperator) Txn() txn.TxnMeta {

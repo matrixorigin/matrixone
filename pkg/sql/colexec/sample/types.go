@@ -55,8 +55,7 @@ type Argument struct {
 	// group by expr1, expr2 ...
 	GroupExprs []*plan.Expr
 
-	IBucket, NBucket int
-	buf              *batch.Batch
+	buf *batch.Batch
 
 	vm.OperatorBase
 }
@@ -153,8 +152,6 @@ func NewMergeSample(rowSampleArg *Argument, outputRowCount bool) *Argument {
 	arg.UsingBlock = rowSampleArg.UsingBlock
 	arg.NeedOutputRowSeen = outputRowCount
 	arg.Rows = rowSampleArg.Rows
-	arg.IBucket = 0
-	arg.NBucket = 0
 	arg.GroupExprs = newGroupExpr
 	arg.SampleExprs = newSampleExpr
 	return arg
@@ -168,8 +165,6 @@ func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr, usingRow bo
 	arg.Rows = rows
 	arg.SampleExprs = sampleExprs
 	arg.GroupExprs = groupExprs
-	arg.IBucket = 0
-	arg.NBucket = 0
 	return arg
 }
 
@@ -181,8 +176,6 @@ func NewSampleByPercent(percent float64, sampleExprs, groupExprs []*plan.Expr) *
 	arg.Percents = percent
 	arg.SampleExprs = sampleExprs
 	arg.GroupExprs = groupExprs
-	arg.IBucket = 0
-	arg.NBucket = 0
 	return arg
 }
 
@@ -203,9 +196,11 @@ func (arg *Argument) SimpleDup() *Argument {
 	a.Percents = arg.Percents
 	a.SampleExprs = arg.SampleExprs
 	a.GroupExprs = arg.GroupExprs
-	a.IBucket = arg.IBucket
-	a.NBucket = arg.NBucket
 	return a
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -245,8 +240,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 func (arg *Argument) ConvertToPipelineOperator(in *pipeline.Instruction) {
 	in.Agg = &pipeline.Group{
-		Ibucket:  uint64(arg.IBucket),
-		Nbucket:  uint64(arg.NBucket),
 		Exprs:    arg.GroupExprs,
 		NeedEval: arg.UsingBlock,
 	}

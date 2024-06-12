@@ -18,6 +18,11 @@ syntax = "proto3";
 package proxy;
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/proxy";
 
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
+
 message ExtraInfo {
   bytes Salt = 1;
   bool InternalConn = 2;

@@ -34,6 +34,10 @@ const (
 	StatusServer = "status-server"
 	// TxnTraceService txn trance service
 	TxnTraceService = "txn-trace-service"
+	// ShardService shard service
+	ShardService = "shard-service"
+	// ProcessCodecService process codec service
+	ProcessCodecService = "process-codec-service"
 
 	// TxnOptions options used to create txn
 	TxnOptions = "txn-options"

@@ -320,7 +320,7 @@ func (mr *MockTxnClientMockRecorder) New(ctx, commitTS interface{}, options ...i
 }
 
 // NewWithSnapshot mocks base method.
-func (m *MockTxnClient) NewWithSnapshot(snapshot []byte) (client.TxnOperator, error) {
+func (m *MockTxnClient) NewWithSnapshot(snapshot txn.CNTxnSnapshot) (client.TxnOperator, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "NewWithSnapshot", snapshot)
 	ret0, _ := ret[0].(client.TxnOperator)
@@ -739,11 +739,23 @@ func (mr *MockTxnOperatorMockRecorder) Rollback(ctx interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Rollback", reflect.TypeOf((*MockTxnOperator)(nil).Rollback), ctx)
 }
 
+// SetFootPrints mocks base method.
+func (m *MockTxnOperator) SetFootPrints(prints [][2]uint32) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetFootPrints", prints)
+}
+
+// SetFootPrints indicates an expected call of SetFootPrints.
+func (mr *MockTxnOperatorMockRecorder) SetFootPrints(prints interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFootPrints", reflect.TypeOf((*MockTxnOperator)(nil).SetFootPrints), prints)
+}
+
 // Snapshot mocks base method.
-func (m *MockTxnOperator) Snapshot() ([]byte, error) {
+func (m *MockTxnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Snapshot")
-	ret0, _ := ret[0].([]byte)
+	ret0, _ := ret[0].(txn.CNTxnSnapshot)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

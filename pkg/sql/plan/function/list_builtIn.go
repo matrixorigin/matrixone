@@ -538,7 +538,7 @@ var supportedStringBuiltIns = []FuncNew{
 	{
 		functionId: ILIKE,
 		class:      plan.Function_STRICT,
-		layout:     BINARY_LOGICAL_OPERATOR,
+		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() {
@@ -1974,6 +1974,36 @@ var supportedArrayOperations = []FuncNew{
 			},
 		},
 	},
+	// function `l2_distance_sq`
+	{
+		functionId: L2_DISTANCE_SQ,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L2DistanceSqArray[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L2DistanceSqArray[float64]
+				},
+			},
+		},
+	},
 	// function `cosine_distance`
 	{
 		functionId: COSINE_DISTANCE,
@@ -2726,6 +2756,26 @@ var supportedMathBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 4,
+				args:       []types.T{types.T_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexFloat32
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexFloat64
+				},
+			},
+			{
+				overloadId: 6,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
@@ -2735,7 +2785,7 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 5,
+				overloadId: 7,
 				args:       []types.T{types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
@@ -3839,7 +3889,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				volatile:   true,
 				args:       []types.T{types.T_varchar, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInPurgeLog

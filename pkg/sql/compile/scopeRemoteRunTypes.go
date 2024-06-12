@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"hash/crc32"
 	"runtime"
 	"sync/atomic"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -86,6 +88,7 @@ type processHelper struct {
 	txnClient        client.TxnClient
 	sessionInfo      process.SessionInfo
 	analysisNodeList []int32
+	StmtId           uuid.UUID
 }
 
 // messageSenderOnClient is a structure
@@ -233,6 +236,7 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 		n := source[i]
 		atomic.AddInt64(&target.analInfos[i].OutputSize, n.OutputSize)
 		atomic.AddInt64(&target.analInfos[i].OutputRows, n.OutputRows)
+		atomic.AddInt64(&target.analInfos[i].InputBlocks, n.InputBlocks)
 		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
 		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
 		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
@@ -381,17 +385,23 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
 	proc.DispatchNotifyCh = make(chan process.WrapCs)
+	{
+		txn := proc.TxnOperator.Txn()
+		txnId := txn.GetID()
+		proc.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
+	}
 
 	c := reuse.Alloc[Compile](nil)
 	c.proc = proc
-	c.proc.MessageBoard = c.MessageBoard
 	c.e = cnInfo.storeEngine
+	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.StmtProfile.GetStmtId())
+	c.proc.MessageBoard = c.MessageBoard
 	c.anal = newAnaylze()
 	c.anal.analInfos = proc.AnalInfos
 	c.addr = receiver.cnInformation.cnAddr
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 	c.ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
-
+	c.execType = plan2.ExecTypeAP_MULTICN
 	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)
 	}
@@ -504,19 +514,25 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 
 	result := processHelper{
 		id:               procInfo.Id,
-		lim:              convertToProcessLimitation(procInfo.Lim),
+		lim:              process.ConvertToProcessLimitation(procInfo.Lim),
 		unixTime:         procInfo.UnixTime,
 		accountId:        procInfo.AccountId,
 		txnClient:        cli,
 		analysisNodeList: procInfo.GetAnalysisNodeList(),
 	}
-	result.txnOperator, err = cli.NewWithSnapshot([]byte(procInfo.Snapshot))
+	result.txnOperator, err = cli.NewWithSnapshot(procInfo.Snapshot)
 	if err != nil {
 		return processHelper{}, err
 	}
-	result.sessionInfo, err = convertToProcessSessionInfo(procInfo.SessionInfo)
+	result.sessionInfo, err = process.ConvertToProcessSessionInfo(procInfo.SessionInfo)
 	if err != nil {
 		return processHelper{}, err
+	}
+	if sessLogger := procInfo.SessionLogger; len(sessLogger.SessId) > 0 {
+		copy(result.sessionInfo.SessionId[:], sessLogger.SessId)
+		copy(result.StmtId[:], sessLogger.StmtId)
+		result.sessionInfo.LogLevel = process.EnumLogLevel2ZapLogLevel(sessLogger.LogLevel)
+		// txnId, ignore. more in txnOperator.
 	}
 
 	return result, nil

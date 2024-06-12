@@ -26,6 +26,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -103,15 +104,84 @@ func AbsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.Functio
 	})
 }
 
-func NormalizeL2Array[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(in []byte) ([]byte, error) {
-		_in := types.BytesToArray[T](in)
-		_out, err := moarray.NormalizeL2(_in)
-		if err != nil {
-			return nil, err
+var (
+	arrayF32Pool = sync.Pool{
+		New: func() interface{} {
+			s := make([]float32, 128)
+			return &s
+		},
+	}
+
+	arrayF64Pool = sync.Pool{
+		New: func() interface{} {
+			s := make([]float64, 128)
+			return &s
+		},
+	}
+)
+
+func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+
+	var inArrayF32 []float32
+	var outArrayF32Ptr *[]float32
+	var outArrayF32 []float32
+
+	var inArrayF64 []float64
+	var outArrayF64Ptr *[]float64
+	var outArrayF64 []float64
+
+	var data []byte
+	var null bool
+
+	for i := uint64(0); i < rowCount; i++ {
+		data, null = source.GetStrValue(i)
+		if null {
+			_ = rs.AppendMustNullForBytesResult()
+			continue
 		}
-		return types.ArrayToBytes[T](_out), nil
-	})
+
+		switch t := parameters[0].GetType().Oid; t {
+		case types.T_array_float32:
+			inArrayF32 = types.BytesToArray[float32](data)
+
+			outArrayF32Ptr = arrayF32Pool.Get().(*[]float32)
+			outArrayF32 = *outArrayF32Ptr
+
+			if cap(outArrayF32) < len(inArrayF32) {
+				outArrayF32 = make([]float32, len(inArrayF32))
+			} else {
+				outArrayF32 = outArrayF32[:len(inArrayF32)]
+			}
+			_ = moarray.NormalizeL2(inArrayF32, outArrayF32)
+			_ = rs.AppendBytes(types.ArrayToBytes[float32](outArrayF32), false)
+
+			*outArrayF32Ptr = outArrayF32
+			arrayF32Pool.Put(outArrayF32Ptr)
+		case types.T_array_float64:
+			inArrayF64 = types.BytesToArray[float64](data)
+
+			outArrayF64Ptr = arrayF64Pool.Get().(*[]float64)
+			outArrayF64 = *outArrayF64Ptr
+
+			if cap(outArrayF64) < len(inArrayF64) {
+				outArrayF64 = make([]float64, len(inArrayF64))
+			} else {
+				outArrayF64 = outArrayF64[:len(inArrayF64)]
+			}
+			_ = moarray.NormalizeL2(inArrayF64, outArrayF64)
+			_ = rs.AppendBytes(types.ArrayToBytes[float64](outArrayF64), false)
+
+			*outArrayF64Ptr = outArrayF64
+			arrayF64Pool.Put(outArrayF64Ptr)
+		}
+
+	}
+
+	return nil
 }
 
 func L1NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
@@ -782,6 +852,8 @@ func ConnectionID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	})
 }
 
+// HexString returns a hexadecimal string representation of a string.
+// See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_hex
 func HexString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryBytesToStr(ivecs, result, proc, length, hexEncodeString)
 }
@@ -794,6 +866,20 @@ func HexUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return opUnaryFixedToStr[uint64](ivecs, result, proc, length, hexEncodeUint64)
 }
 
+func HexFloat32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryFixedToStr[float32](ivecs, result, proc, length, func(v float32) string {
+		// round is used to handle select hex(456.789); which should return 1C9 and not 1C8
+		return fmt.Sprintf("%X", uint64(math.Round(float64(v))))
+	})
+}
+
+func HexFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryFixedToStr[float64](ivecs, result, proc, length, func(v float64) string {
+		// round is used to handle select hex(456.789); which should return 1C9 and not 1C8
+		return fmt.Sprintf("%X", uint64(math.Round(v)))
+	})
+}
+
 func HexArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
 		buf := make([]byte, hex.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
@@ -803,7 +889,7 @@ func HexArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 func hexEncodeString(xs []byte) string {
-	return hex.EncodeToString(xs)
+	return strings.ToUpper(hex.EncodeToString(xs))
 }
 
 func hexEncodeInt64(xs int64) string {
@@ -814,17 +900,24 @@ func hexEncodeUint64(xs uint64) string {
 	return fmt.Sprintf("%X", xs)
 }
 
+// UnhexString returns a string representation of a hexadecimal value.
+// See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_unhex
 func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
 	if null {
 		return rs.AppendMustNullForBytesResult()
 	}
 
-	buf := make([]byte, hex.DecodedLen(len(data)))
-	_, err := hex.Decode(buf, data)
+	// Add a '0' to the front, if the length is not the multiple of 2
+	str := functionUtil.QuickBytesToStr(data)
+	if len(str)%2 != 0 {
+		str = "0" + str
+	}
+
+	bs, err := hex.DecodeString(str)
 	if err != nil {
 		return rs.AppendMustNullForBytesResult()
 	}
-	return rs.AppendMustBytesValue(buf)
+	return rs.AppendMustBytesValue(bs)
 }
 
 func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {

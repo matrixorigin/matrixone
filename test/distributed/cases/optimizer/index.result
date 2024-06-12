@@ -1,4 +1,3 @@
-SET GLOBAL experimental_master_index = 1;
 drop database if exists d1;
 create database d1;
 use d1;
@@ -17,7 +16,7 @@ select mo_ctl('dn', 'flush', 'd1.t2');
 mo_ctl(dn, flush, d1.t2)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select Sleep(1);
-sleep(1)
+Sleep(1)
 0
 select * from t1 where c2=1;
 c1    c2    c3
@@ -174,4 +173,3 @@ a    b
 1    1
 2    2
 drop database if exists d1;
-SET GLOBAL experimental_master_index = 0;

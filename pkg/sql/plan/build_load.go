@@ -87,13 +87,21 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		tableDef.Createsql = string(json_byte)
 	}
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
 	terminated := ","
-	enclosedBy := []byte{0}
+	enclosedBy := []byte("\"")
+	escapedBy := []byte{0}
 	if stmt.Param.Tail.Fields != nil {
 		if stmt.Param.Tail.Fields.EnclosedBy != nil {
-			enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy.Value}
+			if stmt.Param.Tail.Fields.EnclosedBy.Value != 0 {
+				enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy.Value}
+			}
+		}
+		if stmt.Param.Tail.Fields.EscapedBy != nil {
+			if stmt.Param.Tail.Fields.EscapedBy.Value != 0 {
+				escapedBy = []byte{stmt.Param.Tail.Fields.EscapedBy.Value}
+			}
 		}
 		if stmt.Param.Tail.Fields.Terminated != nil {
 			terminated = stmt.Param.Tail.Fields.Terminated.Value
@@ -113,6 +121,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 			IgnoredLines: uint64(stmt.Param.Tail.IgnoredLines),
 			EnclosedBy:   enclosedBy,
 			Terminated:   terminated,
+			EscapedBy:    escapedBy,
 			JsonType:     stmt.Param.JsonData,
 		},
 	}

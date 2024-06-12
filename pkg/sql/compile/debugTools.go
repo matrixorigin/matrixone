@@ -39,7 +39,8 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Output:                  "output",
 	vm.Offset:                  "offset",
 	vm.Product:                 "product",
-	vm.Restrict:                "restrict",
+	vm.ProductL2:               "product l2",
+	vm.Filter:                  "filter",
 	vm.Dispatch:                "dispatch",
 	vm.Shuffle:                 "shuffle",
 	vm.Connector:               "connect",
@@ -72,6 +73,8 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Intersect:               "intersect",
 	vm.IntersectAll:            "intersect all",
 	vm.HashBuild:               "hash build",
+	vm.ShuffleBuild:            "shuffle build",
+	vm.IndexBuild:              "index build",
 	vm.MergeDelete:             "merge delete",
 	vm.LockOp:                  "lockop",
 	vm.MergeBlock:              "merge block",
@@ -83,6 +86,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.TableScan:               "tablescan",
 	vm.ValueScan:               "valuescan",
 	vm.TableFunction:           "tablefunction",
+	vm.OnDuplicateKey:          "on duplicate key",
 }
 
 var debugMagicNames = map[magicType]string{

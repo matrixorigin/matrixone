@@ -490,7 +490,7 @@ func (r *DeleteReq) UnmarshalBinary(data []byte) error {
 	l = int(binary.BigEndian.Uint32(data[index : index+LengthBytes]))
 	index += LengthBytes
 
-	var vec vector.Vector
+	vec := *vector.NewVecFromReuse()
 	if err := vec.UnmarshalBinary(data[index : index+l]); err != nil {
 		return err
 	}

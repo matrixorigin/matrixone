@@ -76,8 +76,6 @@ func (arg *Argument) Release() {
 }
 
 type container struct {
-	colexec.ReceiverOperator
-
 	// operator status
 	status int
 
@@ -92,6 +90,10 @@ type container struct {
 	compares  []compare.Compare
 
 	buf *batch.Batch
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

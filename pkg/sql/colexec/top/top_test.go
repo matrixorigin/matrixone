@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -73,8 +74,19 @@ func TestTop(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-
 		bats := []*batch.Batch{
+			newBatch(tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
+			batch.EmptyBatch,
+		}
+		resetChildren(tc.arg, bats)
+		_, _ = tc.arg.Call(tc.proc)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.arg.Reset(tc.proc, false, nil)
+
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		bats = []*batch.Batch{
 			newBatch(tc.types, tc.proc, Rows),
 			newBatch(tc.types, tc.proc, Rows),
 			batch.EmptyBatch,
@@ -119,7 +131,7 @@ func newTestCase(m *mpool.MPool, ts []types.Type, limit int64, fs []*plan.OrderB
 		proc:  testutil.NewProcessWithMPool(m),
 		arg: &Argument{
 			Fs:    fs,
-			Limit: plan2.MakePlan2Int64ConstExprWithType(limit),
+			Limit: plan2.MakePlan2Uint64ConstExprWithType(uint64(limit)),
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,

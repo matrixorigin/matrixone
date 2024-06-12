@@ -48,7 +48,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	arg.ctr.limit = uint64(vector.MustFixedCol[int64](vec)[0])
+	arg.ctr.limit = uint64(vector.MustFixedCol[uint64](vec)[0])
 	return nil
 }
 
@@ -62,24 +62,24 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
-	var end bool
-	var err error
+	var msg *process.RegisterMessage
 	if arg.buf != nil {
 		proc.PutBatch(arg.buf)
 		arg.buf = nil
 	}
 
 	for {
-		arg.buf, end, err = arg.ctr.ReceiveFromAllRegs(anal)
-		if err != nil {
+		msg = arg.ctr.ReceiveFromAllRegs(anal)
+		if msg.Err != nil {
 			result.Status = vm.ExecStop
-			return result, nil
+			return result, msg.Err
 		}
-		if end {
+		if msg.Batch == nil {
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
+		arg.buf = msg.Batch
 		if arg.buf.Last() {
 			result.Batch = arg.buf
 			return result, nil

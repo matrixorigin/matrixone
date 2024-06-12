@@ -17,6 +17,7 @@ package hashbuild
 import (
 	"bytes"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -36,12 +37,6 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	arg.ctr = new(container)
-	if len(proc.Reg.MergeReceivers) > 1 {
-		arg.ctr.InitReceiver(proc, true)
-		arg.ctr.isMerge = true
-	} else {
-		arg.ctr.InitReceiver(proc, false)
-	}
 
 	if arg.NeedHashMap {
 		arg.ctr.vecs = make([][]*vector.Vector, 0)
@@ -63,15 +58,14 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		}
 
 		if ctr.keyWidth <= 8 {
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(false, arg.Ibucket, arg.Nbucket, proc.Mp()); err != nil {
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
 				return err
 			}
 		} else {
-			if ctr.strHashMap, err = hashmap.NewStrMap(false, arg.Ibucket, arg.Nbucket, proc.Mp()); err != nil {
+			if ctr.strHashMap, err = hashmap.NewStrMap(false, proc.Mp()); err != nil {
 				return err
 			}
 		}
-
 	}
 
 	arg.ctr.batches = make([]*batch.Batch, 0)
@@ -181,21 +175,18 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 	return nil
 }
 
-func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	var err error
+func (ctr *container) collectBuildBatches(arg *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
 	for {
-		if ap.ctr.isMerge {
-			currentBatch, _, err = ctr.ReceiveFromAllRegs(anal)
-		} else {
-			currentBatch, _, err = ctr.ReceiveFromSingleReg(0, anal)
-		}
+		result, err := arg.Children[0].Call(proc)
 		if err != nil {
 			return err
 		}
-		if currentBatch == nil {
+		if result.Batch == nil {
 			break
 		}
+		currentBatch = result.Batch
+		atomic.AddInt64(&currentBatch.Cnt, 1)
 		if currentBatch.IsEmpty() {
 			proc.PutBatch(currentBatch)
 			continue

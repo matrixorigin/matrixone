@@ -111,7 +111,7 @@ func TestTunnelClientToServer(t *testing.T) {
 	sendEventCh <- struct{}{}
 	barrierStart <- struct{}{}
 	scp.mu.Lock()
-	require.Equal(t, true, scp.safeToTransfer())
+	require.Equal(t, true, scp.safeToTransferLocked())
 	scp.mu.Unlock()
 	barrierEnd <- struct{}{}
 
@@ -128,7 +128,7 @@ func TestTunnelClientToServer(t *testing.T) {
 	sendEventCh <- struct{}{}
 	barrierStart <- struct{}{}
 	scp.mu.Lock()
-	require.Equal(t, true, scp.safeToTransfer())
+	require.Equal(t, true, scp.safeToTransferLocked())
 	scp.mu.Unlock()
 	barrierEnd <- struct{}{}
 
@@ -146,7 +146,7 @@ func TestTunnelClientToServer(t *testing.T) {
 	barrierStart <- struct{}{}
 	scp.mu.Lock()
 	// in txn
-	require.Equal(t, true, scp.safeToTransfer())
+	require.Equal(t, true, scp.safeToTransferLocked())
 	scp.mu.Unlock()
 	barrierEnd <- struct{}{}
 
@@ -164,7 +164,7 @@ func TestTunnelClientToServer(t *testing.T) {
 	barrierStart <- struct{}{}
 	scp.mu.Lock()
 	// out of txn
-	require.Equal(t, true, scp.safeToTransfer())
+	require.Equal(t, true, scp.safeToTransferLocked())
 	scp.mu.Unlock()
 	barrierEnd <- struct{}{}
 
@@ -616,7 +616,7 @@ func TestCanStartTransfer(t *testing.T) {
 		}
 		tu.mu.scp = &pipe{}
 		tu.mu.scp.src = newMySQLConn("", nil, 0, nil, nil, 0)
-		tu.mu.scp.src.inTxn.Store(true)
+		tu.mu.scp.mu.inTxn = true
 		can := tu.canStartTransfer(false)
 		require.False(t, can)
 	})

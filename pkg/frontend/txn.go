@@ -20,24 +20,22 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 var (
@@ -46,6 +44,8 @@ var (
 
 // get errors during the transaction. rollback the transaction
 func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
+	execCtx.ses.EnterFPrint(88)
+	defer execCtx.ses.ExitFPrint(88)
 	incStatementErrorsCounter(execCtx.tenant, execCtx.stmt)
 	/*
 		Cases    | set Autocommit = 1/0 | BEGIN statement |
@@ -60,7 +60,7 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 	if ses.GetTxnHandler().InMultiStmtTransactionMode() && ses.GetTxnHandler().InActiveTxn() {
 		ses.cleanCache()
 	}
-	logError(ses, ses.GetDebugString(), execErr.Error())
+	ses.Error(execCtx.reqCtx, execErr.Error())
 	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback || isErrorRollbackWholeTxn(execErr)
 	txnErr := ses.GetTxnHandler().Rollback(execCtx)
 	if txnErr != nil {
@@ -74,6 +74,8 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 // execution succeeds during the transaction. commit the transaction
 func commitTxnFunc(ses FeSession,
 	execCtx *ExecCtx) (retErr error) {
+	execCtx.ses.EnterFPrint(87)
+	defer execCtx.ses.ExitFPrint(87)
 	// Call a defer function -- if TxnCommitSingleStatement paniced, we
 	// want to catch it and convert it to an error.
 	defer func() {
@@ -92,10 +94,12 @@ func commitTxnFunc(ses FeSession,
 
 // finish the transaction
 func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
+	ses.EnterFPrint(74)
+	defer ses.ExitFPrint(74)
 	// First recover all panics.   If paniced, we will abort.
 	if r := recover(); r != nil {
 		recoverErr := moerr.ConvertPanicError(execCtx.reqCtx, r)
-		logError(ses, ses.GetDebugString(), "recover from panic", zap.Error(recoverErr), zap.Error(execErr))
+		ses.Error(execCtx.reqCtx, "recover from panic", zap.Error(recoverErr), zap.Error(execErr))
 	}
 
 	if execCtx.txnOpt.byCommit {
@@ -322,6 +326,10 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.SetTxnId(dumpUUID[:])
 	} else {
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		err = disttae.CheckTxnIsValid(th.txnOp)
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -351,8 +359,8 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	accountID := uint32(0)
 	userName := ""
 	connectionID := uint32(0)
-	if execCtx.proto != nil {
-		connectionID = execCtx.proto.ConnectionID()
+	if execCtx.resper != nil {
+		connectionID = execCtx.resper.GetU32(CONNID)
 	}
 	if execCtx.ses.GetTenantInfo() != nil {
 		accountID = execCtx.ses.GetTenantInfo().TenantID
@@ -365,7 +373,8 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			userName,
 			execCtx.ses.GetUUIDString(),
 			connectionID),
-		client.WithSessionInfo(sessionInfo))
+		client.WithSessionInfo(sessionInfo),
+		client.WithBeginAutoCommit(execCtx.txnOpt.byBegin, execCtx.txnOpt.autoCommit))
 
 	if execCtx.ses.GetFromRealUser() {
 		opts = append(opts,
@@ -376,13 +385,13 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.DisableTrace() {
 		opts = append(opts, client.WithDisableTrace(true))
 	} else {
-		varVal, err := execCtx.ses.GetSessionVar(execCtx.reqCtx, "disable_txn_trace")
+		varVal, err := execCtx.ses.GetSessionSysVar("disable_txn_trace")
 		if err != nil {
 			return err
 		}
-		if gsv, ok := GSysVariables.GetDefinitionOfSysVar("disable_txn_trace"); ok {
-			if svbt, ok2 := gsv.GetType().(SystemVariableBoolType); ok2 {
-				if svbt.IsTrue(varVal) {
+		if def, ok := gSysVarsDefs["disable_txn_trace"]; ok {
+			if boolType, ok := def.GetType().(SystemVariableBoolType); ok {
+				if boolType.IsTrue(varVal) {
 					opts = append(opts, client.WithDisableTrace(true))
 				}
 			}
@@ -399,6 +408,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	if th.txnOp == nil {
 		return moerr.NewInternalError(execCtx.reqCtx, "NewTxnOperator: txnClient new a null txn")
 	}
+	setFPrints(th.txnOp, execCtx.ses.GetFPrints())
 	return err
 }
 
@@ -411,6 +421,8 @@ func (th *TxnHandler) GetTxn() TxnOperator {
 // Commit commits the txn.
 // option bits decide the actual commit behaviour
 func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
+	execCtx.ses.EnterFPrint(75)
+	defer execCtx.ses.ExitFPrint(75)
 	var err error
 	th.mu.Lock()
 	defer th.mu.Unlock()
@@ -425,6 +437,8 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 	if !bitsIsSet(th.optionBits, OPTION_BEGIN|OPTION_NOT_AUTOCOMMIT) ||
 		th.inActiveTxnUnsafe() && NeedToBeCommittedInActiveTransaction(execCtx.stmt) ||
 		execCtx.txnOpt.byCommit {
+		execCtx.ses.EnterFPrint(76)
+		defer execCtx.ses.ExitFPrint(76)
 		err = th.commitUnsafe(execCtx)
 		if err != nil {
 			return err
@@ -435,6 +449,8 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 }
 
 func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
+	execCtx.ses.EnterFPrint(77)
+	defer execCtx.ses.ExitFPrint(77)
 	_, span := trace.Start(execCtx.reqCtx, "TxnHandler.CommitTxn",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(execCtx.ses.GetTxnId(), execCtx.ses.GetStmtId(), execCtx.ses.GetSqlOfStmt()))
@@ -443,7 +459,6 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	if !th.inActiveTxnUnsafe() || th.shareTxn {
 		return nil
 	}
-	sessionInfo := execCtx.ses.GetDebugString()
 	if th.txnOp == nil {
 		th.invalidateTxnUnsafe()
 	}
@@ -461,7 +476,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
-	val, e := execCtx.ses.GetSessionVar(execCtx.reqCtx, "mo_pk_check_by_dn")
+	val, e := execCtx.ses.GetSessionSysVar("mo_pk_check_by_dn")
 	if e != nil {
 		return e
 	}
@@ -477,14 +492,18 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		}
 	}()
 
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+	if execCtx.ses.GetLogLevel().Enabled(zap.DebugLevel) {
 		txnId := th.txnOp.Txn().DebugString()
-		logDebugf(sessionInfo, "CommitTxn txnId:%s", txnId)
+		execCtx.ses.Debugf(execCtx.reqCtx, "CommitTxn txnId:%s", txnId)
 		defer func() {
-			logDebugf(sessionInfo, "CommitTxn exit txnId:%s", txnId)
+			execCtx.ses.Debugf(execCtx.reqCtx, "CommitTxn exit txnId:%s", txnId)
 		}()
 	}
+	execCtx.ses.EnterFPrint(78)
+	defer execCtx.ses.ExitFPrint(78)
 	if th.txnOp != nil {
+		execCtx.ses.EnterFPrint(79)
+		defer execCtx.ses.ExitFPrint(79)
 		commitTs := th.txnOp.Txn().CommitTS
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		err = th.txnOp.Commit(ctx2)
@@ -501,6 +520,8 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 // Rollback rolls back the txn
 // the option bits decide the actual behavior
 func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
+	execCtx.ses.EnterFPrint(80)
+	defer execCtx.ses.ExitFPrint(80)
 	var err error
 	th.mu.Lock()
 	defer th.mu.Unlock()
@@ -515,6 +536,8 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 	if !bitsIsSet(th.optionBits, OPTION_BEGIN|OPTION_NOT_AUTOCOMMIT) ||
 		th.inActiveTxnUnsafe() && NeedToBeCommittedInActiveTransaction(execCtx.stmt) ||
 		execCtx.txnOpt.byRollback {
+		execCtx.ses.EnterFPrint(81)
+		defer execCtx.ses.ExitFPrint(81)
 		//Case1.1: autocommit && not_begin
 		//Case1.2: (not_autocommit || begin) && activeTxn && needToBeCommitted
 		//Case1.3: the error that should rollback the whole txn
@@ -523,7 +546,8 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 		//Case2: not ( autocommit && !begin ) && not ( activeTxn && needToBeCommitted )
 		//<==>  ( not_autocommit || begin ) && not ( activeTxn && needToBeCommitted )
 		//just rollback statement
-
+		execCtx.ses.EnterFPrint(85)
+		defer execCtx.ses.ExitFPrint(85)
 		//non derived statement
 		if th.txnOp != nil && !execCtx.ses.IsDerivedStmt() {
 			err = th.txnOp.GetWorkspace().RollbackLastStatement(th.txnCtx)
@@ -537,6 +561,8 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 }
 
 func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
+	execCtx.ses.EnterFPrint(82)
+	defer execCtx.ses.ExitFPrint(82)
 	_, span := trace.Start(execCtx.reqCtx, "TxnHandler.RollbackTxn",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(execCtx.ses.GetTxnId(), execCtx.ses.GetStmtId(), execCtx.ses.GetSqlOfStmt()))
@@ -545,8 +571,6 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 	if !th.inActiveTxnUnsafe() || th.shareTxn {
 		return nil
 	}
-
-	sessionInfo := execCtx.ses.GetDebugString()
 
 	if th.txnOp == nil {
 		th.invalidateTxnUnsafe()
@@ -573,14 +597,18 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
 		}
 	}()
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+	if execCtx.ses.GetLogLevel().Enabled(zap.DebugLevel) {
 		txnId := th.txnOp.Txn().DebugString()
-		logDebugf(sessionInfo, "RollbackTxn txnId:%s", txnId)
+		execCtx.ses.Debugf(execCtx.reqCtx, "RollbackTxn txnId:%s", txnId)
 		defer func() {
-			logDebugf(sessionInfo, "RollbackTxn exit txnId:%s", txnId)
+			execCtx.ses.Debugf(execCtx.reqCtx, "RollbackTxn exit txnId:%s", txnId)
 		}()
 	}
+	execCtx.ses.EnterFPrint(83)
+	defer execCtx.ses.ExitFPrint(83)
 	if th.txnOp != nil {
+		execCtx.ses.EnterFPrint(84)
+		defer execCtx.ses.ExitFPrint(84)
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		err = th.txnOp.Rollback(ctx2)
 		if err != nil {
@@ -598,6 +626,8 @@ SetAutocommit sets the value of the system variable 'autocommit'.
 It commits the active transaction if the old value is false and the new value is true.
 */
 func (th *TxnHandler) SetAutocommit(execCtx *ExecCtx, old, on bool) error {
+	execCtx.ses.EnterFPrint(86)
+	defer execCtx.ses.ExitFPrint(86)
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	//on -> on : do nothing

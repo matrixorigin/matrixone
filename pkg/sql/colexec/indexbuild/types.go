@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -32,10 +31,8 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-	state   int
-	isMerge bool
-	batch   *batch.Batch
+	state int
+	batch *batch.Batch
 }
 
 type Argument struct {
@@ -75,6 +72,10 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
@@ -82,13 +83,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		if ctr.batch != nil {
 			proc.PutBatch(ctr.batch)
 		}
-		ctr.FreeMergeTypeOperator(pipelineFailed)
-		if ctr.isMerge {
-			ctr.FreeMergeTypeOperator(pipelineFailed)
-		} else {
-			ctr.FreeAllReg()
-		}
-
 		arg.ctr = nil
 	}
 }
