@@ -194,6 +194,7 @@ type OptimizerHints struct {
 	joinOrdering               int
 	forceOneCN                 int
 	execType                   int
+	disableRightJoin           int
 }
 
 type CTERef struct {

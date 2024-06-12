@@ -955,7 +955,7 @@ type FuncExpr struct {
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
 	if node.FuncName != nil {
-		ctx.WriteString(node.FuncName.Compare())
+		ctx.WriteString(node.FuncName.Origin())
 	} else {
 		node.Func.Format(ctx)
 	}

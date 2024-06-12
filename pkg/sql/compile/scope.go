@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
@@ -363,6 +365,10 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 // buildJoinParallelRun deal one case of scope.ParallelRun.
 // this function will create a pipeline to run a join in parallel.
 func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
+	if c.IsTpQuery() {
+		//tp query build scope in compile time, not runtime
+		return s, nil
+	}
 	mcpu := s.NodeInfo.Mcpu
 	if mcpu <= 1 { // no need to parallel
 		buildScope := c.newJoinBuildScope(s, nil)
@@ -471,7 +477,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	}
 
 	maxProvidedCpuNumber := goruntime.GOMAXPROCS(0)
-	if c.execType == plan2.ExecTypeTP {
+	if c.IsTpQuery() {
 		maxProvidedCpuNumber = 1
 	}
 
@@ -1258,6 +1264,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 func (s *Scope) replace(c *Compile) error {
 	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
 	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
+	rewriteFromOnDuplicateKey := s.Plan.GetQuery().Nodes[0].ReplaceCtx.RewriteFromOnDuplicateKey
 
 	delAffectedRows := uint64(0)
 	if deleteCond != "" {
@@ -1267,7 +1274,14 @@ func (s *Scope) replace(c *Compile) error {
 		}
 		delAffectedRows = result.AffectedRows
 	}
-	result, err := c.runSqlWithResult("insert " + c.sql[7:])
+	var sql string
+	if rewriteFromOnDuplicateKey {
+		idx := strings.Index(strings.ToLower(c.sql), "on duplicate key update")
+		sql = c.sql[:idx]
+	} else {
+		sql = "insert " + c.sql[7:]
+	}
+	result, err := c.runSqlWithResult(sql)
 	if err != nil {
 		return err
 	}
