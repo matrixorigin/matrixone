@@ -678,7 +678,7 @@ func (c *Compile) runOnce() error {
 	}
 	if !c.IsTpQuery() {
 		if plan2.HasShuffleInPlan(c.pn.GetQuery()) {
-			logutil.Infof("has shuffle node in plan! sql %v", c.originSQL)
+			logutil.Infof("has shuffle node in plan! sql %v", c.sql)
 		}
 	}
 	//c.printPipeline()
