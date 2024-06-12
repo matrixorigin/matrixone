@@ -123,15 +123,25 @@ func (obj *aobject) PrepareCompact() bool {
 
 	if droppedCommitted {
 		if !obj.meta.PrepareCompactLocked() {
+			if obj.meta.CheckPrintPrepareCompactLocked() {
+				obj.meta.PrintPrepareCompactDebugLog()
+			}
 			return false
 		}
 	} else {
 		if !obj.meta.PrepareCompactLocked() ||
 			!obj.appendMVCC.PrepareCompactLocked() /* all appends are committed */ {
+			if obj.meta.CheckPrintPrepareCompactLocked() {
+				logutil.Infof("obj %v, data prepare compact failed", obj.meta.ID.String())
+			}
 			return false
 		}
 	}
-	return obj.RefCount() == 0
+	prepareCompact := obj.RefCount() == 0
+	if !prepareCompact && obj.meta.CheckPrintPrepareCompactLocked() {
+		logutil.Infof("obj %v, data ref count > 0", obj.meta.ID.String())
+	}
+	return prepareCompact
 }
 
 func (obj *aobject) Pin() *common.PinnedItem[*aobject] {
