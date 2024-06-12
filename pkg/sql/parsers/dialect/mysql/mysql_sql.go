@@ -10480,7 +10480,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedName
 //line mysql_sql.y:1395
 		{
-			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin()), yyDollar[3].cstrUnion().Compare())
+			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetTblName("", yyDollar[1].cstrUnion().Origin()), yyDollar[3].cstrUnion().Compare())
 			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion(), yyDollar[3].cstrUnion())
 			yyLOCAL = unResolve
 		}
@@ -10490,7 +10490,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedName
 //line mysql_sql.y:1401
 		{
-			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin()), yylex.(*Lexer).GetDbOrTblName(yyDollar[3].cstrUnion().Origin()), yyDollar[5].cstrUnion().Compare())
+			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbName(yyDollar[1].cstrUnion().Origin()), yylex.(*Lexer).GetTblName(yyDollar[1].cstrUnion().Origin(), yyDollar[3].cstrUnion().Origin()), yyDollar[5].cstrUnion().Compare())
 			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion(), yyDollar[3].cstrUnion(), yyDollar[5].cstrUnion())
 			yyLOCAL = unResolve
 		}
@@ -14270,7 +14270,7 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:4117
 		{
-			yyVAL.str = yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin())
+			yyVAL.str = yylex.(*Lexer).GetDbName(yyDollar[1].cstrUnion().Origin())
 		}
 	case 610:
 		yyDollar = yyS[yypt-1 : yypt+1]
@@ -16033,7 +16033,7 @@ yydefault:
 		var yyLOCAL tree.SelectExpr
 //line mysql_sql.y:5354
 		{
-			yyLOCAL = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin()))}
+			yyLOCAL = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yylex.(*Lexer).GetTblName("", yyDollar[1].cstrUnion().Origin()))}
 		}
 		yyVAL.union = yyLOCAL
 	case 821:
@@ -16041,7 +16041,7 @@ yydefault:
 		var yyLOCAL tree.SelectExpr
 //line mysql_sql.y:5358
 		{
-			yyLOCAL = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin()), yylex.(*Lexer).GetDbOrTblName(yyDollar[3].cstrUnion().Origin()))}
+			yyLOCAL = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yylex.(*Lexer).GetDbName(yyDollar[1].cstrUnion().Origin()), yylex.(*Lexer).GetTblName(yyDollar[1].cstrUnion().Origin(), yyDollar[3].cstrUnion().Origin()))}
 		}
 		yyVAL.union = yyLOCAL
 	case 822:
@@ -16556,13 +16556,13 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:5720
 		{
-			yyVAL.str = yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin())
+			yyVAL.str = yylex.(*Lexer).GetTblName("", yyDollar[1].cstrUnion().Origin())
 		}
 	case 884:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:5724
 		{
-			yyVAL.str = yylex.(*Lexer).GetDbOrTblName(yyDollar[1].str)
+			yyVAL.str = yylex.(*Lexer).GetTblName("", yyDollar[1].str)
 		}
 	case 885:
 		yyDollar = yyS[yypt-0 : yypt+1]
@@ -19900,7 +19900,7 @@ yydefault:
 //line mysql_sql.y:8175
 		{
 			prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-			yyLOCAL = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin())), prefix, yyDollar[2].atTimeStampUnion())
+			yyLOCAL = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetTblName("", yyDollar[1].cstrUnion().Origin())), prefix, yyDollar[2].atTimeStampUnion())
 		}
 		yyVAL.union = yyLOCAL
 	case 1255:
@@ -19908,8 +19908,8 @@ yydefault:
 		var yyLOCAL *tree.TableName
 //line mysql_sql.y:8180
 		{
-			prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin())), ExplicitSchema: true}
-			yyLOCAL = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetDbOrTblName(yyDollar[3].cstrUnion().Origin())), prefix, yyDollar[4].atTimeStampUnion())
+			prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yylex.(*Lexer).GetDbName(yyDollar[1].cstrUnion().Origin())), ExplicitSchema: true}
+			yyLOCAL = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetTblName(yyDollar[1].cstrUnion().Origin(), yyDollar[3].cstrUnion().Origin())), prefix, yyDollar[4].atTimeStampUnion())
 		}
 		yyVAL.union = yyLOCAL
 	case 1256:
@@ -20367,7 +20367,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedName
 //line mysql_sql.y:8542
 		{
-			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin()), yyDollar[3].cstrUnion().Compare())
+			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetTblName("", yyDollar[1].cstrUnion().Origin()), yyDollar[3].cstrUnion().Compare())
 			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion(), yyDollar[3].cstrUnion())
 			yyLOCAL = unResolve
 		}
@@ -20377,7 +20377,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedName
 //line mysql_sql.y:8548
 		{
-			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin()), yylex.(*Lexer).GetDbOrTblName(yyDollar[3].cstrUnion().Origin()), yyDollar[5].cstrUnion().Compare())
+			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbName(yyDollar[1].cstrUnion().Origin()), yylex.(*Lexer).GetTblName(yyDollar[1].cstrUnion().Origin(), yyDollar[3].cstrUnion().Origin()), yyDollar[5].cstrUnion().Compare())
 			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion(), yyDollar[3].cstrUnion(), yyDollar[5].cstrUnion())
 			yyLOCAL = unResolve
 		}
@@ -20429,7 +20429,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedName
 //line mysql_sql.y:8580
 		{
-			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin()), yyDollar[3].cstrUnion().Compare())
+			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetTblName("", yyDollar[1].cstrUnion().Origin()), yyDollar[3].cstrUnion().Compare())
 			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion(), yyDollar[3].cstrUnion())
 			yyLOCAL = unResolve
 		}
@@ -20439,7 +20439,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedName
 //line mysql_sql.y:8586
 		{
-			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin()), yylex.(*Lexer).GetDbOrTblName(yyDollar[3].cstrUnion().Origin()), yyDollar[5].cstrUnion().Compare())
+			unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbName(yyDollar[1].cstrUnion().Origin()), yylex.(*Lexer).GetTblName(yyDollar[1].cstrUnion().Origin(), yyDollar[3].cstrUnion().Origin()), yyDollar[5].cstrUnion().Compare())
 			unResolve.SetUnresolvedNameCStrParts(yyDollar[1].cstrUnion(), yyDollar[3].cstrUnion(), yyDollar[5].cstrUnion())
 			yyLOCAL = unResolve
 		}

@@ -1028,12 +1028,7 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 		return nil, err
 	}
 
-	origin, err := ses.GetSessionSysVar("keep_user_target_list_in_result")
-	if err != nil {
-		return nil, err
-	}
-
-	stmts, err := mysql.Parse(execCtx.reqCtx, st.Sql, v.(int64), origin.(int64))
+	stmts, err := mysql.Parse(execCtx.reqCtx, st.Sql, v.(int64))
 	if err != nil {
 		return nil, err
 	}
@@ -1923,16 +1918,11 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 
 func parseSql(execCtx *ExecCtx) (stmts []tree.Statement, err error) {
 	var v interface{}
-	var origin interface{}
 	v, err = execCtx.ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
 		v = int64(1)
 	}
-	origin, err = execCtx.ses.GetSessionSysVar("keep_user_target_list_in_result")
-	if err != nil {
-		origin = int64(0)
-	}
-	stmts, err = parsers.Parse(execCtx.reqCtx, dialect.MYSQL, execCtx.input.getSql(), v.(int64), origin.(int64))
+	stmts, err = parsers.Parse(execCtx.reqCtx, dialect.MYSQL, execCtx.input.getSql(), v.(int64))
 	if err != nil {
 		return nil, err
 	}
