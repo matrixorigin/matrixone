@@ -216,7 +216,7 @@ func TestHybridBloomFilter(t *testing.T) {
 	ok, err = hbf2.PrefixMayContainsKey(obj3[:], objectFnId, 1)
 	require.NoError(t, err)
 	require.True(t, ok)
-	ok, err = hbf2.PrefixMayContainsKey(obj4[:], objectFnId, 1)
+	_, err = hbf2.PrefixMayContainsKey(obj4[:], objectFnId, 1)
 	require.NoError(t, err)
 	// false positive
 	// require.False(t, ok)
@@ -239,7 +239,7 @@ func TestHybridBloomFilter(t *testing.T) {
 	ok, err = hbf2.PrefixMayContainsKey(blk3_2[:], blockFnId, 2)
 	require.NoError(t, err)
 	require.True(t, ok)
-	ok, err = hbf2.PrefixMayContainsKey(blk3_3[:], blockFnId, 2)
+	_, err = hbf2.PrefixMayContainsKey(blk3_3[:], blockFnId, 2)
 	require.NoError(t, err)
 	// false postive
 	// require.False(t, ok)
@@ -254,7 +254,7 @@ func TestHybridBloomFilter(t *testing.T) {
 	}
 
 	rowid := types.NewRowid(blk3_2, 100)
-	ok, err = hbf2.MayContainsKey(rowid[:])
+	_, err = hbf2.MayContainsKey(rowid[:])
 	require.NoError(t, err)
 	// false postive
 	// require.False(t, ok)
