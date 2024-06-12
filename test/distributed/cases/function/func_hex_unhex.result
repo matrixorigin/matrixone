@@ -12,16 +12,16 @@ hex(2147483649)
 80000001
 select hex(456.789);
 hex(456.789)
-3435362e373839
+1C9
 select hex(321354.21321);
 hex(321354.21321)
-3332313335342e3231333231
+4E74A
 select hex(1092);
 hex(1092)
 444
 select hex(3215133.214321432);
 hex(3215133.214321432)
-333231353133332e323134333231343332
+310F1D
 select hex('abc');
 hex(abc)
 616263
@@ -56,10 +56,10 @@ hex(V)
 56
 select hex('M');
 hex(M)
-4d
+4D
 select hex('m');
 hex(m)
-6d
+6D
 select hex('');
 hex()
 
@@ -127,7 +127,7 @@ hex(AABBCCDD)
 4141424243434444
 select hex('ZZZ999');
 hex(ZZZ999)
-5a5a5a393939
+5A5A5A393939
 select hex('0123456789abcdef');
 [unknown result because it is related to issue#16710]
 select hex('!"#$%&/()=?`~''_+-*^');
