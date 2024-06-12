@@ -3537,7 +3537,7 @@ func TestPi(t *testing.T) {
 }
 
 func TPi(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ any) (err error) {
-	return TPi(ivecs, result, proc, length, nil)
+	return Pi(ivecs, result, proc, length, nil)
 }
 
 func initUTCTimestampTestCase() []tcTemp {
