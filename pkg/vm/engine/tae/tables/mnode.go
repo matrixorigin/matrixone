@@ -563,6 +563,47 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 }
 
 // Note: With PinNode Context
+func (node *memoryNode) resolveInMemoryColumnDatasWithBatch(
+	ctx context.Context,
+	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
+	colIdxes []int,
+	skipDeletes bool,
+	bat *containers.Batch,
+	mp *mpool.MPool,
+) (err error) {
+	node.object.RLock()
+	defer node.object.RUnlock()
+	maxRow, visible, deSels, err := node.object.appendMVCC.GetVisibleRowLocked(ctx, txn)
+	if !visible || err != nil {
+		// blk.RUnlock()
+		return
+	}
+	var srcBat *containers.Batch
+	srcBat, err = node.GetDataWindow(readSchema, colIdxes, 0, maxRow, mp)
+	if err != nil {
+		return
+	}
+	bat.Vecs = srcBat.Vecs
+	if skipDeletes {
+		return
+	}
+
+	err = node.object.fillInMemoryBatchDeletesLocked(txn, 0, bat, node.object.RWMutex)
+	if err != nil {
+		return
+	}
+	if !deSels.IsEmpty() {
+		if bat.Deletes != nil {
+			bat.Deletes.Or(deSels)
+		} else {
+			bat.Deletes = deSels
+		}
+	}
+	return
+}
+
+// Note: With PinNode Context
 func (node *memoryNode) resolveInMemoryColumnData(
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,

@@ -170,6 +170,12 @@ func (obj *aobject) GetColumnDataByIdsWithBatch(
 ) error {
 	node := obj.PinNode()
 	defer node.Unref()
+	if !node.IsPersisted() {
+		return node.MustMNode().resolveInMemoryColumnDatasWithBatch(
+			ctx,
+			txn, readSchema.(*catalog.Schema), colIdxes, false, bat, mp)
+
+	}
 	return obj.ResolvePersistedColumnDatasWithBatch(
 		ctx,
 		txn,
