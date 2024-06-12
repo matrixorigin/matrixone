@@ -809,11 +809,33 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				pkExpr,
 				serialExpr,
 			})
+		} else if rowsCount <= 3 {
+			inArgs := make([]*plan.Expr, rowsCount)
+			for i := range inArgs {
+				serialArgs := make([]*plan.Expr, len(colExprs))
+				for j := range colExprs {
+					serialArgs[j] = colExprs[j][i]
+				}
+
+				inArgs[i], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
+			}
+			filterExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
+				pkExpr,
+				{
+					Typ: pkExpr.Typ,
+					Expr: &plan.Expr_List{
+						List: &plan.ExprList{
+							List: inArgs,
+						},
+					},
+				},
+			})
 		} else {
 			names := make([]string, len(lmap.m))
 			for n, p := range lmap.m {
 				names[p.order] = n
 			}
+			bat.Attrs = insertColsNameFromStmt
 			toSerialBatch := bat.GetSubBatch(names)
 			// serialize
 			//  __cpkey__ in (serial(a1,b1,c1,d1),serial(a2,b2,c2,d2),xxx)
