@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
@@ -70,7 +71,7 @@ func TestRead(t *testing.T) {
 					ctx,
 					ReadRequest{
 						TableID: table,
-						Data:    k,
+						Param:   pb.ReadParam{KeyParam: pb.KeyParam{Key: k}},
 						Apply: func(b []byte) {
 							values = append(values, b)
 						},
@@ -148,7 +149,7 @@ func TestReadWithSpecialShard(t *testing.T) {
 					ctx,
 					ReadRequest{
 						TableID: table,
-						Data:    k,
+						Param:   pb.ReadParam{KeyParam: pb.KeyParam{Key: k}},
 						Apply: func(b []byte) {
 							require.Equal(t, expect, b)
 						},
@@ -214,7 +215,7 @@ func TestReadWithSpecialShardAndPartitionPolicy(t *testing.T) {
 					ctx,
 					ReadRequest{
 						TableID: table,
-						Data:    k,
+						Param:   pb.ReadParam{KeyParam: pb.KeyParam{Key: k}},
 						Apply: func(b []byte) {
 							n++
 							require.Equal(t, expect, b)
@@ -325,7 +326,7 @@ func TestReadWithLazyCreateShards(t *testing.T) {
 					ctx,
 					ReadRequest{
 						TableID: table,
-						Data:    k,
+						Param:   pb.ReadParam{KeyParam: pb.KeyParam{Key: k}},
 						Apply: func(b []byte) {
 							values = append(values, b)
 						},
@@ -394,7 +395,7 @@ func TestReadWithNewShard(t *testing.T) {
 				ctx,
 				ReadRequest{
 					TableID: table,
-					Data:    k,
+					Param:   pb.ReadParam{KeyParam: pb.KeyParam{Key: k}},
 					Apply: func(b []byte) {
 						require.Equal(t, value, b)
 					},

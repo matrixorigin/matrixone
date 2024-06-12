@@ -321,11 +321,13 @@ func (client *txnClient) New(
 	return op, nil
 }
 
-func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
-	op, err := newTxnOperatorWithSnapshot(client.sender, snapshot)
-	if err != nil {
-		return nil, err
-	}
+func (client *txnClient) NewWithSnapshot(
+	snapshot txn.CNTxnSnapshot,
+) (TxnOperator, error) {
+	op := newTxnOperatorWithSnapshot(
+		client.sender,
+		snapshot,
+	)
 	op.timestampWaiter = client.timestampWaiter
 	return op, nil
 }
