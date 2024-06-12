@@ -426,6 +426,10 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		if err = handleExecUpgrade(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.SetConnectionID:
+		ses.EnterFPrint(62)
+		defer ses.ExitFPrint(62)
+		ses.SetConnectionID(st.ConnectionID)
 	}
 	return
 }

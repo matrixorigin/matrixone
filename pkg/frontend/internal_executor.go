@@ -488,6 +488,12 @@ func (ip *internalProtocol) ResetStatistics() {
 	ip.result.resultSet = nil
 }
 
+func (ip *internalProtocol) Reset(_ *Session) {
+	ip.ResetStatistics()
+	ip.database = ""
+	ip.username = ""
+}
+
 func (ip *internalProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
 func (ip *internalProtocol) WriteLocalInfileRequest(filename string) error {

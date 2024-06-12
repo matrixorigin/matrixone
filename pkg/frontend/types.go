@@ -468,6 +468,10 @@ type feSessionImpl struct {
 	respr        Responser
 	//refreshed once
 	staticTxnInfo string
+	// reserveCOnn is set true when TCP network on the session/routine should be
+	// reserved because the connection is still in use in proxy's connection cache.
+	// Default is false, means that the network connection should be closed.
+	reserveConn bool
 }
 
 func (ses *feSessionImpl) EnterFPrint(idx int) {
@@ -483,7 +487,7 @@ func (ses *feSessionImpl) ExitFPrint(idx int) {
 }
 
 func (ses *feSessionImpl) Close() {
-	if ses.respr != nil {
+	if ses.respr != nil && !ses.reserveConn {
 		ses.respr.Close()
 	}
 	ses.mrs = nil
@@ -879,6 +883,10 @@ func (ses *feSessionImpl) GetStaticTxnInfo() string {
 	return ses.staticTxnInfo
 }
 
+func (ses *feSessionImpl) ReserveConn() {
+	ses.reserveConn = true
+}
+
 func (ses *Session) GetDebugString() string {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -900,6 +908,9 @@ const (
 	CAPABILITY
 	ESTABLISHED
 	TLS_ESTABLISHED
+
+	// AuthString is the property authString in MysqlProtocolImpl.
+	AuthString
 )
 
 type Property interface {
@@ -966,6 +977,8 @@ type MysqlWriter interface {
 	CalculateOutTrafficBytes(b bool) (int64, int64)
 	ResetStatistics()
 	UpdateCtx(ctx context.Context)
+	// Reset sets the session and reset some fields and stats.
+	Reset(ses *Session)
 }
 
 type MysqlRrWr interface {

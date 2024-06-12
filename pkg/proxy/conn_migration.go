@@ -18,25 +18,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
-
-func (c *clientConn) getQueryAddress(addr string) string {
-	var queryAddr string
-	c.moCluster.GetCNService(clusterservice.NewSelectAll(), func(service metadata.CNService) bool {
-		if service.SQLAddress == addr {
-			queryAddr = service.QueryAddress
-			return false
-		}
-		return true
-	})
-	return queryAddr
-}
 
 func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResponse, error) {
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnFrom)
@@ -45,7 +31,7 @@ func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResp
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, time.Second*3)
 	defer cancel()
-	addr := c.getQueryAddress(sqlAddr)
+	addr := getQueryAddress(c.moCluster, sqlAddr)
 	if addr == "" {
 		return nil, moerr.NewInternalError(c.ctx, "cannot get query service address")
 	}
@@ -91,7 +77,7 @@ func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromRes
 	}
 
 	// Then, migrate other info with RPC.
-	addr := c.getQueryAddress(sc.RawConn().RemoteAddr().String())
+	addr := getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 	if addr == "" {
 		return moerr.NewInternalError(c.ctx, "cannot get query service address")
 	}

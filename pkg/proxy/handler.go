@@ -23,9 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
@@ -49,6 +51,10 @@ type handler struct {
 	haKeeperClient logservice.ProxyHAKeeperClient
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
 	ipNetList []*net.IPNet
+	// queryClient is the client which could send RPC request to query server.
+	queryClient client.QueryClient
+	// connCache is the cache of server connections.
+	connCache ConnCache
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
@@ -105,7 +111,11 @@ func newProxyHandler(
 			ipNetList = append(ipNetList, ipNet)
 		}
 	}
-	return &handler{
+	qc, err := client.NewQueryClient(cfg.UUID, morpc.Config{})
+	if err != nil {
+		return nil, err
+	}
+	h := &handler{
 		ctx:            ctx,
 		logger:         rt.Logger(),
 		config:         cfg,
@@ -116,7 +126,12 @@ func newProxyHandler(
 		rebalancer:     re,
 		haKeeperClient: haKeeperClient,
 		ipNetList:      ipNetList,
-	}, nil
+		queryClient:    qc,
+	}
+	if h.config.ConnCacheEnabled {
+		h.connCache = newConnCache(ctx, rt.Logger(), withQueryClient(qc))
+	}
+	return h, nil
 }
 
 // handle handles the incoming connection.
@@ -135,6 +150,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 		withRealConn(),
 		withRebalancePolicy(RebalancePolicyMapping[h.config.RebalancePolicy]),
 		withRebalancer(h.rebalancer),
+		withConnCacheEnabled(h.connCache != nil),
 	)
 	defer func() {
 		_ = t.Close()
@@ -151,6 +167,8 @@ func (h *handler) handle(c goetty.IOSession) error {
 		h.router,
 		t,
 		h.ipNetList,
+		h.queryClient,
+		h.connCache,
 	)
 	if err != nil {
 		h.logger.Error("failed to create client conn", zap.Error(err))
@@ -172,7 +190,14 @@ func (h *handler) handle(c goetty.IOSession) error {
 		return err
 	}
 	h.logger.Debug("server conn created")
-	defer func() { _ = sc.Close() }()
+	defer func() {
+		// This Close() function just disconnect from connManager,
+		// but do not close the real raw connection. The raw connection
+		// is closed if the server connection could not be pushed into
+		// the connection cache, which is in (*clientConn).handleQuitEvent()
+		// function.
+		_ = sc.Close()
+	}()
 
 	h.logger.Info("build connection",
 		zap.String("client->proxy", fmt.Sprintf("%s -> %s", cc.RawConn().RemoteAddr(), cc.RawConn().LocalAddr())),
@@ -242,6 +267,12 @@ func (h *handler) Close() error {
 	if h != nil {
 		h.moCluster.Close()
 		_ = h.haKeeperClient.Close()
+		if h.queryClient != nil {
+			_ = h.queryClient.Close()
+		}
+		if h.connCache != nil {
+			_ = h.connCache.Close()
+		}
 	}
 	return nil
 }
