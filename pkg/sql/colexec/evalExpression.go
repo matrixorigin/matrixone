@@ -579,8 +579,8 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		return nil, err
 	}
 
-	if len(expr.selectList.SelectList) < len(selectList) {
-		expr.selectList.SelectList = make([]bool, len(selectList))
+	if len(expr.selectList.SelectList) < batches[0].RowCount() {
+		expr.selectList.SelectList = make([]bool, batches[0].RowCount())
 	}
 	if selectList == nil {
 		expr.selectList.AnyNull = false
