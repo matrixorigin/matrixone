@@ -459,7 +459,7 @@ type feSessionImpl struct {
 	fprints      footPrints
 	respr        Responser
 	//refreshed once
-	staticTxnId uuid.UUID
+	// staticTxnId uuid.UUID
 	//txn info
 	txnInfo string
 }
