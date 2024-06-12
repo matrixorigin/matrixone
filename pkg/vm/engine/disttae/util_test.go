@@ -1031,7 +1031,7 @@ func Test_ConstructBlockReaderPKFilter(t *testing.T) {
 		return bb
 	}
 
-	filters := []blockReaderPKFilter{
+	filters := []BasePKFilter{
 		// "a=10",
 		{op: function.EQUAL, valid: true, lb: encodeVal(10)},
 		{valid: false},
@@ -1635,7 +1635,7 @@ func Test_ConstructBlockReaderPKFilter(t *testing.T) {
 
 	pkName := "a"
 	for i, expr := range exprs {
-		ret := constructPKFilter(expr, tableDef, pkName, proc)
+		ret := constructBasePKFilter(expr, tableDef, pkName, proc)
 		require.Equal(t, filters[i].valid, ret.valid, exprStrings[i])
 		if filters[i].valid {
 			require.Equal(t, filters[i].op, ret.op, exprStrings[i])
