@@ -73,11 +73,12 @@ func LoadColumnsData2(
 	policy fileservice.Policy,
 	needCopy bool,
 	vPool *containers.VectorPool,
-	bat ...*containers.Batch,
+	bates ...*containers.Batch,
 ) (vectors []containers.Vector, release func(), err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors *fileservice.IOVector
+	var bat *containers.Batch
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
@@ -95,6 +96,9 @@ func LoadColumnsData2(
 		}
 	}()
 	var obj any
+	if len(bates) > 0 {
+		bat = bates[0]
+	}
 	vectors = make([]containers.Vector, len(cols))
 	for i := range cols {
 		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
@@ -104,14 +108,14 @@ func LoadColumnsData2(
 
 		var vec containers.Vector
 		if needCopy {
-			if len(bat) == 1 && bat[0] != nil && len(bat[0].Vecs) == len(cols) {
+			if bat != nil && len(bat.Vecs) == len(cols) {
 				// Clone the vector to the batch
 				if err = obj.(*vector.Vector).CloneWindowTo(
-					bat[0].Vecs[i].GetDownstreamVector(), 0, obj.(*vector.Vector).Length(), vPool.GetMPool(),
+					bat.Vecs[i].GetDownstreamVector(), 0, obj.(*vector.Vector).Length(), vPool.GetMPool(),
 				); err != nil {
 					return
 				}
-				vec = bat[0].Vecs[i]
+				vec = bat.Vecs[i]
 			} else {
 				if vec, err = containers.CloneVector(
 					obj.(*vector.Vector),

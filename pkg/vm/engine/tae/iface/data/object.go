@@ -87,7 +87,7 @@ type Object interface {
 	) (*containers.BlockView, error)
 	GetColumnDataByIdsWithBatch(
 		ctx context.Context, txn txnif.AsyncTxn, readSchema any, blkID uint16, colIdxes []int, bat *containers.Batch, mp *mpool.MPool,
-	) (*containers.BlockView, error)
+	) error
 	Prefetch(idxes []uint16, blkID uint16) error
 	GetMeta() any
 

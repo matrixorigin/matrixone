@@ -316,10 +316,7 @@ func (obj *txnObject) GetColumnDataByIds(
 
 func (obj *txnObject) GetColumnDataByIdsWithBatch(
 	ctx context.Context, blkID uint16, colIdxes []int, bat *containers.Batch, mp *mpool.MPool,
-) (*containers.BlockView, error) {
-	if obj.entry.IsLocal {
-		return obj.table.tableSpace.GetColumnDataByIds(obj.entry, colIdxes, mp)
-	}
+) error {
 	return obj.entry.GetObjectData().GetColumnDataByIdsWithBatch(ctx, obj.Txn, obj.table.GetLocalSchema(), blkID, colIdxes, bat, mp)
 }
 

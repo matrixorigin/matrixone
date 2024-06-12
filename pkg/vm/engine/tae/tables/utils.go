@@ -66,7 +66,7 @@ func LoadPersistedColumnDatas(
 	location objectio.Location,
 	bat *containers.Batch,
 	mp *mpool.MPool,
-) ([]containers.Vector, error) {
+) error {
 	cols := make([]uint16, 0)
 	typs := make([]types.Type, 0)
 	vectors := make([]containers.Vector, len(colIdxs))
@@ -76,7 +76,7 @@ func LoadPersistedColumnDatas(
 		if def.IsPhyAddr() {
 			vec, err := model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			phyAddIdx = i
 			vectors[phyAddIdx] = vec
@@ -86,7 +86,7 @@ func LoadPersistedColumnDatas(
 		typs = append(typs, def.Type)
 	}
 	if len(cols) == 0 {
-		return vectors, nil
+		return nil
 	}
 	//Extend lifetime of vectors is without the function.
 	//need to copy. closeFunc will be nil.
@@ -100,7 +100,7 @@ func LoadPersistedColumnDatas(
 		rt.VectorPool.Transient,
 		bat)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for i, vec := range vecs {
 		idx := i
@@ -109,7 +109,8 @@ func LoadPersistedColumnDatas(
 		}
 		vectors[idx] = vec
 	}
-	return vectors, nil
+	bat.Vecs = vectors
+	return nil
 }
 
 func ReadPersistedBlockRow(location objectio.Location) int {

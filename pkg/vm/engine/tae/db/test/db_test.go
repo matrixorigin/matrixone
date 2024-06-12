@@ -1293,41 +1293,34 @@ func TestFlushTabletailNoCopy(t *testing.T) {
 		}
 
 		srcBat := containers.NewBatch()
-		defer srcBat.Close()
+		currNB := tae.Runtime.VectorPool.Transient.GetMPool().CurrNB()
 		for i := 0; it.Valid(); it.Next() {
 			obj := it.GetObject()
 			for j := uint16(0); j < uint16(obj.BlkCnt()); j++ {
 				for _, vec := range srcBat.Vecs {
 					vec.GetDownstreamVector().Reset(*vec.GetType())
 				}
-				views, err := obj.GetColumnDataByIdsWithBatch(context.Background(), j, idxs, srcBat, common.DefaultAllocator)
+				srcBat.Deletes = nil
+				err := obj.GetColumnDataByIdsWithBatch(context.Background(), j, idxs, srcBat, common.DefaultAllocator)
 				require.NoError(t, err)
-				defer views.Close()
-				for n, view := range views.Columns {
-					require.Equal(t, schema.ColDefs[n].Type.Oid, view.GetData().GetType().Oid)
+				for n, view := range srcBat.Vecs {
+					require.Equal(t, schema.ColDefs[n].Type.Oid, view.GetType().Oid)
 				}
 
-				if len(srcBat.Vecs) == 0 {
-					for z := 0; z < len(schema.ColDefs)-1; z++ {
-						def := schema.ColDefs[z]
-						if def.IsPhyAddr() {
-							logutil.Infof("skip column %s", def.Name)
-							continue
-						}
-						srcBat.Vecs = append(srcBat.Vecs, views.Columns[z].GetData())
-						srcBat.Attrs = append(srcBat.Attrs, schema.ColDefs[z].Name)
-					}
-				}
 				viewDel := 0
-				if views.DeleteMask != nil {
-					viewDel = views.DeleteMask.GetCardinality()
+				if srcBat.Deletes != nil {
+					viewDel = srcBat.Deletes.GetCardinality()
 				}
 				require.Equal(t, dels[i], viewDel)
-				views.ApplyDeletes()
-				total += views.Columns[0].Length()
+				for _, view := range srcBat.Vecs {
+					view.CompactByBitmap(srcBat.Deletes)
+				}
+				total += srcBat.Vecs[0].Length()
 				i++
 			}
 		}
+		srcBat.Close()
+		require.Equal(t, currNB, tae.Runtime.VectorPool.Transient.GetMPool().CurrNB())
 		require.Equal(t, 87, total)
 		require.NoError(t, txn.Commit(context.Background()))
 	}

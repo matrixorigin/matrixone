@@ -227,6 +227,33 @@ func (blk *baseObject) fillInMemoryDeletesLocked(
 	return
 }
 
+func (blk *baseObject) fillInMemoryBatchDeletesLocked(
+	txn txnif.TxnReader,
+	blkID uint16,
+	bat *containers.Batch,
+	rwlocker *sync.RWMutex,
+) (err error) {
+	mvcc := blk.tryGetMVCC()
+	if mvcc == nil {
+		return
+	}
+	deleteHandle := mvcc.TryGetDeleteChain(blkID)
+	if deleteHandle == nil {
+		return
+	}
+	chain := deleteHandle.GetDeleteChain()
+	deletes, err := chain.CollectDeletesLocked(txn, rwlocker)
+	if err != nil || deletes.IsEmpty() {
+		return
+	}
+	if bat.Deletes == nil {
+		bat.Deletes = deletes
+	} else {
+		bat.Deletes.Or(deletes)
+	}
+	return
+}
+
 func (blk *baseObject) buildMetalocation(bid uint16) (objectio.Location, error) {
 	if !blk.meta.ObjectPersisted() {
 		return nil, nil
@@ -351,6 +378,31 @@ func (blk *baseObject) FillPersistedDeletes(
 				view.DeleteMask = nulls.NewWithSize(int(row) + 1)
 			}
 			view.DeleteMask.Add(uint64(row))
+		},
+		nil,
+		mp,
+	)
+}
+
+func (blk *baseObject) FillPersistedBatchDeletes(
+	ctx context.Context,
+	blkID uint16,
+	txn txnif.TxnReader,
+	bat *containers.Batch,
+	mp *mpool.MPool,
+) (err error) {
+	return blk.foreachPersistedDeletesVisibleByTxn(
+		ctx,
+		txn,
+		blkID,
+		true,
+		func(i int, rowIdVec *vector.Vector) {
+			rowid := vector.GetFixedAt[types.Rowid](rowIdVec, i)
+			row := rowid.GetRowOffset()
+			if bat.Deletes == nil {
+				bat.Deletes = nulls.NewWithSize(int(row) + 1)
+			}
+			bat.Deletes.Add(uint64(row))
 		},
 		nil,
 		mp,
@@ -555,43 +607,31 @@ func (blk *baseObject) ResolvePersistedColumnDatas(
 	skipDeletes bool,
 	bat *containers.Batch,
 	mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
-
-	view = containers.NewBlockView()
+) error {
 	location, err := blk.buildMetalocation(blkID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	id := blk.meta.AsCommonID()
 	id.SetBlockOffset(blkID)
-	vecs, err := LoadPersistedColumnDatas(
+	err = LoadPersistedColumnDatas(
 		ctx, readSchema, blk.rt, id, colIdxs, location, bat, mp,
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	for i, vec := range vecs {
-		view.SetData(colIdxs[i], vec)
-	}
-
 	if skipDeletes {
-		return
+		return nil
 	}
-
-	defer func() {
-		if err != nil {
-			view.Close()
-		}
-	}()
 
 	blk.RLock()
-	err = blk.fillInMemoryDeletesLocked(txn, blkID, view.BaseView, blk.RWMutex)
+	err = blk.fillInMemoryBatchDeletesLocked(txn, blkID, bat, blk.RWMutex)
 	blk.RUnlock()
 
-	if err = blk.FillPersistedDeletes(ctx, blkID, txn, view.BaseView, mp); err != nil {
-		return
+	if err = blk.FillPersistedBatchDeletes(ctx, blkID, txn, bat, mp); err != nil {
+		return err
 	}
-	return
+	return nil
 }
 
 func (blk *baseObject) ResolvePersistedColumnData(
