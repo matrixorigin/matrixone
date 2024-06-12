@@ -90,6 +90,22 @@ func (ti *TenantInfo) String() string {
 		ti.TenantID, delimiter, ti.UserID, delimiter, ti.DefaultRoleID)
 }
 
+func (ti *TenantInfo) Copy() *TenantInfo {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	return &TenantInfo{
+		Tenant:              ti.Tenant,
+		User:                ti.User,
+		DefaultRole:         ti.DefaultRole,
+		TenantID:            ti.TenantID,
+		UserID:              ti.UserID,
+		DefaultRoleID:       ti.DefaultRoleID,
+		useAllSecondaryRole: ti.useAllSecondaryRole,
+		delimiter:           ti.delimiter,
+		version:             ti.version,
+	}
+}
+
 func (ti *TenantInfo) GetTenant() string {
 	ti.mu.Lock()
 	defer ti.mu.Unlock()
@@ -5411,6 +5427,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
 	case *tree.SetTransaction:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *tree.SetConnectionID:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.CreateStage, *tree.AlterStage, *tree.DropStage:

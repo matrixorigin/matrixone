@@ -71,6 +71,12 @@ func withRealConn() tunnelOption {
 	}
 }
 
+func withConnCacheEnabled(v bool) tunnelOption {
+	return func(t *tunnel) {
+		t.connCacheEnabled = v
+	}
+}
+
 type transferType int
 
 const (
@@ -100,6 +106,8 @@ type tunnel struct {
 	rebalancer *rebalancer
 	// transferProactive means that the connection transfer is more proactive.
 	rebalancePolicy RebalancePolicy
+	// connCacheEnabled indicates if the connection cache is enabled.
+	connCacheEnabled bool
 	// transferType is the type for transferring: rebalancing and scaling.
 	transferType transferType
 	// realConn indicates the connection in the tunnel is a real network
@@ -167,8 +175,24 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 		}
 		t.cc = cc
 		t.logger = t.logger.With(zap.Uint32("conn ID", cc.ConnID()))
-		t.mu.clientConn = newMySQLConn(connClientName, cc.RawConn(), 0, t.reqC, t.respC, cc.ConnID())
-		t.mu.serverConn = newMySQLConn(connServerName, sc.RawConn(), 0, t.reqC, t.respC, sc.ConnID())
+		t.mu.clientConn = newMySQLConn(
+			connClientName,
+			cc.RawConn(),
+			0,
+			t.reqC,
+			t.respC,
+			t.connCacheEnabled,
+			cc.ConnID(),
+		)
+		t.mu.serverConn = newMySQLConn(
+			connServerName,
+			sc.RawConn(),
+			0,
+			t.reqC,
+			t.respC,
+			t.connCacheEnabled,
+			sc.ConnID(),
+		)
 
 		// Create the pipes from client to server and server to client.
 		t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
@@ -419,7 +443,15 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
 		)
 		return nil, err
 	}
-	return newMySQLConn(connServerName, newConn.RawConn(), 0, t.reqC, t.respC, newConn.ConnID()), nil
+	return newMySQLConn(
+		connServerName,
+		newConn.RawConn(),
+		0,
+		t.reqC,
+		t.respC,
+		t.connCacheEnabled,
+		newConn.ConnID(),
+	), nil
 }
 
 func (t *tunnel) getTransferType() transferType {
@@ -447,7 +479,7 @@ func (t *tunnel) Close() error {
 		if cc != nil && !t.realConn {
 			_ = cc.Close()
 		}
-		if sc != nil {
+		if !t.connCacheEnabled && sc != nil {
 			_ = sc.Close()
 		}
 	})
