@@ -505,18 +505,21 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 				return 10 / ndv
 			}
 			return 0.5
-		case "in":
-			card := float64(exprImpl.F.Args[1].GetVec().Len)
+		case "in", "prefix_in":
+			card := float64(1)
+			switch arg1Impl := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_Vec:
+				card = float64(arg1Impl.Vec.Len)
+
+			case *plan.Expr_List:
+				card = float64(len(arg1Impl.List.List))
+			}
+			if funcName == "prefix_in" {
+				card *= 10
+			}
 			ndv := getExprNdv(expr, builder)
 			if ndv > card {
 				return card / ndv
-			}
-			return 1
-		case "prefix_in":
-			card := float64(exprImpl.F.Args[1].GetVec().Len)
-			ndv := getExprNdv(expr, builder)
-			if ndv > 10*card {
-				return 10 * card / ndv
 			}
 			return 0.5
 		case "prefix_between":
@@ -876,8 +879,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		}
 		if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-				node.Stats.Outcnt = float64(c.I64Val)
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				node.Stats.Outcnt = float64(c.U64Val)
 				node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
 			}
 		}
@@ -1069,8 +1072,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	// if there is a limit, outcnt is limit number
 	if node.Limit != nil {
 		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-				stats.Outcnt = float64(c.I64Val)
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				stats.Outcnt = float64(c.U64Val)
 				stats.BlockNum = int32(((stats.Outcnt / stats.Selectivity) / DefaultBlockMaxRows) + 1)
 				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
 			}
@@ -1300,6 +1303,10 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, sel float64) floa
 }
 
 func (builder *QueryBuilder) canSkipStats() bool {
+	if builder.skipStats {
+		// if already set to true by other parts, just skip stats
+		return true
+	}
 	//for now ,only skip stats for select count(*) from xx
 	if len(builder.qry.Steps) != 1 || len(builder.qry.Nodes) != 3 {
 		return false

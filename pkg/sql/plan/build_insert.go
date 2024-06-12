@@ -78,7 +78,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
 	// }
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 	if stmt.IsRestore {
 		oldSnapshot := builder.compCtx.GetSnapshot()
@@ -98,7 +98,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if err != nil {
 		return nil, err
 	}
-	replaceStmt := getRewriteToReplaceStmt(tableDef, stmt, rewriteInfo)
+	replaceStmt := getRewriteToReplaceStmt(tableDef, stmt, rewriteInfo, isPrepareStmt)
 	if replaceStmt != nil {
 		return buildReplace(replaceStmt, ctx, isPrepareStmt, true)
 	}
@@ -758,9 +758,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			filterExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
 				pkExpr,
 				{
-					Typ: plan.Type{
-						Id: int32(types.T_tuple),
-					},
+					Typ: pkExpr.Typ,
 					Expr: &plan.Expr_List{
 						List: &plan.ExprList{
 							List: colExprs[0],
@@ -825,9 +823,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			filterExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
 				pkExpr,
 				{
-					Typ: plan.Type{
-						Id: int32(types.T_tuple),
-					},
+					Typ: pkExpr.Typ,
 					Expr: &plan.Expr_Vec{
 						Vec: &plan.LiteralVec{
 							Len:  int32(vec.Length()),
@@ -905,11 +901,14 @@ func remapPartExprColRef(expr *Expr, colMap map[int]int, tableDef *TableDef) boo
 	return true
 }
 
-func getRewriteToReplaceStmt(tableDef *TableDef, stmt *tree.Insert, info *dmlSelectInfo) *tree.Replace {
+func getRewriteToReplaceStmt(tableDef *TableDef, stmt *tree.Insert, info *dmlSelectInfo, isPrepareStmt bool) *tree.Replace {
 	if len(info.onDuplicateIdx) == 0 {
 		return nil
 	}
 	if _, ok := stmt.Rows.Select.(*tree.ValuesClause); !ok {
+		return nil
+	}
+	if isPrepareStmt {
 		return nil
 	}
 	canUpdateCols := make([]string, 0, len(tableDef.Cols))

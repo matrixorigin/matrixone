@@ -17,33 +17,27 @@ package compile
 import (
 	"context"
 	"fmt"
-	"strings"
-
 	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -55,15 +49,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 func newScope(magic magicType) *Scope {
@@ -545,7 +543,12 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			scanUsedCpuNumber = 1
 		}
 
-		readers, err = s.NodeInfo.Rel.NewReader(c.ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, s.NodeInfo.Data, len(s.DataSource.OrderBy) > 0)
+		readers, err = s.NodeInfo.Rel.NewReader(c.ctx,
+			scanUsedCpuNumber,
+			s.DataSource.FilterExpr,
+			s.NodeInfo.Data,
+			len(s.DataSource.OrderBy) > 0,
+			s.TxnOffset)
 		if err != nil {
 			return nil, err
 		}
@@ -614,8 +617,12 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		}
 
 		if rel.GetEngineType() == engine.Memory || s.DataSource.PartitionRelationNames == nil {
-			mainRds, err1 := rel.NewReader(
-				ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, s.NodeInfo.Data, len(s.DataSource.OrderBy) > 0)
+			mainRds, err1 := rel.NewReader(ctx,
+				scanUsedCpuNumber,
+				s.DataSource.FilterExpr,
+				s.NodeInfo.Data,
+				len(s.DataSource.OrderBy) > 0,
+				s.TxnOffset)
 			if err1 != nil {
 				return nil, err1
 			}
@@ -642,9 +649,12 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 			if len(cleanRanges) > 0 {
 				// create readers for reading clean blocks from the main table.
-				mainRds, err1 := rel.NewReader(
-					ctx,
-					scanUsedCpuNumber, s.DataSource.FilterExpr, cleanRanges, len(s.DataSource.OrderBy) > 0)
+				mainRds, err1 := rel.NewReader(ctx,
+					scanUsedCpuNumber,
+					s.DataSource.FilterExpr,
+					cleanRanges,
+					len(s.DataSource.OrderBy) > 0,
+					s.TxnOffset)
 				if err1 != nil {
 					return nil, err1
 				}
@@ -656,7 +666,12 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 				if err1 != nil {
 					return nil, err1
 				}
-				memRds, err2 := subRel.NewReader(ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, dirtyRanges[num], len(s.DataSource.OrderBy) > 0)
+				memRds, err2 := subRel.NewReader(ctx,
+					scanUsedCpuNumber,
+					s.DataSource.FilterExpr,
+					dirtyRanges[num],
+					len(s.DataSource.OrderBy) > 0,
+					s.TxnOffset)
 				if err2 != nil {
 					return nil, err2
 				}
@@ -703,6 +718,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			AccountId:    s.DataSource.AccountId,
 		}
 		readerScopes[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
+		readerScopes[i].TxnOffset = s.TxnOffset
 	}
 
 	mergeFromParallelScanScope, errNew := newParallelScope(c, s, readerScopes)

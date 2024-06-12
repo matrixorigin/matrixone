@@ -86,8 +86,16 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	if fn == nil {
 		if elist := expr.GetList(); elist != nil {
 			exprList := elist.List
+			cannotFold := false
 			for i := range exprList {
 				exprList[i] = r.constantFold(exprList[i], proc)
+				if exprList[i].GetLit() == nil {
+					cannotFold = true
+				}
+			}
+
+			if cannotFold {
+				return expr
 			}
 
 			vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
@@ -316,7 +324,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 		}
 		return &plan.Literal{
 			Value: &plan.Literal_Sval{
-				Sval: vec.GetStringAt(0),
+				Sval: vec.GetStringAt(int(row)),
 			},
 		}
 	case types.T_timestamp:

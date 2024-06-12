@@ -1198,7 +1198,7 @@ func appendForeignConstrantPlan(
 //
 //	case 1: For SQL that contains on duplicate update
 //	case 2: the only primary key is auto increment type
-func appendPrimaryConstrantPlan(
+func appendPrimaryConstraintPlan(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
 	tableDef *TableDef,
