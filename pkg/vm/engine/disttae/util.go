@@ -92,7 +92,7 @@ func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName 
 	if !isVec {
 		col, vals, ok = mustColConstValueFromBinaryFuncExpr(exprImpl, tblDef, proc)
 	} else {
-		col, val, ok = mustColVecValueFromBinaryFuncExpr(exprImpl)
+		col, val, ok = mustColVecValueFromBinaryFuncExpr(proc, exprImpl)
 	}
 
 	if !ok {
