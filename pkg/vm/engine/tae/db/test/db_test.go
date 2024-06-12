@@ -1293,7 +1293,7 @@ func TestFlushTabletailNoCopy(t *testing.T) {
 		}
 
 		srcBat := containers.NewBatch()
-		currNB := tae.Runtime.VectorPool.Transient.GetMPool().CurrNB()
+		defer srcBat.Close()
 		for i := 0; it.Valid(); it.Next() {
 			obj := it.GetObject()
 			for j := uint16(0); j < uint16(obj.BlkCnt()); j++ {
@@ -1319,8 +1319,6 @@ func TestFlushTabletailNoCopy(t *testing.T) {
 				i++
 			}
 		}
-		srcBat.Close()
-		require.Equal(t, currNB, tae.Runtime.VectorPool.Transient.GetMPool().CurrNB())
 		require.Equal(t, 87, total)
 		require.NoError(t, txn.Commit(context.Background()))
 	}

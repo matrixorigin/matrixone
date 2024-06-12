@@ -149,8 +149,7 @@ func (obj *aobject) GetColumnDataByIds(
 	colIdxes []int,
 	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
-	var bat *containers.Batch
-	bat = containers.NewBatch()
+	bat := containers.NewBatch()
 	err = obj.resolveColumnDatas(
 		ctx,
 		txn,

@@ -627,6 +627,9 @@ func (blk *baseObject) ResolvePersistedColumnDatas(
 	blk.RLock()
 	err = blk.fillInMemoryBatchDeletesLocked(txn, blkID, bat, blk.RWMutex)
 	blk.RUnlock()
+	if err != nil {
+		return err
+	}
 
 	if err = blk.FillPersistedBatchDeletes(ctx, blkID, txn, bat, mp); err != nil {
 		return err

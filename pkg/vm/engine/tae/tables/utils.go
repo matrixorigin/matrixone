@@ -71,6 +71,7 @@ func LoadPersistedColumnDatas(
 	typs := make([]types.Type, 0)
 	vectors := make([]containers.Vector, len(colIdxs))
 	phyAddIdx := -1
+	var srcBat *containers.Batch
 	for i, colIdx := range colIdxs {
 		def := schema.ColDefs[colIdx]
 		if def.IsPhyAddr() {
@@ -88,6 +89,18 @@ func LoadPersistedColumnDatas(
 	if len(cols) == 0 {
 		return nil
 	}
+
+	if phyAddIdx > -1 {
+		srcBat = containers.NewBatch()
+		for i := range bat.Vecs {
+			if i == phyAddIdx {
+				continue
+			}
+			srcBat.Vecs = append(srcBat.Vecs, bat.Vecs[i])
+		}
+	} else {
+		srcBat = bat
+	}
 	//Extend lifetime of vectors is without the function.
 	//need to copy. closeFunc will be nil.
 	vecs, _, err := blockio.LoadColumns2(
@@ -98,7 +111,7 @@ func LoadPersistedColumnDatas(
 		fileservice.Policy(0),
 		true,
 		rt.VectorPool.Transient,
-		bat)
+		srcBat)
 	if err != nil {
 		return err
 	}
