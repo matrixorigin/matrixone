@@ -45,7 +45,6 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_debug_featuresTables,
 	upg_mo_account,
 	upg_system_logInfo,
-	upg_mo_account2,
 }
 
 var upg_sys_modify_async_task = versions.UpgradeEntry{
@@ -282,24 +281,4 @@ var upg_system_logInfo = versions.UpgradeEntry{
 		return false, nil
 	},
 	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_SYSTEM, "log_info"),
-}
-
-var upg_mo_account2 = versions.UpgradeEntry{
-	Schema:    catalog.MO_CATALOG,
-	TableName: catalog.MOAccountTable,
-	UpgType:   versions.MODIFY_COLUMN,
-	UpgSql:    "alter table mo_catalog.mo_account modify account_id bigint NOT NULL AUTO_INCREMENT",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOAccountTable, "account_id")
-		if err != nil {
-			return false, err
-		}
-
-		if colInfo.IsExits {
-			if strings.EqualFold(colInfo.ColType, versions.T_int64) {
-				return true, nil
-			}
-		}
-		return false, nil
-	},
 }

@@ -16,6 +16,7 @@ package v1_2_1
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -27,6 +28,7 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_system_rawlog_comment,
 	upg_system_statementInto_comment,
 	upg_systemMetric_metric_comment,
+	upg_mo_account2,
 }
 
 // viewSystemLogInfoDDL113 = "CREATE VIEW IF NOT EXISTS `system`.`log_info` as select `trace_id`, `span_id`, `span_kind`, `node_uuid`, `node_type`, `timestamp`, `logger_name`, `level`, `caller`, `message`, `extra`, `stack` from `system`.`rawlog` where `raw_item` = \"log_info\""
@@ -107,6 +109,26 @@ var upg_systemMetric_metric_comment = versions.UpgradeEntry{
 		}
 		if exists && comment == systemMetricComment121 {
 			return true, nil
+		}
+		return false, nil
+	},
+}
+
+var upg_mo_account2 = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MOAccountTable,
+	UpgType:   versions.MODIFY_COLUMN,
+	UpgSql:    "alter table mo_catalog.mo_account modify account_id bigint NOT NULL AUTO_INCREMENT",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOAccountTable, "account_id")
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.IsExits {
+			if strings.EqualFold(colInfo.ColType, versions.T_int64) {
+				return true, nil
+			}
 		}
 		return false, nil
 	},
