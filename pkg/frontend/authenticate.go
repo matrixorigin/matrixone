@@ -9053,7 +9053,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 		return nil, moerr.NewNoUDFNoCtx(string(call.Name.Name.ObjectName))
 	}
 
-	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1, 0)
+	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1)
 	if err != nil {
 		return nil, err
 	}
