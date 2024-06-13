@@ -1148,4 +1148,5 @@ func (n *MVCCHandle) UpdateDeltaLocLocked(txn txnif.TxnReader, deltaloc objectio
 
 func (n *MVCCHandle) ReplayDeltaLoc(mvcc *catalog.MVCCNode[*catalog.MetadataMVCCNode]) {
 	n.deltaloc.Insert(mvcc)
+	n.upgradeDeleteChainByTSLocked(mvcc.Prepare)
 }
