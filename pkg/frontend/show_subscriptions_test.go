@@ -79,8 +79,8 @@ func (m *mockedBackgroundHandler) init(mp *mpool.MPool) {
 	m.pubBatches = make(map[int32][]*batch.Batch)
 
 	var b *batch.Batch
-	v1 := vector.NewVec(types.T_int32.ToType())
-	_ = vector.AppendFixedList(v1, []int32{0, 1}, nil, mp)
+	v1 := vector.NewVec(types.T_int64.ToType())
+	_ = vector.AppendFixedList(v1, []int64{0, 1}, nil, mp)
 	v2 := vector.NewVec(types.T_varchar.ToType())
 	_ = vector.AppendStringList(v2, []string{"sys", "account1"}, nil, mp)
 	b = &batch.Batch{Vecs: []*vector.Vector{v1, v2}}
@@ -129,8 +129,8 @@ func (m *mockedBackgroundHandler) initLike(mp *mpool.MPool) {
 	m.pubBatches = make(map[int32][]*batch.Batch)
 
 	var b *batch.Batch
-	v1 := vector.NewVec(types.T_int32.ToType())
-	_ = vector.AppendFixedList(v1, []int32{0, 1}, nil, mp)
+	v1 := vector.NewVec(types.T_int64.ToType())
+	_ = vector.AppendFixedList(v1, []int64{0, 1}, nil, mp)
 	v2 := vector.NewVec(types.T_varchar.ToType())
 	_ = vector.AppendStringList(v2, []string{"sys", "account1"}, nil, mp)
 	b = &batch.Batch{Vecs: []*vector.Vector{v1, v2}}
