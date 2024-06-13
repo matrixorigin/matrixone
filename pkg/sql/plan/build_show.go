@@ -127,7 +127,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 
-	sql := "select  \"%s\" as `Table`, \"%s\" as `Create Table`"
+	sql := "select \"%s\" as `Table`, \"%s\" as `Create Table`"
 	sql = fmt.Sprintf(sql, tblName, ddlStr)
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
