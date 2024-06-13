@@ -27,13 +27,13 @@ var xorFn = generalFunctionTemplateFactor[bool, bool](
 	nil, true, true,
 )
 
-func notFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func notFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[bool, bool](parameters, result, proc, length, func(v bool) bool {
 		return !v
-	})
+	}, selectList)
 }
 
-func opMultiAnd(params []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func opMultiAnd(params []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rsVec := vector.MustFunctionResult[bool](result).GetResultVector()
 	rsArr := vector.MustFixedCol[bool](rsVec)
 
@@ -101,7 +101,7 @@ func opMultiAnd(params []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	return nil
 }
 
-func opMultiOr(params []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func opMultiOr(params []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rsVec := vector.MustFunctionResult[bool](result).GetResultVector()
 	rsArr := vector.MustFixedCol[bool](rsVec)
 

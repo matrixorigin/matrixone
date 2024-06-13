@@ -59,23 +59,23 @@ func resetGenerateSeriesState(proc *process.Process, arg *Argument) error {
 		}()
 
 		if len(arg.ctr.executorsForArgs) == 1 {
-			endVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			endVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 			if err != nil {
 				return err
 			}
 			startVec, err = vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
 		} else {
-			startVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			startVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 			if err != nil {
 				return err
 			}
-			endVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			endVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 		}
 		if err != nil {
 			return err
 		}
 		if len(arg.Args) == 3 {
-			stepVec, err = arg.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			stepVec, err = arg.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 			if err != nil {
 				return err
 			}
