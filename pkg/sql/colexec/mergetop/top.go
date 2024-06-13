@@ -48,7 +48,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	if err != nil {
 		return err
 	}
-	vec, err := arg.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	vec, err := arg.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
@@ -128,7 +128,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				colIndex := ctr.executorsForOrderList[i].(*colexec.ColumnExpressionExecutor).GetColIndex()
 				ctr.poses = append(ctr.poses, int32(colIndex))
 			} else {
-				vec, err := ctr.executorsForOrderList[i].EvalWithoutResultReusing(proc, []*batch.Batch{bat})
+				vec, err := ctr.executorsForOrderList[i].EvalWithoutResultReusing(proc, []*batch.Batch{bat}, nil)
 				if err != nil {
 					return false, err
 				}
