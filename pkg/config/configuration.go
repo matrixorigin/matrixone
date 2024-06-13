@@ -162,9 +162,6 @@ var (
 	defaultLoggerLabelKey = "role"
 	defaultLoggerLabelVal = "logging_cn"
 
-	// default lower_case_table_names
-	defaultLowerCaseTableNames = "1"
-
 	// largestEntryLimit is the max size for reading file to csv buf
 	LargestEntryLimit = 10 * 1024 * 1024
 
@@ -268,8 +265,6 @@ type FrontendParameters struct {
 	QueryResultMaxsize uint64 `toml:"queryResultMaxsize" user_setting:"advanced"`
 
 	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
-
-	LowerCaseTableNames string `toml:"lowerCaseTableNames" user_setting:"advanced"`
 
 	PrintDebug bool `toml:"printDebug"`
 
@@ -390,10 +385,6 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.AutoIncrCacheSize == 0 {
 		fp.AutoIncrCacheSize = 3000000
-	}
-
-	if fp.LowerCaseTableNames == "" {
-		fp.LowerCaseTableNames = defaultLowerCaseTableNames
 	}
 
 	if fp.PrintDebugInterval == 0 {
