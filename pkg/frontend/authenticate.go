@@ -537,6 +537,10 @@ const (
 	dumpDefaultRoleID = moAdminRoleID
 
 	moCatalog = "mo_catalog"
+
+	SaveQueryResult    = "save_query_result"
+	QueryResultMaxsize = "query_result_maxsize"
+	QueryResultTimeout = "query_result_timeout"
 )
 
 type objectType int
@@ -7893,6 +7897,11 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
 
+	//step6: add new entries to the mo_mysql_compatibility_mode
+	addSqlIntoSet(addInitSystemVariablesSql(uint64(newTenant.GetTenantID()), newTenant.GetTenant(), SaveQueryResult, pu))
+	addSqlIntoSet(addInitSystemVariablesSql(uint64(newTenant.GetTenantID()), newTenant.GetTenant(), QueryResultMaxsize, pu))
+	addSqlIntoSet(addInitSystemVariablesSql(uint64(newTenant.GetTenantID()), newTenant.GetTenant(), QueryResultTimeout, pu))
+
 	//fill the mo_role, mo_user, mo_role_privs, mo_user_grant, mo_role_grant
 	for _, sql := range initDataSqls {
 		bh.ClearExecResultSet()
@@ -9159,6 +9168,22 @@ func doCheckRole(ctx context.Context, ses *Session) error {
 func isSuperUser(username string) bool {
 	u := strings.ToLower(username)
 	return u == dumpName || u == rootName
+}
+
+func addInitSystemVariablesSql(accountId uint64, accountName, variableName string, pu *config.ParameterUnit) string {
+	switch variableName {
+	case SaveQueryResult:
+		var val = "off"
+		if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
+			val = "on"
+		}
+		return getSqlForInsertSysVarWithAccount(accountId, accountName, SaveQueryResult, val)
+	case QueryResultMaxsize:
+		return getSqlForInsertSysVarWithAccount(accountId, accountName, QueryResultMaxsize, getVariableValue(pu.SV.QueryResultMaxsize))
+	case QueryResultTimeout:
+		return getSqlForInsertSysVarWithAccount(accountId, accountName, QueryResultTimeout, getVariableValue(pu.SV.QueryResultTimeout))
+	}
+	return ""
 }
 
 // postAlterSessionStatus post alter all nodes session status which the tenant has been alter restricted or open.
