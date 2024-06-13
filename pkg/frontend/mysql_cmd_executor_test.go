@@ -110,7 +110,7 @@ func Test_mce(t *testing.T) {
 		use_t := mock_frontend.NewMockComputationWrapper(ctrl)
 		use_t.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
 		use_t.EXPECT().Clear().AnyTimes()
-		stmts, err := parsers.Parse(ctx, dialect.MYSQL, "use T", 1, 0)
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, "use T", 1)
 		if err != nil {
 			t.Error(err)
 		}
@@ -121,7 +121,7 @@ func Test_mce(t *testing.T) {
 		runner.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 
 		create_1 := mock_frontend.NewMockComputationWrapper(ctrl)
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "create table A(a varchar(100),b int,c float)", 1, 0)
+		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "create table A(a varchar(100),b int,c float)", 1)
 		if err != nil {
 			t.Error(err)
 		}
@@ -136,7 +136,7 @@ func Test_mce(t *testing.T) {
 		create_1.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
 
 		select_1 := mock_frontend.NewMockComputationWrapper(ctrl)
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from A", 1, 0)
+		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from A", 1)
 		if err != nil {
 			t.Error(err)
 		}
@@ -218,7 +218,7 @@ func Test_mce(t *testing.T) {
 
 		for i := 0; i < len(self_handle_sql); i++ {
 			select_2 := mock_frontend.NewMockComputationWrapper(ctrl)
-			stmts, err = parsers.Parse(ctx, dialect.MYSQL, self_handle_sql[i], 1, 0)
+			stmts, err = parsers.Parse(ctx, dialect.MYSQL, self_handle_sql[i], 1)
 			convey.So(err, convey.ShouldBeNil)
 			select_2.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 			select_2.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
@@ -433,7 +433,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		set := "set @@tx_isolation=`READ-COMMITTED`"
-		setVar, err := parsers.ParseOne(ctx, dialect.MYSQL, set, 1, 0)
+		setVar, err := parsers.ParseOne(ctx, dialect.MYSQL, set, 1)
 		convey.So(err, convey.ShouldBeNil)
 
 		err = handleSetVar(ses, ec, setVar.(*tree.SetVar), "")
@@ -818,7 +818,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 
 func Test_HandlePrepareStmt(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "Prepare stmt1 from select 1, 2", 1, 0)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "Prepare stmt1 from select 1, 2", 1)
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
 	}
@@ -835,7 +835,7 @@ func Test_HandlePrepareStmt(t *testing.T) {
 
 func Test_HandleDeallocate(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "deallocate Prepare stmt1", 1, 0)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "deallocate Prepare stmt1", 1)
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
 	}
@@ -1006,7 +1006,7 @@ func TestSerializePlanToJson(t *testing.T) {
 }
 
 func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
@@ -1380,7 +1380,7 @@ func Test_ExecRequest(t *testing.T) {
 		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		use_t := mock_frontend.NewMockComputationWrapper(ctrl)
 		use_t.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
-		stmts, err := parsers.Parse(ctx, dialect.MYSQL, "use T", 1, 0)
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, "use T", 1)
 		if err != nil {
 			t.Error(err)
 		}
