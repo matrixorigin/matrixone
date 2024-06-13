@@ -255,12 +255,20 @@ func TestMultiAggFuncExec1(t *testing.T) {
 		var err error
 
 		// prepare the input data.
-		vec1 := vector.NewVec(inputType1)
-		require.NoError(t, vector.AppendFixedList[int64](vec1, []int64{0, 1}, []bool{true, false}, mg.Mp()))
-		vec2 := vector.NewVec(inputType2)
-		require.NoError(t, vector.AppendFixedList[bool](vec2, []bool{false, true}, nil, mg.Mp()))
-		inputs[0] = [2]*vector.Vector{vec1, vec2}
-		inputs[1] = [2]*vector.Vector{vec1, vec2}
+		{
+			vec1 := vector.NewVec(inputType1)
+			require.NoError(t, vector.AppendFixedList[int64](vec1, []int64{0, 1}, []bool{true, false}, mg.Mp()))
+			vec2 := vector.NewVec(inputType2)
+			require.NoError(t, vector.AppendFixedList[bool](vec2, []bool{false, true}, nil, mg.Mp()))
+			inputs[0] = [2]*vector.Vector{vec1, vec2}
+		}
+		{
+			vec1 := vector.NewVec(inputType1)
+			require.NoError(t, vector.AppendFixedList[int64](vec1, []int64{0, 1}, []bool{true, false}, mg.Mp()))
+			vec2 := vector.NewVec(inputType2)
+			require.NoError(t, vector.AppendFixedList[bool](vec2, []bool{false, true}, nil, mg.Mp()))
+			inputs[1] = [2]*vector.Vector{vec1, vec2}
+		}
 
 		inputs[2] = [2]*vector.Vector{nil, nil}
 		inputs[2][0] = vector.NewConstNull(inputType1, 2, mg.Mp())
