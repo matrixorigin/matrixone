@@ -16,8 +16,10 @@ package jobs
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -33,16 +35,22 @@ type flushDeletesTask struct {
 	fs     *objectio.ObjectFS
 	name   objectio.ObjectName
 	blocks []objectio.BlockObject
+
+	createAt time.Time
+	parentId uint64
 }
 
 func NewFlushDeletesTask(
 	ctx *tasks.Context,
 	fs *objectio.ObjectFS,
 	delta *containers.Batch,
+	parentId uint64,
 ) *flushDeletesTask {
 	task := &flushDeletesTask{
-		fs:    fs,
-		delta: delta,
+		fs:       fs,
+		delta:    delta,
+		createAt: time.Now(),
+		parentId: parentId,
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.IOTask, ctx)
 	return task
@@ -53,10 +61,12 @@ func (task *flushDeletesTask) Scope() *common.ID { return nil }
 func (task *flushDeletesTask) Execute(ctx context.Context) error {
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	task.name = name
+	waitT := time.Since(task.createAt)
 	writer, err := blockio.NewBlockWriterNew(task.fs.Service, name, 0, nil)
 	if err != nil {
 		return err
 	}
+	inst := time.Now()
 	cnBatch := containers.ToCNBatch(task.delta)
 	for _, vec := range cnBatch.Vecs {
 		if vec == nil {
@@ -68,7 +78,16 @@ func (task *flushDeletesTask) Execute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	copyT := time.Since(inst)
+	inst = time.Now()
 	task.blocks, _, err = writer.Sync(ctx)
+
+	ioT := time.Since(inst)
+	if time.Since(task.createAt) > SlowFlushIOTask {
+		logutil.Infof("slowflush: task %d flushdeletes %v rows: wait %v, copy %v, io %v",
+			task.parentId, cnBatch.RowCount(), waitT, copyT, ioT)
+	}
+
 	if v := ctx.Value(TestFlushBailoutPos2{}); v != nil {
 		err = moerr.NewInternalErrorNoCtx("test flush deletes bail out")
 		return err
