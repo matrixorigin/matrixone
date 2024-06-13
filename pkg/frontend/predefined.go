@@ -113,7 +113,7 @@ var (
 
 	MoCatalogMoMysqlCompatibilityModeDDL = `create table mo_catalog.mo_mysql_compatibility_mode (
 				configuration_id int auto_increment,
-				account_id int,
+				account_id bigint,
 				account_name varchar(300),
 				dat_name     varchar(5000) default NULL,
 				variable_name  varchar(300),
@@ -300,8 +300,8 @@ var (
 			id                  bigint unsigned not null primary key auto_increment,
 			upgrade_id		    bigint unsigned not null,
 			target_version      varchar(50) not null,
-			from_account_id     int not null,
-			to_account_id       int not null,
+			from_account_id     bigint not null,
+			to_account_id       bigint not null,
 			ready               int,
 			create_at           timestamp not null,
 			update_at           timestamp not null
@@ -349,7 +349,7 @@ var (
 			task_metadata_executor      int,
 			task_metadata_context       blob,
 			task_metadata_option        varchar(1000),
-			account_id                  int unsigned not null,
+			account_id                  bigint not null,
 			account                     varchar(128) not null,
 			task_type                   varchar(64) not null,
 			task_runner                 varchar(64),

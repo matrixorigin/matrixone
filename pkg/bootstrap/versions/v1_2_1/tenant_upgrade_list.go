@@ -19,11 +19,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+	"strings"
 )
 
 var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_mo_mysql_compatibility_mode1,
 	upg_information_schema_files,
+	upg_mo_mysql_compatibility_mode2,
 }
 
 var upg_mo_mysql_compatibility_mode1 = versions.UpgradeEntry{
@@ -44,5 +46,25 @@ var upg_information_schema_files = versions.UpgradeEntry{
 	UpgSql:    sysview.InformationSchemaFilesDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "files")
+	},
+}
+
+var upg_mo_mysql_compatibility_mode2 = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_mysql_compatibility_mode",
+	UpgType:   versions.MODIFY_COLUMN,
+	UpgSql:    "alter table mo_catalog.mo_mysql_compatibility_mode modify account_id bigint",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, "mo_mysql_compatibility_mode", "account_id")
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.IsExits {
+			if strings.EqualFold(colInfo.ColType, versions.T_int64) {
+				return true, nil
+			}
+		}
+		return false, nil
 	},
 }

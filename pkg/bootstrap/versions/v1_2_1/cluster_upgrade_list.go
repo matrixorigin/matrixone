@@ -16,11 +16,11 @@ package v1_2_1
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -30,6 +30,8 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_system_statementInto_comment,
 	upg_systemMetric_metric_comment,
 	upg_mo_account2,
+	upg_sys_daemon_task,
+	upg_mo_upgrade,
 }
 
 // viewSystemLogInfoDDL113 = "CREATE VIEW IF NOT EXISTS `system`.`log_info` as select `trace_id`, `span_id`, `span_kind`, `node_uuid`, `node_type`, `timestamp`, `logger_name`, `level`, `caller`, `message`, `extra`, `stack` from `system`.`rawlog` where `raw_item` = \"log_info\""
@@ -135,11 +137,31 @@ var upg_mo_account2 = versions.UpgradeEntry{
 	},
 }
 
+var upg_sys_daemon_task = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSysDaemonTask,
+	UpgType:   versions.MODIFY_COLUMN,
+	UpgSql:    "alter table mo_task.sys_daemon_task modify account_id bigint not null",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MOTaskDB, catalog.MOSysDaemonTask, "account_id")
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.IsExits {
+			if strings.EqualFold(colInfo.ColType, versions.T_int64) {
+				return true, nil
+			}
+		}
+		return false, nil
+	},
+}
+
 var upg_mo_upgrade = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: catalog.MOUpgradeTenantTable,
 	UpgType:   versions.MODIFY_COLUMN,
-	UpgSql:    "alter table mo_catalog.mo_upgrade_tenant modify from_account_id bigint NOT NULL, to_account_id bigint NOT NULL",
+	UpgSql:    "alter table mo_catalog.mo_upgrade_tenant modify from_account_id bigint NOT NULL, modify to_account_id bigint NOT NULL",
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		colInfo1, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOUpgradeTenantTable, "from_account_id")
 		if err != nil {
