@@ -95,7 +95,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				UNIQUE KEY uk1 (name),
 				UNIQUE KEY uk2 (email)
 				);`,
-			want: "CREATE TABLE `example_table` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) NOT NULL DEFAULT 'default_name',\n  `email` VARCHAR(255) DEFAULT NULL,\n  `created_at` TIMESTAMP DEFAULT current_timestamp(),\n  `updated_at` TIMESTAMP DEFAULT current_timestamp() ON UPDATE current_timestamp(),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk1` (`name`),\n  UNIQUE KEY `uk2` (`email`)\n)",
+			want: "CREATE TABLE `example_table` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) NOT NULL DEFAULT 'default_name',\n  `email` VARCHAR(255) DEFAULT NULL,\n  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk1` (`name`),\n  UNIQUE KEY `uk2` (`email`)\n)",
 		},
 		{
 			name: "test6",
@@ -144,7 +144,7 @@ func Test_SingleShowCreateTable(t *testing.T) {
 				UNIQUE KEY uk1 (name),
 				UNIQUE KEY uk2 (email)
 				);`,
-			want: "CREATE TABLE `example_table` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) NOT NULL DEFAULT 'default_name',\n  `email` VARCHAR(255) DEFAULT NULL,\n  `created_at` TIMESTAMP DEFAULT current_timestamp(),\n  `updated_at` TIMESTAMP DEFAULT current_timestamp() ON UPDATE current_timestamp(),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk1` (`name`),\n  UNIQUE KEY `uk2` (`email`)\n)",
+			want: "CREATE TABLE `example_table` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) NOT NULL DEFAULT 'default_name',\n  `email` VARCHAR(255) DEFAULT NULL,\n  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),\n  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk1` (`name`),\n  UNIQUE KEY `uk2` (`email`)\n)",
 		},
 	}
 

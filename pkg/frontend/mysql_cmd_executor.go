@@ -695,6 +695,14 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				return err
 			}
 			runtime.ProcessLevelRuntime().SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
+		} else if name == "refresh_global_sys_vars_mgr" {
+			// refresh the cache of current account in GSysVarsMgr, load the newest data from `mo_mysql_compatibility_mode` table
+			if value.(int64) == 1 {
+				GSysVarsMgr.Put(ses.GetAccountId(), nil)
+				if err = ses.InitSystemVariables(execCtx.reqCtx); err != nil {
+					return err
+				}
+			}
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
@@ -742,7 +750,7 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 	for i := info.length() - 1; i >= 0; i-- {
 		row := make([]interface{}, 3)
 		row[0] = "Error"
-		row[1] = info.codes[i]
+		row[1] = int16(info.codes[i])
 		row[2] = info.msgs[i]
 		mrs.AddRow(row)
 	}

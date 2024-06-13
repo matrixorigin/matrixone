@@ -17,8 +17,11 @@ use mysql;
 show tables;
 show columns from `user`;
 show columns from `db`;
+-- @ignore:4
 show columns from `procs_priv`;
+-- @ignore:4
 show columns from `columns_priv`;
+-- @ignore:4
 show columns from `tables_priv`;
 use information_schema;
 show tables;
