@@ -87,21 +87,10 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 
 	for i := range n.AggList {
 		n.AggList[i] = r.constantFold(n.AggList[i], proc)
-
-		// if fn, ok := n.AggList[i].Expr.(*plan.Expr_F); ok {
-		// 	for i := range fn.F.Args {
-		// 		fn.F.Args[i] = r.constantFold(fn.F.Args[i], proc)
-		// 	}
-		// }
 	}
 
 	for i := range n.WinSpecList {
 		n.WinSpecList[i] = r.constantFold(n.WinSpecList[i], proc)
-		// if fn, ok := n.WinSpecList[i].Expr.(*plan.Expr_F); ok {
-		// 	for i := range fn.F.Args {
-		// 		fn.F.Args[i] = r.constantFold(fn.F.Args[i], proc)
-		// 	}
-		// }
 	}
 
 	for _, orderBy := range n.OrderBy {
