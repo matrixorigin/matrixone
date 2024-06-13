@@ -332,7 +332,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 		return nil, err
 	}
 	defer executor.Free()
-	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return nil, err
 	}
