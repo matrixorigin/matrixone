@@ -715,7 +715,7 @@ type Engine interface {
 	// since implementations may update hints after engine had initialized
 	Hints() Hints
 
-	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]Reader, error)
+	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, blockReadPKFilter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)

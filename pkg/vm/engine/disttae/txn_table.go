@@ -40,11 +40,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -1721,25 +1719,24 @@ func (tbl *txnTable) NewReader(
 	orderedScan bool,
 	txnOffset int,
 ) ([]engine.Reader, error) {
-	if strings.Contains(tbl.tableName, "mo_version") {
-		x := 0
-		x++
-	}
-
-	pkFilter, err := tbl.getInMemPKFilter(ctx, expr)
+	txn := tbl.getTxn()
+	ts := txn.op.SnapshotTS()
+	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	pkFilters := ConstructPKFilters(tbl.tableDef, ts, state, expr, tbl.proc.Load(), txn.engine.packerPool)
+
 	blkArray := objectio.BlockInfoSlice(ranges)
-	if !pkFilter.isValid || plan2.IsFalseExpr(expr) {
+	if !pkFilters.inMemPKFilter.isValid || plan2.IsFalseExpr(expr) {
 		return []engine.Reader{new(emptyReader)}, nil
 	}
 	if blkArray.Len() == 0 {
-		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil, txnOffset)
+		return tbl.newMergeReader(ctx, num, expr, pkFilters, nil, txnOffset)
 	}
 	if blkArray.Len() == 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
-		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil, txnOffset)
+		return tbl.newMergeReader(ctx, num, expr, pkFilters, nil, txnOffset)
 	}
 	if blkArray.Len() > 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
 		rds := make([]engine.Reader, num)
@@ -1756,7 +1753,7 @@ func (tbl *txnTable) NewReader(
 			}
 			dirtyBlks = append(dirtyBlks, blkInfo)
 		}
-		rds0, err := tbl.newMergeReader(ctx, num, expr, pkFilter, dirtyBlks, txnOffset)
+		rds0, err := tbl.newMergeReader(ctx, num, expr, pkFilters, dirtyBlks, txnOffset)
 		if err != nil {
 			return nil, err
 		}
@@ -1765,7 +1762,7 @@ func (tbl *txnTable) NewReader(
 		}
 
 		if len(cleanBlks) > 0 {
-			rds0, err = tbl.newBlockReader(ctx, num, expr, cleanBlks, tbl.proc.Load(), orderedScan)
+			rds0, err = tbl.newBlockReader(ctx, num, expr, pkFilters.blockReadPKFilter, cleanBlks, tbl.proc.Load(), orderedScan)
 			if err != nil {
 				return nil, err
 			}
@@ -1783,144 +1780,14 @@ func (tbl *txnTable) NewReader(
 	for i := 0; i < blkArray.Len(); i++ {
 		blkInfos = append(blkInfos, blkArray.Get(i))
 	}
-	return tbl.newBlockReader(ctx, num, expr, blkInfos, tbl.proc.Load(), orderedScan)
+	return tbl.newBlockReader(ctx, num, expr, pkFilters.blockReadPKFilter, blkInfos, tbl.proc.Load(), orderedScan)
 }
-
-func (tbl *txnTable) getInMemPKFilter(ctx context.Context, expr *plan.Expr) (inMemPKFilter InMemPKFilter, err error) {
-	txn := tbl.getTxn()
-	ts := txn.op.SnapshotTS()
-	state, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return inMemPKFilter, err
-	}
-
-	defer func() {
-		if inMemPKFilter.iter == nil {
-			inMemPKFilter.isValid = true
-			inMemPKFilter.iter = state.NewRowsIter(
-				types.TimestampToTS(ts),
-				nil,
-				false,
-			)
-		}
-	}()
-
-	if expr == nil || tbl.tableDef.Pkey == nil {
-		return
-	}
-
-	basePKFilter := constructBasePKFilter(expr, tbl.tableDef, tbl.proc.Load())
-	if !basePKFilter.valid {
-		return inMemPKFilter, nil
-	}
-
-	var lbVal any
-	var packed [][]byte
-	var packer *types.Packer
-	put := tbl.getTxn().engine.packerPool.Get(&packer)
-	defer put.Put()
-
-	switch basePKFilter.op {
-	case function.EQUAL, function.PREFIX_EQ:
-		switch basePKFilter.oid {
-		case types.T_int8:
-			lbVal = types.DecodeInt8(basePKFilter.lb)
-		case types.T_int16:
-			lbVal = types.DecodeInt16(basePKFilter.lb)
-		case types.T_int32:
-			lbVal = types.DecodeInt32(basePKFilter.lb)
-		case types.T_int64:
-			lbVal = types.DecodeInt64(basePKFilter.lb)
-		case types.T_float32:
-			lbVal = types.DecodeFloat32(basePKFilter.lb)
-		case types.T_float64:
-			lbVal = types.DecodeFloat64(basePKFilter.lb)
-		case types.T_uint8:
-			lbVal = types.DecodeUint8(basePKFilter.lb)
-		case types.T_uint16:
-			lbVal = types.DecodeUint16(basePKFilter.lb)
-		case types.T_uint32:
-			lbVal = types.DecodeUint32(basePKFilter.lb)
-		case types.T_uint64:
-			lbVal = types.DecodeUint64(basePKFilter.lb)
-		case types.T_date:
-			lbVal = types.DecodeDate(basePKFilter.lb)
-		case types.T_time:
-			lbVal = types.DecodeTime(basePKFilter.lb)
-		case types.T_datetime:
-			lbVal = types.DecodeDatetime(basePKFilter.lb)
-		case types.T_timestamp:
-			lbVal = types.DecodeTimestamp(basePKFilter.lb)
-		case types.T_decimal64:
-			lbVal = types.DecodeDecimal64(basePKFilter.lb)
-		case types.T_decimal128:
-			lbVal = types.DecodeDecimal128(basePKFilter.lb)
-		case types.T_varchar:
-			lbVal = basePKFilter.lb
-		case types.T_json:
-			lbVal = types.DecodeJson(basePKFilter.lb)
-		case types.T_enum:
-			lbVal = types.DecodeEnum(basePKFilter.lb)
-		}
-
-		packed = append(packed, logtailreplay.EncodePrimaryKey(lbVal, packer))
-		inMemPKFilter.SetFullData(basePKFilter.op, false, packed...)
-
-	case function.IN, function.PREFIX_IN:
-		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(basePKFilter.lb)
-		packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
-		inMemPKFilter.SetFullData(basePKFilter.op, true, packed...)
-
-	case function.PREFIX_BETWEEN, function.BETWEEN, rangeLeftOpen, rangeRightOpen, rangeBothOpen:
-		packed = append(packed, logtailreplay.EncodePrimaryKey(basePKFilter.lb, packer))
-		packed = append(packed, logtailreplay.EncodePrimaryKey(basePKFilter.ub, packer))
-		inMemPKFilter.SetFullData(basePKFilter.op, false, packed...)
-	}
-
-	inMemPKFilter.iter = tbl.tryConstructPrimaryKeyIndexIter(ts, inMemPKFilter, expr, state)
-	return
-}
-
-//func (tbl *txnTable) tryExtractPKFilter(expr *plan.Expr) (retPKFilter InMemPKFilter) {
-//	pk := tbl.tableDef.Pkey
-//	if expr == nil || pk == nil {
-//		return
-//	}
-//
-//	pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-//	retPKFilter = getPKFilterByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl)
-//	if retPKFilter.isNull || !retPKFilter.isValid || retPKFilter.isVec {
-//		return
-//	}
-//
-//	var packer *types.Packer
-//
-//	put := tbl.getTxn().engine.packerPool.Get(&packer)
-//	val := logtailreplay.EncodePrimaryKey(retPKFilter.val, packer)
-//	put.Put()
-//
-//	if retPKFilter.op == function.EQUAL {
-//		retPKFilter.SetFullData(function.EQUAL, false, val)
-//	} else {
-//		// TODO: hack: remove the last comma, need to fix this in the future
-//		// serial_full(secondary_index, primary_key|fake_pk) => varchar
-//		// prefix_eq expression only has the prefix(secondary index) in it.
-//		// there will have an extra zero after the `encodeStringType` done
-//		// this will violate the rule of prefix_eq, so remove this redundant zero here.
-//		//
-//		val = val[0 : len(val)-1]
-//		retPKFilter.SetFullData(function.PREFIX_EQ, false, val)
-//	}
-//
-//	return
-//}
 
 func (tbl *txnTable) newMergeReader(
 	ctx context.Context,
 	num int,
 	expr *plan.Expr,
-	pkFilter InMemPKFilter,
+	pkFilter PKFilters,
 	dirtyBlks []*objectio.BlockInfo,
 	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
 ) ([]engine.Reader, error) {
@@ -1949,6 +1816,7 @@ func (tbl *txnTable) newBlockReader(
 	ctx context.Context,
 	num int,
 	expr *plan.Expr,
+	filter blockio.BlockReadFilter,
 	blkInfos []*objectio.BlockInfo,
 	proc *process.Process,
 	orderedScan bool) ([]engine.Reader, error) {
@@ -1964,6 +1832,7 @@ func (tbl *txnTable) newBlockReader(
 				ts,
 				[]*objectio.BlockInfo{blk},
 				expr,
+				filter,
 				tbl.getTxn().engine.fs,
 				proc,
 			)
@@ -1985,7 +1854,7 @@ func (tbl *txnTable) newBlockReader(
 		if num != 1 {
 			panic("ordered scan must run in only one parallel")
 		}
-		rd := newBlockReader(ctx, tableDef, ts, blkInfos, expr, fs, proc)
+		rd := newBlockReader(ctx, tableDef, ts, blkInfos, expr, filter, fs, proc)
 		rd.dontPrefetch = true
 		return []engine.Reader{rd}, nil
 	}
@@ -1998,6 +1867,7 @@ func (tbl *txnTable) newBlockReader(
 		ts,
 		num,
 		expr,
+		filter,
 		proc)
 	distributeBlocksToBlockReaders(blockReaders, num, len(blkInfos), infos, steps)
 	for i := 0; i < num; i++ {
@@ -2006,57 +1876,10 @@ func (tbl *txnTable) newBlockReader(
 	return rds, nil
 }
 
-func (tbl *txnTable) tryConstructPrimaryKeyIndexIter(
-	ts timestamp.Timestamp,
-	pkFilter InMemPKFilter,
-	expr *plan.Expr,
-	state *logtailreplay.PartitionState,
-) (iter logtailreplay.RowsIter) {
-	if !pkFilter.isValid {
-		return
-	}
-
-	switch pkFilter.op {
-	case function.EQUAL, function.PREFIX_EQ:
-		iter = state.NewPrimaryKeyIter(
-			types.TimestampToTS(ts),
-			logtailreplay.Prefix(pkFilter.packed[0]),
-		)
-		//case function.IN, function.PREFIX_IN:
-		//	// may be it's better to iterate rows instead.
-		//	if len(pkFilter.packed) > 128 {
-		//		return
-		//	}
-		//
-		//	iter = state.NewPrimaryKeyIter(
-		//		types.TimestampToTS(ts),
-		//		logtailreplay.InKind(pkFilter.packed, pkFilter.op),
-		//	)
-		//case function.BETWEEN, rangeLeftOpen, rangeRightOpen, rangeBothOpen, function.PREFIX_BETWEEN:
-		//	var kind int
-		//	switch pkFilter.op {
-		//	case function.BETWEEN:
-		//		kind = 0
-		//	case rangeLeftOpen:
-		//		kind = 1
-		//	case rangeRightOpen:
-		//		kind = 2
-		//	case rangeBothOpen:
-		//		kind = 3
-		//	case function.PREFIX_BETWEEN:
-		//		kind = 4
-		//	}
-		//	iter = state.NewPrimaryKeyIter(types.TimestampToTS(ts),
-		//		logtailreplay.BetweenKind(pkFilter.packed[0], pkFilter.packed[1], kind))
-	}
-
-	return iter
-}
-
 func (tbl *txnTable) newReader(
 	ctx context.Context,
 	readerNumber int,
-	pkFilter InMemPKFilter,
+	pkFilter PKFilters,
 	expr *plan.Expr,
 	dirtyBlks []*objectio.BlockInfo,
 	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
@@ -2064,14 +1887,7 @@ func (tbl *txnTable) newReader(
 	txn := tbl.getTxn()
 	ts := txn.op.SnapshotTS()
 	fs := txn.engine.fs
-	//state, err := tbl.getPartitionState(ctx)
-	//if err != nil {
-	//	return nil, err
-	//}
-	if strings.Contains(tbl.db.databaseName, "mo_version") {
-		x := 0
-		x++
-	}
+
 	readers := make([]engine.Reader, readerNumber)
 
 	seqnumMp := make(map[string]int)
@@ -2090,23 +1906,10 @@ func (tbl *txnTable) newReader(
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
 
-	var (
-	//iter logtailreplay.RowsIter
-	)
-
-	//iter = tbl.tryConstructPrimaryKeyIndexIter(ts, pkFilter, expr, state)
-	//if iter == nil {
-	//	iter = state.NewRowsIter(
-	//		types.TimestampToTS(ts),
-	//		nil,
-	//		false,
-	//	)
-	//}
-
 	partReader := &PartitionReader{
 		table:     tbl,
 		txnOffset: txnOffset,
-		iter:      pkFilter.iter,
+		iter:      pkFilter.inMemPKFilter.iter,
 		seqnumMp:  seqnumMp,
 		typsMap:   mp,
 	}
@@ -2164,6 +1967,7 @@ func (tbl *txnTable) newReader(
 		ts,
 		readerNumber-1,
 		expr,
+		pkFilter.blockReadPKFilter,
 		proc)
 	objInfos, steps := groupBlocksToObjects(dirtyBlks, readerNumber-1)
 	blockReaders = distributeBlocksToBlockReaders(
@@ -2177,7 +1981,7 @@ func (tbl *txnTable) newReader(
 			blockReader: blockReaders[i],
 			table:       tbl,
 			txnOffset:   txnOffset,
-			pkFilter:    pkFilter,
+			pkFilter:    pkFilter.inMemPKFilter,
 			deletaLocs:  make(map[string][]objectio.Location),
 		}
 		readers[i+1] = bmr
@@ -2389,12 +2193,10 @@ func (tbl *txnTable) PKPersistedBetween(
 			bytes,
 			false)
 
-		_, _, filter := getNonCompositePKSearchFuncByExpr(
-			inExpr,
-			tbl.tableDef,
-			"pk",
-			tbl.proc.Load())
-		return filter.SortedSearchFunc
+		basePKFilter := constructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
+		blockReadPKFilter := constructBlockReadPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
+
+		return blockReadPKFilter.SortedSearchFunc
 	}
 
 	var unsortedFilter blockio.ReadFilterSearchFuncType
