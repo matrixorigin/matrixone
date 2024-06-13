@@ -1254,3 +1254,4 @@ account_name    VARCHAR(300)    YES        null
 database_name    VARCHAR(5000)    YES        null        
 table_name    VARCHAR(5000)    YES        null        
 obj_id    BIGINT UNSIGNED(64)    YES        null        
+drop account if exists fk_show_column;

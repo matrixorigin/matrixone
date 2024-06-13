@@ -109,3 +109,4 @@ show columns from	mo_catalog.mo_foreign_keys            ;
 show columns from	mo_catalog.mo_snapshots           ;
 
 -- @session
+drop account if exists fk_show_column;
