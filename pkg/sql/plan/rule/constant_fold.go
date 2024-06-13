@@ -90,7 +90,7 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 	}
 
 	for i := range n.WinSpecList {
-		if fn, ok := n.AggList[i].Expr.(*plan.Expr_F); ok {
+		if fn, ok := n.WinSpecList[i].Expr.(*plan.Expr_F); ok {
 			for i := range fn.F.Args {
 				fn.F.Args[i] = r.constantFold(fn.F.Args[i], proc)
 			}
