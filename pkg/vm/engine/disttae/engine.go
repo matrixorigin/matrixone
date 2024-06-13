@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"runtime"
 	"strings"
@@ -745,7 +744,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 		// remote block reader
 		basePKFilter := constructBasePKFilter(expr, tblDef, proc.(*process.Process))
 		blockReadPKFilter = constructBlockReadPKFilter(tblDef.Pkey.PkeyColName, basePKFilter)
-		fmt.Println("remote filter: ", basePKFilter.String(), blockReadPKFilter)
+		//fmt.Println("remote filter: ", basePKFilter.String(), blockReadPKFilter)
 	}
 
 	blkSlice := objectio.BlockInfoSlice(ranges)
