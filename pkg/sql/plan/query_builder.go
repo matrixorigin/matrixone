@@ -2978,7 +2978,7 @@ func appendSelectList(
 				if selectExpr.As != nil && !selectExpr.As.Empty() {
 					ctx.headings = append(ctx.headings, selectExpr.As.Origin())
 				} else if expr.CStrParts[0] != nil {
-					ctx.headings = append(ctx.headings, expr.CStrParts[0].Compare())
+					ctx.headings = append(ctx.headings, expr.CStrParts[0].Origin())
 				} else {
 					ctx.headings = append(ctx.headings, expr.Parts[0])
 				}

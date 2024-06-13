@@ -25,10 +25,15 @@ cast(col1 as decimal(20, 10))
 null
 drop table test01;
 drop table if exists test01;
+
 create table test01(col1 datetime(3));
+
 insert into test01 values('2020-01-13 12:20:59.12343243');
+
 insert into test01 values('2023-04-17 01:01:45');
+
 insert into test01 values(NULL);
+
 select * from test01;
 col1
 2020-01-13 12:20:59.123000000
@@ -45,6 +50,7 @@ cast(col1 as decimal(20, 10))
 1681693305.0000000000
 null
 drop table test01;
+
 drop table if exists test02;
 create table test02(col1 date);
 insert into test02 values('2020-12-13');
@@ -107,21 +113,32 @@ drop table test05;
 drop table test06;
 drop table test07;
 drop table if exists test05;
+
 drop table if exists test06;
+
 drop table if exists test07;
+
 create table test05(col1 int);
+
 create table test06(col1 datetime(6));
+
 create table test07(col1 decimal(38,18));
+
 insert into test06 values('2020-01-13 12:20:59.123');
+
 insert into test06 values('2023-04-17 01:01:45.65');
+
 insert into test06 values(NULL);
+
 insert into test05 select * from test06;
+
 select cast(col1 as decimal(20,18)) from test06;
 cast(col1 as decimal(20, 18))
 1578918059.123000000000000000
 1681693305.650000000000000000
 null
 insert into test07 select * from test06;
+
 select * from test05;
 col1
 1578918059
@@ -133,8 +150,11 @@ col1
 1681693305.650000000000000000
 null
 drop table test05;
+
 drop table test06;
+
 drop table test07;
+
 drop table if exists test07;
 drop table if exists test08;
 create table test07(col1 int);
@@ -584,3 +604,4 @@ null
 null
 drop table timestamp01;
 drop database test;
+SET TIME_ZONE = "SYSTEM";
