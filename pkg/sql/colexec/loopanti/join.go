@@ -172,7 +172,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			return err
 		}
 		matched := false
-		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
+		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat}, nil)
 		if err != nil {
 			return err
 		}
