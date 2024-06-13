@@ -23,6 +23,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 )
 
+// LogtailPhase is the logtail information of one phase of
+// subscription request. Phase 1 is executed asynchronously
+// to collect most of logtails of the subscription request.
+// And phase 2 is executed sync.
+type LogtailPhase struct {
+	tail    logtail.TableLogtail
+	closeCB func()
+	sub     subscription
+}
+
 // LogtailResponse wraps logtail.LogtailResponse.
 type LogtailResponse struct {
 	logtail.LogtailResponse

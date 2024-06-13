@@ -49,6 +49,7 @@ func TestService_RegisterServices(t *testing.T) {
 				LogtailRPCStreamPoisonTime toml.Duration `toml:"logtail-rpc-stream-poison-time"`
 				LogtailCollectInterval     toml.Duration `toml:"logtail-collect-interval"`
 				LogtailResponseSendTimeout toml.Duration `toml:"logtail-response-send-timeout"`
+				PullWorkerPoolSize         toml.ByteSize `toml:"pull-worker-pool-size"`
 			}(struct {
 				ListenAddress              string
 				ServiceAddress             string
@@ -57,6 +58,7 @@ func TestService_RegisterServices(t *testing.T) {
 				LogtailRPCStreamPoisonTime toml.Duration
 				LogtailCollectInterval     toml.Duration
 				LogtailResponseSendTimeout toml.Duration
+				PullWorkerPoolSize         toml.ByteSize
 			}{
 				ListenAddress:  fmt.Sprintf("%s:%d", listenHost, port1+1),
 				ServiceAddress: fmt.Sprintf("%s:%d", serviceHost, port1+1),
