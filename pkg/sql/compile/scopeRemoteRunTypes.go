@@ -96,6 +96,12 @@ type messageSenderOnClient struct {
 	ctx       context.Context
 	ctxCancel context.CancelFunc
 
+	// safeToClose should be true, if
+	// 1. there has received the EndMessage or ErrorMessage from receiver.
+	// or
+	// 2. we have never sent a message in succeed.
+	safeToClose bool
+
 	streamSender morpc.Stream
 	receiveCh    chan morpc.Message
 
