@@ -75,7 +75,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if err != nil {
 		return err
 	}
-	statements, err := mysql.Parse(ctx, sql, v.(int64), 0)
+	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
 		return err
 	}
@@ -122,7 +122,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	if err != nil {
 		return err
 	}
-	statements, err := mysql.Parse(ctx, sql, v.(int64), 0)
+	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
 		return err
 	}
