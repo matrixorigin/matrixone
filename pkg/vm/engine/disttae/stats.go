@@ -123,7 +123,7 @@ type GlobalStats struct {
 	logtailUpdate *logtailUpdate
 
 	// tableLogtailCounter is the counter of the logtail entry of stats info key.
-	tableLogtailCounter map[pb.StatsInfoKey]int
+	tableLogtailCounter map[pb.StatsInfoKey]int64
 
 	// statsInfoMap is the global stats info in engine which
 	// contains all subscribed tables stats info.
@@ -151,7 +151,7 @@ func NewGlobalStats(
 		tailC:               make(chan *logtail.TableLogtail, 10000),
 		updateC:             make(chan pb.StatsInfoKey, 1000),
 		logtailUpdate:       newLogtailUpdate(),
-		tableLogtailCounter: make(map[pb.StatsInfoKey]int),
+		tableLogtailCounter: make(map[pb.StatsInfoKey]int64),
 		KeyRouter:           keyRouter,
 	}
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
@@ -162,6 +162,16 @@ func NewGlobalStats(
 	go s.consumeWorker(ctx)
 	go s.updateWorker(ctx)
 	return s
+}
+
+func (gs *GlobalStats) ShouldUpdate(key pb.StatsInfoKey, entryNum int64) bool {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	info, ok := gs.mu.statsInfoMap[key]
+	if ok && info != nil && info.BlockNumber > entryNum {
+		return false
+	}
+	return true
 }
 
 func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
@@ -275,7 +285,7 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 		} else {
 			gs.tableLogtailCounter[key]++
 		}
-		if !triggered && gs.tableLogtailCounter[key] > int(gs.mu.statsInfoMap[key].BlockNumber) {
+		if !triggered && gs.ShouldUpdate(key, gs.tableLogtailCounter[key]) {
 			gs.tableLogtailCounter[key] = 0
 			gs.triggerUpdate(key)
 		}
