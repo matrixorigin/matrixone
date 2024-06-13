@@ -63,5 +63,7 @@ insert into t1 select result, result from generate_series(1,10000)g;
 -- @separator:table
 select mo_ctl('dn','flush','d1.t1');
 select * from t1 where b in (1,2) for update;
+create view v1 as select (case when a in (1,2,3) then 'y' else 'n' end) as a from t1;
+select count(a) from v1;
+drop table t1;
 drop database if exists d1;
-
