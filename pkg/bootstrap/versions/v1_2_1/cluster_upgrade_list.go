@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -129,6 +130,33 @@ var upg_mo_account2 = versions.UpgradeEntry{
 			if strings.EqualFold(colInfo.ColType, versions.T_int64) {
 				return true, nil
 			}
+		}
+		return false, nil
+	},
+}
+
+var upg_mo_upgrade = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MOUpgradeTenantTable,
+	UpgType:   versions.MODIFY_COLUMN,
+	UpgSql:    "alter table mo_catalog.mo_upgrade_tenant modify from_account_id bigint NOT NULL, to_account_id bigint NOT NULL",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo1, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOUpgradeTenantTable, "from_account_id")
+		if err != nil {
+			return false, err
+		}
+
+		colInfo2, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOUpgradeTenantTable, "to_account_id")
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo1.IsExits && colInfo2.IsExits {
+			if strings.EqualFold(colInfo1.ColType, versions.T_int64) && strings.EqualFold(colInfo2.ColType, versions.T_int64) {
+				return true, nil
+			}
+		} else {
+			return false, moerr.NewInternalErrorNoCtx("When modifying table column, the target column does not exist")
 		}
 		return false, nil
 	},

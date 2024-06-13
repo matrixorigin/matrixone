@@ -90,14 +90,14 @@ type subscribed struct {
 	subTime    string
 }
 
-func getAccountIdByName(ctx context.Context, ses *Session, bh BackgroundExec, name string) int32 {
+func getAccountIdByName(ctx context.Context, ses *Session, bh BackgroundExec, name string) int64 {
 	if accountIds, _, err := getAccountIdNames(ctx, ses, bh, name); err == nil && len(accountIds) > 0 {
 		return accountIds[0]
 	}
 	return -1
 }
 
-func getAccountIdNames(ctx context.Context, ses *Session, bh BackgroundExec, likeName string) ([]int32, []string, error) {
+func getAccountIdNames(ctx context.Context, ses *Session, bh BackgroundExec, likeName string) ([]int64, []string, error) {
 	bh.ClearExecResultBatches()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 	sql := getAccountIdNamesSql
@@ -108,7 +108,7 @@ func getAccountIdNames(ctx context.Context, ses *Session, bh BackgroundExec, lik
 		return nil, nil, err
 	}
 
-	var accountIds []int32
+	var accountIds []int64
 	var accountNames []string
 	for _, batch := range bh.GetExecResultBatches() {
 		row := make([]any, len(batch.Vecs))
@@ -119,7 +119,7 @@ func getAccountIdNames(ctx context.Context, ses *Session, bh BackgroundExec, lik
 			}
 
 			// column[0]: account_id
-			accountIds = append(accountIds, row[0].(int32))
+			accountIds = append(accountIds, row[0].(int64))
 			// column[1]: account_name
 			accountNames = append(accountNames, string(row[1].([]byte)[:]))
 		}
@@ -140,7 +140,7 @@ func canSub(subAccount, subAccountListStr string) bool {
 	return false
 }
 
-func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int32, accountName string, like string, subAccountName string) ([]*published, error) {
+func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int64, accountName string, like string, subAccountName string) ([]*published, error) {
 	bh.ClearExecResultBatches()
 	sql := getPubsSql
 	if len(like) > 0 {
@@ -261,7 +261,7 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 	}
 
 	// step 1. get all account
-	var accountIds []int32
+	var accountIds []int64
 	var accountNames []string
 	if accountIds, accountNames, err = getAccountIdNames(ctx, ses, bh, ""); err != nil {
 		return err

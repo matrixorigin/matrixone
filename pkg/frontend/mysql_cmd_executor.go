@@ -348,7 +348,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 
 		bh := GetRawBatchBackgroundExec(ctx, ses)
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
-		var pubAccountId int32
+		var pubAccountId int64
 		if pubAccountId = getAccountIdByName(ctx, ses, bh, pubAccountName); pubAccountId == -1 {
 			return moerr.NewInternalError(ctx, "publish account does not exist")
 		}
