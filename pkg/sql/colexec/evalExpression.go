@@ -537,7 +537,8 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			return err
 		}
 		if i != len(expr.parameterExecutor)-1 {
-			for j := 0; i < rowCount; j++ {
+			rsRowCount := min(rowCount, expr.parameterResults[i].Length())
+			for j := 0; i < rsRowCount; j++ {
 				b, null := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[i]).GetValue(uint64(j))
 				if !null && b {
 					expr.selectList1[j] = false
