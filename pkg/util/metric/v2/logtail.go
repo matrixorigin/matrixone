@@ -128,14 +128,42 @@ var (
 			Buckets:   getDurationBuckets(),
 		})
 
-	LogTailCollectDurationHistogram = prometheus.NewHistogram(
+	LogTailPullCollectionPhase1DurationHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "logtail",
-			Name:      "collect_duration_seconds",
-			Help:      "Bucketed histogram of logtail collecting duration.",
+			Name:      "pull_collection_phase1_duration_seconds",
+			Help:      "Bucketed histogram of logtail pull type collection duration of phase1.",
 			Buckets:   getDurationBuckets(),
 		})
+
+	LogTailPullCollectionPhase2DurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "pull_collection_phase2_duration_seconds",
+			Help:      "Bucketed histogram of logtail pull type collection duration of phase2.",
+			Buckets:   getDurationBuckets(),
+		})
+
+	LogTailPushCollectionDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "push_collection_duration_seconds",
+			Help:      "Bucketed histogram of logtail push type collection duration.",
+			Buckets:   getDurationBuckets(),
+		})
+
+	logTailTransmitCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "transmit_total",
+			Help:      "Total number of transmit count.",
+		}, []string{"type"})
+	LogTailServerSendCounter    = logTailTransmitCounter.WithLabelValues("server-send")
+	LogTailClientReceiveCounter = logTailTransmitCounter.WithLabelValues("client-receive")
 )
 
 var (
