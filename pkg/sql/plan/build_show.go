@@ -58,7 +58,7 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 	}
 
-	sqlStr := "select \"%s\" as `Database`, \"%s\" as `Create Database`"
+	sqlStr := "select `%s` as `Database`, \"%s\" as `Create Database`"
 	createSql := fmt.Sprintf("CREATE DATABASE `%s`", name)
 	sqlStr = fmt.Sprintf(sqlStr, name, createSql)
 
@@ -127,7 +127,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 
-	sql := "select \"%s\" as `Table`, \"%s\" as `Create Table`"
+	sql := "select `%s` as `Table`, \"%s\" as `Create Table`"
 	sql = fmt.Sprintf(sql, tblName, ddlStr)
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
