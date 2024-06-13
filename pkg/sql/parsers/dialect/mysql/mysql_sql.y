@@ -623,7 +623,7 @@ import (
 %type <str> non_reserved_keyword
 %type <str> equal_opt column_keyword_opt
 %type <str> as_opt_id name_string
-%type <cstr> ident as_name_opt
+%type <cstr> ident as_name_opt db_name_cstr
 %type <str> table_alias explain_sym prepare_sym deallocate_sym stmt_name reset_sym
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
@@ -2533,7 +2533,7 @@ begin_stmt:
     }
 
 use_stmt:
-    USE ident
+    USE db_name_cstr
     {
         name := $2
         secondaryRole := false
@@ -5364,7 +5364,6 @@ select_expression:
     }
 |   expression as_name_opt
     {
-    	$2.SetConfig(0)
         $$ = tree.SelectExpr{Expr: $1, As: $2}
     }
 |   ident '.' '*' %prec '*'
@@ -6974,10 +6973,10 @@ using_opt:
     }
 
 create_database_stmt:
-    CREATE database_or_schema not_exists_opt ident subscription_opt create_option_list_opt
+    CREATE database_or_schema not_exists_opt db_name subscription_opt create_option_list_opt
     {
         var IfNotExists = $3
-        var Name = tree.Identifier($4.Compare())
+        var Name = tree.Identifier($4)
         var SubscriptionOption = $5
         var CreateOptions = $6
         $$ = tree.NewCreateDatabase(
@@ -8588,6 +8587,12 @@ ident:
 |   non_reserved_keyword
 	{
     	$$ = tree.NewCStr($1, 1)
+    }
+
+db_name_cstr:
+    ident
+    {
+    	$$ = yylex.(*Lexer).GetDbNameCStr($1.Origin())
     }
 
 column_name:
