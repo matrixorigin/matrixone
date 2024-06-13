@@ -2145,7 +2145,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		//keys must be sorted.
 		keys.InplaceSort()
 		bytes, _ := keys.MarshalBinary()
-		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), "pk")
+		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
 		inExpr := plan2.MakeInExpr(
 			tbl.proc.Load().Ctx,
 			colExpr,
@@ -2153,8 +2153,13 @@ func (tbl *txnTable) PKPersistedBetween(
 			bytes,
 			false)
 
+		fmt.Println("YYY")
 		basePKFilter := constructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
 		blockReadPKFilter := constructBlockReadPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
+
+		if blockReadPKFilter.SortedSearchFunc == nil {
+			fmt.Println(basePKFilter.String(), plan2.FormatExpr(inExpr))
+		}
 
 		return blockReadPKFilter.SortedSearchFunc
 	}
