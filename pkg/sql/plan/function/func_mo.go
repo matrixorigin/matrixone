@@ -47,7 +47,7 @@ const (
 // Mo functions are better tested with bvt.
 
 // MoTableRows returns an estimated row number of a table.
-func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[int64](result)
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -163,7 +163,7 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 // MoTableSize returns an estimated size of a table.
-func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[int64](result)
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -348,16 +348,16 @@ func indexesTableSize(ctx context.Context, db engine.Database, rel engine.Relati
 }
 
 // MoTableColMax return the max value of the column
-func MoTableColMax(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return moTableColMaxMinImpl("mo_table_col_max", ivecs, result, proc, length)
+func MoTableColMax(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return moTableColMaxMinImpl("mo_table_col_max", ivecs, result, proc, length, selectList)
 }
 
 // MoTableColMax return the max value of the column
-func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return moTableColMaxMinImpl("mo_table_col_min", ivecs, result, proc, length)
+func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return moTableColMaxMinImpl("mo_table_col_min", ivecs, result, proc, length, selectList)
 }
 
-func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	if !ok || proc.TxnOperator == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableColMaxMin: txn operator is nil")
@@ -578,7 +578,7 @@ var (
 )
 
 // CastIndexToValue returns enum type index according to the value
-func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	indexs := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
@@ -608,7 +608,7 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 // CastValueToIndex returns enum type index according to the value
-func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint16](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -639,7 +639,7 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 // CastIndexValueToIndex returns enum type index according to the index value
-func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint16](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
@@ -669,7 +669,7 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 }
 
 // CastNanoToTimestamp returns timestamp string according to the nano
-func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	nanos := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
 
