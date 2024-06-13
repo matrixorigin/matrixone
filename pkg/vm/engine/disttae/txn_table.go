@@ -26,6 +26,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/docker/go-units"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -578,6 +579,7 @@ func (tbl *txnTable) reset(newId uint64) {
 
 func (tbl *txnTable) resetSnapshot() {
 	tbl._partState.Store(nil)
+	tbl.logtailUpdated.Store(false)
 }
 
 // Ranges returns all unmodified blocks from the table.
