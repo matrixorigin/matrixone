@@ -38,13 +38,9 @@ import (
 )
 
 const (
-	// defaultLogtailUpdateStatsThreshold is the default value of threshold of receiving
-	// logtail entries to trigger to update stats info.
-	defaultLogtailUpdateStatsThreshold = 1000
-
 	// MinUpdateInterval is the minimal interval to update stats info as it
 	// is necessary to update stats every time.
-	MinUpdateInterval = time.Second * 30
+	MinUpdateInterval = time.Second * 10
 )
 
 type updateStatsRequest struct {
@@ -106,16 +102,8 @@ type GlobalStatsConfig struct {
 
 type GlobalStatsOption func(s *GlobalStats)
 
-func WithLogtailUpdateStatsThreshold(v int) GlobalStatsOption {
-	return func(s *GlobalStats) {
-		s.cfg.LogtailUpdateStatsThreshold = v
-	}
-}
-
 type GlobalStats struct {
 	ctx context.Context
-
-	cfg GlobalStatsConfig
 
 	// engine is the global Engine instance.
 	engine *Engine
@@ -171,16 +159,9 @@ func NewGlobalStats(
 	for _, opt := range opts {
 		opt(s)
 	}
-	s.fillConfig()
 	go s.consumeWorker(ctx)
 	go s.updateWorker(ctx)
 	return s
-}
-
-func (gs *GlobalStats) fillConfig() {
-	if gs.cfg.LogtailUpdateStatsThreshold == 0 {
-		gs.cfg.LogtailUpdateStatsThreshold = defaultLogtailUpdateStatsThreshold
-	}
 }
 
 func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
@@ -294,7 +275,7 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 		} else {
 			gs.tableLogtailCounter[key]++
 		}
-		if !triggered && gs.tableLogtailCounter[key] > gs.cfg.LogtailUpdateStatsThreshold {
+		if !triggered && gs.tableLogtailCounter[key] > int(gs.mu.statsInfoMap[key].BlockNumber) {
 			gs.tableLogtailCounter[key] = 0
 			gs.triggerUpdate(key)
 		}
