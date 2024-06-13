@@ -330,7 +330,6 @@ drop database test02;
 
 drop snapshot sp09;
 drop snapshot sp10;
--- @bvt:issue
 
 
 
