@@ -470,9 +470,6 @@ func ConstructPKFilters(tableDef *plan.TableDef,
 	expr *plan.Expr, proc *process.Process,
 	packerPool *fileservice.Pool[*types.Packer]) (filters PKFilters) {
 	basePKFilter := constructBasePKFilter(expr, tableDef, proc)
-	if tableDef.Pkey.CompPkeyCol != nil {
-		basePKFilter.oid = types.T_varchar
-	}
 
 	filters.inMemPKFilter = constructInMemPKFilter(tableDef, ts, state, packerPool, basePKFilter)
 	filters.blockReadPKFilter = constructBlockReadPKFilter(tableDef.Pkey.PkeyColName, basePKFilter)
@@ -481,6 +478,12 @@ func ConstructPKFilters(tableDef *plan.TableDef,
 }
 
 func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process.Process) (filter BasePKFilter) {
+	defer func() {
+		if tblDef.Pkey.CompPkeyCol != nil {
+			filter.oid = types.T_varchar
+		}
+	}()
+
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch name := exprImpl.F.Func.ObjName; name {
