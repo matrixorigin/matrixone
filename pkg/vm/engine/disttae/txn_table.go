@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -26,6 +27,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/docker/go-units"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -578,6 +580,7 @@ func (tbl *txnTable) reset(newId uint64) {
 
 func (tbl *txnTable) resetSnapshot() {
 	tbl._partState.Store(nil)
+	tbl.logtailUpdated.Store(false)
 }
 
 // Ranges returns all unmodified blocks from the table.
@@ -641,6 +644,27 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset i
 	); err != nil {
 		return
 	}
+
+	if regexp.MustCompile(`.*district.*`).MatchString(tbl.tableName) {
+		blkstr := ""
+		for i := 1; i < blocks.Len(); i++ {
+			blk := blocks.Get(i)
+			blkstr = fmt.Sprintf("%s, [%s,%v,%v]",
+				blkstr,
+				blk.BlockID.String(),
+				blk.EntryState,
+				blk.CanRemote)
+		}
+		if blkstr == "" {
+			blkstr = "no blocks"
+		}
+		logutil.Infof("xxxx table:%s txn:%s call ranges return blks:%s, state:%p",
+			tbl.tableName,
+			tbl.db.op.Txn().DebugString(),
+			blkstr,
+			tbl._partState.Load())
+	}
+
 	return
 }
 
@@ -1902,6 +1926,14 @@ func (tbl *txnTable) newReader(
 	if err != nil {
 		return nil, err
 	}
+
+	//if regexp.MustCompile(`.*sbtest.*`).MatchString(tbl.tableName) {
+	//	logutil.Infof("xxxx table:%s txn:%s call newReader, return state:%p",
+	//		tbl.tableName,
+	//		tbl.db.op.Txn().DebugString(),
+	//		state)
+	//}
+
 	readers := make([]engine.Reader, readerNumber)
 
 	seqnumMp := make(map[string]int)
@@ -2025,6 +2057,14 @@ func (tbl *txnTable) getPartitionState(
 			}
 			tbl._partState.Store(tbl.getTxn().engine.
 				getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot())
+
+			if regexp.MustCompile(`.*district.*`).MatchString(tbl.tableName) {
+				logutil.Infof("xxxx table:%s txn:%s call getPartitionState, return state:%p",
+					tbl.tableName,
+					tbl.db.op.Txn().DebugString(),
+					tbl._partState.Load())
+			}
+
 		}
 		return tbl._partState.Load(), nil
 	}

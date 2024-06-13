@@ -17,10 +17,12 @@ package logtailreplay
 import (
 	"bytes"
 	"context"
+	"regexp"
 	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -91,6 +93,12 @@ func (p *Partition) MutateState() (*PartitionState, func()) {
 		if !p.state.CompareAndSwap(curState, state) {
 			panic("concurrent mutation")
 		}
+
+		if regexp.MustCompile(`.*district.*`).MatchString(p.TableInfo.Name) {
+			logutil.Infof("xxxx MutateState, table:%s, new state:%p, old state:%p",
+				p.TableInfo.Name, state, curState)
+		}
+
 	}
 }
 
