@@ -354,7 +354,7 @@ func checkConflict(proc *process.Process, newBatch *batch.Batch, checkConflictBa
 
 	// build the check expr
 	for i, executor := range checkExpressionExecutor {
-		result, err := executor.Eval(proc, []*batch.Batch{checkConflictBatch})
+		result, err := executor.Eval(proc, []*batch.Batch{checkConflictBatch}, nil)
 		if err != nil {
 			return 0, "", err
 		}
