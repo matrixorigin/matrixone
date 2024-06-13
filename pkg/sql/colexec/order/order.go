@@ -90,7 +90,7 @@ func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enou
 func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) (err error) {
 	if ctr.batWaitForSort != nil {
 		for i := range ctr.sortExprExecutor {
-			ctr.sortVectors[i], err = ctr.sortExprExecutor[i].Eval(proc, []*batch.Batch{ctr.batWaitForSort})
+			ctr.sortVectors[i], err = ctr.sortExprExecutor[i].Eval(proc, []*batch.Batch{ctr.batWaitForSort}, nil)
 			if err != nil {
 				return err
 			}
