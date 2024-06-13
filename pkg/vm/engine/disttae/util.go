@@ -469,6 +469,7 @@ func ConstructPKFilters(tableDef *plan.TableDef,
 	ts timestamp.Timestamp, state *logtailreplay.PartitionState,
 	expr *plan.Expr, proc *process.Process,
 	packerPool *fileservice.Pool[*types.Packer]) (filters PKFilters) {
+
 	basePKFilter := constructBasePKFilter(expr, tableDef, proc)
 
 	filters.inMemPKFilter = constructInMemPKFilter(tableDef, ts, state, packerPool, basePKFilter)
@@ -478,6 +479,10 @@ func ConstructPKFilters(tableDef *plan.TableDef,
 }
 
 func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process.Process) (filter BasePKFilter) {
+	if expr == nil {
+		return
+	}
+
 	defer func() {
 		if tblDef.Pkey.CompPkeyCol != nil {
 			filter.oid = types.T_varchar
