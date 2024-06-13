@@ -54,26 +54,67 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 	if n.Offset != nil {
 		n.Offset = r.constantFold(n.Offset, proc)
 	}
-	if len(n.OnList) > 0 {
-		for i := range n.OnList {
-			n.OnList[i] = r.constantFold(n.OnList[i], proc)
-		}
+	if n.Interval != nil {
+		n.Interval = r.constantFold(n.Interval, proc)
 	}
-	if len(n.FilterList) > 0 {
-		for i := range n.FilterList {
-			n.FilterList[i] = r.constantFold(n.FilterList[i], proc)
-		}
+	if n.Sliding != nil {
+		n.Sliding = r.constantFold(n.Sliding, proc)
 	}
-	if len(n.BlockFilterList) > 0 {
-		for i := range n.BlockFilterList {
-			n.BlockFilterList[i] = r.constantFold(n.BlockFilterList[i], proc)
+
+	for i := range n.ProjectList {
+		n.ProjectList[i] = r.constantFold(n.ProjectList[i], proc)
+	}
+
+	for i := range n.OnList {
+		n.OnList[i] = r.constantFold(n.OnList[i], proc)
+	}
+
+	for i := range n.FilterList {
+		n.FilterList[i] = r.constantFold(n.FilterList[i], proc)
+	}
+
+	for i := range n.GroupBy {
+		n.GroupBy[i] = r.constantFold(n.GroupBy[i], proc)
+	}
+
+	for i := range n.GroupingSet {
+		n.GroupingSet[i] = r.constantFold(n.GroupingSet[i], proc)
+	}
+
+	for i := range n.AggList {
+		if fn, ok := n.AggList[i].Expr.(*plan.Expr_F); ok {
+			for i := range fn.F.Args {
+				fn.F.Args[i] = r.constantFold(fn.F.Args[i], proc)
+			}
 		}
 	}
 
-	if len(n.ProjectList) > 0 {
-		for i := range n.ProjectList {
-			n.ProjectList[i] = r.constantFold(n.ProjectList[i], proc)
+	for i := range n.WinSpecList {
+		if fn, ok := n.AggList[i].Expr.(*plan.Expr_F); ok {
+			for i := range fn.F.Args {
+				fn.F.Args[i] = r.constantFold(fn.F.Args[i], proc)
+			}
 		}
+	}
+
+	for _, orderBy := range n.OrderBy {
+		orderBy.Expr = r.constantFold(orderBy.Expr, proc)
+	}
+
+	for i := range n.TblFuncExprList {
+		n.TblFuncExprList[i] = r.constantFold(n.TblFuncExprList[i], proc)
+	}
+
+	for i := range n.BlockFilterList {
+		n.BlockFilterList[i] = r.constantFold(n.BlockFilterList[i], proc)
+	}
+
+	for i := range n.FillVal {
+		n.FillVal[i] = r.constantFold(n.FillVal[i], proc)
+	}
+
+	for i := range n.OnUpdateExprs {
+		n.OnUpdateExprs[i] = r.constantFold(n.OnUpdateExprs[i], proc)
 	}
 }
 
