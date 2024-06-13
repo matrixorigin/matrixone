@@ -47,7 +47,7 @@ var setEdge = true
 // Set is_called to true if it is false, if is_]called is true Advance last_seq_num.
 // Return advanced last_seq_num.
 
-func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
 
@@ -270,7 +270,7 @@ func setIsCalled[T constraints.Integer](proc *process.Process, rel engine.Relati
 	return ress, nil
 }
 
-func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	tblnames := vector.GenerateFunctionStrParameter(ivecs[0])
 	setnums := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -425,7 +425,7 @@ func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled bo
 	return ress, nil
 }
 
-func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
 
@@ -476,7 +476,7 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return
 }
 
-func Lastval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func Lastval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	// Get last value
 	lastv := proc.SessionInfo.SeqLastValue[0]
 	if lastv == "" {

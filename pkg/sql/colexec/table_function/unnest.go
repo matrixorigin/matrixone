@@ -113,21 +113,21 @@ func unnestCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResu
 		result.Batch = batch.EmptyBatch
 		return false, nil
 	}
-	jsonVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
+	jsonVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return false, err
 	}
 	if jsonVec.GetType().Oid != types.T_json && jsonVec.GetType().Oid != types.T_varchar {
 		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.GetType().String()))
 	}
-	pathVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat})
+	pathVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return false, err
 	}
 	if pathVec.GetType().Oid != types.T_varchar {
 		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.GetType().String()))
 	}
-	outerVec, err = arg.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{bat})
+	outerVec, err = arg.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return false, err
 	}
