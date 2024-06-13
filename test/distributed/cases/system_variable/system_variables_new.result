@@ -33,10 +33,6 @@ set global lower_case_table_names=0;
 select @@global.lower_case_table_names;
 @@lower_case_table_names
 0
-set global keep_user_target_list_in_result = 0;
-select @@global.keep_user_target_list_in_result;
-@@keep_user_target_list_in_result
-0
 set global interactive_timeout = 20;
 show global variables like 'interactive_timeout';
 Variable_name    Value
@@ -87,9 +83,6 @@ select @@GLOBAL.max_connections;
 151
 select @@global.lower_case_table_names;
 @@lower_case_table_names
-1
-select @@global.keep_user_target_list_in_result;
-@@keep_user_target_list_in_result
 1
 show global variables like 'interactive_timeout';
 Variable_name    Value
@@ -167,10 +160,6 @@ internal error: the system variable is global
 select @@lower_case_table_names;
 @@lower_case_table_names
 1
-set keep_user_target_list_in_result = 0;
-select @@keep_user_target_list_in_result;
-@@keep_user_target_list_in_result
-0
 set interactive_timeout = 100;
 SELECT @@interactive_timeout;
 @@interactive_timeout
@@ -222,9 +211,6 @@ save_query_result    off
 select @@lower_case_table_names;
 @@lower_case_table_names
 1
-select @@keep_user_target_list_in_result;
-@@keep_user_target_list_in_result
-1
 SELECT @@interactive_timeout;
 @@interactive_timeout
 28800
@@ -267,9 +253,6 @@ save_query_result    off
 select @@lower_case_table_names;
 @@lower_case_table_names
 1
-select @@keep_user_target_list_in_result;
-@@keep_user_target_list_in_result
-1
 SELECT @@interactive_timeout;
 @@interactive_timeout
 28800
@@ -311,9 +294,6 @@ Variable_name    Value
 save_query_result    off
 select @@lower_case_table_names;
 @@lower_case_table_names
-1
-select @@keep_user_target_list_in_result;
-@@keep_user_target_list_in_result
 1
 SELECT @@net_write_timeout;
 @@net_write_timeout

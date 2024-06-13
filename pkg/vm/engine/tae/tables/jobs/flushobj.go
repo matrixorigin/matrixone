@@ -19,6 +19,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -42,6 +43,9 @@ type flushObjTask struct {
 	stat      objectio.ObjectStats
 	isAObj    bool
 
+	createAt      time.Time
+	partentTaskId uint64
+
 	Stats objectio.ObjectStats
 }
 
@@ -54,15 +58,18 @@ func NewFlushObjTask(
 	data *containers.Batch,
 	delta *containers.Batch,
 	isAObj bool,
+	parentId uint64,
 ) *flushObjTask {
 	task := &flushObjTask{
-		schemaVer: schemaVer,
-		seqnums:   seqnums,
-		data:      data,
-		meta:      meta,
-		fs:        fs,
-		delta:     delta,
-		isAObj:    isAObj,
+		schemaVer:     schemaVer,
+		seqnums:       seqnums,
+		data:          data,
+		meta:          meta,
+		fs:            fs,
+		delta:         delta,
+		isAObj:        isAObj,
+		createAt:      time.Now(),
+		partentTaskId: parentId,
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.IOTask, ctx)
 	return task
@@ -74,6 +81,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	if v := ctx.Value(TestFlushBailoutPos1{}); v != nil {
 		time.Sleep(time.Duration(rand.Intn(200)) * time.Millisecond)
 	}
+	waitT := time.Since(task.createAt)
 	seg := task.meta.ID.Segment()
 	name := objectio.BuildObjectName(seg, 0)
 	task.name = name
@@ -97,6 +105,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			return nil
 		}
 	}
+	inst := time.Now()
 	_, err = writer.WriteBatch(cnBatch)
 	if err != nil {
 		return err
@@ -114,9 +123,20 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			return err
 		}
 	}
+	copyT := time.Since(inst)
+	inst = time.Now()
 	task.blocks, _, err = writer.Sync(ctx)
 	if err != nil {
 		return err
+	}
+	ioT := time.Since(inst)
+	if time.Since(task.createAt) > SlowFlushIOTask {
+		irow, drow := task.data.Length(), 0
+		if task.delta != nil {
+			drow = task.delta.Length()
+		}
+		logutil.Infof("slowflush: task %d flushobj %s(%d,%d): wait %v, copy %v, io %v\n",
+			task.partentTaskId, task.meta.ID.ShortStringEx(), irow, drow, waitT, copyT, ioT)
 	}
 	task.Stats = writer.GetObjectStats()[objectio.SchemaData]
 
