@@ -700,14 +700,15 @@ func constructInMemPKFilter(
 			lbVal = types.DecodeDecimal64(basePKFilter.lb)
 		case types.T_decimal128:
 			lbVal = types.DecodeDecimal128(basePKFilter.lb)
-		case types.T_varchar:
+		case types.T_varchar, types.T_char:
 			lbVal = basePKFilter.lb
 		case types.T_json:
 			lbVal = types.DecodeJson(basePKFilter.lb)
 		case types.T_enum:
 			lbVal = types.DecodeEnum(basePKFilter.lb)
 		default:
-			panic(basePKFilter.oid.String())
+			return
+			//panic(basePKFilter.oid.String())
 		}
 
 		packed = append(packed, logtailreplay.EncodePrimaryKey(lbVal, packer))
