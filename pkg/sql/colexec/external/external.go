@@ -299,7 +299,7 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 	if err != nil {
 		return nil, nil, err
 	}
-	vec, err := executor.Eval(proc, []*batch.Batch{bat})
+	vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		executor.Free()
 		return nil, nil, err
