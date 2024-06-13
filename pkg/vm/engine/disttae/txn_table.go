@@ -619,6 +619,7 @@ func (tbl *txnTable) reset(newId uint64) {
 
 func (tbl *txnTable) resetSnapshot() {
 	tbl._partState.Store(nil)
+	tbl.logtailUpdated.Store(false)
 }
 
 // Ranges returns all unmodified blocks from the table.
