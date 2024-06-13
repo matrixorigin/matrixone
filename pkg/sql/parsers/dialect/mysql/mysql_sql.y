@@ -1393,13 +1393,13 @@ normal_ident:
     }
 |   ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), $3.Compare())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetTblName("", $1.Origin()), $3.Compare())
         unResolve.SetUnresolvedNameCStrParts($1, $3)
         $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), yylex.(*Lexer).GetDbOrTblName($3.Origin()), $5.Compare())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbName($1.Origin()), yylex.(*Lexer).GetTblName($1.Origin(), $3.Origin()), $5.Compare())
         unResolve.SetUnresolvedNameCStrParts($1, $3, $5)
         $$ = unResolve
     }
@@ -4132,7 +4132,7 @@ table_name_unresolved:
 db_name:
     ident
     {
-		$$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
+		$$ = yylex.(*Lexer).GetDbName($1.Origin())
     }
 
 unresolved_object_name:
@@ -5369,11 +5369,11 @@ select_expression:
     }
 |   ident '.' '*' %prec '*'
     {
-        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yylex.(*Lexer).GetDbOrTblName($1.Origin()))}
+        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yylex.(*Lexer).GetTblName("", $1.Origin()))}
     }
 |   ident '.' ident '.' '*' %prec '*'
     {
-        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yylex.(*Lexer).GetDbOrTblName($1.Origin()), yylex.(*Lexer).GetDbOrTblName($3.Origin()))}
+        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yylex.(*Lexer).GetDbName($1.Origin()), yylex.(*Lexer).GetTblName($1.Origin(), $3.Origin()))}
     }
 
 from_opt:
@@ -5739,11 +5739,11 @@ as_opt_id:
 table_alias:
     ident
     {
-	    $$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
+	    $$ = yylex.(*Lexer).GetTblName("", $1.Origin())
     }
 |   STRING
     {
-	    $$ = yylex.(*Lexer).GetDbOrTblName($1)
+	    $$ = yylex.(*Lexer).GetTblName("", $1)
     }
 
 as_name_opt:
@@ -8195,12 +8195,12 @@ table_name:
     ident table_snapshot_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetDbOrTblName($1.Origin())), prefix, $2)
+        $$ = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetTblName("", $1.Origin())), prefix, $2)
     }
 |   ident '.' ident table_snapshot_opt
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yylex.(*Lexer).GetDbOrTblName($1.Origin())), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetDbOrTblName($3.Origin())), prefix, $4)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yylex.(*Lexer).GetDbName($1.Origin())), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetTblName($1.Origin(), $3.Origin())), prefix, $4)
     }
 
 table_snapshot_opt:
@@ -8561,13 +8561,13 @@ column_name_unresolved:
     }
 |   ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), $3.Compare())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetTblName("", $1.Origin()), $3.Compare())
         unResolve.SetUnresolvedNameCStrParts($1, $3)
         $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), yylex.(*Lexer).GetDbOrTblName($3.Origin()), $5.Compare())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbName($1.Origin()), yylex.(*Lexer).GetTblName($1.Origin(), $3.Origin()), $5.Compare())
         unResolve.SetUnresolvedNameCStrParts($1, $3, $5)
         $$ = unResolve
     }
@@ -8599,13 +8599,13 @@ column_name:
     }
 |   ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), $3.Compare())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetTblName("", $1.Origin()), $3.Compare())
         unResolve.SetUnresolvedNameCStrParts($1, $3)
         $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), yylex.(*Lexer).GetDbOrTblName($3.Origin()), $5.Compare())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbName($1.Origin()), yylex.(*Lexer).GetTblName($1.Origin(), $3.Origin()), $5.Compare())
         unResolve.SetUnresolvedNameCStrParts($1, $3, $5)
         $$ = unResolve
     }
