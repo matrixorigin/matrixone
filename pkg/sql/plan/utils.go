@@ -1166,6 +1166,9 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		fn.Args[i] = foldExpr
 		isVec = isVec || foldExpr.GetVec() != nil
 	}
+	if f.IsAgg() || f.IsWin() {
+		return expr, nil
+	}
 	if !rule.IsConstant(expr, varAndParamIsConst) {
 		return expr, nil
 	}

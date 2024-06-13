@@ -111,7 +111,7 @@ func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool,
 
 func GetFunctionById(ctx context.Context, overloadID int64) (f overload, err error) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
 		return overload{}, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], nil
@@ -119,7 +119,7 @@ func GetFunctionById(ctx context.Context, overloadID int64) (f overload, err err
 
 func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, error) {
 	fid, _ := DecodeOverloadID(overloadID)
-	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
 		return 0, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	return allSupportedFunctions[fid].layout, nil
@@ -127,7 +127,7 @@ func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, er
 
 func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
 		return overload{}, false
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], true
