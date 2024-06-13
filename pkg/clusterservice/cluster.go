@@ -70,6 +70,7 @@ func WithDisableRefresh() Option {
 type cluster struct {
 	logger          *log.MOLogger
 	stopper         *stopper.Stopper
+	mu              sync.Mutex
 	client          ClusterClient
 	refreshInterval time.Duration
 	forceRefreshC   chan struct{}
@@ -280,6 +281,11 @@ func (c *cluster) refreshTask(ctx context.Context) {
 func (c *cluster) refresh() {
 	defer c.logger.LogAction("refresh from hakeeper",
 		log.DefaultLogOptions().WithLevel(zap.DebugLevel))()
+
+	// There is data race as ForceRefresh and refreshTask may call this function
+	// at the same time, which will cause inconsistent CN services.
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), c.refreshInterval)
 	defer cancel()
