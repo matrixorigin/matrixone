@@ -47,7 +47,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 		return true, nil
 	}
 
-	v, err := arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
+	v, err := arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return false, err
 	}
