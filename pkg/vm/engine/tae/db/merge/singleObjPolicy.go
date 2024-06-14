@@ -40,7 +40,7 @@ func (s *singleObjConfig) adjust() {
 		s.maxOSizeMergedObjs = common.DefaultMaxOsizeObjMB * common.Const1MBytes
 	}
 	if s.minDeletes == 0 {
-		s.minDeletes = 100
+		s.minDeletes = 2000
 	}
 	if s.oldDeleteThreshold == 0 {
 		s.oldDeleteThreshold = 10 * time.Minute
@@ -84,7 +84,7 @@ func (s *singleObjPolicy) OnObject(obj *catalog.ObjectEntry) {
 			return true
 		}
 		// if deletes is older than now-oldDeleteThreshold, then merge it.
-		if dels > 0 && createAt.Less(&s.threshold) {
+		if dels > s.config.minDeletes && createAt.Less(&s.threshold) {
 			return true
 		}
 		return false

@@ -116,9 +116,6 @@ func (m *ObjectMergeArchon) OnPostTable(tableEntry *catalog.TableEntry) (err err
 	if len(mobjs) == 0 {
 		return
 	}
-	if m.run > 0 && len(mobjs) < 2 {
-		return
-	}
 
 	if m.run == 0 {
 		m.executor.ExecuteSingleObjMerge(tableEntry, mobjs, kind)

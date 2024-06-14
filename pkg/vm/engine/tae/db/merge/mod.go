@@ -198,12 +198,8 @@ const (
 	constSmallMergeGap      = 3 * time.Minute
 )
 
-type Reviser interface {
-	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
-}
-
 type Policy interface {
-	Reviser
+	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
 	OnObject(obj *catalog.ObjectEntry)
 	ResetForTable(*catalog.TableEntry)
 	SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any)
@@ -211,7 +207,7 @@ type Policy interface {
 }
 
 type policy interface {
-	Reviser
+	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
 	OnObject(obj *catalog.ObjectEntry)
 	Clear()
 	ObjCnt() int
