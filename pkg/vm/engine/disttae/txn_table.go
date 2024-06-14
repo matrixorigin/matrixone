@@ -26,6 +26,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/docker/go-units"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -2047,13 +2048,8 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	defer func() {
 		if err == nil {
 			tbl.getTxn().engine.globalStats.notifyLogtailUpdate(tbl.tableId)
-			tbl.logtailUpdated.Store(true)
 		}
 	}()
-	// if the logtail is updated, skip
-	if tbl.logtailUpdated.Load() {
-		return
-	}
 
 	// if the table is created in this txn, skip
 	accountId, err := defines.GetAccountId(ctx)
