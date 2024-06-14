@@ -352,14 +352,9 @@ func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldT
 	}
 	for _, ct := range oldCt.Cts {
 		if def, ok1 := ct.(*engine.RefChildTableDef); ok1 {
-			for i := 0; i < len(def.Tables); i++ {
-				if def.Tables[i] == oldTableId {
-					// delete target element
-					def.Tables = append(def.Tables[:i], def.Tables[i+1:]...)
-					// Because the length of the slice has become shorter, it is necessary to move i forward
-					i--
-				}
-			}
+			def.Tables = plan2.RemoveIf[uint64](def.Tables, func(id uint64) bool {
+				return id == oldTableId
+			})
 		}
 	}
 	return fatherRelation.UpdateConstraint(c.ctx, oldCt)
