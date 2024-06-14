@@ -208,7 +208,7 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 
 		if info.ShuffleRanges[i] != nil {
 			if s.MinValMap[colName] != s.MaxValMap[colName] &&
-				s.TableCnt > HashMapSizeForShuffle &&
+				s.TableCnt > threshHoldForRangeShuffle &&
 				info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV &&
 				!util.JudgeIsCompositeClusterByColumn(colName) &&
 				colName != catalog.CPrimaryKeyColName {
@@ -1265,6 +1265,15 @@ func orSelectivity(s1, s2 float64) float64 {
 	}
 }
 
+func HasShuffleInPlan(qry *plan.Query) bool {
+	for _, node := range qry.GetNodes() {
+		if node.NodeType != plan.Node_TABLE_SCAN && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
+			return true
+		}
+	}
+	return false
+}
+
 func GetExecType(qry *plan.Query) ExecType {
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
@@ -1277,6 +1286,9 @@ func GetExecType(qry *plan.Query) ExecType {
 			return ExecTypeAP_MULTICN
 		}
 		if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
+			ret = ExecTypeAP_ONECN
+		}
+		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {
 			ret = ExecTypeAP_ONECN
 		}
 	}
