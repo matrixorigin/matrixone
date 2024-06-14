@@ -655,7 +655,7 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scope))
 }
- 
+
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
@@ -2412,23 +2412,26 @@ func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right 
 	})
 	switch nodeType {
 	case plan.Node_MINUS:
-		rs[0].appendInstruction(vm.Instruction{
+		rs[0].Instructions[0].Arg.Release()
+		rs[0].Instructions[0] = vm.Instruction{
 			Op:  vm.Minus,
 			Idx: c.anal.curr,
 			Arg: minus.NewArgument(),
-		})
+		}
 	case plan.Node_INTERSECT:
-		rs[0].appendInstruction(vm.Instruction{
+		rs[0].Instructions[0].Arg.Release()
+		rs[0].Instructions[0] = vm.Instruction{
 			Op:  vm.Intersect,
 			Idx: c.anal.curr,
 			Arg: intersect.NewArgument(),
-		})
+		}
 	case plan.Node_INTERSECT_ALL:
-		rs[0].appendInstruction(vm.Instruction{
+		rs[0].Instructions[0].Arg.Release()
+		rs[0].Instructions[0] = vm.Instruction{
 			Op:  vm.IntersectAll,
 			Idx: c.anal.curr,
 			Arg: intersectall.NewArgument(),
-		})
+		}
 	}
 	return rs
 }
@@ -3535,14 +3538,13 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 		ss[i].NodeInfo.Addr = addr
 		ss[i].NodeInfo.Mcpu = 1 // ss is already the mcpu length so we don't need to parallel it
 		ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
-		if !c.IsTpQuery() {
-			ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-				Op:      vm.Merge,
-				Idx:     c.anal.curr,
-				IsFirst: currentFirstFlag,
-				Arg:     merge.NewArgument(),
-			})
-		}
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op:      vm.Merge,
+			Idx:     c.anal.curr,
+			IsFirst: currentFirstFlag,
+			Arg:     merge.NewArgument(),
+		})
+
 	}
 	c.anal.isFirst = false
 	return ss
