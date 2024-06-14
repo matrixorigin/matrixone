@@ -42,7 +42,7 @@ type ObjectEntry struct {
 	*ObjectNode
 	objData data.Object
 
-	hasPrintedPrepareComapct bool
+	HasPrintedPrepareComapct bool
 }
 
 func (entry *ObjectEntry) GetLoaded() bool {
@@ -664,10 +664,10 @@ func (entry *ObjectEntry) CheckPrintPrepareCompactLocked() bool {
 }
 
 func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {
-	if entry.hasPrintedPrepareComapct {
+	if entry.HasPrintedPrepareComapct {
 		return
 	}
-	entry.hasPrintedPrepareComapct = true
+	entry.HasPrintedPrepareComapct = true
 	s := fmt.Sprintf("prepare compact failed, obj %v", entry.PPString(3, 0, ""))
 	lastNode := entry.GetLatestNodeLocked()
 	startTS := lastNode.GetStart()
