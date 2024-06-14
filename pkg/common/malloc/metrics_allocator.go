@@ -50,10 +50,13 @@ type AllocateInfo struct {
 
 var _ Allocator = new(MetricsAllocator)
 
-func (m *MetricsAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator) {
+func (m *MetricsAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator, error) {
+	ptr, dec, err := m.upstream.Allocate(size)
+	if err != nil {
+		return nil, nil, err
+	}
 	metric.MallocCounterAllocateBytes.Add(float64(size))
-	ptr, dec := m.upstream.Allocate(size)
 	fn := m.funcPool.Get().(*argumentedFuncDeallocator[uint64])
 	fn.SetArgument(size)
-	return ptr, ChainDeallocator(dec, fn)
+	return ptr, ChainDeallocator(dec, fn), nil
 }
