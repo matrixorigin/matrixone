@@ -28,8 +28,8 @@ import (
 )
 
 var (
-	connectTimeout      = time.Second * 3
-	readWriteTimeout    = time.Second * 2
+	connectTimeout      = time.Second * 5
+	readWriteTimeout    = time.Second * 20
 	maxIdleConns        = 100
 	maxIdleConnsPerHost = 100
 	maxConnsPerHost     = 1000
@@ -60,7 +60,6 @@ func newHTTPClient(args ObjectStorageArguments) *http.Client {
 		MaxConnsPerHost:       maxConnsPerHost,
 		TLSHandshakeTimeout:   connectTimeout,
 		ResponseHeaderTimeout: readWriteTimeout,
-		ExpectContinueTimeout: readWriteTimeout,
 		ForceAttemptHTTP2:     true,
 	}
 
