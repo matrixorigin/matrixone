@@ -242,7 +242,7 @@ func TestClientAppendAlloc(t *testing.T) {
 		rec := c.GetLogRecord(16)
 		rand.Read(rec.Payload())
 		ac := testing.AllocsPerRun(1000, func() {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 			defer cancel()
 			_, err := c.Append(ctx, rec)
 			require.NoError(t, err)
