@@ -476,14 +476,6 @@ func ConstructPKFilters(tableDef *plan.TableDef, dbName string,
 	filters.inMemPKFilter = constructInMemPKFilter(tableDef, ts, state, packerPool, basePKFilter)
 	filters.blockReadPKFilter = constructBlockReadPKFilter(tableDef.Pkey.PkeyColName, basePKFilter)
 
-	//if dbName == "a" {
-	//	ee := "nil"
-	//	if expr != nil {
-	//		ee = plan2.FormatExpr(expr)
-	//	}
-	//	fmt.Println(tableDef.Name, basePKFilter.String(), filters.inMemPKFilter.String(), filters.blockReadPKFilter, ee)
-	//}
-
 	return
 }
 
@@ -762,7 +754,6 @@ func constructInMemPKFilter(
 			ubVal = types.DecodeEnum(basePKFilter.ub)
 		}
 	default:
-		// >, >=, <, <=
 		return
 		//panic(basePKFilter.oid.String())
 	}
@@ -785,7 +776,7 @@ func constructInMemPKFilter(
 		vec := vector.NewVec(types.T_any.ToType())
 		vec.UnmarshalBinary(basePKFilter.lb)
 		packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
-		if tableDef.Pkey.CompPkeyCol != nil && basePKFilter.op == function.PREFIX_IN {
+		if basePKFilter.op == function.PREFIX_IN {
 			for x := range packed {
 				packed[x] = packed[x][0 : len(packed[x])-1]
 			}
@@ -799,7 +790,7 @@ func constructInMemPKFilter(
 	case function.PREFIX_BETWEEN, function.BETWEEN, rangeLeftOpen, rangeRightOpen, rangeBothOpen:
 		packed = append(packed, logtailreplay.EncodePrimaryKey(lbVal, packer))
 		packed = append(packed, logtailreplay.EncodePrimaryKey(ubVal, packer))
-		if tableDef.Pkey.CompPkeyCol != nil && basePKFilter.op == function.PREFIX_BETWEEN {
+		if basePKFilter.op == function.PREFIX_BETWEEN {
 			packed[0] = packed[0][0 : len(packed[0])-1]
 			packed[1] = packed[1][0 : len(packed[1])-1]
 		}
