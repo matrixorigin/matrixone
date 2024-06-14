@@ -66,6 +66,7 @@ type ExParamConst struct {
 	Extern          *tree.ExternParam
 	tableDef        *plan.TableDef
 	ClusterTable    *plan.ClusterTable
+	TblName         string // for debug moc3421
 }
 
 type ExParam struct {

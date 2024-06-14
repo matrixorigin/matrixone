@@ -756,6 +756,7 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 				FileList:        fileList,
 				FileSize:        FileSize,
 				ClusterTable:    n.GetClusterTable(),
+				TblName:         n.TableDef.Name,
 			},
 			ExParam: external.ExParam{
 				Fileparam: new(external.ExFileparam),
