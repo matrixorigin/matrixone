@@ -228,10 +228,7 @@ func (d *DiskCache) Read(
 		}
 
 		if err := entry.ReadFromOSFile(file); err != nil {
-			// ignore error
-			numError++
-			logutil.Warn("read disk cache error", zap.Any("error", err))
-			return nil
+			return err
 		}
 
 		entry.done = true
@@ -243,7 +240,14 @@ func (d *DiskCache) Read(
 
 	for i := range vector.Entries {
 		if err := fillEntry(&vector.Entries[i]); err != nil {
-			return err
+			// ignore error
+			numError++
+			logutil.Warn(
+				"read disk cache error",
+				zap.Any("error", err),
+				zap.Any("path", vector.FilePath),
+				zap.Any("entry", vector.Entries[i]),
+			)
 		}
 	}
 
@@ -309,7 +313,8 @@ func (d *DiskCache) writeFile(
 	ctx context.Context,
 	diskPath string,
 	openReader func(context.Context) (io.ReadCloser, error),
-) (bool, error) {
+) (written bool, err error) {
+
 	var numCreate, numStat, numError, numWrite int64
 	defer func() {
 		perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
@@ -318,6 +323,19 @@ func (d *DiskCache) writeFile(
 			set.FileService.Cache.Disk.WriteFile.Add(numWrite)
 			set.FileService.Cache.Disk.Error.Add(numError)
 		})
+	}()
+
+	defer func() {
+		if err != nil {
+			// ignore errors
+			numError++
+			logutil.Warn(
+				"write disk cache error",
+				zap.Any("error", err),
+				zap.Any("path", diskPath),
+			)
+			err = nil
+		}
 	}()
 
 	doneUpdate := d.startUpdate(diskPath)
@@ -339,22 +357,16 @@ func (d *DiskCache) writeFile(
 	dir := filepath.Dir(diskPath)
 	err = os.MkdirAll(dir, 0755)
 	if err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 	f, err := os.CreateTemp(dir, "*")
 	if err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 	numCreate++
 	from, err := openReader(ctx)
 	if err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 	defer from.Close()
 	var buf []byte
@@ -364,35 +376,25 @@ func (d *DiskCache) writeFile(
 	if err != nil {
 		f.Close()
 		os.Remove(f.Name())
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 
 	if err := f.Sync(); err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 
 	// set cache
 	stat, err = f.Stat()
 	if err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 	d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
 
 	if err := f.Close(); err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 	if err := os.Rename(f.Name(), diskPath); err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 	logutil.Debug("disk cache file written",
 		zap.Any("path", diskPath),
