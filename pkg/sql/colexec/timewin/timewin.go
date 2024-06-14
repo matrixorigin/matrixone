@@ -388,7 +388,7 @@ func (ctr *container) pushBatch(bat *batch.Batch) {
 //}
 
 func (ctr *container) evalVecs(proc *process.Process) error {
-	vec, err := ctr.tsExe.Eval(proc, []*batch.Batch{ctr.peekBatch(ctr.curIdx)})
+	vec, err := ctr.tsExe.Eval(proc, []*batch.Batch{ctr.peekBatch(ctr.curIdx)}, nil)
 	if err != nil {
 		return err
 	}
@@ -404,7 +404,7 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) err
 	vs := make([]*vector.Vector, len(ctr.aggExe))
 	for i := range ctr.aggExe {
 		if ctr.aggExe[i] != nil {
-			vec, err := ctr.aggExe[i].Eval(proc, []*batch.Batch{bat})
+			vec, err := ctr.aggExe[i].Eval(proc, []*batch.Batch{bat}, nil)
 			if err != nil {
 				return err
 			}
