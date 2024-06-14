@@ -1726,7 +1726,7 @@ func (tbl *txnTable) NewReader(
 		return nil, err
 	}
 
-	pkFilters := ConstructPKFilters(tbl.tableDef, ts, state, expr, tbl.proc.Load(), txn.engine.packerPool)
+	pkFilters := ConstructPKFilters(tbl.tableDef, tbl.db.databaseName, ts, state, expr, tbl.proc.Load(), txn.engine.packerPool)
 
 	blkArray := objectio.BlockInfoSlice(ranges)
 	if !pkFilters.inMemPKFilter.isValid || plan2.IsFalseExpr(expr) {
@@ -2193,7 +2193,6 @@ func (tbl *txnTable) PKPersistedBetween(
 			bytes,
 			false)
 
-		fmt.Println("YYY")
 		basePKFilter := constructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
 		blockReadPKFilter := constructBlockReadPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
 

@@ -466,7 +466,7 @@ func mergeFilters(left, right BasePKFilter, connector int) (finalFilter BasePKFi
 	return
 }
 
-func ConstructPKFilters(tableDef *plan.TableDef,
+func ConstructPKFilters(tableDef *plan.TableDef, dbName string,
 	ts timestamp.Timestamp, state *logtailreplay.PartitionState,
 	expr *plan.Expr, proc *process.Process,
 	packerPool *fileservice.Pool[*types.Packer]) (filters PKFilters) {
@@ -475,6 +475,14 @@ func ConstructPKFilters(tableDef *plan.TableDef,
 
 	filters.inMemPKFilter = constructInMemPKFilter(tableDef, ts, state, packerPool, basePKFilter)
 	filters.blockReadPKFilter = constructBlockReadPKFilter(tableDef.Pkey.PkeyColName, basePKFilter)
+
+	//if dbName == "a" {
+	//	ee := "nil"
+	//	if expr != nil {
+	//		ee = plan2.FormatExpr(expr)
+	//	}
+	//	fmt.Println(tableDef.Name, basePKFilter.String(), filters.inMemPKFilter.String(), filters.blockReadPKFilter, ee)
+	//}
 
 	return
 }
@@ -496,12 +504,9 @@ func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process
 		case "and":
 			leftFilter := constructBasePKFilter(exprImpl.F.Args[0], tblDef, proc)
 			rightFilter := constructBasePKFilter(exprImpl.F.Args[1], tblDef, proc)
-			if !leftFilter.valid {
-				return rightFilter
-			}
 
-			if !rightFilter.valid {
-				return leftFilter
+			if !leftFilter.valid || !rightFilter.valid {
+				return BasePKFilter{}
 			}
 
 			filter = mergeFilters(leftFilter, rightFilter, function.AND)
@@ -510,12 +515,9 @@ func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process
 		case "or":
 			leftFilter := constructBasePKFilter(exprImpl.F.Args[0], tblDef, proc)
 			rightFilter := constructBasePKFilter(exprImpl.F.Args[1], tblDef, proc)
-			if !leftFilter.valid {
-				return rightFilter
-			}
 
-			if !rightFilter.valid {
-				return leftFilter
+			if !leftFilter.valid || !rightFilter.valid {
+				return BasePKFilter{}
 			}
 
 			filter = mergeFilters(leftFilter, rightFilter, function.OR)
@@ -659,58 +661,114 @@ func constructInMemPKFilter(
 		return
 	}
 
-	var lbVal any
+	var lbVal, ubVal any
 	var packed [][]byte
 	var packer *types.Packer
 	put := packerPool.Get(&packer)
 	defer put.Put()
 
+	switch basePKFilter.oid {
+	case types.T_int8:
+		lbVal = types.DecodeInt8(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeInt8(basePKFilter.ub)
+		}
+	case types.T_int16:
+		lbVal = types.DecodeInt16(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeInt16(basePKFilter.ub)
+		}
+	case types.T_int32:
+		lbVal = types.DecodeInt32(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeInt32(basePKFilter.ub)
+		}
+	case types.T_int64:
+		lbVal = types.DecodeInt64(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeInt64(basePKFilter.ub)
+		}
+	case types.T_float32:
+		lbVal = types.DecodeFloat32(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeFloat32(basePKFilter.ub)
+		}
+	case types.T_float64:
+		lbVal = types.DecodeFloat64(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeFloat64(basePKFilter.ub)
+		}
+	case types.T_uint8:
+		lbVal = types.DecodeUint8(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeUint8(basePKFilter.ub)
+		}
+	case types.T_uint16:
+		lbVal = types.DecodeUint16(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeUint16(basePKFilter.ub)
+		}
+	case types.T_uint32:
+		lbVal = types.DecodeUint32(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeUint32(basePKFilter.ub)
+		}
+	case types.T_uint64:
+		lbVal = types.DecodeUint64(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeUint64(basePKFilter.ub)
+		}
+	case types.T_date:
+		lbVal = types.DecodeDate(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeDate(basePKFilter.ub)
+		}
+	case types.T_time:
+		lbVal = types.DecodeTime(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeTime(basePKFilter.ub)
+		}
+	case types.T_datetime:
+		lbVal = types.DecodeDatetime(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeDatetime(basePKFilter.ub)
+		}
+	case types.T_timestamp:
+		lbVal = types.DecodeTimestamp(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeTimestamp(basePKFilter.ub)
+		}
+	case types.T_decimal64:
+		lbVal = types.DecodeDecimal64(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeDecimal64(basePKFilter.ub)
+		}
+	case types.T_decimal128:
+		lbVal = types.DecodeDecimal128(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeDecimal128(basePKFilter.ub)
+		}
+	case types.T_varchar, types.T_char:
+		lbVal = basePKFilter.lb
+		ubVal = basePKFilter.ub
+	case types.T_json:
+		lbVal = types.DecodeJson(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeJson(basePKFilter.ub)
+		}
+	case types.T_enum:
+		lbVal = types.DecodeEnum(basePKFilter.lb)
+		if len(basePKFilter.ub) > 0 {
+			ubVal = types.DecodeEnum(basePKFilter.ub)
+		}
+	default:
+		// >, >=, <, <=
+		return
+		//panic(basePKFilter.oid.String())
+	}
+
 	switch basePKFilter.op {
 	case function.EQUAL, function.PREFIX_EQ:
-		switch basePKFilter.oid {
-		case types.T_int8:
-			lbVal = types.DecodeInt8(basePKFilter.lb)
-		case types.T_int16:
-			lbVal = types.DecodeInt16(basePKFilter.lb)
-		case types.T_int32:
-			lbVal = types.DecodeInt32(basePKFilter.lb)
-		case types.T_int64:
-			lbVal = types.DecodeInt64(basePKFilter.lb)
-		case types.T_float32:
-			lbVal = types.DecodeFloat32(basePKFilter.lb)
-		case types.T_float64:
-			lbVal = types.DecodeFloat64(basePKFilter.lb)
-		case types.T_uint8:
-			lbVal = types.DecodeUint8(basePKFilter.lb)
-		case types.T_uint16:
-			lbVal = types.DecodeUint16(basePKFilter.lb)
-		case types.T_uint32:
-			lbVal = types.DecodeUint32(basePKFilter.lb)
-		case types.T_uint64:
-			lbVal = types.DecodeUint64(basePKFilter.lb)
-		case types.T_date:
-			lbVal = types.DecodeDate(basePKFilter.lb)
-		case types.T_time:
-			lbVal = types.DecodeTime(basePKFilter.lb)
-		case types.T_datetime:
-			lbVal = types.DecodeDatetime(basePKFilter.lb)
-		case types.T_timestamp:
-			lbVal = types.DecodeTimestamp(basePKFilter.lb)
-		case types.T_decimal64:
-			lbVal = types.DecodeDecimal64(basePKFilter.lb)
-		case types.T_decimal128:
-			lbVal = types.DecodeDecimal128(basePKFilter.lb)
-		case types.T_varchar, types.T_char:
-			lbVal = basePKFilter.lb
-		case types.T_json:
-			lbVal = types.DecodeJson(basePKFilter.lb)
-		case types.T_enum:
-			lbVal = types.DecodeEnum(basePKFilter.lb)
-		default:
-			return
-			//panic(basePKFilter.oid.String())
-		}
-
 		packed = append(packed, logtailreplay.EncodePrimaryKey(lbVal, packer))
 		if basePKFilter.op == function.PREFIX_EQ {
 			// TODO Remove this later
@@ -721,19 +779,33 @@ func constructInMemPKFilter(
 			//
 			packed[0] = packed[0][0 : len(packed[0])-1]
 		}
-
 		inMemPKFilter.SetFullData(basePKFilter.op, false, packed...)
 
 	case function.IN, function.PREFIX_IN:
 		vec := vector.NewVec(types.T_any.ToType())
 		vec.UnmarshalBinary(basePKFilter.lb)
 		packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
+		if tableDef.Pkey.CompPkeyCol != nil && basePKFilter.op == function.PREFIX_IN {
+			for x := range packed {
+				packed[x] = packed[x][0 : len(packed[x])-1]
+			}
+		}
 		inMemPKFilter.SetFullData(basePKFilter.op, true, packed...)
 
-	case function.PREFIX_BETWEEN, function.BETWEEN, rangeLeftOpen, rangeRightOpen, rangeBothOpen:
-		packed = append(packed, logtailreplay.EncodePrimaryKey(basePKFilter.lb, packer))
-		packed = append(packed, logtailreplay.EncodePrimaryKey(basePKFilter.ub, packer))
+	case function.LESS_THAN, function.LESS_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL:
+		packed = append(packed, logtailreplay.EncodePrimaryKey(lbVal, packer))
 		inMemPKFilter.SetFullData(basePKFilter.op, false, packed...)
+
+	case function.PREFIX_BETWEEN, function.BETWEEN, rangeLeftOpen, rangeRightOpen, rangeBothOpen:
+		packed = append(packed, logtailreplay.EncodePrimaryKey(lbVal, packer))
+		packed = append(packed, logtailreplay.EncodePrimaryKey(ubVal, packer))
+		if tableDef.Pkey.CompPkeyCol != nil && basePKFilter.op == function.PREFIX_BETWEEN {
+			packed[0] = packed[0][0 : len(packed[0])-1]
+			packed[1] = packed[1][0 : len(packed[1])-1]
+		}
+		inMemPKFilter.SetFullData(basePKFilter.op, false, packed...)
+	default:
+		return
 	}
 
 	inMemPKFilter.iter, inMemPKFilter.delIterFactory = tryConstructPrimaryKeyIndexIter(ts, inMemPKFilter, state)
@@ -775,6 +847,28 @@ func tryConstructPrimaryKeyIndexIter(
 			return state.NewPrimaryKeyDelIter(
 				types.TimestampToTS(ts),
 				logtailreplay.InKind(pkFilter.packed, pkFilter.op), blkId)
+		}
+
+	case function.LESS_EQUAL, function.LESS_THAN:
+		iter = state.NewPrimaryKeyIter(
+			types.TimestampToTS(ts),
+			logtailreplay.LessKind(pkFilter.packed[0], pkFilter.op == function.LESS_EQUAL),
+		)
+		delIterFactory = func(blkId types.Blockid) logtailreplay.RowsIter {
+			return state.NewPrimaryKeyDelIter(
+				types.TimestampToTS(ts),
+				logtailreplay.LessKind(pkFilter.packed[0], pkFilter.op == function.LESS_EQUAL), blkId)
+		}
+
+	case function.GREAT_EQUAL, function.GREAT_THAN:
+		iter = state.NewPrimaryKeyIter(
+			types.TimestampToTS(ts),
+			logtailreplay.GreatKind(pkFilter.packed[0], pkFilter.op == function.GREAT_EQUAL),
+		)
+		delIterFactory = func(blkId types.Blockid) logtailreplay.RowsIter {
+			return state.NewPrimaryKeyDelIter(
+				types.TimestampToTS(ts),
+				logtailreplay.GreatKind(pkFilter.packed[0], pkFilter.op == function.GREAT_EQUAL), blkId)
 		}
 
 	case function.BETWEEN, rangeLeftOpen, rangeRightOpen, rangeBothOpen, function.PREFIX_BETWEEN:
@@ -1341,6 +1435,205 @@ func constructBlockReadPKFilter(pkName string, basePKFilter BasePKFilter) blocki
 		sortedSearchFunc = vector.CollectOffsetsByPrefixEqFactory(basePKFilter.lb)
 		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixEqFactory(basePKFilter.lb)
 
+	case function.PREFIX_BETWEEN:
+		sortedSearchFunc = vector.CollectOffsetsByPrefixBetweenFactory(basePKFilter.lb, basePKFilter.ub)
+		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixBetweenFactory(basePKFilter.lb, basePKFilter.ub)
+
+	case function.IN:
+		vec := vector.NewVec(types.T_any.ToType())
+		vec.UnmarshalBinary(basePKFilter.lb)
+
+		switch vec.GetType().Oid {
+		case types.T_bit:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint64](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[uint64](vec), nil)
+		case types.T_int8:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int8](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[int8](vec), nil)
+		case types.T_int16:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int16](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[int16](vec), nil)
+		case types.T_int32:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int32](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[int32](vec), nil)
+		case types.T_int64:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int64](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[int64](vec), nil)
+		case types.T_uint8:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint8](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[uint8](vec), nil)
+		case types.T_uint16:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint16](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[uint16](vec), nil)
+		case types.T_uint32:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint32](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[uint32](vec), nil)
+		case types.T_uint64:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint64](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[uint64](vec), nil)
+		case types.T_float32:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[float32](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[float32](vec), nil)
+		case types.T_float64:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[float64](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[float64](vec), nil)
+		case types.T_date:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Date](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Date](vec), nil)
+		case types.T_time:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Time](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Time](vec), nil)
+		case types.T_datetime:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Datetime](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Datetime](vec), nil)
+		case types.T_timestamp:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Timestamp](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Timestamp](vec), nil)
+		case types.T_decimal64:
+			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Decimal64](vec), types.CompareDecimal64)
+			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Decimal64](vec), types.CompareDecimal64)
+		case types.T_decimal128:
+			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Decimal128](vec), types.CompareDecimal128)
+			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Decimal128](vec), types.CompareDecimal128)
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+			types.T_array_float32, types.T_array_float64:
+			sortedSearchFunc = vector.VarlenBinarySearchOffsetByValFactory(vector.InefficientMustBytesCol(vec))
+			unSortedSearchFunc = vector.VarlenLinearSearchOffsetByValFactory(vector.InefficientMustBytesCol(vec))
+		case types.T_enum:
+			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Enum](vec))
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Enum](vec), nil)
+		}
+
+	case function.PREFIX_IN:
+		vec := vector.NewVec(types.T_any.ToType())
+		vec.UnmarshalBinary(basePKFilter.lb)
+		sortedSearchFunc = vector.CollectOffsetsByPrefixInFactory(vec)
+		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixInFactory(vec)
+
+	case function.LESS_EQUAL, function.LESS_THAN:
+		closed := basePKFilter.op == function.LESS_EQUAL
+		switch basePKFilter.oid {
+		case types.T_int8:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeInt8(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeInt8(basePKFilter.lb), closed, false)
+		case types.T_int16:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeInt16(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeInt16(basePKFilter.lb), closed, false)
+		case types.T_int32:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeInt32(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeInt32(basePKFilter.lb), closed, false)
+		case types.T_int64:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeInt64(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeInt64(basePKFilter.lb), closed, false)
+		case types.T_float32:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeFloat32(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeFloat32(basePKFilter.lb), closed, false)
+		case types.T_float64:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeFloat64(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeFloat64(basePKFilter.lb), closed, false)
+		case types.T_uint8:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeUint8(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeUint8(basePKFilter.lb), closed, false)
+		case types.T_uint16:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeUint16(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeUint16(basePKFilter.lb), closed, false)
+		case types.T_uint32:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeUint32(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeUint32(basePKFilter.lb), closed, false)
+		case types.T_uint64:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeUint64(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeUint64(basePKFilter.lb), closed, false)
+		case types.T_date:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeDate(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeDate(basePKFilter.lb), closed, false)
+		case types.T_time:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeTime(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeTime(basePKFilter.lb), closed, false)
+		case types.T_datetime:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeDatetime(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeDatetime(basePKFilter.lb), closed, false)
+		case types.T_timestamp:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeTimestamp(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeTimestamp(basePKFilter.lb), closed, false)
+		case types.T_decimal64:
+			sortedSearchFunc = vector.FixedSizeSearchOffsetsByLess(types.DecodeDecimal64(basePKFilter.lb), closed, true, types.CompareDecimal64)
+			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByLess(types.DecodeDecimal64(basePKFilter.lb), closed, false, types.CompareDecimal64)
+		case types.T_decimal128:
+			sortedSearchFunc = vector.FixedSizeSearchOffsetsByLess(types.DecodeDecimal128(basePKFilter.lb), closed, true, types.CompareDecimal128)
+			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByLess(types.DecodeDecimal128(basePKFilter.lb), closed, false, types.CompareDecimal128)
+		case types.T_varchar:
+			sortedSearchFunc = vector.VarlenSearchOffsetByLess(basePKFilter.lb, closed, true)
+			unSortedSearchFunc = vector.VarlenSearchOffsetByLess(basePKFilter.lb, closed, false)
+		case types.T_json:
+			sortedSearchFunc = vector.VarlenSearchOffsetByLess(basePKFilter.lb, closed, true)
+			unSortedSearchFunc = vector.VarlenSearchOffsetByLess(basePKFilter.lb, closed, false)
+		case types.T_enum:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeEnum(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeEnum(basePKFilter.lb), closed, false)
+		}
+
+	case function.GREAT_EQUAL, function.GREAT_THAN:
+		closed := basePKFilter.op == function.GREAT_EQUAL
+		switch basePKFilter.oid {
+		case types.T_int8:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeInt8(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeInt8(basePKFilter.lb), closed, false)
+		case types.T_int16:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeInt16(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeInt16(basePKFilter.lb), closed, false)
+		case types.T_int32:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeInt32(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeInt32(basePKFilter.lb), closed, false)
+		case types.T_int64:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeInt64(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeInt64(basePKFilter.lb), closed, false)
+		case types.T_float32:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeFloat32(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeFloat32(basePKFilter.lb), closed, false)
+		case types.T_float64:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeFloat64(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeFloat64(basePKFilter.lb), closed, false)
+		case types.T_uint8:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeUint8(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeUint8(basePKFilter.lb), closed, false)
+		case types.T_uint16:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeUint16(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeUint16(basePKFilter.lb), closed, false)
+		case types.T_uint32:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeUint32(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeUint32(basePKFilter.lb), closed, false)
+		case types.T_uint64:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeUint64(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeUint64(basePKFilter.lb), closed, false)
+		case types.T_date:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeDate(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeDate(basePKFilter.lb), closed, false)
+		case types.T_time:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeTime(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeTime(basePKFilter.lb), closed, false)
+		case types.T_datetime:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeDatetime(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeDatetime(basePKFilter.lb), closed, false)
+		case types.T_timestamp:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeTimestamp(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeTimestamp(basePKFilter.lb), closed, false)
+		case types.T_decimal64:
+			sortedSearchFunc = vector.FixedSizeSearchOffsetsByGreat(types.DecodeDecimal64(basePKFilter.lb), closed, true, types.CompareDecimal64)
+			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByGreat(types.DecodeDecimal64(basePKFilter.lb), closed, false, types.CompareDecimal64)
+		case types.T_decimal128:
+			sortedSearchFunc = vector.FixedSizeSearchOffsetsByGreat(types.DecodeDecimal128(basePKFilter.lb), closed, true, types.CompareDecimal128)
+			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByGreat(types.DecodeDecimal128(basePKFilter.lb), closed, false, types.CompareDecimal128)
+		case types.T_varchar:
+			sortedSearchFunc = vector.VarlenSearchOffsetByGreat(basePKFilter.lb, closed, true)
+			unSortedSearchFunc = vector.VarlenSearchOffsetByGreat(basePKFilter.lb, closed, false)
+		case types.T_json:
+			sortedSearchFunc = vector.VarlenSearchOffsetByGreat(basePKFilter.lb, closed, true)
+			unSortedSearchFunc = vector.VarlenSearchOffsetByGreat(basePKFilter.lb, closed, false)
+		case types.T_enum:
+			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeEnum(basePKFilter.lb), closed, true)
+			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeEnum(basePKFilter.lb), closed, false)
+		}
+
 	case function.BETWEEN, rangeLeftOpen, rangeRightOpen, rangeBothOpen:
 		var hint int
 		switch basePKFilter.op {
@@ -1451,81 +1744,6 @@ func constructBlockReadPKFilter(pkName string, basePKFilter BasePKFilter) blocki
 			sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lb, ub, hint)
 			unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lb, ub, hint)
 		}
-
-	case function.PREFIX_BETWEEN:
-		sortedSearchFunc = vector.CollectOffsetsByPrefixBetweenFactory(basePKFilter.lb, basePKFilter.ub)
-		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixBetweenFactory(basePKFilter.lb, basePKFilter.ub)
-
-	case function.IN:
-		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(basePKFilter.lb)
-
-		switch vec.GetType().Oid {
-		case types.T_bit:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint64](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[uint64](vec), nil)
-		case types.T_int8:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int8](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[int8](vec), nil)
-		case types.T_int16:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int16](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[int16](vec), nil)
-		case types.T_int32:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int32](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[int32](vec), nil)
-		case types.T_int64:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int64](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[int64](vec), nil)
-		case types.T_uint8:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint8](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[uint8](vec), nil)
-		case types.T_uint16:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint16](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[uint16](vec), nil)
-		case types.T_uint32:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint32](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[uint32](vec), nil)
-		case types.T_uint64:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint64](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[uint64](vec), nil)
-		case types.T_float32:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[float32](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[float32](vec), nil)
-		case types.T_float64:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[float64](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[float64](vec), nil)
-		case types.T_date:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Date](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Date](vec), nil)
-		case types.T_time:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Time](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Time](vec), nil)
-		case types.T_datetime:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Datetime](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Datetime](vec), nil)
-		case types.T_timestamp:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Timestamp](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Timestamp](vec), nil)
-		case types.T_decimal64:
-			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Decimal64](vec), types.CompareDecimal64)
-			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Decimal64](vec), types.CompareDecimal64)
-		case types.T_decimal128:
-			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Decimal128](vec), types.CompareDecimal128)
-			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Decimal128](vec), types.CompareDecimal128)
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-			types.T_array_float32, types.T_array_float64:
-			sortedSearchFunc = vector.VarlenBinarySearchOffsetByValFactory(vector.MustBytesCol(vec))
-			unSortedSearchFunc = vector.VarlenLinearSearchOffsetByValFactory(vector.MustBytesCol(vec))
-		case types.T_enum:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Enum](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Enum](vec), nil)
-		}
-
-	case function.PREFIX_IN:
-		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(basePKFilter.lb)
-		sortedSearchFunc = vector.CollectOffsetsByPrefixInFactory(vec)
-		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixInFactory(vec)
 	}
 
 	if sortedSearchFunc != nil {
@@ -1683,7 +1901,7 @@ func (f *InMemPKFilter) String() string {
 	var buf bytes.Buffer
 	buf.WriteString(
 		fmt.Sprintf("InMemPKFilter{op: %d, isVec: %v, isValid: %v, val: %v, data(len=%d)",
-			f.op, f.isVec, f.isValid, len(f.packed),
+			f.op, f.isVec, f.isValid, f.packed, len(f.packed),
 		))
 	return buf.String()
 }
@@ -1697,15 +1915,6 @@ func (f *InMemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 	f.op = op
 	f.isVec = isVec
 	f.isValid = true
-	f.isNull = false
-}
-
-func (f *PKFilter) SetVal(op uint8, isVec bool, val any) {
-	f.op = op
-	f.val = val
-	f.isValid = true
-	f.isVec = false
-	f.isNull = false
 }
 
 // return canEval, isNull, isVec, evaledVal
