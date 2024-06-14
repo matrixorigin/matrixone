@@ -186,14 +186,16 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 	// 3: (,)
 	// 4: prefix between
 	var validCheck func(bb []byte) bool
-	var seek2First func(iter btree.IterG[*PrimaryIndexEntry]) bool
+	var seek2First func(iter *btree.IterG[*PrimaryIndexEntry]) bool
 	switch kind {
 	case 0:
-		validCheck = func(bb []byte) bool { return bytes.Compare(bb, ub) <= 0 }
-		seek2First = func(iter btree.IterG[*PrimaryIndexEntry]) bool { return true }
+		validCheck = func(bb []byte) bool {
+			return bytes.Compare(bb, ub) <= 0
+		}
+		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
 	case 1:
 		validCheck = func(bb []byte) bool { return bytes.Compare(bb, ub) <= 0 }
-		seek2First = func(iter btree.IterG[*PrimaryIndexEntry]) bool {
+		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool {
 			for bytes.Equal(iter.Item().Bytes, lb) {
 				if ok := iter.Next(); !ok {
 					return false
@@ -203,10 +205,10 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 		}
 	case 2:
 		validCheck = func(bb []byte) bool { return bytes.Compare(bb, ub) < 0 }
-		seek2First = func(iter btree.IterG[*PrimaryIndexEntry]) bool { return true }
+		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
 	case 3:
 		validCheck = func(bb []byte) bool { return bytes.Compare(bb, ub) < 0 }
-		seek2First = func(iter btree.IterG[*PrimaryIndexEntry]) bool {
+		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool {
 			for bytes.Equal(iter.Item().Bytes, lb) {
 				if ok := iter.Next(); !ok {
 					return false
@@ -216,7 +218,7 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 		}
 	case 4:
 		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) <= 0 }
-		seek2First = func(iter btree.IterG[*PrimaryIndexEntry]) bool { return true }
+		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
 	}
 
 	first := true
@@ -227,9 +229,8 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 			if first {
 				first = false
 				if ok = p.iter.Seek(&PrimaryIndexEntry{Bytes: lb}); ok {
-					ok = seek2First(p.iter)
+					ok = seek2First(&p.iter)
 				}
-
 			} else {
 				ok = p.iter.Next()
 			}
@@ -252,8 +253,60 @@ const (
 	judge phase = 2
 )
 
+func LessKind(ub []byte, closed bool) PrimaryKeyMatchSpec {
+	first := true
+	return PrimaryKeyMatchSpec{
+		Move: func(p *primaryKeyIter) bool {
+			var ok bool
+			if first {
+				first = false
+				ok = p.iter.First()
+				return ok
+			}
+
+			ok = p.iter.Next()
+			if !ok {
+				return false
+			}
+
+			if closed {
+				return bytes.Compare(p.iter.Item().Bytes, ub) <= 0
+			}
+
+			return bytes.Compare(p.iter.Item().Bytes, ub) < 0
+		},
+	}
+}
+
+func GreatKind(lb []byte, closed bool) PrimaryKeyMatchSpec {
+	// a > x
+	// a >= x
+	first := true
+	return PrimaryKeyMatchSpec{
+		Move: func(p *primaryKeyIter) bool {
+			var ok bool
+			if first {
+				first = false
+				ok = p.iter.Seek(&PrimaryIndexEntry{Bytes: lb})
+
+				for ok && !closed && bytes.Equal(p.iter.Item().Bytes, lb) {
+					ok = p.iter.Next()
+				}
+				return ok
+			}
+
+			return p.iter.Next()
+		},
+	}
+}
+
 func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 	var encoded []byte
+	//var debug bool
+
+	if kind == function.PREFIX_IN {
+		//debug = true
+	}
 
 	first := true
 	iterateAll := false
@@ -273,6 +326,11 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 
 	match := func(key []byte) bool {
 		if kind == function.PREFIX_IN {
+			//if debug {
+			//	xx, _ := types.Unpack(encoded)
+			//	yy, _ := types.Unpack(key)
+			//	fmt.Printf("%v-%v; %v-%v\n", encoded, xx, key, yy)
+			//}
 			return bytes.HasPrefix(key, encoded)
 		} else {
 			// in
@@ -284,6 +342,24 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 		Name: "InKind",
 		Move: func(p *primaryKeyIter) bool {
 			if first {
+				if kind == function.PREFIX_IN {
+					//var buf bytes.Buffer
+					//buf.WriteString("want: ")
+					//for r := range encodes {
+					//	xx, _ := types.Unpack(encodes[r])
+					//	buf.WriteString(fmt.Sprintf("%v-%v; ", encodes[r], xx))
+					//}
+					//
+					//buf.WriteString("\n has: ")
+					//p.primaryIndex.Scan(func(item *PrimaryIndexEntry) bool {
+					//	xx, _ := types.Unpack(item.Bytes)
+					//	buf.WriteString(fmt.Sprintf("%v-%v; ", item.Bytes, xx))
+					//	return true
+					//})
+
+					//fmt.Println(buf.String(), "\n")
+				}
+
 				first = false
 				// each seek may visit height items
 				// we choose to scan all if the seek is more expensive
