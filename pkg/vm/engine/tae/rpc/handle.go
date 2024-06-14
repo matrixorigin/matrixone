@@ -302,6 +302,9 @@ func (h *Handle) HandleCommit(
 			//delete the txn's context.
 			h.txnCtxs.Delete(util.UnsafeBytesToString(meta.GetID()))
 		}
+
+		logutil.Infof("xxxx txn :%s committed", meta.DebugString())
+
 		common.DoIfInfoEnabled(func() {
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
 				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
