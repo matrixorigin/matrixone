@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package testutil
+package function
 
 import (
 	"fmt"
@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type fEvalFn func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error
+type fEvalFn func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error
 
 type FunctionTestCase struct {
 	proc       *process.Process
@@ -139,7 +139,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 		panic(err)
 	}
 
-	err = fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength)
+	err = fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, nil)
 	if err != nil {
 		if fc.expected.wantErr {
 			return true, ""
@@ -755,7 +755,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 
 // DebugRun will not run the compare logic for function result but return the result vector directly.
 func (fc *FunctionTestCase) DebugRun() (*vector.Vector, error) {
-	err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength)
+	err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, nil)
 	return fc.result.GetResultVector(), err
 }
 
@@ -764,7 +764,7 @@ func (fc *FunctionTestCase) BenchMarkRun() error {
 	num := 100000
 	for num > 0 {
 		num--
-		err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength)
+		err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, nil)
 		// XXX maybe free is unnecessary.
 		typ := fc.result.GetResultVector().GetType()
 		fc.result.GetResultVector().Reset(*typ)

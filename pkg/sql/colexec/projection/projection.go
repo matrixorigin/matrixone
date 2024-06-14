@@ -81,7 +81,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	arg.buf.ShuffleIDX = bat.ShuffleIDX
 	// do projection.
 	for i := range arg.ctr.projExecutors {
-		vec, err := arg.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
+		vec, err := arg.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			for _, newV := range arg.buf.Vecs {
 				if newV != nil {
