@@ -958,7 +958,7 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 	m.Lock()
 	defer m.Unlock()
 	// get from gSysVarsDefs && table if absent
-	if _, ok := m.accountsGlobalSysVarsMap[accountId]; !ok {
+	if m.accountsGlobalSysVarsMap[accountId] == nil {
 		sysVars, err := ses.getGlobalSysVars(ctx)
 		if err != nil {
 			return nil, err
@@ -3495,14 +3495,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("disable_txn_trace"),
 		Default:           int64(0),
 	},
-	"keep_user_target_list_in_result": {
-		Name:              "keep_user_target_list_in_result",
-		Scope:             ScopeBoth,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("keep_user_target_list_in_result", 0, 2, false),
-		Default:           int64(1),
-	},
 	"experimental_ivf_index": {
 		Name:              "experimental_ivf_index",
 		Scope:             ScopeBoth,
@@ -3517,6 +3509,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_master_index"),
+		Default:           int64(0),
+	},
+	"refresh_global_sys_vars_mgr": {
+		Name:              "refresh_global_sys_vars_mgr",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("refresh_global_sys_vars_mgr"),
 		Default:           int64(0),
 	},
 }

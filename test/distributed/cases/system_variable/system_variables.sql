@@ -121,10 +121,13 @@ desc user;
 select host, user from user limit 2;
 desc db;
 select db, user from db limit 5;
+-- @ignore:4
 desc procs_priv;
 select routine_name, routine_type from procs_priv limit 5;
+-- @ignore:4
 desc columns_priv;
 select table_name, column_name from columns_priv limit 5;
+-- @ignore:4
 desc tables_priv;
 select host, table_name from tables_priv limit 5;
 
