@@ -748,7 +748,7 @@ type withFilterMixin struct {
 		evaluated bool
 		//point select for primary key
 		expr     *plan.Expr
-		filter   blockio.ReadFilter
+		filter   blockio.BlockReadFilter
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
 		hasNull  bool
@@ -789,7 +789,7 @@ type blockMergeReader struct {
 	*blockReader
 	table     *txnTable
 	txnOffset int // Transaction writes offset used to specify the starting position for reading data.
-	pkFilter  PKFilter
+	pkFilter  InMemPKFilter
 	//for perfetch deletes
 	loaded     bool
 	pkidx      int
