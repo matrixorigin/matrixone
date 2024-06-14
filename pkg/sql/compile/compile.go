@@ -1789,7 +1789,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-		rs := c.newMergeScope(ss)
+		rs := ss[0]
+		if !c.IsTpQuery() {
+			rs = c.newMergeScope(ss)
+		}
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
 			Arg: constructDispatchLocal(true, true, n.RecursiveSink, receivers),
@@ -3082,8 +3085,15 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scope, right []*Scope) ([]*Scope, error) {
-	l := c.newMergeScope(left)
-	r := c.newMergeScope(right)
+	var l, r *Scope
+	if c.IsTpQuery() {
+		l = left[0]
+		r = right[0]
+	} else {
+		l = c.newMergeScope(left)
+		r = c.newMergeScope(right)
+	}
+
 	all := []*Scope{l, r}
 	rs := c.newMergeScope(all)
 
