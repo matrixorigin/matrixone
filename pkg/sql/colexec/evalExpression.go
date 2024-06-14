@@ -490,12 +490,12 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 	if err != nil {
 		return err
 	}
-	if len(expr.selectList1) < batches[0].RowCount() {
-		expr.selectList1 = make([]bool, batches[0].RowCount())
-		expr.selectList2 = make([]bool, batches[0].RowCount())
+	rowCount := batches[0].RowCount()
+	if len(expr.selectList1) < rowCount {
+		expr.selectList1 = make([]bool, rowCount)
+		expr.selectList2 = make([]bool, rowCount)
 	}
-
-	for i := range expr.selectList1 {
+	for i := 0; i < rowCount; i++ {
 		b, null := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0]).GetValue(uint64(i))
 		if selectList != nil {
 			expr.selectList1[i] = selectList[i]
@@ -519,9 +519,10 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 }
 
 func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
-	if len(expr.selectList1) < batches[0].RowCount() {
-		expr.selectList1 = make([]bool, batches[0].RowCount())
-		expr.selectList2 = make([]bool, batches[0].RowCount())
+	rowCount := batches[0].RowCount()
+	if len(expr.selectList1) < rowCount {
+		expr.selectList1 = make([]bool, rowCount)
+		expr.selectList2 = make([]bool, rowCount)
 	}
 	if selectList != nil {
 		copy(expr.selectList1, selectList)
@@ -536,7 +537,7 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			return err
 		}
 		if i != len(expr.parameterExecutor)-1 {
-			for j := range expr.selectList1 {
+			for j := 0; j < rowCount; j++ {
 				b, null := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[i]).GetValue(uint64(j))
 				if !null && b {
 					expr.selectList1[j] = false
