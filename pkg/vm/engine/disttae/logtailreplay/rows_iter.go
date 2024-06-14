@@ -16,8 +16,8 @@ package logtailreplay
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/tidwall/btree"
 )
@@ -218,6 +218,10 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 		}
 	case 4:
 		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) <= 0 }
+		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
+	default:
+		logutil.Infof("between kind missed: kind: %d, lb=%v, ub=%v\n", kind, lb, ub)
+		validCheck = func(bb []byte) bool { return true }
 		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
 	}
 
