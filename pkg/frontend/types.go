@@ -334,8 +334,8 @@ type FeSession interface {
 	ResetFPrints()
 	EnterFPrint(idx int)
 	ExitFPrint(idx int)
-	SetStaticTxnId(id []byte)
-	GetStaticTxnId() uuid.UUID
+	SetStaticTxnInfo(string)
+	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	SessionLogger
 }
@@ -453,7 +453,7 @@ type feSessionImpl struct {
 	fprints      footPrints
 	respr        Responser
 	//refreshed once
-	staticTxnId uuid.UUID
+	staticTxnInfo string
 }
 
 func (ses *feSessionImpl) EnterFPrint(idx int) {
@@ -853,11 +853,11 @@ func (ses *feSessionImpl) GetResponser() Responser {
 	return ses.respr
 }
 
-func (ses *feSessionImpl) SetStaticTxnId(id []byte) {
-	copy(ses.staticTxnId[:], id)
+func (ses *feSessionImpl) SetStaticTxnInfo(info string) {
+	ses.staticTxnInfo = info
 }
-func (ses *feSessionImpl) GetStaticTxnId() uuid.UUID {
-	return ses.staticTxnId
+func (ses *feSessionImpl) GetStaticTxnInfo() string {
+	return ses.staticTxnInfo
 }
 
 func (ses *Session) GetDebugString() string {
