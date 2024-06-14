@@ -1999,6 +1999,8 @@ func (tbl *txnTable) newReader(
 	partReader := &PartitionReader{
 		table:    tbl,
 		iter:     iter,
+		iterForTest: state.NewRowsIterForTest(types.MaxTs()),
+		iterDel: state.NewRowsIter(types.MaxTs(), nil, true),
 		seqnumMp: seqnumMp,
 		typsMap:  mp,
 	}

@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/tidwall/btree"
 )
@@ -24,6 +25,75 @@ type RowsIter interface {
 	Next() bool
 	Close() error
 	Entry() RowEntry
+}
+
+type rowsIterForTest struct {
+	ts          types.TS
+	iter        btree.IterG[RowEntry]
+	firstCalled bool
+	//lastRowID   types.Rowid
+	//iterDeleted  bool
+}
+
+func (p *PartitionState) NewRowsIterForTest(ts types.TS) *rowsIterForTest {
+
+	iter := p.rows.Copy().Iter()
+	ret := &rowsIterForTest{
+		ts:   ts,
+		iter: iter,
+		//iterDeleted: iterDeleted,
+	}
+	return ret
+}
+
+var _ RowsIter = new(rowsIterForTest)
+
+func (p *rowsIterForTest) Next() bool {
+	for {
+
+		if !p.firstCalled {
+			if !p.iter.First() {
+				return false
+			}
+			p.firstCalled = true
+		} else {
+			if !p.iter.Next() {
+				return false
+			}
+		}
+
+		entry := p.iter.Item()
+
+		//if p.checkBlockID && entry.BlockID != p.blockID {
+		//	// no more
+		//	return false
+		//}
+		if entry.Time.Greater(&p.ts) {
+			// not visible
+			continue
+		}
+		//if entry.RowID.Equal(p.lastRowID) {
+		//	// already met
+		//	continue
+		//}
+
+		//if entry.Deleted != p.iterDeleted {
+		//	// not wanted, skip to next row id
+		//	p.lastRowID = entry.RowID
+		//	continue
+		//}
+		//p.lastRowID = entry.RowID
+		return true
+	}
+}
+
+func (p *rowsIterForTest) Entry() RowEntry {
+	return p.iter.Item()
+}
+
+func (p *rowsIterForTest) Close() error {
+	p.iter.Release()
+	return nil
 }
 
 type rowsIter struct {

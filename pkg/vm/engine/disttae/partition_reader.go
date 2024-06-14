@@ -41,8 +41,13 @@ type PartitionReader struct {
 	// inserted rows comes from txn.writes.
 	inserts []*batch.Batch
 	//deleted rows comes from txn.writes or partitionState.rows.
-	deletes  map[types.Rowid]uint8
-	iter     logtailreplay.RowsIter
+	deletes map[types.Rowid]uint8
+	iter    logtailreplay.RowsIter
+	//add for test
+	iterForTest logtailreplay.RowsIter
+	called      bool
+	iterDel     logtailreplay.RowsIter
+
 	seqnumMp map[string]int
 	typsMap  map[string]types.Type
 }
@@ -102,7 +107,7 @@ func (p *PartitionReader) prepare() error {
 					//deletes in txn.Write maybe comes from PartitionState.Rows ,
 					// PartitionReader need to skip them.
 					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-                    log := false
+					log := false
 					for _, v := range vs {
 						deletes[v] = 0
 						if regexp.MustCompile(`.*sbtest.*`).MatchString(p.table.tableName) {
@@ -271,6 +276,77 @@ func (p *PartitionReader) Read(
 		}
 
 		if rows == 0 {
+
+			tombstones := ""
+			dataRows := ""
+			if !p.called && regexp.MustCompile(`.*sbtest.*`).MatchString(p.table.tableName) {
+				num := 0
+				for p.iterForTest.Next() {
+					entry := p.iterForTest.Entry()
+					//if _, ok := p.deletes[entry.RowID]; ok {
+					//	continue
+					//}
+					if entry.Deleted {
+						tombstones += entry.ToString()
+						continue
+					}
+					dataRows += entry.ToString()
+
+					for i, name := range result.Attrs {
+						if name == catalog.Row_ID {
+							if err = vector.AppendFixed(
+								result.Vecs[i],
+								entry.RowID,
+								false,
+								mp); err != nil {
+								return nil, err
+							}
+						} else {
+							idx := 2 /*rowid and commits*/ + p.seqnumMp[name]
+							if idx >= len(entry.Batch.Vecs) /*add column*/ ||
+								entry.Batch.Attrs[idx] == "" /*drop column*/ {
+								err = vector.AppendAny(
+									result.Vecs[i],
+									nil,
+									true,
+									mp)
+							} else {
+								err = appendFuncs[i](
+									result.Vecs[i],
+									entry.Batch.Vecs[2 /*rowid and commits*/ +p.seqnumMp[name]],
+									entry.Offset,
+								)
+							}
+							if err != nil {
+								return nil, err
+							}
+						}
+					}
+					num++
+					//if rows == maxRows {
+					//break
+					//}
+				}
+
+				result.SetRowCount(num)
+
+				bat := ""
+				len := 0
+				if num > 0 {
+					bat = common.MoBatchToString(result, 10)
+					len = result.RowCount()
+				}
+
+				logutil.Infof("xxxx partititonReader reads:"+
+					"txn:%s, table:%s,bat:%s, relult len:%d, dataRows:%s, tombstones:%s",
+					p.table.db.op.Txn().DebugString(),
+					p.table.tableName,
+					bat,
+					len,
+					dataRows,
+					tombstones)
+			}
+
 			if pool == nil {
 				result.Clean(mp)
 			} else {
@@ -278,6 +354,8 @@ func (p *PartitionReader) Read(
 			}
 			return nil, nil
 		}
+
+		p.called = true
 
 		result.SetRowCount(rows)
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {

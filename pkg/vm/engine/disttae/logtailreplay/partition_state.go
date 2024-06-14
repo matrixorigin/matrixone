@@ -92,6 +92,11 @@ type RowEntry struct {
 	PrimaryIndexBytes []byte
 }
 
+func (r RowEntry) ToString() string {
+	return fmt.Sprintf("[%s]_[%s]_[%v]",
+		r.RowID.String(), r.Time.ToTimestamp().DebugString(), r.Deleted)
+}
+
 func (r RowEntry) Less(than RowEntry) bool {
 	// asc
 	cmp := r.BlockID.Compare(than.BlockID)
