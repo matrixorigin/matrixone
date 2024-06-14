@@ -260,7 +260,7 @@ var (
 	SlowFlushIOTask      = 10 * time.Second
 	SlowFlushTaskOverall = 60 * time.Second
 	SlowDelCollect       = 10 * time.Second
-	SlowDelCollectNObj   = 20
+	SlowDelCollectNObj   = 10
 )
 
 func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
@@ -716,23 +716,25 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 	}()
 	emtpyDelObjIdx = make([]*bitmap.Bitmap, len(task.delSrcMetas))
 	var (
-		enableDeltaStat    = task.schema.Name == "bmsql_stock"
 		enableDetailRecord = len(task.delSrcMetas) > SlowDelCollectNObj
 		tbl                *catalog.TableEntry
 		tombstone          data.Tombstone
 		locMap             = make(map[string]int)
 		now                = time.Now()
-		recorder           = &common.DeletesCollectRecorder{}
+		recorder           = &common.DeletesCollectRecorder{TempCache: make(map[string]common.TempDelCacheEntry)}
 		totalRecorder      = &common.DeletesCollectBoard{}
 		loopCnt, readCnt   int
 	)
 
-	if enableDeltaStat {
-		tbl = task.rel.GetMeta().(*catalog.TableEntry)
-	}
-
 	if enableDetailRecord {
 		ctx = context.WithValue(ctx, common.RecorderKey{}, recorder)
+		tbl = task.rel.GetMeta().(*catalog.TableEntry)
+		defer func() {
+			for _, v := range recorder.TempCache {
+				v.Bat = nil
+				v.Release()
+			}
+		}()
 	}
 
 	for i, obj := range task.delSrcMetas {
@@ -740,7 +742,7 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 		var deletes *containers.Batch
 		emptyDelObjs := &bitmap.Bitmap{}
 		emptyDelObjs.InitWithSize(int64(obj.BlockCnt()))
-		if enableDeltaStat {
+		if enableDetailRecord {
 			tombstone = tbl.TryGetTombstone(obj.ID)
 		}
 		for j := 0; j < obj.BlockCnt(); j++ {
@@ -750,10 +752,14 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 				emptyDelObjs.Add(uint64(j))
 				continue
 			}
-			if enableDeltaStat && tombstone != nil {
-				loc := tombstone.GetLatestDeltaloc(uint16(j))
-				if loc != nil {
-					locMap[loc.String()]++
+			if enableDetailRecord && tombstone != nil {
+				if loc := tombstone.GetLatestDeltaloc(uint16(j)); loc != nil {
+					sloc := loc.String()
+					locMap[sloc]++
+					if locMap[sloc] == 10 { // trigger cache only once
+						logutil.Infof("slowflush: task %d trigger cache for %s", task.ID(), sloc)
+						recorder.TempCache[sloc] = common.TempDelCacheEntry{}
+					}
 				}
 			}
 			recorder.LoadCost = 0
@@ -786,10 +792,8 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 			fmt.Sprintf("slowflush: task %d collect tombstone for %d-%s cost %v, loopN %d, readN %d",
 				task.ID(), task.rel.ID(), task.schema.Name, cost, loopCnt, readCnt))
 		if enableDetailRecord {
-			buf.WriteString(fmt.Sprintf(" | %s", totalRecorder.String()))
-		}
-		if enableDeltaStat {
-			buf.WriteString(fmt.Sprintf(" | location distribution(%v):%v", len(locMap), locMap))
+			buf.WriteString(fmt.Sprintf(" | %s | location distribution(%v):%v",
+				totalRecorder.String(), len(locMap), locMap))
 		}
 		logutil.Infof(buf.String())
 	}
