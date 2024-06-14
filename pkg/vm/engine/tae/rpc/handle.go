@@ -74,6 +74,7 @@ type txnContext struct {
 	deadline time.Time
 	meta     txn.TxnMeta
 	reqs     []any
+	flag     bool
 }
 
 //#region Open
@@ -211,7 +212,7 @@ func (h *Handle) handleRequests(
 		case *api.AlterTableReq:
 			err = h.HandleAlterTable(ctx, txn, req)
 		case *db.WriteReq:
-			err = h.HandleWrite(ctx, txn, req)
+			err = h.HandleWrite(ctx, txnCtx, txn, req)
 		default:
 			err = moerr.NewNotSupported(ctx, "unknown txn request type: %T", req)
 		}
@@ -303,7 +304,9 @@ func (h *Handle) HandleCommit(
 			h.txnCtxs.Delete(util.UnsafeBytesToString(meta.GetID()))
 		}
 
-		logutil.Infof("xxxx txn :%s committed", meta.DebugString())
+		if txnCtx.flag {
+			logutil.Infof("xxxx txn :%s committed", meta.DebugString())
+		}
 
 		common.DoIfInfoEnabled(func() {
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
@@ -527,6 +530,7 @@ func (h *Handle) HandleDropOrTruncateRelation(
 // HandleWrite Handle DML commands
 func (h *Handle) HandleWrite(
 	ctx context.Context,
+	txnCtx *txnContext,
 	txn txnif.AsyncTxn,
 	req *db.WriteReq) (err error) {
 	defer func() {
@@ -559,6 +563,16 @@ func (h *Handle) HandleWrite(
 		common.DoIfDebugEnabled(func() {
 			logutil.Debugf("[precommit] handle write end txn: %s", txn.String())
 		})
+
+		if req.TableName == "mo_increment_columns" {
+			txnCtx.flag = true
+			logutil.Infof("xxxx [precommit] handle write end txn: %s, tableID:%v, entry type:%v, batch:%s",
+				txn.String(),
+				req.TableID,
+				req.Type,
+				common.MoBatchToString(req.Batch, 5))
+		}
+
 	}()
 
 	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
