@@ -213,7 +213,7 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 
 	//special handle for query result
 	if strings.HasPrefix(param.Filepath, "SHARED:/query_result/") {
-		return DefaultBigStats()
+		return DefaultStats()
 	}
 
 	//read one line
