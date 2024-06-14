@@ -55,7 +55,10 @@ type bytesAllocator struct {
 var _ CacheDataAllocator = new(bytesAllocator)
 
 func (b *bytesAllocator) Alloc(size int) memorycache.CacheData {
-	ptr, dec := b.allocator.Allocate(uint64(size))
+	ptr, dec, err := b.allocator.Allocate(uint64(size))
+	if err != nil {
+		panic(err)
+	}
 	metric.FSMallocLiveObjectsBytes.Inc()
 	return Bytes{
 		bytes:       unsafe.Slice((*byte)(ptr), size),
