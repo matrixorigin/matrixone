@@ -2398,12 +2398,19 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	return rs
 }
 
-func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs := c.newJoinScopeListWithBucket(c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum)), ss, children, n)
+func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
+	if c.IsTpQuery() {
+		rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
+	} else {
+		rs = c.newJoinScopeListWithBucket(rs, left, right, n)
+	}
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
-			rs[i].Instructions[0].Arg.Release()
+			if !c.IsTpQuery() {
+				rs[i].Instructions[0].Arg.Release()
+			}
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.Minus,
 				Idx: c.anal.curr,
@@ -2412,7 +2419,9 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 		}
 	case plan.Node_INTERSECT:
 		for i := range rs {
-			rs[i].Instructions[0].Arg.Release()
+			if !c.IsTpQuery() {
+				rs[i].Instructions[0].Arg.Release()
+			}
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.Intersect,
 				Idx: c.anal.curr,
@@ -2421,7 +2430,9 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 		}
 	case plan.Node_INTERSECT_ALL:
 		for i := range rs {
-			rs[i].Instructions[0].Arg.Release()
+			if !c.IsTpQuery() {
+				rs[i].Instructions[0].Arg.Release()
+			}
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.IntersectAll,
 				Idx: c.anal.curr,
@@ -3537,10 +3548,10 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, bIdx int, leftScop
 	return ss
 }
 
-func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.Node) []*Scope {
+func (c *Compile) newJoinScopeListWithBucket(rs, left, right []*Scope, n *plan.Node) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	// construct left
-	leftMerge := c.newMergeScope(ss)
+	leftMerge := c.newMergeScope(left)
 	leftMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: constructDispatch(0, rs, c.addr, n, false),
@@ -3549,7 +3560,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.
 
 	// construct right
 	c.anal.isFirst = currentFirstFlag
-	rightMerge := c.newMergeScope(children)
+	rightMerge := c.newMergeScope(right)
 	rightMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: constructDispatch(1, rs, c.addr, n, false),
