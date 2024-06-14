@@ -58,7 +58,6 @@ func newMergeTaskBuilder(db *DB) *MergeTaskBuilder {
 	op.DatabaseFn = op.onDataBase
 	op.TableFn = op.onTable
 	op.ObjectFn = op.onObject
-	op.PostObjectFn = op.onPostObject
 	op.PostTableFn = op.onPostTable
 	return op
 }
@@ -81,7 +80,12 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 		return
 	}
 	// delObjs := s.ObjectHelper.finish()
-	s.executor.ExecuteFor(s.tbl, s.objPolicy)
+	mobjs, kind := s.objPolicy.Revise(s.executor.CPUPercent(), int64(s.executor.MemAvailBytes()))
+	if len(mobjs) < 2 {
+		return
+	}
+
+	s.executor.ExecuteMultiObjMerge(s.tbl, mobjs, kind)
 }
 
 func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
@@ -179,8 +183,4 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 	s.objPolicy.OnObject(objectEntry)
 	objectEntry.RLock()
 	return
-}
-
-func (s *MergeTaskBuilder) onPostObject(obj *catalog.ObjectEntry) (err error) {
-	return nil
 }
