@@ -2402,6 +2402,16 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []
 	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
 	if c.IsTpQuery() {
 		rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
+		left[0].appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: connector.NewArgument().
+				WithReg(rs[0].Proc.Reg.MergeReceivers[0]),
+		})
+		right[0].appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: connector.NewArgument().
+				WithReg(rs[0].Proc.Reg.MergeReceivers[1]),
+		})
 	} else {
 		rs = c.newJoinScopeListWithBucket(rs, left, right, n)
 	}
