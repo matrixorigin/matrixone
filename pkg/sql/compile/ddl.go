@@ -1762,20 +1762,20 @@ func MakeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 		oldCt.Cts = plan2.RemoveIf[engine.Constraint](oldCt.Cts, pred)
 		oldCt.Cts = append(oldCt.Cts, c)
 	case *engine.IndexDef:
-		ok := false
 		var indexdef *engine.IndexDef
-		for i, ct := range oldCt.Cts {
-			if indexdef, ok = ct.(*engine.IndexDef); ok {
-				//TODO: verify if this is correct @ouyuanning & @qingx
-				indexdef.Indexes = append(indexdef.Indexes, t.Indexes...)
-				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-				oldCt.Cts = append(oldCt.Cts, indexdef)
-				break
+		indice := make([]*plan.IndexDef, 0)
+		pred = func(ct engine.Constraint) bool {
+			indexdef, ok = ct.(*engine.IndexDef)
+			if indexdef != nil && ok {
+				indice = append(indice, indexdef.Indexes...)
 			}
+			return ok
 		}
-		if !ok {
-			oldCt.Cts = append(oldCt.Cts, c)
-		}
+		indice = append(indice, t.Indexes...)
+		oldCt.Cts = plan2.RemoveIf[engine.Constraint](oldCt.Cts, pred)
+		oldCt.Cts = append(oldCt.Cts, &engine.IndexDef{
+			Indexes: indice,
+		})
 	}
 	return oldCt, nil
 }
