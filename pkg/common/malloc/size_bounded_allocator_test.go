@@ -14,30 +14,53 @@
 
 package malloc
 
-import "testing"
+import (
+	"testing"
 
-func TestMetricsAllocator(t *testing.T) {
+	"github.com/stretchr/testify/assert"
+)
+
+func TestSizeBoundedAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
-		return NewMetricsAllocator(
+		return NewSizeBoundedAllocator(
 			GetDefault(nil),
+			1<<40,
+			nil,
 		)
+	})
+
+	t.Run("out of space", func(t *testing.T) {
+		allocator := NewSizeBoundedAllocator(GetDefault(nil), 24, nil)
+		p1, d1, err := allocator.Allocate(12)
+		assert.Nil(t, err)
+		_, _, err = allocator.Allocate(12)
+		assert.Nil(t, err)
+		_, _, err = allocator.Allocate(12)
+		assert.ErrorContains(t, err, "out of space")
+		d1.Deallocate(p1)
+		_, _, err = allocator.Allocate(12)
+		assert.Nil(t, err)
 	})
 }
 
-func BenchmarkMetricsAllocator(b *testing.B) {
+func BenchmarkSizeBoundedAllocator(b *testing.B) {
 	for _, n := range benchNs {
 		benchmarkAllocator(b, func() Allocator {
-			return NewMetricsAllocator(
+			return NewSizeBoundedAllocator(
 				GetDefault(nil),
+				1<<40,
+				nil,
 			)
 		}, n)
 	}
 }
 
-func FuzzMetricsAllocator(f *testing.F) {
+func FuzzSizeBoundedAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
-		return NewMetricsAllocator(
+		return NewSizeBoundedAllocator(
 			GetDefault(nil),
+			1<<40,
+			nil,
 		)
 	})
 }

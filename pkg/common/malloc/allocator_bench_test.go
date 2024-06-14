@@ -33,7 +33,10 @@ func benchmarkAllocator(
 		allcator := newAllocator()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			ptr, dec := allcator.Allocate(n)
+			ptr, dec, err := allcator.Allocate(n)
+			if err != nil {
+				b.Fatal(err)
+			}
 			dec.Deallocate(ptr)
 		}
 	})
@@ -43,7 +46,10 @@ func benchmarkAllocator(
 		b.ResetTimer()
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
-				ptr, dec := allcator.Allocate(n)
+				ptr, dec, err := allcator.Allocate(n)
+				if err != nil {
+					b.Fatal(err)
+				}
 				dec.Deallocate(ptr)
 			}
 		})
