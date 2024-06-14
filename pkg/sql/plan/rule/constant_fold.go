@@ -54,26 +54,59 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 	if n.Offset != nil {
 		n.Offset = r.constantFold(n.Offset, proc)
 	}
-	if len(n.OnList) > 0 {
-		for i := range n.OnList {
-			n.OnList[i] = r.constantFold(n.OnList[i], proc)
-		}
-	}
-	if len(n.FilterList) > 0 {
-		for i := range n.FilterList {
-			n.FilterList[i] = r.constantFold(n.FilterList[i], proc)
-		}
-	}
-	if len(n.BlockFilterList) > 0 {
-		for i := range n.BlockFilterList {
-			n.BlockFilterList[i] = r.constantFold(n.BlockFilterList[i], proc)
-		}
+	// if n.Interval != nil {
+	// 	n.Interval = r.constantFold(n.Interval, proc)
+	// }
+	// if n.Sliding != nil {
+	// 	n.Sliding = r.constantFold(n.Sliding, proc)
+	// }
+
+	for i := range n.OnList {
+		n.OnList[i] = r.constantFold(n.OnList[i], proc)
 	}
 
-	if len(n.ProjectList) > 0 {
-		for i := range n.ProjectList {
-			n.ProjectList[i] = r.constantFold(n.ProjectList[i], proc)
-		}
+	for i := range n.FilterList {
+		n.FilterList[i] = r.constantFold(n.FilterList[i], proc)
+	}
+
+	for i := range n.BlockFilterList {
+		n.BlockFilterList[i] = r.constantFold(n.BlockFilterList[i], proc)
+	}
+
+	for i := range n.ProjectList {
+		n.ProjectList[i] = r.constantFold(n.ProjectList[i], proc)
+	}
+
+	for i := range n.GroupBy {
+		n.GroupBy[i] = r.constantFold(n.GroupBy[i], proc)
+	}
+
+	// for i := range n.GroupingSet {
+	// 	n.GroupingSet[i] = r.constantFold(n.GroupingSet[i], proc)
+	// }
+
+	for i := range n.AggList {
+		n.AggList[i] = r.constantFold(n.AggList[i], proc)
+	}
+
+	for i := range n.WinSpecList {
+		n.WinSpecList[i] = r.constantFold(n.WinSpecList[i], proc)
+	}
+
+	for _, orderBy := range n.OrderBy {
+		orderBy.Expr = r.constantFold(orderBy.Expr, proc)
+	}
+
+	// for i := range n.TblFuncExprList {
+	// 	n.TblFuncExprList[i] = r.constantFold(n.TblFuncExprList[i], proc)
+	// }
+
+	// for i := range n.FillVal {
+	// 	n.FillVal[i] = r.constantFold(n.FillVal[i], proc)
+	// }
+
+	for i := range n.OnUpdateExprs {
+		n.OnUpdateExprs[i] = r.constantFold(n.OnUpdateExprs[i], proc)
 	}
 }
 
@@ -139,6 +172,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	for i := range fn.Args {
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
 		isVec = isVec || fn.Args[i].GetVec() != nil
+	}
+	if f.IsAgg() || f.IsWin() {
+		return expr
 	}
 	if !IsConstant(expr, false) {
 		return expr
