@@ -35,15 +35,21 @@ func TestCheckedDeallocator(t *testing.T) {
 				t.Fatalf("got %v", msg)
 			}
 		}()
-		ptr, dec := allocator.Allocate(42)
+		ptr, dec, err := allocator.Allocate(42)
+		if err != nil {
+			t.Fatal(err)
+		}
 		dec.Deallocate(ptr)
 		dec.Deallocate(ptr)
 	}()
 
 	func() {
-		ptr, dec := allocator.Allocate(42)
+		ptr, dec, err := allocator.Allocate(42)
 		_ = ptr
 		_ = dec
+		if err != nil {
+			t.Fatal(err)
+		}
 		dec.Deallocate(ptr) // comment out this line to trigger memory leak panic
 	}()
 	runtime.GC()

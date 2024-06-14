@@ -757,7 +757,7 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 	for i := info.length() - 1; i >= 0; i-- {
 		row := make([]interface{}, 3)
 		row[0] = "Error"
-		row[1] = info.codes[i]
+		row[1] = int16(info.codes[i])
 		row[2] = info.msgs[i]
 		mrs.AddRow(row)
 	}
