@@ -2108,13 +2108,13 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	defer func() {
 		if err == nil {
 			tbl.getTxn().engine.globalStats.notifyLogtailUpdate(tbl.tableId)
-			tbl.logtailUpdated.Store(true)
+			//tbl.logtailUpdated.Store(true)
 		}
 	}()
 	// if the logtail is updated, skip
-	if tbl.logtailUpdated.Load() {
-		return
-	}
+	//if tbl.logtailUpdated.Load() {
+	//	return
+	//}
 
 	// if the table is created in this txn, skip
 	accountId, err := defines.GetAccountId(ctx)
