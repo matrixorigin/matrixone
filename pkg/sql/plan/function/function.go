@@ -208,7 +208,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		return nil, err
 	}
 	exec, execFree := f.GetExecuteMethod()
-	if err = exec(inputs, result, proc, evaluateLength); err != nil {
+	if err = exec(inputs, result, proc, evaluateLength, nil); err != nil {
 		result.Free()
 		if execFree != nil {
 			// NOTE: execFree is only applicable for serial and serial_full.
@@ -341,7 +341,8 @@ type FuncNew struct {
 
 type executeLogicOfOverload func(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
-	proc *process.Process, length int) error
+	proc *process.Process, length int,
+	selectList *FunctionSelectList) error
 
 // executeFreeOfOverload is used to free the resources allocated by the execution logic.
 // It is mainly used in SERIAL and SERIAL_FULL.
@@ -487,4 +488,22 @@ func newCheckResultWithCast(overloadId int, castType []types.Type) checkResult {
 		idx:       overloadId,
 		finalType: castType,
 	}
+}
+
+type FunctionSelectList struct {
+	AnyNull    bool
+	AllNull    bool
+	SelectList []bool
+}
+
+func (selectList *FunctionSelectList) ShouldEvalAllRow() bool {
+	return !selectList.AnyNull
+}
+
+func (selectList *FunctionSelectList) IgnoreAllRow() bool {
+	return selectList.AllNull
+}
+
+func (selectList *FunctionSelectList) Contains(row uint64) bool {
+	return !selectList.SelectList[row]
 }
