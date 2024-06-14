@@ -198,12 +198,23 @@ const (
 	constSmallMergeGap      = 3 * time.Minute
 )
 
-type Policy interface {
-	OnObject(obj *catalog.ObjectEntry)
+type Reviser interface {
 	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
+}
+
+type Policy interface {
+	Reviser
+	OnObject(obj *catalog.ObjectEntry)
 	ResetForTable(*catalog.TableEntry)
 	SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any)
 	GetConfig(*catalog.TableEntry) any
+}
+
+type policy interface {
+	Reviser
+	OnObject(obj *catalog.ObjectEntry)
+	Clear()
+	ObjCnt() int
 }
 
 func NewUpdatePolicyReq(c *BasicPolicyConfig) *api.AlterTableReq {
