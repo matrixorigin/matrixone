@@ -257,10 +257,10 @@ func (task *flushTableTailTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err
 }
 
 var (
-	SlowFlushIOTask      = 3 * time.Second
+	SlowFlushIOTask      = 10 * time.Second
 	SlowFlushTaskOverall = 60 * time.Second
 	SlowDelCollect       = 10 * time.Second
-	SlowDelCollectNObj   = 50
+	SlowDelCollectNObj   = 20
 )
 
 func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
