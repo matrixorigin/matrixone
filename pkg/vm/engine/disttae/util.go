@@ -887,7 +887,7 @@ func tryConstructPrimaryKeyIndexIter(
 		delIterFactory = func(blkId types.Blockid) logtailreplay.RowsIter {
 			return state.NewPrimaryKeyDelIter(
 				types.TimestampToTS(ts),
-				logtailreplay.BetweenKind(pkFilter.packed[0], pkFilter.packed[1], pkFilter.op), blkId)
+				logtailreplay.BetweenKind(pkFilter.packed[0], pkFilter.packed[1], kind), blkId)
 		}
 	}
 
