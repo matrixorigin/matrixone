@@ -382,7 +382,7 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) (er
 
 	for i := range ctr.aggVecs {
 		for j := range ctr.aggVecs[i].Executor {
-			ctr.aggVecs[i].Vec[j], err = ctr.aggVecs[i].Executor[j].Eval(proc, input)
+			ctr.aggVecs[i].Vec[j], err = ctr.aggVecs[i].Executor[j].Eval(proc, input, nil)
 			if err != nil {
 				return err
 			}
@@ -429,7 +429,7 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	input := []*batch.Batch{bat}
 	for i := range ctr.orderVecs {
 		for j := range ctr.orderVecs[i].Executor {
-			ctr.orderVecs[i].Vec[j], err = ctr.orderVecs[i].Executor[j].Eval(proc, input)
+			ctr.orderVecs[i].Vec[j], err = ctr.orderVecs[i].Executor[j].Eval(proc, input, nil)
 			if err != nil {
 				return false, err
 			}
