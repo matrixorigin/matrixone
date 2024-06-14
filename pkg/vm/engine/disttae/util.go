@@ -92,7 +92,7 @@ func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName 
 	if !isVec {
 		col, vals, ok = mustColConstValueFromBinaryFuncExpr(exprImpl, tblDef, proc)
 	} else {
-		col, val, ok = mustColVecValueFromBinaryFuncExpr(exprImpl)
+		col, val, ok = mustColVecValueFromBinaryFuncExpr(proc, exprImpl)
 	}
 
 	if !ok {
@@ -1700,7 +1700,7 @@ func getConstValueByExpr(
 		return nil
 	}
 	defer exec.Free()
-	vec, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	vec, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return nil
 	}

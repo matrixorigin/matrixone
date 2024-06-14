@@ -362,8 +362,11 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 	}
 
 	var buf bytes.Buffer
-	for _, ch := range createStr {
+	for i, ch := range createStr {
 		if ch == '"' {
+			if i > 0 && createStr[i-1] == '\\' {
+				continue
+			}
 			buf.WriteRune('"')
 		}
 		buf.WriteRune(ch)

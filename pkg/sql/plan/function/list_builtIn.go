@@ -4622,7 +4622,7 @@ var supportedControlBuiltIns = []FuncNew{
 					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return ctl.MoCtl
+					return MoCtl
 				},
 			},
 		},
@@ -5957,7 +5957,7 @@ var supportedOthersBuiltIns = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
 						vs := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
 						res := vector.MustFunctionResult[bool](result)
 						for i := uint64(0); i < uint64(length); i++ {
@@ -6003,7 +6003,7 @@ var supportedOthersBuiltIns = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
 						checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
 						errMsgs := vector.GenerateFunctionStrParameter(parameters[1])
 						value2, null := errMsgs.GetStrValue(0)
@@ -6030,7 +6030,7 @@ var supportedOthersBuiltIns = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
 						checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
 						sourceValues := vector.GenerateFunctionStrParameter(parameters[1])
 						columnNames := vector.GenerateFunctionStrParameter(parameters[2])
@@ -6106,7 +6106,7 @@ var supportedOthersBuiltIns = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
 						isEmpty := parameters[0].Length() == 0
 						res := vector.MustFunctionResult[bool](result)
 						for i := uint64(0); i < uint64(length); i++ {
@@ -6141,7 +6141,7 @@ var supportedOthersBuiltIns = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
 						leftRow := vector.GenerateFunctionFixedTypeParameter[types.Rowid](parameters[0])
 						rightRow := vector.GenerateFunctionFixedTypeParameter[types.Rowid](parameters[1])
 						res := vector.MustFunctionResult[bool](result)
@@ -6279,4 +6279,8 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
+}
+
+func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) (err error) {
+	return ctl.MoCtl(ivecs, result, proc, length)
 }

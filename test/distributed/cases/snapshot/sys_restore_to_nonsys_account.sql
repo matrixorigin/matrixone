@@ -1,3 +1,4 @@
+-- @bvt:issue#16709
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 
@@ -218,7 +219,7 @@ drop snapshot sp04;
 
 
 
--- @bvt:issue#16709
+
 -- acc01 create sp01,sp02, restore sp02, restore sp01
 -- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test01;
@@ -274,11 +275,10 @@ drop database test01;
 -- @session
 drop snapshot sp07;
 drop snapshot sp08;
--- @bvt:issue
 
 
 
--- @bvt:issue#16709
+
 -- sys create sp01,sp02, restore sp02, restore sp01
 -- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test02;
@@ -330,7 +330,6 @@ drop database test02;
 
 drop snapshot sp09;
 drop snapshot sp10;
--- @bvt:issue
 
 
 
@@ -370,3 +369,4 @@ drop database test01;
 -- @session
 
 drop account acc01;
+-- @bvt:issue
