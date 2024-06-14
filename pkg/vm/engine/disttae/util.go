@@ -82,6 +82,10 @@ type BasePKFilter struct {
 
 func (b *BasePKFilter) String() string {
 	name := map[int]string{
+		function.LESS_EQUAL:     "less_eq",
+		function.LESS_THAN:      "less_than",
+		function.GREAT_THAN:     "great_than",
+		function.GREAT_EQUAL:    "great_eq",
 		rangeLeftOpen:           "range_left_open",
 		rangeRightOpen:          "range_right_open",
 		rangeBothOpen:           "range_both_open",
