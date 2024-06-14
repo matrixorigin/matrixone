@@ -32,6 +32,7 @@ func PathField(val string) zap.Field         { return zap.String("path", val) }
 
 func SessionIdField(val string) zap.Field   { return zap.String("session_id", val) }
 func TxnIdField(val string) zap.Field       { return zap.String("txn_id", val) }
+func TxnInfoField(val string) zap.Field     { return zap.String("txn_info", val) }
 func StatementIdField(val string) zap.Field { return zap.String("statement_id", val) }
 
 func NoReportFiled() zap.Field { return zap.Bool(MOInternalFiledKeyNoopReport, true) }
