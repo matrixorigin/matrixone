@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	gotrace "runtime/trace"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -444,6 +445,12 @@ func doUse(ctx context.Context, ses FeSession, db string) error {
 	var txn TxnOperator
 	var err error
 	var dbMeta engine.Database
+
+	// In order to be compatible with various GUI clients and BI tools, lower case db name if it's a mysql system db
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(db)) {
+		db = strings.ToLower(db)
+	}
+
 	txn = txnHandler.GetTxn()
 	//TODO: check meta data
 	if dbMeta, err = getGlobalPu().StorageEngine.Database(ctx, db, txn); err != nil {
@@ -845,7 +852,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		if err != nil {
 			return err
 		}
-		vec, err := executor.Eval(execCtx.proc, []*batch.Batch{bat})
+		vec, err := executor.Eval(execCtx.proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			executor.Free()
 			return err
@@ -1035,12 +1042,7 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 		return nil, err
 	}
 
-	origin, err := ses.GetSessionSysVar("keep_user_target_list_in_result")
-	if err != nil {
-		return nil, err
-	}
-
-	stmts, err := mysql.Parse(execCtx.reqCtx, st.Sql, v.(int64), origin.(int64))
+	stmts, err := mysql.Parse(execCtx.reqCtx, st.Sql, v.(int64))
 	if err != nil {
 		return nil, err
 	}
@@ -1481,7 +1483,7 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 		if err != nil {
 			return err
 		}
-		vec, err := executor.Eval(proc, []*batch.Batch{bat})
+		vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			executor.Free()
 			return err
@@ -1930,16 +1932,11 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 
 func parseSql(execCtx *ExecCtx) (stmts []tree.Statement, err error) {
 	var v interface{}
-	var origin interface{}
 	v, err = execCtx.ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
 		v = int64(1)
 	}
-	origin, err = execCtx.ses.GetSessionSysVar("keep_user_target_list_in_result")
-	if err != nil {
-		origin = int64(0)
-	}
-	stmts, err = parsers.Parse(execCtx.reqCtx, dialect.MYSQL, execCtx.input.getSql(), v.(int64), origin.(int64))
+	stmts, err = parsers.Parse(execCtx.reqCtx, dialect.MYSQL, execCtx.input.getSql(), v.(int64))
 	if err != nil {
 		return nil, err
 	}
