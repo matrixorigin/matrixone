@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
 	"go.uber.org/zap"
 
@@ -131,6 +132,26 @@ func (p *PartitionReader) Read(
 	_ *plan.Expr,
 	mp *mpool.MPool,
 	pool engine.VectorPool) (result *batch.Batch, err error) {
+
+	defer func() {
+		if p.table.tableName == "mo_increment_columns" {
+			bat := ""
+			len := 0
+			if result != nil {
+				bat = common.MoBatchToString(result, 10)
+				len = result.RowCount()
+			}
+			logutil.Infof("xxxx partititonReader reads:"+
+				"txn:%s, table:%s, batch:%s, len:%d, err:%v",
+				p.table.db.op.Txn().DebugString(),
+				p.table.tableName,
+				bat,
+				len,
+				err)
+		}
+
+	}()
+
 	if p == nil {
 		return
 	}

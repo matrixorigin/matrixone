@@ -26,6 +26,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/docker/go-units"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -641,6 +642,27 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset i
 	); err != nil {
 		return
 	}
+
+	if tbl.tableName == "mo_increment_columns" {
+		blkstr := ""
+		for i := 1; i < blocks.Len(); i++ {
+			blk := blocks.Get(i)
+			blkstr = fmt.Sprintf("%s, [%s,%v,%v]",
+				blkstr,
+				blk.BlockID.String(),
+				blk.EntryState,
+				blk.CanRemote)
+		}
+		if blkstr == "" {
+			blkstr = "no blocks"
+		}
+		logutil.Infof("xxxx table:%s txn:%s call ranges return blks:%s, state:%p",
+			tbl.tableName,
+			tbl.db.op.Txn().DebugString(),
+			blkstr,
+			tbl._partState.Load())
+	}
+
 	return
 }
 

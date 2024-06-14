@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"regexp"
 	"runtime"
 	gotrace "runtime/trace"
 	"sort"
@@ -476,6 +477,15 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		c.proc.SetPrepareBatch(nil)
 		c.proc.SetPrepareExprList(nil)
 	}()
+
+	if c.proc.SessionInfo.User != "mo_logger" {
+		if regexp.MustCompile(`.*mo_increment_columns.*`).MatchString(sql) {
+			fmt.Printf("xxxx txnid:%x, snapshot ts:%s, run sql: %s\n",
+				txnOp.Txn().ID,
+				txnOp.Txn().SnapshotTS.DebugString(),
+				sql)
+		}
+	}
 
 	var writeOffset uint64
 
