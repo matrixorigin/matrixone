@@ -16,6 +16,7 @@ package compile
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -148,4 +149,12 @@ func receiveMessageFromCnServer2(c *Compile, s *Scope, sender *messageSenderOnCl
 	}
 
 	return nil
+}
+
+func generateStopSendingMessage() *pipeline.Message {
+	message := cnclient.AcquireMessage()
+
+	message.SetMessageType(pipeline.Method_PipelineMessage)
+	message.SetSid(pipeline.Status_StopSending)
+	return message
 }

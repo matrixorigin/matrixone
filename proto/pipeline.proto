@@ -38,6 +38,7 @@ enum Status {
     WaitingNext = 1;
     Last = 2;
     MessageEnd = 3;
+    StopSending = 4;
 }
 
 message Message {

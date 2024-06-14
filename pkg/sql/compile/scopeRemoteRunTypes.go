@@ -100,7 +100,8 @@ type messageSenderOnClient struct {
 	// 1. there has received the EndMessage or ErrorMessage from receiver.
 	// or
 	// 2. we have never sent a message in succeed.
-	safeToClose bool
+	safeToClose  bool
+	alreadyClose bool
 
 	streamSender morpc.Stream
 	receiveCh    chan morpc.Message
@@ -111,6 +112,8 @@ type messageSenderOnClient struct {
 func newMessageSenderOnClient(
 	ctx context.Context, c *Compile, toAddr string) (*messageSenderOnClient, error) {
 	var sender = new(messageSenderOnClient)
+	sender.safeToClose = true
+	sender.alreadyClose = false
 
 	streamSender, err := cnclient.GetStreamSender(toAddr)
 	if err != nil {
@@ -134,6 +137,9 @@ func newMessageSenderOnClient(
 // XXX we can set a scope as argument directly next day.
 func (sender *messageSenderOnClient) send(
 	scopeData, procData []byte, _ pipeline.Method) error {
+	sender.safeToClose = false
+	sender.alreadyClose = false
+
 	sdLen := len(scopeData)
 	if sdLen <= maxMessageSizeToMoRpc {
 		message := cnclient.AcquireMessage()
@@ -180,8 +186,8 @@ func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 
 	case val, ok := <-sender.receiveCh:
 		if !ok || val == nil {
-			// ch close
-			logutil.Errorf("the stream is closed, ok: %v, val: %v", ok, val)
+			sender.safeToClose = true
+			sender.alreadyClose = true
 			return nil, moerr.NewStreamClosed(sender.ctx)
 		}
 		return val, nil
@@ -236,6 +242,51 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 	}
 }
 
+// todo: there is a bug about remote-run cost's statistical information.
+//
+//		no matter how we stop the remote-run, we should get the final remote cost here.
+//	 I set a timeout limit here, but I think that's not necessary, but for safe.
+func (sender *messageSenderOnClient) waitingTheStopResponse() {
+	if sender.alreadyClose || sender.safeToClose {
+		return
+	}
+
+	// send a stop sending message to message-receiver.
+	if err := sender.streamSender.Send(sender.ctx, generateStopSendingMessage()); err != nil {
+		return
+	}
+
+	// waiting the response, so that we can close the stream safely.
+	receiveChan, err := sender.streamSender.Receive()
+	if err != nil {
+		return
+	}
+
+	// half minute is a very long time to wait a simple response.
+	maxWaitingTime, cancel := context.WithTimeout(context.TODO(), 30*time.Second)
+	for {
+		select {
+		case val, getOK := <-receiveChan:
+			receiverDone := !getOK || val == nil
+			if receiverDone {
+				sender.safeToClose = true
+				break
+			}
+			message := val.(*pipeline.Message)
+			if message.IsEndMessage() || message.GetErr() != nil {
+				// in fact, we should deal the cost analysis information here.
+				cancel()
+				break
+			}
+
+			continue
+
+		case <-maxWaitingTime.Done():
+			break
+		}
+	}
+}
+
 func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 	source := ana.List
 	if len(target.analInfos) != len(source) {
@@ -262,10 +313,14 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 }
 
 func (sender *messageSenderOnClient) close() {
+	sender.waitingTheStopResponse()
+
 	if sender.ctxCancel != nil {
 		sender.ctxCancel()
 	}
-	// XXX not a good way to deal it if close failed.
+	if sender.alreadyClose {
+		return
+	}
 	_ = sender.streamSender.Close(true)
 }
 
