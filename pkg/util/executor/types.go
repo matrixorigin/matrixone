@@ -68,7 +68,7 @@ type Options struct {
 // StatementOption statement execute option.
 type StatementOption struct {
 	waitPolicy lock.WaitPolicy
-	accountId  uint32
+	accountId  int64
 }
 
 // Result exec sql result

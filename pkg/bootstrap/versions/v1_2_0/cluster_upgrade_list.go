@@ -52,7 +52,7 @@ var upg_sys_modify_async_task = versions.UpgradeEntry{
 	TableName: catalog.MOSysAsyncTask,
 	UpgType:   versions.MODIFY_COLUMN,
 	UpgSql:    "alter table `mo_task`.`sys_async_task` modify task_id bigint auto_increment",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "task_id")
 		if err != nil {
 			return false, err
@@ -73,7 +73,7 @@ var upg_create_index1_async_task = versions.UpgradeEntry{
 	TableName: catalog.MOSysAsyncTask,
 	UpgType:   versions.ADD_INDEX,
 	UpgSql:    fmt.Sprintf(`create index idx_task_status on %s.%s(task_status)`, catalog.MOTaskDB, catalog.MOSysAsyncTask),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_status")
 	},
 }
@@ -83,7 +83,7 @@ var upg_create_index2_async_task = versions.UpgradeEntry{
 	TableName: catalog.MOSysAsyncTask,
 	UpgType:   versions.ADD_INDEX,
 	UpgSql:    fmt.Sprintf(`create index idx_task_runner on %s.%s(task_runner)`, catalog.MOTaskDB, catalog.MOSysAsyncTask),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_runner")
 	},
 }
@@ -93,7 +93,7 @@ var upg_create_index3_async_task = versions.UpgradeEntry{
 	TableName: catalog.MOSysAsyncTask,
 	UpgType:   versions.ADD_INDEX,
 	UpgSql:    fmt.Sprintf(`create index idx_task_executor on %s.%s(task_metadata_executor)`, catalog.MOTaskDB, catalog.MOSysAsyncTask),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_executor")
 	},
 }
@@ -103,7 +103,7 @@ var upg_create_index4_async_task = versions.UpgradeEntry{
 	TableName: catalog.MOSysAsyncTask,
 	UpgType:   versions.ADD_INDEX,
 	UpgSql:    fmt.Sprintf(`create index idx_task_epoch on %s.%s(task_epoch)`, catalog.MOTaskDB, catalog.MOSysAsyncTask),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_epoch")
 	},
 }
@@ -113,7 +113,7 @@ var upg_create_index1_daemon_task = versions.UpgradeEntry{
 	TableName: catalog.MOSysDaemonTask,
 	UpgType:   versions.ADD_INDEX,
 	UpgSql:    fmt.Sprintf(`create index idx_account_id on %s.%s(account_id)`, catalog.MOTaskDB, catalog.MOSysDaemonTask),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysDaemonTask, "idx_account_id")
 	},
 }
@@ -123,7 +123,7 @@ var upg_create_index2_daemon_task = versions.UpgradeEntry{
 	TableName: catalog.MOSysDaemonTask,
 	UpgType:   versions.ADD_INDEX,
 	UpgSql:    fmt.Sprintf(`create index idx_last_heartbeat on %s.%s(last_heartbeat)`, catalog.MOTaskDB, catalog.MOSysDaemonTask),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysDaemonTask, "idx_last_heartbeat")
 	},
 }
@@ -134,7 +134,7 @@ var upg_mo_role_privs = versions.UpgradeEntry{
 	TableName: "mo_role_privs",
 	UpgType:   versions.MODIFY_METADATA,
 	UpgSql:    frontend.GenSQLForInsertUpgradeAccountPrivilege(),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		sql := frontend.GenSQLForCheckUpgradeAccountPrivilegeExist()
 		return versions.CheckTableDataExist(txn, accountId, sql)
 	},
@@ -145,7 +145,7 @@ var upg_mo_debug_eventTxnTable = versions.UpgradeEntry{
 	TableName: trace.EventTxnTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    trace.EventTxnTableSQL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.EventTxnTable)
 	},
 	PreSql: fmt.Sprintf("create database if not exists %s", trace.DebugDB),
@@ -156,7 +156,7 @@ var upg_mo_debug_eventDataTable = versions.UpgradeEntry{
 	TableName: trace.EventDataTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    trace.EventDataTableSQL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.EventDataTable)
 	},
 	PreSql: fmt.Sprintf("create database if not exists %s", trace.DebugDB),
@@ -167,7 +167,7 @@ var upg_mo_debug_traceTableFilterTable = versions.UpgradeEntry{
 	TableName: trace.TraceTableFilterTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    trace.TraceTableFilterTableSQL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.TraceTableFilterTable)
 	},
 	PreSql: fmt.Sprintf("create database if not exists %s", trace.DebugDB),
@@ -178,7 +178,7 @@ var upg_mo_debug_traceTxnFilterTable = versions.UpgradeEntry{
 	TableName: trace.TraceTxnFilterTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    trace.TraceTxnFilterTableSQL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.TraceTxnFilterTable)
 	},
 	PreSql: fmt.Sprintf("create database if not exists %s", trace.DebugDB),
@@ -189,7 +189,7 @@ var upg_mo_debug_traceStatementFilterTable = versions.UpgradeEntry{
 	TableName: trace.TraceStatementFilterTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    trace.TraceStatementFilterTableSQL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.TraceStatementFilterTable)
 	},
 	PreSql: fmt.Sprintf("create database if not exists %s", trace.DebugDB),
@@ -200,7 +200,7 @@ var upg_mo_debug_eventErrorTable = versions.UpgradeEntry{
 	TableName: trace.EventErrorTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    trace.EventErrorTableSQL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.EventErrorTable)
 	},
 	PreSql: fmt.Sprintf("create database if not exists %s", trace.DebugDB),
@@ -211,7 +211,7 @@ var upg_mo_debug_traceStatementTable = versions.UpgradeEntry{
 	TableName: trace.TraceStatementTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    trace.TraceStatementTableSQL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.TraceStatementTable)
 	},
 	PreSql: fmt.Sprintf("create database if not exists %s", trace.DebugDB),
@@ -222,7 +222,7 @@ var upg_mo_debug_eventTxnActionTable = versions.UpgradeEntry{
 	TableName: trace.EventTxnActionTable,
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    trace.EventTxnActionTableSQL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.EventTxnActionTable)
 	},
 	PreSql: fmt.Sprintf("create database if not exists %s", trace.DebugDB),
@@ -233,7 +233,7 @@ var upg_mo_debug_featuresTables = versions.UpgradeEntry{
 	TableName: trace.FeaturesTables,
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    trace.FeaturesTablesSQL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.FeaturesTables)
 	},
 	PostSql: fmt.Sprintf(`insert into %s.%s (name, state) values 
@@ -251,7 +251,7 @@ var upg_mo_account = versions.UpgradeEntry{
 	TableName: catalog.MOAccountTable,
 	UpgType:   versions.ADD_COLUMN,
 	UpgSql:    "alter table mo_catalog.mo_account add column admin_name varchar(300) after account_name",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOAccountTable, "admin_name")
 		if err != nil {
 			return false, err
@@ -269,7 +269,7 @@ var upg_system_logInfo = versions.UpgradeEntry{
 	TableName: "log_info",
 	UpgType:   versions.MODIFY_VIEW,
 	UpgSql:    viewSystemLogInfoDDL120,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_SYSTEM, "log_info")
 		if err != nil {
 			return false, err

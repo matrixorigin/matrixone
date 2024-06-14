@@ -69,7 +69,7 @@ func (v *versionHandle) HandleTenantUpgrade(
 	for _, upgEntry := range tenantUpgEntries {
 		start := time.Now()
 
-		err := upgEntry.Upgrade(txn, uint32(tenantID))
+		err := upgEntry.Upgrade(txn, tenantID)
 		if err != nil {
 			getLogger().Error("tenant upgrade entry execute error", zap.Error(err), zap.Int64("tenantId", tenantID), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
 			return err

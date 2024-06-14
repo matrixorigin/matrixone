@@ -123,13 +123,13 @@ type UpgradeEntry struct {
 	// CheckFunc was used to check whether an upgrade is required
 	// return true if the system is already in the final state and does not need to be upgraded,
 	// otherwise return false
-	CheckFunc func(txn executor.TxnExecutor, accountId uint32) (bool, error)
+	CheckFunc func(txn executor.TxnExecutor, accountId int64) (bool, error)
 	PreSql    string
 	PostSql   string
 }
 
 // Upgrade entity execution upgrade entrance
-func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error {
+func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId int64) error {
 	exist, err := u.CheckFunc(txn, accountId)
 	if err != nil {
 		getLogger().Error("execute upgrade entry check error", zap.Error(err), zap.String("upgrade entry", u.String()))
@@ -181,7 +181,7 @@ func (u *UpgradeEntry) String() string {
 // CheckTableColumn Check if the columns in the table exist, and if so,
 // return the detailed information of the column
 func CheckTableColumn(txn executor.TxnExecutor,
-	accountId uint32,
+	accountId int64,
 	schema string,
 	tableName string,
 	columnName string) (ColumnInfo, error) {
@@ -268,7 +268,7 @@ func CheckTableColumn(txn executor.TxnExecutor,
 }
 
 // CheckViewDefinition Check if the view exists, if so, return true and return the view definition
-func CheckViewDefinition(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
+func CheckViewDefinition(txn executor.TxnExecutor, accountId int64, schema string, viewName string) (bool, string, error) {
 	sql := fmt.Sprintf("SELECT tbl.rel_createsql AS `VIEW_DEFINITION` FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.relkind = 'v' AND tbl.reldatabase = '%s'  AND  tbl.relname = '%s'", schema, viewName)
 	if accountId == catalog.System_Account {
 		sql = fmt.Sprintf("SELECT tbl.rel_createsql AS `VIEW_DEFINITION` FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.relkind = 'v' AND account_id = 0 AND tbl.reldatabase = '%s'  AND  tbl.relname = '%s'", schema, viewName)
@@ -298,7 +298,7 @@ func CheckViewDefinition(txn executor.TxnExecutor, accountId uint32, schema stri
 
 // CheckTableDefinition is used to check if the specified table definition exists in the specified database. If it exists,
 // return true; otherwise, return false.
-func CheckTableDefinition(txn executor.TxnExecutor, accountId uint32, schema string, tableName string) (bool, error) {
+func CheckTableDefinition(txn executor.TxnExecutor, accountId int64, schema string, tableName string) (bool, error) {
 	if schema == "" || tableName == "" {
 		return false, moerr.NewInternalErrorNoCtx("schema name or table name is empty")
 	}
@@ -329,7 +329,7 @@ func CheckTableDefinition(txn executor.TxnExecutor, accountId uint32, schema str
 
 // CheckTableComment is used to check if the specified table definition exists in the specified database. If it exists,
 // return true; otherwise, return false.
-func CheckTableComment(txn executor.TxnExecutor, accountId uint32, schema string, tableName string) (bool, string, error) {
+func CheckTableComment(txn executor.TxnExecutor, accountId int64, schema string, tableName string) (bool, string, error) {
 	if schema == "" || tableName == "" {
 		return false, "", moerr.NewInternalErrorNoCtx("schema name or table name is empty")
 	}
@@ -362,7 +362,7 @@ func CheckTableComment(txn executor.TxnExecutor, accountId uint32, schema string
 
 // CheckDatabaseDefinition This function is used to check if the database definition exists.
 // If it exists, return true; otherwise, return false.
-func CheckDatabaseDefinition(txn executor.TxnExecutor, accountId uint32, schema string) (bool, error) {
+func CheckDatabaseDefinition(txn executor.TxnExecutor, accountId int64, schema string) (bool, error) {
 	if schema == "" {
 		return false, moerr.NewInternalErrorNoCtx("schema name is empty")
 	}
@@ -389,7 +389,7 @@ func CheckDatabaseDefinition(txn executor.TxnExecutor, accountId uint32, schema 
 
 // CheckTableDataExist Used to checks whether a table contains specific data
 // This function executes the given SQL query, returns true if the result set is not empty, otherwise returns false.
-func CheckTableDataExist(txn executor.TxnExecutor, accountId uint32, sql string) (bool, error) {
+func CheckTableDataExist(txn executor.TxnExecutor, accountId int64, sql string) (bool, error) {
 	if sql == "" {
 		return false, moerr.NewInternalErrorNoCtx("check table data sql is empty")
 	}
@@ -411,7 +411,7 @@ func CheckTableDataExist(txn executor.TxnExecutor, accountId uint32, sql string)
 
 // CheckIndexDefinition Used to check if a certain index is defined in the table
 // This function executes the given SQL query, returns true if the result set is not empty, otherwise returns false.
-func CheckIndexDefinition(txn executor.TxnExecutor, accountId uint32, schema string, tableName string, indexName string) (bool, error) {
+func CheckIndexDefinition(txn executor.TxnExecutor, accountId int64, schema string, tableName string, indexName string) (bool, error) {
 	if schema == "" || tableName == "" || indexName == "" {
 		return false, moerr.NewInternalErrorNoCtx("schema name or table name or indexName is empty")
 	}

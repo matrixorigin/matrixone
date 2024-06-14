@@ -42,7 +42,7 @@ var upg_system_logInfo = versions.UpgradeEntry{
 	TableName: "log_info",
 	UpgType:   versions.MODIFY_VIEW,
 	UpgSql:    viewSystemLogInfoDDL120,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_SYSTEM, "log_info")
 		if err != nil {
 			return false, err
@@ -71,7 +71,7 @@ var upg_system_rawlog_comment = versions.UpgradeEntry{
 	TableName: catalog.MO_RAWLOG,
 	UpgType:   versions.MODIFY_TABLE_COMMENT,
 	UpgSql:    getDDLAlterComment(catalog.MO_SYSTEM, catalog.MO_RAWLOG, systemRawlogComment121),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, comment, err := versions.CheckTableComment(txn, accountId, catalog.MO_SYSTEM, catalog.MO_RAWLOG)
 		if err != nil {
 			return false, err
@@ -88,7 +88,7 @@ var upg_system_statementInto_comment = versions.UpgradeEntry{
 	TableName: catalog.MO_STATEMENT,
 	UpgType:   versions.MODIFY_TABLE_COMMENT,
 	UpgSql:    getDDLAlterComment(catalog.MO_SYSTEM, catalog.MO_STATEMENT, systemStatementInfoComment121),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, comment, err := versions.CheckTableComment(txn, accountId, catalog.MO_SYSTEM, catalog.MO_STATEMENT)
 		if err != nil {
 			return false, err
@@ -105,7 +105,7 @@ var upg_systemMetric_metric_comment = versions.UpgradeEntry{
 	TableName: catalog.MO_METRIC,
 	UpgType:   versions.MODIFY_TABLE_COMMENT,
 	UpgSql:    getDDLAlterComment(catalog.MO_SYSTEM_METRICS, catalog.MO_METRIC, systemMetricComment121),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, comment, err := versions.CheckTableComment(txn, accountId, catalog.MO_SYSTEM_METRICS, catalog.MO_METRIC)
 		if err != nil {
 			return false, err
@@ -122,7 +122,7 @@ var upg_mo_account2 = versions.UpgradeEntry{
 	TableName: catalog.MOAccountTable,
 	UpgType:   versions.MODIFY_COLUMN,
 	UpgSql:    "alter table mo_catalog.mo_account modify account_id bigint NOT NULL AUTO_INCREMENT",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOAccountTable, "account_id")
 		if err != nil {
 			return false, err
@@ -142,7 +142,7 @@ var upg_sys_daemon_task = versions.UpgradeEntry{
 	TableName: catalog.MOSysDaemonTask,
 	UpgType:   versions.MODIFY_COLUMN,
 	UpgSql:    "alter table mo_task.sys_daemon_task modify account_id bigint not null",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MOTaskDB, catalog.MOSysDaemonTask, "account_id")
 		if err != nil {
 			return false, err
@@ -162,7 +162,7 @@ var upg_mo_upgrade = versions.UpgradeEntry{
 	TableName: catalog.MOUpgradeTenantTable,
 	UpgType:   versions.MODIFY_COLUMN,
 	UpgSql:    "alter table mo_catalog.mo_upgrade_tenant modify from_account_id bigint NOT NULL, modify to_account_id bigint NOT NULL",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		colInfo1, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOUpgradeTenantTable, "from_account_id")
 		if err != nil {
 			return false, err

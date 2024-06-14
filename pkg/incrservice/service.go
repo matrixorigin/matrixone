@@ -399,7 +399,7 @@ func (s *service) destroyTables(ctx context.Context) {
 }
 
 type deleteCtx struct {
-	accountID uint32
+	accountID int64
 	tableID   uint64
 }
 

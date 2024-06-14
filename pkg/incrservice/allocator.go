@@ -117,7 +117,7 @@ func (a *allocator) updateMinValue(
 	minValue uint64,
 	txnOp client.TxnOperator) error {
 	var err error
-	var accountId uint32
+	var accountId int64
 	accountId, err = getAccountID(ctx)
 	if err != nil {
 		return err
@@ -214,7 +214,7 @@ var (
 
 type action struct {
 	txnOp         client.TxnOperator
-	accountID     uint32
+	accountID     int64
 	actionType    int
 	tableID       uint64
 	col           string
@@ -224,6 +224,6 @@ type action struct {
 	applyUpdate   func(error)
 }
 
-func getAccountID(ctx context.Context) (uint32, error) {
+func getAccountID(ctx context.Context) (int64, error) {
 	return defines.GetAccountId(ctx)
 }

@@ -74,7 +74,7 @@ var upg_mo_foreign_keys = versions.UpgradeEntry{
 	TableName: catalog.MOForeignKeys,
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    frontend.MoCatalogMoForeignKeysDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		isExist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MOForeignKeys)
 		if err != nil {
 			return false, err
@@ -92,7 +92,7 @@ var upg_mo_indexes_add_IndexAlgoName = versions.UpgradeEntry{
 	TableName: catalog.MO_INDEXES,
 	UpgType:   versions.ADD_COLUMN,
 	UpgSql:    fmt.Sprintf(`alter table %s.%s add column %s varchar(11) after type;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoName),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoName)
 		if err != nil {
 			return false, err
@@ -110,7 +110,7 @@ var upg_mo_indexes_add_IndexAlgoTableType = versions.UpgradeEntry{
 	TableName: catalog.MO_INDEXES,
 	UpgType:   versions.ADD_COLUMN,
 	UpgSql:    fmt.Sprintf(`alter table %s.%s add column %s varchar(11) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType, catalog.IndexAlgoName),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType)
 		if err != nil {
 			return false, err
@@ -128,7 +128,7 @@ var upg_mo_indexes_add_IndexAlgoParams = versions.UpgradeEntry{
 	TableName: catalog.MO_INDEXES,
 	UpgType:   versions.ADD_COLUMN,
 	UpgSql:    fmt.Sprintf(`alter table %s.%s add column %s varchar(2048) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoParams, catalog.IndexAlgoTableType),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoParams)
 		if err != nil {
 			return false, err
@@ -150,7 +150,7 @@ var upg_system_metrics_sql_statement_duration_total = versions.UpgradeEntry{
 		"from `system_metrics`.`metric` "+
 		"where `metric_name` = 'sql_statement_duration_total'",
 		catalog.MO_SYSTEM_METRICS, "sql_statement_duration_total"),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return false, nil
 	},
 	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", catalog.MO_SYSTEM_METRICS, "sql_statement_duration_total"),
@@ -161,7 +161,7 @@ var upg_mo_snapshots = versions.UpgradeEntry{
 	TableName: catalog.MO_SNAPSHOTS,
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    frontend.MoCatalogMoSnapshotsDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		isExist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS)
 		if err != nil {
 			return false, err
@@ -186,7 +186,7 @@ var upg_sql_statement_cu = versions.UpgradeEntry{
 		role VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',
 		sql_source_type VARCHAR(1024) NOT NULL COMMENT 'sql_source_type, val like: external_sql, cloud_nonuser_sql, cloud_user_sql, internal_sql, ...'
 		) CLUSTER BY (account, collecttime);`, catalog.MO_SYSTEM_METRICS, catalog.MO_SQL_STMT_CU),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		isExist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_SYSTEM_METRICS, catalog.MO_SQL_STMT_CU)
 		if err != nil {
 			return false, err
@@ -205,7 +205,7 @@ var upg_mysql_role_edges = versions.UpgradeEntry{
 	TableName: "role_edges",
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    sysview.MysqlRoleEdgesDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, sysview.MysqlDBConst, "role_edges")
 	},
 }
@@ -215,7 +215,7 @@ var upg_information_schema_schema_privileges = versions.UpgradeEntry{
 	TableName: "schema_privileges",
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    sysview.InformationSchemaSchemaPrivilegesDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "schema_privileges")
 	},
 }
@@ -225,7 +225,7 @@ var upg_information_schema_table_privileges = versions.UpgradeEntry{
 	TableName: "table_privileges",
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    sysview.InformationSchemaTablePrivilegesDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "table_privileges")
 	},
 }
@@ -235,7 +235,7 @@ var upg_information_schema_column_privileges = versions.UpgradeEntry{
 	TableName: "column_privileges",
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    sysview.InformationSchemaColumnPrivilegesDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "column_privileges")
 	},
 }
@@ -245,7 +245,7 @@ var upg_information_schema_collations = versions.UpgradeEntry{
 	TableName: "collations",
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    sysview.InformationSchemaCollationsDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "collations")
 	},
 }
@@ -255,7 +255,7 @@ var upg_information_schema_table_constraints = versions.UpgradeEntry{
 	TableName: "table_constraints",
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    sysview.InformationSchemaTableConstraintsDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "table_constraints")
 	},
 }
@@ -265,7 +265,7 @@ var upg_information_schema_events = versions.UpgradeEntry{
 	TableName: "events",
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    sysview.InformationSchemaEventsDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "events")
 	},
 }
@@ -275,7 +275,7 @@ var upg_information_schema_tables = versions.UpgradeEntry{
 	TableName: "TABLES",
 	UpgType:   versions.MODIFY_VIEW,
 	UpgSql:    sysview.InformationSchemaTablesDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "TABLES")
 		if err != nil {
 			return false, err
@@ -294,7 +294,7 @@ var upg_information_schema_processlist = versions.UpgradeEntry{
 	TableName: "processlist",
 	UpgType:   versions.MODIFY_VIEW,
 	UpgSql:    sysview.InformationSchemaProcesslistDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "processlist")
 		if err != nil {
 			return false, err
@@ -313,7 +313,7 @@ var upg_information_schema_referenctial_constraints = versions.UpgradeEntry{
 	TableName: "REFERENTIAL_CONSTRAINTS",
 	UpgType:   versions.CREATE_VIEW,
 	UpgSql:    sysview.InformationSchemaReferentialConstraintsDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "REFERENTIAL_CONSTRAINTS")
 		if err != nil {
 			return false, err
@@ -332,7 +332,7 @@ var upg_information_schema_columns = versions.UpgradeEntry{
 	TableName: "COLUMNS",
 	UpgType:   versions.MODIFY_VIEW,
 	UpgSql:    sysview.InformationSchemaColumnsDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
 		if err != nil {
 			return false, err
@@ -351,7 +351,7 @@ var upg_information_schema_views = versions.UpgradeEntry{
 	TableName: "VIEWS",
 	UpgType:   versions.MODIFY_VIEW,
 	UpgSql:    sysview.InformationSchemaViewsDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "VIEWS")
 		if err != nil {
 			return false, err
@@ -370,7 +370,7 @@ var upg_information_schema_partitions = versions.UpgradeEntry{
 	TableName: "PARTITIONS",
 	UpgType:   versions.MODIFY_VIEW,
 	UpgSql:    sysview.InformationSchemaPartitionsDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "PARTITIONS")
 		if err != nil {
 			return false, err
@@ -390,7 +390,7 @@ var upg_mo_catalog_mo_sessions = versions.UpgradeEntry{
 	TableName: "mo_sessions",
 	UpgType:   versions.MODIFY_VIEW,
 	UpgSql:    frontend.MoCatalogMoSessionsDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_sessions")
 		if err != nil {
 			return false, err
@@ -409,7 +409,7 @@ var upg_mo_catalog_mo_configurations = versions.UpgradeEntry{
 	TableName: "mo_configurations",
 	UpgType:   versions.MODIFY_VIEW,
 	UpgSql:    frontend.MoCatalogMoConfigurationsDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_configurations")
 		if err != nil {
 			return false, err
@@ -428,7 +428,7 @@ var upg_mo_catalog_mo_locks = versions.UpgradeEntry{
 	TableName: "mo_locks",
 	UpgType:   versions.MODIFY_VIEW,
 	UpgSql:    frontend.MoCatalogMoLocksDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_locks")
 		if err != nil {
 			return false, err
@@ -447,7 +447,7 @@ var upg_mo_catalog_mo_variables = versions.UpgradeEntry{
 	TableName: "mo_variables",
 	UpgType:   versions.MODIFY_VIEW,
 	UpgSql:    frontend.MoCatalogMoVariablesDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_variables")
 		if err != nil {
 			return false, err
@@ -466,7 +466,7 @@ var upg_mo_catalog_mo_transactions = versions.UpgradeEntry{
 	TableName: "mo_transactions",
 	UpgType:   versions.MODIFY_VIEW,
 	UpgSql:    frontend.MoCatalogMoTransactionsDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_transactions")
 		if err != nil {
 			return false, err
@@ -485,7 +485,7 @@ var upg_mo_catalog_mo_cache = versions.UpgradeEntry{
 	TableName: "mo_cache",
 	UpgType:   versions.MODIFY_VIEW,
 	UpgSql:    frontend.MoCatalogMoCacheDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, catalog.MO_CATALOG, "mo_cache")
 		if err != nil {
 			return false, err
@@ -504,7 +504,7 @@ var upg_mo_pub = versions.UpgradeEntry{
 	TableName: catalog.MO_PUBS,
 	UpgType:   versions.ADD_COLUMN,
 	UpgSql:    "alter table `mo_catalog`.`mo_pubs` add column `update_time` timestamp",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, "mo_catalog", catalog.MO_PUBS, "update_time")
 		if err != nil {
 			return false, err

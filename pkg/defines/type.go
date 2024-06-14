@@ -170,9 +170,9 @@ type UserIDKey struct{}
 type RoleIDKey struct{}
 type NodeIDKey struct{}
 
-func GetAccountId(ctx context.Context) (uint32, error) {
+func GetAccountId(ctx context.Context) (int64, error) {
 	if v := ctx.Value(TenantIDKey{}); v != nil {
-		return v.(uint32), nil
+		return v.(int64), nil
 	} else {
 		return 0, moerr.NewInternalError(ctx, "no account id in context")
 	}
@@ -194,11 +194,11 @@ func GetRoleId(ctx context.Context) uint32 {
 	return 0
 }
 
-func AttachAccount(ctx context.Context, accId uint32, userId uint32, roleId uint32) context.Context {
+func AttachAccount(ctx context.Context, accId int64, userId uint32, roleId uint32) context.Context {
 	return AttachRoleId(AttachUserId(AttachAccountId(ctx, accId), userId), roleId)
 }
 
-func AttachAccountId(ctx context.Context, accId uint32) context.Context {
+func AttachAccountId(ctx context.Context, accId int64) context.Context {
 	return context.WithValue(ctx, TenantIDKey{}, accId)
 }
 

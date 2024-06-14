@@ -146,12 +146,12 @@ func (opts StatementOption) WaitPolicy() lock.WaitPolicy {
 }
 
 // WithAccountID execute sql in account
-func (opts StatementOption) WithAccountID(accountID uint32) StatementOption {
+func (opts StatementOption) WithAccountID(accountID int64) StatementOption {
 	opts.accountId = accountID
 	return opts
 }
 
-func (opts StatementOption) AccountID() uint32 {
+func (opts StatementOption) AccountID() int64 {
 	return opts.accountId
 }
 

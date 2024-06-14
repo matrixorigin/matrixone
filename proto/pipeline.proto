@@ -465,7 +465,7 @@ message ProcessInfo {
   string sql = 2;
   ProcessLimitation lim = 3 [(gogoproto.nullable) = false];
   int64 unix_time = 4;
-  uint32 account_id = 5;
+  int64 account_id = 5;
   txn.CNTxnSnapshot snapshot = 6 [(gogoproto.nullable) = false];
   SessionInfo session_info = 7 [(gogoproto.nullable) = false];
   repeated int32 analysis_node_list = 8;

@@ -33,7 +33,7 @@ var upg_mo_mysql_compatibility_mode1 = versions.UpgradeEntry{
 	TableName: "mo_mysql_compatibility_mode",
 	UpgType:   versions.MODIFY_METADATA,
 	UpgSql:    "insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (current_account_id(), current_account_name(), 'keep_user_target_list_in_result', '1',  true)",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		sql := "select * from mo_catalog.mo_mysql_compatibility_mode where variable_name = 'keep_user_target_list_in_result'"
 		return versions.CheckTableDataExist(txn, accountId, sql)
 	},
@@ -44,7 +44,7 @@ var upg_information_schema_files = versions.UpgradeEntry{
 	TableName: "files",
 	UpgType:   versions.CREATE_NEW_TABLE,
 	UpgSql:    sysview.InformationSchemaFilesDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "files")
 	},
 }
@@ -54,7 +54,7 @@ var upg_mo_mysql_compatibility_mode2 = versions.UpgradeEntry{
 	TableName: "mo_mysql_compatibility_mode",
 	UpgType:   versions.MODIFY_COLUMN,
 	UpgSql:    "alter table mo_catalog.mo_mysql_compatibility_mode modify account_id bigint",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId int64) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, "mo_mysql_compatibility_mode", "account_id")
 		if err != nil {
 			return false, err
