@@ -595,7 +595,7 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	}
 	col := extractColRefInFilter(expr)
 	if col != nil {
-		blocksel := calcBlockSelectivityUsingShuffleRange(s.ShuffleRangeMap[col.Name], expr.Selectivity)
+		blocksel := calcBlockSelectivityUsingShuffleRange(s.ShuffleRangeMap[col.Name], expr)
 		switch GetSortOrder(tableDef, col.ColPos) {
 		case 0:
 			blocksel = math.Min(blocksel, 0.2)
@@ -1268,6 +1268,10 @@ func orSelectivity(s1, s2 float64) float64 {
 func GetExecType(qry *plan.Query) ExecType {
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
+		switch node.NodeType {
+		case plan.Node_RECURSIVE_CTE, plan.Node_RECURSIVE_SCAN:
+			ret = ExecTypeAP_ONECN
+		}
 		stats := node.Stats
 		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
 			return ExecTypeAP_MULTICN
@@ -1341,8 +1345,13 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 	}
 }
 
-func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, sel float64) float64 {
+func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, expr *plan.Expr) float64 {
+	sel := expr.Selectivity
 	if s == nil {
+		if expr.GetF().Func.ObjName == "isnull" || expr.GetF().Func.ObjName == "is_null" {
+			//speicial handle for isnull
+			return sel
+		}
 		if sel <= 0.01 {
 			return sel * 100
 		} else {
