@@ -1700,7 +1700,7 @@ func getConstValueByExpr(
 		return nil
 	}
 	defer exec.Free()
-	vec, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	vec, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return nil
 	}

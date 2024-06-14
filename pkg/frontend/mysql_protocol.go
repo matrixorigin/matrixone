@@ -558,6 +558,9 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 const bit4TcpWriteCopy = 12 // 1<<12 == 4096
 
 // CalculateOutTrafficBytes calculate the bytes of the last out traffic, the number of mysql packets
+// return 0 value, if the connection is closed.
+// return -1 value, if the session is nil unexpected.
+//
 // packet cnt has 3 part:
 // 1st part: flush op cnt.
 // 2nd part: upload part, calculation = payload / 16KiB
@@ -567,6 +570,13 @@ const bit4TcpWriteCopy = 12 // 1<<12 == 4096
 //   - If ioCopyBufferSize is changed, you should see the calling of goetty.NewApplicationWithListenAddress(...) in NewMOServer()
 func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
 	ses := mp.GetSession()
+	if ses == nil {
+		if mp.quit.Load() {
+			return 0, 0
+		} else {
+			return -1, -1
+		}
+	}
 	// Case 1: send data as ResultSet
 	resultSetPart := int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer)
 	// Case 2: send data as CSV

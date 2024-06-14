@@ -309,7 +309,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 						1, ctr.cfs2); err != nil {
 						return err
 					}
-					vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
+					vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
 					if err != nil {
 						return err
 					}
@@ -360,7 +360,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 							1, ctr.cfs2); err != nil {
 							return err
 						}
-						vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
+						vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
 						if err != nil {
 							return err
 						}
@@ -419,7 +419,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 
 func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process) error {
 	for i := range ctr.evecs {
-		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat})
+		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			return err
 		}

@@ -17,9 +17,10 @@ package group
 import (
 	"bytes"
 	"fmt"
+	"runtime"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -362,7 +363,7 @@ func (ctr *container) evaluateAggAndGroupBy(
 	// evaluate the agg.
 	for i := range ctr.aggVecs {
 		for j := range ctr.aggVecs[i].Executor {
-			ctr.aggVecs[i].Vec[j], err = ctr.aggVecs[i].Executor[j].Eval(proc, batList)
+			ctr.aggVecs[i].Vec[j], err = ctr.aggVecs[i].Executor[j].Eval(proc, batList, nil)
 			if err != nil {
 				return err
 			}
@@ -371,7 +372,7 @@ func (ctr *container) evaluateAggAndGroupBy(
 
 	// evaluate the group-by.
 	for i := range ctr.groupVecs.Vec {
-		ctr.groupVecs.Vec[i], err = ctr.groupVecs.Executor[i].Eval(proc, batList)
+		ctr.groupVecs.Vec[i], err = ctr.groupVecs.Executor[i].Eval(proc, batList, nil)
 		if err != nil {
 			return err
 		}
