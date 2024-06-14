@@ -669,8 +669,6 @@ type txnTable struct {
 	seqnums    []uint16
 	typs       []types.Type
 	_partState atomic.Pointer[logtailreplay.PartitionState]
-	// specify whether the logtail is updated. once it is updated, it will not be updated again
-	logtailUpdated atomic.Bool
 
 	primaryIdx    int // -1 means no primary key
 	primarySeqnum int // -1 means no primary key

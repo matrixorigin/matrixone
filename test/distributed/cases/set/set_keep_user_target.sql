@@ -1,9 +1,7 @@
 drop account if exists default_1;
 create account default_1 ADMIN_NAME admin IDENTIFIED BY '111111';
 -- @session:id=1&user=default_1:admin&password=111111
-set keep_user_target_list_in_result = 1;
 select @@lower_case_table_names;
-select @@keep_user_target_list_in_result;
 create database if not exists test;
 use test;
 drop table if exists t1;

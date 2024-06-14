@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -63,6 +64,8 @@ type mergeObjectsTask struct {
 	attrs      []string
 
 	targetObjSize uint32
+
+	createAt time.Time
 }
 
 func NewMergeObjectsTask(
@@ -84,6 +87,8 @@ func NewMergeObjectsTask(
 		blkCnt:       make([]int, len(mergedObjs)),
 
 		targetObjSize: targetObjSize,
+
+		createAt: time.Now(),
 	}
 	for i, obj := range mergedObjs {
 		task.mergedBlkCnt[i] = task.totalMergedBlkCnt
@@ -271,6 +276,12 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 			)
 		}
 	}()
+
+	if time.Since(task.createAt) > time.Second*10 {
+		logutil.Warn("[Slow] Mergeblocks wait", common.OperationField(task.Name()),
+			common.AnyField("duration", time.Since(task.createAt)),
+		)
+	}
 
 	schema := task.rel.Schema().(*catalog.Schema)
 	sortkeyPos := -1

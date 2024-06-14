@@ -18,11 +18,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	gotrace "runtime/trace"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -444,6 +446,12 @@ func doUse(ctx context.Context, ses FeSession, db string) error {
 	var txn TxnOperator
 	var err error
 	var dbMeta engine.Database
+
+	// In order to be compatible with various GUI clients and BI tools, lower case db name if it's a mysql system db
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(db)) {
+		db = strings.ToLower(db)
+	}
+
 	txn = txnHandler.GetTxn()
 	//TODO: check meta data
 	if dbMeta, err = getGlobalPu().StorageEngine.Database(ctx, db, txn); err != nil {
@@ -695,6 +703,14 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				return err
 			}
 			runtime.ProcessLevelRuntime().SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
+		} else if name == "refresh_global_sys_vars_mgr" {
+			// refresh the cache of current account in GSysVarsMgr, load the newest data from `mo_mysql_compatibility_mode` table
+			if value.(int64) == 1 {
+				GSysVarsMgr.Put(ses.GetAccountId(), nil)
+				if err = ses.InitSystemVariables(execCtx.reqCtx); err != nil {
+					return err
+				}
+			}
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
@@ -1020,12 +1036,7 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 		return nil, err
 	}
 
-	origin, err := ses.GetSessionSysVar("keep_user_target_list_in_result")
-	if err != nil {
-		return nil, err
-	}
-
-	stmts, err := mysql.Parse(execCtx.reqCtx, st.Sql, v.(int64), origin.(int64))
+	stmts, err := mysql.Parse(execCtx.reqCtx, st.Sql, v.(int64))
 	if err != nil {
 		return nil, err
 	}
@@ -1915,16 +1926,11 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 
 func parseSql(execCtx *ExecCtx) (stmts []tree.Statement, err error) {
 	var v interface{}
-	var origin interface{}
 	v, err = execCtx.ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
 		v = int64(1)
 	}
-	origin, err = execCtx.ses.GetSessionSysVar("keep_user_target_list_in_result")
-	if err != nil {
-		origin = int64(0)
-	}
-	stmts, err = parsers.Parse(execCtx.reqCtx, dialect.MYSQL, execCtx.input.getSql(), v.(int64), origin.(int64))
+	stmts, err = parsers.Parse(execCtx.reqCtx, dialect.MYSQL, execCtx.input.getSql(), v.(int64))
 	if err != nil {
 		return nil, err
 	}
@@ -2168,6 +2174,11 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	return
 }
 
+func makeCompactTxnInfo(op TxnOperator) string {
+	txn := op.Txn()
+	return fmt.Sprintf("%s:%s", hex.EncodeToString(txn.ID), txn.SnapshotTS.DebugString())
+}
+
 func executeStmtWithResponse(ses *Session,
 	execCtx *ExecCtx,
 ) (err error) {
@@ -2288,7 +2299,7 @@ func executeStmtWithWorkspace(ses FeSession,
 
 	//refresh txn id
 	ses.SetTxnId(txnOp.Txn().ID)
-	ses.SetStaticTxnId(txnOp.Txn().ID)
+	ses.SetStaticTxnInfo(makeCompactTxnInfo(txnOp))
 
 	//refresh proc txnOp
 	execCtx.proc.TxnOperator = txnOp
