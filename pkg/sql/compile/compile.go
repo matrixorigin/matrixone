@@ -2398,29 +2398,52 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	return rs
 }
 
-func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
-	if c.IsTpQuery() {
-		rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
-		left[0].appendInstruction(vm.Instruction{
-			Op: vm.Connector,
-			Arg: connector.NewArgument().
-				WithReg(rs[0].Proc.Reg.MergeReceivers[0]),
+	rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
+	left[0].appendInstruction(vm.Instruction{
+		Op: vm.Connector,
+		Arg: connector.NewArgument().
+			WithReg(rs[0].Proc.Reg.MergeReceivers[0]),
+	})
+	right[0].appendInstruction(vm.Instruction{
+		Op: vm.Connector,
+		Arg: connector.NewArgument().
+			WithReg(rs[0].Proc.Reg.MergeReceivers[1]),
+	})
+	switch nodeType {
+	case plan.Node_MINUS:
+		rs[0].appendInstruction(vm.Instruction{
+			Op:  vm.Minus,
+			Idx: c.anal.curr,
+			Arg: minus.NewArgument(),
 		})
-		right[0].appendInstruction(vm.Instruction{
-			Op: vm.Connector,
-			Arg: connector.NewArgument().
-				WithReg(rs[0].Proc.Reg.MergeReceivers[1]),
+	case plan.Node_INTERSECT:
+		rs[0].appendInstruction(vm.Instruction{
+			Op:  vm.Intersect,
+			Idx: c.anal.curr,
+			Arg: intersect.NewArgument(),
 		})
-	} else {
-		rs = c.newJoinScopeListWithBucket(rs, left, right, n)
+	case plan.Node_INTERSECT_ALL:
+		rs[0].appendInstruction(vm.Instruction{
+			Op:  vm.IntersectAll,
+			Idx: c.anal.curr,
+			Arg: intersectall.NewArgument(),
+		})
 	}
+	return rs
+}
+
+func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+	if c.IsTpQuery() {
+		return c.compileTpMinusAndIntersect(n, left, right, nodeType)
+	}
+	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
+	rs = c.newJoinScopeListWithBucket(rs, left, right, n)
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
-			if !c.IsTpQuery() {
-				rs[i].Instructions[0].Arg.Release()
-			}
+			rs[i].Instructions[0].Arg.Release()
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.Minus,
 				Idx: c.anal.curr,
@@ -2429,9 +2452,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []
 		}
 	case plan.Node_INTERSECT:
 		for i := range rs {
-			if !c.IsTpQuery() {
-				rs[i].Instructions[0].Arg.Release()
-			}
+			rs[i].Instructions[0].Arg.Release()
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.Intersect,
 				Idx: c.anal.curr,
@@ -2440,9 +2461,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []
 		}
 	case plan.Node_INTERSECT_ALL:
 		for i := range rs {
-			if !c.IsTpQuery() {
-				rs[i].Instructions[0].Arg.Release()
-			}
+			rs[i].Instructions[0].Arg.Release()
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.IntersectAll,
 				Idx: c.anal.curr,
@@ -3517,12 +3536,14 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 		ss[i].NodeInfo.Addr = addr
 		ss[i].NodeInfo.Mcpu = 1 // ss is already the mcpu length so we don't need to parallel it
 		ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op:      vm.Merge,
-			Idx:     c.anal.curr,
-			IsFirst: currentFirstFlag,
-			Arg:     merge.NewArgument(),
-		})
+		if !c.IsTpQuery() {
+			ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+				Op:      vm.Merge,
+				Idx:     c.anal.curr,
+				IsFirst: currentFirstFlag,
+				Arg:     merge.NewArgument(),
+			})
+		}
 	}
 	c.anal.isFirst = false
 	return ss
