@@ -2000,7 +2000,7 @@ func (tbl *txnTable) newReader(
 		table:    tbl,
 		iter:     iter,
 		iterForTest: state.NewRowsIterForTest(types.MaxTs()),
-		iterDel: state.NewRowsIter(types.MaxTs(), nil, true),
+		//iterDel: state.NewRowsIter(types.MaxTs(), nil, true),
 		seqnumMp: seqnumMp,
 		typsMap:  mp,
 	}

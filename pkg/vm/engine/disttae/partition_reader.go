@@ -46,7 +46,7 @@ type PartitionReader struct {
 	//add for test
 	iterForTest logtailreplay.RowsIter
 	called      bool
-	iterDel     logtailreplay.RowsIter
+	//iterDel     logtailreplay.RowsIter
 
 	seqnumMp map[string]int
 	typsMap  map[string]types.Type
@@ -337,7 +337,7 @@ func (p *PartitionReader) Read(
 					len = result.RowCount()
 				}
 
-				logutil.Infof("xxxx partititonReader reads:"+
+				logutil.Infof("xxxx partititonReader reads from partition state:"+
 					"txn:%s, table:%s,bat:%s, relult len:%d, dataRows:%s, tombstones:%s",
 					p.table.db.op.Txn().DebugString(),
 					p.table.tableName,
