@@ -120,9 +120,7 @@ func New(
 	}
 	e.gcPool = pool
 
-	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
-		WithLogtailUpdateStatsThreshold(threshold),
-	)
+	e.globalStats = NewGlobalStats(ctx, e, keyRouter)
 
 	e.messageCenter = &process.MessageCenter{
 		StmtIDToBoard: make(map[uuid.UUID]*process.MessageBoard, 64),
