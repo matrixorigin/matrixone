@@ -1185,9 +1185,9 @@ func (mr *MockEngineMockRecorder) New(ctx, op interface{}) *gomock.Call {
 }
 
 // NewBlockReader mocks base method.
-func (m *MockEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+func (m *MockEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, filter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewBlockReader", ctx, num, ts, expr, ranges, tblDef, proc)
+	ret := m.ctrl.Call(m, "NewBlockReader", ctx, num, ts, expr, filter, ranges, tblDef, proc)
 	ret0, _ := ret[0].([]engine.Reader)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
