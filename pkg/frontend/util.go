@@ -493,6 +493,9 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	switch resper := ses.GetResponser().(type) {
 	case *MysqlResp:
 		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
+		if outBytes == -1 && outPacket == -1 {
+			ses.Warnf(ctx, "unexpected protocol closed")
+		}
 	default:
 
 	}

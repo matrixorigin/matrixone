@@ -250,6 +250,32 @@ func TestRequestCanBeFilter(t *testing.T) {
 	)
 }
 
+func TestRetryValidateService(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, s Server) {
+			s.RegisterMethodHandler(
+				lock.Method_ValidateService,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *lock.Request,
+					resp *lock.Response,
+					cs morpc.ClientSession) {
+					writeResponse(ctx, cancel, resp, nil, cs)
+				})
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			defer cancel()
+			_, err := c.Send(ctx, &lock.Request{
+				ValidateService: lock.ValidateServiceRequest{ServiceID: "s1"},
+				Method:          lock.Method_ValidateService})
+			require.True(t, isRetryError(err))
+		},
+		WithServerMessageFilter(func(r *lock.Request) bool { return false }),
+	)
+}
+
 func TestLockTableBindChanged(t *testing.T) {
 	runRPCTests(
 		t,
