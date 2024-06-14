@@ -113,7 +113,7 @@ func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.U
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
+func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]int64, error) {
 	panic("not supported in internal sql executor")
 }
 
@@ -152,7 +152,7 @@ func (c *compilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bo
 		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+			ctx = defines.AttachAccountId(ctx, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -172,7 +172,7 @@ func (c *compilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (
 		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+			ctx = defines.AttachAccountId(ctx, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -252,7 +252,7 @@ func (c *compilerContext) GetUserName() string {
 	return "root"
 }
 
-func (c *compilerContext) GetAccountId() (uint32, error) {
+func (c *compilerContext) GetAccountId() (int64, error) {
 	return defines.GetAccountId(c.ctx)
 }
 
@@ -268,7 +268,7 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (o
 		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+			ctx = defines.AttachAccountId(ctx, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -342,7 +342,7 @@ func (c *compilerContext) getRelation(
 		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+			ctx = defines.AttachAccountId(ctx, snapshot.Tenant.TenantID)
 		}
 	}
 

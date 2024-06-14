@@ -28,7 +28,7 @@ option (gogoproto.goproto_sizecache_all)    = false;
 
 message AccessInfo {
     option (gogoproto.typedecl) = false;
-    uint32 AccountID            = 1;
+    int64 AccountID            = 1;
     uint32 UserID               = 2;
     uint32 RoleID               = 3;
 }

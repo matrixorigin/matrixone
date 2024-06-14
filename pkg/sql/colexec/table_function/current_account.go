@@ -43,7 +43,7 @@ func currentAccountCall(_ int, proc *process.Process, arg *Argument, result *vm.
 			case "account_name":
 				rbat.Vecs[i], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(proc.SessionInfo.Account), 1, proc.Mp())
 			case "account_id":
-				rbat.Vecs[i], err = vector.NewConstFixed(types.T_uint32.ToType(), proc.SessionInfo.AccountId, 1, proc.Mp())
+				rbat.Vecs[i], err = vector.NewConstFixed(types.T_int64.ToType(), proc.SessionInfo.AccountId, 1, proc.Mp())
 			case "user_name":
 				rbat.Vecs[i], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(proc.SessionInfo.User), 1, proc.Mp())
 			case "user_id":

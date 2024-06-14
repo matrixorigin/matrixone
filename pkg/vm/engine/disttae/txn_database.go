@@ -521,7 +521,7 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 
 func (db *txnDatabase) getTableItem(
 	ctx context.Context,
-	accountID uint32,
+	accountID int64,
 	name string,
 	engine *Engine,
 ) (cache.TableItem, error) {

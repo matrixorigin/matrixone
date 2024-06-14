@@ -200,7 +200,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 	if !cacheHit {
 		cwft.plan, err = buildPlan(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	} else if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil && !cwft.ses.IsBackgroundSession() {
-		var accId uint32
+		var accId int64
 		accId, err = defines.GetAccountId(execCtx.reqCtx)
 		if err != nil {
 			return nil, err

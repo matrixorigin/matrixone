@@ -217,11 +217,11 @@ func (c *orderByDescCond) sql() string {
 
 type accountIDCond struct {
 	op        Op
-	accountID uint32
+	accountID int64
 }
 
 func (c *accountIDCond) eval(v any) bool {
-	aid, ok := v.(uint32)
+	aid, ok := v.(int64)
 	if !ok {
 		return false
 	}
@@ -436,7 +436,7 @@ func WithTaskType(op Op, value string) Condition {
 }
 
 // WithAccountID set task account ID condition.
-func WithAccountID(op Op, value uint32) Condition {
+func WithAccountID(op Op, value int64) Condition {
 	return func(c *conditions) {
 		(*c)[CondAccountID] = &accountIDCond{op: op, accountID: value}
 	}

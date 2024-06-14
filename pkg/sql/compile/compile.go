@@ -2254,7 +2254,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 			}
 
 			if n.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
+				ctx = defines.AttachAccountId(ctx, n.ScanSnapshot.Tenant.TenantID)
 			}
 		}
 	}
@@ -2272,7 +2272,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 		if n.ObjRef.PubInfo != nil {
-			ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.TenantId))
+			ctx = defines.AttachAccountId(ctx, n.ObjRef.PubInfo.TenantId)
 		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 		if err != nil {
@@ -3899,7 +3899,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 			}
 
 			if n.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
+				ctx = defines.AttachAccountId(ctx, n.ScanSnapshot.Tenant.TenantID)
 			}
 		}
 	}
@@ -3909,7 +3909,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 	if n.ObjRef.PubInfo != nil {
-		ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.GetTenantId()))
+		ctx = defines.AttachAccountId(ctx, n.ObjRef.PubInfo.GetTenantId())
 	}
 	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -3993,7 +3993,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			c.proc.SetCloneTxnOperator(txnOp)
 
 			if n.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
+				ctx = defines.AttachAccountId(ctx, n.ScanSnapshot.Tenant.TenantID)
 			}
 		}
 	}
@@ -4003,7 +4003,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 	if n.ObjRef.PubInfo != nil {
-		ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.GetTenantId()))
+		ctx = defines.AttachAccountId(ctx, n.ObjRef.PubInfo.GetTenantId())
 	}
 	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)

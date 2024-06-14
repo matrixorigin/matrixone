@@ -495,7 +495,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 		if s.DataSource.AccountId != nil {
-			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
+			ctx = defines.AttachAccountId(ctx, s.DataSource.AccountId.GetTenantId())
 		}
 
 		// determined how many cpus we should use.
@@ -566,7 +566,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 					}
 
 					if n.ScanSnapshot.Tenant != nil {
-						ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
+						ctx = defines.AttachAccountId(ctx, n.ScanSnapshot.Tenant.TenantID)
 					}
 				}
 			}

@@ -174,7 +174,7 @@ message ConnectorDetails {
 
 message Details {
   string Description = 1;
-  uint32 AccountID = 2;
+  int64 AccountID = 2;
   string Account = 3;
   string Username = 4;
   string Error = 5;
@@ -186,7 +186,7 @@ message Details {
  message DaemonTask {
    uint64 ID = 1;
    TaskMetadata Metadata = 2 [(gogoproto.nullable) = false];
-   uint32 AccountID = 3;
+   int64 AccountID = 3;
    string Account = 4;
    TaskType TaskType = 5;
    string TaskRunner = 6;

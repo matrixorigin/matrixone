@@ -179,7 +179,7 @@ func execResultArrayHasData(arr []ExecResult) bool {
 type BackgroundExec interface {
 	Close()
 	Exec(context.Context, string) error
-	ExecRestore(context.Context, string, uint32, uint32) error
+	ExecRestore(context.Context, string, int64, int64) error
 	ExecStmt(context.Context, tree.Statement) error
 	GetExecResultSet() []interface{}
 	ClearExecResultSet()
@@ -269,7 +269,7 @@ type FeSession interface {
 	GetStatsCache() *plan2.StatsCache
 	GetUserName() string
 	GetSql() string
-	GetAccountId() uint32
+	GetAccountId() int64
 	GetTenantInfo() *TenantInfo
 	GetConfig(ctx context.Context, dbName, varName string) (any, error)
 	GetBackgroundExec(ctx context.Context) BackgroundExec
@@ -313,7 +313,7 @@ type FeSession interface {
 	SetMysqlResultSet(mrs *MysqlResultSet)
 	GetConnectionID() uint32
 	IsDerivedStmt() bool
-	SetAccountId(uint32)
+	SetAccountId(int64)
 	SetPlan(plan *plan.Plan)
 	SetData([][]interface{})
 	GetIsInternal() bool
@@ -445,7 +445,7 @@ type feSessionImpl struct {
 	lastCommitTS timestamp.Timestamp
 	upstream     *Session
 	sql          string
-	accountId    uint32
+	accountId    int64
 	label        map[string]string
 	timeZone     *time.Location
 
@@ -814,11 +814,11 @@ func (ses *feSessionImpl) GetSql() string {
 	return ses.sql
 }
 
-func (ses *feSessionImpl) GetAccountId() uint32 {
+func (ses *feSessionImpl) GetAccountId() int64 {
 	return ses.accountId
 }
 
-func (ses *feSessionImpl) SetAccountId(u uint32) {
+func (ses *feSessionImpl) SetAccountId(u int64) {
 	ses.accountId = u
 }
 

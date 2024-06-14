@@ -400,8 +400,8 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				if err != nil {
 					return err
 				}
-				if accountId != uint32(sysAccountID) {
-					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
+				if accountId != sysAccountID {
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, sysAccountID)
 				}
 			}
 			ctx := proc.Ctx
@@ -419,7 +419,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				}
 
 				// replace with pub account id
-				ctx = defines.AttachAccountId(ctx, uint32(sysAccountID))
+				ctx = defines.AttachAccountId(ctx, sysAccountID)
 				// replace with real dbname(sub.DbName)
 				if db, err = e.Database(ctx, sub.DbName, txn); err != nil {
 					return err

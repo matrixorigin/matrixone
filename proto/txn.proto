@@ -365,7 +365,7 @@ message TxnOptions {
     uint32                 Features           = 1;
     string                 CN                 = 2;
     string                 SessionID          = 3;
-    uint32                 AccountID          = 4;
+    int64                  AccountID          = 4;
     uint32                 ConnectionID       = 5;
     string                 UserName           = 6;
     repeated uint64        SkipLockTables     = 7;

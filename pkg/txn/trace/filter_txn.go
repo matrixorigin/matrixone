@@ -73,7 +73,7 @@ func (f *connectionIDFilter) Filter(op client.TxnOperator) bool {
 }
 
 type tenantFilter struct {
-	accountID uint32
+	accountID int64
 	userName  string
 }
 

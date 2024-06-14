@@ -177,7 +177,7 @@ func duplicate(t pb.DaemonTask, options map[string]string) bool {
 
 func createConnector(
 	ctx context.Context,
-	accountID uint32,
+	accountID int64,
 	account string,
 	username string,
 	ts taskservice.TaskService,

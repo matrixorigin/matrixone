@@ -607,7 +607,7 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 			}
 
 			if n.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
+				ctx = defines.AttachAccountId(ctx, n.ScanSnapshot.Tenant.TenantID)
 			}
 		}
 	}

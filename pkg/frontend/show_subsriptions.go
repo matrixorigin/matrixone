@@ -99,7 +99,8 @@ func getAccountIdByName(ctx context.Context, ses *Session, bh BackgroundExec, na
 
 func getAccountIdNames(ctx context.Context, ses *Session, bh BackgroundExec, likeName string) ([]int64, []string, error) {
 	bh.ClearExecResultBatches()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+	ctx = defines.AttachAccountId(ctx, sysAccountID)
+
 	sql := getAccountIdNamesSql
 	if len(likeName) > 0 {
 		sql += fmt.Sprintf(" and account_name like '%s'", likeName)
@@ -146,7 +147,8 @@ func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int
 	if len(like) > 0 {
 		sql += fmt.Sprintf(" where pub_name like '%s';", like)
 	}
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accountId))
+	ctx = defines.AttachAccountId(ctx, accountId)
+
 	if err := bh.Exec(ctx, sql); err != nil {
 		return nil, err
 	}
@@ -203,9 +205,10 @@ func getSubInfoFromSql(ctx context.Context, ses FeSession, sql string) (subName,
 	return
 }
 
-func getSubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId uint32) ([]*subscribed, error) {
+func getSubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int64) ([]*subscribed, error) {
 	bh.ClearExecResultBatches()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctx = defines.AttachAccountId(ctx, accountId)
+
 	sql := fmt.Sprintf(getSubsFormat, accountId)
 	if err := bh.Exec(ctx, sql); err != nil {
 		return nil, err

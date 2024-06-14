@@ -129,7 +129,7 @@ type SessionInfo struct {
 	Host                 string
 	Role                 string
 	ConnectionID         uint64
-	AccountId            uint32
+	AccountId            int64
 	RoleId               uint32
 	UserId               uint32
 	LastInsertID         uint64

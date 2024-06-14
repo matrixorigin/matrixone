@@ -275,7 +275,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	}
 	subName := dbName
 	if sub != nil {
-		accountId = uint32(sub.AccountId)
+		accountId = sub.AccountId
 		dbName = sub.DbName
 		ctx.SetQueryingSubscription(sub)
 		defer func() {
@@ -335,7 +335,7 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 	subName := dbName
 	var sql string
 	if sub != nil {
-		accountId = uint32(sub.AccountId)
+		accountId = sub.AccountId
 		dbName = sub.DbName
 		ctx.SetQueryingSubscription(sub)
 		defer func() {
@@ -391,7 +391,7 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 
 	var sub *SubscriptionMeta
 	if obj.PubInfo != nil {
-		accountId = uint32(obj.PubInfo.GetTenantId())
+		accountId = obj.PubInfo.GetTenantId()
 		dbName = obj.SchemaName
 		sub = &SubscriptionMeta{
 			AccountId: obj.PubInfo.GetTenantId(),
@@ -492,7 +492,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	var sub *SubscriptionMeta
 	if obj.PubInfo != nil {
 		dbName = obj.SchemaName
-		accountId = uint32(obj.PubInfo.GetTenantId())
+		accountId = obj.PubInfo.GetTenantId()
 		sub = &SubscriptionMeta{
 			AccountId: obj.PubInfo.GetTenantId(),
 		}
@@ -626,7 +626,7 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 	if sub != nil {
-		accountId = uint32(sub.AccountId)
+		accountId = sub.AccountId
 		dbName = sub.DbName
 		ctx.SetQueryingSubscription(sub)
 		defer func() {

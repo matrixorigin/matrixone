@@ -104,7 +104,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	return doComQueryInBack(back.backSes, &execCtx, &UserInput{sql: sql})
 }
 
-func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uint32, toAccount uint32) error {
+func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount int64, toAccount int64) error {
 	back.backSes.EnterFPrint(97)
 	defer back.backSes.ExitFPrint(97)
 	if ctx == nil {
@@ -237,7 +237,7 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 		}
 		userNameOnly = backSes.tenant.GetUser()
 	} else {
-		var accountId uint32
+		var accountId int64
 		accountId, retErr = defines.GetAccountId(execCtx.reqCtx)
 		if retErr != nil {
 			return retErr

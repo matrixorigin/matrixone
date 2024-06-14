@@ -424,7 +424,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	return
 }
 
-func deleteCurFkTables(ctx context.Context, bh BackgroundExec, dbName string, tblName string, toAccountId uint32) (err error) {
+func deleteCurFkTables(ctx context.Context, bh BackgroundExec, dbName string, tblName string, toAccountId int64) (err error) {
 	getLogger().Info("start to drop cur fk tables")
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
@@ -457,7 +457,7 @@ func restoreToAccount(
 	ctx context.Context,
 	bh BackgroundExec,
 	snapshotName string,
-	toAccountId uint32,
+	toAccountId int64,
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo) (err error) {
 	getLogger().Info(fmt.Sprintf("[%s] start to restore account: %v", snapshotName, toAccountId))
@@ -510,7 +510,7 @@ func restoreToDatabase(
 	bh BackgroundExec,
 	snapshotName string,
 	dbName string,
-	toAccountId uint32,
+	toAccountId int64,
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo) (err error) {
 	getLogger().Info(fmt.Sprintf("[%s] start to restore db: %v", snapshotName, dbName))
@@ -523,7 +523,7 @@ func restoreToTable(
 	snapshotName string,
 	dbName string,
 	tblName string,
-	toAccountId uint32,
+	toAccountId int64,
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo) (err error) {
 	getLogger().Info(fmt.Sprintf("[%s] start to restore table: %v", snapshotName, tblName))
@@ -536,7 +536,7 @@ func restoreToDatabaseOrTable(
 	snapshotName string,
 	dbName string,
 	tblName string,
-	toAccountId uint32,
+	toAccountId int64,
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo) (err error) {
 	if needSkipDb(dbName) {
@@ -610,7 +610,7 @@ func restoreSystemDatabase(
 	ctx context.Context,
 	bh BackgroundExec,
 	snapshotName string,
-	toAccountId uint32) (err error) {
+	toAccountId int64) (err error) {
 	getLogger().Info(fmt.Sprintf("[%s] start to restore system database: %s", snapshotName, moCatalog))
 	tableInfos, err := getTableInfos(ctx, bh, snapshotName, moCatalog, "")
 	if err != nil {
@@ -649,7 +649,7 @@ func restoreTablesWithFk(
 	snapshotName string,
 	sortedFkTbls []string,
 	fkTableMap map[string]*tableInfo,
-	toAccountId uint32) (err error) {
+	toAccountId int64) (err error) {
 	getLogger().Info(fmt.Sprintf("[%s] start to drop fk related tables", snapshotName))
 
 	// recreate tables as topo order
@@ -672,7 +672,7 @@ func restoreViews(
 	bh BackgroundExec,
 	snapshotName string,
 	viewMap map[string]*tableInfo,
-	toAccountId uint32) error {
+	toAccountId int64) error {
 	snapshot, err := doResolveSnapshotWithSnapshotName(ctx, ses, snapshotName)
 	if err != nil {
 		return err
@@ -738,7 +738,7 @@ func recreateTable(
 	bh BackgroundExec,
 	snapshotName string,
 	tblInfo *tableInfo,
-	toAccountId uint32) (err error) {
+	toAccountId int64) (err error) {
 	getLogger().Info(fmt.Sprintf("[%s] start to restore table: %v", snapshotName, tblInfo.tblName))
 	curAccountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -782,7 +782,7 @@ func needSkipDb(dbName string) bool {
 	return slices.Contains(skipDbs, dbName)
 }
 
-func needSkipTable(accountId uint32, dbName string, tblName string) bool {
+func needSkipTable(accountId int64, dbName string, tblName string) bool {
 	if accountId == sysAccountID {
 		return dbName == moCatalog && needSkipTablesInMocatalog[tblName] == 1
 	} else {
@@ -901,7 +901,7 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 		return
 	}
 
-	var accountId uint32
+	var accountId int64
 	if accountId, err = getAccountId(ctx, bh, record.accountName); err != nil {
 		return
 	}
@@ -1066,8 +1066,9 @@ func getCreateTableSql(ctx context.Context, bh BackgroundExec, snapshotName stri
 	return colsList[0][0], nil
 }
 
-func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) (uint32, error) {
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) (int64, error) {
+	ctx = defines.AttachAccountId(ctx, sysAccountID)
+
 	sql := getAccountIdNamesSql
 	if len(accountName) > 0 {
 		sql += fmt.Sprintf(" and account_name = '%s'", accountName)
@@ -1088,7 +1089,7 @@ func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) (u
 		if accountId, err = erArray[0].GetInt64(ctx, 0, 0); err != nil {
 			return 0, err
 		}
-		return uint32(accountId), nil
+		return accountId, nil
 	}
 
 	return 0, moerr.NewInternalError(ctx, "new such account, account name: %v", accountName)
@@ -1248,7 +1249,7 @@ func checkAndRestorePublicationRecord(
 	bh BackgroundExec,
 	snapshotName string,
 	dbName string,
-	toAccountId uint32) (err error) {
+	toAccountId int64) (err error) {
 
 	// check if the database is publicated
 	sql, err := getSqlForGetDbPubCountWithSnapshot(ctx, snapshotName, dbName)
@@ -1275,7 +1276,7 @@ func checkAndRestorePublicationRecord(
 		}
 		if pubCount > 0 {
 			// restore the publication record
-			var curAccountId uint32
+			var curAccountId int64
 			curAccountId, err = defines.GetAccountId(ctx)
 			if err != nil {
 				return

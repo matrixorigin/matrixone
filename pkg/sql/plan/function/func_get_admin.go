@@ -39,7 +39,7 @@ func builtInInternalGetAdminName(parameters []*vector.Vector, result vector.Func
 		}
 
 		exec := v.(executor.SQLExecutor)
-		opts := executor.Options{}.WithAccountID(uint32(accountId)).
+		opts := executor.Options{}.WithAccountID(accountId).
 			WithTxn(proc.TxnOperator).
 			WithTimeZone(proc.SessionInfo.TimeZone)
 		if proc.TxnOperator != nil {

@@ -921,7 +921,7 @@ func (s *service) RefreshTxnFilters() error {
 			params := strings.Split(values[i], ",")
 			filters = append(filters,
 				&tenantFilter{
-					accountID: format.MustParseStringUint32(params[0]),
+					accountID: format.MustParseStringInt64(params[0]),
 					userName:  params[1],
 				})
 		case userMethod:

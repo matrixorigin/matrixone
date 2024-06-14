@@ -3190,7 +3190,7 @@ func lockRows(
 	vec *vector.Vector,
 	lockMode lock.LockMode,
 	sharding lock.Sharding,
-	group uint32) error {
+	group int64) error {
 	if vec == nil || vec.Length() == 0 {
 		panic("lock rows is empty")
 	}
@@ -3251,7 +3251,7 @@ func getRelFromMoCatalog(c *Compile, tblName string) (engine.Relation, error) {
 	return rel, nil
 }
 
-func getLockVector(proc *process.Process, accountId uint32, names []string) (*vector.Vector, error) {
+func getLockVector(proc *process.Process, accountId int64, names []string) (*vector.Vector, error) {
 	vecs := make([]*vector.Vector, len(names)+1)
 	defer func() {
 		for _, v := range vecs {
@@ -3262,7 +3262,7 @@ func getLockVector(proc *process.Process, accountId uint32, names []string) (*ve
 	}()
 
 	// append account_id
-	accountIdVec := proc.GetVector(types.T_uint32.ToType())
+	accountIdVec := proc.GetVector(types.T_int64.ToType())
 	err := vector.AppendFixed(accountIdVec, accountId, false, proc.GetMPool())
 	if err != nil {
 		return nil, err

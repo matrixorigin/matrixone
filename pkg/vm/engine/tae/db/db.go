@@ -82,7 +82,7 @@ func (db *DB) GetUsageMemo() *logtail.TNUsageMemo {
 
 func (db *DB) FlushTable(
 	ctx context.Context,
-	tenantID uint32,
+	tenantID int64,
 	dbId, tableId uint64,
 	ts types.TS) (err error) {
 	err = db.BGCheckpointRunner.FlushTable(ctx, dbId, tableId, ts)

@@ -525,7 +525,7 @@ func (mr *MockBackgroundExecMockRecorder) Exec(arg0, arg1 interface{}) *gomock.C
 }
 
 // ExecRestore mocks base method.
-func (m *MockBackgroundExec) ExecRestore(arg0 context.Context, arg1 string, arg2, arg3 uint32) error {
+func (m *MockBackgroundExec) ExecRestore(arg0 context.Context, arg1 string, arg2, arg3 int64) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ExecRestore", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].(error)

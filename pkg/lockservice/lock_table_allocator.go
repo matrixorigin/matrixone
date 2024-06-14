@@ -41,7 +41,7 @@ type lockTableAllocator struct {
 	mu              struct {
 		sync.RWMutex
 		services   map[string]*serviceBinds
-		lockTables map[uint32]map[uint64]pb.LockTable
+		lockTables map[int64]map[uint64]pb.LockTable
 	}
 
 	// for test
@@ -79,7 +79,7 @@ func NewLockTableAllocator(
 		keepBindTimeout: keepBindTimeout,
 		client:          rpcClient,
 	}
-	la.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
+	la.mu.lockTables = make(map[int64]map[uint64]pb.LockTable)
 	la.mu.services = make(map[string]*serviceBinds)
 
 	for _, opt := range opts {
@@ -101,7 +101,7 @@ func NewLockTableAllocator(
 
 func (l *lockTableAllocator) Get(
 	serviceID string,
-	group uint32,
+	group int64,
 	tableID uint64,
 	originTableID uint64,
 	sharding pb.Sharding) pb.LockTable {
@@ -188,7 +188,7 @@ func (l *lockTableAllocator) Close() error {
 	return err
 }
 
-func (l *lockTableAllocator) GetLatest(groupID uint32, tableID uint64) pb.LockTable {
+func (l *lockTableAllocator) GetLatest(groupID int64, tableID uint64) pb.LockTable {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
@@ -236,7 +236,7 @@ func (l *lockTableAllocator) remainTxnInService(serviceID string) int32 {
 	return int32(c)
 }
 
-func (l *lockTableAllocator) validLockTable(group uint32, table uint64) bool {
+func (l *lockTableAllocator) validLockTable(group int64, table uint64) bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	t, ok := l.mu.lockTables[group][table]
@@ -356,7 +356,7 @@ func (l *lockTableAllocator) registerService(
 
 func (l *lockTableAllocator) registerBind(
 	binds *serviceBinds,
-	group uint32,
+	group int64,
 	tableID uint64,
 	originTableID uint64,
 	sharding pb.Sharding) pb.LockTable {
@@ -371,7 +371,7 @@ func (l *lockTableAllocator) registerBind(
 
 func (l *lockTableAllocator) tryRebindLocked(
 	binds *serviceBinds,
-	group uint32,
+	group int64,
 	old pb.LockTable,
 	tableID uint64) pb.LockTable {
 	// find a valid table and service bind
@@ -401,7 +401,7 @@ func (l *lockTableAllocator) tryRebindLocked(
 
 func (l *lockTableAllocator) createBindLocked(
 	binds *serviceBinds,
-	group uint32,
+	group int64,
 	tableID uint64,
 	originTableID uint64,
 	sharding pb.Sharding) pb.LockTable {
@@ -568,7 +568,7 @@ type serviceBinds struct {
 	sync.RWMutex
 	logger            *log.MOLogger
 	serviceID         string
-	groupTables       map[uint32]map[uint64]struct{}
+	groupTables       map[int64]map[uint64]struct{}
 	lastKeepaliveTime time.Time
 	disabled          bool
 	status            pb.Status
@@ -581,7 +581,7 @@ func newServiceBinds(
 	return &serviceBinds{
 		serviceID:         serviceID,
 		logger:            logger,
-		groupTables:       make(map[uint32]map[uint64]struct{}),
+		groupTables:       make(map[int64]map[uint64]struct{}),
 		lastKeepaliveTime: time.Now(),
 	}
 }
@@ -622,7 +622,7 @@ func (b *serviceBinds) active() bool {
 }
 
 func (b *serviceBinds) bind(
-	group uint32,
+	group int64,
 	tableID uint64) bool {
 	b.Lock()
 	defer b.Unlock()
@@ -656,7 +656,7 @@ func (b *serviceBinds) disable() {
 		zap.String("service", b.serviceID))
 }
 
-func (b *serviceBinds) getTablesLocked(group uint32) map[uint64]struct{} {
+func (b *serviceBinds) getTablesLocked(group int64) map[uint64]struct{} {
 	m, ok := b.groupTables[group]
 	if ok {
 		return m
@@ -799,7 +799,7 @@ func (l *lockTableAllocator) handleRemainTxnInService(
 	writeResponse(ctx, cancel, resp, nil, cs)
 }
 
-func (l *lockTableAllocator) getLockTablesLocked(group uint32) map[uint64]pb.LockTable {
+func (l *lockTableAllocator) getLockTablesLocked(group int64) map[uint64]pb.LockTable {
 	m, ok := l.mu.lockTables[group]
 	if ok {
 		return m

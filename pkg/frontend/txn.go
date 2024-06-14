@@ -315,7 +315,7 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 	if th.txnCtx == nil {
 		panic("context should not be nil")
 	}
-	var accId uint32
+	var accId int64
 	accId, err = defines.GetAccountId(execCtx.reqCtx)
 	if err != nil {
 		return err
@@ -356,7 +356,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		panic("context should not be nil")
 	}
 
-	accountID := uint32(0)
+	accountID := int64(0)
 	userName := ""
 	connectionID := uint32(0)
 	if execCtx.resper != nil {

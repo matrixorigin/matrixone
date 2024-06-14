@@ -40,7 +40,7 @@ const (
 )
 
 type AccessInfo struct {
-	AccountID uint32
+	AccountID int64
 	UserID    uint32
 	RoleID    uint32
 }

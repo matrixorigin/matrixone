@@ -257,7 +257,7 @@ type Transaction struct {
 
 type Pos struct {
 	bat       *batch.Batch
-	accountId uint32
+	accountId int64
 	tbName    string
 	dbName    string
 	offset    int64
@@ -600,7 +600,7 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 type Entry struct {
 	typ int
 	//the tenant owns the tableId and databaseId
-	accountId    uint32
+	accountId    int64
 	tableId      uint64
 	databaseId   uint64
 	tableName    string
@@ -646,14 +646,14 @@ type txnDatabase struct {
 }
 
 type tableKey struct {
-	accountId  uint32
+	accountId  int64
 	databaseId uint64
 	dbName     string
 	name       string
 }
 
 type databaseKey struct {
-	accountId uint32
+	accountId int64
 	id        uint64
 	name      string
 }
@@ -662,7 +662,7 @@ type databaseKey struct {
 type txnTable struct {
 	sync.Mutex
 
-	accountId uint32
+	accountId int64
 	tableId   uint64
 	version   uint32
 	tableName string
@@ -708,7 +708,7 @@ type txnTable struct {
 }
 
 type column struct {
-	accountId  uint32
+	accountId  int64
 	tableId    uint64
 	databaseId uint64
 	// column name

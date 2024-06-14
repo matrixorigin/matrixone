@@ -53,7 +53,7 @@ func (m *mockedBackgroundHandler) ExecStmt(ctx context.Context, statement tree.S
 	return nil
 }
 
-func (m *mockedBackgroundHandler) ExecRestore(context.Context, string, uint32, uint32) error {
+func (m *mockedBackgroundHandler) ExecRestore(context.Context, string, int64, int64) error {
 	panic("unimplement")
 }
 
@@ -195,7 +195,7 @@ func TestDoShowSubscriptions(t *testing.T) {
 	defer ctrl.Finish()
 
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+	ctx = defines.AttachAccountId(ctx, sysAccountID)
 
 	ses := newTestSession(t, ctrl)
 	ses.SetTimeZone(time.UTC)
@@ -235,7 +235,7 @@ func TestDoShowSubscriptionsAll(t *testing.T) {
 	defer ctrl.Finish()
 
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+	ctx = defines.AttachAccountId(ctx, sysAccountID)
 
 	ses := newTestSession(t, ctrl)
 	ses.SetTimeZone(time.UTC)
@@ -280,7 +280,7 @@ func TestDoShowSubscriptionsAllLike(t *testing.T) {
 	defer ctrl.Finish()
 
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+	ctx = defines.AttachAccountId(ctx, sysAccountID)
 
 	ses := newTestSession(t, ctrl)
 	ses.SetTimeZone(time.UTC)

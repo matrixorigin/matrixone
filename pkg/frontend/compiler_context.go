@@ -154,7 +154,7 @@ func (tcc *TxnCompilerContext) GetRootSql() string {
 	return tcc.GetSession().GetSql()
 }
 
-func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {
+func (tcc *TxnCompilerContext) GetAccountId() (int64, error) {
 	return tcc.execCtx.ses.GetAccountId(), nil
 }
 
@@ -172,7 +172,7 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot plan2.Snapsh
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
-			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+			tempCtx = defines.AttachAccountId(tempCtx, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -203,7 +203,7 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot plan2.Snaps
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
-			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+			tempCtx = defines.AttachAccountId(tempCtx, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -257,7 +257,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
-			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+			tempCtx = defines.AttachAccountId(tempCtx, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -269,18 +269,18 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		}
 	}
 	if sub != nil {
-		tempCtx = defines.AttachAccountId(tempCtx, uint32(sub.AccountId))
+		tempCtx = defines.AttachAccountId(tempCtx, sub.AccountId)
 		dbName = sub.DbName
 	}
 
 	//for system_metrics.metric and system.statement_info,
 	//it is special under the no sys account, should switch into the sys account first.
 	if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
-		tempCtx = defines.AttachAccountId(tempCtx, uint32(sysAccountID))
+		tempCtx = defines.AttachAccountId(tempCtx, sysAccountID)
 	}
 
 	if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
-		tempCtx = defines.AttachAccountId(tempCtx, uint32(sysAccountID))
+		tempCtx = defines.AttachAccountId(tempCtx, sysAccountID)
 	}
 
 	//open database
@@ -356,7 +356,7 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot plan2.Snapsh
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
-			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+			tempCtx = defines.AttachAccountId(tempCtx, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -380,7 +380,7 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubm
 
 	pubContext := tcc.execCtx.reqCtx
 	if pubmeta != nil {
-		pubContext = context.WithValue(pubContext, defines.TenantIDKey{}, uint32(pubmeta.AccountId))
+		pubContext = defines.AttachAccountId(pubContext, pubmeta.AccountId)
 	}
 
 	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(pubContext, txn, tableId)
@@ -427,7 +427,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 
 	// convert
 	var subscriptionName string
-	var pubAccountId int32 = -1
+	var pubAccountId int64 = -1
 	if sub != nil {
 		subscriptionName = sub.SubName
 		pubAccountId = sub.AccountId
@@ -641,12 +641,12 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	return
 }
 
-func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (accountIds []uint32, err error) {
+func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (accountIds []int64, err error) {
 	var sql string
 	var erArray []ExecResult
 	var targetAccountId uint64
 	if len(accountNames) == 0 {
-		return []uint32{}, nil
+		return []int64{}, nil
 	}
 
 	dedup := make(map[string]int8)
@@ -690,7 +690,7 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (account
 					return nil, err
 				}
 			}
-			accountIds = append(accountIds, uint32(targetAccountId))
+			accountIds = append(accountIds, int64(targetAccountId))
 		} else {
 			return nil, moerr.NewInternalError(ctx, "there is no account %s", name)
 		}
@@ -875,7 +875,7 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot plan2
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
-			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+			tempCtx = defines.AttachAccountId(tempCtx, snapshot.Tenant.TenantID)
 		}
 	}
 

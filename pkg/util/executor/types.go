@@ -55,7 +55,7 @@ type Options struct {
 	disableIncrStatement    bool
 	txnOp                   client.TxnOperator
 	database                string
-	accountID               uint32
+	accountID               int64
 	minCommittedTS          timestamp.Timestamp
 	innerTxn                bool
 	waitCommittedLogApplied bool

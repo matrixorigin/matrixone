@@ -413,7 +413,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 			return moerr.NewInternalError(ctx, "only sys account can use LIKE clause")
 		}
 		// switch to the sys account to get account info
-		newCtx := defines.AttachAccountId(ctx, uint32(sysAccountID))
+		newCtx := defines.AttachAccountId(ctx, sysAccountID)
 		sql = getSqlForAccountInfo(nil, int64(account.GetTenantID()))
 		if accInfosBatches, accIds, err = getAccountInfo(newCtx, bh, sql, mp); err != nil {
 			return err
@@ -555,7 +555,7 @@ func getSpecialTableCnt(ctx context.Context, bh BackgroundExec, accIds [][]int64
 
 func getSpecialTableInfo(ctx context.Context, bh BackgroundExec, accId int64) (dbCnt, tblCnt int64, err error) {
 	sql := fmt.Sprintf(getSpecialTablesInfoFormat, sysAccountID, sysAccountID)
-	newCtx := defines.AttachAccountId(ctx, uint32(accId))
+	newCtx := defines.AttachAccountId(ctx, accId)
 
 	bh.ClearExecResultBatches()
 	err = bh.Exec(newCtx, sql)

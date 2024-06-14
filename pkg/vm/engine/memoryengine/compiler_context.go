@@ -115,8 +115,8 @@ func (c *CompilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.U
 	return nil, nil
 }
 
-func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
-	return []uint32{catalog.System_Account}, nil
+func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]int64, error) {
+	return []int64{catalog.System_Account}, nil
 }
 
 func (*CompilerContext) Stats(obj *plan.ObjectRef, snapshot plan.Snapshot) (*pb.StatsInfo, error) {
@@ -149,7 +149,7 @@ func (c *CompilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bo
 		txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+			ctx = defines.AttachAccountId(ctx, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -169,7 +169,7 @@ func (c *CompilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (
 		txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+			ctx = defines.AttachAccountId(ctx, snapshot.Tenant.TenantID)
 		}
 	}
 
@@ -210,7 +210,7 @@ func (*CompilerContext) GetUserName() string {
 	return "root"
 }
 
-func (c *CompilerContext) GetAccountId() (uint32, error) {
+func (c *CompilerContext) GetAccountId() (int64, error) {
 	return defines.GetAccountId(c.ctx)
 }
 
@@ -284,7 +284,7 @@ func (c *CompilerContext) getTableAttrs(dbName string, tableName string, snapsho
 		txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+			ctx = defines.AttachAccountId(ctx, snapshot.Tenant.TenantID)
 		}
 	}
 

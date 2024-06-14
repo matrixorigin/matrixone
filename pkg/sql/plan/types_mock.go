@@ -111,10 +111,10 @@ func (mr *MockCompilerContext2MockRecorder) DefaultDatabase() *gomock.Call {
 }
 
 // GetAccountId mocks base method.
-func (m *MockCompilerContext2) GetAccountId() (uint32, error) {
+func (m *MockCompilerContext2) GetAccountId() (int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetAccountId")
-	ret0, _ := ret[0].(uint32)
+	ret0, _ := ret[0].(int64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -360,10 +360,10 @@ func (mr *MockCompilerContext2MockRecorder) Resolve(schemaName, tableName, snaps
 }
 
 // ResolveAccountIds mocks base method.
-func (m *MockCompilerContext2) ResolveAccountIds(accountNames []string) ([]uint32, error) {
+func (m *MockCompilerContext2) ResolveAccountIds(accountNames []string) ([]int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ResolveAccountIds", accountNames)
-	ret0, _ := ret[0].([]uint32)
+	ret0, _ := ret[0].([]int64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

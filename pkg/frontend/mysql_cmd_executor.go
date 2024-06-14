@@ -348,7 +348,8 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		}
 
 		bh := GetRawBatchBackgroundExec(ctx, ses)
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+		ctx = defines.AttachAccountId(ctx, sysAccountID)
+
 		var pubAccountId int64
 		if pubAccountId = getAccountIdByName(ctx, ses, bh, pubAccountName); pubAccountId == -1 {
 			return moerr.NewInternalError(ctx, "publish account does not exist")
@@ -364,7 +365,8 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		}
 
 		// as pub account
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(pubAccountId))
+		ctx = defines.AttachAccountId(ctx, pubAccountId)
+
 		// get db as pub account
 		if db, err = ses.GetTxnHandler().GetStorage().Database(ctx, pubs[0].pubDatabase, txnOp); err != nil {
 			return err
@@ -1776,7 +1778,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 
 	isPrepareStmt := false
 	if ses != nil {
-		var accId uint32
+		var accId int64
 		accId, err = defines.GetAccountId(reqCtx)
 		if err != nil {
 			return nil, err
@@ -2621,7 +2623,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 		userNameOnly = ses.GetTenantInfo().GetUser()
 	} else {
-		var accountId uint32
+		var accountId int64
 		accountId, retErr = defines.GetAccountId(execCtx.reqCtx)
 		if retErr != nil {
 			return retErr

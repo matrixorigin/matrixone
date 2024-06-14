@@ -170,15 +170,9 @@ func (s *sqlExecutor) adjustOptions(
 	ctx context.Context,
 	opts executor.Options) (context.Context, executor.Options, error) {
 	if opts.HasAccountID() {
-		ctx = context.WithValue(
-			ctx,
-			defines.TenantIDKey{},
-			opts.AccountID())
+		ctx = defines.AttachAccountId(ctx, opts.AccountID())
 	} else if ctx.Value(defines.TenantIDKey{}) == nil {
-		ctx = context.WithValue(
-			ctx,
-			defines.TenantIDKey{},
-			uint32(0))
+		ctx = defines.AttachAccountId(ctx, int64(0))
 	}
 
 	if !opts.HasExistsTxn() {
@@ -236,19 +230,18 @@ func (exec *txnExecutor) Exec(
 	//-----------------------------------------------------------------------------------------
 	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
 	// so that it can be restored to its original state after completing the task.
-	recoverAccount := func(exec *txnExecutor, accId uint32) {
-		exec.ctx = context.WithValue(exec.ctx, defines.TenantIDKey{}, accId)
+	recoverAccount := func(exec *txnExecutor, accId int64) {
+		exec.ctx = defines.AttachAccountId(exec.ctx, accId)
 	}
 
 	if statementOption.HasAccountID() {
 		originAccountID := catalog.System_Account
 		if v := exec.ctx.Value(defines.TenantIDKey{}); v != nil {
-			originAccountID = v.(uint32)
+			originAccountID = v.(int64)
 		}
 
-		exec.ctx = context.WithValue(exec.ctx,
-			defines.TenantIDKey{},
-			statementOption.AccountID())
+		exec.ctx = defines.AttachAccountId(exec.ctx, statementOption.AccountID())
+
 		// NOTE: Restore AccountID information in context.Context
 		defer recoverAccount(exec, originAccountID)
 	}

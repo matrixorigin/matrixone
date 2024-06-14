@@ -163,9 +163,10 @@ const (
 	MinInt24  = -1 << 23
 )
 
-// use TenantIDKey{} UserIDKey{} RoleIDKey{} to get uint32 value from Context
-
+// use TenantIDKey{} to get uint32 value from Context
 type TenantIDKey struct{}
+
+// use UserIDKey{} RoleIDKey{} to get uint32 value from Context
 type UserIDKey struct{}
 type RoleIDKey struct{}
 type NodeIDKey struct{}

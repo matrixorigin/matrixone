@@ -1267,7 +1267,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					Expr: &plan.Expr_Lit{
 						Lit: &Const{
 							Isnull: false,
-							Value:  &plan.Literal_U32Val{U32Val: catalog.System_Account},
+							Value:  &plan.Literal_I64Val{I64Val: catalog.System_Account},
 						},
 					},
 					Typ: plan.Type{

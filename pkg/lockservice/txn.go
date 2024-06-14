@@ -43,7 +43,7 @@ type activeTxn struct {
 	txnKey         string
 	fsp            *fixedSlicePool
 	blockedWaiters []*waiter
-	lockHolders    map[uint32]*tableLockHolder
+	lockHolders    map[int64]*tableLockHolder
 	remoteService  string
 	deadlockFound  bool
 }
@@ -69,7 +69,7 @@ func (txn activeTxn) TypeName() string {
 
 func (txn *activeTxn) lockRemoved(
 	serviceID string,
-	group uint32,
+	group int64,
 	table uint64,
 	removedLocks map[string]struct{}) {
 	h := txn.getHoldLocksLocked(group)
@@ -91,7 +91,7 @@ func (txn *activeTxn) lockRemoved(
 }
 
 func (txn *activeTxn) lockAdded(
-	group uint32,
+	group int64,
 	bind pb.LockTable,
 	locks [][]byte) {
 
@@ -126,7 +126,7 @@ func (txn *activeTxn) close(
 	serviceID string,
 	txnID []byte,
 	commitTS timestamp.Timestamp,
-	lockTableFunc func(uint32, uint64) (lockTable, error),
+	lockTableFunc func(int64, uint64) (lockTable, error),
 	mutations ...pb.ExtraMutation) error {
 	logTxnReadyToClose(serviceID, txn)
 
@@ -278,7 +278,7 @@ func (txn *activeTxn) isRemoteLocked() bool {
 	return txn.remoteService != ""
 }
 
-func (txn *activeTxn) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string) {
+func (txn *activeTxn) incLockTableRef(m map[int64]map[uint64]uint64, serviceID string) {
 	txn.RLock()
 	defer txn.RUnlock()
 	for _, h := range txn.lockHolders {
@@ -303,7 +303,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	txnID []byte,
 	holder activeTxnHolder,
 	waiters func(pb.WaitTxn) bool,
-	lockTableFunc func(uint32, uint64) (lockTable, error)) bool {
+	lockTableFunc func(int64, uint64) (lockTable, error)) bool {
 	txn.RLock()
 	// txn already closed
 	if !bytes.Equal(txn.txnID, txnID) {
@@ -317,7 +317,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 		panic("can not fetch waiting txn on remote txn")
 	}
 
-	groups := make([]uint32, 0, len(txn.lockHolders))
+	groups := make([]int64, 0, len(txn.lockHolders))
 	tables := make([]uint64, 0, len(txn.lockHolders))
 	lockKeys := make([]*fixedSlice, 0, len(txn.lockHolders))
 	for g, m := range txn.lockHolders {
@@ -392,7 +392,7 @@ func (txn *activeTxn) getID() []byte {
 	return txn.txnID
 }
 
-func (txn *activeTxn) getHoldLocksLocked(group uint32) *tableLockHolder {
+func (txn *activeTxn) getHoldLocksLocked(group int64) *tableLockHolder {
 	h, ok := txn.lockHolders[group]
 	if ok {
 		return h

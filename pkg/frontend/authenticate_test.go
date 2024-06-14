@@ -7817,7 +7817,7 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	return nil
 }
 
-func (bt *backgroundExecTest) ExecRestore(context.Context, string, uint32, uint32) error {
+func (bt *backgroundExecTest) ExecRestore(context.Context, string, int64, int64) error {
 	panic("unimplement")
 }
 

@@ -3637,7 +3637,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			}
 			acctName := builder.compCtx.GetUserName()
 			if sub := builder.compCtx.GetQueryingSubscription(); sub != nil {
-				currentAccountID = uint32(sub.AccountId)
+				currentAccountID = sub.AccountId
 				builder.qry.Nodes[nodeID].NotCacheable = true
 			}
 			if currentAccountID != catalog.System_Account {

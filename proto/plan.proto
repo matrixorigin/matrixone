@@ -153,12 +153,12 @@ message ObjectRef {
 }
 
 message PubInfo {
-	int32 tenant_id = 1;
+	int64 tenant_id = 1;
 }
 
 message SubscriptionMeta{
 	string name = 1; // pubName
-	int32 account_id = 2; // pubAccountID
+	int64 account_id = 2; // pubAccountID
 	string db_name = 3; // pubDbName
 	string account_name = 4;// pubAccountName
 	string sub_name = 5; // subName(subscription side db name)
@@ -855,7 +855,7 @@ message Snapshot {
 // Tenant information for creating snapshots
 message SnapshotTenant {
 	string tenantName = 1;
-	uint32 tenantID = 2;
+	int64 tenantID = 2;
 }
 
 

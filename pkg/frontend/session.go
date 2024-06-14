@@ -1082,7 +1082,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 
 	//step1 : check tenant exists or not in SYS tenant context
 	ses.timestampMap[TSCheckTenantStart] = time.Now()
-	sysTenantCtx := defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+	sysTenantCtx := defines.AttachAccount(ctx, sysAccountID, uint32(rootID), uint32(moAdminRoleID))
 	sqlForCheckTenant, err := getSqlForCheckTenant(sysTenantCtx, tenant.GetTenant())
 	if err != nil {
 		return nil, err
@@ -1124,7 +1124,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		ses.getRoutine().setResricted(false)
 	}
 
-	tenant.SetTenantID(uint32(tenantID))
+	tenant.SetTenantID(tenantID)
 	ses.timestampMap[TSCheckTenantEnd] = time.Now()
 	v2.CheckTenantDurationHistogram.Observe(ses.timestampMap[TSCheckTenantEnd].Sub(ses.timestampMap[TSCheckTenantStart]).Seconds())
 
@@ -1132,7 +1132,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	//step3 : get the password of the user
 
 	ses.timestampMap[TSCheckUserStart] = time.Now()
-	tenantCtx := defines.AttachAccountId(ctx, uint32(tenantID))
+	tenantCtx := defines.AttachAccountId(ctx, tenantID)
 
 	ses.Debugf(tenantCtx, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session

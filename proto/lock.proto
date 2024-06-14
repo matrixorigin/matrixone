@@ -57,7 +57,7 @@ message LockOptions {
   string              ForwardTo         = 4;
   bool                TableDefChanged   = 5;
   int64               RetryWait         = 6;
-  uint32              Group             = 7;
+  int64               Group             = 7;
   Sharding            Sharding          = 8;
   timestamp.Timestamp SnapShotTs        = 9 [(gogoproto.nullable) = false];
 }
@@ -72,7 +72,7 @@ message LockTable {
   uint64   Version     = 3;
   // Valid false if the service is disabled, and no new service bind this table
   bool     Valid       = 4;
-  uint32   Group       = 5;
+  int64   Group       = 5;
   Sharding Sharding    = 6;
   uint64   OriginTable = 7;
 }
@@ -232,7 +232,7 @@ message UnlockResponse {
 message GetBindRequest {
   string   ServiceID   = 1;
   uint64   Table       = 2;
-  uint32   Group       = 3;
+  int64    Group       = 3;
   Sharding Sharding    = 4;
   uint64   OriginTable = 5;
 }

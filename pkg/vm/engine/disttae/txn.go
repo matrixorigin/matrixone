@@ -75,7 +75,7 @@ func (txn *Transaction) ReadOnly() bool {
 // a table.
 func (txn *Transaction) WriteBatch(
 	typ int,
-	accountId uint32,
+	accountId int64,
 	databaseId uint64,
 	tableId uint64,
 	databaseName string,
@@ -538,15 +538,11 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 }
 
 func (txn *Transaction) getTable(
-	id uint32,
+	id int64,
 	dbName string,
 	tbName string,
 ) (engine.Relation, error) {
-	ctx := context.WithValue(
-		context.Background(),
-		defines.TenantIDKey{},
-		id,
-	)
+	ctx := defines.AttachAccountId(context.Background(), id)
 
 	database, err := txn.engine.Database(ctx, dbName, txn.proc.TxnOperator)
 	if err != nil {
@@ -562,7 +558,7 @@ func (txn *Transaction) getTable(
 // vec contains block infos.
 func (txn *Transaction) insertPosForCNBlock(
 	vec *vector.Vector,
-	id uint32,
+	id int64,
 	b *batch.Batch,
 	dbName string,
 	tbName string) error {
@@ -582,7 +578,7 @@ func (txn *Transaction) insertPosForCNBlock(
 
 func (txn *Transaction) WriteFileLocked(
 	typ int,
-	accountId uint32,
+	accountId int64,
 	databaseId,
 	tableId uint64,
 	databaseName,
@@ -642,7 +638,7 @@ func (txn *Transaction) WriteFileLocked(
 // insert/delete/update all use this api
 func (txn *Transaction) WriteFile(
 	typ int,
-	accountId uint32,
+	accountId int64,
 	databaseId,
 	tableId uint64,
 	databaseName,

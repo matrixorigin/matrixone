@@ -437,7 +437,7 @@ func TestCreateDaemonTask(t *testing.T) {
 	assert.True(t, v.LastHeartbeat.IsZero())
 	assert.Equal(t, newTestTaskMetadata("t1"), v.Metadata)
 	assert.Equal(t, task.TaskType_TypeKafkaSinkConnector, v.TaskType)
-	assert.Equal(t, uint32(10), v.Details.AccountID)
+	assert.Equal(t, int64(10), v.Details.AccountID)
 	assert.Equal(t, "a1", v.Details.Account)
 	assert.Equal(t, "u1", v.Details.Username)
 	details, ok := v.Details.Details.(*task.Details_Connector)

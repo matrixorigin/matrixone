@@ -410,7 +410,7 @@ type CreateDatabase struct {
 	DatTyp      string
 	Owner       uint32 // roleid
 	Creator     uint32 // userid
-	AccountId   uint32 // tenantid
+	AccountId   int64  // tenantid
 	CreatedTime types.Timestamp
 }
 
@@ -425,7 +425,7 @@ type CreateTable struct {
 	CreateSql    string
 	Owner        uint32
 	Creator      uint32
-	AccountId    uint32
+	AccountId    int64
 	DatabaseId   uint64
 	DatabaseName string
 	Comment      string

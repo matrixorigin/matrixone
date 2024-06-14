@@ -40,7 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
+func genCreateDatabaseTuple(sql string, accountId int64, userId, roleId uint32,
 	name string, databaseId uint64, typ string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoDatabaseSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema...)
@@ -206,7 +206,7 @@ func genTableAlterTuple(constraint [][]byte, m *mpool.MPool) (*batch.Batch, erro
 // genCreateTableTuple yields a batch for insertion into mo_tables.
 // rowid: rowid of the row.
 // needRowid: true -- there is a rowid vector in position 0 of the batch.
-func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId uint32, name string,
+func genCreateTableTuple(tbl *txnTable, sql string, accountId int64, userId, roleId uint32, name string,
 	tableId uint64, databaseId uint64, databaseName string, rowid types.Rowid, needRowid bool, m *mpool.MPool) (*batch.Batch, error) {
 	_ = sql //TODO delete this param if not required
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
@@ -1036,7 +1036,7 @@ func genTableDefOfColumn(col column) engine.TableDef {
 }
 */
 
-func genColumns(accountId uint32, tableName, databaseName string,
+func genColumns(accountId int64, tableName, databaseName string,
 	tableId, databaseId uint64, defs []engine.TableDef) ([]column, error) {
 	{ // XXX Why not store PrimaryIndexDef and
 		// then use PrimaryIndexDef for all primary key constraints.
@@ -1145,8 +1145,9 @@ func getTyp(ctx context.Context) string {
 	return ""
 }
 
-func getAccessInfo(ctx context.Context) (uint32, uint32, uint32, error) {
-	var accountId, userId, roleId uint32
+func getAccessInfo(ctx context.Context) (int64, uint32, uint32, error) {
+	var accountId int64
+	var userId, roleId uint32
 	var err error
 
 	accountId, err = defines.GetAccountId(ctx)
@@ -1228,14 +1229,14 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 // 	return bats, nil
 // }
 
-func genDatabaseKey(id uint32, name string) databaseKey {
+func genDatabaseKey(id int64, name string) databaseKey {
 	return databaseKey{
 		name:      name,
 		accountId: id,
 	}
 }
 
-func genTableKey(id uint32, name string, databaseId uint64) tableKey {
+func genTableKey(id int64, name string, databaseId uint64) tableKey {
 	return tableKey{
 		name:       name,
 		databaseId: databaseId,

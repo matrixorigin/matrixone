@@ -73,8 +73,8 @@ func (m *MockCompilerContext) ResolveUdf(name string, ast []*plan.Expr) (*functi
 	return nil, nil
 }
 
-func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
-	return []uint32{catalog.System_Account}, nil
+func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]int64, error) {
+	return []int64{catalog.System_Account}, nil
 }
 
 func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -923,7 +923,7 @@ func (m *MockCompilerContext) GetStatsCache() *StatsCache {
 	return nil
 }
 
-func (m *MockCompilerContext) GetAccountId() (uint32, error) {
+func (m *MockCompilerContext) GetAccountId() (int64, error) {
 	return 0, nil
 }
 

@@ -1907,7 +1907,7 @@ func ConstructObjStatsByLoadObjMeta(
 }
 
 // getDatabasesExceptDeleted remove databases delete in the txn from the CatalogCache
-func getDatabasesExceptDeleted(accountId uint32, cache *cache.CatalogCache, txn *Transaction) []string {
+func getDatabasesExceptDeleted(accountId int64, cache *cache.CatalogCache, txn *Transaction) []string {
 	//first get all delete tables
 	deleteDatabases := make(map[string]any)
 	txn.deletedDatabaseMap.Range(func(k, _ any) bool {

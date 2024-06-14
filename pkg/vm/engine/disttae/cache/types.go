@@ -36,7 +36,7 @@ const (
 )
 
 type TableKey struct {
-	AccountId  uint32
+	AccountId  int64
 	DatabaseId uint64
 	Name       string
 }
@@ -82,7 +82,7 @@ type tableCache struct {
 
 type DatabaseItem struct {
 	// database key
-	AccountId uint32
+	AccountId int64
 	Name      string
 	Ts        timestamp.Timestamp
 
@@ -98,7 +98,7 @@ type DatabaseItem struct {
 
 type TableItem struct {
 	// table key
-	AccountId  uint32
+	AccountId  int64
 	DatabaseId uint64
 	Name       string
 	Ts         timestamp.Timestamp
@@ -141,7 +141,7 @@ type TableItem struct {
 }
 
 type tableItemKey struct {
-	AccountId    uint32
+	AccountId    int64
 	DatabaseId   uint64
 	Name         string
 	Id           uint64

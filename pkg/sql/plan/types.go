@@ -85,7 +85,7 @@ type CompilerContext interface {
 	// get the value of variable
 	ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	// get the list of the account id
-	ResolveAccountIds(accountNames []string) ([]uint32, error)
+	ResolveAccountIds(accountNames []string) ([]int64, error)
 	// get the relevant information of udf
 	ResolveUdf(name string, args []*Expr) (*function.Udf, error)
 	// get the definition of primary key
@@ -96,7 +96,7 @@ type CompilerContext interface {
 	GetRootSql() string
 	// get username of current session
 	GetUserName() string
-	GetAccountId() (uint32, error)
+	GetAccountId() (int64, error)
 	// GetContext get raw context.Context
 	GetContext() context.Context
 	// GetDatabaseId Get database id

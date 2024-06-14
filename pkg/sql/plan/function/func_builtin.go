@@ -640,7 +640,7 @@ func builtInCurrentRole(_ []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 func builtInCurrentAccountID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[uint32](result)
+	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(proc.SessionInfo.AccountId, false); err != nil {
 			return err

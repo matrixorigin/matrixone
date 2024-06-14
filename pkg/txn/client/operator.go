@@ -112,7 +112,7 @@ func WithTxnLockService(lockService lockservice.LockService) TxnOption {
 
 // WithTxnCreateBy set txn create by.
 func WithTxnCreateBy(
-	accountID uint32,
+	accountID int64,
 	userName string,
 	sessionID string,
 	connectionID uint32) TxnOption {

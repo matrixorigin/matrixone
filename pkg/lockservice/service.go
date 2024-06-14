@@ -66,8 +66,8 @@ type service struct {
 		restartTime  timestamp.Timestamp
 		status       pb.Status
 		groupTables  [][]pb.LockTable
-		lockTableRef map[uint32]map[uint64]uint64
-		allocating   map[uint32]map[uint64]chan struct{}
+		lockTableRef map[int64]map[uint64]uint64
+		allocating   map[int64]map[uint64]chan struct{}
 	}
 
 	option struct {
@@ -99,9 +99,9 @@ func NewLockService(
 		opt(s)
 	}
 
-	s.tableGroups = &lockTableHolders{service: s.serviceID, holders: map[uint32]*lockTableHolder{}}
-	s.mu.allocating = make(map[uint32]map[uint64]chan struct{})
-	s.mu.lockTableRef = make(map[uint32]map[uint64]uint64)
+	s.tableGroups = &lockTableHolders{service: s.serviceID, holders: map[int64]*lockTableHolder{}}
+	s.mu.allocating = make(map[int64]map[uint64]chan struct{})
+	s.mu.lockTableRef = make(map[int64]map[uint64]uint64)
 	s.deadlockDetector = newDeadlockDetector(
 		s.fetchTxnWaitingList,
 		s.abortDeadlockTxn)
@@ -300,7 +300,7 @@ func (s *service) checkCanMoveGroupTables() {
 	s.mu.status = pb.Status_ServiceLockWaiting
 }
 
-func (s *service) incRef(group uint32, table uint64) {
+func (s *service) incRef(group int64, table uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.mu.lockTableRef[group]; !ok {
@@ -335,7 +335,7 @@ func (s *service) canLockOnServiceStatus(
 	return false
 }
 
-func (s *service) validGroupTable(group uint32, tableID uint64) bool {
+func (s *service) validGroupTable(group int64, tableID uint64) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	_, ok := s.mu.lockTableRef[group][tableID]
@@ -454,7 +454,7 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn, err error) {
 }
 
 func (s *service) getLockTable(
-	group uint32,
+	group int64,
 	tableID uint64) (lockTable, error) {
 	if v := s.tableGroups.get(group, tableID); v != nil {
 		return v, nil
@@ -466,7 +466,7 @@ func (s *service) getLockTable(
 }
 
 func (s *service) getAllocatingC(
-	group uint32,
+	group int64,
 	tableID uint64,
 	locked bool) chan struct{} {
 	if !locked {
@@ -480,7 +480,7 @@ func (s *service) getAllocatingC(
 }
 
 func (s *service) waitLockTableBind(
-	group uint32,
+	group int64,
 	tableID uint64,
 	locked bool) lockTable {
 	c := s.getAllocatingC(group, tableID, locked)
@@ -491,7 +491,7 @@ func (s *service) waitLockTableBind(
 }
 
 func (s *service) getLockTableWithCreate(
-	group uint32,
+	group int64,
 	tableID uint64,
 	rows [][]byte,
 	sharding pb.Sharding) (lockTable, error) {
@@ -595,7 +595,7 @@ type activeTxnHolder interface {
 	close()
 	empty() bool
 	getAllTxnID() [][]byte
-	incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string)
+	incLockTableRef(m map[int64]map[uint64]uint64, serviceID string)
 	getActiveTxn(txnID []byte, create bool, remoteService string) *activeTxn
 	hasActiveTxn(txnID []byte) bool
 	deleteActiveTxn(txnID []byte) *activeTxn
@@ -868,7 +868,7 @@ func (h *mapBasedTxnHolder) close() {
 	}
 }
 
-func (h *mapBasedTxnHolder) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string) {
+func (h *mapBasedTxnHolder) incLockTableRef(m map[int64]map[uint64]uint64, serviceID string) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -900,18 +900,18 @@ func shardingByRow(row []byte) uint64 {
 type lockTableHolders struct {
 	sync.RWMutex
 	service string
-	holders map[uint32]*lockTableHolder
+	holders map[int64]*lockTableHolder
 }
 
-func (m *lockTableHolders) get(group uint32, id uint64) lockTable {
+func (m *lockTableHolders) get(group int64, id uint64) lockTable {
 	return m.mustGetHolder(group).get(id)
 }
 
-func (m *lockTableHolders) set(group uint32, id uint64, new lockTable) lockTable {
+func (m *lockTableHolders) set(group int64, id uint64, new lockTable) lockTable {
 	return m.mustGetHolder(group).set(id, new)
 }
 
-func (m *lockTableHolders) mustGetHolder(group uint32) *lockTableHolder {
+func (m *lockTableHolders) mustGetHolder(group int64) *lockTableHolder {
 	m.RLock()
 	h, ok := m.holders[group]
 	m.RUnlock()

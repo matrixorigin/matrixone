@@ -25,7 +25,7 @@ type Insert struct {
 	Rows              *Select
 	OnDuplicateUpdate UpdateExprs
 	IsRestore         bool
-	FromDataTenantID  uint32
+	FromDataTenantID  int64
 }
 
 func (node *Insert) Format(ctx *FmtCtx) {

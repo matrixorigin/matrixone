@@ -952,11 +952,11 @@ func (sv SystemVariable) GetDefault() interface{} {
 
 type GlobalSysVarsMgr struct {
 	sync.Mutex
-	accountsGlobalSysVarsMap map[uint32]*SystemVariables
+	accountsGlobalSysVarsMap map[int64]*SystemVariables
 }
 
 // Get return sys vars of accountId
-func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context) (*SystemVariables, error) {
+func (m *GlobalSysVarsMgr) Get(accountId int64, ses *Session, ctx context.Context) (*SystemVariables, error) {
 	m.Lock()
 	defer m.Unlock()
 	// get from gSysVarsDefs && table if absent
@@ -971,14 +971,14 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 	return m.accountsGlobalSysVarsMap[accountId], nil
 }
 
-func (m *GlobalSysVarsMgr) Put(accountId uint32, vars *SystemVariables) {
+func (m *GlobalSysVarsMgr) Put(accountId int64, vars *SystemVariables) {
 	m.Lock()
 	defer m.Unlock()
 	m.accountsGlobalSysVarsMap[accountId] = vars
 }
 
 var GSysVarsMgr = &GlobalSysVarsMgr{
-	accountsGlobalSysVarsMap: make(map[uint32]*SystemVariables),
+	accountsGlobalSysVarsMap: make(map[int64]*SystemVariables),
 }
 
 // SystemVariables is account level

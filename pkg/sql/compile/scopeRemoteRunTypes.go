@@ -83,7 +83,7 @@ type processHelper struct {
 	id               string
 	lim              process.Limitation
 	unixTime         int64
-	accountId        uint32
+	accountId        int64
 	txnOperator      client.TxnOperator
 	txnClient        client.TxnClient
 	sessionInfo      process.SessionInfo

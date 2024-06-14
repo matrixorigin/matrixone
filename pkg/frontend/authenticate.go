@@ -65,7 +65,7 @@ type TenantInfo struct {
 	User        string
 	DefaultRole string
 
-	TenantID      uint32
+	TenantID      int64
 	UserID        uint32
 	DefaultRoleID uint32
 
@@ -100,13 +100,13 @@ func (ti *TenantInfo) getTenantUnsafe() string {
 	return ti.Tenant
 }
 
-func (ti *TenantInfo) GetTenantID() uint32 {
+func (ti *TenantInfo) GetTenantID() int64 {
 	ti.mu.Lock()
 	defer ti.mu.Unlock()
 	return ti.TenantID
 }
 
-func (ti *TenantInfo) SetTenantID(id uint32) {
+func (ti *TenantInfo) SetTenantID(id int64) {
 	ti.mu.Lock()
 	defer ti.mu.Unlock()
 	ti.TenantID = id
@@ -257,7 +257,7 @@ func GetDefaultTenant() string {
 	return sysAccountName
 }
 
-func GetSysTenantId() uint32 {
+func GetSysTenantId() int64 {
 	return sysAccountID
 }
 
@@ -1564,7 +1564,7 @@ func getsqlForUpdateStageComment(stageName, comment string) string {
 	return fmt.Sprintf(updateStageCommentFormat, comment, stageName)
 }
 
-func getSqlForGetAccountName(tenantId uint32) string {
+func getSqlForGetAccountName(tenantId int64) string {
 	return fmt.Sprintf(getTenantNameForMat, tenantId)
 }
 
@@ -2943,7 +2943,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			//Option 1: alter the password of admin for the account
 			if aa.AuthExist {
 				//!!!NOTE!!!:switch into the target account's context, then update the table mo_user.
-				accountCtx := defines.AttachAccountId(ctx, uint32(targetAccountId))
+				accountCtx := defines.AttachAccountId(ctx, int64(targetAccountId))
 
 				//1, check the admin exists or not
 				sql, rtnErr = getSqlForPasswordOfUser(ctx, aa.AdminName)
@@ -3308,7 +3308,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, a
 
 	//check the publication is already exist or not
 
-	newCtx = defines.AttachAccountId(ctx, uint32(accId))
+	newCtx = defines.AttachAccountId(ctx, accId)
 	sql, err = getSqlForPubInfoForSub(newCtx, pubName, true)
 	if err != nil {
 		return nil, err
@@ -3337,7 +3337,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, a
 	}
 
 	if tenantInfo == nil {
-		var tenantId uint32
+		var tenantId int64
 		tenantId, err = defines.GetAccountId(ctx)
 		if err != nil {
 			return nil, err
@@ -3378,7 +3378,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, a
 
 	subs = &plan.SubscriptionMeta{
 		Name:        pubName,
-		AccountId:   int32(accId),
+		AccountId:   accId,
 		DbName:      databaseName,
 		AccountName: accName,
 		SubName:     subName,
@@ -4118,7 +4118,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		//drop tables of the tenant
 		//NOTE!!!: single DDL drop statement per single transaction
 		//SWITCH TO THE CONTEXT of the deleted context
-		deleteCtx = defines.AttachAccountId(ctx, uint32(accountId))
+		deleteCtx = defines.AttachAccountId(ctx, accountId)
 
 		//step 2 : drop table mo_user
 		//step 3 : drop table mo_role
@@ -7611,7 +7611,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 		}
 	}
 
-	ctx = defines.AttachAccount(ctx, uint32(tenant.GetTenantID()), uint32(tenant.GetUserID()), uint32(tenant.GetDefaultRoleID()))
+	ctx = defines.AttachAccount(ctx, tenant.GetTenantID(), uint32(tenant.GetUserID()), uint32(tenant.GetDefaultRoleID()))
 
 	_, st := trace.Debug(ctx, "InitGeneralTenant.init_general_tenant")
 	mp, err = mpool.NewMPool("init_general_tenant", 0, mpool.NoFixed)
@@ -7800,12 +7800,12 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		Tenant:        ca.Name,
 		User:          ca.AdminName,
 		DefaultRole:   accountAdminRoleName,
-		TenantID:      uint32(newTenantID),
+		TenantID:      newTenantID,
 		UserID:        uint32(newUserId),
 		DefaultRoleID: accountAdminRoleID,
 	}
 	//with new tenant
-	newTenantCtx = defines.AttachAccount(ctx, uint32(newTenantID), uint32(newUserId), uint32(accountAdminRoleID))
+	newTenantCtx = defines.AttachAccount(ctx, newTenantID, uint32(newUserId), uint32(accountAdminRoleID))
 	return newTenant, newTenantCtx, err
 }
 
@@ -8789,7 +8789,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 
 func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var sql string
-	var accountId uint32
+	var accountId int64
 	var accountName string
 	var dbName string
 	var err error
@@ -9111,7 +9111,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	tenantInfo = ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		tenantCtx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+		tenantCtx = defines.AttachAccount(ctx, sysAccountID, uint32(rootID), uint32(moAdminRoleID))
 	} else {
 		tenantCtx = defines.AttachAccount(ctx, tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 	}
@@ -9161,7 +9161,7 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	tenantInfo = ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		tenantCtx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+		tenantCtx = defines.AttachAccount(ctx, sysAccountID, uint32(rootID), uint32(moAdminRoleID))
 	} else {
 		tenantCtx = defines.AttachAccount(ctx, tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 	}

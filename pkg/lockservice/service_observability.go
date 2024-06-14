@@ -69,7 +69,7 @@ func (s *service) ForceRefreshLockTableBinds(
 }
 
 func (s *service) GetLockTableBind(
-	group uint32,
+	group int64,
 	tableID uint64) (pb.LockTable, error) {
 	l, err := s.getLockTable(group, tableID)
 	if err != nil {
@@ -116,7 +116,7 @@ func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bo
 }
 
 func (s *service) CloseRemoteLockTable(
-	group uint32,
+	group int64,
 	tableID uint64,
 	version uint64) (bool, error) {
 	removed := false

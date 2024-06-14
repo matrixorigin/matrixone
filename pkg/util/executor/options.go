@@ -41,7 +41,7 @@ func (opts Options) WithDatabase(database string) Options {
 }
 
 // WithAccountID execute sql in account
-func (opts Options) WithAccountID(accountID uint32) Options {
+func (opts Options) WithAccountID(accountID int64) Options {
 	opts.accountID = accountID
 	return opts
 }
@@ -72,7 +72,7 @@ func (opts Options) Database() string {
 }
 
 // AccountID returns account id
-func (opts Options) AccountID() uint32 {
+func (opts Options) AccountID() int64 {
 	return opts.accountID
 }
 

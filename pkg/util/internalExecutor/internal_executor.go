@@ -26,7 +26,7 @@ type SessionOverrideOptions struct {
 	Database      *string
 	Username      *string
 	IsInternal    *bool
-	AccountId     *uint32
+	AccountId     *int64
 	UserId        *uint32
 	DefaultRoleId *uint32
 }
@@ -56,7 +56,7 @@ func (s *OptsBuilder) Internal(b bool) *OptsBuilder {
 	return s
 }
 
-func (s *OptsBuilder) AccountId(id uint32) *OptsBuilder {
+func (s *OptsBuilder) AccountId(id int64) *OptsBuilder {
 	s.opts.AccountId = &id
 	return s
 }

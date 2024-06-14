@@ -123,7 +123,7 @@ type tableIdNameKey struct {
 	name string
 }
 
-func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
+func (cc *CatalogCache) Tables(accountId int64, databaseId uint64,
 	ts timestamp.Timestamp) ([]string, []uint64) {
 	var rs []string
 	var rids []uint64
@@ -192,7 +192,7 @@ func (cc *CatalogCache) GetTableByName(databaseID uint64, tableName string) *Tab
 	return rel
 }
 
-func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []string {
+func (cc *CatalogCache) Databases(accountId int64, ts timestamp.Timestamp) []string {
 	var rs []string
 
 	key := &DatabaseItem{
