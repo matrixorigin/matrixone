@@ -40,11 +40,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -1721,16 +1719,24 @@ func (tbl *txnTable) NewReader(
 	orderedScan bool,
 	txnOffset int,
 ) ([]engine.Reader, error) {
-	pkFilter := tbl.tryExtractPKFilter(expr)
+	txn := tbl.getTxn()
+	ts := txn.op.SnapshotTS()
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	pkFilters := ConstructPKFilters(tbl.tableDef, tbl.db.databaseName, ts, state, expr, tbl.proc.Load(), txn.engine.packerPool)
+
 	blkArray := objectio.BlockInfoSlice(ranges)
-	if pkFilter.isNull || plan2.IsFalseExpr(expr) {
+	if !pkFilters.inMemPKFilter.isValid || plan2.IsFalseExpr(expr) {
 		return []engine.Reader{new(emptyReader)}, nil
 	}
 	if blkArray.Len() == 0 {
-		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil, txnOffset)
+		return tbl.newMergeReader(ctx, num, expr, pkFilters, nil, txnOffset)
 	}
 	if blkArray.Len() == 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
-		return tbl.newMergeReader(ctx, num, expr, pkFilter, nil, txnOffset)
+		return tbl.newMergeReader(ctx, num, expr, pkFilters, nil, txnOffset)
 	}
 	if blkArray.Len() > 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
 		rds := make([]engine.Reader, num)
@@ -1747,7 +1753,7 @@ func (tbl *txnTable) NewReader(
 			}
 			dirtyBlks = append(dirtyBlks, blkInfo)
 		}
-		rds0, err := tbl.newMergeReader(ctx, num, expr, pkFilter, dirtyBlks, txnOffset)
+		rds0, err := tbl.newMergeReader(ctx, num, expr, pkFilters, dirtyBlks, txnOffset)
 		if err != nil {
 			return nil, err
 		}
@@ -1756,7 +1762,7 @@ func (tbl *txnTable) NewReader(
 		}
 
 		if len(cleanBlks) > 0 {
-			rds0, err = tbl.newBlockReader(ctx, num, expr, cleanBlks, tbl.proc.Load(), orderedScan)
+			rds0, err = tbl.newBlockReader(ctx, num, expr, pkFilters.blockReadPKFilter, cleanBlks, tbl.proc.Load(), orderedScan)
 			if err != nil {
 				return nil, err
 			}
@@ -1774,48 +1780,14 @@ func (tbl *txnTable) NewReader(
 	for i := 0; i < blkArray.Len(); i++ {
 		blkInfos = append(blkInfos, blkArray.Get(i))
 	}
-	return tbl.newBlockReader(ctx, num, expr, blkInfos, tbl.proc.Load(), orderedScan)
-}
-
-func (tbl *txnTable) tryExtractPKFilter(expr *plan.Expr) (retPKFilter PKFilter) {
-	pk := tbl.tableDef.Pkey
-	if expr == nil || pk == nil {
-		return
-	}
-
-	pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-	retPKFilter = getPKFilterByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl)
-	if retPKFilter.isNull || !retPKFilter.isValid || retPKFilter.isVec {
-		return
-	}
-
-	var packer *types.Packer
-
-	put := tbl.getTxn().engine.packerPool.Get(&packer)
-	val := logtailreplay.EncodePrimaryKey(retPKFilter.val, packer)
-	put.Put()
-
-	if retPKFilter.op == function.EQUAL {
-		retPKFilter.SetFullData(function.EQUAL, false, val)
-	} else {
-		// TODO: hack: remove the last comma, need to fix this in the future
-		// serial_full(secondary_index, primary_key|fake_pk) => varchar
-		// prefix_eq expression only has the prefix(secondary index) in it.
-		// there will have an extra zero after the `encodeStringType` done
-		// this will violate the rule of prefix_eq, so remove this redundant zero here.
-		//
-		val = val[0 : len(val)-1]
-		retPKFilter.SetFullData(function.PREFIX_EQ, false, val)
-	}
-
-	return
+	return tbl.newBlockReader(ctx, num, expr, pkFilters.blockReadPKFilter, blkInfos, tbl.proc.Load(), orderedScan)
 }
 
 func (tbl *txnTable) newMergeReader(
 	ctx context.Context,
 	num int,
 	expr *plan.Expr,
-	pkFilter PKFilter,
+	pkFilter PKFilters,
 	dirtyBlks []*objectio.BlockInfo,
 	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
 ) ([]engine.Reader, error) {
@@ -1844,6 +1816,7 @@ func (tbl *txnTable) newBlockReader(
 	ctx context.Context,
 	num int,
 	expr *plan.Expr,
+	filter blockio.BlockReadFilter,
 	blkInfos []*objectio.BlockInfo,
 	proc *process.Process,
 	orderedScan bool) ([]engine.Reader, error) {
@@ -1859,6 +1832,7 @@ func (tbl *txnTable) newBlockReader(
 				ts,
 				[]*objectio.BlockInfo{blk},
 				expr,
+				filter,
 				tbl.getTxn().engine.fs,
 				proc,
 			)
@@ -1880,7 +1854,7 @@ func (tbl *txnTable) newBlockReader(
 		if num != 1 {
 			panic("ordered scan must run in only one parallel")
 		}
-		rd := newBlockReader(ctx, tableDef, ts, blkInfos, expr, fs, proc)
+		rd := newBlockReader(ctx, tableDef, ts, blkInfos, expr, filter, fs, proc)
 		rd.dontPrefetch = true
 		return []engine.Reader{rd}, nil
 	}
@@ -1893,6 +1867,7 @@ func (tbl *txnTable) newBlockReader(
 		ts,
 		num,
 		expr,
+		filter,
 		proc)
 	distributeBlocksToBlockReaders(blockReaders, num, len(blkInfos), infos, steps)
 	for i := 0; i < num; i++ {
@@ -1901,41 +1876,10 @@ func (tbl *txnTable) newBlockReader(
 	return rds, nil
 }
 
-func (tbl *txnTable) tryConstructPrimaryKeyIndexIter(
-	ts timestamp.Timestamp,
-	pkFilter PKFilter,
-	expr *plan.Expr,
-	state *logtailreplay.PartitionState,
-) (iter logtailreplay.RowsIter) {
-	if !pkFilter.isValid {
-		return
-	}
-
-	switch pkFilter.op {
-	case function.EQUAL, function.PREFIX_EQ:
-		iter = state.NewPrimaryKeyIter(
-			types.TimestampToTS(ts),
-			logtailreplay.Prefix(pkFilter.packed[0]),
-		)
-	case function.IN:
-		// may be it's better to iterate rows instead.
-		if len(pkFilter.packed) > 128 {
-			return
-		}
-
-		iter = state.NewPrimaryKeyIter(
-			types.TimestampToTS(ts),
-			logtailreplay.ExactIn(pkFilter.packed),
-		)
-	}
-
-	return iter
-}
-
 func (tbl *txnTable) newReader(
 	ctx context.Context,
 	readerNumber int,
-	pkFilter PKFilter,
+	pkFilter PKFilters,
 	expr *plan.Expr,
 	dirtyBlks []*objectio.BlockInfo,
 	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
@@ -1943,10 +1887,7 @@ func (tbl *txnTable) newReader(
 	txn := tbl.getTxn()
 	ts := txn.op.SnapshotTS()
 	fs := txn.engine.fs
-	state, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
+
 	readers := make([]engine.Reader, readerNumber)
 
 	seqnumMp := make(map[string]int)
@@ -1965,23 +1906,10 @@ func (tbl *txnTable) newReader(
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
 
-	var (
-		iter logtailreplay.RowsIter
-	)
-
-	iter = tbl.tryConstructPrimaryKeyIndexIter(ts, pkFilter, expr, state)
-	if iter == nil {
-		iter = state.NewRowsIter(
-			types.TimestampToTS(ts),
-			nil,
-			false,
-		)
-	}
-
 	partReader := &PartitionReader{
 		table:     tbl,
 		txnOffset: txnOffset,
-		iter:      iter,
+		iter:      pkFilter.inMemPKFilter.iter,
 		seqnumMp:  seqnumMp,
 		typsMap:   mp,
 	}
@@ -2039,6 +1967,7 @@ func (tbl *txnTable) newReader(
 		ts,
 		readerNumber-1,
 		expr,
+		pkFilter.blockReadPKFilter,
 		proc)
 	objInfos, steps := groupBlocksToObjects(dirtyBlks, readerNumber-1)
 	blockReaders = distributeBlocksToBlockReaders(
@@ -2052,7 +1981,7 @@ func (tbl *txnTable) newReader(
 			blockReader: blockReaders[i],
 			table:       tbl,
 			txnOffset:   txnOffset,
-			pkFilter:    pkFilter,
+			pkFilter:    pkFilter.inMemPKFilter,
 			deletaLocs:  make(map[string][]objectio.Location),
 		}
 		readers[i+1] = bmr
@@ -2256,7 +2185,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		//keys must be sorted.
 		keys.InplaceSort()
 		bytes, _ := keys.MarshalBinary()
-		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), "pk")
+		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
 		inExpr := plan2.MakeInExpr(
 			tbl.proc.Load().Ctx,
 			colExpr,
@@ -2264,12 +2193,10 @@ func (tbl *txnTable) PKPersistedBetween(
 			bytes,
 			false)
 
-		_, _, filter := getNonCompositePKSearchFuncByExpr(
-			inExpr,
-			tbl.tableDef,
-			"pk",
-			tbl.proc.Load())
-		return filter.SortedSearchFunc
+		basePKFilter := constructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
+		blockReadPKFilter := constructBlockReadPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
+
+		return blockReadPKFilter.SortedSearchFunc
 	}
 
 	var unsortedFilter blockio.ReadFilterSearchFuncType
@@ -2518,7 +2445,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		bat, err := blockio.BlockRead(
 			tbl.proc.Load().Ctx, &blk, nil, columns, colTypes,
 			tbl.db.op.SnapshotTS(),
-			nil, nil, blockio.ReadFilter{},
+			nil, nil, blockio.BlockReadFilter{},
 			tbl.getTxn().engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(), fileservice.Policy(0),
 		)
 		if err != nil {
