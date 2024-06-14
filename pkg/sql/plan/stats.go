@@ -1268,6 +1268,10 @@ func orSelectivity(s1, s2 float64) float64 {
 func GetExecType(qry *plan.Query) ExecType {
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
+		switch node.NodeType {
+		case plan.Node_RECURSIVE_CTE, plan.Node_RECURSIVE_SCAN:
+			ret = ExecTypeAP_ONECN
+		}
 		stats := node.Stats
 		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
 			return ExecTypeAP_MULTICN
