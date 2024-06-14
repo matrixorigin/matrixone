@@ -83,14 +83,9 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 func checkModifyNewColumn(ctx context.Context, tableDef *TableDef, oldCol, newCol *ColDef, pos *tree.ColumnPosition) error {
 	if pos != nil && pos.Typ != tree.ColumnPositionNone {
 		// detete old column
-		originIndex := -1
-		for i, col := range tableDef.Cols {
-			if strings.EqualFold(col.Name, oldCol.Name) {
-				originIndex = i
-				break
-			}
-		}
-		tableDef.Cols = append(tableDef.Cols[:originIndex], tableDef.Cols[originIndex+1:]...)
+		tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(col *ColDef) bool {
+			return strings.EqualFold(col.Name, oldCol.Name)
+		})
 
 		targetPos, err := findPositionRelativeColumn(ctx, tableDef.Cols, pos)
 		if err != nil {
