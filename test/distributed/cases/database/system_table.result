@@ -19,7 +19,7 @@ trigger_catalog    trigger_schema    trigger_name    event_manipulation    event
 SELECT * FROM `information_schema`.`user_privileges` LIMIT 0,1000;
 grantee    table_catalog    privilege_type    is_grantable
 SELECT TABLE_SCHEMA AS TABLE_CAT, NULL AS TABLE_SCHEM, TABLE_NAME, NON_UNIQUE, NULL AS INDEX_QUALIFIER, INDEX_NAME,3 AS TYPE, SEQ_IN_INDEX AS ORDINAL_POSITION, COLUMN_NAME,COLLATION AS ASC_OR_DESC, CARDINALITY, 0 AS PAGES, NULL AS FILTER_CONDITION FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = 'mysql' AND TABLE_NAME = 'procs_priv' ORDER BY NON_UNIQUE, INDEX_NAME, SEQ_IN_INDEX limit 1;
-TABLE_CAT    TABLE_SCHEM    table_name    non_unique    INDEX_QUALIFIER    index_name    TYPE    ORDINAL_POSITION    column_name    ASC_OR_DESC    cardinality    PAGES    FILTER_CONDITION
+TABLE_CAT    TABLE_SCHEM    TABLE_NAME    NON_UNIQUE    INDEX_QUALIFIER    INDEX_NAME    TYPE    ORDINAL_POSITION    COLUMN_NAME    ASC_OR_DESC    CARDINALITY    PAGES    FILTER_CONDITION
 mysql    null    procs_priv    0    null    PRIMARY    3    1    host    A    0    0    null
 SELECT * FROM `mysql`.`columns_priv` LIMIT 0,1000;
 host    db    user    table_name    column_name    timestamp    column_priv
@@ -126,7 +126,7 @@ routine_name    CHAR(64)    NO    PRI    ''
 routine_type    VARCHAR(10)    NO    PRI    null        
 grantor    VARCHAR(288)    NO    MUL    ''        
 proc_priv    VARCHAR(10)    NO        ''        
-timestamp    TIMESTAMP(0)    NO        current_timestamp()        
+timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
 show columns from `columns_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
 host    CHAR(255)    NO    PRI    ''        
@@ -134,7 +134,7 @@ db    CHAR(64)    NO    PRI    ''
 user    CHAR(32)    NO    PRI    ''        
 table_name    CHAR(64)    NO    PRI    ''        
 column_name    CHAR(64)    NO    PRI    ''        
-timestamp    TIMESTAMP(0)    NO        current_timestamp()        
+timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
 column_priv    VARCHAR(10)    NO        ''        
 show columns from `tables_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -143,7 +143,7 @@ db    CHAR(64)    NO    PRI    ''
 user    CHAR(32)    NO    PRI    ''        
 table_name    CHAR(64)    NO    PRI    ''        
 grantor    VARCHAR(288)    NO    MUL    ''        
-timestamp    TIMESTAMP(0)    NO        current_timestamp()        
+timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
 table_priv    VARCHAR(10)    NO        ''        
 column_priv    VARCHAR(10)    NO        ''        
 use information_schema;

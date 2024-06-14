@@ -205,7 +205,7 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 func (s *Scope) MergeRun(c *Compile) error {
 	var wg sync.WaitGroup
 
-	errChan := make(chan error, len(s.PreScopes))
+	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		wg.Add(1)
 		scope := s.PreScopes[i]
@@ -216,30 +216,47 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 			switch scope.Magic {
 			case Normal:
-				errChan <- scope.Run(c)
+				preScopeResultReceiveChan <- scope.Run(c)
 			case Merge, MergeInsert:
-				errChan <- scope.MergeRun(c)
+				preScopeResultReceiveChan <- scope.MergeRun(c)
 			case Remote:
-				errChan <- scope.RemoteRun(c)
+				preScopeResultReceiveChan <- scope.RemoteRun(c)
 			case Parallel:
-				errChan <- scope.ParallelRun(c)
+				preScopeResultReceiveChan <- scope.ParallelRun(c)
 			default:
-				errChan <- moerr.NewInternalError(c.ctx, "unexpected scope Magic %d", scope.Magic)
+				preScopeResultReceiveChan <- moerr.NewInternalError(c.ctx, "unexpected scope Magic %d", scope.Magic)
 			}
 		})
 		if errSubmit != nil {
-			errChan <- errSubmit
+			preScopeResultReceiveChan <- errSubmit
 			wg.Done()
 		}
 	}
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
-	var errReceiveChan chan error
+	var notifyMessageResultReceiveChan chan notifyMessageResult
 	if len(s.RemoteReceivRegInfos) > 0 {
-		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
-		s.notifyAndReceiveFromRemote(&wg, errReceiveChan)
+		notifyMessageResultReceiveChan = make(chan notifyMessageResult, len(s.RemoteReceivRegInfos))
+		s.sendNotifyMessage(&wg, notifyMessageResultReceiveChan)
 	}
-	defer wg.Wait()
+
+	defer func() {
+		// should wait all the notify-message-routine and preScopes done.
+		wg.Wait()
+
+		// not necessary, but we still clean the preScope error channel here.
+		for len(preScopeResultReceiveChan) > 0 {
+			<-preScopeResultReceiveChan
+		}
+
+		// clean the notifyMessageResultReceiveChan to make sure all the rpc-sender can be closed.
+		for len(notifyMessageResultReceiveChan) > 0 {
+			result := <-notifyMessageResultReceiveChan
+			if result.sender != nil {
+				_ = result.sender.Close(false)
+			}
+		}
+	}()
 
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
@@ -257,7 +274,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 	remoteScopeCount := len(s.RemoteReceivRegInfos)
 	if remoteScopeCount == 0 {
 		for i := 0; i < len(s.PreScopes); i++ {
-			if err := <-errChan; err != nil {
+			if err := <-preScopeResultReceiveChan; err != nil {
 				return err
 			}
 		}
@@ -266,15 +283,18 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	for {
 		select {
-		case err := <-errChan:
+		case err := <-preScopeResultReceiveChan:
 			if err != nil {
 				return err
 			}
 			preScopeCount--
 
-		case err := <-errReceiveChan:
-			if err != nil {
-				return err
+		case result := <-notifyMessageResultReceiveChan:
+			if result.sender != nil {
+				_ = result.sender.Close(false)
+			}
+			if result.err != nil {
+				return result.err
 			}
 			remoteScopeCount--
 		}
@@ -311,7 +331,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		p.Cleanup(s.Proc, err != nil, err)
 	}
 
-	// sender should be closed after cleanup (tell the sub-pipeline that query was done).
+	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
 		sender.close()
 	}
@@ -502,7 +522,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 		readers, err = c.e.NewBlockReader(
 			ctx, scanUsedCpuNumber,
-			s.DataSource.Timestamp, s.DataSource.FilterExpr, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
+			s.DataSource.Timestamp, s.DataSource.FilterExpr, nil, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -1133,9 +1153,19 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 	}
 }
 
-func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan error) {
+// the result of sendNotifyMessage routine.
+// we set sender here because we need to close the sender after canceling the context
+// to avoid misreport error (it was possible if there are more than one stream between two compute nodes).
+type notifyMessageResult struct {
+	sender morpc.Stream
+	err    error
+}
+
+// sendNotifyMessage create n routines to notify the remote nodes where their receivers are.
+// and keep receiving the data until the query was done or data is ended.
+func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
-	closeWithError := func(err error, reg *process.WaitRegister) {
+	closeWithError := func(err error, reg *process.WaitRegister, sender morpc.Stream) {
 		if reg != nil {
 			select {
 			case <-s.Proc.Ctx.Done():
@@ -1145,9 +1175,9 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 
 		select {
 		case <-s.Proc.Ctx.Done():
-			errChan <- nil
+			resultChan <- notifyMessageResult{err: nil, sender: sender}
 		default:
-			errChan <- err
+			resultChan <- notifyMessageResult{err: err, sender: sender}
 		}
 		wg.Done()
 	}
@@ -1171,10 +1201,9 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 				if errStream != nil {
 					s.Proc.Errorf(s.Proc.Ctx, "Failed to get stream sender txnID=%s, err=%v",
 						s.Proc.TxnOperator.Txn().DebugString(), errStream)
-					closeWithError(errStream, s.Proc.Reg.MergeReceivers[receiverIdx])
+					closeWithError(errStream, s.Proc.Reg.MergeReceivers[receiverIdx], streamSender)
 					return
 				}
-				defer streamSender.Close(true)
 
 				message := cnclient.AcquireMessage()
 				message.Id = streamSender.ID()
@@ -1183,23 +1212,23 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 				message.Uuid = uuid
 
 				if errSend := streamSender.Send(s.Proc.Ctx, message); errSend != nil {
-					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx])
+					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], streamSender)
 					return
 				}
 
 				messagesReceive, errReceive := streamSender.Receive()
 				if errReceive != nil {
-					closeWithError(errReceive, s.Proc.Reg.MergeReceivers[receiverIdx])
+					closeWithError(errReceive, s.Proc.Reg.MergeReceivers[receiverIdx], streamSender)
 					return
 				}
 
 				err := receiveMsgAndForward(s.Proc, messagesReceive, s.Proc.Reg.MergeReceivers[receiverIdx].Ch)
-				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx])
+				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], streamSender)
 			},
 		)
 
 		if errSubmit != nil {
-			errChan <- errSubmit
+			resultChan <- notifyMessageResult{err: errSubmit, sender: nil}
 			wg.Done()
 		}
 	}

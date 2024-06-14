@@ -1579,7 +1579,7 @@ func initHexStringTestCase() []tcTemp {
 				[]bool{false, false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"48656c6c6f", "476f7068657221"},
+				[]string{"48656C6C6F", "476F7068657221"},
 				[]bool{false, false}),
 		},
 		{
@@ -1589,7 +1589,7 @@ func initHexStringTestCase() []tcTemp {
 				[]bool{false, false, false, false, false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"", "616263", "610a62", "615c6e62", "612262"},
+				[]string{"", "616263", "610A62", "615C6E62", "612262"},
 				[]bool{false, false, false, false, false}),
 		},
 	}

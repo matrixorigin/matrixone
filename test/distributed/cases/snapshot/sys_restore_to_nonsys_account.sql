@@ -1,3 +1,4 @@
+-- @bvt:issue#16709
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 
@@ -332,6 +333,7 @@ drop snapshot sp10;
 
 
 
+
 -- abnormal test: sys restore non-sys account:acc01 to sys
 -- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test01;
@@ -367,3 +369,4 @@ drop database test01;
 -- @session
 
 drop account acc01;
+-- @bvt:issue

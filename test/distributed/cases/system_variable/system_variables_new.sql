@@ -2,6 +2,8 @@
 create account acc1 ADMIN_NAME 'admin' IDENTIFIED BY '111';
 create account acc2 ADMIN_NAME 'admin' IDENTIFIED BY '111';
 create account acc3 ADMIN_NAME 'admin' IDENTIFIED BY '111';
+# sys init with on
+set global enable_privilege_cache = on;
 
 -- acc1 set global variables,sys,acc2,acc3 confirm env isolation
 -- @session:id=1&user=acc1:admin&password=111
@@ -20,8 +22,6 @@ set global max_connections=65536;
 select @@max_connections;
 set global lower_case_table_names=0;
 select @@global.lower_case_table_names;
-set global keep_user_target_list_in_result = 0;
-select @@global.keep_user_target_list_in_result;
 set global interactive_timeout = 20;
 show global variables like 'interactive_timeout';
 set global net_write_timeout = 10;
@@ -45,7 +45,6 @@ show global variables like 'enable_privilege_cache';
 SHOW GLOBAL VARIABLES LIKE 'save_query_result';
 select @@GLOBAL.max_connections;
 select @@global.lower_case_table_names;
-select @@global.keep_user_target_list_in_result;
 show global variables like 'interactive_timeout';
 show global variables like 'net_write_timeout';
 show global variables like 'wait_timeout';
@@ -79,8 +78,6 @@ set max_connections=1000;
 select @@max_connections;
 set lower_case_table_names=0;
 select @@lower_case_table_names;
-set keep_user_target_list_in_result = 0;
-select @@keep_user_target_list_in_result;
 set interactive_timeout = 100;
 SELECT @@interactive_timeout;
 set net_write_timeout = 15;
@@ -108,7 +105,6 @@ select @@max_connections;
 show variables like 'enable_privilege_cache';
 SHOW VARIABLES LIKE 'save_query_result';
 select @@lower_case_table_names;
-select @@keep_user_target_list_in_result;
 SELECT @@interactive_timeout;
 SELECT @@net_write_timeout;
 SELECT @@wait_timeout;
@@ -126,7 +122,6 @@ select @@max_connections;
 show variables like 'enable_privilege_cache';
 SHOW VARIABLES LIKE 'save_query_result';
 select @@lower_case_table_names;
-select @@keep_user_target_list_in_result;
 SELECT @@interactive_timeout;
 SELECT @@net_write_timeout;
 SELECT @@wait_timeout;
@@ -143,7 +138,6 @@ select @@max_connections;
 show variables like 'enable_privilege_cache';
 SHOW VARIABLES LIKE 'save_query_result';
 select @@lower_case_table_names;
-select @@keep_user_target_list_in_result;
 SELECT @@net_write_timeout;
 SELECT @@wait_timeout;
 SELECT @@sql_select_limit;
