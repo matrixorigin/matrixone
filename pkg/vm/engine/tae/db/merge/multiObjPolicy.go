@@ -16,12 +16,13 @@ package merge
 
 import (
 	"fmt"
+	"math"
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
-	"math"
-	"slices"
 )
 
 type multiObjConfig struct {
@@ -58,42 +59,6 @@ func (m *multiObjPolicy) OnObject(obj *catalog.ObjectEntry) {
 	m.objects = append(m.objects, obj)
 }
 
-func (m *multiObjPolicy) OnPostTable() {
-	if len(m.objects) < 2 {
-		return
-	}
-	if !m.objects[0].GetSortKeyZonemap().IsInited() {
-		return
-	}
-	t := m.objects[0].GetSortKeyZonemap().GetType()
-
-	slices.SortFunc(m.objects, func(a, b *catalog.ObjectEntry) int {
-		zmA := a.GetSortKeyZonemap()
-		zmB := b.GetSortKeyZonemap()
-		if c := compute.CompareGeneric(zmA.GetMin(), zmB.GetMin(), t); c != 0 {
-			return c
-		}
-		return compute.CompareGeneric(zmA.GetMax(), zmB.GetMax(), t)
-	})
-
-	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: minValue(t)}
-	for _, obj := range m.objects {
-		zm := obj.GetSortKeyZonemap()
-		if len(set.entries) == 0 || compute.CompareGeneric(set.maxValue, zm.GetMin(), t) > 0 {
-			set.add(t, obj)
-		} else if len(set.entries) == 1 {
-			set.reset(t)
-			set.add(t, obj)
-		} else {
-			break
-		}
-	}
-	if len(set.entries) > m.config.maxObjs {
-		m.objects = set.entries[:m.config.maxObjs]
-	}
-	m.objects = set.entries
-}
-
 func (m *multiObjPolicy) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	if len(m.objects) < 2 {
 		return nil, TaskHostDN
@@ -119,6 +84,10 @@ func (m *multiObjPolicy) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 	for _, obj := range m.objects {
 		zm := obj.GetSortKeyZonemap()
 		if len(set.entries) == 0 || compute.CompareGeneric(set.maxValue, zm.GetMin(), t) > 0 {
+			set.add(t, obj)
+		} else if obj.GetOriginSize() < common.Const1MBytes {
+			set.add(t, obj)
+		} else if set.size < 20*common.Const1MBytes {
 			set.add(t, obj)
 		} else if len(set.entries) == 1 {
 			set.reset(t)
@@ -146,11 +115,6 @@ func (m *multiObjPolicy) Clear() {
 
 func (m *multiObjPolicy) ObjCnt() int {
 	return len(m.objects)
-}
-
-type entryInterval struct {
-	min, max any
-	entry    *catalog.ObjectEntry
 }
 
 type entrySet struct {
