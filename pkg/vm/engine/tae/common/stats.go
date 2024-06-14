@@ -27,6 +27,50 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+type DeletesCollectRecorder struct {
+	LoadCost   time.Duration
+	LoadAfter  time.Duration
+	BisectCost time.Duration
+	MemCost    time.Duration
+}
+
+type DeletesCollectBoard struct {
+	DeletesCollectRecorder
+	LoadMax, LoadAfterMax, BisectMax, MemMax time.Duration
+	LoadCnt                                  int
+}
+
+func (r *DeletesCollectBoard) Add(other *DeletesCollectRecorder) {
+	r.LoadCost += other.LoadCost
+	r.LoadAfter += other.LoadAfter
+	r.BisectCost += other.BisectCost
+	r.MemCost += other.MemCost
+
+	if other.LoadCost > r.LoadMax {
+		r.LoadMax = other.LoadCost
+	}
+	if other.LoadAfter > r.LoadAfterMax {
+		r.LoadAfterMax = other.LoadAfter
+	}
+	if other.BisectCost > r.BisectMax {
+		r.BisectMax = other.BisectCost
+	}
+	if other.MemCost > r.MemMax {
+		r.MemMax = other.MemCost
+	}
+	if other.LoadCost > 0 {
+		r.LoadCnt++
+	}
+}
+
+func (r *DeletesCollectBoard) String() string {
+	return fmt.Sprintf(
+		"LoadCost:%v LoadAfter:%v BisectCost:%v MemCost:%v LoadMax:%v LoadAfterMax:%v BisectMax:%v MemMax:%v LoadCnt:%v",
+		r.LoadCost, r.LoadAfter, r.BisectCost, r.MemCost, r.LoadMax, r.LoadAfterMax, r.BisectMax, r.MemMax, r.LoadCnt)
+}
+
+type RecorderKey struct{}
+
 const (
 	DefaultMinOsizeQualifiedMB   = 110   // MB
 	DefaultMaxOsizeObjMB         = 128   // MB

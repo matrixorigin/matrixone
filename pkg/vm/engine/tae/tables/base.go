@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -494,6 +495,13 @@ func (blk *baseObject) foreachPersistedDeletes(
 	if deletes == nil || err != nil {
 		return
 	}
+	if v := ctx.Value(common.RecorderKey{}); v != nil {
+		recorder := v.(*common.DeletesCollectRecorder)
+		inst := time.Now()
+		defer func() {
+			recorder.BisectCost = time.Since(inst)
+		}()
+	}
 	defer release()
 	defer deletes.Close()
 	if persistedByCN {
@@ -512,11 +520,8 @@ func (blk *baseObject) foreachPersistedDeletes(
 		abortVec := deletes.Vecs[3].GetDownstreamVector()
 		commitTsVec := deletes.Vecs[1].GetDownstreamVector()
 		rowIdVec := deletes.Vecs[0].GetDownstreamVector()
-		// TODO(aptend): remove this after recovery
-		rowIdSlice := vector.MustFixedCol[types.Rowid](rowIdVec)
-		prev := types.Rowid{}
 
-		rstart, rend := blockio.FindIntervalForBlock(rowIdSlice, objectio.NewBlockidWithObjectID(&blk.meta.ID, blkID))
+		rstart, rend := blockio.FindIntervalForBlock(vector.MustFixedCol[types.Rowid](rowIdVec), objectio.NewBlockidWithObjectID(&blk.meta.ID, blkID))
 		for i := rstart; i < rend; i++ {
 			if skipAbort {
 				abort := vector.GetFixedAt[bool](abortVec, i)
@@ -525,8 +530,7 @@ func (blk *baseObject) foreachPersistedDeletes(
 				}
 			}
 			commitTS := vector.GetFixedAt[types.TS](commitTsVec, i)
-			if commitTS.GreaterEq(&start) && commitTS.LessEq(&end) && !rowIdSlice[i].Equal(prev) {
-				prev = rowIdSlice[i]
+			if commitTS.GreaterEq(&start) && commitTS.LessEq(&end) {
 				loopOp(i, rowIdVec)
 			}
 		}
@@ -907,6 +911,12 @@ func (blk *baseObject) CollectDeleteInRangeByBlock(
 	start, end types.TS,
 	withAborted bool,
 	mp *mpool.MPool) (*containers.Batch, error) {
+	var recorder *common.DeletesCollectRecorder
+	var inst time.Time
+	if v := ctx.Value(common.RecorderKey{}); v != nil {
+		recorder = v.(*common.DeletesCollectRecorder)
+		inst = time.Now()
+	}
 	deletes, minTS, _, err := blk.inMemoryCollectDeleteInRange(
 		ctx,
 		blkID,
@@ -915,6 +925,9 @@ func (blk *baseObject) CollectDeleteInRangeByBlock(
 		withAborted,
 		mp,
 	)
+	if recorder != nil {
+		recorder.MemCost = time.Since(inst)
+	}
 	if err != nil {
 		if deletes != nil {
 			deletes.Close()
