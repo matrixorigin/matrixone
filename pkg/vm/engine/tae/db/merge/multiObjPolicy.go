@@ -132,6 +132,9 @@ func (m *multiObjPolicy) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 	}
 	m.objects = set.entries
 	objs := m.controlMem(m.objects, mem)
+	if len(objs) < 2 {
+		return nil, TaskHostDN
+	}
 	revisedObj := make([]*catalog.ObjectEntry, len(objs))
 	copy(revisedObj, objs)
 	return revisedObj, TaskHostDN
