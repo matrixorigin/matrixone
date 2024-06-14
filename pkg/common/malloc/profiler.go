@@ -33,6 +33,11 @@ type Profiler[T any, P interface {
 	locations sync.Map // LocationKey -> *profile.Location
 	functions sync.Map // FunctionKey -> *profile.Function
 	samples   sync.Map // SampleKey -> *SampleInfo[P]
+
+	// special samples
+	stackOmittedSample SampleInfo[T]
+
+	nextID atomic.Uint64
 }
 
 type SampleInfo[T any] struct {
@@ -41,6 +46,7 @@ type SampleInfo[T any] struct {
 }
 
 type SampleValues interface {
+	Init()
 	SampleTypes() []*profile.ValueType
 	DefaultSampleType() string
 	Values() []int64
@@ -63,7 +69,14 @@ func NewProfiler[T any, P interface {
 	*T
 	SampleValues
 }]() *Profiler[T, P] {
-	return &Profiler[T, P]{}
+	ret := &Profiler[T, P]{}
+
+	ret.stackOmittedSample.Locations = []*profile.Location{
+		ret.getMockLocation("| stack omitted |"),
+	}
+	P(&ret.stackOmittedSample.Values).Init()
+
+	return ret
 }
 
 func (p *Profiler[T, P]) Sample(
@@ -74,27 +87,19 @@ func (p *Profiler[T, P]) Sample(
 	if fullStackFraction > 0 &&
 		fastrand()%fullStackFraction > 0 {
 		// omit stack
-		return p.getSampleValue(
-			p.getMockLocation("|stack omitted|"),
-		)
+		return &p.stackOmittedSample.Values
 	}
 
+	skip += 2 // runtime.Callers, p.Sample
+
 	// full stack
-	return p.getSampleValue(
-		p.getFullStackLocations(skip)...,
-	)
-}
-
-func (p *Profiler[T, P]) getFullStackLocations(skip int) []*profile.Location {
-
 	pcs := *pcsPool.Get().(*[]uintptr)
 	defer func() {
 		pcs = pcs[:cap(pcs)]
 		pcsPool.Put(&pcs)
 	}()
-
 	for {
-		n := runtime.Callers(3+skip, pcs)
+		n := runtime.Callers(skip, pcs)
 		if n == len(pcs) {
 			pcs = append(pcs, make([]uintptr, len(pcs))...)
 			continue
@@ -102,26 +107,7 @@ func (p *Profiler[T, P]) getFullStackLocations(skip int) []*profile.Location {
 		pcs = pcs[:n]
 		break
 	}
-
-	var locations []*profile.Location
-	frames := runtime.CallersFrames(pcs)
-	for {
-		frame, more := frames.Next()
-
-		if frame.Function == "" {
-			// unknown function, ignore
-			continue
-		}
-
-		location := p.getLocation(frame)
-		locations = append(locations, location)
-
-		if !more {
-			break
-		}
-	}
-
-	return locations
+	return p.getSampleValueFromPCs(pcs...)
 }
 
 func (p *Profiler[T, P]) getLocation(frame runtime.Frame) *profile.Location {
@@ -134,7 +120,7 @@ func (p *Profiler[T, P]) getLocation(frame runtime.Frame) *profile.Location {
 	}
 
 	location := &profile.Location{
-		ID:      nextID.Add(1),
+		ID:      p.nextID.Add(1),
 		Address: uint64(frame.PC),
 	}
 
@@ -158,7 +144,7 @@ func (p *Profiler[T, P]) getMockLocation(label string) *profile.Location {
 	}
 
 	location := &profile.Location{
-		ID:      nextID.Add(1),
+		ID:      p.nextID.Add(1),
 		Address: 0,
 	}
 
@@ -180,7 +166,7 @@ func (p *Profiler[T, P]) getFunction(frame runtime.Frame) *profile.Function {
 	}
 
 	fn := &profile.Function{
-		ID:         nextID.Add(1),
+		ID:         p.nextID.Add(1),
 		Name:       frame.Function,
 		SystemName: frame.Function,
 		Filename:   frame.File,
@@ -199,7 +185,7 @@ func (p *Profiler[T, P]) getMockFunction(label string) *profile.Function {
 	}
 
 	fn := &profile.Function{
-		ID:         nextID.Add(1),
+		ID:         p.nextID.Add(1),
 		Name:       label,
 		SystemName: label,
 		Filename:   label,
@@ -209,15 +195,15 @@ func (p *Profiler[T, P]) getMockFunction(label string) *profile.Function {
 	return v.(*profile.Function)
 }
 
-func (p *Profiler[T, P]) getSampleValue(locations ...*profile.Location) P {
+func (p *Profiler[T, P]) getSampleValueFromPCs(pcs ...uintptr) P {
 	hasher := hasherPool.Get().(*maphash.Hash)
 	defer func() {
 		hasher.Reset()
 		hasherPool.Put(hasher)
 	}()
-	for _, loc := range locations {
+	for _, pc := range pcs {
 		hasher.Write(
-			unsafe.Slice((*byte)(unsafe.Pointer(&loc.ID)), unsafe.Sizeof(loc.ID)),
+			unsafe.Slice((*byte)(unsafe.Pointer(&pc)), unsafe.Sizeof(pc)),
 		)
 	}
 	key := SampleKey{
@@ -229,12 +215,35 @@ func (p *Profiler[T, P]) getSampleValue(locations ...*profile.Location) P {
 	}
 
 	var value T
+	P(&value).Init()
 	v, _ := p.samples.LoadOrStore(key, &SampleInfo[P]{
 		Values:    &value,
-		Locations: locations,
+		Locations: p.getLocationsFromPCs(pcs),
 	})
 
 	return v.(*SampleInfo[P]).Values
+}
+
+func (p *Profiler[T, P]) getLocationsFromPCs(pcs []uintptr) []*profile.Location {
+	var locations []*profile.Location
+	frames := runtime.CallersFrames(pcs)
+	for {
+		frame, more := frames.Next()
+
+		if frame.Function == "" {
+			// unknown function, ignore
+			continue
+		}
+
+		location := p.getLocation(frame)
+		locations = append(locations, location)
+
+		if !more {
+			break
+		}
+	}
+
+	return locations
 }
 
 func (p *Profiler[T, P]) Write(w io.Writer) error {
@@ -255,6 +264,11 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 		return true
 	})
 
+	prof.Sample = append(prof.Sample, &profile.Sample{
+		Location: p.stackOmittedSample.Locations,
+		Value:    P(&p.stackOmittedSample.Values).Values(),
+	})
+
 	p.locations.Range(func(k, v any) bool {
 		location := v.(*profile.Location)
 		prof.Location = append(prof.Location, copyLocation(location))
@@ -269,10 +283,6 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 
 	return prof.Write(w)
 }
-
-var (
-	nextID = new(atomic.Uint64)
-)
 
 var pcsPool = sync.Pool{
 	New: func() any {
