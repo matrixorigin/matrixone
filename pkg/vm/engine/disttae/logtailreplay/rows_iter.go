@@ -16,9 +16,9 @@ package logtailreplay
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/tidwall/btree"
 )
 
@@ -302,11 +302,6 @@ func GreatKind(lb []byte, closed bool) PrimaryKeyMatchSpec {
 
 func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 	var encoded []byte
-	//var debug bool
-
-	if kind == function.PREFIX_IN {
-		//debug = true
-	}
 
 	first := true
 	iterateAll := false
@@ -326,11 +321,6 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 
 	match := func(key []byte) bool {
 		if kind == function.PREFIX_IN {
-			//if debug {
-			//	xx, _ := types.Unpack(encoded)
-			//	yy, _ := types.Unpack(key)
-			//	fmt.Printf("%v-%v; %v-%v\n", encoded, xx, key, yy)
-			//}
 			return bytes.HasPrefix(key, encoded)
 		} else {
 			// in
@@ -342,24 +332,6 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 		Name: "InKind",
 		Move: func(p *primaryKeyIter) bool {
 			if first {
-				if kind == function.PREFIX_IN {
-					//var buf bytes.Buffer
-					//buf.WriteString("want: ")
-					//for r := range encodes {
-					//	xx, _ := types.Unpack(encodes[r])
-					//	buf.WriteString(fmt.Sprintf("%v-%v; ", encodes[r], xx))
-					//}
-					//
-					//buf.WriteString("\n has: ")
-					//p.primaryIndex.Scan(func(item *PrimaryIndexEntry) bool {
-					//	xx, _ := types.Unpack(item.Bytes)
-					//	buf.WriteString(fmt.Sprintf("%v-%v; ", item.Bytes, xx))
-					//	return true
-					//})
-
-					//fmt.Println(buf.String(), "\n")
-				}
-
 				first = false
 				// each seek may visit height items
 				// we choose to scan all if the seek is more expensive

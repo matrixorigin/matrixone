@@ -2156,10 +2156,6 @@ func (tbl *txnTable) PKPersistedBetween(
 		basePKFilter := constructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
 		blockReadPKFilter := constructBlockReadPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
 
-		if blockReadPKFilter.SortedSearchFunc == nil {
-			fmt.Println(basePKFilter.String(), plan2.FormatExpr(inExpr))
-		}
-
 		return blockReadPKFilter.SortedSearchFunc
 	}
 
