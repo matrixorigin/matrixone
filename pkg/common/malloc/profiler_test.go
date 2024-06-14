@@ -17,6 +17,7 @@ package malloc
 import (
 	"io"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,6 +29,8 @@ type testSampleValues struct {
 	N atomic.Int64
 	A atomic.Int64
 }
+
+func (t *testSampleValues) Init() {}
 
 func (t *testSampleValues) SampleTypes() []*profile.ValueType {
 	return []*profile.ValueType{
@@ -130,4 +133,12 @@ func BenchmarkProfilerWrite(b *testing.B) {
 			}
 		}
 	})
+}
+
+func BenchmarkCallers(b *testing.B) {
+	pcs := make([]uintptr, 8)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		runtime.Callers(1, pcs)
+	}
 }
