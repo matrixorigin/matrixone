@@ -559,6 +559,8 @@ func doLock(
 			return false, false, timestamp.Timestamp{}, err
 		}
 
+		logutil.Infof("xxxx txn:%s doLock, changed:%v.", txnOp.Txn().DebugString(), changed)
+
 		if changed {
 			trace.GetService().TxnNoConflictChanged(
 				proc.TxnOperator,
@@ -568,7 +570,6 @@ func doLock(
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 				return false, false, timestamp.Timestamp{}, err
 			}
-			logutil.Infof("xxxx txn:%s doLock, changed.", txnOp.Txn().DebugString())
 			return true, false, newSnapshotTS, nil
 		}
 	}
