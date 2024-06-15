@@ -146,12 +146,6 @@ func (txn *Transaction) WriteBatch(
 	return nil
 }
 
-func (txn *Transaction) dumpBatch(offset int) error {
-	txn.Lock()
-	defer txn.Unlock()
-	return txn.dumpBatchLocked(offset)
-}
-
 func checkPKDupGeneric[T comparable](
 	mp map[any]bool,
 	t *types.Type,
@@ -396,8 +390,6 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 	//offset < 0 indicates commit.
 	if offset < 0 {
-		logutil.Infof("xxxx txn:%s, insertCount:%v",
-			txn.op.Txn().DebugString(), txn.insertCount)
 		if txn.workspaceSize < WorkspaceThreshold && txn.insertCount < InsertEntryThreshold {
 			return nil
 		}
@@ -406,10 +398,6 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			return nil
 		}
 	}
-
-	//if txn.workspaceSize < WorkspaceThreshold {
-	//	return nil
-	//}
 
 	dumpAll := offset < 0
 	if dumpAll {
