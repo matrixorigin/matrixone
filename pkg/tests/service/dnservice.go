@@ -186,6 +186,7 @@ func buildTNConfig(
 	cfg.LogtailServer.LogtailCollectInterval.Duration = opt.logtailPushServer.logtailCollectInterval
 	cfg.LogtailServer.LogtailRPCStreamPoisonTime.Duration = opt.logtailPushServer.logtailRPCStreamPoisonTIme
 	cfg.LogtailServer.LogtailResponseSendTimeout.Duration = opt.logtailPushServer.logtailResponseSendTimeout
+	cfg.LogtailServer.PullWorkerPoolSize = toml.ByteSize(opt.logtailPushServer.pullWorkerPoolSize)
 
 	// We need the filled version of configuration.
 	// It's necessary when building tnservice.Option.

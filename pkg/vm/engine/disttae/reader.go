@@ -19,8 +19,6 @@ import (
 	"sort"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -43,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // -----------------------------------------------------------------
@@ -51,7 +49,7 @@ import (
 
 func (mixin *withFilterMixin) reset() {
 	mixin.filterState.evaluated = false
-	mixin.filterState.filter = blockio.ReadFilter{}
+	mixin.filterState.filter = blockio.BlockReadFilter{}
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
@@ -63,7 +61,7 @@ func (mixin *withFilterMixin) reset() {
 // call tryUpdate to update the seqnums
 // NOTE: here we assume the tryUpdate is always called with the same cols
 // for all blocks and it will only be updated once
-func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
+func (mixin *withFilterMixin) tryUpdateColumns(cols []string, blkCnt int) {
 	if len(cols) == len(mixin.columns.seqnums) {
 		return
 	}
@@ -101,68 +99,20 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			mixin.columns.colTypes[i] = types.T(colDef.Typ.Id).ToType()
 		}
 	}
-}
 
-func (mixin *withFilterMixin) getReadFilter(proc *process.Process, blkCnt int) (
-	filter blockio.ReadFilter,
-) {
-	if mixin.filterState.evaluated {
-		filter = mixin.filterState.filter
-		return
-	}
-	pk := mixin.tableDef.Pkey
-	if mixin.filterState.expr == nil || pk == nil {
+	if mixin.columns.pkPos != -1 {
+		// here we will select the primary key column from the vectors, and
+		// use the search function to find the offset of the primary key.
+		// it returns the offset of the primary key in the pk vector.
+		// if the primary key is not found, it returns empty slice
 		mixin.filterState.evaluated = true
-		mixin.filterState.filter = blockio.ReadFilter{}
-		return
+		//mixin.filterState.filter = filter
+		mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[mixin.columns.pkPos]}
+		mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
+
+		// records how many blks one reader needs to read when having filter
+		objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
 	}
-	return mixin.getPKFilter(proc, blkCnt)
-}
-
-func (mixin *withFilterMixin) getPKFilter(
-	proc *process.Process, blkCnt int,
-) blockio.ReadFilter {
-	// if no primary key is included in the columns or no filter expr is given,
-	// no filter is needed
-	if mixin.columns.pkPos == -1 || mixin.filterState.expr == nil {
-		mixin.filterState.evaluated = true
-		mixin.filterState.filter = blockio.ReadFilter{}
-		return blockio.ReadFilter{}
-	}
-
-	// evaluate the search function for the filter
-	// if the search function is not found, no filter is needed
-	// primary key must be used by the expr in one of the following patterns:
-	// A: $pk = const_value
-	// B: const_value = $pk
-	// C: {A|B} and {A|B}
-	// D: {A|B|C} [and {A|B|C}]*
-	// for other patterns, no filter is needed
-	ok, hasNull, filter := getNonCompositePKSearchFuncByExpr(
-		mixin.filterState.expr,
-		mixin.tableDef,
-		mixin.tableDef.Pkey.PkeyColName,
-		proc,
-	)
-	if !ok || !filter.Valid {
-		mixin.filterState.evaluated = true
-		mixin.filterState.filter = blockio.ReadFilter{}
-		mixin.filterState.hasNull = hasNull
-		return blockio.ReadFilter{}
-	}
-
-	// here we will select the primary key column from the vectors, and
-	// use the search function to find the offset of the primary key.
-	// it returns the offset of the primary key in the pk vector.
-	// if the primary key is not found, it returns empty slice
-	mixin.filterState.evaluated = true
-	mixin.filterState.filter = filter
-	mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[mixin.columns.pkPos]}
-	mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
-
-	// records how many blks one reader needs to read when having filter
-	objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
-	return filter
 }
 
 // -----------------------------------------------------------------
@@ -198,6 +148,7 @@ func newBlockReader(
 	ts timestamp.Timestamp,
 	blks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
+	filter blockio.BlockReadFilter,
 	fs fileservice.FileService,
 	proc *process.Process,
 ) *blockReader {
@@ -218,6 +169,7 @@ func newBlockReader(
 		blks: blks,
 	}
 	r.filterState.expr = filterExpr
+	r.filterState.filter = filter
 	return r
 }
 
@@ -376,10 +328,9 @@ func (r *blockReader) Read(
 
 	// try to update the columns
 	// the columns is only updated once for all blocks
-	r.tryUpdateColumns(cols)
+	r.tryUpdateColumns(cols, len(r.blks))
 
-	// get the block read filter
-	filter := r.getReadFilter(r.proc, len(r.blks))
+	filter := r.withFilterMixin.filterState.filter
 
 	// if any null expr is found in the primary key (composite primary keys), quick return
 	if r.filterState.hasNull {
@@ -474,7 +425,7 @@ func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
 func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
-	pkFilter PKFilter,
+	pkFilter PKFilters,
 	ts timestamp.Timestamp,
 	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
@@ -491,10 +442,11 @@ func newBlockMergeReader(
 			ts,
 			dirtyBlks,
 			filterExpr,
+			pkFilter.blockReadPKFilter,
 			fs,
 			proc,
 		),
-		pkFilter:   pkFilter,
+		pkFilter:   pkFilter.inMemPKFilter,
 		deletaLocs: make(map[string][]objectio.Location),
 	}
 	return r
@@ -563,15 +515,12 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	}
 	info := r.blks[0]
 
-	r.tryUpdateColumns(cols)
+	r.tryUpdateColumns(cols, len(r.blks))
 	// load deletes from txn.blockId_dn_delete_metaLoc_batch
 	err := r.table.LoadDeletesForBlock(info.BlockID, &r.buffer)
 	if err != nil {
 		return err
 	}
-
-	// load deletes from partition state for the specified block
-	//filter := r.getReadFilter(r.proc, len(r.blks))
 
 	state, err := r.table.getPartitionState(ctx)
 	if err != nil {
@@ -580,13 +529,8 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	ts := types.TimestampToTS(r.ts)
 
 	var iter logtailreplay.RowsIter
-	if !r.pkFilter.isNull && r.pkFilter.isValid {
-		switch r.pkFilter.op {
-		case function.EQUAL, function.PREFIX_EQ:
-			iter = state.NewPrimaryKeyDelIter(ts, logtailreplay.Prefix(r.pkFilter.packed[0]), info.BlockID)
-		case function.IN:
-			iter = state.NewPrimaryKeyDelIter(ts, logtailreplay.ExactIn(r.pkFilter.packed), info.BlockID)
-		}
+	if r.pkFilter.delIterFactory != nil {
+		iter = r.pkFilter.delIterFactory(info.BlockID)
 	}
 
 	if iter != nil {
