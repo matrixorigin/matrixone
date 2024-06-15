@@ -873,10 +873,38 @@ func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 		if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
 			//the column account_id of the cluster table do need to be filled here
 			if len(line)+1 < getRealAttrCnt(param.Attrs, param.Cols) {
+				logutil.Errorf("load %s failed", param.TblName)
+				logutil.Errorf("extern values is %s\n", param.CreateSql)
+				for i, c := range param.Cols {
+					if !c.Hidden && i < len(line) {
+						str := fmt.Sprintf("col name is %s and ", c.Name)
+						if line[i].IsNull {
+							str += "line value is null\n"
+							logutil.Error(str)
+						} else {
+							str += fmt.Sprintf("line value is %s\n", line[i].Val)
+							logutil.Error(str)
+						}
+					}
+				}
 				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo)
 			}
 		} else {
 			if !param.Extern.SysTable && len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
+				logutil.Errorf("load %s failed", param.TblName)
+				logutil.Errorf("extern values is %s\n", param.CreateSql)
+				for i, c := range param.Cols {
+					if !c.Hidden && i < len(line) {
+						str := fmt.Sprintf("col name is %s and ", c.Name)
+						if line[i].IsNull {
+							str += "line value is null\n"
+							logutil.Error(str)
+						} else {
+							str += fmt.Sprintf("line value is %s\n", line[i].Val)
+							logutil.Error(str)
+						}
+					}
+				}
 				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo)
 			}
 		}
