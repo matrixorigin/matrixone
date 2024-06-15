@@ -15,9 +15,12 @@
 package compile
 
 import (
+	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -25,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"go.uber.org/zap"
+	"sync/atomic"
+	"time"
 )
 
 // remoteRun sends a scope to remote node for running.
@@ -153,9 +158,249 @@ func receiveMessageFromCnServer2(c *Compile, s *Scope, sender *messageSenderOnCl
 	return nil
 }
 
+// messageSenderOnClient support a series of methods
+// to do sending message and receiving its returns.
+type messageSenderOnClient struct {
+	// sender's context
+	// and cancel function (it exists if this context was recreated by us).
+	ctx       context.Context
+	ctxCancel context.CancelFunc
+
+	mp *mpool.MPool
+
+	// anal was used to merge remote-run's cost analysis information.
+	anal *anaylze
+
+	// message sender and its data receiver.
+	streamSender morpc.Stream
+	receiveCh    chan morpc.Message
+
+	// Two Flags to help us know the sender status.
+	//
+	// safeToClose should be true, if
+	// 1. there has received the EndMessage or ErrorMessage from receiver.
+	// or
+	// 2. we have never sent a message in succeed.
+	safeToClose bool
+	// alreadyClose should be true once we get a stream closed signal.
+	alreadyClose bool
+}
+
+func newMessageSenderOnClient(
+	ctx context.Context, toAddr string, mp *mpool.MPool, ana *anaylze) (*messageSenderOnClient, error) {
+	var sender = new(messageSenderOnClient)
+	sender.safeToClose = true
+	sender.alreadyClose = false
+	sender.mp = mp
+	sender.anal = ana
+
+	streamSender, err := cnclient.GetStreamSender(toAddr)
+	if err != nil {
+		return sender, err
+	}
+
+	sender.streamSender = streamSender
+	if _, ok := ctx.Deadline(); !ok {
+		sender.ctx, sender.ctxCancel = context.WithTimeout(ctx, time.Second*10000)
+	} else {
+		sender.ctx = ctx
+	}
+
+	if sender.receiveCh == nil {
+		sender.receiveCh, err = sender.streamSender.Receive()
+	}
+	return sender, err
+}
+
+func (sender *messageSenderOnClient) sendPipeline(
+	scopeData, procData []byte) error {
+	sdLen := len(scopeData)
+	if sdLen <= maxMessageSizeToMoRpc {
+		message := cnclient.AcquireMessage()
+		message.SetID(sender.streamSender.ID())
+		message.SetMessageType(pipeline.Method_PipelineMessage)
+		message.SetData(scopeData)
+		message.SetProcData(procData)
+		message.SetSid(pipeline.Status_Last)
+		return sender.streamSender.Send(sender.ctx, message)
+	}
+
+	start := 0
+	for start < sdLen {
+		end := start + maxMessageSizeToMoRpc
+
+		message := cnclient.AcquireMessage()
+		message.SetID(sender.streamSender.ID())
+		message.SetMessageType(pipeline.Method_PipelineMessage)
+		if end >= sdLen {
+			message.SetData(scopeData[start:sdLen])
+			message.SetProcData(procData)
+			message.SetSid(pipeline.Status_Last)
+		} else {
+			message.SetData(scopeData[start:end])
+			message.SetSid(pipeline.Status_WaitingNext)
+		}
+
+		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
+			return err
+		}
+		start = end
+	}
+	return nil
+}
+
+func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
+	select {
+	case <-sender.ctx.Done():
+		return nil, nil
+
+	case val, ok := <-sender.receiveCh:
+		if !ok || val == nil {
+			sender.safeToClose = true
+			sender.alreadyClose = true
+			return nil, moerr.NewStreamClosed(sender.ctx)
+		}
+		return val, nil
+	}
+}
+
+func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool, err error) {
+	var val morpc.Message
+	var m *pipeline.Message
+	var dataBuffer []byte
+
+	for {
+		val, err = sender.receiveMessage()
+		if err != nil {
+			return nil, false, err
+		}
+		if val == nil {
+			return nil, true, nil
+		}
+
+		m = val.(*pipeline.Message)
+		if info, get := m.TryToGetMoErr(); get {
+			sender.safeToClose = true
+			return nil, false, info
+		}
+		if m.IsEndMessage() {
+			anaData := m.GetAnalyse()
+			if len(anaData) > 0 {
+				ana := new(pipeline.AnalysisList)
+				if err = ana.Unmarshal(anaData); err != nil {
+					return nil, false, err
+				}
+				sender.dealAnalysis(ana)
+			}
+			sender.safeToClose = true
+			return nil, true, nil
+		}
+
+		if dataBuffer == nil {
+			dataBuffer = m.Data
+		} else {
+			dataBuffer = append(dataBuffer, m.Data...)
+		}
+
+		if m.WaitingNextToMerge() {
+			continue
+		}
+
+		bat, err = decodeBatch(sender.mp, dataBuffer)
+		return bat, false, err
+	}
+}
+
+// no matter how we stop the remote-run, we should get the final remote cost here.
+func (sender *messageSenderOnClient) waitingTheStopResponse() {
+	if sender.alreadyClose || sender.safeToClose {
+		return
+	}
+
+	// send a stop sending message to message-receiver.
+	if err := sender.streamSender.Send(sender.ctx, generateStopSendingMessage()); err != nil {
+		return
+	}
+
+	// waiting the response, so that we can close the stream safely.
+	receiveChan, err := sender.streamSender.Receive()
+	if err != nil {
+		return
+	}
+
+	// half minute is a very long time to wait an EndMessage response.
+	// todo: remove this waiting time is better, but I am scared if it will hung sometimes.
+	maxWaitingTime, cancel := context.WithTimeout(context.TODO(), 30*time.Second)
+	for {
+		select {
+		case val, getOK := <-receiveChan:
+			receiverDone := !getOK || val == nil
+			if receiverDone {
+				sender.safeToClose = true
+				break
+			}
+			message := val.(*pipeline.Message)
+			if message.IsEndMessage() || message.GetErr() != nil {
+				// in fact, we should deal the cost analysis information here.
+				cancel()
+				break
+			}
+
+			continue
+
+		case <-maxWaitingTime.Done():
+			break
+		}
+	}
+}
+
 func generateStopSendingMessage() *pipeline.Message {
 	message := cnclient.AcquireMessage()
 	message.SetMessageType(pipeline.Method_StopSending)
 	message.NeedNotReply = true
 	return message
+}
+
+func (sender *messageSenderOnClient) dealAnalysis(ana *pipeline.AnalysisList) {
+	if sender.anal == nil {
+		return
+	}
+	mergeAnalyseInfo(sender.anal, ana)
+}
+
+func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
+	source := ana.List
+	if len(target.analInfos) != len(source) {
+		return
+	}
+	for i := range target.analInfos {
+		n := source[i]
+		atomic.AddInt64(&target.analInfos[i].OutputSize, n.OutputSize)
+		atomic.AddInt64(&target.analInfos[i].OutputRows, n.OutputRows)
+		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
+		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
+		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
+		target.analInfos[i].MergeArray(n)
+		atomic.AddInt64(&target.analInfos[i].TimeConsumed, n.TimeConsumed)
+		atomic.AddInt64(&target.analInfos[i].WaitTimeConsumed, n.WaitTimeConsumed)
+		atomic.AddInt64(&target.analInfos[i].DiskIO, n.DiskIO)
+		atomic.AddInt64(&target.analInfos[i].S3IOByte, n.S3IOByte)
+		atomic.AddInt64(&target.analInfos[i].S3IOInputCount, n.S3IOInputCount)
+		atomic.AddInt64(&target.analInfos[i].S3IOOutputCount, n.S3IOOutputCount)
+		atomic.AddInt64(&target.analInfos[i].NetworkIO, n.NetworkIO)
+		atomic.AddInt64(&target.analInfos[i].ScanTime, n.ScanTime)
+		atomic.AddInt64(&target.analInfos[i].InsertTime, n.InsertTime)
+	}
+}
+
+func (sender *messageSenderOnClient) close() {
+	sender.waitingTheStopResponse()
+
+	if sender.ctxCancel != nil {
+		sender.ctxCancel()
+	}
+	if sender.alreadyClose {
+		return
+	}
+	_ = sender.streamSender.Close(true)
 }

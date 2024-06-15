@@ -18,15 +18,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -35,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
+	"runtime"
 	"time"
 )
 
@@ -46,6 +52,8 @@ import (
 //  1. notify message :
 //     a message to tell the dispatch pipeline where its remote receiver are.
 //     and we use this connection's write-back method to send the data.
+//     or
+//     a message to stop the running pipeline.
 //
 //  2. scope message :
 //     a message contains the encoded pipeline.
@@ -195,4 +203,336 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))
 	}
 	return nil
+}
+
+const (
+	maxMessageSizeToMoRpc = 64 * mpool.MB
+
+	// HandleNotifyTimeout
+	// todo: this is a bad design here.
+	//  we should do the waiting work in the prepare stage of the dispatch operator but not in the exec stage.
+	//      do the waiting work in the exec stage can save some execution time, but it will cause an unstable waiting time.
+	//		(because we cannot control the execution time of the running sql,
+	//		and the coming time of the first batch of the result is not a constant time.)
+	// 		see the codes in pkg/sql/colexec/dispatch/dispatch.go:waitRemoteRegsReady()
+	//
+	// need to fix this in the future. for now, increase it to make tpch1T can run on 3 CN
+	HandleNotifyTimeout = 300 * time.Second
+)
+
+// message receiver's cn information.
+type cnInformation struct {
+	cnAddr      string
+	storeEngine engine.Engine
+	fileService fileservice.FileService
+	lockService lockservice.LockService
+	queryClient qclient.QueryClient
+	hakeeper    logservice.CNHAKeeperClient
+	udfService  udf.Service
+	aicm        *defines.AutoIncrCacheManager
+}
+
+// information to rebuild a process.
+type processHelper struct {
+	id               string
+	lim              process.Limitation
+	unixTime         int64
+	accountId        uint32
+	txnOperator      client.TxnOperator
+	txnClient        client.TxnClient
+	sessionInfo      process.SessionInfo
+	analysisNodeList []int32
+	StmtId           uuid.UUID
+}
+
+// messageReceiverOnServer supported a series methods to write back results.
+type messageReceiverOnServer struct {
+	ctx         context.Context
+	messageId   uint64
+	messageTyp  pipeline.Method
+	messageUuid uuid.UUID
+
+	cnInformation cnInformation
+	// information to build a process.
+	procBuildHelper processHelper
+
+	clientSession   morpc.ClientSession
+	messageAcquirer func() morpc.Message
+	maxMessageSize  int
+	scopeData       []byte
+
+	needNotReply bool
+
+	// result.
+	finalAnalysisInfo []*process.AnalyzeInfo
+}
+
+func newMessageReceiverOnServer(
+	ctx context.Context,
+	cnAddr string,
+	m *pipeline.Message,
+	cs morpc.ClientSession,
+	messageAcquirer func() morpc.Message,
+	storeEngine engine.Engine,
+	fileService fileservice.FileService,
+	lockService lockservice.LockService,
+	queryClient qclient.QueryClient,
+	hakeeper logservice.CNHAKeeperClient,
+	udfService udf.Service,
+	txnClient client.TxnClient,
+	aicm *defines.AutoIncrCacheManager) messageReceiverOnServer {
+
+	receiver := messageReceiverOnServer{
+		ctx:             ctx,
+		messageId:       m.GetId(),
+		messageTyp:      m.GetCmd(),
+		clientSession:   cs,
+		messageAcquirer: messageAcquirer,
+		maxMessageSize:  maxMessageSizeToMoRpc,
+		needNotReply:    m.NeedNotReply,
+	}
+	receiver.cnInformation = cnInformation{
+		cnAddr:      cnAddr,
+		storeEngine: storeEngine,
+		fileService: fileService,
+		lockService: lockService,
+		queryClient: queryClient,
+		hakeeper:    hakeeper,
+		udfService:  udfService,
+		aicm:        aicm,
+	}
+
+	switch m.GetCmd() {
+	case pipeline.Method_PrepareDoneNotifyMessage:
+		opUuid, err := uuid.FromBytes(m.GetUuid())
+		if err != nil {
+			logutil.Errorf("decode uuid from pipeline.Message failed, bytes are %v", m.GetUuid())
+			panic("cn receive a message with wrong uuid bytes")
+		}
+		receiver.messageUuid = opUuid
+
+	case pipeline.Method_PipelineMessage:
+		var err error
+		receiver.procBuildHelper, err = generateProcessHelper(m.GetProcInfoData(), txnClient)
+		if err != nil {
+			logutil.Errorf("decode process info from pipeline.Message failed, bytes are %v", m.GetProcInfoData())
+			panic("cn receive a message with wrong process bytes")
+		}
+		receiver.scopeData = m.Data
+	}
+
+	return receiver
+}
+
+func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, error) {
+	message, ok := receiver.messageAcquirer().(*pipeline.Message)
+	if !ok {
+		return nil, moerr.NewInternalError(receiver.ctx, "get a message with wrong type.")
+	}
+	message.SetID(receiver.messageId)
+	return message, nil
+}
+
+// newCompile make and return a new compile to run a pipeline.
+func (receiver *messageReceiverOnServer) newCompile() *Compile {
+	// compile is almost surely wanting a small or middle pool.  Later.
+	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
+	if err != nil {
+		panic(err)
+	}
+	pHelper, cnInfo := receiver.procBuildHelper, receiver.cnInformation
+	proc := process.New(
+		receiver.ctx,
+		mp,
+		pHelper.txnClient,
+		pHelper.txnOperator,
+		cnInfo.fileService,
+		cnInfo.lockService,
+		cnInfo.queryClient,
+		cnInfo.hakeeper,
+		cnInfo.udfService,
+		cnInfo.aicm)
+	proc.UnixTime = pHelper.unixTime
+	proc.Id = pHelper.id
+	proc.Lim = pHelper.lim
+	proc.SessionInfo = pHelper.sessionInfo
+	proc.SessionInfo.StorageEngine = cnInfo.storeEngine
+	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
+	for i := range proc.AnalInfos {
+		proc.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
+		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
+	}
+	proc.DispatchNotifyCh = make(chan process.WrapCs)
+	{
+		txn := proc.TxnOperator.Txn()
+		txnId := txn.GetID()
+		proc.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
+	}
+
+	c := reuse.Alloc[Compile](nil)
+	c.proc = proc
+	c.proc.MessageBoard = c.MessageBoard
+	c.e = cnInfo.storeEngine
+	c.anal = newAnaylze()
+	c.anal.analInfos = proc.AnalInfos
+	c.addr = receiver.cnInformation.cnAddr
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
+	c.ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
+
+	c.fill = func(b *batch.Batch) error {
+		return receiver.sendBatch(b)
+	}
+	return c
+}
+
+func (receiver *messageReceiverOnServer) sendError(
+	errInfo error) error {
+	message, err := receiver.acquireMessage()
+	if err != nil {
+		return err
+	}
+	message.SetID(receiver.messageId)
+	message.SetSid(pipeline.Status_MessageEnd)
+	if errInfo != nil {
+		message.SetMoError(receiver.ctx, errInfo)
+	}
+	return receiver.clientSession.Write(receiver.ctx, message)
+}
+
+func (receiver *messageReceiverOnServer) sendBatch(
+	b *batch.Batch) error {
+	// there's no need to send the nil batch.
+	if b == nil {
+		return nil
+	}
+
+	data, err := b.MarshalBinary()
+	if err != nil {
+		return err
+	}
+
+	dataLen := len(data)
+	if dataLen <= receiver.maxMessageSize {
+		m, errA := receiver.acquireMessage()
+		if errA != nil {
+			return errA
+		}
+		m.SetMessageType(pipeline.Method_BatchMessage)
+		m.SetData(data)
+		m.SetSid(pipeline.Status_Last)
+		return receiver.clientSession.Write(receiver.ctx, m)
+	}
+	// if data is too large, cut and send
+	for start, end := 0, 0; start < dataLen; start = end {
+		m, errA := receiver.acquireMessage()
+		if errA != nil {
+			return errA
+		}
+		end = start + receiver.maxMessageSize
+		if end >= dataLen {
+			end = dataLen
+			m.SetSid(pipeline.Status_Last)
+		} else {
+			m.SetSid(pipeline.Status_WaitingNext)
+		}
+		m.SetMessageType(pipeline.Method_BatchMessage)
+		m.SetData(data[start:end])
+
+		if errW := receiver.clientSession.Write(receiver.ctx, m); errW != nil {
+			return errW
+		}
+	}
+	return nil
+}
+
+func (receiver *messageReceiverOnServer) sendEndMessage() error {
+	message, err := receiver.acquireMessage()
+	if err != nil {
+		return err
+	}
+	message.SetSid(pipeline.Status_MessageEnd)
+	message.SetID(receiver.messageId)
+	message.SetMessageType(receiver.messageTyp)
+
+	analysisInfo := receiver.finalAnalysisInfo
+	if len(analysisInfo) > 0 {
+		anas := &pipeline.AnalysisList{
+			List: make([]*plan.AnalyzeInfo, len(analysisInfo)),
+		}
+		for i, a := range analysisInfo {
+			anas.List[i] = convertToPlanAnalyzeInfo(a)
+		}
+		data, err := anas.Marshal()
+		if err != nil {
+			return err
+		}
+		message.SetAnalysis(data)
+	}
+	return receiver.clientSession.Write(receiver.ctx, message)
+}
+
+func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, error) {
+	procInfo := &pipeline.ProcessInfo{}
+	err := procInfo.Unmarshal(data)
+	if err != nil {
+		return processHelper{}, err
+	}
+	if len(procInfo.GetAnalysisNodeList()) == 0 {
+		panic(fmt.Sprintf("empty plan: %s", procInfo.Sql))
+	}
+
+	result := processHelper{
+		id:               procInfo.Id,
+		lim:              convertToProcessLimitation(procInfo.Lim),
+		unixTime:         procInfo.UnixTime,
+		accountId:        procInfo.AccountId,
+		txnClient:        cli,
+		analysisNodeList: procInfo.GetAnalysisNodeList(),
+	}
+	result.txnOperator, err = cli.NewWithSnapshot([]byte(procInfo.Snapshot))
+	if err != nil {
+		return processHelper{}, err
+	}
+	result.sessionInfo, err = convertToProcessSessionInfo(procInfo.SessionInfo)
+	if err != nil {
+		return processHelper{}, err
+	}
+	if sessLogger := procInfo.SessionLogger; sessLogger != nil {
+		copy(result.sessionInfo.SessionId[:], sessLogger.SessId)
+		copy(result.StmtId[:], sessLogger.StmtId)
+		result.sessionInfo.LogLevel = enumLogLevel2ZapLogLevel(sessLogger.LogLevel)
+		// txnId, ignore. more in txnOperator.
+	}
+
+	return result, nil
+}
+
+func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, error) {
+	getCtx, getCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
+	var opProc *process.Process
+	var ok bool
+
+	for {
+		select {
+		case <-getCtx.Done():
+			colexec.Get().GetProcByUuid(uid, true)
+			getCancel()
+			return nil, moerr.NewInternalError(receiver.ctx, "get dispatch process by uuid timeout")
+
+		case <-receiver.ctx.Done():
+			colexec.Get().GetProcByUuid(uid, true)
+			getCancel()
+			return nil, nil
+
+		default:
+			if opProc, ok = colexec.Get().GetProcByUuid(uid, false); !ok {
+				// it's bad to call the Gosched() here.
+				// cut the HandleNotifyTimeout to 1ms, 1ms, 2ms, 3ms, 5ms, 8ms..., and use them as waiting time may be a better way.
+				runtime.Gosched()
+			} else {
+				getCancel()
+				return opProc, nil
+			}
+		}
+	}
 }
