@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -1490,6 +1491,14 @@ var (
 		PrivilegeTypeUpgradeAccount: 0,
 	}
 )
+
+func init() {
+	tables := make([]string, 0)
+	for tbl := range predefinedTables {
+		tables = append(tables, tbl)
+	}
+	util.InitPredefinedTables(tables)
+}
 
 func getSqlForAccountIdAndStatus(ctx context.Context, accName string, check bool) (string, error) {
 	if check && accountNameIsInvalid(accName) {

@@ -668,14 +668,11 @@ type txnTable struct {
 	tableName string
 	db        *txnDatabase
 	//	insertExpr *plan.Expr
-	defs       []engine.TableDef
-	tableDef   *plan.TableDef
-	seqnums    []uint16
-	typs       []types.Type
-	_partState atomic.Pointer[logtailreplay.PartitionState]
-	// specify whether the logtail is updated. once it is updated, it will not be updated again
-	logtailUpdated atomic.Bool
-
+	defs          []engine.TableDef
+	tableDef      *plan.TableDef
+	seqnums       []uint16
+	typs          []types.Type
+	_partState    atomic.Pointer[logtailreplay.PartitionState]
 	primaryIdx    int // -1 means no primary key
 	primarySeqnum int // -1 means no primary key
 	clusterByIdx  int // -1 means no clusterBy key
@@ -754,7 +751,7 @@ type withFilterMixin struct {
 		evaluated bool
 		//point select for primary key
 		expr     *plan.Expr
-		filter   blockio.ReadFilter
+		filter   blockio.BlockReadFilter
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
 		hasNull  bool
@@ -795,7 +792,7 @@ type blockMergeReader struct {
 	*blockReader
 	table     *txnTable
 	txnOffset int // Transaction writes offset used to specify the starting position for reading data.
-	pkFilter  PKFilter
+	pkFilter  InMemPKFilter
 	//for perfetch deletes
 	loaded     bool
 	pkidx      int
