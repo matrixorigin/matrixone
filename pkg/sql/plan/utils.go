@@ -1166,6 +1166,9 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		fn.Args[i] = foldExpr
 		isVec = isVec || foldExpr.GetVec() != nil
 	}
+	if f.IsAgg() || f.IsWin() {
+		return expr, nil
+	}
 	if !rule.IsConstant(expr, varAndParamIsConst) {
 		return expr, nil
 	}
@@ -2147,4 +2150,44 @@ func GetRowSizeFromTableDef(tableDef *TableDef, ignoreHiddenKey bool) float64 {
 		}
 	}
 	return float64(size)
+}
+
+type UnorderedSet[T ~string | ~int] map[T]int
+
+func (set UnorderedSet[T]) Insert(val T) {
+	set[val] = 0
+}
+
+func (set UnorderedSet[T]) Find(val T) bool {
+	if _, ok := set[val]; ok {
+		return ok
+	}
+	return false
+}
+
+// RemoveIf removes the elements that pred is true.
+func RemoveIf[T any](data []T, pred func(t T) bool) []T {
+	if len(data) == 0 {
+		return data
+	}
+	res := 0
+	for i := 0; i < len(data); i++ {
+		if !pred(data[i]) {
+			if res != i {
+				data[res] = data[i]
+			}
+			res++
+		}
+	}
+	return data[:res]
+}
+
+func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
+	if len(data) == 0 {
+		return false
+	}
+	if _, exists := data[val]; exists {
+		return true
+	}
+	return false
 }
