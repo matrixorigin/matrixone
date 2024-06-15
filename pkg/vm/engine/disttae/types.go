@@ -101,7 +101,7 @@ const (
 
 const (
 	WorkspaceThreshold   uint64 = 1 * mpool.MB
-	InsertEntryThreshold        = 5000
+	InsertEntryThreshold        = 15000
 	GCBatchOfFileCount   int    = 1000
 	GCPoolSize           int    = 5
 )
