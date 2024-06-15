@@ -65,6 +65,8 @@ func (s *Scope) remoteRun2(c *Compile) (sender *messageSenderOnClient, err error
 		return sender, err
 	}
 
+	sender.safeToClose = false
+	sender.alreadyClose = false
 	err = receiveMessageFromCnServer2(c, s, sender)
 	return nil, nil
 }
@@ -153,8 +155,7 @@ func receiveMessageFromCnServer2(c *Compile, s *Scope, sender *messageSenderOnCl
 
 func generateStopSendingMessage() *pipeline.Message {
 	message := cnclient.AcquireMessage()
-
-	message.SetMessageType(pipeline.Method_PipelineMessage)
-	message.SetSid(pipeline.Status_StopSending)
+	message.SetMessageType(pipeline.Method_StopSending)
+	message.NeedNotReply = true
 	return message
 }

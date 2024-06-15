@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"reflect"
 	"sync"
 
@@ -49,6 +50,45 @@ type Server struct {
 	uuidCsChanMap UuidProcMap
 	//txn's local segments.
 	cnSegmentMap CnSegmentMap
+
+	receivedRunningPipeline RunningPipelineMapForRemoteNode
+}
+
+// RunningPipelineMapForRemoteNode
+// is a map to record which pipeline was built for a remote node.
+// these pipelines will send data to a remote node,
+// we record them for a better control for their lives.
+type RunningPipelineMapForRemoteNode struct {
+	sync.Mutex
+
+	fromRpcClientToRunningPipeline map[morpc.ClientSession]*process.Process
+}
+
+func (s *Server) RecordRunningPipeline(session morpc.ClientSession, proc *process.Process) {
+	s.receivedRunningPipeline.Lock()
+	defer s.receivedRunningPipeline.Unlock()
+
+	s.receivedRunningPipeline.fromRpcClientToRunningPipeline[session] = proc
+}
+
+func (s *Server) CancelRunningPipeline(session morpc.ClientSession) {
+	s.receivedRunningPipeline.Lock()
+	defer s.receivedRunningPipeline.Unlock()
+
+	p, ok := s.receivedRunningPipeline.fromRpcClientToRunningPipeline[session]
+	if ok {
+		p.Cancel()
+		delete(s.receivedRunningPipeline.fromRpcClientToRunningPipeline, session)
+	}
+}
+
+func (s *Server) RemoveRunningPipeline(session morpc.ClientSession) {
+	s.receivedRunningPipeline.Lock()
+	defer s.receivedRunningPipeline.Unlock()
+
+	if _, ok := s.receivedRunningPipeline.fromRpcClientToRunningPipeline[session]; ok {
+		delete(s.receivedRunningPipeline.fromRpcClientToRunningPipeline, session)
+	}
 }
 
 type uuidProcMapItem struct {

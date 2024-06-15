@@ -137,9 +137,6 @@ func newMessageSenderOnClient(
 // XXX we can set a scope as argument directly next day.
 func (sender *messageSenderOnClient) send(
 	scopeData, procData []byte, _ pipeline.Method) error {
-	sender.safeToClose = false
-	sender.alreadyClose = false
-
 	sdLen := len(scopeData)
 	if sdLen <= maxMessageSizeToMoRpc {
 		message := cnclient.AcquireMessage()
@@ -210,6 +207,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 
 		m = val.(*pipeline.Message)
 		if info, get := m.TryToGetMoErr(); get {
+			sender.safeToClose = true
 			return nil, false, info
 		}
 		if m.IsEndMessage() {
@@ -221,6 +219,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 				}
 				mergeAnalyseInfo(sender.c.anal, ana)
 			}
+			sender.safeToClose = true
 			return nil, true, nil
 		}
 
@@ -262,7 +261,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 		return
 	}
 
-	// half minute is a very long time to wait a simple response.
+	// half minute is a very long time to wait an EndMessage response.
 	maxWaitingTime, cancel := context.WithTimeout(context.TODO(), 30*time.Second)
 	for {
 		select {
@@ -341,6 +340,7 @@ type messageReceiverOnServer struct {
 	maxMessageSize  int
 	scopeData       []byte
 
+	needNotReply bool
 	// XXX what's that. So confused.
 	sequence uint64
 
@@ -371,6 +371,7 @@ func newMessageReceiverOnServer(
 		messageAcquirer: messageAcquirer,
 		maxMessageSize:  maxMessageSizeToMoRpc,
 		sequence:        0,
+		needNotReply:    m.NeedNotReply,
 	}
 	receiver.cnInformation = cnInformation{
 		cnAddr:      cnAddr,
@@ -400,10 +401,6 @@ func newMessageReceiverOnServer(
 			panic("cn receive a message with wrong process bytes")
 		}
 		receiver.scopeData = m.Data
-
-	default:
-		logutil.Errorf("unknown cmd %d for pipeline.Message", m.GetCmd())
-		panic("unknown message type")
 	}
 
 	return receiver

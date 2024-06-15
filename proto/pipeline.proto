@@ -31,6 +31,7 @@ enum Method {
     PipelineMessage = 1;
     BatchMessage = 2;
     PrepareDoneNotifyMessage = 3;// for dispatch
+    StopSending = 4;
 }
 
 enum Status {
@@ -38,7 +39,6 @@ enum Status {
     WaitingNext = 1;
     Last = 2;
     MessageEnd = 3;
-    StopSending = 4;
 }
 
 message Message {
@@ -53,6 +53,7 @@ message Message {
   uint64  batch_cnt = 9;
   uint32  checksum = 10;
   uint64  sequence = 11;
+  bool    needNotReply = 12;
 }
 
 message Connector {
