@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -137,9 +138,20 @@ func LoadPersistedDeletesBySchema(
 	isPersistedByCN bool,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, release func(), err error) {
+	var recorder *common.DeletesCollectRecorder
+	var inst time.Time
+	if v := ctx.Value(common.RecorderKey{}); v != nil {
+		recorder = v.(*common.DeletesCollectRecorder)
+		inst = time.Now()
+	}
+
 	movbat, release, err := blockio.ReadBlockDeleteBySchema(ctx, location, fs.Service, isPersistedByCN)
 	if err != nil {
 		return
+	}
+	if recorder != nil {
+		recorder.LoadCost = time.Since(inst)
+		inst = time.Now()
 	}
 	bat = containers.NewBatch()
 	if isPersistedByCN {
@@ -152,6 +164,9 @@ func LoadPersistedDeletesBySchema(
 		for i := 0; i < 4; i++ {
 			bat.AddVector(colNames[i], containers.ToTNVector(movbat.Vecs[i], mp))
 		}
+	}
+	if recorder != nil {
+		recorder.LoadAfter = time.Since(inst)
 	}
 	return
 }

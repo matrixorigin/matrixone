@@ -41,12 +41,6 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 	case *tree.Use:
 		ses.EnterFPrint(12)
 		defer ses.ExitFPrint(12)
-		var v interface{}
-		v, err = ses.GetSessionSysVar("lower_case_table_names")
-		if err != nil {
-			return
-		}
-		st.Name.SetConfig(v.(int64))
 		//use database
 		err = handleChangeDB(ses, execCtx, st.Name.Compare())
 		if err != nil {
