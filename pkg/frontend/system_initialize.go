@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -125,6 +126,12 @@ func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, fina
 	initMoUserGrant5 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, dumpID, types.CurrentTimestamp().String2(time.UTC, 0), false)
 	addSqlIntoSet(initMoUserGrant4)
 	addSqlIntoSet(initMoUserGrant5)
+
+	//step6: add new entries to the mo_mysql_compatibility_mode
+	pu := config.GetParameterUnit(ctx)
+	addSqlIntoSet(addInitSystemVariablesSql(sysAccountID, sysAccountName, SaveQueryResult, pu))
+	addSqlIntoSet(addInitSystemVariablesSql(sysAccountID, sysAccountName, QueryResultMaxsize, pu))
+	addSqlIntoSet(addInitSystemVariablesSql(sysAccountID, sysAccountName, QueryResultTimeout, pu))
 
 	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant, mo_mysql_compatibility_mode
 	for _, sql := range initDataSqls {
