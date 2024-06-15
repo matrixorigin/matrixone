@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync"
 	"time"
 
@@ -447,11 +448,15 @@ func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 			return
 		}
 	}
+
+	now := time.Now()
 	for _, table := range db.tables {
 		if err = table.PrePrepareDedup(ctx); err != nil {
 			return
 		}
 	}
+	v2.TxnTNPrePrepareDeduplicateDurationHistogram.Observe(time.Since(now).Seconds())
+
 	for _, table := range db.tables {
 		if err = table.PrePrepare(); err != nil {
 			return
