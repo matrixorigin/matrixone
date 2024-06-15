@@ -95,22 +95,23 @@ type processHelper struct {
 type messageSenderOnClient struct {
 	ctx       context.Context
 	ctxCancel context.CancelFunc
+	mp        *mpool.MPool
+	anal      *anaylze
 
 	// safeToClose should be true, if
 	// 1. there has received the EndMessage or ErrorMessage from receiver.
 	// or
 	// 2. we have never sent a message in succeed.
-	safeToClose  bool
+	safeToClose bool
+	// alreadyClose should be true once we get a stream closed signal.
 	alreadyClose bool
 
 	streamSender morpc.Stream
 	receiveCh    chan morpc.Message
-
-	c *Compile
 }
 
 func newMessageSenderOnClient(
-	ctx context.Context, c *Compile, toAddr string) (*messageSenderOnClient, error) {
+	ctx context.Context, toAddr string, mp *mpool.MPool, ana *anaylze) (*messageSenderOnClient, error) {
 	var sender = new(messageSenderOnClient)
 	sender.safeToClose = true
 	sender.alreadyClose = false
@@ -126,7 +127,6 @@ func newMessageSenderOnClient(
 	} else {
 		sender.ctx = ctx
 	}
-	sender.c = c
 
 	if sender.receiveCh == nil {
 		sender.receiveCh, err = sender.streamSender.Receive()
@@ -135,8 +135,8 @@ func newMessageSenderOnClient(
 }
 
 // XXX we can set a scope as argument directly next day.
-func (sender *messageSenderOnClient) send(
-	scopeData, procData []byte, _ pipeline.Method) error {
+func (sender *messageSenderOnClient) sendPipeline(
+	scopeData, procData []byte) error {
 	sdLen := len(scopeData)
 	if sdLen <= maxMessageSizeToMoRpc {
 		message := cnclient.AcquireMessage()
@@ -217,7 +217,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 				if err = ana.Unmarshal(anaData); err != nil {
 					return nil, false, err
 				}
-				mergeAnalyseInfo(sender.c.anal, ana)
+				sender.dealAnalysis(ana)
 			}
 			sender.safeToClose = true
 			return nil, true, nil
@@ -236,7 +236,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			return nil, false, moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
 		}
 
-		bat, err = decodeBatch(sender.c.proc.Mp(), dataBuffer)
+		bat, err = decodeBatch(sender.mp, dataBuffer)
 		return bat, false, err
 	}
 }
@@ -262,6 +262,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 	}
 
 	// half minute is a very long time to wait an EndMessage response.
+	// todo: remove this waiting time is better, but I am scared if it will hung sometimes.
 	maxWaitingTime, cancel := context.WithTimeout(context.TODO(), 30*time.Second)
 	for {
 		select {
@@ -284,6 +285,13 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 			break
 		}
 	}
+}
+
+func (sender *messageSenderOnClient) dealAnalysis(ana *pipeline.AnalysisList) {
+	if sender.anal == nil {
+		return
+	}
+	mergeAnalyseInfo(sender.anal, ana)
 }
 
 func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {

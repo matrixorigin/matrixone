@@ -145,7 +145,8 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 	sender := &messageSenderOnClient{
 		ctx:          ctx,
 		streamSender: streamSender,
-		c:            c,
+		mp:           s.Proc.Mp(),
+		anal:         c.anal,
 	}
 	ch2 := make(chan *process.RegisterMessage)
 	ctx2, cancel := context.WithTimeout(context.Background(), time.Second)

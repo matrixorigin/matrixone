@@ -45,7 +45,7 @@ func Test_MessageSenderOnClient(t *testing.T) {
 	err = server.Start()
 	require.Nil(t, err)
 
-	sender, err := newMessageSenderOnClient(context.TODO(), nil, "127.0.0.1:9999")
+	sender, err := newMessageSenderOnClient(context.TODO(), "127.0.0.1:9999", nil, nil)
 	require.Nil(t, err)
 	defer sender.close()
 
@@ -53,9 +53,9 @@ func Test_MessageSenderOnClient(t *testing.T) {
 	require.Nil(t, err)
 
 	// server has been closed
-	_ = sender.send(nil, nil, 0)
+	_ = sender.sendPipeline(nil, nil)
 
-	_ = sender.send(make([]byte, maxMessageSizeToMoRpc+1), nil, 0)
+	_ = sender.sendPipeline(make([]byte, maxMessageSizeToMoRpc+1), nil)
 }
 
 func Test_MessageReceiverOnServer(t *testing.T) {

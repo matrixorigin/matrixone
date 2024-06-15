@@ -350,14 +350,14 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	}
 
 	// new sender and do send work.
-	sender, err = newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
+	sender, err = newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr, s.Proc.Mp(), c.anal)
 	if err != nil {
 		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
 			c.sql, c.proc.TxnOperator.Txn().DebugString(), err)
 		return nil, err
 	}
 
-	if err = sender.send(sData, pData, pipeline.Method_PipelineMessage); err != nil {
+	if err = sender.sendPipeline(sData, pData); err != nil {
 		return sender, err
 	}
 	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)

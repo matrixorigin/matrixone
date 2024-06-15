@@ -53,7 +53,7 @@ func (s *Scope) remoteRun2(c *Compile) (sender *messageSenderOnClient, err error
 	}
 
 	// generate a new sender to do send work.
-	sender, err = newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
+	sender, err = newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr, s.Proc.Mp(), c.anal)
 	if err != nil {
 		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
 			c.sql, c.proc.TxnOperator.Txn().DebugString(), err)
@@ -61,7 +61,7 @@ func (s *Scope) remoteRun2(c *Compile) (sender *messageSenderOnClient, err error
 		return nil, err
 	}
 
-	if err = sender.send(scopeEncodeData, processEncodeData, pipeline.Method_PipelineMessage); err != nil {
+	if err = sender.sendPipeline(scopeEncodeData, processEncodeData); err != nil {
 		return sender, err
 	}
 
