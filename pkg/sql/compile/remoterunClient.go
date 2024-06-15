@@ -72,7 +72,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 
 	sender.safeToClose = false
 	sender.alreadyClose = false
-	err = receiveMessageFromCnServer2(c, s, sender)
+	err = receiveMessageFromCnServer(c, s, sender)
 	return nil, nil
 }
 
@@ -101,7 +101,7 @@ func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, pro
 	return scopeData, processData, nil
 }
 
-func receiveMessageFromCnServer2(c *Compile, s *Scope, sender *messageSenderOnClient) error {
+func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnClient) error {
 	// generate a new pipeline to send data in local.
 	// value_scan -> connector / dispatch -> next pipeline.
 	fakeValueScanOperator := value_scan.NewArgument()
@@ -154,8 +154,6 @@ func receiveMessageFromCnServer2(c *Compile, s *Scope, sender *messageSenderOnCl
 			return errCall
 		}
 	}
-
-	return nil
 }
 
 // messageSenderOnClient support a series of methods
@@ -337,19 +335,24 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 			receiverDone := !getOK || val == nil
 			if receiverDone {
 				sender.safeToClose = true
-				break
+				sender.alreadyClose = true
+				cancel()
+				return
 			}
+
 			message := val.(*pipeline.Message)
 			if message.IsEndMessage() || message.GetErr() != nil {
+				sender.safeToClose = true
 				// in fact, we should deal the cost analysis information here.
 				cancel()
-				break
+				return
 			}
 
 			continue
 
 		case <-maxWaitingTime.Done():
-			break
+			cancel()
+			return
 		}
 	}
 }

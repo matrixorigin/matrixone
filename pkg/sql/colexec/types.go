@@ -64,31 +64,29 @@ type RunningPipelineMapForRemoteNode struct {
 	fromRpcClientToRunningPipeline map[morpc.ClientSession]*process.Process
 }
 
-func (s *Server) RecordRunningPipeline(session morpc.ClientSession, proc *process.Process) {
-	s.receivedRunningPipeline.Lock()
-	defer s.receivedRunningPipeline.Unlock()
+func (srv *Server) RecordRunningPipeline(session morpc.ClientSession, proc *process.Process) {
+	srv.receivedRunningPipeline.Lock()
+	defer srv.receivedRunningPipeline.Unlock()
 
-	s.receivedRunningPipeline.fromRpcClientToRunningPipeline[session] = proc
+	srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[session] = proc
 }
 
-func (s *Server) CancelRunningPipeline(session morpc.ClientSession) {
-	s.receivedRunningPipeline.Lock()
-	defer s.receivedRunningPipeline.Unlock()
+func (srv *Server) CancelRunningPipeline(session morpc.ClientSession) {
+	srv.receivedRunningPipeline.Lock()
+	defer srv.receivedRunningPipeline.Unlock()
 
-	p, ok := s.receivedRunningPipeline.fromRpcClientToRunningPipeline[session]
+	p, ok := srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[session]
 	if ok {
 		p.Cancel()
-		delete(s.receivedRunningPipeline.fromRpcClientToRunningPipeline, session)
+		delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, session)
 	}
 }
 
-func (s *Server) RemoveRunningPipeline(session morpc.ClientSession) {
-	s.receivedRunningPipeline.Lock()
-	defer s.receivedRunningPipeline.Unlock()
+func (srv *Server) RemoveRunningPipeline(session morpc.ClientSession) {
+	srv.receivedRunningPipeline.Lock()
+	defer srv.receivedRunningPipeline.Unlock()
 
-	if _, ok := s.receivedRunningPipeline.fromRpcClientToRunningPipeline[session]; ok {
-		delete(s.receivedRunningPipeline.fromRpcClientToRunningPipeline, session)
-	}
+	delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, session)
 }
 
 type uuidProcMapItem struct {
