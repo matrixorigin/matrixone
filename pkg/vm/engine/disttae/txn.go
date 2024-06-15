@@ -392,8 +392,16 @@ func (txn *Transaction) checkDup() error {
 func (txn *Transaction) dumpBatchLocked(offset int) error {
 	var size uint64
 	var pkCount int
-	if txn.workspaceSize < WorkspaceThreshold && txn.insertCount < InsertEntryThreshold {
-		return nil
+
+	if offset < 0 {
+		if txn.workspaceSize < WorkspaceThreshold &&
+			txn.insertCount < InsertEntryThreshold {
+			return nil
+		}
+	} else {
+		if txn.workspaceSize < WorkspaceThreshold {
+			return nil
+		}
 	}
 
 	dumpAll := offset < 0

@@ -180,7 +180,7 @@ type Transaction struct {
 	writes []Entry
 	// txn workspace size
 	workspaceSize uint64
-	// the count of insert entry when txn commits.
+	// the total row count for insert entries when txn commits.
 	insertCount int
 	// the last snapshot write offset
 	snapshotWriteOffset int
