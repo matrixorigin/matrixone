@@ -1263,7 +1263,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	// If the login information contains the database name, verify if the database exists
 	if dbName != "" {
 		ses.timestampMap[TSCheckDbNameStart] = time.Now()
-		_, err = executeSQLInBackgroundSession(tenantCtx, ses, "use "+dbName)
+		_, err = executeSQLInBackgroundSession(tenantCtx, ses, "use `"+dbName+"`")
 		if err != nil {
 			return nil, err
 		}
@@ -1563,7 +1563,7 @@ func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
 		skipRespClient: true,
 		ses:            ses,
 	}
-	return doComQuery(ses, tempExecCtx, &UserInput{sql: "use " + d.db})
+	return doComQuery(ses, tempExecCtx, &UserInput{sql: "use `" + d.db + "`"})
 }
 
 type prepareStmtMigration struct {
