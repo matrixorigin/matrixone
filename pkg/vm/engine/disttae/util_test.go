@@ -953,7 +953,7 @@ func Test_removeIf(t *testing.T) {
 	assert.Equal(t, []string(nil), removeIf[string](nil, nil))
 }
 
-func Test_ConstructBlockReaderPKFilter(t *testing.T) {
+func Test_ConstructBasePKFilter(t *testing.T) {
 	m := mpool.MustNewNoFixed(t.Name())
 	proc := testutil.NewProcessWithMPool(m)
 	exprStrings := []string{
@@ -1013,6 +1013,11 @@ func Test_ConstructBlockReaderPKFilter(t *testing.T) {
 		"a>10 or a=15",
 		"a>=10 or a=10",
 		"a<=10 or a=10",
+
+		"a<99",
+		"a<=99",
+		"a>99",
+		"a>=99",
 	}
 
 	encodeVal := func(val int64) []byte {
@@ -1031,14 +1036,14 @@ func Test_ConstructBlockReaderPKFilter(t *testing.T) {
 		return bb
 	}
 
-	filters := []blockReaderPKFilter{
+	filters := []BasePKFilter{
 		// "a=10",
 		{op: function.EQUAL, valid: true, lb: encodeVal(10)},
 		{valid: false},
 		{valid: false},
 		{op: function.IN, valid: true, lb: encodeVec([]int64{1, 2})},
-		{op: function.EQUAL, valid: true, lb: encodeVal(50)},
-		{op: function.EQUAL, valid: true, lb: encodeVal(60)},
+		{valid: false},
+		{valid: false},
 		{valid: false},
 		{valid: false},
 		{valid: false},
@@ -1090,6 +1095,11 @@ func Test_ConstructBlockReaderPKFilter(t *testing.T) {
 		{valid: true, op: function.GREAT_THAN, lb: encodeVal(10)},
 		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(10)},
 		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(10)},
+
+		{valid: true, op: function.LESS_THAN, lb: encodeVal(99)},
+		{valid: true, op: function.LESS_EQUAL, lb: encodeVal(99)},
+		{valid: true, op: function.GREAT_THAN, lb: encodeVal(99)},
+		{valid: true, op: function.GREAT_EQUAL, lb: encodeVal(99)},
 	}
 
 	exprs := []*plan.Expr{
@@ -1633,14 +1643,14 @@ func Test_ConstructBlockReaderPKFilter(t *testing.T) {
 		},
 	})
 
-	pkName := "a"
+	tableDef.Pkey.PkeyColName = "a"
 	for i, expr := range exprs {
-		ret := constructPKFilter(expr, tableDef, pkName, proc)
-		require.Equal(t, filters[i].valid, ret.valid, exprStrings[i])
+		basePKFilter := constructBasePKFilter(expr, tableDef, proc)
+		require.Equal(t, filters[i].valid, basePKFilter.valid, exprStrings[i])
 		if filters[i].valid {
-			require.Equal(t, filters[i].op, ret.op, exprStrings[i])
-			require.Equal(t, filters[i].lb, ret.lb, exprStrings[i])
-			require.Equal(t, filters[i].ub, ret.ub, exprStrings[i])
+			require.Equal(t, filters[i].op, basePKFilter.op, exprStrings[i])
+			require.Equal(t, filters[i].lb, basePKFilter.lb, exprStrings[i])
+			require.Equal(t, filters[i].ub, basePKFilter.ub, exprStrings[i])
 		}
 	}
 
