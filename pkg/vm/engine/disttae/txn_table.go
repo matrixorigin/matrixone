@@ -26,6 +26,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/docker/go-units"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1494,7 +1495,8 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
 	}
-	return tbl.getTxn().dumpBatch(tbl.getTxn().GetSnapshotWriteOffset())
+	return nil
+	//return tbl.getTxn().dumpBatch(tbl.getTxn().GetSnapshotWriteOffset())
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
