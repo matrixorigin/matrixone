@@ -62,7 +62,9 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	}
 	metaFiles := make([]*MetaFile, 0)
 	var readDuration, applyDuration time.Duration
+	r.checkpointMetaFiles.Lock()
 	for i, dir := range dirs {
+		r.checkpointMetaFiles.files[dir.Name] = struct{}{}
 		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
 		metaFiles = append(metaFiles, &MetaFile{
 			start: start,
@@ -70,6 +72,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			index: i,
 		})
 	}
+	r.checkpointMetaFiles.Unlock()
 	sort.Slice(metaFiles, func(i, j int) bool {
 		return metaFiles[i].end.Less(&metaFiles[j].end)
 	})
