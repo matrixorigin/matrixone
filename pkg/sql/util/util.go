@@ -28,6 +28,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var (
+	//every account have these tables.
+	predefinedTables []string
+	specialTables    = map[string]struct{}{
+		catalog.MO_DATABASE: {},
+		catalog.MO_TABLES:   {},
+		catalog.MO_COLUMNS:  {},
+	}
+)
+
+func InitPredefinedTables(tables []string) {
+	predefinedTables = tables
+}
+
 func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	rbat := batch.NewWithSize(len(bat.Vecs))
 	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
@@ -200,48 +214,15 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	// datname in ('mo_catalog')
 	inExpr := tree.NewComparisonExpr(tree.IN, att_dblnameColName, inValues)
 
-	mo_userConst := tree.NewNumValWithType(constant.MakeString("mo_user"), "mo_user", false, tree.P_char)
-	mo_roleConst := tree.NewNumValWithType(constant.MakeString("mo_role"), "mo_role", false, tree.P_char)
-	mo_user_grantConst := tree.NewNumValWithType(constant.MakeString("mo_user_grant"), "mo_user_grant", false, tree.P_char)
-	mo_role_grantConst := tree.NewNumValWithType(constant.MakeString("mo_role_grant"), "mo_role_grant", false, tree.P_char)
-	mo_role_privsConst := tree.NewNumValWithType(constant.MakeString("mo_role_privs"), "mo_role_privs", false, tree.P_char)
-	mo_user_defined_functionConst := tree.NewNumValWithType(constant.MakeString("mo_user_defined_function"), "mo_user_defined_function", false, tree.P_char)
-	mo_mysql_compatibility_modeConst := tree.NewNumValWithType(constant.MakeString("mo_mysql_compatibility_mode"), "mo_mysql_compatibility_mode", false, tree.P_char)
-	mo_indexes := tree.NewNumValWithType(constant.MakeString("mo_indexes"), "mo_indexes", false, tree.P_char)
-	mo_table_partitions := tree.NewNumValWithType(constant.MakeString("mo_table_partitions"), "mo_table_partitions", false, tree.P_char)
-	mo_pubs := tree.NewNumValWithType(constant.MakeString("mo_pubs"), "mo_pubs", false, tree.P_char)
-	mo_stored_procedure := tree.NewNumValWithType(constant.MakeString("mo_stored_procedure"), "mo_stored_procedure", false, tree.P_char)
-	mo_stages := tree.NewNumValWithType(constant.MakeString("mo_stages"), "mo_stages", false, tree.P_char)
-	mo_snapshots := tree.NewNumValWithType(constant.MakeString("mo_snapshots"), "mo_snapshots", false, tree.P_char)
+	exprs := make([]tree.Expr, 0)
+	for _, table := range predefinedTables {
+		if _, ok := specialTables[table]; ok {
+			continue
+		}
+		exprs = append(exprs, tree.NewNumValWithType(constant.MakeString(table), table, false, tree.P_char))
+	}
 
-	mo_locks := tree.NewNumValWithType(constant.MakeString("mo_locks"), "mo_locks", false, tree.P_char)
-	mo_variables := tree.NewNumValWithType(constant.MakeString("mo_variables"), "mo_variables", false, tree.P_char)
-	mo_transactions := tree.NewNumValWithType(constant.MakeString("mo_transactions"), "mo_transactions", false, tree.P_char)
-	mo_cache := tree.NewNumValWithType(constant.MakeString("mo_cache"), "mo_cache", false, tree.P_char)
-	mo_sessions := tree.NewNumValWithType(constant.MakeString("mo_sessions"), "mo_sessions", false, tree.P_char)
-	mo_configurations := tree.NewNumValWithType(constant.MakeString("mo_configurations"), "mo_configurations", false, tree.P_char)
-
-	notInValues := tree.NewTuple(tree.Exprs{
-		mo_userConst,
-		mo_roleConst,
-		mo_user_grantConst,
-		mo_role_grantConst,
-		mo_role_privsConst,
-		mo_user_defined_functionConst,
-		mo_mysql_compatibility_modeConst,
-		mo_indexes,
-		mo_table_partitions,
-		mo_pubs,
-		mo_stored_procedure,
-		mo_stages,
-		mo_snapshots,
-		mo_locks,
-		mo_variables,
-		mo_transactions,
-		mo_cache,
-		mo_sessions,
-		mo_configurations,
-	})
+	notInValues := tree.NewTuple(exprs)
 
 	notInexpr := tree.NewComparisonExpr(tree.NOT_IN, att_relnameColName, notInValues)
 
