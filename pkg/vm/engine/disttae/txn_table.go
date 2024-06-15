@@ -1989,6 +1989,10 @@ func (tbl *txnTable) newReader(
 
 	iter, pkVal = tbl.tryConstructPrimaryKeyIndexIter(ts, pkFilter, expr, state)
 	if iter == nil {
+		if regexp.MustCompile(`.*sbtest.*`).MatchString(tbl.tableName) {
+			logutil.Fatalf("xxxx sbtest point select should not, table:%s, txn:%s",
+				tbl.tableName, txn.op.Txn().DebugString())
+		}
 		iter = state.NewRowsIter(
 			types.TimestampToTS(ts),
 			nil,
@@ -1997,8 +2001,8 @@ func (tbl *txnTable) newReader(
 	}
 
 	partReader := &PartitionReader{
-		table:    tbl,
-		iter:     iter,
+		table:       tbl,
+		iter:        iter,
 		iterForTest: state.NewRowsIterForTest(types.MaxTs()),
 		//iterDel: state.NewRowsIter(types.MaxTs(), nil, true),
 		seqnumMp: seqnumMp,
