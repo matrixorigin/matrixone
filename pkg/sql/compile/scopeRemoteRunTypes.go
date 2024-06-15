@@ -115,6 +115,8 @@ func newMessageSenderOnClient(
 	var sender = new(messageSenderOnClient)
 	sender.safeToClose = true
 	sender.alreadyClose = false
+	sender.mp = mp
+	sender.anal = ana
 
 	streamSender, err := cnclient.GetStreamSender(toAddr)
 	if err != nil {

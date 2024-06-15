@@ -38,7 +38,7 @@ import (
 	"time"
 )
 
-// CnServerMessageHandler2 receive and deal the message from cn-client.
+// CnServerMessageHandler receive and deal the message from cn-client.
 //
 // The message should always *pipeline.Message here.
 // there are 2 types of pipeline message now.
@@ -50,7 +50,7 @@ import (
 //  2. scope message :
 //     a message contains the encoded pipeline.
 //     we decoded it and run it locally.
-func CnServerMessageHandler2(
+func CnServerMessageHandler(
 	ctx context.Context,
 	serverAddress string,
 	message morpc.Message,

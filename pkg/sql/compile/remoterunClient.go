@@ -34,7 +34,7 @@ import (
 // first, Message with error information.
 // second, Message with EndFlag and Analysis Information.
 // third, Message with batch data.
-func (s *Scope) remoteRun2(c *Compile) (sender *messageSenderOnClient, err error) {
+func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error) {
 	// a defer for safety.
 	defer func() {
 		if e := recover(); e != nil {
