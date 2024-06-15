@@ -1179,7 +1179,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 	// to notify the remote dispatch executor where its remote receivers are.
 	// dispatch operator will use this stream connection to send data back.
 	//
-	// function `cnMessageHandle` at file `scopeRemoteRun.go` will handle the notification.
+	// function `cnMessageHandle` at file `remoterunServer.go` will handle the notification.
 	for i := range s.RemoteReceivRegInfos {
 		wg.Add(1)
 
