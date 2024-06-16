@@ -100,9 +100,10 @@ const (
 )
 
 const (
-	WorkspaceThreshold uint64 = 1 * mpool.MB
-	GCBatchOfFileCount int    = 1000
-	GCPoolSize         int    = 5
+	WorkspaceThreshold   uint64 = 1 * mpool.MB
+	InsertEntryThreshold        = 5000
+	GCBatchOfFileCount   int    = 1000
+	GCPoolSize           int    = 5
 )
 
 var (
@@ -179,7 +180,8 @@ type Transaction struct {
 	writes []Entry
 	// txn workspace size
 	workspaceSize uint64
-
+	// the total row count for insert entries when txn commits.
+	insertCount int
 	// the last snapshot write offset
 	snapshotWriteOffset int
 
