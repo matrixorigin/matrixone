@@ -279,7 +279,8 @@ func (p *PartitionReader) Read(
 
 			//tombstones := ""
 			rows := ""
-			if !p.called && regexp.MustCompile(`.*sbtest.*`).MatchString(p.table.tableName) {
+			if !p.called && p.iterForTest != nil &&
+				regexp.MustCompile(`.*sbtest.*`).MatchString(p.table.tableName) {
 				num := 0
 				for p.iterForTest.Next() {
 					entry := p.iterForTest.Entry()
