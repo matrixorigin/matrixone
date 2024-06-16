@@ -4054,7 +4054,7 @@ func TestLogtailBasic(t *testing.T) {
 	insDataEntry := resp.Commands[0]
 	require.Equal(t, api.Entry_Insert, insDataEntry.EntryType)
 	require.Equal(t, len(schema.ColDefs)+1, len(insDataEntry.Bat.Vecs)) // 5 columns, rowid + commit ts + 2 visibile
-	check_same_rows(insDataEntry.Bat, 90)                               // 99 rows, because the first write is excluded.
+	check_same_rows(insDataEntry.Bat, 99)                               // 99 rows, because the first write is excluded.
 	// test first user col, this is probably fragile, it depends on the details of MockSchema
 	// if something changes, delete this is okay.
 	firstCol, err := vector.ProtoVectorToVector(insDataEntry.Bat.Vecs[2]) // mock_0 column, int8 type
