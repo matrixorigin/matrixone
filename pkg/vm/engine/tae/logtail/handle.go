@@ -507,7 +507,7 @@ func (b *TableLogtailRespBuilder) VisitObj(e *catalog.ObjectEntry) error {
 func (b *TableLogtailRespBuilder) visitObjMeta(e *catalog.ObjectEntry) (bool, error) {
 	mvccNodes := e.ClonePreparedInRange(b.start, b.end)
 	if len(mvccNodes) == 0 {
-		return true, nil
+		return false, nil
 	}
 
 	for _, node := range mvccNodes {
