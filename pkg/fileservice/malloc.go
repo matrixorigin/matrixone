@@ -28,7 +28,7 @@ func getMallocAllocator() malloc.Allocator {
 	// delay initialization of global allocator
 	// ugly, but we tend to read malloc config from files instead of env vars
 	initMallocAllocatorOnce.Do(func() {
-		_mallocAllocator = malloc.NewDefault(nil)
+		_mallocAllocator = malloc.GetDefault(nil)
 	})
 	return _mallocAllocator
 }

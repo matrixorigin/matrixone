@@ -49,7 +49,11 @@ func newData(
 		size:       size,
 		globalSize: globalSize,
 	}
-	data.ptr, data.deallocator = allocator.Allocate(uint64(size))
+	var err error
+	data.ptr, data.deallocator, err = allocator.Allocate(uint64(size))
+	if err != nil {
+		panic(err)
+	}
 	metric.FSMallocLiveObjectsMemoryCache.Inc()
 	data.buf = unsafe.Slice((*byte)(data.ptr), size)
 	data.ref.init(1)
