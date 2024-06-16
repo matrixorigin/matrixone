@@ -757,7 +757,6 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 					sloc := loc.String()
 					locMap[sloc]++
 					if locMap[sloc] == 10 { // trigger cache only once
-						logutil.Infof("slowflush: task %d trigger cache for %s", task.ID(), sloc)
 						recorder.TempCache[sloc] = common.TempDelCacheEntry{}
 					}
 				}
