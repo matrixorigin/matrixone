@@ -172,4 +172,9 @@ select * from t1 where b in (1,2) for update;
 a    b
 1    1
 2    2
+create view v1 as select (case when a in (1,2,3) then 'y' else 'n' end) as a from t1;
+select count(a) from v1;
+count(a)
+10000
+drop table t1;
 drop database if exists d1;
