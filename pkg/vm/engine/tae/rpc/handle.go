@@ -74,6 +74,7 @@ type txnContext struct {
 	deadline time.Time
 	meta     txn.TxnMeta
 	reqs     []any
+	flag     bool
 }
 
 //#region Open
@@ -211,7 +212,7 @@ func (h *Handle) handleRequests(
 		case *api.AlterTableReq:
 			err = h.HandleAlterTable(ctx, txn, req)
 		case *db.WriteReq:
-			err = h.HandleWrite(ctx, txn, req)
+			err = h.HandleWrite(ctx, txnCtx, txn, req)
 		default:
 			err = moerr.NewNotSupported(ctx, "unknown txn request type: %T", req)
 		}
@@ -302,6 +303,11 @@ func (h *Handle) HandleCommit(
 			//delete the txn's context.
 			h.txnCtxs.Delete(util.UnsafeBytesToString(meta.GetID()))
 		}
+
+		if txnCtx.flag {
+			logutil.Infof("xxxx txn :%s committed, err:%v", meta.DebugString(), err)
+		}
+
 		common.DoIfInfoEnabled(func() {
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
 				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
@@ -524,6 +530,7 @@ func (h *Handle) HandleDropOrTruncateRelation(
 // HandleWrite Handle DML commands
 func (h *Handle) HandleWrite(
 	ctx context.Context,
+	txnCtx *txnContext,
 	txn txnif.AsyncTxn,
 	req *db.WriteReq) (err error) {
 	defer func() {
@@ -552,7 +559,18 @@ func (h *Handle) HandleWrite(
 		)
 		logutil.Debugf("[precommit] write batch: %s", common.DebugMoBatch(req.Batch))
 	})
+
 	defer func() {
+
+		if regexp.MustCompile(`.*sbtest.*`).MatchString(req.TableName) {
+			txnCtx.flag = true
+			logutil.Infof("xxxx handle write end, txn: %s, tableID:%v, entry type:%v, batch:%s",
+				txn.String(),
+				req.TableID,
+				req.Type,
+				common.MoBatchToString(req.Batch, 5))
+		}
+
 		common.DoIfDebugEnabled(func() {
 			logutil.Debugf("[precommit] handle write end txn: %s", txn.String())
 		})
