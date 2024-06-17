@@ -2552,13 +2552,13 @@ func (g *graph) hasLoop(start int64) bool {
 }
 
 func inputNameIsInvalid(ctx context.Context, inputs ...string) error {
-	for _, input := range inputs {
-		for _, t := range input {
-			if t == ' ' || t == '\t' || t == '`' || t == '"' || t == '\'' {
-				return moerr.NewInternalError(ctx, `invalid input`)
-			}
-		}
-	}
+	//for _, input := range inputs {
+	//	for _, t := range input {
+	//		if t == ' ' || t == '\t' || t == '`' || t == '"' || t == '\'' {
+	//			return moerr.NewInternalError(ctx, `invalid input`)
+	//		}
+	//	}
+	//}
 	return nil
 }
 
