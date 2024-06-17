@@ -649,14 +649,13 @@ func (c *Compile) IsTpQuery() bool {
 
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
-		fmt.Print("pipeline for tp query!")
+		fmt.Println("pipeline for tp query!")
 	} else {
-		fmt.Print("pipeline for ap query!")
+		fmt.Println("pipeline for ap query!")
 	}
-	fmt.Print("sql: " + c.sql)
 	fmt.Println(DebugShowScopes(c.scope))
 }
-
+ 
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
