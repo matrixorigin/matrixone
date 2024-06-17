@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -494,6 +495,13 @@ func (blk *baseObject) foreachPersistedDeletes(
 	if deletes == nil || err != nil {
 		return
 	}
+	if v := ctx.Value(common.RecorderKey{}); v != nil {
+		recorder := v.(*common.DeletesCollectRecorder)
+		inst := time.Now()
+		defer func() {
+			recorder.BisectCost = time.Since(inst)
+		}()
+	}
 	defer release()
 	defer deletes.Close()
 	if persistedByCN {
@@ -903,6 +911,12 @@ func (blk *baseObject) CollectDeleteInRangeByBlock(
 	start, end types.TS,
 	withAborted bool,
 	mp *mpool.MPool) (*containers.Batch, error) {
+	var recorder *common.DeletesCollectRecorder
+	var inst time.Time
+	if v := ctx.Value(common.RecorderKey{}); v != nil {
+		recorder = v.(*common.DeletesCollectRecorder)
+		inst = time.Now()
+	}
 	deletes, minTS, _, err := blk.inMemoryCollectDeleteInRange(
 		ctx,
 		blkID,
@@ -911,6 +925,9 @@ func (blk *baseObject) CollectDeleteInRangeByBlock(
 		withAborted,
 		mp,
 	)
+	if recorder != nil {
+		recorder.MemCost = time.Since(inst)
+	}
 	if err != nil {
 		if deletes != nil {
 			deletes.Close()
