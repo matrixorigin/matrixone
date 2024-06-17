@@ -424,7 +424,7 @@ desc table02;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO        null        
 col2    CHAR(1)    YES        'c'        
-col3    DECIMAL128(38)    NO        null        
+col3    DECIMAL(38)    NO        null        
 select * from table02;
 col1    col2    col3
 1    a    3728
@@ -958,7 +958,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO        null        
 col1    VARCHAR(255)    NO        null        
 col2    INT(32)    YES        null        
-col3    DECIMAL64(10)    YES        null        
+col3    DECIMAL(10)    YES        null        
 newcolumn    BIGINT(64)    YES        null        
 col5    BOOL(0)    YES        null        
 col6    ENUM('apple','banana','orange')    YES        null        
@@ -1191,7 +1191,7 @@ Table    Create Table
 test03    CREATE TABLE `test03` (\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  UNIQUE KEY `col2` (`col2`)\n)
 desc test03;
 Field    Type    Null    Key    Default    Extra    Comment
-col2    DECIMAL128(38)    YES    UNI    null        
+col2    DECIMAL(38)    YES    UNI    null        
 insert into test03 values (372.324);
 Duplicate entry '372' for key '__mo_index_idx_col'
 drop table if exists test04;
