@@ -19,6 +19,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,6 +40,7 @@ const (
 // add unit tests for cases
 type buildTestCase struct {
 	arg    *Argument
+	marg   *merge.Argument
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
 	proc   *process.Process
@@ -70,8 +73,11 @@ func TestString(t *testing.T) {
 
 func TestBuild(t *testing.T) {
 	for _, tc := range tcs[:1] {
-		err := tc.arg.Prepare(tc.proc)
+		err := tc.marg.Prepare(tc.proc)
 		require.NoError(t, err)
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		tc.arg.SetChildren([]vm.Operator{tc.marg})
 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
@@ -168,6 +174,7 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 				},
 			},
 		},
+		marg: &merge.Argument{},
 	}
 }
 

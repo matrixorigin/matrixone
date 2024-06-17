@@ -32,6 +32,7 @@ func ToCNBatch(tnBat *Batch) *batch.Batch {
 	for i, vec := range tnBat.Vecs {
 		cnBat.Vecs[i] = vec.GetDownstreamVector()
 	}
+	cnBat.SetRowCount(tnBat.Length())
 	return cnBat
 }
 

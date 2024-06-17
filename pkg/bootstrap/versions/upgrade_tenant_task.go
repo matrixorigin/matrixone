@@ -56,7 +56,7 @@ func UpdateUpgradeTenantTaskState(
 	taskID uint64,
 	state int32,
 	txn executor.TxnExecutor) error {
-	sql := fmt.Sprintf("update %s set ready = %d where id = %d",
+	sql := fmt.Sprintf("update %s set ready = %d, update_at = current_timestamp() where id = %d",
 		catalog.MOUpgradeTenantTable,
 		state,
 		taskID)

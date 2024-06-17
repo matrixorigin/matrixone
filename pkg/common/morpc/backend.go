@@ -594,7 +594,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 				wg.Add(1)
 			}
 			resp := msg.(RPCMessage).Message
-			rb.metrics.inputBytesCounter.Add(float64(resp.Size()))
+			rb.metrics.inputBytesCounter.Add(float64(resp.ProtoSize()))
 			rb.requestDone(ctx, resp.GetID(), msg.(RPCMessage), nil, cb)
 			if rb.options.hasPayloadResponse {
 				wg.Wait()

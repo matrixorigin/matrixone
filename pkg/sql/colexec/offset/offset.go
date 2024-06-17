@@ -40,11 +40,11 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 			return err
 		}
 	}
-	vec, err := arg.offsetExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	vec, err := arg.offsetExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
-	arg.offset = uint64(vector.MustFixedCol[int64](vec)[0])
+	arg.offset = uint64(vector.MustFixedCol[uint64](vec)[0])
 
 	return nil
 }

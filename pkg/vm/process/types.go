@@ -382,6 +382,8 @@ type Process struct {
 	MessageBoard *MessageBoard
 
 	logger *log.MOLogger
+
+	CloneTxnOperator client.TxnOperator
 }
 
 type vectorPool struct {
@@ -501,6 +503,14 @@ func (proc *Process) SetCacheForAutoCol(name string) {
 	aicm.Mu.Lock()
 	defer aicm.Mu.Unlock()
 	aicm.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: 0, MaxNum: aicm.MaxSize, Step: 1}
+}
+
+func (proc *Process) SetCloneTxnOperator(op client.TxnOperator) {
+	proc.CloneTxnOperator = op
+}
+
+func (proc *Process) GetCloneTxnOperator() client.TxnOperator {
+	return proc.CloneTxnOperator
 }
 
 type analyze struct {

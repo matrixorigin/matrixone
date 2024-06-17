@@ -93,6 +93,12 @@ func NewS3FS(
 			return nil, err
 		}
 
+	case strings.EqualFold(args.Endpoint, "disk"):
+		fs.storage, err = newDiskObjectStorage(ctx, args, perfCounterSets)
+		if err != nil {
+			return nil, err
+		}
+
 	default:
 		fs.storage, err = NewAwsSDKv2(ctx, args, perfCounterSets)
 		if err != nil {
@@ -181,7 +187,7 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 	defer span.End()
 	start := time.Now()
 	defer func() {
-		metric.S3ListIODurationHistogram.Observe(time.Since(start).Seconds())
+		metric.FSReadDurationList.Observe(time.Since(start).Seconds())
 	}()
 
 	path, err := ParsePathAtService(dirPath, s.name)
@@ -228,7 +234,7 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 	defer span.End()
 	start := time.Now()
 	defer func() {
-		metric.S3StatIODurationHistogram.Observe(time.Since(start).Seconds())
+		metric.FSReadDurationStat.Observe(time.Since(start).Seconds())
 	}()
 	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
@@ -308,7 +314,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	var bytesWritten int
 	start := time.Now()
 	defer func() {
-		metric.S3WriteIODurationHistogram.Observe(time.Since(start).Seconds())
+		metric.FSWriteDurationWrite.Observe(time.Since(start).Seconds())
 		metric.S3WriteIOBytesHistogram.Observe(float64(bytesWritten))
 	}()
 
@@ -567,8 +573,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 				C: bytesCounter,
 			},
 			closeFunc: func() error {
-				s3ReadIODuration := time.Since(t0)
-				metric.S3ReadIODurationHistogram.Observe(s3ReadIODuration.Seconds())
 				metric.S3ReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
 				return r.Close()
 			},
@@ -600,7 +604,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 			return nil, err
 		}
 		defer reader.Close()
+		tStart := time.Now()
 		bs, err = io.ReadAll(reader)
+		metric.FSReadDurationIOReadAll.Observe(time.Since(tStart).Seconds())
 		if err != nil {
 			return nil, err
 		}
@@ -824,6 +830,12 @@ func (s *S3FS) FlushCache() {
 
 func (s *S3FS) SetAsyncUpdate(b bool) {
 	s.asyncUpdate = b
+}
+
+func (s *S3FS) Cost() *CostAttr {
+	return &CostAttr{
+		List: CostHigh,
+	}
 }
 
 type tracePoint struct {

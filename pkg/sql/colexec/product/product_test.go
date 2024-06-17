@@ -17,6 +17,7 @@ package product
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,6 +44,7 @@ type productTestCase struct {
 	proc   *process.Process
 	cancel context.CancelFunc
 	barg   *hashbuild.Argument
+	marg   *merge.Argument
 }
 
 var (
@@ -183,12 +185,16 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) productTe
 				},
 			},
 		},
+		marg: &merge.Argument{},
 	}
 }
 
 func hashBuild(t *testing.T, tc productTestCase) []*batch.Batch {
-	err := tc.barg.Prepare(tc.proc)
+	err := tc.marg.Prepare(tc.proc)
 	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+	tc.barg.SetChildren([]vm.Operator{tc.marg})
 	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
 	for _, r := range tc.proc.Reg.MergeReceivers {
 		r.Ch <- nil

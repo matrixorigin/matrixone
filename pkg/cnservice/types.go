@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -176,6 +177,9 @@ type Config struct {
 
 	// LockService lockservice
 	LockService lockservice.Config `toml:"lockservice"`
+
+	// ShardService shard service config
+	ShardService shardservice.Config `toml:"shardservice"`
 
 	// Txn txn config
 	Txn struct {
@@ -531,9 +535,9 @@ func (c *Config) SetDefaultValue() {
 		c.Txn.MaxActive = runtime.NumCPU() * 4
 	}
 	c.Txn.NormalStateNoWait = false
-	c.LockService.ServiceID = "temp"
-	c.LockService.Validate()
 	c.LockService.ServiceID = c.UUID
+
+	c.ShardService.ServiceID = c.UUID
 
 	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
 
@@ -573,6 +577,13 @@ func (s *service) getLockServiceConfig() lockservice.Config {
 	return s.cfg.LockService
 }
 
+func (s *service) getShardServiceConfig() shardservice.Config {
+	s.cfg.ShardService.ServiceID = s.cfg.UUID
+	s.cfg.ShardService.RPC = s.cfg.RPC
+	s.cfg.ShardService.ListenAddress = s.shardServiceListenAddr()
+	return s.cfg.ShardService
+}
+
 type service struct {
 	metadata       metadata.CNStore
 	cfg            *Config
@@ -609,6 +620,7 @@ type service struct {
 	pu                     *config.ParameterUnit
 	moCluster              clusterservice.MOCluster
 	lockService            lockservice.LockService
+	shardService           shardservice.ShardService
 	sqlExecutor            executor.SQLExecutor
 	sessionMgr             *queryservice.SessionManager
 	// queryService is used to handle query request from other CN service.

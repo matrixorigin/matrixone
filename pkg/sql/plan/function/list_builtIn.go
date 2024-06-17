@@ -1974,6 +1974,36 @@ var supportedArrayOperations = []FuncNew{
 			},
 		},
 	},
+	// function `l2_distance_sq`
+	{
+		functionId: L2_DISTANCE_SQ,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L2DistanceSqArray[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L2DistanceSqArray[float64]
+				},
+			},
+		},
+	},
 	// function `cosine_distance`
 	{
 		functionId: COSINE_DISTANCE,
@@ -2726,6 +2756,26 @@ var supportedMathBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 4,
+				args:       []types.T{types.T_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexFloat32
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexFloat64
+				},
+			},
+			{
+				overloadId: 6,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
@@ -2735,7 +2785,7 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 5,
+				overloadId: 7,
 				args:       []types.T{types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
@@ -3839,7 +3889,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				volatile:   true,
 				args:       []types.T{types.T_varchar, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInPurgeLog
@@ -4572,7 +4622,7 @@ var supportedControlBuiltIns = []FuncNew{
 					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return ctl.MoCtl
+					return MoCtl
 				},
 			},
 		},
@@ -5907,7 +5957,7 @@ var supportedOthersBuiltIns = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
 						vs := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
 						res := vector.MustFunctionResult[bool](result)
 						for i := uint64(0); i < uint64(length); i++ {
@@ -5953,7 +6003,7 @@ var supportedOthersBuiltIns = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
 						checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
 						errMsgs := vector.GenerateFunctionStrParameter(parameters[1])
 						value2, null := errMsgs.GetStrValue(0)
@@ -5980,7 +6030,7 @@ var supportedOthersBuiltIns = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
 						checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
 						sourceValues := vector.GenerateFunctionStrParameter(parameters[1])
 						columnNames := vector.GenerateFunctionStrParameter(parameters[2])
@@ -6056,7 +6106,7 @@ var supportedOthersBuiltIns = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
 						isEmpty := parameters[0].Length() == 0
 						res := vector.MustFunctionResult[bool](result)
 						for i := uint64(0); i < uint64(length); i++ {
@@ -6091,7 +6141,7 @@ var supportedOthersBuiltIns = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
 						leftRow := vector.GenerateFunctionFixedTypeParameter[types.Rowid](parameters[0])
 						rightRow := vector.GenerateFunctionFixedTypeParameter[types.Rowid](parameters[1])
 						res := vector.MustFunctionResult[bool](result)
@@ -6229,4 +6279,8 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
+}
+
+func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) (err error) {
+	return ctl.MoCtl(ivecs, result, proc, length)
 }

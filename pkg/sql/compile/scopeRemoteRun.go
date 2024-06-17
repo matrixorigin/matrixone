@@ -101,7 +101,6 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 // CnServerMessageHandler is responsible for processing the cn-client message received at cn-server.
@@ -404,92 +403,15 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 }
 
 // encodeProcessInfo get needed information from proc, and do serialization work.
-func encodeProcessInfo(proc *process.Process, sql string) ([]byte, error) {
-	procInfo := &pipeline.ProcessInfo{}
-	if len(proc.AnalInfos) == 0 {
-		proc.Error(proc.Ctx, "empty plan", zap.String("sql", sql))
+func encodeProcessInfo(
+	proc *process.Process,
+	sql string,
+) ([]byte, error) {
+	v, err := proc.BuildProcessInfo(sql)
+	if err != nil {
+		return nil, err
 	}
-	{
-		procInfo.Id = proc.Id
-		procInfo.Sql = sql
-		procInfo.Lim = convertToPipelineLimitation(proc.Lim)
-		procInfo.UnixTime = proc.UnixTime
-		accountId, err := defines.GetAccountId(proc.Ctx)
-		if err != nil {
-			return nil, err
-		}
-		procInfo.AccountId = accountId
-		snapshot, err := proc.TxnOperator.Snapshot()
-		if err != nil {
-			return nil, err
-		}
-		procInfo.Snapshot = string(snapshot)
-		procInfo.AnalysisNodeList = make([]int32, len(proc.AnalInfos))
-		for i := range procInfo.AnalysisNodeList {
-			procInfo.AnalysisNodeList[i] = proc.AnalInfos[i].NodeId
-		}
-	}
-	{ // session info
-		timeBytes, err := time.Time{}.In(proc.SessionInfo.TimeZone).MarshalBinary()
-		if err != nil {
-			return nil, err
-		}
-
-		procInfo.SessionInfo = &pipeline.SessionInfo{
-			User:         proc.SessionInfo.GetUser(),
-			Host:         proc.SessionInfo.GetHost(),
-			Role:         proc.SessionInfo.GetRole(),
-			ConnectionId: proc.SessionInfo.GetConnectionID(),
-			Database:     proc.SessionInfo.GetDatabase(),
-			Version:      proc.SessionInfo.GetVersion(),
-			TimeZone:     timeBytes,
-			QueryId:      proc.SessionInfo.QueryId,
-		}
-	}
-	{ // log info
-		stmtId := proc.StmtProfile.GetStmtId()
-		txnId := proc.StmtProfile.GetTxnId()
-		procInfo.SessionLogger = &pipeline.SessionLoggerInfo{
-			SessId:   proc.SessionInfo.SessionId[:],
-			StmtId:   stmtId[:],
-			TxnId:    txnId[:],
-			LogLevel: zapLogLevel2EnumLogLevel(proc.SessionInfo.LogLevel),
-		}
-	}
-	return procInfo.Marshal()
-}
-
-var zapLogLevel2EnumLogLevelMap = map[zapcore.Level]pipeline.SessionLoggerInfo_LogLevel{
-	zap.DebugLevel:  pipeline.SessionLoggerInfo_Debug,
-	zap.InfoLevel:   pipeline.SessionLoggerInfo_Info,
-	zap.WarnLevel:   pipeline.SessionLoggerInfo_Warn,
-	zap.ErrorLevel:  pipeline.SessionLoggerInfo_Error,
-	zap.DPanicLevel: pipeline.SessionLoggerInfo_Panic,
-	zap.PanicLevel:  pipeline.SessionLoggerInfo_Panic,
-	zap.FatalLevel:  pipeline.SessionLoggerInfo_Fatal,
-}
-
-func zapLogLevel2EnumLogLevel(level zapcore.Level) pipeline.SessionLoggerInfo_LogLevel {
-	if lvl, exist := zapLogLevel2EnumLogLevelMap[level]; exist {
-		return lvl
-	}
-	return pipeline.SessionLoggerInfo_Info
-}
-
-var enumLogLevel2ZapLogLevelMap = map[pipeline.SessionLoggerInfo_LogLevel]zapcore.Level{
-	pipeline.SessionLoggerInfo_Debug: zap.DebugLevel,
-	pipeline.SessionLoggerInfo_Info:  zap.InfoLevel,
-	pipeline.SessionLoggerInfo_Warn:  zap.WarnLevel,
-	pipeline.SessionLoggerInfo_Error: zap.ErrorLevel,
-	pipeline.SessionLoggerInfo_Panic: zap.PanicLevel,
-	pipeline.SessionLoggerInfo_Fatal: zap.FatalLevel,
-}
-
-func enumLogLevel2ZapLogLevel(level pipeline.SessionLoggerInfo_LogLevel) zapcore.Level {
-	if lvl, exist := enumLogLevel2ZapLogLevelMap[level]; exist {
-		return lvl
-	}
-	return zap.InfoLevel
+	return v.Marshal()
 }
 
 func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
@@ -573,6 +495,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			TableDef:               s.DataSource.TableDef,
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
+			IsConst:                s.DataSource.isConst,
 		}
 		if s.DataSource.Bat != nil {
 			data, err := types.Encode(s.DataSource.Bat)
@@ -688,6 +611,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			TableDef:           dsc.TableDef,
 			Timestamp:          *dsc.Timestamp,
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
+			isConst:            dsc.IsConst,
 		}
 		if len(dsc.Block) > 0 {
 			bat := new(batch.Batch)
@@ -803,9 +727,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *fuzzyfilter.Argument:
 		in.FuzzyFilter = &pipeline.FuzzyFilter{
-			N:      float32(t.N),
-			PkName: t.PkName,
-			PkTyp:  t.PkTyp,
+			N:        float32(t.N),
+			PkName:   t.PkName,
+			PkTyp:    t.PkTyp,
+			BuildIdx: int32(t.BuildIdx),
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
@@ -1614,49 +1539,6 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 		res[i].Rel, res[i].Pos = relList[i], colList[i]
 	}
 	return res
-}
-
-// convert process.Limitation to pipeline.ProcessLimitation
-func convertToPipelineLimitation(lim process.Limitation) *pipeline.ProcessLimitation {
-	return &pipeline.ProcessLimitation{
-		Size:          lim.Size,
-		BatchRows:     lim.BatchRows,
-		BatchSize:     lim.BatchSize,
-		PartitionRows: lim.PartitionRows,
-		ReaderSize:    lim.ReaderSize,
-	}
-}
-
-// convert pipeline.ProcessLimitation to process.Limitation
-func convertToProcessLimitation(lim *pipeline.ProcessLimitation) process.Limitation {
-	return process.Limitation{
-		Size:          lim.Size,
-		BatchRows:     lim.BatchRows,
-		BatchSize:     lim.BatchSize,
-		PartitionRows: lim.PartitionRows,
-		ReaderSize:    lim.ReaderSize,
-	}
-}
-
-// convert pipeline.SessionInfo to process.SessionInfo
-func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo, error) {
-	sessionInfo := process.SessionInfo{
-		User:         sei.User,
-		Host:         sei.Host,
-		Role:         sei.Role,
-		ConnectionID: sei.ConnectionId,
-		Database:     sei.Database,
-		Version:      sei.Version,
-		Account:      sei.Account,
-		QueryId:      sei.QueryId,
-	}
-	t := time.Time{}
-	err := t.UnmarshalBinary(sei.TimeZone)
-	if err != nil {
-		return sessionInfo, nil
-	}
-	sessionInfo.TimeZone = t.Location()
-	return sessionInfo, nil
 }
 
 func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {

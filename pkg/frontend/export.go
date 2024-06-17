@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -67,13 +68,16 @@ type ExportConfig struct {
 	AsyncReader *io.PipeReader
 	AsyncWriter *io.PipeWriter
 	AsyncGroup  *errgroup.Group
+	mrs         *MysqlResultSet
+	lineStr     []byte
+	ctx         context.Context
 }
 
 type writeParam struct {
 	First      bool
 	OutTofile  bool
-	Index      int32
-	WriteIndex int32
+	Index      atomic.Int32
+	WriteIndex atomic.Int32
 	ByteChan   chan *BatchByte
 	BatchMap   map[int32][]byte
 }
@@ -219,7 +223,7 @@ func getExportFilePath(filename string, fileCnt uint) string {
 	}
 }
 
-var formatOutputString = func(oq *outputQueue, tmp, symbol []byte, enclosed byte, flag bool) error {
+var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byte, flag bool) error {
 	var err error
 	if flag && enclosed != 0 {
 		if err = writeToCSVFile(oq, []byte{enclosed}); err != nil {
@@ -322,35 +326,35 @@ var EndOfLine = func(ep *ExportConfig) (int, error) {
 	return 0, nil
 }
 
-func writeToCSVFile(oq *outputQueue, output []byte) error {
-	if oq.ep.userConfig.MaxFileSize != 0 && oq.ep.CurFileSize+uint64(len(output)) > oq.ep.userConfig.MaxFileSize {
-		if err := Flush(oq.ep); err != nil {
+func writeToCSVFile(ep *ExportConfig, output []byte) error {
+	if ep.userConfig.MaxFileSize != 0 && ep.CurFileSize+uint64(len(output)) > ep.userConfig.MaxFileSize {
+		if err := Flush(ep); err != nil {
 			return err
 		}
-		if oq.ep.LineSize != 0 && oq.ep.OutTofile {
-			if _, err := Seek(oq.ep); err != nil {
+		if ep.LineSize != 0 && ep.OutTofile {
+			if _, err := Seek(ep); err != nil {
 				return err
 			}
 			for {
-				if n, err := Read(oq.ep); err != nil {
+				if n, err := Read(ep); err != nil {
 					return err
-				} else if uint64(n) == oq.ep.LineSize {
+				} else if uint64(n) == ep.LineSize {
 					break
 				}
 			}
-			if err := Truncate(oq.ep); err != nil {
+			if err := Truncate(ep); err != nil {
 				return err
 			}
 		}
-		if err := Close(oq.ep); err != nil {
+		if err := Close(ep); err != nil {
 			return err
 		}
-		if err := openNewFile(oq.ctx, oq.ep, oq.mrs); err != nil {
+		if err := openNewFile(ep.ctx, ep, ep.mrs); err != nil {
 			return err
 		}
 	}
 
-	if err := writeDataToCSVFile(oq.ep, output); err != nil {
+	if err := writeDataToCSVFile(ep, output); err != nil {
 		return err
 	}
 	return nil
@@ -381,27 +385,6 @@ func appendBytes(writeByte, tmp, symbol []byte, enclosed byte, flag bool) []byte
 	return writeByte
 }
 
-func preCopyBat(obj interface{}, bat *batch.Batch) *batch.Batch {
-	ses := obj.(*Session)
-	bat2 := batch.NewWithSize(len(bat.Vecs))
-	for i, vec := range bat.Vecs {
-		bat2.Vecs[i], _ = vec.Dup(ses.GetMemPool())
-	}
-	bat2.SetRowCount(bat.RowCount())
-	return bat2
-}
-
-func initExportFirst(oq *outputQueue) {
-	if !oq.ep.First {
-		oq.ep.First = true
-		oq.ep.ByteChan = make(chan *BatchByte, 10)
-		oq.ep.BatchMap = make(map[int32][]byte)
-		oq.ep.Index = 0
-		oq.ep.WriteIndex = 0
-	}
-	oq.ep.Index++
-}
-
 func formatJsonString(str string, flag bool, terminatedBy string) string {
 	if len(str) < 2 {
 		return "\"" + str + "\""
@@ -415,12 +398,12 @@ func formatJsonString(str string, flag bool, terminatedBy string) string {
 	return tmp
 }
 
-func constructByte(ctx context.Context, obj interface{}, bat *batch.Batch, index int32, ByteChan chan *BatchByte, oq *outputQueue) {
+func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index int32, ByteChan chan *BatchByte, ep *ExportConfig) {
 	ses := obj.(*Session)
-	symbol := oq.ep.Symbol
-	closeby := oq.ep.userConfig.Fields.EnclosedBy.Value
-	terminated := oq.ep.userConfig.Fields.Terminated.Value
-	flag := oq.ep.ColumnFlag
+	symbol := ep.Symbol
+	closeby := ep.userConfig.Fields.EnclosedBy.Value
+	terminated := ep.userConfig.Fields.Terminated.Value
+	flag := ep.ColumnFlag
 	writeByte := make([]byte, 0)
 	for i := 0; i < bat.RowCount(); i++ {
 		for j, vec := range bat.Vecs {
@@ -574,15 +557,15 @@ func addEscapeToString(s []byte) []byte {
 	return ret
 }
 
-func exportDataToCSVFile(oq *outputQueue) error {
-	if !oq.ep.OutTofile {
+func exportDataToCSVFile(oq *ExportConfig) error {
+	if !oq.OutTofile {
 		return exportDataToCSVFile2(oq)
 	}
-	oq.ep.LineSize = 0
+	oq.LineSize = 0
 
-	symbol := oq.ep.Symbol
-	closeby := oq.ep.userConfig.Fields.EnclosedBy.Value
-	flag := oq.ep.ColumnFlag
+	symbol := oq.Symbol
+	closeby := oq.userConfig.Fields.EnclosedBy.Value
+	flag := oq.ColumnFlag
 	for i := uint64(0); i < oq.mrs.GetColumnCount(); i++ {
 		column, err := oq.mrs.GetColumn(oq.ctx, i)
 		if err != nil {
@@ -746,69 +729,106 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			return moerr.NewInternalError(oq.ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
 		}
 	}
-	oq.ep.Rows++
-	_, err := EndOfLine(oq.ep)
+	oq.Rows++
+	_, err := EndOfLine(oq)
 	return err
 }
 
-func exportDataToCSVFile2(oq *outputQueue) error {
+func exportDataToCSVFile2(ep *ExportConfig) error {
 	var tmp *BatchByte
 	select {
-	case tmp = <-oq.ep.ByteChan:
+	case tmp = <-ep.ByteChan:
 	default:
 	}
 	if tmp != nil {
 		if tmp.err != nil {
 			return tmp.err
 		}
-		oq.ep.BatchMap[tmp.index] = tmp.writeByte
+		ep.BatchMap[tmp.index] = tmp.writeByte
 	}
 
-	value, ok := oq.ep.BatchMap[oq.ep.WriteIndex+1]
+	value, ok := ep.BatchMap[ep.WriteIndex.Load()+1]
 	if !ok {
 		return nil
 	}
 
-	if err := writeToCSVFile(oq, value); err != nil {
+	if err := writeToCSVFile(ep, value); err != nil {
 		return err
 	}
-	oq.ep.WriteIndex++
-	oq.ep.BatchMap[oq.ep.WriteIndex] = nil
-	_, err := EndOfLine(oq.ep)
+	ep.WriteIndex.Add(1)
+	ep.BatchMap[ep.WriteIndex.Load()] = nil
+	_, err := EndOfLine(ep)
 	return err
 }
 
-func exportAllData(oq *outputQueue) error {
+func exportAllData(ep *ExportConfig) error {
 	var tmp *BatchByte
 	for {
 		tmp = nil
-		if oq.ep.WriteIndex == oq.ep.Index {
+		if ep.WriteIndex == ep.Index {
 			break
 		}
 		select {
-		case tmp = <-oq.ep.ByteChan:
+		case tmp = <-ep.ByteChan:
 		default:
 		}
 		if tmp != nil {
 			if tmp.err != nil {
 				return tmp.err
 			}
-			oq.ep.BatchMap[tmp.index] = tmp.writeByte
+			ep.BatchMap[tmp.index] = tmp.writeByte
 		}
 
-		value, ok := oq.ep.BatchMap[oq.ep.WriteIndex+1]
+		value, ok := ep.BatchMap[ep.WriteIndex.Load()+1]
 		if !ok {
 			continue
 		}
-		if err := writeToCSVFile(oq, value); err != nil {
+		if err := writeToCSVFile(ep, value); err != nil {
 			return err
 		}
-		oq.ep.WriteIndex++
-		oq.ep.BatchMap[oq.ep.WriteIndex] = nil
+		ep.WriteIndex.Add(1)
+		ep.BatchMap[ep.WriteIndex.Load()] = nil
 	}
-	oq.ep.First = false
-	oq.ep.FileCnt = 0
-	oq.ep.ByteChan = nil
-	oq.ep.BatchMap = nil
+	ep.First = false
+	ep.FileCnt = 0
+	ep.ByteChan = nil
+	ep.BatchMap = nil
 	return nil
+}
+
+var _ CsvWriter = &ExportConfig{}
+
+func (ec *ExportConfig) init() {
+	ec.ByteChan = make(chan *BatchByte, 10)
+	ec.BatchMap = make(map[int32][]byte)
+	ec.Index.Store(0)
+	ec.WriteIndex.Store(0)
+}
+
+func (ec *ExportConfig) resetLineStr() {
+	ec.lineStr = ec.lineStr[:0]
+}
+
+func (ec *ExportConfig) Write(execCtx *ExecCtx, bat *batch.Batch) error {
+	ec.Index.Add(1)
+	copied, err := bat.Dup(execCtx.ses.GetMemPool())
+	if err != nil {
+		return err
+	}
+	go constructByte(execCtx.reqCtx, execCtx.ses, copied, ec.Index.Load(), ec.ByteChan, ec)
+	if err = exportDataToCSVFile(ec); err != nil {
+		execCtx.ses.Error(execCtx.reqCtx,
+			"Error occurred while exporting to CSV file",
+			zap.Error(err))
+		return err
+	}
+	return nil
+}
+
+func (ec *ExportConfig) Close() {
+	if ec != nil {
+		ec.mrs = nil
+		ec.lineStr = nil
+		ec.ctx = nil
+	}
 }

@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"runtime"
 	"strings"
 	"sync"
@@ -24,7 +25,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/panjf2000/ants/v2"
-	_ "go.uber.org/automaxprocs"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -44,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	client2 "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -122,9 +121,7 @@ func New(
 	}
 	e.gcPool = pool
 
-	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
-		WithLogtailUpdateStatsThreshold(threshold),
-	)
+	e.globalStats = NewGlobalStats(ctx, e, keyRouter)
 
 	e.messageCenter = &process.MessageCenter{
 		StmtIDToBoard: make(map[uuid.UUID]*process.MessageBoard, 64),
@@ -142,9 +139,9 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create database in snapshot txn")
 	}
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
+	txn, err := txnIsValid(op)
+	if err != nil {
+		return err
 	}
 	typ := getTyp(ctx)
 	sql := getSql(ctx)
@@ -193,9 +190,9 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
 	logDebugf(op.Txn(), "Engine.Database %s", name)
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
-		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
+	txn, err := txnIsValid(op)
+	if err != nil {
+		return nil, err
 	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -256,9 +253,9 @@ func (e *Engine) Database(ctx context.Context, name string,
 func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
 	var dbs []string
 
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
+	txn, err := txnIsValid(op)
+	if err != nil {
+		return nil, err
 	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -306,9 +303,10 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 }
 
 func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return "", "", moerr.NewTxnClosed(ctx, op.Txn().ID)
+	var txn *Transaction
+	txn, err = txnIsValid(op)
+	if err != nil {
+		return "", "", err
 	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -374,9 +372,10 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 }
 
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return "", "", nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
+	var txn *Transaction
+	txn, err = txnIsValid(op)
+	if err != nil {
+		return "", "", nil, err
 	}
 	switch tableId {
 	case catalog.MO_DATABASE_ID:
@@ -502,14 +501,15 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 
 	var databaseId uint64
 	var rowId types.Rowid
+	var txn *Transaction
 	//var db *txnDatabase
 	if op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("delete database in snapshot txn")
 	}
 
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
+	txn, err = txnIsValid(op)
+	if err != nil {
+		return err
 	}
 
 	accountId, err := defines.GetAccountId(ctx)
@@ -694,7 +694,15 @@ func (e *Engine) Hints() (h engine.Hints) {
 }
 
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-	expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	expr *plan.Expr, filter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	var blockReadPKFilter blockio.BlockReadFilter
+	if filter == nil {
+		// remote block reader
+		basePKFilter := constructBasePKFilter(expr, tblDef, proc.(*process.Process))
+		blockReadPKFilter = constructBlockReadPKFilter(tblDef.Pkey.PkeyColName, basePKFilter)
+		//fmt.Println("remote filter: ", basePKFilter.String(), blockReadPKFilter)
+	}
+
 	blkSlice := objectio.BlockInfoSlice(ranges)
 	rds := make([]engine.Reader, num)
 	blkInfos := make([]*objectio.BlockInfo, 0, blkSlice.Len())
@@ -706,7 +714,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 			//FIXME::why set blk.EntryState = false ?
 			blk.EntryState = false
 			rds[i] = newBlockReader(
-				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, e.fs, proc.(*process.Process),
+				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, blockReadPKFilter, e.fs, proc.(*process.Process),
 			)
 		}
 		for j := len(blkInfos); j < num; j++ {
@@ -720,7 +728,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	if err != nil {
 		return nil, err
 	}
-	blockReaders := newBlockReaders(ctx, fs, tblDef, ts, num, expr, proc.(*process.Process))
+	blockReaders := newBlockReaders(ctx, fs, tblDef, ts, num, expr, blockReadPKFilter, proc.(*process.Process))
 	distributeBlocksToBlockReaders(blockReaders, num, len(blkInfos), infos, steps)
 	for i := 0; i < num; i++ {
 		rds[i] = blockReaders[i]

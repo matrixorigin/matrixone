@@ -64,8 +64,8 @@ func Test_MessageReceiverOnServer(t *testing.T) {
 
 	ti, _ := time.Now().MarshalBinary()
 	procInfo := &pipeline.ProcessInfo{
-		Lim:              &pipeline.ProcessLimitation{Size: 1},
-		SessionInfo:      &pipeline.SessionInfo{TimeZone: ti},
+		Lim:              pipeline.ProcessLimitation{Size: 1},
+		SessionInfo:      pipeline.SessionInfo{TimeZone: ti},
 		AnalysisNodeList: []int32{1, 2},
 	}
 	procInfoData, err := procInfo.Marshal()
@@ -95,7 +95,7 @@ func Test_MessageReceiverOnServer(t *testing.T) {
 
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	cli := mock_frontend.NewMockTxnClient(ctrl)
-	cli.EXPECT().NewWithSnapshot([]byte("")).Return(txnOperator, nil)
+	cli.EXPECT().NewWithSnapshot(gomock.Any()).Return(txnOperator, nil)
 
 	cs := mock_morpc.NewMockClientSession(ctrl)
 	cs.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).Times(5)

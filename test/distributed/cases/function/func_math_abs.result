@@ -56,6 +56,7 @@ SELECT ABS(i) AS a FROM t GROUP BY abs(i) ORDER BY a + 1;
 a
 1
 2
+set keep_user_target_list_in_result = 1;
 SELECT ABS(i) AS a FROM t GROUP BY a ORDER BY a + 1;
 a
 1
@@ -66,23 +67,23 @@ CREATE TABLE t2(c0 INTEGER, c1 INTEGER, c2 INTEGER);
 INSERT INTO t1 select abs(-341.741), abs(-234141113), abs(-141241);
 INSERT INTO t2 select abs(-341.5612), abs(-23413), abs(-14141);
 select * from t1;
-c0	c1	c2
-342	234141113	141241
+c0    c1    c2
+342    234141113    141241
 select * from t2;
-c0	c1	c2
-342	23413	14141
+c0    c1    c2
+342    23413    14141
 SELECT t1.c0, t2.c0 from t1 join t2 on abs(t1.c0) = abs(t2.c0) having abs(t1.c0)>100;
 SQL syntax error: column "t1.c0" must appear in the GROUP BY clause or be used in an aggregate function
 drop table t1;
 drop table t2;
 SELECT abs(10)-abs(-34);
-abs(10)-abs(-34)
+abs(10) - abs(-34)
 -24
 SELECT abs(1241)*abs(-0.4141);
-abs(1241)*abs(-0.4141)
+abs(1241) * abs(-0.4141)
 513.8981
 SELECT abs(-100)>abs(-102);
-abs(-100)>abs(-102)
+abs(-100) > abs(-102)
 false
 SELECT abs(-100)<>abs(100);
 abs(-100)<>abs(100)

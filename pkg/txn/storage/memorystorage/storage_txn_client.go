@@ -72,7 +72,7 @@ func (s *StorageTxnClient) IterTxns(func(client.TxnOverview) bool) {
 	panic("unimplemented")
 }
 
-func (*StorageTxnClient) NewWithSnapshot(snapshot []byte) (client.TxnOperator, error) {
+func (*StorageTxnClient) NewWithSnapshot(snapshot txn.CNTxnSnapshot) (client.TxnOperator, error) {
 	panic("unimplemented")
 }
 
@@ -227,7 +227,7 @@ func (s *StorageTxnOperator) Rollback(ctx context.Context) error {
 	return nil
 }
 
-func (*StorageTxnOperator) Snapshot() ([]byte, error) {
+func (*StorageTxnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 	panic("unimplemented")
 }
 

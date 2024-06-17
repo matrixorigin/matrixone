@@ -566,6 +566,12 @@ func (l *LocalETLFS) syncDir(nativePath string) error {
 	return nil
 }
 
+func (l *LocalETLFS) Cost() *CostAttr {
+	return &CostAttr{
+		List: CostLow,
+	}
+}
+
 func (l *LocalETLFS) toNativeFilePath(filePath string) string {
 	return filepath.Join(l.rootPath, l.toOSPath(filePath))
 }

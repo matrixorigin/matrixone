@@ -40,10 +40,6 @@ func (r *LogtailRequest) DebugString() string {
 	return r.LogtailRequest.String()
 }
 
-func (r *LogtailRequest) Size() int {
-	return r.ProtoSize()
-}
-
 // LogtailRequestPool acquires or releases LogtailRequest.
 type LogtailRequestPool interface {
 	// Acquire fetches item from pool.

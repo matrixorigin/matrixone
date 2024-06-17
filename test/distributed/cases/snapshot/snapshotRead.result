@@ -181,7 +181,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275154    test    def    create database test    0    1    2024-05-15 14:05:10    0    
+272916    test    def    create database test    0    1    2024-06-03 11:11:41    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test';
 attname
 __mo_rowid
@@ -317,6 +317,7 @@ dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    cr
 275154    test    def    create database test    0    1    2024-05-15 14:05:10    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp05'} where att_database = 'test';
 attname
+__mo_index_pri_col
 __mo_rowid
 col1
 col2
@@ -327,7 +328,6 @@ col1
 col2
 col3
 __mo_rowid
-__mo_index_pri_col
 __mo_index_idx_col
 drop snapshot sp05;
 drop snapshot sp04;
@@ -587,8 +587,8 @@ lastname
 officecode
 reportsto
 __mo_rowid
-__mo_index_idx_col
 __mo_index_pri_col
+__mo_index_idx_col
 drop table testsnap_03;
 drop table testsnap_04;
 drop snapshot sp04;
@@ -606,11 +606,11 @@ col1    col2    account_id
 drop snapshot if exists sp06;
 create snapshot sp06 for account sys;
 select count(*) from mo_catalog.mo_tables{snapshot = sp06} where reldatabase = 'mo_catalog';
-
+count(*)
+36
 select * from mo_catalog.mo_database{snapshot = sp06} where datname = 'mo_catalog';
-
-select attname from mo_catalog.mo_columns{snapshot = sp06} where att_database = 'mo_catalog';
-
+dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
+1    mo_catalog    mo_catalog        0    0    2024-06-03 10:16:00    0
 drop table cluster01;
 drop snapshot sp06;
 drop database if exists test03;
@@ -1072,11 +1072,16 @@ count(*)
 drop snapshot if exists `binary`;
 create snapshot `binary` for account sys;
 select count(*) from mo_catalog.mo_tables{snapshot = `binary`} where reldatabase = 'test05';
-
+count(*)
+1
 select * from mo_catalog.mo_database{snapshot = `binary`} where datname = 'test05';
-
+dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
+273259    test05    def    create database test05    0    1    2024-06-03 11:11:50    0    
 select attname from mo_catalog.mo_columns{snapshot = `binary`} where att_database = 'test05';
-
+attname
+__mo_fake_pk_col
+__mo_rowid
+a
 drop snapshot `binary`;
 drop table t1;
 drop table if exists t1;
@@ -1090,11 +1095,16 @@ insert into t1 values('2022-01-02', 2);
 drop snapshot if exists consistent;
 create snapshot consistent for account sys;
 select count(*) from mo_catalog.mo_tables{snapshot = consistent} where reldatabase = 'test05';
-
+count(*)
+1
 select * from mo_catalog.mo_database{snapshot = consistent} where datname = 'test05';
-
+dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
+273259    test05    def    create database test05    0    1    2024-06-03 11:11:50    0    
 select attname from mo_catalog.mo_columns{snapshot = consistent} where att_database = 'test05';
-
+attname
+__mo_rowid
+dvalue
+value32
 drop snapshot consistent;
 drop table t1;
 drop database if exists test05;

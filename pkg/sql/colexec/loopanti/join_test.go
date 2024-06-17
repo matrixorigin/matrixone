@@ -19,6 +19,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -44,6 +46,7 @@ type joinTestCase struct {
 	proc   *process.Process
 	cancel context.CancelFunc
 	barg   *hashbuild.Argument
+	marg   *merge.Argument
 }
 
 var (
@@ -258,12 +261,16 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 				},
 			},
 		},
+		marg: &merge.Argument{},
 	}
 }
 
 func hashBuild(t *testing.T, tc joinTestCase) []*batch.Batch {
-	err := tc.barg.Prepare(tc.proc)
+	err := tc.marg.Prepare(tc.proc)
 	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+	tc.barg.SetChildren([]vm.Operator{tc.marg})
 	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
 	for _, r := range tc.proc.Reg.MergeReceivers {
 		r.Ch <- nil

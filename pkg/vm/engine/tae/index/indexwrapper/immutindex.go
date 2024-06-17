@@ -82,7 +82,7 @@ func (idx ImmutIndex) BatchDedup(
 		buf = bf.GetBloomFilter(blkID)
 	}
 
-	bfIndex := index.NewEmptyBinaryFuseFilter()
+	bfIndex := index.NewEmptyBloomFilter()
 	if err = index.DecodeBloomFilter(bfIndex, buf); err != nil {
 		return
 	}
@@ -124,7 +124,7 @@ func (idx ImmutIndex) Dedup(
 		buf = bf.GetBloomFilter(blkID)
 	}
 
-	bfIndex := index.NewEmptyBinaryFuseFilter()
+	bfIndex := index.NewEmptyBloomFilter()
 	if err = index.DecodeBloomFilter(bfIndex, buf); err != nil {
 		return
 	}

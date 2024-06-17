@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -401,6 +403,13 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	defer func() {
 		v2.TxnStatementResolveDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
+		tableName = strings.ToLower(tableName)
+	}
+
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, snapshot)
 	if err != nil {
 		return nil, nil
@@ -597,7 +606,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 	}
 }
 
-func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (varValue interface{}, err error) {
 	ctx := tcc.execCtx.reqCtx
 
 	if ctx.Value(defines.InSp{}) != nil && ctx.Value(defines.InSp{}).(bool) {
@@ -612,17 +621,24 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	if isSystemVar {
 		if isGlobalVar {
-			return tcc.GetSession().GetGlobalSystemVariableValue(ctx, varName)
+			if varValue, err = tcc.GetSession().GetGlobalSysVar(varName); err != nil {
+				return
+			}
 		} else {
-			return tcc.GetSession().GetSessionVar(ctx, varName)
+			if varValue, err = tcc.GetSession().GetSessionSysVar(varName); err != nil {
+				return
+			}
 		}
 	} else {
-		_, val, err := tcc.GetSession().GetUserDefinedVar(varName)
-		if val == nil {
+		var udVar *UserDefinedVar
+		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil || udVar == nil {
 			return nil, err
 		}
-		return val.Value, err
+
+		varValue = udVar.Value
 	}
+
+	return
 }
 
 func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (accountIds []uint32, err error) {

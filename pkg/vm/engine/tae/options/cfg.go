@@ -24,7 +24,7 @@ const (
 	defaultRpcMaxMessageSize      = 16 * mpool.KB
 	defaultRpcEnableChecksum      = true
 	defaultLogtailCollectInterval = 50 * time.Millisecond
-	defaultResponseSendTimeout    = 10 * time.Second
+	defaultResponseSendTimeout    = 30 * time.Second
 	defaultRpcStreamPoisonTime    = 5 * time.Second
 )
 

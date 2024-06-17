@@ -125,7 +125,7 @@ func (interpreter *Interpreter) GetSimpleExprValueWithSpVar(e tree.Expr) (interf
 	if err != nil {
 		return nil, err
 	}
-	retStmt, err := parsers.ParseOne(interpreter.ctx, dialect.MYSQL, "select "+interpreter.GetExprString(newExpr), 1, 0)
+	retStmt, err := parsers.ParseOne(interpreter.ctx, dialect.MYSQL, "select "+interpreter.GetExprString(newExpr), 1)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +255,7 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) (e
 				interpreter.outParamMap[k] = 0
 			} else { // For INOUT and IN type, fetch store its previous value
 				interpreter.bh.ClearExecResultSet()
-				_, value, _ := interpreter.ses.GetUserDefinedVar(varParam.Name)
+				value, _ := interpreter.ses.GetUserDefinedVar(varParam.Name)
 				if value == nil {
 					// raise an error as INOUT / IN type param has to have a value
 					return moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or IN has to have a specified value.", k))

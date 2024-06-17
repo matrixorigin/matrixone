@@ -196,3 +196,10 @@ ORDER BY 1
 DROP TABLE test_grids_1;
 drop table test_grid_dtl_1;
 
+CREATE TABLE t1(a INT,b INT,c INT);
+INSERT INTO t1 VALUES(1,0,0),(1,2,0),(1,0,3),(1,2,3);
+SELECT if(c = 0, if(b = 0, a, a / b), if(b = 0, a / c, a / b / c)) FROM t1;
+DROP TABLE t1;
+
+# reset
+SET TIME_ZONE = "SYSTEM";

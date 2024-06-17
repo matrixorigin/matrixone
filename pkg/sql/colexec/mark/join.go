@@ -304,7 +304,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 // store the results of the calculation on the probe side of the equation condition
 func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, proc *process.Process) error {
 	for i := range ctr.evecs {
-		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat})
+		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			ctr.cleanEvalVectors()
 			return err
@@ -318,7 +318,7 @@ func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, proc *process.Pro
 // store the results of the calculation on the build side of the equation condition
 func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, proc *process.Process) error {
 	for i := range ctr.buildEqEvecs {
-		vec, err := ctr.buildEqEvecs[i].executor.Eval(proc, []*batch.Batch{bat})
+		vec, err := ctr.buildEqEvecs[i].executor.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			ctr.cleanEvalVectors()
 			return err
@@ -348,7 +348,7 @@ func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint6
 				1, ctr.cfs2); err != nil {
 				return condUnkown, err
 			}
-			vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
+			vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
 			if err != nil {
 				return condUnkown, err
 			}
@@ -376,7 +376,7 @@ func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint6
 					1, ctr.cfs2); err != nil {
 					return condUnkown, err
 				}
-				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
+				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
 				if err != nil {
 					return condUnkown, err
 				}
@@ -406,7 +406,7 @@ func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.
 	if err := colexec.SetJoinBatchValues(ctr.joinBat, pbat, int64(idx), ctr.bat.RowCount(), ctr.cfs); err != nil {
 		return condUnkown, err
 	}
-	vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
+	vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat}, nil)
 	if err != nil {
 		return condUnkown, err
 	}

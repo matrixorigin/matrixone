@@ -245,6 +245,7 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(moerr.NewInternalError(ctx, "throw error")).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			wsp := newTestWorkspace()
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
 			txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
@@ -255,9 +256,6 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 	eng.EXPECT().Hints().Return(engine.Hints{
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
-
-	var gSys GlobalSystemVariables
-	InitGlobalSystemVariables(&gSys)
 
 	ses := newTestSession(t, ctrl)
 	getGlobalPu().TxnClient = txnClient
@@ -276,6 +274,7 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			wsp := newTestWorkspace()
 			wsp.reportErr1 = true
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
@@ -288,8 +287,6 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
 
-	var gSys GlobalSystemVariables
-	InitGlobalSystemVariables(&gSys)
 	ses := newTestSession(t, ctrl)
 	getGlobalPu().TxnClient = txnClient
 	getGlobalPu().StorageEngine = eng
@@ -310,6 +307,7 @@ func newMockErrSession3(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 			}).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(moerr.NewInternalError(ctx, "r-w conflicts")).AnyTimes()
+			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			wsp := newTestWorkspace()
 			wsp.reportErr1 = true
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
@@ -322,8 +320,6 @@ func newMockErrSession3(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
 
-	var gSys GlobalSystemVariables
-	InitGlobalSystemVariables(&gSys)
 	ses := newTestSession(t, ctrl)
 	getGlobalPu().TxnClient = txnClient
 	getGlobalPu().StorageEngine = eng
@@ -350,6 +346,7 @@ func Test_rollbackStatement(t *testing.T) {
 				wsp := newTestWorkspace()
 				txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
 				txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+				txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 				return txnOperator, nil
 			}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -363,9 +360,6 @@ func Test_rollbackStatement(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
-
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
 
 		ses := newTestSession(t, ctrl)
 		getGlobalPu().TxnClient = txnClient

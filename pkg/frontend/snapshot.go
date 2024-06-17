@@ -70,7 +70,7 @@ var (
 
 	restorePubDbDataFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {snapshot = '%s'} WHERE  DATABASE_NAME = '%s'"
 
-	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", "mo_catalog"}
+	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", moCatalog}
 
 	needSkipTablesInMocatalog = map[string]int8{
 		"mo_database":         1,
@@ -417,6 +417,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			return
 		}
 	}
+
+	// checks if the given context has been canceled.
+	if err = CancelCheck(ctx); err != nil {
+		return
+	}
+
 	return
 }
 
@@ -474,7 +480,7 @@ func restoreToAccount(
 		}
 
 		// do some op to pub database
-		if err := checkPubAndDropPubRecord(ctx, bh, snapshotName, dbName); err != nil {
+		if err := checkPubAndDropPubRecord(toCtx, bh, snapshotName, dbName); err != nil {
 			return err
 		}
 
@@ -594,6 +600,16 @@ func restoreToDatabaseOrTable(
 			continue
 		}
 
+		// checks if the given context has been canceled.
+		if err = CancelCheck(ctx); err != nil {
+			return
+		}
+
+		// checks if the given context has been canceled.
+		if err = CancelCheck(ctx); err != nil {
+			return
+		}
+
 		if err = recreateTable(ctx, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
 			return
 		}
@@ -626,6 +642,12 @@ func restoreSystemDatabase(
 		}
 
 		getLogger().Info(fmt.Sprintf("[%s] start to restore system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
+
+		// checks if the given context has been canceled.
+		if err = CancelCheck(ctx); err != nil {
+			return
+		}
+
 		if err = recreateTable(ctx, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
 			return
 		}
@@ -678,7 +700,7 @@ func restoreViews(
 
 	g := topsort{next: make(map[string][]string)}
 	for key, view := range viewMap {
-		stmts, err := parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1, 0)
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1)
 		if err != nil {
 			return err
 		}
@@ -708,7 +730,7 @@ func restoreViews(
 		if tblInfo, ok := viewMap[key]; ok {
 			getLogger().Info(fmt.Sprintf("[%s] start to restore view: %v, restore timestamp: %d", snapshotName, tblInfo.tblName, snapshot.TS.PhysicalTime))
 
-			if err = bh.Exec(toCtx, "use "+tblInfo.dbName); err != nil {
+			if err = bh.Exec(toCtx, "use `"+tblInfo.dbName+"`"); err != nil {
 				return err
 			}
 
@@ -739,7 +761,7 @@ func recreateTable(
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
-	if err = bh.Exec(ctx, fmt.Sprintf("use %s", tblInfo.dbName)); err != nil {
+	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
 		return
 	}
 
@@ -776,8 +798,6 @@ func needSkipDb(dbName string) bool {
 }
 
 func needSkipTable(accountId uint32, dbName string, tblName string) bool {
-	// TODO determine which tables should be skipped
-
 	if accountId == sysAccountID {
 		return dbName == moCatalog && needSkipTablesInMocatalog[tblName] == 1
 	} else {
@@ -1157,7 +1177,7 @@ func getTableInfoMap(
 		// filter by dbName and tblName
 		d, t := splitKey(key)
 		if needSkipDb(d) || needSkipTable(curAccountId, d, t) {
-			return
+			continue
 		}
 		if dbName != "" && dbName != d {
 			return

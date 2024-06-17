@@ -21,6 +21,7 @@ import (
 	"time"
 
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,6 +40,8 @@ var (
 	defaultLogtailServiceAddress = "127.0.0.1:22001"
 	defaultLockListenAddress     = "0.0.0.0:22002"
 	defaultLockServiceAddress    = "127.0.0.1:22002"
+	defaultShardListenAddress    = "0.0.0.0:22003"
+	defaultShardServiceAddress   = "127.0.0.1:22003"
 	defaultZombieTimeout         = time.Hour
 	defaultDiscoveryTimeout      = time.Second * 30
 	defaultHeatbeatInterval      = time.Second
@@ -178,6 +181,8 @@ type Config struct {
 	// LockService lockservice config
 	LockService lockservice.Config `toml:"lockservice"`
 
+	ShardService shardservice.Config `toml:"shardservice"`
+
 	// IsStandalone indicates whether the tn is in standalone cluster not an independent process.
 	// For the tn does not boost an independent queryservice in standalone mode.
 	// cn,tn shares the same queryservice in standalone mode.
@@ -205,6 +210,12 @@ func (c *Config) Validate() error {
 	}
 	if c.LockService.ServiceAddress == "" {
 		c.LockService.ServiceAddress = defaultLockServiceAddress
+	}
+	if c.ShardService.ListenAddress == "" {
+		c.ShardService.ListenAddress = defaultShardListenAddress
+	}
+	if c.ShardService.ServiceAddress == "" {
+		c.ShardService.ServiceAddress = defaultShardServiceAddress
 	}
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = StorageTAE
@@ -292,6 +303,9 @@ func (c *Config) Validate() error {
 	c.RPC.Adjust()
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
+
+	c.ShardService.ServiceID = c.UUID
+	c.ShardService.Validate()
 
 	if c.PortBase != 0 {
 		if c.ServiceHost == "" {
@@ -389,9 +403,10 @@ func (c *Config) SetDefaultValue() {
 	}
 
 	c.RPC.Adjust()
-	c.LockService.ServiceID = "tmp"
-	c.LockService.Validate()
 	c.LockService.ServiceID = c.UUID
+
+	c.ShardService.RPC = c.RPC
+	c.ShardService.ServiceID = c.UUID
 
 	if c.PortBase != 0 {
 		if c.ServiceHost == "" {

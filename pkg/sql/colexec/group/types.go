@@ -85,10 +85,7 @@ type container struct {
 	keyWidth          int
 	groupVecsNullable bool
 
-	bat *batch.Batch
-
-	hasAggResult bool
-
+	bat   *batch.Batch
 	state vm.CtrState
 }
 

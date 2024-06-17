@@ -49,7 +49,7 @@ import (
 
 func (mixin *withFilterMixin) reset() {
 	mixin.filterState.evaluated = false
-	mixin.filterState.filter = blockio.ReadFilter{}
+	mixin.filterState.filter = blockio.BlockReadFilter{}
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
@@ -61,7 +61,7 @@ func (mixin *withFilterMixin) reset() {
 // call tryUpdate to update the seqnums
 // NOTE: here we assume the tryUpdate is always called with the same cols
 // for all blocks and it will only be updated once
-func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
+func (mixin *withFilterMixin) tryUpdateColumns(cols []string, blkCnt int) {
 	if len(cols) == len(mixin.columns.seqnums) {
 		return
 	}
@@ -99,67 +99,20 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			mixin.columns.colTypes[i] = types.T(colDef.Typ.Id).ToType()
 		}
 	}
-}
 
-func (mixin *withFilterMixin) getReadFilter(proc *process.Process, blkCnt int) (
-	filter blockio.ReadFilter,
-) {
-	if mixin.filterState.evaluated {
-		filter = mixin.filterState.filter
-		return
-	}
-	pk := mixin.tableDef.Pkey
-	if mixin.filterState.expr == nil || pk == nil {
+	if mixin.columns.pkPos != -1 {
+		// here we will select the primary key column from the vectors, and
+		// use the search function to find the offset of the primary key.
+		// it returns the offset of the primary key in the pk vector.
+		// if the primary key is not found, it returns empty slice
 		mixin.filterState.evaluated = true
-		mixin.filterState.filter = blockio.ReadFilter{}
-		return
+		//mixin.filterState.filter = filter
+		mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[mixin.columns.pkPos]}
+		mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
+
+		// records how many blks one reader needs to read when having filter
+		objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
 	}
-	return mixin.getPKFilter(proc, blkCnt)
-}
-
-func (mixin *withFilterMixin) getPKFilter(
-	proc *process.Process, blkCnt int,
-) blockio.ReadFilter {
-	// if no primary key is included in the columns or no filter expr is given,
-	// no filter is needed
-	if mixin.columns.pkPos == -1 || mixin.filterState.expr == nil {
-		mixin.filterState.evaluated = true
-		mixin.filterState.filter = blockio.ReadFilter{}
-		return blockio.ReadFilter{}
-	}
-
-	// evaluate the search function for the filter
-	// if the search function is not found, no filter is needed
-	// primary key must be used by the expr in one of the following patterns:
-	// A: $pk = const_value
-	// B: const_value = $pk
-	// C: {A|B} and {A|B}
-	// D: {A|B|C} [and {A|B|C}]*
-	// for other patterns, no filter is needed
-	ok, hasNull, filter := getNonCompositePKSearchFuncByExpr(
-		mixin.filterState.expr,
-		mixin.tableDef.Pkey.PkeyColName,
-		proc,
-	)
-	if !ok || !filter.Valid {
-		mixin.filterState.evaluated = true
-		mixin.filterState.filter = blockio.ReadFilter{}
-		mixin.filterState.hasNull = hasNull
-		return blockio.ReadFilter{}
-	}
-
-	// here we will select the primary key column from the vectors, and
-	// use the search function to find the offset of the primary key.
-	// it returns the offset of the primary key in the pk vector.
-	// if the primary key is not found, it returns empty slice
-	mixin.filterState.evaluated = true
-	mixin.filterState.filter = filter
-	mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[mixin.columns.pkPos]}
-	mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
-
-	// records how many blks one reader needs to read when having filter
-	objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
-	return filter
 }
 
 // -----------------------------------------------------------------
@@ -195,6 +148,7 @@ func newBlockReader(
 	ts timestamp.Timestamp,
 	blks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
+	filter blockio.BlockReadFilter,
 	fs fileservice.FileService,
 	proc *process.Process,
 ) *blockReader {
@@ -215,6 +169,7 @@ func newBlockReader(
 		blks: blks,
 	}
 	r.filterState.expr = filterExpr
+	r.filterState.filter = filter
 	return r
 }
 
@@ -373,10 +328,9 @@ func (r *blockReader) Read(
 
 	// try to update the columns
 	// the columns is only updated once for all blocks
-	r.tryUpdateColumns(cols)
+	r.tryUpdateColumns(cols, len(r.blks))
 
-	// get the block read filter
-	filter := r.getReadFilter(r.proc, len(r.blks))
+	filter := r.withFilterMixin.filterState.filter
 
 	// if any null expr is found in the primary key (composite primary keys), quick return
 	if r.filterState.hasNull {
@@ -471,25 +425,28 @@ func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
 func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
-	pkVal []byte,
+	pkFilter PKFilters,
 	ts timestamp.Timestamp,
 	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
+	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
 	fs fileservice.FileService,
 	proc *process.Process,
 ) *blockMergeReader {
 	r := &blockMergeReader{
-		table: txnTable,
+		table:     txnTable,
+		txnOffset: txnOffset,
 		blockReader: newBlockReader(
 			ctx,
 			txnTable.GetTableDef(ctx),
 			ts,
 			dirtyBlks,
 			filterExpr,
+			pkFilter.blockReadPKFilter,
 			fs,
 			proc,
 		),
-		pkVal:      pkVal,
+		pkFilter:   pkFilter.inMemPKFilter,
 		deletaLocs: make(map[string][]objectio.Location),
 	}
 	return r
@@ -513,9 +470,9 @@ func (r *blockMergeReader) prefetchDeletes() error {
 				return nil
 			}
 			for _, bat := range bats {
-				vs := vector.MustStrCol(bat.GetVector(0))
-				for _, deltaLoc := range vs {
-					location, err := blockio.EncodeLocationFromString(deltaLoc)
+				vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
+				for i := range vs {
+					location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
 					if err != nil {
 						return err
 					}
@@ -558,15 +515,12 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	}
 	info := r.blks[0]
 
-	r.tryUpdateColumns(cols)
+	r.tryUpdateColumns(cols, len(r.blks))
 	// load deletes from txn.blockId_dn_delete_metaLoc_batch
 	err := r.table.LoadDeletesForBlock(info.BlockID, &r.buffer)
 	if err != nil {
 		return err
 	}
-
-	// load deletes from partition state for the specified block
-	filter := r.getReadFilter(r.proc, len(r.blks))
 
 	state, err := r.table.getPartitionState(ctx)
 	if err != nil {
@@ -574,12 +528,12 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	}
 	ts := types.TimestampToTS(r.ts)
 
-	if filter.Valid && info.Sorted && len(r.pkVal) > 0 {
-		iter := state.NewPrimaryKeyDelIter(
-			ts,
-			logtailreplay.Prefix(r.pkVal),
-			info.BlockID,
-		)
+	var iter logtailreplay.RowsIter
+	if r.pkFilter.delIterFactory != nil {
+		iter = r.pkFilter.delIterFactory(info.BlockID)
+	}
+
+	if iter != nil {
 		for iter.Next() {
 			entry := iter.Entry()
 			if !entry.Deleted {
@@ -588,9 +542,8 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 			_, offset := entry.RowID.Decode()
 			r.buffer = append(r.buffer, int64(offset))
 		}
-		iter.Close()
 	} else {
-		iter := state.NewRowsIter(ts, &info.BlockID, true)
+		iter = state.NewRowsIter(ts, &info.BlockID, true)
 		currlen := len(r.buffer)
 		for iter.Next() {
 			entry := iter.Entry()
@@ -598,7 +551,13 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 			r.buffer = append(r.buffer, int64(offset))
 		}
 		v2.TaskLoadMemDeletesPerBlockHistogram.Observe(float64(len(r.buffer) - currlen))
-		iter.Close()
+	}
+
+	iter.Close()
+
+	txnOffset := r.txnOffset
+	if r.table.db.op.IsSnapOp() {
+		txnOffset = r.table.getTxn().GetSnapshotWriteOffset()
 	}
 
 	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
@@ -606,7 +565,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	r.table.getTxn().forEachTableWrites(
 		r.table.db.databaseId,
 		r.table.tableId,
-		r.table.getTxn().GetSnapshotWriteOffset(), func(entry Entry) {
+		txnOffset, func(entry Entry) {
 			if entry.isGeneratedByTruncate() {
 				return
 			}

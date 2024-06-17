@@ -161,6 +161,7 @@ func makePlan2Int64ConstExpr(v int64) *plan.Expr_Lit {
 }
 
 var MakePlan2Int64ConstExprWithType = makePlan2Int64ConstExprWithType
+var MakePlan2Uint64ConstExprWithType = makePlan2Uint64ConstExprWithType
 
 func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 	return &plan.Expr{
@@ -199,16 +200,14 @@ func makePlan2Vecf32ConstExpr(v string) *plan.Expr_Lit {
 var MakePlan2StringVecExprWithType = makePlan2StringVecExprWithType
 
 func makePlan2StringVecExprWithType(mp *mpool.MPool, vals ...string) *plan.Expr {
-	vec := vector.NewVec(types.T_char.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType())
 	for _, val := range vals {
 		vector.AppendBytes(vec, []byte(val), false, mp)
 	}
 	data, _ := vec.MarshalBinary()
 	vec.Free(mp)
 	return &plan.Expr{
-		Typ: plan.Type{
-			Id: int32(types.T_tuple),
-		},
+		Typ: makePlan2Type(vec.GetType()),
 		Expr: &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
 				Len:  int32(len(vals)),
@@ -228,9 +227,7 @@ func makePlan2Int64VecExprWithType(mp *mpool.MPool, vals ...int64) *plan.Expr {
 	data, _ := vec.MarshalBinary()
 	vec.Free(mp)
 	return &plan.Expr{
-		Typ: plan.Type{
-			Id: int32(types.T_tuple),
-		},
+		Typ: makePlan2Type(vec.GetType()),
 		Expr: &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
 				Len:  int32(len(vals)),

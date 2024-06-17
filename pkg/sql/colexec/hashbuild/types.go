@@ -38,12 +38,8 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
-	state int
-
+	state              int
 	hasNull            bool
-	isMerge            bool
 	multiSels          [][]int32
 	batches            []*batch.Batch
 	batchIdx           int
@@ -120,12 +116,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanEvalVectors()
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
-		}
-		ctr.FreeMergeTypeOperator(pipelineFailed)
-		if ctr.isMerge {
-			ctr.FreeMergeTypeOperator(pipelineFailed)
-		} else {
-			ctr.FreeAllReg()
 		}
 		arg.ctr = nil
 	}

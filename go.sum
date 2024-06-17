@@ -467,8 +467,8 @@ github.com/mailru/easyjson v0.7.6 h1:8yTIVnZgCoiM1TgqoeTl+LfU5Jg6/xL3QhGQnimLYnA
 github.com/mailru/easyjson v0.7.6/go.mod h1:xzfreul335JAWq5oZzymOObrkdz5UnU4kGfJJLY9Nlc=
 github.com/matrixorigin/dragonboat/v4 v4.0.0-20240312080931-1b40809d7cea h1:xsbOnW95FvN+kxHVonA+ooI8LPySQV8P+YbzG9BEJHI=
 github.com/matrixorigin/dragonboat/v4 v4.0.0-20240312080931-1b40809d7cea/go.mod h1:bR6ZGoUwApH4/P4+AezNGT0xehljg+j+Z/Q2Fz+Y4a0=
-github.com/matrixorigin/goetty/v2 v2.0.0-20231122095211-6a25dc9130ca h1:Umz9yzhDh/wxoZxUePptSGZN9fim7cq9u0EowC/QYo0=
-github.com/matrixorigin/goetty/v2 v2.0.0-20231122095211-6a25dc9130ca/go.mod h1:OwIBpVwRW1HjF/Jhc2Av3UvG2NygMg+bdqGxZaqwhU0=
+github.com/matrixorigin/goetty/v2 v2.0.0-20240611082008-a4de209fff3d h1:wSlkJlWXZ3if1sH8Bc/lUUOWhTw91lgYGSFOHqy1tcw=
+github.com/matrixorigin/goetty/v2 v2.0.0-20240611082008-a4de209fff3d/go.mod h1:OwIBpVwRW1HjF/Jhc2Av3UvG2NygMg+bdqGxZaqwhU0=
 github.com/matrixorigin/gosigar v0.14.3-0.20231205085924-69ea5558fb97 h1:yx+DAToxqqOCHLiHiA1TDMkT+dESg5DaaLPayZJgPa0=
 github.com/matrixorigin/gosigar v0.14.3-0.20231205085924-69ea5558fb97/go.mod h1:iXRIGg2tLnu7LBdpqzyQfGDEidKCfWcCMS0WKyPWoMs=
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4 h1:+SmZP2bG+YcO/ntzjCleCu6hFTJiue7Oj2tftpJKTlU=
@@ -566,6 +566,8 @@ github.com/nats-io/nats.go v1.9.1/go.mod h1:ZjDU1L/7fJ09jvUSRVBR2e7+RnLiiIQyqyzE
 github.com/nats-io/nkeys v0.0.2/go.mod h1:dab7URMsZm6Z/jp9Z5UGa87Uutgc2mVpXLC4B7TDb/4=
 github.com/nats-io/nkeys v0.1.0/go.mod h1:xpnFELMwJABBLVhffcfd1MZx6VsNRFpEugbxziKVo7w=
 github.com/nats-io/nuid v1.0.1/go.mod h1:19wcPz3Ph3q0Jbyiqsd0kePYG7A95tJPxeL+1OSON2c=
+github.com/ncruces/go-dns v1.2.5 h1:d2zZVWUassOyUOc8okB70hXBZrupqkuls7C7ZXMaKMM=
+github.com/ncruces/go-dns v1.2.5/go.mod h1:DnLzi8G7KNNZUfNRIcrNqbfhvKAuKHXIZThOYFWYBck=
 github.com/neelance/astrewrite v0.0.0-20160511093645-99348263ae86/go.mod h1:kHJEU3ofeGjhHklVoIGuVj85JJwZ6kWPaJwCIxgnFmo=
 github.com/neelance/sourcemap v0.0.0-20151028013722-8c68805598ab/go.mod h1:Qr6/a/Q4r9LP1IltGz7tA7iOK1WonHEYhu1HRBA7ZiM=
 github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e/go.mod h1:zD1mROLANZcx1PVRCS0qkT7pwLkGfwJo4zjcN/Tysno=

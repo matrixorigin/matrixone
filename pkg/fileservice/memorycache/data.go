@@ -16,9 +16,61 @@ package memorycache
 
 import (
 	"sync/atomic"
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+// Data is a reference counted byte buffer
+type Data struct {
+	size int
+	buf  []byte
+	// reference counta for the Data, the Data is free
+	// when the reference count is 0
+	ref         refcnt
+	ptr         unsafe.Pointer
+	deallocator malloc.Deallocator
+	globalSize  *atomic.Int64
+}
+
+var _ CacheData = new(Data)
+
+func newData(
+	allocator malloc.Allocator,
+	size int,
+	globalSize *atomic.Int64,
+) *Data {
+	if size == 0 {
+		return nil
+	}
+	globalSize.Add(int64(size))
+	data := &Data{
+		size:       size,
+		globalSize: globalSize,
+	}
+	var err error
+	data.ptr, data.deallocator, err = allocator.Allocate(uint64(size))
+	if err != nil {
+		panic(err)
+	}
+	metric.FSMallocLiveObjectsMemoryCache.Inc()
+	data.buf = unsafe.Slice((*byte)(data.ptr), size)
+	data.ref.init(1)
+	return data
+}
+
+func (d *Data) free() {
+	d.globalSize.Add(-int64(d.size))
+	d.buf = nil
+	d.deallocator.Deallocate(d.ptr)
+	metric.FSMallocLiveObjectsMemoryCache.Dec()
+}
+
 func (d *Data) Bytes() []byte {
+	if d == nil {
+		return nil
+	}
 	return d.Buf()
 }
 
@@ -30,7 +82,7 @@ func (d *Data) Buf() []byte {
 	return d.buf
 }
 
-func (d *Data) Truncate(n int) *Data {
+func (d *Data) Slice(n int) CacheData {
 	d.buf = d.buf[:n]
 	return d
 }
@@ -43,8 +95,8 @@ func (d *Data) acquire() {
 	d.ref.acquire()
 }
 
-func (d *Data) release(size *atomic.Int64) {
+func (d *Data) Release() {
 	if d != nil && d.ref.release() {
-		d.free(size)
+		d.free()
 	}
 }

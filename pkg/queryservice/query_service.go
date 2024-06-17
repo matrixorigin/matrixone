@@ -44,7 +44,7 @@ type QueryService interface {
 type queryService struct {
 	// serviceID is the UUID of CN service.
 	serviceID string
-	handler   morpc.MessageHandler[*pb.Request, *pb.Response]
+	handler   morpc.MethodBasedServer[*pb.Request, *pb.Response]
 
 	mu struct {
 		sync.Mutex
@@ -90,7 +90,7 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config) (QueryS
 
 // AddHandleFunc implements the QueryService interface.
 func (s *queryService) AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool) {
-	s.handler.RegisterHandleFunc(uint32(method), h, async)
+	s.handler.RegisterMethod(uint32(method), h, async)
 }
 
 // SetReleaseFunc implements the QueryService interface.

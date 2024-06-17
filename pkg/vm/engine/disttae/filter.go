@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -126,11 +127,12 @@ func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *proces
 	return vals, true
 }
 
-func mustColVecValueFromBinaryFuncExpr(expr *plan.Expr_F) (*plan.Expr_Col, []byte, bool) {
+func mustColVecValueFromBinaryFuncExpr(proc *process.Process, expr *plan.Expr_F) (*plan.Expr_Col, []byte, bool) {
 	var (
-		colExpr *plan.Expr_Col
-		valExpr *plan.Expr
-		ok      bool
+		colExpr  *plan.Expr_Col
+		valExpr  *plan.Expr
+		ok       bool
+		exprImpl *plan.Expr_Vec
 	)
 	if colExpr, ok = expr.F.Args[0].Expr.(*plan.Expr_Col); ok {
 		valExpr = expr.F.Args[1]
@@ -140,11 +142,20 @@ func mustColVecValueFromBinaryFuncExpr(expr *plan.Expr_F) (*plan.Expr_Col, []byt
 		return nil, nil, false
 	}
 
-	switch exprImpl := valExpr.Expr.(type) {
-	case *plan.Expr_Vec:
-		return colExpr, exprImpl.Vec.Data, true
+	if exprImpl, ok = valExpr.Expr.(*plan.Expr_Vec); !ok {
+		foldedExprs, err := plan2.ConstandFoldList([]*plan.Expr{valExpr}, proc, true)
+		if err != nil {
+			logutil.Errorf("try const fold val expr failed: %s", plan2.FormatExpr(valExpr))
+			return nil, nil, false
+		}
+
+		if exprImpl, ok = foldedExprs[0].Expr.(*plan.Expr_Vec); !ok {
+			logutil.Errorf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
+			return nil, nil, false
+		}
 	}
-	return nil, nil, false
+
+	return colExpr, exprImpl.Vec.Data, ok
 }
 
 func mustColConstValueFromBinaryFuncExpr(
@@ -770,7 +781,7 @@ func CompileFilterExpr(
 			}
 			// TODO: define seekOp
 		case "prefix_in":
-			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl)
+			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(proc, exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -850,7 +861,7 @@ func CompileFilterExpr(
 			}
 
 		case "in":
-			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl)
+			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(proc, exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -893,7 +904,7 @@ func CompileFilterExpr(
 				}
 				if isPK {
 					blkBf := bf.GetBloomFilter(uint32(blkIdx))
-					blkBfIdx := index.NewEmptyBinaryFuseFilter()
+					blkBfIdx := index.NewEmptyBloomFilter()
 					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
 						return false, false, err
 					}
@@ -960,7 +971,7 @@ func CompileFilterExpr(
 				}
 				if isPK {
 					blkBf := bf.GetBloomFilter(uint32(blkIdx))
-					blkBfIdx := index.NewEmptyBinaryFuseFilter()
+					blkBfIdx := index.NewEmptyBloomFilter()
 					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
 						return false, false, err
 					}
@@ -992,6 +1003,7 @@ func CompileFilterExpr(
 func TryFastFilterBlocks(
 	ctx context.Context,
 	tbl *txnTable,
+	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
 	snapshotTS timestamp.Timestamp,
 	tableDef *plan.TableDef,
 	exprs []*plan.Expr,
@@ -1010,6 +1022,7 @@ func TryFastFilterBlocks(
 	err = ExecuteBlockFilter(
 		ctx,
 		tbl,
+		txnOffset,
 		snapshotTS,
 		fastFilterOp,
 		loadOp,
@@ -1030,6 +1043,7 @@ func TryFastFilterBlocks(
 func ExecuteBlockFilter(
 	ctx context.Context,
 	tbl *txnTable,
+	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
 	snapshotTS timestamp.Timestamp,
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
@@ -1070,7 +1084,7 @@ func ExecuteBlockFilter(
 	}()
 
 	if !highSelectivityHint {
-		*dirtyBlocks = tbl.collectDirtyBlocks(snapshot, uncommittedObjects)
+		*dirtyBlocks = tbl.collectDirtyBlocks(snapshot, uncommittedObjects, txnOffset)
 	}
 
 	err = ForeachSnapshotObjects(

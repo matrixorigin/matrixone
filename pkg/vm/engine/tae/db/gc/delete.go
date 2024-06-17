@@ -55,6 +55,12 @@ func (g *GCWorker) Start() bool {
 	return true
 }
 
+func (g *GCWorker) Idle() {
+	g.Lock()
+	defer g.Unlock()
+	g.state = Idle
+}
+
 func (g *GCWorker) resetObjects() {
 	g.objects = make([]string, 0)
 }

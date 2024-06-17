@@ -45,13 +45,11 @@ func (c *CompilerContext) GetViews() []string {
 }
 
 func (c *CompilerContext) SetViews(views []string) {
-	//TODO implement me
-	panic("implement me")
+
 }
 
 func (c *CompilerContext) GetSnapshot() *plan.Snapshot {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (c *CompilerContext) SetSnapshot(snapshot *plan.Snapshot) {

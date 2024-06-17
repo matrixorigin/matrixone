@@ -25,6 +25,7 @@ option (gogoproto.protosizer_all) = true;
 import "plan.proto";
 import "timestamp.proto";
 import "lock.proto";
+import "txn.proto";
 
 enum Method {
     UnknownMethod = 0;
@@ -200,6 +201,7 @@ message FuzzyFilter {
   float N = 1;
   string PkName = 2;
   plan.Type PkTyp = 3 [(gogoproto.nullable) = false];
+  int32 BuildIdx = 4;
 }
 
 message Join {
@@ -440,6 +442,7 @@ message Source {
   plan.TableDef tableDef = 8;
   timestamp.Timestamp timestamp = 9;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 10;
+  bool is_const = 11;
 }
 
 message NodeInfo {
@@ -461,13 +464,13 @@ message ProcessLimitation {
 message ProcessInfo {
   string id = 1;
   string sql = 2;
-  ProcessLimitation lim = 3;
+  ProcessLimitation lim = 3 [(gogoproto.nullable) = false];
   int64 unix_time = 4;
   uint32 account_id = 5;
-  string snapshot = 6;
-  SessionInfo session_info = 7;
+  txn.CNTxnSnapshot snapshot = 6 [(gogoproto.nullable) = false];
+  SessionInfo session_info = 7 [(gogoproto.nullable) = false];
   repeated int32 analysis_node_list = 8;
-  SessionLoggerInfo session_logger = 9;
+  SessionLoggerInfo session_logger = 9 [(gogoproto.nullable) = false];
 }
 
 message SessionInfo {

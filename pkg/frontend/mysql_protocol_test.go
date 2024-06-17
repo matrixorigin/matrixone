@@ -40,6 +40,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -69,7 +70,7 @@ func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	routine := NewRoutine(context.TODO(), pro, tRM.pu.SV, rs)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
-	err := pro.writePackets(hsV10pkt, true)
+	err := pro.writePackets(hsV10pkt)
 	if err != nil {
 		panic(err)
 	}
@@ -83,14 +84,6 @@ func (tRM *TestRoutineManager) Closed(rs goetty.IOSession) {
 	tRM.rwlock.Lock()
 	defer tRM.rwlock.Unlock()
 	delete(tRM.clients, rs)
-}
-
-func NewTestRoutineManager(pu *config.ParameterUnit) *TestRoutineManager {
-	rm := &TestRoutineManager{
-		clients: make(map[goetty.IOSession]*Routine),
-		pu:      pu,
-	}
-	return rm
 }
 
 func TestMysqlClientProtocol_Handshake(t *testing.T) {
@@ -192,6 +185,7 @@ func TestKill(t *testing.T) {
 		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 		return txnOp, nil
 	}).AnyTimes()
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
@@ -247,7 +241,7 @@ func TestKill(t *testing.T) {
 			}
 			stmts = append(stmts, cmdFieldStmt)
 		} else {
-			stmts, err = parsers.Parse(execCtx.reqCtx, dialect.MYSQL, execCtx.input.getSql(), 1, 0)
+			stmts, err = parsers.Parse(execCtx.reqCtx, dialect.MYSQL, execCtx.input.getSql(), 1)
 			if err != nil {
 				return nil, err
 			}
@@ -1879,7 +1873,7 @@ func Test_writePackets(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize), true)
+		err = proto.writePackets(make([]byte, MaxPayloadSize))
 		convey.So(err, convey.ShouldBeNil)
 	})
 	convey.Convey("writepackets 16MB failed", t, func() {
@@ -1906,7 +1900,7 @@ func Test_writePackets(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize), true)
+		err = proto.writePackets(make([]byte, MaxPayloadSize))
 		convey.So(err, convey.ShouldBeError)
 	})
 
@@ -1927,7 +1921,7 @@ func Test_writePackets(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize), true)
+		err = proto.writePackets(make([]byte, MaxPayloadSize))
 		convey.So(err, convey.ShouldBeError)
 	})
 }
@@ -1949,10 +1943,10 @@ func Test_openpacket(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
-		err = proto.openPacket()
+		proto.openPacket()
 		convey.So(err, convey.ShouldBeNil)
 		outBuf := proto.tcpConn.OutBuf()
-		headLen := outBuf.GetWriteIndex() - beginWriteIndex(outBuf, proto.beginOffset)
+		headLen := outBuf.GetWriteIndex() - proto.getBeginWriteIndex()
 		convey.So(headLen, convey.ShouldEqual, HeaderLengthOfTheProtocol)
 	})
 
@@ -1974,7 +1968,7 @@ func Test_openpacket(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
-		ses := NewSession(context.TODO(), proto, nil, nil, false, nil)
+		ses := NewSession(context.TODO(), proto, nil)
 		proto.ses = ses
 
 		err = proto.fillPacket(make([]byte, MaxPayloadSize)...)
@@ -1983,7 +1977,7 @@ func Test_openpacket(t *testing.T) {
 		err = proto.closePacket(true)
 		convey.So(err, convey.ShouldBeNil)
 
-		proto.append(nil, make([]byte, 1024)...)
+		proto.append(make([]byte, 1024)...)
 	})
 
 	convey.Convey("closepacket falied.", t, func() {
@@ -2003,10 +1997,10 @@ func Test_openpacket(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
-		ses := NewSession(context.TODO(), proto, nil, nil, false, nil)
+		ses := NewSession(context.TODO(), proto, nil)
 		proto.ses = ses
 
-		err = proto.openPacket()
+		proto.openPacket()
 		convey.So(err, convey.ShouldBeNil)
 
 		proto.beginOffset = proto.tcpConn.OutBuf().GetWriteIndex() - proto.tcpConn.OutBuf().GetReadIndex()
@@ -2097,23 +2091,25 @@ func Test_openpacket(t *testing.T) {
 		for _, c := range kases {
 			proto.SetSequenceID(0)
 
-			err = proto.openRow(nil)
+			proto.openRow()
 			convey.So(err, convey.ShouldBeNil)
 
 			outBuf := proto.tcpConn.OutBuf()
-			beginOffset := proto.beginOffset
 
-			rawBuf := proto.append(nil, c.data...)
+			beginIdx := proto.getBeginWriteIndex()
 
-			err = proto.closeRow(nil)
+			proto.append(c.data...)
+
+			widx := outBuf.GetWriteIndex()
+
+			err = proto.closeRow()
 			convey.So(err, convey.ShouldBeNil)
 
 			want := mysqlPack(c.data)
 
 			convey.So(c.len, convey.ShouldEqual, len(want))
 
-			widx := outBuf.GetWriteIndex()
-			beginIdx := beginWriteIndex(outBuf, beginOffset)
+			rawBuf := proto.tcpConn.OutBuf().RawBuf()
 			res := rawBuf[beginIdx:widx]
 
 			convey.So(bytes.Equal(res, want), convey.ShouldBeTrue)
@@ -2147,7 +2143,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		})
 
 		st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
-		stmts, err := mysql.Parse(ctx, st.Sql, 1, 0)
+		stmts, err := mysql.Parse(ctx, st.Sql, 1)
 		if err != nil {
 			t.Error(err)
 		}
@@ -2184,7 +2180,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		st := tree.NewPrepareString("stmt1", "select ?, 1")
-		stmts, err := mysql.Parse(ctx, st.Sql, 1, 0)
+		stmts, err := mysql.Parse(ctx, st.Sql, 1)
 		if err != nil {
 			t.Error(err)
 		}
@@ -2225,7 +2221,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 	st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
-	stmts, err := mysql.Parse(ctx, st.Sql, 1, 0)
+	stmts, err := mysql.Parse(ctx, st.Sql, 1)
 	if err != nil {
 		f.Error(err)
 	}
@@ -2359,9 +2355,7 @@ func Test_resultset(t *testing.T) {
 			t.Error(err)
 		}
 		setGlobalPu(pu)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(ctx, proto, nil, &gSys, true, nil)
+		ses := NewSession(ctx, proto, nil)
 		proto.ses = ses
 
 		res := make9ColumnsResultSet()
@@ -2393,14 +2387,12 @@ func Test_resultset(t *testing.T) {
 			t.Error(err)
 		}
 		setGlobalPu(pu)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(ctx, proto, nil, &gSys, true, nil)
+		ses := NewSession(ctx, proto, nil)
 		proto.ses = ses
 
 		res := make9ColumnsResultSet()
 
-		err = proto.SendResultSetTextBatchRowSpeedup(res, uint64(len(res.Data)))
+		err = proto.WriteResultSetRow(res, uint64(len(res.Data)))
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -2427,9 +2419,7 @@ func Test_resultset(t *testing.T) {
 			t.Error(err)
 		}
 		setGlobalPu(pu)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(ctx, proto, nil, &gSys, true, nil)
+		ses := NewSession(ctx, proto, nil)
 		proto.ses = ses
 
 		res := make9ColumnsResultSet()
@@ -2464,15 +2454,13 @@ func Test_resultset(t *testing.T) {
 			t.Error(err)
 		}
 		setGlobalPu(pu)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(ctx, proto, nil, &gSys, true, nil)
+		ses := NewSession(ctx, proto, nil)
 		ses.cmd = COM_STMT_EXECUTE
 		proto.ses = ses
 
 		res := make9ColumnsResultSet()
 
-		err = proto.SendResultSetTextBatchRowSpeedup(res, 0)
+		err = proto.WriteResultSetRow(res, 0)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -2845,9 +2833,205 @@ func TestMysqlProtocolImpl_Close(t *testing.T) {
 	}
 
 	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-	proto.Quit()
+	proto.Close()
 	assert.Nil(t, proto.GetSalt())
 	assert.Nil(t, proto.strconvBuffer)
 	assert.Nil(t, proto.lenEncBuffer)
 	assert.Nil(t, proto.binaryNullBuffer)
+}
+
+var _ MysqlRrWr = &testMysqlWriter{}
+
+// testMysqlWriter works for the background transaction that does not use the network protocol.
+type testMysqlWriter struct {
+	username string
+	database string
+	ioses    goetty.IOSession
+}
+
+func (fp *testMysqlWriter) GetStr(PropertyID) string {
+	return ""
+}
+func (fp *testMysqlWriter) SetStr(PropertyID, string) {}
+func (fp *testMysqlWriter) SetU32(PropertyID, uint32) {}
+func (fp *testMysqlWriter) GetU32(PropertyID) uint32 {
+	return 0
+}
+func (fp *testMysqlWriter) SetU8(PropertyID, uint8) {}
+func (fp *testMysqlWriter) GetU8(PropertyID) uint8 {
+	return 0
+}
+func (fp *testMysqlWriter) SetBool(PropertyID, bool) {}
+func (fp *testMysqlWriter) GetBool(PropertyID) bool {
+	return false
+}
+
+func (fp *testMysqlWriter) Write(ctx *ExecCtx, batch *batch.Batch) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteHandshake() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteEOF(warnings, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteEOFIF(warnings uint16, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteEOFOrOK(warnings uint16, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteERR(errorCode uint16, sqlState, errorMessage string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteLengthEncodedNumber(u uint64) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteColumnDef(ctx context.Context, column Column, i int) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteTextRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteBinaryRow() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WriteResponse(ctx context.Context, response *Response) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (fp *testMysqlWriter) Read(options goetty.ReadOptions) (interface{}, error) {
+	return fp.ioses.Read(options)
+}
+
+func (fp *testMysqlWriter) UpdateCtx(ctx context.Context) {
+
+}
+
+func (fp *testMysqlWriter) GetCapability() uint32 {
+	return DefaultCapability
+}
+
+func (fp *testMysqlWriter) SetCapability(uint32) {
+
+}
+
+func (fp *testMysqlWriter) IsTlsEstablished() bool {
+	return true
+}
+
+func (fp *testMysqlWriter) SetTlsEstablished() {
+
+}
+
+func (fp *testMysqlWriter) HandleHandshake(ctx context.Context, payload []byte) (bool, error) {
+	return false, nil
+}
+
+func (fp *testMysqlWriter) Authenticate(ctx context.Context) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) GetSequenceId() uint8 {
+	return 0
+}
+
+func (fp *testMysqlWriter) SetSequenceID(value uint8) {
+}
+
+func (fp *testMysqlWriter) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) ResetStatistics() {}
+
+func (fp *testMysqlWriter) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
+
+func (fp *testMysqlWriter) IsEstablished() bool {
+	return true
+}
+
+func (fp *testMysqlWriter) SetEstablished() {}
+
+func (fp *testMysqlWriter) ConnectionID() uint32 {
+	return fakeConnectionID
+}
+
+func (fp *testMysqlWriter) Peer() string {
+	return "0.0.0.0:0"
+}
+
+func (fp *testMysqlWriter) GetDatabaseName() string {
+	return fp.database
+}
+
+func (fp *testMysqlWriter) SetDatabaseName(s string) {
+	fp.database = s
+}
+
+func (fp *testMysqlWriter) GetUserName() string {
+	return fp.username
+}
+
+func (fp *testMysqlWriter) SetUserName(s string) {
+	fp.username = s
+}
+
+func (fp *testMysqlWriter) Close() {}
+
+func (fp *testMysqlWriter) WriteLocalInfileRequest(filename string) error {
+	return nil
+}
+
+func (fp *testMysqlWriter) Flush() error {
+	return nil
 }

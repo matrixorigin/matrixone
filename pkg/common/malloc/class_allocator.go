@@ -15,10 +15,10 @@
 package malloc
 
 import (
-	"fmt"
 	"math/bits"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/sys/unix"
 )
 
@@ -52,7 +52,7 @@ type Class struct {
 }
 
 func NewClassAllocator(
-	checkFraction uint32,
+	checkFraction *uint32,
 ) *ClassAllocator {
 	ret := &ClassAllocator{}
 
@@ -69,9 +69,9 @@ func NewClassAllocator(
 
 var _ Allocator = new(ClassAllocator)
 
-func (c *ClassAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator) {
+func (c *ClassAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator, error) {
 	if size == 0 {
-		panic("invalid size: 0")
+		return nil, nil, moerr.NewInternalErrorNoCtx("invalid allocate size: 0")
 	}
 	// class size factor is 2, so we can calculate the class index
 	var i int
@@ -83,14 +83,14 @@ func (c *ClassAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator) {
 		i = bits.Len64(size) - 1
 	}
 	if i >= len(c.classes) {
-		panic(fmt.Sprintf("cannot allocate %v bytes: too large", size))
+		return nil, nil, moerr.NewInternalErrorNoCtx("cannot allocate %v bytes: too large", size)
 	}
 	return c.classes[i].allocator.Allocate(size)
 }
 
 type fixedSizeMmapAllocator struct {
 	size          uint64
-	checkFraction uint32
+	checkFraction *uint32
 	// buffer1 buffers objects
 	buffer1 chan unsafe.Pointer
 	// buffer2 buffers MADV_DONTNEED objects
@@ -99,7 +99,7 @@ type fixedSizeMmapAllocator struct {
 
 func newFixedSizedAllocator(
 	size uint64,
-	checkFraction uint32,
+	checkFraction *uint32,
 ) *fixedSizeMmapAllocator {
 	// if size is larger than smallClassCap, num1 will be zero, buffer1 will be empty
 	num1 := smallClassCap / size
@@ -118,10 +118,10 @@ func newFixedSizedAllocator(
 
 var _ Allocator = new(fixedSizeMmapAllocator)
 
-func (f *fixedSizeMmapAllocator) Allocate(_ uint64) (ptr unsafe.Pointer, dec Deallocator) {
-	if f.checkFraction > 0 {
+func (f *fixedSizeMmapAllocator) Allocate(_ uint64) (ptr unsafe.Pointer, dec Deallocator, err error) {
+	if f.checkFraction != nil {
 		defer func() {
-			if fastrand()%f.checkFraction == 0 {
+			if fastrand()%*f.checkFraction == 0 {
 				dec = newCheckedDeallocator(dec)
 			}
 		}()
@@ -132,7 +132,7 @@ func (f *fixedSizeMmapAllocator) Allocate(_ uint64) (ptr unsafe.Pointer, dec Dea
 	case ptr := <-f.buffer1:
 		// from buffer1
 		clear(unsafe.Slice((*byte)(ptr), f.size))
-		return ptr, f
+		return ptr, f, nil
 
 	default:
 
@@ -141,7 +141,7 @@ func (f *fixedSizeMmapAllocator) Allocate(_ uint64) (ptr unsafe.Pointer, dec Dea
 		case ptr := <-f.buffer2:
 			// from buffer2
 			f.reuseMem(ptr)
-			return ptr, f
+			return ptr, f, nil
 
 		default:
 			// allocate new
@@ -152,11 +152,9 @@ func (f *fixedSizeMmapAllocator) Allocate(_ uint64) (ptr unsafe.Pointer, dec Dea
 				unix.MAP_PRIVATE|unix.MAP_ANONYMOUS,
 			)
 			if err != nil {
-				panic(fmt.Sprintf("error %v, size %v",
-					err, f.size,
-				))
+				return nil, nil, err
 			}
-			return unsafe.Pointer(unsafe.SliceData(data)), f
+			return unsafe.Pointer(unsafe.SliceData(data)), f, nil
 
 		}
 
@@ -167,8 +165,8 @@ var _ Deallocator = new(fixedSizeMmapAllocator)
 
 func (f *fixedSizeMmapAllocator) Deallocate(ptr unsafe.Pointer) {
 
-	if f.checkFraction > 0 &&
-		fastrand()%f.checkFraction == 0 {
+	if f.checkFraction != nil &&
+		fastrand()%*f.checkFraction == 0 {
 		// do not reuse to detect use-after-free
 		if err := unix.Munmap(
 			unsafe.Slice((*byte)(ptr), f.size),

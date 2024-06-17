@@ -1,4 +1,3 @@
-SET GLOBAL experimental_master_index = 1;
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 insert into t1 values("Congress","Lane", "1");
@@ -58,13 +57,13 @@ null    Lane    6
 update t1 set a="albin" ,b="john" where c="7";
 select * from t1 where a="albin";
 a    b    c
-albin    john    8
 albin    john    7
+albin    john    8
 update t1 set a=NULL ,b="john" where c="7";
 select * from t1 where b="john";
 a    b    c
-albin    john    8
 null    john    7
+albin    john    8
 delete from t1 where c="7";
 select * from t1 where a="john";
 a    b    c
@@ -297,4 +296,3 @@ Nightingale    Lane    3
 select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3" limit 1;
 a    b    c
 Congress    Lane    1
-SET GLOBAL experimental_master_index = 0;

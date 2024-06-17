@@ -42,12 +42,12 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 	var err error
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
-		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, s.Select, false)
+		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, s.Select, false, true)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false)
+		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false, true)
 		if err != nil {
 			return nil, err
 		}
@@ -104,12 +104,12 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	var err error
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
-		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, s.Select, false)
+		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, s.Select, false, true)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false)
+		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false, true)
 		if err != nil {
 			return nil, err
 		}
@@ -176,7 +176,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) {
 	var err error
 	var rootId int32
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 	bindCtx := NewBindContext(builder, nil)
 
 	getTblAndColName := func(relPos, colPos int32) (string, string) {
@@ -344,7 +344,8 @@ func buildSourceDefs(stmt *tree.CreateSource, ctx CompilerContext, createStream 
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
 	viewName := stmt.Name.ObjectName
-	createTable := &plan.CreateTable{
+
+	createView := &plan.CreateView{
 		Replace:     stmt.Replace,
 		IfNotExists: stmt.IfNotExists,
 		TableDef: &TableDef{
@@ -354,12 +355,12 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 
 	// get database name
 	if len(stmt.Name.SchemaName) == 0 {
-		createTable.Database = ""
+		createView.Database = ""
 	} else {
-		createTable.Database = string(stmt.Name.SchemaName)
+		createView.Database = string(stmt.Name.SchemaName)
 	}
-	if len(createTable.Database) == 0 {
-		createTable.Database = ctx.DefaultDatabase()
+	if len(createView.Database) == 0 {
+		createView.Database = ctx.DefaultDatabase()
 	}
 
 	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
@@ -367,7 +368,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		snapshot = ctx.GetSnapshot()
 	}
 
-	if sub, err := ctx.GetSubscriptionMeta(createTable.Database, *snapshot); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(createView.Database, *snapshot); err != nil {
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
@@ -378,16 +379,16 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		return nil, err
 	}
 
-	createTable.TableDef.Cols = tableDef.Cols
-	createTable.TableDef.ViewSql = tableDef.ViewSql
-	createTable.TableDef.Defs = tableDef.Defs
+	createView.TableDef.Cols = tableDef.Cols
+	createView.TableDef.ViewSql = tableDef.ViewSql
+	createView.TableDef.Defs = tableDef.Defs
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
-				DdlType: plan.DataDefinition_CREATE_TABLE,
-				Definition: &plan.DataDefinition_CreateTable{
-					CreateTable: createTable,
+				DdlType: plan.DataDefinition_CREATE_VIEW,
+				Definition: &plan.DataDefinition_CreateView{
+					CreateView: createView,
 				},
 			},
 		},
@@ -882,7 +883,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			}})
 	}
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 	bindContext := NewBindContext(builder, nil)
 
 	// set partition(unsupport now)
@@ -1008,6 +1009,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
+	dedupFkName := make(UnorderedSet[string])
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
@@ -1188,6 +1190,17 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if err != nil {
 				return err
 			}
+
+			if def.ConstraintSymbol != fkData.Def.Name {
+				return moerr.NewInternalError(ctx.GetContext(), "different fk name %s %s", def.ConstraintSymbol, fkData.Def.Name)
+			}
+
+			//dedup
+			if dedupFkName.Find(fkData.Def.Name) {
+				return moerr.NewInternalError(ctx.GetContext(), "duplicate fk name %s", fkData.Def.Name)
+			}
+			dedupFkName.Insert(fkData.Def.Name)
+
 			//only setups foreign key without forward reference
 			if !fkData.ForwardRefer {
 				createTable.FkDbs = append(createTable.FkDbs, fkData.ParentDbName)
@@ -3667,12 +3680,6 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 
 func getAutoIncrementOffsetFromVariables(ctx CompilerContext) (uint64, bool) {
 	v, err := ctx.ResolveVariable("auto_increment_offset", true, false)
-	if err == nil {
-		if offset, ok := v.(int64); ok && offset > 1 {
-			return uint64(offset - 1), true
-		}
-	}
-	v, err = ctx.ResolveVariable("auto_increment_offset", true, true)
 	if err == nil {
 		if offset, ok := v.(int64); ok && offset > 1 {
 			return uint64(offset - 1), true

@@ -398,8 +398,14 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	newConn, err := t.cc.BuildConnWithServer(t.mu.serverConn.RemoteAddr().String())
+	prevAddr := t.mu.serverConn.RemoteAddr().String()
+	t.logger.Info("build connection with new server", zap.String("prev addr", prevAddr))
+	newConn, err := t.cc.BuildConnWithServer(prevAddr)
 	if err != nil {
+		t.logger.Error("failed to build connection with new server",
+			zap.String("prev addr", prevAddr),
+			zap.Error(err),
+		)
 		return nil, err
 	}
 	return newMySQLConn(connServerName, newConn.RawConn(), 0, t.reqC, t.respC, newConn.ConnID()), nil

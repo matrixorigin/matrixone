@@ -31,6 +31,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/google/uuid"
+	"go.uber.org/automaxprocs/maxprocs"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -43,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/gossip"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -70,6 +72,10 @@ var (
 	maxProcessor = flag.Int("max-processor", 0, "set max processor for go runtime")
 	globalEtlFS  fileservice.FileService
 )
+
+func init() {
+	maxprocs.Set(maxprocs.Logger(func(string, ...interface{}) {}))
+}
 
 func main() {
 	if *maxProcessor > 0 {
@@ -484,7 +490,10 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	}
 	if !SV.DisableMetric || SV.EnableMetricToProm {
 		stopper.RunNamedTask("metric", func(ctx context.Context) {
-			if act := mometric.InitMetric(ctx, nil, &SV, UUID, nodeRole, mometric.WithWriterFactory(writerFactory)); !act {
+			if act := mometric.InitMetric(ctx, nil, &SV, UUID, nodeRole,
+				mometric.WithWriterFactory(writerFactory),
+				mometric.WithFrontendServerStarted(frontend.MoServerIsStarted),
+			); !act {
 				return
 			}
 			<-ctx.Done()

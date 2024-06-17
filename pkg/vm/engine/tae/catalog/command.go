@@ -244,18 +244,12 @@ func (cmd *EntryCommand[T, N]) SetReplayTxn(txn txnif.AsyncTxn) {
 }
 
 func (cmd *EntryCommand[T, N]) ApplyCommit() {
-	if cmd.mvccNode.Is1PC() {
-		return
-	}
 	if err := cmd.mvccNode.ApplyCommit(cmd.mvccNode.Txn.GetID()); err != nil {
 		panic(err)
 	}
 }
 
 func (cmd *EntryCommand[T, N]) ApplyRollback() {
-	if cmd.mvccNode.Is1PC() {
-		return
-	}
 	cmd.mvccNode.ApplyRollback()
 }
 

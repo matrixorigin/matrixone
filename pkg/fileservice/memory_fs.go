@@ -346,6 +346,12 @@ func (m *MemoryFS) deleteSingle(ctx context.Context, filePath string) error {
 	return nil
 }
 
+func (m *MemoryFS) Cost() *CostAttr {
+	return &CostAttr{
+		List: CostLow,
+	}
+}
+
 type _MemFSEntry struct {
 	FilePath string
 	Data     []byte

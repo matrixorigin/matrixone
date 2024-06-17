@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	stRuntime "runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -109,6 +110,7 @@ type service struct {
 	entryC     chan event
 	txnActionC chan event
 	statementC chan event
+	txnErrorC  chan string
 
 	loadC  chan loadAction
 	dir    string
@@ -152,14 +154,15 @@ func NewService(
 	}
 
 	s := &service{
-		stopper:  stopper.NewStopper("txn-trace"),
-		cn:       cn,
-		client:   client,
-		clock:    clock,
-		executor: executor,
-		dir:      dataDir,
-		logger:   runtime.ProcessLevelRuntime().Logger().Named("txn-trace"),
-		loadC:    make(chan loadAction, 4),
+		stopper:   stopper.NewStopper("txn-trace"),
+		cn:        cn,
+		client:    client,
+		clock:     clock,
+		executor:  executor,
+		dir:       dataDir,
+		logger:    runtime.ProcessLevelRuntime().Logger().Named("txn-trace"),
+		loadC:     make(chan loadAction, 4),
+		txnErrorC: make(chan string, stRuntime.NumCPU()*10),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -199,6 +202,9 @@ func NewService(
 		panic(err)
 	}
 	if err := s.stopper.RunTask(s.watch); err != nil {
+		panic(err)
+	}
+	if err := s.stopper.RunTask(s.handleTxnError); err != nil {
 		panic(err)
 	}
 	return s, nil

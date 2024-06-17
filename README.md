@@ -14,11 +14,11 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.cn/en/1.1.3/MatrixOne/Release-Notes/v1.1.3/">
-   <img src="https://img.shields.io/badge/Release-v1.1.3-green.svg" alt="release"/>
+  <a href="https://docs.matrixorigin.cn/en/1.2.0/MatrixOne/Release-Notes/v1.2.0/">
+   <img src="https://img.shields.io/badge/Release-v1.2.0-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.cn/en/1.1.3/">
+  <a href="https://docs.matrixorigin.cn/en/1.2.0/">
     <b>Docs</b>
   </a>
   <b>||</b>
@@ -165,14 +165,14 @@ MatrixOne's architecture is as below:
     <img alt="MatrixOne" height="420" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/architecture/archi-en-2.png?raw=true">
 </p>
 
-For more details, you can checkout [MatrixOne Architecture Design](https://docs.matrixorigin.cn/en/1.1.3/MatrixOne/Overview/architecture/matrixone-architecture-design/).
+For more details, you can checkout [MatrixOne Architecture Design](https://docs.matrixorigin.cn/en/1.2.0/MatrixOne/Overview/architecture/matrixone-architecture-design/).
 
 ## ⚡️ <a id="quick-start">Quick start</a>
 
 ### ⚙️ Install MatrixOne
 
 MatrixOne supports Linux and MacOS. You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
-For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.cn/en/1.1.3/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
+For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.cn/en/1.2.0/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
 
 **Step 1.Install Dependency**
 
@@ -216,7 +216,7 @@ The mo_ctl tool can be installed through the following command:
 wget https://raw.githubusercontent.com/matrixorigin/mo_ctl_standalone/main/install.sh && sudo -u $(whoami) bash +x ./install.sh
 ```
 
-See [mo_ctl Tool](https://docs.matrixorigin.cn/en/1.1.3/MatrixOne/Maintain/mo_ctl/) for complete usage details.
+See [mo_ctl Tool](https://docs.matrixorigin.cn/en/1.2.0/MatrixOne/Maintain/mo_ctl/) for complete usage details.
 
 **Step 3. Set mo_ctl parameters**
 
@@ -248,10 +248,10 @@ mo_ctl deploy main
 
 - *Option 2*: Get the MatrixOne(Stable Version)
 
-If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **1.1.3** first.
+If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **1.2.0** first.
 
 ```
-mo_ctl deploy v1.1.3
+mo_ctl deploy v1.2.0
 ```
 
 **Step 5. Launch MatrixOne server**
@@ -264,12 +264,12 @@ __Tips__: The initial startup of MatrixOne approximately takes 20 to 30 seconds.
 
 One-click connection to MatrixOne service through `mo_ctl connect` command.
 
-__Note__: The login account in the above code snippet is the initial account; please change the initial password after logging in to MatrixOne; see [Password Management](https://docs.matrixorigin.cn/en/1.1.3/MatrixOne/Security/password-mgmt/).
+__Note__: The login account in the above code snippet is the initial account; please change the initial password after logging in to MatrixOne; see [Password Management](https://docs.matrixorigin.cn/en/1.2.0/MatrixOne/Security/password-mgmt/).
 
 ## 🙌 <a id="contributing">Contributing</a>
 
 Contributions to MatrixOne are welcome from everyone.  
- See [Contribution Guide](https://docs.matrixorigin.cn/en/1.1.3/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
+ See [Contribution Guide](https://docs.matrixorigin.cn/en/1.2.0/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
 
 ### 👏 All contributors
 

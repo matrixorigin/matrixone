@@ -127,19 +127,11 @@ func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, fina
 	addSqlIntoSet(initMoUserGrant4)
 	addSqlIntoSet(initMoUserGrant5)
 
-	//setp6: add new entries to the mo_mysql_compatibility_mode
+	//step6: add new entries to the mo_mysql_compatibility_mode
 	pu := config.GetParameterUnit(ctx)
-	for _, variable := range gSysVarsDefs {
-		if _, ok := configInitVariables[variable.Name]; ok {
-			addsql := addInitSystemVariablesSql(sysAccountID, sysAccountName, variable.Name, pu)
-			if len(addsql) != 0 {
-				addSqlIntoSet(addsql)
-			}
-		} else {
-			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
-			addSqlIntoSet(initMoMysqlCompatibilityMode)
-		}
-	}
+	addSqlIntoSet(addInitSystemVariablesSql(sysAccountID, sysAccountName, SaveQueryResult, pu))
+	addSqlIntoSet(addInitSystemVariablesSql(sysAccountID, sysAccountName, QueryResultMaxsize, pu))
+	addSqlIntoSet(addInitSystemVariablesSql(sysAccountID, sysAccountName, QueryResultTimeout, pu))
 
 	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant, mo_mysql_compatibility_mode
 	for _, sql := range initDataSqls {

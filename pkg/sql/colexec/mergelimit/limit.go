@@ -44,11 +44,11 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 			return err
 		}
 	}
-	vec, err := arg.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	vec, err := arg.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
-	arg.ctr.limit = uint64(vector.MustFixedCol[int64](vec)[0])
+	arg.ctr.limit = uint64(vector.MustFixedCol[uint64](vec)[0])
 	return nil
 }
 

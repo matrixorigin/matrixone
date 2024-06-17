@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go/constant"
 	"strconv"
 	"strings"
@@ -40,7 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
-func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool) *QueryBuilder {
+func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
 	var mysqlCompatible bool
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
@@ -64,6 +65,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		tag2Table:          make(map[int32]*TableDef),
 		isPrepareStatement: isPrepareStatement,
 		deleteNode:         make(map[uint64]int32),
+		skipStats:          skipStats,
 	}
 }
 
@@ -1433,6 +1435,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.rewriteDistinctToAGG(rootID)
 		builder.rewriteEffectlessAggToProject(rootID)
 		rootID, _ = builder.pushdownFilters(rootID, nil, false)
+		builder.mergeFiltersOnCompositeKey(rootID)
 		err := foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 		if err != nil {
 			return nil, err
@@ -1480,13 +1483,15 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.partitionPrune(rootID)
 
 		builder.optimizeLikeExpr(rootID)
-		builder.mergeFiltersOnCompositeKey(rootID)
 		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
 		determineHashOnPK(rootID, builder)
 		determineShuffleMethod(rootID, builder)
 		determineShuffleMethod2(rootID, -1, builder)
+		if builder.optimizerHints != nil && builder.optimizerHints.printShuffle == 1 && HasShuffleInPlan(builder.qry) {
+			logutil.Infof("has shuffle node in plan! sql: %v", builder.compCtx.GetRootSql())
+		}
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
 
@@ -1535,7 +1540,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//for i := 1; i < len(builder.qry.Steps); i++ {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
-
+	builder.hintQueryType()
 	return builder.qry, nil
 }
 
@@ -1841,8 +1846,8 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			}
 
 			if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-				if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-					ctx.hasSingleRow = c.I64Val == 1
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+					ctx.hasSingleRow = c.U64Val == 1
 				}
 			}
 		}
@@ -2555,14 +2560,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			if err != nil {
 				return 0, err
 			}
-
-			if cExpr, ok := offsetExpr.Expr.(*plan.Expr_Lit); ok {
-				if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-					if c.I64Val < 0 {
-						return 0, moerr.NewSyntaxError(builder.GetContext(), "offset value must be nonnegative")
-					}
-				}
-			}
 		}
 		if astLimit.Count != nil {
 			limitExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true)
@@ -2571,11 +2568,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 
 			if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-				if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-					if c.I64Val < 0 {
-						return 0, moerr.NewSyntaxError(builder.GetContext(), "limit value must be nonnegative")
-					}
-					ctx.hasSingleRow = c.I64Val == 1
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+					ctx.hasSingleRow = c.U64Val == 1
 				}
 			}
 		}
@@ -2988,7 +2982,7 @@ func appendSelectList(
 				if selectExpr.As != nil && !selectExpr.As.Empty() {
 					ctx.headings = append(ctx.headings, selectExpr.As.Origin())
 				} else if expr.CStrParts[0] != nil {
-					ctx.headings = append(ctx.headings, expr.CStrParts[0].Compare())
+					ctx.headings = append(ctx.headings, expr.CStrParts[0].Origin())
 				} else {
 					ctx.headings = append(ctx.headings, expr.Parts[0])
 				}
@@ -3417,14 +3411,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 							if err != nil {
 								return 0, err
 							}
-
-							if cExpr, ok := offsetExpr.Expr.(*plan.Expr_Lit); ok {
-								if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-									if c.I64Val < 0 {
-										return 0, moerr.NewSyntaxError(builder.GetContext(), "offset value must be nonnegative")
-									}
-								}
-							}
 						}
 						if s.Limit.Count != nil {
 							limitExpr, err = limitBinder.BindExpr(s.Limit.Count, 0, true)
@@ -3433,11 +3419,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 							}
 
 							if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-								if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
-									if c.I64Val < 0 {
-										return 0, moerr.NewSyntaxError(builder.GetContext(), "limit value must be nonnegative")
-									}
-									ctx.hasSingleRow = c.I64Val == 1
+								if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+									ctx.hasSingleRow = c.U64Val == 1
 								}
 							}
 						}
@@ -3543,7 +3526,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					return 0, err
 				}
 
-				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1, 0)
+				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1)
 				defer func() {
 					for _, s := range originStmts {
 						s.Free()

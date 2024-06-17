@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -362,13 +363,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					return moerr.NewErrCantDropFieldOrKey(c.ctx, constraintName)
 				}
 				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
-				for i, fk := range tableDef.Fkeys {
+				tableDef.Fkeys = plan2.RemoveIf[*plan.ForeignKeyDef](tableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
 					if fk.Name == constraintName {
 						removeRefChildTbls[constraintName] = fk.ForeignTbl
-						tableDef.Fkeys = append(tableDef.Fkeys[:i], tableDef.Fkeys[i+1:]...)
-						break
+						return true
 					}
-				}
+					return false
+				})
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
 				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 				var notDroppedIndex []*plan.IndexDef
@@ -841,24 +842,13 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			return nil
 		}
-		if qry.GetReplace() {
-			err := c.runSql(fmt.Sprintf("drop view if exists %s", tblName))
-			if err != nil {
-				c.proc.Info(c.ctx, "createTable",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.Error(err),
-				)
-				return err
-			}
-		} else {
-			c.proc.Info(c.ctx, "createTable",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
-			return moerr.NewTableAlreadyExists(c.ctx, tblName)
-		}
+
+		c.proc.Info(c.ctx, "createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return moerr.NewTableAlreadyExists(c.ctx, tblName)
 	}
 
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
@@ -974,12 +964,17 @@ func (s *Scope) CreateTable(c *Compile) error {
 		for _, col := range planCols {
 			colId2Name[col.ColId] = col.Name
 		}
+		dedupFkName := make(plan2.UnorderedSet[string])
 		//1. update fk info in child table.
 		//column ids of column names in child table have changed after
 		//the table is created by engine.Database.Create.
 		//refresh column ids of column names in child table.
 		newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
 		for i, fkey := range qry.GetTableDef().Fkeys {
+			if dedupFkName.Find(fkey.Name) {
+				return moerr.NewInternalError(c.ctx, "deduplicate fk name %s", fkey.Name)
+			}
+			dedupFkName.Insert(fkey.Name)
 			newDef := &plan.ForeignKeyDef{
 				Name:        fkey.Name,
 				Cols:        make([]uint64, len(fkey.Cols)),
@@ -1290,12 +1285,118 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	}
 
-	return maybeCreateAutoIncrement(
+	err = maybeCreateAutoIncrement(
 		c.ctx,
 		dbSource,
 		qry.GetTableDef(),
 		c.proc.TxnOperator,
-		nil)
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+
+	if len(partitionTables) == 0 {
+		return nil
+	}
+
+	return shardservice.GetService().Create(
+		c.ctx,
+		qry.GetTableDef().TblId,
+		c.proc.TxnOperator,
+	)
+}
+
+func (s *Scope) CreateView(c *Compile) error {
+	qry := s.Plan.GetDdl().GetCreateView()
+
+	// convert the plan's cols to the execution's cols
+	planCols := qry.GetTableDef().GetCols()
+	exeCols := planColsToExeCols(planCols)
+
+	// convert the plan's defs to the execution's defs
+	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	if err != nil {
+		getLogger().Info("createView",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		if dbName == "" {
+			return moerr.NewNoDB(c.ctx)
+		}
+		return err
+	}
+
+	viewName := qry.GetTableDef().GetName()
+	if _, err = dbSource.Relation(c.ctx, viewName, nil); err == nil {
+		if qry.GetIfNotExists() {
+			return nil
+		}
+
+		if qry.GetReplace() {
+			err = c.runSql(fmt.Sprintf("drop view if exists %s", viewName))
+			if err != nil {
+				getLogger().Info("createView",
+					zap.String("databaseName", c.db),
+					zap.String("viewName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
+				return err
+			}
+		} else {
+			getLogger().Info("createView",
+				zap.String("databaseName", c.db),
+				zap.String("viewName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return moerr.NewTableAlreadyExists(c.ctx, viewName)
+		}
+	}
+
+	// check in EntireEngine.TempEngine, notice that TempEngine may not init
+	tmpDBSource, err := c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+	if err == nil {
+		if _, err = tmpDBSource.Relation(c.ctx, engine.GetTempTableName(dbName, viewName), nil); err == nil {
+			if qry.GetIfNotExists() {
+				return nil
+			}
+			getLogger().Info("createView",
+				zap.String("databaseName", c.db),
+				zap.String("viewName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", viewName))
+		}
+	}
+
+	if err = lockMoTable(c, dbName, viewName, lock.LockMode_Exclusive); err != nil {
+		getLogger().Info("createView",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	if err = dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), viewName, append(exeCols, exeDefs...)); err != nil {
+		getLogger().Info("createView",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+	return nil
 }
 
 func checkIndexInitializable(dbName string, tblName string) bool {
@@ -1616,26 +1717,21 @@ func (s *Scope) DropIndex(c *Compile) error {
 
 func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engine.ConstraintDef, error) {
 	// must fount dropName because of being checked in plan
-	for i, ct := range oldCt.Cts {
+	for i := 0; i < len(oldCt.Cts); i++ {
+		ct := oldCt.Cts[i]
 		switch def := ct.(type) {
 		case *engine.ForeignKeyDef:
-			for idx, fkDef := range def.Fkeys {
-				if fkDef.Name == dropName {
-					def.Fkeys = append(def.Fkeys[:idx], def.Fkeys[idx+1:]...)
-					oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-					oldCt.Cts = append(oldCt.Cts, def)
-					break
-				}
+			pred := func(fkDef *plan.ForeignKeyDef) bool {
+				return fkDef.Name == dropName
 			}
+			def.Fkeys = plan2.RemoveIf[*plan.ForeignKeyDef](def.Fkeys, pred)
+			oldCt.Cts[i] = def
 		case *engine.IndexDef:
-			for idx, index := range def.Indexes {
-				if index.IndexName == dropName {
-					def.Indexes = append(def.Indexes[:idx], def.Indexes[idx+1:]...)
-					oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-					oldCt.Cts = append(oldCt.Cts, def)
-					break
-				}
+			pred := func(index *plan.IndexDef) bool {
+				return index.IndexName == dropName
 			}
+			def.Indexes = plan2.RemoveIf[*plan.IndexDef](def.Indexes, pred)
+			oldCt.Cts[i] = def
 		}
 	}
 	return oldCt, nil
@@ -1648,33 +1744,23 @@ func MakeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 			Cts: []engine.Constraint{c},
 		}, nil
 	}
+	ok := false
+	var pred func(engine.Constraint) bool
 	switch t := c.(type) {
 	case *engine.ForeignKeyDef:
-		ok := false
-		for i, ct := range oldCt.Cts {
-			if _, ok = ct.(*engine.ForeignKeyDef); ok {
-				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-				oldCt.Cts = append(oldCt.Cts, t)
-				break
-			}
+		pred = func(ct engine.Constraint) bool {
+			_, ok = ct.(*engine.ForeignKeyDef)
+			return ok
 		}
-		if !ok {
-			oldCt.Cts = append(oldCt.Cts, c)
-		}
-
+		oldCt.Cts = plan2.RemoveIf[engine.Constraint](oldCt.Cts, pred)
+		oldCt.Cts = append(oldCt.Cts, c)
 	case *engine.RefChildTableDef:
-		ok := false
-		for i, ct := range oldCt.Cts {
-			if _, ok = ct.(*engine.RefChildTableDef); ok {
-				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-				oldCt.Cts = append(oldCt.Cts, t)
-				break
-			}
+		pred = func(ct engine.Constraint) bool {
+			_, ok = ct.(*engine.RefChildTableDef)
+			return ok
 		}
-		if !ok {
-			oldCt.Cts = append(oldCt.Cts, c)
-		}
-
+		oldCt.Cts = plan2.RemoveIf[engine.Constraint](oldCt.Cts, pred)
+		oldCt.Cts = append(oldCt.Cts, c)
 	case *engine.IndexDef:
 		ok := false
 		var indexdef *engine.IndexDef
@@ -1748,12 +1834,9 @@ func (s *Scope) removeChildTblIdFromParentTable(c *Compile, fkRelation engine.Re
 	}
 	for _, ct := range oldCt.Cts {
 		if def, ok := ct.(*engine.RefChildTableDef); ok {
-			for idx, refTable := range def.Tables {
-				if refTable == tblId {
-					def.Tables = append(def.Tables[:idx], def.Tables[idx+1:]...)
-					break
-				}
-			}
+			def.Tables = plan2.RemoveIf[uint64](def.Tables, func(id uint64) bool {
+				return id == tblId
+			})
 			break
 		}
 	}
@@ -1942,14 +2025,26 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if isTemp {
 		oldId = rel.GetTableID(c.ctx)
 	}
-	err = incrservice.GetAutoIncrementService(c.ctx).Reset(
-		c.ctx,
-		oldId,
-		newId,
-		keepAutoIncrement,
-		c.proc.TxnOperator)
-	if err != nil {
-		return err
+
+	// check if contains any auto_increment column(include __mo_fake_pk_col), if so, reset the auto_increment value
+	tblDef := rel.GetTableDef(c.ctx)
+	var containAuto bool
+	for _, col := range tblDef.Cols {
+		if col.Typ.AutoIncr {
+			containAuto = true
+			break
+		}
+	}
+	if containAuto {
+		err = incrservice.GetAutoIncrementService(c.ctx).Reset(
+			c.ctx,
+			oldId,
+			newId,
+			keepAutoIncrement,
+			c.proc.TxnOperator)
+		if err != nil {
+			return err
+		}
 	}
 
 	// update index information in mo_catalog.mo_indexes
@@ -2141,11 +2236,29 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
+			tblDef := rel.GetTableDef(c.ctx)
+			var containAuto bool
+			for _, col := range tblDef.Cols {
+				if col.Typ.AutoIncr {
+					containAuto = true
+					break
+				}
+			}
+			if containAuto {
+				err := incrservice.GetAutoIncrementService(c.ctx).Delete(
+					c.ctx,
+					rel.GetTableID(c.ctx),
+					c.proc.TxnOperator)
+				if err != nil {
+					return err
+				}
+			}
+
+			if err := shardservice.GetService().Delete(
 				c.ctx,
 				rel.GetTableID(c.ctx),
-				c.proc.TxnOperator)
-			if err != nil {
+				c.proc.TxnOperator,
+			); err != nil {
 				return err
 			}
 		}
@@ -2168,12 +2281,30 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
+			tblDef := rel.GetTableDef(c.ctx)
+			var containAuto bool
+			for _, col := range tblDef.Cols {
+				if col.Typ.AutoIncr {
+					containAuto = true
+					break
+				}
+			}
+			if containAuto {
+				// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
+				err := incrservice.GetAutoIncrementService(c.ctx).Delete(
+					c.ctx,
+					rel.GetTableID(c.ctx),
+					c.proc.TxnOperator)
+				if err != nil {
+					return err
+				}
+			}
+
+			if err := shardservice.GetService().Delete(
 				c.ctx,
 				rel.GetTableID(c.ctx),
-				c.proc.TxnOperator)
-			if err != nil {
+				c.proc.TxnOperator,
+			); err != nil {
 				return err
 			}
 		}

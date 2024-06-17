@@ -19,12 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func builtInInternalGetAdminName(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInInternalGetAdminName(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
@@ -52,12 +51,12 @@ func builtInInternalGetAdminName(parameters []*vector.Vector, result vector.Func
 		}
 		defer res.Close()
 
-		var adminNme string
+		var adminNme []byte
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-			adminNme = cols[0].UnsafeGetStringAt(0)
+			adminNme = cols[0].GetBytesAt(0)
 			return true
 		})
-		if err = rs.AppendBytes(functionUtil.QuickStrToBytes(adminNme), false); err != nil {
+		if err = rs.AppendBytes(adminNme, false); err != nil {
 			return err
 		}
 	}
