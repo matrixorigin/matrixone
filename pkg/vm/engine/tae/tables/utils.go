@@ -187,9 +187,6 @@ func LoadPersistedDeletesBySchema(
 			bat.AddVector(colNames[i], containers.ToTNVector(movbat.Vecs[i], mp))
 		}
 	}
-	if recorder != nil {
-		recorder.LoadAfter = time.Since(inst)
-	}
 	return
 }
 
