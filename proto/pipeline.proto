@@ -442,6 +442,7 @@ message Source {
   plan.TableDef tableDef = 8;
   timestamp.Timestamp timestamp = 9;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 10;
+  bool is_const = 11;
 }
 
 message NodeInfo {
