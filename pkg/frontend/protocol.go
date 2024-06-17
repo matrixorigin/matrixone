@@ -17,8 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
-
 	"github.com/fagongzi/goetty/v2"
 	"go.uber.org/zap"
 
@@ -135,12 +133,6 @@ func (resp *Response) SetCategory(category int) {
 
 func (mp *MysqlProtocolImpl) UpdateCtx(ctx context.Context) {
 	mp.ctx = ctx
-}
-
-func (mp *MysqlProtocolImpl) incDebugCount(i int) {
-	if i >= 0 && i < len(mp.debugCount) {
-		atomic.AddUint64(&mp.debugCount[i], 1)
-	}
 }
 
 func (mp *MysqlProtocolImpl) setQuit(b bool) bool {

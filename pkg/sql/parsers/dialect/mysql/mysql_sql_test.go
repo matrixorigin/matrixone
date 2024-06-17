@@ -44,7 +44,7 @@ func TestDebug(t *testing.T) {
 	if debugSQL.output == "" {
 		debugSQL.output = debugSQL.input
 	}
-	ast, err := ParseOne(context.TODO(), debugSQL.input, 1, 0)
+	ast, err := ParseOne(context.TODO(), debugSQL.input, 1)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", debugSQL.input, err)
 		return
@@ -70,7 +70,7 @@ func TestOriginSQL(t *testing.T) {
 	if orginSQL.output == "" {
 		orginSQL.output = orginSQL.input
 	}
-	ast, err := ParseOne(context.TODO(), orginSQL.input, 0, 1)
+	ast, err := ParseOne(context.TODO(), orginSQL.input, 0)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", orginSQL.input, err)
 		return
@@ -2893,7 +2893,7 @@ func TestValid(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		ast, err := ParseOne(ctx, tcase.input, 1, 0)
+		ast, err := ParseOne(ctx, tcase.input, 1)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -2933,7 +2933,7 @@ func TestSQLStringFmt(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		ast, err := ParseOne(ctx, tcase.input, 1, 0)
+		ast, err := ParseOne(ctx, tcase.input, 1)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -3038,7 +3038,7 @@ func TestMulti(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		asts, err := Parse(ctx, tcase.input, 1, 0)
+		asts, err := Parse(ctx, tcase.input, 1)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -3098,7 +3098,7 @@ var (
 func TestFaultTolerance(t *testing.T) {
 	ctx := context.TODO()
 	for _, tcase := range invalidSQL {
-		_, err := ParseOne(ctx, tcase.input, 1, 0)
+		_, err := ParseOne(ctx, tcase.input, 1)
 		if err == nil {
 			t.Errorf("Fault tolerant ases (%q) should parse errors", tcase.input)
 			continue

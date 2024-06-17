@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go/constant"
 	"strconv"
 	"strings"
@@ -1488,6 +1489,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		determineHashOnPK(rootID, builder)
 		determineShuffleMethod(rootID, builder)
 		determineShuffleMethod2(rootID, -1, builder)
+		if builder.optimizerHints != nil && builder.optimizerHints.printShuffle == 1 && HasShuffleInPlan(builder.qry) {
+			logutil.Infof("has shuffle node in plan! sql: %v", builder.compCtx.GetRootSql())
+		}
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
 
@@ -3522,7 +3526,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					return 0, err
 				}
 
-				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1, 0)
+				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1)
 				defer func() {
 					for _, s := range originStmts {
 						s.Free()
@@ -4141,7 +4145,12 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
 				return
 			}
-
+			snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: lit.I64Val}, Tenant: tenant}
+		} else if tsExpr.Type == tree.ATMOTIMESTAMP {
+			if lit.I64Val <= 0 {
+				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
+				return
+			}
 			snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: lit.I64Val}, Tenant: tenant}
 		} else {
 			err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint for snapshot hint", lit.I64Val)

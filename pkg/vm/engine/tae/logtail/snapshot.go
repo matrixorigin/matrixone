@@ -308,7 +308,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				}
 				checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 				bat, err := blockio.BlockRead(ctx, &blk, nil, idxes, colTypes, checkpointTS.ToTimestamp(),
-					nil, nil, blockio.ReadFilter{}, fs, mp, nil, fileservice.Policy(0))
+					nil, nil, blockio.BlockReadFilter{}, fs, mp, nil, fileservice.Policy(0))
 				if err != nil {
 					return nil, err
 				}

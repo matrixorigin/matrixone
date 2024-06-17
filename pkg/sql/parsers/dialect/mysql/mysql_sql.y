@@ -623,7 +623,7 @@ import (
 %type <str> non_reserved_keyword
 %type <str> equal_opt column_keyword_opt
 %type <str> as_opt_id name_string
-%type <cstr> ident as_name_opt
+%type <cstr> ident as_name_opt db_name_cstr
 %type <str> table_alias explain_sym prepare_sym deallocate_sym stmt_name reset_sym
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
@@ -1393,13 +1393,13 @@ normal_ident:
     }
 |   ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), $3.Compare())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetTblName("", $1.Origin()), $3.Compare())
         unResolve.SetUnresolvedNameCStrParts($1, $3)
         $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), yylex.(*Lexer).GetDbOrTblName($3.Origin()), $5.Compare())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbName($1.Origin()), yylex.(*Lexer).GetTblName($1.Origin(), $3.Origin()), $5.Compare())
         unResolve.SetUnresolvedNameCStrParts($1, $3, $5)
         $$ = unResolve
     }
@@ -2533,7 +2533,7 @@ begin_stmt:
     }
 
 use_stmt:
-    USE ident
+    USE db_name_cstr
     {
         name := $2
         secondaryRole := false
@@ -4132,7 +4132,7 @@ table_name_unresolved:
 db_name:
     ident
     {
-		$$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
+		$$ = yylex.(*Lexer).GetDbName($1.Origin())
     }
 
 unresolved_object_name:
@@ -5364,16 +5364,15 @@ select_expression:
     }
 |   expression as_name_opt
     {
-    	$2.SetConfig(0)
         $$ = tree.SelectExpr{Expr: $1, As: $2}
     }
 |   ident '.' '*' %prec '*'
     {
-        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yylex.(*Lexer).GetDbOrTblName($1.Origin()))}
+        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yylex.(*Lexer).GetTblName("", $1.Origin()))}
     }
 |   ident '.' ident '.' '*' %prec '*'
     {
-        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yylex.(*Lexer).GetDbOrTblName($1.Origin()), yylex.(*Lexer).GetDbOrTblName($3.Origin()))}
+        $$ = tree.SelectExpr{Expr: tree.SetUnresolvedNameWithStar(yylex.(*Lexer).GetDbName($1.Origin()), yylex.(*Lexer).GetTblName($1.Origin(), $3.Origin()))}
     }
 
 from_opt:
@@ -5739,11 +5738,11 @@ as_opt_id:
 table_alias:
     ident
     {
-	    $$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
+	    $$ = yylex.(*Lexer).GetTblName("", $1.Origin())
     }
 |   STRING
     {
-	    $$ = yylex.(*Lexer).GetDbOrTblName($1)
+	    $$ = yylex.(*Lexer).GetTblName("", $1)
     }
 
 as_name_opt:
@@ -6974,10 +6973,10 @@ using_opt:
     }
 
 create_database_stmt:
-    CREATE database_or_schema not_exists_opt ident subscription_opt create_option_list_opt
+    CREATE database_or_schema not_exists_opt db_name subscription_opt create_option_list_opt
     {
         var IfNotExists = $3
-        var Name = tree.Identifier($4.Compare())
+        var Name = tree.Identifier($4)
         var SubscriptionOption = $5
         var CreateOptions = $6
         $$ = tree.NewCreateDatabase(
@@ -8195,12 +8194,12 @@ table_name:
     ident table_snapshot_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetDbOrTblName($1.Origin())), prefix, $2)
+        $$ = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetTblName("", $1.Origin())), prefix, $2)
     }
 |   ident '.' ident table_snapshot_opt
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yylex.(*Lexer).GetDbOrTblName($1.Origin())), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetDbOrTblName($3.Origin())), prefix, $4)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yylex.(*Lexer).GetDbName($1.Origin())), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetTblName($1.Origin(), $3.Origin())), prefix, $4)
     }
 
 table_snapshot_opt:
@@ -8561,13 +8560,13 @@ column_name_unresolved:
     }
 |   ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), $3.Compare())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetTblName("", $1.Origin()), $3.Compare())
         unResolve.SetUnresolvedNameCStrParts($1, $3)
         $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), yylex.(*Lexer).GetDbOrTblName($3.Origin()), $5.Compare())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbName($1.Origin()), yylex.(*Lexer).GetTblName($1.Origin(), $3.Origin()), $5.Compare())
         unResolve.SetUnresolvedNameCStrParts($1, $3, $5)
         $$ = unResolve
     }
@@ -8590,6 +8589,12 @@ ident:
     	$$ = tree.NewCStr($1, 1)
     }
 
+db_name_cstr:
+    ident
+    {
+    	$$ = yylex.(*Lexer).GetDbNameCStr($1.Origin())
+    }
+
 column_name:
     ident
     {
@@ -8599,13 +8604,13 @@ column_name:
     }
 |   ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), $3.Compare())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetTblName("", $1.Origin()), $3.Compare())
         unResolve.SetUnresolvedNameCStrParts($1, $3)
         $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbOrTblName($1.Origin()), yylex.(*Lexer).GetDbOrTblName($3.Origin()), $5.Compare())
+        unResolve := tree.SetUnresolvedName(yylex.(*Lexer).GetDbName($1.Origin()), yylex.(*Lexer).GetTblName($1.Origin(), $3.Origin()), $5.Compare())
         unResolve.SetUnresolvedNameCStrParts($1, $3, $5)
         $$ = unResolve
     }

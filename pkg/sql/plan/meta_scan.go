@@ -106,6 +106,20 @@ var (
 				NotNullable: false,
 			},
 		},
+		{
+			Name: catalog.MetaColNames[catalog.SAVED_ROW_COUNT_IDX],
+			Typ: plan.Type{
+				Id:          int32(catalog.MetaColTypes[catalog.SAVED_ROW_COUNT_IDX].Oid),
+				NotNullable: false,
+			},
+		},
+		{
+			Name: catalog.MetaColNames[catalog.QUERY_ROW_COUNT_IDX],
+			Typ: plan.Type{
+				Id:          int32(catalog.MetaColTypes[catalog.QUERY_ROW_COUNT_IDX].Oid),
+				NotNullable: false,
+			},
+		},
 	}
 )
 

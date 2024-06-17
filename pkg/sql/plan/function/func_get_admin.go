@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func builtInInternalGetAdminName(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInInternalGetAdminName(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -26,8 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func Parse(ctx context.Context, sql string, lower int64, useOrigin int64) ([]tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql, lower, useOrigin)
+func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
+	lexer := NewLexer(dialect.MYSQL, sql, lower)
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
@@ -50,8 +51,8 @@ func Parse(ctx context.Context, sql string, lower int64, useOrigin int64) ([]tre
 	return lexer.stmts, nil
 }
 
-func ParseOne(ctx context.Context, sql string, lower int64, useOrigin int64) (tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql, lower, useOrigin)
+func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, error) {
+	lexer := NewLexer(dialect.MYSQL, sql, lower)
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
@@ -70,15 +71,13 @@ type Lexer struct {
 	stmts      []tree.Statement
 	paramIndex int
 	lower      int64
-	useOrigin  int64
 }
 
-func NewLexer(dialectType dialect.DialectType, sql string, lower int64, useOrigin int64) *Lexer {
+func NewLexer(dialectType dialect.DialectType, sql string, lower int64) *Lexer {
 	return &Lexer{
 		scanner:    NewScanner(dialectType, sql),
 		paramIndex: 0,
 		lower:      lower,
-		useOrigin:  useOrigin,
 	}
 }
 
@@ -102,12 +101,53 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	return typ
 }
 
-func (l *Lexer) GetDbOrTblName(origin string) string {
-	if l.lower == 1 {
-		return strings.ToLower(origin)
+var CaseInsensitiveDbs = []string{"information_schema", "mysql"}
+
+func (l *Lexer) GetDbName(origin string) string {
+	lower := strings.ToLower(origin)
+
+	if slices.Contains(CaseInsensitiveDbs, lower) {
+		return lower
 	}
+
+	if l.lower == 1 {
+		return lower
+	}
+
 	return origin
 }
+
+func (l *Lexer) GetTblName(dbName, tblName string) string {
+	lowerDbName := strings.ToLower(dbName)
+	lowerTblName := strings.ToLower(tblName)
+
+	if slices.Contains(CaseInsensitiveDbs, lowerDbName) {
+		return lowerTblName
+	}
+
+	if l.lower == 1 {
+		return lowerTblName
+	}
+	return tblName
+}
+
+func (l *Lexer) GetDbNameCStr(origin string) *tree.CStr {
+	lower := strings.ToLower(origin)
+
+	if slices.Contains(CaseInsensitiveDbs, lower) {
+		return tree.NewCStr(origin, 1)
+	}
+
+	return tree.NewCStr(origin, l.lower)
+}
+
+//func (l *Lexer) GetTblNameCStr(dbName, tblName string) *tree.CStr {
+//	if slices.Contains(CaseInsensitiveDbs, strings.ToLower(dbName)) {
+//		return tree.NewCStr(tblName, 1)
+//	}
+//
+//	return tree.NewCStr(tblName, l.lower)
+//}
 
 func (l *Lexer) Error(err string) {
 	errMsg := fmt.Sprintf("You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. %s", err)

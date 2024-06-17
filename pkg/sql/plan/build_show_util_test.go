@@ -163,7 +163,7 @@ func Test_SingleShowCreateTable(t *testing.T) {
 }
 
 func buildTestCreateTableStmt(opt Optimizer, sql string) (*TableDef, error) {
-	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
+	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		return nil, err
 	}

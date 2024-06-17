@@ -13,9 +13,7 @@ select hex(3215133.214321432);
 -- Character type
 select hex('abc');
 select hex('qqqqq');
--- @bvt:issue#16710
 select hex('abcdefghijklmnopqrstuvwxyz');
--- @bvt:issue
 select hex('edwrgewgrewrwe');
 
 -- Character type （Numeric string）
@@ -36,27 +34,21 @@ select hex('');
 
 -- Numeric string (Special character)
 select hex('!@#');
--- @bvt:issue#16710
 select hex('@##%%&^^&#$#%^&^*(()#^&**(*(');
 select hex('}}}{:"{:""');
--- @bvt:issue
 select hex('%');
 
 -- Special character (Blank space)
 select hex(' ');
 
 -- Chinese
--- @bvt:issue#16710
 select hex('你好');
 select hex('数据库');
 select hex('数据库云平台');
 select hex('欢迎来到 MatrixOne！');
--- @bvt:issue
 
 -- Character type (emoji)
--- @bvt:issue#16710
 select hex('😀');
--- @bvt:issue
 
 -- null
 select hex(CAST(NULL AS UNSIGNED));
@@ -83,12 +75,10 @@ select hex('a1b2c3d4');
 select hex('12345678');
 select hex('AABBCCDD');
 select hex('ZZZ999');
--- @bvt:issue#16710
 select hex('0123456789abcdef');
 select hex('!"#$%&/()=?`~''_+-*^');
 select hex(' 2543g4365435    423532543254&&*32grde5y43');
 select hex('');
--- @bvt:issue
 
 -- unhex
 select unhex('7B');

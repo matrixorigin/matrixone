@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"runtime"
 	"strings"
 	"sync"
@@ -120,9 +121,7 @@ func New(
 	}
 	e.gcPool = pool
 
-	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
-		WithLogtailUpdateStatsThreshold(threshold),
-	)
+	e.globalStats = NewGlobalStats(ctx, e, keyRouter)
 
 	e.messageCenter = &process.MessageCenter{
 		StmtIDToBoard: make(map[uuid.UUID]*process.MessageBoard, 64),
@@ -695,7 +694,15 @@ func (e *Engine) Hints() (h engine.Hints) {
 }
 
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-	expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	expr *plan.Expr, filter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	var blockReadPKFilter blockio.BlockReadFilter
+	if filter == nil {
+		// remote block reader
+		basePKFilter := constructBasePKFilter(expr, tblDef, proc.(*process.Process))
+		blockReadPKFilter = constructBlockReadPKFilter(tblDef.Pkey.PkeyColName, basePKFilter)
+		//fmt.Println("remote filter: ", basePKFilter.String(), blockReadPKFilter)
+	}
+
 	blkSlice := objectio.BlockInfoSlice(ranges)
 	rds := make([]engine.Reader, num)
 	blkInfos := make([]*objectio.BlockInfo, 0, blkSlice.Len())
@@ -707,7 +714,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 			//FIXME::why set blk.EntryState = false ?
 			blk.EntryState = false
 			rds[i] = newBlockReader(
-				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, e.fs, proc.(*process.Process),
+				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, blockReadPKFilter, e.fs, proc.(*process.Process),
 			)
 		}
 		for j := len(blkInfos); j < num; j++ {
@@ -721,7 +728,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	if err != nil {
 		return nil, err
 	}
-	blockReaders := newBlockReaders(ctx, fs, tblDef, ts, num, expr, proc.(*process.Process))
+	blockReaders := newBlockReaders(ctx, fs, tblDef, ts, num, expr, blockReadPKFilter, proc.(*process.Process))
 	distributeBlocksToBlockReaders(blockReaders, num, len(blkInfos), infos, steps)
 	for i := 0; i < num; i++ {
 		rds[i] = blockReaders[i]

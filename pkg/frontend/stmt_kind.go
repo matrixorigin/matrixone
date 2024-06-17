@@ -189,7 +189,7 @@ func statementCanBeExecutedInUncommittedTransaction(ctx context.Context, ses FeS
 		if err != nil {
 			return false, err
 		}
-		preStmt, err := mysql.ParseOne(ctx, st.Sql, v.(int64), 0)
+		preStmt, err := mysql.ParseOne(ctx, st.Sql, v.(int64))
 		defer func() {
 			preStmt.Free()
 		}()
