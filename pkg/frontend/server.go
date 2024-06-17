@@ -87,6 +87,15 @@ var globalRtMgr atomic.Value
 var globalPu atomic.Value
 var globalAicm atomic.Value
 var moServerStarted atomic.Bool
+var globalSessionAlloc atomic.Value
+
+func getGlobalSessionAlloc() *SessionAllocator {
+	return globalSessionAlloc.Load().(*SessionAllocator)
+}
+
+func setGlobalSessionAlloc(s *SessionAllocator) {
+	globalSessionAlloc.Store(s)
+}
 
 func setGlobalRtMgr(rtMgr *RoutineManager) {
 	globalRtMgr.Store(rtMgr)
@@ -132,6 +141,7 @@ func NewMOServer(
 ) *MOServer {
 	setGlobalPu(pu)
 	setGlobalAicm(aicm)
+	setGlobalSessionAlloc(NewSessionAllocator(pu))
 	codec := NewSqlCodec()
 	rm, err := NewRoutineManager(ctx)
 	if err != nil {
@@ -163,7 +173,7 @@ func NewMOServer(
 			goetty.WithSessionCodec(codec),
 			goetty.WithSessionLogger(logutil.GetGlobalLogger()),
 			goetty.WithSessionRWBUfferSize(DefaultRpcBufferSize, DefaultRpcBufferSize),
-			goetty.WithSessionAllocator(NewSessionAllocator(pu))),
+			goetty.WithSessionAllocator(getGlobalSessionAlloc())),
 		goetty.WithAppSessionAware(rm),
 		//when the readTimeout expires the goetty will close the tcp connection.
 		goetty.WithReadTimeout(pu.SV.SessionTimeout.Duration))
