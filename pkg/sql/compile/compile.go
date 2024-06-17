@@ -2372,7 +2372,36 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
+func (c *Compile) compileTPUnion(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+	ss = append(ss, children...)
+	rs := c.newScopeListOnCurrentCN(len(ss), 1)
+	gn := new(plan.Node)
+	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
+	for i := range gn.GroupBy {
+		gn.GroupBy[i] = plan2.DeepCopyExpr(n.ProjectList[i])
+		gn.GroupBy[i].Typ.NotNullable = false
+	}
+	rs[0].Instructions = append(rs[0].Instructions, vm.Instruction{
+		Op:  vm.Group,
+		Idx: c.anal.curr,
+		Arg: constructGroup(c.ctx, gn, n, true, 0, c.proc),
+	})
+
+	for i := range ss {
+		ss[i].appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: connector.NewArgument().
+				WithReg(rs[0].Proc.Reg.MergeReceivers[i]),
+		})
+		rs[0].PreScopes = append(rs[0].PreScopes, ss[i])
+	}
+	return rs
+}
+
 func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+	if c.IsTpQuery() {
+		return c.compileTPUnion(n, ss, children)
+	}
 	ss = append(ss, children...)
 	rs := c.newScopeListOnCurrentCN(1, int(n.Stats.BlockNum))
 	gn := new(plan.Node)
@@ -2392,18 +2421,6 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 			idx = i
 		}
 	}
-	if c.IsTpQuery() {
-		for i := range ss {
-			ss[i].appendInstruction(vm.Instruction{
-				Op: vm.Connector,
-				Arg: connector.NewArgument().
-					WithReg(rs[0].Proc.Reg.MergeReceivers[0]),
-			})
-			rs[0].PreScopes = append(rs[0].PreScopes, ss[i])
-		}
-		return rs
-	}
-
 	mergeChildren := c.newMergeScope(ss)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
