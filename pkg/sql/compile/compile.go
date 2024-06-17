@@ -647,6 +647,7 @@ func (c *Compile) IsTpQuery() bool {
 	return c.execType == plan2.ExecTypeTP
 }
 
+/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!")
@@ -655,7 +656,7 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scope))
 }
- 
+*/
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
@@ -676,7 +677,7 @@ func (c *Compile) runOnce() error {
 		}
 	}
 
-	c.printPipeline()
+	//c.printPipeline()
 
 	for i := range c.scope {
 		wg.Add(1)
