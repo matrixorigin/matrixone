@@ -21,6 +21,8 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"golang.org/x/exp/slices"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -32,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
-	"golang.org/x/exp/slices"
 )
 
 var dmlPlanCtxPool = sync.Pool{
@@ -1273,12 +1274,9 @@ func buildInsertPlansWithRelatedHiddenTable(
 
 				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
 				// remove row_id
-				for i, col := range idxTableDef.Cols {
-					if col.Name == catalog.Row_ID {
-						idxTableDef.Cols = append(idxTableDef.Cols[:i], idxTableDef.Cols[i+1:]...)
-						break
-					}
-				}
+				idxTableDef.Cols = RemoveIf[*ColDef](idxTableDef.Cols, func(col *ColDef) bool {
+					return col.Name == catalog.Row_ID
+				})
 
 				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 				newSourceStep, err := appendPreInsertPlan(builder, bindCtx, tableDef, lastNodeId, idx, false, idxTableDef, indexdef.Unique)
@@ -1297,12 +1295,9 @@ func buildInsertPlansWithRelatedHiddenTable(
 				if indexdef.GetUnique() {
 					_, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
 					// remove row_id
-					for i, colVal := range idxTableDef.Cols {
-						if colVal.Name == catalog.Row_ID {
-							idxTableDef.Cols = append(idxTableDef.Cols[:i], idxTableDef.Cols[i+1:]...)
-							break
-						}
-					}
+					idxTableDef.Cols = RemoveIf[*ColDef](idxTableDef.Cols, func(colVal *ColDef) bool {
+						return colVal.Name == catalog.Row_ID
+					})
 					originTableMessageForFuzzy = &OriginTableMessageForFuzzy{
 						ParentTableName: tableDef.Name,
 					}
@@ -1383,12 +1378,9 @@ func buildInsertPlansWithRelatedHiddenTable(
 
 				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName, Snapshot{TS: &timestamp.Timestamp{}})
 				// remove row_id
-				for i, colVal := range idxTableDef.Cols {
-					if colVal.Name == catalog.Row_ID {
-						idxTableDef.Cols = append(idxTableDef.Cols[:i], idxTableDef.Cols[i+1:]...)
-						break
-					}
-				}
+				idxTableDef.Cols = RemoveIf[*ColDef](idxTableDef.Cols, func(colVal *ColDef) bool {
+					return colVal.Name == catalog.Row_ID
+				})
 				genLastNodeIdFn := func() int32 {
 					return appendSinkScanNode(builder, bindCtx, sourceStep)
 				}
@@ -1443,12 +1435,9 @@ func buildInsertPlansWithRelatedHiddenTable(
 
 			// remove row_id
 			for i := range idxTableDefs {
-				for j, column := range idxTableDefs[i].Cols {
-					if column.Name == catalog.Row_ID {
-						idxTableDefs[i].Cols = append(idxTableDefs[i].Cols[:j], idxTableDefs[i].Cols[j+1:]...)
-						break
-					}
-				}
+				idxTableDefs[i].Cols = RemoveIf[*ColDef](idxTableDefs[i].Cols, func(column *ColDef) bool {
+					return column.Name == catalog.Row_ID
+				})
 			}
 
 			newSourceStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, tableDef, lastNodeId, multiTableIndex, false, idxRefs, idxTableDefs)

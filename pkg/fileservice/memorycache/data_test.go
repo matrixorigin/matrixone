@@ -23,7 +23,7 @@ import (
 )
 
 func TestData(t *testing.T) {
-	allocator := malloc.NewDefault(nil)
+	allocator := malloc.GetDefault(nil)
 
 	var size atomic.Int64
 	d := newData(allocator, 1, &size)

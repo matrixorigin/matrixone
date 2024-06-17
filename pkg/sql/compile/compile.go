@@ -1789,7 +1789,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-		rs := c.newMergeScope(ss)
+		rs := ss[0]
+		if !c.IsTpQuery() {
+			rs = c.newMergeScope(ss)
+		}
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
 			Arg: constructDispatchLocal(true, true, n.RecursiveSink, receivers),
@@ -2369,7 +2372,36 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
+func (c *Compile) compileTPUnion(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+	ss = append(ss, children...)
+	rs := c.newScopeListOnCurrentCN(len(ss), 1)
+	gn := new(plan.Node)
+	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
+	for i := range gn.GroupBy {
+		gn.GroupBy[i] = plan2.DeepCopyExpr(n.ProjectList[i])
+		gn.GroupBy[i].Typ.NotNullable = false
+	}
+	rs[0].Instructions = append(rs[0].Instructions, vm.Instruction{
+		Op:  vm.Group,
+		Idx: c.anal.curr,
+		Arg: constructGroup(c.ctx, gn, n, true, 0, c.proc),
+	})
+
+	for i := range ss {
+		ss[i].appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: connector.NewArgument().
+				WithReg(rs[0].Proc.Reg.MergeReceivers[i]),
+		})
+		rs[0].PreScopes = append(rs[0].PreScopes, ss[i])
+	}
+	return rs
+}
+
 func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+	if c.IsTpQuery() {
+		return c.compileTPUnion(n, ss, children)
+	}
 	ss = append(ss, children...)
 	rs := c.newScopeListOnCurrentCN(1, int(n.Stats.BlockNum))
 	gn := new(plan.Node)
@@ -2398,8 +2430,51 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	return rs
 }
 
-func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs := c.newJoinScopeListWithBucket(c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum)), ss, children, n)
+func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
+	rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
+	left[0].appendInstruction(vm.Instruction{
+		Op: vm.Connector,
+		Arg: connector.NewArgument().
+			WithReg(rs[0].Proc.Reg.MergeReceivers[0]),
+	})
+	right[0].appendInstruction(vm.Instruction{
+		Op: vm.Connector,
+		Arg: connector.NewArgument().
+			WithReg(rs[0].Proc.Reg.MergeReceivers[1]),
+	})
+	switch nodeType {
+	case plan.Node_MINUS:
+		rs[0].Instructions[0].Arg.Release()
+		rs[0].Instructions[0] = vm.Instruction{
+			Op:  vm.Minus,
+			Idx: c.anal.curr,
+			Arg: minus.NewArgument(),
+		}
+	case plan.Node_INTERSECT:
+		rs[0].Instructions[0].Arg.Release()
+		rs[0].Instructions[0] = vm.Instruction{
+			Op:  vm.Intersect,
+			Idx: c.anal.curr,
+			Arg: intersect.NewArgument(),
+		}
+	case plan.Node_INTERSECT_ALL:
+		rs[0].Instructions[0].Arg.Release()
+		rs[0].Instructions[0] = vm.Instruction{
+			Op:  vm.IntersectAll,
+			Idx: c.anal.curr,
+			Arg: intersectall.NewArgument(),
+		}
+	}
+	return rs
+}
+
+func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+	if c.IsTpQuery() {
+		return c.compileTpMinusAndIntersect(n, left, right, nodeType)
+	}
+	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
+	rs = c.newJoinScopeListWithBucket(rs, left, right, n)
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
@@ -3039,8 +3114,15 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scope, right []*Scope) ([]*Scope, error) {
-	l := c.newMergeScope(left)
-	r := c.newMergeScope(right)
+	var l, r *Scope
+	if c.IsTpQuery() {
+		l = left[0]
+		r = right[0]
+	} else {
+		l = c.newMergeScope(left)
+		r = c.newMergeScope(right)
+	}
+
 	all := []*Scope{l, r}
 	rs := c.newMergeScope(all)
 
@@ -3502,6 +3584,7 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 			IsFirst: currentFirstFlag,
 			Arg:     merge.NewArgument(),
 		})
+
 	}
 	c.anal.isFirst = false
 	return ss
@@ -3537,10 +3620,10 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, bIdx int, leftScop
 	return ss
 }
 
-func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.Node) []*Scope {
+func (c *Compile) newJoinScopeListWithBucket(rs, left, right []*Scope, n *plan.Node) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	// construct left
-	leftMerge := c.newMergeScope(ss)
+	leftMerge := c.newMergeScope(left)
 	leftMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: constructDispatch(0, rs, c.addr, n, false),
@@ -3549,7 +3632,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.
 
 	// construct right
 	c.anal.isFirst = currentFirstFlag
-	rightMerge := c.newMergeScope(children)
+	rightMerge := c.newMergeScope(right)
 	rightMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: constructDispatch(1, rs, c.addr, n, false),
