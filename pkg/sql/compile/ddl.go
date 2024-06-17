@@ -363,13 +363,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					return moerr.NewErrCantDropFieldOrKey(c.ctx, constraintName)
 				}
 				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
-				for i, fk := range tableDef.Fkeys {
+				tableDef.Fkeys = plan2.RemoveIf[*plan.ForeignKeyDef](tableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
 					if fk.Name == constraintName {
 						removeRefChildTbls[constraintName] = fk.ForeignTbl
-						tableDef.Fkeys = append(tableDef.Fkeys[:i], tableDef.Fkeys[i+1:]...)
-						break
+						return true
 					}
-				}
+					return false
+				})
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
 				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 				var notDroppedIndex []*plan.IndexDef
@@ -964,12 +964,17 @@ func (s *Scope) CreateTable(c *Compile) error {
 		for _, col := range planCols {
 			colId2Name[col.ColId] = col.Name
 		}
+		dedupFkName := make(plan2.UnorderedSet[string])
 		//1. update fk info in child table.
 		//column ids of column names in child table have changed after
 		//the table is created by engine.Database.Create.
 		//refresh column ids of column names in child table.
 		newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
 		for i, fkey := range qry.GetTableDef().Fkeys {
+			if dedupFkName.Find(fkey.Name) {
+				return moerr.NewInternalError(c.ctx, "deduplicate fk name %s", fkey.Name)
+			}
+			dedupFkName.Insert(fkey.Name)
 			newDef := &plan.ForeignKeyDef{
 				Name:        fkey.Name,
 				Cols:        make([]uint64, len(fkey.Cols)),
@@ -1712,26 +1717,21 @@ func (s *Scope) DropIndex(c *Compile) error {
 
 func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engine.ConstraintDef, error) {
 	// must fount dropName because of being checked in plan
-	for i, ct := range oldCt.Cts {
+	for i := 0; i < len(oldCt.Cts); i++ {
+		ct := oldCt.Cts[i]
 		switch def := ct.(type) {
 		case *engine.ForeignKeyDef:
-			for idx, fkDef := range def.Fkeys {
-				if fkDef.Name == dropName {
-					def.Fkeys = append(def.Fkeys[:idx], def.Fkeys[idx+1:]...)
-					oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-					oldCt.Cts = append(oldCt.Cts, def)
-					break
-				}
+			pred := func(fkDef *plan.ForeignKeyDef) bool {
+				return fkDef.Name == dropName
 			}
+			def.Fkeys = plan2.RemoveIf[*plan.ForeignKeyDef](def.Fkeys, pred)
+			oldCt.Cts[i] = def
 		case *engine.IndexDef:
-			for idx, index := range def.Indexes {
-				if index.IndexName == dropName {
-					def.Indexes = append(def.Indexes[:idx], def.Indexes[idx+1:]...)
-					oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-					oldCt.Cts = append(oldCt.Cts, def)
-					break
-				}
+			pred := func(index *plan.IndexDef) bool {
+				return index.IndexName == dropName
 			}
+			def.Indexes = plan2.RemoveIf[*plan.IndexDef](def.Indexes, pred)
+			oldCt.Cts[i] = def
 		}
 	}
 	return oldCt, nil
@@ -1744,33 +1744,23 @@ func MakeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 			Cts: []engine.Constraint{c},
 		}, nil
 	}
+	ok := false
+	var pred func(engine.Constraint) bool
 	switch t := c.(type) {
 	case *engine.ForeignKeyDef:
-		ok := false
-		for i, ct := range oldCt.Cts {
-			if _, ok = ct.(*engine.ForeignKeyDef); ok {
-				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-				oldCt.Cts = append(oldCt.Cts, t)
-				break
-			}
+		pred = func(ct engine.Constraint) bool {
+			_, ok = ct.(*engine.ForeignKeyDef)
+			return ok
 		}
-		if !ok {
-			oldCt.Cts = append(oldCt.Cts, c)
-		}
-
+		oldCt.Cts = plan2.RemoveIf[engine.Constraint](oldCt.Cts, pred)
+		oldCt.Cts = append(oldCt.Cts, c)
 	case *engine.RefChildTableDef:
-		ok := false
-		for i, ct := range oldCt.Cts {
-			if _, ok = ct.(*engine.RefChildTableDef); ok {
-				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
-				oldCt.Cts = append(oldCt.Cts, t)
-				break
-			}
+		pred = func(ct engine.Constraint) bool {
+			_, ok = ct.(*engine.RefChildTableDef)
+			return ok
 		}
-		if !ok {
-			oldCt.Cts = append(oldCt.Cts, c)
-		}
-
+		oldCt.Cts = plan2.RemoveIf[engine.Constraint](oldCt.Cts, pred)
+		oldCt.Cts = append(oldCt.Cts, c)
 	case *engine.IndexDef:
 		ok := false
 		var indexdef *engine.IndexDef
@@ -1844,12 +1834,9 @@ func (s *Scope) removeChildTblIdFromParentTable(c *Compile, fkRelation engine.Re
 	}
 	for _, ct := range oldCt.Cts {
 		if def, ok := ct.(*engine.RefChildTableDef); ok {
-			for idx, refTable := range def.Tables {
-				if refTable == tblId {
-					def.Tables = append(def.Tables[:idx], def.Tables[idx+1:]...)
-					break
-				}
-			}
+			def.Tables = plan2.RemoveIf[uint64](def.Tables, func(id uint64) bool {
+				return id == tblId
+			})
 			break
 		}
 	}

@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	HashMapSizeForShuffle           = 160000
+	threshHoldForRangeShuffle       = 240000
 	threshHoldForHybirdShuffle      = 4000000
 	threshHoldForHashShuffle        = 8000000
 	MAXShuffleDOP                   = 64
@@ -309,7 +309,7 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.Stats.HashmapStats.HashmapSize < HashMapSizeForShuffle {
+	if n.Stats.HashmapStats.HashmapSize < threshHoldForRangeShuffle {
 		return
 	}
 	idx := 0
@@ -393,7 +393,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.Stats.HashmapStats.HashmapSize < HashMapSizeForShuffle {
+	if n.Stats.HashmapStats.HashmapSize < threshHoldForRangeShuffle {
 		return
 	}
 	//find the highest ndv
@@ -419,6 +419,9 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
+		if n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && n.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
+			n.Stats.HashmapStats.Shuffle = false
+		}
 	}
 
 	//shuffle join-> shuffle group ,if they use the same hask key, the group can reuse the shuffle method

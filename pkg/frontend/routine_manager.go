@@ -397,6 +397,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 	length := packet.Length
 	payload := packet.Payload
+	payloads := make([][]byte, 1)
+	payloads[0] = payload
 	for uint32(length) == MaxPayloadSize {
 		msg, err = protocol.Read(goetty.ReadOptions{})
 		if err != nil {
@@ -417,8 +419,29 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 		protocol.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
 		seq = protocol.GetU8(SEQUENCEID)
-		payload = append(payload, packet.Payload...)
+		payloads = append(payloads, packet.Payload)
 		length = packet.Length
+	}
+
+	//combine these payloads
+	if len(payloads) > 1 {
+		tLen := 0
+		for _, bytes := range payloads {
+			tLen += len(bytes)
+		}
+		alloc := getGlobalSessionAlloc()
+		var temp []byte
+		temp, err = alloc.Alloc(tLen)
+		defer alloc.Free(temp)
+		if err != nil {
+			return err
+		}
+		offset := 0
+		for _, bytes := range payloads {
+			copy(temp[offset:offset+len(bytes)], bytes)
+			offset += len(bytes)
+		}
+		payload = temp
 	}
 
 	// finish handshake process
