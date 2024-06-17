@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -266,6 +267,10 @@ func (c *checkpointCleaner) Replay() error {
 
 }
 
+func (c *checkpointCleaner) GetCheckpoints() map[string]struct{} {
+	return c.ckpClient.GetCheckpointMetaFiles()
+}
+
 func (c *checkpointCleaner) updateMaxConsumed(e *checkpoint.CheckpointEntry) {
 	c.maxConsumed.Store(e)
 }
@@ -456,12 +461,11 @@ func (c *checkpointCleaner) mergeGCFile() error {
 // idxes: idxes is the index of the global checkpoint in files,
 // and the merge file will only process the files in one global checkpoint interval each time.
 func getAllowedMergeFiles(
-	ctx context.Context,
-	fs fileservice.FileService,
+	metas map[string]struct{},
 	snapshot types.TS,
 	listFunc checkpoint.GetCheckpointRange) (ok bool, files []*checkpoint.MetaFile, idxes []int, err error) {
 	var idx int
-	files, idx, err = checkpoint.ListSnapshotMeta(ctx, fs, snapshot, listFunc)
+	files, idx, err = checkpoint.ListSnapshotMetaWithDiskCleaner(snapshot, listFunc, metas)
 	if err != nil {
 		return
 	}
@@ -562,7 +566,9 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		(c.GeteCkpStage() != nil && c.GeteCkpStage().GreaterEq(&stage)) {
 		return nil
 	}
-	ok, files, idxes, err := getAllowedMergeFiles(c.ctx, c.fs.Service, stage, nil)
+	metas := c.GetCheckpoints()
+	logutil.Infof("[MergeCheckpoint] metas len %d", len(metas))
+	ok, files, idxes, err := getAllowedMergeFiles(metas, stage, nil)
 	if err != nil {
 		return err
 	}
@@ -603,6 +609,13 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 		if err != nil {
 			logutil.Errorf("DelFiles failed: %v", err.Error())
 			return err
+		}
+		for _, file := range deleteFiles {
+			if strings.Contains(file, checkpoint.PrefixMetadata) {
+				info := strings.Split(file, checkpoint.CheckpointDir+"/")
+				name := info[1]
+				c.ckpClient.RemoveCheckpointMetaFile(name)
+			}
 		}
 	}
 	c.updateCkpStage(&stage)
