@@ -16,8 +16,10 @@ package tables
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -137,10 +139,42 @@ func LoadPersistedDeletesBySchema(
 	isPersistedByCN bool,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, release func(), err error) {
-	movbat, release, err := blockio.ReadBlockDeleteBySchema(ctx, location, fs.Service, isPersistedByCN)
-	if err != nil {
-		return
+	var (
+		recorder *common.DeletesCollectRecorder
+		movbat   *batch.Batch
+	)
+
+	if v := ctx.Value(common.RecorderKey{}); v != nil {
+		recorder = v.(*common.DeletesCollectRecorder)
+		inst := time.Now()
+		defer func() {
+			recorder.LoadCost = time.Since(inst)
+		}()
+		sloc := location.String()
+		entry, ok := recorder.TempCache[sloc]
+		if ok && entry.Bat != nil { // hit cache
+			movbat = entry.Bat
+		}
+
+		if ok && entry.Bat == nil { // cache enable and first call
+			movbat, release, err = blockio.ReadBlockDeleteBySchema(ctx, location, fs.Service, isPersistedByCN)
+			if err != nil {
+				return nil, nil, err
+			}
+			recorder.TempCache[sloc] = common.TempDelCacheEntry{
+				Bat:     movbat,
+				Release: release,
+			}
+		}
+		release = func() {}
 	}
+	if movbat == nil { // cache disabled
+		movbat, release, err = blockio.ReadBlockDeleteBySchema(ctx, location, fs.Service, isPersistedByCN)
+		if err != nil {
+			return
+		}
+	}
+
 	bat = containers.NewBatch()
 	if isPersistedByCN {
 		colNames := []string{catalog.PhyAddrColumnName, catalog.AttrPKVal}

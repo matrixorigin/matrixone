@@ -757,7 +757,7 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 	for i := info.length() - 1; i >= 0; i-- {
 		row := make([]interface{}, 3)
 		row[0] = "Error"
-		row[1] = info.codes[i]
+		row[1] = int16(info.codes[i])
 		row[2] = info.msgs[i]
 		mrs.AddRow(row)
 	}
@@ -2834,7 +2834,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_QUIT:
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
-		var query = string(req.GetData().([]byte))
+		var query = util.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(SubStringFromBegin(query, int(getGlobalPu().SV.LengthOfQueryPrinted))))
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
@@ -2843,7 +2843,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		return resp, nil
 	case COM_INIT_DB:
-		var dbname = string(req.GetData().([]byte))
+		var dbname = util.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		query := "use `" + dbname + "`"
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
@@ -2853,7 +2853,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 		return resp, nil
 	case COM_FIELD_LIST:
-		var payload = string(req.GetData().([]byte))
+		var payload = util.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		query := makeCmdFieldListSql(payload)
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
@@ -2869,7 +2869,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
-		sql = string(req.GetData().([]byte))
+		sql = util.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 
 		// rewrite to "Prepare stmt_name from 'xxx'"
@@ -2886,9 +2886,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_EXECUTE:
 		ses.SetCmd(COM_STMT_EXECUTE)
-		data := req.GetData().([]byte)
 		var prepareStmt *PrepareStmt
-		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, data)
+		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
@@ -2906,8 +2905,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_SEND_LONG_DATA:
 		ses.SetCmd(COM_STMT_SEND_LONG_DATA)
-		data := req.GetData().([]byte)
-		err = parseStmtSendLongData(execCtx.reqCtx, ses, data)
+		err = parseStmtSendLongData(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_SEND_LONG_DATA, ses.GetTxnHandler().GetServerStatus(), err)
 			return resp, nil
@@ -2915,10 +2913,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return nil, nil
 
 	case COM_STMT_CLOSE:
-		data := req.GetData().([]byte)
-
 		// rewrite to "deallocate Prepare stmt_name"
-		stmtID := binary.LittleEndian.Uint32(data[0:4])
+		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql = fmt.Sprintf("deallocate prepare %s", stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
@@ -2930,10 +2926,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, nil
 
 	case COM_STMT_RESET:
-		data := req.GetData().([]byte)
-
 		//Payload of COM_STMT_RESET
-		stmtID := binary.LittleEndian.Uint32(data[0:4])
+		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql = fmt.Sprintf("reset prepare %s", stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
@@ -2944,8 +2938,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, nil
 
 	case COM_SET_OPTION:
-		data := req.GetData().([]byte)
-		err := handleSetOption(ses, execCtx, data)
+		err = handleSetOption(ses, execCtx, req.GetData().([]byte))
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus(), err)
 		}

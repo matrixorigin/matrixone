@@ -1009,6 +1009,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
+	dedupFkName := make(UnorderedSet[string])
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
@@ -1189,6 +1190,17 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if err != nil {
 				return err
 			}
+
+			if def.ConstraintSymbol != fkData.Def.Name {
+				return moerr.NewInternalError(ctx.GetContext(), "different fk name %s %s", def.ConstraintSymbol, fkData.Def.Name)
+			}
+
+			//dedup
+			if dedupFkName.Find(fkData.Def.Name) {
+				return moerr.NewInternalError(ctx.GetContext(), "duplicate fk name %s", fkData.Def.Name)
+			}
+			dedupFkName.Insert(fkData.Def.Name)
+
 			//only setups foreign key without forward reference
 			if !fkData.ForwardRefer {
 				createTable.FkDbs = append(createTable.FkDbs, fkData.ParentDbName)
