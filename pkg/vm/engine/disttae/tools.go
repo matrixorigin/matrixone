@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -1494,12 +1495,12 @@ func groupBlocksToObjects(blkInfos []*objectio.BlockInfo, dop int) ([][]*objecti
 }
 
 func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef,
-	ts timestamp.Timestamp, num int, expr *plan.Expr,
+	ts timestamp.Timestamp, num int, expr *plan.Expr, filter blockio.BlockReadFilter,
 	proc *process.Process) []*blockReader {
 	rds := make([]*blockReader, num)
 	for i := 0; i < num; i++ {
 		rds[i] = newBlockReader(
-			ctx, tblDef, ts, nil, expr, fs, proc,
+			ctx, tblDef, ts, nil, expr, filter, fs, proc,
 		)
 	}
 	return rds

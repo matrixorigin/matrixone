@@ -46,6 +46,10 @@ func EncodeCheckpointMetadataFileName(dir, prefix string, start, end types.TS) s
 	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), CheckpointExt)
 }
 
+func EncodeCheckpointMetadataFileNameWithoutDir(prefix string, start, end types.TS) string {
+	return fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), CheckpointExt)
+}
+
 func EncodeSnapshotMetadataFileName(dir, prefix string, start, end types.TS) string {
 	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), SnapshotExt)
 }

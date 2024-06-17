@@ -522,7 +522,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 		readers, err = c.e.NewBlockReader(
 			ctx, scanUsedCpuNumber,
-			s.DataSource.Timestamp, s.DataSource.FilterExpr, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
+			s.DataSource.Timestamp, s.DataSource.FilterExpr, nil, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -576,8 +576,13 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 					n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+					if c.proc.GetCloneTxnOperator() != nil {
+						txnOp = c.proc.GetCloneTxnOperator()
+					} else {
+						txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+						c.proc.SetCloneTxnOperator(txnOp)
+					}
 
-					txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 					if n.ScanSnapshot.Tenant != nil {
 						ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
 					}

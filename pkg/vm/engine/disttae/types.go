@@ -100,9 +100,10 @@ const (
 )
 
 const (
-	WorkspaceThreshold uint64 = 1 * mpool.MB
-	GCBatchOfFileCount int    = 1000
-	GCPoolSize         int    = 5
+	WorkspaceThreshold   uint64 = 1 * mpool.MB
+	InsertEntryThreshold        = 5000
+	GCBatchOfFileCount   int    = 1000
+	GCPoolSize           int    = 5
 )
 
 var (
@@ -179,7 +180,8 @@ type Transaction struct {
 	writes []Entry
 	// txn workspace size
 	workspaceSize uint64
-
+	// the total row count for insert entries when txn commits.
+	insertCount int
 	// the last snapshot write offset
 	snapshotWriteOffset int
 
@@ -748,7 +750,7 @@ type withFilterMixin struct {
 		evaluated bool
 		//point select for primary key
 		expr     *plan.Expr
-		filter   blockio.ReadFilter
+		filter   blockio.BlockReadFilter
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
 		hasNull  bool
@@ -789,7 +791,7 @@ type blockMergeReader struct {
 	*blockReader
 	table     *txnTable
 	txnOffset int // Transaction writes offset used to specify the starting position for reading data.
-	pkFilter  PKFilter
+	pkFilter  InMemPKFilter
 	//for perfetch deletes
 	loaded     bool
 	pkidx      int
