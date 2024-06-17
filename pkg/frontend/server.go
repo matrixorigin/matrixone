@@ -16,7 +16,11 @@ package frontend
 
 import (
 	"context"
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/fagongzi/goetty/v2/codec"
 	"io"
+	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -42,6 +46,30 @@ type MOServer struct {
 	app         goetty.NetApplication
 	rm          *RoutineManager
 	readTimeout time.Duration
+
+	mu      sync.RWMutex
+	wg      sync.WaitGroup
+	running bool
+
+	logger *zap.Logger
+	codec  codec.Codec
+
+	listeners []net.Listener
+}
+
+type IOSession struct {
+	id                    uint64
+	state                 int32
+	conn                  net.Conn
+	localAddr, remoteAddr string
+	in                    *buf.ByteBuf
+	out                   *buf.ByteBuf
+	disableConnect        bool
+	logger                *zap.Logger
+	readCopyBuf           []byte
+	writeCopyBuf          []byte
+	codec                 codec.Codec
+	allocator             buf.Allocator
 }
 
 // BaseService is an interface which indicates that the instance is
@@ -67,7 +95,7 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 
 func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
-	err := mo.app.Start()
+	err := mo.startAcceptLoop()
 	if err != nil {
 		return err
 	}
@@ -76,7 +104,109 @@ func (mo *MOServer) Start() error {
 }
 
 func (mo *MOServer) Stop() error {
-	return mo.app.Stop()
+	mo.mu.Lock()
+	if !mo.running {
+		mo.mu.Unlock()
+		return nil
+	}
+	mo.running = false
+	mo.mu.Unlock()
+
+	var errors []error
+	for _, listener := range mo.listeners {
+		if err := listener.Close(); err != nil {
+			errors = append(errors, err)
+		}
+	}
+	if len(errors) > 0 {
+		return errors[0]
+	}
+
+	mo.logger.Debug("application listener closed")
+	mo.wg.Wait()
+
+	// now no new connection will added, close all active sessions
+	for _, m := range s.sessions {
+		m.Lock()
+		for k, rs := range m.sessions {
+			delete(m.sessions, k)
+			if err := rs.Disconnect(); err != nil {
+				s.logger.Error("session closed failed",
+					zap.Error(err))
+			}
+		}
+		m.Unlock()
+	}
+	s.logger.Debug("application stopped")
+	return nil
+}
+
+func (mo *MOServer) startAcceptLoop() error {
+	mo.logger.Debug("mo server accept loop started")
+	defer func() {
+		mo.logger.Debug("mo server accept loop stopped")
+	}()
+
+	listenFunc := func(listener net.Listener) {
+		defer mo.wg.Done()
+
+		var tempDelay time.Duration
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				if !mo.isStarted() {
+					return
+				}
+
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					if tempDelay == 0 {
+						tempDelay = 5 * time.Millisecond
+					} else {
+						tempDelay *= 2
+					}
+					if max := 1 * time.Second; tempDelay > max {
+						tempDelay = max
+					}
+					time.Sleep(tempDelay)
+					continue
+				}
+				return
+			}
+			tempDelay = 0
+
+			rs := NewIOSession()
+			if !s.addSession(rs) {
+				if err := rs.Close(); err != nil {
+					s.logger.Error("close session failed", zap.Error(err))
+				}
+				return
+			}
+
+			go func() {
+				defer func() {
+					if s.deleteSession(rs) {
+						if err := rs.Close(); err != nil {
+							s.logger.Error("close session failed", zap.Error(err))
+						}
+					}
+				}()
+				if err := handle(rs); err != nil {
+					s.logger.Error("handle session failed", zap.Error(err))
+				}
+			}()
+		}
+	}
+
+	for _, listener := range mo.listeners {
+		mo.wg.Add(1)
+		go listenFunc(listener)
+	}
+}
+
+func (mo *MOServer) isStarted() bool {
+	mo.mu.RLock()
+	defer mo.mu.RUnlock()
+	return mo.running
 }
 
 func nextConnectionID() uint32 {
@@ -121,6 +251,36 @@ func MoServerIsStarted() bool {
 
 func setMoServerStarted(b bool) {
 	moServerStarted.Store(b)
+}
+func NewIOSession(conn net.Conn) *IOSession {
+	moio := &IOSession{
+		id:             ,
+		state:          0,
+		conn:           nil,
+		localAddr:      "",
+		remoteAddr:     "",
+		in:             nil,
+		out:            nil,
+		disableConnect: false,
+		logger:         nil,
+		readCopyBuf:    nil,
+		writeCopyBuf:   nil,
+		codec:          nil,
+		allocator:      nil,
+	}
+	bio.adjust()
+	bio.Ref()
+
+	bio.readCopyBuf = make([]byte, bio.options.readCopyBufSize)
+	bio.writeCopyBuf = make([]byte, bio.options.writeCopyBufSize)
+	if bio.conn != nil {
+		bio.initConn()
+		bio.disableConnect = true
+	}
+	if bio.options.aware != nil {
+		bio.options.aware.Created(bio)
+	}
+	return bio
 }
 
 func NewMOServer(
