@@ -225,6 +225,7 @@ func (sender *messageSenderOnClient) sendPipeline(
 		message.SetData(scopeData)
 		message.SetProcData(procData)
 		message.SetSid(pipeline.Status_Last)
+		message.NeedNotReply = false
 		return sender.streamSender.Send(sender.ctx, message)
 	}
 
@@ -243,6 +244,7 @@ func (sender *messageSenderOnClient) sendPipeline(
 			message.SetData(scopeData[start:end])
 			message.SetSid(pipeline.Status_WaitingNext)
 		}
+		message.NeedNotReply = false
 
 		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
 			return err
@@ -287,6 +289,8 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			return nil, false, info
 		}
 		if m.IsEndMessage() {
+			sender.safeToClose = true
+
 			anaData := m.GetAnalyse()
 			if len(anaData) > 0 {
 				ana := new(pipeline.AnalysisList)
@@ -295,7 +299,6 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 				}
 				sender.dealAnalysis(ana)
 			}
-			sender.safeToClose = true
 			return nil, true, nil
 		}
 
@@ -346,7 +349,8 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 			}
 
 			message := val.(*pipeline.Message)
-			if message.IsEndMessage() || message.GetErr() != nil {
+
+			if message.IsEndMessage() || len(message.GetErr()) > 0 {
 				sender.safeToClose = true
 				// in fact, we should deal the cost analysis information here.
 				cancel()

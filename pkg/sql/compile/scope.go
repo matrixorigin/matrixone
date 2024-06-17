@@ -1205,12 +1205,15 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 				message := cnclient.AcquireMessage()
 				message.SetID(sender.streamSender.ID())
 				message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
+				message.NeedNotReply = false
 				message.Uuid = uuid
 
 				if errSend := sender.streamSender.Send(s.Proc.Ctx, message); errSend != nil {
 					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 					return
 				}
+				sender.safeToClose = false
+				sender.alreadyClose = false
 
 				err = receiveMsgAndForward(s.Proc, sender, s.Proc.Reg.MergeReceivers[receiverIdx].Ch)
 				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
