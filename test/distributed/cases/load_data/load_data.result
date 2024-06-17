@@ -731,3 +731,15 @@ select * from load_data_t1;
 name    age    city
 XiAn     26     zhangsan
 drop table load_data_t1;
+drop table if exists load_data_t2;
+create table load_data_t2(id int, name varchar(20), age int);
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name , age);
+select * from load_data_t2 order by id;
+id    name    age
+1     aron    32
+2     ben    35
+3     cindy    22
+4     david    33
+5     emma    18
+6     frank    59
+drop table load_data_t2;

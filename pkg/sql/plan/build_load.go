@@ -79,6 +79,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		stmt.Param.Parallel = false
 	}
 	stmt.Param.LoadFile = true
+	columnList := stmt.Param.Tail.ColumnList
+	stmt.Param.Tail.ColumnList = nil
 	if stmt.Param.ScanType != tree.INLINE {
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
@@ -132,7 +134,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		NodeType: plan.Node_PROJECT,
 		Stats:    &plan.Stats{},
 	}
-	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, tableDef)
+	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, tableDef, columnList)
 	if err != nil {
 		return nil, err
 	}
@@ -231,16 +233,16 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	return param.Filepath, nil
 }
 
-func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef) (bool, error) {
+func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef, columnList []tree.LoadColumn) (bool, error) {
 	tblName := string(stmt.Table.ObjectName)
 	colToIndex := make(map[string]int32, 0)
 	ifExistAutoPkCol := false
-	if len(stmt.Param.Tail.ColumnList) == 0 {
+	if len(columnList) == 0 {
 		for i := 0; i < len(tableDef.Cols); i++ {
 			colToIndex[tableDef.Cols[i].Name] = int32(i)
 		}
 	} else {
-		for i, col := range stmt.Param.Tail.ColumnList {
+		for i, col := range columnList {
 			switch realCol := col.(type) {
 			case *tree.UnresolvedName:
 				if _, ok := tableDef.Name2ColIndex[realCol.Parts[0]]; !ok {
