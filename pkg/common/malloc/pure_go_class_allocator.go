@@ -119,16 +119,16 @@ func (p *PureGoClassAllocator) classAllocate(class int) *pureGoClassAllocatorHan
 	}
 }
 
-func (p *PureGoClassAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator) {
+func (p *PureGoClassAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator, error) {
 	if size == 0 {
-		return nil, dumbHandle
+		return nil, dumbHandle, nil
 	}
 	class := p.requestSizeToClass(size)
 	if class == -1 {
-		return unsafe.Pointer(unsafe.SliceData(make([]byte, size))), dumbHandle
+		return unsafe.Pointer(unsafe.SliceData(make([]byte, size))), dumbHandle, nil
 	}
 	handle := p.classAllocate(class)
-	return handle.ptr, handle
+	return handle.ptr, handle, nil
 }
 
 func (h *pureGoClassAllocatorHandle) Deallocate(_ unsafe.Pointer) {

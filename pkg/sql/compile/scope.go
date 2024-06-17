@@ -504,7 +504,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 		readers, err = c.e.NewBlockReader(
 			ctx, scanUsedCpuNumber,
-			s.DataSource.Timestamp, s.DataSource.FilterExpr, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
+			s.DataSource.Timestamp, s.DataSource.FilterExpr, nil, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
 		if err != nil {
 			return nil, err
 		}

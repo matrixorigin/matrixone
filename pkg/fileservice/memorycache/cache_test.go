@@ -30,7 +30,7 @@ func TestCache(t *testing.T) {
 		func(key cache.CacheKey, value CacheData) {},
 		func(key cache.CacheKey, value CacheData) {},
 		func(key cache.CacheKey, value CacheData) {},
-		malloc.NewDefault(nil),
+		malloc.GetDefault(nil),
 	)
 	// test Alloc and Set
 	key := cache.CacheKey{Path: "x", Sz: 1}

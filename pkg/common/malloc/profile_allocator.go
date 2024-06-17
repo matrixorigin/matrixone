@@ -15,6 +15,7 @@
 package malloc
 
 import (
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -23,13 +24,20 @@ import (
 )
 
 type HeapSampleValues struct {
-	AllocatedObjects atomic.Int64
-	AllocatedBytes   atomic.Int64
-	InuseObjects     atomic.Int64
-	InuseBytes       atomic.Int64
+	AllocatedObjects ShardedCounter[int64, atomic.Int64, *atomic.Int64]
+	AllocatedBytes   ShardedCounter[int64, atomic.Int64, *atomic.Int64]
+	InuseObjects     ShardedCounter[int64, atomic.Int64, *atomic.Int64]
+	InuseBytes       ShardedCounter[int64, atomic.Int64, *atomic.Int64]
 }
 
 var _ SampleValues = new(HeapSampleValues)
+
+func (h *HeapSampleValues) Init() {
+	h.AllocatedObjects = *NewShardedCounter[int64, atomic.Int64](runtime.GOMAXPROCS(0))
+	h.AllocatedBytes = *NewShardedCounter[int64, atomic.Int64](runtime.GOMAXPROCS(0))
+	h.InuseObjects = *NewShardedCounter[int64, atomic.Int64](runtime.GOMAXPROCS(0))
+	h.InuseBytes = *NewShardedCounter[int64, atomic.Int64](runtime.GOMAXPROCS(0))
+}
 
 func (h *HeapSampleValues) DefaultSampleType() string {
 	return "inuse_bytes"
@@ -105,9 +113,13 @@ type profileDeallocateArgs struct {
 
 var _ Allocator = new(ProfileAllocator)
 
-func (p *ProfileAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator) {
-	ptr, dec := p.upstream.Allocate(size)
-	values := p.profiler.Sample(1, p.profileFraction)
+func (p *ProfileAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator, error) {
+	ptr, dec, err := p.upstream.Allocate(size)
+	if err != nil {
+		return nil, nil, err
+	}
+	const skip = 1 // p.Allocate
+	values := p.profiler.Sample(skip, p.profileFraction)
 	values.AllocatedBytes.Add(int64(size))
 	values.AllocatedObjects.Add(1)
 	values.InuseBytes.Add(int64(size))
@@ -117,5 +129,5 @@ func (p *ProfileAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator) {
 		values: values,
 		size:   size,
 	})
-	return ptr, ChainDeallocator(dec, fn)
+	return ptr, ChainDeallocator(dec, fn), nil
 }
