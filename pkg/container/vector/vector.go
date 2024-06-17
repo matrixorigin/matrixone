@@ -17,10 +17,8 @@ package vector
 import (
 	"bytes"
 	"fmt"
-	"runtime/debug"
 	"slices"
 	"sort"
-	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -449,10 +447,10 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	// }
 	// v.OnPut = false
 	v.OnUsed = false
-	if len(v.FreeMsg) > 20 {
-		v.FreeMsg = v.FreeMsg[1:]
-	}
-	v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : typ="+v.typ.DescString()+" "+string(debug.Stack()))
+	// if len(v.FreeMsg) > 20 {
+	// 	v.FreeMsg = v.FreeMsg[1:]
+	// }
+	// v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : typ="+v.typ.DescString()+" "+string(debug.Stack()))
 
 	// reuse.Free[Vector](v, nil)
 	vectorPool.Put(v)

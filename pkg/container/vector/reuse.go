@@ -16,9 +16,7 @@ package vector
 
 import (
 	"runtime"
-	"runtime/debug"
 	"sync"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -29,9 +27,9 @@ var vectorPool = &sync.Pool{
 		v := new(Vector)
 		v.nsp = &nulls.Nulls{}
 		runtime.SetFinalizer(v, func(v *Vector) {
-			if v.OnUsed {
-				panic("vector is still used")
-			}
+			// if v.OnUsed {
+			// 	panic("vector is still used")
+			// }
 		})
 		return v
 	},
@@ -67,10 +65,10 @@ func NewVecFromReuse() *Vector {
 	// if v.OnUsed {
 	// 	panic("alloc onused vector")
 	// }
-	if len(v.AllocMsg) > 20 {
-		v.AllocMsg = v.AllocMsg[1:]
-	}
-	v.AllocMsg = append(v.AllocMsg, time.Now().String()+" : "+string(debug.Stack()))
+	// if len(v.AllocMsg) > 20 {
+	// 	v.AllocMsg = v.AllocMsg[1:]
+	// }
+	// v.AllocMsg = append(v.AllocMsg, time.Now().String()+" : "+string(debug.Stack()))
 	v.OnUsed = true
 	return v
 }
