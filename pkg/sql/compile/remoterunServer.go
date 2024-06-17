@@ -105,6 +105,11 @@ func CnServerMessageHandler(
 
 	// if this message is responsible for the execution of certain pipelines, they should be ended after message processing is completed.
 	if receiver.messageTyp == pipeline.Method_PipelineMessage || receiver.messageTyp == pipeline.Method_PrepareDoneNotifyMessage {
+		// keep listening until connection was closed
+		// to prevent some strange handle order between 'stop sending message' and others.
+		if err == nil {
+			<-ctx.Done()
+		}
 		colexec.Get().RemoveRunningPipeline(receiver.clientSession)
 	}
 	return err
