@@ -2392,6 +2392,17 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 			idx = i
 		}
 	}
+	if c.IsTpQuery() {
+		for i := range ss {
+			ss[i].appendInstruction(vm.Instruction{
+				Op: vm.Connector,
+				Arg: connector.NewArgument().
+					WithReg(rs[0].Proc.Reg.MergeReceivers[0]),
+			})
+		}
+		return rs
+	}
+
 	mergeChildren := c.newMergeScope(ss)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
