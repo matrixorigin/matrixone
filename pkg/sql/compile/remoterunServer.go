@@ -163,6 +163,8 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if err != nil {
 			return err
 		}
+		s = appendWriteBackOperator(runCompile, s)
+		s.SetContextRecursively(runCompile.ctx)
 
 		defer func() {
 			runCompile.proc.FreeVectors()
