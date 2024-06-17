@@ -2399,6 +2399,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 				Arg: connector.NewArgument().
 					WithReg(rs[0].Proc.Reg.MergeReceivers[0]),
 			})
+			rs[0].PreScopes = append(rs[0].PreScopes, ss[i])
 		}
 		return rs
 	}
