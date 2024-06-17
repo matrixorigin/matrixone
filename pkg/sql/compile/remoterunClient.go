@@ -133,6 +133,11 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 			fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", LastOperator.Op))
 	}
 
+	// the last operator is responsible for distributing received data locally. Need Prepare here.
+	if err := LastOperator.Arg.Prepare(s.Proc); err != nil {
+		return err
+	}
+
 	// receive back result and send.
 	var bat *batch.Batch
 	var end bool
