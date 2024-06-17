@@ -131,7 +131,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 
 	if o.TransferTableTTL == time.Duration(0) {
-		o.TransferTableTTL = time.Second * 90
+		o.TransferTableTTL = time.Second * 60
 	}
 
 	if o.StorageCfg == nil {
