@@ -319,6 +319,34 @@ SELECT @@session.autocommit;
 select @@TIME_ZONE;
 @@TIME_ZONE
 SYSTEM
+show global variables like '%lower_case_table%';
+Variable_name    Value
+lower_case_table_names    1
+set global lower_case_table_names=0;
+show global variables like '%lower_case_table%';
+Variable_name    Value
+lower_case_table_names    0
+SELECT @@global.lower_case_table_names;
+@@lower_case_table_names
+0
+SELECT @@session.lower_case_table_names;
+@@lower_case_table_names
+1
+select @@lower_case_table_names;
+@@lower_case_table_names
+1
+SELECT @@session.lower_case_table_names;
+@@lower_case_table_names
+0
+select @@lower_case_table_names;
+@@lower_case_table_names
+0
+show global variables like '%lower_case_table%';
+Variable_name    Value
+lower_case_table_names    0
+SELECT @@global.lower_case_table_names;
+@@lower_case_table_names
+0
 drop account acc1;
 drop account acc2;
 drop account acc3;
