@@ -17,13 +17,14 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"runtime/debug"
 	"slices"
 	"sort"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
@@ -62,6 +63,13 @@ type Vector struct {
 
 	// FIXME: Bad design! Will be deleted soon.
 	isBin bool
+
+	OnUsed bool
+	// OnPut    bool
+	AllocMsg []string
+	FreeMsg  []string
+	// PutMsg   []string
+	// GetMsg   []string
 }
 
 type typedSlice struct {
@@ -439,14 +447,15 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	// if !v.OnUsed || v.OnPut {
 	// 	panic("free vector which unalloc or in put list")
 	// }
-	// v.OnUsed = false
 	// v.OnPut = false
-	// if len(v.FreeMsg) > 20 {
-	// 	v.FreeMsg = v.FreeMsg[1:]
-	// }
-	// v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : typ="+v.typ.DescString()+" "+string(debug.Stack()))
+	v.OnUsed = false
+	if len(v.FreeMsg) > 20 {
+		v.FreeMsg = v.FreeMsg[1:]
+	}
+	v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : typ="+v.typ.DescString()+" "+string(debug.Stack()))
 
-	reuse.Free[Vector](v, nil)
+	// reuse.Free[Vector](v, nil)
+	vectorPool.Put(v)
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
