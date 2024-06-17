@@ -101,9 +101,12 @@ func CnServerMessageHandler(
 		} else {
 			err = receiver.sendEndMessage()
 		}
-		colexec.Get().RemoveRunningPipeline(receiver.clientSession)
 	}
 
+	// if this message is responsible for the execution of certain pipelines, they should be ended after message processing is completed.
+	if receiver.messageTyp == pipeline.Method_PipelineMessage || receiver.messageTyp == pipeline.Method_PrepareDoneNotifyMessage {
+		colexec.Get().RemoveRunningPipeline(receiver.clientSession)
+	}
 	return err
 }
 
@@ -115,7 +118,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if err != nil || dispatchProc == nil {
 			return err
 		}
-		colexec.Get().RecordRunningPipeline(receiver.clientSession, dispatchProc)
+		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, dispatchProc); cancel {
+			dispatchProc.Cancel()
+			return nil
+		}
 
 		infoToDispatchOperator := process.WrapCs{
 			MsgId: receiver.messageId,
@@ -156,7 +162,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 	case pipeline.Method_PipelineMessage:
 		runCompile := receiver.newCompile()
-		colexec.Get().RecordRunningPipeline(receiver.clientSession, runCompile.proc)
+		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, runCompile.proc); cancel {
+			runCompile.proc.Cancel()
+			return nil
+		}
 
 		// decode and running the pipeline.
 		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)

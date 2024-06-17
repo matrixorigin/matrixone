@@ -64,11 +64,18 @@ type RunningPipelineMapForRemoteNode struct {
 	fromRpcClientToRunningPipeline map[morpc.ClientSession]*process.Process
 }
 
-func (srv *Server) RecordRunningPipeline(session morpc.ClientSession, proc *process.Process) {
+func (srv *Server) RecordRunningPipeline(session morpc.ClientSession, proc *process.Process) (queryCancel bool) {
 	srv.receivedRunningPipeline.Lock()
 	defer srv.receivedRunningPipeline.Unlock()
 
+	// CancelRunningPipeline was called before, this query has been canceled.
+	if _, ok := srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[session]; ok {
+		delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, session)
+		return true
+	}
+
 	srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[session] = proc
+	return false
 }
 
 func (srv *Server) CancelRunningPipeline(session morpc.ClientSession) {
@@ -79,6 +86,9 @@ func (srv *Server) CancelRunningPipeline(session morpc.ClientSession) {
 	if ok {
 		p.Cancel()
 		delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, session)
+	} else {
+		// indicate that this query was canceled. once anyone want to start this query, should just return.
+		srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[session] = nil
 	}
 }
 
