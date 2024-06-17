@@ -495,6 +495,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			TableDef:               s.DataSource.TableDef,
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
+			IsConst:                s.DataSource.isConst,
 		}
 		if s.DataSource.Bat != nil {
 			data, err := types.Encode(s.DataSource.Bat)
@@ -610,6 +611,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			TableDef:           dsc.TableDef,
 			Timestamp:          *dsc.Timestamp,
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
+			isConst:            dsc.IsConst,
 		}
 		if len(dsc.Block) > 0 {
 			bat := new(batch.Batch)
