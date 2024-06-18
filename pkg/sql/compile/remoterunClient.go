@@ -324,7 +324,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 	}
 
 	// send a stop sending message to message-receiver.
-	if err := sender.streamSender.Send(sender.ctx, generateStopSendingMessage()); err != nil {
+	if err := sender.streamSender.Send(sender.ctx, generateStopSendingMessage(sender.streamSender.ID())); err != nil {
 		return
 	}
 
@@ -366,9 +366,10 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 	}
 }
 
-func generateStopSendingMessage() *pipeline.Message {
+func generateStopSendingMessage(streamID uint64) *pipeline.Message {
 	message := cnclient.AcquireMessage()
 	message.SetMessageType(pipeline.Method_StopSending)
+	message.SetID(streamID)
 	message.NeedNotReply = true
 	return message
 }
