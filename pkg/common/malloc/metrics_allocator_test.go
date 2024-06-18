@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,18 +14,30 @@
 
 package malloc
 
-import (
-	"testing"
-	"unsafe"
-)
+import "testing"
 
-func TestAllocFree(t *testing.T) {
-	for i := 0; i < 1<<19; i++ {
-		ptr, handle := Alloc(i)
-		bs := unsafe.Slice((*byte)(ptr), i)
-		if len(bs) != i {
-			t.Fatal()
-		}
-		handle.Free()
+func TestMetricsAllocator(t *testing.T) {
+	testAllocator(t, func() Allocator {
+		return NewMetricsAllocator(
+			GetDefault(nil),
+		)
+	})
+}
+
+func BenchmarkMetricsAllocator(b *testing.B) {
+	for _, n := range benchNs {
+		benchmarkAllocator(b, func() Allocator {
+			return NewMetricsAllocator(
+				GetDefault(nil),
+			)
+		}, n)
 	}
+}
+
+func FuzzMetricsAllocator(f *testing.F) {
+	fuzzAllocator(f, func() Allocator {
+		return NewMetricsAllocator(
+			GetDefault(nil),
+		)
+	})
 }

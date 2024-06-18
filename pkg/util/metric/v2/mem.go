@@ -67,3 +67,17 @@ var (
 			Help:      "Total number of cross pool free",
 		})
 )
+
+var (
+	mallocCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "mem",
+			Name:      "malloc_counter",
+			Help:      "malloc counter",
+		},
+		[]string{"type"},
+	)
+	MallocCounterAllocateBytes = mallocCounter.WithLabelValues("allocate")
+	MallocCounterFreeBytes     = mallocCounter.WithLabelValues("free")
+)
