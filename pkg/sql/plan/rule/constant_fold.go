@@ -181,14 +181,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	}
 
 	vec, err := colexec.EvalExpressionOnce(proc, expr, []*batch.Batch{r.bat})
-	defer func() {
-		if vec != nil {
-			vec.Free(proc.Mp())
-		}
-	}()
 	if err != nil {
 		return expr
 	}
+	defer vec.Free(proc.Mp())
 
 	if isVec {
 		data, err := vec.MarshalBinary()

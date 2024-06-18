@@ -1360,7 +1360,6 @@ func constructBlockReadPKFilter(pkName string, basePKFilter BasePKFilter) blocki
 
 	var readFilter blockio.BlockReadFilter
 	var sortedSearchFunc, unSortedSearchFunc func(*vector.Vector) []int32
-	var resetFunc func()
 
 	readFilter.HasFakePK = pkName == catalog.FakePrimaryKeyColName
 
@@ -1437,9 +1436,6 @@ func constructBlockReadPKFilter(pkName string, basePKFilter BasePKFilter) blocki
 	case function.IN:
 		vec := vector.NewVec(types.T_any.ToType())
 		vec.UnmarshalBinary(basePKFilter.lb)
-		resetFunc = func() {
-			vec.Free(nil)
-		}
 
 		switch vec.GetType().Oid {
 		case types.T_bit:
@@ -1504,9 +1500,6 @@ func constructBlockReadPKFilter(pkName string, basePKFilter BasePKFilter) blocki
 
 	case function.PREFIX_IN:
 		vec := vector.NewVec(types.T_any.ToType())
-		resetFunc = func() {
-			vec.Free(nil)
-		}
 		vec.UnmarshalBinary(basePKFilter.lb)
 		sortedSearchFunc = vector.CollectOffsetsByPrefixInFactory(vec)
 		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixInFactory(vec)
@@ -1746,8 +1739,6 @@ func constructBlockReadPKFilter(pkName string, basePKFilter BasePKFilter) blocki
 			unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lb, ub, hint)
 		}
 	}
-
-	readFilter.ResetFunc = resetFunc
 
 	if sortedSearchFunc != nil {
 		readFilter.SortedSearchFunc = func(vecs []*vector.Vector) []int32 {
