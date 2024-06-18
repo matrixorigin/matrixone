@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 
@@ -495,6 +496,10 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
 		arg.BuildIdx = t.BuildIdx
+		res.Arg = arg
+	case vm.TableScan:
+		// t := sourceIns.Arg.(*table_scan.Argument)
+		arg := table_scan.NewArgument()
 		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -1910,6 +1915,10 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		return e.F.Args[1], e.F.Args[0]
 	}
 	return e.F.Args[0], e.F.Args[1]
+}
+
+func constructTableScan() *table_scan.Argument {
+	return table_scan.NewArgument()
 }
 
 func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
