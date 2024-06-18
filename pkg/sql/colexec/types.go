@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"reflect"
 	"sync"
 
@@ -49,6 +50,53 @@ type Server struct {
 	uuidCsChanMap UuidProcMap
 	//txn's local segments.
 	cnSegmentMap CnSegmentMap
+
+	receivedRunningPipeline RunningPipelineMapForRemoteNode
+}
+
+// RunningPipelineMapForRemoteNode
+// is a map to record which pipeline was built for a remote node.
+// these pipelines will send data to a remote node,
+// we record them for a better control for their lives.
+type RunningPipelineMapForRemoteNode struct {
+	sync.Mutex
+
+	fromRpcClientToRunningPipeline map[morpc.ClientSession]*process.Process
+}
+
+func (srv *Server) RecordRunningPipeline(session morpc.ClientSession, proc *process.Process) (queryCancel bool) {
+	srv.receivedRunningPipeline.Lock()
+	defer srv.receivedRunningPipeline.Unlock()
+
+	// CancelRunningPipeline was called before, this query has been canceled.
+	if _, ok := srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[session]; ok {
+		delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, session)
+		return true
+	}
+
+	srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[session] = proc
+	return false
+}
+
+func (srv *Server) CancelRunningPipeline(session morpc.ClientSession) {
+	srv.receivedRunningPipeline.Lock()
+	defer srv.receivedRunningPipeline.Unlock()
+
+	p, ok := srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[session]
+	if ok {
+		p.Cancel()
+		delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, session)
+	} else {
+		// indicate that this query was canceled. once anyone want to start this query, should just return.
+		srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[session] = nil
+	}
+}
+
+func (srv *Server) RemoveRunningPipeline(session morpc.ClientSession) {
+	srv.receivedRunningPipeline.Lock()
+	defer srv.receivedRunningPipeline.Unlock()
+
+	delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, session)
 }
 
 type uuidProcMapItem struct {
