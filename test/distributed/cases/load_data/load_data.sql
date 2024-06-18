@@ -338,3 +338,9 @@ CREATE TABLE load_data_t1 (
 load data inline format='csv', data=$XXX$ zhangsan,26,XiAn $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age,name);
 select * from load_data_t1;
 drop table load_data_t1;
+
+drop table if exists load_data_t2;
+create table load_data_t2(id int, name varchar(20), age int);
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name , age);
+select * from load_data_t2 order by id;
+drop table load_data_t2;
