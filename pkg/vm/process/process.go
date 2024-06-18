@@ -369,14 +369,6 @@ func (proc *Process) PutVector(vec *vector.Vector) {
 
 func (proc *Process) GetVector(typ types.Type) *vector.Vector {
 	if vec := proc.vp.getVector(typ); vec != nil {
-		// if !vec.OnUsed || !vec.OnPut {
-		// 	panic("vec not on put")
-		// }
-		// vec.OnPut = false
-		// if len(vec.GetMsg) > 20 {
-		// 	vec.GetMsg = vec.GetMsg[1:]
-		// }
-		// vec.GetMsg = append(vec.GetMsg, time.Now().String()+" : typ="+vec.GetType().DescString()+" "+string(debug.Stack()))
 		vec.Reset(typ)
 		return vec
 	}
@@ -401,15 +393,6 @@ func (vp *vectorPool) putVector(vec *vector.Vector) bool {
 	if len(vp.vecs[key]) >= vp.Limit {
 		return false
 	}
-	// if !vec.OnUsed || vec.OnPut {
-	// 	panic("vec not on used")
-	// }
-	// vec.OnPut = true
-	// if len(vec.PutMsg) > 20 {
-	// 	vec.PutMsg = vec.PutMsg[1:]
-	// }
-	// vec.PutMsg = append(vec.PutMsg, time.Now().String()+" : typ="+vec.GetType().DescString()+" "+string(debug.Stack()))
-
 	vp.vecs[key] = append(vp.vecs[key], vec)
 	return true
 }
