@@ -21,6 +21,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -90,7 +91,7 @@ func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (
 
 func (i *IOEntry) prepareData() (finally func(err *error)) {
 	if cap(i.Data) < int(i.Size) {
-		ptr, dec, err := getMallocAllocator().Allocate(uint64(i.Size))
+		ptr, dec, err := getMallocAllocator().Allocate(uint64(i.Size), malloc.NoHints)
 		if err != nil {
 			panic(err)
 		}
@@ -100,12 +101,12 @@ func (i *IOEntry) prepareData() (finally func(err *error)) {
 			i.releaseData()
 		}
 		i.releaseData = func() {
-			dec.Deallocate(ptr)
+			dec.Deallocate(ptr, malloc.NoHints)
 			metric.FSMallocLiveObjectsIOEntryData.Dec()
 		}
 		finally = func(err *error) {
 			if err != nil && *err != nil {
-				dec.Deallocate(ptr)
+				dec.Deallocate(ptr, malloc.NoHints)
 				metric.FSMallocLiveObjectsIOEntryData.Dec()
 			}
 		}
