@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2180,6 +2181,11 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	return
 }
 
+func makeCompactTxnInfo(op TxnOperator) string {
+	txn := op.Txn()
+	return fmt.Sprintf("%s:%s", hex.EncodeToString(txn.ID), txn.SnapshotTS.DebugString())
+}
+
 func executeStmtWithResponse(ses *Session,
 	execCtx *ExecCtx,
 ) (err error) {
@@ -2276,9 +2282,15 @@ func executeStmtWithWorkspace(ses FeSession,
 		return nil
 	}
 
-	autocommit, err = autocommitValue(execCtx.reqCtx, ses)
-	if err != nil {
-		return err
+	//in session migration, the txn forced to be autocommit.
+	//then the txn can be committed.
+	if execCtx.inMigration {
+		autocommit = true
+	} else {
+		autocommit, err = autocommitValue(execCtx.reqCtx, ses)
+		if err != nil {
+			return err
+		}
 	}
 
 	execCtx.txnOpt.autoCommit = autocommit
@@ -2300,7 +2312,7 @@ func executeStmtWithWorkspace(ses FeSession,
 
 	//refresh txn id
 	ses.SetTxnId(txnOp.Txn().ID)
-	ses.SetStaticTxnId(txnOp.Txn().ID)
+	ses.SetStaticTxnInfo(makeCompactTxnInfo(txnOp))
 
 	//refresh proc txnOp
 	execCtx.proc.TxnOperator = txnOp
@@ -2310,6 +2322,9 @@ func executeStmtWithWorkspace(ses FeSession,
 		return err
 	}
 
+	ses.EnterFPrint(118)
+	defer ses.ExitFPrint(118)
+	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//!!!NOTE!!!: statement management
 	//2. start statement on workspace
 	txnOp.GetWorkspace().StartStatement()
@@ -2322,6 +2337,9 @@ func executeStmtWithWorkspace(ses FeSession,
 
 		txnOp = ses.GetTxnHandler().GetTxn()
 		if txnOp != nil {
+			ses.EnterFPrint(119)
+			defer ses.ExitFPrint(119)
+			setFPrints(txnOp, execCtx.ses.GetFPrints())
 			//most of the cases, txnOp will not nil except that "set autocommit = 1"
 			//commit the txn immediately then the txnOp is nil.
 			txnOp.GetWorkspace().EndStatement()
@@ -2348,6 +2366,9 @@ func executeStmtWithIncrStmt(ses FeSession,
 	if ses.IsDerivedStmt() {
 		return
 	}
+	ses.EnterFPrint(117)
+	defer ses.ExitFPrint(117)
+	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//3. increase statement id
 	err = txnOp.GetWorkspace().IncrStatementID(execCtx.reqCtx, false)
 	if err != nil {
