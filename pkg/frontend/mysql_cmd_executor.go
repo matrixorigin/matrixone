@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -2080,7 +2079,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	}
 	start := time.Now()
 	var msg interface{}
-	msg, err = mysqlRrWr.Read(goetty.ReadOptions{})
+	msg, err = mysqlRrWr.Read(ReadOptions{})
 	if err != nil {
 		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
 		if errors.Is(err, errorInvalidLength0) {
@@ -2124,7 +2123,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
 		readStart := time.Now()
-		msg, err = mysqlRrWr.Read(goetty.ReadOptions{})
+		msg, err = mysqlRrWr.Read(ReadOptions{})
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 				seq += 1

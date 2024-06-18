@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -919,7 +918,7 @@ type MediaWriter interface {
 type MysqlReader interface {
 	MediaReader
 	Property
-	Read(options goetty.ReadOptions) (interface{}, error)
+	Read(options ReadOptions) (interface{}, error)
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 	Authenticate(ctx context.Context) error
 	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error

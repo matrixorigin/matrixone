@@ -25,7 +25,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/fagongzi/goetty/v2"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,7 +41,7 @@ import (
 type RoutineManager struct {
 	mu      sync.RWMutex
 	ctx     context.Context
-	clients map[goetty.IOSession]*Routine
+	clients map[*baseIO]*Routine
 	// routinesByID keeps the routines by connection ID.
 	routinesByConnID map[uint32]*Routine
 	tlsConfig        *tls.Config
@@ -73,7 +72,7 @@ func NewKillRecord(killtime time.Time, version uint64) KillRecord {
 	}
 }
 
-func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine, version uint64) {
+func (ar *AccountRoutineManager) recordRoutine(tenantID int64, rt *Routine, version uint64) {
 	if tenantID == sysAccountID || rt == nil {
 		return
 	}
@@ -162,14 +161,14 @@ func (rm *RoutineManager) getCtx() context.Context {
 	return rm.ctx
 }
 
-func (rm *RoutineManager) setRoutine(rs goetty.IOSession, id uint32, r *Routine) {
+func (rm *RoutineManager) setRoutine(rs *baseIO, id uint32, r *Routine) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.clients[rs] = r
 	rm.routinesByConnID[id] = r
 }
 
-func (rm *RoutineManager) getRoutine(rs goetty.IOSession) *Routine {
+func (rm *RoutineManager) getRoutine(rs *baseIO) *Routine {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	return rm.clients[rs]
@@ -185,7 +184,7 @@ func (rm *RoutineManager) getRoutineByConnID(id uint32) *Routine {
 	return nil
 }
 
-func (rm *RoutineManager) deleteRoutine(rs goetty.IOSession) *Routine {
+func (rm *RoutineManager) deleteRoutine(rs *baseIO) *Routine {
 	var rt *Routine
 	var ok bool
 	rm.mu.Lock()
@@ -237,7 +236,7 @@ func (rm *RoutineManager) GetAccountRoutineManager() *AccountRoutineManager {
 	return rm.accountRoutine
 }
 
-func (rm *RoutineManager) Created(rs goetty.IOSession) {
+func (rm *RoutineManager) Created(rs *baseIO) {
 	logutil.Debugf("get the connection from %s", rs.RemoteAddress())
 	createdStart := time.Now()
 	connID, err := rm.getConnID()
@@ -246,7 +245,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 		return
 	}
 	pro := NewMysqlClientProtocol(connID, rs, int(getGlobalPu().SV.MaxBytesInOutbufToFlush), getGlobalPu().SV)
-	routine := NewRoutine(rm.getCtx(), pro, getGlobalPu().SV, rs)
+	routine := NewRoutine(rm.getCtx(), pro, getGlobalPu().SV)
 	v2.CreatedRoutineCounter.Inc()
 
 	cancelCtx := routine.getCancelRoutineCtx()
@@ -295,7 +294,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 /*
 When the io is closed, the Closed will be called.
 */
-func (rm *RoutineManager) Closed(rs goetty.IOSession) {
+func (rm *RoutineManager) Closed(rs *baseIO) {
 	rt := rm.deleteRoutine(rs)
 	if rt == nil {
 		return
@@ -351,7 +350,7 @@ func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatK
 	return nil
 }
 
-func getConnectionInfo(rs goetty.IOSession) string {
+func getConnectionInfo(rs *baseIO) string {
 	conn := rs.RawConn()
 	if conn != nil {
 		return fmt.Sprintf("connection from %s to %s", conn.RemoteAddr(), conn.LocalAddr())
@@ -359,7 +358,7 @@ func getConnectionInfo(rs goetty.IOSession) string {
 	return fmt.Sprintf("connection from %s", rs.RemoteAddress())
 }
 
-func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received uint64) error {
+func (rm *RoutineManager) Handler(rs *baseIO, msg interface{}, received uint64) error {
 	logutil.Debugf("get request from %d:%s", rs.ID(), rs.RemoteAddress())
 	defer func() {
 		logutil.Debugf("request from %d:%s has been processed", rs.ID(), rs.RemoteAddress())
@@ -398,7 +397,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	length := packet.Length
 	payload := packet.Payload
 	for uint32(length) == MaxPayloadSize {
-		msg, err = protocol.Read(goetty.ReadOptions{})
+		msg, err = protocol.Read(ReadOptions{})
 		if err != nil {
 			ses.Error(ctx,
 				"Failed to read message",
@@ -595,7 +594,7 @@ func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {
 	}
 	rm := &RoutineManager{
 		ctx:              ctx,
-		clients:          make(map[goetty.IOSession]*Routine),
+		clients:          make(map[*baseIO]*Routine),
 		routinesByConnID: make(map[uint32]*Routine),
 		accountRoutine:   accountRoutine,
 	}

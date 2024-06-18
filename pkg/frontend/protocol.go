@@ -17,10 +17,8 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/fagongzi/goetty/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"go.uber.org/zap"
 )
 
 // Response Categories
@@ -210,7 +208,7 @@ func (mp *MysqlProtocolImpl) safeQuit() {
 	}
 }
 
-func (mp *MysqlProtocolImpl) GetTcpConnection() goetty.IOSession {
+func (mp *MysqlProtocolImpl) GetTcpConnection() IOSession {
 	return mp.tcpConn
 }
 

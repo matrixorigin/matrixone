@@ -32,7 +32,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/fagongzi/goetty/v2"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 
@@ -262,7 +261,7 @@ type MysqlProtocolImpl struct {
 	//TODO: make it global
 	io IOPackage
 
-	tcpConn goetty.IOSession
+	tcpConn *baseIO
 
 	quit atomic.Bool
 
@@ -495,7 +494,7 @@ func (mp *MysqlProtocolImpl) WritePrepareResponse(ctx context.Context, stmt *Pre
 	return mp.SendPrepareResponse(ctx, stmt)
 }
 
-func (mp *MysqlProtocolImpl) Read(options goetty.ReadOptions) (interface{}, error) {
+func (mp *MysqlProtocolImpl) Read(options ReadOptions) (interface{}, error) {
 	return mp.tcpConn.Read(options)
 }
 
@@ -1825,7 +1824,7 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod(ctx context.Context) 
 		return nil, err
 	}
 
-	read, err := mp.tcpConn.Read(goetty.ReadOptions{})
+	read, err := mp.tcpConn.Read(ReadOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -2843,7 +2842,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 		var packet = append(header[:], payload[i:i+curLen]...)
 
 		mp.ses.CountPacket(1)
-		err := mp.tcpConn.Write(packet, goetty.WriteOptions{Flush: true})
+		err := mp.tcpConn.Write(packet, WriteOptions{Flush: true})
 		if err != nil {
 			return err
 		}
@@ -2858,7 +2857,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 			header[3] = mp.GetSequenceId()
 			mp.ses.CountPacket(1)
 			//send header / zero-sized packet
-			err := mp.tcpConn.Write(header[:], goetty.WriteOptions{Flush: true})
+			err := mp.tcpConn.Write(header[:], WriteOptions{Flush: true})
 			mp.AddFlushBytes(uint64(len(header)))
 			if err != nil {
 				return err
@@ -2897,7 +2896,7 @@ func (mp *MysqlProtocolImpl) MakeEOFPayload(warnings, status uint16) []byte {
 }
 
 // receiveExtraInfo tries to receive salt and labels read from proxy module.
-func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
+func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *baseIO) {
 	// TODO(volgariver6): when proxy is stable, remove this deadline setting.
 	if err := rs.RawConn().SetReadDeadline(time.Now().Add(defaultSaltReadTimeout)); err != nil {
 		mp.ses.Debugf(mp.ctx, "failed to set deadline for salt updating: %v", err)
@@ -3003,8 +3002,7 @@ func generate_salt(n int) []byte {
 	}
 	return buf
 }
-
-func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
+func NewMysqlClientProtocol(connectionID uint32, tcp *baseIO, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
 	salt := generate_salt(20)
 	mysql := &MysqlProtocolImpl{
 		io:               NewIOPackage(true),

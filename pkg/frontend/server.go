@@ -16,8 +16,6 @@ package frontend
 
 import (
 	"context"
-	"github.com/fagongzi/goetty/v2/buf"
-	"github.com/fagongzi/goetty/v2/codec"
 	"io"
 	"net"
 	"sync"
@@ -51,25 +49,11 @@ type MOServer struct {
 	wg      sync.WaitGroup
 	running bool
 
+	pu     *config.ParameterUnit
 	logger *zap.Logger
-	codec  codec.Codec
+	codec  Codec
 
 	listeners []net.Listener
-}
-
-type IOSession struct {
-	id                    uint64
-	state                 int32
-	conn                  net.Conn
-	localAddr, remoteAddr string
-	in                    *buf.ByteBuf
-	out                   *buf.ByteBuf
-	disableConnect        bool
-	logger                *zap.Logger
-	readCopyBuf           []byte
-	writeCopyBuf          []byte
-	codec                 codec.Codec
-	allocator             buf.Allocator
 }
 
 // BaseService is an interface which indicates that the instance is
@@ -95,10 +79,7 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 
 func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
-	err := mo.startAcceptLoop()
-	if err != nil {
-		return err
-	}
+	mo.startAcceptLoop()
 	setMoServerStarted(true)
 	return nil
 }
@@ -125,23 +106,17 @@ func (mo *MOServer) Stop() error {
 	mo.logger.Debug("application listener closed")
 	mo.wg.Wait()
 
-	// now no new connection will added, close all active sessions
-	for _, m := range s.sessions {
-		m.Lock()
-		for k, rs := range m.sessions {
-			delete(m.sessions, k)
-			if err := rs.Disconnect(); err != nil {
-				s.logger.Error("session closed failed",
-					zap.Error(err))
-			}
+	for s := range mo.rm.clients {
+		if err := s.Close(); err != nil {
+			s.logger.Error("session closed failed",
+				zap.Error(err))
 		}
-		m.Unlock()
 	}
-	s.logger.Debug("application stopped")
+	mo.logger.Debug("application stopped")
 	return nil
 }
 
-func (mo *MOServer) startAcceptLoop() error {
+func (mo *MOServer) startAcceptLoop() {
 	mo.logger.Debug("mo server accept loop started")
 	defer func() {
 		mo.logger.Debug("mo server accept loop stopped")
@@ -154,9 +129,6 @@ func (mo *MOServer) startAcceptLoop() error {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
-				if !mo.isStarted() {
-					return
-				}
 
 				if ne, ok := err.(net.Error); ok && ne.Timeout() {
 					if tempDelay == 0 {
@@ -174,24 +146,16 @@ func (mo *MOServer) startAcceptLoop() error {
 			}
 			tempDelay = 0
 
-			rs := NewIOSession()
-			if !s.addSession(rs) {
-				if err := rs.Close(); err != nil {
-					s.logger.Error("close session failed", zap.Error(err))
-				}
-				return
-			}
+			rs := NewIOSession(conn, NewSessionAllocator(mo.pu))
 
 			go func() {
 				defer func() {
-					if s.deleteSession(rs) {
-						if err := rs.Close(); err != nil {
-							s.logger.Error("close session failed", zap.Error(err))
-						}
+					if err := rs.Close(); err != nil {
+						mo.logger.Error("close session failed", zap.Error(err))
 					}
 				}()
-				if err := handle(rs); err != nil {
-					s.logger.Error("handle session failed", zap.Error(err))
+				if err := mo.handleMessage(rs); err != nil {
+					mo.logger.Error("handle session failed", zap.Error(err))
 				}
 			}()
 		}
@@ -252,36 +216,6 @@ func MoServerIsStarted() bool {
 func setMoServerStarted(b bool) {
 	moServerStarted.Store(b)
 }
-func NewIOSession(conn net.Conn) *IOSession {
-	moio := &IOSession{
-		id:             ,
-		state:          0,
-		conn:           nil,
-		localAddr:      "",
-		remoteAddr:     "",
-		in:             nil,
-		out:            nil,
-		disableConnect: false,
-		logger:         nil,
-		readCopyBuf:    nil,
-		writeCopyBuf:   nil,
-		codec:          nil,
-		allocator:      nil,
-	}
-	bio.adjust()
-	bio.Ref()
-
-	bio.readCopyBuf = make([]byte, bio.options.readCopyBufSize)
-	bio.writeCopyBuf = make([]byte, bio.options.writeCopyBufSize)
-	if bio.conn != nil {
-		bio.initConn()
-		bio.disableConnect = true
-	}
-	if bio.options.aware != nil {
-		bio.options.aware.Created(bio)
-	}
-	return bio
-}
 
 func NewMOServer(
 	ctx context.Context,
@@ -292,7 +226,7 @@ func NewMOServer(
 ) *MOServer {
 	setGlobalPu(pu)
 	setGlobalAicm(aicm)
-	codec := NewSqlCodec()
+
 	rm, err := NewRoutineManager(ctx)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
@@ -313,31 +247,19 @@ func NewMOServer(
 		uaddr:       pu.SV.UnixSocketAddress,
 		rm:          rm,
 		readTimeout: pu.SV.SessionTimeout.Duration,
+		pu:          pu,
+		codec:       NewMysqlCodec(),
 	}
-	app, err := goetty.NewApplicationWithListenAddress(
-		addresses,
-		rm.Handler,
-		goetty.WithAppLogger(logutil.GetGlobalLogger()),
-		goetty.WithAppHandleSessionFunc(mo.handleMessage),
-		goetty.WithAppSessionOptions(
-			goetty.WithSessionCodec(codec),
-			goetty.WithSessionLogger(logutil.GetGlobalLogger()),
-			goetty.WithSessionRWBUfferSize(DefaultRpcBufferSize, DefaultRpcBufferSize),
-			goetty.WithSessionAllocator(NewSessionAllocator(pu))),
-		goetty.WithAppSessionAware(rm),
-		//when the readTimeout expires the goetty will close the tcp connection.
-		goetty.WithReadTimeout(pu.SV.SessionTimeout.Duration))
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-	mo.app = app
 	return mo
 }
 
 // handleMessage receives the message from the client and executes it
-func (mo *MOServer) handleMessage(rs goetty.IOSession) error {
+func (mo *MOServer) handleMessage(rs *baseIO) error {
 	received := uint64(0)
-	option := goetty.ReadOptions{Timeout: mo.readTimeout}
+	option := ReadOptions{Timeout: mo.readTimeout}
 	for {
 		msg, err := rs.Read(option)
 		if err != nil {
