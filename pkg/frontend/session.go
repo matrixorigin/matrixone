@@ -699,6 +699,10 @@ func (ses *Session) UpdateDebugString() {
 	if ses.rt != nil {
 		sb.WriteString(fmt.Sprintf("goRoutineId %d", ses.rt.getGoroutineId()))
 		sb.WriteByte('|')
+		if ses.rt.mc != nil {
+			sb.WriteString(fmt.Sprintf("migrate-goRoutineId %d", ses.rt.mc.getGoroutineId()))
+			sb.WriteByte('|')
+		}
 	}
 	//session id
 	sb.WriteString(ses.uuid.String())
@@ -1559,9 +1563,9 @@ func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
 		return nil
 	}
 	tempExecCtx := &ExecCtx{
-		reqCtx:         ctx,
-		skipRespClient: true,
-		ses:            ses,
+		reqCtx:      ctx,
+		inMigration: true,
+		ses:         ses,
 	}
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: "use `" + d.db + "`"})
 }
@@ -1591,7 +1595,7 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 
 	tempExecCtx := &ExecCtx{
 		reqCtx:            ctx,
-		skipRespClient:    true,
+		inMigration:       true,
 		ses:               ses,
 		executeParamTypes: p.paramTypes,
 	}
@@ -1599,8 +1603,10 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 }
 
 func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
+	ses.ResetFPrints()
 	ses.EnterFPrint(89)
 	defer ses.ExitFPrint(89)
+	defer ses.ResetFPrints()
 	parameters := getGlobalPu().SV
 
 	//all offspring related to the request inherit the txnCtx

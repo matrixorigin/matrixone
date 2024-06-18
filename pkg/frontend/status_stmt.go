@@ -170,7 +170,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(73)
 	defer ses.ExitFPrint(73)
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	var rspLen uint64
