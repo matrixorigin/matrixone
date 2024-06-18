@@ -265,14 +265,37 @@ func TestRetryValidateService(t *testing.T) {
 					writeResponse(ctx, cancel, resp, nil, cs)
 				})
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
-			defer cancel()
-			_, err := c.Send(ctx, &lock.Request{
-				ValidateService: lock.ValidateServiceRequest{ServiceID: "s1"},
-				Method:          lock.Method_ValidateService})
-			require.True(t, isRetryError(err))
+			_, err := validateService(time.Millisecond*100, "s1", c)
+			require.True(t, err != nil && isRetryError(err))
 		},
 		WithServerMessageFilter(func(r *lock.Request) bool { return false }),
+	)
+}
+
+func TestValidateService(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, s Server) {
+			s.RegisterMethodHandler(
+				lock.Method_ValidateService,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *lock.Request,
+					resp *lock.Response,
+					cs morpc.ClientSession) {
+					resp.ValidateService.OK = true
+					writeResponse(ctx, cancel, resp, nil, cs)
+				})
+
+			valid, err := validateService(time.Millisecond*100, "UNKNOWN", c)
+			require.False(t, err != nil && isRetryError(err))
+			require.True(t, !valid)
+
+			valid, err = validateService(time.Millisecond*100, "s1", c)
+			require.False(t, err != nil && isRetryError(err))
+			require.False(t, !valid)
+		},
 	)
 }
 
