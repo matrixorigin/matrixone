@@ -33,8 +33,7 @@ type Argument struct {
 	Attrs          []string
 	TableID        uint64
 
-	buf    *batch.Batch
-	tmpBuf *batch.Batch
+	buf *batch.Batch
 
 	maxAllocSize int
 
@@ -80,11 +79,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())
 		arg.buf = nil
-	}
-
-	if arg.tmpBuf != nil {
-		arg.tmpBuf.Clean(proc.Mp())
-		arg.tmpBuf = nil
 	}
 
 	if arg.msgReceiver != nil {
