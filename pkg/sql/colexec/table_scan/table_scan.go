@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -27,7 +26,6 @@ import (
 )
 
 const argName = "table_scan"
-const maxBatchMemSize = colexec.DefaultBatchSize * 1024
 
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(argName)
@@ -91,6 +89,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if arg.buf != nil {
 		proc.PutBatch(arg.buf)
+		arg.buf = nil
 	}
 
 	for {
@@ -108,24 +107,22 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		// read data from storage engine
 		bat, err := arg.Reader.Read(proc.Ctx, arg.Attrs, nil, proc.Mp(), proc)
 		if err != nil {
+			if bat != nil {
+				proc.PutBatch(bat)
+			}
 			result.Status = vm.ExecStop
 			e = err
 			return result, err
 		}
 
 		if bat == nil {
-			if arg.tmpBuf != nil {
-				arg.buf = arg.tmpBuf
-				arg.tmpBuf = nil
-				break
-			} else {
-				result.Status = vm.ExecStop
-				e = err
-				return result, err
-			}
+			result.Status = vm.ExecStop
+			e = err
+			return result, err
 		}
 
 		if bat.IsEmpty() {
+			proc.PutBatch(bat)
 			continue
 		}
 
@@ -142,24 +139,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		batSize := bat.Size()
 		arg.maxAllocSize = max(arg.maxAllocSize, batSize)
 
-		if arg.tmpBuf == nil {
-			arg.tmpBuf = bat
-			continue
-		}
-
-		tmpSize := arg.tmpBuf.Size()
-		if arg.tmpBuf.RowCount()+bat.RowCount() < colexec.DefaultBatchSize && tmpSize+batSize < maxBatchMemSize {
-			_, err := arg.tmpBuf.Append(proc.Ctx, proc.GetMPool(), bat)
-			proc.PutBatch(bat)
-			if err != nil {
-				e = err
-				return result, err
-			}
-			continue
-		}
-
-		arg.buf = arg.tmpBuf
-		arg.tmpBuf = bat
+		arg.buf = bat
 		break
 	}
 

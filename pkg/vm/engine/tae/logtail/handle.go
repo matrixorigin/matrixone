@@ -252,6 +252,10 @@ func (b *CatalogLogtailRespBuilder) Close() {
 		b.delBatch.Close()
 		b.delBatch = nil
 	}
+	if b.specailDeleteBatch != nil {
+		b.specailDeleteBatch.Close()
+		b.specailDeleteBatch = nil
+	}
 }
 
 // VisitDB = catalog.Processor.OnDatabase
@@ -490,6 +494,10 @@ func (b *TableLogtailRespBuilder) Close() {
 	if b.blkMetaDelBatch != nil {
 		b.blkMetaDelBatch.Close()
 		b.blkMetaDelBatch = nil
+	}
+	if b.objectMetaBatch != nil {
+		b.objectMetaBatch.Close()
+		b.objectMetaBatch = nil
 	}
 }
 
