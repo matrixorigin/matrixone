@@ -286,6 +286,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	lastArg.SetInfo(info)
 	lastArg.AppendChild(valueScanOperator)
 	for {
+		valueScanOperator.Prepare(s.Proc)
 		bat, end, err = sender.receiveBatch()
 		if err != nil {
 			return err

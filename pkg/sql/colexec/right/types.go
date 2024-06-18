@@ -44,13 +44,15 @@ type evalVector struct {
 type container struct {
 	colexec.ReceiverOperator
 
-	state int
+	state   int
+	lastpos int
 
 	inBuckets []uint8
 
 	batches       []*batch.Batch
 	batchRowCount int
 	rbat          *batch.Batch
+	buf           *batch.Batch
 
 	expr colexec.ExpressionExecutor
 
@@ -79,16 +81,14 @@ type Argument struct {
 	RightTypes []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
-	bat        *batch.Batch
 	rbat       []*batch.Batch
-	lastpos    int
 
-	IsMerger bool
-	Channel  chan *bitmap.Bitmap
-	NumCPU   uint64
+	Channel chan *bitmap.Bitmap
+	NumCPU  uint64
 
 	HashOnPK           bool
 	IsShuffle          bool
+	IsMerger           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
 	vm.OperatorBase
@@ -152,13 +152,13 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
-
+		if arg.ctr.buf != nil {
+			proc.PutBatch(arg.ctr.buf)
+			arg.ctr.buf = nil
+		}
 		arg.ctr = nil
 	}
-	if arg.bat != nil {
-		proc.PutBatch(arg.bat)
-		arg.bat = nil
-	}
+
 }
 
 func (ctr *container) cleanExprExecutor() {

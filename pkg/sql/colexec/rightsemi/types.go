@@ -44,7 +44,8 @@ type evalVector struct {
 type container struct {
 	colexec.ReceiverOperator
 
-	state int
+	state   int
+	lastpos int
 
 	inBuckets []uint8
 
@@ -71,6 +72,8 @@ type container struct {
 
 	tmpBatches []*batch.Batch // for reuse
 
+	buf []*batch.Batch
+
 	maxAllocSize int64
 }
 
@@ -80,13 +83,11 @@ type Argument struct {
 	RightTypes []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
-	rbat       []*batch.Batch
-	lastpos    int
 
-	IsMerger bool
-	Channel  chan *bitmap.Bitmap
-	NumCPU   uint64
+	Channel chan *bitmap.Bitmap
+	NumCPU  uint64
 
+	IsMerger           bool
 	HashOnPK           bool
 	IsShuffle          bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
@@ -170,6 +171,7 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 		proc.PutBatch(ctr.batches[i])
 	}
 	ctr.batches = nil
+
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil

@@ -63,9 +63,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result := vm.NewCallResult()
 	var msg *process.RegisterMessage
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if arg.ctr.buf != nil {
+		proc.PutBatch(arg.ctr.buf)
+		arg.ctr.buf = nil
 	}
 
 	for {
@@ -79,29 +79,29 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Status = vm.ExecStop
 			return result, nil
 		}
-		arg.buf = msg.Batch
-		if arg.buf.Last() {
-			result.Batch = arg.buf
+		arg.ctr.buf = msg.Batch
+		if arg.ctr.buf.Last() {
+			result.Batch = arg.ctr.buf
 			return result, nil
 		}
 
-		anal.Input(arg.buf, arg.GetIsFirst())
+		anal.Input(arg.ctr.buf, arg.GetIsFirst())
 		if arg.ctr.seen >= arg.ctr.limit {
-			proc.PutBatch(arg.buf)
+			proc.PutBatch(arg.ctr.buf)
 			continue
 		}
-		newSeen := arg.ctr.seen + uint64(arg.buf.RowCount())
+		newSeen := arg.ctr.seen + uint64(arg.ctr.buf.RowCount())
 		if newSeen < arg.ctr.limit {
 			arg.ctr.seen = newSeen
-			anal.Output(arg.buf, arg.GetIsLast())
-			result.Batch = arg.buf
+			anal.Output(arg.ctr.buf, arg.GetIsLast())
+			result.Batch = arg.ctr.buf
 			return result, nil
 		} else {
 			num := int(newSeen - arg.ctr.limit)
-			batch.SetLength(arg.buf, arg.buf.RowCount()-num)
+			batch.SetLength(arg.ctr.buf, arg.ctr.buf.RowCount()-num)
 			arg.ctr.seen = newSeen
-			anal.Output(arg.buf, arg.GetIsLast())
-			result.Batch = arg.buf
+			anal.Output(arg.ctr.buf, arg.GetIsLast())
+			result.Batch = arg.ctr.buf
 			return result, nil
 		}
 	}

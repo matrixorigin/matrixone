@@ -55,8 +55,6 @@ type Argument struct {
 	// group by expr1, expr2 ...
 	GroupExprs []*plan.Expr
 
-	buf *batch.Batch
-
 	vm.OperatorBase
 }
 
@@ -65,28 +63,28 @@ func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
 }
 
 type container struct {
-	// safe check.
-	workDone bool
-
 	samplePool *sPool
-
-	isGroupBy     bool
-	isMultiSample bool
+	// safe check.
+	workDone             bool
+	isGroupBy            bool
+	isMultiSample        bool
+	groupVectorsNullable bool
+	useIntHashMap        bool
 
 	// executor for group-by columns.
-	groupExecutors       []colexec.ExpressionExecutor
-	groupVectors         []*vector.Vector
-	groupVectorsNullable bool
+	groupExecutors []colexec.ExpressionExecutor
+	groupVectors   []*vector.Vector
 
 	// executor for sample(expression, number)'s expression.
 	sampleExecutors []colexec.ExpressionExecutor
 	tempBatch1      []*batch.Batch
 	sampleVectors   []*vector.Vector
 
+	buf *batch.Batch
+
 	// hash map related.
-	useIntHashMap bool
-	intHashMap    *hashmap.IntHashMap
-	strHashMap    *hashmap.StrHashMap
+	intHashMap *hashmap.IntHashMap
+	strHashMap *hashmap.StrHashMap
 }
 
 func init() {
@@ -204,11 +202,6 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
-	}
-
 	if arg.ctr != nil {
 		if arg.ctr.intHashMap != nil {
 			arg.ctr.intHashMap.Free()
@@ -232,6 +225,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 		if arg.ctr.samplePool != nil {
 			arg.ctr.samplePool.Free()
+		}
+
+		if arg.ctr.buf != nil {
+			arg.ctr.buf.Clean(proc.Mp())
+			arg.ctr.buf = nil
 		}
 
 		arg.ctr = nil
