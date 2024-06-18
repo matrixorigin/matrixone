@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,31 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memorycache
+package fileservice
 
 import (
-	"sync/atomic"
-	"testing"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	"github.com/stretchr/testify/require"
 )
 
-func TestRCBytes(t *testing.T) {
-	allocator := malloc.GetDefault(nil)
+var initMallocAllocatorOnce sync.Once
 
-	var size atomic.Int64
-	r := RCBytes{
-		d:    newData(allocator, 1, &size),
-		size: &size,
-	}
-	// test Bytes
-	r.Bytes()[0] = 1
-	require.Equal(t, r.Bytes()[0], byte(1))
-	// test Slice
-	r = r.Slice(0).(RCBytes)
-	require.Equal(t, 0, len(r.Bytes()))
-	// test release
-	r.Release()
-	require.Equal(t, int64(0), size.Load())
+var _mallocAllocator malloc.Allocator
+
+func getMallocAllocator() malloc.Allocator {
+	// delay initialization of global allocator
+	// ugly, but we tend to read malloc config from files instead of env vars
+	initMallocAllocatorOnce.Do(func() {
+		_mallocAllocator = malloc.GetDefault(nil)
+	})
+	return _mallocAllocator
 }
