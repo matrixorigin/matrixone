@@ -206,7 +206,9 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 				if execLen == 1 {
 					// ToConst just returns a new pointer to the same memory.
 					// so we need to duplicate it.
-					fixed.resultVector, err = result.ToConst(0, 1, mp).Dup(mp)
+					tmpVec := result.ToConst(0, 1, mp)
+					fixed.resultVector, err = tmpVec.Dup(mp)
+					tmpVec.Free(mp)
 				} else {
 					fixed.fixed = true
 					fixed.resultVector = result

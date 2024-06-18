@@ -19,6 +19,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 )
 
+// debug tools. pls donot delete these codes
+// var vectorPool = &sync.Pool{
+// 	New: func() interface{} {
+// 		v := new(Vector)
+// 		v.nsp = &nulls.Nulls{}
+// 		runtime.SetFinalizer(v, func(v *Vector) {
+// 			if v.OnUsed {
+// 				panic("vector is still used")
+// 			}
+// 		})
+// 		return v
+// 	},
+// }
+
 func init() {
 	reuse.CreatePool[Vector](
 		func() *Vector {
@@ -45,6 +59,7 @@ func (v Vector) TypeName() string {
 
 func NewVecFromReuse() *Vector {
 	v := reuse.Alloc[Vector](nil)
+	// v := vectorPool.Get().(*Vector)
 	// if v.OnUsed {
 	// 	panic("alloc onused vector")
 	// }

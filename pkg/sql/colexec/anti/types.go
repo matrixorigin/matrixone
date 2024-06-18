@@ -127,6 +127,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 		arg.ctr = nil
 	}
+	if arg.bat != nil {
+		proc.PutBatch(arg.bat)
+		arg.bat = nil
+	}
+	arg.lastrow = 0
 }
 
 func (ctr *container) cleanExprExecutor() {
