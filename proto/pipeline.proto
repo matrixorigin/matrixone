@@ -363,6 +363,10 @@ message StreamScan {
   int64 limit = 3;
 }
 
+message TableScan {
+
+}
+
 message SampleFunc {
   enum SampleType {
     Rows = 0;
@@ -425,6 +429,7 @@ message Instruction{
   int32 max_parallel = 42;
   IndexJoin index_join = 43;
   ProductL2 product_l2 = 44;
+  TableScan table_scan = 45;
 }
 
 message AnalysisList {

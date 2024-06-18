@@ -1046,6 +1046,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Limit:  t.Limit,
 			Offset: t.Offset,
 		}
+	case *table_scan.Argument:
+		in.TableScan = &pipeline.TableScan{}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
