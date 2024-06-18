@@ -455,7 +455,7 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 					b.getServiceID(),
 					l.client,
 				)
-				if isRetryError(err) {
+				if err != nil && isRetryError(err) {
 					continue
 				}
 				if !valid {

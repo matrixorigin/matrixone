@@ -578,14 +578,8 @@ func (p *PartitionState) HandleRowsInsert(
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
-	vec0 := mustVectorFromProto(input.Vecs[0])
-	vec1 := mustVectorFromProto(input.Vecs[1])
-	defer func() {
-		vec0.Free(nil)
-		vec1.Free(nil)
-	}()
-	rowIDVector := vector.MustFixedCol[types.Rowid](vec0)
-	timeVector := vector.MustFixedCol[types.TS](vec1)
+	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
+	timeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
