@@ -23,6 +23,7 @@ import (
 
 type TxnMemo struct {
 	*model.Tree
+	IsFlushOrMerge   bool
 	isCatalogChanged bool
 }
 

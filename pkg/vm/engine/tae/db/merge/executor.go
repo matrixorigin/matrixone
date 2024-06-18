@@ -218,6 +218,7 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, mobjs []*catalog.O
 		}
 
 		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
+			txn.GetMemo().IsFlushOrMerge = true
 			task, err := jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes)
 			return task, err
 		}

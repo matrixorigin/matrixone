@@ -67,40 +67,6 @@ func (obj *txnSysObject) RangeDelete(blkID uint16, start, end uint32, dt handle.
 	return obj.txnObject.RangeDelete(blkID, start, end, dt, mp)
 }
 
-func (obj *txnSysObject) processDB(fn func(*catalog.DBEntry) error, ignoreErr bool) (err error) {
-	it := newDBIt(obj.Txn, obj.catalog)
-	for it.linkIt.Valid() {
-		if err = it.GetError(); err != nil && !ignoreErr {
-			break
-		}
-		db := it.GetCurr()
-		if err = fn(db); err != nil && !ignoreErr {
-			break
-		}
-		it.Next()
-	}
-	return
-}
-
-func (obj *txnSysObject) processTable(entry *catalog.DBEntry, fn func(*catalog.TableEntry) error, ignoreErr bool) (err error) {
-	txnDB, err := obj.table.store.getOrSetDB(entry.GetID())
-	if err != nil {
-		return
-	}
-	it := newRelationIt(txnDB)
-	for it.linkIt.Valid() {
-		if err = it.GetError(); err != nil && !ignoreErr {
-			break
-		}
-		table := it.GetCurr()
-		if err = fn(table); err != nil && !ignoreErr {
-			break
-		}
-		it.Next()
-	}
-	return
-}
-
 func FillColumnRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.TableMVCCNode], attr string, colData containers.Vector) {
 	schema := node.BaseNode.Schema
 	tableID := table.GetID()
@@ -160,45 +126,19 @@ func FillColumnRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Ta
 			colData.Append(colDef.SeqNum, false)
 		case pkgcatalog.SystemColAttr_EnumValues:
 			colData.Append([]byte(colDef.EnumValues), false)
+		case pkgcatalog.SystemColAttr_CPKey:
+			packer := types.NewPacker()
+			packer.EncodeUint32(schema.AcInfo.TenantID)
+			packer.EncodeStringType([]byte(table.GetDB().GetName()))
+			packer.EncodeStringType([]byte(schema.Name))
+			packer.EncodeStringType([]byte(colDef.Name))
+			colData.Append(packer.Bytes(), false)
+			packer.Close()
+		case pkgcatalog.Row_ID:
 		default:
 			panic("unexpected colname. if add new catalog def, fill it in this switch")
 		}
 	}
-}
-
-// func (obj *txnSysObject) GetDeltaPersistedTS() types.TS {
-// 	return types.TS{}.Next()
-// }
-
-func (obj *txnSysObject) getColumnTableVec(
-	ts types.TS, colIdx int, mp *mpool.MPool,
-) (colData containers.Vector, colName string, err error) {
-	col := catalog.SystemColumnSchema.ColDefs[colIdx]
-	colData = containers.MakeVector(col.Type, mp)
-	tableFn := func(table *catalog.TableEntry) error {
-		table.RLock()
-		node := table.GetVisibleNodeLocked(obj.Txn)
-		table.RUnlock()
-		FillColumnRow(table, node, col.Name, colData)
-		return nil
-	}
-	dbFn := func(db *catalog.DBEntry) error {
-		return obj.processTable(db, tableFn, false)
-	}
-	err = obj.processDB(dbFn, false)
-	if err != nil {
-		return
-	}
-	return
-}
-func (obj *txnSysObject) getColumnTableData(
-	colIdx int, mp *mpool.MPool,
-) (view *containers.Batch, err error) {
-	ts := obj.Txn.GetStartTS()
-	view = containers.NewBatch()
-	colData, colName, err := obj.getColumnTableVec(ts, colIdx, mp)
-	view.AddVector(colName, colData)
-	return
 }
 
 func FillTableRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.TableMVCCNode], attr string, colData containers.Vector) {
@@ -240,46 +180,22 @@ func FillTableRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Tab
 		colData.Append(schema.Version, false)
 	case pkgcatalog.SystemRelAttr_CatalogVersion:
 		colData.Append(schema.CatalogVersion, false)
-	case catalog.AccountIDDbNameTblName:
+	case pkgcatalog.SystemRelAttr_CPKey:
 		packer := types.NewPacker()
 		packer.EncodeUint32(schema.AcInfo.TenantID)
 		packer.EncodeStringType([]byte(table.GetDB().GetName()))
 		packer.EncodeStringType([]byte(schema.Name))
 		colData.Append(packer.Bytes(), false)
 		packer.Close()
+	case pkgcatalog.Row_ID:
+		// fill outside of this func
 	default:
-		panic("unexpected colname. if add new catalog def, fill it in this switch")
+		panic(fmt.Sprintf("unexpected colname %q. if add new catalog def, fill it in this switch", attr))
 	}
 }
 
-func (obj *txnSysObject) getRelTableVec(ts types.TS, colIdx int, mp *mpool.MPool) (colData containers.Vector, colName string, err error) {
-	colDef := catalog.SystemTableSchema.ColDefs[colIdx]
-	colName = colDef.Name
-	colData = containers.MakeVector(colDef.Type, mp)
-	tableFn := func(table *catalog.TableEntry) error {
-		table.RLock()
-		node := table.GetVisibleNodeLocked(obj.Txn)
-		table.RUnlock()
-		FillTableRow(table, node, colDef.Name, colData)
-		return nil
-	}
-	dbFn := func(db *catalog.DBEntry) error {
-		return obj.processTable(db, tableFn, false)
-	}
-	if err = obj.processDB(dbFn, false); err != nil {
-		return
-	}
-	return
-}
-
-func (obj *txnSysObject) getRelTableData(colIdx int, mp *mpool.MPool) (view *containers.Batch, err error) {
-	ts := obj.Txn.GetStartTS()
-	view = containers.NewBatch()
-	colData, colName, err := obj.getRelTableVec(ts, colIdx, mp)
-	view.AddVector(colName, colData)
-	return
-}
-
+// FillDBRow is used for checkpoint collecting and catalog-tree replaying at the moment.
+// As to Logtail and GetColumnDataById, objects in mo_database are the right place to get data.
 func FillDBRow(db *catalog.DBEntry, _ *catalog.MVCCNode[*catalog.EmptyMVCCNode], attr string, colData containers.Vector) {
 	switch attr {
 	case pkgcatalog.SystemDBAttr_ID:
@@ -300,53 +216,23 @@ func FillDBRow(db *catalog.DBEntry, _ *catalog.MVCCNode[*catalog.EmptyMVCCNode],
 		colData.Append(db.GetTenantID(), false)
 	case pkgcatalog.SystemDBAttr_Type:
 		colData.Append([]byte(db.GetDatType()), false)
-	case catalog.AccountIDDbName:
+	case pkgcatalog.SystemDBAttr_CPKey:
 		packer := types.NewPacker()
 		packer.EncodeUint32(db.GetTenantID())
 		packer.EncodeStringType([]byte(db.GetName()))
 		colData.Append(packer.Bytes(), false)
 		packer.Close()
+	case pkgcatalog.Row_ID:
+		// fill outside of this func
 	default:
-		panic("unexpected colname. if add new catalog def, fill it in this switch")
+		panic(fmt.Sprintf("unexpected colname %q. if add new catalog def, fill it in this switch", attr))
 	}
-}
-func (obj *txnSysObject) getDBTableVec(colIdx int, mp *mpool.MPool) (colData containers.Vector, colName string, err error) {
-	colDef := catalog.SystemDBSchema.ColDefs[colIdx]
-	colName = colDef.Name
-	colData = containers.MakeVector(colDef.Type, mp)
-	fn := func(db *catalog.DBEntry) error {
-		FillDBRow(db, nil, colDef.Name, colData)
-		return nil
-	}
-	if err = obj.processDB(fn, false); err != nil {
-		return
-	}
-	return
-}
-func (obj *txnSysObject) getDBTableData(
-	colIdx int, mp *mpool.MPool,
-) (view *containers.Batch, err error) {
-	view = containers.NewBatch()
-	colData, colName, err := obj.getDBTableVec(colIdx, mp)
-	view.AddVector(colName, colData)
-	return
 }
 
 func (obj *txnSysObject) GetColumnDataById(
 	ctx context.Context, blkID uint16, colIdx int, mp *mpool.MPool,
 ) (view *containers.Batch, err error) {
-	if !obj.isSysTable() {
-		return obj.txnObject.GetColumnDataById(ctx, blkID, colIdx, mp)
-	}
-	if obj.table.GetID() == pkgcatalog.MO_DATABASE_ID {
-		return obj.getDBTableData(colIdx, mp)
-	} else if obj.table.GetID() == pkgcatalog.MO_TABLES_ID {
-		return obj.getRelTableData(colIdx, mp)
-	} else if obj.table.GetID() == pkgcatalog.MO_COLUMNS_ID {
-		return obj.getColumnTableData(colIdx, mp)
-	} else {
-		panic("not supported")
-	}
+	return obj.txnObject.GetColumnDataById(ctx, blkID, colIdx, mp)
 }
 
 func (obj *txnSysObject) Prefetch(idxes []int) error {
@@ -363,41 +249,6 @@ func (obj *txnSysObject) GetColumnDataByName(
 func (obj *txnSysObject) GetColumnDataByNames(
 	ctx context.Context, blkID uint16, attrs []string, mp *mpool.MPool,
 ) (view *containers.Batch, err error) {
-	if !obj.isSysTable() {
-		return obj.txnObject.GetColumnDataByNames(ctx, blkID, attrs, mp)
-	}
-	view = containers.NewBatch()
-	ts := obj.Txn.GetStartTS()
-	switch obj.table.GetID() {
-	case pkgcatalog.MO_DATABASE_ID:
-		for _, attr := range attrs {
-			colIdx := obj.entry.GetSchema().GetColIdx(attr)
-			vec, _, err := obj.getDBTableVec(colIdx, mp)
-			view.AddVector(attr, vec)
-			if err != nil {
-				return view, err
-			}
-		}
-	case pkgcatalog.MO_TABLES_ID:
-		for _, attr := range attrs {
-			colIdx := obj.entry.GetSchema().GetColIdx(attr)
-			vec, _, err := obj.getRelTableVec(ts, colIdx, mp)
-			view.AddVector(attr, vec)
-			if err != nil {
-				return view, err
-			}
-		}
-	case pkgcatalog.MO_COLUMNS_ID:
-		for _, attr := range attrs {
-			colIdx := obj.entry.GetSchema().GetColIdx(attr)
-			vec, _, err := obj.getColumnTableVec(ts, colIdx, mp)
-			view.AddVector(attr, vec)
-			if err != nil {
-				return view, err
-			}
-		}
-	default:
-		panic("not supported")
-	}
+	obj.txnObject.GetColumnDataByNames(ctx, blkID, attrs, mp)
 	return
 }
