@@ -6918,6 +6918,7 @@ func TestSnapshotMeta(t *testing.T) {
 	assert.NotNil(t, minMerged)
 	snaps, err := db.DiskCleaner.GetCleaner().GetSnapshots()
 	assert.Nil(t, err)
+	defer logtail.CloseSnapshotList(snaps)
 	assert.Equal(t, 1, len(snaps))
 	for _, snap := range snaps {
 		assert.Equal(t, len(snapshots), snap.Length())
@@ -6940,6 +6941,7 @@ func TestSnapshotMeta(t *testing.T) {
 	assert.True(t, end.GreaterEq(&minEnd))
 	snaps, err = db.DiskCleaner.GetCleaner().GetSnapshots()
 	assert.Nil(t, err)
+	defer logtail.CloseSnapshotList(snaps)
 	assert.Equal(t, 1, len(snaps))
 	for _, snap := range snaps {
 		assert.Equal(t, len(snapshots), snap.Length())
