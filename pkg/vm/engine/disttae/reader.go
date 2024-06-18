@@ -49,6 +49,9 @@ import (
 
 func (mixin *withFilterMixin) reset() {
 	mixin.filterState.evaluated = false
+	if mixin.filterState.filter.ResetFunc != nil {
+		mixin.filterState.filter.ResetFunc()
+	}
 	mixin.filterState.filter = blockio.BlockReadFilter{}
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1

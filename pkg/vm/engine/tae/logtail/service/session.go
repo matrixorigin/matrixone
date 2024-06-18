@@ -215,7 +215,7 @@ func (s *morpcStream) write(
 			return err
 		}
 	}
-
+	v2.LogTailServerSendCounter.Add(1)
 	return nil
 }
 
