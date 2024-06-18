@@ -420,7 +420,7 @@ func saveProfiles() {
 
 func saveProfile(typ string) string {
 	name, _ := uuid.NewV7()
-	profilePath := catalog.BuildProfilePath(typ, name.String()) + ".gz"
+	profilePath := catalog.BuildProfilePath(globalServiceType, globalNodeId, typ, name.String()) + ".gz"
 	logutil.GetGlobalLogger().Info("save profiles ", zap.String("path", profilePath))
 	cnservice.SaveProfile(profilePath, typ, globalEtlFS)
 	return profilePath

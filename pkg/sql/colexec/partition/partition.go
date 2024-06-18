@@ -118,7 +118,7 @@ func (ctr *container) evaluateOrderColumn(proc *process.Process, index int) erro
 
 	ctr.orderCols[index] = make([]*vector.Vector, len(ctr.executors))
 	for i := 0; i < len(ctr.executors); i++ {
-		vec, err := ctr.executors[i].EvalWithoutResultReusing(proc, inputs)
+		vec, err := ctr.executors[i].EvalWithoutResultReusing(proc, inputs, nil)
 		if err != nil {
 			return err
 		}

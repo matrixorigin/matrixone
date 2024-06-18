@@ -147,6 +147,21 @@ select @@SESSION.SQL_LOG_BIN;
 SELECT @@session.autocommit;
 select @@TIME_ZONE;
 
+-- set global confirm session env
+-- @session:id=4&user=acc3:admin&password=111
+show global variables like '%lower_case_table%';
+set global lower_case_table_names=0;
+show global variables like '%lower_case_table%';
+SELECT @@global.lower_case_table_names;
+SELECT @@session.lower_case_table_names;
+select @@lower_case_table_names;
+-- @session
+-- @session:id=5&user=acc3:admin&password=111
+SELECT @@session.lower_case_table_names;
+select @@lower_case_table_names;
+show global variables like '%lower_case_table%';
+SELECT @@global.lower_case_table_names;
+-- @session
 drop account acc1;
 drop account acc2;
 drop account acc3;

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -757,7 +758,7 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 	for i := info.length() - 1; i >= 0; i-- {
 		row := make([]interface{}, 3)
 		row[0] = "Error"
-		row[1] = info.codes[i]
+		row[1] = int16(info.codes[i])
 		row[2] = info.msgs[i]
 		mrs.AddRow(row)
 	}
@@ -852,7 +853,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		if err != nil {
 			return err
 		}
-		vec, err := executor.Eval(execCtx.proc, []*batch.Batch{bat})
+		vec, err := executor.Eval(execCtx.proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			executor.Free()
 			return err
@@ -1483,7 +1484,7 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 		if err != nil {
 			return err
 		}
-		vec, err := executor.Eval(proc, []*batch.Batch{bat})
+		vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			executor.Free()
 			return err
@@ -2180,6 +2181,11 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	return
 }
 
+func makeCompactTxnInfo(op TxnOperator) string {
+	txn := op.Txn()
+	return fmt.Sprintf("%s:%s", hex.EncodeToString(txn.ID), txn.SnapshotTS.DebugString())
+}
+
 func executeStmtWithResponse(ses *Session,
 	execCtx *ExecCtx,
 ) (err error) {
@@ -2276,9 +2282,15 @@ func executeStmtWithWorkspace(ses FeSession,
 		return nil
 	}
 
-	autocommit, err = autocommitValue(execCtx.reqCtx, ses)
-	if err != nil {
-		return err
+	//in session migration, the txn forced to be autocommit.
+	//then the txn can be committed.
+	if execCtx.inMigration {
+		autocommit = true
+	} else {
+		autocommit, err = autocommitValue(execCtx.reqCtx, ses)
+		if err != nil {
+			return err
+		}
 	}
 
 	execCtx.txnOpt.autoCommit = autocommit
@@ -2300,7 +2312,7 @@ func executeStmtWithWorkspace(ses FeSession,
 
 	//refresh txn id
 	ses.SetTxnId(txnOp.Txn().ID)
-	ses.SetStaticTxnId(txnOp.Txn().ID)
+	ses.SetStaticTxnInfo(makeCompactTxnInfo(txnOp))
 
 	//refresh proc txnOp
 	execCtx.proc.TxnOperator = txnOp
@@ -2310,6 +2322,9 @@ func executeStmtWithWorkspace(ses FeSession,
 		return err
 	}
 
+	ses.EnterFPrint(118)
+	defer ses.ExitFPrint(118)
+	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//!!!NOTE!!!: statement management
 	//2. start statement on workspace
 	txnOp.GetWorkspace().StartStatement()
@@ -2322,6 +2337,9 @@ func executeStmtWithWorkspace(ses FeSession,
 
 		txnOp = ses.GetTxnHandler().GetTxn()
 		if txnOp != nil {
+			ses.EnterFPrint(119)
+			defer ses.ExitFPrint(119)
+			setFPrints(txnOp, execCtx.ses.GetFPrints())
 			//most of the cases, txnOp will not nil except that "set autocommit = 1"
 			//commit the txn immediately then the txnOp is nil.
 			txnOp.GetWorkspace().EndStatement()
@@ -2348,6 +2366,9 @@ func executeStmtWithIncrStmt(ses FeSession,
 	if ses.IsDerivedStmt() {
 		return
 	}
+	ses.EnterFPrint(117)
+	defer ses.ExitFPrint(117)
+	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//3. increase statement id
 	err = txnOp.GetWorkspace().IncrStatementID(execCtx.reqCtx, false)
 	if err != nil {
@@ -2834,7 +2855,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_QUIT:
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
-		var query = string(req.GetData().([]byte))
+		var query = util.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(SubStringFromBegin(query, int(getGlobalPu().SV.LengthOfQueryPrinted))))
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
@@ -2843,7 +2864,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		return resp, nil
 	case COM_INIT_DB:
-		var dbname = string(req.GetData().([]byte))
+		var dbname = util.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		query := "use `" + dbname + "`"
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
@@ -2853,7 +2874,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 		return resp, nil
 	case COM_FIELD_LIST:
-		var payload = string(req.GetData().([]byte))
+		var payload = util.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		query := makeCmdFieldListSql(payload)
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
@@ -2869,7 +2890,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
-		sql = string(req.GetData().([]byte))
+		sql = util.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 
 		// rewrite to "Prepare stmt_name from 'xxx'"
@@ -2886,9 +2907,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_EXECUTE:
 		ses.SetCmd(COM_STMT_EXECUTE)
-		data := req.GetData().([]byte)
 		var prepareStmt *PrepareStmt
-		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, data)
+		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
@@ -2906,8 +2926,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_SEND_LONG_DATA:
 		ses.SetCmd(COM_STMT_SEND_LONG_DATA)
-		data := req.GetData().([]byte)
-		err = parseStmtSendLongData(execCtx.reqCtx, ses, data)
+		err = parseStmtSendLongData(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_SEND_LONG_DATA, ses.GetTxnHandler().GetServerStatus(), err)
 			return resp, nil
@@ -2915,10 +2934,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return nil, nil
 
 	case COM_STMT_CLOSE:
-		data := req.GetData().([]byte)
-
 		// rewrite to "deallocate Prepare stmt_name"
-		stmtID := binary.LittleEndian.Uint32(data[0:4])
+		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql = fmt.Sprintf("deallocate prepare %s", stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
@@ -2930,10 +2947,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, nil
 
 	case COM_STMT_RESET:
-		data := req.GetData().([]byte)
-
 		//Payload of COM_STMT_RESET
-		stmtID := binary.LittleEndian.Uint32(data[0:4])
+		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql = fmt.Sprintf("reset prepare %s", stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
@@ -2944,8 +2959,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, nil
 
 	case COM_SET_OPTION:
-		data := req.GetData().([]byte)
-		err := handleSetOption(ses, execCtx, data)
+		err = handleSetOption(ses, execCtx, req.GetData().([]byte))
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus(), err)
 		}

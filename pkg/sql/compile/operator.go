@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 
@@ -496,6 +497,10 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.PkTyp = t.PkTyp
 		arg.BuildIdx = t.BuildIdx
 		res.Arg = arg
+	case vm.TableScan:
+		// t := sourceIns.Arg.(*table_scan.Argument)
+		arg := table_scan.NewArgument()
+		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
@@ -560,13 +565,13 @@ func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.Argume
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
 
-	if tableScan.Stats.Outcnt < sinkScan.Stats.Outcnt {
-		arg.BuildIdx = 0 // build on tableScan
-		arg.N = sinkScan.Stats.Outcnt + tableScan.Stats.Outcnt
-	} else {
-		arg.BuildIdx = 1 // build on sinkScan
-		arg.N = sinkScan.Stats.Outcnt
-	}
+	// if tableScan.Stats.Outcnt < sinkScan.Stats.Outcnt {
+	// 	arg.BuildIdx = 0 // build on tableScan
+	// 	arg.N = sinkScan.Stats.Outcnt + tableScan.Stats.Outcnt
+	// } else {
+	arg.BuildIdx = 1 // build on sinkScan
+	arg.N = 1.2 * sinkScan.Stats.Outcnt
+	// }
 
 	// currently can not build runtime filter on table scan and probe it on sink scan
 	// so only use runtime filter when build on sink scan
@@ -1910,6 +1915,10 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		return e.F.Args[1], e.F.Args[0]
 	}
 	return e.F.Args[0], e.F.Args[1]
+}
+
+func constructTableScan() *table_scan.Argument {
+	return table_scan.NewArgument()
 }
 
 func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {

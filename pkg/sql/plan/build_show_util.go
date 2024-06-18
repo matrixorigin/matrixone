@@ -203,7 +203,15 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 		}
 	}
 
+	dedupFkName := make(UnorderedSet[string])
 	for _, fk := range tableDef.Fkeys {
+		if len(fk.Name) != 0 {
+			if dedupFkName.Find(fk.Name) {
+				continue
+			}
+			dedupFkName.Insert(fk.Name)
+		}
+
 		colNames := make([]string, len(fk.Cols))
 		for i, colId := range fk.Cols {
 			colNames[i] = colIdToName[colId]
@@ -363,8 +371,11 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 	}
 
 	var buf bytes.Buffer
-	for _, ch := range createStr {
+	for i, ch := range createStr {
 		if ch == '"' {
+			if i > 0 && createStr[i-1] == '\\' {
+				continue
+			}
 			buf.WriteRune('"')
 		}
 		buf.WriteRune(ch)

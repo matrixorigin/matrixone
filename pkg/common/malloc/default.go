@@ -19,12 +19,30 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 )
 
-func NewDefault(config *Config) (allocator Allocator) {
+var defaultAllocator Allocator
+
+var setDefaultAllocatorOnce sync.Once
+
+func GetDefault(defaultConfig *Config) Allocator {
+	setDefaultAllocatorOnce.Do(func() {
+		defaultAllocator = newDefault(defaultConfig)
+	})
+	return defaultAllocator
+}
+
+func newDefault(config *Config) (allocator Allocator) {
 	if config == nil {
 		c := *defaultConfig.Load()
 		config = &c
+	}
+
+	if os.Getenv("MO_MALLOC_DEBUG") != "" {
+		config.CheckFraction = ptrTo(uint32(1))
+		config.FullStackFraction = ptrTo(uint32(1))
+		config.EnableMetrics = ptrTo(true)
 	}
 
 	defer func() {
@@ -78,7 +96,7 @@ func NewDefault(config *Config) (allocator Allocator) {
 var globalProfiler = NewProfiler[HeapSampleValues]()
 
 func init() {
-	http.HandleFunc("/debug/pprof/malloc", func(w http.ResponseWriter, req *http.Request) {
+	http.HandleFunc("/debug/malloc", func(w http.ResponseWriter, req *http.Request) {
 		globalProfiler.Write(w)
 	})
 }

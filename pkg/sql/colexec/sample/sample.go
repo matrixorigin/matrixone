@@ -197,7 +197,7 @@ func (ctr *container) evaluateSampleAndGroupByColumns(proc *process.Process, bat
 	ctr.tempBatch1[0] = bat
 	// evaluate the sample columns.
 	for i, executor := range ctr.sampleExecutors {
-		ctr.sampleVectors[i], err = executor.Eval(proc, ctr.tempBatch1)
+		ctr.sampleVectors[i], err = executor.Eval(proc, ctr.tempBatch1, nil)
 		if err != nil {
 			return err
 		}
@@ -205,7 +205,7 @@ func (ctr *container) evaluateSampleAndGroupByColumns(proc *process.Process, bat
 
 	// evaluate the group by columns.
 	for i, executor := range ctr.groupExecutors {
-		ctr.groupVectors[i], err = executor.Eval(proc, ctr.tempBatch1)
+		ctr.groupVectors[i], err = executor.Eval(proc, ctr.tempBatch1, nil)
 		if err != nil {
 			return err
 		}

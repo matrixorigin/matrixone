@@ -142,7 +142,7 @@ func TestCheckTimeoutServiceTask(t *testing.T) {
 		time.Millisecond,
 		func(a *lockTableAllocator) {
 			// create s1 bind
-			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			a.Get("s2", 0, 1, 0, pb.Sharding_None)
 
 			for {
 				bind := a.GetLatest(0, 1)

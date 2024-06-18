@@ -75,7 +75,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			break
 		}
 
-		vec, err := arg.ctr.executors[i].Eval(proc, []*batch.Batch{arg.buf})
+		vec, err := arg.ctr.executors[i].Eval(proc, []*batch.Batch{arg.buf}, nil)
 		if err != nil {
 			result.Batch = nil
 			return result, err

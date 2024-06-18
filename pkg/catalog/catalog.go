@@ -504,6 +504,6 @@ func BuildQueryResultMetaPath(accountName, statementId string) string {
 	return fmt.Sprintf(QueryResultMetaPath, accountName, statementId)
 }
 
-func BuildProfilePath(typ, name string) string {
-	return fmt.Sprintf("%s/%s_%s", ProfileDir, typ, name)
+func BuildProfilePath(serviceTyp string, nodeId string, typ, name string) string {
+	return fmt.Sprintf("%s/%s_%s_%s_%s", ProfileDir, serviceTyp, nodeId, typ, name)
 }
