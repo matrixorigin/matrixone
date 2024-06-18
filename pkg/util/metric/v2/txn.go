@@ -269,8 +269,19 @@ var (
 	TxnPreparedWaitDurationHistogram   = txnTNSideDurationHistogram.WithLabelValues("5-PreparedWait")
 	TxnPreparedDurationHistogram       = txnTNSideDurationHistogram.WithLabelValues("6-Prepared")
 
-	TxnDequeuePreparedDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("dequeue_prepared")
-	TxnBeforeCommitDurationHistogram    = txnTNSideDurationHistogram.WithLabelValues("before_txn_commit")
+	TxnBeforeCommitDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("before_txn_commit")
+
+	txnTNDeduplicateDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_deduplicate_duration_seconds",
+			Help:      "Bucketed histogram of txn duration on tn side",
+			Buckets:   getDurationBuckets(),
+		}, []string{"type"})
+
+	TxnTNAppendDeduplicateDurationHistogram     = txnTNDeduplicateDurationHistogram.WithLabelValues("append_deduplicate")
+	TxnTNPrePrepareDeduplicateDurationHistogram = txnTNDeduplicateDurationHistogram.WithLabelValues("prePrepare_deduplicate")
 
 	txnMpoolDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
