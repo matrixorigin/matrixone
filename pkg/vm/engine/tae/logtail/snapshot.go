@@ -210,7 +210,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		logutil.Infof("[UpdateSnapshot] cost %v", time.Since(now))
 	}()
 	sm.updateTableInfo(data)
-	if sm.tid == 0 {
+	if sm.tid == 0 && len(sm.tides) == 0 {
 		return sm
 	}
 	ins := data.GetObjectBatchs()
