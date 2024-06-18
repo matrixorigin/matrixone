@@ -33,7 +33,8 @@ type Argument struct {
 	Attrs          []string
 	TableID        uint64
 
-	buf *batch.Batch
+	buf    *batch.Batch
+	tmpBuf *batch.Batch
 
 	maxAllocSize int
 
@@ -81,12 +82,13 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		arg.buf = nil
 	}
 
+	if arg.tmpBuf != nil {
+		arg.tmpBuf.Clean(proc.Mp())
+		arg.tmpBuf = nil
+	}
+
 	if arg.msgReceiver != nil {
 		arg.msgReceiver.Free()
-	}
-	if arg.Reader != nil {
-		arg.Reader.Close()
-		arg.Reader = nil
 	}
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Alloc(int64(arg.maxAllocSize))

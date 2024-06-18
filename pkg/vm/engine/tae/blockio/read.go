@@ -34,14 +34,12 @@ import (
 )
 
 type ReadFilterSearchFuncType func([]*vector.Vector) []int32
-type ReadFilterResetFuncType func()
 
 type BlockReadFilter struct {
 	HasFakePK          bool
 	Valid              bool
 	SortedSearchFunc   ReadFilterSearchFuncType
 	UnSortedSearchFunc ReadFilterSearchFuncType
-	ResetFunc          ReadFilterResetFuncType
 }
 
 func ReadByFilter(
