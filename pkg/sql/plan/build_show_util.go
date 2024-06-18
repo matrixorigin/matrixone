@@ -87,6 +87,7 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 		}
 
 		typeStr := FormatColType(col.Typ)
+		typeStr = strings.ToLower(typeStr)
 		fmt.Fprintf(buf, "  `%s` %s", formatStr(colName), typeStr)
 
 		//-------------------------------------------------------------------------------------------------------------
