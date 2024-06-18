@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
@@ -62,10 +63,10 @@ type Vector struct {
 	// FIXME: Bad design! Will be deleted soon.
 	isBin bool
 
-	OnUsed bool
+	// OnUsed   bool
 	// OnPut    bool
-	AllocMsg []string
-	FreeMsg  []string
+	// AllocMsg []string
+	// FreeMsg  []string
 	// PutMsg   []string
 	// GetMsg   []string
 }
@@ -446,14 +447,14 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	// 	panic("free vector which unalloc or in put list")
 	// }
 	// v.OnPut = false
-	v.OnUsed = false
+	// v.OnUsed = false
 	// if len(v.FreeMsg) > 20 {
 	// 	v.FreeMsg = v.FreeMsg[1:]
 	// }
 	// v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : typ="+v.typ.DescString()+" "+string(debug.Stack()))
+	// vectorPool.Put(v)
 
-	// reuse.Free[Vector](v, nil)
-	vectorPool.Put(v)
+	reuse.Free[Vector](v, nil)
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
