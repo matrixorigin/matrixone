@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,33 +14,32 @@
 
 package malloc
 
-import "time"
+import (
+	"unsafe"
 
-func init() {
-	go func() {
-		lastNumAllocs := make([]int64, numShards)
-		for range time.NewTicker(time.Second * 37).C {
-			for i := 0; i < numShards; i++ {
-				numAllocs := shards[i].numAlloc.Load()
-				if numAllocs == lastNumAllocs[i] {
-					// not active, flush
-					shards[i].flush()
-				}
-				lastNumAllocs[i] = numAllocs
-			}
-		}
-	}()
+	"golang.org/x/sys/unix"
+)
+
+const (
+	madv_FREE_REUSABLE = 0x7
+	madv_FREE_REUSE    = 0x8
+)
+
+func (f *fixedSizeMmapAllocator) reuseMem(ptr unsafe.Pointer) {
+	if err := unix.Madvise(
+		unsafe.Slice((*byte)(ptr), f.size),
+		madv_FREE_REUSE,
+	); err != nil {
+		panic(err)
+	}
+	clear(unsafe.Slice((*byte)(ptr), f.size))
 }
 
-func (s *Shard) flush() {
-	for _, ch := range s.pools {
-	loop:
-		for {
-			select {
-			case <-ch:
-			default:
-				break loop
-			}
-		}
+func (f *fixedSizeMmapAllocator) freeMem(ptr unsafe.Pointer) {
+	if err := unix.Madvise(
+		unsafe.Slice((*byte)(ptr), f.size),
+		madv_FREE_REUSABLE,
+	); err != nil {
+		panic(err)
 	}
 }
