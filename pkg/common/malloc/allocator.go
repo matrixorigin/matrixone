@@ -14,22 +14,12 @@
 
 package malloc
 
-import (
-	"testing"
-)
+import "unsafe"
 
-func BenchmarkAllocFree(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		_, handle := Alloc(4096)
-		handle.Free()
-	}
+type Allocator interface {
+	Allocate(size uint64) (unsafe.Pointer, Deallocator, error)
 }
 
-func BenchmarkParallelAllocFree(b *testing.B) {
-	b.RunParallel(func(pb *testing.PB) {
-		for size := 1; pb.Next(); size++ {
-			_, handle := Alloc(size % 65536)
-			handle.Free()
-		}
-	})
+type Deallocator interface {
+	Deallocate(unsafe.Pointer)
 }
