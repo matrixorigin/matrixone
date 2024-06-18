@@ -801,6 +801,52 @@ func TestIssue11838(t *testing.T) {
 	)
 }
 
+func TestStreamClosedBySequenceMissing(t *testing.T) {
+	var globalSeq uint64
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
+			expectSeq := globalSeq + 1
+			if expectSeq != seq {
+				return backendClosed
+			}
+			globalSeq = expectSeq
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+			defer cancel()
+
+			st, err := b.NewStream(false)
+			assert.NoError(t, err)
+			defer func() {
+				assert.NoError(t, st.Close(false))
+			}()
+
+			// First send and receive with normal context, all is ok.
+			assert.NoError(t, st.Send(ctx, &testMessage{id: st.ID()}))
+
+			rc, err := st.Receive()
+			assert.NoError(t, err)
+			v, ok := <-rc
+			assert.True(t, ok)
+			assert.NotNil(t, v)
+
+			// Second send, with timout context, context deadline exceeded will be returned.
+			ctxOut, cancelOut := context.WithTimeout(context.TODO(), -time.Second)
+			defer cancelOut()
+			assert.ErrorIs(t, context.DeadlineExceeded, st.Send(ctxOut, &testMessage{id: st.ID()}))
+
+			// Third send and receive with normal context, all is ok.
+			assert.NoError(t, st.Send(ctx, &testMessage{id: st.ID()}))
+			rc, err = st.Receive()
+			assert.NoError(t, err)
+			v, ok = <-rc
+			assert.True(t, ok)
+			assert.NotNil(t, v)
+		},
+	)
+}
+
 func testBackendSend(t *testing.T,
 	handleFunc func(goetty.IOSession, interface{}, uint64) error,
 	testFunc func(b *remoteBackend),

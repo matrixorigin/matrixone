@@ -360,6 +360,13 @@ func (rb *remoteBackend) doSend(f *Future) error {
 		// process writeC for a long time, causing the writeC buffer to reach its limit.
 		select {
 		case rb.writeC <- f:
+			// double-check the if the context is done.
+			select {
+			case <-f.send.Ctx.Done():
+				rb.stateMu.RUnlock()
+				return f.send.Ctx.Err()
+			default:
+			}
 			rb.metrics.sendingQueueSizeGauge.Set(float64(len(rb.writeC)))
 			rb.stateMu.RUnlock()
 			return nil
@@ -1092,6 +1099,11 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	s.mu.RUnlock()
 
 	if err != nil {
+		// If err is not nil, means it failed to send to backend server,
+		// and the sequence need to be reset, otherwise, the sequence will
+		// be disordered in server end for next calls.
+		s.sequence--
+
 		return err
 	}
 	// stream only wait send completed
