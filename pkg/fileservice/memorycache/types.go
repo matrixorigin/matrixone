@@ -16,6 +16,7 @@ package memorycache
 
 import (
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache"
@@ -31,8 +32,9 @@ type CacheData interface {
 }
 
 type Cache struct {
-	size atomic.Int64
-	l    *lrucache.LRU[cache.CacheKey, *Data]
+	size      atomic.Int64
+	l         *lrucache.LRU[cache.CacheKey, *Data]
+	allocator malloc.Allocator
 }
 
 // RCBytes represents a reference counting data from cache
@@ -49,6 +51,7 @@ type Data struct {
 	buf  []byte
 	// reference counta for the Data, the Data is free
 	// when the reference count is 0
-	ref       refcnt
-	bufHandle *malloc.Handle
+	ref         refcnt
+	ptr         unsafe.Pointer
+	deallocator malloc.Deallocator
 }
