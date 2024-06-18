@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -176,6 +177,8 @@ func startService(
 		return err
 	}
 	setupProcessLevelRuntime(cfg, stopper)
+
+	malloc.SetDefaultConfig(cfg.Malloc)
 
 	setupStatusServer(runtime.ProcessLevelRuntime())
 
