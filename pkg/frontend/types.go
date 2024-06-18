@@ -697,6 +697,11 @@ func (ses *feSessionImpl) GetUpstream() FeSession {
 
 // ClearResultBatches does not call Batch.Clear().
 func (ses *feSessionImpl) ClearResultBatches() {
+	for _, bat := range ses.resultBatches {
+		if bat != nil {
+			bat.Clean(ses.pool)
+		}
+	}
 	ses.resultBatches = nil
 }
 
