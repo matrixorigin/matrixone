@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -786,7 +787,11 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Name == s.DataSource.TableDef.Pkey.PkeyColName
 		if !isFilterOnPK {
 			// put expr in filter instruction
-			ins := s.Instructions[0]
+			idx := 0
+			if _, ok := s.Instructions[0].Arg.(*table_scan.Argument); ok {
+				idx = 1
+			}
+			ins := s.Instructions[idx]
 			arg, ok := ins.Arg.(*filter.Argument)
 			if !ok {
 				panic("missing instruction for runtime filter!")

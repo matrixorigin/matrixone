@@ -2218,6 +2218,13 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 	s.DataSource = &Source{
 		node: n,
 	}
+
+	s.appendInstruction(vm.Instruction{
+		Op:      vm.TableScan,
+		Idx:     c.anal.curr,
+		IsFirst: c.anal.isFirst,
+		Arg:     constructTableScan(),
+	})
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 	return s, nil
 }
