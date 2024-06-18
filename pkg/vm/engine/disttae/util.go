@@ -501,8 +501,12 @@ func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process
 			leftFilter := constructBasePKFilter(exprImpl.F.Args[0], tblDef, proc)
 			rightFilter := constructBasePKFilter(exprImpl.F.Args[1], tblDef, proc)
 
-			if !leftFilter.valid || !rightFilter.valid {
-				return BasePKFilter{}
+			if !leftFilter.valid {
+				return rightFilter
+			}
+
+			if !rightFilter.valid {
+				return leftFilter
 			}
 
 			filter = mergeFilters(leftFilter, rightFilter, function.AND)
