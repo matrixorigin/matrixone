@@ -341,7 +341,7 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 	if errEncode != nil {
 		return errEncode
 	}
-	s.Instructions = append(s.Instructions, lastInstruction)
+	s.appendInstruction(lastInstruction)
 
 	// encode the process related information
 	pData, errEncodeProc := encodeProcessInfo(s.Proc, c.sql)
@@ -416,7 +416,7 @@ func encodeProcessInfo(
 
 func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
 	rs := c.newMergeScope([]*Scope{s})
-	rs.Instructions = append(rs.Instructions, vm.Instruction{
+	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Output,
 		Idx: -1, // useless
 		Arg: output.NewArgument().
@@ -495,6 +495,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			TableDef:               s.DataSource.TableDef,
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
+			IsConst:                s.DataSource.isConst,
 		}
 		if s.DataSource.Bat != nil {
 			data, err := types.Encode(s.DataSource.Bat)
@@ -610,6 +611,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			TableDef:           dsc.TableDef,
 			Timestamp:          *dsc.Timestamp,
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
+			isConst:            dsc.IsConst,
 		}
 		if len(dsc.Block) > 0 {
 			bat := new(batch.Batch)
