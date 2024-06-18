@@ -153,7 +153,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 }
 
 func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx, columns []any) (err error) {
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	//!!!carefully to use
@@ -200,7 +200,7 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(70)
 	defer ses.ExitFPrint(70)
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 
@@ -268,7 +268,7 @@ func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(71)
 	defer ses.ExitFPrint(71)
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
@@ -283,7 +283,7 @@ func (resper *MysqlResp) respMixedResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(72)
 	defer ses.ExitFPrint(72)
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	//!!!the columnDef has been sent after the compiling ends. It should not be sent here again.

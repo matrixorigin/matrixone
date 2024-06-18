@@ -270,6 +270,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	ses.ResetFPrints()
 	ses.EnterFPrint(0)
 	defer ses.ExitFPrint(0)
+	defer ses.ResetFPrints()
 
 	if rt.needPrintSessionInfo() {
 		ses.Info(routineCtx, "mo received first request")
@@ -450,6 +451,7 @@ func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateCo
 		}
 		defer rt.mc.endMigrate()
 		ses := rt.getSession()
+		ses.UpdateDebugString()
 		err = Migrate(ses, req)
 	})
 	return err
