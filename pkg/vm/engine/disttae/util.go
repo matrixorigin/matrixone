@@ -160,13 +160,13 @@ func unionVector[T types.OrderedT | types.Decimal128](a, b []T, ret *vector.Vect
 	var prevVal T
 	for i < len(a) && j < len(b) {
 		if cmp(a[i], b[j]) <= 0 {
-			if i == 0 || cmp(prevVal, a[i]) != 0 {
+			if (i == 0 && j == 0) || cmp(prevVal, a[i]) != 0 {
 				prevVal = a[i]
 				vector.AppendFixed(ret, a[i], false, proc.Mp())
 			}
 			i++
 		} else {
-			if j == 0 || cmp(prevVal, b[j]) != 0 {
+			if (i == 0 && j == 0) || cmp(prevVal, b[j]) != 0 {
 				prevVal = b[j]
 				vector.AppendFixed(ret, b[j], false, proc.Mp())
 			}
@@ -175,14 +175,14 @@ func unionVector[T types.OrderedT | types.Decimal128](a, b []T, ret *vector.Vect
 	}
 
 	for ; i < len(a); i++ {
-		if i == 0 || cmp(prevVal, a[i]) != 0 {
+		if (i == 0 && j == 0) || cmp(prevVal, a[i]) != 0 {
 			prevVal = a[i]
 			vector.AppendFixed(ret, a[i], false, proc.Mp())
 		}
 	}
 
 	for ; j < len(b); j++ {
-		if j == 0 || cmp(prevVal, b[j]) != 0 {
+		if (i == 0 && j == 0) || cmp(prevVal, b[j]) != 0 {
 			prevVal = b[j]
 			vector.AppendFixed(ret, b[j], false, proc.Mp())
 		}
@@ -190,12 +190,19 @@ func unionVector[T types.OrderedT | types.Decimal128](a, b []T, ret *vector.Vect
 }
 
 func mergeBaseFilterInKind(left, right BasePKFilter, isOR bool, proc *process.Process) (ret BasePKFilter) {
-	va := vector.NewVec(types.T_any.ToType())
-	vb := vector.NewVec(types.T_any.ToType())
+	var ok bool
+	var va, vb *vector.Vector
 	ret.vec = vector.NewVec(left.oid.ToType())
 
-	va.UnmarshalBinary(left.vec.([]byte))
-	vb.UnmarshalBinary(right.vec.([]byte))
+	if va, ok = left.vec.(*vector.Vector); !ok {
+		va = vector.NewVec(types.T_any.ToType())
+		va.UnmarshalBinary(left.vec.([]byte))
+	}
+
+	if vb, ok = right.vec.(*vector.Vector); !ok {
+		vb = vector.NewVec(types.T_any.ToType())
+		vb.UnmarshalBinary(right.vec.([]byte))
+	}
 
 	switch va.GetType().Oid {
 	case types.T_int8:
@@ -754,15 +761,16 @@ func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process
 				filters[idx] = ff
 			}
 
+			for idx := 0; idx < len(filters)-1; idx++ {
+				if vec, ok := filters[idx].vec.(*vector.Vector); ok {
+					vec.Free(proc.Mp())
+				}
+			}
+
 			ret := filters[len(filters)-1]
 			return ret
 
 		case "or":
-			if strings.Contains(tblDef.Name, "t1") {
-				x := 0
-				x++
-			}
-
 			filters := make([]BasePKFilter, len(exprImpl.F.Args))
 			for idx := range exprImpl.F.Args {
 				ff := constructBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
@@ -770,7 +778,7 @@ func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process
 					return BasePKFilter{}
 				}
 
-				filters = append(filters, ff)
+				filters[idx] = ff
 			}
 
 			if len(filters) == 0 {
@@ -790,8 +798,15 @@ func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process
 				filters[idx] = ff
 			}
 
+			for idx := 0; idx < len(filters)-1; idx++ {
+				if vec, ok := filters[idx].vec.(*vector.Vector); ok {
+					vec.Free(proc.Mp())
+				}
+			}
+
 			ret := filters[len(filters)-1]
 			return ret
+
 		case ">=":
 			//a >= ?
 			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
@@ -936,103 +951,105 @@ func constructInMemPKFilter(
 	put := packerPool.Get(&packer)
 	defer put.Put()
 
-	switch basePKFilter.oid {
-	case types.T_int8:
-		lbVal = types.DecodeInt8(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeInt8(basePKFilter.ub)
+	if basePKFilter.op != function.IN && basePKFilter.op != function.PREFIX_IN {
+		switch basePKFilter.oid {
+		case types.T_int8:
+			lbVal = types.DecodeInt8(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeInt8(basePKFilter.ub)
+			}
+		case types.T_int16:
+			lbVal = types.DecodeInt16(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeInt16(basePKFilter.ub)
+			}
+		case types.T_int32:
+			lbVal = types.DecodeInt32(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeInt32(basePKFilter.ub)
+			}
+		case types.T_int64:
+			lbVal = types.DecodeInt64(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeInt64(basePKFilter.ub)
+			}
+		case types.T_float32:
+			lbVal = types.DecodeFloat32(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeFloat32(basePKFilter.ub)
+			}
+		case types.T_float64:
+			lbVal = types.DecodeFloat64(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeFloat64(basePKFilter.ub)
+			}
+		case types.T_uint8:
+			lbVal = types.DecodeUint8(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeUint8(basePKFilter.ub)
+			}
+		case types.T_uint16:
+			lbVal = types.DecodeUint16(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeUint16(basePKFilter.ub)
+			}
+		case types.T_uint32:
+			lbVal = types.DecodeUint32(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeUint32(basePKFilter.ub)
+			}
+		case types.T_uint64:
+			lbVal = types.DecodeUint64(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeUint64(basePKFilter.ub)
+			}
+		case types.T_date:
+			lbVal = types.DecodeDate(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeDate(basePKFilter.ub)
+			}
+		case types.T_time:
+			lbVal = types.DecodeTime(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeTime(basePKFilter.ub)
+			}
+		case types.T_datetime:
+			lbVal = types.DecodeDatetime(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeDatetime(basePKFilter.ub)
+			}
+		case types.T_timestamp:
+			lbVal = types.DecodeTimestamp(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeTimestamp(basePKFilter.ub)
+			}
+		case types.T_decimal64:
+			lbVal = types.DecodeDecimal64(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeDecimal64(basePKFilter.ub)
+			}
+		case types.T_decimal128:
+			lbVal = types.DecodeDecimal128(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeDecimal128(basePKFilter.ub)
+			}
+		case types.T_varchar, types.T_char:
+			lbVal = basePKFilter.lb
+			ubVal = basePKFilter.ub
+		case types.T_json:
+			lbVal = types.DecodeJson(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeJson(basePKFilter.ub)
+			}
+		case types.T_enum:
+			lbVal = types.DecodeEnum(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeEnum(basePKFilter.ub)
+			}
+		default:
+			return
+			//panic(basePKFilter.oid.String())
 		}
-	case types.T_int16:
-		lbVal = types.DecodeInt16(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeInt16(basePKFilter.ub)
-		}
-	case types.T_int32:
-		lbVal = types.DecodeInt32(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeInt32(basePKFilter.ub)
-		}
-	case types.T_int64:
-		lbVal = types.DecodeInt64(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeInt64(basePKFilter.ub)
-		}
-	case types.T_float32:
-		lbVal = types.DecodeFloat32(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeFloat32(basePKFilter.ub)
-		}
-	case types.T_float64:
-		lbVal = types.DecodeFloat64(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeFloat64(basePKFilter.ub)
-		}
-	case types.T_uint8:
-		lbVal = types.DecodeUint8(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeUint8(basePKFilter.ub)
-		}
-	case types.T_uint16:
-		lbVal = types.DecodeUint16(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeUint16(basePKFilter.ub)
-		}
-	case types.T_uint32:
-		lbVal = types.DecodeUint32(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeUint32(basePKFilter.ub)
-		}
-	case types.T_uint64:
-		lbVal = types.DecodeUint64(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeUint64(basePKFilter.ub)
-		}
-	case types.T_date:
-		lbVal = types.DecodeDate(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeDate(basePKFilter.ub)
-		}
-	case types.T_time:
-		lbVal = types.DecodeTime(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeTime(basePKFilter.ub)
-		}
-	case types.T_datetime:
-		lbVal = types.DecodeDatetime(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeDatetime(basePKFilter.ub)
-		}
-	case types.T_timestamp:
-		lbVal = types.DecodeTimestamp(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeTimestamp(basePKFilter.ub)
-		}
-	case types.T_decimal64:
-		lbVal = types.DecodeDecimal64(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeDecimal64(basePKFilter.ub)
-		}
-	case types.T_decimal128:
-		lbVal = types.DecodeDecimal128(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeDecimal128(basePKFilter.ub)
-		}
-	case types.T_varchar, types.T_char:
-		lbVal = basePKFilter.lb
-		ubVal = basePKFilter.ub
-	case types.T_json:
-		lbVal = types.DecodeJson(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeJson(basePKFilter.ub)
-		}
-	case types.T_enum:
-		lbVal = types.DecodeEnum(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeEnum(basePKFilter.ub)
-		}
-	default:
-		return
-		//panic(basePKFilter.oid.String())
 	}
 
 	switch basePKFilter.op {
@@ -1713,8 +1730,12 @@ func constructBlockReadPKFilter(pkName string, basePKFilter BasePKFilter) blocki
 		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixBetweenFactory(basePKFilter.lb, basePKFilter.ub)
 
 	case function.IN:
-		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(basePKFilter.lb)
+		var ok bool
+		var vec *vector.Vector
+		if vec, ok = basePKFilter.vec.(*vector.Vector); !ok {
+			vec = vector.NewVec(types.T_any.ToType())
+			vec.UnmarshalBinary(basePKFilter.vec.([]byte))
+		}
 
 		switch vec.GetType().Oid {
 		case types.T_bit:
@@ -1778,8 +1799,13 @@ func constructBlockReadPKFilter(pkName string, basePKFilter BasePKFilter) blocki
 		}
 
 	case function.PREFIX_IN:
-		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(basePKFilter.lb)
+		var ok bool
+		var vec *vector.Vector
+		if vec, ok = basePKFilter.vec.(*vector.Vector); !ok {
+			vec = vector.NewVec(types.T_any.ToType())
+			vec.UnmarshalBinary(basePKFilter.vec.([]byte))
+		}
+
 		sortedSearchFunc = vector.CollectOffsetsByPrefixInFactory(vec)
 		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixInFactory(vec)
 
