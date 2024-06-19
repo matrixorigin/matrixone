@@ -329,6 +329,12 @@ func CompileFilterExpr(
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "or":
+			if len(exprImpl.F.Args) > 2 {
+				// TODO
+				// a in (...) or in (...) or in (...) or ...
+				// a = x or a in (...) or a between r and s or ...
+				return
+			}
 			leftFastOp, leftLoadOp, leftObjectOp, leftBlockOp, leftSeekOp, leftCan, leftHSH := CompileFilterExpr(
 				exprImpl.F.Args[0], proc, tableDef, fs,
 			)
